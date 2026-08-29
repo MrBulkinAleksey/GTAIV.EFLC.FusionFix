@@ -130,6 +130,9 @@ Volumetrischer Nebel
 [AO]
 Ambient Occlusion
 
+[SSR]
+Screen Space Reflections
+
 [Zoomed Movement]
 Bewegung beim Zoomen erlauben
 

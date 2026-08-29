@@ -130,6 +130,9 @@ Niebla volumétrica
 [AO]
 Oclusión ambiental
 
+[SSR]
+Screen Space Reflections
+
 [Zoomed Movement]
 Permitir movimiento al acercar la mirilla
 

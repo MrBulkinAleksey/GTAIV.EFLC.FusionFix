@@ -130,6 +130,9 @@ Brouillard volumétrique
 [AO]
 Occlusion ambiante
 
+[SSR]
+Screen Space Reflections
+
 [Zoomed Movement]
 Permettre le mouvement en zoomant
 

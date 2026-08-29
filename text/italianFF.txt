@@ -130,6 +130,9 @@ Nebbia volumetrica
 [AO]
 Occlusione ambientale
 
+[SSR]
+Screen Space Reflections
+
 [Zoomed Movement]
 Consenti movimento con lo zoom
 

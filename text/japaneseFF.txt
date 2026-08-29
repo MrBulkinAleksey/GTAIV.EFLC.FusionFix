@@ -130,6 +130,9 @@ FPSリミッター
 [AO]
 アンビエントオクルージョン
 
+[SSR]
+Screen Space Reflections
+
 [Zoomed Movement]
 ズーム中の移動を許可
 

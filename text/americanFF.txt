@@ -130,6 +130,9 @@ Volumetric Fog
 [AO]
 Ambient Occlusion
 
+[SSR]
+Screen Space Reflections
+
 [Zoomed Movement]
 Allow Movement When Zoomed
 

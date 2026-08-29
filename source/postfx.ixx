@@ -35,6 +35,7 @@ import shaders;
 #define IDR_Blit_PS                              129
 
 #define IDR_AO_FX                                133
+#define IDR_SSR_FX                               136
 
 #define IDR_SSDraw_PS_compiled                   2127
 #define IDR_SSPrepass_PS_compiled                2128
@@ -115,7 +116,7 @@ public:
 
     // game render targets
     // rage::grcRenderTargetPC* mSpecularAoRT = nullptr;
-    // rage::grcRenderTargetPC* mNormalRT = nullptr;
+    rage::grcRenderTargetPC* mNormalRT = nullptr;
     rage::grcRenderTargetPC* mDiffuseRT = nullptr;
     rage::grcRenderTargetPC* mSpecularRT = nullptr;
     rage::grcRenderTargetPC* mDepthRT = nullptr;
@@ -192,6 +193,43 @@ public:
 
     bool bEnablePreAlphaDepth = false;
 
+    ID3DXEffect* SSREffect = nullptr;
+    rage::grcRenderTargetPC* SSRTex = nullptr;
+    IDirect3DSurface9* SSRSurf = nullptr;
+    rage::grcRenderTargetPC* SSRHistoryTex = nullptr;
+    IDirect3DSurface9* SSRHistorySurf = nullptr;
+    bool bSSRValidThisFrame = false;
+    D3DXMATRIX SSRPrevViewProj = {};
+    bool bSSRPrevViewProjValid = false;
+    D3DXVECTOR4 SSRReprojRows[4] = {};
+    bool bSSRReprojValid = false;
+    struct
+    {
+        D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
+        D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
+        D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
+        D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
+        D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
+        D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY;
+        D3DXHANDLE techSSR, techSSRWater;
+    } SSREffectHandles = {};
+
+    static bool SSREnabled() { static auto p = FusionFixSettings.GetRef("PREF_SSR"); return p && p->get() != 0; }
+    int nSSRSteps = 24;
+    int nSSRRefineSteps = 4;
+    float fSSRMaxDistance = 24.0f;
+    float fSSRThickness = 0.5f;
+    float fSSREdgeFade = 0.1f;
+    float fSSRIntensity = 1.0f;
+    float fSSRGlossBoost = 2.0f;
+    float fSSRGlossCutoff = 0.15f;
+    float fSSRWaterIntensity = 1.0f;
+    // CWater::Render loads this as the Z of every flat water vertex, so it is the real
+    // surface height rather than an assumed sea level.
+    const float* pWaterLevel = nullptr;
+    float fSSRWaterLevelOffset = 0.0f;
+    float fSSRWaterBlur = 3.0f;
+    float fSSRWaterNormalStrength = 1.0f;
     int nAmbientOcclusionSamples = 9;
     int nAmbientOcclusionBlurPasses = 1;
     int nAmbientOcclusionLogMaxOffset = 3;
@@ -507,6 +545,52 @@ public:
             }
         }
 
+        if (!SSREffect)
+        {
+            ID3DXBuffer* errors = nullptr;
+            static std::string steps = std::to_string(nSSRSteps);
+            static std::string refineSteps = std::to_string(nSSRRefineSteps);
+            D3DXMACRO defines[] = {
+                {"NUM_STEPS", steps.c_str()},
+                {"NUM_REFINE_STEPS", refineSteps.c_str()},
+                {} // last must be empty
+            };
+            if (D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
+                hm, MAKEINTRESOURCEW(IDR_SSR_FX), defines, nullptr, 0, nullptr, &SSREffect, &errors) != S_OK)
+            {
+                if (errors)
+                    MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
+            }
+            else
+            {
+                auto& h = SSREffectHandles;
+                h.DepthTex2D = SSREffect->GetParameterByName(nullptr, "DepthTex2D");
+                h.HistoryTex2D = SSREffect->GetParameterByName(nullptr, "HistoryTex2D");
+                h.SpecularTex2D = SSREffect->GetParameterByName(nullptr, "SpecularTex2D");
+                h.SurfaceTex2D = SSREffect->GetParameterByName(nullptr, "SurfaceTex2D");
+                h.vec2InvViewportSize = SSREffect->GetParameterByName(nullptr, "vec2InvViewportSize");
+                h.fNearPlane = SSREffect->GetParameterByName(nullptr, "fNearPlane");
+                h.fFarDivNear = SSREffect->GetParameterByName(nullptr, "fFarDivNear");
+                h.vec4ProjInfo = SSREffect->GetParameterByName(nullptr, "vec4ProjInfo");
+                h.fMaxDistance = SSREffect->GetParameterByName(nullptr, "fMaxDistance");
+                h.fThickness = SSREffect->GetParameterByName(nullptr, "fThickness");
+                h.fEdgeFade = SSREffect->GetParameterByName(nullptr, "fEdgeFade");
+                h.fIntensity = SSREffect->GetParameterByName(nullptr, "fIntensity");
+                h.vec4ViewToPrevClip = SSREffect->GetParameterByName(nullptr, "vec4ViewToPrevClip");
+                h.fGlossBoost = SSREffect->GetParameterByName(nullptr, "fGlossBoost");
+                h.fGlossCutoff = SSREffect->GetParameterByName(nullptr, "fGlossCutoff");
+                h.vec4WaterPlane = SSREffect->GetParameterByName(nullptr, "vec4WaterPlane");
+                h.fWaterIntensity = SSREffect->GetParameterByName(nullptr, "fWaterIntensity");
+                h.fWaterBlur = SSREffect->GetParameterByName(nullptr, "fWaterBlur");
+                h.fWaterNormalStrength = SSREffect->GetParameterByName(nullptr, "fWaterNormalStrength");
+                h.vec4WaterToView = SSREffect->GetParameterByName(nullptr, "vec4WaterToView");
+                h.vec4WaterWorldX = SSREffect->GetParameterByName(nullptr, "vec4WaterWorldX");
+                h.vec4WaterWorldY = SSREffect->GetParameterByName(nullptr, "vec4WaterWorldY");
+                h.techSSR = SSREffect->GetTechniqueByName("SSR");
+                h.techSSRWater = SSREffect->GetTechniqueByName("SSRWater");
+            }
+        }
+
         return ShadersFinishedLoading();
     }
 
@@ -622,6 +706,19 @@ public:
         useStippleFilter = iniReader.ReadInteger("SRF", "StippleFilter", 1) != 0;
 
         bEnablePreAlphaDepth = iniReader.ReadInteger("POSTFX", "EnablePreAlphaDepth", 1) != 0;
+
+        nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 24), 4, 128);
+        nSSRRefineSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsRefineSteps", 4), 0, 16);
+        fSSRMaxDistance = std::max(1.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsMaxDistance", 24.0f));
+        fSSRThickness = std::max(0.01f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsThickness", 0.5f));
+        fSSREdgeFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsEdgeFade", 0.1f), 0.001f, 0.5f);
+        fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
+        fSSRGlossBoost = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossBoost", 2.0f), 0.0f, 8.0f);
+        fSSRGlossCutoff = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossCutoff", 0.15f), 0.0f, 1.0f);
+        fSSRWaterIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterIntensity", 1.0f), 0.0f, 1.0f);
+        fSSRWaterLevelOffset = iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterLevelOffset", 0.0f);
+        fSSRWaterBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterBlur", 3.0f), 0.0f, 32.0f);
+        fSSRWaterNormalStrength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterRipple", 1.0f), 0.0f, 4.0f);
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -761,7 +858,7 @@ private:
     {
         PostFxResources.ReleaseTextures();
         // PostFxResources.mSpecularAoRT    =nullptr;
-        // PostFxResources.mNormalRT        =nullptr;
+        PostFxResources.mNormalRT = nullptr;
         PostFxResources.mDiffuseRT = nullptr;
         // PostFxResources.mSpecularRT      =nullptr;
         // PostFxResources.mDepthRT         =nullptr;
@@ -787,6 +884,8 @@ private:
         }
         if (PostFxResources.AOEffect)
             PostFxResources.AOEffect->OnLostDevice();
+        if (PostFxResources.SSREffect)
+            PostFxResources.SSREffect->OnLostDevice();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             SAFE_RELEASE(PostFxResources.AOCamDepthSurf[i]);
@@ -812,7 +911,7 @@ private:
 
     static void __fastcall OnDeviceReset()
     {
-        // PostFxResources.mNormalRT       = rage::grcTextureFactoryPC::GetRTByName( "_DEFERRED_GBUFFER_1_"  );
+        PostFxResources.mNormalRT = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_1_");
         PostFxResources.mDiffuseRT = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_0_");
         PostFxResources.mSpecularRT = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_2_");
         PostFxResources.mDepthRT = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_3_");
@@ -857,6 +956,8 @@ private:
 
         if (PostFxResources.AOEffect)
             PostFxResources.AOEffect->OnResetDevice();
+        if (PostFxResources.SSREffect)
+            PostFxResources.SSREffect->OnResetDevice();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             SAFE_RELEASE(PostFxResources.AOCamDepthSurf[i]);
@@ -878,6 +979,21 @@ private:
             PostFxResources.AOBlurTex->Destroy();
             PostFxResources.AOBlurTex = nullptr;
         }
+        SAFE_RELEASE(PostFxResources.SSRSurf);
+        if (PostFxResources.SSRTex)
+        {
+            PostFxResources.SSRTex->Destroy();
+            PostFxResources.SSRTex = nullptr;
+        }
+        SAFE_RELEASE(PostFxResources.SSRHistorySurf);
+        if (PostFxResources.SSRHistoryTex)
+        {
+            PostFxResources.SSRHistoryTex->Destroy();
+            PostFxResources.SSRHistoryTex = nullptr;
+        }
+        PostFxResources.bSSRValidThisFrame = false;
+        PostFxResources.bSSRPrevViewProjValid = false;
+        PostFxResources.bSSRReprojValid = false;
 
         auto pDevice = rage::grcDevice::GetD3DDevice();
 
@@ -908,6 +1024,33 @@ private:
         aoDesc.mLevels = 1;
         PostFxResources.AOTex = CreateEmptyRT("AOTex", 3, width, height, 8, &aoDesc);
         PostFxResources.AOBlurTex = CreateEmptyRT("AOBlurTex", 3, width, height, 8, &aoDesc);
+
+        {
+            aoDesc.mFormat = rage::GRCFMT_A16B16G16R16F;
+            aoDesc.mLevels = 1;
+            PostFxResources.SSRTex = CreateEmptyRT("SSRTex", 3, width, height, 64, &aoDesc);
+            if (PostFxResources.SSRTex && PostFxResources.SSRTex->mD3DTexture)
+                PostFxResources.SSRTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRSurf);
+
+            PostFxResources.SSRHistoryTex = CreateEmptyRT("SSRHistoryTex", 3, width, height, 64, &aoDesc);
+            if (PostFxResources.SSRHistoryTex && PostFxResources.SSRHistoryTex->mD3DTexture)
+                PostFxResources.SSRHistoryTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRHistorySurf);
+
+            IDirect3DSurface9* oldRT = nullptr;
+            pDevice->GetRenderTarget(0, &oldRT);
+            for (auto* surf : { PostFxResources.SSRSurf, PostFxResources.SSRHistorySurf })
+            {
+                if (!surf)
+                    continue;
+                pDevice->SetRenderTarget(0, surf);
+                pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+            }
+            if (oldRT)
+            {
+                pDevice->SetRenderTarget(0, oldRT);
+                oldRT->Release();
+            }
+        }
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             PostFxResources.AOCamDepthTex->mD3DTexture->GetSurfaceLevel(i, &PostFxResources.AOCamDepthSurf[i]);
@@ -1027,6 +1170,18 @@ private:
                     pDevice->SetSamplerState(0, D3DSAMP_ADDRESSU, prevAddressU[0]);
                     pDevice->SetSamplerState(0, D3DSAMP_ADDRESSV, prevAddressV[0]);
                     pDevice->SetTexture(0, prevTex[0]);
+
+                    if (PostFxResources.SSREnabled() && PostFxResources.SSRHistorySurf && PostFxResources.SSRSurf)
+                    {
+                        D3DVIEWPORT9 vpBeforeCapture;
+                        pDevice->GetViewport(&vpBeforeCapture);
+
+                        pDevice->SetRenderTarget(0, PostFxResources.SSRSurf);
+                        pDevice->StretchRect(PostFxResources.HDRFullScreenSurface, nullptr, PostFxResources.SSRHistorySurf, nullptr, D3DTEXF_NONE);
+                        pDevice->SetRenderTarget(0, PostFxResources.HDRFullScreenSurface);
+
+                        pDevice->SetViewport(&vpBeforeCapture);
+                    }
                 }
             }
 
@@ -1494,6 +1649,431 @@ private:
         return S_FALSE;
     }
 
+    static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kSSRRenderStates[] =
+    {
+        { D3DRS_ZENABLE,          FALSE },
+        { D3DRS_ZWRITEENABLE,     FALSE },
+        { D3DRS_ALPHABLENDENABLE, FALSE },
+        { D3DRS_ALPHATESTENABLE,  FALSE },
+        { D3DRS_STENCILENABLE,    FALSE },
+        { D3DRS_FOGENABLE,        FALSE },
+        { D3DRS_CLIPPING,         FALSE },
+        { D3DRS_CULLMODE,         D3DCULL_NONE },
+        { D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA },
+    };
+
+    static constexpr struct { D3DSAMPLERSTATETYPE state; DWORD value; } kSSRSamplerStates[] =
+    {
+        { D3DSAMP_ADDRESSU,  D3DTADDRESS_CLAMP },
+        { D3DSAMP_ADDRESSV,  D3DTADDRESS_CLAMP },
+        { D3DSAMP_MAGFILTER, D3DTEXF_POINT },
+        { D3DSAMP_MINFILTER, D3DTEXF_POINT },
+        { D3DSAMP_MIPFILTER, D3DTEXF_NONE },
+    };
+    static constexpr DWORD kSSRSamplerSlots = 4;
+    static constexpr DWORD kSSRTextureSlots = 8;
+    static constexpr UINT kPSConstCount = 224;
+    static constexpr UINT kVSConstCount = 256;
+    static inline float savedPSConsts[kPSConstCount * 4];
+    static inline float savedVSConsts[kVSConstCount * 4];
+
+    static void MatrixMultiply(D3DXMATRIX& out, const D3DXMATRIX& a, const D3DXMATRIX& b)
+    {
+        D3DXMATRIX r;
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
+                r.m[i][j] = a.m[i][0] * b.m[0][j] + a.m[i][1] * b.m[1][j]
+                          + a.m[i][2] * b.m[2][j] + a.m[i][3] * b.m[3][j];
+        out = r;
+    }
+
+    static void RenderScreenSpaceReflections()
+    {
+        auto& R = PostFxResources;
+        R.bSSRValidThisFrame = false;
+
+        if (!R.SSRSurf)
+            return;
+
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+
+        auto clearSSR = [&]()
+        {
+            IDirect3DSurface9* oldRT = nullptr;
+            pDevice->GetRenderTarget(0, &oldRT);
+            pDevice->SetRenderTarget(0, R.SSRSurf);
+            pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+            if (oldRT)
+            {
+                pDevice->SetRenderTarget(0, oldRT);
+                oldRT->Release();
+            }
+        };
+
+        if (!R.SSREnabled())
+        {
+            clearSSR();
+            return;
+        }
+
+        rage::grcViewport* vp = rage::GetCurrentViewport();
+        if (!R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex || !vp || R.fSSRIntensity <= 0.0f)
+        {
+            clearSSR();
+            return;
+        }
+
+        IDirect3DSurface9* rt0 = nullptr;
+        IDirect3DSurface9* ds = nullptr;
+        IDirect3DVertexDeclaration9* oldDecl = nullptr;
+        IDirect3DVertexBuffer9* oldVB = nullptr;
+        UINT oldOffset = 0, oldStride = 0;
+        DWORD oldFVF = 0;
+        D3DVIEWPORT9 oldViewport;
+
+        pDevice->GetFVF(&oldFVF);
+        pDevice->GetVertexDeclaration(&oldDecl);
+        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        pDevice->GetRenderTarget(0, &rt0);
+        pDevice->GetDepthStencilSurface(&ds);
+        pDevice->GetViewport(&oldViewport);
+
+        pDevice->SetDepthStencilSurface(nullptr);
+        pDevice->SetStreamSource(0, nullptr, 0, 0);
+        pDevice->SetVertexDeclaration(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+
+        float width = float(vp->mWidth);
+        float height = float(vp->mHeight);
+
+        D3DVIEWPORT9 vpDesc = {};
+        vpDesc.MaxZ = 1.0f;
+        vpDesc.Width = DWORD(width);
+        vpDesc.Height = DWORD(height);
+        pDevice->SetViewport(&vpDesc);
+
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        ScreenVertex screenVertices[4] =
+        {
+            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
+            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+        };
+
+        auto& h = R.SSREffectHandles;
+        ID3DXEffect* effect = R.SSREffect;
+
+        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
+
+        // _DEFERRED_GBUFFER_2_ is (specular intensity, gloss, AO); vehicle paint and glass
+        // sit near the top of both, road surfaces near the bottom.
+        bool hasSpecular = R.mSpecularRT && R.mSpecularRT->mD3DTexture;
+        if (hasSpecular)
+            effect->SetTexture(h.SpecularTex2D, R.mSpecularRT->mD3DTexture);
+        effect->SetFloat(h.fGlossBoost, hasSpecular ? R.fSSRGlossBoost : 0.0f);
+        effect->SetFloat(h.fGlossCutoff, hasSpecular ? R.fSSRGlossCutoff : -1.0f);
+
+        float invViewportSize[] = { 1.0f / width, 1.0f / height };
+        effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
+        effect->SetFloat(h.fNearPlane, vp->mNearClip);
+        effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
+
+        // Same reconstruction basis the AO pass uses.
+        D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
+        D3DXVECTOR4 projInfo;
+        projInfo.x = -2.0f / ((width) * proj._11);
+        projInfo.y = -2.0f / ((height) * proj._22);
+        projInfo.z = (1.0f - proj._31) / proj._11;
+        projInfo.w = (1.0f + proj._32) / proj._22;
+        effect->SetVector(h.vec4ProjInfo, &projInfo);
+
+        D3DXMATRIX viewProj;
+        MatrixMultiply(viewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
+
+        if (!R.bSSRPrevViewProjValid)
+            R.SSRPrevViewProj = viewProj;
+
+        D3DXMATRIX reproj;
+        MatrixMultiply(reproj, *(const D3DXMATRIX*)vp->mViewInverseMatrix, R.SSRPrevViewProj);
+
+        const float axisSign[4] = { -1.0f, 1.0f, (proj._34 < 0.0f) ? -1.0f : 1.0f, 1.0f };
+        D3DXVECTOR4 reprojRows[4];
+        for (int row = 0; row < 4; ++row)
+        {
+            float s = axisSign[row];
+            reprojRows[row] = D3DXVECTOR4(reproj.m[row][0] * s, reproj.m[row][1] * s,
+                                          reproj.m[row][2] * s, reproj.m[row][3] * s);
+        }
+        effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
+        memcpy(R.SSRReprojRows, reprojRows, sizeof(reprojRows));
+        R.bSSRReprojValid = true;
+
+        R.SSRPrevViewProj = viewProj;
+        R.bSSRPrevViewProjValid = true;
+
+        effect->SetFloat(h.fMaxDistance, R.fSSRMaxDistance);
+        effect->SetFloat(h.fThickness, R.fSSRThickness);
+        effect->SetFloat(h.fEdgeFade, R.fSSREdgeFade);
+        effect->SetFloat(h.fIntensity, R.fSSRIntensity);
+
+        UINT passes = 0;
+        IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
+        DWORD savedRenderStates[std::size(kSSRRenderStates)] = {};
+        DWORD savedSamplerStates[kSSRSamplerSlots][std::size(kSSRSamplerStates)] = {};
+        {
+            for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+                pDevice->GetTexture(slot, &oldTextures[slot]);
+            pDevice->SetTexture(3, nullptr);
+
+            pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+            pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+
+            for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
+            {
+                pDevice->GetRenderState(kSSRRenderStates[i].state, &savedRenderStates[i]);
+                pDevice->SetRenderState(kSSRRenderStates[i].state, kSSRRenderStates[i].value);
+            }
+
+            for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+                for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+                {
+                    pDevice->GetSamplerState(slot, kSSRSamplerStates[i].state, &savedSamplerStates[slot][i]);
+                    pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
+                }
+
+            effect->SetTechnique(h.techSSR);
+            effect->Begin(&passes, 0);
+        }
+        {
+            pDevice->SetRenderTarget(0, R.SSRSurf);
+            pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+
+            effect->BeginPass(0);
+            effect->CommitChanges();
+            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            effect->EndPass();
+        }
+        {
+            effect->End();
+
+            for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
+                pDevice->SetRenderState(kSSRRenderStates[i].state, savedRenderStates[i]);
+
+            for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+                for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+                    pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, savedSamplerStates[slot][i]);
+
+            pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+            pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+
+            for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+            {
+                pDevice->SetTexture(slot, oldTextures[slot]);
+                SAFE_RELEASE(oldTextures[slot]);
+            }
+        }
+
+        R.bSSRValidThisFrame = true;
+
+        pDevice->SetRenderTarget(0, rt0);
+        pDevice->SetDepthStencilSurface(ds);
+        pDevice->SetViewport(&oldViewport);
+        pDevice->SetFVF(oldFVF);
+        pDevice->SetVertexDeclaration(oldDecl);
+        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
+
+        SAFE_RELEASE(rt0);
+        SAFE_RELEASE(ds);
+        SAFE_RELEASE(oldDecl);
+        SAFE_RELEASE(oldVB);
+    }
+
+    static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kWaterSSRRenderStates[] =
+    {
+        { D3DRS_ZENABLE,          FALSE },
+        { D3DRS_ZWRITEENABLE,     FALSE },
+        { D3DRS_ALPHATESTENABLE,  FALSE },
+        { D3DRS_STENCILENABLE,    FALSE },
+        { D3DRS_FOGENABLE,        FALSE },
+        { D3DRS_CLIPPING,         FALSE },
+        { D3DRS_CULLMODE,         D3DCULL_NONE },
+        { D3DRS_ALPHABLENDENABLE, TRUE },
+        { D3DRS_SEPARATEALPHABLENDENABLE, FALSE },
+        { D3DRS_BLENDOP,          D3DBLENDOP_ADD },
+        { D3DRS_SRCBLEND,         D3DBLEND_SRCALPHA },
+        { D3DRS_DESTBLEND,        D3DBLEND_ONE },
+        // Additive and RGB only, so a miss adds nothing and the scene alpha is untouched.
+        { D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE },
+    };
+
+    static void RenderWaterReflections()
+    {
+        auto& R = PostFxResources;
+
+        if (!R.SSREnabled() || !R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex)
+            return;
+        if (!R.bSSRReprojValid || R.fSSRWaterIntensity <= 0.0f)
+            return;
+
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        rage::grcViewport* vp = rage::GetCurrentViewport();
+        if (!pDevice || !vp)
+            return;
+
+        const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+
+        float waterLevel = (R.pWaterLevel ? *R.pWaterLevel : 0.0f) + R.fSSRWaterLevelOffset;
+
+        if (viewInv.m[3][2] <= waterLevel)
+            return;
+
+        D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
+        const float axisSign[3] = { -1.0f, 1.0f, (proj._34 < 0.0f) ? -1.0f : 1.0f };
+
+        D3DXVECTOR4 plane(viewInv.m[0][2] * axisSign[0],
+                          viewInv.m[1][2] * axisSign[1],
+                          viewInv.m[2][2] * axisSign[2],
+                          viewInv.m[3][2] - waterLevel);
+
+        float width = float(vp->mWidth);
+        float height = float(vp->mHeight);
+
+        auto& h = R.SSREffectHandles;
+        ID3DXEffect* effect = R.SSREffect;
+
+        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
+
+        float invViewportSize[] = { 1.0f / width, 1.0f / height };
+        effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
+        effect->SetFloat(h.fNearPlane, vp->mNearClip);
+        effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
+
+        D3DXVECTOR4 projInfo;
+        projInfo.x = -2.0f / ((width) * proj._11);
+        projInfo.y = -2.0f / ((height) * proj._22);
+        projInfo.z = (1.0f - proj._31) / proj._11;
+        projInfo.w = (1.0f + proj._32) / proj._22;
+        effect->SetVector(h.vec4ProjInfo, &projInfo);
+
+        effect->SetVectorArray(h.vec4ViewToPrevClip, R.SSRReprojRows, 4);
+        effect->SetVector(h.vec4WaterPlane, &plane);
+
+        D3DXVECTOR4 toView[3];
+        for (int row = 0; row < 3; ++row)
+            toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
+                                      viewInv.m[row][2] * axisSign[row], 0.0f);
+        effect->SetVectorArray(h.vec4WaterToView, toView, 3);
+
+        D3DXVECTOR4 worldX(toView[0].x, toView[1].x, toView[2].x, viewInv.m[3][0]);
+        D3DXVECTOR4 worldY(toView[0].y, toView[1].y, toView[2].y, viewInv.m[3][1]);
+        effect->SetVector(h.vec4WaterWorldX, &worldX);
+        effect->SetVector(h.vec4WaterWorldY, &worldY);
+
+        effect->SetFloat(h.fMaxDistance, R.fSSRMaxDistance);
+        effect->SetFloat(h.fThickness, R.fSSRThickness);
+        effect->SetFloat(h.fEdgeFade, R.fSSREdgeFade);
+        effect->SetFloat(h.fWaterIntensity, R.fSSRWaterIntensity);
+        effect->SetFloat(h.fWaterBlur, R.fSSRWaterBlur);
+
+        IDirect3DVertexDeclaration9* oldDecl = nullptr;
+        IDirect3DVertexBuffer9* oldVB = nullptr;
+        IDirect3DSurface9* ds = nullptr;
+        UINT oldOffset = 0, oldStride = 0;
+        DWORD oldFVF = 0;
+
+        pDevice->GetFVF(&oldFVF);
+        pDevice->GetVertexDeclaration(&oldDecl);
+        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        pDevice->GetDepthStencilSurface(&ds);
+
+        pDevice->SetDepthStencilSurface(nullptr);
+        pDevice->SetStreamSource(0, nullptr, 0, 0);
+        pDevice->SetVertexDeclaration(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        ScreenVertex screenVertices[4] =
+        {
+            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
+            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+        };
+
+        UINT passes = 0;
+        IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
+        DWORD savedRenderStates[std::size(kWaterSSRRenderStates)] = {};
+        DWORD savedSamplerStates[kSSRSamplerSlots][std::size(kSSRSamplerStates)] = {};
+
+        for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+            pDevice->GetTexture(slot, &oldTextures[slot]);
+        pDevice->SetTexture(3, nullptr);
+
+        effect->SetTexture(h.SurfaceTex2D, oldTextures[0]);
+        effect->SetFloat(h.fWaterNormalStrength, oldTextures[0] ? R.fSSRWaterNormalStrength : 0.0f);
+
+        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+
+        for (size_t i = 0; i < std::size(kWaterSSRRenderStates); ++i)
+        {
+            pDevice->GetRenderState(kWaterSSRRenderStates[i].state, &savedRenderStates[i]);
+            pDevice->SetRenderState(kWaterSSRRenderStates[i].state, kWaterSSRRenderStates[i].value);
+        }
+
+        for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+            {
+                pDevice->GetSamplerState(slot, kSSRSamplerStates[i].state, &savedSamplerStates[slot][i]);
+                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
+            }
+
+        effect->SetTechnique(h.techSSRWater);
+        effect->Begin(&passes, 0);
+        effect->BeginPass(0);
+        effect->CommitChanges();
+        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+        effect->EndPass();
+        effect->End();
+
+        for (size_t i = 0; i < std::size(kWaterSSRRenderStates); ++i)
+            pDevice->SetRenderState(kWaterSSRRenderStates[i].state, savedRenderStates[i]);
+
+        for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, savedSamplerStates[slot][i]);
+
+        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+
+        for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+        {
+            pDevice->SetTexture(slot, oldTextures[slot]);
+            SAFE_RELEASE(oldTextures[slot]);
+        }
+
+        pDevice->SetDepthStencilSurface(ds);
+        pDevice->SetFVF(oldFVF);
+        pDevice->SetVertexDeclaration(oldDecl);
+        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
+
+        SAFE_RELEASE(ds);
+        SAFE_RELEASE(oldDecl);
+        SAFE_RELEASE(oldVB);
+    }
+
+    static inline SafetyHookInline shWaterRender{};
+    static void __cdecl WaterRenderHook(int a1)
+    {
+        shWaterRender.unsafe_ccall<void>(a1);
+        RenderWaterReflections();
+    }
+
     static void RenderAmbientOcclusion()
     {
         static auto AO = FusionFixSettings.GetRef("PREF_SAO");
@@ -1748,11 +2328,30 @@ private:
         DWORD result = RenderPedAndVehicleFakeShadowsInlineHook.unsafe_ccall<DWORD>(a1);
 
         RenderAmbientOcclusion();
+        RenderScreenSpaceReflections();
 
         return result;
     }
 
 public:
+    static void BindSSRTexture()
+    {
+        auto& R = PostFxResources;
+        if (!R.SSRTex || !R.SSRTex->mD3DTexture)
+            return;
+
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+
+        pDevice->SetTexture(3, R.SSRTex->mD3DTexture);
+        pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(3, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+        pDevice->SetSamplerState(3, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+        pDevice->SetSamplerState(3, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    }
+
     PostFX()
     {
         FusionFix::onInitEventAsync() += []()
@@ -1769,6 +2368,23 @@ public:
 
                 pattern = find_pattern("E8 ? ? ? ? 6A ? FF B7 ? ? ? ? 8B CF FF 77 ? E8 ? ? ? ? 5F", "E8 ? ? ? ? 8B 8E ? ? ? ? 8B 56 ? 6A ? 51");
                 hbDrawCallPostFX.fun = injector::MakeCALL(pattern.get_first(0), DrawCallPostFX).get();
+
+                pattern = find_pattern("55 8B EC 83 E4 F0 81 EC D8 00 00 00 56 57 E8 ? ? ? ?");
+                if (!pattern.empty())
+                    shWaterRender = safetyhook::create_inline(pattern.get_first(0), WaterRenderHook);
+
+                pattern = find_pattern("F3 0F 10 05 ? ? ? ? F3 0F 11 44 24 08 FF 74 24 08");
+                if (!pattern.empty())
+                    PostFxResources.pWaterLevel = *pattern.get_first<const float*>(4);
+
+                {
+                    CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
+                    {
+                        auto cb = new T_CB_Generic_NoArgs(BindSSRTexture);
+                        if (cb)
+                            cb->Append();
+                    };
+                }
 
                 if (PostFxResources.bEnablePreAlphaDepth)
                 {
