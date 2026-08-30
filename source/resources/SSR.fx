@@ -161,6 +161,7 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
     float tHit = 0.0;
     float hitDelta = 0.0;
     float hitThickness = 1.0;
+    float prevRayZ = P0.z;
 
     [loop]
     for (int i = 0; i < NUM_STEPS; ++i)
@@ -174,7 +175,7 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
 
         if (delta > 0.0)
         {
-            float thickness = max(fThickness, rayZ * 0.02);
+            float thickness = (rayZ - prevRayZ) + fThickness;
             if (delta < thickness)
             {
                 tHit = t;
@@ -183,6 +184,8 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
             }
             break;
         }
+
+        prevRayZ = rayZ;
     }
 
     if (tHit <= 0.0)
@@ -233,8 +236,8 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 
     float4 r = TraceReflection(C, n, 0.0);
 
-    float2 spec = tex2D(SpecularTex, uv).xy;
-    float gloss = saturate(max(spec.x, spec.y));
+    float2 spec = saturate(tex2D(SpecularTex, uv).xy);
+    float gloss = sqrt(spec.x * spec.y);
     r.a *= smoothstep(fGlossCutoff, fGlossCutoff + 0.2, gloss) * (1.0 + fGlossBoost * gloss);
 
     return float4(r.rgb, saturate(r.a * fIntensity));

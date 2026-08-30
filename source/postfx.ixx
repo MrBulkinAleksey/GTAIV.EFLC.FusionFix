@@ -218,11 +218,11 @@ public:
     int nSSRSteps = 24;
     int nSSRRefineSteps = 4;
     float fSSRMaxDistance = 24.0f;
-    float fSSRThickness = 0.5f;
+    float fSSRThickness = 0.1f;
     float fSSREdgeFade = 0.1f;
     float fSSRIntensity = 1.0f;
     float fSSRGlossBoost = 2.0f;
-    float fSSRGlossCutoff = 0.15f;
+    float fSSRGlossCutoff = 0.25f;
     float fSSRWaterIntensity = 1.0f;
     // CWater::Render loads this as the Z of every flat water vertex, so it is the real
     // surface height rather than an assumed sea level.
@@ -710,11 +710,11 @@ public:
         nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 24), 4, 128);
         nSSRRefineSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsRefineSteps", 4), 0, 16);
         fSSRMaxDistance = std::max(1.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsMaxDistance", 24.0f));
-        fSSRThickness = std::max(0.01f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsThickness", 0.5f));
+        fSSRThickness = std::max(0.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsThickness", 0.1f));
         fSSREdgeFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsEdgeFade", 0.1f), 0.001f, 0.5f);
         fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRGlossBoost = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossBoost", 2.0f), 0.0f, 8.0f);
-        fSSRGlossCutoff = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossCutoff", 0.15f), 0.0f, 1.0f);
+        fSSRGlossCutoff = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossCutoff", 0.25f), 0.0f, 1.0f);
         fSSRWaterIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWaterLevelOffset = iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterLevelOffset", 0.0f);
         fSSRWaterBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterBlur", 3.0f), 0.0f, 32.0f);
