@@ -246,7 +246,8 @@ public:
     D3DXVECTOR4 SSRReprojRows[4] = {};
     bool bSSRReprojValid = false;
 
-    // Vehicle glass reflections (shaders/patches/vehicle_glass_reflections.patch). The glass
+    // Glass reflections (shaders/patches/vehicle_glass_reflections.patch and
+    // building_glass_reflections.patch). The glass
     // shader reads the camera projection and settings from a 2x1 float texture, since no
     // shader constant survives from here to the glass draws, plus the scene below.
     // D3DPOOL_DEFAULT, so released on device loss.
@@ -3015,7 +3016,7 @@ private:
 
 public:
     // Runs right after deferred lighting and the SSR composite, before glass: gives the
-    // patched vehicle glass shaders the scene, its depth and the camera. With the feature off
+    // patched vehicle and building glass shaders the scene, its depth and the camera. With the feature off
     // s9 is left empty, and the glass shaders keep the game's environment map.
     static void PrepareGlassReflections()
     {
