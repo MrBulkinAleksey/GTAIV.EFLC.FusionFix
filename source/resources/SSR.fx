@@ -124,6 +124,7 @@ uniform float4 vec4WaterWorldY;
 
 uniform float fUseGBufferNormals; // 1 reads the G-buffer normal, 0 rebuilds it from depth
 uniform float fTemporalBlend;     // weight of the previous frame's reflection, 0 disables accumulation
+uniform float fDebugMode;         // 1 magenta on every surface, 2 raw hits ignoring gloss, 0 normal output
 uniform float fFrameIndex;        // varies the ray start offset between frames
 uniform float fPrevDepthValid;    // 0 until a previous frame's linear depth exists
 
@@ -392,10 +393,17 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     if (rawDepth >= 0.9999)
         return 0.0; // sky
 
+    // Debug 1: every reflective surface should turn magenta if deferred_lighting reads
+    // this texture at all, independent of the ray march.
+    if (fDebugMode > 0.5 && fDebugMode < 1.5)
+        return float4(1.0, 0.0, 1.0, 1.0);
+
     // Matte surfaces reflect nothing, so skip the ray march for them entirely.
     float2 spec = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).xy);
     float gloss = sqrt(spec.x * spec.y);
     float glossWeight = smoothstep(fGlossCutoff, fGlossCutoff + 0.2, gloss) * (1.0 + fGlossBoost * gloss);
+    if (fDebugMode > 1.5)
+        glossWeight = 1.0; // debug 2: show what the rays hit, whatever the material
     if (glossWeight <= 0.0)
         return 0.0;
 
@@ -412,6 +420,8 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 
     float4 r = TraceReflection(C, n, 0.0, (fTemporalBlend > 0.0) ? RayJitter(vPos) : 1.0);
     r.a = saturate(r.a * glossWeight * fIntensity);
+    if (fDebugMode > 1.5)
+        return float4(r.rgb, r.a > 0.0 ? 1.0 : 0.0);
 
     if (fTemporalBlend > 0.0)
     {

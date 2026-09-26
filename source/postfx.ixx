@@ -307,7 +307,7 @@ public:
     struct
     {
         D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, PrevSSRTex2D;
-        D3DXHANDLE fUseGBufferNormals, fTemporalBlend, fFrameIndex;
+        D3DXHANDLE fUseGBufferNormals, fTemporalBlend, fFrameIndex, fDebugMode;
         D3DXHANDLE PrevDepthTex2D, CurTex2D, PrevTex2D, fPrevDepthValid, fResolveBlend, vec4SunView;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask;
         D3DXHANDLE fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity;
@@ -340,6 +340,7 @@ public:
     bool bSSRHalfResolution = false;
     bool bSSRGBufferNormals = true;
     float fSSRTemporalBlend = 0.5f;
+    int nSSRDebug = 0;
     int nAmbientOcclusionSamples = 9;
     int nAmbientOcclusionBlurPasses = 1;
     int nAmbientOcclusionLogMaxOffset = 3;
@@ -724,6 +725,7 @@ public:
                 h.techSSR = SSREffect->GetTechniqueByName("SSR");
                 h.techSSRWater = SSREffect->GetTechniqueByName("SSRWater");
                 h.PrevDepthTex2D = SSREffect->GetParameterByName(nullptr, "PrevDepthTex2D");
+                h.fDebugMode = SSREffect->GetParameterByName(nullptr, "fDebugMode");
                 h.PreWaterTex2D = SSREffect->GetParameterByName(nullptr, "PreWaterTex2D");
                 h.PostWaterTex2D = SSREffect->GetParameterByName(nullptr, "PostWaterTex2D");
                 h.fUseWaterMask = SSREffect->GetParameterByName(nullptr, "fUseWaterMask");
@@ -878,6 +880,7 @@ public:
         bSSRHalfResolution = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsHalfResolution", 0) != 0;
         bSSRGBufferNormals = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGBufferNormals", 1) != 0;
         fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporalBlend", 0.5f), 0.0f, 0.9f);
+        nSSRDebug = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsDebug", 0), 0, 2);
 
         bContactShadows = iniReader.ReadInteger("POSTFX", "ContactShadows", 1) != 0;
         nContactShadowSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ContactShadowsSteps", 12), 4, 64);
@@ -2313,7 +2316,9 @@ private:
         effect->SetFloat(h.fUseGBufferNormals, gbufferNormals ? 1.0f : 0.0f);
 
         effect->SetTexture(h.PrevSSRTex2D, R.SSRTex[prev]->mD3DTexture);
-        effect->SetFloat(h.fTemporalBlend, R.bSSRPrevValid ? R.fSSRTemporalBlend : 0.0f);
+        // Debug output must not be blended with earlier frames.
+        effect->SetFloat(h.fTemporalBlend, (R.bSSRPrevValid && !R.nSSRDebug) ? R.fSSRTemporalBlend : 0.0f);
+        effect->SetFloat(h.fDebugMode, float(R.nSSRDebug));
 
         // _DEFERRED_GBUFFER_2_ is (specular intensity, gloss, AO); vehicle paint and glass
         // sit near the top of both, road surfaces near the bottom.
