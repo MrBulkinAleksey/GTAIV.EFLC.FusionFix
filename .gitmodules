@@ -9,7 +9,7 @@
 	url = https://github.com/ThirteenAG/IniReader
 [submodule "shaders/GTAIV.EFLC.FusionShaders"]
 	path = shaders/GTAIV.EFLC.FusionShaders
-	url = https://github.com/Parallellines0451/GTAIV.EFLC.FusionShaders
+	url = https://github.com/ook3D/GTAIV.EFLC.FusionShaders
 	ignore = dirty
 [submodule "external/modupdater"]
 	path = external/modupdater
