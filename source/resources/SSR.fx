@@ -700,11 +700,13 @@ float4 SSRComposite_PS(float2 uv : TEXCOORD0) : COLOR0
     float3 n = SurfaceNormal(uv, C);
     float NdotV = saturate(dot(n, -normalize(C)));
 
-    // _DEFERRED_GBUFFER_2_.x is specular intensity: dull materials reflect little even at
-    // grazing angles, polished paint and wet asphalt a lot more.
-    float specIntensity = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).x);
-    float F0 = 0.04 + 0.21 * specIntensity;
-    float fresnel = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
+    // The same Fresnel deferred_lighting applies to the game's own reflection, 0.25 facing
+    // the camera up to 1 at grazing angles. A physically based one (a few percent facing the
+    // camera) left SSR invisible next to the game's strongly weighted environment reflection.
+    // Which surfaces reflect at all is already decided by the gloss weight in r.a.
+    float fresnel = 1.0 - NdotV;
+    fresnel *= fresnel;
+    fresnel = 0.25 + 0.75 * fresnel * fresnel;
 
     float k = saturate(r.a * fresnel * fReflectionStrength);
     if (any(r != r))
