@@ -986,6 +986,8 @@ public:
                 //    WaterQuadsCount++;
                 //});
 
+                });*/
+
                 // The light-admission workaround now installs in nightshadows.ixx
                 // after its guarded allocator setup, avoiding parallel edits to 927BD4.
 
