@@ -42,6 +42,32 @@ permissions:
   contents: write
 
 jobs:
+  # Fast feedback on shaders while the full build runs: applies shaders/patches, assembles
+  # every game shader and compiles the HLSL effects the game compiles at runtime.
+  shaders:
+    runs-on: windows-2025-vs2026
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v7
+      with:
+        sparse-checkout: |
+          shaders
+          tools/RageShaderEditor
+          source/resources
+          source/dxsdk
+          buildshaders.bat
+
+    - name: Checkout shader submodule
+      run: git submodule update --init --depth 1 shaders/GTAIV.EFLC.FusionShaders
+
+    - name: Build shaders
+      shell: cmd
+      run: |
+        call buildshaders.bat || exit 1
+        "source\dxsdk\lib\x86\fxc.exe" /T fx_2_0 /nologo /Fo "%TEMP%\SSR.fxo" "source\resources\SSR.fx" || exit 1
+        "source\dxsdk\lib\x86\fxc.exe" /T fx_2_0 /nologo /Fo "%TEMP%\AO.fxo" "source\resources\AO.fx" || exit 1
+
   build:
     runs-on: windows-2025-vs2026
 
@@ -65,12 +91,33 @@ jobs:
     - name: Configure build
       run: ./premake5 vs2026 --with-version=${{ steps.versioning.outputs.version }}
 
-    - name: Build
+    # The updater library only changes with its submodule or the runner's toolchain, so it is
+    # cached on both instead of being rebuilt in four configurations on every run.
+    - name: Get modupdater revision
+      id: modupdater
+      shell: bash
+      run: |
+        echo "sha=$(git -C external/modupdater rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        echo "image=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+    - name: Cache modupdater library
+      id: modupdater-cache
+      uses: actions/cache@v6
+      with:
+        path: external/modupdater/dist
+        key: modupdater-${{ runner.os }}-${{ steps.modupdater.outputs.image }}-${{ steps.modupdater.outputs.sha }}
+
+    - name: Build modupdater
+      if: steps.modupdater-cache.outputs.cache-hit != 'true'
       run: |
         Push-Location external\modupdater
         & .\premake5.bat
-        & .\builddist.bat
+        # Only the configuration this build links against.
+        msbuild -m build/modupdater.sln /t:UpdaterLib /property:Configuration=Release /property:Platform=Win32
         Pop-Location
+
+    - name: Build
+      run: |
         msbuild -m build/GTAIV.EFLC.FusionFix.slnx /property:Configuration=Release /property:Platform=Win32
 
     - name: Download Ultimate ASI Loader x86
