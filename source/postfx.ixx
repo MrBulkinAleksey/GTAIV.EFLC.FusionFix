@@ -882,7 +882,7 @@ public:
         bSSRHalfResolution = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsHalfResolution", 0) != 0;
         bSSRGBufferNormals = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGBufferNormals", 1) != 0;
         fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporalBlend", 0.5f), 0.0f, 0.9f);
-        nSSRDebug = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsDebug", 0), 0, 2);
+        nSSRDebug = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsDebug", 0), 0, 3);
 
         nContactShadowSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ContactShadowsSteps", 12), 4, 64);
         fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 0.6f), 0.05f, 10.0f);
