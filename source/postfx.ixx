@@ -246,6 +246,23 @@ public:
     D3DXVECTOR4 SSRReprojRows[4] = {};
     bool bSSRReprojValid = false;
 
+    // Vehicle glass reflections (shaders/patches/vehicle_glass_reflections.patch). The glass
+    // shader reads the camera projection and settings from a 2x1 float texture, since no
+    // shader constant survives from here to the glass draws, plus the scene below.
+    // D3DPOOL_DEFAULT, so released on device loss.
+    bool bGlassReflections = true;
+    float fGlassReflectionsLength = 15.0f;
+    float fGlassReflectionsThickness = 0.5f;
+    IDirect3DTexture9* GlassParamsTex = nullptr;
+    IDirect3DTexture9* GlassSceneTex = nullptr;
+    D3DSURFACE_DESC GlassSceneDesc = {};
+    void ReleaseGlassReflections()
+    {
+        SAFE_RELEASE(GlassParamsTex);
+        SAFE_RELEASE(GlassSceneTex);
+        GlassSceneDesc = {};
+    }
+
     // Copies of the scene right before and right after CWater::Render. They differ only
     // where water was drawn, which limits the water reflection pass to real water.
     // D3DPOOL_DEFAULT textures in the render target's own format, so released on device loss.
@@ -268,6 +285,7 @@ public:
         D3DXVECTOR4 reprojRows[4] = {}; // view space position to the previous frame's clip space
         D3DXVECTOR4 worldToView[3] = {};
         D3DXVECTOR4 sunView = {};       // towards the directional light in view space, w 1 when known
+        float proj11 = 0.0f, proj22 = 0.0f, proj31 = 0.0f, proj32 = 0.0f, proj34 = 0.0f;
         D3DXMATRIX prevViewProj = {};
         bool prevViewProjValid = false;
         uint32_t index = 0;
@@ -892,6 +910,9 @@ public:
         fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporalBlend", 0.5f), 0.0f, 0.9f);
         nSSRDebug = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsDebug", 0), 0, 3);
         bSSRComposite = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsComposite", 1) != 0;
+        bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
+        fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
+        fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
         fSSRReflectionStrength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStrength", 1.0f), 0.0f, 4.0f);
 
         nContactShadowSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ContactShadowsSteps", 12), 4, 64);
@@ -1051,6 +1072,7 @@ private:
     {
         PostFxResources.ReleaseTextures();
         PostFxResources.ReleaseWaterMask();
+        PostFxResources.ReleaseGlassReflections();
         // PostFxResources.mSpecularAoRT    =nullptr;
         PostFxResources.mNormalRT = nullptr;
         PostFxResources.mDiffuseRT = nullptr;
@@ -1963,6 +1985,11 @@ private:
         F.projInfo.y = -2.0f / (F.height * proj._22);
         F.projInfo.z = (1.0f - proj._31) / proj._11;
         F.projInfo.w = (1.0f + proj._32) / proj._22;
+        F.proj11 = proj._11;
+        F.proj22 = proj._22;
+        F.proj31 = proj._31;
+        F.proj32 = proj._32;
+        F.proj34 = proj._34;
 
         D3DXMATRIX viewProj;
         MatrixMultiply(viewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
@@ -2966,6 +2993,95 @@ private:
     }
 
 public:
+    // Runs right after deferred lighting and the SSR composite, before glass: gives the
+    // patched vehicle glass shaders the scene, its depth and the camera. With the feature off
+    // s12 is left empty, and the glass shaders keep the game's environment map.
+    static void PrepareGlassReflections()
+    {
+        auto& R = PostFxResources;
+        auto& F = R.Frame;
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+
+        auto disable = [&]()
+        {
+            pDevice->SetTexture(12, nullptr);
+            pDevice->SetTexture(13, nullptr);
+            pDevice->SetTexture(14, nullptr);
+        };
+
+        auto depth = R.LinDepth.Previous(); // written this frame, see RenderPedAndVehicleFakeShadows
+        if (!R.bGlassReflections || !R.SSREnabled() || !F.valid || !depth)
+        {
+            disable();
+            return;
+        }
+
+        // Copy of the lit opaque scene; glass is drawn into the same target afterwards.
+        IDirect3DSurface9* scene = nullptr;
+        if (FAILED(pDevice->GetRenderTarget(0, &scene)) || !scene)
+        {
+            disable();
+            return;
+        }
+        D3DSURFACE_DESC desc = {};
+        scene->GetDesc(&desc);
+        if (R.GlassSceneTex && (desc.Width != R.GlassSceneDesc.Width || desc.Height != R.GlassSceneDesc.Height ||
+            desc.Format != R.GlassSceneDesc.Format))
+            SAFE_RELEASE(R.GlassSceneTex);
+        if (!R.GlassSceneTex && SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format,
+            D3DPOOL_DEFAULT, &R.GlassSceneTex, nullptr)))
+            R.GlassSceneDesc = desc;
+        bool ok = R.GlassSceneTex != nullptr;
+        if (ok)
+        {
+            IDirect3DSurface9* dst = nullptr;
+            ok = SUCCEEDED(R.GlassSceneTex->GetSurfaceLevel(0, &dst)) &&
+                 SUCCEEDED(pDevice->StretchRect(scene, nullptr, dst, nullptr, D3DTEXF_NONE));
+            SAFE_RELEASE(dst);
+        }
+        SAFE_RELEASE(scene);
+
+        if (ok && !R.GlassParamsTex)
+            ok = SUCCEEDED(pDevice->CreateTexture(2, 1, 1, D3DUSAGE_DYNAMIC, D3DFMT_A32B32G32R32F, D3DPOOL_DEFAULT,
+                                                  &R.GlassParamsTex, nullptr));
+        if (ok)
+        {
+            // Texel 0: projection _11, _22, _31, _32. Texel 1: _34, thickness, ray length, and
+            // a magic value the shader checks, so a foreign texture in s12 is never used.
+            D3DLOCKED_RECT locked = {};
+            ok = SUCCEEDED(R.GlassParamsTex->LockRect(0, &locked, nullptr, D3DLOCK_DISCARD));
+            if (ok)
+            {
+                // A32B32G32R32F stores each texel as r, g, b, a floats.
+                float* texels = static_cast<float*>(locked.pBits);
+                const float values[8] = { F.proj11, F.proj22, F.proj31, F.proj32,
+                                          F.proj34, R.fGlassReflectionsThickness, R.fGlassReflectionsLength, 12345.0f };
+                std::memcpy(texels, values, sizeof(values));
+                R.GlassParamsTex->UnlockRect(0);
+            }
+        }
+        if (!ok)
+        {
+            disable();
+            return;
+        }
+
+        auto bind = [&](DWORD slot, IDirect3DBaseTexture9* tex, DWORD filter)
+        {
+            pDevice->SetTexture(slot, tex);
+            pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+            pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+            pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, filter);
+            pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, filter);
+            pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        };
+        bind(12, R.GlassParamsTex, D3DTEXF_POINT);
+        bind(13, depth, D3DTEXF_POINT);
+        bind(14, R.GlassSceneTex, D3DTEXF_LINEAR);
+    }
+
     // Runs right after deferred lighting, before glass and water: blends this frame's
     // reflections over the lit scene.
     static void RenderSSRComposite()
@@ -3073,6 +3189,9 @@ public:
                         auto cb = new T_CB_Generic_NoArgs(RenderSSRComposite);
                         if (cb)
                             cb->Append();
+                        auto glass = new T_CB_Generic_NoArgs(PrepareGlassReflections);
+                        if (glass)
+                            glass->Append();
                     };
                 }
 

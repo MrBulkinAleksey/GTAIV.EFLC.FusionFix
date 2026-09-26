@@ -1,0 +1,246 @@
+diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
+index 366992fd..69651148 100644
+--- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
++++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
+@@ -157,6 +157,12 @@
+     def c12, 0.473434001, -0.480026007, 0.519456029, 0.767022014
+     def c13, -0.203345001, 0.620715976, 0.962339997, -0.194983006
+     def c28, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    def c155, 0.25, 0.5, 0, 0
++    def c156, 0.75, 0.5, 0, 0
++    def c157, 12345, 1, 0.0833333358, 10
++    def c158, 0.5, -0.5, 0.5, 0
++    defi i0, 12, 0, 0, 0
+     dcl vPos.xy
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+@@ -169,6 +175,9 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s4
++    dcl_2d s12 // FusionFix: camera projection and settings, 2x1
++    dcl_2d s13 // FusionFix: linear view depth of the opaque scene
++    dcl_2d s14 // FusionFix: copy of the lit opaque scene
+     dcl_2d s15
+     texld r0, v0, s0
+     add r1.xyz, c1.x, v1
+@@ -201,6 +210,54 @@
+     add r4.xy, -r4, c1.w
+     mov r4.zw, c2.w
+     texldl r4, r4, s4
++    // --- FusionFix glass reflections: march the reflected ray through the opaque scene and
++    // --- use what it hits instead of the environment map. Without FusionFix's parameter
++    // --- texture (magic value missing) the environment map is kept as is.
++    mov r28, c155
++    texldl r27, r28, s12 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s12 // projection _34, thickness, ray length, magic
++    add r29.x, r28.w, -c157.x
++    mul r29.x, r29.x, r29.x
++    if_lt r29.x, c157.y
++      mul r30.xyz, r5, r28.z
++      mul r30.xyz, r30, c157.z
++      mov r31.xyz, v4
++      mov r17, c155.z
++      rep i0
++        add r31.xyz, r31, r30
++        add r14.xyz, r31, -c15
++        dp3 r15.x, r14, c12
++        dp3 r15.y, r14, c13
++        dp3 r15.z, r14, c14
++        mul r16.w, r15.z, r28.x
++        break_le r16.w, c155.z // behind the camera
++        mul r16.x, r15.x, r27.x
++        mad r16.x, r15.z, r27.z, r16.x
++        mul r16.y, r15.y, r27.y
++        mad r16.y, r15.z, r27.w, r16.y
++        rcp r16.z, r16.w
++        mul r16.xy, r16, r16.z
++        mad r18.xy, r16, c158.xy, c158.zz
++        mov r18.zw, c155.z
++        min r29.y, r18.x, r18.y
++        add r29.zw, c157.y, -r18.xyxy
++        min r29.z, r29.z, r29.w
++        min r29.y, r29.y, r29.z
++        break_lt r29.y, c155.z // left the screen
++        texldl r14, r18, s13
++        add r14.y, r16.w, -r14.x
++        if_gt r14.y, c155.z
++          if_lt r14.y, r28.y
++            texldl r17, r18, s14
++            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
++          endif
++          break // went behind the scene, a hit or not
++        endif
++      endrep
++      lrp r15.xyz, r17.w, r17, r4
++      mov r4.xyz, r15
++    endif
+     mul_sat r1.x, r5.z, c3.x
+     mul r4.xyz, r4, r1.x
+     mul r4.xyz, r1.z, r4
+diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
+index 2847833c..46c4991e 100644
+--- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
++++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
+@@ -108,6 +108,12 @@
+     def c11, 0.962339997, -0.194983006, 0.473434001, -0.480026007
+     def c12, -0.69591397, 0.457136989, -0.203345001, 0.620715976
+     def c13, -0.326211989, -0.405809999, -0.840143979, -0.0735799968
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    def c155, 0.25, 0.5, 0, 0
++    def c156, 0.75, 0.5, 0, 0
++    def c157, 12345, 1, 0.0833333358, 10
++    def c158, 0.5, -0.5, 0.5, 0
++    defi i0, 12, 0, 0, 0
+     dcl vPos.xy
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+@@ -120,6 +126,9 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s4
++    dcl_2d s12 // FusionFix: camera projection and settings, 2x1
++    dcl_2d s13 // FusionFix: linear view depth of the opaque scene
++    dcl_2d s14 // FusionFix: copy of the lit opaque scene
+     dcl_2d s15
+     texld r0, v0, s0
+     add r1.xyz, c1.x, v1
+@@ -151,6 +160,54 @@
+     add r4.xy, -r4, c1.z
+     mov r4.zw, c2.w
+     texldl r4, r4, s4
++    // --- FusionFix glass reflections: march the reflected ray through the opaque scene and
++    // --- use what it hits instead of the environment map. Without FusionFix's parameter
++    // --- texture (magic value missing) the environment map is kept as is.
++    mov r28, c155
++    texldl r27, r28, s12 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s12 // projection _34, thickness, ray length, magic
++    add r29.x, r28.w, -c157.x
++    mul r29.x, r29.x, r29.x
++    if_lt r29.x, c157.y
++      mul r30.xyz, r5, r28.z
++      mul r30.xyz, r30, c157.z
++      mov r31.xyz, v4
++      mov r17, c155.z
++      rep i0
++        add r31.xyz, r31, r30
++        add r14.xyz, r31, -c15
++        dp3 r15.x, r14, c12
++        dp3 r15.y, r14, c13
++        dp3 r15.z, r14, c14
++        mul r16.w, r15.z, r28.x
++        break_le r16.w, c155.z // behind the camera
++        mul r16.x, r15.x, r27.x
++        mad r16.x, r15.z, r27.z, r16.x
++        mul r16.y, r15.y, r27.y
++        mad r16.y, r15.z, r27.w, r16.y
++        rcp r16.z, r16.w
++        mul r16.xy, r16, r16.z
++        mad r18.xy, r16, c158.xy, c158.zz
++        mov r18.zw, c155.z
++        min r29.y, r18.x, r18.y
++        add r29.zw, c157.y, -r18.xyxy
++        min r29.z, r29.z, r29.w
++        min r29.y, r29.y, r29.z
++        break_lt r29.y, c155.z // left the screen
++        texldl r14, r18, s13
++        add r14.y, r16.w, -r14.x
++        if_gt r14.y, c155.z
++          if_lt r14.y, r28.y
++            texldl r17, r18, s14
++            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
++          endif
++          break // went behind the scene, a hit or not
++        endif
++      endrep
++      lrp r15.xyz, r17.w, r17, r4
++      mov r4.xyz, r15
++    endif
+     mul_sat r1.x, r5.z, c3.x
+     mul r4.xyz, r4, r1.x
+     mul r4.xyz, r1.z, r4
+diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
+index 1d5cecf5..0e4f224f 100644
+--- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
++++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
+@@ -133,6 +133,12 @@
+     def c12, 0.473434001, -0.480026007, 0.519456029, 0.767022014
+     def c13, -0.203345001, 0.620715976, 0.962339997, -0.194983006
+     def c28, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    def c155, 0.25, 0.5, 0, 0
++    def c156, 0.75, 0.5, 0, 0
++    def c157, 12345, 1, 0.0833333358, 10
++    def c158, 0.5, -0.5, 0.5, 0
++    defi i0, 12, 0, 0, 0
+     dcl vPos.xy
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+@@ -145,6 +151,9 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s4
++    dcl_2d s12 // FusionFix: camera projection and settings, 2x1
++    dcl_2d s13 // FusionFix: linear view depth of the opaque scene
++    dcl_2d s14 // FusionFix: copy of the lit opaque scene
+     dcl_2d s15
+     texld r0, v0, s0
+     add r1.xyz, c0.x, v1
+@@ -177,6 +186,54 @@
+     add r4.xy, -r4, c0.w
+     mov r4.zw, c2.w
+     texldl r4, r4, s4
++    // --- FusionFix glass reflections: march the reflected ray through the opaque scene and
++    // --- use what it hits instead of the environment map. Without FusionFix's parameter
++    // --- texture (magic value missing) the environment map is kept as is.
++    mov r28, c155
++    texldl r27, r28, s12 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s12 // projection _34, thickness, ray length, magic
++    add r29.x, r28.w, -c157.x
++    mul r29.x, r29.x, r29.x
++    if_lt r29.x, c157.y
++      mul r30.xyz, r5, r28.z
++      mul r30.xyz, r30, c157.z
++      mov r31.xyz, v4
++      mov r17, c155.z
++      rep i0
++        add r31.xyz, r31, r30
++        add r14.xyz, r31, -c15
++        dp3 r15.x, r14, c12
++        dp3 r15.y, r14, c13
++        dp3 r15.z, r14, c14
++        mul r16.w, r15.z, r28.x
++        break_le r16.w, c155.z // behind the camera
++        mul r16.x, r15.x, r27.x
++        mad r16.x, r15.z, r27.z, r16.x
++        mul r16.y, r15.y, r27.y
++        mad r16.y, r15.z, r27.w, r16.y
++        rcp r16.z, r16.w
++        mul r16.xy, r16, r16.z
++        mad r18.xy, r16, c158.xy, c158.zz
++        mov r18.zw, c155.z
++        min r29.y, r18.x, r18.y
++        add r29.zw, c157.y, -r18.xyxy
++        min r29.z, r29.z, r29.w
++        min r29.y, r29.y, r29.z
++        break_lt r29.y, c155.z // left the screen
++        texldl r14, r18, s13
++        add r14.y, r16.w, -r14.x
++        if_gt r14.y, c155.z
++          if_lt r14.y, r28.y
++            texldl r17, r18, s14
++            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
++          endif
++          break // went behind the scene, a hit or not
++        endif
++      endrep
++      lrp r15.xyz, r17.w, r17, r4
++      mov r4.xyz, r15
++    endif
+     mul_sat r1.x, r5.z, c3.x
+     mul r4.xyz, r4, r1.x
+     mul r4.xyz, r1.z, r4
