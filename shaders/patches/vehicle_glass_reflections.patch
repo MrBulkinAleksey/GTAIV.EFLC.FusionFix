@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 366992fd..69651148 100644
+index 366992fd..3eeb39e2 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 @@ -157,6 +157,12 @@
@@ -19,9 +19,9 @@ index 366992fd..69651148 100644
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
-+    dcl_2d s12 // FusionFix: camera projection and settings, 2x1
-+    dcl_2d s13 // FusionFix: linear view depth of the opaque scene
-+    dcl_2d s14 // FusionFix: copy of the lit opaque scene
++    dcl_2d s9 // FusionFix: camera projection and settings, 2x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
++    dcl_2d s13 // FusionFix: copy of the lit opaque scene
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
@@ -33,9 +33,9 @@ index 366992fd..69651148 100644
 +    // --- use what it hits instead of the environment map. Without FusionFix's parameter
 +    // --- texture (magic value missing) the environment map is kept as is.
 +    mov r28, c155
-+    texldl r27, r28, s12 // projection _11, _22, _31, _32
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
 +    mov r28, c156
-+    texldl r28, r28, s12 // projection _34, thickness, ray length, magic
++    texldl r28, r28, s9 // projection _34, thickness, ray length, magic
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
@@ -64,11 +64,11 @@ index 366992fd..69651148 100644
 +        min r29.z, r29.z, r29.w
 +        min r29.y, r29.y, r29.z
 +        break_lt r29.y, c155.z // left the screen
-+        texldl r14, r18, s13
++        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
 +          if_lt r14.y, r28.y
-+            texldl r17, r18, s14
++            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
@@ -81,7 +81,7 @@ index 366992fd..69651148 100644
      mul r4.xyz, r4, r1.x
      mul r4.xyz, r1.z, r4
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 2847833c..46c4991e 100644
+index 2847833c..17cfafce 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 @@ -108,6 +108,12 @@
@@ -101,9 +101,9 @@ index 2847833c..46c4991e 100644
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
-+    dcl_2d s12 // FusionFix: camera projection and settings, 2x1
-+    dcl_2d s13 // FusionFix: linear view depth of the opaque scene
-+    dcl_2d s14 // FusionFix: copy of the lit opaque scene
++    dcl_2d s9 // FusionFix: camera projection and settings, 2x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
++    dcl_2d s13 // FusionFix: copy of the lit opaque scene
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
@@ -115,9 +115,9 @@ index 2847833c..46c4991e 100644
 +    // --- use what it hits instead of the environment map. Without FusionFix's parameter
 +    // --- texture (magic value missing) the environment map is kept as is.
 +    mov r28, c155
-+    texldl r27, r28, s12 // projection _11, _22, _31, _32
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
 +    mov r28, c156
-+    texldl r28, r28, s12 // projection _34, thickness, ray length, magic
++    texldl r28, r28, s9 // projection _34, thickness, ray length, magic
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
@@ -146,11 +146,11 @@ index 2847833c..46c4991e 100644
 +        min r29.z, r29.z, r29.w
 +        min r29.y, r29.y, r29.z
 +        break_lt r29.y, c155.z // left the screen
-+        texldl r14, r18, s13
++        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
 +          if_lt r14.y, r28.y
-+            texldl r17, r18, s14
++            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
@@ -163,7 +163,7 @@ index 2847833c..46c4991e 100644
      mul r4.xyz, r4, r1.x
      mul r4.xyz, r1.z, r4
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 1d5cecf5..0e4f224f 100644
+index 1d5cecf5..8d035589 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 @@ -133,6 +133,12 @@
@@ -183,9 +183,9 @@ index 1d5cecf5..0e4f224f 100644
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
-+    dcl_2d s12 // FusionFix: camera projection and settings, 2x1
-+    dcl_2d s13 // FusionFix: linear view depth of the opaque scene
-+    dcl_2d s14 // FusionFix: copy of the lit opaque scene
++    dcl_2d s9 // FusionFix: camera projection and settings, 2x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
++    dcl_2d s13 // FusionFix: copy of the lit opaque scene
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c0.x, v1
@@ -197,9 +197,9 @@ index 1d5cecf5..0e4f224f 100644
 +    // --- use what it hits instead of the environment map. Without FusionFix's parameter
 +    // --- texture (magic value missing) the environment map is kept as is.
 +    mov r28, c155
-+    texldl r27, r28, s12 // projection _11, _22, _31, _32
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
 +    mov r28, c156
-+    texldl r28, r28, s12 // projection _34, thickness, ray length, magic
++    texldl r28, r28, s9 // projection _34, thickness, ray length, magic
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
@@ -228,11 +228,11 @@ index 1d5cecf5..0e4f224f 100644
 +        min r29.z, r29.z, r29.w
 +        min r29.y, r29.y, r29.z
 +        break_lt r29.y, c155.z // left the screen
-+        texldl r14, r18, s13
++        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
 +          if_lt r14.y, r28.y
-+            texldl r17, r18, s14
++            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not

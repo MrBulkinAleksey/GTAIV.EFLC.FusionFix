@@ -256,6 +256,27 @@ public:
     IDirect3DTexture9* GlassParamsTex = nullptr;
     IDirect3DTexture9* GlassSceneTex = nullptr;
     D3DSURFACE_DESC GlassSceneDesc = {};
+    // 1x1 transparent black, for samplers that must read "no contribution" with alpha 0.
+    // Managed, so it survives device resets.
+    IDirect3DTexture9* TransparentTexture = nullptr;
+    IDirect3DTexture9* TransparentTex()
+    {
+        if (!TransparentTexture)
+        {
+            auto pDevice = rage::grcDevice::GetD3DDevice();
+            if (pDevice && SUCCEEDED(pDevice->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &TransparentTexture, nullptr)))
+            {
+                D3DLOCKED_RECT locked = {};
+                if (SUCCEEDED(TransparentTexture->LockRect(0, &locked, nullptr, 0)))
+                {
+                    *static_cast<uint32_t*>(locked.pBits) = 0;
+                    TransparentTexture->UnlockRect(0);
+                }
+            }
+        }
+        return TransparentTexture;
+    }
+
     void ReleaseGlassReflections()
     {
         SAFE_RELEASE(GlassParamsTex);
@@ -2995,7 +3016,7 @@ private:
 public:
     // Runs right after deferred lighting and the SSR composite, before glass: gives the
     // patched vehicle glass shaders the scene, its depth and the camera. With the feature off
-    // s12 is left empty, and the glass shaders keep the game's environment map.
+    // s9 is left empty, and the glass shaders keep the game's environment map.
     static void PrepareGlassReflections()
     {
         auto& R = PostFxResources;
@@ -3006,9 +3027,9 @@ public:
 
         auto disable = [&]()
         {
-            pDevice->SetTexture(12, nullptr);
+            pDevice->SetTexture(9, nullptr);
+            pDevice->SetTexture(11, nullptr);
             pDevice->SetTexture(13, nullptr);
-            pDevice->SetTexture(14, nullptr);
         };
 
         auto depth = R.LinDepth.Previous(); // written this frame, see RenderPedAndVehicleFakeShadows
@@ -3049,7 +3070,7 @@ public:
         if (ok)
         {
             // Texel 0: projection _11, _22, _31, _32. Texel 1: _34, thickness, ray length, and
-            // a magic value the shader checks, so a foreign texture in s12 is never used.
+            // a magic value the shader checks, so a foreign texture in s9 is never used.
             D3DLOCKED_RECT locked = {};
             ok = SUCCEEDED(R.GlassParamsTex->LockRect(0, &locked, nullptr, D3DLOCK_DISCARD));
             if (ok)
@@ -3077,9 +3098,11 @@ public:
             pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, filter);
             pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
         };
-        bind(12, R.GlassParamsTex, D3DTEXF_POINT);
-        bind(13, depth, D3DTEXF_POINT);
-        bind(14, R.GlassSceneTex, D3DTEXF_LINEAR);
+        // s9, s11 and s13 are read by no game shader, so these can stay bound until the glass
+        // draws without disturbing anything else.
+        bind(9, R.GlassParamsTex, D3DTEXF_POINT);
+        bind(11, depth, D3DTEXF_POINT);
+        bind(13, R.GlassSceneTex, D3DTEXF_LINEAR);
     }
 
     // Runs right after deferred lighting, before glass and water: blends this frame's
@@ -3117,6 +3140,16 @@ public:
     // Runs right before deferred_lighting: s3 reflections, s7 contact shadow occlusion and s8
     // indirect light. A pass that did not run this frame leaves its sampler empty, which the
     // shader treats as no contribution.
+    // RAGE remembers which texture it bound to each sampler and skips binding it again, so any
+    // slot changed for deferred_lighting (s3 is also read by other shaders, s7 by rage_postfx)
+    // is put back right after lighting, together with its sampler states.
+    static constexpr DWORD kLightingSlots[] = { 3, 7, 8 };
+    static constexpr D3DSAMPLERSTATETYPE kLightingSamplerStates[] =
+        { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER };
+    static inline IDirect3DBaseTexture9* savedLightingTextures[std::size(kLightingSlots)] = {};
+    static inline DWORD savedLightingSamplerStates[std::size(kLightingSlots)][std::size(kLightingSamplerStates)] = {};
+    static inline bool bLightingTexturesSaved = false;
+
     static void BindScreenSpaceLightingTextures()
     {
         auto& R = PostFxResources;
@@ -3124,7 +3157,18 @@ public:
         if (!pDevice)
             return;
 
-        auto bind = [&](DWORD slot, IDirect3DTexture9* tex)
+        if (!bLightingTexturesSaved)
+        {
+            for (size_t i = 0; i < std::size(kLightingSlots); ++i)
+            {
+                pDevice->GetTexture(kLightingSlots[i], &savedLightingTextures[i]);
+                for (size_t j = 0; j < std::size(kLightingSamplerStates); ++j)
+                    pDevice->GetSamplerState(kLightingSlots[i], kLightingSamplerStates[j], &savedLightingSamplerStates[i][j]);
+            }
+            bLightingTexturesSaved = true;
+        }
+
+        auto bind = [&](DWORD slot, IDirect3DBaseTexture9* tex)
         {
             pDevice->SetTexture(slot, tex);
             if (!tex)
@@ -3136,11 +3180,32 @@ public:
             pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
         };
 
-        // With our own composite deferred_lighting keeps the game's reflection untouched.
+        // deferred_lighting blends its own reflection towards s3 by s3's alpha, and an empty
+        // sampler reads alpha 1, which would black the reflection out. With our own composite
+        // s3 gets a transparent texel, so the game's reflection stays as it was.
         auto* ssr = R.SSRTex[R.nSSRCurrent];
-        bind(3, (!R.bSSRComposite && ssr) ? ssr->mD3DTexture : nullptr);
+        if (!R.bSSRComposite && ssr && ssr->mD3DTexture)
+            bind(3, ssr->mD3DTexture);
+        else
+            bind(3, R.TransparentTex());
         bind(7, R.bContactShadowsValidThisFrame ? R.ContactShadowHistory.rt[R.ContactShadowHistory.last].Texture() : nullptr);
         bind(8, R.bIndirectLightValidThisFrame ? R.IndirectLightHistory.rt[R.IndirectLightHistory.last].Texture() : nullptr);
+    }
+
+    static void RestoreLightingTextures()
+    {
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice || !bLightingTexturesSaved)
+            return;
+
+        for (size_t i = 0; i < std::size(kLightingSlots); ++i)
+        {
+            pDevice->SetTexture(kLightingSlots[i], savedLightingTextures[i]);
+            for (size_t j = 0; j < std::size(kLightingSamplerStates); ++j)
+                pDevice->SetSamplerState(kLightingSlots[i], kLightingSamplerStates[j], savedLightingSamplerStates[i][j]);
+            SAFE_RELEASE(savedLightingTextures[i]);
+        }
+        bLightingTexturesSaved = false;
     }
 
     PostFX()
@@ -3186,6 +3251,9 @@ public:
                     };
                     CRenderPhaseDeferredLighting_LightsToScreen::OnAfterBuildRenderList() += []()
                     {
+                        auto restore = new T_CB_Generic_NoArgs(RestoreLightingTextures);
+                        if (restore)
+                            restore->Append();
                         auto cb = new T_CB_Generic_NoArgs(RenderSSRComposite);
                         if (cb)
                             cb->Append();
