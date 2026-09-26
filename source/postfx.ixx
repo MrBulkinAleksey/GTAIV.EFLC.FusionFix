@@ -722,7 +722,7 @@ public:
                 h.fGIThickness = SSREffect->GetParameterByName(nullptr, "fGIThickness");
                 h.fGIIntensity = SSREffect->GetParameterByName(nullptr, "fGIIntensity");
                 h.fGIMaxViewDistance = SSREffect->GetParameterByName(nullptr, "fGIMaxViewDistance");
-                h.techLinearDepth = SSREffect->GetTechniqueByName("LinearDepth");
+                h.techLinearDepth = SSREffect->GetTechniqueByName("LinearDepthCopy");
                 h.techContactShadows = SSREffect->GetTechniqueByName("ContactShadows");
                 h.techSSGI = SSREffect->GetTechniqueByName("SSGI");
                 h.techTemporalResolve = SSREffect->GetTechniqueByName("TemporalResolve");

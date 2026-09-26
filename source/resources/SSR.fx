@@ -629,7 +629,7 @@ technique SSRWater
     }
 }
 
-technique LinearDepth
+technique LinearDepthCopy
 {
     pass P0
     {
