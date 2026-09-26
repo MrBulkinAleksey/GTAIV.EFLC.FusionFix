@@ -6,6 +6,7 @@
 texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, PrevSSRTex2D;
 texture PrevDepthTex2D, CurTex2D, PrevTex2D;
 texture PreWaterTex2D, PostWaterTex2D;
+texture SSRResultTex2D;
 
 sampler2D DepthTex
 {
@@ -90,6 +91,17 @@ sampler2D PostWaterTex
     MipFilter = NONE;
 };
 
+// This frame's resolved reflections, read by the composite pass.
+sampler2D SSRResultTex
+{
+    Texture = <SSRResultTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = NONE;
+};
+
 sampler2D SurfaceTex
 {
     Texture = <SurfaceTex2D>;
@@ -144,6 +156,7 @@ uniform float fGIIntensity;
 uniform float fGIMaxViewDistance;
 
 uniform float fResolveBlend;      // weight of the reprojected history in the resolve pass
+uniform float fReflectionStrength; // composite pass: multiplier on the Fresnel weighted reflection
 
 static const float HISTORY_CLAMP = 8.0;
 static const float SSR_SCALE = 1.0;
@@ -653,6 +666,39 @@ float4 TemporalResolve_PS(float2 uv : TEXCOORD0) : COLOR0
     return lerp(cur, prev, fResolveBlend);
 }
 
+// Blends the reflections over the lit scene after deferred lighting, weighted by our own
+// Fresnel term and the surface's specular intensity, instead of feeding them through the
+// game's much weaker environment reflection term.
+float4 SSRComposite_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 r = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+    if (r.a <= 0.0)
+        return 0.0;
+
+    // Debug output is shown as is.
+    if (fDebugMode > 0.5)
+        return float4(r.rgb, saturate(r.a));
+
+    float rawDepth = RawDepth(uv);
+    if (rawDepth >= 0.9999)
+        return 0.0;
+
+    float3 C = ViewPosFromUVZ(uv, pow(fFarDivNear, rawDepth) * fNearPlane);
+    float3 n = SurfaceNormal(uv, C);
+    float NdotV = saturate(dot(n, -normalize(C)));
+
+    // _DEFERRED_GBUFFER_2_.x is specular intensity: dull materials reflect little even at
+    // grazing angles, polished paint and wet asphalt a lot more.
+    float specIntensity = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).x);
+    float F0 = 0.04 + 0.21 * specIntensity;
+    float fresnel = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
+
+    float k = saturate(r.a * fresnel * fReflectionStrength);
+    if (any(r != r))
+        return 0.0;
+    return float4(r.rgb, k);
+}
+
 void FullscreenQuadVS(in float4 iPos : POSITION, in float2 iUV : TEXCOORD0,
                       out float4 oPos : POSITION, out float2 oUV : TEXCOORD0)
 {
@@ -711,5 +757,20 @@ technique TemporalResolve
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 TemporalResolve_PS();
+    }
+}
+
+technique SSRComposite
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SSRComposite_PS();
+        AlphaBlendEnable = TRUE;
+        SeparateAlphaBlendEnable = FALSE;
+        BlendOp = ADD;
+        SrcBlend = SRCALPHA;
+        DestBlend = INVSRCALPHA;
+        ColorWriteEnable = RED | GREEN | BLUE;
     }
 }

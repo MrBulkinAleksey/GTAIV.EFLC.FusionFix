@@ -312,6 +312,7 @@ public:
         D3DXHANDLE fUseGBufferNormals, fTemporalBlend, fFrameIndex, fDebugMode;
         D3DXHANDLE PrevDepthTex2D, CurTex2D, PrevTex2D, fPrevDepthValid, fResolveBlend, vec4SunView;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask;
+        D3DXHANDLE SSRResultTex2D, fReflectionStrength, techSSRComposite;
         D3DXHANDLE fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity;
         D3DXHANDLE fGIRayLength, fGIThickness, fGIIntensity, fGIMaxViewDistance;
         D3DXHANDLE techLinearDepth, techContactShadows, techSSGI, techTemporalResolve;
@@ -343,6 +344,10 @@ public:
     bool bSSRGBufferNormals = true;
     float fSSRTemporalBlend = 0.5f;
     int nSSRDebug = 0;
+    // Blend reflections over the lit scene ourselves instead of through deferred_lighting's
+    // environment reflection term, which the game scales down to near nothing.
+    bool bSSRComposite = true;
+    float fSSRReflectionStrength = 1.0f;
     int nAmbientOcclusionSamples = 9;
     int nAmbientOcclusionBlurPasses = 1;
     int nAmbientOcclusionLogMaxOffset = 3;
@@ -731,6 +736,9 @@ public:
                 h.PreWaterTex2D = SSREffect->GetParameterByName(nullptr, "PreWaterTex2D");
                 h.PostWaterTex2D = SSREffect->GetParameterByName(nullptr, "PostWaterTex2D");
                 h.fUseWaterMask = SSREffect->GetParameterByName(nullptr, "fUseWaterMask");
+                h.SSRResultTex2D = SSREffect->GetParameterByName(nullptr, "SSRResultTex2D");
+                h.fReflectionStrength = SSREffect->GetParameterByName(nullptr, "fReflectionStrength");
+                h.techSSRComposite = SSREffect->GetTechniqueByName("SSRComposite");
                 h.CurTex2D = SSREffect->GetParameterByName(nullptr, "CurTex2D");
                 h.PrevTex2D = SSREffect->GetParameterByName(nullptr, "PrevTex2D");
                 h.fPrevDepthValid = SSREffect->GetParameterByName(nullptr, "fPrevDepthValid");
@@ -883,6 +891,8 @@ public:
         bSSRGBufferNormals = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGBufferNormals", 1) != 0;
         fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporalBlend", 0.5f), 0.0f, 0.9f);
         nSSRDebug = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsDebug", 0), 0, 3);
+        bSSRComposite = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsComposite", 1) != 0;
+        fSSRReflectionStrength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStrength", 1.0f), 0.0f, 4.0f);
 
         nContactShadowSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ContactShadowsSteps", 12), 4, 64);
         fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 0.6f), 0.05f, 10.0f);
@@ -2956,6 +2966,38 @@ private:
     }
 
 public:
+    // Runs right after deferred lighting, before glass and water: blends this frame's
+    // reflections over the lit scene.
+    static void RenderSSRComposite()
+    {
+        auto& R = PostFxResources;
+        auto& h = R.SSREffectHandles;
+        if (!R.bSSRComposite || !R.SSREnabled() || !R.bSSRValidThisFrame || !R.SSREffect || !R.Frame.valid || !R.mDepthRT)
+            return;
+
+        auto* ssr = R.SSRTex[R.nSSRCurrent];
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        if (!ssr || !ssr->mD3DTexture || !pDevice)
+            return;
+
+        IDirect3DSurface9* scene = nullptr;
+        if (FAILED(pDevice->GetRenderTarget(0, &scene)) || !scene)
+            return;
+
+        ID3DXEffect* effect = R.SSREffect;
+        SetScreenSpaceParams(effect);
+        const bool gbufferNormals = R.bSSRGBufferNormals && R.mNormalRT && R.mNormalRT->mD3DTexture;
+        effect->SetTexture(h.NormalTex2D, gbufferNormals ? R.mNormalRT->mD3DTexture : nullptr);
+        effect->SetFloat(h.fUseGBufferNormals, gbufferNormals ? 1.0f : 0.0f);
+        effect->SetTexture(h.SpecularTex2D, (R.mSpecularRT && R.mSpecularRT->mD3DTexture) ? R.mSpecularRT->mD3DTexture : nullptr);
+        effect->SetTexture(h.SSRResultTex2D, ssr->mD3DTexture);
+        effect->SetFloat(h.fReflectionStrength, R.fSSRReflectionStrength);
+        effect->SetFloat(h.fDebugMode, float(R.nSSRDebug));
+
+        DrawScreenPass(effect, h.techSSRComposite, scene);
+        SAFE_RELEASE(scene);
+    }
+
     // Runs right before deferred_lighting: s3 reflections, s7 contact shadow occlusion and s8
     // indirect light. A pass that did not run this frame leaves its sampler empty, which the
     // shader treats as no contribution.
@@ -2978,9 +3020,9 @@ public:
             pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
         };
 
+        // With our own composite deferred_lighting keeps the game's reflection untouched.
         auto* ssr = R.SSRTex[R.nSSRCurrent];
-        if (ssr && ssr->mD3DTexture)
-            bind(3, ssr->mD3DTexture);
+        bind(3, (!R.bSSRComposite && ssr) ? ssr->mD3DTexture : nullptr);
         bind(7, R.bContactShadowsValidThisFrame ? R.ContactShadowHistory.rt[R.ContactShadowHistory.last].Texture() : nullptr);
         bind(8, R.bIndirectLightValidThisFrame ? R.IndirectLightHistory.rt[R.IndirectLightHistory.last].Texture() : nullptr);
     }
@@ -3023,6 +3065,12 @@ public:
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
                         auto cb = new T_CB_Generic_NoArgs(BindScreenSpaceLightingTextures);
+                        if (cb)
+                            cb->Append();
+                    };
+                    CRenderPhaseDeferredLighting_LightsToScreen::OnAfterBuildRenderList() += []()
+                    {
+                        auto cb = new T_CB_Generic_NoArgs(RenderSSRComposite);
                         if (cb)
                             cb->Append();
                     };
