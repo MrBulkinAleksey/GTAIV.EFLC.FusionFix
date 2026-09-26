@@ -15,6 +15,7 @@ import timecycext;
 
 namespace CText
 {
+    const wchar_t* ShadowReachLabel(uint32_t hash);
     using CText = void;
     CText* g_text = nullptr;
 
@@ -24,6 +25,7 @@ namespace CText
     const wchar_t* __fastcall getText(CText* text, void* edx, const char* key)
     {
         auto hash = GetHash(key);
+        if (const auto label = ShadowReachLabel(hash)) return label;
         if (gxtEntries.contains(hash))
             return gxtEntries[hash].c_str();
 
@@ -33,6 +35,7 @@ namespace CText
     SafetyHookInline shGetTextByKey{};
     const wchar_t* __fastcall getTextByKey(CText* text, void* edx, uint32_t hash, int a3)
     {
+        if (const auto label = ShadowReachLabel(hash)) return label;
         if (gxtEntries.contains(hash))
             return gxtEntries[hash].c_str();
 
@@ -42,6 +45,7 @@ namespace CText
     SafetyHookInline shDoesTextLabelExist{};
     char __fastcall doesTextLabelExist(CText* text, void* edx, const char* key)
     {
+        if (ShadowReachLabel(GetHash(key))) return 1;
         if (gxtEntries.contains(GetHash(key)))
             return 1;
 
@@ -379,6 +383,8 @@ public:
             { 0, "PREF_STOPTAXI",               "MISC",       "InstantStopTaxi",                    "",                           0, nullptr, 0, 1 },
             { 0, "PREF_SAO",                    "MISC",       "AmbientOcclusion",                   "",                           0, nullptr, 0, 1 },
             { 0, "PREF_AUTOCLIMBLADDERS",       "MISC",       "AutoClimbLadders",                   "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_HEADLIGHT_REACH", "SHADOWS", "HeadlightShadowReach", "", 10, nullptr, 0, 40 },
+            { 0, "PREF_LAMP_REACH", "SHADOWS", "LamppostShadowReach", "", 10, nullptr, 0, 40 },
             // Enums are at capacity, to use more enums, replace multiplayer ones. On/Off toggles should still be possible to add.
         };
 
@@ -442,6 +448,8 @@ public:
         // Sliders
         static std::vector<std::pair<std::string_view, std::string_view>> matchingSettingsList =
         {
+            { "PREF_EPISODIC_RACENAME_RACE_0", "PREF_HEADLIGHT_REACH" },
+            { "PREF_EPISODIC_RACENAME_RACE_1", "PREF_LAMP_REACH" },
             { "PREF_EPISODIC_RACENAME_RACE_2",  "PREF_PADAIMSENSITIVITY"    },
             { "PREF_EPISODIC_RACENAME_RACE_3",  "PREF_MOUSEAIMSENSITIVITY"  },
             { "PREF_EPISODIC_RACENAME_RACE_4",  "PREF_PADLOOKSENSITIVITY"   },
@@ -661,6 +669,20 @@ public:
     } ExtraNightShadowsText;
 
 } FusionFixSettings;
+
+const wchar_t* CText::ShadowReachLabel(uint32_t hash)
+{
+    static const auto headlightHash = GetHash("FF_HREACH");
+    static const auto lampHash = GetHash("FF_LREACH");
+    if (hash != headlightHash && hash != lampHash) return nullptr;
+    const bool headlight = hash == headlightHash;
+    const auto step = std::clamp(FusionFixSettings.Get(headlight ? "PREF_HEADLIGHT_REACH" : "PREF_LAMP_REACH"), 0, 40);
+    static thread_local std::wstring labels[2];
+    auto& label = labels[headlight ? 0 : 1];
+    label = headlight ? L"Headlight shadow reach: " : L"Lamppost shadow reach: ";
+    label += step ? std::to_wstring(step * 5) + L" ft" : L"Original";
+    return label.c_str();
+}
 
 export bool shouldModifyMapMenuBackground(int curMenuTab = *pMenuTab)
 {

@@ -8,6 +8,7 @@ export module extrainfo;
 import common;
 import comvars;
 import settings;
+import nightshadows;
 
 std::wstring GetModuleVersion(HMODULE hModule)
 {
@@ -104,7 +105,7 @@ public:
                                     extra += L" / " + ualVer;
 
                                 auto ens = CText::getText("FF_WARN2");
-                                if (ens[0])
+                                if (ens[0] && !IsPlayerNightShadowFixActive())
                                 {
                                     if (FusionFixSettings.GetRef("PREF_EXTRANIGHTSHADOWS")->get() != 0)
                                     {
