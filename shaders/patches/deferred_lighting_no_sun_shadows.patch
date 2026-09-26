@@ -1,0 +1,122 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
+index e970e7eb..f598dafd 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
+@@ -48,6 +48,7 @@
+     def c21, 3, 2, 1, 0 // Console tree lighting constants
+     def c22, 0.012156862745098, 0.0007843137254902, 0, 0 // 3.1, 0.2
+     def c24, 0.212500006, 0.715399981, 0.0720999986, 0.5
++    def c159, 0, 1, 0, 0 // FusionFix: zero, one
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+     dcl_2d s0
+@@ -57,6 +58,8 @@
+     dcl_2d s5
+     dcl_2d s6
+     dcl_2d s3	// FusionFix SSR
++    dcl_2d s7	// FusionFix contact shadows
++    dcl_2d s8	// FusionFix screen space indirect light
+     texld r0, v0, s1
+     mul r1.xyz, r0.w, c1
+     frc r1.xyz, r1
+@@ -73,6 +76,13 @@
+     mad r0.yzw, v1.xxyz, -r0.x, c2.z
+     mul r2.xyz, r0.x, v1
+     nrm r3.xyz, r0.yzww
++    // --- FusionFix: contact shadows (s7 holds occlusion, so an unbound sampler changes nothing)
++    // --- and screen space indirect light (s8), sampled once for both lighting branches.
++    mov r27.xy, v0
++    mov r27.zw, c159.x
++    texldl r28, r27, s8
++    texldl r29, r27, s7
++    add r29.x, c159.y, -r29.x
+     texld r21, v0, s6
+     add r21.x, r21.x, -c22.x
+     add_sat r21.x, -r21_abs.x, c22.y
+@@ -139,7 +149,9 @@
+       mad r1.yzw, r2.xxyz, r0.w, c37.xxyz
+       mul r1.yzw, r3.z, r1
+       mul r2.xyz, c18.w, c18
++      mul r1.x, r1.x, r29.x // FusionFix contact shadow on the direct light
+       mad r1.xyz, r2, r1.x, r1.yzww
++      add r1.xyz, r1, r28 // FusionFix indirect light joins the ambient term
+       texld r2, v0, s0
+       mad oC0.xyz, r2, r1, r0
+       mov oC0.w, c0.z
+@@ -172,6 +184,7 @@
+       //dot(normal, -dirLight) * dirLightColor
+       dp3_sat r0.w, r1.xyz, -c17.xyz
+       mul r5.xyz, r6, r0.w
++      mul r5.xyz, r5, r29.x // FusionFix contact shadow on the direct light
+       
+       //saturate(viewDir.z * 2)
+       add_sat r0.w, r3.z, r3.z
+@@ -199,6 +212,7 @@
+       
+       //diffuse * r0
+       texld r2.xyz, v0, s0
++      add r0.xyz, r0.xyz, r28.xyz // FusionFix indirect light joins the ambient term
+       mul r0.xyz, r0.xyz, r2.xyz
+       
+       mul r0.w, r0.w, r0.w
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
+index 437b8768..8183a53b 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
+@@ -49,6 +49,7 @@
+     def c21, 3, 2, 1, 0 // Console tree lighting constants
+     def c22, 0.012156862745098, 0.0007843137254902, 0, 0 // 3.1, 0.2
+     def c24, 0.212500006, 0.715399981, 0.0720999986, 0.5
++    def c159, 0, 1, 0, 0 // FusionFix: zero, one
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+     dcl_2d s0
+@@ -58,6 +59,8 @@
+     dcl_2d s5
+     dcl_2d s6
+     dcl_2d s3	// FusionFix SSR
++    dcl_2d s7	// FusionFix contact shadows
++    dcl_2d s8	// FusionFix screen space indirect light
+     texld r0, v0, s1
+     mul r1.xyz, r0.w, c1
+     frc r1.xyz, r1
+@@ -74,6 +77,13 @@
+     mad r0.yzw, v1.xxyz, -r0.x, c3.w
+     mul r2.xyz, r0.x, v1
+     nrm r3.xyz, r0.yzww
++    // --- FusionFix: contact shadows (s7 holds occlusion, so an unbound sampler changes nothing)
++    // --- and screen space indirect light (s8), sampled once for both lighting branches.
++    mov r27.xy, v0
++    mov r27.zw, c159.x
++    texldl r28, r27, s8
++    texldl r29, r27, s7
++    add r29.x, c159.y, -r29.x
+     texld r22, v0, s5
+     add r21.x, r22.x, -c22.x
+     add_sat r21.x, -r21_abs.x, c22.y
+@@ -159,7 +169,9 @@
+       mad r1.yzw, r4.xxyz, r0.y, c37.xxyz
+       mul r1.yzw, r3.z, r1
+       mul r3.xyz, c18.w, c18
++      mul r1.x, r1.x, r29.x // FusionFix contact shadow on the direct light
+       mad r1.xyz, r3, r1.x, r1.yzww
++      add r1.xyz, r1, r28 // FusionFix indirect light joins the ambient term
+       mad oC0.xyz, r2, r1, r0.xzww
+       mov oC0.w, c3.z
+     else
+@@ -191,6 +203,7 @@
+       //dot(normal, -dirLight) * dirLightColor
+       dp3_sat r0.w, r1.xyz, -c17.xyz
+       mul r5.xyz, r6, r0.w
++      mul r5.xyz, r5, r29.x // FusionFix contact shadow on the direct light
+       
+       //saturate(viewDir.z * 2)
+       add_sat r0.w, r3.z, r3.z
+@@ -218,6 +231,7 @@
+       
+       //diffuse * r0
+       texld r2.xyz, v0, s0
++      add r0.xyz, r0.xyz, r28.xyz // FusionFix indirect light joins the ambient term
+       mul r0.xyz, r0.xyz, r2.xyz
+       
+       mul r0.w, r0.w, r0.w
