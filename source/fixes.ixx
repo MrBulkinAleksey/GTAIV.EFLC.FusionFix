@@ -986,51 +986,8 @@ public:
                 //    WaterQuadsCount++;
                 //});
 
-                pattern = find_pattern("8B 35 ? ? ? ? F3 0F 11 44 24 ? F3 0F 10 80", "8B 1D ? ? ? ? F3 0F 10 83");
-                static auto RenderLightsHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
-                {
-                    bAnyVisibleNearbyLightOnScreen = false;
-                });*/
-
-                // TODO: Remove? It barely affects water flicker and messes with another workaround for light related stuff (guh)
-                auto pattern = hook::pattern("A8 ? 0F 84 ? ? ? ? 8B C8");
-                static auto loc_927DE0 = resolve_next_displacement(pattern.get_first(0)).value();
-                injector::MakeNOP(pattern.get_first(2), 6);
-                static auto LightCounterHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
-                {
-                    static auto ExtraNightShadows = FusionFixSettings.GetRef("PREF_EXTRANIGHTSHADOWS");
-                    if (ExtraNightShadows->get())
-                    {
-                        if ((regs.eax & 6) != 0)
-                        {
-                            return;
-
-                            /*if (Natives::IsInteriorScene())
-                            {
-                                return; // Flicker - Always in interiors
-                            }
-
-                            if (!bAnyVisibleNearbyWaterOnScreen)
-                            {
-                                return; // Flicker - No water on screen
-                            }
-                            else if (bAnyVisibleNearbyLightOnScreen)
-                            {
-                                return; // Flicker - Water and lights
-                            }*/
-                        }
-                    }
-                    else
-                    {
-                        if ((regs.eax & 6) != 0 && Natives::IsInteriorScene())
-                        {
-                            return; // Flicker
-                        }
-                    }
-
-                    return_to(loc_927DE0);
-                });
-            }
+                // The light-admission workaround now installs in nightshadows.ixx
+                // after its guarded allocator setup, avoiding parallel edits to 927BD4.
 
             // Restore console/pre-1.0.6.0 pause menu info spacing
             {
