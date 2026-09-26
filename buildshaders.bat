@@ -15,8 +15,15 @@ for %%p in ("%shaders_path%\patches\*.patch") do (
 )
 
 cd tools/RageShaderEditor
+rem RageShaderEditor reports assembly errors but still exits normally and leaves a broken
+rem .fxc behind, which crashes the game, so its output is checked here instead.
 for /R "%shaders_path%" %%a in (*.xml) do (
-    RageShaderEditor.exe "%%a"
+    RageShaderEditor.exe "%%a" < nul > "%TEMP%\RageShaderEditor.log" 2>&1
+    type "%TEMP%\RageShaderEditor.log"
+    findstr /C:"Error when assembling" "%TEMP%\RageShaderEditor.log" >nul && (
+        echo Shader assembly failed for %%a
+        exit 1
+    )
 )
 cd ../..
 
