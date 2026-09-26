@@ -128,6 +128,8 @@ workspace "GTAIV.EFLC.FusionFix"
       -- ConsoleGamma
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T fx_2_0 /nologo /Fo \"../source/resources/shaders/win32_30/ConsoleGamma.fxo\" /Fc \"../shaders/external/gamma/asm/ConsoleGamma.asm\" \"../shaders/external/gamma/fx/ConsoleGamma.fx\"",
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T fx_2_0 /nologo /Fo \"../source/resources/shaders/win32_30/ConsoleGamma_Dither.fxo\" /Fc \"../shaders/external/gamma/asm/ConsoleGamma_Dither.asm\" \"../shaders/external/gamma/fx/ConsoleGamma_Dither.fx\"",
+      -- SSR.fx ships as source and is compiled by D3DX in game, so check it here to fail the build instead of the game
+      "\"../source/dxsdk/lib/x86/fxc.exe\" /T fx_2_0 /nologo /Fo \"%{cfg.objdir}/SSR.fxo\" \"../source/resources/SSR.fx\"",
     }
 
    prebuildcommands {

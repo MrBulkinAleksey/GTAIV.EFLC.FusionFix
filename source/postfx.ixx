@@ -194,8 +194,12 @@ public:
     bool bEnablePreAlphaDepth = false;
 
     ID3DXEffect* SSREffect = nullptr;
-    rage::grcRenderTargetPC* SSRTex = nullptr;
-    IDirect3DSurface9* SSRSurf = nullptr;
+    // Two reflection targets used in turn, so each frame can read the previous one for accumulation.
+    rage::grcRenderTargetPC* SSRTex[2] = {};
+    IDirect3DSurface9* SSRSurf[2] = {};
+    int nSSRCurrent = 0;
+    bool bSSRPrevValid = false;
+    uint32_t nSSRFrame = 0;
     rage::grcRenderTargetPC* SSRHistoryTex = nullptr;
     IDirect3DSurface9* SSRHistorySurf = nullptr;
     bool bSSRValidThisFrame = false;
@@ -205,7 +209,8 @@ public:
     bool bSSRReprojValid = false;
     struct
     {
-        D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
+        D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, PrevSSRTex2D;
+        D3DXHANDLE fUseGBufferNormals, fTemporalBlend, fFrameIndex;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
@@ -228,8 +233,11 @@ public:
     // surface height rather than an assumed sea level.
     const float* pWaterLevel = nullptr;
     float fSSRWaterLevelOffset = 0.0f;
-    float fSSRWaterBlur = 3.0f;
-    float fSSRWaterNormalStrength = 1.0f;
+    float fSSRWaterBlur = 0.5f;
+    float fSSRWaterNormalStrength = 0.65f;
+    bool bSSRHalfResolution = false;
+    bool bSSRGBufferNormals = true;
+    float fSSRTemporalBlend = 0.5f;
     int nAmbientOcclusionSamples = 9;
     int nAmbientOcclusionBlurPasses = 1;
     int nAmbientOcclusionLogMaxOffset = 3;
@@ -568,6 +576,11 @@ public:
                 h.HistoryTex2D = SSREffect->GetParameterByName(nullptr, "HistoryTex2D");
                 h.SpecularTex2D = SSREffect->GetParameterByName(nullptr, "SpecularTex2D");
                 h.SurfaceTex2D = SSREffect->GetParameterByName(nullptr, "SurfaceTex2D");
+                h.NormalTex2D = SSREffect->GetParameterByName(nullptr, "NormalTex2D");
+                h.PrevSSRTex2D = SSREffect->GetParameterByName(nullptr, "PrevSSRTex2D");
+                h.fUseGBufferNormals = SSREffect->GetParameterByName(nullptr, "fUseGBufferNormals");
+                h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
+                h.fFrameIndex = SSREffect->GetParameterByName(nullptr, "fFrameIndex");
                 h.vec2InvViewportSize = SSREffect->GetParameterByName(nullptr, "vec2InvViewportSize");
                 h.fNearPlane = SSREffect->GetParameterByName(nullptr, "fNearPlane");
                 h.fFarDivNear = SSREffect->GetParameterByName(nullptr, "fFarDivNear");
@@ -717,8 +730,11 @@ public:
         fSSRGlossCutoff = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossCutoff", 0.25f), 0.0f, 1.0f);
         fSSRWaterIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWaterLevelOffset = iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterLevelOffset", 0.0f);
-        fSSRWaterBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterBlur", 3.0f), 0.0f, 32.0f);
-        fSSRWaterNormalStrength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterRipple", 1.0f), 0.0f, 4.0f);
+        fSSRWaterBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterBlur", 0.5f), 0.0f, 32.0f);
+        fSSRWaterNormalStrength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterRipple", 0.65f), 0.0f, 4.0f);
+        bSSRHalfResolution = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsHalfResolution", 0) != 0;
+        bSSRGBufferNormals = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGBufferNormals", 1) != 0;
+        fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporalBlend", 0.5f), 0.0f, 0.9f);
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -979,12 +995,16 @@ private:
             PostFxResources.AOBlurTex->Destroy();
             PostFxResources.AOBlurTex = nullptr;
         }
-        SAFE_RELEASE(PostFxResources.SSRSurf);
-        if (PostFxResources.SSRTex)
+        for (int i = 0; i < 2; ++i)
         {
-            PostFxResources.SSRTex->Destroy();
-            PostFxResources.SSRTex = nullptr;
+            SAFE_RELEASE(PostFxResources.SSRSurf[i]);
+            if (PostFxResources.SSRTex[i])
+            {
+                PostFxResources.SSRTex[i]->Destroy();
+                PostFxResources.SSRTex[i] = nullptr;
+            }
         }
+        PostFxResources.bSSRPrevValid = false;
         SAFE_RELEASE(PostFxResources.SSRHistorySurf);
         if (PostFxResources.SSRHistoryTex)
         {
@@ -1028,9 +1048,16 @@ private:
         {
             aoDesc.mFormat = rage::GRCFMT_A16B16G16R16F;
             aoDesc.mLevels = 1;
-            PostFxResources.SSRTex = CreateEmptyRT("SSRTex", 3, width, height, 64, &aoDesc);
-            if (PostFxResources.SSRTex && PostFxResources.SSRTex->mD3DTexture)
-                PostFxResources.SSRTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRSurf);
+            // deferred_lighting samples the reflection by uv with linear filtering, so a
+            // half resolution target needs no change on its side.
+            const uint32_t ssrWidth = PostFxResources.bSSRHalfResolution ? std::max(1u, uint32_t(width) / 2) : uint32_t(width);
+            const uint32_t ssrHeight = PostFxResources.bSSRHalfResolution ? std::max(1u, uint32_t(height) / 2) : uint32_t(height);
+            for (int i = 0; i < 2; ++i)
+            {
+                PostFxResources.SSRTex[i] = CreateEmptyRT(i ? "SSRTex1" : "SSRTex0", 3, ssrWidth, ssrHeight, 64, &aoDesc);
+                if (PostFxResources.SSRTex[i] && PostFxResources.SSRTex[i]->mD3DTexture)
+                    PostFxResources.SSRTex[i]->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRSurf[i]);
+            }
 
             PostFxResources.SSRHistoryTex = CreateEmptyRT("SSRHistoryTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.SSRHistoryTex && PostFxResources.SSRHistoryTex->mD3DTexture)
@@ -1038,7 +1065,7 @@ private:
 
             IDirect3DSurface9* oldRT = nullptr;
             pDevice->GetRenderTarget(0, &oldRT);
-            for (auto* surf : { PostFxResources.SSRSurf, PostFxResources.SSRHistorySurf })
+            for (auto* surf : { PostFxResources.SSRSurf[0], PostFxResources.SSRSurf[1], PostFxResources.SSRHistorySurf })
             {
                 if (!surf)
                     continue;
@@ -1171,12 +1198,12 @@ private:
                     pDevice->SetSamplerState(0, D3DSAMP_ADDRESSV, prevAddressV[0]);
                     pDevice->SetTexture(0, prevTex[0]);
 
-                    if (PostFxResources.SSREnabled() && PostFxResources.SSRHistorySurf && PostFxResources.SSRSurf)
+                    if (PostFxResources.SSREnabled() && PostFxResources.SSRHistorySurf && PostFxResources.SSRSurf[0])
                     {
                         D3DVIEWPORT9 vpBeforeCapture;
                         pDevice->GetViewport(&vpBeforeCapture);
 
-                        pDevice->SetRenderTarget(0, PostFxResources.SSRSurf);
+                        pDevice->SetRenderTarget(0, PostFxResources.SSRSurf[0]);
                         pDevice->StretchRect(PostFxResources.HDRFullScreenSurface, nullptr, PostFxResources.SSRHistorySurf, nullptr, D3DTEXF_NONE);
                         pDevice->SetRenderTarget(0, PostFxResources.HDRFullScreenSurface);
 
@@ -1670,7 +1697,7 @@ private:
         { D3DSAMP_MINFILTER, D3DTEXF_POINT },
         { D3DSAMP_MIPFILTER, D3DTEXF_NONE },
     };
-    static constexpr DWORD kSSRSamplerSlots = 4;
+    static constexpr DWORD kSSRSamplerSlots = 8;
     static constexpr DWORD kSSRTextureSlots = 8;
     static constexpr UINT kPSConstCount = 224;
     static constexpr UINT kVSConstCount = 256;
@@ -1687,12 +1714,21 @@ private:
         out = r;
     }
 
+    // Rotation from world space into the view space the SSR shader reconstructs positions in.
+    static void ComputeWorldToView(const D3DXMATRIX& viewInv, const D3DMATRIX& proj, D3DXVECTOR4 (&toView)[3])
+    {
+        const float axisSign[3] = { -1.0f, 1.0f, (proj._34 < 0.0f) ? -1.0f : 1.0f };
+        for (int row = 0; row < 3; ++row)
+            toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
+                                      viewInv.m[row][2] * axisSign[row], 0.0f);
+    }
+
     static void RenderScreenSpaceReflections()
     {
         auto& R = PostFxResources;
         R.bSSRValidThisFrame = false;
 
-        if (!R.SSRSurf)
+        if (!R.SSRSurf[0] || !R.SSRSurf[1])
             return;
 
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
@@ -1703,13 +1739,17 @@ private:
         {
             IDirect3DSurface9* oldRT = nullptr;
             pDevice->GetRenderTarget(0, &oldRT);
-            pDevice->SetRenderTarget(0, R.SSRSurf);
-            pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+            for (auto* surf : R.SSRSurf)
+            {
+                pDevice->SetRenderTarget(0, surf);
+                pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+            }
             if (oldRT)
             {
                 pDevice->SetRenderTarget(0, oldRT);
                 oldRT->Release();
             }
+            R.bSSRPrevValid = false;
         };
 
         if (!R.SSREnabled())
@@ -1748,19 +1788,27 @@ private:
         float width = float(vp->mWidth);
         float height = float(vp->mHeight);
 
+        // The target may be at half resolution; positions are still reconstructed at full resolution.
+        const int prev = R.nSSRCurrent;
+        const int write = prev ^ 1;
+        D3DSURFACE_DESC targetDesc = {};
+        R.SSRSurf[write]->GetDesc(&targetDesc);
+        const float targetWidth = float(targetDesc.Width);
+        const float targetHeight = float(targetDesc.Height);
+
         D3DVIEWPORT9 vpDesc = {};
         vpDesc.MaxZ = 1.0f;
-        vpDesc.Width = DWORD(width);
-        vpDesc.Height = DWORD(height);
+        vpDesc.Width = targetDesc.Width;
+        vpDesc.Height = targetDesc.Height;
         pDevice->SetViewport(&vpDesc);
 
         struct ScreenVertex { float x, y, z, rhw; float u, v; };
         ScreenVertex screenVertices[4] =
         {
-            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
-            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+            { -0.5f,               -0.5f,                0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,                targetHeight - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+            { targetWidth - 0.5f,  -0.5f,                0.0f, 1.0f, 1.0f, 0.0f },
+            { targetWidth - 0.5f,   targetHeight - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
         };
 
         auto& h = R.SSREffectHandles;
@@ -1768,6 +1816,14 @@ private:
 
         effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
         effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
+
+        const bool gbufferNormals = R.bSSRGBufferNormals && R.mNormalRT && R.mNormalRT->mD3DTexture;
+        effect->SetTexture(h.NormalTex2D, gbufferNormals ? R.mNormalRT->mD3DTexture : nullptr);
+        effect->SetFloat(h.fUseGBufferNormals, gbufferNormals ? 1.0f : 0.0f);
+
+        effect->SetTexture(h.PrevSSRTex2D, R.SSRTex[prev]->mD3DTexture);
+        effect->SetFloat(h.fTemporalBlend, R.bSSRPrevValid ? R.fSSRTemporalBlend : 0.0f);
+        effect->SetFloat(h.fFrameIndex, float(R.nSSRFrame++ % 64));
 
         // _DEFERRED_GBUFFER_2_ is (specular intensity, gloss, AO); vehicle paint and glass
         // sit near the top of both, road surfaces near the bottom.
@@ -1812,6 +1868,10 @@ private:
         memcpy(R.SSRReprojRows, reprojRows, sizeof(reprojRows));
         R.bSSRReprojValid = true;
 
+        D3DXVECTOR4 toView[3];
+        ComputeWorldToView(*(const D3DXMATRIX*)vp->mViewInverseMatrix, proj, toView);
+        effect->SetVectorArray(h.vec4WaterToView, toView, 3);
+
         R.SSRPrevViewProj = viewProj;
         R.bSSRPrevViewProjValid = true;
 
@@ -1849,7 +1909,7 @@ private:
             effect->Begin(&passes, 0);
         }
         {
-            pDevice->SetRenderTarget(0, R.SSRSurf);
+            pDevice->SetRenderTarget(0, R.SSRSurf[write]);
             pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
 
             effect->BeginPass(0);
@@ -1878,6 +1938,8 @@ private:
         }
 
         R.bSSRValidThisFrame = true;
+        R.nSSRCurrent = write;
+        R.bSSRPrevValid = true;
 
         pDevice->SetRenderTarget(0, rt0);
         pDevice->SetDepthStencilSurface(ds);
@@ -1926,7 +1988,10 @@ private:
 
         const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
 
-        float waterLevel = (R.pWaterLevel ? *R.pWaterLevel : 0.0f) + R.fSSRWaterLevelOffset;
+        float waterLevel = R.pWaterLevel ? *R.pWaterLevel : 0.0f;
+        if (!std::isfinite(waterLevel) || std::abs(waterLevel) > 1000.0f)
+            waterLevel = 0.0f;
+        waterLevel += R.fSSRWaterLevelOffset;
 
         if (viewInv.m[3][2] <= waterLevel)
             return;
@@ -1964,9 +2029,7 @@ private:
         effect->SetVector(h.vec4WaterPlane, &plane);
 
         D3DXVECTOR4 toView[3];
-        for (int row = 0; row < 3; ++row)
-            toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
-                                      viewInv.m[row][2] * axisSign[row], 0.0f);
+        ComputeWorldToView(viewInv, proj, toView);
         effect->SetVectorArray(h.vec4WaterToView, toView, 3);
 
         D3DXVECTOR4 worldX(toView[0].x, toView[1].x, toView[2].x, viewInv.m[3][0]);
@@ -2337,14 +2400,15 @@ public:
     static void BindSSRTexture()
     {
         auto& R = PostFxResources;
-        if (!R.SSRTex || !R.SSRTex->mD3DTexture)
+        auto* tex = R.SSRTex[R.nSSRCurrent];
+        if (!tex || !tex->mD3DTexture)
             return;
 
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
 
-        pDevice->SetTexture(3, R.SSRTex->mD3DTexture);
+        pDevice->SetTexture(3, tex->mD3DTexture);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(3, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
@@ -2373,9 +2437,18 @@ public:
                 if (!pattern.empty())
                     shWaterRender = safetyhook::create_inline(pattern.get_first(0), WaterRenderHook);
 
-                pattern = find_pattern("F3 0F 10 05 ? ? ? ? F3 0F 11 44 24 08 FF 74 24 08");
-                if (!pattern.empty())
-                    PostFxResources.pWaterLevel = *pattern.get_first<const float*>(4);
+                // This byte sequence is generic, so only trust a single match whose operand
+                // points into the game image.
+                pattern = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 11 44 24 08 FF 74 24 08");
+                if (pattern.size() == 1)
+                {
+                    auto waterLevel = *pattern.get_first<const float*>(4);
+                    auto image = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+                    auto nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(image + reinterpret_cast<const IMAGE_DOS_HEADER*>(image)->e_lfanew);
+                    auto address = reinterpret_cast<uintptr_t>(waterLevel);
+                    if (address >= image && address + sizeof(float) <= image + nt->OptionalHeader.SizeOfImage)
+                        PostFxResources.pWaterLevel = waterLevel;
+                }
 
                 {
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()

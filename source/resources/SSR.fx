@@ -1,4 +1,4 @@
-texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
+texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, PrevSSRTex2D;
 
 sampler2D DepthTex
 {
@@ -15,6 +15,18 @@ sampler2D HistoryTex
 sampler2D SpecularTex
 {
     Texture = <SpecularTex2D>;
+};
+
+sampler2D NormalTex
+{
+    Texture = <NormalTex2D>;
+};
+
+sampler2D PrevSSRTex
+{
+    Texture = <PrevSSRTex2D>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
 };
 
 sampler2D SurfaceTex
@@ -44,9 +56,13 @@ uniform float4 vec4WaterPlane;  // water plane in reconstruction space, (normal.
 uniform float fWaterBlur;       // reflection blur radius in pixels at max ray distance
 uniform float fWaterNormalStrength; // ripple slope multiplier, 0 gives a flat mirror
 
-uniform float4 vec4WaterToView[3];
+uniform float4 vec4WaterToView[3]; // world to view rotation, also used for G-buffer normals
 uniform float4 vec4WaterWorldX;
 uniform float4 vec4WaterWorldY;
+
+uniform float fUseGBufferNormals; // 1 reads the G-buffer normal, 0 rebuilds it from depth
+uniform float fTemporalBlend;     // weight of the previous frame's reflection, 0 disables accumulation
+uniform float fFrameIndex;        // varies the ray start offset between frames
 
 static const float HISTORY_CLAMP = 8.0;
 static const float SSR_SCALE = 1.0;
@@ -80,9 +96,14 @@ float3 SampleHistoryBlurred(float2 uv, float radiusPixels)
 #define NUM_REFINE_STEPS 4
 #endif
 
+float RawDepth(float2 uv)
+{
+    return tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
+}
+
 float LinearDepth(float2 uv)
 {
-    return pow(fFarDivNear, tex2Dlod(DepthTex, float4(uv, 0, 0)).r) * fNearPlane;
+    return pow(fFarDivNear, RawDepth(uv)) * fNearPlane;
 }
 
 float3 ReconstructViewPos(float2 S, float z)
@@ -135,7 +156,32 @@ float3 ReconstructNormal(float2 uv, float3 C)
     return normalize(cross(dpdy, dpdx));
 }
 
-float4 TraceReflection(float3 C, float3 n, float blurPixels)
+float3 WorldToView(float3 v)
+{
+    return float3(dot(vec4WaterToView[0].xyz, v),
+                  dot(vec4WaterToView[1].xyz, v),
+                  dot(vec4WaterToView[2].xyz, v));
+}
+
+// Same decoding deferred_lighting applies to _DEFERRED_GBUFFER_1_: 8 bits per axis
+// in rgb with the fractional bits packed into alpha, in world space.
+float3 GBufferNormal(float2 uv)
+{
+    float4 g = tex2Dlod(NormalTex, float4(uv, 0, 0));
+    float3 f = frac(g.w * float3(0.998046875, 7.984375, 63.875));
+    f.xy -= f.yz * 0.125;
+    return normalize(WorldToView(g.xyz * 256.0 + f - 127.999992));
+}
+
+// Interleaved gradient noise, shifted every frame so accumulation sees new ray offsets.
+// Kept in (0, 1] so the first step never lands on the ray origin.
+float RayJitter(float2 pixel)
+{
+    pixel += fFrameIndex * 5.588238;
+    return 1.0 - frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
+}
+
+float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
 {
     float z = C.z;
     float3 V = normalize(C);
@@ -166,7 +212,7 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
     [loop]
     for (int i = 0; i < NUM_STEPS; ++i)
     {
-        float t = dt * (float) (i + 1);
+        float t = dt * ((float) i + jitter);
 
         float2 sampleUV = lerp(uv0, uv1, t);
         float rayZ = 1.0 / lerp(invZ0, invZ1, t);
@@ -229,18 +275,49 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
 
 float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
-    float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
+    float rawDepth = RawDepth(uv);
+    if (rawDepth >= 0.9999)
+        return 0.0; // sky
 
-    float3 n = ReconstructNormal(uv, C);
+    // Matte surfaces reflect nothing, so skip the ray march for them entirely.
+    float2 spec = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).xy);
+    float gloss = sqrt(spec.x * spec.y);
+    float glossWeight = smoothstep(fGlossCutoff, fGlossCutoff + 0.2, gloss) * (1.0 + fGlossBoost * gloss);
+    if (glossWeight <= 0.0)
+        return 0.0;
+
+    // uv rather than VPOS, so the pass also works into a reduced resolution target.
+    float3 C = ViewPosFromUVZ(uv, pow(fFarDivNear, rawDepth) * fNearPlane);
+
+    float3 n;
+    [branch]
+    if (fUseGBufferNormals > 0.0)
+        n = GBufferNormal(uv);
+    else
+        n = ReconstructNormal(uv, C);
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, 0.0);
+    float4 r = TraceReflection(C, n, 0.0, (fTemporalBlend > 0.0) ? RayJitter(vPos) : 1.0);
+    r.a = saturate(r.a * glossWeight * fIntensity);
 
-    float2 spec = saturate(tex2D(SpecularTex, uv).xy);
-    float gloss = sqrt(spec.x * spec.y);
-    r.a *= smoothstep(fGlossCutoff, fGlossCutoff + 0.2, gloss) * (1.0 + fGlossBoost * gloss);
+    if (fTemporalBlend > 0.0)
+    {
+        // Reproject this surface point into the previous frame's reflection and blend in
+        // premultiplied form, so a miss on either side does not darken the colour.
+        float2 prevUV = HistoryUV(C);
+        if (all(prevUV > 0.0) && all(prevUV < 1.0))
+        {
+            float4 prev = tex2Dlod(PrevSSRTex, float4(prevUV, 0, 0));
+            if (all(prev == prev))
+            {
+                float4 cur = float4(r.rgb * r.a, r.a);
+                float4 acc = lerp(cur, float4(prev.rgb * prev.a, prev.a), fTemporalBlend);
+                r = float4(acc.rgb / max(acc.a, 1e-4), acc.a);
+            }
+        }
+    }
 
-    return float4(r.rgb, saturate(r.a * fIntensity));
+    return r;
 }
 
 float3 WaterNormal(float2 worldXY, float distSq)
@@ -251,11 +328,7 @@ float3 WaterNormal(float2 worldXY, float distSq)
     slope += (tex2D(SurfaceTex, worldXY * 0.01).zw - 0.5) * 1.024;
     slope += (tex2D(SurfaceTex, worldXY * 0.0454545468).zw - 0.5) * 0.465454549 * near;
 
-    float3 nWorld = normalize(float3(slope * fWaterNormalStrength, 1.0));
-
-    return float3(dot(vec4WaterToView[0].xyz, nWorld),
-                  dot(vec4WaterToView[1].xyz, nWorld),
-                  dot(vec4WaterToView[2].xyz, nWorld));
+    return WorldToView(normalize(float3(slope * fWaterNormalStrength, 1.0)));
 }
 
 float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
@@ -279,7 +352,7 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 n = WaterNormal(worldXY, dot(C, C));
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, fWaterBlur);
+    float4 r = TraceReflection(C, n, fWaterBlur, 1.0);
 
     return float4(r.rgb, saturate(r.a * fWaterIntensity));
 }
