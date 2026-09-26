@@ -331,6 +331,16 @@ public:
             // The experimental adapter has only been audited for CE 1.2.0.59. Any other
             // layout skips it and keeps the official FusionFix night shadow behaviour.
             const bool ceAdapter = CShadows::ValidateAdapter();
+            ShadowDiagnostics::path = iniReader.GetIniPath().parent_path() / "GTAIV-shadows.log";
+            {
+                // Uses the real image size, so an unexpected executable is never read past its end.
+                const auto image = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
+                const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+                const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(image + dos->e_lfanew);
+                ShadowDiagnostics::adapterStatus = std::string(ceAdapter ? "ce_adapter=1 " : "ce_adapter=0 ") +
+                    fusionfix::shadows::ce::DescribeMappedImage(image, nt->OptionalHeader.SizeOfImage,
+                        reinterpret_cast<uintptr_t>(image));
+            }
             bool casterGuard = false;
             int casterMode = 0;
             if (ceAdapter)
@@ -354,7 +364,6 @@ public:
                 // Publication happens after all hooks are installed below.
                 ShadowDiagnostics::guardPassed = casterGuard;
                 ShadowDiagnostics::casterMode = casterMode;
-                ShadowDiagnostics::path = iniReader.GetIniPath().parent_path() / "GTAIV-shadows.log";
 
                 // Offline-reviewed prototype; never turn this on silently for an
                 // existing installation. A later controlled launch must opt in.
@@ -601,7 +610,8 @@ public:
             OwnHeadlightCaster::enabled.store(ceAdapter && casterGuard && casterMode == 1 &&
                 static_cast<bool>(shsub_D77A00), std::memory_order_release);
             HeadlightEnhancement::diagnosticsReady.store(ceAdapter && shadowDiagnostics, std::memory_order_release);
-            ShadowDiagnostics::ready.store(ceAdapter && shadowDiagnostics, std::memory_order_release);
+            // Written on every executable, so a missing adapter shows up with its reason.
+            ShadowDiagnostics::ready.store(shadowDiagnostics, std::memory_order_release);
         };
     }
 } NightShadows;

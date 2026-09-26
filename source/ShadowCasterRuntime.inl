@@ -72,6 +72,7 @@ namespace ShadowDiagnostics
     static std::string startupGuardDetails;
     static bool startupWritten = false;
     static bool admissionInstalled = false;
+    static std::string adapterStatus;
 
     static void Write() noexcept
     {
@@ -86,6 +87,7 @@ namespace ShadowDiagnostics
             std::ofstream log(path, std::ios::app);
             if (!startupWritten)
             {
+                log << "adapter " << adapterStatus << '\n';
                 log << "startup_guard " << startupGuardDetails << '\n';
                 log << "allocator_startup " << PlayerShadowAllocation::installStatus << '\n';
                 if (log.good()) startupWritten = true;
