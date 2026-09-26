@@ -13,6 +13,47 @@
 //  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 texture AOTexture2D, AOCamDepthTexture2D, DepthTex2D;
+texture NormalTex2D, DiffuseTex2D, AOHistoryTexture2D, PrevDepthTex2D;
+
+sampler2D NormalTex
+{
+    Texture = <NormalTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MipFilter = None;
+    MinFilter = Point;
+    MagFilter = Point;
+};
+
+sampler2D DiffuseTex
+{
+    Texture = <DiffuseTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MipFilter = None;
+    MinFilter = Point;
+    MagFilter = Point;
+};
+
+sampler2D AOHistoryTexture
+{
+    Texture = <AOHistoryTexture2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MipFilter = None;
+    MinFilter = Linear;
+    MagFilter = Linear;
+};
+
+sampler2D PrevDepthTex
+{
+    Texture = <PrevDepthTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MipFilter = None;
+    MinFilter = Point;
+    MagFilter = Point;
+};
 
 sampler2D AOCamDepthTexture
 {
@@ -55,6 +96,14 @@ uniform float fProjScale;
 uniform float4 vec4ProjInfo;
 uniform float2 vec2BlurDirection;
 
+uniform float4 vec4WorldToView[3];    // rotation into the view space positions are reconstructed in
+uniform float4 vec4ViewToPrevClip[4]; // view space position to the previous frame's clip space
+uniform float fUseGBufferNormals;     // 1 reads the G-buffer normal, 0 rebuilds it from depth
+uniform float fFrameRotation;         // extra spiral rotation, changes every frame for accumulation
+uniform float fResolveBlend;          // weight of the reprojected history, 0 disables accumulation
+uniform float fPrevDepthValid;
+uniform float fMultiBounce;           // 0..1, how much light bouncing off bright albedo lifts the occlusion
+
 #ifndef NUM_SAMPLES
 #define NUM_SAMPLES 9
 #endif
@@ -90,7 +139,19 @@ float3 ReconstructNormal(float3 pos)
 
 float GetRandomRotationAngle(float2 vPos)
 {
-    return 2 * PI * frac(52.9829189 * frac(dot(vPos, float2(0.06711056, 0.00583715))));
+    return 2 * PI * frac(52.9829189 * frac(dot(vPos, float2(0.06711056, 0.00583715)))) + fFrameRotation;
+}
+
+// Same decoding deferred_lighting applies to _DEFERRED_GBUFFER_1_, rotated into view space.
+float3 GBufferNormal(float2 uv)
+{
+    float4 g = tex2Dlod(NormalTex, float4(uv, 0, 0));
+    float3 f = frac(g.w * float3(0.998046875, 7.984375, 63.875));
+    f.xy -= f.yz * 0.125;
+    float3 w = g.xyz * 256.0 + f - 127.999992;
+    return normalize(float3(dot(vec4WorldToView[0].xyz, w),
+                            dot(vec4WorldToView[1].xyz, w),
+                            dot(vec4WorldToView[2].xyz, w)));
 }
 
 float3 getOffsetPosition(float2 ssC, float2 unitOffset, float ssR)
@@ -195,7 +256,13 @@ float4 ComputeAO_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 	// Reconstruct normals from positions. These will lead to 1-pixel black lines
 	// at depth discontinuities, however the blur will wipe those out so they are not visible
 	// in the final image.
+    // The G-buffer normal avoids the one pixel dark lines of the derivative normal at
+    // depth edges; both are evaluated since the derivatives cannot sit in a branch.
     float3 n_C = ReconstructNormal(C);
+    // Keep the G-buffer normal on the same side as the derivative one the SAO sum expects.
+    float3 n_G = GBufferNormal(uv);
+    n_G = (dot(n_G, n_C) < 0.0) ? -n_G : n_G;
+    n_C = (fUseGBufferNormals > 0.0) ? n_G : n_C;
 
 	// Choose the screen-space sample radius
 	// proportional to the projected area of the sphere
@@ -242,10 +309,53 @@ float4 BlurAOToBuffer_PS(float2 uv : TEXCOORD0) : COLOR0
     return float4(blur.x, blur.x, blur.x, 1);
 }
 
+// Jimenez et al. 2016 multi-bounce fit: bright surfaces receive light bounced off their
+// surroundings, so pure occlusion over-darkens them.
+float MultiBounce(float ao, float albedo)
+{
+    float a = 2.0404 * albedo - 0.3324;
+    float b = -4.7951 * albedo + 0.6417;
+    float c = 2.7552 * albedo + 0.6903;
+    return max(ao, ((ao * a + b) * ao + c) * ao);
+}
+
 float4 OutputAO_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     float ao = tex2D(AOTexture, uv).r;
-    return float4(0, 0, 0, 1.0 - ao);
+    if (fMultiBounce > 0.0)
+    {
+        float albedo = dot(tex2D(DiffuseTex, uv).rgb, 1.0 / 3.0);
+        ao = lerp(ao, MultiBounce(ao, albedo), fMultiBounce);
+    }
+    return float4(0, 0, 0, 1.0 - saturate(ao));
+}
+
+// Blends the blurred AO with its reprojected history, dropping history on disocclusion.
+float4 TemporalResolveAO_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+{
+    float ao = tex2D(AOTexture, uv).r;
+    float depth = tex2D(AOCamDepthTexture, uv).r;
+
+    if (fResolveBlend > 0.0 && fPrevDepthValid > 0.0 && depth < FAR_CLIP)
+    {
+        float3 C = ReconstructViewPos(vPos, depth);
+        float4 clip = C.x * vec4ViewToPrevClip[0]
+                    + C.y * vec4ViewToPrevClip[1]
+                    + C.z * vec4ViewToPrevClip[2]
+                    +       vec4ViewToPrevClip[3];
+        if (clip.w > 0.0)
+        {
+            float2 prevUV = (clip.xy / clip.w) * float2(0.5, -0.5) + 0.5;
+            if (all(prevUV > 0.0) && all(prevUV < 1.0))
+            {
+                float prevZ = tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r;
+                if (abs(prevZ - clip.w) < clip.w * 0.05 + 0.05)
+                    ao = lerp(ao, tex2Dlod(AOHistoryTexture, float4(prevUV, 0, 0)).r, fResolveBlend);
+            }
+        }
+    }
+
+    return float4(ao, ao, ao, 1.0);
 }
 
 float4 ComputeCamDepth_PS(float2 uv : TEXCOORD0) : COLOR0
@@ -342,5 +452,19 @@ technique AmbientOcclusion
         FogEnable = FALSE;
         Clipping = FALSE;   
         ColorWriteEnable = BLUE; // output ao
+    }
+    pass TemporalResolveAO
+    {
+        PixelShader = compile ps_3_0 TemporalResolveAO_PS();
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable = FALSE;
+        ZEnable = 0;
+        ZWriteEnable = FALSE;
+        StencilEnable = FALSE;
+        CullMode = NONE;
+        FogEnable = FALSE;
+        Clipping = FALSE;
+        ColorWriteEnable = RED | GREEN | BLUE | ALPHA;
     }
 }

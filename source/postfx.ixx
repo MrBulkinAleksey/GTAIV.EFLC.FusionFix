@@ -54,6 +54,47 @@ import shaders;
 
 std::optional<std::reference_wrapper<int32_t>> UsePostFxAA;
 
+// A render target with its surface.
+struct ScreenRT
+{
+    rage::grcRenderTargetPC* tex = nullptr;
+    IDirect3DSurface9* surf = nullptr;
+
+    IDirect3DTexture9* Texture() const { return tex ? tex->mD3DTexture : nullptr; }
+    void Release()
+    {
+        SAFE_RELEASE(surf);
+        if (tex)
+        {
+            tex->Destroy();
+            tex = nullptr;
+        }
+    }
+};
+
+// Two render targets written in turn, so each frame can read what the previous one wrote.
+struct HistoryRT
+{
+    ScreenRT rt[2];
+    int last = 0;           // written most recently
+    bool lastValid = false; // `last` holds a usable previous frame
+
+    bool Ready() const { return rt[0].surf && rt[1].surf; }
+    int Next() const { return last ^ 1; }
+    IDirect3DTexture9* Previous() const { return lastValid ? rt[last].Texture() : nullptr; }
+    void Advance()
+    {
+        last = Next();
+        lastValid = true;
+    }
+    void Release()
+    {
+        rt[0].Release();
+        rt[1].Release();
+        lastValid = false;
+    }
+};
+
 class PostFxResource
 {
 public:
@@ -199,18 +240,64 @@ public:
     IDirect3DSurface9* SSRSurf[2] = {};
     int nSSRCurrent = 0;
     bool bSSRPrevValid = false;
-    uint32_t nSSRFrame = 0;
     rage::grcRenderTargetPC* SSRHistoryTex = nullptr;
     IDirect3DSurface9* SSRHistorySurf = nullptr;
     bool bSSRValidThisFrame = false;
-    D3DXMATRIX SSRPrevViewProj = {};
-    bool bSSRPrevViewProjValid = false;
     D3DXVECTOR4 SSRReprojRows[4] = {};
     bool bSSRReprojValid = false;
+    // Camera data shared by every screen space pass, computed once per frame.
+    struct
+    {
+        bool valid = false;
+        float width = 0.0f, height = 0.0f, nearClip = 0.0f, farClip = 0.0f;
+        D3DXVECTOR4 projInfo = {};
+        D3DXVECTOR4 reprojRows[4] = {}; // view space position to the previous frame's clip space
+        D3DXVECTOR4 worldToView[3] = {};
+        D3DXVECTOR4 sunView = {};       // towards the directional light in view space, w 1 when known
+        D3DXMATRIX prevViewProj = {};
+        bool prevViewProjValid = false;
+        uint32_t index = 0;
+    } Frame;
+
+    // Linear view depth of this and the previous frame, for rejecting stale history.
+    HistoryRT LinDepth;
+
+    bool bContactShadows = true;
+    int nContactShadowSteps = 12;
+    float fContactShadowLength = 0.6f;
+    float fContactShadowThickness = 0.25f;
+    float fContactShadowMaxDistance = 60.0f;
+    float fContactShadowIntensity = 1.0f;
+    float fContactShadowTemporalBlend = 0.5f;
+    ScreenRT ContactShadowRaw;
+    HistoryRT ContactShadowHistory;
+    bool bContactShadowsValidThisFrame = false;
+
+    bool bIndirectLight = true;
+    int nIndirectLightRays = 2;
+    int nIndirectLightSteps = 10;
+    float fIndirectLightRayLength = 4.0f;
+    float fIndirectLightThickness = 0.5f;
+    float fIndirectLightIntensity = 1.0f;
+    float fIndirectLightMaxDistance = 80.0f;
+    float fIndirectLightTemporalBlend = 0.85f;
+    ScreenRT IndirectLightRaw;
+    HistoryRT IndirectLightHistory;
+    bool bIndirectLightValidThisFrame = false;
+
+    bool bAmbientOcclusionGBufferNormals = true;
+    float fAmbientOcclusionTemporalBlend = 0.5f;
+    float fAmbientOcclusionMultiBounce = 1.0f;
+    HistoryRT AOHistory;
+
     struct
     {
         D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, PrevSSRTex2D;
         D3DXHANDLE fUseGBufferNormals, fTemporalBlend, fFrameIndex;
+        D3DXHANDLE PrevDepthTex2D, CurTex2D, PrevTex2D, fPrevDepthValid, fResolveBlend, vec4SunView;
+        D3DXHANDLE fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity;
+        D3DXHANDLE fGIRayLength, fGIThickness, fGIIntensity, fGIMaxViewDistance;
+        D3DXHANDLE techLinearDepth, techContactShadows, techSSGI, techTemporalResolve;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
@@ -266,6 +353,9 @@ public:
         D3DXHANDLE vec2PrevMipSize;
         D3DXHANDLE vec2PrevMipTexel;
         D3DXHANDLE iPreviousMip;
+        D3DXHANDLE NormalTex2D, DiffuseTex2D, AOHistoryTexture2D, PrevDepthTex2D;
+        D3DXHANDLE vec4WorldToView, vec4ViewToPrevClip;
+        D3DXHANDLE fUseGBufferNormals, fFrameRotation, fResolveBlend, fPrevDepthValid, fMultiBounce;
     } AOEffectHandles = {};
 
     bool loadShaders(LPDIRECT3DDEVICE9 pDevice, HMODULE hm)
@@ -550,6 +640,17 @@ public:
                 AOEffectHandles.vec2PrevMipSize = AOEffect->GetParameterByName(nullptr, "vec2PrevMipSize");
                 AOEffectHandles.vec2PrevMipTexel = AOEffect->GetParameterByName(nullptr, "vec2PrevMipTexel");
                 AOEffectHandles.iPreviousMip = AOEffect->GetParameterByName(nullptr, "iPreviousMip");
+                AOEffectHandles.NormalTex2D = AOEffect->GetParameterByName(nullptr, "NormalTex2D");
+                AOEffectHandles.DiffuseTex2D = AOEffect->GetParameterByName(nullptr, "DiffuseTex2D");
+                AOEffectHandles.AOHistoryTexture2D = AOEffect->GetParameterByName(nullptr, "AOHistoryTexture2D");
+                AOEffectHandles.PrevDepthTex2D = AOEffect->GetParameterByName(nullptr, "PrevDepthTex2D");
+                AOEffectHandles.vec4WorldToView = AOEffect->GetParameterByName(nullptr, "vec4WorldToView");
+                AOEffectHandles.vec4ViewToPrevClip = AOEffect->GetParameterByName(nullptr, "vec4ViewToPrevClip");
+                AOEffectHandles.fUseGBufferNormals = AOEffect->GetParameterByName(nullptr, "fUseGBufferNormals");
+                AOEffectHandles.fFrameRotation = AOEffect->GetParameterByName(nullptr, "fFrameRotation");
+                AOEffectHandles.fResolveBlend = AOEffect->GetParameterByName(nullptr, "fResolveBlend");
+                AOEffectHandles.fPrevDepthValid = AOEffect->GetParameterByName(nullptr, "fPrevDepthValid");
+                AOEffectHandles.fMultiBounce = AOEffect->GetParameterByName(nullptr, "fMultiBounce");
             }
         }
 
@@ -558,9 +659,15 @@ public:
             ID3DXBuffer* errors = nullptr;
             static std::string steps = std::to_string(nSSRSteps);
             static std::string refineSteps = std::to_string(nSSRRefineSteps);
+            static std::string contactShadowSteps = std::to_string(nContactShadowSteps);
+            static std::string indirectLightRays = std::to_string(nIndirectLightRays);
+            static std::string indirectLightSteps = std::to_string(nIndirectLightSteps);
             D3DXMACRO defines[] = {
                 {"NUM_STEPS", steps.c_str()},
                 {"NUM_REFINE_STEPS", refineSteps.c_str()},
+                {"CS_STEPS", contactShadowSteps.c_str()},
+                {"GI_RAYS", indirectLightRays.c_str()},
+                {"GI_STEPS", indirectLightSteps.c_str()},
                 {} // last must be empty
             };
             if (D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
@@ -601,6 +708,24 @@ public:
                 h.vec4WaterWorldY = SSREffect->GetParameterByName(nullptr, "vec4WaterWorldY");
                 h.techSSR = SSREffect->GetTechniqueByName("SSR");
                 h.techSSRWater = SSREffect->GetTechniqueByName("SSRWater");
+                h.PrevDepthTex2D = SSREffect->GetParameterByName(nullptr, "PrevDepthTex2D");
+                h.CurTex2D = SSREffect->GetParameterByName(nullptr, "CurTex2D");
+                h.PrevTex2D = SSREffect->GetParameterByName(nullptr, "PrevTex2D");
+                h.fPrevDepthValid = SSREffect->GetParameterByName(nullptr, "fPrevDepthValid");
+                h.fResolveBlend = SSREffect->GetParameterByName(nullptr, "fResolveBlend");
+                h.vec4SunView = SSREffect->GetParameterByName(nullptr, "vec4SunView");
+                h.fCSLength = SSREffect->GetParameterByName(nullptr, "fCSLength");
+                h.fCSThickness = SSREffect->GetParameterByName(nullptr, "fCSThickness");
+                h.fCSMaxViewDistance = SSREffect->GetParameterByName(nullptr, "fCSMaxViewDistance");
+                h.fCSIntensity = SSREffect->GetParameterByName(nullptr, "fCSIntensity");
+                h.fGIRayLength = SSREffect->GetParameterByName(nullptr, "fGIRayLength");
+                h.fGIThickness = SSREffect->GetParameterByName(nullptr, "fGIThickness");
+                h.fGIIntensity = SSREffect->GetParameterByName(nullptr, "fGIIntensity");
+                h.fGIMaxViewDistance = SSREffect->GetParameterByName(nullptr, "fGIMaxViewDistance");
+                h.techLinearDepth = SSREffect->GetTechniqueByName("LinearDepth");
+                h.techContactShadows = SSREffect->GetTechniqueByName("ContactShadows");
+                h.techSSGI = SSREffect->GetTechniqueByName("SSGI");
+                h.techTemporalResolve = SSREffect->GetTechniqueByName("TemporalResolve");
             }
         }
 
@@ -735,6 +860,27 @@ public:
         bSSRHalfResolution = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsHalfResolution", 0) != 0;
         bSSRGBufferNormals = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGBufferNormals", 1) != 0;
         fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporalBlend", 0.5f), 0.0f, 0.9f);
+
+        bContactShadows = iniReader.ReadInteger("POSTFX", "ContactShadows", 1) != 0;
+        nContactShadowSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ContactShadowsSteps", 12), 4, 64);
+        fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 0.6f), 0.05f, 10.0f);
+        fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.25f), 0.01f, 5.0f);
+        fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
+        fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
+        fContactShadowTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsTemporalBlend", 0.5f), 0.0f, 0.95f);
+
+        bIndirectLight = iniReader.ReadInteger("POSTFX", "ScreenSpaceIndirectLight", 1) != 0;
+        nIndirectLightRays = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceIndirectLightRays", 2), 1, 16);
+        nIndirectLightSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceIndirectLightSteps", 10), 2, 64);
+        fIndirectLightRayLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", 4.0f), 0.1f, 50.0f);
+        fIndirectLightThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightThickness", 0.5f), 0.01f, 10.0f);
+        fIndirectLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightIntensity", 1.0f), 0.0f, 4.0f);
+        fIndirectLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxDistance", 80.0f), 1.0f, 1000.0f);
+        fIndirectLightTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightTemporalBlend", 0.85f), 0.0f, 0.95f);
+
+        bAmbientOcclusionGBufferNormals = iniReader.ReadInteger("POSTFX", "AmbientOcclusionGBufferNormals", 1) != 0;
+        fAmbientOcclusionTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionTemporalBlend", 0.5f), 0.0f, 0.95f);
+        fAmbientOcclusionMultiBounce = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionMultiBounce", 1.0f), 0.0f, 1.0f);
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -1005,6 +1151,13 @@ private:
             }
         }
         PostFxResources.bSSRPrevValid = false;
+        PostFxResources.LinDepth.Release();
+        PostFxResources.AOHistory.Release();
+        PostFxResources.ContactShadowRaw.Release();
+        PostFxResources.ContactShadowHistory.Release();
+        PostFxResources.IndirectLightRaw.Release();
+        PostFxResources.IndirectLightHistory.Release();
+        PostFxResources.Frame.prevViewProjValid = false;
         SAFE_RELEASE(PostFxResources.SSRHistorySurf);
         if (PostFxResources.SSRHistoryTex)
         {
@@ -1012,7 +1165,6 @@ private:
             PostFxResources.SSRHistoryTex = nullptr;
         }
         PostFxResources.bSSRValidThisFrame = false;
-        PostFxResources.bSSRPrevViewProjValid = false;
         PostFxResources.bSSRReprojValid = false;
 
         auto pDevice = rage::grcDevice::GetD3DDevice();
@@ -1065,6 +1217,39 @@ private:
 
             IDirect3DSurface9* oldRT = nullptr;
             pDevice->GetRenderTarget(0, &oldRT);
+            auto CreateScreenRT = [&](ScreenRT& target, const char* name, rage::grcTextureFormat format, uint32_t bpp, uint32_t w, uint32_t h)
+            {
+                aoDesc.mFormat = format;
+                aoDesc.mLevels = 1;
+                target.tex = CreateEmptyRT(name, 3, w, h, bpp, &aoDesc);
+                if (target.tex && target.tex->mD3DTexture)
+                    target.tex->mD3DTexture->GetSurfaceLevel(0, &target.surf);
+            };
+            auto CreateHistoryRT = [&](HistoryRT& target, const char* name0, const char* name1, rage::grcTextureFormat format, uint32_t bpp, uint32_t w, uint32_t h)
+            {
+                CreateScreenRT(target.rt[0], name0, format, bpp, w, h);
+                CreateScreenRT(target.rt[1], name1, format, bpp, w, h);
+                target.lastValid = false;
+            };
+
+            auto& R = PostFxResources;
+            CreateHistoryRT(R.LinDepth, "LinDepthTex0", "LinDepthTex1", rage::GRCFMT_R32F, 32, width, height);
+            if (R.fAmbientOcclusionTemporalBlend > 0.0f)
+                CreateHistoryRT(R.AOHistory, "AOHistoryTex0", "AOHistoryTex1", rage::GRCFMT_R16F, 16, width, height);
+            if (R.bContactShadows)
+            {
+                CreateScreenRT(R.ContactShadowRaw, "ContactShadowTex", rage::GRCFMT_R16F, 16, width, height);
+                CreateHistoryRT(R.ContactShadowHistory, "ContactShadowHistoryTex0", "ContactShadowHistoryTex1", rage::GRCFMT_R16F, 16, width, height);
+            }
+            if (R.bIndirectLight)
+            {
+                // Indirect light is low frequency, so it is traced at half resolution.
+                const uint32_t giWidth = std::max(1u, uint32_t(width) / 2);
+                const uint32_t giHeight = std::max(1u, uint32_t(height) / 2);
+                CreateScreenRT(R.IndirectLightRaw, "IndirectLightTex", rage::GRCFMT_A16B16G16R16F, 64, giWidth, giHeight);
+                CreateHistoryRT(R.IndirectLightHistory, "IndirectLightHistoryTex0", "IndirectLightHistoryTex1", rage::GRCFMT_A16B16G16R16F, 64, giWidth, giHeight);
+            }
+
             for (auto* surf : { PostFxResources.SSRSurf[0], PostFxResources.SSRSurf[1], PostFxResources.SSRHistorySurf })
             {
                 if (!surf)
@@ -1198,7 +1383,8 @@ private:
                     pDevice->SetSamplerState(0, D3DSAMP_ADDRESSV, prevAddressV[0]);
                     pDevice->SetTexture(0, prevTex[0]);
 
-                    if (PostFxResources.SSREnabled() && PostFxResources.SSRHistorySurf && PostFxResources.SSRSurf[0])
+                    // Reflections and indirect light both sample the previous frame's lit scene.
+                    if ((PostFxResources.SSREnabled() || PostFxResources.bIndirectLight) && PostFxResources.SSRHistorySurf && PostFxResources.SSRSurf[0])
                     {
                         D3DVIEWPORT9 vpBeforeCapture;
                         pDevice->GetViewport(&vpBeforeCapture);
@@ -1723,6 +1909,292 @@ private:
                                       viewInv.m[row][2] * axisSign[row], 0.0f);
     }
 
+    // Everything the screen space passes need from the camera, computed once per frame
+    // before any of them runs.
+    static void UpdateFrameCamera()
+    {
+        auto& F = PostFxResources.Frame;
+        F.valid = false;
+
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        rage::grcViewport* vp = rage::GetCurrentViewport();
+        if (!pDevice || !vp || vp->mWidth <= 0 || vp->mHeight <= 0 || vp->mNearClip <= 0.0f)
+            return;
+
+        F.width = float(vp->mWidth);
+        F.height = float(vp->mHeight);
+        F.nearClip = vp->mNearClip;
+        F.farClip = vp->mFarClip;
+
+        // Same reconstruction basis the AO pass uses.
+        D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
+        F.projInfo.x = -2.0f / (F.width * proj._11);
+        F.projInfo.y = -2.0f / (F.height * proj._22);
+        F.projInfo.z = (1.0f - proj._31) / proj._11;
+        F.projInfo.w = (1.0f + proj._32) / proj._22;
+
+        D3DXMATRIX viewProj;
+        MatrixMultiply(viewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
+        if (!F.prevViewProjValid)
+            F.prevViewProj = viewProj;
+
+        D3DXMATRIX reproj;
+        MatrixMultiply(reproj, *(const D3DXMATRIX*)vp->mViewInverseMatrix, F.prevViewProj);
+        const float axisSign[4] = { -1.0f, 1.0f, (proj._34 < 0.0f) ? -1.0f : 1.0f, 1.0f };
+        for (int row = 0; row < 4; ++row)
+        {
+            float s = axisSign[row];
+            F.reprojRows[row] = D3DXVECTOR4(reproj.m[row][0] * s, reproj.m[row][1] * s,
+                                            reproj.m[row][2] * s, reproj.m[row][3] * s);
+        }
+        F.prevViewProj = viewProj;
+        F.prevViewProjValid = true;
+
+        ComputeWorldToView(*(const D3DXMATRIX*)vp->mViewInverseMatrix, proj, F.worldToView);
+
+        // gDirectionalLight is a RAGE global, and globals keep the same register in every
+        // shader, so c17 holds the directional light the last lit draw used. It is the
+        // direction the light travels; the passes want the direction towards it.
+        F.sunView = D3DXVECTOR4(0.0f, 0.0f, 0.0f, 0.0f);
+        float light[4] = {};
+        if (SUCCEEDED(pDevice->GetPixelShaderConstantF(17, light, 1)))
+        {
+            const float len = std::sqrt(light[0] * light[0] + light[1] * light[1] + light[2] * light[2]);
+            if (std::isfinite(len) && len > 0.9f && len < 1.1f)
+            {
+                const float toLight[3] = { -light[0] / len, -light[1] / len, -light[2] / len };
+                F.sunView.x = F.worldToView[0].x * toLight[0] + F.worldToView[0].y * toLight[1] + F.worldToView[0].z * toLight[2];
+                F.sunView.y = F.worldToView[1].x * toLight[0] + F.worldToView[1].y * toLight[1] + F.worldToView[1].z * toLight[2];
+                F.sunView.z = F.worldToView[2].x * toLight[0] + F.worldToView[2].y * toLight[1] + F.worldToView[2].z * toLight[2];
+                F.sunView.w = 1.0f;
+            }
+        }
+
+        ++F.index;
+        F.valid = true;
+    }
+
+    // Parameters every pass of the screen space lighting effect reads.
+    static void SetScreenSpaceParams(ID3DXEffect* effect)
+    {
+        auto& R = PostFxResources;
+        auto& F = R.Frame;
+        auto& h = R.SSREffectHandles;
+
+        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+
+        float invViewportSize[] = { 1.0f / F.width, 1.0f / F.height };
+        effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
+        effect->SetFloat(h.fNearPlane, F.nearClip);
+        effect->SetFloat(h.fFarDivNear, F.farClip / F.nearClip);
+        effect->SetVector(h.vec4ProjInfo, &F.projInfo);
+        effect->SetVectorArray(h.vec4ViewToPrevClip, F.reprojRows, 4);
+        effect->SetVectorArray(h.vec4WaterToView, F.worldToView, 3);
+        effect->SetFloat(h.fFrameIndex, float(F.index % 64));
+
+        auto prevDepth = R.LinDepth.Previous();
+        effect->SetTexture(h.PrevDepthTex2D, prevDepth);
+        effect->SetFloat(h.fPrevDepthValid, prevDepth ? 1.0f : 0.0f);
+    }
+
+    // Draws one fullscreen pass of an effect technique into target, restoring every device
+    // state it touches.
+    static void DrawScreenPass(ID3DXEffect* effect, D3DXHANDLE technique, IDirect3DSurface9* target)
+    {
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice || !effect || !technique || !target)
+            return;
+
+        static constexpr DWORD kSlots = 16;
+
+        IDirect3DSurface9* rt0 = nullptr;
+        IDirect3DSurface9* ds = nullptr;
+        IDirect3DVertexDeclaration9* oldDecl = nullptr;
+        IDirect3DVertexBuffer9* oldVB = nullptr;
+        UINT oldOffset = 0, oldStride = 0;
+        DWORD oldFVF = 0;
+        D3DVIEWPORT9 oldViewport;
+        IDirect3DBaseTexture9* oldTextures[kSlots] = {};
+        DWORD savedRenderStates[std::size(kSSRRenderStates)] = {};
+        DWORD savedSamplerStates[kSlots][std::size(kSSRSamplerStates)] = {};
+
+        pDevice->GetFVF(&oldFVF);
+        pDevice->GetVertexDeclaration(&oldDecl);
+        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        pDevice->GetRenderTarget(0, &rt0);
+        pDevice->GetDepthStencilSurface(&ds);
+        pDevice->GetViewport(&oldViewport);
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+            pDevice->GetTexture(slot, &oldTextures[slot]);
+        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+
+        pDevice->SetDepthStencilSurface(nullptr);
+        pDevice->SetStreamSource(0, nullptr, 0, 0);
+        pDevice->SetVertexDeclaration(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        // Our own outputs may still be bound for deferred_lighting from the last frame.
+        for (DWORD slot : { 3u, 7u, 8u })
+            pDevice->SetTexture(slot, nullptr);
+        for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
+        {
+            pDevice->GetRenderState(kSSRRenderStates[i].state, &savedRenderStates[i]);
+            pDevice->SetRenderState(kSSRRenderStates[i].state, kSSRRenderStates[i].value);
+        }
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+            {
+                pDevice->GetSamplerState(slot, kSSRSamplerStates[i].state, &savedSamplerStates[slot][i]);
+                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
+            }
+
+        D3DSURFACE_DESC desc = {};
+        target->GetDesc(&desc);
+        const float w = float(desc.Width);
+        const float h = float(desc.Height);
+
+        pDevice->SetRenderTarget(0, target);
+        D3DVIEWPORT9 vp = {};
+        vp.Width = desc.Width;
+        vp.Height = desc.Height;
+        vp.MaxZ = 1.0f;
+        pDevice->SetViewport(&vp);
+
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        ScreenVertex screenVertices[4] =
+        {
+            { -0.5f,     -0.5f,     0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,      h - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+            { w - 0.5f,  -0.5f,     0.0f, 1.0f, 1.0f, 0.0f },
+            { w - 0.5f,   h - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+        };
+
+        UINT passes = 0;
+        effect->SetTechnique(technique);
+        effect->Begin(&passes, 0);
+        effect->BeginPass(0);
+        effect->CommitChanges();
+        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+        effect->EndPass();
+        effect->End();
+
+        for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
+            pDevice->SetRenderState(kSSRRenderStates[i].state, savedRenderStates[i]);
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, savedSamplerStates[slot][i]);
+        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+        {
+            pDevice->SetTexture(slot, oldTextures[slot]);
+            SAFE_RELEASE(oldTextures[slot]);
+        }
+
+        pDevice->SetRenderTarget(0, rt0);
+        pDevice->SetDepthStencilSurface(ds);
+        pDevice->SetViewport(&oldViewport);
+        pDevice->SetFVF(oldFVF);
+        pDevice->SetVertexDeclaration(oldDecl);
+        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
+
+        SAFE_RELEASE(rt0);
+        SAFE_RELEASE(ds);
+        SAFE_RELEASE(oldDecl);
+        SAFE_RELEASE(oldVB);
+    }
+
+    // Blends a freshly traced pass with its reprojected history into the history's next target.
+    static void ResolveTemporal(const ScreenRT& current, HistoryRT& history, float blend)
+    {
+        auto& R = PostFxResources;
+        auto& h = R.SSREffectHandles;
+        ID3DXEffect* effect = R.SSREffect;
+
+        auto prev = history.Previous();
+        effect->SetTexture(h.CurTex2D, current.Texture());
+        effect->SetTexture(h.PrevTex2D, prev);
+        effect->SetFloat(h.fResolveBlend, prev ? blend : 0.0f);
+        DrawScreenPass(effect, h.techTemporalResolve, history.rt[history.Next()].surf);
+        history.Advance();
+    }
+
+    // This frame's linear depth goes into the target the previous frame did not use, so the
+    // passes below can still compare against last frame's.
+    static bool RenderLinearDepth()
+    {
+        auto& R = PostFxResources;
+        if (!R.SSREffect || !R.Frame.valid || !R.mDepthRT || !R.LinDepth.Ready())
+            return false;
+
+        SetScreenSpaceParams(R.SSREffect);
+        DrawScreenPass(R.SSREffect, R.SSREffectHandles.techLinearDepth, R.LinDepth.rt[R.LinDepth.Next()].surf);
+        return true;
+    }
+
+    static void RenderContactShadows()
+    {
+        auto& R = PostFxResources;
+        auto& F = R.Frame;
+        auto& h = R.SSREffectHandles;
+        R.bContactShadowsValidThisFrame = false;
+
+        if (!R.bContactShadows || !R.SSREffect || !F.valid || F.sunView.w <= 0.0f || !R.mDepthRT ||
+            !R.ContactShadowRaw.surf || !R.ContactShadowHistory.Ready())
+        {
+            R.ContactShadowHistory.lastValid = false;
+            return;
+        }
+
+        ID3DXEffect* effect = R.SSREffect;
+        SetScreenSpaceParams(effect);
+
+        const bool gbufferNormals = R.mNormalRT && R.mNormalRT->mD3DTexture;
+        effect->SetTexture(h.NormalTex2D, gbufferNormals ? R.mNormalRT->mD3DTexture : nullptr);
+        effect->SetFloat(h.fUseGBufferNormals, gbufferNormals ? 1.0f : 0.0f);
+        effect->SetVector(h.vec4SunView, &F.sunView);
+        effect->SetFloat(h.fCSLength, R.fContactShadowLength);
+        effect->SetFloat(h.fCSThickness, R.fContactShadowThickness);
+        effect->SetFloat(h.fCSMaxViewDistance, R.fContactShadowMaxDistance);
+        effect->SetFloat(h.fCSIntensity, R.fContactShadowIntensity);
+
+        DrawScreenPass(effect, h.techContactShadows, R.ContactShadowRaw.surf);
+        ResolveTemporal(R.ContactShadowRaw, R.ContactShadowHistory, R.fContactShadowTemporalBlend);
+        R.bContactShadowsValidThisFrame = true;
+    }
+
+    static void RenderIndirectLight()
+    {
+        auto& R = PostFxResources;
+        auto& F = R.Frame;
+        auto& h = R.SSREffectHandles;
+        R.bIndirectLightValidThisFrame = false;
+
+        if (!R.bIndirectLight || R.fIndirectLightIntensity <= 0.0f || !R.SSREffect || !F.valid || !R.mDepthRT ||
+            !R.SSRHistoryTex || !R.IndirectLightRaw.surf || !R.IndirectLightHistory.Ready())
+        {
+            R.IndirectLightHistory.lastValid = false;
+            return;
+        }
+
+        ID3DXEffect* effect = R.SSREffect;
+        SetScreenSpaceParams(effect);
+
+        const bool gbufferNormals = R.mNormalRT && R.mNormalRT->mD3DTexture;
+        effect->SetTexture(h.NormalTex2D, gbufferNormals ? R.mNormalRT->mD3DTexture : nullptr);
+        effect->SetFloat(h.fUseGBufferNormals, gbufferNormals ? 1.0f : 0.0f);
+        // The previous frame's lit scene, captured before post processing.
+        effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
+        effect->SetFloat(h.fGIRayLength, R.fIndirectLightRayLength);
+        effect->SetFloat(h.fGIThickness, R.fIndirectLightThickness);
+        effect->SetFloat(h.fGIIntensity, R.fIndirectLightIntensity);
+        effect->SetFloat(h.fGIMaxViewDistance, R.fIndirectLightMaxDistance);
+
+        DrawScreenPass(effect, h.techSSGI, R.IndirectLightRaw.surf);
+        ResolveTemporal(R.IndirectLightRaw, R.IndirectLightHistory, R.fIndirectLightTemporalBlend);
+        R.bIndirectLightValidThisFrame = true;
+    }
+
     static void RenderScreenSpaceReflections()
     {
         auto& R = PostFxResources;
@@ -1759,7 +2231,7 @@ private:
         }
 
         rage::grcViewport* vp = rage::GetCurrentViewport();
-        if (!R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex || !vp || R.fSSRIntensity <= 0.0f)
+        if (!R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex || !vp || !R.Frame.valid || R.fSSRIntensity <= 0.0f)
         {
             clearSSR();
             return;
@@ -1823,7 +2295,6 @@ private:
 
         effect->SetTexture(h.PrevSSRTex2D, R.SSRTex[prev]->mD3DTexture);
         effect->SetFloat(h.fTemporalBlend, R.bSSRPrevValid ? R.fSSRTemporalBlend : 0.0f);
-        effect->SetFloat(h.fFrameIndex, float(R.nSSRFrame++ % 64));
 
         // _DEFERRED_GBUFFER_2_ is (specular intensity, gloss, AO); vehicle paint and glass
         // sit near the top of both, road surfaces near the bottom.
@@ -1833,47 +2304,9 @@ private:
         effect->SetFloat(h.fGlossBoost, hasSpecular ? R.fSSRGlossBoost : 0.0f);
         effect->SetFloat(h.fGlossCutoff, hasSpecular ? R.fSSRGlossCutoff : -1.0f);
 
-        float invViewportSize[] = { 1.0f / width, 1.0f / height };
-        effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
-        effect->SetFloat(h.fNearPlane, vp->mNearClip);
-        effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
-
-        // Same reconstruction basis the AO pass uses.
-        D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
-        D3DXVECTOR4 projInfo;
-        projInfo.x = -2.0f / ((width) * proj._11);
-        projInfo.y = -2.0f / ((height) * proj._22);
-        projInfo.z = (1.0f - proj._31) / proj._11;
-        projInfo.w = (1.0f + proj._32) / proj._22;
-        effect->SetVector(h.vec4ProjInfo, &projInfo);
-
-        D3DXMATRIX viewProj;
-        MatrixMultiply(viewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
-
-        if (!R.bSSRPrevViewProjValid)
-            R.SSRPrevViewProj = viewProj;
-
-        D3DXMATRIX reproj;
-        MatrixMultiply(reproj, *(const D3DXMATRIX*)vp->mViewInverseMatrix, R.SSRPrevViewProj);
-
-        const float axisSign[4] = { -1.0f, 1.0f, (proj._34 < 0.0f) ? -1.0f : 1.0f, 1.0f };
-        D3DXVECTOR4 reprojRows[4];
-        for (int row = 0; row < 4; ++row)
-        {
-            float s = axisSign[row];
-            reprojRows[row] = D3DXVECTOR4(reproj.m[row][0] * s, reproj.m[row][1] * s,
-                                          reproj.m[row][2] * s, reproj.m[row][3] * s);
-        }
-        effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
-        memcpy(R.SSRReprojRows, reprojRows, sizeof(reprojRows));
+        SetScreenSpaceParams(effect);
+        memcpy(R.SSRReprojRows, R.Frame.reprojRows, sizeof(R.SSRReprojRows));
         R.bSSRReprojValid = true;
-
-        D3DXVECTOR4 toView[3];
-        ComputeWorldToView(*(const D3DXMATRIX*)vp->mViewInverseMatrix, proj, toView);
-        effect->SetVectorArray(h.vec4WaterToView, toView, 3);
-
-        R.SSRPrevViewProj = viewProj;
-        R.bSSRPrevViewProjValid = true;
 
         effect->SetFloat(h.fMaxDistance, R.fSSRMaxDistance);
         effect->SetFloat(h.fThickness, R.fSSRThickness);
@@ -2172,7 +2605,7 @@ private:
 
             UINT passes = 0;
             ID3DXEffect* effect = PostFxResources.AOEffect;
-            effect->Begin(&passes, 0); assert(passes == 5);
+            effect->Begin(&passes, 0); assert(passes == 6);
             {
                 rage::grcViewport* currGrcViewport = rage::GetCurrentViewport();
 
@@ -2262,6 +2695,18 @@ private:
 
                 effect->SetVector(h.vec4ProjInfo, &projInfo);
 
+                // G-buffer normals, and a spiral rotation that changes every frame so the
+                // temporal resolve below averages different sample sets.
+                auto& F = PostFxResources.Frame;
+                const bool gbufferNormals = PostFxResources.bAmbientOcclusionGBufferNormals && F.valid &&
+                    PostFxResources.mNormalRT && PostFxResources.mNormalRT->mD3DTexture;
+                const bool temporal = PostFxResources.fAmbientOcclusionTemporalBlend > 0.0f && F.valid &&
+                    PostFxResources.AOHistory.Ready();
+                effect->SetTexture(h.NormalTex2D, gbufferNormals ? PostFxResources.mNormalRT->mD3DTexture : nullptr);
+                effect->SetFloat(h.fUseGBufferNormals, gbufferNormals ? 1.0f : 0.0f);
+                effect->SetVectorArray(h.vec4WorldToView, F.worldToView, 3);
+                effect->SetFloat(h.fFrameRotation, temporal ? float(F.index % 64) * 2.39996323f : 0.0f); // golden angle
+
                 effect->CommitChanges();
 
                 effect->BeginPass(2);
@@ -2289,9 +2734,38 @@ private:
                 }
                 effect->EndPass();
 
+                IDirect3DTexture9* aoResult = aoTex;
+                auto& history = PostFxResources.AOHistory;
+                if (temporal)
+                {
+                    auto prevAO = history.Previous();
+                    auto prevDepth = PostFxResources.LinDepth.Previous();
+                    effect->SetTexture(h.AOTexture2D, aoTex);
+                    effect->SetTexture(h.AOHistoryTexture2D, prevAO);
+                    effect->SetTexture(h.PrevDepthTex2D, prevDepth);
+                    effect->SetFloat(h.fPrevDepthValid, prevDepth ? 1.0f : 0.0f);
+                    effect->SetFloat(h.fResolveBlend, prevAO ? PostFxResources.fAmbientOcclusionTemporalBlend : 0.0f);
+                    effect->SetVectorArray(h.vec4ViewToPrevClip, F.reprojRows, 4);
+
+                    pDevice->SetRenderTarget(0, history.rt[history.Next()].surf);
+                    effect->BeginPass(5);
+                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                    effect->EndPass();
+
+                    history.Advance();
+                    aoResult = history.rt[history.last].Texture();
+                }
+                else
+                {
+                    history.lastValid = false;
+                }
+
                 // final output
                 pDevice->SetRenderTarget(0, SpecularRT);
-                effect->SetTexture(h.AOTexture2D, aoTex);
+                effect->SetTexture(h.AOTexture2D, aoResult);
+                const bool hasAlbedo = PostFxResources.mDiffuseRT && PostFxResources.mDiffuseRT->mD3DTexture;
+                effect->SetTexture(h.DiffuseTex2D, hasAlbedo ? PostFxResources.mDiffuseRT->mD3DTexture : nullptr);
+                effect->SetFloat(h.fMultiBounce, hasAlbedo ? PostFxResources.fAmbientOcclusionMultiBounce : 0.0f);
 
                 effect->BeginPass(4);
                 pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
@@ -2311,6 +2785,10 @@ private:
             SAFE_RELEASE(ds);
             SAFE_RELEASE(oldDecl);
             SAFE_RELEASE(oldVB);
+        }
+        else
+        {
+            PostFxResources.AOHistory.lastValid = false;
         }
     }
 
@@ -2390,30 +2868,49 @@ private:
     {
         DWORD result = RenderPedAndVehicleFakeShadowsInlineHook.unsafe_ccall<DWORD>(a1);
 
+        // Everything below reads the G-buffer and feeds deferred_lighting, which runs next.
+        UpdateFrameCamera();
+        const bool linearDepth = RenderLinearDepth();
         RenderAmbientOcclusion();
         RenderScreenSpaceReflections();
+        RenderContactShadows();
+        RenderIndirectLight();
+        if (linearDepth)
+            PostFxResources.LinDepth.Advance();
+        else
+            PostFxResources.LinDepth.lastValid = false;
 
         return result;
     }
 
 public:
-    static void BindSSRTexture()
+    // Runs right before deferred_lighting: s3 reflections, s7 contact shadow occlusion and s8
+    // indirect light. A pass that did not run this frame leaves its sampler empty, which the
+    // shader treats as no contribution.
+    static void BindScreenSpaceLightingTextures()
     {
         auto& R = PostFxResources;
-        auto* tex = R.SSRTex[R.nSSRCurrent];
-        if (!tex || !tex->mD3DTexture)
-            return;
-
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
 
-        pDevice->SetTexture(3, tex->mD3DTexture);
-        pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-        pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-        pDevice->SetSamplerState(3, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-        pDevice->SetSamplerState(3, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-        pDevice->SetSamplerState(3, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        auto bind = [&](DWORD slot, IDirect3DTexture9* tex)
+        {
+            pDevice->SetTexture(slot, tex);
+            if (!tex)
+                return;
+            pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+            pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+            pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+            pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+            pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        };
+
+        auto* ssr = R.SSRTex[R.nSSRCurrent];
+        if (ssr && ssr->mD3DTexture)
+            bind(3, ssr->mD3DTexture);
+        bind(7, R.bContactShadowsValidThisFrame ? R.ContactShadowHistory.rt[R.ContactShadowHistory.last].Texture() : nullptr);
+        bind(8, R.bIndirectLightValidThisFrame ? R.IndirectLightHistory.rt[R.IndirectLightHistory.last].Texture() : nullptr);
     }
 
     PostFX()
@@ -2453,7 +2950,7 @@ public:
                 {
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
-                        auto cb = new T_CB_Generic_NoArgs(BindSSRTexture);
+                        auto cb = new T_CB_Generic_NoArgs(BindScreenSpaceLightingTextures);
                         if (cb)
                             cb->Append();
                     };
