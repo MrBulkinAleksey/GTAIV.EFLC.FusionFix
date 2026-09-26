@@ -353,6 +353,7 @@ public:
         D3DXHANDLE PrevDepthTex2D, CurTex2D, PrevTex2D, fPrevDepthValid, fResolveBlend, vec4SunView;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask;
         D3DXHANDLE SSRResultTex2D, fReflectionStrength, techSSRComposite;
+        D3DXHANDLE fRoughBlur, DebugTex2D, vec4DebugScale, techDebugView;
         D3DXHANDLE fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity;
         D3DXHANDLE fGIRayLength, fGIThickness, fGIIntensity, fGIMaxViewDistance;
         D3DXHANDLE techLinearDepth, techContactShadows, techSSGI, techTemporalResolve;
@@ -388,6 +389,8 @@ public:
     // environment reflection term, which the game scales down to near nothing.
     bool bSSRComposite = true;
     float fSSRReflectionStrength = 1.0f;
+    float fSSRRoughBlur = 6.0f;
+    int nScreenSpaceDebugView = 0;
     int nAmbientOcclusionSamples = 9;
     int nAmbientOcclusionBlurPasses = 1;
     int nAmbientOcclusionLogMaxOffset = 3;
@@ -779,6 +782,10 @@ public:
                 h.SSRResultTex2D = SSREffect->GetParameterByName(nullptr, "SSRResultTex2D");
                 h.fReflectionStrength = SSREffect->GetParameterByName(nullptr, "fReflectionStrength");
                 h.techSSRComposite = SSREffect->GetTechniqueByName("SSRComposite");
+                h.fRoughBlur = SSREffect->GetParameterByName(nullptr, "fRoughBlur");
+                h.DebugTex2D = SSREffect->GetParameterByName(nullptr, "DebugTex2D");
+                h.vec4DebugScale = SSREffect->GetParameterByName(nullptr, "vec4DebugScale");
+                h.techDebugView = SSREffect->GetTechniqueByName("DebugView");
                 h.CurTex2D = SSREffect->GetParameterByName(nullptr, "CurTex2D");
                 h.PrevTex2D = SSREffect->GetParameterByName(nullptr, "PrevTex2D");
                 h.fPrevDepthValid = SSREffect->GetParameterByName(nullptr, "fPrevDepthValid");
@@ -936,6 +943,8 @@ public:
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
         fSSRReflectionStrength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStrength", 1.0f), 0.0f, 4.0f);
+        fSSRRoughBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsRoughBlur", 6.0f), 0.0f, 32.0f);
+        nScreenSpaceDebugView = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceDebugView", 0), 0, 5);
 
         nContactShadowSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ContactShadowsSteps", 12), 4, 64);
         fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 0.6f), 0.05f, 10.0f);
@@ -2377,6 +2386,7 @@ private:
         // Debug output must not be blended with earlier frames.
         effect->SetFloat(h.fTemporalBlend, (R.bSSRPrevValid && !R.nSSRDebug) ? R.fSSRTemporalBlend : 0.0f);
         effect->SetFloat(h.fDebugMode, float(R.nSSRDebug));
+        effect->SetFloat(h.fRoughBlur, R.fSSRRoughBlur);
 
         // _DEFERRED_GBUFFER_2_ is (specular intensity, gloss, AO); vehicle paint and glass
         // sit near the top of both, road surfaces near the bottom.
@@ -3106,6 +3116,39 @@ public:
         bind(13, R.GlassSceneTex, D3DTEXF_LINEAR);
     }
 
+    // ScreenSpaceDebugView: replaces the lit scene with one of the screen space buffers, so
+    // each effect can be checked on its own. 1 AO, 2 contact shadows, 3 indirect light,
+    // 4 reflections, 5 linear depth.
+    static void RenderDebugView()
+    {
+        auto& R = PostFxResources;
+        auto& h = R.SSREffectHandles;
+        if (!R.nScreenSpaceDebugView || !R.SSREffect)
+            return;
+
+        IDirect3DTexture9* tex = nullptr;
+        D3DXVECTOR4 scale(1.0f, 1.0f, 1.0f, 1.0f); // w: show the red channel as grey
+        switch (R.nScreenSpaceDebugView)
+        {
+        case 1: tex = R.AOHistory.lastValid ? R.AOHistory.rt[R.AOHistory.last].Texture() : (R.AOTex ? R.AOTex->mD3DTexture : nullptr); break;
+        case 2: tex = R.bContactShadowsValidThisFrame ? R.ContactShadowHistory.rt[R.ContactShadowHistory.last].Texture() : nullptr; break;
+        case 3: tex = R.bIndirectLightValidThisFrame ? R.IndirectLightHistory.rt[R.IndirectLightHistory.last].Texture() : nullptr; scale = D3DXVECTOR4(4.0f, 4.0f, 4.0f, 0.0f); break;
+        case 4: tex = (R.bSSRValidThisFrame && R.SSRTex[R.nSSRCurrent]) ? R.SSRTex[R.nSSRCurrent]->mD3DTexture : nullptr; scale.w = 0.0f; break;
+        case 5: tex = R.LinDepth.Previous(); scale = D3DXVECTOR4(0.01f, 0.01f, 0.01f, 1.0f); break;
+        }
+
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        IDirect3DSurface9* scene = nullptr;
+        if (!pDevice || FAILED(pDevice->GetRenderTarget(0, &scene)) || !scene)
+            return;
+
+        // A buffer that did not run this frame shows as black.
+        R.SSREffect->SetTexture(h.DebugTex2D, tex ? static_cast<IDirect3DBaseTexture9*>(tex) : R.TransparentTex());
+        R.SSREffect->SetVector(h.vec4DebugScale, &scale);
+        DrawScreenPass(R.SSREffect, h.techDebugView, scene);
+        SAFE_RELEASE(scene);
+    }
+
     // Runs right after deferred lighting, before glass and water: blends this frame's
     // reflections over the lit scene.
     static void RenderSSRComposite()
@@ -3258,6 +3301,9 @@ public:
                         auto cb = new T_CB_Generic_NoArgs(RenderSSRComposite);
                         if (cb)
                             cb->Append();
+                        auto debug = new T_CB_Generic_NoArgs(RenderDebugView);
+                        if (debug)
+                            debug->Append();
                         auto glass = new T_CB_Generic_NoArgs(PrepareGlassReflections);
                         if (glass)
                             glass->Append();

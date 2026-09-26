@@ -6,7 +6,7 @@
 texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, PrevSSRTex2D;
 texture PrevDepthTex2D, CurTex2D, PrevTex2D;
 texture PreWaterTex2D, PostWaterTex2D;
-texture SSRResultTex2D;
+texture SSRResultTex2D, DebugTex2D;
 
 sampler2D DepthTex
 {
@@ -102,6 +102,16 @@ sampler2D SSRResultTex
     MipFilter = NONE;
 };
 
+sampler2D DebugTex
+{
+    Texture = <DebugTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = NONE;
+};
+
 sampler2D SurfaceTex
 {
     Texture = <SurfaceTex2D>;
@@ -157,6 +167,8 @@ uniform float fGIMaxViewDistance;
 
 uniform float fResolveBlend;      // weight of the reprojected history in the resolve pass
 uniform float fReflectionStrength; // composite pass: multiplier on the Fresnel weighted reflection
+uniform float fRoughBlur;          // reflection blur in pixels on the least glossy surfaces that still reflect
+uniform float4 vec4DebugScale;     // debug view: rgb multiplier, w 1 to show the red channel as grey
 
 static const float HISTORY_CLAMP = 8.0;
 static const float SSR_SCALE = 1.0;
@@ -435,7 +447,8 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         n = ReconstructNormal(uv, C);
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, 0.0, (fTemporalBlend > 0.0) ? RayJitter(vPos) : 1.0);
+    // Less glossy surfaces get blurrier reflections, the way rough surfaces scatter them.
+    float4 r = TraceReflection(C, n, fRoughBlur * (1.0 - gloss), (fTemporalBlend > 0.0) ? RayJitter(vPos) : 1.0);
     r.a = saturate(r.a * glossWeight * fIntensity);
     if (fDebugMode > 1.5 && fDebugMode < 2.5)
         return float4(0.0, DEBUG_BOOST * r.a, 0.0, r.a > 0.0 ? 1.0 : 0.0);
@@ -699,6 +712,14 @@ float4 SSRComposite_PS(float2 uv : TEXCOORD0) : COLOR0
     return float4(r.rgb, k);
 }
 
+// Shows one of the screen space buffers over the lit scene (ScreenSpaceDebugView).
+float4 DebugView_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 c = tex2Dlod(DebugTex, float4(uv, 0, 0));
+    float3 v = (vec4DebugScale.w > 0.5) ? c.rrr : c.rgb;
+    return float4(v * vec4DebugScale.xyz, 1.0);
+}
+
 void FullscreenQuadVS(in float4 iPos : POSITION, in float2 iUV : TEXCOORD0,
                       out float4 oPos : POSITION, out float2 oUV : TEXCOORD0)
 {
@@ -771,6 +792,16 @@ technique SSRComposite
         BlendOp = ADD;
         SrcBlend = SRCALPHA;
         DestBlend = INVSRCALPHA;
+        ColorWriteEnable = RED | GREEN | BLUE;
+    }
+}
+
+technique DebugView
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 DebugView_PS();
         ColorWriteEnable = RED | GREEN | BLUE;
     }
 }
