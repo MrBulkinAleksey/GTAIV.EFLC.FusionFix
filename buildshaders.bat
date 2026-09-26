@@ -16,12 +16,23 @@ for %%p in ("%shaders_path%\patches\*.patch") do (
 
 cd tools/RageShaderEditor
 rem RageShaderEditor reports assembly errors but still exits normally and leaves a broken
-rem .fxc behind, which crashes the game, so its output is checked here instead.
+rem .fxc behind, which crashes the game, so its output is checked here instead. It prints
+rem nothing on success; any error, exception or pause prompt fails the build, and the
+rem offending lines are repeated as GitHub annotations.
 for /R "%shaders_path%" %%a in (*.xml) do (
     RageShaderEditor.exe "%%a" < nul > "%TEMP%\RageShaderEditor.log" 2>&1
     type "%TEMP%\RageShaderEditor.log"
-    findstr /C:"Error when assembling" "%TEMP%\RageShaderEditor.log" >nul && (
+    findstr /I /C:"error" /C:"exception" /C:"press any key" "%TEMP%\RageShaderEditor.log" >nul && (
+        for /f "usebackq delims=" %%l in (`findstr /I /C:"error" /C:"exception" "%TEMP%\RageShaderEditor.log"`) do echo ::error title=Shader assembly::%%l
         echo Shader assembly failed for %%a
+        exit 1
+    )
+)
+
+rem Every shader description must have produced its compiled shader.
+for /R "%shaders_path%" %%a in (*.fxc.xml) do (
+    if not exist "%%~dpna" (
+        echo ::error title=Shader assembly::No compiled shader was produced for %%a
         exit 1
     )
 )

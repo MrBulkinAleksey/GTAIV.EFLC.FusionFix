@@ -276,7 +276,10 @@ public:
     // Linear view depth of this and the previous frame, for rejecting stale history.
     HistoryRT LinDepth;
 
-    bool bContactShadows = true;
+    // Menu toggles, read every frame so switching them needs no restart.
+    static bool ContactShadowsEnabled() { static auto p = FusionFixSettings.GetRef("PREF_CONTACTSHADOWS"); return p && p->get() != 0; }
+    static bool IndirectLightEnabled() { static auto p = FusionFixSettings.GetRef("PREF_SSGI"); return p && p->get() != 0; }
+
     int nContactShadowSteps = 12;
     float fContactShadowLength = 0.6f;
     float fContactShadowThickness = 0.25f;
@@ -287,7 +290,6 @@ public:
     HistoryRT ContactShadowHistory;
     bool bContactShadowsValidThisFrame = false;
 
-    bool bIndirectLight = true;
     int nIndirectLightRays = 2;
     int nIndirectLightSteps = 10;
     float fIndirectLightRayLength = 4.0f;
@@ -882,7 +884,6 @@ public:
         fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporalBlend", 0.5f), 0.0f, 0.9f);
         nSSRDebug = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsDebug", 0), 0, 2);
 
-        bContactShadows = iniReader.ReadInteger("POSTFX", "ContactShadows", 1) != 0;
         nContactShadowSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ContactShadowsSteps", 12), 4, 64);
         fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 0.6f), 0.05f, 10.0f);
         fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.25f), 0.01f, 5.0f);
@@ -890,7 +891,6 @@ public:
         fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         fContactShadowTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsTemporalBlend", 0.5f), 0.0f, 0.95f);
 
-        bIndirectLight = iniReader.ReadInteger("POSTFX", "ScreenSpaceIndirectLight", 1) != 0;
         nIndirectLightRays = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceIndirectLightRays", 2), 1, 16);
         nIndirectLightSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceIndirectLightSteps", 10), 2, 64);
         fIndirectLightRayLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", 4.0f), 0.1f, 50.0f);
@@ -1258,12 +1258,11 @@ private:
             CreateHistoryRT(R.LinDepth, "LinDepthTex0", "LinDepthTex1", rage::GRCFMT_R32F, 32, width, height);
             if (R.fAmbientOcclusionTemporalBlend > 0.0f)
                 CreateHistoryRT(R.AOHistory, "AOHistoryTex0", "AOHistoryTex1", rage::GRCFMT_R16F, 16, width, height);
-            if (R.bContactShadows)
+            // Created regardless of the menu toggles, so they can be switched on in game.
             {
                 CreateScreenRT(R.ContactShadowRaw, "ContactShadowTex", rage::GRCFMT_R16F, 16, width, height);
                 CreateHistoryRT(R.ContactShadowHistory, "ContactShadowHistoryTex0", "ContactShadowHistoryTex1", rage::GRCFMT_R16F, 16, width, height);
             }
-            if (R.bIndirectLight)
             {
                 // Indirect light is low frequency, so it is traced at half resolution.
                 const uint32_t giWidth = std::max(1u, uint32_t(width) / 2);
@@ -1406,7 +1405,7 @@ private:
                     pDevice->SetTexture(0, prevTex[0]);
 
                     // Reflections and indirect light both sample the previous frame's lit scene.
-                    if ((PostFxResources.SSREnabled() || PostFxResources.bIndirectLight) && PostFxResources.SSRHistorySurf && PostFxResources.SSRSurf[0])
+                    if ((PostFxResources.SSREnabled() || PostFxResources.IndirectLightEnabled()) && PostFxResources.SSRHistorySurf && PostFxResources.SSRSurf[0])
                     {
                         D3DVIEWPORT9 vpBeforeCapture;
                         pDevice->GetViewport(&vpBeforeCapture);
@@ -2161,7 +2160,7 @@ private:
         auto& h = R.SSREffectHandles;
         R.bContactShadowsValidThisFrame = false;
 
-        if (!R.bContactShadows || !R.SSREffect || !F.valid || F.sunView.w <= 0.0f || !R.mDepthRT ||
+        if (!R.ContactShadowsEnabled() || !R.SSREffect || !F.valid || F.sunView.w <= 0.0f || !R.mDepthRT ||
             !R.ContactShadowRaw.surf || !R.ContactShadowHistory.Ready())
         {
             R.ContactShadowHistory.lastValid = false;
@@ -2192,7 +2191,7 @@ private:
         auto& h = R.SSREffectHandles;
         R.bIndirectLightValidThisFrame = false;
 
-        if (!R.bIndirectLight || R.fIndirectLightIntensity <= 0.0f || !R.SSREffect || !F.valid || !R.mDepthRT ||
+        if (!R.IndirectLightEnabled() || R.fIndirectLightIntensity <= 0.0f || !R.SSREffect || !F.valid || !R.mDepthRT ||
             !R.SSRHistoryTex || !R.IndirectLightRaw.surf || !R.IndirectLightHistory.Ready())
         {
             R.IndirectLightHistory.lastValid = false;

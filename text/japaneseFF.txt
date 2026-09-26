@@ -133,6 +133,12 @@ FPSリミッター
 [SSR]
 Screen Space Reflections
 
+[Contact Shadows]
+Contact Shadows
+
+[SSGI]
+Screen Space Indirect Light
+
 [Zoomed Movement]
 ズーム中の移動を許可
 

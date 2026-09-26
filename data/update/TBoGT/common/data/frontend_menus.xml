@@ -1174,6 +1174,8 @@
             <optionspc action="MENUOPT_ADJUST" label="Tone Mapping" value="PREF_TONEMAPPING" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			      <optionspc action="MENUOPT_ADJUST" label="AO" value="PREF_SAO" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
             <optionspc action="MENUOPT_ADJUST" label="SSR" value="PREF_SSR" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+            <optionspc action="MENUOPT_ADJUST" label="Contact Shadows" value="PREF_CONTACTSHADOWS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+            <optionspc action="MENUOPT_ADJUST" label="SSGI" value="PREF_SSGI" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
             <optionspc action="MENUOPT_ADJUST" label="Shadow Filter" value="PREF_SHADOWFILTER" scaler="6" displayValue="MENU_DISPLAY_SHADOWFILTER" />
             <optionspc action="MENUOPT_ADJUST" label="Graphics API" value="PREF_GRAPHICSAPI" scaler="2" displayValue="MENU_DISPLAY_NETSTATS_COMP_TEAM" />
       
@@ -1238,6 +1240,8 @@
             <optionspc action="MENUOPT_ADJUST" label="Tone Mapping" value="PREF_TONEMAPPING" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			      <optionspc action="MENUOPT_ADJUST" label="AO" value="PREF_SAO" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
             <optionspc action="MENUOPT_ADJUST" label="SSR" value="PREF_SSR" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+            <optionspc action="MENUOPT_ADJUST" label="Contact Shadows" value="PREF_CONTACTSHADOWS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+            <optionspc action="MENUOPT_ADJUST" label="SSGI" value="PREF_SSGI" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
             <optionspc action="MENUOPT_ADJUST" label="Shadow Filter" value="PREF_SHADOWFILTER" scaler="6" displayValue="MENU_DISPLAY_SHADOWFILTER" />
             <optionspc action="MENUOPT_ADJUST" label="Graphics API" value="PREF_GRAPHICSAPI" scaler="2" displayValue="MENU_DISPLAY_NETSTATS_COMP_TEAM" />
       

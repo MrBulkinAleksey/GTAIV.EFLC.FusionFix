@@ -133,6 +133,12 @@ Oclusión ambiental
 [SSR]
 Screen Space Reflections
 
+[Contact Shadows]
+Contact Shadows
+
+[SSGI]
+Screen Space Indirect Light
+
 [Zoomed Movement]
 Permitir movimiento al acercar la mirilla
 

@@ -133,6 +133,12 @@ Occlusione ambientale
 [SSR]
 Screen Space Reflections
 
+[Contact Shadows]
+Contact Shadows
+
+[SSGI]
+Screen Space Indirect Light
+
 [Zoomed Movement]
 Consenti movimento con lo zoom
 

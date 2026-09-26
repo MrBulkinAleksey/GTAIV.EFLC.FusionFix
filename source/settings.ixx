@@ -384,6 +384,8 @@ public:
             { 0, "PREF_SAO",                    "MISC",       "AmbientOcclusion",                   "",                           0, nullptr, 0, 1 },
             { 0, "PREF_AUTOCLIMBLADDERS",       "MISC",       "AutoClimbLadders",                   "",                           0, nullptr, 0, 1 },
             { 0, "PREF_SSR",                    "POSTFX",     "ScreenSpaceReflections",             "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_CONTACTSHADOWS",         "POSTFX",     "ContactShadows",                     "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_SSGI",                   "POSTFX",     "ScreenSpaceIndirectLight",           "",                           1, nullptr, 0, 1 },
             { 0, "PREF_HEADLIGHT_REACH", "SHADOWS", "HeadlightShadowReach", "", 10, nullptr, 0, 40 },
             { 0, "PREF_LAMP_REACH", "SHADOWS", "LamppostShadowReach", "", 10, nullptr, 0, 40 },
             // Enums are at capacity, to use more enums, replace multiplayer ones. On/Off toggles should still be possible to add.
