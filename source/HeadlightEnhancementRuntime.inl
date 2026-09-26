@@ -4,7 +4,7 @@ namespace HeadlightEnhancement
     static uintptr_t imageBase = 0;
     static std::atomic<uint64_t> lastDrivenToken{0};
     static std::atomic<uint32_t> retainedSubmissions{0};
-    static bool brightnessInstalled = false, cutoffInstalled = false;
+    static bool brightnessInstalled = false;
     static std::atomic<bool> diagnosticsReady{false};
     static std::filesystem::path logPath;
 
@@ -56,10 +56,6 @@ namespace HeadlightEnhancement
         ++retainedSubmissions;
     }
 
-    // No projection-mask replacement in this candidate.
-    static int SelectMask(int original, int) { return original; }
-    static bool InstallCutoff(bool) { return false; }
-
     static void WriteDiagnostics()
     {
         if (!diagnosticsReady.load(std::memory_order_acquire)) return;
@@ -68,8 +64,8 @@ namespace HeadlightEnhancement
         if (logPath.empty() || now - last < 5000) return;
         last = now;
         std::ofstream out(logPath, std::ios::trunc);
-        out << "Headlight candidate 24\nbrightnessInstalled=" << brightnessInstalled
-            << "\ncutoffInstalled=0\nretainedSubmissions=" << retainedSubmissions.load()
+        out << "brightnessInstalled=" << brightnessInstalled
+            << "\nretainedSubmissions=" << retainedSubmissions.load()
             << "\ntrackedVehicle=" << (lastDrivenToken.load() != 0) << '\n';
     }
 

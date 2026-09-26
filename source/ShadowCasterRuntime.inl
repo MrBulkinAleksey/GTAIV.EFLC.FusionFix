@@ -86,11 +86,11 @@ namespace ShadowDiagnostics
             std::ofstream log(path, std::ios::app);
             if (!startupWritten)
             {
-                log << "candidate=21 startup_guard " << startupGuardDetails << '\n';
-                log << "candidate=21 allocator_startup " << PlayerShadowAllocation::installStatus << '\n';
+                log << "startup_guard " << startupGuardDetails << '\n';
+                log << "allocator_startup " << PlayerShadowAllocation::installStatus << '\n';
                 if (log.good()) startupWritten = true;
             }
-            log << "candidate=21 tick=" << now << " admission_installed=" << admissionInstalled
+            log << "tick=" << now << " admission_installed=" << admissionInstalled
                 << " traffic_self_shadow_fix=" << bTrafficSelfShadowFix
                 << " traffic_car_excluded=" << OwnHeadlightCaster::trafficCarExcluded.load()
                 << " close_headlight_relevance=" << bCloseHeadlightRelevance << " caster_guard=" << guardPassed

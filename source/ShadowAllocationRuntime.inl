@@ -106,8 +106,7 @@ namespace PlayerShadowAllocation
         const auto distance = fusionfix::shadows::EvaluateGeometry(state.player,
             {light.mPosition.x, light.mPosition.y, light.mPosition.z}).distanceSquared;
         const bool beam = (light.mFlags & 0x100u) != 0;
-        if (fusionfix::shadows::WithinShadowReach(distance,
-                FusionFixSettings.Get(beam ? "PREF_HEADLIGHT_REACH" : "PREF_LAMP_REACH")))
+        if (fusionfix::shadows::WithinShadowReach(distance, ShadowReachStep(beam)))
             return true;
         if (bCloseHeadlightRelevance && !state.occupiedCar && light.mType == 2 &&
             (light.mFlags & 0x100u) &&
