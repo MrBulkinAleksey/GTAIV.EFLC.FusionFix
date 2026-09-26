@@ -1,0 +1,1402 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
+index 2337a596..47001e9e 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
+@@ -40,12 +40,23 @@
+     def c0, 0.50999999, 2, -0.999989986, 9.99999975e-006
+     def c1, 1, -0.333333343, 1.5, -0.200000003
+     def c2, 1.25, 0, 0, 0
++    // --- FusionFix local contact shadows: parameter texels, magic, one, 1/steps, uv and position mapping
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c157, 12345, 1, 0.125, 0
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.625, 0.5, 0, 0
++    def c160, 2, -1, 0.899999976, 0
++    def c161, 0.00300000003, 0.0199999996, 4, 0
++    defi i0, 8, 0, 0, 0
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
++    dcl_2d s9 // FusionFix: camera projection and settings, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s2
+@@ -80,8 +91,97 @@
+     mul r1.xyz, c76.w, c76
+     mul r0.xyw, r0.x, r1.xyzz
+     mul r0.xyw, r3.xyzz, r0
+-    cmp oC0.xyz, r0.z, r0.xyww, c2.y
+-    mov oC0.w, c1.x
++    cmp r26.xyz, r0.z, r0.xyww, c2.y
++    mov r26.w, c1.x
++    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
++    // --- through the opaque depth catches small occluders, also for lights without a shadow
++    // --- map. Needs FusionFix's parameter texture (s9, magic value) and linear depth (s11).
++    mov r31.w, c157.y
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, -, -, magic
++    mov r29, c159
++    texldl r29, r29, s9 // ray length, thickness, max view distance, strength
++    add r13.x, r28.w, -c157.x
++    mul r13.x, r13.x, r13.x
++    if_lt r13.x, c157.y
++      add r13.xy, vPos, c158.z
++      mul r13.xy, r13, c77.zw
++      mov r13.zw, c158.w
++      texldl r14, r13, s11
++      mov r13.w, r14.x // this pixel's linear depth
++      if_lt r14.x, r29.z
++        // view space position from screen uv and depth, then world space
++        mad r15.xy, r13, c160.x, c160.y
++        mul r15.y, r15.y, c160.y
++        mul r15.xy, r15, r14.x
++        rcp r15.w, r28.x
++        mul r15.z, r14.x, r15.w
++        mad r15.x, -r15.z, r27.z, r15.x
++        rcp r16.x, r27.x
++        mul r15.x, r15.x, r16.x
++        mad r15.y, -r15.z, r27.w, r15.y
++        rcp r16.y, r27.y
++        mul r15.y, r15.y, r16.y
++        mul r16.xyz, r15.x, c12
++        mad r16.xyz, r15.y, c13, r16
++        mad r16.xyz, r15.z, c14, r16
++        add r16.xyz, r16, c15
++        // towards the light, stopping short of it
++        add r17.xyz, c66, -r16
++        dp3 r17.w, r17, r17
++        rsq r17.w, r17.w
++        mul r17.xyz, r17, r17.w
++        rcp r17.w, r17.w
++        mul r17.w, r17.w, c160.z
++        min r17.w, r17.w, r29.x
++        mul r30.xyz, r17, r17.w
++        mul r30.xyz, r30, c157.z
++        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
++        mad r31.xyz, r17, r18.x, r16
++        mov r18.w, c158.w
++        rep i0
++          add r31.xyz, r31, r30
++          add r14.xyz, r31, -c15
++          dp3 r15.x, r14, c12
++          dp3 r15.y, r14, c13
++          dp3 r15.z, r14, c14
++          mul r16.w, r15.z, r28.x
++          break_le r16.w, c158.w // behind the camera
++          mul r16.x, r15.x, r27.x
++          mad r16.x, r15.z, r27.z, r16.x
++          mul r16.y, r15.y, r27.y
++          mad r16.y, r15.z, r27.w, r16.y
++          rcp r16.z, r16.w
++          mul r16.xy, r16, r16.z
++          mad r12.xy, r16, c158.xy, c158.zz
++          mov r12.zw, c158.w
++          min r15.w, r12.x, r12.y
++          break_lt r15.w, c158.w // left the screen
++          max r15.w, r12.x, r12.y
++          break_gt r15.w, c157.y
++          texldl r14, r12, s11
++          add r14.y, r16.w, -r14.x
++          if_gt r14.y, c158.w
++            if_lt r14.y, r29.y
++              mov r18.w, c157.y
++            endif
++            break // went behind the scene, a hit or not
++          endif
++        endrep
++        // fade out over the last quarter of the distance limit
++        add r13.x, r29.z, -r13.w
++        rcp r13.y, r29.z
++        mul r13.x, r13.x, r13.y
++        mul_sat r13.x, r13.x, c161.z
++        mul r18.w, r18.w, r13.x
++        mul r18.w, r18.w, r29.w
++        add r31.w, c157.y, -r18.w
++      endif
++    endif
++    mul r26.xyz, r26, r31.w
++    mov oC0, r26
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+index 1800ea70..2a3f3653 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+@@ -43,6 +43,15 @@
+     def c1, 255, -128, -0, -7.9000001
+     def c2, 9.99999975e-006, 1, -0.333333343, 1.5
+     def c3, -0.200000003, 1.25, 0, 0
++    // --- FusionFix local contact shadows: parameter texels, magic, one, 1/steps, uv and position mapping
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c157, 12345, 1, 0.125, 0
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.625, 0.5, 0, 0
++    def c160, 2, -1, 0.899999976, 0
++    def c161, 0.00300000003, 0.0199999996, 4, 0
++    defi i0, 8, 0, 0, 0
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -50,6 +59,8 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s4
++    dcl_2d s9 // FusionFix: camera projection and settings, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s2
+@@ -91,7 +102,96 @@
+     mad r1.x, r3.x, c0.w, r1.x
+     add r1.x, r1.x, c1.w
+     mov r0.w, c2.y
+-    cmp oC0, r1.x, r0, -c1.z
++    cmp r26, r1.x, r0, -c1.z
++    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
++    // --- through the opaque depth catches small occluders, also for lights without a shadow
++    // --- map. Needs FusionFix's parameter texture (s9, magic value) and linear depth (s11).
++    mov r31.w, c157.y
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, -, -, magic
++    mov r29, c159
++    texldl r29, r29, s9 // ray length, thickness, max view distance, strength
++    add r13.x, r28.w, -c157.x
++    mul r13.x, r13.x, r13.x
++    if_lt r13.x, c157.y
++      add r13.xy, vPos, c158.z
++      mul r13.xy, r13, c77.zw
++      mov r13.zw, c158.w
++      texldl r14, r13, s11
++      mov r13.w, r14.x // this pixel's linear depth
++      if_lt r14.x, r29.z
++        // view space position from screen uv and depth, then world space
++        mad r15.xy, r13, c160.x, c160.y
++        mul r15.y, r15.y, c160.y
++        mul r15.xy, r15, r14.x
++        rcp r15.w, r28.x
++        mul r15.z, r14.x, r15.w
++        mad r15.x, -r15.z, r27.z, r15.x
++        rcp r16.x, r27.x
++        mul r15.x, r15.x, r16.x
++        mad r15.y, -r15.z, r27.w, r15.y
++        rcp r16.y, r27.y
++        mul r15.y, r15.y, r16.y
++        mul r16.xyz, r15.x, c12
++        mad r16.xyz, r15.y, c13, r16
++        mad r16.xyz, r15.z, c14, r16
++        add r16.xyz, r16, c15
++        // towards the light, stopping short of it
++        add r17.xyz, c66, -r16
++        dp3 r17.w, r17, r17
++        rsq r17.w, r17.w
++        mul r17.xyz, r17, r17.w
++        rcp r17.w, r17.w
++        mul r17.w, r17.w, c160.z
++        min r17.w, r17.w, r29.x
++        mul r30.xyz, r17, r17.w
++        mul r30.xyz, r30, c157.z
++        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
++        mad r31.xyz, r17, r18.x, r16
++        mov r18.w, c158.w
++        rep i0
++          add r31.xyz, r31, r30
++          add r14.xyz, r31, -c15
++          dp3 r15.x, r14, c12
++          dp3 r15.y, r14, c13
++          dp3 r15.z, r14, c14
++          mul r16.w, r15.z, r28.x
++          break_le r16.w, c158.w // behind the camera
++          mul r16.x, r15.x, r27.x
++          mad r16.x, r15.z, r27.z, r16.x
++          mul r16.y, r15.y, r27.y
++          mad r16.y, r15.z, r27.w, r16.y
++          rcp r16.z, r16.w
++          mul r16.xy, r16, r16.z
++          mad r12.xy, r16, c158.xy, c158.zz
++          mov r12.zw, c158.w
++          min r15.w, r12.x, r12.y
++          break_lt r15.w, c158.w // left the screen
++          max r15.w, r12.x, r12.y
++          break_gt r15.w, c157.y
++          texldl r14, r12, s11
++          add r14.y, r16.w, -r14.x
++          if_gt r14.y, c158.w
++            if_lt r14.y, r29.y
++              mov r18.w, c157.y
++            endif
++            break // went behind the scene, a hit or not
++          endif
++        endrep
++        // fade out over the last quarter of the distance limit
++        add r13.x, r29.z, -r13.w
++        rcp r13.y, r29.z
++        mul r13.x, r13.x, r13.y
++        mul_sat r13.x, r13.x, c161.z
++        mul r18.w, r18.w, r13.x
++        mul r18.w, r18.w, r29.w
++        add r31.w, c157.y, -r18.w
++      endif
++    endif
++    mul r26.xyz, r26, r31.w
++    mov oC0, r26
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
+index 0b4d1074..f4792963 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
+@@ -43,6 +43,15 @@
+     def c1, 255, -128, -0, -7.9000001
+     def c2, 9.99999975e-006, 1, -0.333333343, 1.5
+     def c3, -0.200000003, 1.25, 0, 0
++    // --- FusionFix local contact shadows: parameter texels, magic, one, 1/steps, uv and position mapping
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c157, 12345, 1, 0.125, 0
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.625, 0.5, 0, 0
++    def c160, 2, -1, 0.899999976, 0
++    def c161, 0.00300000003, 0.0199999996, 4, 0
++    defi i0, 8, 0, 0, 0
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -50,6 +59,8 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s4
++    dcl_2d s9 // FusionFix: camera projection and settings, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s2
+@@ -91,7 +102,96 @@
+     mad r1.x, r3.x, c0.w, r1.x
+     add r1.x, r1.x, c1.w
+     mov r0.w, c2.y
+-    cmp oC0, r1.x, -c1.z, r0
++    cmp r26, r1.x, -c1.z, r0
++    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
++    // --- through the opaque depth catches small occluders, also for lights without a shadow
++    // --- map. Needs FusionFix's parameter texture (s9, magic value) and linear depth (s11).
++    mov r31.w, c157.y
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, -, -, magic
++    mov r29, c159
++    texldl r29, r29, s9 // ray length, thickness, max view distance, strength
++    add r13.x, r28.w, -c157.x
++    mul r13.x, r13.x, r13.x
++    if_lt r13.x, c157.y
++      add r13.xy, vPos, c158.z
++      mul r13.xy, r13, c77.zw
++      mov r13.zw, c158.w
++      texldl r14, r13, s11
++      mov r13.w, r14.x // this pixel's linear depth
++      if_lt r14.x, r29.z
++        // view space position from screen uv and depth, then world space
++        mad r15.xy, r13, c160.x, c160.y
++        mul r15.y, r15.y, c160.y
++        mul r15.xy, r15, r14.x
++        rcp r15.w, r28.x
++        mul r15.z, r14.x, r15.w
++        mad r15.x, -r15.z, r27.z, r15.x
++        rcp r16.x, r27.x
++        mul r15.x, r15.x, r16.x
++        mad r15.y, -r15.z, r27.w, r15.y
++        rcp r16.y, r27.y
++        mul r15.y, r15.y, r16.y
++        mul r16.xyz, r15.x, c12
++        mad r16.xyz, r15.y, c13, r16
++        mad r16.xyz, r15.z, c14, r16
++        add r16.xyz, r16, c15
++        // towards the light, stopping short of it
++        add r17.xyz, c66, -r16
++        dp3 r17.w, r17, r17
++        rsq r17.w, r17.w
++        mul r17.xyz, r17, r17.w
++        rcp r17.w, r17.w
++        mul r17.w, r17.w, c160.z
++        min r17.w, r17.w, r29.x
++        mul r30.xyz, r17, r17.w
++        mul r30.xyz, r30, c157.z
++        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
++        mad r31.xyz, r17, r18.x, r16
++        mov r18.w, c158.w
++        rep i0
++          add r31.xyz, r31, r30
++          add r14.xyz, r31, -c15
++          dp3 r15.x, r14, c12
++          dp3 r15.y, r14, c13
++          dp3 r15.z, r14, c14
++          mul r16.w, r15.z, r28.x
++          break_le r16.w, c158.w // behind the camera
++          mul r16.x, r15.x, r27.x
++          mad r16.x, r15.z, r27.z, r16.x
++          mul r16.y, r15.y, r27.y
++          mad r16.y, r15.z, r27.w, r16.y
++          rcp r16.z, r16.w
++          mul r16.xy, r16, r16.z
++          mad r12.xy, r16, c158.xy, c158.zz
++          mov r12.zw, c158.w
++          min r15.w, r12.x, r12.y
++          break_lt r15.w, c158.w // left the screen
++          max r15.w, r12.x, r12.y
++          break_gt r15.w, c157.y
++          texldl r14, r12, s11
++          add r14.y, r16.w, -r14.x
++          if_gt r14.y, c158.w
++            if_lt r14.y, r29.y
++              mov r18.w, c157.y
++            endif
++            break // went behind the scene, a hit or not
++          endif
++        endrep
++        // fade out over the last quarter of the distance limit
++        add r13.x, r29.z, -r13.w
++        rcp r13.y, r29.z
++        mul r13.x, r13.x, r13.y
++        mul_sat r13.x, r13.x, c161.z
++        mul r18.w, r18.w, r13.x
++        mul r18.w, r18.w, r29.w
++        add r31.w, c157.y, -r18.w
++      endif
++    endif
++    mul r26.xyz, r26, r31.w
++    mov oC0, r26
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index 86f2d477..87634a30 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -77,6 +77,15 @@
+     def c136, -0.7515861305520581, -0.41609876195815027, 0.9102937449894895, -0.17014527555321657
+     def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
++    // --- FusionFix local contact shadows: parameter texels, magic, one, 1/steps, uv and position mapping
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c157, 12345, 1, 0.125, 0
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.625, 0.5, 0, 0
++    def c160, 2, -1, 0.899999976, 0
++    def c161, 0.00300000003, 0.0199999996, 4, 0
++    defi i0, 8, 0, 0, 0
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -86,6 +95,8 @@
+     dcl_2d s4
+     dcl_2d s5
+     dcl_2d s14
++    dcl_2d s9 // FusionFix: camera projection and settings, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
+     add r0.zw, c0.x, vPos.xyxy
+     mul r0.zw, r0, c84
+     texld r2, r0.zwzw, s1
+@@ -305,7 +316,96 @@
+     mad r0.x, r0.x, c6.z, r0.z
+     add r0.x, r0.x, c7.z
+     cmp r0.x, r0.x, c2.y, r0.y
+-    mul oC0, r1, r0.x
++    mul r26, r1, r0.x
++    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
++    // --- through the opaque depth catches small occluders, also for lights without a shadow
++    // --- map. Needs FusionFix's parameter texture (s9, magic value) and linear depth (s11).
++    mov r31.w, c157.y
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, -, -, magic
++    mov r29, c159
++    texldl r29, r29, s9 // ray length, thickness, max view distance, strength
++    add r13.x, r28.w, -c157.x
++    mul r13.x, r13.x, r13.x
++    if_lt r13.x, c157.y
++      add r13.xy, vPos, c158.z
++      mul r13.xy, r13, c84.zw
++      mov r13.zw, c158.w
++      texldl r14, r13, s11
++      mov r13.w, r14.x // this pixel's linear depth
++      if_lt r14.x, r29.z
++        // view space position from screen uv and depth, then world space
++        mad r15.xy, r13, c160.x, c160.y
++        mul r15.y, r15.y, c160.y
++        mul r15.xy, r15, r14.x
++        rcp r15.w, r28.x
++        mul r15.z, r14.x, r15.w
++        mad r15.x, -r15.z, r27.z, r15.x
++        rcp r16.x, r27.x
++        mul r15.x, r15.x, r16.x
++        mad r15.y, -r15.z, r27.w, r15.y
++        rcp r16.y, r27.y
++        mul r15.y, r15.y, r16.y
++        mul r16.xyz, r15.x, c12
++        mad r16.xyz, r15.y, c13, r16
++        mad r16.xyz, r15.z, c14, r16
++        add r16.xyz, r16, c15
++        // towards the light, stopping short of it
++        add r17.xyz, c78, -r16
++        dp3 r17.w, r17, r17
++        rsq r17.w, r17.w
++        mul r17.xyz, r17, r17.w
++        rcp r17.w, r17.w
++        mul r17.w, r17.w, c160.z
++        min r17.w, r17.w, r29.x
++        mul r30.xyz, r17, r17.w
++        mul r30.xyz, r30, c157.z
++        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
++        mad r31.xyz, r17, r18.x, r16
++        mov r18.w, c158.w
++        rep i0
++          add r31.xyz, r31, r30
++          add r14.xyz, r31, -c15
++          dp3 r15.x, r14, c12
++          dp3 r15.y, r14, c13
++          dp3 r15.z, r14, c14
++          mul r16.w, r15.z, r28.x
++          break_le r16.w, c158.w // behind the camera
++          mul r16.x, r15.x, r27.x
++          mad r16.x, r15.z, r27.z, r16.x
++          mul r16.y, r15.y, r27.y
++          mad r16.y, r15.z, r27.w, r16.y
++          rcp r16.z, r16.w
++          mul r16.xy, r16, r16.z
++          mad r12.xy, r16, c158.xy, c158.zz
++          mov r12.zw, c158.w
++          min r15.w, r12.x, r12.y
++          break_lt r15.w, c158.w // left the screen
++          max r15.w, r12.x, r12.y
++          break_gt r15.w, c157.y
++          texldl r14, r12, s11
++          add r14.y, r16.w, -r14.x
++          if_gt r14.y, c158.w
++            if_lt r14.y, r29.y
++              mov r18.w, c157.y
++            endif
++            break // went behind the scene, a hit or not
++          endif
++        endrep
++        // fade out over the last quarter of the distance limit
++        add r13.x, r29.z, -r13.w
++        rcp r13.y, r29.z
++        mul r13.x, r13.x, r13.y
++        mul_sat r13.x, r13.x, c161.z
++        mul r18.w, r18.w, r13.x
++        mul r18.w, r18.w, r29.w
++        add r31.w, c157.y, -r18.w
++      endif
++    endif
++    mul r26.xyz, r26, r31.w
++    mov oC0, r26
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+index d104b6c1..ae7b4637 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+@@ -71,6 +71,15 @@
+     def c136, -0.7515861305520581, -0.41609876195815027, 0.9102937449894895, -0.17014527555321657
+     def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
++    // --- FusionFix local contact shadows: parameter texels, magic, one, 1/steps, uv and position mapping
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c157, 12345, 1, 0.125, 0
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.625, 0.5, 0, 0
++    def c160, 2, -1, 0.899999976, 0
++    def c161, 0.00300000003, 0.0199999996, 4, 0
++    defi i0, 8, 0, 0, 0
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -78,6 +87,8 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s14
++    dcl_2d s9 // FusionFix: camera projection and settings, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c84.zwzw
+     texld r1, r0, s2
+@@ -268,8 +279,97 @@
+     mul r1.yzw, c83.w, c83.xxyz
+     mul r1.yzw, r0.w, r1
+     mul r0.xyz, r0, r1.yzww
+-    cmp oC0.xyz, r1.x, r0, c2.y
+-    mov oC0.w, c1.x
++    cmp r26.xyz, r1.x, r0, c2.y
++    mov r26.w, c1.x
++    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
++    // --- through the opaque depth catches small occluders, also for lights without a shadow
++    // --- map. Needs FusionFix's parameter texture (s9, magic value) and linear depth (s11).
++    mov r31.w, c157.y
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, -, -, magic
++    mov r29, c159
++    texldl r29, r29, s9 // ray length, thickness, max view distance, strength
++    add r13.x, r28.w, -c157.x
++    mul r13.x, r13.x, r13.x
++    if_lt r13.x, c157.y
++      add r13.xy, vPos, c158.z
++      mul r13.xy, r13, c84.zw
++      mov r13.zw, c158.w
++      texldl r14, r13, s11
++      mov r13.w, r14.x // this pixel's linear depth
++      if_lt r14.x, r29.z
++        // view space position from screen uv and depth, then world space
++        mad r15.xy, r13, c160.x, c160.y
++        mul r15.y, r15.y, c160.y
++        mul r15.xy, r15, r14.x
++        rcp r15.w, r28.x
++        mul r15.z, r14.x, r15.w
++        mad r15.x, -r15.z, r27.z, r15.x
++        rcp r16.x, r27.x
++        mul r15.x, r15.x, r16.x
++        mad r15.y, -r15.z, r27.w, r15.y
++        rcp r16.y, r27.y
++        mul r15.y, r15.y, r16.y
++        mul r16.xyz, r15.x, c12
++        mad r16.xyz, r15.y, c13, r16
++        mad r16.xyz, r15.z, c14, r16
++        add r16.xyz, r16, c15
++        // towards the light, stopping short of it
++        add r17.xyz, c78, -r16
++        dp3 r17.w, r17, r17
++        rsq r17.w, r17.w
++        mul r17.xyz, r17, r17.w
++        rcp r17.w, r17.w
++        mul r17.w, r17.w, c160.z
++        min r17.w, r17.w, r29.x
++        mul r30.xyz, r17, r17.w
++        mul r30.xyz, r30, c157.z
++        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
++        mad r31.xyz, r17, r18.x, r16
++        mov r18.w, c158.w
++        rep i0
++          add r31.xyz, r31, r30
++          add r14.xyz, r31, -c15
++          dp3 r15.x, r14, c12
++          dp3 r15.y, r14, c13
++          dp3 r15.z, r14, c14
++          mul r16.w, r15.z, r28.x
++          break_le r16.w, c158.w // behind the camera
++          mul r16.x, r15.x, r27.x
++          mad r16.x, r15.z, r27.z, r16.x
++          mul r16.y, r15.y, r27.y
++          mad r16.y, r15.z, r27.w, r16.y
++          rcp r16.z, r16.w
++          mul r16.xy, r16, r16.z
++          mad r12.xy, r16, c158.xy, c158.zz
++          mov r12.zw, c158.w
++          min r15.w, r12.x, r12.y
++          break_lt r15.w, c158.w // left the screen
++          max r15.w, r12.x, r12.y
++          break_gt r15.w, c157.y
++          texldl r14, r12, s11
++          add r14.y, r16.w, -r14.x
++          if_gt r14.y, c158.w
++            if_lt r14.y, r29.y
++              mov r18.w, c157.y
++            endif
++            break // went behind the scene, a hit or not
++          endif
++        endrep
++        // fade out over the last quarter of the distance limit
++        add r13.x, r29.z, -r13.w
++        rcp r13.y, r29.z
++        mul r13.x, r13.x, r13.y
++        mul_sat r13.x, r13.x, c161.z
++        mul r18.w, r18.w, r13.x
++        mul r18.w, r18.w, r29.w
++        add r31.w, c157.y, -r18.w
++      endif
++    endif
++    mul r26.xyz, r26, r31.w
++    mov oC0, r26
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+index 963ce403..145d706f 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -48,6 +48,15 @@
+     def c0, 0.50999999, 512, 2, -0.999989986
+     def c1, 1, 0.5, 0, 9.99999975e-006
+     def c2, -0.100000001, 1.11111116, 0, 0
++    // --- FusionFix local contact shadows: parameter texels, magic, one, 1/steps, uv and position mapping
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c157, 12345, 1, 0.125, 0
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.625, 0.5, 0, 0
++    def c160, 2, -1, 0.899999976, 0
++    def c161, 0.00300000003, 0.0199999996, 4, 0
++    defi i0, 8, 0, 0, 0
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -56,6 +65,8 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s5
++    dcl_2d s9 // FusionFix: camera projection and settings, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
+     mul r0.xyz, c78.w, c78
+     add r1.xy, c0.x, vPos
+     mul r1.xy, r1, c79.zwzw
+@@ -137,7 +148,96 @@
+     mad r0.xyz, r2, r0, r1
+     mad_sat r1.x, r4.z, r4.z, c1.y
+     mov r0.w, c1.x
+-    mul oC0, r0, r1.x
++    mul r26, r0, r1.x
++    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
++    // --- through the opaque depth catches small occluders, also for lights without a shadow
++    // --- map. Needs FusionFix's parameter texture (s9, magic value) and linear depth (s11).
++    mov r31.w, c157.y
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, -, -, magic
++    mov r29, c159
++    texldl r29, r29, s9 // ray length, thickness, max view distance, strength
++    add r13.x, r28.w, -c157.x
++    mul r13.x, r13.x, r13.x
++    if_lt r13.x, c157.y
++      add r13.xy, vPos, c158.z
++      mul r13.xy, r13, c79.zw
++      mov r13.zw, c158.w
++      texldl r14, r13, s11
++      mov r13.w, r14.x // this pixel's linear depth
++      if_lt r14.x, r29.z
++        // view space position from screen uv and depth, then world space
++        mad r15.xy, r13, c160.x, c160.y
++        mul r15.y, r15.y, c160.y
++        mul r15.xy, r15, r14.x
++        rcp r15.w, r28.x
++        mul r15.z, r14.x, r15.w
++        mad r15.x, -r15.z, r27.z, r15.x
++        rcp r16.x, r27.x
++        mul r15.x, r15.x, r16.x
++        mad r15.y, -r15.z, r27.w, r15.y
++        rcp r16.y, r27.y
++        mul r15.y, r15.y, r16.y
++        mul r16.xyz, r15.x, c12
++        mad r16.xyz, r15.y, c13, r16
++        mad r16.xyz, r15.z, c14, r16
++        add r16.xyz, r16, c15
++        // towards the light, stopping short of it
++        add r17.xyz, c72, -r16
++        dp3 r17.w, r17, r17
++        rsq r17.w, r17.w
++        mul r17.xyz, r17, r17.w
++        rcp r17.w, r17.w
++        mul r17.w, r17.w, c160.z
++        min r17.w, r17.w, r29.x
++        mul r30.xyz, r17, r17.w
++        mul r30.xyz, r30, c157.z
++        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
++        mad r31.xyz, r17, r18.x, r16
++        mov r18.w, c158.w
++        rep i0
++          add r31.xyz, r31, r30
++          add r14.xyz, r31, -c15
++          dp3 r15.x, r14, c12
++          dp3 r15.y, r14, c13
++          dp3 r15.z, r14, c14
++          mul r16.w, r15.z, r28.x
++          break_le r16.w, c158.w // behind the camera
++          mul r16.x, r15.x, r27.x
++          mad r16.x, r15.z, r27.z, r16.x
++          mul r16.y, r15.y, r27.y
++          mad r16.y, r15.z, r27.w, r16.y
++          rcp r16.z, r16.w
++          mul r16.xy, r16, r16.z
++          mad r12.xy, r16, c158.xy, c158.zz
++          mov r12.zw, c158.w
++          min r15.w, r12.x, r12.y
++          break_lt r15.w, c158.w // left the screen
++          max r15.w, r12.x, r12.y
++          break_gt r15.w, c157.y
++          texldl r14, r12, s11
++          add r14.y, r16.w, -r14.x
++          if_gt r14.y, c158.w
++            if_lt r14.y, r29.y
++              mov r18.w, c157.y
++            endif
++            break // went behind the scene, a hit or not
++          endif
++        endrep
++        // fade out over the last quarter of the distance limit
++        add r13.x, r29.z, -r13.w
++        rcp r13.y, r29.z
++        mul r13.x, r13.x, r13.y
++        mul_sat r13.x, r13.x, c161.z
++        mul r18.w, r18.w, r13.x
++        mul r18.w, r18.w, r29.w
++        add r31.w, c157.y, -r18.w
++      endif
++    endif
++    mul r26.xyz, r26, r31.w
++    mov oC0, r26
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index 6cdc2ec6..5bf22f6e 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -79,6 +79,15 @@
+     def c136, -0.7515861305520581, -0.41609876195815027, 0.9102937449894895, -0.17014527555321657
+     def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
++    // --- FusionFix local contact shadows: parameter texels, magic, one, 1/steps, uv and position mapping
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c157, 12345, 1, 0.125, 0
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.625, 0.5, 0, 0
++    def c160, 2, -1, 0.899999976, 0
++    def c161, 0.00300000003, 0.0199999996, 4, 0
++    defi i0, 8, 0, 0, 0
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -88,6 +97,8 @@
+     dcl_2d s4
+     dcl_2d s5
+     dcl_2d s14
++    dcl_2d s9 // FusionFix: camera projection and settings, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
+     mul r0.xyz, c85.w, c85
+     add r1.xy, c0.x, vPos
+     mul r1.xy, r1, c86.zwzw
+@@ -322,8 +333,97 @@
+     mul r0.xyz, r0, r0.w
+     mul r2.xyz, r3, r6
+     mul r1.xyz, r1.z, r1.xyww
+-    mad oC0.xyz, r2, r0, r1
+-    mov oC0.w, c1.x
++    mad r26.xyz, r2, r0, r1
++    mov r26.w, c1.x
++    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
++    // --- through the opaque depth catches small occluders, also for lights without a shadow
++    // --- map. Needs FusionFix's parameter texture (s9, magic value) and linear depth (s11).
++    mov r31.w, c157.y
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, -, -, magic
++    mov r29, c159
++    texldl r29, r29, s9 // ray length, thickness, max view distance, strength
++    add r13.x, r28.w, -c157.x
++    mul r13.x, r13.x, r13.x
++    if_lt r13.x, c157.y
++      add r13.xy, vPos, c158.z
++      mul r13.xy, r13, c86.zw
++      mov r13.zw, c158.w
++      texldl r14, r13, s11
++      mov r13.w, r14.x // this pixel's linear depth
++      if_lt r14.x, r29.z
++        // view space position from screen uv and depth, then world space
++        mad r15.xy, r13, c160.x, c160.y
++        mul r15.y, r15.y, c160.y
++        mul r15.xy, r15, r14.x
++        rcp r15.w, r28.x
++        mul r15.z, r14.x, r15.w
++        mad r15.x, -r15.z, r27.z, r15.x
++        rcp r16.x, r27.x
++        mul r15.x, r15.x, r16.x
++        mad r15.y, -r15.z, r27.w, r15.y
++        rcp r16.y, r27.y
++        mul r15.y, r15.y, r16.y
++        mul r16.xyz, r15.x, c12
++        mad r16.xyz, r15.y, c13, r16
++        mad r16.xyz, r15.z, c14, r16
++        add r16.xyz, r16, c15
++        // towards the light, stopping short of it
++        add r17.xyz, c79, -r16
++        dp3 r17.w, r17, r17
++        rsq r17.w, r17.w
++        mul r17.xyz, r17, r17.w
++        rcp r17.w, r17.w
++        mul r17.w, r17.w, c160.z
++        min r17.w, r17.w, r29.x
++        mul r30.xyz, r17, r17.w
++        mul r30.xyz, r30, c157.z
++        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
++        mad r31.xyz, r17, r18.x, r16
++        mov r18.w, c158.w
++        rep i0
++          add r31.xyz, r31, r30
++          add r14.xyz, r31, -c15
++          dp3 r15.x, r14, c12
++          dp3 r15.y, r14, c13
++          dp3 r15.z, r14, c14
++          mul r16.w, r15.z, r28.x
++          break_le r16.w, c158.w // behind the camera
++          mul r16.x, r15.x, r27.x
++          mad r16.x, r15.z, r27.z, r16.x
++          mul r16.y, r15.y, r27.y
++          mad r16.y, r15.z, r27.w, r16.y
++          rcp r16.z, r16.w
++          mul r16.xy, r16, r16.z
++          mad r12.xy, r16, c158.xy, c158.zz
++          mov r12.zw, c158.w
++          min r15.w, r12.x, r12.y
++          break_lt r15.w, c158.w // left the screen
++          max r15.w, r12.x, r12.y
++          break_gt r15.w, c157.y
++          texldl r14, r12, s11
++          add r14.y, r16.w, -r14.x
++          if_gt r14.y, c158.w
++            if_lt r14.y, r29.y
++              mov r18.w, c157.y
++            endif
++            break // went behind the scene, a hit or not
++          endif
++        endrep
++        // fade out over the last quarter of the distance limit
++        add r13.x, r29.z, -r13.w
++        rcp r13.y, r29.z
++        mul r13.x, r13.x, r13.y
++        mul_sat r13.x, r13.x, c161.z
++        mul r18.w, r18.w, r13.x
++        mul r18.w, r18.w, r29.w
++        add r31.w, c157.y, -r18.w
++      endif
++    endif
++    mul r26.xyz, r26, r31.w
++    mov oC0, r26
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+index 21f11d1d..7553b046 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -43,6 +43,15 @@
+     def c1, 0.998046875, 7.984375, 63.875, -127.999992
+     def c2, 0.5, 9.99999975e-006, 1, -0.100000001
+     def c3, 1.11111116, 0, 0, 0.125
++    // --- FusionFix local contact shadows: parameter texels, magic, one, 1/steps, uv and position mapping
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c157, 12345, 1, 0.125, 0
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.625, 0.5, 0, 0
++    def c160, 2, -1, 0.899999976, 0
++    def c161, 0.00300000003, 0.0199999996, 4, 0
++    defi i0, 8, 0, 0, 0
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -50,6 +59,8 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s4
++    dcl_2d s9 // FusionFix: camera projection and settings, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s1
+@@ -103,7 +114,96 @@
+     mad_sat r1.x, r1.z, r1.z, c2.x
+     mad r0.xyz, r0.w, r2, r0
+     mov r0.w, c2.z
+-    mul oC0, r1.x, r0
++    mul r26, r1.x, r0
++    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
++    // --- through the opaque depth catches small occluders, also for lights without a shadow
++    // --- map. Needs FusionFix's parameter texture (s9, magic value) and linear depth (s11).
++    mov r31.w, c157.y
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, -, -, magic
++    mov r29, c159
++    texldl r29, r29, s9 // ray length, thickness, max view distance, strength
++    add r13.x, r28.w, -c157.x
++    mul r13.x, r13.x, r13.x
++    if_lt r13.x, c157.y
++      add r13.xy, vPos, c158.z
++      mul r13.xy, r13, c77.zw
++      mov r13.zw, c158.w
++      texldl r14, r13, s11
++      mov r13.w, r14.x // this pixel's linear depth
++      if_lt r14.x, r29.z
++        // view space position from screen uv and depth, then world space
++        mad r15.xy, r13, c160.x, c160.y
++        mul r15.y, r15.y, c160.y
++        mul r15.xy, r15, r14.x
++        rcp r15.w, r28.x
++        mul r15.z, r14.x, r15.w
++        mad r15.x, -r15.z, r27.z, r15.x
++        rcp r16.x, r27.x
++        mul r15.x, r15.x, r16.x
++        mad r15.y, -r15.z, r27.w, r15.y
++        rcp r16.y, r27.y
++        mul r15.y, r15.y, r16.y
++        mul r16.xyz, r15.x, c12
++        mad r16.xyz, r15.y, c13, r16
++        mad r16.xyz, r15.z, c14, r16
++        add r16.xyz, r16, c15
++        // towards the light, stopping short of it
++        add r17.xyz, c66, -r16
++        dp3 r17.w, r17, r17
++        rsq r17.w, r17.w
++        mul r17.xyz, r17, r17.w
++        rcp r17.w, r17.w
++        mul r17.w, r17.w, c160.z
++        min r17.w, r17.w, r29.x
++        mul r30.xyz, r17, r17.w
++        mul r30.xyz, r30, c157.z
++        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
++        mad r31.xyz, r17, r18.x, r16
++        mov r18.w, c158.w
++        rep i0
++          add r31.xyz, r31, r30
++          add r14.xyz, r31, -c15
++          dp3 r15.x, r14, c12
++          dp3 r15.y, r14, c13
++          dp3 r15.z, r14, c14
++          mul r16.w, r15.z, r28.x
++          break_le r16.w, c158.w // behind the camera
++          mul r16.x, r15.x, r27.x
++          mad r16.x, r15.z, r27.z, r16.x
++          mul r16.y, r15.y, r27.y
++          mad r16.y, r15.z, r27.w, r16.y
++          rcp r16.z, r16.w
++          mul r16.xy, r16, r16.z
++          mad r12.xy, r16, c158.xy, c158.zz
++          mov r12.zw, c158.w
++          min r15.w, r12.x, r12.y
++          break_lt r15.w, c158.w // left the screen
++          max r15.w, r12.x, r12.y
++          break_gt r15.w, c157.y
++          texldl r14, r12, s11
++          add r14.y, r16.w, -r14.x
++          if_gt r14.y, c158.w
++            if_lt r14.y, r29.y
++              mov r18.w, c157.y
++            endif
++            break // went behind the scene, a hit or not
++          endif
++        endrep
++        // fade out over the last quarter of the distance limit
++        add r13.x, r29.z, -r13.w
++        rcp r13.y, r29.z
++        mul r13.x, r13.x, r13.y
++        mul_sat r13.x, r13.x, c161.z
++        mul r18.w, r18.w, r13.x
++        mul r18.w, r18.w, r29.w
++        add r31.w, c157.y, -r18.w
++      endif
++    endif
++    mul r26.xyz, r26, r31.w
++    mov oC0, r26
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+index 3a813bf9..9e446612 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -46,6 +46,15 @@
+     def c2, 255, -128, -0, -7.9000001
+     def c3, 1, 0, 9.99999975e-006, -0.100000001
+     def c4, 1.11111116, 0, 0, 0.125
++    // --- FusionFix local contact shadows: parameter texels, magic, one, 1/steps, uv and position mapping
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c157, 12345, 1, 0.125, 0
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.625, 0.5, 0, 0
++    def c160, 2, -1, 0.899999976, 0
++    def c161, 0.00300000003, 0.0199999996, 4, 0
++    defi i0, 8, 0, 0, 0
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -54,6 +63,8 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s5
++    dcl_2d s9 // FusionFix: camera projection and settings, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s1
+@@ -112,7 +123,96 @@
+     mad r0.x, r0.x, c2.x, r0.y
+     add r0.x, r0.x, c2.w
+     cmp r0.x, r0.x, c3.x, c3.y
+-    mul oC0, r1, r0.x
++    mul r26, r1, r0.x
++    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
++    // --- through the opaque depth catches small occluders, also for lights without a shadow
++    // --- map. Needs FusionFix's parameter texture (s9, magic value) and linear depth (s11).
++    mov r31.w, c157.y
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, -, -, magic
++    mov r29, c159
++    texldl r29, r29, s9 // ray length, thickness, max view distance, strength
++    add r13.x, r28.w, -c157.x
++    mul r13.x, r13.x, r13.x
++    if_lt r13.x, c157.y
++      add r13.xy, vPos, c158.z
++      mul r13.xy, r13, c77.zw
++      mov r13.zw, c158.w
++      texldl r14, r13, s11
++      mov r13.w, r14.x // this pixel's linear depth
++      if_lt r14.x, r29.z
++        // view space position from screen uv and depth, then world space
++        mad r15.xy, r13, c160.x, c160.y
++        mul r15.y, r15.y, c160.y
++        mul r15.xy, r15, r14.x
++        rcp r15.w, r28.x
++        mul r15.z, r14.x, r15.w
++        mad r15.x, -r15.z, r27.z, r15.x
++        rcp r16.x, r27.x
++        mul r15.x, r15.x, r16.x
++        mad r15.y, -r15.z, r27.w, r15.y
++        rcp r16.y, r27.y
++        mul r15.y, r15.y, r16.y
++        mul r16.xyz, r15.x, c12
++        mad r16.xyz, r15.y, c13, r16
++        mad r16.xyz, r15.z, c14, r16
++        add r16.xyz, r16, c15
++        // towards the light, stopping short of it
++        add r17.xyz, c66, -r16
++        dp3 r17.w, r17, r17
++        rsq r17.w, r17.w
++        mul r17.xyz, r17, r17.w
++        rcp r17.w, r17.w
++        mul r17.w, r17.w, c160.z
++        min r17.w, r17.w, r29.x
++        mul r30.xyz, r17, r17.w
++        mul r30.xyz, r30, c157.z
++        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
++        mad r31.xyz, r17, r18.x, r16
++        mov r18.w, c158.w
++        rep i0
++          add r31.xyz, r31, r30
++          add r14.xyz, r31, -c15
++          dp3 r15.x, r14, c12
++          dp3 r15.y, r14, c13
++          dp3 r15.z, r14, c14
++          mul r16.w, r15.z, r28.x
++          break_le r16.w, c158.w // behind the camera
++          mul r16.x, r15.x, r27.x
++          mad r16.x, r15.z, r27.z, r16.x
++          mul r16.y, r15.y, r27.y
++          mad r16.y, r15.z, r27.w, r16.y
++          rcp r16.z, r16.w
++          mul r16.xy, r16, r16.z
++          mad r12.xy, r16, c158.xy, c158.zz
++          mov r12.zw, c158.w
++          min r15.w, r12.x, r12.y
++          break_lt r15.w, c158.w // left the screen
++          max r15.w, r12.x, r12.y
++          break_gt r15.w, c157.y
++          texldl r14, r12, s11
++          add r14.y, r16.w, -r14.x
++          if_gt r14.y, c158.w
++            if_lt r14.y, r29.y
++              mov r18.w, c157.y
++            endif
++            break // went behind the scene, a hit or not
++          endif
++        endrep
++        // fade out over the last quarter of the distance limit
++        add r13.x, r29.z, -r13.w
++        rcp r13.y, r29.z
++        mul r13.x, r13.x, r13.y
++        mul_sat r13.x, r13.x, c161.z
++        mul r18.w, r18.w, r13.x
++        mul r18.w, r18.w, r29.w
++        add r31.w, c157.y, -r18.w
++      endif
++    endif
++    mul r26.xyz, r26, r31.w
++    mov oC0, r26
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+index 43331379..1c70cb23 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -46,6 +46,15 @@
+     def c2, 0.998046875, 7.984375, 63.875, -127.999992
+     def c3, 255, -128, -0, -7.9000001
+     def c4, -0.100000001, 1.11111116, 0, 0.125
++    // --- FusionFix local contact shadows: parameter texels, magic, one, 1/steps, uv and position mapping
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c157, 12345, 1, 0.125, 0
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.625, 0.5, 0, 0
++    def c160, 2, -1, 0.899999976, 0
++    def c161, 0.00300000003, 0.0199999996, 4, 0
++    defi i0, 8, 0, 0, 0
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -54,6 +63,8 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s5
++    dcl_2d s9 // FusionFix: camera projection and settings, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
+     add r0.xy, c1.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s1
+@@ -114,7 +125,96 @@
+     add r0.x, r0.x, c3.w
+     cmp r0.x, r0.x, c0.x, c0.y
+     mul r0, r2, r0.x
+-    mul oC0, r1.y, r0
++    mul r26, r1.y, r0
++    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
++    // --- through the opaque depth catches small occluders, also for lights without a shadow
++    // --- map. Needs FusionFix's parameter texture (s9, magic value) and linear depth (s11).
++    mov r31.w, c157.y
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, -, -, magic
++    mov r29, c159
++    texldl r29, r29, s9 // ray length, thickness, max view distance, strength
++    add r13.x, r28.w, -c157.x
++    mul r13.x, r13.x, r13.x
++    if_lt r13.x, c157.y
++      add r13.xy, vPos, c158.z
++      mul r13.xy, r13, c77.zw
++      mov r13.zw, c158.w
++      texldl r14, r13, s11
++      mov r13.w, r14.x // this pixel's linear depth
++      if_lt r14.x, r29.z
++        // view space position from screen uv and depth, then world space
++        mad r15.xy, r13, c160.x, c160.y
++        mul r15.y, r15.y, c160.y
++        mul r15.xy, r15, r14.x
++        rcp r15.w, r28.x
++        mul r15.z, r14.x, r15.w
++        mad r15.x, -r15.z, r27.z, r15.x
++        rcp r16.x, r27.x
++        mul r15.x, r15.x, r16.x
++        mad r15.y, -r15.z, r27.w, r15.y
++        rcp r16.y, r27.y
++        mul r15.y, r15.y, r16.y
++        mul r16.xyz, r15.x, c12
++        mad r16.xyz, r15.y, c13, r16
++        mad r16.xyz, r15.z, c14, r16
++        add r16.xyz, r16, c15
++        // towards the light, stopping short of it
++        add r17.xyz, c66, -r16
++        dp3 r17.w, r17, r17
++        rsq r17.w, r17.w
++        mul r17.xyz, r17, r17.w
++        rcp r17.w, r17.w
++        mul r17.w, r17.w, c160.z
++        min r17.w, r17.w, r29.x
++        mul r30.xyz, r17, r17.w
++        mul r30.xyz, r30, c157.z
++        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
++        mad r31.xyz, r17, r18.x, r16
++        mov r18.w, c158.w
++        rep i0
++          add r31.xyz, r31, r30
++          add r14.xyz, r31, -c15
++          dp3 r15.x, r14, c12
++          dp3 r15.y, r14, c13
++          dp3 r15.z, r14, c14
++          mul r16.w, r15.z, r28.x
++          break_le r16.w, c158.w // behind the camera
++          mul r16.x, r15.x, r27.x
++          mad r16.x, r15.z, r27.z, r16.x
++          mul r16.y, r15.y, r27.y
++          mad r16.y, r15.z, r27.w, r16.y
++          rcp r16.z, r16.w
++          mul r16.xy, r16, r16.z
++          mad r12.xy, r16, c158.xy, c158.zz
++          mov r12.zw, c158.w
++          min r15.w, r12.x, r12.y
++          break_lt r15.w, c158.w // left the screen
++          max r15.w, r12.x, r12.y
++          break_gt r15.w, c157.y
++          texldl r14, r12, s11
++          add r14.y, r16.w, -r14.x
++          if_gt r14.y, c158.w
++            if_lt r14.y, r29.y
++              mov r18.w, c157.y
++            endif
++            break // went behind the scene, a hit or not
++          endif
++        endrep
++        // fade out over the last quarter of the distance limit
++        add r13.x, r29.z, -r13.w
++        rcp r13.y, r29.z
++        mul r13.x, r13.x, r13.y
++        mul_sat r13.x, r13.x, c161.z
++        mul r18.w, r18.w, r13.x
++        mul r18.w, r18.w, r29.w
++        add r31.w, c157.y, -r18.w
++      endif
++    endif
++    mul r26.xyz, r26, r31.w
++    mov oC0, r26
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+index 76eac906..37635132 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -46,6 +46,15 @@
+     def c2, 255, -128, -0, -7.9000001
+     def c3, -8, -0, -1, 0.100000001
+     def c4, 9.99999975e-006, 1.11111116, 0, 0.125
++    // --- FusionFix local contact shadows: parameter texels, magic, one, 1/steps, uv and position mapping
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c157, 12345, 1, 0.125, 0
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.625, 0.5, 0, 0
++    def c160, 2, -1, 0.899999976, 0
++    def c161, 0.00300000003, 0.0199999996, 4, 0
++    defi i0, 8, 0, 0, 0
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -54,6 +63,8 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s5
++    dcl_2d s9 // FusionFix: camera projection and settings, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s1
+@@ -116,7 +127,96 @@
+     add r0.x, -r0_abs.x, c3.w
+     cmp r0.x, r0.x, -c3.z, -c3.y
+     mov r1.w, -c3.z
+-    mul oC0, r1, r0.x
++    mul r26, r1, r0.x
++    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
++    // --- through the opaque depth catches small occluders, also for lights without a shadow
++    // --- map. Needs FusionFix's parameter texture (s9, magic value) and linear depth (s11).
++    mov r31.w, c157.y
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, -, -, magic
++    mov r29, c159
++    texldl r29, r29, s9 // ray length, thickness, max view distance, strength
++    add r13.x, r28.w, -c157.x
++    mul r13.x, r13.x, r13.x
++    if_lt r13.x, c157.y
++      add r13.xy, vPos, c158.z
++      mul r13.xy, r13, c77.zw
++      mov r13.zw, c158.w
++      texldl r14, r13, s11
++      mov r13.w, r14.x // this pixel's linear depth
++      if_lt r14.x, r29.z
++        // view space position from screen uv and depth, then world space
++        mad r15.xy, r13, c160.x, c160.y
++        mul r15.y, r15.y, c160.y
++        mul r15.xy, r15, r14.x
++        rcp r15.w, r28.x
++        mul r15.z, r14.x, r15.w
++        mad r15.x, -r15.z, r27.z, r15.x
++        rcp r16.x, r27.x
++        mul r15.x, r15.x, r16.x
++        mad r15.y, -r15.z, r27.w, r15.y
++        rcp r16.y, r27.y
++        mul r15.y, r15.y, r16.y
++        mul r16.xyz, r15.x, c12
++        mad r16.xyz, r15.y, c13, r16
++        mad r16.xyz, r15.z, c14, r16
++        add r16.xyz, r16, c15
++        // towards the light, stopping short of it
++        add r17.xyz, c66, -r16
++        dp3 r17.w, r17, r17
++        rsq r17.w, r17.w
++        mul r17.xyz, r17, r17.w
++        rcp r17.w, r17.w
++        mul r17.w, r17.w, c160.z
++        min r17.w, r17.w, r29.x
++        mul r30.xyz, r17, r17.w
++        mul r30.xyz, r30, c157.z
++        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
++        mad r31.xyz, r17, r18.x, r16
++        mov r18.w, c158.w
++        rep i0
++          add r31.xyz, r31, r30
++          add r14.xyz, r31, -c15
++          dp3 r15.x, r14, c12
++          dp3 r15.y, r14, c13
++          dp3 r15.z, r14, c14
++          mul r16.w, r15.z, r28.x
++          break_le r16.w, c158.w // behind the camera
++          mul r16.x, r15.x, r27.x
++          mad r16.x, r15.z, r27.z, r16.x
++          mul r16.y, r15.y, r27.y
++          mad r16.y, r15.z, r27.w, r16.y
++          rcp r16.z, r16.w
++          mul r16.xy, r16, r16.z
++          mad r12.xy, r16, c158.xy, c158.zz
++          mov r12.zw, c158.w
++          min r15.w, r12.x, r12.y
++          break_lt r15.w, c158.w // left the screen
++          max r15.w, r12.x, r12.y
++          break_gt r15.w, c157.y
++          texldl r14, r12, s11
++          add r14.y, r16.w, -r14.x
++          if_gt r14.y, c158.w
++            if_lt r14.y, r29.y
++              mov r18.w, c157.y
++            endif
++            break // went behind the scene, a hit or not
++          endif
++        endrep
++        // fade out over the last quarter of the distance limit
++        add r13.x, r29.z, -r13.w
++        rcp r13.y, r29.z
++        mul r13.x, r13.x, r13.y
++        mul_sat r13.x, r13.x, c161.z
++        mul r18.w, r18.w, r13.x
++        mul r18.w, r18.w, r29.w
++        add r31.w, c157.y, -r18.w
++      endif
++    endif
++    mul r26.xyz, r26, r31.w
++    mov oC0, r26
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x

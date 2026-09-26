@@ -254,6 +254,11 @@ public:
     bool bGlassReflections = true;
     float fGlassReflectionsLength = 15.0f;
     float fGlassReflectionsThickness = 0.5f;
+    bool bLocalContactShadows = true;
+    float fLocalContactShadowLength = 1.0f;
+    float fLocalContactShadowThickness = 0.3f;
+    float fLocalContactShadowMaxDistance = 40.0f;
+    float fLocalContactShadowIntensity = 1.0f;
     IDirect3DTexture9* GlassParamsTex = nullptr;
     IDirect3DTexture9* GlassSceneTex = nullptr;
     D3DSURFACE_DESC GlassSceneDesc = {};
@@ -942,6 +947,11 @@ public:
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
+        bLocalContactShadows = iniReader.ReadInteger("POSTFX", "LocalContactShadows", 1) != 0;
+        fLocalContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsLength", 1.0f), 0.05f, 10.0f);
+        fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.3f), 0.01f, 5.0f);
+        fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
+        fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRReflectionStrength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStrength", 1.0f), 0.0f, 4.0f);
         fSSRRoughBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsRoughBlur", 6.0f), 0.0f, 32.0f);
         nScreenSpaceDebugView = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceDebugView", 0), 0, 5);
@@ -3025,95 +3035,118 @@ private:
     }
 
 public:
-    // Runs right after deferred lighting and the SSR composite, before glass: gives the
-    // patched vehicle and building glass shaders the scene, its depth and the camera. With the feature off
-    // s9 is left empty, and the glass shaders keep the game's environment map.
-    static void PrepareGlassReflections()
+    // The 4x1 float texture in s9 that the patched glass and local light shaders read the
+    // camera projection and their settings from; no shader constant survives until their
+    // draws. Texel 0: projection _11, _22, _31, _32. Texel 1: _34, glass thickness, glass ray
+    // length (0 turns glass reflections off) and a magic value the shaders check, so a foreign
+    // texture in s9 is never used. Texel 2: local contact shadow ray length, thickness, max
+    // view distance (0 turns them off) and strength.
+    static bool FillScreenSpaceParams(bool glass)
     {
         auto& R = PostFxResources;
         auto& F = R.Frame;
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
+            return false;
+        if (!R.GlassParamsTex && FAILED(pDevice->CreateTexture(4, 1, 1, D3DUSAGE_DYNAMIC, D3DFMT_A32B32G32R32F,
+            D3DPOOL_DEFAULT, &R.GlassParamsTex, nullptr)))
+            return false;
+
+        const bool local = R.bLocalContactShadows && R.ContactShadowsEnabled();
+        const float values[16] =
+        {
+            F.proj11, F.proj22, F.proj31, F.proj32,
+            F.proj34, R.fGlassReflectionsThickness, glass ? R.fGlassReflectionsLength : 0.0f, 12345.0f,
+            R.fLocalContactShadowLength, R.fLocalContactShadowThickness, local ? R.fLocalContactShadowMaxDistance : 0.0f,
+            R.fLocalContactShadowIntensity,
+            0.0f, 0.0f, 0.0f, 0.0f,
+        };
+        D3DLOCKED_RECT locked = {};
+        if (FAILED(R.GlassParamsTex->LockRect(0, &locked, nullptr, D3DLOCK_DISCARD)))
+            return false;
+        // A32B32G32R32F stores each texel as r, g, b, a floats.
+        std::memcpy(locked.pBits, values, sizeof(values));
+        R.GlassParamsTex->UnlockRect(0);
+        return true;
+    }
+
+    static void BindSampler(IDirect3DDevice9* pDevice, DWORD slot, IDirect3DBaseTexture9* tex, DWORD filter)
+    {
+        pDevice->SetTexture(slot, tex);
+        pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, filter);
+        pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, filter);
+        pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    }
+
+    // Before deferred lighting: the camera and this frame's linear depth for the patched local
+    // light shaders, which also stay bound for the glass shaders. s9, s11 and s13 are read by
+    // no game shader, so they can stay bound for the rest of the frame.
+    static void BindScreenSpaceParams()
+    {
+        auto& R = PostFxResources;
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
             return;
 
-        auto disable = [&]()
+        auto depth = R.LinDepth.Previous(); // written this frame, see RenderPedAndVehicleFakeShadows
+        const bool glass = R.bGlassReflections && R.SSREnabled();
+        if (!R.Frame.valid || !depth || !FillScreenSpaceParams(glass))
         {
             pDevice->SetTexture(9, nullptr);
             pDevice->SetTexture(11, nullptr);
-            pDevice->SetTexture(13, nullptr);
-        };
-
-        auto depth = R.LinDepth.Previous(); // written this frame, see RenderPedAndVehicleFakeShadows
-        if (!R.bGlassReflections || !R.SSREnabled() || !F.valid || !depth)
-        {
-            disable();
             return;
         }
+        BindSampler(pDevice, 9, R.GlassParamsTex, D3DTEXF_POINT);
+        BindSampler(pDevice, 11, depth, D3DTEXF_POINT);
+    }
 
-        // Copy of the lit opaque scene; glass is drawn into the same target afterwards.
+    // Runs right after deferred lighting and the SSR composite, before glass: a copy of the lit
+    // opaque scene for the patched glass shaders. When it cannot be made, glass reflections
+    // are switched off through the parameter texture and the glass keeps the environment map.
+    static void PrepareGlassReflections()
+    {
+        auto& R = PostFxResources;
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+
+        bool ok = R.bGlassReflections && R.SSREnabled() && R.Frame.valid && R.GlassParamsTex;
         IDirect3DSurface9* scene = nullptr;
-        if (FAILED(pDevice->GetRenderTarget(0, &scene)) || !scene)
-        {
-            disable();
-            return;
-        }
-        D3DSURFACE_DESC desc = {};
-        scene->GetDesc(&desc);
-        if (R.GlassSceneTex && (desc.Width != R.GlassSceneDesc.Width || desc.Height != R.GlassSceneDesc.Height ||
-            desc.Format != R.GlassSceneDesc.Format))
-            SAFE_RELEASE(R.GlassSceneTex);
-        if (!R.GlassSceneTex && SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format,
-            D3DPOOL_DEFAULT, &R.GlassSceneTex, nullptr)))
-            R.GlassSceneDesc = desc;
-        bool ok = R.GlassSceneTex != nullptr;
+        if (ok)
+            ok = SUCCEEDED(pDevice->GetRenderTarget(0, &scene)) && scene;
         if (ok)
         {
-            IDirect3DSurface9* dst = nullptr;
-            ok = SUCCEEDED(R.GlassSceneTex->GetSurfaceLevel(0, &dst)) &&
-                 SUCCEEDED(pDevice->StretchRect(scene, nullptr, dst, nullptr, D3DTEXF_NONE));
-            SAFE_RELEASE(dst);
+            D3DSURFACE_DESC desc = {};
+            scene->GetDesc(&desc);
+            if (R.GlassSceneTex && (desc.Width != R.GlassSceneDesc.Width || desc.Height != R.GlassSceneDesc.Height ||
+                desc.Format != R.GlassSceneDesc.Format))
+                SAFE_RELEASE(R.GlassSceneTex);
+            if (!R.GlassSceneTex && SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format,
+                D3DPOOL_DEFAULT, &R.GlassSceneTex, nullptr)))
+                R.GlassSceneDesc = desc;
+            ok = R.GlassSceneTex != nullptr;
+            if (ok)
+            {
+                IDirect3DSurface9* dst = nullptr;
+                ok = SUCCEEDED(R.GlassSceneTex->GetSurfaceLevel(0, &dst)) &&
+                     SUCCEEDED(pDevice->StretchRect(scene, nullptr, dst, nullptr, D3DTEXF_NONE));
+                SAFE_RELEASE(dst);
+            }
         }
         SAFE_RELEASE(scene);
 
-        if (ok && !R.GlassParamsTex)
-            ok = SUCCEEDED(pDevice->CreateTexture(2, 1, 1, D3DUSAGE_DYNAMIC, D3DFMT_A32B32G32R32F, D3DPOOL_DEFAULT,
-                                                  &R.GlassParamsTex, nullptr));
         if (ok)
         {
-            // Texel 0: projection _11, _22, _31, _32. Texel 1: _34, thickness, ray length, and
-            // a magic value the shader checks, so a foreign texture in s9 is never used.
-            D3DLOCKED_RECT locked = {};
-            ok = SUCCEEDED(R.GlassParamsTex->LockRect(0, &locked, nullptr, D3DLOCK_DISCARD));
-            if (ok)
-            {
-                // A32B32G32R32F stores each texel as r, g, b, a floats.
-                float* texels = static_cast<float*>(locked.pBits);
-                const float values[8] = { F.proj11, F.proj22, F.proj31, F.proj32,
-                                          F.proj34, R.fGlassReflectionsThickness, R.fGlassReflectionsLength, 12345.0f };
-                std::memcpy(texels, values, sizeof(values));
-                R.GlassParamsTex->UnlockRect(0);
-            }
+            BindSampler(pDevice, 13, R.GlassSceneTex, D3DTEXF_LINEAR);
         }
-        if (!ok)
+        else
         {
-            disable();
-            return;
+            pDevice->SetTexture(13, nullptr);
+            if (R.GlassParamsTex && R.Frame.valid)
+                FillScreenSpaceParams(false);
         }
-
-        auto bind = [&](DWORD slot, IDirect3DBaseTexture9* tex, DWORD filter)
-        {
-            pDevice->SetTexture(slot, tex);
-            pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-            pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-            pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, filter);
-            pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, filter);
-            pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
-        };
-        // s9, s11 and s13 are read by no game shader, so these can stay bound until the glass
-        // draws without disturbing anything else.
-        bind(9, R.GlassParamsTex, D3DTEXF_POINT);
-        bind(11, depth, D3DTEXF_POINT);
-        bind(13, R.GlassSceneTex, D3DTEXF_LINEAR);
     }
 
     // ScreenSpaceDebugView: replaces the lit scene with one of the screen space buffers, so
@@ -3234,6 +3267,8 @@ public:
             bind(3, R.TransparentTex());
         bind(7, R.bContactShadowsValidThisFrame ? R.ContactShadowHistory.rt[R.ContactShadowHistory.last].Texture() : nullptr);
         bind(8, R.bIndirectLightValidThisFrame ? R.IndirectLightHistory.rt[R.IndirectLightHistory.last].Texture() : nullptr);
+
+        BindScreenSpaceParams();
     }
 
     static void RestoreLightingTextures()
