@@ -991,6 +991,8 @@ public:
                 // The light-admission workaround now installs in nightshadows.ixx
                 // after its guarded allocator setup, avoiding parallel edits to 927BD4.
 
+            }
+
             // Restore console/pre-1.0.6.0 pause menu info spacing
             {
                 // These also had a %s at the start on console but the sprintf call on PC doesn't support it and replacing it is too much for such a little thing
