@@ -204,11 +204,18 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
     float3 V = normalize(C);
     float3 R = reflect(V, n);
 
-    if (R.z <= 0.0)
-        return 0.0;
-
     float3 P0 = C + n * max(fMaxDistance / (float) NUM_STEPS * 0.1, z * 0.01);
-    float3 P1 = P0 + R * fMaxDistance;   // R.z > 0, so P1.z > P0.z > 0 and both project
+
+    // With the camera looking down at a roof or bonnet more steeply than about 45 degrees,
+    // the reflected ray heads up the screen towards what stands behind the car, but its view
+    // depth shrinks. Those rays are traced too, stopping in front of the near plane so both
+    // ends stay projectable; dropping them made reflections vanish as the camera tilted down.
+    float len = fMaxDistance;
+    if (R.z < 0.0)
+        len = min(len, (P0.z - fNearPlane * 2.0) / -R.z);
+    if (len <= 0.0)
+        return 0.0;
+    float3 P1 = P0 + R * len;
 
     float2 uv0 = ViewToUV(P0);
     float2 uv1 = ViewToUV(P1);
@@ -288,7 +295,9 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
 
     float rayLen = length(hitP - C);
 
-    confidence *= saturate(dot(V, R) * 2.0 + 0.5);
+    // Rays coming back towards the camera see the side of things the screen shows least well,
+    // so they count for a little less, but are not faded out.
+    confidence *= saturate(dot(V, R) * 0.5 + 0.9);
     confidence *= saturate((1.0 - rayLen / fMaxDistance) * 4.0);
     confidence *= 1.0 - smoothstep(hitThickness * 0.75, hitThickness, hitDelta);
 
