@@ -595,7 +595,10 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 
     float jitter = RayJitter(vPos);
     float occlusion = 0.0;
+    float prevZ = P0.z;
 
+    // The thickness grows by the depth the step covered, so a long step does not jump over
+    // a ped, whose front is all the depth knows about.
     [loop]
     for (int i = 0; i < CS_STEPS; ++i)
     {
@@ -606,7 +609,9 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
             break;
 
         float delta = P.z - LinearDepth(sampleUV);
-        if (delta > 0.0 && delta < fCSThickness)
+        float thickness = abs(P.z - prevZ) + fCSThickness;
+        prevZ = P.z;
+        if (delta > 0.0 && delta < thickness)
         {
             occlusion = 1.0 - t * t; // occluders further along the ray cast softer shadows
             break;
