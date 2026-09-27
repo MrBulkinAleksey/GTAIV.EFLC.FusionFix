@@ -224,6 +224,28 @@ public:
     IDirect3DSurface9* SSRDebugSurf = nullptr;
     bool bSSRDebugValid = false;
     bool bSSRGBufferNormals = true;
+
+    // 1x1 transparent black for s3 when there is no SSR target. An empty sampler reads alpha
+    // 1, which deferred_lighting would take as a full strength black reflection with its
+    // horizon fade lifted. Managed, so it survives device resets.
+    IDirect3DTexture9* TransparentTexture = nullptr;
+    IDirect3DTexture9* TransparentTex()
+    {
+        if (!TransparentTexture)
+        {
+            auto pDevice = rage::grcDevice::GetD3DDevice();
+            if (pDevice && SUCCEEDED(pDevice->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &TransparentTexture, nullptr)))
+            {
+                D3DLOCKED_RECT locked = {};
+                if (SUCCEEDED(TransparentTexture->LockRect(0, &locked, nullptr, 0)))
+                {
+                    *static_cast<uint32_t*>(locked.pBits) = 0;
+                    TransparentTexture->UnlockRect(0);
+                }
+            }
+        }
+        return TransparentTexture;
+    }
     int nSSRSteps = 24;
     int nSSRRefineSteps = 4;
     float fSSRMaxDistance = 24.0f;
@@ -2506,14 +2528,12 @@ public:
     static void BindSSRTexture()
     {
         auto& R = PostFxResources;
-        if (!R.SSRTex || !R.SSRTex->mD3DTexture)
-            return;
-
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
 
-        pDevice->SetTexture(3, R.SSRTex->mD3DTexture);
+        IDirect3DBaseTexture9* tex = (R.SSRTex && R.SSRTex->mD3DTexture) ? R.SSRTex->mD3DTexture : R.TransparentTex();
+        pDevice->SetTexture(3, tex);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(3, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
