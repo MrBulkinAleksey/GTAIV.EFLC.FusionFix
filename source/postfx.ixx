@@ -223,7 +223,7 @@ public:
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask;
-        D3DXHANDLE fDenoiseRadius, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera;
+        D3DXHANDLE fDenoiseRadius, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
@@ -256,6 +256,8 @@ public:
     bool bSSRPassThinObjects = true;
     bool bSSRStepJitter = true;
     float fSSRTowardCamera = 0.0f;
+    float fSSRReflectionBlur = 0.0f;
+    float fSSRDistanceFade = 0.0f;
     rage::grcRenderTargetPC* SSRDenoisedTex = nullptr;
     IDirect3DSurface9* SSRDenoisedSurf = nullptr;
     bool bSSRDenoised = false;
@@ -697,6 +699,8 @@ public:
                 h.fPassThinObjects = SSREffect->GetParameterByName(nullptr, "fPassThinObjects");
                 h.fStepJitter = SSREffect->GetParameterByName(nullptr, "fStepJitter");
                 h.fTowardCamera = SSREffect->GetParameterByName(nullptr, "fTowardCamera");
+                h.fReflectionBlur = SSREffect->GetParameterByName(nullptr, "fReflectionBlur");
+                h.fDistanceFade = SSREffect->GetParameterByName(nullptr, "fDistanceFade");
                 h.vec4SunView = SSREffect->GetParameterByName(nullptr, "vec4SunView");
                 h.fCSLength = SSREffect->GetParameterByName(nullptr, "fCSLength");
                 h.fCSThickness = SSREffect->GetParameterByName(nullptr, "fCSThickness");
@@ -842,6 +846,8 @@ public:
         bSSRPassThinObjects = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsPastThinObjects", 1) != 0;
         bSSRStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsStepJitter", 1) != 0;
         fSSRTowardCamera = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", 0.0f), 0.0f, 1.0f);
+        fSSRReflectionBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsBlur", 0.0f), 0.0f, 32.0f);
+        fSSRDistanceFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsDistanceFade", 0.0f), 0.0f, 100.0f);
         fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 1.0f), 0.05f, 10.0f);
         fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.5f), 0.01f, 10.0f);
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
@@ -2001,6 +2007,8 @@ private:
         effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);
         effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
         effect->SetFloat(h.fTowardCamera, R.fSSRTowardCamera);
+        effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
+        effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
 
         // World to reconstruction space rotation, for the G-buffer normals and the debug view.
         const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;

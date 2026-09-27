@@ -93,6 +93,8 @@ uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDeno
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
 uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step
 uniform float fTowardCamera;      // 0..1, how far reflections pointing back at the camera reach
+uniform float fReflectionBlur;    // blur radius in pixels a reflection reaches at fMaxDistance, 0 keeps it sharp
+uniform float fDistanceFade;      // reflections fade out towards this distance from the surface, 0 disables
 
 // Contact shadows, see ContactShadows_PS.
 uniform float4 vec4SunView;         // direction towards the sun in reconstruction space, w 0 if unknown
@@ -219,7 +221,8 @@ float PixelJitter(float2 pixel)
 }
 
 // jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
-float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
+// distanceFade: reflections fade out towards this distance from the surface, 0 disables.
+float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float distanceFade)
 {
     float z = C.z;
     float3 V = normalize(C);
@@ -345,6 +348,10 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
 
     confidence *= facing;
     confidence *= saturate((1.0 - rayLen / fMaxDistance) * 4.0);
+    // Car paint is no perfect mirror: it shows what stands next to it and barely what stands
+    // metres away, such as a ped between the camera and a door at night.
+    if (distanceFade > 0.0)
+        confidence *= 1.0 - smoothstep(distanceFade * 0.5, distanceFade, rayLen);
     confidence *= 1.0 - smoothstep(hitThickness * 0.75, hitThickness, hitDelta);
 
     float3 colour = SampleHistoryBlurred(histUV, blurPixels * saturate(rayLen / fMaxDistance));
@@ -391,7 +398,7 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         n = ReconstructNormal(uv, C);
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, 0.0, fStepJitter > 0.0 ? PixelJitter(vPos) : 1.0);
+    float4 r = TraceReflection(C, n, fReflectionBlur, fStepJitter > 0.0 ? PixelJitter(vPos) : 1.0, fDistanceFade);
     return float4(r.rgb, saturate(r.a * surfaceWeight * fIntensity));
 }
 
@@ -440,7 +447,7 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 n = WaterNormal(worldXY, dot(C, C));
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, fWaterBlur, 1.0);
+    float4 r = TraceReflection(C, n, fWaterBlur, 1.0, 0.0);
 
     return float4(r.rgb, saturate(r.a * fWaterIntensity));
 }
