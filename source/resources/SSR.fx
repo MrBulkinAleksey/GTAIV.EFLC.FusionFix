@@ -1,4 +1,5 @@
 texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, SSRResultTex2D, DebugTex2D;
+texture PreWaterTex2D, PostWaterTex2D;
 
 sampler2D DepthTex
 {
@@ -32,6 +33,28 @@ sampler2D DebugTex
     Texture = <DebugTex2D>;
 };
 
+// The scene right before and right after the game draws water; they differ only where
+// water was actually drawn.
+sampler2D PreWaterTex
+{
+    Texture = <PreWaterTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
+};
+
+sampler2D PostWaterTex
+{
+    Texture = <PostWaterTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
+};
+
 sampler2D SurfaceTex
 {
     Texture = <SurfaceTex2D>;
@@ -58,6 +81,7 @@ uniform float fWaterIntensity;  // final multiplier for the water pass
 uniform float4 vec4WaterPlane;  // water plane in reconstruction space, (normal.xyz, d)
 uniform float fWaterBlur;       // reflection blur radius in pixels at max ray distance
 uniform float fWaterNormalStrength; // ripple slope multiplier, 0 gives a flat mirror
+uniform float fUseWaterMask;        // 1 limits the water pass to pixels the game drew water on
 
 uniform float4 vec4WaterToView[3];
 uniform float4 vec4WaterWorldX;
@@ -312,6 +336,15 @@ float3 WaterNormal(float2 worldXY, float distSq)
 
 float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
+    // The water plane extends under everything, including tunnels below water level, so
+    // only reflect where the game actually drew water this frame.
+    if (fUseWaterMask > 0.0)
+    {
+        float3 diff = abs(tex2Dlod(PostWaterTex, float4(uv, 0, 0)).rgb - tex2Dlod(PreWaterTex, float4(uv, 0, 0)).rgb);
+        if (max(diff.r, max(diff.g, diff.b)) < 1e-4)
+            return 0.0;
+    }
+
     float3 dir = float3((vPos + 0.5f) * vec4ProjInfo.xy + vec4ProjInfo.zw, 1.0);
 
     float denom = dot(vec4WaterPlane.xyz, dir);

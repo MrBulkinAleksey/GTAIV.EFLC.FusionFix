@@ -203,11 +203,26 @@ public:
     bool bSSRPrevViewProjValid = false;
     D3DXVECTOR4 SSRReprojRows[4] = {};
     bool bSSRReprojValid = false;
+
+    // Copies of the scene right before and right after CWater::Render. They differ only
+    // where water was drawn, which limits the water reflection pass to real water.
+    // D3DPOOL_DEFAULT textures in the render target's own format, so released on device loss.
+    IDirect3DTexture9* WaterMaskTex[2] = {};
+    D3DSURFACE_DESC WaterMaskDesc = {};
+    bool bWaterMaskCaptured = false;
+    void ReleaseWaterMask()
+    {
+        SAFE_RELEASE(WaterMaskTex[0]);
+        SAFE_RELEASE(WaterMaskTex[1]);
+        WaterMaskDesc = {};
+        bWaterMaskCaptured = false;
+    }
     struct
     {
         D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
+        D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
@@ -624,6 +639,9 @@ public:
                 h.DebugTex2D = SSREffect->GetParameterByName(nullptr, "DebugTex2D");
                 h.fDebugMode = SSREffect->GetParameterByName(nullptr, "fDebugMode");
                 h.fUseGBufferNormals = SSREffect->GetParameterByName(nullptr, "fUseGBufferNormals");
+                h.PreWaterTex2D = SSREffect->GetParameterByName(nullptr, "PreWaterTex2D");
+                h.PostWaterTex2D = SSREffect->GetParameterByName(nullptr, "PostWaterTex2D");
+                h.fUseWaterMask = SSREffect->GetParameterByName(nullptr, "fUseWaterMask");
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
             }
@@ -896,6 +914,7 @@ private:
     static void __fastcall OnDeviceLost()
     {
         PostFxResources.ReleaseTextures();
+        PostFxResources.ReleaseWaterMask();
         // PostFxResources.mSpecularAoRT    =nullptr;
         PostFxResources.mNormalRT = nullptr;
         PostFxResources.mDiffuseRT = nullptr;
@@ -1720,7 +1739,7 @@ private:
         { D3DSAMP_MINFILTER, D3DTEXF_POINT },
         { D3DSAMP_MIPFILTER, D3DTEXF_NONE },
     };
-    static constexpr DWORD kSSRSamplerSlots = 4;
+    static constexpr DWORD kSSRSamplerSlots = 8;
     static constexpr DWORD kSSRTextureSlots = 8;
     static constexpr UINT kPSConstCount = 224;
     static constexpr UINT kVSConstCount = 256;
@@ -2047,6 +2066,12 @@ private:
         effect->SetVectorArray(h.vec4ViewToPrevClip, R.SSRReprojRows, 4);
         effect->SetVector(h.vec4WaterPlane, &plane);
 
+        // Without both copies the pass falls back to the whole water plane.
+        const bool waterMask = R.bWaterMaskCaptured && CopyRenderTargetToWaterMask(1);
+        effect->SetTexture(h.PreWaterTex2D, waterMask ? R.WaterMaskTex[0] : nullptr);
+        effect->SetTexture(h.PostWaterTex2D, waterMask ? R.WaterMaskTex[1] : nullptr);
+        effect->SetFloat(h.fUseWaterMask, waterMask ? 1.0f : 0.0f);
+
         D3DXVECTOR4 toView[3];
         for (int row = 0; row < 3; ++row)
             toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
@@ -2152,10 +2177,53 @@ private:
     }
 
     static inline SafetyHookInline shWaterRender{};
+    // Copies the bound render target into WaterMaskTex[index], (re)creating both copies in
+    // its size and format when needed.
+    static bool CopyRenderTargetToWaterMask(int index)
+    {
+        auto& R = PostFxResources;
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        IDirect3DSurface9* rt = nullptr;
+        if (!pDevice || FAILED(pDevice->GetRenderTarget(0, &rt)) || !rt)
+            return false;
+
+        D3DSURFACE_DESC desc = {};
+        rt->GetDesc(&desc);
+        if (R.WaterMaskTex[0] && (desc.Width != R.WaterMaskDesc.Width || desc.Height != R.WaterMaskDesc.Height ||
+            desc.Format != R.WaterMaskDesc.Format))
+            R.ReleaseWaterMask();
+
+        bool ok = true;
+        for (int i = 0; i < 2 && ok; ++i)
+        {
+            if (!R.WaterMaskTex[i])
+                ok = SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format,
+                                                      D3DPOOL_DEFAULT, &R.WaterMaskTex[i], nullptr));
+        }
+        if (ok)
+        {
+            R.WaterMaskDesc = desc;
+            IDirect3DSurface9* dst = nullptr;
+            ok = SUCCEEDED(R.WaterMaskTex[index]->GetSurfaceLevel(0, &dst)) &&
+                 SUCCEEDED(pDevice->StretchRect(rt, nullptr, dst, nullptr, D3DTEXF_NONE));
+            SAFE_RELEASE(dst);
+        }
+        else
+        {
+            R.ReleaseWaterMask();
+        }
+
+        SAFE_RELEASE(rt);
+        return ok;
+    }
+
     static void __cdecl WaterRenderHook(int a1)
     {
+        auto& R = PostFxResources;
+        R.bWaterMaskCaptured = R.SSREnabled() && R.SSREffect && R.fSSRWaterIntensity > 0.0f && CopyRenderTargetToWaterMask(0);
         shWaterRender.unsafe_ccall<void>(a1);
         RenderWaterReflections();
+        R.bWaterMaskCaptured = false;
     }
 
     static void RenderAmbientOcclusion()
