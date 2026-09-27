@@ -198,7 +198,14 @@ float3 GBufferNormal(float2 uv)
                             dot(vec4WaterToView[2].xyz, n)));
 }
 
-float4 TraceReflection(float3 C, float3 n, float blurPixels)
+// Interleaved gradient noise in (0, 1], fixed per pixel so it does not flicker between frames.
+float PixelJitter(float2 pixel)
+{
+    return 1.0 - frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
+}
+
+// jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
+float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
 {
     float z = C.z;
     float3 V = normalize(C);
@@ -230,14 +237,21 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
     // a ped standing by a car is, about twice the even spacing at the far end. Even steps a
     // metre apart stepped over a leg next to the bonnet, so only some pixels caught it and its
     // reflection came out as several shifted slices.
-    float tHit = 0.0;
-    float tBeforeHit = 0.0;
+    // Each pixel starts its steps up to one step later (jitter), so neighbouring rows do not
+    // all catch or all miss a thin object such as a tree trunk in step with each other; that
+    // showed as regular bands, the offset leaves fine noise that the smoothing pass removes.
+    float hit = 0.0;
+    float2 finalUV = 0.0;
+    float hitZ = 0.0;
+    float hitDelta = 0.0;
+    float hitThickness = 1.0;
     float prevT = 0.0;
+    float inFront = 1.0;
 
     [loop]
     for (int i = 0; i < NUM_STEPS; ++i)
     {
-        float s = (float) (i + 1) / (float) NUM_STEPS;
+        float s = ((float) i + jitter) / (float) NUM_STEPS;
         float t = tEnd * s * s;
 
         float2 sampleUV = lerp(uv0, uv1, t);
@@ -245,47 +259,58 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
 
         float delta = rayZ - LinearDepth(sampleUV);
 
-        // The first sample behind the scene ends the march; whether it is a hit is decided
-        // below, once the crossing is found. Judging the thickness at the sample itself made it
-        // depend on where the step happened to land, so a leg standing on a roof reflected as
-        // alternating bands of hits and misses.
         if (delta > 0.0)
         {
-            tHit = t;
-            tBeforeHit = prevT;
-            break;
+            // The ray went behind the scene since the last sample. Find the crossing and judge
+            // the thickness there, not at the sample, where it depended on where the step
+            // happened to land.
+            if (inFront > 0.0)
+            {
+                float lo = prevT;
+                float hi = t;
+                [unroll]
+                for (int j = 0; j < NUM_REFINE_STEPS; ++j)
+                {
+                    float mid = (lo + hi) * 0.5;
+                    float midZ = 1.0 / lerp(invZ0, invZ1, mid);
+                    if (midZ - LinearDepth(lerp(uv0, uv1, mid)) > 0.0)
+                        hi = mid;
+                    else
+                        lo = mid;
+                }
+
+                float2 crossUV = lerp(uv0, uv1, hi);
+                float crossZ = 1.0 / lerp(invZ0, invZ1, hi);
+                float crossDelta = crossZ - LinearDepth(crossUV);
+                float crossThickness = abs(crossZ - 1.0 / lerp(invZ0, invZ1, lo)) + fThickness;
+
+                // Just behind a surface is a hit. Far behind means the ray passed behind a thin
+                // object standing in front of what it was crossing, such as a trunk in front of
+                // a wall: it carries on and may still hit the wall, instead of ending as a miss.
+                if (crossDelta <= crossThickness)
+                {
+                    hit = 1.0;
+                    finalUV = crossUV;
+                    hitZ = crossZ;
+                    hitDelta = crossDelta;
+                    hitThickness = crossThickness;
+                    break;
+                }
+            }
+            inFront = 0.0;
+        }
+        else
+        {
+            inFront = 1.0;
         }
 
         prevT = t;
     }
 
-    if (tHit <= 0.0)
+    if (hit <= 0.0)
         return 0.0;
 
-    float lo = tBeforeHit;
-    float hi = tHit;
-    [unroll]
-    for (int j = 0; j < NUM_REFINE_STEPS; ++j)
-    {
-        float mid = (lo + hi) * 0.5;
-        float midZ = 1.0 / lerp(invZ0, invZ1, mid);
-        if (midZ - LinearDepth(lerp(uv0, uv1, mid)) > 0.0)
-            hi = mid;
-        else
-            lo = mid;
-    }
-
-    float2 finalUV = lerp(uv0, uv1, hi);
-    float hitZ = 1.0 / lerp(invZ0, invZ1, hi);
     float3 hitP = ViewPosFromUVZ(finalUV, hitZ);
-
-    // At the crossing the ray is either just behind a surface (a hit) or has jumped behind
-    // an object standing in front of what it was passing over, which it only hits if it
-    // went through within the object's assumed thickness.
-    float hitDelta = hitZ - LinearDepth(finalUV);
-    float hitThickness = abs(hitZ - 1.0 / lerp(invZ0, invZ1, lo)) + fThickness;
-    if (hitDelta > hitThickness)
-        return 0.0;
 
     float2 histUV = HistoryUV(hitP);
 
@@ -343,7 +368,7 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         n = ReconstructNormal(uv, C);
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, 0.0);
+    float4 r = TraceReflection(C, n, 0.0, PixelJitter(vPos));
     return float4(r.rgb, saturate(r.a * surfaceWeight * fIntensity));
 }
 
@@ -392,7 +417,7 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 n = WaterNormal(worldXY, dot(C, C));
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, fWaterBlur);
+    float4 r = TraceReflection(C, n, fWaterBlur, 1.0);
 
     return float4(r.rgb, saturate(r.a * fWaterIntensity));
 }
