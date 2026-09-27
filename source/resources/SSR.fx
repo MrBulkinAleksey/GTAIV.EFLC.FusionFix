@@ -213,6 +213,15 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
     float3 V = normalize(C);
     float3 R = reflect(V, n);
 
+    // A ray reflected almost straight back at the camera, such as off a door with a ped
+    // crouching between it and the camera, should show the ped's front, but the screen only
+    // holds his back; the hit jumps between his back, his outline and what is behind him, so
+    // those reflections showed from far away and twitched. They are faded out and not traced.
+    // A roof seen steeply from above reflects at about -0.5 and keeps its reflections.
+    float facing = saturate((dot(V, R) + 0.8) / 0.3);
+    if (facing <= 0.0)
+        return 0.0;
+
     float3 P0 = C + n * max(fMaxDistance / (float) NUM_STEPS * 0.1, z * 0.01);
 
     // With the camera looking down at a roof or bonnet more steeply than about 45 degrees,
@@ -320,9 +329,7 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
 
     float rayLen = length(hitP - C);
 
-    // Rays coming back towards the camera see the side of things the screen shows least well,
-    // so they count for a little less, but are not faded out.
-    confidence *= saturate(dot(V, R) * 0.5 + 0.9);
+    confidence *= facing;
     confidence *= saturate((1.0 - rayLen / fMaxDistance) * 4.0);
     confidence *= 1.0 - smoothstep(hitThickness * 0.75, hitThickness, hitDelta);
 
