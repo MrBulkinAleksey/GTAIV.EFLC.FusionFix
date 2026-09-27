@@ -1,21 +1,22 @@
 diff --git a/win32_30_nv8/gta_glass/gta_glassPS1.asm b/win32_30_nv8/gta_glass/gta_glassPS1.asm
-index c689ff61..37f50123 100644
+index c689ff61..8af2d30b 100644
 --- a/win32_30_nv8/gta_glass/gta_glassPS1.asm
 +++ b/win32_30_nv8/gta_glass/gta_glassPS1.asm
-@@ -150,6 +150,12 @@
+@@ -150,6 +150,13 @@
      def c9, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c10, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c11, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
-+    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
 +    def c155, 0.125, 0.5, 0, 0
 +    def c156, 0.375, 0.5, 0, 0
 +    def c157, 12345, 1, 0.0833333358, 10
 +    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -164,6 +170,9 @@
+@@ -164,6 +171,9 @@
      dcl_2d s2
      dcl_2d s10
      dcl_2d s15
@@ -25,7 +26,7 @@ index c689ff61..37f50123 100644
      texld r0, v0, s1
      add r0.z, -r0.w, c6.w
      add r0.z, -r0.x, r0.z
-@@ -187,9 +196,58 @@
+@@ -187,9 +197,76 @@
      add r3.xyz, r0, c0.y
      dp3 r0.w, r3, r3
      rsq r0.w, r0.w
@@ -43,13 +44,27 @@ index c689ff61..37f50123 100644
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
 +      mul r30.xyz, r13, r28.z
-+      mul r30.xyz, r30, c157.z
 +      mov r31.xyz, v6
++      add r14.xyz, r31, -c15
++      dp3 r31.w, r14, c14
++      mul r31.w, r31.w, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c155.z
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
-+        add r31.xyz, r31, r30
-+        add r14.xyz, r31, -c15
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r14.xyz, r30, r28.w, r31
++        add r14.xyz, r14, -c15
 +        dp3 r15.x, r14, c12
 +        dp3 r15.y, r14, c13
 +        dp3 r15.z, r14, c14
@@ -71,12 +86,16 @@ index c689ff61..37f50123 100644
 +        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
-+          if_lt r14.y, r28.y
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
 +        endif
++        mov r31.w, r16.w
 +      endrep
 +      lrp r15.xyz, r17.w, r17, r3
 +      mov r3.xyz, r15
@@ -85,23 +104,24 @@ index c689ff61..37f50123 100644
      mul r3.xyz, r3, c74.x
      mul r4.w, r1.w, v5.w
 diff --git a/win32_30_nv8/gta_glass/gta_glassPS10.asm b/win32_30_nv8/gta_glass/gta_glassPS10.asm
-index 3e067e27..56144bc0 100644
+index 3e067e27..ee0af9b1 100644
 --- a/win32_30_nv8/gta_glass/gta_glassPS10.asm
 +++ b/win32_30_nv8/gta_glass/gta_glassPS10.asm
-@@ -126,6 +126,12 @@
+@@ -126,6 +126,13 @@
      def c9, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c10, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c11, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
-+    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
 +    def c155, 0.125, 0.5, 0, 0
 +    def c156, 0.375, 0.5, 0, 0
 +    def c157, 12345, 1, 0.0833333358, 10
 +    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -140,6 +146,9 @@
+@@ -140,6 +147,9 @@
      dcl_2d s2
      dcl_2d s10
      dcl_2d s15
@@ -111,7 +131,7 @@ index 3e067e27..56144bc0 100644
      texld r0, v0, s1
      add r0.z, -r0.w, c0.w
      add r0.z, -r0.x, r0.z
-@@ -163,9 +172,58 @@
+@@ -163,9 +173,76 @@
      add r3.xyz, r0, c1.y
      dp3 r0.w, r3, r3
      rsq r0.w, r0.w
@@ -129,13 +149,27 @@ index 3e067e27..56144bc0 100644
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
 +      mul r30.xyz, r13, r28.z
-+      mul r30.xyz, r30, c157.z
 +      mov r31.xyz, v6
++      add r14.xyz, r31, -c15
++      dp3 r31.w, r14, c14
++      mul r31.w, r31.w, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c155.z
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
-+        add r31.xyz, r31, r30
-+        add r14.xyz, r31, -c15
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r14.xyz, r30, r28.w, r31
++        add r14.xyz, r14, -c15
 +        dp3 r15.x, r14, c12
 +        dp3 r15.y, r14, c13
 +        dp3 r15.z, r14, c14
@@ -157,12 +191,16 @@ index 3e067e27..56144bc0 100644
 +        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
-+          if_lt r14.y, r28.y
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
 +        endif
++        mov r31.w, r16.w
 +      endrep
 +      lrp r15.xyz, r17.w, r17, r3
 +      mov r3.xyz, r15
@@ -171,23 +209,24 @@ index 3e067e27..56144bc0 100644
      mul r3.xyz, r3, c74.x
      mul r4.w, r1.w, v5.w
 diff --git a/win32_30_nv8/gta_glass/gta_glassPS11.asm b/win32_30_nv8/gta_glass/gta_glassPS11.asm
-index af866f87..91392d17 100644
+index af866f87..5cde974b 100644
 --- a/win32_30_nv8/gta_glass/gta_glassPS11.asm
 +++ b/win32_30_nv8/gta_glass/gta_glassPS11.asm
-@@ -138,6 +138,12 @@
+@@ -138,6 +138,13 @@
      def c8, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c9, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c10, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
-+    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
 +    def c155, 0.125, 0.5, 0, 0
 +    def c156, 0.375, 0.5, 0, 0
 +    def c157, 12345, 1, 0.0833333358, 10
 +    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -152,6 +158,9 @@
+@@ -152,6 +159,9 @@
      dcl_2d s2
      dcl_2d s10
      dcl_2d s15
@@ -197,7 +236,7 @@ index af866f87..91392d17 100644
      texld r0, v0, s1
      add r0.z, -r0.w, c5.w
      add r0.z, -r0.x, r0.z
-@@ -175,9 +184,58 @@
+@@ -175,9 +185,76 @@
      add r3.xyz, r0, c0.y
      dp3 r0.w, r3, r3
      rsq r0.w, r0.w
@@ -215,13 +254,27 @@ index af866f87..91392d17 100644
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
 +      mul r30.xyz, r13, r28.z
-+      mul r30.xyz, r30, c157.z
 +      mov r31.xyz, v6
++      add r14.xyz, r31, -c15
++      dp3 r31.w, r14, c14
++      mul r31.w, r31.w, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c155.z
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
-+        add r31.xyz, r31, r30
-+        add r14.xyz, r31, -c15
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r14.xyz, r30, r28.w, r31
++        add r14.xyz, r14, -c15
 +        dp3 r15.x, r14, c12
 +        dp3 r15.y, r14, c13
 +        dp3 r15.z, r14, c14
@@ -243,12 +296,16 @@ index af866f87..91392d17 100644
 +        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
-+          if_lt r14.y, r28.y
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
 +        endif
++        mov r31.w, r16.w
 +      endrep
 +      lrp r15.xyz, r17.w, r17, r3
 +      mov r3.xyz, r15
@@ -257,23 +314,24 @@ index af866f87..91392d17 100644
      mul r3.xyz, r3, c74.x
      mul r4, r1, v5
 diff --git a/win32_30_nv8/gta_glass/gta_glassPS9.asm b/win32_30_nv8/gta_glass/gta_glassPS9.asm
-index cb335ca7..85a99e15 100644
+index cb335ca7..9877e097 100644
 --- a/win32_30_nv8/gta_glass/gta_glassPS9.asm
 +++ b/win32_30_nv8/gta_glass/gta_glassPS9.asm
-@@ -102,6 +102,12 @@
+@@ -102,6 +102,13 @@
      def c9, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c10, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c11, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
-+    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
 +    def c155, 0.125, 0.5, 0, 0
 +    def c156, 0.375, 0.5, 0, 0
 +    def c157, 12345, 1, 0.0833333358, 10
 +    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -116,6 +122,9 @@
+@@ -116,6 +123,9 @@
      dcl_2d s2
      dcl_2d s10
      dcl_2d s15
@@ -283,7 +341,7 @@ index cb335ca7..85a99e15 100644
      texld r0, v0, s1
      add r0.z, -r0.w, c0.w
      add r0.z, -r0.x, r0.z
-@@ -139,9 +148,58 @@
+@@ -139,9 +149,76 @@
      add r3.xyz, r0, c1.y
      dp3 r0.w, r3, r3
      rsq r0.w, r0.w
@@ -301,13 +359,27 @@ index cb335ca7..85a99e15 100644
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
 +      mul r30.xyz, r13, r28.z
-+      mul r30.xyz, r30, c157.z
 +      mov r31.xyz, v6
++      add r14.xyz, r31, -c15
++      dp3 r31.w, r14, c14
++      mul r31.w, r31.w, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c155.z
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
-+        add r31.xyz, r31, r30
-+        add r14.xyz, r31, -c15
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r14.xyz, r30, r28.w, r31
++        add r14.xyz, r14, -c15
 +        dp3 r15.x, r14, c12
 +        dp3 r15.y, r14, c13
 +        dp3 r15.z, r14, c14
@@ -329,12 +401,16 @@ index cb335ca7..85a99e15 100644
 +        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
-+          if_lt r14.y, r28.y
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
 +        endif
++        mov r31.w, r16.w
 +      endrep
 +      lrp r15.xyz, r17.w, r17, r3
 +      mov r3.xyz, r15
@@ -343,23 +419,24 @@ index cb335ca7..85a99e15 100644
      mul r3.xyz, r3, c74.x
      mul r4.w, r1.w, v5.w
 diff --git a/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS1.asm b/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS1.asm
-index c70412cd..e07ad444 100644
+index c70412cd..60af46b5 100644
 --- a/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS1.asm
 +++ b/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS1.asm
-@@ -154,6 +154,12 @@
+@@ -154,6 +154,13 @@
      def c9, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c10, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c11, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
-+    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
 +    def c155, 0.125, 0.5, 0, 0
 +    def c156, 0.375, 0.5, 0, 0
 +    def c157, 12345, 1, 0.0833333358, 10
 +    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -169,6 +175,9 @@
+@@ -169,6 +176,9 @@
      dcl_2d s4
      dcl_2d s10
      dcl_2d s15
@@ -369,7 +446,7 @@ index c70412cd..e07ad444 100644
      texld r0, v0, s1
      add r0.z, -r0.w, c6.w
      add r0.z, -r0.x, r0.z
-@@ -196,9 +205,58 @@
+@@ -196,9 +206,76 @@
      add r4.xyz, r3, c0.y
      dp3 r0.y, r4, r4
      rsq r0.y, r0.y
@@ -387,13 +464,27 @@ index c70412cd..e07ad444 100644
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
 +      mul r30.xyz, r13, r28.z
-+      mul r30.xyz, r30, c157.z
 +      mov r31.xyz, v6
++      add r14.xyz, r31, -c15
++      dp3 r31.w, r14, c14
++      mul r31.w, r31.w, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c155.z
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
-+        add r31.xyz, r31, r30
-+        add r14.xyz, r31, -c15
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r14.xyz, r30, r28.w, r31
++        add r14.xyz, r14, -c15
 +        dp3 r15.x, r14, c12
 +        dp3 r15.y, r14, c13
 +        dp3 r15.z, r14, c14
@@ -415,12 +506,16 @@ index c70412cd..e07ad444 100644
 +        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
-+          if_lt r14.y, r28.y
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
 +        endif
++        mov r31.w, r16.w
 +      endrep
 +      lrp r15.xyz, r17.w, r17, r4
 +      mov r4.xyz, r15
@@ -429,23 +524,24 @@ index c70412cd..e07ad444 100644
      mul r4.xyz, r4, c75.x
      mul r5.w, r1.w, v5.w
 diff --git a/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS10.asm b/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS10.asm
-index 373e4324..a229a1e2 100644
+index 373e4324..3b8e7c8f 100644
 --- a/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS10.asm
 +++ b/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS10.asm
-@@ -130,6 +130,12 @@
+@@ -130,6 +130,13 @@
      def c9, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c10, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c11, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
-+    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
 +    def c155, 0.125, 0.5, 0, 0
 +    def c156, 0.375, 0.5, 0, 0
 +    def c157, 12345, 1, 0.0833333358, 10
 +    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -145,6 +151,9 @@
+@@ -145,6 +152,9 @@
      dcl_2d s4
      dcl_2d s10
      dcl_2d s15
@@ -455,7 +551,7 @@ index 373e4324..a229a1e2 100644
      texld r0, v0, s1
      add r0.z, -r0.w, c0.w
      add r0.z, -r0.x, r0.z
-@@ -172,9 +181,58 @@
+@@ -172,9 +182,76 @@
      add r4.xyz, r3, c1.y
      dp3 r0.y, r4, r4
      rsq r0.y, r0.y
@@ -473,13 +569,27 @@ index 373e4324..a229a1e2 100644
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
 +      mul r30.xyz, r13, r28.z
-+      mul r30.xyz, r30, c157.z
 +      mov r31.xyz, v6
++      add r14.xyz, r31, -c15
++      dp3 r31.w, r14, c14
++      mul r31.w, r31.w, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c155.z
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
-+        add r31.xyz, r31, r30
-+        add r14.xyz, r31, -c15
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r14.xyz, r30, r28.w, r31
++        add r14.xyz, r14, -c15
 +        dp3 r15.x, r14, c12
 +        dp3 r15.y, r14, c13
 +        dp3 r15.z, r14, c14
@@ -501,12 +611,16 @@ index 373e4324..a229a1e2 100644
 +        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
-+          if_lt r14.y, r28.y
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
 +        endif
++        mov r31.w, r16.w
 +      endrep
 +      lrp r15.xyz, r17.w, r17, r4
 +      mov r4.xyz, r15
@@ -515,23 +629,24 @@ index 373e4324..a229a1e2 100644
      mul r4.xyz, r4, c75.x
      mul r5.w, r1.w, v5.w
 diff --git a/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS11.asm b/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS11.asm
-index 79af19c6..8082a866 100644
+index 79af19c6..3f7819b3 100644
 --- a/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS11.asm
 +++ b/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS11.asm
-@@ -142,6 +142,12 @@
+@@ -142,6 +142,13 @@
      def c8, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c9, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c10, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
-+    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
 +    def c155, 0.125, 0.5, 0, 0
 +    def c156, 0.375, 0.5, 0, 0
 +    def c157, 12345, 1, 0.0833333358, 10
 +    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -157,6 +163,9 @@
+@@ -157,6 +164,9 @@
      dcl_2d s4
      dcl_2d s10
      dcl_2d s15
@@ -541,7 +656,7 @@ index 79af19c6..8082a866 100644
      texld r0, v0, s1
      add r0.z, -r0.w, c5.w
      add r0.z, -r0.x, r0.z
-@@ -184,9 +193,58 @@
+@@ -184,9 +194,76 @@
      add r4.xyz, r3, c0.y
      dp3 r0.y, r4, r4
      rsq r0.y, r0.y
@@ -559,13 +674,27 @@ index 79af19c6..8082a866 100644
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
 +      mul r30.xyz, r13, r28.z
-+      mul r30.xyz, r30, c157.z
 +      mov r31.xyz, v6
++      add r14.xyz, r31, -c15
++      dp3 r31.w, r14, c14
++      mul r31.w, r31.w, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c155.z
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
-+        add r31.xyz, r31, r30
-+        add r14.xyz, r31, -c15
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r14.xyz, r30, r28.w, r31
++        add r14.xyz, r14, -c15
 +        dp3 r15.x, r14, c12
 +        dp3 r15.y, r14, c13
 +        dp3 r15.z, r14, c14
@@ -587,12 +716,16 @@ index 79af19c6..8082a866 100644
 +        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
-+          if_lt r14.y, r28.y
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
 +        endif
++        mov r31.w, r16.w
 +      endrep
 +      lrp r15.xyz, r17.w, r17, r4
 +      mov r4.xyz, r15
@@ -601,23 +734,24 @@ index 79af19c6..8082a866 100644
      mul r4.xyz, r4, c75.x
      mul r5, r1, v5
 diff --git a/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS9.asm b/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS9.asm
-index 6a42d426..3f8766b1 100644
+index 6a42d426..4d7e3b87 100644
 --- a/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS9.asm
 +++ b/win32_30_nv8/gta_glass_normal_spec_reflect/gta_glass_normal_spec_reflectPS9.asm
-@@ -106,6 +106,12 @@
+@@ -106,6 +106,13 @@
      def c9, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c10, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c11, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
-+    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
 +    def c155, 0.125, 0.5, 0, 0
 +    def c156, 0.375, 0.5, 0, 0
 +    def c157, 12345, 1, 0.0833333358, 10
 +    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -121,6 +127,9 @@
+@@ -121,6 +128,9 @@
      dcl_2d s4
      dcl_2d s10
      dcl_2d s15
@@ -627,7 +761,7 @@ index 6a42d426..3f8766b1 100644
      texld r0, v0, s1
      add r0.z, -r0.w, c0.w
      add r0.z, -r0.x, r0.z
-@@ -147,9 +156,58 @@
+@@ -147,9 +157,76 @@
      add r4.xyz, r3, c1.y
      dp3 r0.y, r4, r4
      rsq r0.y, r0.y
@@ -645,13 +779,27 @@ index 6a42d426..3f8766b1 100644
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
 +      mul r30.xyz, r13, r28.z
-+      mul r30.xyz, r30, c157.z
 +      mov r31.xyz, v6
++      add r14.xyz, r31, -c15
++      dp3 r31.w, r14, c14
++      mul r31.w, r31.w, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c155.z
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
-+        add r31.xyz, r31, r30
-+        add r14.xyz, r31, -c15
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r14.xyz, r30, r28.w, r31
++        add r14.xyz, r14, -c15
 +        dp3 r15.x, r14, c12
 +        dp3 r15.y, r14, c13
 +        dp3 r15.z, r14, c14
@@ -673,12 +821,16 @@ index 6a42d426..3f8766b1 100644
 +        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
-+          if_lt r14.y, r28.y
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
 +        endif
++        mov r31.w, r16.w
 +      endrep
 +      lrp r15.xyz, r17.w, r17, r4
 +      mov r4.xyz, r15
@@ -687,23 +839,24 @@ index 6a42d426..3f8766b1 100644
      mul r4.xyz, r4, c75.x
      mul r5.w, r1.w, v5.w
 diff --git a/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS1.asm b/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS1.asm
-index fcf8b859..412ef71e 100644
+index fcf8b859..3e25e587 100644
 --- a/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS1.asm
 +++ b/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS1.asm
-@@ -147,6 +147,12 @@
+@@ -147,6 +147,13 @@
      def c10, 0.962339997, -0.194983006, 0.473434001, -0.480026007
      def c11, -0.69591397, 0.457136989, -0.203345001, 0.620715976
      def c12, -0.326211989, -0.405809999, -0.840143979, -0.0735799968
-+    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
 +    def c155, 0.125, 0.5, 0, 0
 +    def c156, 0.375, 0.5, 0, 0
 +    def c157, 12345, 1, 0.0833333358, 10
 +    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -158,6 +164,9 @@
+@@ -158,6 +165,9 @@
      dcl_2d s1
      dcl_2d s10
      dcl_2d s15
@@ -713,7 +866,7 @@ index fcf8b859..412ef71e 100644
      texld r0, v0, s0
      add r1.xyz, c2.w, v1
      nrm r2.xyz, r1
-@@ -169,9 +178,58 @@
+@@ -169,9 +179,76 @@
      add r3.xyz, r1, c2.w
      dp3 r1.w, r3, r3
      rsq r1.w, r1.w
@@ -731,13 +884,27 @@ index fcf8b859..412ef71e 100644
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
 +      mul r30.xyz, r13, r28.z
-+      mul r30.xyz, r30, c157.z
 +      mov r31.xyz, v4
++      add r14.xyz, r31, -c15
++      dp3 r31.w, r14, c14
++      mul r31.w, r31.w, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c155.z
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
-+        add r31.xyz, r31, r30
-+        add r14.xyz, r31, -c15
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r14.xyz, r30, r28.w, r31
++        add r14.xyz, r14, -c15
 +        dp3 r15.x, r14, c12
 +        dp3 r15.y, r14, c13
 +        dp3 r15.z, r14, c14
@@ -759,12 +926,16 @@ index fcf8b859..412ef71e 100644
 +        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
-+          if_lt r14.y, r28.y
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
 +        endif
++        mov r31.w, r16.w
 +      endrep
 +      lrp r15.xyz, r17.w, r17, r3
 +      mov r3.xyz, r15
@@ -773,23 +944,24 @@ index fcf8b859..412ef71e 100644
      mul r3.xyz, r3, c73.x
      mul r4.w, r0.w, v3.w
 diff --git a/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS10.asm b/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS10.asm
-index 336c62cc..440e8186 100644
+index 336c62cc..184a0cf4 100644
 --- a/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS10.asm
 +++ b/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS10.asm
-@@ -123,6 +123,12 @@
+@@ -123,6 +123,13 @@
      def c10, 0.962339997, -0.194983006, 0.473434001, -0.480026007
      def c11, -0.69591397, 0.457136989, -0.203345001, 0.620715976
      def c12, -0.326211989, -0.405809999, -0.840143979, -0.0735799968
-+    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
 +    def c155, 0.125, 0.5, 0, 0
 +    def c156, 0.375, 0.5, 0, 0
 +    def c157, 12345, 1, 0.0833333358, 10
 +    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -134,6 +140,9 @@
+@@ -134,6 +141,9 @@
      dcl_2d s1
      dcl_2d s10
      dcl_2d s15
@@ -799,7 +971,7 @@ index 336c62cc..440e8186 100644
      texld r0, v0, s0
      add r1.xyz, c2.w, v1
      nrm r2.xyz, r1
-@@ -145,9 +154,58 @@
+@@ -145,9 +155,76 @@
      add r3.xyz, r1, c2.w
      dp3 r1.w, r3, r3
      rsq r1.w, r1.w
@@ -817,13 +989,27 @@ index 336c62cc..440e8186 100644
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
 +      mul r30.xyz, r13, r28.z
-+      mul r30.xyz, r30, c157.z
 +      mov r31.xyz, v4
++      add r14.xyz, r31, -c15
++      dp3 r31.w, r14, c14
++      mul r31.w, r31.w, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c155.z
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
-+        add r31.xyz, r31, r30
-+        add r14.xyz, r31, -c15
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r14.xyz, r30, r28.w, r31
++        add r14.xyz, r14, -c15
 +        dp3 r15.x, r14, c12
 +        dp3 r15.y, r14, c13
 +        dp3 r15.z, r14, c14
@@ -845,12 +1031,16 @@ index 336c62cc..440e8186 100644
 +        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
-+          if_lt r14.y, r28.y
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
 +        endif
++        mov r31.w, r16.w
 +      endrep
 +      lrp r15.xyz, r17.w, r17, r3
 +      mov r3.xyz, r15
@@ -859,23 +1049,24 @@ index 336c62cc..440e8186 100644
      mul r3.xyz, r3, c73.x
      mul r4.w, r0.w, v3.w
 diff --git a/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS11.asm b/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS11.asm
-index 97c3006b..05747852 100644
+index 97c3006b..c263064b 100644
 --- a/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS11.asm
 +++ b/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS11.asm
-@@ -135,6 +135,12 @@
+@@ -135,6 +135,13 @@
      def c9, 0.962339997, -0.194983006, 0.473434001, -0.480026007
      def c10, -0.69591397, 0.457136989, -0.203345001, 0.620715976
      def c11, -0.326211989, -0.405809999, -0.840143979, -0.0735799968
-+    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
 +    def c155, 0.125, 0.5, 0, 0
 +    def c156, 0.375, 0.5, 0, 0
 +    def c157, 12345, 1, 0.0833333358, 10
 +    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -146,6 +152,9 @@
+@@ -146,6 +153,9 @@
      dcl_2d s1
      dcl_2d s10
      dcl_2d s15
@@ -885,7 +1076,7 @@ index 97c3006b..05747852 100644
      texld r0, v0, s0
      add r1.xyz, c2.w, v1
      nrm r2.xyz, r1
-@@ -157,9 +166,58 @@
+@@ -157,9 +167,76 @@
      add r3.xyz, r1, c2.w
      dp3 r1.w, r3, r3
      rsq r1.w, r1.w
@@ -903,13 +1094,27 @@ index 97c3006b..05747852 100644
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
 +      mul r30.xyz, r13, r28.z
-+      mul r30.xyz, r30, c157.z
 +      mov r31.xyz, v4
++      add r14.xyz, r31, -c15
++      dp3 r31.w, r14, c14
++      mul r31.w, r31.w, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c155.z
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
-+        add r31.xyz, r31, r30
-+        add r14.xyz, r31, -c15
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r14.xyz, r30, r28.w, r31
++        add r14.xyz, r14, -c15
 +        dp3 r15.x, r14, c12
 +        dp3 r15.y, r14, c13
 +        dp3 r15.z, r14, c14
@@ -931,12 +1136,16 @@ index 97c3006b..05747852 100644
 +        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
-+          if_lt r14.y, r28.y
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
 +        endif
++        mov r31.w, r16.w
 +      endrep
 +      lrp r15.xyz, r17.w, r17, r3
 +      mov r3.xyz, r15
@@ -945,23 +1154,24 @@ index 97c3006b..05747852 100644
      mul r3.xyz, r3, c73.x
      mul r4, r0, v3
 diff --git a/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS9.asm b/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS9.asm
-index ae6fec32..ee855d5b 100644
+index ae6fec32..4a4e305e 100644
 --- a/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS9.asm
 +++ b/win32_30_nv8/gta_glass_reflect/gta_glass_reflectPS9.asm
-@@ -98,6 +98,12 @@
+@@ -98,6 +98,13 @@
      def c9, 0.962339997, -0.194983006, 0.473434001, -0.480026007
      def c10, -0.69591397, 0.457136989, -0.203345001, 0.620715976
      def c11, -0.326211989, -0.405809999, -0.840143979, -0.0735799968
-+    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
 +    def c155, 0.125, 0.5, 0, 0
 +    def c156, 0.375, 0.5, 0, 0
 +    def c157, 12345, 1, 0.0833333358, 10
 +    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -109,6 +115,9 @@
+@@ -109,6 +116,9 @@
      dcl_2d s1
      dcl_2d s10
      dcl_2d s15
@@ -971,7 +1181,7 @@ index ae6fec32..ee855d5b 100644
      texld r0, v0, s0
      add r1.xyz, c0.w, v1
      nrm r2.xyz, r1
-@@ -120,9 +129,58 @@
+@@ -120,9 +130,76 @@
      add r3.xyz, r1, c0.w
      dp3 r1.w, r3, r3
      rsq r1.w, r1.w
@@ -989,13 +1199,27 @@ index ae6fec32..ee855d5b 100644
 +    add r29.x, r28.w, -c157.x
 +    mul r29.x, r29.x, r29.x
 +    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
 +      mul r30.xyz, r13, r28.z
-+      mul r30.xyz, r30, c157.z
 +      mov r31.xyz, v4
++      add r14.xyz, r31, -c15
++      dp3 r31.w, r14, c14
++      mul r31.w, r31.w, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c155.z
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
-+        add r31.xyz, r31, r30
-+        add r14.xyz, r31, -c15
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r14.xyz, r30, r28.w, r31
++        add r14.xyz, r14, -c15
 +        dp3 r15.x, r14, c12
 +        dp3 r15.y, r14, c13
 +        dp3 r15.z, r14, c14
@@ -1017,12 +1241,16 @@ index ae6fec32..ee855d5b 100644
 +        texldl r14, r18, s11
 +        add r14.y, r16.w, -r14.x
 +        if_gt r14.y, c155.z
-+          if_lt r14.y, r28.y
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
 +          break // went behind the scene, a hit or not
 +        endif
++        mov r31.w, r16.w
 +      endrep
 +      lrp r15.xyz, r17.w, r17, r3
 +      mov r3.xyz, r15
