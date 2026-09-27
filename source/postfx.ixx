@@ -231,7 +231,7 @@ public:
     float fSSREdgeFade = 0.1f;
     float fSSRIntensity = 1.0f;
     float fSSRGlossBoost = 2.0f;
-    float fSSRGlossCutoff = 0.25f;
+    float fSSRGlossCutoff = 0.5f;
     float fSSRWaterIntensity = 1.0f;
     // CWater::Render loads this as the Z of every flat water vertex, so it is the real
     // surface height rather than an assumed sea level.
@@ -730,7 +730,7 @@ public:
         fSSREdgeFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsEdgeFade", 0.1f), 0.001f, 0.5f);
         fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRGlossBoost = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossBoost", 2.0f), 0.0f, 8.0f);
-        fSSRGlossCutoff = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossCutoff", 0.25f), 0.0f, 1.0f);
+        fSSRGlossCutoff = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossCutoff", 0.5f), 0.0f, 1.0f);
         fSSRWaterIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWaterLevelOffset = iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterLevelOffset", 0.0f);
         fSSRWaterBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterBlur", 3.0f), 0.0f, 32.0f);
@@ -1798,8 +1798,9 @@ private:
         effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
         effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
 
-        // _DEFERRED_GBUFFER_2_ is (specular intensity, gloss, AO); vehicle paint and glass
-        // sit near the top of both, road surfaces near the bottom.
+        // _DEFERRED_GBUFFER_2_ is (specular intensity, gloss, AO). Gloss decides what reflects:
+        // car paint sits around 0.8, roads and walls around 0.2-0.35. Car paint stores almost no
+        // specular intensity here, so that channel is not used.
         bool hasSpecular = R.mSpecularRT && R.mSpecularRT->mD3DTexture;
         if (hasSpecular)
             effect->SetTexture(h.SpecularTex2D, R.mSpecularRT->mD3DTexture);
