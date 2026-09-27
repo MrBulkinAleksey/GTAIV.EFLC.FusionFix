@@ -256,7 +256,8 @@ public:
     //       thickness, ray length and a magic value, so a foreign texture is never used;
     //       texel 2 the camera's right axis and the debug flag; texel 3 its up axis (the axes
     //       come from here because those shaders overwrite gViewInverse's first two rows);
-    //       texel 4 near and log2(far / near), to make the depth in s11 linear
+    //       texel 4 near and log2(far / near), to make the depth in s11 linear, and the
+    //       step jitter flag (ScreenSpaceReflectionsStepJitter)
     //   s11 the game's own log depth, _DEFERRED_GBUFFER_3_, which the coronas also read. A
     //       separate linear depth pass for this made lights and lit windows drift while the
     //       camera turned, so there is none.
@@ -2061,7 +2062,7 @@ private:
                 proj._34, R.fGlassReflectionsThickness, R.fGlassReflectionsLength, 12345.0f,
                 viewInv.m[0][0], viewInv.m[0][1], viewInv.m[0][2], debugMode == R.kGlassDebugMode ? 1.0f : 0.0f,
                 viewInv.m[1][0], viewInv.m[1][1], viewInv.m[1][2], 0.0f,
-                vp->mNearClip, log2f(vp->mFarClip / vp->mNearClip), 0.0f, 0.0f,
+                vp->mNearClip, log2f(vp->mFarClip / vp->mNearClip), R.bSSRStepJitter ? 1.0f : 0.0f, 0.0f,
             };
             memcpy(R.GlassParams, params, sizeof(params));
             R.bGlassFrameValid = true;

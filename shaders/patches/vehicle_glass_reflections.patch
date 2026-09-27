@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 366992fd..2b753af6 100644
+index 366992fd..91471e1a 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 @@ -157,6 +157,16 @@
@@ -29,7 +29,7 @@ index 366992fd..2b753af6 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
-@@ -201,7 +214,105 @@
+@@ -201,7 +214,106 @@
      add r4.xy, -r4, c1.w
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -67,7 +67,7 @@ index 366992fd..2b753af6 100644
 +      // s11 holds the game's log depth; linear = near * 2^(raw * log2(far / near)). The ray
 +      // length in r28.z is no longer needed, so it takes log2(far / near); r15.w takes near.
 +      mov r16, c162
-+      texldl r16, r16, s9 // near, log2(far / near)
++      texldl r16, r16, s9 // near, log2(far / near), step jitter flag
 +      mov r15.w, r16.x
 +      mov r28.z, r16.y
 +      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
@@ -75,6 +75,7 @@ index 366992fd..2b753af6 100644
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
 +      add r29.x, r29.x, c159.w
++      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsStepJitter)
 +      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
@@ -136,7 +137,7 @@ index 366992fd..2b753af6 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 2847833c..50d51eb8 100644
+index 2847833c..05ed9385 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 @@ -108,6 +108,16 @@
@@ -166,7 +167,7 @@ index 2847833c..50d51eb8 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
-@@ -151,7 +164,105 @@
+@@ -151,7 +164,106 @@
      add r4.xy, -r4, c1.z
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -204,7 +205,7 @@ index 2847833c..50d51eb8 100644
 +      // s11 holds the game's log depth; linear = near * 2^(raw * log2(far / near)). The ray
 +      // length in r28.z is no longer needed, so it takes log2(far / near); r15.w takes near.
 +      mov r16, c162
-+      texldl r16, r16, s9 // near, log2(far / near)
++      texldl r16, r16, s9 // near, log2(far / near), step jitter flag
 +      mov r15.w, r16.x
 +      mov r28.z, r16.y
 +      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
@@ -212,6 +213,7 @@ index 2847833c..50d51eb8 100644
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
 +      add r29.x, r29.x, c159.w
++      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsStepJitter)
 +      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
@@ -273,7 +275,7 @@ index 2847833c..50d51eb8 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 1d5cecf5..1fbf5fb5 100644
+index 1d5cecf5..70df8de3 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 @@ -133,6 +133,16 @@
@@ -303,7 +305,7 @@ index 1d5cecf5..1fbf5fb5 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c0.x, v1
-@@ -177,7 +190,105 @@
+@@ -177,7 +190,106 @@
      add r4.xy, -r4, c0.w
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -341,7 +343,7 @@ index 1d5cecf5..1fbf5fb5 100644
 +      // s11 holds the game's log depth; linear = near * 2^(raw * log2(far / near)). The ray
 +      // length in r28.z is no longer needed, so it takes log2(far / near); r15.w takes near.
 +      mov r16, c162
-+      texldl r16, r16, s9 // near, log2(far / near)
++      texldl r16, r16, s9 // near, log2(far / near), step jitter flag
 +      mov r15.w, r16.x
 +      mov r28.z, r16.y
 +      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
@@ -349,6 +351,7 @@ index 1d5cecf5..1fbf5fb5 100644
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
 +      add r29.x, r29.x, c159.w
++      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsStepJitter)
 +      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
