@@ -258,6 +258,10 @@ public:
     bool bGlassReflections = true;
     float fGlassReflectionsLength = 15.0f;
     float fGlassReflectionsThickness = 0.5f;
+    // Temporary, to find which part of the glass path makes lights and lit windows drift:
+    // 1 only the linear depth pass, 2 also the scene copy, 3 also the parameter upload,
+    // 4 everything, binding the samplers too.
+    int nGlassStage = 4;
     rage::grcRenderTargetPC* GlassDepthTex = nullptr;
     IDirect3DSurface9* GlassDepthSurf = nullptr;
     // In the scene target's own format, so the copy needs no conversion. D3DPOOL_DEFAULT, so
@@ -814,6 +818,7 @@ public:
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
+        nGlassStage = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStage", 4), 1, 4);
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -2744,10 +2749,12 @@ public:
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.GlassDepthTex && R.GlassDepthTex->mD3DTexture;
         R.bGlassFrameValid = false;
+        if (R.nGlassStage < 2)
+            ok = false;
 
-        if (ok && !R.GlassParamsTex)
+        if (ok && R.nGlassStage >= 3 && !R.GlassParamsTex)
             ok = SUCCEEDED(pDevice->CreateTexture(4, 1, 1, 0, D3DFMT_A32B32G32R32F, D3DPOOL_MANAGED, &R.GlassParamsTex, nullptr));
-        if (ok)
+        if (ok && R.nGlassStage >= 3)
         {
             D3DLOCKED_RECT locked = {};
             ok = SUCCEEDED(R.GlassParamsTex->LockRect(0, &locked, nullptr, 0));
@@ -2785,6 +2792,11 @@ public:
             return;
         }
 
+        if (R.nGlassStage < 4)
+        {
+            UnbindGlassReflections();
+            return;
+        }
         BindSampler(pDevice, 9, R.GlassParamsTex, D3DTEXF_POINT);
         BindSampler(pDevice, 11, R.GlassDepthTex->mD3DTexture, D3DTEXF_POINT);
         BindSampler(pDevice, 13, R.GlassSceneTex, D3DTEXF_LINEAR);
