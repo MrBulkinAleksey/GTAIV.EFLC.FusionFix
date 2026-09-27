@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 366992fd..91471e1a 100644
+index 366992fd..34429b77 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 @@ -157,6 +157,16 @@
@@ -75,7 +75,7 @@ index 366992fd..91471e1a 100644
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
 +      add r29.x, r29.x, c159.w
-+      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsStepJitter)
++      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsGlassStepJitter)
 +      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
@@ -137,7 +137,7 @@ index 366992fd..91471e1a 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 2847833c..05ed9385 100644
+index 2847833c..557b1909 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 @@ -108,6 +108,16 @@
@@ -213,7 +213,7 @@ index 2847833c..05ed9385 100644
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
 +      add r29.x, r29.x, c159.w
-+      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsStepJitter)
++      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsGlassStepJitter)
 +      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0
@@ -275,7 +275,7 @@ index 2847833c..05ed9385 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 1d5cecf5..70df8de3 100644
+index 1d5cecf5..1c6ca325 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 @@ -133,6 +133,16 @@
@@ -351,7 +351,7 @@ index 1d5cecf5..70df8de3 100644
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
 +      add r29.x, r29.x, c159.w
-+      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsStepJitter)
++      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsGlassStepJitter)
 +      mul r30.w, r29.x, c157.z
 +      mov r17, c155.z
 +      rep i0

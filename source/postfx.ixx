@@ -274,7 +274,7 @@ public:
     //       texel 2 the camera's right axis and the debug flag; texel 3 its up axis (the axes
     //       come from here because those shaders overwrite gViewInverse's first two rows);
     //       texel 4 near and log2(far / near), to make the depth in s11 linear, and the
-    //       step jitter flag (ScreenSpaceReflectionsStepJitter)
+    //       step jitter flag (ScreenSpaceReflectionsGlassStepJitter)
     //   s11 the game's own log depth, _DEFERRED_GBUFFER_3_, which the coronas also read. A
     //       separate linear depth pass for this made lights and lit windows drift while the
     //       camera turned, so there is none.
@@ -282,6 +282,9 @@ public:
     bool bGlassReflections = true;
     float fGlassReflectionsLength = 15.0f;
     float fGlassReflectionsThickness = 0.5f;
+    // Off by default: glass has no smoothing pass, so the offset shows as dots that crawl over
+    // the window whenever the camera or the car moves.
+    bool bGlassStepJitter = false;
     // In the scene target's own format, so the copy needs no conversion. D3DPOOL_DEFAULT, so
     // released on device loss.
     IDirect3DTexture9* GlassSceneTex = nullptr;
@@ -855,6 +858,7 @@ public:
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
+        bGlassStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStepJitter", 0) != 0;
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -2108,7 +2112,7 @@ private:
                 proj._34, R.fGlassReflectionsThickness, R.fGlassReflectionsLength, 12345.0f,
                 viewInv.m[0][0], viewInv.m[0][1], viewInv.m[0][2], debugMode == R.kGlassDebugMode ? 1.0f : 0.0f,
                 viewInv.m[1][0], viewInv.m[1][1], viewInv.m[1][2], 0.0f,
-                vp->mNearClip, log2f(vp->mFarClip / vp->mNearClip), R.bSSRStepJitter ? 1.0f : 0.0f, 0.0f,
+                vp->mNearClip, log2f(vp->mFarClip / vp->mNearClip), R.bGlassStepJitter ? 1.0f : 0.0f, 0.0f,
             };
             memcpy(R.GlassParams, params, sizeof(params));
             R.bGlassFrameValid = true;
