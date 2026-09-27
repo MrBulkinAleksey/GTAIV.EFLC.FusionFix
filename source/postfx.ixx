@@ -223,6 +223,7 @@ public:
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask;
+        D3DXHANDLE fDenoiseRadius, techSSRDenoise;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
@@ -235,6 +236,11 @@ public:
     // SSR debug view from the graphics menu (PREF_SSR_DEBUG), see SSRDebug_PS in SSR.fx.
     // Built after the SSR pass and shown over the finished frame.
     static int SSRDebugMode() { static auto p = FusionFixSettings.GetRef("PREF_SSR_DEBUG"); return p ? p->get() : 0; }
+    // The smoothed SSR result (SSRDenoise_PS) that deferred_lighting reads, when enabled.
+    float fSSRDenoiseRadius = 2.0f;
+    rage::grcRenderTargetPC* SSRDenoisedTex = nullptr;
+    IDirect3DSurface9* SSRDenoisedSurf = nullptr;
+    bool bSSRDenoised = false;
     rage::grcRenderTargetPC* SSRDebugTex = nullptr;
     IDirect3DSurface9* SSRDebugSurf = nullptr;
     bool bSSRDebugValid = false;
@@ -642,6 +648,8 @@ public:
                 h.PreWaterTex2D = SSREffect->GetParameterByName(nullptr, "PreWaterTex2D");
                 h.PostWaterTex2D = SSREffect->GetParameterByName(nullptr, "PostWaterTex2D");
                 h.fUseWaterMask = SSREffect->GetParameterByName(nullptr, "fUseWaterMask");
+                h.fDenoiseRadius = SSREffect->GetParameterByName(nullptr, "fDenoiseRadius");
+                h.techSSRDenoise = SSREffect->GetTechniqueByName("SSRDenoise");
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
             }
@@ -776,6 +784,7 @@ public:
         fSSRWaterBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterBlur", 3.0f), 0.0f, 32.0f);
         fSSRWaterNormalStrength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterRipple", 1.0f), 0.0f, 4.0f);
         bSSRGBufferNormals = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGBufferNormals", 1) != 0;
+        fSSRDenoiseRadius = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsSmoothing", 2.0f), 0.0f, 8.0f);
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -1049,6 +1058,13 @@ private:
             PostFxResources.SSRHistoryTex->Destroy();
             PostFxResources.SSRHistoryTex = nullptr;
         }
+        SAFE_RELEASE(PostFxResources.SSRDenoisedSurf);
+        if (PostFxResources.SSRDenoisedTex)
+        {
+            PostFxResources.SSRDenoisedTex->Destroy();
+            PostFxResources.SSRDenoisedTex = nullptr;
+        }
+        PostFxResources.bSSRDenoised = false;
         SAFE_RELEASE(PostFxResources.SSRDebugSurf);
         if (PostFxResources.SSRDebugTex)
         {
@@ -1100,6 +1116,10 @@ private:
             PostFxResources.SSRHistoryTex = CreateEmptyRT("SSRHistoryTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.SSRHistoryTex && PostFxResources.SSRHistoryTex->mD3DTexture)
                 PostFxResources.SSRHistoryTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRHistorySurf);
+
+            PostFxResources.SSRDenoisedTex = CreateEmptyRT("SSRDenoisedTex", 3, width, height, 64, &aoDesc);
+            if (PostFxResources.SSRDenoisedTex && PostFxResources.SSRDenoisedTex->mD3DTexture)
+                PostFxResources.SSRDenoisedTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRDenoisedSurf);
 
             PostFxResources.SSRDebugTex = CreateEmptyRT("SSRDebugTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.SSRDebugTex && PostFxResources.SSRDebugTex->mD3DTexture)
@@ -1761,6 +1781,7 @@ private:
         auto& R = PostFxResources;
         R.bSSRValidThisFrame = false;
         R.bSSRDebugValid = false;
+        R.bSSRDenoised = false;
 
         if (!R.SSRSurf)
             return;
@@ -1945,10 +1966,28 @@ private:
         effect->End();
 
         // Debug view, while the G-buffer still holds this frame. Changes nothing the game sees.
+        // Smooth the result into the texture deferred_lighting reads.
+        R.bSSRDenoised = false;
+        if (R.fSSRDenoiseRadius > 0.0f && R.SSRDenoisedSurf && h.techSSRDenoise)
+        {
+            effect->SetTexture(h.SSRResultTex2D, R.SSRTex->mD3DTexture);
+            effect->SetFloat(h.fDenoiseRadius, R.fSSRDenoiseRadius);
+            pDevice->SetRenderTarget(0, R.SSRDenoisedSurf);
+            effect->SetTechnique(h.techSSRDenoise);
+            effect->Begin(&passes, 0);
+            effect->BeginPass(0);
+            effect->CommitChanges();
+            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            effect->EndPass();
+            effect->End();
+            R.bSSRDenoised = true;
+        }
+        IDirect3DTexture9* ssrResult = R.bSSRDenoised ? R.SSRDenoisedTex->mD3DTexture : R.SSRTex->mD3DTexture;
+
         const int debugMode = R.SSRDebugMode();
         if (debugMode && R.SSRDebugSurf && h.techSSRDebug && hasNormals)
         {
-            effect->SetTexture(h.SSRResultTex2D, R.SSRTex->mD3DTexture);
+            effect->SetTexture(h.SSRResultTex2D, ssrResult);
             effect->SetFloat(h.fDebugMode, float(debugMode));
 
             pDevice->SetRenderTarget(0, R.SSRDebugSurf);
@@ -2600,7 +2639,11 @@ public:
         if (!pDevice)
             return;
 
-        IDirect3DBaseTexture9* tex = (R.SSRTex && R.SSRTex->mD3DTexture) ? R.SSRTex->mD3DTexture : R.TransparentTex();
+        IDirect3DBaseTexture9* tex = R.TransparentTex();
+        if (R.bSSRDenoised && R.SSRDenoisedTex && R.SSRDenoisedTex->mD3DTexture)
+            tex = R.SSRDenoisedTex->mD3DTexture;
+        else if (R.SSRTex && R.SSRTex->mD3DTexture)
+            tex = R.SSRTex->mD3DTexture;
         pDevice->SetTexture(3, tex);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);

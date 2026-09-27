@@ -89,6 +89,7 @@ uniform float4 vec4WaterWorldY;
 
 uniform float fDebugMode; // SSR debug view from the graphics menu, see SSRDebug_PS
 uniform float fUseGBufferNormals; // 1 reads the G-buffer normal, 0 rebuilds it from depth
+uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDenoise_PS
 
 static const float HISTORY_CLAMP = 8.0;
 static const float SSR_SCALE = 1.0;
@@ -453,6 +454,43 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return float4(ssr.a * (1.0 - fade), ssr.a * fade, 0.0, 1.0);
 }
 
+// Each pixel decides on its own whether its ray hit and where, so neighbours on a car panel
+// pick slightly different points and the reflection looks grainy. A small depth aware blur,
+// in premultiplied form so misses (alpha 0) neither darken the colour nor bleed a halo, and
+// weighted by depth so a bonnet does not pick up the road behind it.
+float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    static const float2 taps[12] =
+    {
+        float2(-0.326, -0.406), float2(-0.840, -0.074), float2(-0.696,  0.457),
+        float2(-0.203,  0.621), float2( 0.962, -0.195), float2( 0.473, -0.480),
+        float2( 0.519,  0.767), float2( 0.185, -0.893), float2( 0.507,  0.064),
+        float2( 0.896,  0.412), float2(-0.322, -0.933), float2(-0.792, -0.598)
+    };
+
+    float4 centre = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+    float centreZ = LinearDepth(uv);
+    float2 radius = fDenoiseRadius * vec2InvViewportSize;
+
+    float4 sum = float4(centre.rgb * centre.a, centre.a);
+    float weightSum = 1.0;
+
+    [unroll]
+    for (int i = 0; i < 12; ++i)
+    {
+        float2 tapUV = uv + taps[i] * radius;
+        float4 s = tex2Dlod(SSRResultTex, float4(tapUV, 0, 0));
+        float w = exp(-dot(taps[i], taps[i]) * 2.0);
+        w *= saturate(1.0 - abs(LinearDepth(tapUV) - centreZ) / (centreZ * 0.02));
+        sum += w * float4(s.rgb * s.a, s.a);
+        weightSum += w;
+    }
+
+    float a = sum.a / weightSum;
+    float3 colour = sum.a > 1e-4 ? sum.rgb / sum.a : centre.rgb;
+    return float4(colour, a);
+}
+
 float4 SSRDebugCopy_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     return float4(tex2Dlod(DebugTex, float4(uv, 0, 0)).rgb, 1.0);
@@ -489,6 +527,15 @@ technique SSRDebug
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSRDebug_PS();
+    }
+}
+
+technique SSRDenoise
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SSRDenoise_PS();
     }
 }
 
