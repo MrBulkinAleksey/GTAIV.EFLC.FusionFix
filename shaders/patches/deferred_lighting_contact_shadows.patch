@@ -1,0 +1,146 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+index 0c44c5dd..59d892a0 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+@@ -108,6 +108,7 @@
+     dcl_2d s6
+     dcl_2d s15
+     dcl_2d s3	// FusionFix SSR
++    dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
+     texld r1, v0, s1
+     mul r2.xyz, r1.w, c0.yzww
+     frc r2.xyz, r2
+@@ -448,6 +449,12 @@
+     mul_sat r20.y, r20.y, r0.y
+     mul r20.y, r20.y, r20.y
+     lrp r0.y, r20.y, c110.y, r20.x
++    // --- FusionFix: contact shadows darken the sun shadow term.
++    mov r27.xy, v0
++    mov r27.zw, c110.w
++    texldl r29, r27, s9
++    add r29.x, c110.y, -r29.x
++    mul r0.y, r0.y, r29.x
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     mov r2.xyz, r31.xyz
+     mad r1.xyz, v1, -r0.x, c1.w
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+index 04965326..5a42e39b 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+@@ -109,6 +109,7 @@
+     dcl_2d s6
+     dcl_2d s15
+     dcl_2d s3	// FusionFix SSR
++    dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
+     texld r1, v0, s1
+     mul r2.xyz, r1.w, c1
+     frc r2.xyz, r2
+@@ -449,6 +450,12 @@
+     mul_sat r20.y, r20.y, r0.y
+     mul r20.y, r20.y, r20.y
+     lrp r0.y, r20.y, c110.y, r20.x
++    // --- FusionFix: contact shadows darken the sun shadow term.
++    mov r27.xy, v0
++    mov r27.zw, c110.w
++    texldl r29, r27, s9
++    add r29.x, c110.y, -r29.x
++    mul r0.y, r0.y, r29.x
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     mov r2.xyz, r31.xyz
+     mad r1.xyz, v1, -r0.x, c3.w
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
+index e970e7eb..b0a07f12 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
+@@ -48,6 +48,7 @@
+     def c21, 3, 2, 1, 0 // Console tree lighting constants
+     def c22, 0.012156862745098, 0.0007843137254902, 0, 0 // 3.1, 0.2
+     def c24, 0.212500006, 0.715399981, 0.0720999986, 0.5
++    def c159, 0, 1, 0, 0 // FusionFix: zero, one
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+     dcl_2d s0
+@@ -57,6 +58,7 @@
+     dcl_2d s5
+     dcl_2d s6
+     dcl_2d s3	// FusionFix SSR
++    dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
+     texld r0, v0, s1
+     mul r1.xyz, r0.w, c1
+     frc r1.xyz, r1
+@@ -73,6 +75,11 @@
+     mad r0.yzw, v1.xxyz, -r0.x, c2.z
+     mul r2.xyz, r0.x, v1
+     nrm r3.xyz, r0.yzww
++    // --- FusionFix: contact shadows, sampled once for both lighting branches below.
++    mov r27.xy, v0
++    mov r27.zw, c159.x
++    texldl r29, r27, s9
++    add r29.x, c159.y, -r29.x
+     texld r21, v0, s6
+     add r21.x, r21.x, -c22.x
+     add_sat r21.x, -r21_abs.x, c22.y
+@@ -139,6 +146,7 @@
+       mad r1.yzw, r2.xxyz, r0.w, c37.xxyz
+       mul r1.yzw, r3.z, r1
+       mul r2.xyz, c18.w, c18
++      mul r1.x, r1.x, r29.x // FusionFix contact shadow on the direct light
+       mad r1.xyz, r2, r1.x, r1.yzww
+       texld r2, v0, s0
+       mad oC0.xyz, r2, r1, r0
+@@ -172,6 +180,7 @@
+       //dot(normal, -dirLight) * dirLightColor
+       dp3_sat r0.w, r1.xyz, -c17.xyz
+       mul r5.xyz, r6, r0.w
++      mul r5.xyz, r5, r29.x // FusionFix contact shadow on the direct light
+       
+       //saturate(viewDir.z * 2)
+       add_sat r0.w, r3.z, r3.z
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
+index 437b8768..1786b28a 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
+@@ -49,6 +49,7 @@
+     def c21, 3, 2, 1, 0 // Console tree lighting constants
+     def c22, 0.012156862745098, 0.0007843137254902, 0, 0 // 3.1, 0.2
+     def c24, 0.212500006, 0.715399981, 0.0720999986, 0.5
++    def c159, 0, 1, 0, 0 // FusionFix: zero, one
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+     dcl_2d s0
+@@ -58,6 +59,7 @@
+     dcl_2d s5
+     dcl_2d s6
+     dcl_2d s3	// FusionFix SSR
++    dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
+     texld r0, v0, s1
+     mul r1.xyz, r0.w, c1
+     frc r1.xyz, r1
+@@ -74,6 +76,11 @@
+     mad r0.yzw, v1.xxyz, -r0.x, c3.w
+     mul r2.xyz, r0.x, v1
+     nrm r3.xyz, r0.yzww
++    // --- FusionFix: contact shadows, sampled once for both lighting branches below.
++    mov r27.xy, v0
++    mov r27.zw, c159.x
++    texldl r29, r27, s9
++    add r29.x, c159.y, -r29.x
+     texld r22, v0, s5
+     add r21.x, r22.x, -c22.x
+     add_sat r21.x, -r21_abs.x, c22.y
+@@ -159,6 +166,7 @@
+       mad r1.yzw, r4.xxyz, r0.y, c37.xxyz
+       mul r1.yzw, r3.z, r1
+       mul r3.xyz, c18.w, c18
++      mul r1.x, r1.x, r29.x // FusionFix contact shadow on the direct light
+       mad r1.xyz, r3, r1.x, r1.yzww
+       mad oC0.xyz, r2, r1, r0.xzww
+       mov oC0.w, c3.z
+@@ -191,6 +199,7 @@
+       //dot(normal, -dirLight) * dirLightColor
+       dp3_sat r0.w, r1.xyz, -c17.xyz
+       mul r5.xyz, r6, r0.w
++      mul r5.xyz, r5, r29.x // FusionFix contact shadow on the direct light
+       
+       //saturate(viewDir.z * 2)
+       add_sat r0.w, r3.z, r3.z

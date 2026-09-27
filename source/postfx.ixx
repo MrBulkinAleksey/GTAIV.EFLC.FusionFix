@@ -224,6 +224,7 @@ public:
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask;
         D3DXHANDLE fDenoiseRadius, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera;
+        D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
@@ -235,6 +236,20 @@ public:
     static bool SSREnabled() { static auto p = FusionFixSettings.GetRef("PREF_SSR"); return p && p->get() != 0; }
     // SSR debug view from the graphics menu (PREF_SSR_DEBUG), see SSRDebug_PS in SSR.fx.
     // Built after the SSR pass and shown over the finished frame.
+    // Contact shadows (ContactShadows_PS in SSR.fx), bound to s9 for deferred_lighting
+    // (shaders/patches/deferred_lighting_contact_shadows.patch) and unbound right after it.
+    static bool ContactShadowsEnabled() { static auto p = FusionFixSettings.GetRef("PREF_CONTACTSHADOWS"); return p && p->get() != 0; }
+    float fContactShadowLength = 1.0f;
+    float fContactShadowThickness = 0.5f;
+    float fContactShadowMaxDistance = 60.0f;
+    float fContactShadowIntensity = 1.0f;
+    rage::grcRenderTargetPC* ContactRawTex = nullptr;
+    IDirect3DSurface9* ContactRawSurf = nullptr;
+    rage::grcRenderTargetPC* ContactTex = nullptr;
+    IDirect3DSurface9* ContactSurf = nullptr;
+    bool bContactValid = false;
+    bool bContactBound = false;
+    static constexpr int kContactDebugMode = 7;
     static int SSRDebugMode() { static auto p = FusionFixSettings.GetRef("PREF_SSR_DEBUG"); return p ? p->get() : 0; }
     // The smoothed SSR result (SSRDenoise_PS) that deferred_lighting reads, when enabled.
     float fSSRDenoiseRadius = 2.0f;
@@ -682,6 +697,12 @@ public:
                 h.fPassThinObjects = SSREffect->GetParameterByName(nullptr, "fPassThinObjects");
                 h.fStepJitter = SSREffect->GetParameterByName(nullptr, "fStepJitter");
                 h.fTowardCamera = SSREffect->GetParameterByName(nullptr, "fTowardCamera");
+                h.vec4SunView = SSREffect->GetParameterByName(nullptr, "vec4SunView");
+                h.fCSLength = SSREffect->GetParameterByName(nullptr, "fCSLength");
+                h.fCSThickness = SSREffect->GetParameterByName(nullptr, "fCSThickness");
+                h.fCSMaxViewDistance = SSREffect->GetParameterByName(nullptr, "fCSMaxViewDistance");
+                h.fCSIntensity = SSREffect->GetParameterByName(nullptr, "fCSIntensity");
+                h.techContactShadows = SSREffect->GetTechniqueByName("ContactShadows");
                 h.techSSRDenoise = SSREffect->GetTechniqueByName("SSRDenoise");
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
@@ -821,6 +842,10 @@ public:
         bSSRPassThinObjects = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsPastThinObjects", 1) != 0;
         bSSRStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsStepJitter", 1) != 0;
         fSSRTowardCamera = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", 0.0f), 0.0f, 1.0f);
+        fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 1.0f), 0.05f, 10.0f);
+        fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.5f), 0.01f, 10.0f);
+        fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
+        fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
@@ -1107,6 +1132,17 @@ private:
             PostFxResources.SSRDenoisedTex = nullptr;
         }
         PostFxResources.bSSRDenoised = false;
+        for (auto* rt : { &PostFxResources.ContactRawTex, &PostFxResources.ContactTex })
+        {
+            if (*rt)
+            {
+                (*rt)->Destroy();
+                *rt = nullptr;
+            }
+        }
+        SAFE_RELEASE(PostFxResources.ContactRawSurf);
+        SAFE_RELEASE(PostFxResources.ContactSurf);
+        PostFxResources.bContactValid = false;
         PostFxResources.bGlassFrameValid = false;
         SAFE_RELEASE(PostFxResources.SSRDebugSurf);
         if (PostFxResources.SSRDebugTex)
@@ -1163,6 +1199,13 @@ private:
             PostFxResources.SSRDenoisedTex = CreateEmptyRT("SSRDenoisedTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.SSRDenoisedTex && PostFxResources.SSRDenoisedTex->mD3DTexture)
                 PostFxResources.SSRDenoisedTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRDenoisedSurf);
+
+            PostFxResources.ContactRawTex = CreateEmptyRT("ContactShadowRawTex", 3, width, height, 64, &aoDesc);
+            if (PostFxResources.ContactRawTex && PostFxResources.ContactRawTex->mD3DTexture)
+                PostFxResources.ContactRawTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactRawSurf);
+            PostFxResources.ContactTex = CreateEmptyRT("ContactShadowTex", 3, width, height, 64, &aoDesc);
+            if (PostFxResources.ContactTex && PostFxResources.ContactTex->mD3DTexture)
+                PostFxResources.ContactTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactSurf);
 
             PostFxResources.SSRDebugTex = CreateEmptyRT("SSRDebugTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.SSRDebugTex && PostFxResources.SSRDebugTex->mD3DTexture)
@@ -2032,7 +2075,7 @@ private:
         IDirect3DTexture9* ssrResult = R.bSSRDenoised ? R.SSRDenoisedTex->mD3DTexture : R.SSRTex->mD3DTexture;
 
         const int debugMode = R.SSRDebugMode();
-        if (debugMode && debugMode != R.kGlassDebugMode && R.SSRDebugSurf && h.techSSRDebug && hasNormals)
+        if (debugMode && debugMode < R.kGlassDebugMode && R.SSRDebugSurf && h.techSSRDebug && hasNormals)
         {
             effect->SetTexture(h.SSRResultTex2D, ssrResult);
             effect->SetFloat(h.fDebugMode, float(debugMode));
@@ -2690,8 +2733,189 @@ private:
 
         RenderAmbientOcclusion();
         RenderScreenSpaceReflections();
+        RenderContactShadows();
 
         return result;
+    }
+
+    // Draws one full screen quad of the SSR effect's technique into target, then restores the
+    // device state it touched.
+    static void DrawEffectPass(IDirect3DDevice9* pDevice, ID3DXEffect* effect, D3DXHANDLE technique, IDirect3DSurface9* target, float width, float height)
+    {
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        const ScreenVertex screenVertices[4] =
+        {
+            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
+            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+        };
+        pDevice->SetRenderTarget(0, target);
+        UINT passes = 0;
+        effect->SetTechnique(technique);
+        effect->Begin(&passes, 0);
+        effect->BeginPass(0);
+        effect->CommitChanges();
+        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+        effect->EndPass();
+        effect->End();
+    }
+
+    // Before deferred lighting, next to SSR: contact shadows towards the sun, smoothed, into
+    // ContactTex for deferred_lighting. Independent of SSR being on.
+    static void RenderContactShadows()
+    {
+        auto& R = PostFxResources;
+        R.bContactValid = false;
+
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        rage::grcViewport* vp = rage::GetCurrentViewport();
+        auto& h = R.SSREffectHandles;
+        ID3DXEffect* effect = R.SSREffect;
+        if (!R.ContactShadowsEnabled() || R.fContactShadowIntensity <= 0.0f || !pDevice || !vp || !effect ||
+            !h.techContactShadows || !R.mDepthRT || !R.ContactRawSurf || !R.ContactSurf)
+            return;
+
+        // gDirectionalLight is a RAGE global, and globals keep the same register in every
+        // shader, so c17 holds the directional light the last lit draw used: the direction
+        // the light travels, the reverse of the direction towards the sun.
+        float light[4] = {};
+        if (FAILED(pDevice->GetPixelShaderConstantF(17, light, 1)))
+            return;
+        const float lightLen = sqrtf(light[0] * light[0] + light[1] * light[1] + light[2] * light[2]);
+        if (!(lightLen > 0.9f && lightLen < 1.1f))
+            return;
+
+        const float width = float(vp->mWidth);
+        const float height = float(vp->mHeight);
+        D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
+        const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+        const float axisSign[3] = { -1.0f, 1.0f, (proj._34 < 0.0f) ? -1.0f : 1.0f };
+
+        D3DXVECTOR4 toView[3];
+        for (int row = 0; row < 3; ++row)
+            toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
+                                      viewInv.m[row][2] * axisSign[row], 0.0f);
+        D3DXVECTOR4 sun(0.0f, 0.0f, 0.0f, 1.0f);
+        for (int row = 0; row < 3; ++row)
+            (&sun.x)[row] = -(toView[row].x * light[0] + toView[row].y * light[1] + toView[row].z * light[2]) / lightLen;
+
+        D3DXVECTOR4 projInfo;
+        projInfo.x = -2.0f / (width * proj._11);
+        projInfo.y = -2.0f / (height * proj._22);
+        projInfo.z = (1.0f - proj._31) / proj._11;
+        projInfo.w = (1.0f + proj._32) / proj._22;
+
+        const bool hasNormals = R.mNormalRT && R.mNormalRT->mD3DTexture;
+        const float invViewportSize[] = { 1.0f / width, 1.0f / height };
+        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        if (hasNormals)
+            effect->SetTexture(h.NormalTex2D, R.mNormalRT->mD3DTexture);
+        effect->SetFloat(h.fUseGBufferNormals, (hasNormals && R.bSSRGBufferNormals) ? 1.0f : 0.0f);
+        effect->SetVectorArray(h.vec4WaterToView, toView, 3);
+        effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
+        effect->SetFloat(h.fNearPlane, vp->mNearClip);
+        effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
+        effect->SetVector(h.vec4ProjInfo, &projInfo);
+        effect->SetVector(h.vec4SunView, &sun);
+        effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
+        effect->SetFloat(h.fCSLength, R.fContactShadowLength);
+        effect->SetFloat(h.fCSThickness, R.fContactShadowThickness);
+        effect->SetFloat(h.fCSMaxViewDistance, R.fContactShadowMaxDistance);
+        effect->SetFloat(h.fCSIntensity, R.fContactShadowIntensity);
+
+        IDirect3DSurface9* rt0 = nullptr;
+        IDirect3DSurface9* ds = nullptr;
+        IDirect3DVertexDeclaration9* oldDecl = nullptr;
+        IDirect3DVertexBuffer9* oldVB = nullptr;
+        UINT oldOffset = 0, oldStride = 0;
+        DWORD oldFVF = 0;
+        D3DVIEWPORT9 oldViewport;
+        pDevice->GetFVF(&oldFVF);
+        pDevice->GetVertexDeclaration(&oldDecl);
+        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        pDevice->GetRenderTarget(0, &rt0);
+        pDevice->GetDepthStencilSurface(&ds);
+        pDevice->GetViewport(&oldViewport);
+
+        IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
+        DWORD savedRenderStates[std::size(kSSRRenderStates)] = {};
+        DWORD savedSamplerStates[kSSRSamplerSlots][std::size(kSSRSamplerStates)] = {};
+        for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+            pDevice->GetTexture(slot, &oldTextures[slot]);
+        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+        for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
+        {
+            pDevice->GetRenderState(kSSRRenderStates[i].state, &savedRenderStates[i]);
+            pDevice->SetRenderState(kSSRRenderStates[i].state, kSSRRenderStates[i].value);
+        }
+        for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+            {
+                pDevice->GetSamplerState(slot, kSSRSamplerStates[i].state, &savedSamplerStates[slot][i]);
+                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
+            }
+
+        pDevice->SetDepthStencilSurface(nullptr);
+        pDevice->SetStreamSource(0, nullptr, 0, 0);
+        pDevice->SetVertexDeclaration(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        D3DVIEWPORT9 vpDesc = {};
+        vpDesc.Width = DWORD(width);
+        vpDesc.Height = DWORD(height);
+        vpDesc.MaxZ = 1.0f;
+        pDevice->SetViewport(&vpDesc);
+
+        DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawSurf, width, height);
+
+        // The same depth aware smoothing SSR uses; the raw result has alpha 1 everywhere, so
+        // it is a plain weighted blur.
+        IDirect3DTexture9* result = R.ContactRawTex->mD3DTexture;
+        if (R.fSSRDenoiseRadius > 0.0f && h.techSSRDenoise)
+        {
+            effect->SetTexture(h.SSRResultTex2D, R.ContactRawTex->mD3DTexture);
+            effect->SetFloat(h.fDenoiseRadius, R.fSSRDenoiseRadius);
+            DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.ContactSurf, width, height);
+            result = R.ContactTex->mD3DTexture;
+        }
+        else
+        {
+            pDevice->StretchRect(R.ContactRawSurf, nullptr, R.ContactSurf, nullptr, D3DTEXF_NONE);
+        }
+
+        if (R.SSRDebugMode() == R.kContactDebugMode && R.SSRDebugSurf && h.techSSRDebug)
+        {
+            effect->SetTexture(h.SSRResultTex2D, result);
+            effect->SetFloat(h.fDebugMode, float(R.kContactDebugMode));
+            DrawEffectPass(pDevice, effect, h.techSSRDebug, R.SSRDebugSurf, width, height);
+            R.bSSRDebugValid = true;
+        }
+
+        for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
+            pDevice->SetRenderState(kSSRRenderStates[i].state, savedRenderStates[i]);
+        for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, savedSamplerStates[slot][i]);
+        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+        for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+        {
+            pDevice->SetTexture(slot, oldTextures[slot]);
+            SAFE_RELEASE(oldTextures[slot]);
+        }
+        pDevice->SetRenderTarget(0, rt0);
+        pDevice->SetDepthStencilSurface(ds);
+        pDevice->SetViewport(&oldViewport);
+        pDevice->SetFVF(oldFVF);
+        pDevice->SetVertexDeclaration(oldDecl);
+        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
+        SAFE_RELEASE(rt0);
+        SAFE_RELEASE(ds);
+        SAFE_RELEASE(oldDecl);
+        SAFE_RELEASE(oldVB);
+
+        R.bContactValid = true;
     }
 
 public:
@@ -2707,6 +2931,14 @@ public:
             tex = R.SSRDenoisedTex->mD3DTexture;
         else if (R.SSRTex && R.SSRTex->mD3DTexture)
             tex = R.SSRTex->mD3DTexture;
+        // Contact shadows for deferred_lighting; s9 is read by no game shader, and the car glass
+        // takes it over right after lighting.
+        if (R.bContactValid && R.ContactTex && R.ContactTex->mD3DTexture)
+        {
+            BindSampler(pDevice, 9, R.ContactTex->mD3DTexture, D3DTEXF_POINT);
+            R.bContactBound = true;
+        }
+
         pDevice->SetTexture(3, tex);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
@@ -2734,6 +2966,12 @@ public:
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
+
+        if (R.bContactBound)
+        {
+            pDevice->SetTexture(9, nullptr);
+            R.bContactBound = false;
+        }
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.mDepthRT && R.mDepthRT->mD3DTexture;
         R.bGlassFrameValid = false;

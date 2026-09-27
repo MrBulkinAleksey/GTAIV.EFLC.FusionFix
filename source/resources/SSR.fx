@@ -94,6 +94,17 @@ uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object
 uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step
 uniform float fTowardCamera;      // 0..1, how far reflections pointing back at the camera reach
 
+// Contact shadows, see ContactShadows_PS.
+uniform float4 vec4SunView;         // direction towards the sun in reconstruction space, w 0 if unknown
+uniform float fCSLength;            // world units a contact shadow ray travels
+uniform float fCSThickness;         // how deep behind the scene a sample may land and still occlude
+uniform float fCSMaxViewDistance;   // contact shadows fade out towards this view distance
+uniform float fCSIntensity;         // strength, 0..1
+
+#ifndef CS_STEPS
+#define CS_STEPS 16
+#endif
+
 static const float HISTORY_CLAMP = 8.0;
 static const float SSR_SCALE = 1.0;
 
@@ -443,6 +454,7 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 //      G-buffer
 //   4: green what SSR found and the game shows, red what SSR found but deferred_lighting
 //      fades out, because it keeps reflections only when they point above the horizon
+//   7: contact shadows alone, white lit, black shadowed
 //   5: _DEFERRED_GBUFFER_2_ as stored: red specular intensity, green gloss, blue the
 //      reflection strength deferred_lighting uses; see SSRSurfaceWeight
 
@@ -462,6 +474,10 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         return float4(1.0, 1.0, 1.0, 1.0);
 
     float4 ssr = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+
+    // 7: contact shadows, white lit, black shadowed (SSRResultTex holds them in this mode)
+    if (fDebugMode > 6.5)
+        return float4((1.0 - ssr.xxx), 1.0);
     float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
     bool sky = rawDepth >= 0.9999;
 
@@ -548,6 +564,71 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
     return float4(colour, a);
 }
 
+// Contact shadows: a short ray from each pixel towards the sun through the depth buffer. The
+// game's sun shadow map is too coarse for the contact between a ped's feet or a car's tyres
+// and the ground; this fills that in. The result is occlusion (0 lit, 1 shadowed), so an
+// unbound sampler in deferred_lighting changes nothing. No temporal accumulation: history
+// reprojected for the camera trailed behind moving peds, so the result is smoothed spatially.
+float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+{
+    float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
+    if (rawDepth >= 0.9999 || vec4SunView.w <= 0.0)
+        return float4(0.0, 0.0, 0.0, 1.0);
+
+    float3 C = ViewPosFromUVZ(uv, pow(fFarDivNear, rawDepth) * fNearPlane);
+    if (C.z >= fCSMaxViewDistance)
+        return float4(0.0, 0.0, 0.0, 1.0);
+
+    float3 L = vec4SunView.xyz;
+    float3 n;
+    [branch]
+    if (fUseGBufferNormals > 0.0)
+        n = GBufferNormal(uv);
+    else
+        n = ReconstructNormal(uv, C);
+    n = (dot(n, C) > 0.0) ? -n : n;
+    if (dot(n, L) <= 0.0)
+        return float4(0.0, 0.0, 0.0, 1.0); // facing away from the sun, the game already darkens it
+
+    float3 P0 = C + n * (0.02 + C.z * 0.002);
+
+    // A ray heading back towards the camera must stay in front of the near plane.
+    float len = fCSLength;
+    if (L.z < 0.0)
+        len = min(len, (P0.z - fNearPlane * 2.0) / -L.z);
+    if (len <= 0.0)
+        return float4(0.0, 0.0, 0.0, 1.0);
+
+    float jitter = fStepJitter > 0.0 ? PixelJitter(vPos) : 1.0;
+    float occlusion = 0.0;
+    float prevZ = P0.z;
+
+    [loop]
+    for (int i = 0; i < CS_STEPS; ++i)
+    {
+        float t = ((float) i + jitter) / (float) CS_STEPS;
+        float3 P = P0 + L * (len * t);
+        float2 sampleUV = ViewToUV(P);
+        if (any(sampleUV <= 0.0) || any(sampleUV >= 1.0))
+            break;
+
+        // The depth buffer only holds the front of things. Anything a sample lands behind by
+        // less than the thickness occludes; the thickness grows by the depth this step covered,
+        // so a long step does not jump over a ped.
+        float delta = P.z - LinearDepth(sampleUV);
+        float thickness = abs(P.z - prevZ) + fCSThickness;
+        prevZ = P.z;
+        if (delta > 0.0 && delta < thickness)
+        {
+            occlusion = 1.0 - t * t; // occluders further along the ray cast softer shadows
+            break;
+        }
+    }
+
+    float fade = 1.0 - smoothstep(fCSMaxViewDistance * 0.75, fCSMaxViewDistance, C.z);
+    return float4(saturate(occlusion * fade * fCSIntensity), 0.0, 0.0, 1.0);
+}
+
 float4 SSRDebugCopy_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     return float4(tex2Dlod(DebugTex, float4(uv, 0, 0)).rgb, 1.0);
@@ -593,6 +674,15 @@ technique SSRDenoise
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSRDenoise_PS();
+    }
+}
+
+technique ContactShadows
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 ContactShadows_PS();
     }
 }
 

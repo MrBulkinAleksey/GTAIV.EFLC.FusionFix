@@ -154,6 +154,12 @@ Specular and Gloss
 [SSRDbgGlass]
 Glass Rays
 
+[SSRDbgContact]
+Contact Shadows
+
+[Contact Shadows]
+Contact Shadows
+
 [Zoomed Movement]
 Bewegung beim Zoomen erlauben
 

@@ -154,6 +154,12 @@ Fusion Fix: Проверять Обновления
 [SSRDbgGlass]
 Лучи стёкол
 
+[SSRDbgContact]
+Контактные тени
+
+[Contact Shadows]
+Контактные тени
+
 [Zoomed Movement]
 Разрешить движение при прицеливании
 
