@@ -194,17 +194,22 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
     float2 tEdge = (step(0.0, dUV) - uv0) / (abs(dUV) < 1e-5 ? 1e-5 : dUV);
     float tEnd = clamp(min(tEdge.x, tEdge.y), 0.0, 1.0);
 
-    float dt = tEnd / (float) NUM_STEPS;
-
+    // Steps grow with the square of their index: a few centimetres next to the surface, where
+    // a ped standing by a car is, about twice the even spacing at the far end. Even steps a
+    // metre apart stepped over a leg next to the bonnet, so only some pixels caught it and its
+    // reflection came out as several shifted slices.
     float tHit = 0.0;
+    float tBeforeHit = 0.0;
     float hitDelta = 0.0;
     float hitThickness = 1.0;
     float prevRayZ = P0.z;
+    float prevT = 0.0;
 
     [loop]
     for (int i = 0; i < NUM_STEPS; ++i)
     {
-        float t = dt * (float) (i + 1);
+        float s = (float) (i + 1) / (float) NUM_STEPS;
+        float t = tEnd * s * s;
 
         float2 sampleUV = lerp(uv0, uv1, t);
         float rayZ = 1.0 / lerp(invZ0, invZ1, t);
@@ -217,6 +222,7 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
             if (delta < thickness)
             {
                 tHit = t;
+                tBeforeHit = prevT;
                 hitDelta = delta;
                 hitThickness = thickness;
             }
@@ -224,12 +230,13 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
         }
 
         prevRayZ = rayZ;
+        prevT = t;
     }
 
     if (tHit <= 0.0)
         return 0.0;
 
-    float lo = tHit - dt;
+    float lo = tBeforeHit;
     float hi = tHit;
     [unroll]
     for (int j = 0; j < NUM_REFINE_STEPS; ++j)
