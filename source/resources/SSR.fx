@@ -241,13 +241,14 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
     // all catch or all miss a thin object such as a tree trunk in step with each other; that
     // showed as regular bands, the offset leaves fine noise that the smoothing pass removes.
     float hit = 0.0;
-    float2 finalUV = 0.0;
-    float hitZ = 0.0;
-    float hitDelta = 0.0;
-    float hitThickness = 1.0;
+    float hitLo = 0.0;
+    float hitHi = 0.0;
     float prevT = 0.0;
-    float inFront = 1.0;
+    float prevDelta = -1.0;
 
+    // One loop, no nested refinement inside it: D3DX compiles this effect while the game
+    // loads, and an unrolled refinement inside the march made it take long enough to look
+    // like a hang.
     [loop]
     for (int i = 0; i < NUM_STEPS; ++i)
     {
@@ -259,57 +260,52 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
 
         float delta = rayZ - LinearDepth(sampleUV);
 
-        if (delta > 0.0)
+        // The ray went behind the scene since the last sample, which was in front of it.
+        // Estimate where it crossed from the two samples and judge the thickness there, not
+        // at this sample, where it depended on where the step happened to land. Far behind
+        // means the ray passed behind a thin object standing in front of what it was
+        // crossing, such as a trunk in front of a wall: it carries on and may still hit the
+        // wall, instead of ending as a miss.
+        if (delta > 0.0 && prevDelta <= 0.0)
         {
-            // The ray went behind the scene since the last sample. Find the crossing and judge
-            // the thickness there, not at the sample, where it depended on where the step
-            // happened to land.
-            if (inFront > 0.0)
+            float tc = lerp(prevT, t, saturate(-prevDelta / max(delta - prevDelta, 1e-5)));
+            float zc = 1.0 / lerp(invZ0, invZ1, tc);
+            float crossDelta = zc - LinearDepth(lerp(uv0, uv1, tc));
+            float crossThickness = abs(rayZ - 1.0 / lerp(invZ0, invZ1, prevT)) + fThickness;
+            if (crossDelta <= crossThickness)
             {
-                float lo = prevT;
-                float hi = t;
-                [unroll]
-                for (int j = 0; j < NUM_REFINE_STEPS; ++j)
-                {
-                    float mid = (lo + hi) * 0.5;
-                    float midZ = 1.0 / lerp(invZ0, invZ1, mid);
-                    if (midZ - LinearDepth(lerp(uv0, uv1, mid)) > 0.0)
-                        hi = mid;
-                    else
-                        lo = mid;
-                }
-
-                float2 crossUV = lerp(uv0, uv1, hi);
-                float crossZ = 1.0 / lerp(invZ0, invZ1, hi);
-                float crossDelta = crossZ - LinearDepth(crossUV);
-                float crossThickness = abs(crossZ - 1.0 / lerp(invZ0, invZ1, lo)) + fThickness;
-
-                // Just behind a surface is a hit. Far behind means the ray passed behind a thin
-                // object standing in front of what it was crossing, such as a trunk in front of
-                // a wall: it carries on and may still hit the wall, instead of ending as a miss.
-                if (crossDelta <= crossThickness)
-                {
-                    hit = 1.0;
-                    finalUV = crossUV;
-                    hitZ = crossZ;
-                    hitDelta = crossDelta;
-                    hitThickness = crossThickness;
-                    break;
-                }
+                hit = 1.0;
+                hitLo = prevT;
+                hitHi = t;
+                break;
             }
-            inFront = 0.0;
-        }
-        else
-        {
-            inFront = 1.0;
         }
 
         prevT = t;
+        prevDelta = delta;
     }
 
     if (hit <= 0.0)
         return 0.0;
 
+    // Binary refinement between the last sample in front of the scene and the first behind it.
+    float lo = hitLo;
+    float hi = hitHi;
+    [unroll]
+    for (int j = 0; j < NUM_REFINE_STEPS; ++j)
+    {
+        float mid = (lo + hi) * 0.5;
+        float midZ = 1.0 / lerp(invZ0, invZ1, mid);
+        if (midZ - LinearDepth(lerp(uv0, uv1, mid)) > 0.0)
+            hi = mid;
+        else
+            lo = mid;
+    }
+
+    float2 finalUV = lerp(uv0, uv1, hi);
+    float hitZ = 1.0 / lerp(invZ0, invZ1, hi);
+    float hitDelta = max(hitZ - LinearDepth(finalUV), 0.0);
+    float hitThickness = abs(hitZ - 1.0 / lerp(invZ0, invZ1, lo)) + fThickness;
     float3 hitP = ViewPosFromUVZ(finalUV, hitZ);
 
     float2 histUV = HistoryUV(hitP);
