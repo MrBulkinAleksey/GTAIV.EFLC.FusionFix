@@ -2386,12 +2386,6 @@ public:
         static FusionFix::Event<> BuildRenderListEvent;
         return BuildRenderListEvent;
     }
-    // Commands appended here run after all deferred lighting, before transparent geometry.
-    static FusionFix::Event<>& OnAfterBuildRenderList()
-    {
-        static FusionFix::Event<> AfterBuildRenderListEvent;
-        return AfterBuildRenderListEvent;
-    }
     static FusionFix::Event<rage::CLightSource*>& OnAfterCopyLight()
     {
         static FusionFix::Event<rage::CLightSource*> AfterCopyLightEvent;
@@ -2404,8 +2398,7 @@ public:
     static void __fastcall BuildRenderList(CBaseDC* _this, void* edx)
     {
         OnBuildRenderList().executeAll();
-        shBuildRenderList.unsafe_fastcall(_this, edx);
-        OnAfterBuildRenderList().executeAll();
+        return shBuildRenderList.unsafe_fastcall(_this, edx);
     }
 
     static rage::CLightSource* __fastcall CopyLight(void* _this, void* edx, void* a2)
