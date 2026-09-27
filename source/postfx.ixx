@@ -276,9 +276,10 @@ public:
     //       come from here because those shaders overwrite gViewInverse's first two rows);
     //       texel 4 near and log2(far / near), to make the depth in s11 linear, and the
     //       step jitter flag (ScreenSpaceReflectionsGlassStepJitter)
-    //   s11 the game's own log depth, _DEFERRED_GBUFFER_3_, which the coronas also read. A
-    //       separate linear depth pass for this made lights and lit windows drift while the
-    //       camera turned, so there is none.
+    //   s11 a copy of the game's own log depth, _DEFERRED_GBUFFER_3_, taken with StretchRect
+    //       after lighting. A separate linear depth pass made lights and lit windows drift
+    //       while the camera turned; binding GBUFFER_3 itself made foliage and glass drawn
+    //       after lighting tremble, since they write to it while it was bound for reading.
     //   s13 a copy of the lit opaque scene
     bool bGlassReflections = true;
     float fGlassReflectionsLength = 15.0f;
@@ -290,6 +291,8 @@ public:
     // released on device loss.
     IDirect3DTexture9* GlassSceneTex = nullptr;
     D3DSURFACE_DESC GlassSceneDesc = {};
+    IDirect3DTexture9* GlassDepthCopyTex = nullptr;
+    D3DSURFACE_DESC GlassDepthCopyDesc = {};
     IDirect3DTexture9* GlassParamsTex = nullptr; // managed, so it survives device resets
     float GlassParams[20] = {};
     bool bGlassFrameValid = false;
@@ -1003,6 +1006,8 @@ private:
         UnbindGlassReflections();
         SAFE_RELEASE(PostFxResources.GlassSceneTex);
         PostFxResources.GlassSceneDesc = {};
+        SAFE_RELEASE(PostFxResources.GlassDepthCopyTex);
+        PostFxResources.GlassDepthCopyDesc = {};
         // PostFxResources.mSpecularAoRT    =nullptr;
         PostFxResources.mNormalRT = nullptr;
         PostFxResources.mDiffuseRT = nullptr;
@@ -3004,25 +3009,34 @@ public:
             }
         }
 
-        IDirect3DSurface9* scene = nullptr;
-        if (ok)
-            ok = SUCCEEDED(pDevice->GetRenderTarget(0, &scene)) && scene;
-        if (ok)
+        // Copies src into tex, (re)creating tex in src's size and format; D3DPOOL_DEFAULT, so
+        // released on device loss.
+        auto copySurface = [pDevice](IDirect3DSurface9* src, IDirect3DTexture9*& tex, D3DSURFACE_DESC& texDesc)
         {
             D3DSURFACE_DESC desc = {};
-            scene->GetDesc(&desc);
-            if (R.GlassSceneTex && (desc.Width != R.GlassSceneDesc.Width || desc.Height != R.GlassSceneDesc.Height ||
-                desc.Format != R.GlassSceneDesc.Format))
-                SAFE_RELEASE(R.GlassSceneTex);
-            if (!R.GlassSceneTex && SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET,
-                desc.Format, D3DPOOL_DEFAULT, &R.GlassSceneTex, nullptr)))
-                R.GlassSceneDesc = desc;
+            src->GetDesc(&desc);
+            if (tex && (desc.Width != texDesc.Width || desc.Height != texDesc.Height || desc.Format != texDesc.Format))
+                SAFE_RELEASE(tex);
+            if (!tex && SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET,
+                desc.Format, D3DPOOL_DEFAULT, &tex, nullptr)))
+                texDesc = desc;
             IDirect3DSurface9* dst = nullptr;
-            ok = R.GlassSceneTex && SUCCEEDED(R.GlassSceneTex->GetSurfaceLevel(0, &dst)) &&
-                 SUCCEEDED(pDevice->StretchRect(scene, nullptr, dst, nullptr, D3DTEXF_NONE));
+            const bool copied = tex && SUCCEEDED(tex->GetSurfaceLevel(0, &dst)) &&
+                                SUCCEEDED(pDevice->StretchRect(src, nullptr, dst, nullptr, D3DTEXF_NONE));
             SAFE_RELEASE(dst);
-        }
+            return copied;
+        };
+
+        IDirect3DSurface9* scene = nullptr;
+        if (ok)
+            ok = SUCCEEDED(pDevice->GetRenderTarget(0, &scene)) && scene && copySurface(scene, R.GlassSceneTex, R.GlassSceneDesc);
         SAFE_RELEASE(scene);
+
+        IDirect3DSurface9* depth = nullptr;
+        if (ok)
+            ok = SUCCEEDED(R.mDepthRT->mD3DTexture->GetSurfaceLevel(0, &depth)) && depth &&
+                 copySurface(depth, R.GlassDepthCopyTex, R.GlassDepthCopyDesc);
+        SAFE_RELEASE(depth);
 
         if (!ok)
         {
@@ -3031,7 +3045,7 @@ public:
         }
 
         BindSampler(pDevice, 9, R.GlassParamsTex, D3DTEXF_POINT);
-        BindSampler(pDevice, 11, R.mDepthRT->mD3DTexture, D3DTEXF_POINT);
+        BindSampler(pDevice, 11, R.GlassDepthCopyTex, D3DTEXF_POINT);
         BindSampler(pDevice, 13, R.GlassSceneTex, D3DTEXF_LINEAR);
         R.bGlassBound = true;
     }
