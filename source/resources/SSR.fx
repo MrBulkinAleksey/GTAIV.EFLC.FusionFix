@@ -332,8 +332,10 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
 
 // How strongly SSR may show at this pixel, 0 where the ray is not worth tracing: the sky,
 // matte surfaces, and surfaces deferred_lighting would not show a reflection on anyway. It
-// scales its reflection by 2 * x * z of _DEFERRED_GBUFFER_2_; only an exact zero (in 8 bits)
-// is skipped, since car paint stores a small x that the game still multiplies up.
+// scales its reflection by 2 * x * z of _DEFERRED_GBUFFER_2_, so only a pixel where x or z is
+// exactly zero (in 8 bits) is skipped, as foliage stores both as zero. Testing the product
+// instead skipped car paint, whose small x times a small z fell under one 8-bit step though
+// the game still multiplies the result up into a visible reflection.
 // Gloss alone decides matte: weighting by x classed every car body as matte.
 float SSRSurfaceWeight(float2 uv)
 {
@@ -342,7 +344,7 @@ float SSRSurfaceWeight(float2 uv)
     if (fGlossCutoff < 0.0)
         return 1.0; // no specular G-buffer bound
     float3 spec = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).xyz);
-    if (spec.x * spec.z < 0.5 / 255.0)
+    if (min(spec.x, spec.z) < 0.5 / 255.0)
         return 0.0;
     float gloss = spec.y;
     return smoothstep(fGlossCutoff, fGlossCutoff + 0.2, gloss) * (1.0 + fGlossBoost * gloss);
@@ -532,12 +534,6 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
     return float4(colour, a);
 }
 
-// Linear view depth for the patched car glass shaders, which march their reflection through it.
-float4 LinearDepthCopy_PS(float2 uv : TEXCOORD0) : COLOR0
-{
-    return float4(LinearDepth(uv), 0.0, 0.0, 1.0);
-}
-
 float4 SSRDebugCopy_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     return float4(tex2Dlod(DebugTex, float4(uv, 0, 0)).rgb, 1.0);
@@ -583,15 +579,6 @@ technique SSRDenoise
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSRDenoise_PS();
-    }
-}
-
-technique LinearDepthCopy
-{
-    pass P0
-    {
-        VertexShader = compile vs_3_0 FullscreenQuadVS();
-        PixelShader = compile ps_3_0 LinearDepthCopy_PS();
     }
 }
 
