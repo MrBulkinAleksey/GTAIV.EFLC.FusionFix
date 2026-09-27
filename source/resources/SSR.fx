@@ -328,6 +328,13 @@ float3 ViewToWorld(float3 v)
 
 float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
+    // As many white squares in the top left corner as the mode number, so screenshots say
+    // which view they show.
+    float2 cell = floor(vPos / 24.0);
+    float2 inCell = frac(vPos / 24.0);
+    if (cell.y == 0.0 && cell.x < fDebugMode && all(inCell > 0.2) && all(inCell < 0.8))
+        return float4(1.0, 1.0, 1.0, 1.0);
+
     float4 ssr = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
     float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
     bool sky = rawDepth >= 0.9999;
