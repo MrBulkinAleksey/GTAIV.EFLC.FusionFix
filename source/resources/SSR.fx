@@ -64,6 +64,7 @@ uniform float4 vec4WaterWorldX;
 uniform float4 vec4WaterWorldY;
 
 uniform float fDebugMode; // SSR debug view from the graphics menu, see SSRDebug_PS
+uniform float fUseGBufferNormals; // 1 reads the G-buffer normal, 0 rebuilds it from depth
 
 static const float HISTORY_CLAMP = 8.0;
 static const float SSR_SCALE = 1.0;
@@ -150,6 +151,26 @@ float3 ReconstructNormal(float2 uv, float3 C)
     float3 dpdy = (abs(d.z - C.z) < abs(u.z - C.z)) ? (C - d) : (u - C);
 
     return normalize(cross(dpdy, dpdx));
+}
+
+// _DEFERRED_GBUFFER_1_ decoded the way deferred_lighting decodes it, in world space.
+float3 GBufferNormalWorld(float2 uv)
+{
+    float4 g = tex2Dlod(NormalTex, float4(uv, 0, 0));
+    float3 f = frac(g.w * float3(0.998046875, 7.984375, 63.875));
+    f.xy -= f.yz * 0.125;
+    return normalize(g.xyz * 256.0 + f - 127.999992);
+}
+
+// The same normal in reconstruction space. Rebuilding normals from depth does not work here:
+// depth precision makes neighbouring pixels of a car panel read the same depth, so the normal
+// faces the camera and the reflected ray heads straight back, and roads turn into noise.
+float3 GBufferNormal(float2 uv)
+{
+    float3 n = GBufferNormalWorld(uv);
+    return normalize(float3(dot(vec4WaterToView[0].xyz, n),
+                            dot(vec4WaterToView[1].xyz, n),
+                            dot(vec4WaterToView[2].xyz, n)));
 }
 
 float4 TraceReflection(float3 C, float3 n, float blurPixels)
@@ -248,7 +269,12 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
 
-    float3 n = ReconstructNormal(uv, C);
+    float3 n;
+    [branch]
+    if (fUseGBufferNormals > 0.0)
+        n = GBufferNormal(uv);
+    else
+        n = ReconstructNormal(uv, C);
     n = (dot(n, C) > 0.0) ? -n : n;
 
     float4 r = TraceReflection(C, n, 0.0);
@@ -310,15 +336,8 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 //      G-buffer
 //   4: green what SSR found and the game shows, red what SSR found but deferred_lighting
 //      fades out, because it keeps reflections only when they point above the horizon
-
-// _DEFERRED_GBUFFER_1_ decoded the way deferred_lighting decodes it, in world space.
-float3 GBufferNormalWorld(float2 uv)
-{
-    float4 g = tex2Dlod(NormalTex, float4(uv, 0, 0));
-    float3 f = frac(g.w * float3(0.998046875, 7.984375, 63.875));
-    f.xy -= f.yz * 0.125;
-    return normalize(g.xyz * 256.0 + f - 127.999992);
-}
+//   5: _DEFERRED_GBUFFER_2_ as stored: red specular intensity, green gloss; the glossy test
+//      is sqrt(red * green) against ScreenSpaceReflectionsGlossCutoff
 
 // vec4WaterToView rotates world into reconstruction space; its transpose rotates back.
 float3 ViewToWorld(float3 v)
@@ -356,6 +375,14 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         return float4(0.0, 0.2 + 0.8 * ssr.a, 0.0, 1.0);
     }
 
+    if (fDebugMode > 4.5)
+    {
+        if (sky)
+            return float4(0.0, 0.0, 0.0, 1.0);
+        float2 spec = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).xy);
+        return float4(spec.x, spec.y, 0.0, 1.0);
+    }
+
     float3 C = ViewPosFromUVZ(uv, LinearDepth(uv));
 
     if (fDebugMode < 3.5)
@@ -366,9 +393,7 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         if (uv.x < 0.5)
             n = ReconstructNormal(uv, C);
         else
-            n = normalize(float3(dot(vec4WaterToView[0].xyz, GBufferNormalWorld(uv)),
-                                 dot(vec4WaterToView[1].xyz, GBufferNormalWorld(uv)),
-                                 dot(vec4WaterToView[2].xyz, GBufferNormalWorld(uv))));
+            n = GBufferNormal(uv);
         n = (dot(n, C) > 0.0) ? -n : n;
         if (abs(uv.x - 0.5) < vec2InvViewportSize.x)
             return float4(1.0, 1.0, 1.0, 1.0);

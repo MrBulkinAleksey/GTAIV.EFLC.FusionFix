@@ -148,6 +148,9 @@ Fusion Fix: Проверять Обновления
 [SSRDbgHorizon]
 Гашение у горизонта
 
+[SSRDbgSpecular]
+Блик и глянец
+
 [Zoomed Movement]
 Разрешить движение при прицеливании
 

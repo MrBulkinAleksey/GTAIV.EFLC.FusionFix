@@ -148,6 +148,9 @@ Normals
 [SSRDbgHorizon]
 Horizon Fade
 
+[SSRDbgSpecular]
+Specular and Gloss
+
 [Zoomed Movement]
 ズーム中の移動を許可
 

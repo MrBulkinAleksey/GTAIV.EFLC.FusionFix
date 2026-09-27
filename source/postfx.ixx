@@ -207,6 +207,7 @@ public:
     {
         D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
+        D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
@@ -222,6 +223,7 @@ public:
     rage::grcRenderTargetPC* SSRDebugTex = nullptr;
     IDirect3DSurface9* SSRDebugSurf = nullptr;
     bool bSSRDebugValid = false;
+    bool bSSRGBufferNormals = true;
     int nSSRSteps = 24;
     int nSSRRefineSteps = 4;
     float fSSRMaxDistance = 24.0f;
@@ -599,6 +601,7 @@ public:
                 h.SSRResultTex2D = SSREffect->GetParameterByName(nullptr, "SSRResultTex2D");
                 h.DebugTex2D = SSREffect->GetParameterByName(nullptr, "DebugTex2D");
                 h.fDebugMode = SSREffect->GetParameterByName(nullptr, "fDebugMode");
+                h.fUseGBufferNormals = SSREffect->GetParameterByName(nullptr, "fUseGBufferNormals");
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
             }
@@ -732,6 +735,7 @@ public:
         fSSRWaterLevelOffset = iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterLevelOffset", 0.0f);
         fSSRWaterBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterBlur", 3.0f), 0.0f, 32.0f);
         fSSRWaterNormalStrength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterRipple", 1.0f), 0.0f, 4.0f);
+        bSSRGBufferNormals = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGBufferNormals", 1) != 0;
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -1845,6 +1849,20 @@ private:
         effect->SetFloat(h.fEdgeFade, R.fSSREdgeFade);
         effect->SetFloat(h.fIntensity, R.fSSRIntensity);
 
+        // World to reconstruction space rotation, for the G-buffer normals and the debug view.
+        const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+        {
+            D3DXVECTOR4 toView[3];
+            for (int row = 0; row < 3; ++row)
+                toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
+                                          viewInv.m[row][2] * axisSign[row], 0.0f);
+            effect->SetVectorArray(h.vec4WaterToView, toView, 3);
+        }
+        const bool hasNormals = R.mNormalRT && R.mNormalRT->mD3DTexture;
+        if (hasNormals)
+            effect->SetTexture(h.NormalTex2D, R.mNormalRT->mD3DTexture);
+        effect->SetFloat(h.fUseGBufferNormals, (hasNormals && R.bSSRGBufferNormals) ? 1.0f : 0.0f);
+
         UINT passes = 0;
         IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
         DWORD savedRenderStates[std::size(kSSRRenderStates)] = {};
@@ -1886,15 +1904,8 @@ private:
 
         // Debug view, while the G-buffer still holds this frame. Changes nothing the game sees.
         const int debugMode = R.SSRDebugMode();
-        if (debugMode && R.SSRDebugSurf && h.techSSRDebug && R.mNormalRT && R.mNormalRT->mD3DTexture)
+        if (debugMode && R.SSRDebugSurf && h.techSSRDebug && hasNormals)
         {
-            const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
-            D3DXVECTOR4 toView[3];
-            for (int row = 0; row < 3; ++row)
-                toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
-                                          viewInv.m[row][2] * axisSign[row], 0.0f);
-            effect->SetVectorArray(h.vec4WaterToView, toView, 3);
-            effect->SetTexture(h.NormalTex2D, R.mNormalRT->mD3DTexture);
             effect->SetTexture(h.SSRResultTex2D, R.SSRTex->mD3DTexture);
             effect->SetFloat(h.fDebugMode, float(debugMode));
 

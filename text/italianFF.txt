@@ -148,6 +148,9 @@ Normals
 [SSRDbgHorizon]
 Horizon Fade
 
+[SSRDbgSpecular]
+Specular and Gloss
+
 [Zoomed Movement]
 Consenti movimento con lo zoom
 

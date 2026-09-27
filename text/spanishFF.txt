@@ -148,6 +148,9 @@ Normals
 [SSRDbgHorizon]
 Horizon Fade
 
+[SSRDbgSpecular]
+Specular and Gloss
+
 [Zoomed Movement]
 Permitir movimiento al acercar la mirilla
 
