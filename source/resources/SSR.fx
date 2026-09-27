@@ -1,4 +1,4 @@
-texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
+texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, SSRResultTex2D, DebugTex2D;
 
 sampler2D DepthTex
 {
@@ -15,6 +15,21 @@ sampler2D HistoryTex
 sampler2D SpecularTex
 {
     Texture = <SpecularTex2D>;
+};
+
+sampler2D NormalTex
+{
+    Texture = <NormalTex2D>;
+};
+
+sampler2D SSRResultTex
+{
+    Texture = <SSRResultTex2D>;
+};
+
+sampler2D DebugTex
+{
+    Texture = <DebugTex2D>;
 };
 
 sampler2D SurfaceTex
@@ -47,6 +62,8 @@ uniform float fWaterNormalStrength; // ripple slope multiplier, 0 gives a flat m
 uniform float4 vec4WaterToView[3];
 uniform float4 vec4WaterWorldX;
 uniform float4 vec4WaterWorldY;
+
+uniform float fDebugMode; // SSR debug view from the graphics menu, see SSRDebug_PS
 
 static const float HISTORY_CLAMP = 8.0;
 static const float SSR_SCALE = 1.0;
@@ -284,6 +301,86 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return float4(r.rgb, saturate(r.a * fWaterIntensity));
 }
 
+// SSR debug view (graphics menu). Built right after the SSR pass, while the G-buffer is intact,
+// and shown over the finished frame, so tone mapping and exposure do not change the colours.
+//   1: what SSR hands to deferred_lighting, the reflected colour times its confidence
+//   2: where rays go: green a hit (brightness is confidence), red a glossy pixel whose ray
+//      found nothing, dark blue a matte pixel that is not traced, black the sky
+//   3: surface normals, left half rebuilt from depth (what SSR uses), right half from the
+//      G-buffer
+//   4: green what SSR found and the game shows, red what SSR found but deferred_lighting
+//      fades out, because it keeps reflections only when they point above the horizon
+
+// _DEFERRED_GBUFFER_1_ decoded the way deferred_lighting decodes it, in world space.
+float3 GBufferNormalWorld(float2 uv)
+{
+    float4 g = tex2Dlod(NormalTex, float4(uv, 0, 0));
+    float3 f = frac(g.w * float3(0.998046875, 7.984375, 63.875));
+    f.xy -= f.yz * 0.125;
+    return normalize(g.xyz * 256.0 + f - 127.999992);
+}
+
+// vec4WaterToView rotates world into reconstruction space; its transpose rotates back.
+float3 ViewToWorld(float3 v)
+{
+    return v.x * vec4WaterToView[0].xyz + v.y * vec4WaterToView[1].xyz + v.z * vec4WaterToView[2].xyz;
+}
+
+float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+{
+    float4 ssr = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+    float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
+    bool sky = rawDepth >= 0.9999;
+
+    if (fDebugMode < 1.5)
+        return float4(ssr.rgb * ssr.a, 1.0);
+
+    if (fDebugMode < 2.5)
+    {
+        if (sky)
+            return float4(0.0, 0.0, 0.0, 1.0);
+        float2 spec = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).xy);
+        float gloss = sqrt(spec.x * spec.y);
+        float glossWeight = smoothstep(fGlossCutoff, fGlossCutoff + 0.2, gloss);
+        if (glossWeight <= 0.0)
+            return float4(0.0, 0.0, 0.25, 1.0);
+        if (ssr.a <= 0.0)
+            return float4(0.6, 0.0, 0.0, 1.0);
+        return float4(0.0, 0.2 + 0.8 * ssr.a, 0.0, 1.0);
+    }
+
+    float3 C = ViewPosFromUVZ(uv, LinearDepth(uv));
+
+    if (fDebugMode < 3.5)
+    {
+        if (sky)
+            return float4(0.0, 0.0, 0.0, 1.0);
+        float3 n;
+        if (uv.x < 0.5)
+            n = ReconstructNormal(uv, C);
+        else
+            n = normalize(float3(dot(vec4WaterToView[0].xyz, GBufferNormalWorld(uv)),
+                                 dot(vec4WaterToView[1].xyz, GBufferNormalWorld(uv)),
+                                 dot(vec4WaterToView[2].xyz, GBufferNormalWorld(uv))));
+        n = (dot(n, C) > 0.0) ? -n : n;
+        if (abs(uv.x - 0.5) < vec2InvViewportSize.x)
+            return float4(1.0, 1.0, 1.0, 1.0);
+        return float4(n * 0.5 + 0.5, 1.0);
+    }
+
+    if (sky || ssr.a <= 0.0)
+        return float4(0.0, 0.0, 0.0, 1.0);
+    float3 V = normalize(ViewToWorld(C));
+    float3 R = reflect(V, GBufferNormalWorld(uv));
+    float fade = saturate(R.z * 5.0); // deferred_lighting's own horizon fade
+    return float4(ssr.a * (1.0 - fade), ssr.a * fade, 0.0, 1.0);
+}
+
+float4 SSRDebugCopy_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    return float4(tex2Dlod(DebugTex, float4(uv, 0, 0)).rgb, 1.0);
+}
+
 void FullscreenQuadVS(in float4 iPos : POSITION, in float2 iUV : TEXCOORD0,
                       out float4 oPos : POSITION, out float2 oUV : TEXCOORD0)
 {
@@ -306,5 +403,23 @@ technique SSRWater
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSRWater_PS();
+    }
+}
+
+technique SSRDebug
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SSRDebug_PS();
+    }
+}
+
+technique SSRDebugCopy
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SSRDebugCopy_PS();
     }
 }

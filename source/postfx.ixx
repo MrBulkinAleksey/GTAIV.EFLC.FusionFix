@@ -206,6 +206,7 @@ public:
     struct
     {
         D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
+        D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
@@ -215,6 +216,12 @@ public:
     } SSREffectHandles = {};
 
     static bool SSREnabled() { static auto p = FusionFixSettings.GetRef("PREF_SSR"); return p && p->get() != 0; }
+    // SSR debug view from the graphics menu (PREF_SSR_DEBUG), see SSRDebug_PS in SSR.fx.
+    // Built after the SSR pass and shown over the finished frame.
+    static int SSRDebugMode() { static auto p = FusionFixSettings.GetRef("PREF_SSR_DEBUG"); return p ? p->get() : 0; }
+    rage::grcRenderTargetPC* SSRDebugTex = nullptr;
+    IDirect3DSurface9* SSRDebugSurf = nullptr;
+    bool bSSRDebugValid = false;
     int nSSRSteps = 24;
     int nSSRRefineSteps = 4;
     float fSSRMaxDistance = 24.0f;
@@ -588,6 +595,12 @@ public:
                 h.vec4WaterWorldY = SSREffect->GetParameterByName(nullptr, "vec4WaterWorldY");
                 h.techSSR = SSREffect->GetTechniqueByName("SSR");
                 h.techSSRWater = SSREffect->GetTechniqueByName("SSRWater");
+                h.NormalTex2D = SSREffect->GetParameterByName(nullptr, "NormalTex2D");
+                h.SSRResultTex2D = SSREffect->GetParameterByName(nullptr, "SSRResultTex2D");
+                h.DebugTex2D = SSREffect->GetParameterByName(nullptr, "DebugTex2D");
+                h.fDebugMode = SSREffect->GetParameterByName(nullptr, "fDebugMode");
+                h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
+                h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
             }
         }
 
@@ -991,6 +1004,13 @@ private:
             PostFxResources.SSRHistoryTex->Destroy();
             PostFxResources.SSRHistoryTex = nullptr;
         }
+        SAFE_RELEASE(PostFxResources.SSRDebugSurf);
+        if (PostFxResources.SSRDebugTex)
+        {
+            PostFxResources.SSRDebugTex->Destroy();
+            PostFxResources.SSRDebugTex = nullptr;
+        }
+        PostFxResources.bSSRDebugValid = false;
         PostFxResources.bSSRValidThisFrame = false;
         PostFxResources.bSSRPrevViewProjValid = false;
         PostFxResources.bSSRReprojValid = false;
@@ -1035,6 +1055,10 @@ private:
             PostFxResources.SSRHistoryTex = CreateEmptyRT("SSRHistoryTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.SSRHistoryTex && PostFxResources.SSRHistoryTex->mD3DTexture)
                 PostFxResources.SSRHistoryTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRHistorySurf);
+
+            PostFxResources.SSRDebugTex = CreateEmptyRT("SSRDebugTex", 3, width, height, 64, &aoDesc);
+            if (PostFxResources.SSRDebugTex && PostFxResources.SSRDebugTex->mD3DTexture)
+                PostFxResources.SSRDebugTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRDebugSurf);
 
             IDirect3DSurface9* oldRT = nullptr;
             pDevice->GetRenderTarget(0, &oldRT);
@@ -1691,6 +1715,7 @@ private:
     {
         auto& R = PostFxResources;
         R.bSSRValidThisFrame = false;
+        R.bSSRDebugValid = false;
 
         if (!R.SSRSurf)
             return;
@@ -1857,8 +1882,33 @@ private:
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
         }
+        effect->End();
+
+        // Debug view, while the G-buffer still holds this frame. Changes nothing the game sees.
+        const int debugMode = R.SSRDebugMode();
+        if (debugMode && R.SSRDebugSurf && h.techSSRDebug && R.mNormalRT && R.mNormalRT->mD3DTexture)
         {
+            const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+            D3DXVECTOR4 toView[3];
+            for (int row = 0; row < 3; ++row)
+                toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
+                                          viewInv.m[row][2] * axisSign[row], 0.0f);
+            effect->SetVectorArray(h.vec4WaterToView, toView, 3);
+            effect->SetTexture(h.NormalTex2D, R.mNormalRT->mD3DTexture);
+            effect->SetTexture(h.SSRResultTex2D, R.SSRTex->mD3DTexture);
+            effect->SetFloat(h.fDebugMode, float(debugMode));
+
+            pDevice->SetRenderTarget(0, R.SSRDebugSurf);
+            effect->SetTechnique(h.techSSRDebug);
+            effect->Begin(&passes, 0);
+            effect->BeginPass(0);
+            effect->CommitChanges();
+            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            effect->EndPass();
             effect->End();
+            R.bSSRDebugValid = true;
+        }
+        {
 
             for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
                 pDevice->SetRenderState(kSSRRenderStates[i].state, savedRenderStates[i]);
@@ -2267,6 +2317,113 @@ private:
         bInsteadDrawPrimitivePostFX = true;
         hbDrawCallPostFX.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitivePostFX = false;
+        DrawSSRDebugOverlay();
+    }
+
+    // Replaces the finished frame with the SSR debug view chosen in the graphics menu.
+    static void DrawSSRDebugOverlay()
+    {
+        auto& R = PostFxResources;
+        if (!R.bSSRDebugValid || !R.SSRDebugTex || !R.SSREffect || !R.SSREffectHandles.techSSRDebugCopy)
+            return;
+        R.bSSRDebugValid = false;
+
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+
+        IDirect3DSurface9* rt0 = nullptr;
+        if (FAILED(pDevice->GetRenderTarget(0, &rt0)) || !rt0)
+            return;
+        D3DSURFACE_DESC desc = {};
+        rt0->GetDesc(&desc);
+        const float width = float(desc.Width);
+        const float height = float(desc.Height);
+
+        IDirect3DSurface9* ds = nullptr;
+        IDirect3DVertexDeclaration9* oldDecl = nullptr;
+        IDirect3DVertexBuffer9* oldVB = nullptr;
+        UINT oldOffset = 0, oldStride = 0;
+        DWORD oldFVF = 0;
+        D3DVIEWPORT9 oldViewport;
+        pDevice->GetFVF(&oldFVF);
+        pDevice->GetVertexDeclaration(&oldDecl);
+        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        pDevice->GetDepthStencilSurface(&ds);
+        pDevice->GetViewport(&oldViewport);
+
+        IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
+        DWORD savedRenderStates[std::size(kSSRRenderStates)] = {};
+        DWORD savedSamplerStates[kSSRSamplerSlots][std::size(kSSRSamplerStates)] = {};
+        for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+            pDevice->GetTexture(slot, &oldTextures[slot]);
+        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+        for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
+        {
+            pDevice->GetRenderState(kSSRRenderStates[i].state, &savedRenderStates[i]);
+            pDevice->SetRenderState(kSSRRenderStates[i].state, kSSRRenderStates[i].value);
+        }
+        for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+            {
+                pDevice->GetSamplerState(slot, kSSRSamplerStates[i].state, &savedSamplerStates[slot][i]);
+                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
+            }
+
+        pDevice->SetDepthStencilSurface(nullptr);
+        pDevice->SetStreamSource(0, nullptr, 0, 0);
+        pDevice->SetVertexDeclaration(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        D3DVIEWPORT9 vpDesc = {};
+        vpDesc.Width = desc.Width;
+        vpDesc.Height = desc.Height;
+        vpDesc.MaxZ = 1.0f;
+        pDevice->SetViewport(&vpDesc);
+
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        ScreenVertex screenVertices[4] =
+        {
+            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
+            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+        };
+
+        auto& h = R.SSREffectHandles;
+        ID3DXEffect* effect = R.SSREffect;
+        effect->SetTexture(h.DebugTex2D, R.SSRDebugTex->mD3DTexture);
+        UINT passes = 0;
+        effect->SetTechnique(h.techSSRDebugCopy);
+        effect->Begin(&passes, 0);
+        effect->BeginPass(0);
+        effect->CommitChanges();
+        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+        effect->EndPass();
+        effect->End();
+
+        for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
+            pDevice->SetRenderState(kSSRRenderStates[i].state, savedRenderStates[i]);
+        for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, savedSamplerStates[slot][i]);
+        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+        for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+        {
+            pDevice->SetTexture(slot, oldTextures[slot]);
+            SAFE_RELEASE(oldTextures[slot]);
+        }
+
+        pDevice->SetDepthStencilSurface(ds);
+        pDevice->SetViewport(&oldViewport);
+        pDevice->SetFVF(oldFVF);
+        pDevice->SetVertexDeclaration(oldDecl);
+        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
+        SAFE_RELEASE(rt0);
+        SAFE_RELEASE(ds);
+        SAFE_RELEASE(oldDecl);
+        SAFE_RELEASE(oldVB);
     }
 
     static inline injector::hook_back<void(__stdcall*)()> hbDrawPrimitivePostFX;

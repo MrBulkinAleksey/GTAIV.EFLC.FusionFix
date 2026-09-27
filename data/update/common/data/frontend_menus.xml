@@ -371,6 +371,13 @@
             <options text="LampostsHeadl" action="ACTION_NONE" value="2" />
             <options text="LampHeadlVNS" action="ACTION_NONE" value="3" />
         </menupc>
+        <menupc enum="MENU_DISPLAY_SSR_DEBUG">
+            <options text="MO_OFF" action="ACTION_NONE" value="0" />
+            <options text="SSRDbgColour" action="ACTION_NONE" value="1" />
+            <options text="SSRDbgHits" action="ACTION_NONE" value="2" />
+            <options text="SSRDbgNormals" action="ACTION_NONE" value="3" />
+            <options text="SSRDbgHorizon" action="ACTION_NONE" value="4" />
+        </menupc>
 
         <menupc enum="MENU_DISPLAY_GRAPHICS_API">
             <options text="DirectX 9" action="ACTION_NONE" value="0" />
@@ -861,6 +868,7 @@
             <optionspc action="MENUOPT_ADJUST" label="Tone Mapping" value="PREF_TONEMAPPING" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="AO" value="PREF_SAO" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="SSR" value="PREF_SSR" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+			<optionspc action="MENUOPT_ADJUST" label="SSR Debug" value="PREF_SSR_DEBUG" scaler="5" displayValue="MENU_DISPLAY_SSR_DEBUG" />
             <optionspc action="MENUOPT_ADJUST" label="Shadow Filter" value="PREF_SHADOWFILTER" scaler="3" displayValue="MENU_DISPLAY_SHADOWFILTER" />
             <optionspc action="MENUOPT_ADJUST" label="Graphics API" value="PREF_GRAPHICSAPI" scaler="2" displayValue="MENU_DISPLAY_GRAPHICS_API" />
             
@@ -894,6 +902,7 @@
             <optionspc action="MENUOPT_ADJUST" label="Tone Mapping" value="PREF_TONEMAPPING" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="AO" value="PREF_SAO" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="SSR" value="PREF_SSR" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+			<optionspc action="MENUOPT_ADJUST" label="SSR Debug" value="PREF_SSR_DEBUG" scaler="5" displayValue="MENU_DISPLAY_SSR_DEBUG" />
             <optionspc action="MENUOPT_ADJUST" label="Shadow Filter" value="PREF_SHADOWFILTER" scaler="3" displayValue="MENU_DISPLAY_SHADOWFILTER" />
             <optionspc action="MENUOPT_ADJUST" label="Graphics API" value="PREF_GRAPHICSAPI" scaler="2" displayValue="MENU_DISPLAY_GRAPHICS_API" />
             

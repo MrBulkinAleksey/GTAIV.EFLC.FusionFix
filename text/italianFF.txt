@@ -133,6 +133,21 @@ Occlusione ambientale
 [SSR]
 Screen Space Reflections
 
+[SSR Debug]
+SSR Debug View
+
+[SSRDbgColour]
+Reflected Colour
+
+[SSRDbgHits]
+Ray Hits
+
+[SSRDbgNormals]
+Normals
+
+[SSRDbgHorizon]
+Horizon Fade
+
 [Zoomed Movement]
 Consenti movimento con lo zoom
 

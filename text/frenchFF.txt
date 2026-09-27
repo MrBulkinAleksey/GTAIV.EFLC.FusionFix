@@ -133,6 +133,21 @@ Occlusion ambiante
 [SSR]
 Screen Space Reflections
 
+[SSR Debug]
+SSR Debug View
+
+[SSRDbgColour]
+Reflected Colour
+
+[SSRDbgHits]
+Ray Hits
+
+[SSRDbgNormals]
+Normals
+
+[SSRDbgHorizon]
+Horizon Fade
+
 [Zoomed Movement]
 Permettre le mouvement en zoomant
 

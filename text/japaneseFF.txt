@@ -133,6 +133,21 @@ FPSリミッター
 [SSR]
 Screen Space Reflections
 
+[SSR Debug]
+SSR Debug View
+
+[SSRDbgColour]
+Reflected Colour
+
+[SSRDbgHits]
+Ray Hits
+
+[SSRDbgNormals]
+Normals
+
+[SSRDbgHorizon]
+Horizon Fade
+
 [Zoomed Movement]
 ズーム中の移動を許可
 
