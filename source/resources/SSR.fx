@@ -300,8 +300,30 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
     return float4(colour, confidence);
 }
 
+// How strongly SSR may show at this pixel, 0 where the ray is not worth tracing: the sky,
+// matte surfaces, and surfaces deferred_lighting would not show a reflection on anyway. It
+// scales its reflection by 2 * x * z of _DEFERRED_GBUFFER_2_; only an exact zero (in 8 bits)
+// is skipped, since car paint stores a small x that the game still multiplies up.
+// Gloss alone decides matte: weighting by x classed every car body as matte.
+float SSRSurfaceWeight(float2 uv)
+{
+    if (tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999)
+        return 0.0; // sky
+    if (fGlossCutoff < 0.0)
+        return 1.0; // no specular G-buffer bound
+    float3 spec = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).xyz);
+    if (spec.x * spec.z < 0.5 / 255.0)
+        return 0.0;
+    float gloss = spec.y;
+    return smoothstep(fGlossCutoff, fGlossCutoff + 0.2, gloss) * (1.0 + fGlossBoost * gloss);
+}
+
 float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
+    float surfaceWeight = SSRSurfaceWeight(uv);
+    if (surfaceWeight <= 0.0)
+        return 0.0;
+
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
 
     float3 n;
@@ -313,14 +335,7 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     n = (dot(n, C) > 0.0) ? -n : n;
 
     float4 r = TraceReflection(C, n, 0.0);
-
-    float2 spec = saturate(tex2D(SpecularTex, uv).xy);
-    // Gloss alone: car paint stores almost no specular intensity in this channel, so
-    // weighting by it classed every car body as matte.
-    float gloss = spec.y;
-    r.a *= smoothstep(fGlossCutoff, fGlossCutoff + 0.2, gloss) * (1.0 + fGlossBoost * gloss);
-
-    return float4(r.rgb, saturate(r.a * fIntensity));
+    return float4(r.rgb, saturate(r.a * surfaceWeight * fIntensity));
 }
 
 float3 WaterNormal(float2 worldXY, float distSq)
@@ -382,8 +397,8 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 //      G-buffer
 //   4: green what SSR found and the game shows, red what SSR found but deferred_lighting
 //      fades out, because it keeps reflections only when they point above the horizon
-//   5: _DEFERRED_GBUFFER_2_ as stored: red specular intensity, green gloss; the glossy test
-//      is green against ScreenSpaceReflectionsGlossCutoff
+//   5: _DEFERRED_GBUFFER_2_ as stored: red specular intensity, green gloss, blue the
+//      reflection strength deferred_lighting uses; see SSRSurfaceWeight
 
 // vec4WaterToView rotates world into reconstruction space; its transpose rotates back.
 float3 ViewToWorld(float3 v)
@@ -411,10 +426,7 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     {
         if (sky)
             return float4(0.0, 0.0, 0.0, 1.0);
-        float2 spec = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).xy);
-        float gloss = spec.y;
-        float glossWeight = smoothstep(fGlossCutoff, fGlossCutoff + 0.2, gloss);
-        if (glossWeight <= 0.0)
+        if (SSRSurfaceWeight(uv) <= 0.0)
             return float4(0.0, 0.0, 0.25, 1.0);
         if (ssr.a <= 0.0)
             return float4(0.6, 0.0, 0.0, 1.0);
@@ -425,8 +437,7 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     {
         if (sky)
             return float4(0.0, 0.0, 0.0, 1.0);
-        float2 spec = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).xy);
-        return float4(spec.x, spec.y, 0.0, 1.0);
+        return float4(saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).xyz), 1.0);
     }
 
     float3 C = ViewPosFromUVZ(uv, LinearDepth(uv));
