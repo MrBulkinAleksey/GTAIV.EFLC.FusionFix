@@ -223,7 +223,7 @@ public:
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask;
-        D3DXHANDLE fDenoiseRadius, techSSRDenoise, fPassThinObjects, fStepJitter;
+        D3DXHANDLE fDenoiseRadius, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
@@ -240,6 +240,7 @@ public:
     float fSSRDenoiseRadius = 2.0f;
     bool bSSRPassThinObjects = false;
     bool bSSRStepJitter = false;
+    float fSSRTowardCamera = 0.0f;
     rage::grcRenderTargetPC* SSRDenoisedTex = nullptr;
     IDirect3DSurface9* SSRDenoisedSurf = nullptr;
     bool bSSRDenoised = false;
@@ -683,6 +684,7 @@ public:
                 h.fDenoiseRadius = SSREffect->GetParameterByName(nullptr, "fDenoiseRadius");
                 h.fPassThinObjects = SSREffect->GetParameterByName(nullptr, "fPassThinObjects");
                 h.fStepJitter = SSREffect->GetParameterByName(nullptr, "fStepJitter");
+                h.fTowardCamera = SSREffect->GetParameterByName(nullptr, "fTowardCamera");
                 h.techSSRDenoise = SSREffect->GetTechniqueByName("SSRDenoise");
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
@@ -821,6 +823,7 @@ public:
         fSSRDenoiseRadius = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsSmoothing", 2.0f), 0.0f, 8.0f);
         bSSRPassThinObjects = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsPastThinObjects", 0) != 0;
         bSSRStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsStepJitter", 0) != 0;
+        fSSRTowardCamera = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", 0.0f), 0.0f, 1.0f);
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
@@ -1958,6 +1961,7 @@ private:
         effect->SetFloat(h.fIntensity, R.fSSRIntensity);
         effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);
         effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
+        effect->SetFloat(h.fTowardCamera, R.fSSRTowardCamera);
 
         // World to reconstruction space rotation, for the G-buffer normals and the debug view.
         const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;

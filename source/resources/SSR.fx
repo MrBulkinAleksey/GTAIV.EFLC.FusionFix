@@ -92,6 +92,7 @@ uniform float fUseGBufferNormals; // 1 reads the G-buffer normal, 0 rebuilds it 
 uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDenoise_PS
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
 uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step
+uniform float fTowardCamera;      // 0..1, how far reflections pointing back at the camera reach
 
 static const float HISTORY_CLAMP = 8.0;
 static const float SSR_SCALE = 1.0;
@@ -213,12 +214,14 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
     float3 V = normalize(C);
     float3 R = reflect(V, n);
 
-    // A ray reflected almost straight back at the camera, such as off a door with a ped
-    // crouching between it and the camera, should show the ped's front, but the screen only
-    // holds his back; the hit jumps between his back, his outline and what is behind him, so
-    // those reflections showed from far away and twitched. They are faded out and not traced.
-    // A roof seen steeply from above reflects at about -0.5 and keeps its reflections.
-    float facing = saturate((dot(V, R) + 0.8) / 0.3);
+    // Rays reflected back towards the camera see the side of things the screen does not show:
+    // a door with a ped crouching between it and the camera should show his front, the screen
+    // holds his back, and the hit jumps between his back, his outline and what is behind him.
+    // At fTowardCamera 0 they fade from a cosine of 0.25 between view and reflection and are
+    // gone at -0.25, which keeps the ped out of the door; at 1 they keep full weight down to
+    // -0.5 and fade by -0.8, which lets a roof seen steeply from above (about -0.5) reflect.
+    float cosVR = dot(V, R);
+    float facing = lerp(saturate(cosVR * 2.0 + 0.5), saturate((cosVR + 0.8) / 0.3), fTowardCamera);
     if (facing <= 0.0)
         return 0.0;
 
