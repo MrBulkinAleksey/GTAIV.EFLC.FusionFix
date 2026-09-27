@@ -597,7 +597,9 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     if (dot(n, L) <= 0.0)
         return float4(0.0, 0.0, 0.0, 1.0); // facing away from the sun, the game already darkens it
 
-    float3 P0 = C + n * (0.02 + C.z * 0.002);
+    // Depth gets coarser with distance, so the start moves further off the surface there;
+    // otherwise distant tile seams and kerb edges shadowed themselves as dotted lines.
+    float3 P0 = C + n * (0.03 + C.z * 0.005);
 
     // A ray heading back towards the camera must stay in front of the near plane.
     float len = fCSLength;
@@ -633,6 +635,9 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     }
 
     float fade = 1.0 - smoothstep(fCSMaxViewDistance * 0.75, fCSMaxViewDistance, C.z);
+    // With the sun grazing the surface the ray runs along it and any seam blocks it; the game's
+    // own lighting already darkens such surfaces, so contact shadows fade out there.
+    fade *= saturate(dot(n, L) * 5.0);
     return float4(saturate(occlusion * fade * fCSIntensity), 0.0, 0.0, 1.0);
 }
 
