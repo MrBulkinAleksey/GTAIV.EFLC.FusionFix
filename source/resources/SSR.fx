@@ -90,6 +90,8 @@ uniform float4 vec4WaterWorldY;
 uniform float fDebugMode; // SSR debug view from the graphics menu, see SSRDebug_PS
 uniform float fUseGBufferNormals; // 1 reads the G-buffer normal, 0 rebuilds it from depth
 uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDenoise_PS
+uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
+uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step
 
 static const float HISTORY_CLAMP = 8.0;
 static const float SSR_SCALE = 1.0;
@@ -279,6 +281,8 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
                 hitHi = t;
                 break;
             }
+            if (fPassThinObjects <= 0.0)
+                break;
         }
 
         prevT = t;
@@ -366,7 +370,7 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         n = ReconstructNormal(uv, C);
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, 0.0, PixelJitter(vPos));
+    float4 r = TraceReflection(C, n, 0.0, fStepJitter > 0.0 ? PixelJitter(vPos) : 1.0);
     return float4(r.rgb, saturate(r.a * surfaceWeight * fIntensity));
 }
 
