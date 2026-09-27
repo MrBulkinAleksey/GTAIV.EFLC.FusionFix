@@ -286,6 +286,9 @@ public:
     // Off by default: glass has no smoothing pass, so the offset shows as dots that crawl over
     // the window whenever the camera or the car moves.
     bool bGlassStepJitter = false;
+    // Temporary, to find which part of the glass path after lighting makes foliage and glass
+    // tremble: 1 nothing, 2 the parameter upload, 3 also the scene copy, 4 everything.
+    int nGlassStage = 4;
     // In the scene target's own format, so the copy needs no conversion. D3DPOOL_DEFAULT, so
     // released on device loss.
     IDirect3DTexture9* GlassSceneTex = nullptr;
@@ -861,6 +864,7 @@ public:
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
         bGlassStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStepJitter", 0) != 0;
+        nGlassStage = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStage", 4), 1, 4);
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -2989,6 +2993,8 @@ public:
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.mDepthRT && R.mDepthRT->mD3DTexture;
         R.bGlassFrameValid = false;
+        if (R.nGlassStage < 2)
+            ok = false;
 
         if (ok && !R.GlassParamsTex)
             ok = SUCCEEDED(pDevice->CreateTexture(5, 1, 1, 0, D3DFMT_A32B32G32R32F, D3DPOOL_MANAGED, &R.GlassParamsTex, nullptr));
@@ -3004,6 +3010,8 @@ public:
             }
         }
 
+        if (R.nGlassStage < 3)
+            ok = false;
         IDirect3DSurface9* scene = nullptr;
         if (ok)
             ok = SUCCEEDED(pDevice->GetRenderTarget(0, &scene)) && scene;
@@ -3024,7 +3032,7 @@ public:
         }
         SAFE_RELEASE(scene);
 
-        if (!ok)
+        if (!ok || R.nGlassStage < 4)
         {
             UnbindGlassReflections();
             return;
