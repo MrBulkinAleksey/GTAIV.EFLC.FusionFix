@@ -84,7 +84,7 @@ index 2337a596..27291f31 100644
 +        mad r31.xyz, r17, r18.x, r16
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
-+        dp2add r18.y, vPos, c162, c158.w
++        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
@@ -220,7 +220,7 @@ index 1800ea70..2601b327 100644
 +        mad r31.xyz, r17, r18.x, r16
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
-+        dp2add r18.y, vPos, c162, c158.w
++        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
@@ -356,7 +356,7 @@ index 0b4d1074..61a38e6a 100644
 +        mad r31.xyz, r17, r18.x, r16
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
-+        dp2add r18.y, vPos, c162, c158.w
++        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
@@ -492,7 +492,7 @@ index 86f2d477..d1fb3957 100644
 +        mad r31.xyz, r17, r18.x, r16
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
-+        dp2add r18.y, vPos, c162, c158.w
++        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
@@ -630,7 +630,7 @@ index d104b6c1..9ccc3a48 100644
 +        mad r31.xyz, r17, r18.x, r16
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
-+        dp2add r18.y, vPos, c162, c158.w
++        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
@@ -766,7 +766,7 @@ index 963ce403..e0db7a02 100644
 +        mad r31.xyz, r17, r18.x, r16
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
-+        dp2add r18.y, vPos, c162, c158.w
++        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
@@ -904,7 +904,7 @@ index 6cdc2ec6..153e00e2 100644
 +        mad r31.xyz, r17, r18.x, r16
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
-+        dp2add r18.y, vPos, c162, c158.w
++        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
@@ -1040,7 +1040,7 @@ index 21f11d1d..646bb750 100644
 +        mad r31.xyz, r17, r18.x, r16
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
-+        dp2add r18.y, vPos, c162, c158.w
++        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
@@ -1176,7 +1176,7 @@ index 3a813bf9..a0a60297 100644
 +        mad r31.xyz, r17, r18.x, r16
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
-+        dp2add r18.y, vPos, c162, c158.w
++        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
@@ -1312,7 +1312,7 @@ index 43331379..e4e4d552 100644
 +        mad r31.xyz, r17, r18.x, r16
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
-+        dp2add r18.y, vPos, c162, c158.w
++        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
@@ -1448,7 +1448,7 @@ index 76eac906..fbbeb625 100644
 +        mad r31.xyz, r17, r18.x, r16
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
-+        dp2add r18.y, vPos, c162, c158.w
++        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y

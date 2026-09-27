@@ -53,7 +53,7 @@ index c689ff61..8af2d30b 100644
 +      add r14.xyz, r31, -c15
 +      dp3 r31.w, r14, c14
 +      mul r31.w, r31.w, r28.x // view depth of the previous sample
-+      dp2add r29.x, vPos, c159, c155.z
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
 +      frc r29.x, r29.x
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
@@ -158,7 +158,7 @@ index 3e067e27..ee0af9b1 100644
 +      add r14.xyz, r31, -c15
 +      dp3 r31.w, r14, c14
 +      mul r31.w, r31.w, r28.x // view depth of the previous sample
-+      dp2add r29.x, vPos, c159, c155.z
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
 +      frc r29.x, r29.x
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
@@ -263,7 +263,7 @@ index af866f87..5cde974b 100644
 +      add r14.xyz, r31, -c15
 +      dp3 r31.w, r14, c14
 +      mul r31.w, r31.w, r28.x // view depth of the previous sample
-+      dp2add r29.x, vPos, c159, c155.z
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
 +      frc r29.x, r29.x
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
@@ -368,7 +368,7 @@ index cb335ca7..9877e097 100644
 +      add r14.xyz, r31, -c15
 +      dp3 r31.w, r14, c14
 +      mul r31.w, r31.w, r28.x // view depth of the previous sample
-+      dp2add r29.x, vPos, c159, c155.z
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
 +      frc r29.x, r29.x
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
@@ -473,7 +473,7 @@ index c70412cd..60af46b5 100644
 +      add r14.xyz, r31, -c15
 +      dp3 r31.w, r14, c14
 +      mul r31.w, r31.w, r28.x // view depth of the previous sample
-+      dp2add r29.x, vPos, c159, c155.z
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
 +      frc r29.x, r29.x
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
@@ -578,7 +578,7 @@ index 373e4324..3b8e7c8f 100644
 +      add r14.xyz, r31, -c15
 +      dp3 r31.w, r14, c14
 +      mul r31.w, r31.w, r28.x // view depth of the previous sample
-+      dp2add r29.x, vPos, c159, c155.z
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
 +      frc r29.x, r29.x
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
@@ -683,7 +683,7 @@ index 79af19c6..3f7819b3 100644
 +      add r14.xyz, r31, -c15
 +      dp3 r31.w, r14, c14
 +      mul r31.w, r31.w, r28.x // view depth of the previous sample
-+      dp2add r29.x, vPos, c159, c155.z
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
 +      frc r29.x, r29.x
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
@@ -788,7 +788,7 @@ index 6a42d426..4d7e3b87 100644
 +      add r14.xyz, r31, -c15
 +      dp3 r31.w, r14, c14
 +      mul r31.w, r31.w, r28.x // view depth of the previous sample
-+      dp2add r29.x, vPos, c159, c155.z
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
 +      frc r29.x, r29.x
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
@@ -893,7 +893,7 @@ index fcf8b859..3e25e587 100644
 +      add r14.xyz, r31, -c15
 +      dp3 r31.w, r14, c14
 +      mul r31.w, r31.w, r28.x // view depth of the previous sample
-+      dp2add r29.x, vPos, c159, c155.z
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
 +      frc r29.x, r29.x
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
@@ -998,7 +998,7 @@ index 336c62cc..184a0cf4 100644
 +      add r14.xyz, r31, -c15
 +      dp3 r31.w, r14, c14
 +      mul r31.w, r31.w, r28.x // view depth of the previous sample
-+      dp2add r29.x, vPos, c159, c155.z
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
 +      frc r29.x, r29.x
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
@@ -1103,7 +1103,7 @@ index 97c3006b..c263064b 100644
 +      add r14.xyz, r31, -c15
 +      dp3 r31.w, r14, c14
 +      mul r31.w, r31.w, r28.x // view depth of the previous sample
-+      dp2add r29.x, vPos, c159, c155.z
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
 +      frc r29.x, r29.x
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
@@ -1208,7 +1208,7 @@ index ae6fec32..4a4e305e 100644
 +      add r14.xyz, r31, -c15
 +      dp3 r31.w, r14, c14
 +      mul r31.w, r31.w, r28.x // view depth of the previous sample
-+      dp2add r29.x, vPos, c159, c155.z
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
 +      frc r29.x, r29.x
 +      mul r29.x, r29.x, c159.z
 +      frc r29.x, r29.x
