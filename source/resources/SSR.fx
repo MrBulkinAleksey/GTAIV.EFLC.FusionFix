@@ -224,9 +224,6 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
     // reflection came out as several shifted slices.
     float tHit = 0.0;
     float tBeforeHit = 0.0;
-    float hitDelta = 0.0;
-    float hitThickness = 1.0;
-    float prevRayZ = P0.z;
     float prevT = 0.0;
 
     [loop]
@@ -240,20 +237,17 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
 
         float delta = rayZ - LinearDepth(sampleUV);
 
+        // The first sample behind the scene ends the march; whether it is a hit is decided
+        // below, once the crossing is found. Judging the thickness at the sample itself made it
+        // depend on where the step happened to land, so a leg standing on a roof reflected as
+        // alternating bands of hits and misses.
         if (delta > 0.0)
         {
-            float thickness = (rayZ - prevRayZ) + fThickness;
-            if (delta < thickness)
-            {
-                tHit = t;
-                tBeforeHit = prevT;
-                hitDelta = delta;
-                hitThickness = thickness;
-            }
+            tHit = t;
+            tBeforeHit = prevT;
             break;
         }
 
-        prevRayZ = rayZ;
         prevT = t;
     }
 
@@ -274,7 +268,16 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
     }
 
     float2 finalUV = lerp(uv0, uv1, hi);
-    float3 hitP = ViewPosFromUVZ(finalUV, 1.0 / lerp(invZ0, invZ1, hi));
+    float hitZ = 1.0 / lerp(invZ0, invZ1, hi);
+    float3 hitP = ViewPosFromUVZ(finalUV, hitZ);
+
+    // At the crossing the ray is either just behind a surface (a hit) or has jumped behind
+    // an object standing in front of what it was passing over, which it only hits if it
+    // went through within the object's assumed thickness.
+    float hitDelta = hitZ - LinearDepth(finalUV);
+    float hitThickness = abs(hitZ - 1.0 / lerp(invZ0, invZ1, lo)) + fThickness;
+    if (hitDelta > hitThickness)
+        return 0.0;
 
     float2 histUV = HistoryUV(hitP);
 
