@@ -1,0 +1,60 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+index 0c44c5dd..054f5117 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+@@ -501,6 +501,10 @@
+       texldl r10, r10, s3
+       add r11.xyz, r10, -r3
+       mad r3.xyz, r11, r10.w, r3
++      // --- FusionFix SSR: the game fades reflections that point below the horizon, since its
++      // --- parabolic map only holds the sky. Keep that fade only where SSR found nothing.
++      add r11.w, -r0.z, c2.w
++      mad r0.z, r11.w, r10.w, r0.z
+       mul r1.yzw, r0.z, r3.xxyz
+       mul r0.xzw, r0.x, r1.yyzw
+       mul r0.xzw, r4.z, r0
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+index 04965326..53e4e17b 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+@@ -515,6 +515,10 @@
+       texldl r10, r10, s3
+       add r11.xyz, r10, -r7
+       mad r7.xyz, r11, r10.w, r7
++      // --- FusionFix SSR: the game fades reflections that point below the horizon, since its
++      // --- parabolic map only holds the sky. Keep that fade only where SSR found nothing.
++      add r11.w, -r0.x, c3.z
++      mad r0.x, r11.w, r10.w, r0.x
+       mul r3.xyz, r0.x, r7
+       mul r0.xzw, r0.z, r3.xyyz
+       mul r0.xzw, r4.z, r0
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
+index e970e7eb..88d0e1e5 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
+@@ -113,6 +113,10 @@
+       texldl r10, r10, s3
+       add r11.xyz, r10, -r2
+       mad r2.xyz, r11, r10.w, r2
++      // --- FusionFix SSR: the game fades reflections that point below the horizon, since its
++      // --- parabolic map only holds the sky. Keep that fade only where SSR found nothing.
++      add r11.w, -r0.w, c0.z
++      mad r0.w, r11.w, r10.w, r0.w
+       mul r0.yzw, r0.w, r2.xxyz
+       mul r0.yzw, r1.w, r0
+       mul r0.yzw, r3.z, r0
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
+index 437b8768..6fc05475 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
+@@ -128,6 +128,10 @@
+       texldl r10, r10, s3
+       add r11.xyz, r10, -r2
+       mad r2.xyz, r11, r10.w, r2
++      // --- FusionFix SSR: the game fades reflections that point below the horizon, since its
++      // --- parabolic map only holds the sky. Keep that fade only where SSR found nothing.
++      add r11.w, -r0.w, c3.z
++      mad r0.w, r11.w, r10.w, r0.w
+       mul r2.xyz, r0.w, r2
+       mul r2.xyz, r1.w, r2
+       mul r2.xyz, r3.z, r2

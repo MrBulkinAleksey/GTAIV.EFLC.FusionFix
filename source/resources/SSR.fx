@@ -1,4 +1,4 @@
-texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
+texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D;
 
 sampler2D DepthTex
 {
@@ -15,6 +15,11 @@ sampler2D HistoryTex
 sampler2D SpecularTex
 {
     Texture = <SpecularTex2D>;
+};
+
+sampler2D NormalTex
+{
+    Texture = <NormalTex2D>;
 };
 
 sampler2D SurfaceTex
@@ -44,9 +49,11 @@ uniform float4 vec4WaterPlane;  // water plane in reconstruction space, (normal.
 uniform float fWaterBlur;       // reflection blur radius in pixels at max ray distance
 uniform float fWaterNormalStrength; // ripple slope multiplier, 0 gives a flat mirror
 
-uniform float4 vec4WaterToView[3];
+uniform float4 vec4WaterToView[3]; // world to view rotation, also used for G-buffer normals
 uniform float4 vec4WaterWorldX;
 uniform float4 vec4WaterWorldY;
+
+uniform float fUseGBufferNormals; // 1 reads the G-buffer normal, 0 rebuilds it from depth
 
 static const float HISTORY_CLAMP = 8.0;
 static const float SSR_SCALE = 1.0;
@@ -135,17 +142,41 @@ float3 ReconstructNormal(float2 uv, float3 C)
     return normalize(cross(dpdy, dpdx));
 }
 
+float3 WorldToView(float3 v)
+{
+    return float3(dot(vec4WaterToView[0].xyz, v),
+                  dot(vec4WaterToView[1].xyz, v),
+                  dot(vec4WaterToView[2].xyz, v));
+}
+
+// Same decoding deferred_lighting applies to _DEFERRED_GBUFFER_1_: 8 bits per axis in rgb
+// with the fractional bits packed into alpha, in world space. Smooth across a curved car
+// panel, where a normal rebuilt from depth breaks into facets and noise.
+float3 GBufferNormal(float2 uv)
+{
+    float4 g = tex2Dlod(NormalTex, float4(uv, 0, 0));
+    float3 f = frac(g.w * float3(0.998046875, 7.984375, 63.875));
+    f.xy -= f.yz * 0.125;
+    return normalize(WorldToView(g.xyz * 256.0 + f - 127.999992));
+}
+
 float4 TraceReflection(float3 C, float3 n, float blurPixels)
 {
     float z = C.z;
     float3 V = normalize(C);
     float3 R = reflect(V, n);
 
-    if (R.z <= 0.0)
-        return 0.0;
-
     float3 P0 = C + n * max(fMaxDistance / (float) NUM_STEPS * 0.1, z * 0.01);
-    float3 P1 = P0 + R * fMaxDistance;   // R.z > 0, so P1.z > P0.z > 0 and both project
+
+    // Rays heading back towards the camera are what reflect a ped or another car standing
+    // next to a car, so they are traced too, but stop in front of the near plane to keep
+    // both ends projectable.
+    float len = fMaxDistance;
+    if (R.z < 0.0)
+        len = min(len, (P0.z - fNearPlane * 2.0) / -R.z);
+    if (len <= 0.0)
+        return 0.0;
+    float3 P1 = P0 + R * len;
 
     float2 uv0 = ViewToUV(P0);
     float2 uv1 = ViewToUV(P1);
@@ -175,7 +206,7 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
 
         if (delta > 0.0)
         {
-            float thickness = (rayZ - prevRayZ) + fThickness;
+            float thickness = abs(rayZ - prevRayZ) + fThickness;
             if (delta < thickness)
             {
                 tHit = t;
@@ -215,7 +246,9 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels)
 
     float rayLen = length(hitP - C);
 
-    confidence *= saturate(dot(V, R) * 2.0 + 0.5);
+    // A ray coming back towards the camera hits the side of an object the screen does not
+    // show, so it is trusted less, but not dropped.
+    confidence *= saturate(dot(V, R) * 0.5 + 0.9);
     confidence *= saturate((1.0 - rayLen / fMaxDistance) * 4.0);
     confidence *= 1.0 - smoothstep(hitThickness * 0.75, hitThickness, hitDelta);
 
@@ -231,7 +264,12 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
 
-    float3 n = ReconstructNormal(uv, C);
+    float3 n;
+    [branch]
+    if (fUseGBufferNormals > 0.0)
+        n = GBufferNormal(uv);
+    else
+        n = ReconstructNormal(uv, C);
     n = (dot(n, C) > 0.0) ? -n : n;
 
     float4 r = TraceReflection(C, n, 0.0);
@@ -284,6 +322,12 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return float4(r.rgb, saturate(r.a * fWaterIntensity));
 }
 
+// Linear view depth for the patched car glass shaders, which march their reflection through it.
+float4 LinearDepthCopy_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    return float4(LinearDepth(uv), 0.0, 0.0, 1.0);
+}
+
 void FullscreenQuadVS(in float4 iPos : POSITION, in float2 iUV : TEXCOORD0,
                       out float4 oPos : POSITION, out float2 oUV : TEXCOORD0)
 {
@@ -306,5 +350,14 @@ technique SSRWater
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSRWater_PS();
+    }
+}
+
+technique LinearDepthCopy
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 LinearDepthCopy_PS();
     }
 }

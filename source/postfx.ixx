@@ -205,14 +205,68 @@ public:
     bool bSSRReprojValid = false;
     struct
     {
-        D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
+        D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, fUseGBufferNormals;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY;
-        D3DXHANDLE techSSR, techSSRWater;
+        D3DXHANDLE techSSR, techSSRWater, techLinearDepth;
     } SSREffectHandles = {};
+
+    bool bSSRGBufferNormals = true;
+
+    // s3 as the game left it, put back after deferred lighting. RAGE remembers which texture
+    // each sampler holds and skips binding it again, so anything left in s3 would be read by
+    // unrelated shaders later in the frame.
+    IDirect3DBaseTexture9* SavedLightingTex3 = nullptr;
+    DWORD SavedLightingSampler3[5] = {};
+    bool bLightingTex3Saved = false;
+
+    // 1x1 transparent black. An empty sampler reads alpha 1, which deferred_lighting would
+    // take as a full strength black reflection. Managed, so it survives device resets.
+    IDirect3DTexture9* TransparentTexture = nullptr;
+    IDirect3DTexture9* TransparentTex()
+    {
+        if (!TransparentTexture)
+        {
+            auto pDevice = rage::grcDevice::GetD3DDevice();
+            if (pDevice && SUCCEEDED(pDevice->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &TransparentTexture, nullptr)))
+            {
+                D3DLOCKED_RECT locked = {};
+                if (SUCCEEDED(TransparentTexture->LockRect(0, &locked, nullptr, 0)))
+                {
+                    *static_cast<uint32_t*>(locked.pBits) = 0;
+                    TransparentTexture->UnlockRect(0);
+                }
+            }
+        }
+        return TransparentTexture;
+    }
+
+    // Car glass reflections (shaders/patches/vehicle_glass_reflections.patch). Glass is drawn
+    // after lighting and is not in the depth buffer, so the SSR buffer cannot reach it; the
+    // patched glass shaders march their own reflected ray through the lit opaque scene.
+    // They read, from samplers no game shader uses:
+    //   s9  a 4x1 float texture: texel 0 projection _11, _22, _31, _32; texel 1 _34,
+    //       thickness, ray length and a magic value, so a foreign texture is never used;
+    //       texels 2 and 3 the camera's right and up axes, which these shaders cannot take
+    //       from gViewInverse because their own constants overwrite its first two rows.
+    //   s11 this frame's linear view depth
+    //   s13 a copy of the lit opaque scene
+    bool bGlassReflections = true;
+    float fGlassReflectionsLength = 15.0f;
+    float fGlassReflectionsThickness = 0.5f;
+    rage::grcRenderTargetPC* GlassDepthTex = nullptr;
+    IDirect3DSurface9* GlassDepthSurf = nullptr;
+    // In the scene target's own format, so the copy never needs a conversion. D3DPOOL_DEFAULT,
+    // so released on device loss.
+    IDirect3DTexture9* GlassSceneTex = nullptr;
+    D3DSURFACE_DESC GlassSceneDesc = {};
+    IDirect3DTexture9* GlassParamsTex = nullptr; // managed, so it survives device resets
+    float GlassParams[16] = {};
+    bool bGlassFrameValid = false;
+    bool bGlassBound = false;
 
     static bool SSREnabled() { static auto p = FusionFixSettings.GetRef("PREF_SSR"); return p && p->get() != 0; }
     int nSSRSteps = 24;
@@ -588,6 +642,9 @@ public:
                 h.vec4WaterWorldY = SSREffect->GetParameterByName(nullptr, "vec4WaterWorldY");
                 h.techSSR = SSREffect->GetTechniqueByName("SSR");
                 h.techSSRWater = SSREffect->GetTechniqueByName("SSRWater");
+                h.techLinearDepth = SSREffect->GetTechniqueByName("LinearDepthCopy");
+                h.NormalTex2D = SSREffect->GetParameterByName(nullptr, "NormalTex2D");
+                h.fUseGBufferNormals = SSREffect->GetParameterByName(nullptr, "fUseGBufferNormals");
             }
         }
 
@@ -719,6 +776,10 @@ public:
         fSSRWaterLevelOffset = iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterLevelOffset", 0.0f);
         fSSRWaterBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterBlur", 3.0f), 0.0f, 32.0f);
         fSSRWaterNormalStrength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterRipple", 1.0f), 0.0f, 4.0f);
+        bSSRGBufferNormals = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGBufferNormals", 1) != 0;
+        bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
+        fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
+        fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -857,6 +918,11 @@ private:
     static void __fastcall OnDeviceLost()
     {
         PostFxResources.ReleaseTextures();
+        UnbindGlassReflections();
+        SAFE_RELEASE(PostFxResources.GlassSceneTex);
+        PostFxResources.GlassSceneDesc = {};
+        SAFE_RELEASE(PostFxResources.SavedLightingTex3);
+        PostFxResources.bLightingTex3Saved = false;
         // PostFxResources.mSpecularAoRT    =nullptr;
         PostFxResources.mNormalRT = nullptr;
         PostFxResources.mDiffuseRT = nullptr;
@@ -991,6 +1057,13 @@ private:
             PostFxResources.SSRHistoryTex->Destroy();
             PostFxResources.SSRHistoryTex = nullptr;
         }
+        SAFE_RELEASE(PostFxResources.GlassDepthSurf);
+        if (PostFxResources.GlassDepthTex)
+        {
+            PostFxResources.GlassDepthTex->Destroy();
+            PostFxResources.GlassDepthTex = nullptr;
+        }
+        PostFxResources.bGlassFrameValid = false;
         PostFxResources.bSSRValidThisFrame = false;
         PostFxResources.bSSRPrevViewProjValid = false;
         PostFxResources.bSSRReprojValid = false;
@@ -1035,6 +1108,12 @@ private:
             PostFxResources.SSRHistoryTex = CreateEmptyRT("SSRHistoryTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.SSRHistoryTex && PostFxResources.SSRHistoryTex->mD3DTexture)
                 PostFxResources.SSRHistoryTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRHistorySurf);
+
+            aoDesc.mFormat = rage::GRCFMT_R32F;
+            PostFxResources.GlassDepthTex = CreateEmptyRT("GlassDepthTex", 3, width, height, 32, &aoDesc);
+            if (PostFxResources.GlassDepthTex && PostFxResources.GlassDepthTex->mD3DTexture)
+                PostFxResources.GlassDepthTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.GlassDepthSurf);
+            aoDesc.mFormat = rage::GRCFMT_A16B16G16R16F;
 
             IDirect3DSurface9* oldRT = nullptr;
             pDevice->GetRenderTarget(0, &oldRT);
@@ -1691,6 +1770,7 @@ private:
     {
         auto& R = PostFxResources;
         R.bSSRValidThisFrame = false;
+        R.bGlassFrameValid = false;
 
         if (!R.SSRSurf)
             return;
@@ -1820,6 +1900,21 @@ private:
         effect->SetFloat(h.fEdgeFade, R.fSSREdgeFade);
         effect->SetFloat(h.fIntensity, R.fSSRIntensity);
 
+        // World to reconstruction space rotation for the G-buffer normals, built the way the
+        // water pass builds it.
+        const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+        const bool gbufferNormals = R.bSSRGBufferNormals && R.mNormalRT && R.mNormalRT->mD3DTexture;
+        if (gbufferNormals)
+        {
+            effect->SetTexture(h.NormalTex2D, R.mNormalRT->mD3DTexture);
+            D3DXVECTOR4 toView[3];
+            for (int row = 0; row < 3; ++row)
+                toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
+                                          viewInv.m[row][2] * axisSign[row], 0.0f);
+            effect->SetVectorArray(h.vec4WaterToView, toView, 3);
+        }
+        effect->SetFloat(h.fUseGBufferNormals, gbufferNormals ? 1.0f : 0.0f);
+
         UINT passes = 0;
         IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
         DWORD savedRenderStates[std::size(kSSRRenderStates)] = {};
@@ -1857,9 +1952,31 @@ private:
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
         }
+        effect->End();
+
+        // Linear depth and camera for the car glass shaders, which draw after lighting.
+        if (R.bGlassReflections && R.GlassDepthSurf && h.techLinearDepth)
         {
+            pDevice->SetRenderTarget(0, R.GlassDepthSurf);
+            effect->SetTechnique(h.techLinearDepth);
+            effect->Begin(&passes, 0);
+            effect->BeginPass(0);
+            effect->CommitChanges();
+            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            effect->EndPass();
             effect->End();
 
+            const float params[16] =
+            {
+                proj._11, proj._22, proj._31, proj._32,
+                proj._34, R.fGlassReflectionsThickness, R.fGlassReflectionsLength, 12345.0f,
+                viewInv.m[0][0], viewInv.m[0][1], viewInv.m[0][2], 0.0f,
+                viewInv.m[1][0], viewInv.m[1][1], viewInv.m[1][2], 0.0f,
+            };
+            memcpy(R.GlassParams, params, sizeof(params));
+            R.bGlassFrameValid = true;
+        }
+        {
             for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
                 pDevice->SetRenderState(kSSRRenderStates[i].state, savedRenderStates[i]);
 
@@ -2264,6 +2381,7 @@ private:
     static inline injector::hook_back<void(__fastcall*)(void*, void*, int, int, int)> hbDrawCallPostFX;
     static void __fastcall DrawCallPostFX(void* _this, void* edx, int a2, int a3, int a4)
     {
+        UnbindGlassReflections();
         bInsteadDrawPrimitivePostFX = true;
         hbDrawCallPostFX.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitivePostFX = false;
@@ -2334,22 +2452,128 @@ private:
     }
 
 public:
+    static constexpr D3DSAMPLERSTATETYPE kBoundSamplerStates[] =
+    {
+        D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER
+    };
+
+    static void BindSampler(IDirect3DDevice9* pDevice, DWORD slot, IDirect3DBaseTexture9* tex, DWORD filter)
+    {
+        pDevice->SetTexture(slot, tex);
+        pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, filter);
+        pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, filter);
+        pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    }
+
+    // Before deferred lighting, which blends s3 over its environment reflection by alpha.
     static void BindSSRTexture()
     {
         auto& R = PostFxResources;
-        if (!R.SSRTex || !R.SSRTex->mD3DTexture)
-            return;
-
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
 
-        pDevice->SetTexture(3, R.SSRTex->mD3DTexture);
-        pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-        pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-        pDevice->SetSamplerState(3, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-        pDevice->SetSamplerState(3, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-        pDevice->SetSamplerState(3, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        if (!R.bLightingTex3Saved)
+        {
+            pDevice->GetTexture(3, &R.SavedLightingTex3);
+            for (size_t i = 0; i < std::size(kBoundSamplerStates); ++i)
+                pDevice->GetSamplerState(3, kBoundSamplerStates[i], &R.SavedLightingSampler3[i]);
+            R.bLightingTex3Saved = true;
+        }
+
+        IDirect3DBaseTexture9* tex = (R.SSRTex && R.SSRTex->mD3DTexture) ? R.SSRTex->mD3DTexture : R.TransparentTex();
+        BindSampler(pDevice, 3, tex, D3DTEXF_LINEAR);
+    }
+
+    // Right after deferred lighting: give s3 back to the game, then set up the car glass.
+    static void AfterDeferredLighting()
+    {
+        auto& R = PostFxResources;
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+
+        if (R.bLightingTex3Saved)
+        {
+            pDevice->SetTexture(3, R.SavedLightingTex3);
+            for (size_t i = 0; i < std::size(kBoundSamplerStates); ++i)
+                pDevice->SetSamplerState(3, kBoundSamplerStates[i], R.SavedLightingSampler3[i]);
+            SAFE_RELEASE(R.SavedLightingTex3);
+            R.bLightingTex3Saved = false;
+        }
+
+        PrepareGlassReflections(pDevice);
+    }
+
+    // Copies the lit opaque scene and binds it with this frame's linear depth and camera for
+    // the patched car glass shaders. Anything missing leaves s9 empty, and the glass keeps the
+    // game's environment map.
+    static void PrepareGlassReflections(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.GlassDepthTex && R.GlassDepthTex->mD3DTexture;
+        R.bGlassFrameValid = false;
+
+        if (ok && !R.GlassParamsTex)
+            ok = SUCCEEDED(pDevice->CreateTexture(4, 1, 1, 0, D3DFMT_A32B32G32R32F, D3DPOOL_MANAGED, &R.GlassParamsTex, nullptr));
+        if (ok)
+        {
+            D3DLOCKED_RECT locked = {};
+            ok = SUCCEEDED(R.GlassParamsTex->LockRect(0, &locked, nullptr, 0));
+            if (ok)
+            {
+                // A32B32G32R32F stores each texel as r, g, b, a floats.
+                memcpy(locked.pBits, R.GlassParams, sizeof(R.GlassParams));
+                R.GlassParamsTex->UnlockRect(0);
+            }
+        }
+
+        IDirect3DSurface9* scene = nullptr;
+        if (ok)
+            ok = SUCCEEDED(pDevice->GetRenderTarget(0, &scene)) && scene;
+        if (ok)
+        {
+            D3DSURFACE_DESC desc = {};
+            scene->GetDesc(&desc);
+            if (R.GlassSceneTex && (desc.Width != R.GlassSceneDesc.Width || desc.Height != R.GlassSceneDesc.Height ||
+                desc.Format != R.GlassSceneDesc.Format))
+                SAFE_RELEASE(R.GlassSceneTex);
+            if (!R.GlassSceneTex && SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET,
+                desc.Format, D3DPOOL_DEFAULT, &R.GlassSceneTex, nullptr)))
+                R.GlassSceneDesc = desc;
+            IDirect3DSurface9* dst = nullptr;
+            ok = R.GlassSceneTex && SUCCEEDED(R.GlassSceneTex->GetSurfaceLevel(0, &dst)) &&
+                 SUCCEEDED(pDevice->StretchRect(scene, nullptr, dst, nullptr, D3DTEXF_NONE));
+            SAFE_RELEASE(dst);
+        }
+        SAFE_RELEASE(scene);
+
+        if (!ok)
+        {
+            UnbindGlassReflections();
+            return;
+        }
+
+        BindSampler(pDevice, 9, R.GlassParamsTex, D3DTEXF_POINT);
+        BindSampler(pDevice, 11, R.GlassDepthTex->mD3DTexture, D3DTEXF_POINT);
+        BindSampler(pDevice, 13, R.GlassSceneTex, D3DTEXF_LINEAR);
+        R.bGlassBound = true;
+    }
+
+    // Once the main scene is done, so car glass drawn by other render phases (reflections,
+    // mirrors) never marches with this camera's data.
+    static void UnbindGlassReflections()
+    {
+        auto& R = PostFxResources;
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice || !R.bGlassBound)
+            return;
+        pDevice->SetTexture(9, nullptr);
+        pDevice->SetTexture(11, nullptr);
+        pDevice->SetTexture(13, nullptr);
+        R.bGlassBound = false;
     }
 
     PostFX()
@@ -2381,6 +2605,12 @@ public:
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
                         auto cb = new T_CB_Generic_NoArgs(BindSSRTexture);
+                        if (cb)
+                            cb->Append();
+                    };
+                    CRenderPhaseDeferredLighting_LightsToScreen::OnAfterBuildRenderList() += []()
+                    {
+                        auto cb = new T_CB_Generic_NoArgs(AfterDeferredLighting);
                         if (cb)
                             cb->Append();
                     };
