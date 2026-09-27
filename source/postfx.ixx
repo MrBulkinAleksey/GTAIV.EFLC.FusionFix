@@ -261,8 +261,8 @@ public:
         }
         return TransparentTexture;
     }
-    int nSSRSteps = 24;
-    int nSSRRefineSteps = 4;
+    int nSSRSteps = 48;
+    int nSSRRefineSteps = 8;
     float fSSRMaxDistance = 24.0f;
     float fSSRThickness = 0.3f;
     float fSSREdgeFade = 0.1f;
@@ -763,8 +763,8 @@ public:
 
         bEnablePreAlphaDepth = iniReader.ReadInteger("POSTFX", "EnablePreAlphaDepth", 1) != 0;
 
-        nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 24), 4, 128);
-        nSSRRefineSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsRefineSteps", 4), 0, 16);
+        nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 48), 4, 128);
+        nSSRRefineSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsRefineSteps", 8), 0, 16);
         fSSRMaxDistance = std::max(1.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsMaxDistance", 24.0f));
         fSSRThickness = std::max(0.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsThickness", 0.3f));
         fSSREdgeFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsEdgeFade", 0.1f), 0.001f, 0.5f);

@@ -116,10 +116,10 @@ float3 SampleHistoryBlurred(float2 uv, float radiusPixels)
 }
 
 #ifndef NUM_STEPS
-#define NUM_STEPS 24
+#define NUM_STEPS 48
 #endif
 #ifndef NUM_REFINE_STEPS
-#define NUM_REFINE_STEPS 4
+#define NUM_REFINE_STEPS 8
 #endif
 
 float LinearDepth(float2 uv)
