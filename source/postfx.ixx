@@ -243,6 +243,7 @@ public:
     float fContactShadowThickness = 0.15f;
     float fContactShadowMaxDistance = 60.0f;
     float fContactShadowIntensity = 1.0f;
+    bool bContactShadowStepJitter = true;
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
     IDirect3DSurface9* ContactRawSurf = nullptr;
     rage::grcRenderTargetPC* ContactTex = nullptr;
@@ -855,6 +856,7 @@ public:
         fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.15f), 0.01f, 10.0f);
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
         fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
+        bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
@@ -2830,7 +2832,7 @@ private:
         effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
         effect->SetVector(h.vec4ProjInfo, &projInfo);
         effect->SetVector(h.vec4SunView, &sun);
-        effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
+        effect->SetFloat(h.fStepJitter, R.bContactShadowStepJitter ? 1.0f : 0.0f);
         effect->SetFloat(h.fCSLength, R.fContactShadowLength);
         effect->SetFloat(h.fCSThickness, R.fContactShadowThickness);
         effect->SetFloat(h.fCSMaxViewDistance, R.fContactShadowMaxDistance);

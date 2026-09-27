@@ -91,7 +91,7 @@ uniform float fDebugMode; // SSR debug view from the graphics menu, see SSRDebug
 uniform float fUseGBufferNormals; // 1 reads the G-buffer normal, 0 rebuilds it from depth
 uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDenoise_PS
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
-uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step
+uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step (set per pass: SSR and contact shadows each have their own switch)
 uniform float fTowardCamera;      // 0..1, how far reflections pointing back at the camera reach
 uniform float fReflectionBlur;    // blur radius in pixels a reflection reaches at fMaxDistance, 0 keeps it sharp
 uniform float fDistanceFade;      // reflections fade out towards this distance from the surface, 0 disables
