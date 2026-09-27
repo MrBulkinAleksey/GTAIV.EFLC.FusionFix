@@ -355,7 +355,7 @@ public:
     {
         D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, PrevSSRTex2D;
         D3DXHANDLE fUseGBufferNormals, fTemporalBlend, fFrameIndex, fDebugMode;
-        D3DXHANDLE PrevDepthTex2D, CurTex2D, PrevTex2D, fPrevDepthValid, fResolveBlend, vec4SunView;
+        D3DXHANDLE PrevDepthTex2D, CurTex2D, PrevTex2D, fPrevDepthValid, fResolveBlend, vec4SunView, vec2CurTexelSize;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask;
         D3DXHANDLE SSRResultTex2D, fReflectionStrength, techSSRComposite;
         D3DXHANDLE fRoughBlur, DebugTex2D, vec4DebugScale, techDebugView;
@@ -792,6 +792,7 @@ public:
                 h.vec4DebugScale = SSREffect->GetParameterByName(nullptr, "vec4DebugScale");
                 h.techDebugView = SSREffect->GetTechniqueByName("DebugView");
                 h.CurTex2D = SSREffect->GetParameterByName(nullptr, "CurTex2D");
+                h.vec2CurTexelSize = SSREffect->GetParameterByName(nullptr, "vec2CurTexelSize");
                 h.PrevTex2D = SSREffect->GetParameterByName(nullptr, "PrevTex2D");
                 h.fPrevDepthValid = SSREffect->GetParameterByName(nullptr, "fPrevDepthValid");
                 h.fResolveBlend = SSREffect->GetParameterByName(nullptr, "fResolveBlend");
@@ -2212,6 +2213,12 @@ private:
 
         auto prev = history.Previous();
         effect->SetTexture(h.CurTex2D, current.Texture());
+        D3DSURFACE_DESC desc = {};
+        if (current.surf && SUCCEEDED(current.surf->GetDesc(&desc)) && desc.Width && desc.Height)
+        {
+            const float texel[2] = { 1.0f / float(desc.Width), 1.0f / float(desc.Height) };
+            effect->SetFloatArray(h.vec2CurTexelSize, texel, 2);
+        }
         effect->SetTexture(h.PrevTex2D, prev);
         effect->SetFloat(h.fResolveBlend, prev ? blend : 0.0f);
         DrawScreenPass(effect, h.techTemporalResolve, history.rt[history.Next()].surf);

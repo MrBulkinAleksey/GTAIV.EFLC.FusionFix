@@ -122,6 +122,7 @@ sampler2D SurfaceTex
 };
 
 uniform float2 vec2InvViewportSize;
+uniform float2 vec2CurTexelSize;   // texel size of CurTex, which may be half resolution
 uniform float fNearPlane;
 uniform float fFarDivNear;
 uniform float4 vec4ProjInfo;
@@ -324,17 +325,25 @@ float RayJitter(float2 pixel)
     return 1.0 - frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
 }
 
-float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
+// rayLen: distance from C to what the ray hit, 0 on a miss.
+float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, out float rayLen)
 {
+    rayLen = 0.0;
     float z = C.z;
     float3 V = normalize(C);
     float3 R = reflect(V, n);
 
-    if (R.z <= 0.0)
-        return 0.0;
-
     float3 P0 = C + n * max(fMaxDistance / (float) NUM_STEPS * 0.1, z * 0.01);
-    float3 P1 = P0 + R * fMaxDistance;   // R.z > 0, so P1.z > P0.z > 0 and both project
+
+    // Rays heading back towards the camera are what reflect a ped or car standing between the
+    // camera and a bonnet or shop window, so they are traced too, but stop in front of the
+    // near plane to keep both ends projectable.
+    float len = fMaxDistance;
+    if (R.z < 0.0)
+        len = min(len, (P0.z - fNearPlane * 2.0) / -R.z);
+    if (len <= 0.0)
+        return 0.0;
+    float3 P1 = P0 + R * len;
 
     float2 uv0 = ViewToUV(P0);
     float2 uv1 = ViewToUV(P1);
@@ -364,7 +373,7 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
 
         if (delta > 0.0)
         {
-            float thickness = (rayZ - prevRayZ) + fThickness;
+            float thickness = abs(rayZ - prevRayZ) + fThickness;
             if (delta < thickness)
             {
                 tHit = t;
@@ -402,9 +411,12 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter)
     float e = min(edge.x, edge.y);
     float confidence = e * e * (3.0 - 2.0 * e);
 
-    float rayLen = length(hitP - C);
+    rayLen = length(hitP - C);
 
-    confidence *= saturate(dot(V, R) * 2.0 + 0.5);
+    // A ray coming back towards the camera hits the far side of whatever it finds, which the
+    // screen never shows, so it is trusted less, but not dropped: those are the reflections
+    // of the player in a bonnet or a shop window.
+    confidence *= saturate(dot(V, R) * 0.5 + 0.9);
     confidence *= saturate((1.0 - rayLen / fMaxDistance) * 4.0);
     confidence *= 1.0 - smoothstep(hitThickness * 0.75, hitThickness, hitDelta);
 
@@ -448,7 +460,8 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     n = (dot(n, C) > 0.0) ? -n : n;
 
     // Less glossy surfaces get blurrier reflections, the way rough surfaces scatter them.
-    float4 r = TraceReflection(C, n, fRoughBlur * (1.0 - gloss), (fTemporalBlend > 0.0) ? RayJitter(vPos) : 1.0);
+    float rayLen;
+    float4 r = TraceReflection(C, n, fRoughBlur * (1.0 - gloss), (fTemporalBlend > 0.0) ? RayJitter(vPos) : 1.0, rayLen);
     r.a = saturate(r.a * glossWeight * fIntensity);
     if (fDebugMode > 1.5 && fDebugMode < 2.5)
         return float4(0.0, DEBUG_BOOST * r.a, 0.0, r.a > 0.0 ? 1.0 : 0.0);
@@ -457,11 +470,20 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 
     if (fTemporalBlend > 0.0)
     {
-        // Reproject this surface point into the previous frame's reflection and blend in
-        // premultiplied form, so a miss on either side does not darken the colour.
+        // A reflection sits behind the mirror, as far as the ray travelled, so it moves across
+        // the surface as the camera moves. Reprojecting the surface point itself would drag
+        // last frame's reflection along with the surface, and street lights in wet roads and
+        // bonnets would trail behind the camera. The surface point still decides disocclusion.
+        // Blended in premultiplied form, so a miss on either side does not darken the colour.
         float2 prevUV;
         if (Reproject(C, prevUV))
         {
+            if (rayLen > 0.0)
+            {
+                float2 virtualUV = HistoryUV(C + normalize(C) * rayLen);
+                if (all(virtualUV > 0.0) && all(virtualUV < 1.0))
+                    prevUV = virtualUV;
+            }
             float4 prev = tex2Dlod(PrevSSRTex, float4(prevUV, 0, 0));
             if (all(prev == prev))
             {
@@ -516,7 +538,8 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 n = WaterNormal(worldXY, dot(C, C));
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, fWaterBlur, 1.0);
+    float rayLen;
+    float4 r = TraceReflection(C, n, fWaterBlur, 1.0, rayLen);
 
     return float4(r.rgb, saturate(r.a * fWaterIntensity));
 }
@@ -659,7 +682,7 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return float4(gi, 1.0);
 }
 
-// Blends a noisy pass with its reprojected history, dropping history on disocclusion.
+// Blends a noisy pass with its reprojected history, clamped to this frame's neighbourhood.
 float4 TemporalResolve_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     float4 cur = tex2Dlod(CurTex, float4(uv, 0, 0));
@@ -675,6 +698,25 @@ float4 TemporalResolve_PS(float2 uv : TEXCOORD0) : COLOR0
     float4 prev = tex2Dlod(PrevTex, float4(prevUV, 0, 0));
     if (any(prev != prev))
         return cur;
+
+    // Reprojection only follows the camera, so history under a moving ped or car still holds
+    // where its shadow was. Clamping it to the range of this frame's 3x3 neighbourhood drops
+    // those trails instead of leaving copies of the shadow behind.
+    float4 lo = cur, hi = cur;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            if (x == 0 && y == 0)
+                continue;
+            float4 s = tex2Dlod(CurTex, float4(uv + float2(x, y) * vec2CurTexelSize, 0, 0));
+            lo = min(lo, s);
+            hi = max(hi, s);
+        }
+    }
+    prev = clamp(prev, lo, hi);
 
     return lerp(cur, prev, fResolveBlend);
 }
