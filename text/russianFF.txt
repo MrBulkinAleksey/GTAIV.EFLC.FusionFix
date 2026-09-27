@@ -151,6 +151,9 @@ Fusion Fix: Проверять Обновления
 [SSRDbgSpecular]
 Блик и глянец
 
+[SSRDbgGlass]
+Лучи стёкол
+
 [Zoomed Movement]
 Разрешить движение при прицеливании
 

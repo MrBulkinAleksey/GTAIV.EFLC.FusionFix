@@ -511,6 +511,12 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
     return float4(colour, a);
 }
 
+// Linear view depth for the patched car glass shaders, which march their reflection through it.
+float4 LinearDepthCopy_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    return float4(LinearDepth(uv), 0.0, 0.0, 1.0);
+}
+
 float4 SSRDebugCopy_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     return float4(tex2Dlod(DebugTex, float4(uv, 0, 0)).rgb, 1.0);
@@ -556,6 +562,15 @@ technique SSRDenoise
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSRDenoise_PS();
+    }
+}
+
+technique LinearDepthCopy
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 LinearDepthCopy_PS();
     }
 }
 

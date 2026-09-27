@@ -223,7 +223,7 @@ public:
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask;
-        D3DXHANDLE fDenoiseRadius, techSSRDenoise;
+        D3DXHANDLE fDenoiseRadius, techSSRDenoise, techLinearDepth;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
@@ -244,6 +244,31 @@ public:
     rage::grcRenderTargetPC* SSRDebugTex = nullptr;
     IDirect3DSurface9* SSRDebugSurf = nullptr;
     bool bSSRDebugValid = false;
+
+    // Car glass reflections (shaders/patches/vehicle_glass_reflections.patch). Glass is drawn
+    // after lighting and is not in the depth buffer, so the SSR buffer cannot reach it; the
+    // patched gta_vehicle_vehglass shaders march their own reflected ray through the lit
+    // opaque scene. They read, from samplers no game shader uses:
+    //   s9  a 4x1 float texture: texel 0 projection _11, _22, _31, _32; texel 1 _34,
+    //       thickness, ray length and a magic value, so a foreign texture is never used;
+    //       texel 2 the camera's right axis and the debug flag; texel 3 its up axis. The axes
+    //       come from here because those shaders overwrite gViewInverse's first two rows.
+    //   s11 this frame's linear view depth
+    //   s13 a copy of the lit opaque scene
+    bool bGlassReflections = true;
+    float fGlassReflectionsLength = 15.0f;
+    float fGlassReflectionsThickness = 0.5f;
+    rage::grcRenderTargetPC* GlassDepthTex = nullptr;
+    IDirect3DSurface9* GlassDepthSurf = nullptr;
+    // In the scene target's own format, so the copy needs no conversion. D3DPOOL_DEFAULT, so
+    // released on device loss.
+    IDirect3DTexture9* GlassSceneTex = nullptr;
+    D3DSURFACE_DESC GlassSceneDesc = {};
+    IDirect3DTexture9* GlassParamsTex = nullptr; // managed, so it survives device resets
+    float GlassParams[16] = {};
+    bool bGlassFrameValid = false;
+    bool bGlassBound = false;
+    static constexpr int kGlassDebugMode = 6;
     bool bSSRGBufferNormals = true;
 
     // 1x1 transparent black for s3 when there is no SSR target. An empty sampler reads alpha
@@ -650,6 +675,7 @@ public:
                 h.fUseWaterMask = SSREffect->GetParameterByName(nullptr, "fUseWaterMask");
                 h.fDenoiseRadius = SSREffect->GetParameterByName(nullptr, "fDenoiseRadius");
                 h.techSSRDenoise = SSREffect->GetTechniqueByName("SSRDenoise");
+                h.techLinearDepth = SSREffect->GetTechniqueByName("LinearDepthCopy");
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
             }
@@ -785,6 +811,9 @@ public:
         fSSRWaterNormalStrength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterRipple", 1.0f), 0.0f, 4.0f);
         bSSRGBufferNormals = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGBufferNormals", 1) != 0;
         fSSRDenoiseRadius = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsSmoothing", 2.0f), 0.0f, 8.0f);
+        bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
+        fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
+        fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -924,6 +953,9 @@ private:
     {
         PostFxResources.ReleaseTextures();
         PostFxResources.ReleaseWaterMask();
+        UnbindGlassReflections();
+        SAFE_RELEASE(PostFxResources.GlassSceneTex);
+        PostFxResources.GlassSceneDesc = {};
         // PostFxResources.mSpecularAoRT    =nullptr;
         PostFxResources.mNormalRT = nullptr;
         PostFxResources.mDiffuseRT = nullptr;
@@ -1065,6 +1097,13 @@ private:
             PostFxResources.SSRDenoisedTex = nullptr;
         }
         PostFxResources.bSSRDenoised = false;
+        SAFE_RELEASE(PostFxResources.GlassDepthSurf);
+        if (PostFxResources.GlassDepthTex)
+        {
+            PostFxResources.GlassDepthTex->Destroy();
+            PostFxResources.GlassDepthTex = nullptr;
+        }
+        PostFxResources.bGlassFrameValid = false;
         SAFE_RELEASE(PostFxResources.SSRDebugSurf);
         if (PostFxResources.SSRDebugTex)
         {
@@ -1120,6 +1159,12 @@ private:
             PostFxResources.SSRDenoisedTex = CreateEmptyRT("SSRDenoisedTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.SSRDenoisedTex && PostFxResources.SSRDenoisedTex->mD3DTexture)
                 PostFxResources.SSRDenoisedTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRDenoisedSurf);
+
+            aoDesc.mFormat = rage::GRCFMT_R32F;
+            PostFxResources.GlassDepthTex = CreateEmptyRT("GlassDepthTex", 3, width, height, 32, &aoDesc);
+            if (PostFxResources.GlassDepthTex && PostFxResources.GlassDepthTex->mD3DTexture)
+                PostFxResources.GlassDepthTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.GlassDepthSurf);
+            aoDesc.mFormat = rage::GRCFMT_A16B16G16R16F;
 
             PostFxResources.SSRDebugTex = CreateEmptyRT("SSRDebugTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.SSRDebugTex && PostFxResources.SSRDebugTex->mD3DTexture)
@@ -1781,6 +1826,7 @@ private:
         auto& R = PostFxResources;
         R.bSSRValidThisFrame = false;
         R.bSSRDebugValid = false;
+        R.bGlassFrameValid = false;
         R.bSSRDenoised = false;
 
         if (!R.SSRSurf)
@@ -1985,7 +2031,7 @@ private:
         IDirect3DTexture9* ssrResult = R.bSSRDenoised ? R.SSRDenoisedTex->mD3DTexture : R.SSRTex->mD3DTexture;
 
         const int debugMode = R.SSRDebugMode();
-        if (debugMode && R.SSRDebugSurf && h.techSSRDebug && hasNormals)
+        if (debugMode && debugMode != R.kGlassDebugMode && R.SSRDebugSurf && h.techSSRDebug && hasNormals)
         {
             effect->SetTexture(h.SSRResultTex2D, ssrResult);
             effect->SetFloat(h.fDebugMode, float(debugMode));
@@ -1999,6 +2045,29 @@ private:
             effect->EndPass();
             effect->End();
             R.bSSRDebugValid = true;
+        }
+
+        // Linear depth and camera for the car glass shaders, which draw after lighting.
+        if (R.bGlassReflections && R.GlassDepthSurf && h.techLinearDepth)
+        {
+            pDevice->SetRenderTarget(0, R.GlassDepthSurf);
+            effect->SetTechnique(h.techLinearDepth);
+            effect->Begin(&passes, 0);
+            effect->BeginPass(0);
+            effect->CommitChanges();
+            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            effect->EndPass();
+            effect->End();
+
+            const float params[16] =
+            {
+                proj._11, proj._22, proj._31, proj._32,
+                proj._34, R.fGlassReflectionsThickness, R.fGlassReflectionsLength, 12345.0f,
+                viewInv.m[0][0], viewInv.m[0][1], viewInv.m[0][2], debugMode == R.kGlassDebugMode ? 1.0f : 0.0f,
+                viewInv.m[1][0], viewInv.m[1][1], viewInv.m[1][2], 0.0f,
+            };
+            memcpy(R.GlassParams, params, sizeof(params));
+            R.bGlassFrameValid = true;
         }
         {
 
@@ -2455,6 +2524,7 @@ private:
     static inline injector::hook_back<void(__fastcall*)(void*, void*, int, int, int)> hbDrawCallPostFX;
     static void __fastcall DrawCallPostFX(void* _this, void* edx, int a2, int a3, int a4)
     {
+        UnbindGlassReflections();
         bInsteadDrawPrimitivePostFX = true;
         hbDrawCallPostFX.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitivePostFX = false;
@@ -2652,6 +2722,89 @@ public:
         pDevice->SetSamplerState(3, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
     }
 
+    static void BindSampler(IDirect3DDevice9* pDevice, DWORD slot, IDirect3DBaseTexture9* tex, DWORD filter)
+    {
+        pDevice->SetTexture(slot, tex);
+        pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, filter);
+        pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, filter);
+        pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    }
+
+    // Right after deferred lighting: copies the lit opaque scene and binds it with this frame's
+    // linear depth and camera for the patched car glass shaders. Anything missing leaves s9
+    // empty, and the glass keeps the game's environment map.
+    static void PrepareGlassReflections()
+    {
+        auto& R = PostFxResources;
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+
+        bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.GlassDepthTex && R.GlassDepthTex->mD3DTexture;
+        R.bGlassFrameValid = false;
+
+        if (ok && !R.GlassParamsTex)
+            ok = SUCCEEDED(pDevice->CreateTexture(4, 1, 1, 0, D3DFMT_A32B32G32R32F, D3DPOOL_MANAGED, &R.GlassParamsTex, nullptr));
+        if (ok)
+        {
+            D3DLOCKED_RECT locked = {};
+            ok = SUCCEEDED(R.GlassParamsTex->LockRect(0, &locked, nullptr, 0));
+            if (ok)
+            {
+                // A32B32G32R32F stores each texel as r, g, b, a floats.
+                memcpy(locked.pBits, R.GlassParams, sizeof(R.GlassParams));
+                R.GlassParamsTex->UnlockRect(0);
+            }
+        }
+
+        IDirect3DSurface9* scene = nullptr;
+        if (ok)
+            ok = SUCCEEDED(pDevice->GetRenderTarget(0, &scene)) && scene;
+        if (ok)
+        {
+            D3DSURFACE_DESC desc = {};
+            scene->GetDesc(&desc);
+            if (R.GlassSceneTex && (desc.Width != R.GlassSceneDesc.Width || desc.Height != R.GlassSceneDesc.Height ||
+                desc.Format != R.GlassSceneDesc.Format))
+                SAFE_RELEASE(R.GlassSceneTex);
+            if (!R.GlassSceneTex && SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET,
+                desc.Format, D3DPOOL_DEFAULT, &R.GlassSceneTex, nullptr)))
+                R.GlassSceneDesc = desc;
+            IDirect3DSurface9* dst = nullptr;
+            ok = R.GlassSceneTex && SUCCEEDED(R.GlassSceneTex->GetSurfaceLevel(0, &dst)) &&
+                 SUCCEEDED(pDevice->StretchRect(scene, nullptr, dst, nullptr, D3DTEXF_NONE));
+            SAFE_RELEASE(dst);
+        }
+        SAFE_RELEASE(scene);
+
+        if (!ok)
+        {
+            UnbindGlassReflections();
+            return;
+        }
+
+        BindSampler(pDevice, 9, R.GlassParamsTex, D3DTEXF_POINT);
+        BindSampler(pDevice, 11, R.GlassDepthTex->mD3DTexture, D3DTEXF_POINT);
+        BindSampler(pDevice, 13, R.GlassSceneTex, D3DTEXF_LINEAR);
+        R.bGlassBound = true;
+    }
+
+    // Once the main scene is done, so car glass drawn by other render phases (reflections,
+    // mirrors) never marches with this camera's data.
+    static void UnbindGlassReflections()
+    {
+        auto& R = PostFxResources;
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice || !R.bGlassBound)
+            return;
+        pDevice->SetTexture(9, nullptr);
+        pDevice->SetTexture(11, nullptr);
+        pDevice->SetTexture(13, nullptr);
+        R.bGlassBound = false;
+    }
+
     PostFX()
     {
         FusionFix::onInitEventAsync() += []()
@@ -2681,6 +2834,12 @@ public:
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
                         auto cb = new T_CB_Generic_NoArgs(BindSSRTexture);
+                        if (cb)
+                            cb->Append();
+                    };
+                    CRenderPhaseDeferredLighting_LightsToScreen::OnAfterBuildRenderList() += []()
+                    {
+                        auto cb = new T_CB_Generic_NoArgs(PrepareGlassReflections);
                         if (cb)
                             cb->Append();
                     };

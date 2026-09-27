@@ -151,6 +151,9 @@ Horizon Fade
 [SSRDbgSpecular]
 Specular and Gloss
 
+[SSRDbgGlass]
+Glass Rays
+
 [Zoomed Movement]
 Consenti movimento con lo zoom
 

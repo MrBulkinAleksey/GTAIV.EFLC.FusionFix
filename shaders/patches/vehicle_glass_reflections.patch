@@ -1,0 +1,381 @@
+diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
+index 366992fd..7ab30bee 100644
+--- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
++++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
+@@ -157,6 +157,15 @@
+     def c12, 0.473434001, -0.480026007, 0.519456029, 0.767022014
+     def c13, -0.203345001, 0.620715976, 0.962339997, -0.194983006
+     def c28, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c160, 0.625, 0.5, 0, 0
++    def c161, 0.875, 0.5, 0, 0
++    def c157, 12345, 1, 0.0833333358, 10
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
++    defi i0, 12, 0, 0, 0
+     dcl vPos.xy
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+@@ -169,6 +178,9 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s4
++    dcl_2d s9 // FusionFix: camera projection, settings, view axes and debug flag, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
++    dcl_2d s13 // FusionFix: copy of the lit opaque scene
+     dcl_2d s15
+     texld r0, v0, s0
+     add r1.xyz, c1.x, v1
+@@ -201,7 +213,96 @@
+     add r4.xy, -r4, c1.w
+     mov r4.zw, c2.w
+     texldl r4, r4, s4
++    // --- FusionFix glass reflections: march the reflected ray through the opaque scene and
++    // --- use what it hits instead of the environment map. Without FusionFix's parameter
++    // --- texture (magic value missing) the environment map is kept as is.
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, thickness, ray length, magic
++    add r29.x, r28.w, -c157.x
++    mul r29.x, r29.x, r29.x
++    mov r17, c155.z // no hit unless the march below finds one
++    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
++      // The ray is straight, so its start and direction go into view space once, here.
++      // gViewInverse's first two rows (c12, c13) are overwritten by this shader's own
++      // constants, so the camera's right and up axes come from the parameter texture.
++      mov r14, c160
++      texldl r14, r14, s9 // camera right axis
++      mov r16, c161
++      texldl r16, r16, s9 // camera up axis
++      mul r15.xyz, r5, r28.z
++      dp3 r30.x, r15, r14
++      dp3 r30.y, r15, r16
++      dp3 r30.z, r15, c14
++      add r15.xyz, v4, -c15
++      dp3 r31.x, r15, r14
++      dp3 r31.y, r15, r16
++      dp3 r31.z, r15, c14
++      mul r31.w, r31.z, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
++      mov r17, c155.z
++      rep i0
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r15.xyz, r30, r28.w, r31
++        mul r16.w, r15.z, r28.x
++        break_le r16.w, c155.z // behind the camera
++        mul r16.x, r15.x, r27.x
++        mad r16.x, r15.z, r27.z, r16.x
++        mul r16.y, r15.y, r27.y
++        mad r16.y, r15.z, r27.w, r16.y
++        rcp r16.z, r16.w
++        mul r16.xy, r16, r16.z
++        mad r18.xy, r16, c158.xy, c158.zz
++        mov r18.zw, c155.z
++        min r29.y, r18.x, r18.y
++        add r29.zw, c157.y, -r18.xyxy
++        min r29.z, r29.z, r29.w
++        min r29.y, r29.y, r29.z
++        break_lt r29.y, c155.z // left the screen
++        texldl r14, r18, s11
++        add r14.y, r16.w, -r14.x
++        if_gt r14.y, c155.z
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
++            texldl r17, r18, s13
++            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
++          endif
++          break // went behind the scene, a hit or not
++        endif
++        mov r31.w, r16.w
++      endrep
++      lrp r15.xyz, r17.w, r17, r4
++      mov r4.xyz, r15
++      // Debug view (texel 2 w > 0): bright green where the march hit, red where it missed,
++      // shown at full strength whatever the horizon fade would do.
++      mov r16, c160
++      texldl r16, r16, s9
++      if_lt c155.z, r16.w
++        add r15.x, c157.y, -r17.w
++        mov r15.y, r17.w
++        mov r15.z, c155.z
++        mul r4.xyz, r15, c157.w
++        mov r17.w, c157.y
++      endif
++    endif
+     mul_sat r1.x, r5.z, c3.x
++    // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
++    // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
++    add r29.x, -r1.x, c157.y
++    mad r1.x, r29.x, r17.w, r1.x
+     mul r4.xyz, r4, r1.x
+     mul r4.xyz, r1.z, r4
+     mul r4.xyz, r4, c3.y
+diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
+index 2847833c..cfa43b0f 100644
+--- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
++++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
+@@ -108,6 +108,15 @@
+     def c11, 0.962339997, -0.194983006, 0.473434001, -0.480026007
+     def c12, -0.69591397, 0.457136989, -0.203345001, 0.620715976
+     def c13, -0.326211989, -0.405809999, -0.840143979, -0.0735799968
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c160, 0.625, 0.5, 0, 0
++    def c161, 0.875, 0.5, 0, 0
++    def c157, 12345, 1, 0.0833333358, 10
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
++    defi i0, 12, 0, 0, 0
+     dcl vPos.xy
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+@@ -120,6 +129,9 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s4
++    dcl_2d s9 // FusionFix: camera projection, settings, view axes and debug flag, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
++    dcl_2d s13 // FusionFix: copy of the lit opaque scene
+     dcl_2d s15
+     texld r0, v0, s0
+     add r1.xyz, c1.x, v1
+@@ -151,7 +163,96 @@
+     add r4.xy, -r4, c1.z
+     mov r4.zw, c2.w
+     texldl r4, r4, s4
++    // --- FusionFix glass reflections: march the reflected ray through the opaque scene and
++    // --- use what it hits instead of the environment map. Without FusionFix's parameter
++    // --- texture (magic value missing) the environment map is kept as is.
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, thickness, ray length, magic
++    add r29.x, r28.w, -c157.x
++    mul r29.x, r29.x, r29.x
++    mov r17, c155.z // no hit unless the march below finds one
++    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
++      // The ray is straight, so its start and direction go into view space once, here.
++      // gViewInverse's first two rows (c12, c13) are overwritten by this shader's own
++      // constants, so the camera's right and up axes come from the parameter texture.
++      mov r14, c160
++      texldl r14, r14, s9 // camera right axis
++      mov r16, c161
++      texldl r16, r16, s9 // camera up axis
++      mul r15.xyz, r5, r28.z
++      dp3 r30.x, r15, r14
++      dp3 r30.y, r15, r16
++      dp3 r30.z, r15, c14
++      add r15.xyz, v4, -c15
++      dp3 r31.x, r15, r14
++      dp3 r31.y, r15, r16
++      dp3 r31.z, r15, c14
++      mul r31.w, r31.z, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
++      mov r17, c155.z
++      rep i0
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r15.xyz, r30, r28.w, r31
++        mul r16.w, r15.z, r28.x
++        break_le r16.w, c155.z // behind the camera
++        mul r16.x, r15.x, r27.x
++        mad r16.x, r15.z, r27.z, r16.x
++        mul r16.y, r15.y, r27.y
++        mad r16.y, r15.z, r27.w, r16.y
++        rcp r16.z, r16.w
++        mul r16.xy, r16, r16.z
++        mad r18.xy, r16, c158.xy, c158.zz
++        mov r18.zw, c155.z
++        min r29.y, r18.x, r18.y
++        add r29.zw, c157.y, -r18.xyxy
++        min r29.z, r29.z, r29.w
++        min r29.y, r29.y, r29.z
++        break_lt r29.y, c155.z // left the screen
++        texldl r14, r18, s11
++        add r14.y, r16.w, -r14.x
++        if_gt r14.y, c155.z
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
++            texldl r17, r18, s13
++            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
++          endif
++          break // went behind the scene, a hit or not
++        endif
++        mov r31.w, r16.w
++      endrep
++      lrp r15.xyz, r17.w, r17, r4
++      mov r4.xyz, r15
++      // Debug view (texel 2 w > 0): bright green where the march hit, red where it missed,
++      // shown at full strength whatever the horizon fade would do.
++      mov r16, c160
++      texldl r16, r16, s9
++      if_lt c155.z, r16.w
++        add r15.x, c157.y, -r17.w
++        mov r15.y, r17.w
++        mov r15.z, c155.z
++        mul r4.xyz, r15, c157.w
++        mov r17.w, c157.y
++      endif
++    endif
+     mul_sat r1.x, r5.z, c3.x
++    // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
++    // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
++    add r29.x, -r1.x, c157.y
++    mad r1.x, r29.x, r17.w, r1.x
+     mul r4.xyz, r4, r1.x
+     mul r4.xyz, r1.z, r4
+     mul r4.xyz, r4, c3.y
+diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
+index 1d5cecf5..98772be4 100644
+--- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
++++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
+@@ -133,6 +133,15 @@
+     def c12, 0.473434001, -0.480026007, 0.519456029, 0.767022014
+     def c13, -0.203345001, 0.620715976, 0.962339997, -0.194983006
+     def c28, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
++    // --- FusionFix glass reflections: parameter texels, magic, 1/steps, edge fade, uv mapping, noise
++    def c155, 0.125, 0.5, 0, 0
++    def c156, 0.375, 0.5, 0, 0
++    def c160, 0.625, 0.5, 0, 0
++    def c161, 0.875, 0.5, 0, 0
++    def c157, 12345, 1, 0.0833333358, 10
++    def c158, 0.5, -0.5, 0.5, 0
++    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
++    defi i0, 12, 0, 0, 0
+     dcl vPos.xy
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+@@ -145,6 +154,9 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s4
++    dcl_2d s9 // FusionFix: camera projection, settings, view axes and debug flag, 4x1
++    dcl_2d s11 // FusionFix: linear view depth of the opaque scene
++    dcl_2d s13 // FusionFix: copy of the lit opaque scene
+     dcl_2d s15
+     texld r0, v0, s0
+     add r1.xyz, c0.x, v1
+@@ -177,7 +189,96 @@
+     add r4.xy, -r4, c0.w
+     mov r4.zw, c2.w
+     texldl r4, r4, s4
++    // --- FusionFix glass reflections: march the reflected ray through the opaque scene and
++    // --- use what it hits instead of the environment map. Without FusionFix's parameter
++    // --- texture (magic value missing) the environment map is kept as is.
++    mov r28, c155
++    texldl r27, r28, s9 // projection _11, _22, _31, _32
++    mov r28, c156
++    texldl r28, r28, s9 // projection _34, thickness, ray length, magic
++    add r29.x, r28.w, -c157.x
++    mul r29.x, r29.x, r29.x
++    mov r17, c155.z // no hit unless the march below finds one
++    if_lt r29.x, c157.y
++      // Steps grow with the square of the distance, dense next to the glass where a ped
++      // standing by it is, and each pixel starts up to one step later, so thin occluders are
++      // neither stepped over nor repeated as copies. A sample counts as a hit when it lands
++      // behind the scene by less than the thickness plus the depth the step itself covered.
++      // The ray is straight, so its start and direction go into view space once, here.
++      // gViewInverse's first two rows (c12, c13) are overwritten by this shader's own
++      // constants, so the camera's right and up axes come from the parameter texture.
++      mov r14, c160
++      texldl r14, r14, s9 // camera right axis
++      mov r16, c161
++      texldl r16, r16, s9 // camera up axis
++      mul r15.xyz, r5, r28.z
++      dp3 r30.x, r15, r14
++      dp3 r30.y, r15, r16
++      dp3 r30.z, r15, c14
++      add r15.xyz, v4, -c15
++      dp3 r31.x, r15, r14
++      dp3 r31.y, r15, r16
++      dp3 r31.z, r15, c14
++      mul r31.w, r31.z, r28.x // view depth of the previous sample
++      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
++      frc r29.x, r29.x
++      mul r29.x, r29.x, c159.z
++      frc r29.x, r29.x
++      add r29.x, r29.x, c159.w
++      mul r30.w, r29.x, c157.z
++      mov r17, c155.z
++      rep i0
++        add r30.w, r30.w, c157.z
++        mul r28.w, r30.w, r30.w
++        mad r15.xyz, r30, r28.w, r31
++        mul r16.w, r15.z, r28.x
++        break_le r16.w, c155.z // behind the camera
++        mul r16.x, r15.x, r27.x
++        mad r16.x, r15.z, r27.z, r16.x
++        mul r16.y, r15.y, r27.y
++        mad r16.y, r15.z, r27.w, r16.y
++        rcp r16.z, r16.w
++        mul r16.xy, r16, r16.z
++        mad r18.xy, r16, c158.xy, c158.zz
++        mov r18.zw, c155.z
++        min r29.y, r18.x, r18.y
++        add r29.zw, c157.y, -r18.xyxy
++        min r29.z, r29.z, r29.w
++        min r29.y, r29.y, r29.z
++        break_lt r29.y, c155.z // left the screen
++        texldl r14, r18, s11
++        add r14.y, r16.w, -r14.x
++        if_gt r14.y, c155.z
++          add r29.x, r16.w, -r31.w
++          abs r29.x, r29.x
++          add r29.x, r29.x, r28.y
++          if_lt r14.y, r29.x
++            texldl r17, r18, s13
++            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
++          endif
++          break // went behind the scene, a hit or not
++        endif
++        mov r31.w, r16.w
++      endrep
++      lrp r15.xyz, r17.w, r17, r4
++      mov r4.xyz, r15
++      // Debug view (texel 2 w > 0): bright green where the march hit, red where it missed,
++      // shown at full strength whatever the horizon fade would do.
++      mov r16, c160
++      texldl r16, r16, s9
++      if_lt c155.z, r16.w
++        add r15.x, c157.y, -r17.w
++        mov r15.y, r17.w
++        mov r15.z, c155.z
++        mul r4.xyz, r15, c157.w
++        mov r17.w, c157.y
++      endif
++    endif
+     mul_sat r1.x, r5.z, c3.x
++    // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
++    // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
++    add r29.x, -r1.x, c157.y
++    mad r1.x, r29.x, r17.w, r1.x
+     mul r4.xyz, r4, r1.x
+     mul r4.xyz, r1.z, r4
+     mul r4.xyz, r4, c3.y
