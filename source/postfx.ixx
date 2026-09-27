@@ -239,8 +239,8 @@ public:
     // Contact shadows (ContactShadows_PS in SSR.fx), bound to s9 for deferred_lighting
     // (shaders/patches/deferred_lighting_contact_shadows.patch) and unbound right after it.
     static bool ContactShadowsEnabled() { static auto p = FusionFixSettings.GetRef("PREF_CONTACTSHADOWS"); return p && p->get() != 0; }
-    float fContactShadowLength = 1.0f;
-    float fContactShadowThickness = 0.5f;
+    float fContactShadowLength = 0.3f;
+    float fContactShadowThickness = 0.15f;
     float fContactShadowMaxDistance = 60.0f;
     float fContactShadowIntensity = 1.0f;
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
@@ -851,8 +851,8 @@ public:
         fSSRTowardCamera = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", 0.0f), 0.0f, 1.0f);
         fSSRReflectionBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsBlur", 0.0f), 0.0f, 32.0f);
         fSSRDistanceFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsDistanceFade", 0.0f), 0.0f, 100.0f);
-        fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 1.0f), 0.05f, 10.0f);
-        fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.5f), 0.01f, 10.0f);
+        fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 0.3f), 0.05f, 10.0f);
+        fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.15f), 0.01f, 10.0f);
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
         fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
