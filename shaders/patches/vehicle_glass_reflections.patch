@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 366992fd..34429b77 100644
+index 366992fd..9af5d0ac 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-@@ -157,6 +157,16 @@
+@@ -157,6 +157,17 @@
      def c12, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c13, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c28, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
@@ -16,10 +16,11 @@ index 366992fd..34429b77 100644
 +    def c158, 0.5, -0.5, 0.5, 0
 +    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
++    defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
-@@ -169,6 +179,9 @@
+@@ -169,6 +180,9 @@
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
@@ -29,7 +30,7 @@ index 366992fd..34429b77 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
-@@ -201,7 +214,106 @@
+@@ -201,7 +215,147 @@
      add r4.xy, -r4, c1.w
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -107,6 +108,47 @@ index 366992fd..34429b77 100644
 +          abs r29.x, r29.x
 +          add r29.x, r29.x, r28.y
 +          if_lt r14.y, r29.x
++            // Refine where the ray crossed the scene between the previous step and this one,
++            // and take the colour there: taken at the step itself, neighbouring pixels caught a
++            // ped's legs at different steps and the reflection showed several copies of them.
++            // r17 holds the search interval (in s, before squaring) until the colour lands in it.
++            add r17.x, r30.w, -c157.z
++            max r17.x, r17.x, c155.z
++            mov r17.y, r30.w
++            rep i1
++              add r17.z, r17.x, r17.y
++              mul r17.z, r17.z, c158.x
++              mul r28.w, r17.z, r17.z
++              mad r15.xyz, r30, r28.w, r31
++              mul r16.w, r15.z, r28.x
++              mul r16.x, r15.x, r27.x
++              mad r16.x, r15.z, r27.z, r16.x
++              mul r16.y, r15.y, r27.y
++              mad r16.y, r15.z, r27.w, r16.y
++              rcp r16.z, r16.w
++              mul r16.xy, r16, r16.z
++              mad r18.xy, r16, c158.xy, c158.zz
++              texldl r14, r18, s11
++              mul r14.x, r14.x, r28.z
++              exp r14.x, r14.x
++              mul r14.x, r14.x, r15.w
++              add r14.y, r16.w, -r14.x
++              if_gt r14.y, c155.z
++                mov r17.y, r17.z
++              else
++                mov r17.x, r17.z
++              endif
++            endrep
++            mul r28.w, r17.y, r17.y
++            mad r15.xyz, r30, r28.w, r31
++            mul r16.w, r15.z, r28.x
++            mul r16.x, r15.x, r27.x
++            mad r16.x, r15.z, r27.z, r16.x
++            mul r16.y, r15.y, r27.y
++            mad r16.y, r15.z, r27.w, r16.y
++            rcp r16.z, r16.w
++            mul r16.xy, r16, r16.z
++            mad r18.xy, r16, c158.xy, c158.zz
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
@@ -137,10 +179,10 @@ index 366992fd..34429b77 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 2847833c..557b1909 100644
+index 2847833c..739c0b3e 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-@@ -108,6 +108,16 @@
+@@ -108,6 +108,17 @@
      def c11, 0.962339997, -0.194983006, 0.473434001, -0.480026007
      def c12, -0.69591397, 0.457136989, -0.203345001, 0.620715976
      def c13, -0.326211989, -0.405809999, -0.840143979, -0.0735799968
@@ -154,10 +196,11 @@ index 2847833c..557b1909 100644
 +    def c158, 0.5, -0.5, 0.5, 0
 +    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
++    defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
-@@ -120,6 +130,9 @@
+@@ -120,6 +131,9 @@
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
@@ -167,7 +210,7 @@ index 2847833c..557b1909 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
-@@ -151,7 +164,106 @@
+@@ -151,7 +165,147 @@
      add r4.xy, -r4, c1.z
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -245,6 +288,47 @@ index 2847833c..557b1909 100644
 +          abs r29.x, r29.x
 +          add r29.x, r29.x, r28.y
 +          if_lt r14.y, r29.x
++            // Refine where the ray crossed the scene between the previous step and this one,
++            // and take the colour there: taken at the step itself, neighbouring pixels caught a
++            // ped's legs at different steps and the reflection showed several copies of them.
++            // r17 holds the search interval (in s, before squaring) until the colour lands in it.
++            add r17.x, r30.w, -c157.z
++            max r17.x, r17.x, c155.z
++            mov r17.y, r30.w
++            rep i1
++              add r17.z, r17.x, r17.y
++              mul r17.z, r17.z, c158.x
++              mul r28.w, r17.z, r17.z
++              mad r15.xyz, r30, r28.w, r31
++              mul r16.w, r15.z, r28.x
++              mul r16.x, r15.x, r27.x
++              mad r16.x, r15.z, r27.z, r16.x
++              mul r16.y, r15.y, r27.y
++              mad r16.y, r15.z, r27.w, r16.y
++              rcp r16.z, r16.w
++              mul r16.xy, r16, r16.z
++              mad r18.xy, r16, c158.xy, c158.zz
++              texldl r14, r18, s11
++              mul r14.x, r14.x, r28.z
++              exp r14.x, r14.x
++              mul r14.x, r14.x, r15.w
++              add r14.y, r16.w, -r14.x
++              if_gt r14.y, c155.z
++                mov r17.y, r17.z
++              else
++                mov r17.x, r17.z
++              endif
++            endrep
++            mul r28.w, r17.y, r17.y
++            mad r15.xyz, r30, r28.w, r31
++            mul r16.w, r15.z, r28.x
++            mul r16.x, r15.x, r27.x
++            mad r16.x, r15.z, r27.z, r16.x
++            mul r16.y, r15.y, r27.y
++            mad r16.y, r15.z, r27.w, r16.y
++            rcp r16.z, r16.w
++            mul r16.xy, r16, r16.z
++            mad r18.xy, r16, c158.xy, c158.zz
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
@@ -275,10 +359,10 @@ index 2847833c..557b1909 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 1d5cecf5..1c6ca325 100644
+index 1d5cecf5..561a2e97 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-@@ -133,6 +133,16 @@
+@@ -133,6 +133,17 @@
      def c12, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c13, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c28, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
@@ -292,10 +376,11 @@ index 1d5cecf5..1c6ca325 100644
 +    def c158, 0.5, -0.5, 0.5, 0
 +    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
++    defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
-@@ -145,6 +155,9 @@
+@@ -145,6 +156,9 @@
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
@@ -305,7 +390,7 @@ index 1d5cecf5..1c6ca325 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c0.x, v1
-@@ -177,7 +190,106 @@
+@@ -177,7 +191,147 @@
      add r4.xy, -r4, c0.w
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -383,6 +468,47 @@ index 1d5cecf5..1c6ca325 100644
 +          abs r29.x, r29.x
 +          add r29.x, r29.x, r28.y
 +          if_lt r14.y, r29.x
++            // Refine where the ray crossed the scene between the previous step and this one,
++            // and take the colour there: taken at the step itself, neighbouring pixels caught a
++            // ped's legs at different steps and the reflection showed several copies of them.
++            // r17 holds the search interval (in s, before squaring) until the colour lands in it.
++            add r17.x, r30.w, -c157.z
++            max r17.x, r17.x, c155.z
++            mov r17.y, r30.w
++            rep i1
++              add r17.z, r17.x, r17.y
++              mul r17.z, r17.z, c158.x
++              mul r28.w, r17.z, r17.z
++              mad r15.xyz, r30, r28.w, r31
++              mul r16.w, r15.z, r28.x
++              mul r16.x, r15.x, r27.x
++              mad r16.x, r15.z, r27.z, r16.x
++              mul r16.y, r15.y, r27.y
++              mad r16.y, r15.z, r27.w, r16.y
++              rcp r16.z, r16.w
++              mul r16.xy, r16, r16.z
++              mad r18.xy, r16, c158.xy, c158.zz
++              texldl r14, r18, s11
++              mul r14.x, r14.x, r28.z
++              exp r14.x, r14.x
++              mul r14.x, r14.x, r15.w
++              add r14.y, r16.w, -r14.x
++              if_gt r14.y, c155.z
++                mov r17.y, r17.z
++              else
++                mov r17.x, r17.z
++              endif
++            endrep
++            mul r28.w, r17.y, r17.y
++            mad r15.xyz, r30, r28.w, r31
++            mul r16.w, r15.z, r28.x
++            mul r16.x, r15.x, r27.x
++            mad r16.x, r15.z, r27.z, r16.x
++            mul r16.y, r15.y, r27.y
++            mad r16.y, r15.z, r27.w, r16.y
++            rcp r16.z, r16.w
++            mul r16.xy, r16, r16.z
++            mad r18.xy, r16, c158.xy, c158.zz
 +            texldl r17, r18, s13
 +            mul_sat r17.w, r29.y, c157.w // fade out near the screen edges
 +          endif
