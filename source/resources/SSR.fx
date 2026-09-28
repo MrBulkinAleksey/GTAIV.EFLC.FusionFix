@@ -274,6 +274,12 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     float2 tEdge = (step(0.0, dUV) - uv0) / (abs(dUV) < 1e-5 ? 1e-5 : dUV);
     float tEnd = clamp(min(tEdge.x, tEdge.y), 0.0, 1.0);
 
+    // A ray short on screen needs fewer steps: a car far away reflects over a few dozen pixels,
+    // and all NUM_STEPS there sampled each pixel several times. About one step per two pixels
+    // of the ray keeps the last and longest step, twice the average, within a few pixels.
+    float rayPixels = length(dUV * tEnd / vec2InvViewportSize);
+    float steps = clamp(ceil(rayPixels * 0.5), 12.0, (float) NUM_STEPS);
+
     // Steps grow with the square of their index: a few centimetres next to the surface, where
     // a ped standing by a car is, about twice the even spacing at the far end. Even steps a
     // metre apart stepped over a leg next to the bonnet, so only some pixels caught it and its
@@ -293,7 +299,9 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     [loop]
     for (int i = 0; i < NUM_STEPS; ++i)
     {
-        float s = ((float) i + jitter) / (float) NUM_STEPS;
+        if ((float) i >= steps)
+            break;
+        float s = ((float) i + jitter) / steps;
         float t = tEnd * s * s;
 
         float2 sampleUV = lerp(uv0, uv1, t);
@@ -575,6 +583,11 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
         float2( 0.519,  0.767), float2( 0.185, -0.893), float2( 0.507,  0.064),
         float2( 0.896,  0.412), float2(-0.322, -0.933), float2(-0.792, -0.598)
     };
+
+    // Most of the screen is sky, roads and walls, which SSR does not trace and deferred_lighting
+    // would not show a reflection on: twelve taps there were spent for nothing.
+    if (SSRSurfaceWeight(uv) <= 0.0)
+        return 0.0;
 
     float4 centre = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
     float centreZ = LinearDepth(uv);
