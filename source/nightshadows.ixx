@@ -372,9 +372,36 @@ export bool IsPlayerNightShadowFixActive() noexcept
 
 class NightShadows
 {
+    // Taken while the ASI loads, before any FusionFix module installs hooks. The async
+    // initializers run in parallel, and framelimit.ixx hooks the frame counter increment
+    // the adapter checks, so checking from onInitEventAsync races with it.
+    static inline bool ceAdapter = false;
+    static inline bool casterGuard = false;
+
 public:
     NightShadows()
     {
+        {
+            ceAdapter = CShadows::ValidateAdapter();
+            const auto image = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
+            // Uses the real image size, so an unexpected executable is never read past its end.
+            const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+            const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(image + dos->e_lfanew);
+            ShadowDiagnostics::adapterStatus = std::string(ceAdapter ? "ce_adapter=1 " : "ce_adapter=0 ") +
+                fusionfix::shadows::ce::DescribeMappedImage(image, nt->OptionalHeader.SizeOfImage,
+                    reinterpret_cast<uintptr_t>(image));
+            if (ceAdapter)
+            {
+                // Validate BEFORE allocator and caster installation alter guarded bytes.
+                casterGuard = fusionfix::shadows::ce::casterguard::Validate(
+                    image, fusionfix::shadows::ce::ImageSize, reinterpret_cast<uintptr_t>(image));
+                // Preserve the exact startup mismatch before any hook modifies a guarded
+                // range. This remains diagnostic only: no guard bypass.
+                ShadowDiagnostics::startupGuardDetails = fusionfix::shadows::ce::diagnostics::Describe(
+                    image, fusionfix::shadows::ce::ImageSize, reinterpret_cast<uintptr_t>(image));
+            }
+        }
+
         // Registered before game callbacks start, independent of async init.
         FusionFix::onGameProcessEvent() += []() { NearbyVehicleLighting36::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
         FusionFix::onInitEventAsync() += []()
@@ -396,18 +423,7 @@ public:
 
             // The experimental adapter has only been audited for CE 1.2.0.59. Any other
             // layout skips it and keeps the official FusionFix night shadow behaviour.
-            const bool ceAdapter = CShadows::ValidateAdapter();
             ShadowDiagnostics::path = iniReader.GetIniPath().parent_path() / "GTAIV-shadows.log";
-            {
-                // Uses the real image size, so an unexpected executable is never read past its end.
-                const auto image = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
-                const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
-                const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(image + dos->e_lfanew);
-                ShadowDiagnostics::adapterStatus = std::string(ceAdapter ? "ce_adapter=1 " : "ce_adapter=0 ") +
-                    fusionfix::shadows::ce::DescribeMappedImage(image, nt->OptionalHeader.SizeOfImage,
-                        reinterpret_cast<uintptr_t>(image));
-            }
-            bool casterGuard = false;
             int casterMode = 0;
             if (ceAdapter)
             {
@@ -418,16 +434,8 @@ public:
                 bTrafficSelfShadowFix = iniReader.ReadInteger("SHADOWS", "ExperimentalTrafficSelfShadowFix", 0) != 0;
                 NearbyVehicleLighting36::enabled.store(iniReader.ReadInteger("SHADOWS", "NearbyVehicleHeadlightReceivers", 0) != 0, std::memory_order_release);
 
-                // Validate BEFORE allocator and caster installation alter guarded bytes.
-                const auto image = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
-                casterGuard = fusionfix::shadows::ce::casterguard::Validate(
-                    image, fusionfix::shadows::ce::ImageSize, reinterpret_cast<uintptr_t>(image));
                 casterMode = iniReader.ReadInteger("SHADOWS", "ExperimentalOwnHeadlightCasterFix", 0);
-                // Preserve the exact startup mismatch before our own hooks modify
-                // any guarded range. This remains diagnostic only: no guard bypass.
-                ShadowDiagnostics::startupGuardDetails = fusionfix::shadows::ce::diagnostics::Describe(
-                    image, fusionfix::shadows::ce::ImageSize, reinterpret_cast<uintptr_t>(image));
-                OwnHeadlightCaster::base = reinterpret_cast<uintptr_t>(image);
+                OwnHeadlightCaster::base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
                 // Publication happens after all hooks are installed below.
                 ShadowDiagnostics::guardPassed = casterGuard;
                 ShadowDiagnostics::casterMode = casterMode;
