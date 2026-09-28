@@ -255,8 +255,8 @@ public:
     // themselves (shaders/patches/local_light_contact_shadows.patch); they follow the Contact
     // Shadows menu toggle.
     bool bLocalContactShadows = false; // off until they show right
-    float fLocalContactShadowLength = 2.0f;
-    float fLocalContactShadowThickness = 0.3f;
+    float fLocalContactShadowLength = 0.5f;
+    float fLocalContactShadowThickness = 0.2f;
     float fLocalContactShadowMaxDistance = 40.0f;
     float fLocalContactShadowIntensity = 1.0f;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
@@ -905,8 +905,8 @@ public:
         fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
         bLocalContactShadows = iniReader.ReadInteger("POSTFX", "LocalContactShadows", 0) != 0;
-        fLocalContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsLength", 2.0f), 0.05f, 10.0f);
-        fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.3f), 0.01f, 5.0f);
+        fLocalContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsLength", 0.5f), 0.05f, 10.0f);
+        fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.2f), 0.01f, 5.0f);
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         fNormalDetail = std::clamp(iniReader.ReadFloat("POSTFX", "NormalDetail", 1.0f), 1.0f, 4.0f);
