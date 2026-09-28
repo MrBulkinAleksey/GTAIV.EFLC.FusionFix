@@ -262,6 +262,14 @@ public:
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
     float LocalContactShadowConsts[12] = {};
+    // Light scattered by the air inside point and spot lights, marched in the light shaders
+    // (shaders/patches/local_light_contact_shadows.patch). c201: density, strength, max
+    // distance squared and 12345 in w while on; set with c202-c204 right before lighting.
+    bool bVolumetricLight = true;
+    float fVolumetricLightDensity = 0.05f;
+    float fVolumetricLightIntensity = 1.0f;
+    float fVolumetricLightMaxDistance = 60.0f;
+    float VolumetricLightConsts[4] = {};
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
     IDirect3DSurface9* ContactRawSurf = nullptr;
     rage::grcRenderTargetPC* ContactTex = nullptr;
@@ -893,6 +901,10 @@ public:
         fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.2f), 0.01f, 5.0f);
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
+        bVolumetricLight = iniReader.ReadInteger("POSTFX", "VolumetricLight", 1) != 0;
+        fVolumetricLightDensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightDensity", 0.05f), 0.0f, 1.0f);
+        fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 1.0f), 0.0f, 10.0f);
+        fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 60.0f), 1.0f, 1000.0f);
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
@@ -2920,6 +2932,14 @@ private:
                 proj._11, proj._22, proj._31, proj._32,
             };
             memcpy(R.LocalContactShadowConsts, consts, sizeof(consts));
+
+            const bool volumetric = camera && R.bVolumetricLight && R.fVolumetricLightDensity > 0.0f && R.fVolumetricLightIntensity > 0.0f;
+            const float volumetricConsts[4] =
+            {
+                R.fVolumetricLightDensity, R.fVolumetricLightIntensity,
+                R.fVolumetricLightMaxDistance * R.fVolumetricLightMaxDistance, volumetric ? 12345.0f : 0.0f,
+            };
+            memcpy(R.VolumetricLightConsts, volumetricConsts, sizeof(volumetricConsts));
         }
 
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
@@ -3099,6 +3119,7 @@ public:
             R.bContactBound = true;
         }
 
+        pDevice->SetPixelShaderConstantF(201, R.VolumetricLightConsts, 1);
         pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
 
         pDevice->SetTexture(3, tex);
@@ -3137,6 +3158,7 @@ public:
         // Lights drawn for other views (reflections, mirrors) must not march with this camera.
         const float noLocalContactShadows[4] = {};
         pDevice->SetPixelShaderConstantF(203, noLocalContactShadows, 1);
+        pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
