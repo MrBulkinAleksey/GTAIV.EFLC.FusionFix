@@ -136,6 +136,12 @@ Screen Space Reflections
 [SSR Debug]
 SSR Debug View
 
+[SSRHalf]
+Half Resolution
+
+[SSRFull]
+Full Resolution
+
 [SSRDbgColour]
 Reflected Colour
 

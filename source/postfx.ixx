@@ -236,7 +236,9 @@ public:
         D3DXHANDLE techSSR, techSSRWater;
     } SSREffectHandles = {};
 
+    // PREF_SSR: 0 off, 1 half resolution, 2 full resolution.
     static bool SSREnabled() { static auto p = FusionFixSettings.GetRef("PREF_SSR"); return p && p->get() != 0; }
+    static bool SSRHalfRes() { static auto p = FusionFixSettings.GetRef("PREF_SSR"); return p && p->get() == 1; }
     // SSR debug view from the graphics menu (PREF_SSR_DEBUG), see SSRDebug_PS in SSR.fx.
     // Built after the SSR pass and shown over the finished frame.
     // Contact shadows (ContactShadows_PS in SSR.fx), bound to s9 for deferred_lighting
@@ -265,6 +267,14 @@ public:
     rage::grcRenderTargetPC* SSRDenoisedTex = nullptr;
     IDirect3DSurface9* SSRDenoisedSurf = nullptr;
     bool bSSRDenoised = false;
+    // The same pair at half the resolution, for the Half quality setting; deferred_lighting
+    // reads it with bilinear filtering. Both pairs are kept, so switching needs no reset.
+    rage::grcRenderTargetPC* SSRHalfTex = nullptr;
+    IDirect3DSurface9* SSRHalfSurf = nullptr;
+    rage::grcRenderTargetPC* SSRHalfDenoisedTex = nullptr;
+    IDirect3DSurface9* SSRHalfDenoisedSurf = nullptr;
+    // What deferred_lighting gets this frame: one of the four textures above.
+    IDirect3DTexture9* SSRResult = nullptr;
     rage::grcRenderTargetPC* SSRDebugTex = nullptr;
     IDirect3DSurface9* SSRDebugSurf = nullptr;
     bool bSSRDebugValid = false;
@@ -1145,6 +1155,17 @@ private:
             PostFxResources.SSRDenoisedTex = nullptr;
         }
         PostFxResources.bSSRDenoised = false;
+        SAFE_RELEASE(PostFxResources.SSRHalfSurf);
+        SAFE_RELEASE(PostFxResources.SSRHalfDenoisedSurf);
+        for (auto* rt : { &PostFxResources.SSRHalfTex, &PostFxResources.SSRHalfDenoisedTex })
+        {
+            if (*rt)
+            {
+                (*rt)->Destroy();
+                *rt = nullptr;
+            }
+        }
+        PostFxResources.SSRResult = nullptr;
         for (auto* rt : { &PostFxResources.ContactRawTex, &PostFxResources.ContactTex })
         {
             if (*rt)
@@ -1212,6 +1233,13 @@ private:
             PostFxResources.SSRDenoisedTex = CreateEmptyRT("SSRDenoisedTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.SSRDenoisedTex && PostFxResources.SSRDenoisedTex->mD3DTexture)
                 PostFxResources.SSRDenoisedTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRDenoisedSurf);
+
+            PostFxResources.SSRHalfTex = CreateEmptyRT("SSRHalfTex", 3, width / 2, height / 2, 64, &aoDesc);
+            if (PostFxResources.SSRHalfTex && PostFxResources.SSRHalfTex->mD3DTexture)
+                PostFxResources.SSRHalfTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRHalfSurf);
+            PostFxResources.SSRHalfDenoisedTex = CreateEmptyRT("SSRHalfDenoisedTex", 3, width / 2, height / 2, 64, &aoDesc);
+            if (PostFxResources.SSRHalfDenoisedTex && PostFxResources.SSRHalfDenoisedTex->mD3DTexture)
+                PostFxResources.SSRHalfDenoisedTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRHalfDenoisedSurf);
 
             PostFxResources.ContactRawTex = CreateEmptyRT("ContactShadowRawTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.ContactRawTex && PostFxResources.ContactRawTex->mD3DTexture)
@@ -1894,6 +1922,7 @@ private:
     {
         auto& R = PostFxResources;
         R.bSSRHistoryThisFrame = false;
+        R.SSRResult = nullptr;
         R.bSSRValidThisFrame = false;
         R.bSSRDebugValid = false;
         R.bGlassFrameValid = false;
@@ -1955,23 +1984,51 @@ private:
         float width = float(vp->mWidth);
         float height = float(vp->mHeight);
 
-        D3DVIEWPORT9 vpDesc = {};
-        vpDesc.MaxZ = 1.0f;
-        vpDesc.Width = DWORD(width);
-        vpDesc.Height = DWORD(height);
-        pDevice->SetViewport(&vpDesc);
-
-        struct ScreenVertex { float x, y, z, rhw; float u, v; };
-        ScreenVertex screenVertices[4] =
-        {
-            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
-            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
-        };
+        // Half: the march and the smoothing run on the half size targets, created as the full
+        // size halved; the debug view stays full size.
+        const bool half = R.SSRHalfRes() && R.SSRHalfSurf && R.SSRHalfDenoisedSurf;
+        IDirect3DSurface9* ssrSurf = half ? R.SSRHalfSurf : R.SSRSurf;
+        IDirect3DTexture9* ssrTex = half ? R.SSRHalfTex->mD3DTexture : R.SSRTex->mD3DTexture;
+        IDirect3DSurface9* denoisedSurf = half ? R.SSRHalfDenoisedSurf : R.SSRDenoisedSurf;
+        IDirect3DTexture9* denoisedTex = half ? R.SSRHalfDenoisedTex->mD3DTexture
+                                              : (R.SSRDenoisedTex ? R.SSRDenoisedTex->mD3DTexture : nullptr);
 
         auto& h = R.SSREffectHandles;
         ID3DXEffect* effect = R.SSREffect;
+        D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
+
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        ScreenVertex screenVertices[4] = {};
+        // Viewport, quad and the effect's pixel size and reconstruction basis for a w x h target.
+        auto setPassSize = [&](float w, float hgt)
+        {
+            D3DVIEWPORT9 vpDesc = {};
+            vpDesc.MaxZ = 1.0f;
+            vpDesc.Width = DWORD(w);
+            vpDesc.Height = DWORD(hgt);
+            pDevice->SetViewport(&vpDesc);
+
+            const ScreenVertex quad[4] =
+            {
+                { -0.5f,      -0.5f,       0.0f, 1.0f, 0.0f, 0.0f },
+                { -0.5f,       hgt - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+                { w - 0.5f,   -0.5f,       0.0f, 1.0f, 1.0f, 0.0f },
+                { w - 0.5f,    hgt - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+            };
+            memcpy(screenVertices, quad, sizeof(quad));
+
+            float invViewportSize[] = { 1.0f / w, 1.0f / hgt };
+            effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
+
+            // Same reconstruction basis the AO pass uses.
+            D3DXVECTOR4 projInfo;
+            projInfo.x = -2.0f / (w * proj._11);
+            projInfo.y = -2.0f / (hgt * proj._22);
+            projInfo.z = (1.0f - proj._31) / proj._11;
+            projInfo.w = (1.0f + proj._32) / proj._22;
+            effect->SetVector(h.vec4ProjInfo, &projInfo);
+        };
+        setPassSize(half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height);
 
         effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
         effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
@@ -1990,19 +2047,8 @@ private:
         effect->SetFloat(h.fGlossBoost, hasSpecular ? R.fSSRGlossBoost : 0.0f);
         effect->SetFloat(h.fGlossCutoff, hasSpecular ? R.fSSRGlossCutoff : -1.0f);
 
-        float invViewportSize[] = { 1.0f / width, 1.0f / height };
-        effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
         effect->SetFloat(h.fNearPlane, vp->mNearClip);
         effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
-
-        // Same reconstruction basis the AO pass uses.
-        D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
-        D3DXVECTOR4 projInfo;
-        projInfo.x = -2.0f / ((width) * proj._11);
-        projInfo.y = -2.0f / ((height) * proj._22);
-        projInfo.z = (1.0f - proj._31) / proj._11;
-        projInfo.w = (1.0f + proj._32) / proj._22;
-        effect->SetVector(h.vec4ProjInfo, &projInfo);
 
         D3DXMATRIX viewProj;
         MatrixMultiply(viewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
@@ -2073,7 +2119,7 @@ private:
             effect->Begin(&passes, 0);
         }
         {
-            pDevice->SetRenderTarget(0, R.SSRSurf);
+            pDevice->SetRenderTarget(0, ssrSurf);
             pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
 
             effect->BeginPass(0);
@@ -2086,11 +2132,12 @@ private:
         // Debug view, while the G-buffer still holds this frame. Changes nothing the game sees.
         // Smooth the result into the texture deferred_lighting reads.
         R.bSSRDenoised = false;
-        if (R.fSSRDenoiseRadius > 0.0f && R.SSRDenoisedSurf && h.techSSRDenoise)
+        if (R.fSSRDenoiseRadius > 0.0f && denoisedSurf && denoisedTex && h.techSSRDenoise)
         {
-            effect->SetTexture(h.SSRResultTex2D, R.SSRTex->mD3DTexture);
-            effect->SetFloat(h.fDenoiseRadius, R.fSSRDenoiseRadius);
-            pDevice->SetRenderTarget(0, R.SSRDenoisedSurf);
+            effect->SetTexture(h.SSRResultTex2D, ssrTex);
+            // The radius is in full size pixels, so the blur covers the same part of the screen.
+            effect->SetFloat(h.fDenoiseRadius, half ? R.fSSRDenoiseRadius * 0.5f : R.fSSRDenoiseRadius);
+            pDevice->SetRenderTarget(0, denoisedSurf);
             effect->SetTechnique(h.techSSRDenoise);
             effect->Begin(&passes, 0);
             effect->BeginPass(0);
@@ -2100,11 +2147,14 @@ private:
             effect->End();
             R.bSSRDenoised = true;
         }
-        IDirect3DTexture9* ssrResult = R.bSSRDenoised ? R.SSRDenoisedTex->mD3DTexture : R.SSRTex->mD3DTexture;
+        IDirect3DTexture9* ssrResult = R.bSSRDenoised ? denoisedTex : ssrTex;
+        R.SSRResult = ssrResult;
 
         const int debugMode = R.SSRDebugMode();
         if (debugMode && debugMode < R.kGlassDebugMode && R.SSRDebugSurf && h.techSSRDebug && hasNormals)
         {
+            if (half)
+                setPassSize(width, height);
             effect->SetTexture(h.SSRResultTex2D, ssrResult);
             effect->SetFloat(h.fDebugMode, float(debugMode));
 
@@ -2967,10 +3017,10 @@ public:
             return;
 
         IDirect3DBaseTexture9* tex = R.TransparentTex();
-        if (R.bSSRDenoised && R.SSRDenoisedTex && R.SSRDenoisedTex->mD3DTexture)
-            tex = R.SSRDenoisedTex->mD3DTexture;
+        if (R.SSRResult)
+            tex = R.SSRResult;
         else if (R.SSRTex && R.SSRTex->mD3DTexture)
-            tex = R.SSRTex->mD3DTexture;
+            tex = R.SSRTex->mD3DTexture; // cleared while SSR is off
         // Contact shadows for deferred_lighting; s9 is read by no game shader, and the car glass
         // takes it over right after lighting.
         if (R.bContactValid && R.ContactTex && R.ContactTex->mD3DTexture)
