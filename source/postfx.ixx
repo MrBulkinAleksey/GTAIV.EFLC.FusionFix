@@ -2032,6 +2032,7 @@ private:
         // World to reconstruction space rotation, for the G-buffer normals and the debug view.
         const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
         {
+            const float axisSign[3] = { -1.0f, 1.0f, (proj._34 < 0.0f) ? -1.0f : 1.0f };
             D3DXVECTOR4 toView[3];
             for (int row = 0; row < 3; ++row)
                 toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
