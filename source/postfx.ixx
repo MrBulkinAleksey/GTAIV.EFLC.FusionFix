@@ -286,7 +286,8 @@ public:
     //   s9  a 5x1 float texture: texel 0 projection _11, _22, _31, _32; texel 1 _34,
     //       thickness, ray length and a magic value, so a foreign texture is never used;
     //       texel 2 the camera's right axis and the debug flag; texel 3 its up axis (the axes
-    //       come from here because those shaders overwrite gViewInverse's first two rows);
+    //       come from here because those shaders overwrite gViewInverse's first two rows) and
+    //       half the screen height, to count the steps a ray needs;
     //       texel 4 near and log2(far / near), to make the depth in s11 linear, the step
     //       jitter flag (ScreenSpaceReflectionsGlassStepJitter) and how far reflections
     //       pointing back at the camera reach (ScreenSpaceReflectionsTowardCamera, as in SSR)
@@ -302,7 +303,9 @@ public:
     // slices; with it, as fine noise, since glass has no smoothing pass. Averaging pixel quads
     // in the shader with dsx and dsy left bright dots where the derivatives are per quad.
     bool bGlassStepJitter = true;
-    IDirect3DTexture9* GlassParamsTex = nullptr; // managed, so it survives device resets
+    // Dynamic and locked with D3DLOCK_DISCARD, so the upload each frame never waits for the GPU
+    // to finish with last frame's; D3DPOOL_DEFAULT, so released on device loss.
+    IDirect3DTexture9* GlassParamsTex = nullptr;
     float GlassParams[20] = {};
     bool bGlassFrameValid = false;
     bool bGlassBound = false;
@@ -1014,6 +1017,7 @@ private:
         PostFxResources.ReleaseTextures();
         PostFxResources.ReleaseWaterMask();
         UnbindGlassReflections();
+        SAFE_RELEASE(PostFxResources.GlassParamsTex);
         // PostFxResources.mSpecularAoRT    =nullptr;
         PostFxResources.mNormalRT = nullptr;
         PostFxResources.mDiffuseRT = nullptr;
@@ -2177,7 +2181,7 @@ private:
                 proj._11, proj._22, proj._31, proj._32,
                 proj._34, R.fGlassReflectionsThickness, R.fGlassReflectionsLength, 12345.0f,
                 viewInv.m[0][0], viewInv.m[0][1], viewInv.m[0][2], debugMode == R.kGlassDebugMode ? 1.0f : 0.0f,
-                viewInv.m[1][0], viewInv.m[1][1], viewInv.m[1][2], 0.0f,
+                viewInv.m[1][0], viewInv.m[1][1], viewInv.m[1][2], height * 0.5f,
                 vp->mNearClip, log2f(vp->mFarClip / vp->mNearClip), R.bGlassStepJitter ? 1.0f : 0.0f, R.fSSRTowardCamera,
             };
             memcpy(R.GlassParams, params, sizeof(params));
@@ -3068,11 +3072,11 @@ public:
         R.bGlassFrameValid = false;
 
         if (ok && !R.GlassParamsTex)
-            ok = SUCCEEDED(pDevice->CreateTexture(5, 1, 1, 0, D3DFMT_A32B32G32R32F, D3DPOOL_MANAGED, &R.GlassParamsTex, nullptr));
+            ok = SUCCEEDED(pDevice->CreateTexture(5, 1, 1, D3DUSAGE_DYNAMIC, D3DFMT_A32B32G32R32F, D3DPOOL_DEFAULT, &R.GlassParamsTex, nullptr));
         if (ok)
         {
             D3DLOCKED_RECT locked = {};
-            ok = SUCCEEDED(R.GlassParamsTex->LockRect(0, &locked, nullptr, 0));
+            ok = SUCCEEDED(R.GlassParamsTex->LockRect(0, &locked, nullptr, D3DLOCK_DISCARD));
             if (ok)
             {
                 // A32B32G32R32F stores each texel as r, g, b, a floats.

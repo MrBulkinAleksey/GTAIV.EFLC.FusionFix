@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 366992fd..f53e32b0 100644
+index 366992fd..720c713e 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-@@ -157,6 +157,18 @@
+@@ -157,6 +157,19 @@
      def c12, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c13, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c28, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
@@ -16,12 +16,13 @@ index 366992fd..f53e32b0 100644
 +    def c158, 0.5, -0.5, 0.5, 0
 +    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
++    def c164, 12, 48, 9.99999997e-007, 0 // step count limits
 +    defi i0, 48, 0, 0, 0
 +    defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
-@@ -169,6 +181,9 @@
+@@ -169,6 +182,9 @@
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
@@ -31,7 +32,7 @@ index 366992fd..f53e32b0 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
-@@ -201,7 +216,172 @@
+@@ -201,7 +217,209 @@
      add r4.xy, -r4, c1.w
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -67,6 +68,42 @@ index 366992fd..f53e32b0 100644
 +      dp3 r31.y, r15, r16
 +      dp3 r31.z, r15, c14
 +      mul r31.w, r31.z, r28.x // view depth of the previous sample
++      // A ray short on screen takes fewer steps, about one per two pixels of it, 12 to 48: a
++      // window far away reflects over a few dozen pixels. r16 still holds texel 3, whose w is
++      // half the screen height; half its width is that times _22 / _11. r17.y takes the step
++      // in s, r17 being free until a hit.
++      mul r14.x, r31.x, r27.x
++      mad r14.x, r31.z, r27.z, r14.x
++      mul r14.y, r31.y, r27.y
++      mad r14.y, r31.z, r27.w, r14.y
++      rcp r14.w, r31.w
++      mul r14.xy, r14, r14.w // start, in clip space
++      add r18.xyz, r31, r30
++      mul r18.w, r18.z, r28.x
++      max r18.w, r18.w, c164.z // an end behind the camera just counts as long
++      mul r29.x, r18.x, r27.x
++      mad r29.x, r18.z, r27.z, r29.x
++      mul r29.y, r18.y, r27.y
++      mad r29.y, r18.z, r27.w, r29.y
++      rcp r18.w, r18.w
++      mul r29.xy, r29, r18.w
++      add r29.xy, r29, -r14
++      rcp r18.x, r27.x
++      mul r18.x, r18.x, r27.y
++      mul r18.x, r18.x, r16.w
++      mul r29.x, r29.x, r18.x
++      mul r29.y, r29.y, r16.w
++      dp2add r29.x, r29, r29, c155.z
++      max r29.x, r29.x, c164.z
++      rsq r29.y, r29.x
++      mul r29.x, r29.x, r29.y // length in pixels
++      mul r29.x, r29.x, c158.x
++      frc r29.y, r29.x
++      add r29.x, r29.x, -r29.y
++      add r29.x, r29.x, c157.y // floor(length / 2) + 1
++      max r29.x, r29.x, c164.x
++      min r29.x, r29.x, c164.y
++      rcp r17.y, r29.x
 +      // s11 holds the game's log depth; linear = near * 2^(raw * log2(far / near)). The ray
 +      // length in r28.z is no longer needed, so it takes log2(far / near); r15.w takes near.
 +      mov r16, c162
@@ -79,11 +116,12 @@ index 366992fd..f53e32b0 100644
 +      frc r29.x, r29.x
 +      add r29.x, r29.x, c159.w
 +      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsGlassStepJitter)
-+      mul r30.w, r29.x, c157.z
-+      mov r17, c155.z
++      mul r30.w, r29.x, r17.y
++      mov r17.w, c155.z
 +      mov r17.x, c157.y // r17.x 1 while the previous sample was in front of the scene
 +      rep i0
-+        add r30.w, r30.w, c157.z
++        add r30.w, r30.w, r17.y
++        break_lt c157.y, r30.w // past the ray's end
 +        mul r28.w, r30.w, r30.w
 +        mad r15.xyz, r30, r28.w, r31
 +        mul r16.w, r15.z, r28.x
@@ -116,7 +154,7 @@ index 366992fd..f53e32b0 100644
 +            // and take the colour there: taken at the step itself, neighbouring pixels caught a
 +            // ped's legs at different steps and the reflection showed several copies of them.
 +            // r17 holds the search interval (in s, before squaring) until the colour lands in it.
-+            add r17.x, r30.w, -c157.z
++            add r17.x, r30.w, -r17.y
 +            max r17.x, r17.x, c155.z
 +            mov r17.y, r30.w
 +            rep i1
@@ -205,10 +243,10 @@ index 366992fd..f53e32b0 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 2847833c..a85c6711 100644
+index 2847833c..66b4803f 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-@@ -108,6 +108,18 @@
+@@ -108,6 +108,19 @@
      def c11, 0.962339997, -0.194983006, 0.473434001, -0.480026007
      def c12, -0.69591397, 0.457136989, -0.203345001, 0.620715976
      def c13, -0.326211989, -0.405809999, -0.840143979, -0.0735799968
@@ -222,12 +260,13 @@ index 2847833c..a85c6711 100644
 +    def c158, 0.5, -0.5, 0.5, 0
 +    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
++    def c164, 12, 48, 9.99999997e-007, 0 // step count limits
 +    defi i0, 48, 0, 0, 0
 +    defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
-@@ -120,6 +132,9 @@
+@@ -120,6 +133,9 @@
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
@@ -237,7 +276,7 @@ index 2847833c..a85c6711 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
-@@ -151,7 +166,172 @@
+@@ -151,7 +167,209 @@
      add r4.xy, -r4, c1.z
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -273,6 +312,42 @@ index 2847833c..a85c6711 100644
 +      dp3 r31.y, r15, r16
 +      dp3 r31.z, r15, c14
 +      mul r31.w, r31.z, r28.x // view depth of the previous sample
++      // A ray short on screen takes fewer steps, about one per two pixels of it, 12 to 48: a
++      // window far away reflects over a few dozen pixels. r16 still holds texel 3, whose w is
++      // half the screen height; half its width is that times _22 / _11. r17.y takes the step
++      // in s, r17 being free until a hit.
++      mul r14.x, r31.x, r27.x
++      mad r14.x, r31.z, r27.z, r14.x
++      mul r14.y, r31.y, r27.y
++      mad r14.y, r31.z, r27.w, r14.y
++      rcp r14.w, r31.w
++      mul r14.xy, r14, r14.w // start, in clip space
++      add r18.xyz, r31, r30
++      mul r18.w, r18.z, r28.x
++      max r18.w, r18.w, c164.z // an end behind the camera just counts as long
++      mul r29.x, r18.x, r27.x
++      mad r29.x, r18.z, r27.z, r29.x
++      mul r29.y, r18.y, r27.y
++      mad r29.y, r18.z, r27.w, r29.y
++      rcp r18.w, r18.w
++      mul r29.xy, r29, r18.w
++      add r29.xy, r29, -r14
++      rcp r18.x, r27.x
++      mul r18.x, r18.x, r27.y
++      mul r18.x, r18.x, r16.w
++      mul r29.x, r29.x, r18.x
++      mul r29.y, r29.y, r16.w
++      dp2add r29.x, r29, r29, c155.z
++      max r29.x, r29.x, c164.z
++      rsq r29.y, r29.x
++      mul r29.x, r29.x, r29.y // length in pixels
++      mul r29.x, r29.x, c158.x
++      frc r29.y, r29.x
++      add r29.x, r29.x, -r29.y
++      add r29.x, r29.x, c157.y // floor(length / 2) + 1
++      max r29.x, r29.x, c164.x
++      min r29.x, r29.x, c164.y
++      rcp r17.y, r29.x
 +      // s11 holds the game's log depth; linear = near * 2^(raw * log2(far / near)). The ray
 +      // length in r28.z is no longer needed, so it takes log2(far / near); r15.w takes near.
 +      mov r16, c162
@@ -285,11 +360,12 @@ index 2847833c..a85c6711 100644
 +      frc r29.x, r29.x
 +      add r29.x, r29.x, c159.w
 +      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsGlassStepJitter)
-+      mul r30.w, r29.x, c157.z
-+      mov r17, c155.z
++      mul r30.w, r29.x, r17.y
++      mov r17.w, c155.z
 +      mov r17.x, c157.y // r17.x 1 while the previous sample was in front of the scene
 +      rep i0
-+        add r30.w, r30.w, c157.z
++        add r30.w, r30.w, r17.y
++        break_lt c157.y, r30.w // past the ray's end
 +        mul r28.w, r30.w, r30.w
 +        mad r15.xyz, r30, r28.w, r31
 +        mul r16.w, r15.z, r28.x
@@ -322,7 +398,7 @@ index 2847833c..a85c6711 100644
 +            // and take the colour there: taken at the step itself, neighbouring pixels caught a
 +            // ped's legs at different steps and the reflection showed several copies of them.
 +            // r17 holds the search interval (in s, before squaring) until the colour lands in it.
-+            add r17.x, r30.w, -c157.z
++            add r17.x, r30.w, -r17.y
 +            max r17.x, r17.x, c155.z
 +            mov r17.y, r30.w
 +            rep i1
@@ -411,10 +487,10 @@ index 2847833c..a85c6711 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 1d5cecf5..1ad961fb 100644
+index 1d5cecf5..9ee48716 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-@@ -133,6 +133,18 @@
+@@ -133,6 +133,19 @@
      def c12, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c13, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c28, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
@@ -428,12 +504,13 @@ index 1d5cecf5..1ad961fb 100644
 +    def c158, 0.5, -0.5, 0.5, 0
 +    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
++    def c164, 12, 48, 9.99999997e-007, 0 // step count limits
 +    defi i0, 48, 0, 0, 0
 +    defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
-@@ -145,6 +157,9 @@
+@@ -145,6 +158,9 @@
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
@@ -443,7 +520,7 @@ index 1d5cecf5..1ad961fb 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c0.x, v1
-@@ -177,7 +192,172 @@
+@@ -177,7 +193,209 @@
      add r4.xy, -r4, c0.w
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -479,6 +556,42 @@ index 1d5cecf5..1ad961fb 100644
 +      dp3 r31.y, r15, r16
 +      dp3 r31.z, r15, c14
 +      mul r31.w, r31.z, r28.x // view depth of the previous sample
++      // A ray short on screen takes fewer steps, about one per two pixels of it, 12 to 48: a
++      // window far away reflects over a few dozen pixels. r16 still holds texel 3, whose w is
++      // half the screen height; half its width is that times _22 / _11. r17.y takes the step
++      // in s, r17 being free until a hit.
++      mul r14.x, r31.x, r27.x
++      mad r14.x, r31.z, r27.z, r14.x
++      mul r14.y, r31.y, r27.y
++      mad r14.y, r31.z, r27.w, r14.y
++      rcp r14.w, r31.w
++      mul r14.xy, r14, r14.w // start, in clip space
++      add r18.xyz, r31, r30
++      mul r18.w, r18.z, r28.x
++      max r18.w, r18.w, c164.z // an end behind the camera just counts as long
++      mul r29.x, r18.x, r27.x
++      mad r29.x, r18.z, r27.z, r29.x
++      mul r29.y, r18.y, r27.y
++      mad r29.y, r18.z, r27.w, r29.y
++      rcp r18.w, r18.w
++      mul r29.xy, r29, r18.w
++      add r29.xy, r29, -r14
++      rcp r18.x, r27.x
++      mul r18.x, r18.x, r27.y
++      mul r18.x, r18.x, r16.w
++      mul r29.x, r29.x, r18.x
++      mul r29.y, r29.y, r16.w
++      dp2add r29.x, r29, r29, c155.z
++      max r29.x, r29.x, c164.z
++      rsq r29.y, r29.x
++      mul r29.x, r29.x, r29.y // length in pixels
++      mul r29.x, r29.x, c158.x
++      frc r29.y, r29.x
++      add r29.x, r29.x, -r29.y
++      add r29.x, r29.x, c157.y // floor(length / 2) + 1
++      max r29.x, r29.x, c164.x
++      min r29.x, r29.x, c164.y
++      rcp r17.y, r29.x
 +      // s11 holds the game's log depth; linear = near * 2^(raw * log2(far / near)). The ray
 +      // length in r28.z is no longer needed, so it takes log2(far / near); r15.w takes near.
 +      mov r16, c162
@@ -491,11 +604,12 @@ index 1d5cecf5..1ad961fb 100644
 +      frc r29.x, r29.x
 +      add r29.x, r29.x, c159.w
 +      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsGlassStepJitter)
-+      mul r30.w, r29.x, c157.z
-+      mov r17, c155.z
++      mul r30.w, r29.x, r17.y
++      mov r17.w, c155.z
 +      mov r17.x, c157.y // r17.x 1 while the previous sample was in front of the scene
 +      rep i0
-+        add r30.w, r30.w, c157.z
++        add r30.w, r30.w, r17.y
++        break_lt c157.y, r30.w // past the ray's end
 +        mul r28.w, r30.w, r30.w
 +        mad r15.xyz, r30, r28.w, r31
 +        mul r16.w, r15.z, r28.x
@@ -528,7 +642,7 @@ index 1d5cecf5..1ad961fb 100644
 +            // and take the colour there: taken at the step itself, neighbouring pixels caught a
 +            // ped's legs at different steps and the reflection showed several copies of them.
 +            // r17 holds the search interval (in s, before squaring) until the colour lands in it.
-+            add r17.x, r30.w, -c157.z
++            add r17.x, r30.w, -r17.y
 +            max r17.x, r17.x, c155.z
 +            mov r17.y, r30.w
 +            rep i1
