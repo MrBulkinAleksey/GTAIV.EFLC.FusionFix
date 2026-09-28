@@ -160,6 +160,9 @@ Fusion Fix: Проверять Обновления
 [SSRDbgGlass]
 Лучи стёкол
 
+[SSRDbgParallax]
+Крутой параллакс
+
 [SSRDbgContact]
 Контактные тени
 

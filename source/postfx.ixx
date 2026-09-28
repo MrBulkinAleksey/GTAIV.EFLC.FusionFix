@@ -257,6 +257,9 @@ public:
     bool bContactValid = false;
     bool bContactBound = false;
     static constexpr int kContactDebugMode = 7;
+    // Paints the surfaces drawn by the patched steep parallax shaders
+    // (shaders/patches/steep_parallax_occlusion.patch), which read the flag and colour from c205.
+    static constexpr int kParallaxDebugMode = 8;
     static int SSRDebugMode() { static auto p = FusionFixSettings.GetRef("PREF_SSR_DEBUG"); return p ? p->get() : 0; }
     // The smoothed SSR result (SSRDenoise_PS) that deferred_lighting reads, when enabled.
     float fSSRDenoiseRadius = 2.0f;
@@ -1933,6 +1936,13 @@ private:
         R.bSSRDebugValid = false;
         R.bGlassFrameValid = false;
         R.bSSRDenoised = false;
+
+        // No game shader uses c205, so the value stays until the next frame's G-buffer draws.
+        if (auto pDevice = rage::grcDevice::GetD3DDevice())
+        {
+            const float parallaxDebug[4] = { R.SSRDebugMode() == R.kParallaxDebugMode ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
+            pDevice->SetPixelShaderConstantF(205, parallaxDebug, 1);
+        }
 
         if (!R.SSRSurf)
             return;
