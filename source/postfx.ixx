@@ -227,7 +227,7 @@ public:
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
-        D3DXHANDLE fDenoiseRadius, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade;
+        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
@@ -257,9 +257,8 @@ public:
     bool bContactValid = false;
     bool bContactBound = false;
     static constexpr int kContactDebugMode = 7;
-    // Paints the surfaces drawn by the patched steep parallax shaders
-    // (shaders/patches/steep_parallax_occlusion.patch), which read the flag and colour from c205.
-    static constexpr int kParallaxDebugMode = 8;
+    // 8 paints the surfaces drawn by the patched steep parallax shaders; shaders.ixx sets their
+    // flag in c205 at the start of each frame.
     static int SSRDebugMode() { static auto p = FusionFixSettings.GetRef("PREF_SSR_DEBUG"); return p ? p->get() : 0; }
     // The smoothed SSR result (SSRDenoise_PS) that deferred_lighting reads, when enabled.
     float fSSRDenoiseRadius = 2.0f;
@@ -721,6 +720,7 @@ public:
                 h.PostWaterTex2D = SSREffect->GetParameterByName(nullptr, "PostWaterTex2D");
                 h.fUseWaterMask = SSREffect->GetParameterByName(nullptr, "fUseWaterMask");
                 h.fDenoiseRadius = SSREffect->GetParameterByName(nullptr, "fDenoiseRadius");
+                h.fDenoiseSSROnly = SSREffect->GetParameterByName(nullptr, "fDenoiseSSROnly");
                 h.fPassThinObjects = SSREffect->GetParameterByName(nullptr, "fPassThinObjects");
                 h.fStepJitter = SSREffect->GetParameterByName(nullptr, "fStepJitter");
                 h.fTowardCamera = SSREffect->GetParameterByName(nullptr, "fTowardCamera");
@@ -1937,13 +1937,6 @@ private:
         R.bGlassFrameValid = false;
         R.bSSRDenoised = false;
 
-        // No game shader uses c205, so the value stays until the next frame's G-buffer draws.
-        if (auto pDevice = rage::grcDevice::GetD3DDevice())
-        {
-            const float parallaxDebug[4] = { R.SSRDebugMode() == R.kParallaxDebugMode ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
-            pDevice->SetPixelShaderConstantF(205, parallaxDebug, 1);
-        }
-
         if (!R.SSRSurf)
             return;
 
@@ -2153,6 +2146,7 @@ private:
             effect->SetTexture(h.SSRResultTex2D, ssrTex);
             // The radius is in full size pixels, so the blur covers the same part of the screen.
             effect->SetFloat(h.fDenoiseRadius, half ? R.fSSRDenoiseRadius * 0.5f : R.fSSRDenoiseRadius);
+            effect->SetFloat(h.fDenoiseSSROnly, 1.0f);
             pDevice->SetRenderTarget(0, denoisedSurf);
             effect->SetTechnique(h.techSSRDenoise);
             effect->Begin(&passes, 0);
@@ -3012,6 +3006,7 @@ private:
         {
             effect->SetTexture(h.SSRResultTex2D, R.ContactRawTex->mD3DTexture);
             effect->SetFloat(h.fDenoiseRadius, R.fSSRDenoiseRadius);
+            effect->SetFloat(h.fDenoiseSSROnly, 0.0f);
             DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.ContactSurf, width, height);
             result = R.ContactTex->mD3DTexture;
         }

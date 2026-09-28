@@ -593,6 +593,14 @@ public:
 
                         pDevice->SetPixelShaderConstantF(208, &arr13[0], 1);
                     }
+
+                    // SSR Debug 8: the patched steep parallax shaders paint their surfaces in
+                    // c205.yzw while c205.x is set (shaders/patches/steep_parallax_occlusion.patch)
+                    {
+                        static auto ssrDebug = FusionFixSettings.GetRef("PREF_SSR_DEBUG");
+                        const float arr14[4] = { ssrDebug && ssrDebug->get() == 8 ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
+                        pDevice->SetPixelShaderConstantF(205, &arr14[0], 1);
+                    }
                 }
             });
         };
