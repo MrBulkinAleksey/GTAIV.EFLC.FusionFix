@@ -213,6 +213,7 @@ public:
     IDirect3DTexture9* WaterMaskTex[2] = {};
     D3DSURFACE_DESC WaterMaskDesc = {};
     bool bWaterMaskCaptured = false;
+    bool bWaterDoneThisFrame = false; // reset by the SSR pass, which runs before any water
     void ReleaseWaterMask()
     {
         SAFE_RELEASE(WaterMaskTex[0]);
@@ -1926,6 +1927,7 @@ private:
     {
         auto& R = PostFxResources;
         R.bSSRHistoryThisFrame = false;
+        R.bWaterDoneThisFrame = false;
         R.SSRResult = nullptr;
         R.bSSRValidThisFrame = false;
         R.bSSRDebugValid = false;
@@ -2455,12 +2457,37 @@ private:
         return ok;
     }
 
+    // Whether the bound render target is the size of the screen, as the main scene's is.
+    static bool RenderTargetIsScreenSized()
+    {
+        auto& R = PostFxResources;
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        IDirect3DSurface9* rt = nullptr;
+        if (!pDevice || !R.SSRSurf || FAILED(pDevice->GetRenderTarget(0, &rt)) || !rt)
+            return false;
+        D3DSURFACE_DESC desc = {}, screen = {};
+        rt->GetDesc(&desc);
+        R.SSRSurf->GetDesc(&screen);
+        SAFE_RELEASE(rt);
+        return desc.Width == screen.Width && desc.Height == screen.Height;
+    }
+
     static void __cdecl WaterRenderHook(int a1)
     {
         auto& R = PostFxResources;
-        R.bWaterMaskCaptured = R.SSREnabled() && R.SSREffect && R.fSSRWaterIntensity > 0.0f && CopyRenderTargetToWaterMask(0);
+        // The game renders water for other views too, into targets of other sizes: each call
+        // took two full screen copies and a full screen pass, and a target of another size
+        // had both mask copies released and created again, even with no water on screen.
+        // Only the main scene's water gets reflections, once a frame.
+        const bool mainScene = R.SSREnabled() && R.SSREffect && R.fSSRWaterIntensity > 0.0f &&
+                               !R.bWaterDoneThisFrame && RenderTargetIsScreenSized();
+        R.bWaterMaskCaptured = mainScene && CopyRenderTargetToWaterMask(0);
         shWaterRender.unsafe_ccall<void>(a1);
-        RenderWaterReflections();
+        if (mainScene)
+        {
+            RenderWaterReflections();
+            R.bWaterDoneThisFrame = true;
+        }
         R.bWaterMaskCaptured = false;
     }
 
