@@ -262,16 +262,15 @@ public:
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
     float LocalContactShadowConsts[12] = {};
-    // Light scattered by the air inside point and spot lights, marched in the light shaders
-    // (shaders/patches/local_light_contact_shadows.patch). c201: density times strength,
-    // 1 / max radius squared, max distance squared and 12345 in w while on; set with
-    // c202-c204 right before lighting.
+    // The engine's own light shafts on street lights, as the snow season turns them on (see
+    // OnAfterCopyLight in seasonal/snow.ixx), at all times: spot lights of 8 to 20 m that are
+    // no vehicle, traffic, fill or cutscene light get the shaft flag, VolumetricLightIntensity
+    // and VolumetricLightScale, fading out towards VolumetricLightMaxDistance. When the snow
+    // season gives the weather shafts of its own, its handler, which runs after this one, wins.
     bool bVolumetricLight = true;
-    float fVolumetricLightDensity = 0.05f;
-    float fVolumetricLightIntensity = 1.0f;
-    float fVolumetricLightMaxDistance = 60.0f;
-    float fVolumetricLightMaxRadius = 20.0f;
-    float VolumetricLightConsts[4] = {};
+    float fVolumetricLightIntensity = 4.0f;
+    float fVolumetricLightScale = 0.15f;
+    float fVolumetricLightMaxDistance = 100.0f;
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
     IDirect3DSurface9* ContactRawSurf = nullptr;
     rage::grcRenderTargetPC* ContactTex = nullptr;
@@ -904,10 +903,9 @@ public:
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bVolumetricLight = iniReader.ReadInteger("POSTFX", "VolumetricLight", 1) != 0;
-        fVolumetricLightDensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightDensity", 0.05f), 0.0f, 1.0f);
-        fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 1.0f), 0.0f, 10.0f);
-        fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 60.0f), 1.0f, 1000.0f);
-        fVolumetricLightMaxRadius = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxRadius", 20.0f), 0.5f, 200.0f);
+        fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 4.0f), 0.0f, 20.0f);
+        fVolumetricLightScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightScale", 0.15f), 0.0f, 2.0f);
+        fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 100.0f), 10.0f, 1000.0f);
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
@@ -2936,13 +2934,6 @@ private:
             };
             memcpy(R.LocalContactShadowConsts, consts, sizeof(consts));
 
-            const bool volumetric = camera && R.bVolumetricLight && R.fVolumetricLightDensity > 0.0f && R.fVolumetricLightIntensity > 0.0f;
-            const float volumetricConsts[4] =
-            {
-                R.fVolumetricLightDensity * R.fVolumetricLightIntensity, 1.0f / (R.fVolumetricLightMaxRadius * R.fVolumetricLightMaxRadius),
-                R.fVolumetricLightMaxDistance * R.fVolumetricLightMaxDistance, volumetric ? 12345.0f : 0.0f,
-            };
-            memcpy(R.VolumetricLightConsts, volumetricConsts, sizeof(volumetricConsts));
         }
 
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
@@ -3101,6 +3092,36 @@ private:
         R.bContactValid = true;
     }
 
+    // Runs as the game copies each light into the frame's draw list, on the main thread.
+    static void OnAfterCopyLight(rage::CLightSource* light)
+    {
+        auto& R = PostFxResources;
+        if (!R.bVolumetricLight || R.fVolumetricLightIntensity <= 0.0f || !light)
+            return;
+        // Spot lights of 8 to 20 m, most of lamppost.img, and none of the vehicle, traffic,
+        // fill and cutscene lights (0x398) or lights that have a shaft already (8).
+        if (light->mType != rage::LT_SPOT || light->mRadius < 8.0f || light->mRadius > 20.0f || (light->mFlags & (0x398 | 8)))
+            return;
+
+        Cam camera = 0;
+        rage::Vector3 cameraPos{};
+        Natives::GetRootCam(&camera);
+        Natives::GetCamPos(camera, &cameraPos.x, &cameraPos.y, &cameraPos.z);
+        const float dx = cameraPos.x - light->mPosition.x;
+        const float dy = cameraPos.y - light->mPosition.y;
+        const float dz = cameraPos.z - light->mPosition.z;
+        const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+        const float fadeStart = R.fVolumetricLightMaxDistance * 0.3f;
+        const float x = std::clamp((distance - fadeStart) / (R.fVolumetricLightMaxDistance - fadeStart), 0.0f, 1.0f);
+        const float fade = 1.0f - x * x * (3.0f - 2.0f * x);
+        if (fade <= 0.0f)
+            return;
+
+        light->mFlags |= 8; // light shaft
+        light->mVolumeIntensity = R.fVolumetricLightIntensity * fade;
+        light->mVolumeScale = R.fVolumetricLightScale;
+    }
+
 public:
     static void BindSSRTexture()
     {
@@ -3122,7 +3143,6 @@ public:
             R.bContactBound = true;
         }
 
-        pDevice->SetPixelShaderConstantF(201, R.VolumetricLightConsts, 1);
         pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
 
         pDevice->SetTexture(3, tex);
@@ -3161,7 +3181,6 @@ public:
         // Lights drawn for other views (reflections, mirrors) must not march with this camera.
         const float noLocalContactShadows[4] = {};
         pDevice->SetPixelShaderConstantF(203, noLocalContactShadows, 1);
-        pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
@@ -3233,6 +3252,7 @@ public:
                     PostFxResources.pWaterLevel = *pattern.get_first<const float*>(4);
 
                 {
+                    CRenderPhaseDeferredLighting_LightsToScreen::OnAfterCopyLight() += OnAfterCopyLight;
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
                         auto cb = new T_CB_Generic_NoArgs(BindSSRTexture);

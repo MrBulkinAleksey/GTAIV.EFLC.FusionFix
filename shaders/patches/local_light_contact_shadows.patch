@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index 2337a596..8f139de5 100644
+index 2337a596..115c514c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-@@ -40,6 +40,17 @@
+@@ -40,6 +40,14 @@
      def c0, 0.50999999, 2, -0.999989986, 9.99999975e-006
      def c1, 1, -0.333333343, 1.5, -0.200000003
      def c2, 1.25, 0, 0, 0
@@ -13,14 +13,11 @@ index 2337a596..8f139de5 100644
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
-+    // --- FusionFix volumetric light: 1/samples; samples
-+    def c163, 0.125, 0, 0, 0
-+    defi i1, 8, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -80,8 +91,224 @@
+@@ -80,8 +88,135 @@
      mul r1.xyz, c76.w, c76
      mul r0.xyw, r0.x, r1.xyzz
      mul r0.xyw, r3.xyzz, r0
@@ -154,104 +151,15 @@ index 2337a596..8f139de5 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix volumetric light: light scattered towards the camera by the air along the
-+    // --- view ray, where it crosses this light's sphere: 8 samples with the light's own falloff
-+    // --- and cone, over the light's radius so big lights do not flood the screen, times density
-+    // --- and strength. c201: density times strength, 1 / max radius squared, max distance
-+    // --- squared, magic while on; set right before lighting with the projection in c203-c204.
-+    mov r29, c201
-+    add r13.x, r29.w, -c157.x
-+    mul r13.x, r13.x, r13.x
-+    if_lt r13.x, c157.y
-+      mov r18, c66
-+      add r18.xyz, r18, -c15 // light - camera
-+      dp3 r12.x, r18, r18
-+      if_lt r12.x, r29.z // light within the max distance
-+        // this pixel's surface, from depth, as for the contact shadows
-+        add r13.xy, vPos, c158.z
-+        mul r13.xy, r13, c77.zw
-+        mov r13.zw, c158.w
-+        texldl r14, r13, s2
-+        pow r19.x, c209_abs.z, r14.x
-+        mul r14.x, r19.x, c209.w
-+        mov r27, c204
-+        mov r28, c203
-+        mad r15.xy, r13, c160.x, c160.y
-+        mul r15.y, r15.y, c160.y
-+        mul r15.xy, r15, r14.x
-+        rcp r15.w, r28.x
-+        mul r15.z, r14.x, r15.w
-+        mad r15.x, -r15.z, r27.z, r15.x
-+        rcp r16.x, r27.x
-+        mul r15.x, r15.x, r16.x
-+        mad r15.y, -r15.z, r27.w, r15.y
-+        rcp r16.y, r27.y
-+        mul r15.y, r15.y, r16.y
-+        mul r16.xyz, r15.x, c12
-+        mad r16.xyz, r15.y, c13, r16
-+        mad r16.xyz, r15.z, c14, r16 // surface - camera
-+        dp3 r17.w, r16, r16
-+        rsq r17.w, r17.w
-+        mul r17.xyz, r16, r17.w // view direction
-+        rcp r17.w, r17.w // distance to the surface
-+        mov r30.x, c73.x
-+        mov r30.y, c74.x
-+        mov r30.z, c75.x
-+        if_lt r29.y, r30.x // only lights smaller than the max radius: the big fills over facades flooded them
-+        dp3 r18.w, r18, r17 // where along the ray it passes the light
-+        mad r12.x, -r18.w, r18.w, r12.x // squared distance of the ray from the light
-+        rcp r12.y, r30.x // squared radius
-+        add r12.z, r12.y, -r12.x
-+        if_lt c158.w, r12.z // the ray crosses the light's sphere
-+          rsq r12.w, r12.z
-+          rcp r12.w, r12.w // half the chord
-+          add r13.x, r18.w, -r12.w
-+          max r13.x, r13.x, c158.w // entry, no nearer than the camera
-+          add r13.y, r18.w, r12.w
-+          min r13.y, r13.y, r17.w // exit, no further than the surface
-+          add r13.z, r13.y, -r13.x
-+          if_lt c158.w, r13.z
-+            mul r13.w, r13.z, c163.x // step
-+            dp2add r14.y, vPos, c162, c162.w // interleaved gradient noise
-+            frc r14.y, r14.y
-+            mul r14.y, r14.y, c162.z
-+            frc r14.y, r14.y
-+            mad r13.x, r13.w, r14.y, r13.x
-+            mov r14.w, c158.w
-+            rep i1
-+              mad r15.xyz, r17, -r13.x, r18 // sample to light
-+              dp3 r15.w, r15, r15
-+              mad_sat r16.w, r15.w, -r30.x, c157.y
-+              mul r16.w, r16.w, r16.w // falloff
-+              rsq r15.w, r15.w
-+              mul r15.xyz, r15, r15.w
-+              dp3 r16.x, r15, -c72
-+              add r16.x, r16.x, -r30.y
-+              mul_sat r16.x, r16.x, r30.z // cone
-+              mad r14.w, r16.w, r16.x, r14.w
-+              add r13.x, r13.x, r13.w
-+            endrep
-+            mul r14.w, r14.w, r13.w
-+            rsq r12.y, r12.y // 1 / radius
-+            mul r14.w, r14.w, r12.y
-+            mul r14.w, r14.w, r29.x
-+            mov r15, c76
-+            mul r15.xyz, r15, r15.w
-+            mad r26.xyz, r15, r14.w, r26
-+          endif
-+        endif
-+        endif
-+      endif
-+    endif
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index 1800ea70..99485111 100644
+index 1800ea70..56917527 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-@@ -43,6 +43,17 @@
+@@ -43,6 +43,14 @@
      def c1, 255, -128, -0, -7.9000001
      def c2, 9.99999975e-006, 1, -0.333333343, 1.5
      def c3, -0.200000003, 1.25, 0, 0
@@ -262,14 +170,11 @@ index 1800ea70..99485111 100644
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
-+    // --- FusionFix volumetric light: 1/samples; samples
-+    def c163, 0.125, 0, 0, 0
-+    defi i1, 8, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -91,7 +102,223 @@
+@@ -91,7 +99,134 @@
      mad r1.x, r3.x, c0.w, r1.x
      add r1.x, r1.x, c1.w
      mov r0.w, c2.y
@@ -401,104 +306,15 @@ index 1800ea70..99485111 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix volumetric light: light scattered towards the camera by the air along the
-+    // --- view ray, where it crosses this light's sphere: 8 samples with the light's own falloff
-+    // --- and cone, over the light's radius so big lights do not flood the screen, times density
-+    // --- and strength. c201: density times strength, 1 / max radius squared, max distance
-+    // --- squared, magic while on; set right before lighting with the projection in c203-c204.
-+    mov r29, c201
-+    add r13.x, r29.w, -c157.x
-+    mul r13.x, r13.x, r13.x
-+    if_lt r13.x, c157.y
-+      mov r18, c66
-+      add r18.xyz, r18, -c15 // light - camera
-+      dp3 r12.x, r18, r18
-+      if_lt r12.x, r29.z // light within the max distance
-+        // this pixel's surface, from depth, as for the contact shadows
-+        add r13.xy, vPos, c158.z
-+        mul r13.xy, r13, c77.zw
-+        mov r13.zw, c158.w
-+        texldl r14, r13, s2
-+        pow r19.x, c209_abs.z, r14.x
-+        mul r14.x, r19.x, c209.w
-+        mov r27, c204
-+        mov r28, c203
-+        mad r15.xy, r13, c160.x, c160.y
-+        mul r15.y, r15.y, c160.y
-+        mul r15.xy, r15, r14.x
-+        rcp r15.w, r28.x
-+        mul r15.z, r14.x, r15.w
-+        mad r15.x, -r15.z, r27.z, r15.x
-+        rcp r16.x, r27.x
-+        mul r15.x, r15.x, r16.x
-+        mad r15.y, -r15.z, r27.w, r15.y
-+        rcp r16.y, r27.y
-+        mul r15.y, r15.y, r16.y
-+        mul r16.xyz, r15.x, c12
-+        mad r16.xyz, r15.y, c13, r16
-+        mad r16.xyz, r15.z, c14, r16 // surface - camera
-+        dp3 r17.w, r16, r16
-+        rsq r17.w, r17.w
-+        mul r17.xyz, r16, r17.w // view direction
-+        rcp r17.w, r17.w // distance to the surface
-+        mov r30.x, c73.x
-+        mov r30.y, c74.x
-+        mov r30.z, c75.x
-+        if_lt r29.y, r30.x // only lights smaller than the max radius: the big fills over facades flooded them
-+        dp3 r18.w, r18, r17 // where along the ray it passes the light
-+        mad r12.x, -r18.w, r18.w, r12.x // squared distance of the ray from the light
-+        rcp r12.y, r30.x // squared radius
-+        add r12.z, r12.y, -r12.x
-+        if_lt c158.w, r12.z // the ray crosses the light's sphere
-+          rsq r12.w, r12.z
-+          rcp r12.w, r12.w // half the chord
-+          add r13.x, r18.w, -r12.w
-+          max r13.x, r13.x, c158.w // entry, no nearer than the camera
-+          add r13.y, r18.w, r12.w
-+          min r13.y, r13.y, r17.w // exit, no further than the surface
-+          add r13.z, r13.y, -r13.x
-+          if_lt c158.w, r13.z
-+            mul r13.w, r13.z, c163.x // step
-+            dp2add r14.y, vPos, c162, c162.w // interleaved gradient noise
-+            frc r14.y, r14.y
-+            mul r14.y, r14.y, c162.z
-+            frc r14.y, r14.y
-+            mad r13.x, r13.w, r14.y, r13.x
-+            mov r14.w, c158.w
-+            rep i1
-+              mad r15.xyz, r17, -r13.x, r18 // sample to light
-+              dp3 r15.w, r15, r15
-+              mad_sat r16.w, r15.w, -r30.x, c157.y
-+              mul r16.w, r16.w, r16.w // falloff
-+              rsq r15.w, r15.w
-+              mul r15.xyz, r15, r15.w
-+              dp3 r16.x, r15, -c72
-+              add r16.x, r16.x, -r30.y
-+              mul_sat r16.x, r16.x, r30.z // cone
-+              mad r14.w, r16.w, r16.x, r14.w
-+              add r13.x, r13.x, r13.w
-+            endrep
-+            mul r14.w, r14.w, r13.w
-+            rsq r12.y, r12.y // 1 / radius
-+            mul r14.w, r14.w, r12.y
-+            mul r14.w, r14.w, r29.x
-+            mov r15, c76
-+            mul r15.xyz, r15, r15.w
-+            mad r26.xyz, r15, r14.w, r26
-+          endif
-+        endif
-+        endif
-+      endif
-+    endif
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 0b4d1074..6854c6a2 100644
+index 0b4d1074..a7de22f6 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-@@ -43,6 +43,17 @@
+@@ -43,6 +43,14 @@
      def c1, 255, -128, -0, -7.9000001
      def c2, 9.99999975e-006, 1, -0.333333343, 1.5
      def c3, -0.200000003, 1.25, 0, 0
@@ -509,14 +325,11 @@ index 0b4d1074..6854c6a2 100644
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
-+    // --- FusionFix volumetric light: 1/samples; samples
-+    def c163, 0.125, 0, 0, 0
-+    defi i1, 8, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -91,7 +102,223 @@
+@@ -91,7 +99,134 @@
      mad r1.x, r3.x, c0.w, r1.x
      add r1.x, r1.x, c1.w
      mov r0.w, c2.y
@@ -648,104 +461,15 @@ index 0b4d1074..6854c6a2 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix volumetric light: light scattered towards the camera by the air along the
-+    // --- view ray, where it crosses this light's sphere: 8 samples with the light's own falloff
-+    // --- and cone, over the light's radius so big lights do not flood the screen, times density
-+    // --- and strength. c201: density times strength, 1 / max radius squared, max distance
-+    // --- squared, magic while on; set right before lighting with the projection in c203-c204.
-+    mov r29, c201
-+    add r13.x, r29.w, -c157.x
-+    mul r13.x, r13.x, r13.x
-+    if_lt r13.x, c157.y
-+      mov r18, c66
-+      add r18.xyz, r18, -c15 // light - camera
-+      dp3 r12.x, r18, r18
-+      if_lt r12.x, r29.z // light within the max distance
-+        // this pixel's surface, from depth, as for the contact shadows
-+        add r13.xy, vPos, c158.z
-+        mul r13.xy, r13, c77.zw
-+        mov r13.zw, c158.w
-+        texldl r14, r13, s2
-+        pow r19.x, c209_abs.z, r14.x
-+        mul r14.x, r19.x, c209.w
-+        mov r27, c204
-+        mov r28, c203
-+        mad r15.xy, r13, c160.x, c160.y
-+        mul r15.y, r15.y, c160.y
-+        mul r15.xy, r15, r14.x
-+        rcp r15.w, r28.x
-+        mul r15.z, r14.x, r15.w
-+        mad r15.x, -r15.z, r27.z, r15.x
-+        rcp r16.x, r27.x
-+        mul r15.x, r15.x, r16.x
-+        mad r15.y, -r15.z, r27.w, r15.y
-+        rcp r16.y, r27.y
-+        mul r15.y, r15.y, r16.y
-+        mul r16.xyz, r15.x, c12
-+        mad r16.xyz, r15.y, c13, r16
-+        mad r16.xyz, r15.z, c14, r16 // surface - camera
-+        dp3 r17.w, r16, r16
-+        rsq r17.w, r17.w
-+        mul r17.xyz, r16, r17.w // view direction
-+        rcp r17.w, r17.w // distance to the surface
-+        mov r30.x, c73.x
-+        mov r30.y, c74.x
-+        mov r30.z, c75.x
-+        if_lt r29.y, r30.x // only lights smaller than the max radius: the big fills over facades flooded them
-+        dp3 r18.w, r18, r17 // where along the ray it passes the light
-+        mad r12.x, -r18.w, r18.w, r12.x // squared distance of the ray from the light
-+        rcp r12.y, r30.x // squared radius
-+        add r12.z, r12.y, -r12.x
-+        if_lt c158.w, r12.z // the ray crosses the light's sphere
-+          rsq r12.w, r12.z
-+          rcp r12.w, r12.w // half the chord
-+          add r13.x, r18.w, -r12.w
-+          max r13.x, r13.x, c158.w // entry, no nearer than the camera
-+          add r13.y, r18.w, r12.w
-+          min r13.y, r13.y, r17.w // exit, no further than the surface
-+          add r13.z, r13.y, -r13.x
-+          if_lt c158.w, r13.z
-+            mul r13.w, r13.z, c163.x // step
-+            dp2add r14.y, vPos, c162, c162.w // interleaved gradient noise
-+            frc r14.y, r14.y
-+            mul r14.y, r14.y, c162.z
-+            frc r14.y, r14.y
-+            mad r13.x, r13.w, r14.y, r13.x
-+            mov r14.w, c158.w
-+            rep i1
-+              mad r15.xyz, r17, -r13.x, r18 // sample to light
-+              dp3 r15.w, r15, r15
-+              mad_sat r16.w, r15.w, -r30.x, c157.y
-+              mul r16.w, r16.w, r16.w // falloff
-+              rsq r15.w, r15.w
-+              mul r15.xyz, r15, r15.w
-+              dp3 r16.x, r15, -c72
-+              add r16.x, r16.x, -r30.y
-+              mul_sat r16.x, r16.x, r30.z // cone
-+              mad r14.w, r16.w, r16.x, r14.w
-+              add r13.x, r13.x, r13.w
-+            endrep
-+            mul r14.w, r14.w, r13.w
-+            rsq r12.y, r12.y // 1 / radius
-+            mul r14.w, r14.w, r12.y
-+            mul r14.w, r14.w, r29.x
-+            mov r15, c76
-+            mul r15.xyz, r15, r15.w
-+            mad r26.xyz, r15, r14.w, r26
-+          endif
-+        endif
-+        endif
-+      endif
-+    endif
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 86f2d477..e58aff30 100644
+index 86f2d477..cefce9ca 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-@@ -77,6 +77,17 @@
+@@ -77,6 +77,14 @@
      def c136, -0.7515861305520581, -0.41609876195815027, 0.9102937449894895, -0.17014527555321657
      def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
      // ----------------------------------------------------------------------------------------------------------------------------------------------
@@ -756,14 +480,11 @@ index 86f2d477..e58aff30 100644
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
-+    // --- FusionFix volumetric light: 1/samples; samples
-+    def c163, 0.125, 0, 0, 0
-+    defi i1, 8, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -305,7 +316,223 @@
+@@ -305,7 +313,134 @@
      mad r0.x, r0.x, c6.z, r0.z
      add r0.x, r0.x, c7.z
      cmp r0.x, r0.x, c2.y, r0.y
@@ -895,104 +616,15 @@ index 86f2d477..e58aff30 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix volumetric light: light scattered towards the camera by the air along the
-+    // --- view ray, where it crosses this light's sphere: 8 samples with the light's own falloff
-+    // --- and cone, over the light's radius so big lights do not flood the screen, times density
-+    // --- and strength. c201: density times strength, 1 / max radius squared, max distance
-+    // --- squared, magic while on; set right before lighting with the projection in c203-c204.
-+    mov r29, c201
-+    add r13.x, r29.w, -c157.x
-+    mul r13.x, r13.x, r13.x
-+    if_lt r13.x, c157.y
-+      mov r18, c78
-+      add r18.xyz, r18, -c15 // light - camera
-+      dp3 r12.x, r18, r18
-+      if_lt r12.x, r29.z // light within the max distance
-+        // this pixel's surface, from depth, as for the contact shadows
-+        add r13.xy, vPos, c158.z
-+        mul r13.xy, r13, c84.zw
-+        mov r13.zw, c158.w
-+        texldl r14, r13, s4
-+        pow r19.x, c209_abs.z, r14.x
-+        mul r14.x, r19.x, c209.w
-+        mov r27, c204
-+        mov r28, c203
-+        mad r15.xy, r13, c160.x, c160.y
-+        mul r15.y, r15.y, c160.y
-+        mul r15.xy, r15, r14.x
-+        rcp r15.w, r28.x
-+        mul r15.z, r14.x, r15.w
-+        mad r15.x, -r15.z, r27.z, r15.x
-+        rcp r16.x, r27.x
-+        mul r15.x, r15.x, r16.x
-+        mad r15.y, -r15.z, r27.w, r15.y
-+        rcp r16.y, r27.y
-+        mul r15.y, r15.y, r16.y
-+        mul r16.xyz, r15.x, c12
-+        mad r16.xyz, r15.y, c13, r16
-+        mad r16.xyz, r15.z, c14, r16 // surface - camera
-+        dp3 r17.w, r16, r16
-+        rsq r17.w, r17.w
-+        mul r17.xyz, r16, r17.w // view direction
-+        rcp r17.w, r17.w // distance to the surface
-+        mov r30.x, c80.x
-+        mov r30.y, c81.x
-+        mov r30.z, c82.x
-+        if_lt r29.y, r30.x // only lights smaller than the max radius: the big fills over facades flooded them
-+        dp3 r18.w, r18, r17 // where along the ray it passes the light
-+        mad r12.x, -r18.w, r18.w, r12.x // squared distance of the ray from the light
-+        rcp r12.y, r30.x // squared radius
-+        add r12.z, r12.y, -r12.x
-+        if_lt c158.w, r12.z // the ray crosses the light's sphere
-+          rsq r12.w, r12.z
-+          rcp r12.w, r12.w // half the chord
-+          add r13.x, r18.w, -r12.w
-+          max r13.x, r13.x, c158.w // entry, no nearer than the camera
-+          add r13.y, r18.w, r12.w
-+          min r13.y, r13.y, r17.w // exit, no further than the surface
-+          add r13.z, r13.y, -r13.x
-+          if_lt c158.w, r13.z
-+            mul r13.w, r13.z, c163.x // step
-+            dp2add r14.y, vPos, c162, c162.w // interleaved gradient noise
-+            frc r14.y, r14.y
-+            mul r14.y, r14.y, c162.z
-+            frc r14.y, r14.y
-+            mad r13.x, r13.w, r14.y, r13.x
-+            mov r14.w, c158.w
-+            rep i1
-+              mad r15.xyz, r17, -r13.x, r18 // sample to light
-+              dp3 r15.w, r15, r15
-+              mad_sat r16.w, r15.w, -r30.x, c157.y
-+              mul r16.w, r16.w, r16.w // falloff
-+              rsq r15.w, r15.w
-+              mul r15.xyz, r15, r15.w
-+              dp3 r16.x, r15, -c79
-+              add r16.x, r16.x, -r30.y
-+              mul_sat r16.x, r16.x, r30.z // cone
-+              mad r14.w, r16.w, r16.x, r14.w
-+              add r13.x, r13.x, r13.w
-+            endrep
-+            mul r14.w, r14.w, r13.w
-+            rsq r12.y, r12.y // 1 / radius
-+            mul r14.w, r14.w, r12.y
-+            mul r14.w, r14.w, r29.x
-+            mov r15, c83
-+            mul r15.xyz, r15, r15.w
-+            mad r26.xyz, r15, r14.w, r26
-+          endif
-+        endif
-+        endif
-+      endif
-+    endif
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index d104b6c1..eff8208e 100644
+index d104b6c1..be12b5c3 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-@@ -71,6 +71,17 @@
+@@ -71,6 +71,14 @@
      def c136, -0.7515861305520581, -0.41609876195815027, 0.9102937449894895, -0.17014527555321657
      def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
      // ----------------------------------------------------------------------------------------------------------------------------------------------
@@ -1003,14 +635,11 @@ index d104b6c1..eff8208e 100644
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
-+    // --- FusionFix volumetric light: 1/samples; samples
-+    def c163, 0.125, 0, 0, 0
-+    defi i1, 8, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -268,8 +279,224 @@
+@@ -268,8 +276,135 @@
      mul r1.yzw, c83.w, c83.xxyz
      mul r1.yzw, r0.w, r1
      mul r0.xyz, r0, r1.yzww
@@ -1144,104 +773,15 @@ index d104b6c1..eff8208e 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix volumetric light: light scattered towards the camera by the air along the
-+    // --- view ray, where it crosses this light's sphere: 8 samples with the light's own falloff
-+    // --- and cone, over the light's radius so big lights do not flood the screen, times density
-+    // --- and strength. c201: density times strength, 1 / max radius squared, max distance
-+    // --- squared, magic while on; set right before lighting with the projection in c203-c204.
-+    mov r29, c201
-+    add r13.x, r29.w, -c157.x
-+    mul r13.x, r13.x, r13.x
-+    if_lt r13.x, c157.y
-+      mov r18, c78
-+      add r18.xyz, r18, -c15 // light - camera
-+      dp3 r12.x, r18, r18
-+      if_lt r12.x, r29.z // light within the max distance
-+        // this pixel's surface, from depth, as for the contact shadows
-+        add r13.xy, vPos, c158.z
-+        mul r13.xy, r13, c84.zw
-+        mov r13.zw, c158.w
-+        texldl r14, r13, s2
-+        pow r19.x, c209_abs.z, r14.x
-+        mul r14.x, r19.x, c209.w
-+        mov r27, c204
-+        mov r28, c203
-+        mad r15.xy, r13, c160.x, c160.y
-+        mul r15.y, r15.y, c160.y
-+        mul r15.xy, r15, r14.x
-+        rcp r15.w, r28.x
-+        mul r15.z, r14.x, r15.w
-+        mad r15.x, -r15.z, r27.z, r15.x
-+        rcp r16.x, r27.x
-+        mul r15.x, r15.x, r16.x
-+        mad r15.y, -r15.z, r27.w, r15.y
-+        rcp r16.y, r27.y
-+        mul r15.y, r15.y, r16.y
-+        mul r16.xyz, r15.x, c12
-+        mad r16.xyz, r15.y, c13, r16
-+        mad r16.xyz, r15.z, c14, r16 // surface - camera
-+        dp3 r17.w, r16, r16
-+        rsq r17.w, r17.w
-+        mul r17.xyz, r16, r17.w // view direction
-+        rcp r17.w, r17.w // distance to the surface
-+        mov r30.x, c80.x
-+        mov r30.y, c81.x
-+        mov r30.z, c82.x
-+        if_lt r29.y, r30.x // only lights smaller than the max radius: the big fills over facades flooded them
-+        dp3 r18.w, r18, r17 // where along the ray it passes the light
-+        mad r12.x, -r18.w, r18.w, r12.x // squared distance of the ray from the light
-+        rcp r12.y, r30.x // squared radius
-+        add r12.z, r12.y, -r12.x
-+        if_lt c158.w, r12.z // the ray crosses the light's sphere
-+          rsq r12.w, r12.z
-+          rcp r12.w, r12.w // half the chord
-+          add r13.x, r18.w, -r12.w
-+          max r13.x, r13.x, c158.w // entry, no nearer than the camera
-+          add r13.y, r18.w, r12.w
-+          min r13.y, r13.y, r17.w // exit, no further than the surface
-+          add r13.z, r13.y, -r13.x
-+          if_lt c158.w, r13.z
-+            mul r13.w, r13.z, c163.x // step
-+            dp2add r14.y, vPos, c162, c162.w // interleaved gradient noise
-+            frc r14.y, r14.y
-+            mul r14.y, r14.y, c162.z
-+            frc r14.y, r14.y
-+            mad r13.x, r13.w, r14.y, r13.x
-+            mov r14.w, c158.w
-+            rep i1
-+              mad r15.xyz, r17, -r13.x, r18 // sample to light
-+              dp3 r15.w, r15, r15
-+              mad_sat r16.w, r15.w, -r30.x, c157.y
-+              mul r16.w, r16.w, r16.w // falloff
-+              rsq r15.w, r15.w
-+              mul r15.xyz, r15, r15.w
-+              dp3 r16.x, r15, -c79
-+              add r16.x, r16.x, -r30.y
-+              mul_sat r16.x, r16.x, r30.z // cone
-+              mad r14.w, r16.w, r16.x, r14.w
-+              add r13.x, r13.x, r13.w
-+            endrep
-+            mul r14.w, r14.w, r13.w
-+            rsq r12.y, r12.y // 1 / radius
-+            mul r14.w, r14.w, r12.y
-+            mul r14.w, r14.w, r29.x
-+            mov r15, c83
-+            mul r15.xyz, r15, r15.w
-+            mad r26.xyz, r15, r14.w, r26
-+          endif
-+        endif
-+        endif
-+      endif
-+    endif
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 963ce403..b8e850d1 100644
+index 963ce403..0f5445ea 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-@@ -48,6 +48,17 @@
+@@ -48,6 +48,14 @@
      def c0, 0.50999999, 512, 2, -0.999989986
      def c1, 1, 0.5, 0, 9.99999975e-006
      def c2, -0.100000001, 1.11111116, 0, 0
@@ -1252,14 +792,11 @@ index 963ce403..b8e850d1 100644
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
-+    // --- FusionFix volumetric light: 1/samples; samples
-+    def c163, 0.125, 0, 0, 0
-+    defi i1, 8, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -137,7 +148,223 @@
+@@ -137,7 +145,134 @@
      mad r0.xyz, r2, r0, r1
      mad_sat r1.x, r4.z, r4.z, c1.y
      mov r0.w, c1.x
@@ -1391,104 +928,15 @@ index 963ce403..b8e850d1 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix volumetric light: light scattered towards the camera by the air along the
-+    // --- view ray, where it crosses this light's sphere: 8 samples with the light's own falloff
-+    // --- and cone, over the light's radius so big lights do not flood the screen, times density
-+    // --- and strength. c201: density times strength, 1 / max radius squared, max distance
-+    // --- squared, magic while on; set right before lighting with the projection in c203-c204.
-+    mov r29, c201
-+    add r13.x, r29.w, -c157.x
-+    mul r13.x, r13.x, r13.x
-+    if_lt r13.x, c157.y
-+      mov r18, c72
-+      add r18.xyz, r18, -c15 // light - camera
-+      dp3 r12.x, r18, r18
-+      if_lt r12.x, r29.z // light within the max distance
-+        // this pixel's surface, from depth, as for the contact shadows
-+        add r13.xy, vPos, c158.z
-+        mul r13.xy, r13, c79.zw
-+        mov r13.zw, c158.w
-+        texldl r14, r13, s5
-+        pow r19.x, c209_abs.z, r14.x
-+        mul r14.x, r19.x, c209.w
-+        mov r27, c204
-+        mov r28, c203
-+        mad r15.xy, r13, c160.x, c160.y
-+        mul r15.y, r15.y, c160.y
-+        mul r15.xy, r15, r14.x
-+        rcp r15.w, r28.x
-+        mul r15.z, r14.x, r15.w
-+        mad r15.x, -r15.z, r27.z, r15.x
-+        rcp r16.x, r27.x
-+        mul r15.x, r15.x, r16.x
-+        mad r15.y, -r15.z, r27.w, r15.y
-+        rcp r16.y, r27.y
-+        mul r15.y, r15.y, r16.y
-+        mul r16.xyz, r15.x, c12
-+        mad r16.xyz, r15.y, c13, r16
-+        mad r16.xyz, r15.z, c14, r16 // surface - camera
-+        dp3 r17.w, r16, r16
-+        rsq r17.w, r17.w
-+        mul r17.xyz, r16, r17.w // view direction
-+        rcp r17.w, r17.w // distance to the surface
-+        mov r30.x, c75.x
-+        mov r30.y, c76.x
-+        mov r30.z, c77.x
-+        if_lt r29.y, r30.x // only lights smaller than the max radius: the big fills over facades flooded them
-+        dp3 r18.w, r18, r17 // where along the ray it passes the light
-+        mad r12.x, -r18.w, r18.w, r12.x // squared distance of the ray from the light
-+        rcp r12.y, r30.x // squared radius
-+        add r12.z, r12.y, -r12.x
-+        if_lt c158.w, r12.z // the ray crosses the light's sphere
-+          rsq r12.w, r12.z
-+          rcp r12.w, r12.w // half the chord
-+          add r13.x, r18.w, -r12.w
-+          max r13.x, r13.x, c158.w // entry, no nearer than the camera
-+          add r13.y, r18.w, r12.w
-+          min r13.y, r13.y, r17.w // exit, no further than the surface
-+          add r13.z, r13.y, -r13.x
-+          if_lt c158.w, r13.z
-+            mul r13.w, r13.z, c163.x // step
-+            dp2add r14.y, vPos, c162, c162.w // interleaved gradient noise
-+            frc r14.y, r14.y
-+            mul r14.y, r14.y, c162.z
-+            frc r14.y, r14.y
-+            mad r13.x, r13.w, r14.y, r13.x
-+            mov r14.w, c158.w
-+            rep i1
-+              mad r15.xyz, r17, -r13.x, r18 // sample to light
-+              dp3 r15.w, r15, r15
-+              mad_sat r16.w, r15.w, -r30.x, c157.y
-+              mul r16.w, r16.w, r16.w // falloff
-+              rsq r15.w, r15.w
-+              mul r15.xyz, r15, r15.w
-+              dp3 r16.x, r15, -c73
-+              add r16.x, r16.x, -r30.y
-+              mul_sat r16.x, r16.x, r30.z // cone
-+              mad r14.w, r16.w, r16.x, r14.w
-+              add r13.x, r13.x, r13.w
-+            endrep
-+            mul r14.w, r14.w, r13.w
-+            rsq r12.y, r12.y // 1 / radius
-+            mul r14.w, r14.w, r12.y
-+            mul r14.w, r14.w, r29.x
-+            mov r15, c78
-+            mul r15.xyz, r15, r15.w
-+            mad r26.xyz, r15, r14.w, r26
-+          endif
-+        endif
-+        endif
-+      endif
-+    endif
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 6cdc2ec6..fb9026f2 100644
+index 6cdc2ec6..dccf188d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-@@ -79,6 +79,17 @@
+@@ -79,6 +79,14 @@
      def c136, -0.7515861305520581, -0.41609876195815027, 0.9102937449894895, -0.17014527555321657
      def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
      // ----------------------------------------------------------------------------------------------------------------------------------------------
@@ -1499,14 +947,11 @@ index 6cdc2ec6..fb9026f2 100644
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
-+    // --- FusionFix volumetric light: 1/samples; samples
-+    def c163, 0.125, 0, 0, 0
-+    defi i1, 8, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -322,8 +333,224 @@
+@@ -322,8 +330,135 @@
      mul r0.xyz, r0, r0.w
      mul r2.xyz, r3, r6
      mul r1.xyz, r1.z, r1.xyww
@@ -1640,104 +1085,15 @@ index 6cdc2ec6..fb9026f2 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix volumetric light: light scattered towards the camera by the air along the
-+    // --- view ray, where it crosses this light's sphere: 8 samples with the light's own falloff
-+    // --- and cone, over the light's radius so big lights do not flood the screen, times density
-+    // --- and strength. c201: density times strength, 1 / max radius squared, max distance
-+    // --- squared, magic while on; set right before lighting with the projection in c203-c204.
-+    mov r29, c201
-+    add r13.x, r29.w, -c157.x
-+    mul r13.x, r13.x, r13.x
-+    if_lt r13.x, c157.y
-+      mov r18, c79
-+      add r18.xyz, r18, -c15 // light - camera
-+      dp3 r12.x, r18, r18
-+      if_lt r12.x, r29.z // light within the max distance
-+        // this pixel's surface, from depth, as for the contact shadows
-+        add r13.xy, vPos, c158.z
-+        mul r13.xy, r13, c86.zw
-+        mov r13.zw, c158.w
-+        texldl r14, r13, s5
-+        pow r19.x, c209_abs.z, r14.x
-+        mul r14.x, r19.x, c209.w
-+        mov r27, c204
-+        mov r28, c203
-+        mad r15.xy, r13, c160.x, c160.y
-+        mul r15.y, r15.y, c160.y
-+        mul r15.xy, r15, r14.x
-+        rcp r15.w, r28.x
-+        mul r15.z, r14.x, r15.w
-+        mad r15.x, -r15.z, r27.z, r15.x
-+        rcp r16.x, r27.x
-+        mul r15.x, r15.x, r16.x
-+        mad r15.y, -r15.z, r27.w, r15.y
-+        rcp r16.y, r27.y
-+        mul r15.y, r15.y, r16.y
-+        mul r16.xyz, r15.x, c12
-+        mad r16.xyz, r15.y, c13, r16
-+        mad r16.xyz, r15.z, c14, r16 // surface - camera
-+        dp3 r17.w, r16, r16
-+        rsq r17.w, r17.w
-+        mul r17.xyz, r16, r17.w // view direction
-+        rcp r17.w, r17.w // distance to the surface
-+        mov r30.x, c82.x
-+        mov r30.y, c83.x
-+        mov r30.z, c84.x
-+        if_lt r29.y, r30.x // only lights smaller than the max radius: the big fills over facades flooded them
-+        dp3 r18.w, r18, r17 // where along the ray it passes the light
-+        mad r12.x, -r18.w, r18.w, r12.x // squared distance of the ray from the light
-+        rcp r12.y, r30.x // squared radius
-+        add r12.z, r12.y, -r12.x
-+        if_lt c158.w, r12.z // the ray crosses the light's sphere
-+          rsq r12.w, r12.z
-+          rcp r12.w, r12.w // half the chord
-+          add r13.x, r18.w, -r12.w
-+          max r13.x, r13.x, c158.w // entry, no nearer than the camera
-+          add r13.y, r18.w, r12.w
-+          min r13.y, r13.y, r17.w // exit, no further than the surface
-+          add r13.z, r13.y, -r13.x
-+          if_lt c158.w, r13.z
-+            mul r13.w, r13.z, c163.x // step
-+            dp2add r14.y, vPos, c162, c162.w // interleaved gradient noise
-+            frc r14.y, r14.y
-+            mul r14.y, r14.y, c162.z
-+            frc r14.y, r14.y
-+            mad r13.x, r13.w, r14.y, r13.x
-+            mov r14.w, c158.w
-+            rep i1
-+              mad r15.xyz, r17, -r13.x, r18 // sample to light
-+              dp3 r15.w, r15, r15
-+              mad_sat r16.w, r15.w, -r30.x, c157.y
-+              mul r16.w, r16.w, r16.w // falloff
-+              rsq r15.w, r15.w
-+              mul r15.xyz, r15, r15.w
-+              dp3 r16.x, r15, -c80
-+              add r16.x, r16.x, -r30.y
-+              mul_sat r16.x, r16.x, r30.z // cone
-+              mad r14.w, r16.w, r16.x, r14.w
-+              add r13.x, r13.x, r13.w
-+            endrep
-+            mul r14.w, r14.w, r13.w
-+            rsq r12.y, r12.y // 1 / radius
-+            mul r14.w, r14.w, r12.y
-+            mul r14.w, r14.w, r29.x
-+            mov r15, c85
-+            mul r15.xyz, r15, r15.w
-+            mad r26.xyz, r15, r14.w, r26
-+          endif
-+        endif
-+        endif
-+      endif
-+    endif
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 21f11d1d..aea477a4 100644
+index 21f11d1d..e2816d40 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-@@ -43,6 +43,17 @@
+@@ -43,6 +43,14 @@
      def c1, 0.998046875, 7.984375, 63.875, -127.999992
      def c2, 0.5, 9.99999975e-006, 1, -0.100000001
      def c3, 1.11111116, 0, 0, 0.125
@@ -1748,14 +1104,11 @@ index 21f11d1d..aea477a4 100644
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
-+    // --- FusionFix volumetric light: 1/samples; samples
-+    def c163, 0.125, 0, 0, 0
-+    defi i1, 8, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -103,7 +114,223 @@
+@@ -103,7 +111,134 @@
      mad_sat r1.x, r1.z, r1.z, c2.x
      mad r0.xyz, r0.w, r2, r0
      mov r0.w, c2.z
@@ -1887,104 +1240,15 @@ index 21f11d1d..aea477a4 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix volumetric light: light scattered towards the camera by the air along the
-+    // --- view ray, where it crosses this light's sphere: 8 samples with the light's own falloff
-+    // --- and cone, over the light's radius so big lights do not flood the screen, times density
-+    // --- and strength. c201: density times strength, 1 / max radius squared, max distance
-+    // --- squared, magic while on; set right before lighting with the projection in c203-c204.
-+    mov r29, c201
-+    add r13.x, r29.w, -c157.x
-+    mul r13.x, r13.x, r13.x
-+    if_lt r13.x, c157.y
-+      mov r18, c66
-+      add r18.xyz, r18, -c15 // light - camera
-+      dp3 r12.x, r18, r18
-+      if_lt r12.x, r29.z // light within the max distance
-+        // this pixel's surface, from depth, as for the contact shadows
-+        add r13.xy, vPos, c158.z
-+        mul r13.xy, r13, c77.zw
-+        mov r13.zw, c158.w
-+        texldl r14, r13, s4
-+        pow r19.x, c209_abs.z, r14.x
-+        mul r14.x, r19.x, c209.w
-+        mov r27, c204
-+        mov r28, c203
-+        mad r15.xy, r13, c160.x, c160.y
-+        mul r15.y, r15.y, c160.y
-+        mul r15.xy, r15, r14.x
-+        rcp r15.w, r28.x
-+        mul r15.z, r14.x, r15.w
-+        mad r15.x, -r15.z, r27.z, r15.x
-+        rcp r16.x, r27.x
-+        mul r15.x, r15.x, r16.x
-+        mad r15.y, -r15.z, r27.w, r15.y
-+        rcp r16.y, r27.y
-+        mul r15.y, r15.y, r16.y
-+        mul r16.xyz, r15.x, c12
-+        mad r16.xyz, r15.y, c13, r16
-+        mad r16.xyz, r15.z, c14, r16 // surface - camera
-+        dp3 r17.w, r16, r16
-+        rsq r17.w, r17.w
-+        mul r17.xyz, r16, r17.w // view direction
-+        rcp r17.w, r17.w // distance to the surface
-+        mov r30.x, c73.x
-+        mov r30.y, c74.x
-+        mov r30.z, c75.x
-+        if_lt r29.y, r30.x // only lights smaller than the max radius: the big fills over facades flooded them
-+        dp3 r18.w, r18, r17 // where along the ray it passes the light
-+        mad r12.x, -r18.w, r18.w, r12.x // squared distance of the ray from the light
-+        rcp r12.y, r30.x // squared radius
-+        add r12.z, r12.y, -r12.x
-+        if_lt c158.w, r12.z // the ray crosses the light's sphere
-+          rsq r12.w, r12.z
-+          rcp r12.w, r12.w // half the chord
-+          add r13.x, r18.w, -r12.w
-+          max r13.x, r13.x, c158.w // entry, no nearer than the camera
-+          add r13.y, r18.w, r12.w
-+          min r13.y, r13.y, r17.w // exit, no further than the surface
-+          add r13.z, r13.y, -r13.x
-+          if_lt c158.w, r13.z
-+            mul r13.w, r13.z, c163.x // step
-+            dp2add r14.y, vPos, c162, c162.w // interleaved gradient noise
-+            frc r14.y, r14.y
-+            mul r14.y, r14.y, c162.z
-+            frc r14.y, r14.y
-+            mad r13.x, r13.w, r14.y, r13.x
-+            mov r14.w, c158.w
-+            rep i1
-+              mad r15.xyz, r17, -r13.x, r18 // sample to light
-+              dp3 r15.w, r15, r15
-+              mad_sat r16.w, r15.w, -r30.x, c157.y
-+              mul r16.w, r16.w, r16.w // falloff
-+              rsq r15.w, r15.w
-+              mul r15.xyz, r15, r15.w
-+              dp3 r16.x, r15, -c72
-+              add r16.x, r16.x, -r30.y
-+              mul_sat r16.x, r16.x, r30.z // cone
-+              mad r14.w, r16.w, r16.x, r14.w
-+              add r13.x, r13.x, r13.w
-+            endrep
-+            mul r14.w, r14.w, r13.w
-+            rsq r12.y, r12.y // 1 / radius
-+            mul r14.w, r14.w, r12.y
-+            mul r14.w, r14.w, r29.x
-+            mov r15, c76
-+            mul r15.xyz, r15, r15.w
-+            mad r26.xyz, r15, r14.w, r26
-+          endif
-+        endif
-+        endif
-+      endif
-+    endif
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 3a813bf9..5c1539bc 100644
+index 3a813bf9..e2424c1f 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-@@ -46,6 +46,17 @@
+@@ -46,6 +46,14 @@
      def c2, 255, -128, -0, -7.9000001
      def c3, 1, 0, 9.99999975e-006, -0.100000001
      def c4, 1.11111116, 0, 0, 0.125
@@ -1995,14 +1259,11 @@ index 3a813bf9..5c1539bc 100644
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
-+    // --- FusionFix volumetric light: 1/samples; samples
-+    def c163, 0.125, 0, 0, 0
-+    defi i1, 8, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -112,7 +123,223 @@
+@@ -112,7 +120,134 @@
      mad r0.x, r0.x, c2.x, r0.y
      add r0.x, r0.x, c2.w
      cmp r0.x, r0.x, c3.x, c3.y
@@ -2134,104 +1395,15 @@ index 3a813bf9..5c1539bc 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix volumetric light: light scattered towards the camera by the air along the
-+    // --- view ray, where it crosses this light's sphere: 8 samples with the light's own falloff
-+    // --- and cone, over the light's radius so big lights do not flood the screen, times density
-+    // --- and strength. c201: density times strength, 1 / max radius squared, max distance
-+    // --- squared, magic while on; set right before lighting with the projection in c203-c204.
-+    mov r29, c201
-+    add r13.x, r29.w, -c157.x
-+    mul r13.x, r13.x, r13.x
-+    if_lt r13.x, c157.y
-+      mov r18, c66
-+      add r18.xyz, r18, -c15 // light - camera
-+      dp3 r12.x, r18, r18
-+      if_lt r12.x, r29.z // light within the max distance
-+        // this pixel's surface, from depth, as for the contact shadows
-+        add r13.xy, vPos, c158.z
-+        mul r13.xy, r13, c77.zw
-+        mov r13.zw, c158.w
-+        texldl r14, r13, s4
-+        pow r19.x, c209_abs.z, r14.x
-+        mul r14.x, r19.x, c209.w
-+        mov r27, c204
-+        mov r28, c203
-+        mad r15.xy, r13, c160.x, c160.y
-+        mul r15.y, r15.y, c160.y
-+        mul r15.xy, r15, r14.x
-+        rcp r15.w, r28.x
-+        mul r15.z, r14.x, r15.w
-+        mad r15.x, -r15.z, r27.z, r15.x
-+        rcp r16.x, r27.x
-+        mul r15.x, r15.x, r16.x
-+        mad r15.y, -r15.z, r27.w, r15.y
-+        rcp r16.y, r27.y
-+        mul r15.y, r15.y, r16.y
-+        mul r16.xyz, r15.x, c12
-+        mad r16.xyz, r15.y, c13, r16
-+        mad r16.xyz, r15.z, c14, r16 // surface - camera
-+        dp3 r17.w, r16, r16
-+        rsq r17.w, r17.w
-+        mul r17.xyz, r16, r17.w // view direction
-+        rcp r17.w, r17.w // distance to the surface
-+        mov r30.x, c73.x
-+        mov r30.y, c74.x
-+        mov r30.z, c75.x
-+        if_lt r29.y, r30.x // only lights smaller than the max radius: the big fills over facades flooded them
-+        dp3 r18.w, r18, r17 // where along the ray it passes the light
-+        mad r12.x, -r18.w, r18.w, r12.x // squared distance of the ray from the light
-+        rcp r12.y, r30.x // squared radius
-+        add r12.z, r12.y, -r12.x
-+        if_lt c158.w, r12.z // the ray crosses the light's sphere
-+          rsq r12.w, r12.z
-+          rcp r12.w, r12.w // half the chord
-+          add r13.x, r18.w, -r12.w
-+          max r13.x, r13.x, c158.w // entry, no nearer than the camera
-+          add r13.y, r18.w, r12.w
-+          min r13.y, r13.y, r17.w // exit, no further than the surface
-+          add r13.z, r13.y, -r13.x
-+          if_lt c158.w, r13.z
-+            mul r13.w, r13.z, c163.x // step
-+            dp2add r14.y, vPos, c162, c162.w // interleaved gradient noise
-+            frc r14.y, r14.y
-+            mul r14.y, r14.y, c162.z
-+            frc r14.y, r14.y
-+            mad r13.x, r13.w, r14.y, r13.x
-+            mov r14.w, c158.w
-+            rep i1
-+              mad r15.xyz, r17, -r13.x, r18 // sample to light
-+              dp3 r15.w, r15, r15
-+              mad_sat r16.w, r15.w, -r30.x, c157.y
-+              mul r16.w, r16.w, r16.w // falloff
-+              rsq r15.w, r15.w
-+              mul r15.xyz, r15, r15.w
-+              dp3 r16.x, r15, -c72
-+              add r16.x, r16.x, -r30.y
-+              mul_sat r16.x, r16.x, r30.z // cone
-+              mad r14.w, r16.w, r16.x, r14.w
-+              add r13.x, r13.x, r13.w
-+            endrep
-+            mul r14.w, r14.w, r13.w
-+            rsq r12.y, r12.y // 1 / radius
-+            mul r14.w, r14.w, r12.y
-+            mul r14.w, r14.w, r29.x
-+            mov r15, c76
-+            mul r15.xyz, r15, r15.w
-+            mad r26.xyz, r15, r14.w, r26
-+          endif
-+        endif
-+        endif
-+      endif
-+    endif
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 43331379..e16778e7 100644
+index 43331379..142fb3e8 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-@@ -46,6 +46,17 @@
+@@ -46,6 +46,14 @@
      def c2, 0.998046875, 7.984375, 63.875, -127.999992
      def c3, 255, -128, -0, -7.9000001
      def c4, -0.100000001, 1.11111116, 0, 0.125
@@ -2242,14 +1414,11 @@ index 43331379..e16778e7 100644
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
-+    // --- FusionFix volumetric light: 1/samples; samples
-+    def c163, 0.125, 0, 0, 0
-+    defi i1, 8, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -114,7 +125,223 @@
+@@ -114,7 +122,134 @@
      add r0.x, r0.x, c3.w
      cmp r0.x, r0.x, c0.x, c0.y
      mul r0, r2, r0.x
@@ -2381,104 +1550,15 @@ index 43331379..e16778e7 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix volumetric light: light scattered towards the camera by the air along the
-+    // --- view ray, where it crosses this light's sphere: 8 samples with the light's own falloff
-+    // --- and cone, over the light's radius so big lights do not flood the screen, times density
-+    // --- and strength. c201: density times strength, 1 / max radius squared, max distance
-+    // --- squared, magic while on; set right before lighting with the projection in c203-c204.
-+    mov r29, c201
-+    add r13.x, r29.w, -c157.x
-+    mul r13.x, r13.x, r13.x
-+    if_lt r13.x, c157.y
-+      mov r18, c66
-+      add r18.xyz, r18, -c15 // light - camera
-+      dp3 r12.x, r18, r18
-+      if_lt r12.x, r29.z // light within the max distance
-+        // this pixel's surface, from depth, as for the contact shadows
-+        add r13.xy, vPos, c158.z
-+        mul r13.xy, r13, c77.zw
-+        mov r13.zw, c158.w
-+        texldl r14, r13, s4
-+        pow r19.x, c209_abs.z, r14.x
-+        mul r14.x, r19.x, c209.w
-+        mov r27, c204
-+        mov r28, c203
-+        mad r15.xy, r13, c160.x, c160.y
-+        mul r15.y, r15.y, c160.y
-+        mul r15.xy, r15, r14.x
-+        rcp r15.w, r28.x
-+        mul r15.z, r14.x, r15.w
-+        mad r15.x, -r15.z, r27.z, r15.x
-+        rcp r16.x, r27.x
-+        mul r15.x, r15.x, r16.x
-+        mad r15.y, -r15.z, r27.w, r15.y
-+        rcp r16.y, r27.y
-+        mul r15.y, r15.y, r16.y
-+        mul r16.xyz, r15.x, c12
-+        mad r16.xyz, r15.y, c13, r16
-+        mad r16.xyz, r15.z, c14, r16 // surface - camera
-+        dp3 r17.w, r16, r16
-+        rsq r17.w, r17.w
-+        mul r17.xyz, r16, r17.w // view direction
-+        rcp r17.w, r17.w // distance to the surface
-+        mov r30.x, c73.x
-+        mov r30.y, c74.x
-+        mov r30.z, c75.x
-+        if_lt r29.y, r30.x // only lights smaller than the max radius: the big fills over facades flooded them
-+        dp3 r18.w, r18, r17 // where along the ray it passes the light
-+        mad r12.x, -r18.w, r18.w, r12.x // squared distance of the ray from the light
-+        rcp r12.y, r30.x // squared radius
-+        add r12.z, r12.y, -r12.x
-+        if_lt c158.w, r12.z // the ray crosses the light's sphere
-+          rsq r12.w, r12.z
-+          rcp r12.w, r12.w // half the chord
-+          add r13.x, r18.w, -r12.w
-+          max r13.x, r13.x, c158.w // entry, no nearer than the camera
-+          add r13.y, r18.w, r12.w
-+          min r13.y, r13.y, r17.w // exit, no further than the surface
-+          add r13.z, r13.y, -r13.x
-+          if_lt c158.w, r13.z
-+            mul r13.w, r13.z, c163.x // step
-+            dp2add r14.y, vPos, c162, c162.w // interleaved gradient noise
-+            frc r14.y, r14.y
-+            mul r14.y, r14.y, c162.z
-+            frc r14.y, r14.y
-+            mad r13.x, r13.w, r14.y, r13.x
-+            mov r14.w, c158.w
-+            rep i1
-+              mad r15.xyz, r17, -r13.x, r18 // sample to light
-+              dp3 r15.w, r15, r15
-+              mad_sat r16.w, r15.w, -r30.x, c157.y
-+              mul r16.w, r16.w, r16.w // falloff
-+              rsq r15.w, r15.w
-+              mul r15.xyz, r15, r15.w
-+              dp3 r16.x, r15, -c72
-+              add r16.x, r16.x, -r30.y
-+              mul_sat r16.x, r16.x, r30.z // cone
-+              mad r14.w, r16.w, r16.x, r14.w
-+              add r13.x, r13.x, r13.w
-+            endrep
-+            mul r14.w, r14.w, r13.w
-+            rsq r12.y, r12.y // 1 / radius
-+            mul r14.w, r14.w, r12.y
-+            mul r14.w, r14.w, r29.x
-+            mov r15, c76
-+            mul r15.xyz, r15, r15.w
-+            mad r26.xyz, r15, r14.w, r26
-+          endif
-+        endif
-+        endif
-+      endif
-+    endif
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 76eac906..660a6e39 100644
+index 76eac906..fa58e3d7 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-@@ -46,6 +46,17 @@
+@@ -46,6 +46,14 @@
      def c2, 255, -128, -0, -7.9000001
      def c3, -8, -0, -1, 0.100000001
      def c4, 9.99999975e-006, 1.11111116, 0, 0.125
@@ -2489,14 +1569,11 @@ index 76eac906..660a6e39 100644
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    defi i0, 12, 0, 0, 0
-+    // --- FusionFix volumetric light: 1/samples; samples
-+    def c163, 0.125, 0, 0, 0
-+    defi i1, 8, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -116,7 +127,223 @@
+@@ -116,7 +124,134 @@
      add r0.x, -r0_abs.x, c3.w
      cmp r0.x, r0.x, -c3.z, -c3.y
      mov r1.w, -c3.z
@@ -2628,95 +1705,6 @@ index 76eac906..660a6e39 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix volumetric light: light scattered towards the camera by the air along the
-+    // --- view ray, where it crosses this light's sphere: 8 samples with the light's own falloff
-+    // --- and cone, over the light's radius so big lights do not flood the screen, times density
-+    // --- and strength. c201: density times strength, 1 / max radius squared, max distance
-+    // --- squared, magic while on; set right before lighting with the projection in c203-c204.
-+    mov r29, c201
-+    add r13.x, r29.w, -c157.x
-+    mul r13.x, r13.x, r13.x
-+    if_lt r13.x, c157.y
-+      mov r18, c66
-+      add r18.xyz, r18, -c15 // light - camera
-+      dp3 r12.x, r18, r18
-+      if_lt r12.x, r29.z // light within the max distance
-+        // this pixel's surface, from depth, as for the contact shadows
-+        add r13.xy, vPos, c158.z
-+        mul r13.xy, r13, c77.zw
-+        mov r13.zw, c158.w
-+        texldl r14, r13, s4
-+        pow r19.x, c209_abs.z, r14.x
-+        mul r14.x, r19.x, c209.w
-+        mov r27, c204
-+        mov r28, c203
-+        mad r15.xy, r13, c160.x, c160.y
-+        mul r15.y, r15.y, c160.y
-+        mul r15.xy, r15, r14.x
-+        rcp r15.w, r28.x
-+        mul r15.z, r14.x, r15.w
-+        mad r15.x, -r15.z, r27.z, r15.x
-+        rcp r16.x, r27.x
-+        mul r15.x, r15.x, r16.x
-+        mad r15.y, -r15.z, r27.w, r15.y
-+        rcp r16.y, r27.y
-+        mul r15.y, r15.y, r16.y
-+        mul r16.xyz, r15.x, c12
-+        mad r16.xyz, r15.y, c13, r16
-+        mad r16.xyz, r15.z, c14, r16 // surface - camera
-+        dp3 r17.w, r16, r16
-+        rsq r17.w, r17.w
-+        mul r17.xyz, r16, r17.w // view direction
-+        rcp r17.w, r17.w // distance to the surface
-+        mov r30.x, c73.x
-+        mov r30.y, c74.x
-+        mov r30.z, c75.x
-+        if_lt r29.y, r30.x // only lights smaller than the max radius: the big fills over facades flooded them
-+        dp3 r18.w, r18, r17 // where along the ray it passes the light
-+        mad r12.x, -r18.w, r18.w, r12.x // squared distance of the ray from the light
-+        rcp r12.y, r30.x // squared radius
-+        add r12.z, r12.y, -r12.x
-+        if_lt c158.w, r12.z // the ray crosses the light's sphere
-+          rsq r12.w, r12.z
-+          rcp r12.w, r12.w // half the chord
-+          add r13.x, r18.w, -r12.w
-+          max r13.x, r13.x, c158.w // entry, no nearer than the camera
-+          add r13.y, r18.w, r12.w
-+          min r13.y, r13.y, r17.w // exit, no further than the surface
-+          add r13.z, r13.y, -r13.x
-+          if_lt c158.w, r13.z
-+            mul r13.w, r13.z, c163.x // step
-+            dp2add r14.y, vPos, c162, c162.w // interleaved gradient noise
-+            frc r14.y, r14.y
-+            mul r14.y, r14.y, c162.z
-+            frc r14.y, r14.y
-+            mad r13.x, r13.w, r14.y, r13.x
-+            mov r14.w, c158.w
-+            rep i1
-+              mad r15.xyz, r17, -r13.x, r18 // sample to light
-+              dp3 r15.w, r15, r15
-+              mad_sat r16.w, r15.w, -r30.x, c157.y
-+              mul r16.w, r16.w, r16.w // falloff
-+              rsq r15.w, r15.w
-+              mul r15.xyz, r15, r15.w
-+              dp3 r16.x, r15, -c72
-+              add r16.x, r16.x, -r30.y
-+              mul_sat r16.x, r16.x, r30.z // cone
-+              mad r14.w, r16.w, r16.x, r14.w
-+              add r13.x, r13.x, r13.w
-+            endrep
-+            mul r14.w, r14.w, r13.w
-+            rsq r12.y, r12.y // 1 / radius
-+            mul r14.w, r14.w, r12.y
-+            mul r14.w, r14.w, r29.x
-+            mov r15, c76
-+            mul r15.xyz, r15, r15.w
-+            mad r26.xyz, r15, r14.w, r26
-+          endif
-+        endif
-+        endif
-+      endif
-+    endif
 +    mov oC0, r26
      
      // LogDepth Write
