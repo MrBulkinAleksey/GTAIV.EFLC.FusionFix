@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 366992fd..254093b0 100644
+index 366992fd..f9afc354 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-@@ -157,6 +157,17 @@
+@@ -157,6 +157,18 @@
      def c12, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c13, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c28, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
@@ -15,12 +15,13 @@ index 366992fd..254093b0 100644
 +    def c157, 12345, 1, 0.03125, 10
 +    def c158, 0.5, -0.5, 0.5, 0
 +    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
 +    defi i0, 32, 0, 0, 0
 +    defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
-@@ -169,6 +180,9 @@
+@@ -169,6 +181,9 @@
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
@@ -30,7 +31,7 @@ index 366992fd..254093b0 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
-@@ -201,7 +215,154 @@
+@@ -201,7 +216,169 @@
      add r4.xy, -r4, c1.w
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -69,7 +70,7 @@ index 366992fd..254093b0 100644
 +      // s11 holds the game's log depth; linear = near * 2^(raw * log2(far / near)). The ray
 +      // length in r28.z is no longer needed, so it takes log2(far / near); r15.w takes near.
 +      mov r16, c162
-+      texldl r16, r16, s9 // near, log2(far / near), step jitter flag
++      texldl r16, r16, s9 // near, log2(far / near), step jitter flag, toward camera
 +      mov r15.w, r16.x
 +      mov r28.z, r16.y
 +      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
@@ -163,6 +164,21 @@ index 366992fd..254093b0 100644
 +        endif
 +        mov r31.w, r16.w
 +      endrep
++      // Rays reflected back towards the camera would show the side of things the screen does
++      // not hold: a ped standing in front of a windscreen seen from ahead should show his
++      // front, the screen has his back, and the hit jumped between his back, his outline and
++      // what is behind him. They fade as in SSR (ScreenSpaceReflectionsTowardCamera, texel 4 w).
++      add r15.xyz, v4, -c15
++      nrm r16.xyz, r15
++      nrm r14.xyz, r5
++      dp3 r16.w, r16, r14 // cosine between view and reflection
++      mad_sat r29.z, r16.w, c163.x, c163.y
++      add r29.w, r16.w, c163.z
++      mul_sat r29.w, r29.w, c163.w
++      mov r15, c162
++      texldl r15, r15, s9
++      lrp r29.z, r15.w, r29.w, r29.z
++      mul r17.w, r17.w, r29.z
 +      lrp r15.xyz, r17.w, r17, r4
 +      mov r4.xyz, r15
 +      // Debug view (texel 2 w > 0): bright green where the march hit, red where it missed,
@@ -186,10 +202,10 @@ index 366992fd..254093b0 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 2847833c..eccfb505 100644
+index 2847833c..48ec6c2b 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-@@ -108,6 +108,17 @@
+@@ -108,6 +108,18 @@
      def c11, 0.962339997, -0.194983006, 0.473434001, -0.480026007
      def c12, -0.69591397, 0.457136989, -0.203345001, 0.620715976
      def c13, -0.326211989, -0.405809999, -0.840143979, -0.0735799968
@@ -202,12 +218,13 @@ index 2847833c..eccfb505 100644
 +    def c157, 12345, 1, 0.03125, 10
 +    def c158, 0.5, -0.5, 0.5, 0
 +    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
 +    defi i0, 32, 0, 0, 0
 +    defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
-@@ -120,6 +131,9 @@
+@@ -120,6 +132,9 @@
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
@@ -217,7 +234,7 @@ index 2847833c..eccfb505 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
-@@ -151,7 +165,154 @@
+@@ -151,7 +166,169 @@
      add r4.xy, -r4, c1.z
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -256,7 +273,7 @@ index 2847833c..eccfb505 100644
 +      // s11 holds the game's log depth; linear = near * 2^(raw * log2(far / near)). The ray
 +      // length in r28.z is no longer needed, so it takes log2(far / near); r15.w takes near.
 +      mov r16, c162
-+      texldl r16, r16, s9 // near, log2(far / near), step jitter flag
++      texldl r16, r16, s9 // near, log2(far / near), step jitter flag, toward camera
 +      mov r15.w, r16.x
 +      mov r28.z, r16.y
 +      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
@@ -350,6 +367,21 @@ index 2847833c..eccfb505 100644
 +        endif
 +        mov r31.w, r16.w
 +      endrep
++      // Rays reflected back towards the camera would show the side of things the screen does
++      // not hold: a ped standing in front of a windscreen seen from ahead should show his
++      // front, the screen has his back, and the hit jumped between his back, his outline and
++      // what is behind him. They fade as in SSR (ScreenSpaceReflectionsTowardCamera, texel 4 w).
++      add r15.xyz, v4, -c15
++      nrm r16.xyz, r15
++      nrm r14.xyz, r5
++      dp3 r16.w, r16, r14 // cosine between view and reflection
++      mad_sat r29.z, r16.w, c163.x, c163.y
++      add r29.w, r16.w, c163.z
++      mul_sat r29.w, r29.w, c163.w
++      mov r15, c162
++      texldl r15, r15, s9
++      lrp r29.z, r15.w, r29.w, r29.z
++      mul r17.w, r17.w, r29.z
 +      lrp r15.xyz, r17.w, r17, r4
 +      mov r4.xyz, r15
 +      // Debug view (texel 2 w > 0): bright green where the march hit, red where it missed,
@@ -373,10 +405,10 @@ index 2847833c..eccfb505 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 1d5cecf5..a42ec5d3 100644
+index 1d5cecf5..a86f420a 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-@@ -133,6 +133,17 @@
+@@ -133,6 +133,18 @@
      def c12, 0.473434001, -0.480026007, 0.519456029, 0.767022014
      def c13, -0.203345001, 0.620715976, 0.962339997, -0.194983006
      def c28, -0.840143979, -0.0735799968, -0.69591397, 0.457136989
@@ -389,12 +421,13 @@ index 1d5cecf5..a42ec5d3 100644
 +    def c157, 12345, 1, 0.03125, 10
 +    def c158, 0.5, -0.5, 0.5, 0
 +    def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
 +    defi i0, 32, 0, 0, 0
 +    defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
-@@ -145,6 +156,9 @@
+@@ -145,6 +157,9 @@
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
@@ -404,7 +437,7 @@ index 1d5cecf5..a42ec5d3 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c0.x, v1
-@@ -177,7 +191,154 @@
+@@ -177,7 +192,169 @@
      add r4.xy, -r4, c0.w
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -443,7 +476,7 @@ index 1d5cecf5..a42ec5d3 100644
 +      // s11 holds the game's log depth; linear = near * 2^(raw * log2(far / near)). The ray
 +      // length in r28.z is no longer needed, so it takes log2(far / near); r15.w takes near.
 +      mov r16, c162
-+      texldl r16, r16, s9 // near, log2(far / near), step jitter flag
++      texldl r16, r16, s9 // near, log2(far / near), step jitter flag, toward camera
 +      mov r15.w, r16.x
 +      mov r28.z, r16.y
 +      dp2add r29.x, vPos, c159, c159.w // -1 only shifts the integer part, frc drops it
@@ -537,6 +570,21 @@ index 1d5cecf5..a42ec5d3 100644
 +        endif
 +        mov r31.w, r16.w
 +      endrep
++      // Rays reflected back towards the camera would show the side of things the screen does
++      // not hold: a ped standing in front of a windscreen seen from ahead should show his
++      // front, the screen has his back, and the hit jumped between his back, his outline and
++      // what is behind him. They fade as in SSR (ScreenSpaceReflectionsTowardCamera, texel 4 w).
++      add r15.xyz, v4, -c15
++      nrm r16.xyz, r15
++      nrm r14.xyz, r5
++      dp3 r16.w, r16, r14 // cosine between view and reflection
++      mad_sat r29.z, r16.w, c163.x, c163.y
++      add r29.w, r16.w, c163.z
++      mul_sat r29.w, r29.w, c163.w
++      mov r15, c162
++      texldl r15, r15, s9
++      lrp r29.z, r15.w, r29.w, r29.z
++      mul r17.w, r17.w, r29.z
 +      lrp r15.xyz, r17.w, r17, r4
 +      mov r4.xyz, r15
 +      // Debug view (texel 2 w > 0): bright green where the march hit, red where it missed,

@@ -274,8 +274,9 @@ public:
     //       thickness, ray length and a magic value, so a foreign texture is never used;
     //       texel 2 the camera's right axis and the debug flag; texel 3 its up axis (the axes
     //       come from here because those shaders overwrite gViewInverse's first two rows);
-    //       texel 4 near and log2(far / near), to make the depth in s11 linear, and the
-    //       step jitter flag (ScreenSpaceReflectionsGlassStepJitter)
+    //       texel 4 near and log2(far / near), to make the depth in s11 linear, the step
+    //       jitter flag (ScreenSpaceReflectionsGlassStepJitter) and how far reflections
+    //       pointing back at the camera reach (ScreenSpaceReflectionsTowardCamera, as in SSR)
     //   s11 PreAlphaDepthCopyRT, into which the fog pass copies the game's own log depth
     //       (_DEFERRED_GBUFFER_3_) with a draw. GBUFFER_3 itself is written by the passes the
     //       glass is drawn in, and read while bound its hits broke up into patches; a separate
@@ -2133,7 +2134,7 @@ private:
                 proj._34, R.fGlassReflectionsThickness, R.fGlassReflectionsLength, 12345.0f,
                 viewInv.m[0][0], viewInv.m[0][1], viewInv.m[0][2], debugMode == R.kGlassDebugMode ? 1.0f : 0.0f,
                 viewInv.m[1][0], viewInv.m[1][1], viewInv.m[1][2], 0.0f,
-                vp->mNearClip, log2f(vp->mFarClip / vp->mNearClip), R.bGlassStepJitter ? 1.0f : 0.0f, 0.0f,
+                vp->mNearClip, log2f(vp->mFarClip / vp->mNearClip), R.bGlassStepJitter ? 1.0f : 0.0f, R.fSSRTowardCamera,
             };
             memcpy(R.GlassParams, params, sizeof(params));
             R.bGlassFrameValid = true;
