@@ -263,12 +263,14 @@ public:
     // the viewport hook runs for every view and the last before lighting is not the camera's.
     float LocalContactShadowConsts[12] = {};
     // Light scattered by the air inside point and spot lights, marched in the light shaders
-    // (shaders/patches/local_light_contact_shadows.patch). c201: density, strength, max
-    // distance squared and 12345 in w while on; set with c202-c204 right before lighting.
+    // (shaders/patches/local_light_contact_shadows.patch). c201: density times strength,
+    // 1 / max radius squared, max distance squared and 12345 in w while on; set with
+    // c202-c204 right before lighting.
     bool bVolumetricLight = true;
     float fVolumetricLightDensity = 0.05f;
     float fVolumetricLightIntensity = 1.0f;
     float fVolumetricLightMaxDistance = 60.0f;
+    float fVolumetricLightMaxRadius = 20.0f;
     float VolumetricLightConsts[4] = {};
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
     IDirect3DSurface9* ContactRawSurf = nullptr;
@@ -905,6 +907,7 @@ public:
         fVolumetricLightDensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightDensity", 0.05f), 0.0f, 1.0f);
         fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 1.0f), 0.0f, 10.0f);
         fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 60.0f), 1.0f, 1000.0f);
+        fVolumetricLightMaxRadius = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxRadius", 20.0f), 0.5f, 200.0f);
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
@@ -2936,7 +2939,7 @@ private:
             const bool volumetric = camera && R.bVolumetricLight && R.fVolumetricLightDensity > 0.0f && R.fVolumetricLightIntensity > 0.0f;
             const float volumetricConsts[4] =
             {
-                R.fVolumetricLightDensity, R.fVolumetricLightIntensity,
+                R.fVolumetricLightDensity * R.fVolumetricLightIntensity, 1.0f / (R.fVolumetricLightMaxRadius * R.fVolumetricLightMaxRadius),
                 R.fVolumetricLightMaxDistance * R.fVolumetricLightMaxDistance, volumetric ? 12345.0f : 0.0f,
             };
             memcpy(R.VolumetricLightConsts, volumetricConsts, sizeof(volumetricConsts));
