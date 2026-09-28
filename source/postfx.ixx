@@ -292,6 +292,13 @@ public:
     // Temporary, to find which part of the glass path after lighting makes foliage and glass
     // tremble: 1 nothing, 2 the parameter upload, 3 everything.
     int nGlassStage = 3;
+    // Temporary, to find why the glass hits broke up once the scene copy after lighting was
+    // gone: s11 0 GBUFFER_3 itself, 1 the fog pass's copy; and 1 to take that scene copy
+    // again, into a texture nothing reads.
+    int nGlassDepthSource = 1;
+    bool bGlassSceneCopy = false;
+    IDirect3DTexture9* GlassSceneTex = nullptr; // D3DPOOL_DEFAULT, released on device loss
+    D3DSURFACE_DESC GlassSceneDesc = {};
     IDirect3DTexture9* GlassParamsTex = nullptr; // managed, so it survives device resets
     float GlassParams[20] = {};
     bool bGlassFrameValid = false;
@@ -866,6 +873,8 @@ public:
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
         bGlassStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStepJitter", 0) != 0;
         nGlassStage = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStage", 3), 1, 3);
+        nGlassDepthSource = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassDepthSource", 1), 0, 1);
+        bGlassSceneCopy = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassSceneCopy", 0) != 0;
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -1006,6 +1015,8 @@ private:
         PostFxResources.ReleaseTextures();
         PostFxResources.ReleaseWaterMask();
         UnbindGlassReflections();
+        SAFE_RELEASE(PostFxResources.GlassSceneTex);
+        PostFxResources.GlassSceneDesc = {};
         // PostFxResources.mSpecularAoRT    =nullptr;
         PostFxResources.mNormalRT = nullptr;
         PostFxResources.mDiffuseRT = nullptr;
@@ -3019,6 +3030,24 @@ public:
             }
         }
 
+        IDirect3DSurface9* scene = nullptr;
+        if (ok && R.bGlassSceneCopy && SUCCEEDED(pDevice->GetRenderTarget(0, &scene)) && scene)
+        {
+            D3DSURFACE_DESC desc = {};
+            scene->GetDesc(&desc);
+            if (R.GlassSceneTex && (desc.Width != R.GlassSceneDesc.Width || desc.Height != R.GlassSceneDesc.Height ||
+                desc.Format != R.GlassSceneDesc.Format))
+                SAFE_RELEASE(R.GlassSceneTex);
+            if (!R.GlassSceneTex && SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET,
+                desc.Format, D3DPOOL_DEFAULT, &R.GlassSceneTex, nullptr)))
+                R.GlassSceneDesc = desc;
+            IDirect3DSurface9* dst = nullptr;
+            if (R.GlassSceneTex && SUCCEEDED(R.GlassSceneTex->GetSurfaceLevel(0, &dst)))
+                pDevice->StretchRect(scene, nullptr, dst, nullptr, D3DTEXF_NONE);
+            SAFE_RELEASE(dst);
+        }
+        SAFE_RELEASE(scene);
+
         if (!ok || R.nGlassStage < 3)
         {
             UnbindGlassReflections();
@@ -3026,7 +3055,8 @@ public:
         }
 
         BindSampler(pDevice, 9, R.GlassParamsTex, D3DTEXF_POINT);
-        BindSampler(pDevice, 11, R.PreAlphaDepthCopyRT->mD3DTexture, D3DTEXF_POINT);
+        BindSampler(pDevice, 11, R.nGlassDepthSource == 0 && R.mDepthRT && R.mDepthRT->mD3DTexture ? R.mDepthRT->mD3DTexture
+                                                                                                  : R.PreAlphaDepthCopyRT->mD3DTexture, D3DTEXF_POINT);
         BindSampler(pDevice, 13, R.SSRHistoryTex->mD3DTexture, D3DTEXF_LINEAR);
         R.bGlassBound = true;
     }
