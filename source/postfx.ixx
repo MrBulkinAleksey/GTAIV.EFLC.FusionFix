@@ -250,6 +250,14 @@ public:
     float fContactShadowMaxDistance = 60.0f;
     float fContactShadowIntensity = 1.0f;
     bool bContactShadowStepJitter = true;
+    // Contact shadows from street lights and headlights, marched in the light shaders
+    // themselves (shaders/patches/local_light_contact_shadows.patch); they follow the Contact
+    // Shadows menu toggle.
+    bool bLocalContactShadows = true;
+    float fLocalContactShadowLength = 2.0f;
+    float fLocalContactShadowThickness = 0.3f;
+    float fLocalContactShadowMaxDistance = 40.0f;
+    float fLocalContactShadowIntensity = 1.0f;
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
     IDirect3DSurface9* ContactRawSurf = nullptr;
     rage::grcRenderTargetPC* ContactTex = nullptr;
@@ -878,6 +886,11 @@ public:
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
         fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
+        bLocalContactShadows = iniReader.ReadInteger("POSTFX", "LocalContactShadows", 1) != 0;
+        fLocalContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsLength", 2.0f), 0.05f, 10.0f);
+        fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.3f), 0.01f, 5.0f);
+        fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
+        fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
@@ -2892,6 +2905,13 @@ private:
     {
         auto& R = PostFxResources;
         R.bContactValid = false;
+
+        // For the light shaders, whatever becomes of the sun's pass below.
+        const bool local = R.bLocalContactShadows && R.ContactShadowsEnabled() && R.fLocalContactShadowIntensity > 0.0f;
+        LocalContactShadowParams[0] = R.fLocalContactShadowLength;
+        LocalContactShadowParams[1] = R.fLocalContactShadowThickness;
+        LocalContactShadowParams[2] = local ? R.fLocalContactShadowMaxDistance : 0.0f;
+        LocalContactShadowParams[3] = R.fLocalContactShadowIntensity;
 
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
         rage::grcViewport* vp = rage::GetCurrentViewport();

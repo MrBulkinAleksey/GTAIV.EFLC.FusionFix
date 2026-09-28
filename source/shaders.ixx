@@ -44,6 +44,11 @@ int GetFusionShaderID(T pShader)
     return -1;
 }
 
+// Contact shadows from point and spot lights (shaders/patches/local_light_contact_shadows.patch):
+// ray length, thickness, max view distance (0 turns them off) and strength. postfx fills it each
+// frame; the viewport hook below hands it to the light shaders in c202, with the projection.
+export inline float LocalContactShadowParams[4] = {};
+
 class Shaders
 {
     static void OnBeforeLighting()
@@ -367,6 +372,17 @@ public:
                             // (shaders/patches/steep_parallax_occlusion.patch, parallax_debug_view.patch).
                             // Set here with c209, which those shaders read too: set once a frame, it
                             // did not survive until the G-buffer draws.
+                            // Local light contact shadows: c204 projection _11, _22, _31, _32; c203 _34
+                            // and 12345 in w while they are on; c202 their settings.
+                            {
+                                const D3DMATRIX& proj = *(const D3DMATRIX*)viewport->mProjectionMatrix;
+                                const float projRow[4] = { proj._11, proj._22, proj._31, proj._32 };
+                                const float projZ[4] = { proj._34, 0.0f, 0.0f, LocalContactShadowParams[2] > 0.0f ? 12345.0f : 0.0f };
+                                pDevice->SetPixelShaderConstantF(204, projRow, 1);
+                                pDevice->SetPixelShaderConstantF(203, projZ, 1);
+                                pDevice->SetPixelShaderConstantF(202, LocalContactShadowParams, 1);
+                            }
+
                             static auto ssrDebug = FusionFixSettings.GetRef("PREF_SSR_DEBUG");
                             const float parallaxDebug[4] = { ssrDebug && ssrDebug->get() == 8 ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
                             pDevice->SetPixelShaderConstantF(205, parallaxDebug, 1);
