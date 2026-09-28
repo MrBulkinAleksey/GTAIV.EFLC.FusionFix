@@ -361,6 +361,15 @@ public:
 
                             pDevice->SetVertexShaderConstantF(227, &arr[0], 1);
                             pDevice->SetPixelShaderConstantF(209, &arr[0], 1);
+
+                            // SSR Debug 8: the parallax shaders paint their surfaces while c205.x is
+                            // set, steep parallax in c205.yzw (red), the others in other orders of it
+                            // (shaders/patches/steep_parallax_occlusion.patch, parallax_debug_view.patch).
+                            // Set here with c209, which those shaders read too: set once a frame, it
+                            // did not survive until the G-buffer draws.
+                            static auto ssrDebug = FusionFixSettings.GetRef("PREF_SSR_DEBUG");
+                            const float parallaxDebug[4] = { ssrDebug && ssrDebug->get() == 8 ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
+                            pDevice->SetPixelShaderConstantF(205, parallaxDebug, 1);
                         }
                     }
                 });
@@ -592,15 +601,6 @@ public:
                         arr13[3] = 0.0f;
 
                         pDevice->SetPixelShaderConstantF(208, &arr13[0], 1);
-                    }
-
-                    // SSR Debug 8: the parallax shaders paint their surfaces while c205.x is set,
-                    // steep parallax in c205.yzw (red), the others in other orders of it
-                    // (shaders/patches/steep_parallax_occlusion.patch, parallax_debug_view.patch)
-                    {
-                        static auto ssrDebug = FusionFixSettings.GetRef("PREF_SSR_DEBUG");
-                        const float arr14[4] = { ssrDebug && ssrDebug->get() == 8 ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
-                        pDevice->SetPixelShaderConstantF(205, &arr14[0], 1);
                     }
                 }
             });

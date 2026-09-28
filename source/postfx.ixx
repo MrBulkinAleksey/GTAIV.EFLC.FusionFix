@@ -258,7 +258,7 @@ public:
     bool bContactBound = false;
     static constexpr int kContactDebugMode = 7;
     // 8 has the parallax shaders paint their surfaces, steep parallax red, gta_parallax green and
-    // gta_parallax_specmap blue; shaders.ixx sets their flag in c205 at the start of each frame.
+    // gta_parallax_specmap blue; shaders.ixx sets their flag in c205 with each viewport.
     static int SSRDebugMode() { static auto p = FusionFixSettings.GetRef("PREF_SSR_DEBUG"); return p ? p->get() : 0; }
     // The smoothed SSR result (SSRDenoise_PS) that deferred_lighting reads, when enabled.
     float fSSRDenoiseRadius = 2.0f;
