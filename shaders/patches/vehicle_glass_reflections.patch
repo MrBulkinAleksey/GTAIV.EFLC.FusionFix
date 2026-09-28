@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 366992fd..ee1e89fe 100644
+index 366992fd..f602d8ca 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 @@ -157,6 +157,18 @@
@@ -31,7 +31,7 @@ index 366992fd..ee1e89fe 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
-@@ -201,7 +216,169 @@
+@@ -201,7 +216,170 @@
      add r4.xy, -r4, c1.w
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -182,13 +182,14 @@ index 366992fd..ee1e89fe 100644
 +      lrp r15.xyz, r17.w, r17, r4
 +      mov r4.xyz, r15
 +      // Debug view (texel 2 w > 0): bright green where the march hit, red where it missed,
-+      // shown at full strength whatever the horizon fade would do.
++      // shown at full strength whatever the horizon fade would do; blue how much of the
++      // reflection the toward camera fade keeps.
 +      mov r16, c160
 +      texldl r16, r16, s9
 +      if_lt c155.z, r16.w
 +        add r15.x, c157.y, -r17.w
 +        mov r15.y, r17.w
-+        mov r15.z, c155.z
++        mov r15.z, r28.w
 +        mul r4.xyz, r15, c157.w
 +        mov r17.w, c157.y
 +      endif
@@ -202,7 +203,7 @@ index 366992fd..ee1e89fe 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 2847833c..3529d912 100644
+index 2847833c..cc1dde28 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 @@ -108,6 +108,18 @@
@@ -234,7 +235,7 @@ index 2847833c..3529d912 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
-@@ -151,7 +166,169 @@
+@@ -151,7 +166,170 @@
      add r4.xy, -r4, c1.z
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -385,13 +386,14 @@ index 2847833c..3529d912 100644
 +      lrp r15.xyz, r17.w, r17, r4
 +      mov r4.xyz, r15
 +      // Debug view (texel 2 w > 0): bright green where the march hit, red where it missed,
-+      // shown at full strength whatever the horizon fade would do.
++      // shown at full strength whatever the horizon fade would do; blue how much of the
++      // reflection the toward camera fade keeps.
 +      mov r16, c160
 +      texldl r16, r16, s9
 +      if_lt c155.z, r16.w
 +        add r15.x, c157.y, -r17.w
 +        mov r15.y, r17.w
-+        mov r15.z, c155.z
++        mov r15.z, r28.w
 +        mul r4.xyz, r15, c157.w
 +        mov r17.w, c157.y
 +      endif
@@ -405,7 +407,7 @@ index 2847833c..3529d912 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 1d5cecf5..668f2748 100644
+index 1d5cecf5..1c92b362 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 @@ -133,6 +133,18 @@
@@ -437,7 +439,7 @@ index 1d5cecf5..668f2748 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c0.x, v1
-@@ -177,7 +192,169 @@
+@@ -177,7 +192,170 @@
      add r4.xy, -r4, c0.w
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -588,13 +590,14 @@ index 1d5cecf5..668f2748 100644
 +      lrp r15.xyz, r17.w, r17, r4
 +      mov r4.xyz, r15
 +      // Debug view (texel 2 w > 0): bright green where the march hit, red where it missed,
-+      // shown at full strength whatever the horizon fade would do.
++      // shown at full strength whatever the horizon fade would do; blue how much of the
++      // reflection the toward camera fade keeps.
 +      mov r16, c160
 +      texldl r16, r16, s9
 +      if_lt c155.z, r16.w
 +        add r15.x, c157.y, -r17.w
 +        mov r15.y, r17.w
-+        mov r15.z, c155.z
++        mov r15.z, r28.w
 +        mul r4.xyz, r15, c157.w
 +        mov r17.w, c157.y
 +      endif
