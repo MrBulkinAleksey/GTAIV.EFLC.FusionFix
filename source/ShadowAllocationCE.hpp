@@ -1,3 +1,8 @@
+// OnyxOak modification project: Extra Night Shadows Fix and Better Headlights.
+// Project direction, integration and visual testing by OnyxOak; Codex-assisted development.
+// Modification notice: 2026-09-27. See ATTRIBUTION.md for upstream credits and GPL-3.0.
+// Official release: https://www.nexusmods.com/gta4/mods/1459
+
 #pragma once
 
 #include "ShadowAdapterCE.hpp"
@@ -17,7 +22,17 @@ namespace fusionfix::shadows::ce::allocation
     inline constexpr std::uint32_t SelectionRva = 0x005277F0;
     inline constexpr std::uint32_t SelectionCallerRva = 0x001C2ADB;
     inline constexpr std::uint32_t ComparatorRva = 0x005253F0;
+    inline constexpr std::uint32_t LampDistanceRva = 0x00527CB8;
     inline constexpr std::uint32_t CollectRva = 0x00527D5C;
+    // After the audited comparator call/add esp, before test eax, eax.
+    inline constexpr std::uint32_t CompareResultRva = 0x00527D7B;
+    // Same active scene camera table read by native shadow selection itself.
+    // Two audited frustum-call sites pass table[index]+0x10 as grcViewport.
+    inline constexpr std::uint32_t SceneCameraTableRva = 0x00D8D818;
+    inline constexpr std::uint32_t SceneViewportOffset = 0x10;
+    inline constexpr std::uint32_t CacheResultRva = 0x00527E29;
+    inline constexpr std::uint32_t CachePickerRva = 0x00525D40;
+    inline constexpr std::uint32_t CacheAge0Rva = 0x00DA0BEC;
     inline constexpr std::uint32_t FinalizeRva = 0x0052805D;
     inline constexpr std::uint32_t LightArrayPointerRva = 0x00C3EED8;
     inline constexpr std::uint32_t LightCountRva = 0x0110E240;
@@ -287,13 +302,19 @@ namespace fusionfix::shadows::ce::allocation
             std::size_t relocationCount;
         };
 
-        inline constexpr std::array<GuardedRange, 5> GuardedRanges{{
+        inline constexpr std::array<uint8_t,105> CachePickerBytes{0xE8,0xAB,0xF0,0xFF,0xFF,0x84,0xC0,0x75,0x04,0x83,0xC8,0xFF,0xC3,0xF3,0x0F,0x10,0x4C,0x24,0x04,0x56,0x83,0xCA,0xFF,0x57,0x33,0xF6,0x0B,0xFA,0x33,0xC9,0xB8,0xEC,0x0B,0x1A,0x01,0x83,0x78,0x08,0xFF,0x75,0x0F,0x83,0xFA,0xFF,0x74,0x04,0x39,0x30,0x7E,0x15,0x8B,0x30,0x8B,0xD1,0xEB,0x0F,0xF3,0x0F,0x10,0x40,0xF4,0x0F,0x2F,0xC1,0x76,0x05,0x0F,0x28,0xC8,0x8B,0xF9,0x05,0x00,0x01,0x00,0x00,0x41,0x3D,0xEC,0x13,0x1A,0x01,0x7C,0xCF,0x83,0xFA,0xFF,0x74,0x05,0x5F,0x8B,0xC2,0x5E,0xC3,0x83,0xC8,0xFF,0x3B,0xF8,0x0F,0x45,0xC7,0x5F,0x5E,0xC3};
+        inline constexpr std::array<uint16_t,2> CachePickerRelocations{0x1F,0x4E};
+        inline constexpr std::array<uint8_t,3> SceneViewportOffsetBytes{0x83,0xC1,0x10};
+        inline constexpr std::array<GuardedRange, 8> GuardedRanges{{
             {SelectionRva, SelectionBytes.data(), SelectionBytes.size(),
                 SelectionRelocations.data(), SelectionRelocations.size()},
             {ComparatorRva, ComparatorBytes.data(), ComparatorBytes.size(), nullptr, 0},
             {SelectionCallerRva - 5, CallerBytes.data(), CallerBytes.size(), nullptr, 0},
             {0x240, CodeSectionBytes.data(), CodeSectionBytes.size(), nullptr, 0},
-            {0x290, DataSectionBytes.data(), DataSectionBytes.size(), nullptr, 0}
+            {0x290, DataSectionBytes.data(), DataSectionBytes.size(), nullptr, 0},
+            {0x5487B3, SceneViewportOffsetBytes.data(), SceneViewportOffsetBytes.size(), nullptr, 0},
+            {0x54CFAB, SceneViewportOffsetBytes.data(), SceneViewportOffsetBytes.size(), nullptr, 0},
+            {CachePickerRva, CachePickerBytes.data(), CachePickerBytes.size(), CachePickerRelocations.data(), CachePickerRelocations.size()}
         }};
 
         constexpr std::uint32_t ConstRead32(const std::uint8_t* bytes) noexcept
@@ -332,6 +353,12 @@ namespace fusionfix::shadows::ce::allocation
             return true;
         }
         static_assert(ValidAllMetadata(), "Guard ranges/relocations must stay inside the audited image");
+        static_assert(CacheResultRva >= SelectionRva && CacheResultRva-SelectionRva+9<=SelectionBytes.size());
+        static_assert(ConstRead32(CachePickerBytes.data()+0x1F)==PreferredBase+CacheAge0Rva);
+        static_assert(LampDistanceRva >= SelectionRva && LampDistanceRva - SelectionRva + 6 <= SelectionBytes.size());
+        static_assert(CompareResultRva >= SelectionRva && CompareResultRva - SelectionRva + 7 <= SelectionBytes.size());
+        static_assert(ConstRead32(SelectionBytes.data()+(0x5278EA-SelectionRva))==PreferredBase+SceneCameraTableRva);
+        static_assert(ConstRead32(SelectionBytes.data()+(0x5278F5-SelectionRva))==PreferredBase+SceneCameraTableRva);
         static_assert(CollectRva >= SelectionRva &&
             CollectRva - SelectionRva + 31 <= SelectionBytes.size());
         static_assert(FinalizeRva >= SelectionRva &&

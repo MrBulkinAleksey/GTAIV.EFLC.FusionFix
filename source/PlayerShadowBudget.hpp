@@ -1,3 +1,8 @@
+// OnyxOak modification project: Extra Night Shadows Fix and Better Headlights.
+// Project direction, integration and visual testing by OnyxOak; Codex-assisted development.
+// Modification notice: 2026-09-27. See ATTRIBUTION.md for upstream credits and GPL-3.0.
+// Official release: https://www.nexusmods.com/gta4/mods/1459
+
 #pragma once
 
 #include <array>
@@ -24,7 +29,9 @@ namespace fusionfix::shadows::budget
         // Optional engine generation or stable geometry signature detects reuse
         // of a pointer/key. A changing list index is NOT a generation.
         std::uint64_t generation{};
-        float viewWeight = 1.0f; // Neutral preserves the release policy.
+        float viewWeight = 1.0f;
+        float reachSquared{}; // Zero uses the policy default; retained lights get 20% exit margin.
+        float priorityDistanceSquared = -1.0f; // Ranking only; never used for eligibility.
     };
 
     struct Frame
@@ -75,6 +82,8 @@ namespace fusionfix::shadows::budget
         PlayerShadowBudget() = default;
         explicit PlayerShadowBudget(Policy policy) noexcept : policy_(policy) {}
 
+        const Selection& LastSelection() const noexcept { return selection_; }
+
         void Reset() noexcept
         {
             history_ = {};
@@ -116,6 +125,8 @@ namespace fusionfix::shadows::budget
             if (candidate.index == InvalidIndex || !std::isfinite(candidate.distanceSquared) ||
                 candidate.distanceSquared < 0.0f || !std::isfinite(candidate.viewWeight) ||
                 candidate.viewWeight < 1.0f || candidate.viewWeight > 3.0f ||
+                !std::isfinite(candidate.reachSquared) || candidate.reachSquared < 0 ||
+                !std::isfinite(candidate.priorityDistanceSquared) || candidate.priorityDistanceSquared < -1.0f ||
                 (candidate.kind != Kind::Lamp && candidate.kind != Kind::PlayerBeam && candidate.kind != Kind::OtherBeam))
             {
                 selection_.invalidInput = true;
@@ -147,6 +158,7 @@ namespace fusionfix::shadows::budget
                 if (candidate.distanceSquared < record.candidate.distanceSquared)
                     record.candidate.distanceSquared = candidate.distanceSquared;
                 record.candidate.influencesPlayer |= candidate.influencesPlayer;
+                record.candidate.reachSquared = (std::min)(record.candidate.reachSquared, candidate.reachSquared);
                 record.candidate.viewWeight = (std::max)(record.candidate.viewWeight, candidate.viewWeight);
                 return !record.ambiguous;
             }
@@ -181,13 +193,19 @@ namespace fusionfix::shadows::budget
             // Two local lamps protect the occupied car's exterior-light shadow.
             Pick(2, [](const Candidate& c) { return c.kind == Kind::Lamp && c.influencesPlayer; });
             const auto beforePlayerBeams = selectedCount_;
-            Pick(frame_.driving ? 1 : 2, [this](const Candidate& c) {
-                return c.kind == Kind::PlayerBeam && (frame_.driving || c.influencesPlayer);
-            });
+            Pick(1, [](const Candidate& c) { return c.kind == Kind::PlayerBeam; });
             const auto playerBeams = selectedCount_ - beforePlayerBeams;
-            Pick(2 - playerBeams, [](const Candidate& c) {
+            if (frame_.driving) {
+                // Driving: one NPC beam may compete with a useful lamp rather
+                // than taking a slot unconditionally before visible road lamps.
+                Pick(1, [](const Candidate& c) {
+                    return c.kind == Kind::Lamp || (c.kind == Kind::OtherBeam && c.influencesPlayer);
+                });
+            } else {
+                Pick(2 - playerBeams, [](const Candidate& c) {
                     return c.kind == Kind::OtherBeam && c.influencesPlayer;
                 });
+            }
             Pick(SlotCount, [](const Candidate& c) { return c.kind == Kind::Lamp; });
 
             std::array<bool, SlotCount> assigned{};
@@ -233,7 +251,8 @@ namespace fusionfix::shadows::budget
                 return false;
             if (c.kind != Kind::Lamp && c.kind != Kind::PlayerBeam && c.kind != Kind::OtherBeam)
                 return false;
-            const auto maximum = c.kind == Kind::Lamp ? policy_.maximumLampDistanceSquared : policy_.maximumBeamDistanceSquared;
+            const auto maximum = c.reachSquared > 0 ? c.reachSquared * (Retained(c) ? 1.44f : 1.0f) :
+                (c.kind == Kind::Lamp ? policy_.maximumLampDistanceSquared : policy_.maximumBeamDistanceSquared);
             return c.distanceSquared <= maximum;
         }
 
@@ -258,12 +277,23 @@ namespace fusionfix::shadows::budget
             if (heldA != heldB) return heldA;
             // Comparing adjusted distance gives a total order, avoiding
             // non-transitive pairwise hysteresis under shuffled submission.
-            const double scoreA = a.distanceSquared / a.viewWeight;
-            const double scoreB = b.distanceSquared / b.viewWeight;
-            const double distanceA = oldA ? scoreA :
-                (scoreA + policy_.replacementMarginSquared) / policy_.replacementRatio;
-            const double distanceB = oldB ? scoreB :
-                (scoreB + policy_.replacementMarginSquared) / policy_.replacementRatio;
+            // Bounded camera preference: far lights cannot saturate the score
+            // and displace an entire nearer corridor on a small camera rotation.
+            const auto score = [&](const Candidate& c) -> double {
+                const double distance = frame_.driving && c.kind == Kind::Lamp && c.priorityDistanceSquared >= 0
+                    ? c.priorityDistanceSquared : c.distanceSquared;
+                if (c.kind == Kind::Lamp && c.viewWeight > 1.0f)
+                    return distance / (c.viewWeight * c.viewWeight);
+                // Relevant very close NPC beams remain competitive; distant
+                // ones cannot automatically displace visible streetlamp shadows.
+                return frame_.driving && c.kind == Kind::OtherBeam ? distance*4.0 : distance;
+            };
+            const double scoreA = score(a);
+            const double scoreB = score(b);
+            const float ratio = frame_.driving
+                ? (std::min)(policy_.replacementRatio,0.5f) : policy_.replacementRatio;
+            const double distanceA = oldA ? scoreA : (scoreA + policy_.replacementMarginSquared) / ratio;
+            const double distanceB = oldB ? scoreB : (scoreB + policy_.replacementMarginSquared) / ratio;
             if (distanceA != distanceB) return distanceA < distanceB;
             if (a.key != b.key) return a.key < b.key;
             if (a.generation != b.generation) return a.generation < b.generation;

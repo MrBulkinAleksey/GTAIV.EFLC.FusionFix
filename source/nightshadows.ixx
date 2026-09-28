@@ -12,7 +12,21 @@ module;
 #include "ShadowGuardDiagnostics.hpp"
 #include "CloseHeadlightRelevance.hpp"
 #include "ShadowReach.hpp"
+#include "ShadowReceiver.hpp"
+#include "NearbyVehicleReceivers36.hpp"
+#include "NativeLampDistance38.hpp"
+#include "NativeLampContinuity41.hpp"
+#include "NativeShadowContinuity42.hpp"
+#include "ShadowVolumeVisibility43.hpp"
+#include "NativeCacheDependencies44.hpp"
+#include "ShadowInactiveSlots.hpp"
 #include "ShadowViewPriority.hpp"
+#include "ShadowDrivingFocus.hpp"
+#include "ShadowLookupValidation.hpp"
+#include "ShadowTrace34.hpp"
+#include "SubmittedHeadlightHistory.hpp"
+#include "ShadowLookupLayout.hpp"
+#include "ShadowCrashTrace30.hpp"
 #include <fstream>
 #include <atomic>
 #include <intrin.h>
@@ -38,6 +52,16 @@ static int32_t ShadowReachStep(bool headlight)
     return reach ? reach->get() : 0;
 }
 
+namespace NearbyVehicleLighting36 {
+    static void Update() noexcept;
+    static bool Relevant(uintptr_t player,uint32_t frame,uint32_t now,
+        fusionfix::shadows::Vec3 position,fusionfix::shadows::Vec3 source,
+        fusionfix::shadows::Vec3 direction,float outerCos,float radius,uintptr_t key) noexcept;
+    static float Score(uintptr_t player,uint32_t frame,uint32_t now,
+        fusionfix::shadows::Vec3 position,fusionfix::shadows::Vec3 source,
+        fusionfix::shadows::Vec3 direction,float outerCos,float radius,uintptr_t key) noexcept;
+}
+
 namespace CShadows
 {
     // CE's submission adapter takes 16 stack words. Its final word is an opaque
@@ -54,8 +78,9 @@ namespace CShadows
     {
         std::mutex stateMutex;
         fusionfix::shadows::StableHeadlightSelector selector;
+        fusionfix::shadows::SubmittedHeadlightHistory submitted;
         fusionfix::shadows::Vec3 playerPosition{};
-        uintptr_t occupiedVehicle = 0;
+        uintptr_t occupiedVehicle = 0, lastVehicle = 0, playerSession = 0;
         uint32_t frame = 0;
         bool hasFrame = false;
         bool playerValid = false;
@@ -66,6 +91,7 @@ namespace CShadows
                 !CPlayer::getLocalPlayerPed || !CPlayer::findPlayerCar)
             {
                 selector.Reset();
+                submitted.Reset();
                 hasFrame = false;
                 return false;
             }
@@ -83,12 +109,14 @@ namespace CShadows
             if (!ped)
             {
                 selector.Reset();
+                submitted.Reset();
                 return false;
             }
             const auto matrix = *reinterpret_cast<const float* const*>(ped + 0x20);
             if (!matrix)
             {
                 selector.Reset();
+                submitted.Reset();
                 return false;
             }
             playerPosition = {matrix[12], matrix[13], matrix[14]};
@@ -96,25 +124,33 @@ namespace CShadows
                 !std::isfinite(playerPosition.z))
             {
                 selector.Reset();
+                submitted.Reset();
                 return false;
             }
             const uintptr_t car = CPlayer::findPlayerCar();
+            if (ped != playerSession) { lastVehicle = 0; submitted.Reset(); }
+            playerSession = ped;
             occupiedVehicle = car;
+            if (car) {
+                lastVehicle = car;
+                const auto carMatrix = *reinterpret_cast<const float* const*>(car + 0x20);
+                if (carMatrix && std::isfinite(carMatrix[12]) && std::isfinite(carMatrix[13]) && std::isfinite(carMatrix[14]))
+                    playerPosition = {carMatrix[12], carMatrix[13], carMatrix[14]};
+            }
             selector.BeginFrame({nextFrame, static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),
                                  ped, car != 0, car});
             playerValid = true;
             return true;
         }
 
-        bool IsSelectedBeam(uintptr_t key)
+        bool IsSubmittedBeam(uintptr_t key)
         {
             const std::lock_guard<std::mutex> lock(stateMutex);
             if (!key || !hasFrame || !playerValid) return false;
-            const auto identities = selector.ActiveIdentities();
-            return key == identities[0] || key == identities[1];
+            return pFrameCounter && submitted.Contains(key, *pFrameCounter);
         }
 
-        bool ShouldCast(int directionAddress, int positionAddress, int stableKey)
+        bool ShouldCast(int directionAddress, int positionAddress, int stableKey, int radiusBits)
         {
             // Keep policy bookkeeping coherent if render submissions are made
             // on more than one thread. The engine call occurs after unlock.
@@ -133,19 +169,36 @@ namespace CShadows
             }
             auto geometry = fusionfix::shadows::EvaluateGeometry(
                 playerPosition, lightPosition, directionAddress ? &forward : nullptr);
-            if (bCloseHeadlightRelevance && !occupiedVehicle && directionAddress &&
-                fusionfix::shadows::CloseHeadlightTouchesBody(playerPosition, lightPosition,
-                    forward, 0.70710678f, 35.0f))
-                geometry.aimedAtPlayer = true;
-            const auto identity = static_cast<uintptr_t>(static_cast<uint32_t>(stableKey));
-            // Reach changes selection relevance, never the light cone or atlas size.
-            if (fusionfix::shadows::WithinShadowReach(geometry.distanceSquared, ShadowReachStep(true)))
-            {
-                geometry.directionKnown = true;
-                geometry.aimedAtPlayer = true;
+            float sourceRadius;
+            std::memcpy(&sourceRadius, &radiusBits, sizeof(sourceRadius));
+            const float receiverExtent = occupiedVehicle ? 3.0f : 1.5f;
+            geometry.distanceSquared = fusionfix::shadows::ReceiverDistanceSquared(playerPosition, lightPosition, receiverExtent);
+            // Broad submission gate; the allocator checks the native cone.
+            geometry.aimedAtPlayer = directionAddress && fusionfix::shadows::BeamTouchesReceiver(
+                playerPosition, receiverExtent, lightPosition, forward, 0.70710678f, sourceRadius);
+            float receiverWeight=1.0f;
+            if (!occupiedVehicle) {
+                if(geometry.aimedAtPlayer) receiverWeight=1.5f;
+                else if(directionAddress) {
+                    const float benefit=NearbyVehicleLighting36::Score(playerSession,frame,
+                        static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),playerPosition,lightPosition,
+                        forward,0.70710678f,sourceRadius,static_cast<uintptr_t>(static_cast<uint32_t>(stableKey)));
+                    geometry.aimedAtPlayer=benefit>0;
+                    receiverWeight=1.0f+0.5f*benefit;
+                }
             }
-            const bool playerHeadlight = fusionfix::shadows::ce::IsVehicleBeam(identity, occupiedVehicle);
-            const bool accepted = selector.Consider({identity, geometry, playerHeadlight});
+            const auto identity = static_cast<uintptr_t>(static_cast<uint32_t>(stableKey));
+            const bool playerHeadlight = fusionfix::shadows::ce::IsVehicleBeam(identity,
+                occupiedVehicle ? occupiedVehicle : lastVehicle);
+            // NPC beams must reach the receiver; source-to-ped distance is not a ten-foot gate.
+            // The current/recent car may light scenery beyond Niko instead.
+            const int feet = fusionfix::shadows::ShadowReachFeet(ShadowReachStep(true));
+            const float configuredReach = feet > 0 ? feet * 0.3048f : 35.0f;
+            const float reach = !playerHeadlight && std::isfinite(sourceRadius) && sourceRadius > 0
+                ? (std::max)(configuredReach, sourceRadius) : configuredReach;
+            const bool accepted = selector.Consider({identity, geometry, playerHeadlight,
+                reach * reach, !playerHeadlight, receiverWeight});
+            if (accepted) submitted.Record(identity, frame);
             if (playerHeadlight)
             {
                 if (accepted) ++drivingBeamAccepted;
@@ -160,7 +213,7 @@ namespace CShadows
         int direction, int tangent, int position, int a7, int a8, int a9, int a10,
         int a11, int a12, int a13, int a14, int a15, int stableKey)
     {
-        if (!gStableHeadlightShadow.ShouldCast(direction, position, stableKey))
+        if (!gStableHeadlightShadow.ShouldCast(direction, position, stableKey, a11))
             flags &= ~4u;
         hbStoreStaticShadow.fun(a1, a2, flags, direction, tangent, position,
                                 a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey);
@@ -170,7 +223,7 @@ namespace CShadows
         int direction, int tangent, int position, int a7, int a8, int a9, int a10,
         int a11, int a12, int a13, int a14, int a15, int stableKey)
     {
-        if (!gStableHeadlightShadow.ShouldCast(direction, position, stableKey))
+        if (!gStableHeadlightShadow.ShouldCast(direction, position, stableKey, a11))
             flags &= ~4u;
         hbStoreStaticShadow.fun(a1, a2, flags, direction, tangent, position,
                                 a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey);
@@ -252,6 +305,8 @@ namespace CShadows
 }
 
 #include "ShadowAllocationRuntime.inl"
+#include "NearbyVehicleRuntime36.inl"
+#include "ShadowLookupRuntime.inl"
 #include "ShadowCasterRuntime.inl"
 #include "NightShadowAdmissionRuntime.inl"
 
@@ -269,7 +324,9 @@ static int __cdecl sub_925DB0(int a1, int a2, int flags)
         }
     }
 
-    return shsub_925DB0.ccall<int>(a1, a2, flags);
+    const int buffer = ShadowLookupGuard::ReadBuffer();
+    const int result = shsub_925DB0.ccall<int>(a1, a2, flags);
+    return ShadowLookupGuard::Filter(result, static_cast<uint32_t>(a1), a2, buffer);
 }
 
 // Lamppost shadows workaround 2
@@ -319,10 +376,19 @@ public:
     NightShadows()
     {
         // Registered before game callbacks start, independent of async init.
-        FusionFix::onGameProcessEvent() += []() { ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
+        FusionFix::onGameProcessEvent() += []() { NearbyVehicleLighting36::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
+            if (iniReader.ReadInteger("SHADOWS", "ExperimentalCrashDiagnostics", 0) != 0)
+            {
+                const auto crashPath = iniReader.GetIniPath().parent_path() /
+                    (L"GTAIV-shadow-crash-" + std::to_wstring(GetCurrentProcessId()) + L".bin");
+                const auto contextPath = iniReader.GetIniPath().parent_path() /
+                    (L"GTAIV-path-context-" + std::to_wstring(GetCurrentProcessId()) + L".bin");
+                crash_path_context::Install(contextPath.c_str());
+                shadow_crash_trace::Install(crashPath.c_str());
+            }
 
             // [NIGHTSHADOWS]
             bHighResolutionNightShadows = iniReader.ReadInteger("SHADOWS", "HighResolutionNightShadows", 0) != 0;
@@ -350,6 +416,7 @@ public:
                     iniReader.ReadInteger("HEADLIGHTS", "ConsistentBrightness", 0) != 0);
                 bCloseHeadlightRelevance = iniReader.ReadInteger("SHADOWS", "ExperimentalCloseHeadlightRelevance", 0) != 0;
                 bTrafficSelfShadowFix = iniReader.ReadInteger("SHADOWS", "ExperimentalTrafficSelfShadowFix", 0) != 0;
+                NearbyVehicleLighting36::enabled.store(iniReader.ReadInteger("SHADOWS", "NearbyVehicleHeadlightReceivers", 0) != 0, std::memory_order_release);
 
                 // Validate BEFORE allocator and caster installation alter guarded bytes.
                 const auto image = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
@@ -368,8 +435,15 @@ public:
                 // Offline-reviewed prototype; never turn this on silently for an
                 // existing installation. A later controlled launch must opt in.
                 PlayerShadowAllocation::cameraPriority = iniReader.ReadInteger("SHADOWS", "CameraAwareShadowPriority", 0) != 0;
+                if (PlayerShadowAllocation::cameraPriority)
+                    PlayerShadowAllocation::cameraPriority = PlayerShadowAllocation::InstallCameraCapture();
+                PlayerShadowAllocation::nativeLampPriority = iniReader.ReadInteger("SHADOWS", "NativeLampViewPriority", 0) != 0;
                 const int allocationMode = iniReader.ReadInteger("SHADOWS", "ExperimentalPlayerShadowAllocation", 0);
                 ShadowDiagnostics::allocationMode = allocationMode;
+                if (shadowDiagnostics)
+                    ShadowTrace34::Start(iniReader.GetIniPath().parent_path() /
+                        ("GTAIV-light-trace-mode" + std::to_string(allocationMode) + "-" + std::to_string(GetCurrentProcessId()) + ".bin"),
+                        allocationMode, GetCurrentProcessId());
                 // 0=off, 1=observe private output only, 2=experimental publication.
                 if (allocationMode == 1 || allocationMode == 2)
                 {
@@ -537,6 +611,8 @@ public:
             {
                 // Lamppost shadows workaround 1
                 auto pattern = hook::pattern("80 3D ? ? ? ? ? 75 04 83 C8 FF");
+                if (ceAdapter)
+                    ShadowLookupGuard::Initialize();
                 shsub_925DB0 = safetyhook::create_inline(pattern.get_first(), sub_925DB0);
 
                 // Lamppost shadows workaround 2

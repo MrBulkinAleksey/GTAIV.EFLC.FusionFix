@@ -1,3 +1,8 @@
+// OnyxOak modification project: Extra Night Shadows Fix and Better Headlights.
+// Project direction, integration and visual testing by OnyxOak; Codex-assisted development.
+// Modification notice: 2026-09-27. See ATTRIBUTION.md for upstream credits and GPL-3.0.
+// Official release: https://www.nexusmods.com/gta4/mods/1459
+
 #pragma once
 #include "StableHeadlightSelector.hpp"
 #include <algorithm>
@@ -10,6 +15,17 @@ struct ShadowView {
     float projection[4][4]{};
     bool valid{};
 };
+// Compare against the display device, not the currently bound render window:
+// shadow/reflection passes can change the latter together with the viewport.
+inline bool IsGameplayViewport(bool perspective, int width, int height,
+                               int deviceWidth, int deviceHeight) noexcept {
+    return perspective && deviceWidth > 0 && deviceHeight > 0 &&
+        width == deviceWidth && height == deviceHeight;
+}
+inline float SmoothUnit(float value) noexcept {
+    const float t = std::clamp(value,0.0f,1.0f);
+    return t*t*(3.0f-2.0f*t);
+}
 inline float ViewSample(const ShadowView& c, Vec3 p) noexcept {
     if (!c.valid) return 0;
     const float v[4]{p.x,p.y,p.z,1};
@@ -20,8 +36,12 @@ inline float ViewSample(const ShadowView& c, Vec3 p) noexcept {
     if(clip[3]<=0.01f || clip[2]<0 || clip[2]>clip[3]) return 0;
     const float x=clip[0]/clip[3], y=clip[1]/clip[3];
     const float edge=(std::max)(std::abs(x),std::abs(y));
-    // Soft screen-edge rolloff, modest central emphasis; no hard rejection.
-    return std::clamp((1.2f-edge)/1.2f,0.0f,1.0f);
+    // Give the whole visible area useful priority. The broad shoulder admits
+    // lights just before they enter view; smooth falloff avoids a screen-edge
+    // discontinuity without favoring the screen center.
+    // Equal relevance throughout the frame. Keep a continuous shoulder outside
+    // it so a small camera movement does not immediately invalidate a receiver.
+    return 1.0f-SmoothUnit((edge-1.0f)/0.35f);
 }
 inline float ShadowViewWeight(const ShadowView& c, Vec3 position, Vec3 direction,
                               float radius, bool beam) noexcept {

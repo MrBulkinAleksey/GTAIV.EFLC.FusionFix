@@ -1,3 +1,8 @@
+// OnyxOak modification project: Extra Night Shadows Fix and Better Headlights.
+// Project direction, integration and visual testing by OnyxOak; Codex-assisted development.
+// Modification notice: 2026-09-27. See ATTRIBUTION.md for upstream credits and GPL-3.0.
+// Official release: https://www.nexusmods.com/gta4/mods/1459
+
 #pragma once
 
 #include <array>
@@ -45,6 +50,11 @@ namespace fusionfix::shadows
         std::uintptr_t identity{};
         Geometry geometry{};
         bool playerHeadlight{};
+        // CE adapter supplies a per-source radius and genuine beam relevance.
+        // Zero retains the original selector contract for other adapters.
+        float reachSquared{};
+        bool requirePlayerInfluence{};
+        float receiverWeight=1.0f; // Bounded benefit of visible receiving geometry, not source brightness.
     };
 
     struct FrameContext
@@ -157,7 +167,7 @@ namespace fusionfix::shadows
                 if (!Eligible(candidate, next) || Contains(candidate.identity))
                     continue;
                 // Reserve room for an external beam while driving; never exceed two beams.
-                if (next.driving && candidate.playerHeadlight)
+                if (candidate.playerHeadlight)
                 {
                     bool haveOwn = false;
                     for (const auto& slot : active_)
@@ -233,24 +243,34 @@ namespace fusionfix::shadows
 
         bool Eligible(const HeadlightCandidate& c, const FrameContext&) const noexcept
         {
-            return c.identity && std::isfinite(c.geometry.distanceSquared) &&
-                c.geometry.distanceSquared >= 0.0f && c.geometry.distanceSquared <= policy_.maximumDistanceSquared;
+            if (!c.identity || !std::isfinite(c.geometry.distanceSquared) || c.geometry.distanceSquared < 0 ||
+                !std::isfinite(c.reachSquared) || c.reachSquared < 0 ||
+                !std::isfinite(c.receiverWeight) || c.receiverWeight<1 || c.receiverWeight>1.5f) return false;
+            const float limit = c.reachSquared > 0 ?
+                c.reachSquared * (Contains(c.identity) ? 1.44f : 1.0f) : policy_.maximumDistanceSquared;
+            return c.geometry.distanceSquared <= limit &&
+                (!c.requirePlayerInfluence || (c.geometry.directionKnown && c.geometry.aimedAtPlayer));
         }
 
         static unsigned Priority(const HeadlightCandidate& c, const FrameContext& frame) noexcept
         {
-            if (frame.driving && c.playerHeadlight) return 0;
-            const unsigned offset = frame.driving ? 1 : 0;
+            if (c.playerHeadlight) return 0;
+            const unsigned offset = 1;
             if (c.geometry.directionKnown && c.geometry.aimedAtPlayer) return offset;
             return offset + (c.geometry.directionKnown ? 2 : 1);
+        }
+
+        static float Score(const HeadlightCandidate& c) noexcept {
+            return c.geometry.distanceSquared/(c.receiverWeight*c.receiverWeight);
         }
 
         static bool Better(const HeadlightCandidate& a, const HeadlightCandidate& b, const FrameContext& frame) noexcept
         {
             const auto aPriority = Priority(a, frame), bPriority = Priority(b, frame);
             if (aPriority != bPriority) return aPriority < bPriority;
-            if (a.geometry.distanceSquared != b.geometry.distanceSquared)
-                return a.geometry.distanceSquared < b.geometry.distanceSquared;
+            if (Score(a) != Score(b)) return Score(a) < Score(b);
+            if(a.receiverWeight != b.receiverWeight) return a.receiverWeight > b.receiverWeight;
+            if(a.geometry.distanceSquared != b.geometry.distanceSquared) return a.geometry.distanceSquared < b.geometry.distanceSquared;
             if (a.identity != b.identity) return a.identity < b.identity;
             // Deterministic duplicate reduction, including contradictory tags.
             if (a.playerHeadlight != b.playerHeadlight) return a.playerHeadlight;
@@ -270,8 +290,8 @@ namespace fusionfix::shadows
                 return false;
             const auto incomingPriority = Priority(candidate, next), oldPriority = Priority(slot.candidate, next);
             if (incomingPriority != oldPriority) return incomingPriority < oldPriority;
-            return candidate.geometry.distanceSquared + policy_.replacementMarginSquared <
-                slot.candidate.geometry.distanceSquared * policy_.replacementRatio;
+            return Score(candidate) + policy_.replacementMarginSquared <
+                Score(slot.candidate) * policy_.replacementRatio;
         }
 
         void Collect(HeadlightCandidate candidate) noexcept

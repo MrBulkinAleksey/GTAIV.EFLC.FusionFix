@@ -1,3 +1,8 @@
+// OnyxOak modification project: Extra Night Shadows Fix and Better Headlights.
+// Project direction, integration and visual testing by OnyxOak; Codex-assisted development.
+// Modification notice: 2026-09-27. See ATTRIBUTION.md for upstream credits and GPL-3.0.
+// Official release: https://www.nexusmods.com/gta4/mods/1459
+
 // Candidate 14: narrowly scoped immediate-render experiment. AE3310 may queue
 // AE0690 instead: that path does not visit the entity hook and is NOT fixed here.
 namespace OwnHeadlightCaster
@@ -33,12 +38,14 @@ namespace OwnHeadlightCaster
         const auto key = *reinterpret_cast<const uint32_t*>(base + guard::SlotKeyRva + offset);
         const auto kind = *reinterpret_cast<const uint32_t*>(base + guard::SlotKindRva + offset);
         const bool active = *reinterpret_cast<const uint8_t*>(base + guard::SlotActiveRva + offset) == 1;
+        ShadowTrace34::Emit({5,CShadows::pFrameCounter?*CShadows::pFrameCounter:0,GetTickCount(),key,
+            static_cast<int>(slot),static_cast<int>(kind),active?1:0,0,0,0,0,0});
         const auto car = CPlayer::findPlayerCar();
         // Exclude only the source vehicle from its own immediate
-        // headlight pass. Confirm the opaque key was selected by our submission
+        // headlight pass. Confirm the opaque key was recently accepted by our submission
         // adapter; do not infer an owner pointer or dereference that key.
         if (bTrafficSelfShadowFix && kind == 4 && active &&
-            CShadows::gStableHeadlightShadow.IsSelectedBeam(key))
+            CShadows::gStableHeadlightShadow.IsSubmittedBeam(key))
             result.trafficBeamKey = key;
         if (!policy::OwnBeam(slot, kind, active, key, car)) return result;
         result.car = car;
@@ -80,6 +87,7 @@ namespace ShadowDiagnostics
         const auto now = GetTickCount64();
         if (now - lastWrite < 5000) return;
         lastWrite = now;
+        ShadowTrace34::Flush();
         // Low-frequency game-event I/O, never inside submission/caster hooks.
         // Failure to write diagnostics must not escape into game code.
         try
@@ -97,11 +105,49 @@ namespace ShadowDiagnostics
                 << " traffic_car_excluded=" << OwnHeadlightCaster::trafficCarExcluded.load()
                 << " close_headlight_relevance=" << bCloseHeadlightRelevance << " caster_guard=" << guardPassed
                 << " caster_requested=" << casterMode << " caster_enabled=" << OwnHeadlightCaster::enabled.load()
-                << " allocation_mode=" << allocationMode << " allocation_ready=" << PlayerShadowAllocation::ready.load()
+                << " lamp_policy=scene_camera_cache_continuity allocation_mode=" << allocationMode << " allocation_ready=" << PlayerShadowAllocation::ready.load()
                 << " allocation_thread_block=" << PlayerShadowAllocation::unsupportedThread.load()
+                << " capture_calls=" << PlayerShadowAllocation::captureCalls.load()
+                << " capture_valid=" << PlayerShadowAllocation::captureValid.load()
+                << " view_w=" << PlayerShadowAllocation::captureWidth.load()
+                << " view_h=" << PlayerShadowAllocation::captureHeight.load()
+                << " device_w=" << PlayerShadowAllocation::activeWidth.load()
+                << " device_h=" << PlayerShadowAllocation::activeHeight.load()
+                << " crash_trace=" << (shadow_crash_trace::handler != nullptr)
                 << " camera_priority=" << PlayerShadowAllocation::cameraPriority
+                << " scene_camera_reads=" << PlayerShadowAllocation::sceneCameraReads.load()
+                << " auxiliary_views_rejected=" << PlayerShadowAllocation::auxiliaryViewsRejected.load()
                 << " camera_passes=" << PlayerShadowAllocation::cameraPasses.load()
                 << " camera_fallbacks=" << PlayerShadowAllocation::cameraFallbacks.load()
+                << " trace_enabled=" << ShadowTrace34::enabled.load()
+                << " trace_dropped=" << ShadowTrace34::recorder.dropped.load()
+                << " native_lamp_priority=" << PlayerShadowAllocation::nativeLampPriority
+                << " cache_dependency_checks=" << PlayerShadowAllocation::cacheDependencyChecks.load()
+                << " cache_dependency_redirected=" << PlayerShadowAllocation::cacheDependencyRedirected.load()
+                << " cache_dependency_deferred=" << PlayerShadowAllocation::cacheDependencyDeferred.load()
+                << " cache_dependency_rejected=" << PlayerShadowAllocation::cacheDependencyRejected.load()
+                << " continuity_compares=" << PlayerShadowAllocation::continuityComparisons.load()
+                << " continuity_overrides=" << PlayerShadowAllocation::continuityOverrides.load()
+                << " continuity_rejected=" << PlayerShadowAllocation::continuityRejected.load()
+                << " lamp_distance_adjusted=" << PlayerShadowAllocation::lampDistanceAdjusted.load()
+                << " nearby_receivers=" << NearbyVehicleLighting36::enabled.load()
+                << " receiver_captures=" << NearbyVehicleLighting36::captures.load()
+                << " receiver_matches=" << NearbyVehicleLighting36::matches.load()
+                << " receiver_invalid_pool=" << NearbyVehicleLighting36::invalidPool.load()
+                << " lookup_guard=" << ShadowLookupGuard::ready
+                << " lamp_removed=" << PlayerShadowAllocation::lampRemoved.load()
+                << " lamp_missing_input=" << PlayerShadowAllocation::lampMissingInput.load()
+                << " lamp_dropped_present=" << PlayerShadowAllocation::lampDroppedPresent.load()
+                << " rejected_dynamic_map=" << ShadowLookupGuard::rejectedDynamic.load()
+                << " rejected_static_map=" << ShadowLookupGuard::rejectedStatic.load()
+                << " lookup_buffer_changed=" << ShadowLookupGuard::changedBuffer.load()
+                << " stale_keys_cleared=" << PlayerShadowAllocation::staleKeysCleared.load()
+                << " rejected_adapter=" << PlayerShadowAllocation::rejectedAdapterChecks.load()
+                << " rejected_input=" << PlayerShadowAllocation::rejectedPassReasons[2].load()
+                << " rejected_duplicate=" << PlayerShadowAllocation::rejectedPassReasons[3].load()
+                << " rejected_capacity=" << PlayerShadowAllocation::rejectedPassReasons[4].load()
+                << " rejected_commit=" << PlayerShadowAllocation::rejectedPassReasons[5].load()
+                << " rejected_snapshot=" << PlayerShadowAllocation::rejectedPassReasons[6].load()
                 << " applied=" << PlayerShadowAllocation::appliedPasses.load()
                 << " observed=" << PlayerShadowAllocation::observedPasses.load()
                 << " fallback=" << PlayerShadowAllocation::fallbackPasses.load()

@@ -1,3 +1,8 @@
+// OnyxOak modification project: Extra Night Shadows Fix and Better Headlights.
+// Project direction, integration and visual testing by OnyxOak; Codex-assisted development.
+// Modification notice: 2026-09-27. See ATTRIBUTION.md for upstream credits and GPL-3.0.
+// Official release: https://www.nexusmods.com/gta4/mods/1459
+
 // FusionFix's existing light-admission workaround moved from fixes.ixx.
 // It edits CE 927BD4 inside the allocator's guarded selection function. Keep
 // ONE installer, after both startup guards and allocator hook preparation.
