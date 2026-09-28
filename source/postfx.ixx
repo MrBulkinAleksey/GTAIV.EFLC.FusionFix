@@ -287,8 +287,9 @@ public:
     bool bGlassReflections = true;
     float fGlassReflectionsLength = 15.0f;
     float fGlassReflectionsThickness = 0.5f;
-    // On by default: the glass shaders average each 2x2 pixel quad, which takes most of the
-    // dots out; without it the edges of what the march caught show as shifted slices.
+    // On by default: without it the edges of what the glass march caught show as shifted
+    // slices; with it, as fine noise, since glass has no smoothing pass. Averaging pixel quads
+    // in the shader with dsx and dsy left bright dots where the derivatives are per quad.
     bool bGlassStepJitter = true;
     // Temporary, to find which part of the glass path after lighting makes foliage and glass
     // tremble: 1 nothing, 2 the parameter upload, 3 everything.
