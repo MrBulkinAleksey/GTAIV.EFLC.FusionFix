@@ -269,8 +269,13 @@ public:
     // season gives the weather shafts of its own, its handler, which runs after this one, wins.
     bool bVolumetricLight = true;
     float fVolumetricLightIntensity = 4.0f;
-    float fVolumetricLightScale = 0.15f;
+    float fVolumetricLightScale = 0.25f;
     float fVolumetricLightMaxDistance = 100.0f;
+    // Headlights too: spot lights of at least 8 m carrying this flag, taken for the vehicle
+    // light bit of the snow season's exclusions (0x398 lists previous shafts, vehicle, traffic,
+    // fill and cutscene lights, 0x10 first after the shaft bit); 0 leaves headlights out.
+    uint32_t nVolumetricLightHeadlightFlag = 0x10;
+    float fVolumetricLightHeadlightIntensity = 2.0f;
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
     IDirect3DSurface9* ContactRawSurf = nullptr;
     rage::grcRenderTargetPC* ContactTex = nullptr;
@@ -904,8 +909,10 @@ public:
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bVolumetricLight = iniReader.ReadInteger("POSTFX", "VolumetricLight", 1) != 0;
         fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 4.0f), 0.0f, 20.0f);
-        fVolumetricLightScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightScale", 0.15f), 0.0f, 2.0f);
+        fVolumetricLightScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightScale", 0.25f), 0.0f, 2.0f);
         fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 100.0f), 10.0f, 1000.0f);
+        nVolumetricLightHeadlightFlag = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightFlag", 0x10)) & 0x398;
+        fVolumetricLightHeadlightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightIntensity", 2.0f), 0.0f, 20.0f);
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
@@ -3099,8 +3106,14 @@ private:
         if (!R.bVolumetricLight || R.fVolumetricLightIntensity <= 0.0f || !light)
             return;
         // Spot lights of 8 to 20 m, most of lamppost.img, and none of the vehicle, traffic,
-        // fill and cutscene lights (0x398) or lights that have a shaft already (8).
-        if (light->mType != rage::LT_SPOT || light->mRadius < 8.0f || light->mRadius > 20.0f || (light->mFlags & (0x398 | 8)))
+        // fill and cutscene lights (0x398) or lights that have a shaft already (8); headlights
+        // are the spot lights of at least 8 m with the vehicle light bit and no other of those.
+        if (light->mType != rage::LT_SPOT || light->mRadius < 8.0f)
+            return;
+        const uint32_t headlightFlag = R.nVolumetricLightHeadlightFlag;
+        const bool headlight = headlightFlag && (light->mFlags & headlightFlag) &&
+                               !(light->mFlags & ((0x398 | 8) & ~headlightFlag)) && R.fVolumetricLightHeadlightIntensity > 0.0f;
+        if (!headlight && (light->mRadius > 20.0f || (light->mFlags & (0x398 | 8))))
             return;
 
         Cam camera = 0;
@@ -3118,7 +3131,7 @@ private:
             return;
 
         light->mFlags |= 8; // light shaft
-        light->mVolumeIntensity = R.fVolumetricLightIntensity * fade;
+        light->mVolumeIntensity = (headlight ? R.fVolumetricLightHeadlightIntensity : R.fVolumetricLightIntensity) * fade;
         light->mVolumeScale = R.fVolumetricLightScale;
     }
 
