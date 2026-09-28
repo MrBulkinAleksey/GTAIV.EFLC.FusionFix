@@ -161,7 +161,7 @@ Specular and Gloss
 Glass Rays
 
 [SSRDbgParallax]
-Steep Parallax
+Parallax
 
 [SSRDbgContact]
 Contact Shadows

@@ -499,8 +499,8 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 //   6: car glass, drawn by the patched glass shaders themselves: green a hit, red a miss,
 //      blue how much the fade for reflections pointing back at the camera keeps
 //   7: contact shadows alone, white lit, black shadowed
-//   8: surfaces drawn by the patched steep parallax shaders painted red, by those shaders
-//      themselves (c205); nothing is drawn over the frame
+//   8: parallax surfaces painted by their own shaders (c205): steep parallax red, gta_parallax
+//      green, gta_parallax_specmap blue; nothing is drawn over the frame
 //   5: _DEFERRED_GBUFFER_2_ as stored: red specular intensity, green gloss, blue the
 //      reflection strength deferred_lighting uses; see SSRSurfaceWeight
 
