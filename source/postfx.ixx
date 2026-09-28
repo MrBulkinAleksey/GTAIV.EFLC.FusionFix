@@ -3025,9 +3025,22 @@ public:
             if (!R.GlassSceneTex && SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET,
                 desc.Format, D3DPOOL_DEFAULT, &R.GlassSceneTex, nullptr)))
                 R.GlassSceneDesc = desc;
+            // Copied while another surface is bound, as the SSR history copy does: copying the
+            // bound target itself made foliage and glass drawn after it tremble.
             IDirect3DSurface9* dst = nullptr;
-            ok = R.GlassSceneTex && SUCCEEDED(R.GlassSceneTex->GetSurfaceLevel(0, &dst)) &&
-                 SUCCEEDED(pDevice->StretchRect(scene, nullptr, dst, nullptr, D3DTEXF_NONE));
+            ok = R.GlassSceneTex && SUCCEEDED(R.GlassSceneTex->GetSurfaceLevel(0, &dst)) && R.SSRSurf;
+            if (ok)
+            {
+                D3DVIEWPORT9 viewport = {};
+                RECT scissor = {};
+                pDevice->GetViewport(&viewport);
+                pDevice->GetScissorRect(&scissor);
+                pDevice->SetRenderTarget(0, R.SSRSurf);
+                ok = SUCCEEDED(pDevice->StretchRect(scene, nullptr, dst, nullptr, D3DTEXF_NONE));
+                pDevice->SetRenderTarget(0, scene);
+                pDevice->SetViewport(&viewport);
+                pDevice->SetScissorRect(&scissor);
+            }
             SAFE_RELEASE(dst);
         }
         SAFE_RELEASE(scene);
