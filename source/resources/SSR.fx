@@ -1,5 +1,6 @@
 texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, SSRResultTex2D, DebugTex2D;
 texture PreWaterTex2D, PostWaterTex2D;
+texture PrevDepthTex2D;
 
 sampler2D DepthTex
 {
@@ -11,6 +12,17 @@ sampler2D HistoryTex
     Texture = <HistoryTex2D>;
     MinFilter = LINEAR;
     MagFilter = LINEAR;
+};
+
+// The log depth the fog pass copied along with HistoryTex, so it matches the history colour.
+sampler2D PrevDepthTex
+{
+    Texture = <PrevDepthTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
 };
 
 sampler2D SpecularTex
@@ -70,6 +82,7 @@ uniform float fFarDivNear;
 uniform float4 vec4ProjInfo;
 
 uniform float4 vec4ViewToPrevClip[4];
+uniform float fUsePrevDepth; // 1 when PrevDepthTex holds the depth HistoryTex was taken with
 
 uniform float fMaxDistance;     // world units to march before giving up
 uniform float fThickness;       // how deep behind a surface still counts as a hit
@@ -353,6 +366,19 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     if (distanceFade > 0.0)
         confidence *= 1.0 - smoothstep(distanceFade * 0.5, distanceFade, rayLen);
     confidence *= 1.0 - smoothstep(hitThickness * 0.75, hitThickness, hitDelta);
+
+    // The colour comes from the history, the hit from this frame's depth. Next to an outline
+    // the history pixel can belong to what is behind, a white roof behind a ped's legs, and
+    // his reflection got a bright rim. The depth copied with the history tells them apart:
+    // clip.w is the hit's view depth in the history's camera.
+    [branch]
+    if (fUsePrevDepth > 0.0)
+    {
+        float prevHitZ = dot(float4(hitP, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
+                                                       vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
+        float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(histUV, 0, 0)).r) * fNearPlane;
+        confidence *= 1.0 - smoothstep(hitThickness * 0.75, hitThickness, abs(prevZ - prevHitZ));
+    }
 
     float3 colour = SampleHistoryBlurred(histUV, blurPixels * saturate(rayLen / fMaxDistance));
 

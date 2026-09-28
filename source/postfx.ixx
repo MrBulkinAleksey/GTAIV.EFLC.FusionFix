@@ -222,7 +222,7 @@ public:
         D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
-        D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask;
+        D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
         D3DXHANDLE fDenoiseRadius, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
@@ -671,6 +671,8 @@ public:
                 auto& h = SSREffectHandles;
                 h.DepthTex2D = SSREffect->GetParameterByName(nullptr, "DepthTex2D");
                 h.HistoryTex2D = SSREffect->GetParameterByName(nullptr, "HistoryTex2D");
+                h.PrevDepthTex2D = SSREffect->GetParameterByName(nullptr, "PrevDepthTex2D");
+                h.fUsePrevDepth = SSREffect->GetParameterByName(nullptr, "fUsePrevDepth");
                 h.SpecularTex2D = SSREffect->GetParameterByName(nullptr, "SpecularTex2D");
                 h.SurfaceTex2D = SSREffect->GetParameterByName(nullptr, "SurfaceTex2D");
                 h.vec2InvViewportSize = SSREffect->GetParameterByName(nullptr, "vec2InvViewportSize");
@@ -1959,6 +1961,11 @@ private:
 
         effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
         effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
+        // Last frame's fog pass copied this depth along with the history; this frame's has not
+        // run yet.
+        const bool prevDepth = R.bEnablePreAlphaDepth && R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
+        effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
+        effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
 
         // _DEFERRED_GBUFFER_2_ is (specular intensity, gloss, AO). Gloss decides what reflects:
         // car paint sits around 0.8, roads and walls around 0.2-0.35. Car paint stores almost no
@@ -2224,6 +2231,9 @@ private:
 
         effect->SetVectorArray(h.vec4ViewToPrevClip, R.SSRReprojRows, 4);
         effect->SetVector(h.vec4WaterPlane, &plane);
+        // The history may already hold this frame here, with the reprojection still last frame's.
+        effect->SetTexture(h.PrevDepthTex2D, nullptr);
+        effect->SetFloat(h.fUsePrevDepth, 0.0f);
 
         // Without both copies the pass falls back to the whole water plane.
         const bool waterMask = R.bWaterMaskCaptured && CopyRenderTargetToWaterMask(1);
