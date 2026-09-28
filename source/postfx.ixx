@@ -276,9 +276,10 @@ public:
     //       come from here because those shaders overwrite gViewInverse's first two rows);
     //       texel 4 near and log2(far / near), to make the depth in s11 linear, and the
     //       step jitter flag (ScreenSpaceReflectionsGlassStepJitter)
-    //   s11 the game's own log depth, _DEFERRED_GBUFFER_3_, which the coronas also read. A
-    //       separate linear depth pass for this made lights and lit windows drift while the
-    //       camera turned, so there is none.
+    //   s11 PreAlphaDepthCopyRT, into which the fog pass copies the game's own log depth
+    //       (_DEFERRED_GBUFFER_3_) with a draw. GBUFFER_3 itself is written by the passes the
+    //       glass is drawn in, and read while bound its hits broke up into patches; a separate
+    //       linear depth pass made lights and lit windows drift while the camera turned.
     //   s13 SSRHistoryTex, into which the fog pass copies the lit opaque scene with a draw
     //       before any glass is drawn. A StretchRect of the scene target right after lighting
     //       made foliage and glass drawn after it tremble, so the glass takes no copy of its own.
@@ -2971,8 +2972,8 @@ public:
         pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
     }
 
-    // Right after deferred lighting: binds this frame's depth and camera, and the texture the fog
-    // pass copies the lit opaque scene into, for the patched car glass shaders. Anything missing
+    // Right after deferred lighting: binds this frame's camera, and the textures the fog pass
+    // copies the depth and the lit opaque scene into, for the patched car glass shaders. Anything missing
     // leaves s9 empty, and the glass keeps the game's environment map.
     static void PrepareGlassReflections()
     {
@@ -2987,9 +2988,9 @@ public:
             R.bContactBound = false;
         }
 
-        // The fog pass copies the scene into SSRHistoryTex only with EnablePreAlphaDepth.
-        bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.mDepthRT && R.mDepthRT->mD3DTexture &&
-                  R.bEnablePreAlphaDepth && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
+        // The fog pass copies the scene and the depth only with EnablePreAlphaDepth.
+        bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.bEnablePreAlphaDepth &&
+                  R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
         R.bGlassFrameValid = false;
         if (R.nGlassStage < 2)
             ok = false;
@@ -3015,7 +3016,7 @@ public:
         }
 
         BindSampler(pDevice, 9, R.GlassParamsTex, D3DTEXF_POINT);
-        BindSampler(pDevice, 11, R.mDepthRT->mD3DTexture, D3DTEXF_POINT);
+        BindSampler(pDevice, 11, R.PreAlphaDepthCopyRT->mD3DTexture, D3DTEXF_POINT);
         BindSampler(pDevice, 13, R.SSRHistoryTex->mD3DTexture, D3DTEXF_LINEAR);
         R.bGlassBound = true;
     }

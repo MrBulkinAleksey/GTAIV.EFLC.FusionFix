@@ -25,7 +25,7 @@ index 366992fd..9af5d0ac 100644
      dcl_2d s2
      dcl_2d s4
 +    dcl_2d s9 // FusionFix: camera projection, settings, view axes, debug flag and depth decoding, 5x1
-+    dcl_2d s11 // FusionFix: the game's log depth (_DEFERRED_GBUFFER_3_)
++    dcl_2d s11 // FusionFix: copy of the game's log depth (_DEFERRED_GBUFFER_3_)
 +    dcl_2d s13 // FusionFix: copy of the lit opaque scene
      dcl_2d s15
      texld r0, v0, s0
@@ -205,7 +205,7 @@ index 2847833c..739c0b3e 100644
      dcl_2d s2
      dcl_2d s4
 +    dcl_2d s9 // FusionFix: camera projection, settings, view axes, debug flag and depth decoding, 5x1
-+    dcl_2d s11 // FusionFix: the game's log depth (_DEFERRED_GBUFFER_3_)
++    dcl_2d s11 // FusionFix: copy of the game's log depth (_DEFERRED_GBUFFER_3_)
 +    dcl_2d s13 // FusionFix: copy of the lit opaque scene
      dcl_2d s15
      texld r0, v0, s0
@@ -385,7 +385,7 @@ index 1d5cecf5..561a2e97 100644
      dcl_2d s2
      dcl_2d s4
 +    dcl_2d s9 // FusionFix: camera projection, settings, view axes, debug flag and depth decoding, 5x1
-+    dcl_2d s11 // FusionFix: the game's log depth (_DEFERRED_GBUFFER_3_)
++    dcl_2d s11 // FusionFix: copy of the game's log depth (_DEFERRED_GBUFFER_3_)
 +    dcl_2d s13 // FusionFix: copy of the lit opaque scene
      dcl_2d s15
      texld r0, v0, s0
