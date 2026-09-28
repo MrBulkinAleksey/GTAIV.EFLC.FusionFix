@@ -287,9 +287,9 @@ public:
     bool bGlassReflections = true;
     float fGlassReflectionsLength = 15.0f;
     float fGlassReflectionsThickness = 0.5f;
-    // Off by default: glass has no smoothing pass, so the offset shows as dots that crawl over
-    // the window whenever the camera or the car moves.
-    bool bGlassStepJitter = false;
+    // On by default: the glass shaders average each 2x2 pixel quad, which takes most of the
+    // dots out; without it the edges of what the march caught show as shifted slices.
+    bool bGlassStepJitter = true;
     // Temporary, to find which part of the glass path after lighting makes foliage and glass
     // tremble: 1 nothing, 2 the parameter upload, 3 everything.
     int nGlassStage = 3;
@@ -872,7 +872,7 @@ public:
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
-        bGlassStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStepJitter", 0) != 0;
+        bGlassStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStepJitter", 1) != 0;
         nGlassStage = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStage", 3), 1, 3);
         nGlassDepthSource = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassDepthSource", 1), 0, 1);
         bGlassSceneCopy = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassSceneCopy", 0) != 0;
