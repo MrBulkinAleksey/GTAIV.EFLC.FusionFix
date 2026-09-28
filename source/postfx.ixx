@@ -279,7 +279,9 @@ public:
     //   s11 the game's own log depth, _DEFERRED_GBUFFER_3_, which the coronas also read. A
     //       separate linear depth pass for this made lights and lit windows drift while the
     //       camera turned, so there is none.
-    //   s13 a copy of the lit opaque scene
+    //   s13 SSRHistoryTex, into which the fog pass copies the lit opaque scene with a draw
+    //       before any glass is drawn. A StretchRect of the scene target right after lighting
+    //       made foliage and glass drawn after it tremble, so the glass takes no copy of its own.
     bool bGlassReflections = true;
     float fGlassReflectionsLength = 15.0f;
     float fGlassReflectionsThickness = 0.5f;
@@ -287,12 +289,8 @@ public:
     // the window whenever the camera or the car moves.
     bool bGlassStepJitter = false;
     // Temporary, to find which part of the glass path after lighting makes foliage and glass
-    // tremble: 1 nothing, 2 the parameter upload, 3 also the scene copy, 4 everything.
-    int nGlassStage = 4;
-    // In the scene target's own format, so the copy needs no conversion. D3DPOOL_DEFAULT, so
-    // released on device loss.
-    IDirect3DTexture9* GlassSceneTex = nullptr;
-    D3DSURFACE_DESC GlassSceneDesc = {};
+    // tremble: 1 nothing, 2 the parameter upload, 3 everything.
+    int nGlassStage = 3;
     IDirect3DTexture9* GlassParamsTex = nullptr; // managed, so it survives device resets
     float GlassParams[20] = {};
     bool bGlassFrameValid = false;
@@ -864,7 +862,7 @@ public:
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
         bGlassStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStepJitter", 0) != 0;
-        nGlassStage = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStage", 4), 1, 4);
+        nGlassStage = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStage", 3), 1, 3);
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -1005,8 +1003,6 @@ private:
         PostFxResources.ReleaseTextures();
         PostFxResources.ReleaseWaterMask();
         UnbindGlassReflections();
-        SAFE_RELEASE(PostFxResources.GlassSceneTex);
-        PostFxResources.GlassSceneDesc = {};
         // PostFxResources.mSpecularAoRT    =nullptr;
         PostFxResources.mNormalRT = nullptr;
         PostFxResources.mDiffuseRT = nullptr;
@@ -2975,9 +2971,9 @@ public:
         pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
     }
 
-    // Right after deferred lighting: copies the lit opaque scene and binds it with this frame's
-    // linear depth and camera for the patched car glass shaders. Anything missing leaves s9
-    // empty, and the glass keeps the game's environment map.
+    // Right after deferred lighting: binds this frame's depth and camera, and the texture the fog
+    // pass copies the lit opaque scene into, for the patched car glass shaders. Anything missing
+    // leaves s9 empty, and the glass keeps the game's environment map.
     static void PrepareGlassReflections()
     {
         auto& R = PostFxResources;
@@ -2991,7 +2987,9 @@ public:
             R.bContactBound = false;
         }
 
-        bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.mDepthRT && R.mDepthRT->mD3DTexture;
+        // The fog pass copies the scene into SSRHistoryTex only with EnablePreAlphaDepth.
+        bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.mDepthRT && R.mDepthRT->mD3DTexture &&
+                  R.bEnablePreAlphaDepth && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
         R.bGlassFrameValid = false;
         if (R.nGlassStage < 2)
             ok = false;
@@ -3010,42 +3008,7 @@ public:
             }
         }
 
-        if (R.nGlassStage < 3)
-            ok = false;
-        IDirect3DSurface9* scene = nullptr;
-        if (ok)
-            ok = SUCCEEDED(pDevice->GetRenderTarget(0, &scene)) && scene;
-        if (ok)
-        {
-            D3DSURFACE_DESC desc = {};
-            scene->GetDesc(&desc);
-            if (R.GlassSceneTex && (desc.Width != R.GlassSceneDesc.Width || desc.Height != R.GlassSceneDesc.Height ||
-                desc.Format != R.GlassSceneDesc.Format))
-                SAFE_RELEASE(R.GlassSceneTex);
-            if (!R.GlassSceneTex && SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET,
-                desc.Format, D3DPOOL_DEFAULT, &R.GlassSceneTex, nullptr)))
-                R.GlassSceneDesc = desc;
-            // Copied while another surface is bound, as the SSR history copy does: copying the
-            // bound target itself made foliage and glass drawn after it tremble.
-            IDirect3DSurface9* dst = nullptr;
-            ok = R.GlassSceneTex && SUCCEEDED(R.GlassSceneTex->GetSurfaceLevel(0, &dst)) && R.SSRSurf;
-            if (ok)
-            {
-                D3DVIEWPORT9 viewport = {};
-                RECT scissor = {};
-                pDevice->GetViewport(&viewport);
-                pDevice->GetScissorRect(&scissor);
-                pDevice->SetRenderTarget(0, R.SSRSurf);
-                ok = SUCCEEDED(pDevice->StretchRect(scene, nullptr, dst, nullptr, D3DTEXF_NONE));
-                pDevice->SetRenderTarget(0, scene);
-                pDevice->SetViewport(&viewport);
-                pDevice->SetScissorRect(&scissor);
-            }
-            SAFE_RELEASE(dst);
-        }
-        SAFE_RELEASE(scene);
-
-        if (!ok || R.nGlassStage < 4)
+        if (!ok || R.nGlassStage < 3)
         {
             UnbindGlassReflections();
             return;
@@ -3053,7 +3016,7 @@ public:
 
         BindSampler(pDevice, 9, R.GlassParamsTex, D3DTEXF_POINT);
         BindSampler(pDevice, 11, R.mDepthRT->mD3DTexture, D3DTEXF_POINT);
-        BindSampler(pDevice, 13, R.GlassSceneTex, D3DTEXF_LINEAR);
+        BindSampler(pDevice, 13, R.SSRHistoryTex->mD3DTexture, D3DTEXF_LINEAR);
         R.bGlassBound = true;
     }
 
