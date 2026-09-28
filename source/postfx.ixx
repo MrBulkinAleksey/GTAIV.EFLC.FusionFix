@@ -225,7 +225,6 @@ public:
     {
         D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
-        D3DXHANDLE NormalCopyTex2D, fNormalDetail, fNormalDetailRadius, fNormalDetailFade, techNormalDetail;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade;
@@ -263,14 +262,6 @@ public:
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
     float LocalContactShadowConsts[12] = {};
-    // Exaggerates the relief of normal mapped surfaces such as brick before lighting, see
-    // NormalDetail_PS in SSR.fx; 1.0 leaves the G-buffer untouched.
-    float fNormalDetail = 1.0f;
-    float fNormalDetailRadius = 16.0f;
-    float fNormalDetailFade = 60.0f;
-    // A copy of _DEFERRED_GBUFFER_1_ in its own format; D3DPOOL_DEFAULT, released on device loss.
-    IDirect3DTexture9* NormalCopyTex = nullptr;
-    D3DSURFACE_DESC NormalCopyDesc = {};
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
     IDirect3DSurface9* ContactRawSurf = nullptr;
     rage::grcRenderTargetPC* ContactTex = nullptr;
@@ -754,11 +745,6 @@ public:
                 h.techSSRDenoise = SSREffect->GetTechniqueByName("SSRDenoise");
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
-                h.NormalCopyTex2D = SSREffect->GetParameterByName(nullptr, "NormalCopyTex2D");
-                h.fNormalDetail = SSREffect->GetParameterByName(nullptr, "fNormalDetail");
-                h.fNormalDetailRadius = SSREffect->GetParameterByName(nullptr, "fNormalDetailRadius");
-                h.fNormalDetailFade = SSREffect->GetParameterByName(nullptr, "fNormalDetailFade");
-                h.techNormalDetail = SSREffect->GetTechniqueByName("NormalDetail");
             }
         }
 
@@ -907,9 +893,6 @@ public:
         fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.2f), 0.01f, 5.0f);
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
-        fNormalDetail = std::clamp(iniReader.ReadFloat("POSTFX", "NormalDetail", 1.0f), 1.0f, 4.0f);
-        fNormalDetailRadius = std::clamp(iniReader.ReadFloat("POSTFX", "NormalDetailRadius", 16.0f), 1.0f, 64.0f);
-        fNormalDetailFade = std::clamp(iniReader.ReadFloat("POSTFX", "NormalDetailFadeDistance", 60.0f), 5.0f, 500.0f);
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
@@ -1054,8 +1037,6 @@ private:
         PostFxResources.ReleaseWaterMask();
         UnbindGlassReflections();
         SAFE_RELEASE(PostFxResources.GlassParamsTex);
-        SAFE_RELEASE(PostFxResources.NormalCopyTex);
-        PostFxResources.NormalCopyDesc = {};
         // PostFxResources.mSpecularAoRT    =nullptr;
         PostFxResources.mNormalRT = nullptr;
         PostFxResources.mDiffuseRT = nullptr;
@@ -2893,7 +2874,6 @@ private:
         RenderAmbientOcclusion();
         RenderScreenSpaceReflections();
         RenderContactShadows();
-        RenderNormalDetail();
 
         return result;
     }
@@ -2919,124 +2899,6 @@ private:
         pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
         effect->EndPass();
         effect->End();
-    }
-
-    // Before deferred lighting, after AO, SSR and contact shadows, which keep the game's normals:
-    // exaggerates normal map detail in _DEFERRED_GBUFFER_1_ itself, so the sun, every lamp and
-    // the speculars all see it. The G-buffer is copied first, with StretchRect, as no pass is
-    // drawing into it here.
-    static void RenderNormalDetail()
-    {
-        auto& R = PostFxResources;
-        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
-        rage::grcViewport* vp = rage::GetCurrentViewport();
-        auto& h = R.SSREffectHandles;
-        ID3DXEffect* effect = R.SSREffect;
-        if (R.fNormalDetail <= 1.0f || !pDevice || !vp || !effect || !h.techNormalDetail || !R.mDepthRT ||
-            !R.mDepthRT->mD3DTexture || !R.mNormalRT || !R.mNormalRT->mD3DTexture)
-            return;
-
-        IDirect3DSurface9* gbuffer = nullptr;
-        if (FAILED(R.mNormalRT->mD3DTexture->GetSurfaceLevel(0, &gbuffer)) || !gbuffer)
-            return;
-        D3DSURFACE_DESC desc = {};
-        gbuffer->GetDesc(&desc);
-        if (R.NormalCopyTex && (desc.Width != R.NormalCopyDesc.Width || desc.Height != R.NormalCopyDesc.Height ||
-            desc.Format != R.NormalCopyDesc.Format))
-            SAFE_RELEASE(R.NormalCopyTex);
-        if (!R.NormalCopyTex && SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET,
-            desc.Format, D3DPOOL_DEFAULT, &R.NormalCopyTex, nullptr)))
-            R.NormalCopyDesc = desc;
-        IDirect3DSurface9* copy = nullptr;
-        const bool copied = R.NormalCopyTex && SUCCEEDED(R.NormalCopyTex->GetSurfaceLevel(0, &copy)) &&
-                            SUCCEEDED(pDevice->StretchRect(gbuffer, nullptr, copy, nullptr, D3DTEXF_NONE));
-        SAFE_RELEASE(copy);
-        if (!copied)
-        {
-            SAFE_RELEASE(gbuffer);
-            return;
-        }
-
-        const float width = float(desc.Width);
-        const float height = float(desc.Height);
-        const float invViewportSize[] = { 1.0f / width, 1.0f / height };
-        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
-        effect->SetTexture(h.NormalCopyTex2D, R.NormalCopyTex);
-        effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
-        effect->SetFloat(h.fNearPlane, vp->mNearClip);
-        effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
-        effect->SetFloat(h.fNormalDetail, R.fNormalDetail);
-        effect->SetFloat(h.fNormalDetailRadius, R.fNormalDetailRadius);
-        effect->SetFloat(h.fNormalDetailFade, R.fNormalDetailFade);
-
-        IDirect3DSurface9* rt0 = nullptr;
-        IDirect3DSurface9* ds = nullptr;
-        IDirect3DVertexDeclaration9* oldDecl = nullptr;
-        IDirect3DVertexBuffer9* oldVB = nullptr;
-        UINT oldOffset = 0, oldStride = 0;
-        DWORD oldFVF = 0;
-        D3DVIEWPORT9 oldViewport;
-        pDevice->GetFVF(&oldFVF);
-        pDevice->GetVertexDeclaration(&oldDecl);
-        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
-        pDevice->GetRenderTarget(0, &rt0);
-        pDevice->GetDepthStencilSurface(&ds);
-        pDevice->GetViewport(&oldViewport);
-
-        IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
-        DWORD savedRenderStates[std::size(kSSRRenderStates)] = {};
-        DWORD savedSamplerStates[kSSRSamplerSlots][std::size(kSSRSamplerStates)] = {};
-        for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
-            pDevice->GetTexture(slot, &oldTextures[slot]);
-        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
-        pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-        for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
-        {
-            pDevice->GetRenderState(kSSRRenderStates[i].state, &savedRenderStates[i]);
-            pDevice->SetRenderState(kSSRRenderStates[i].state, kSSRRenderStates[i].value);
-        }
-        for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
-            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
-            {
-                pDevice->GetSamplerState(slot, kSSRSamplerStates[i].state, &savedSamplerStates[slot][i]);
-                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
-            }
-
-        pDevice->SetDepthStencilSurface(nullptr);
-        pDevice->SetStreamSource(0, nullptr, 0, 0);
-        pDevice->SetVertexDeclaration(nullptr);
-        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
-        D3DVIEWPORT9 vpDesc = {};
-        vpDesc.Width = desc.Width;
-        vpDesc.Height = desc.Height;
-        vpDesc.MaxZ = 1.0f;
-        pDevice->SetViewport(&vpDesc);
-
-        DrawEffectPass(pDevice, effect, h.techNormalDetail, gbuffer, width, height);
-
-        for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
-            pDevice->SetRenderState(kSSRRenderStates[i].state, savedRenderStates[i]);
-        for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
-            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
-                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, savedSamplerStates[slot][i]);
-        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
-        pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-        for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
-        {
-            pDevice->SetTexture(slot, oldTextures[slot]);
-            SAFE_RELEASE(oldTextures[slot]);
-        }
-        pDevice->SetRenderTarget(0, rt0);
-        pDevice->SetDepthStencilSurface(ds);
-        pDevice->SetViewport(&oldViewport);
-        pDevice->SetFVF(oldFVF);
-        pDevice->SetVertexDeclaration(oldDecl);
-        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
-        SAFE_RELEASE(rt0);
-        SAFE_RELEASE(ds);
-        SAFE_RELEASE(oldDecl);
-        SAFE_RELEASE(oldVB);
-        SAFE_RELEASE(gbuffer);
     }
 
     // Before deferred lighting, next to SSR: contact shadows towards the sun, smoothed, into

@@ -1,7 +1,6 @@
 texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, SSRResultTex2D, DebugTex2D;
 texture PreWaterTex2D, PostWaterTex2D;
 texture PrevDepthTex2D;
-texture NormalCopyTex2D;
 
 sampler2D DepthTex
 {
@@ -19,17 +18,6 @@ sampler2D HistoryTex
 sampler2D PrevDepthTex
 {
     Texture = <PrevDepthTex2D>;
-    AddressU = Clamp;
-    AddressV = Clamp;
-    MinFilter = POINT;
-    MagFilter = POINT;
-    MipFilter = NONE;
-};
-
-// A copy of _DEFERRED_GBUFFER_1_, read while NormalDetail_PS writes the original.
-sampler2D NormalCopyTex
-{
-    Texture = <NormalCopyTex2D>;
     AddressU = Clamp;
     AddressV = Clamp;
     MinFilter = POINT;
@@ -116,9 +104,6 @@ uniform float fDebugMode; // SSR debug view from the graphics menu, see SSRDebug
 uniform float fUseGBufferNormals; // 1 reads the G-buffer normal, 0 rebuilds it from depth
 uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDenoise_PS
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
-uniform float fNormalDetail;       // how many times normal map detail is exaggerated, see NormalDetail_PS
-uniform float fNormalDetailRadius; // pixels over which the surface's own normal is averaged
-uniform float fNormalDetailFade;   // view distance at which the exaggeration has faded out
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
 uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step (set per pass: SSR and contact shadows each have their own switch)
 uniform float fTowardCamera;      // 0..1, how far reflections pointing back at the camera reach
@@ -704,48 +689,6 @@ float4 SSRDebugCopy_PS(float2 uv : TEXCOORD0) : COLOR0
     return float4(tex2Dlod(DebugTex, float4(uv, 0, 0)).rgb, 1.0);
 }
 
-// Brick, stone and other relief read flat because their normal maps tilt the normal only a
-// little. Before lighting, each G-buffer normal is pulled further away from its neighbourhood's
-// average, which stands in for the surface's own normal: depth rebuilt normals are too coarse
-// for that (see GBufferNormal). The average is depth aware, so an edge between two surfaces is
-// not taken for detail, and the exaggeration fades with distance, where the normal maps are
-// filtered down and it would only shimmer. The game stores (n + 1) / 2 in xyz and its own alpha
-// in w, which is kept.
-float4 NormalDetail_PS(float2 uv : TEXCOORD0) : COLOR0
-{
-    static const float2 taps[12] =
-    {
-        float2(-0.326, -0.406), float2(-0.840, -0.074), float2(-0.696,  0.457),
-        float2(-0.203,  0.621), float2( 0.962, -0.195), float2( 0.473, -0.480),
-        float2( 0.519,  0.767), float2( 0.185, -0.893), float2( 0.507,  0.064),
-        float2( 0.896,  0.412), float2(-0.322, -0.933), float2(-0.792, -0.598)
-    };
-
-    float4 g = tex2Dlod(NormalCopyTex, float4(uv, 0, 0));
-    if (tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999)
-        return g; // sky
-
-    float z = LinearDepth(uv);
-    float k = lerp(fNormalDetail, 1.0, saturate(z / max(fNormalDetailFade, 1e-3)));
-    if (k <= 1.001)
-        return g;
-
-    float3 n = normalize(g.xyz * 2.0 - 1.0);
-    float3 base = n;
-    float2 radius = fNormalDetailRadius * vec2InvViewportSize;
-    [unroll]
-    for (int i = 0; i < 12; ++i)
-    {
-        float2 tapUV = uv + taps[i] * radius;
-        float w = saturate(1.0 - abs(LinearDepth(tapUV) - z) / (z * 0.02));
-        base += w * (tex2Dlod(NormalCopyTex, float4(tapUV, 0, 0)).xyz * 2.0 - 1.0);
-    }
-    base = normalize(base);
-
-    float3 detailed = normalize(base + k * (n - base));
-    return float4(detailed * 0.5 + 0.5, g.w);
-}
-
 void FullscreenQuadVS(in float4 iPos : POSITION, in float2 iUV : TEXCOORD0,
                       out float4 oPos : POSITION, out float2 oUV : TEXCOORD0)
 {
@@ -795,15 +738,6 @@ technique ContactShadows
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 ContactShadows_PS();
-    }
-}
-
-technique NormalDetail
-{
-    pass P0
-    {
-        VertexShader = compile vs_3_0 FullscreenQuadVS();
-        PixelShader = compile ps_3_0 NormalDetail_PS();
     }
 }
 
