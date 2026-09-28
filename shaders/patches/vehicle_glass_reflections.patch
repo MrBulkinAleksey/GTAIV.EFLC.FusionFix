@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 366992fd..f9afc354 100644
+index 366992fd..ee1e89fe 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 @@ -157,6 +157,18 @@
@@ -177,8 +177,8 @@ index 366992fd..f9afc354 100644
 +      mul_sat r29.w, r29.w, c163.w
 +      mov r15, c162
 +      texldl r15, r15, s9
-+      lrp r29.z, r15.w, r29.w, r29.z
-+      mul r17.w, r17.w, r29.z
++      lrp r28.w, r15.w, r29.w, r29.z
++      mul r17.w, r17.w, r28.w
 +      lrp r15.xyz, r17.w, r17, r4
 +      mov r4.xyz, r15
 +      // Debug view (texel 2 w > 0): bright green where the march hit, red where it missed,
@@ -202,7 +202,7 @@ index 366992fd..f9afc354 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 2847833c..48ec6c2b 100644
+index 2847833c..3529d912 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 @@ -108,6 +108,18 @@
@@ -380,8 +380,8 @@ index 2847833c..48ec6c2b 100644
 +      mul_sat r29.w, r29.w, c163.w
 +      mov r15, c162
 +      texldl r15, r15, s9
-+      lrp r29.z, r15.w, r29.w, r29.z
-+      mul r17.w, r17.w, r29.z
++      lrp r28.w, r15.w, r29.w, r29.z
++      mul r17.w, r17.w, r28.w
 +      lrp r15.xyz, r17.w, r17, r4
 +      mov r4.xyz, r15
 +      // Debug view (texel 2 w > 0): bright green where the march hit, red where it missed,
@@ -405,7 +405,7 @@ index 2847833c..48ec6c2b 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 1d5cecf5..a86f420a 100644
+index 1d5cecf5..668f2748 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 @@ -133,6 +133,18 @@
@@ -583,8 +583,8 @@ index 1d5cecf5..a86f420a 100644
 +      mul_sat r29.w, r29.w, c163.w
 +      mov r15, c162
 +      texldl r15, r15, s9
-+      lrp r29.z, r15.w, r29.w, r29.z
-+      mul r17.w, r17.w, r29.z
++      lrp r28.w, r15.w, r29.w, r29.z
++      mul r17.w, r17.w, r28.w
 +      lrp r15.xyz, r17.w, r17, r4
 +      mov r4.xyz, r15
 +      // Debug view (texel 2 w > 0): bright green where the march hit, red where it missed,
