@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS1.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS1.asm
-index 9ae93cb3..4ca690d9 100644
+index 9ae93cb3..3334559d 100644
 --- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS1.asm
 +++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS1.asm
 @@ -150,6 +150,9 @@
@@ -12,7 +12,7 @@ index 9ae93cb3..4ca690d9 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -168,22 +171,54 @@
+@@ -168,22 +171,55 @@
      add r1.xyz, c0.x, v7
      dp3 r0.z, r1, r1
      rsq r0.z, r0.z
@@ -66,14 +66,15 @@ index 9ae93cb3..4ca690d9 100644
 +    texldd r0, r1.zwzw, s0, r9, r10
 +    // --- FusionFix parallax: debug view (c205.x > 0, "Steep Parallax" in SSR Debug) paints these
 +    // --- surfaces in the colour c205.yzw
-+    if_lt c143.w, c205.x
-+      mov r0.xyz, c205.yzw
++    mov r31, c205 // an instruction reads one constant register at most
++    if_lt c143.w, r31.x
++      mov r0.xyz, r31.yzw
 +    endif
      add r1.xy, r2.yzzw, c1.z
      mul r1.xy, r1, c74.x
      dp2add r1.z, r2.yzzw, -r2.yzzw, c0.z
 diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS10.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS10.asm
-index e273a30b..5ec4c5a4 100644
+index e273a30b..3f44e516 100644
 --- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS10.asm
 +++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS10.asm
 @@ -126,6 +126,9 @@
@@ -86,7 +87,7 @@ index e273a30b..5ec4c5a4 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -144,22 +147,54 @@
+@@ -144,22 +147,55 @@
      add r1.xyz, c0.x, v7
      dp3 r0.z, r1, r1
      rsq r0.z, r0.z
@@ -140,14 +141,15 @@ index e273a30b..5ec4c5a4 100644
 +    texldd r0, r1.zwzw, s0, r9, r10
 +    // --- FusionFix parallax: debug view (c205.x > 0, "Steep Parallax" in SSR Debug) paints these
 +    // --- surfaces in the colour c205.yzw
-+    if_lt c143.w, c205.x
-+      mov r0.xyz, c205.yzw
++    mov r31, c205 // an instruction reads one constant register at most
++    if_lt c143.w, r31.x
++      mov r0.xyz, r31.yzw
 +    endif
      add r1.xy, r2.yzzw, c1.z
      mul r1.xy, r1, c74.x
      dp2add r1.z, r2.yzzw, -r2.yzzw, c0.z
 diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS11.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS11.asm
-index fa26b64e..07a15379 100644
+index fa26b64e..a2319deb 100644
 --- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS11.asm
 +++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS11.asm
 @@ -138,6 +138,9 @@
@@ -160,7 +162,7 @@ index fa26b64e..07a15379 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -156,22 +159,54 @@
+@@ -156,22 +159,55 @@
      add r1.xyz, c0.x, v7
      dp3 r0.z, r1, r1
      rsq r0.z, r0.z
@@ -214,14 +216,15 @@ index fa26b64e..07a15379 100644
 +    texldd r0, r1.zwzw, s0, r9, r10
 +    // --- FusionFix parallax: debug view (c205.x > 0, "Steep Parallax" in SSR Debug) paints these
 +    // --- surfaces in the colour c205.yzw
-+    if_lt c143.w, c205.x
-+      mov r0.xyz, c205.yzw
++    mov r31, c205 // an instruction reads one constant register at most
++    if_lt c143.w, r31.x
++      mov r0.xyz, r31.yzw
 +    endif
      add r1.xy, r2.yzzw, c1.x
      mul r1.xy, r1, c74.x
      dp2add r1.z, r2.yzzw, -r2.yzzw, c0.z
 diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
-index 01673f32..937323be 100644
+index 01673f32..fff31bb2 100644
 --- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
 +++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
 @@ -36,6 +36,9 @@
@@ -234,7 +237,7 @@ index 01673f32..937323be 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord4 v2.xyz
-@@ -50,22 +53,54 @@
+@@ -50,22 +53,55 @@
      add r1.xyz, c0.x, v5
      dp3 r0.z, r1, r1
      rsq r0.z, r0.z
@@ -288,14 +291,15 @@ index 01673f32..937323be 100644
 +    texldd r0, r1.zwzw, s0, r9, r10
 +    // --- FusionFix parallax: debug view (c205.x > 0, "Steep Parallax" in SSR Debug) paints these
 +    // --- surfaces in the colour c205.yzw
-+    if_lt c143.w, c205.x
-+      mov r0.xyz, c205.yzw
++    mov r31, c205 // an instruction reads one constant register at most
++    if_lt c143.w, r31.x
++      mov r0.xyz, r31.yzw
 +    endif
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v4.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
 diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
-index b23193c4..668ebfb9 100644
+index b23193c4..a41ca0e0 100644
 --- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
 +++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
 @@ -36,6 +36,9 @@
@@ -308,7 +312,7 @@ index b23193c4..668ebfb9 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord4 v2.xyz
-@@ -51,22 +54,54 @@
+@@ -51,22 +54,55 @@
      add r1.xyz, c0.x, v5
      dp3 r0.z, r1, r1
      rsq r0.z, r0.z
@@ -362,14 +366,15 @@ index b23193c4..668ebfb9 100644
 +    texldd r0, r1.zwzw, s0, r9, r10
 +    // --- FusionFix parallax: debug view (c205.x > 0, "Steep Parallax" in SSR Debug) paints these
 +    // --- surfaces in the colour c205.yzw
-+    if_lt c143.w, c205.x
-+      mov r0.xyz, c205.yzw
++    mov r31, c205 // an instruction reads one constant register at most
++    if_lt c143.w, r31.x
++      mov r0.xyz, r31.yzw
 +    endif
      add r1.xy, r2.yzzw, c1.z
      mul r1.xy, r1, c74.x
      dp2add r1.z, r2.yzzw, -r2.yzzw, c0.z
 diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS9.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS9.asm
-index 07a98a3d..5e5a48ed 100644
+index 07a98a3d..d03bff43 100644
 --- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS9.asm
 +++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS9.asm
 @@ -102,6 +102,9 @@
@@ -382,7 +387,7 @@ index 07a98a3d..5e5a48ed 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -120,22 +123,54 @@
+@@ -120,22 +123,55 @@
      add r1.xyz, c0.x, v7
      dp3 r0.z, r1, r1
      rsq r0.z, r0.z
@@ -436,14 +441,15 @@ index 07a98a3d..5e5a48ed 100644
 +    texldd r0, r1.zwzw, s0, r9, r10
 +    // --- FusionFix parallax: debug view (c205.x > 0, "Steep Parallax" in SSR Debug) paints these
 +    // --- surfaces in the colour c205.yzw
-+    if_lt c143.w, c205.x
-+      mov r0.xyz, c205.yzw
++    mov r31, c205 // an instruction reads one constant register at most
++    if_lt c143.w, r31.x
++      mov r0.xyz, r31.yzw
 +    endif
      add r1.xy, r2.yzzw, c1.z
      mul r1.xy, r1, c74.x
      dp2add r1.z, r2.yzzw, -r2.yzzw, c0.z
 diff --git a/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS1.asm b/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS1.asm
-index de3b0475..750fa7dc 100644
+index de3b0475..92ef8476 100644
 --- a/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS1.asm
 +++ b/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS1.asm
 @@ -151,6 +151,9 @@
@@ -456,7 +462,7 @@ index de3b0475..750fa7dc 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -169,22 +172,54 @@
+@@ -169,22 +172,55 @@
      add r1.xyz, c0.x, v7
      dp3 r0.z, r1, r1
      rsq r0.z, r0.z
@@ -510,14 +516,15 @@ index de3b0475..750fa7dc 100644
 +    texldd r0, r1.zwzw, s0, r9, r10
 +    // --- FusionFix parallax: debug view (c205.x > 0, "Steep Parallax" in SSR Debug) paints these
 +    // --- surfaces in the colour c205.yzw
-+    if_lt c143.w, c205.x
-+      mov r0.xyz, c205.yzw
++    mov r31, c205 // an instruction reads one constant register at most
++    if_lt c143.w, r31.x
++      mov r0.xyz, r31.yzw
 +    endif
      add r1.xy, r2.yzzw, c1.x
      mul r1.xy, r1, c74.x
      dp2add r1.z, r2.yzzw, -r2.yzzw, -c0.z
 diff --git a/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS10.asm b/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS10.asm
-index fb5e9c9e..74852b64 100644
+index fb5e9c9e..96ff1e7d 100644
 --- a/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS10.asm
 +++ b/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS10.asm
 @@ -127,6 +127,9 @@
@@ -530,7 +537,7 @@ index fb5e9c9e..74852b64 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -145,22 +148,54 @@
+@@ -145,22 +148,55 @@
      add r1.xyz, c0.x, v7
      dp3 r0.z, r1, r1
      rsq r0.z, r0.z
@@ -584,14 +591,15 @@ index fb5e9c9e..74852b64 100644
 +    texldd r0, r1.zwzw, s0, r9, r10
 +    // --- FusionFix parallax: debug view (c205.x > 0, "Steep Parallax" in SSR Debug) paints these
 +    // --- surfaces in the colour c205.yzw
-+    if_lt c143.w, c205.x
-+      mov r0.xyz, c205.yzw
++    mov r31, c205 // an instruction reads one constant register at most
++    if_lt c143.w, r31.x
++      mov r0.xyz, r31.yzw
 +    endif
      add r1.xy, r2.yzzw, c1.x
      mul r1.xy, r1, c74.x
      dp2add r1.z, r2.yzzw, -r2.yzzw, -c0.z
 diff --git a/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS11.asm b/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS11.asm
-index c83d7f08..5779473e 100644
+index c83d7f08..ca207b83 100644
 --- a/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS11.asm
 +++ b/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS11.asm
 @@ -139,6 +139,9 @@
@@ -604,7 +612,7 @@ index c83d7f08..5779473e 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -157,22 +160,54 @@
+@@ -157,22 +160,55 @@
      add r1.xyz, c0.x, v7
      dp3 r0.z, r1, r1
      rsq r0.z, r0.z
@@ -658,14 +666,15 @@ index c83d7f08..5779473e 100644
 +    texldd r0, r1.zwzw, s0, r9, r10
 +    // --- FusionFix parallax: debug view (c205.x > 0, "Steep Parallax" in SSR Debug) paints these
 +    // --- surfaces in the colour c205.yzw
-+    if_lt c143.w, c205.x
-+      mov r0.xyz, c205.yzw
++    mov r31, c205 // an instruction reads one constant register at most
++    if_lt c143.w, r31.x
++      mov r0.xyz, r31.yzw
 +    endif
      add r1.xy, r2.yzzw, c1.z
      mul r1.xy, r1, c74.x
      dp2add r1.z, r2.yzzw, -r2.yzzw, -c0.z
 diff --git a/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS9.asm b/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS9.asm
-index fa9f00bd..79d6a781 100644
+index fa9f00bd..6c11a215 100644
 --- a/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS9.asm
 +++ b/win32_30_nv8/gta_projtex_steep/gta_projtex_steepPS9.asm
 @@ -102,6 +102,9 @@
@@ -678,7 +687,7 @@ index fa9f00bd..79d6a781 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_texcoord3 v2.xyz
-@@ -120,22 +123,54 @@
+@@ -120,22 +123,55 @@
      add r1.xyz, c0.x, v7
      dp3 r0.z, r1, r1
      rsq r0.z, r0.z
@@ -732,8 +741,9 @@ index fa9f00bd..79d6a781 100644
 +    texldd r0, r1.zwzw, s0, r9, r10
 +    // --- FusionFix parallax: debug view (c205.x > 0, "Steep Parallax" in SSR Debug) paints these
 +    // --- surfaces in the colour c205.yzw
-+    if_lt c143.w, c205.x
-+      mov r0.xyz, c205.yzw
++    mov r31, c205 // an instruction reads one constant register at most
++    if_lt c143.w, r31.x
++      mov r0.xyz, r31.yzw
 +    endif
      add r1.xy, r2.yzzw, c1.x
      mul r1.xy, r1, c74.x
