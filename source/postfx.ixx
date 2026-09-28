@@ -2879,6 +2879,13 @@ private:
         const float lightLen = sqrtf(light[0] * light[0] + light[1] * light[1] + light[2] * light[2]);
         if (!(lightLen > 0.9f && lightLen < 1.1f))
             return;
+        // At night the sun is below the horizon, or the directional light's colour
+        // (gDirectionalColour, c18) is black, and deferred_lighting would show nothing: the
+        // whole screen pass cost a frame or so for no shadow.
+        float colour[4] = {};
+        if (-light[2] / lightLen <= 0.0f || FAILED(pDevice->GetPixelShaderConstantF(18, colour, 1)) ||
+            std::max({ colour[0], colour[1], colour[2] }) <= 1e-3f)
+            return;
 
         const float width = float(vp->mWidth);
         const float height = float(vp->mHeight);
