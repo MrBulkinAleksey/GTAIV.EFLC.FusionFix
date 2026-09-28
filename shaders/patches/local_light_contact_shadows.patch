@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index 2337a596..fb405e6f 100644
+index 2337a596..ca8dc6a1 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-@@ -40,6 +40,16 @@
+@@ -40,6 +40,17 @@
      def c0, 0.50999999, 2, -0.999989986, 9.99999975e-006
      def c1, 1, -0.333333343, 1.5, -0.200000003
      def c2, 1.25, 0, 0, 0
@@ -16,10 +16,11 @@ index 2337a596..fb405e6f 100644
 +    // --- FusionFix volumetric light: 1/samples; samples
 +    def c163, 0.125, 0, 0, 0
 +    defi i1, 8, 0, 0, 0
++    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -80,8 +90,203 @@
+@@ -80,8 +91,214 @@
      mul r1.xyz, c76.w, c76
      mul r0.xyw, r0.x, r1.xyzz
      mul r0.xyw, r3.xyzz, r0
@@ -74,18 +75,25 @@ index 2337a596..fb405e6f 100644
 +        mul r30.xyz, r17, r17.w
 +        mul r30.xyz, r30, c157.z
 +        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
-+        mad r31.xyz, r17, r18.x, r16
++        mad r13.xyz, r17, r18.x, r16 // where both rays start
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
 +        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
-+        add r18.y, r18.y, c162.w
-+        mad r31.xyz, r30, r18.y, r31
-+        mov r18.w, c158.w
-+        mov r18.z, r13.w // view depth of the previous sample
-+        mov r18.x, c158.w // part of the ray marched so far
++        // two rays, the second's steps half a step after the first's, halve that noise
++        mov r17.y, r18.y // this pixel's step offset
++        mov r17.x, c158.w // shadow summed over both rays
++        mov r17.z, c158.w // extra offset of the ray being marched
++        rep i2
++          add r18.y, r17.y, r17.z
++          frc r18.y, r18.y
++          add r18.y, r18.y, c162.w
++          mad r31.xyz, r30, r18.y, r13
++          mov r18.w, c158.w
++          mov r18.z, r13.w // view depth of the previous sample
++          mov r18.x, c158.w // part of the ray marched so far
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -125,6 +133,10 @@ index 2337a596..fb405e6f 100644
 +            endif
 +          endif
 +        endrep
++          add r17.x, r17.x, r18.w
++          mov r17.z, c158.x
++        endrep
++        mul r18.w, r17.x, c158.x // both rays' average
 +        // fade out over the last quarter of the distance limit
 +        add r13.x, r29.z, -r13.w
 +        rcp r13.y, r29.z
@@ -226,10 +238,10 @@ index 2337a596..fb405e6f 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index 1800ea70..ea3276ab 100644
+index 1800ea70..5c09a27a 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-@@ -43,6 +43,16 @@
+@@ -43,6 +43,17 @@
      def c1, 255, -128, -0, -7.9000001
      def c2, 9.99999975e-006, 1, -0.333333343, 1.5
      def c3, -0.200000003, 1.25, 0, 0
@@ -243,10 +255,11 @@ index 1800ea70..ea3276ab 100644
 +    // --- FusionFix volumetric light: 1/samples; samples
 +    def c163, 0.125, 0, 0, 0
 +    defi i1, 8, 0, 0, 0
++    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -91,7 +101,202 @@
+@@ -91,7 +102,213 @@
      mad r1.x, r3.x, c0.w, r1.x
      add r1.x, r1.x, c1.w
      mov r0.w, c2.y
@@ -299,18 +312,25 @@ index 1800ea70..ea3276ab 100644
 +        mul r30.xyz, r17, r17.w
 +        mul r30.xyz, r30, c157.z
 +        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
-+        mad r31.xyz, r17, r18.x, r16
++        mad r13.xyz, r17, r18.x, r16 // where both rays start
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
 +        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
-+        add r18.y, r18.y, c162.w
-+        mad r31.xyz, r30, r18.y, r31
-+        mov r18.w, c158.w
-+        mov r18.z, r13.w // view depth of the previous sample
-+        mov r18.x, c158.w // part of the ray marched so far
++        // two rays, the second's steps half a step after the first's, halve that noise
++        mov r17.y, r18.y // this pixel's step offset
++        mov r17.x, c158.w // shadow summed over both rays
++        mov r17.z, c158.w // extra offset of the ray being marched
++        rep i2
++          add r18.y, r17.y, r17.z
++          frc r18.y, r18.y
++          add r18.y, r18.y, c162.w
++          mad r31.xyz, r30, r18.y, r13
++          mov r18.w, c158.w
++          mov r18.z, r13.w // view depth of the previous sample
++          mov r18.x, c158.w // part of the ray marched so far
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -350,6 +370,10 @@ index 1800ea70..ea3276ab 100644
 +            endif
 +          endif
 +        endrep
++          add r17.x, r17.x, r18.w
++          mov r17.z, c158.x
++        endrep
++        mul r18.w, r17.x, c158.x // both rays' average
 +        // fade out over the last quarter of the distance limit
 +        add r13.x, r29.z, -r13.w
 +        rcp r13.y, r29.z
@@ -451,10 +475,10 @@ index 1800ea70..ea3276ab 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 0b4d1074..503f2130 100644
+index 0b4d1074..472ac9b8 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-@@ -43,6 +43,16 @@
+@@ -43,6 +43,17 @@
      def c1, 255, -128, -0, -7.9000001
      def c2, 9.99999975e-006, 1, -0.333333343, 1.5
      def c3, -0.200000003, 1.25, 0, 0
@@ -468,10 +492,11 @@ index 0b4d1074..503f2130 100644
 +    // --- FusionFix volumetric light: 1/samples; samples
 +    def c163, 0.125, 0, 0, 0
 +    defi i1, 8, 0, 0, 0
++    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -91,7 +101,202 @@
+@@ -91,7 +102,213 @@
      mad r1.x, r3.x, c0.w, r1.x
      add r1.x, r1.x, c1.w
      mov r0.w, c2.y
@@ -524,18 +549,25 @@ index 0b4d1074..503f2130 100644
 +        mul r30.xyz, r17, r17.w
 +        mul r30.xyz, r30, c157.z
 +        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
-+        mad r31.xyz, r17, r18.x, r16
++        mad r13.xyz, r17, r18.x, r16 // where both rays start
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
 +        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
-+        add r18.y, r18.y, c162.w
-+        mad r31.xyz, r30, r18.y, r31
-+        mov r18.w, c158.w
-+        mov r18.z, r13.w // view depth of the previous sample
-+        mov r18.x, c158.w // part of the ray marched so far
++        // two rays, the second's steps half a step after the first's, halve that noise
++        mov r17.y, r18.y // this pixel's step offset
++        mov r17.x, c158.w // shadow summed over both rays
++        mov r17.z, c158.w // extra offset of the ray being marched
++        rep i2
++          add r18.y, r17.y, r17.z
++          frc r18.y, r18.y
++          add r18.y, r18.y, c162.w
++          mad r31.xyz, r30, r18.y, r13
++          mov r18.w, c158.w
++          mov r18.z, r13.w // view depth of the previous sample
++          mov r18.x, c158.w // part of the ray marched so far
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -575,6 +607,10 @@ index 0b4d1074..503f2130 100644
 +            endif
 +          endif
 +        endrep
++          add r17.x, r17.x, r18.w
++          mov r17.z, c158.x
++        endrep
++        mul r18.w, r17.x, c158.x // both rays' average
 +        // fade out over the last quarter of the distance limit
 +        add r13.x, r29.z, -r13.w
 +        rcp r13.y, r29.z
@@ -676,10 +712,10 @@ index 0b4d1074..503f2130 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 86f2d477..4a027e66 100644
+index 86f2d477..aad6d5b0 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-@@ -77,6 +77,16 @@
+@@ -77,6 +77,17 @@
      def c136, -0.7515861305520581, -0.41609876195815027, 0.9102937449894895, -0.17014527555321657
      def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
      // ----------------------------------------------------------------------------------------------------------------------------------------------
@@ -693,10 +729,11 @@ index 86f2d477..4a027e66 100644
 +    // --- FusionFix volumetric light: 1/samples; samples
 +    def c163, 0.125, 0, 0, 0
 +    defi i1, 8, 0, 0, 0
++    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -305,7 +315,202 @@
+@@ -305,7 +316,213 @@
      mad r0.x, r0.x, c6.z, r0.z
      add r0.x, r0.x, c7.z
      cmp r0.x, r0.x, c2.y, r0.y
@@ -749,18 +786,25 @@ index 86f2d477..4a027e66 100644
 +        mul r30.xyz, r17, r17.w
 +        mul r30.xyz, r30, c157.z
 +        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
-+        mad r31.xyz, r17, r18.x, r16
++        mad r13.xyz, r17, r18.x, r16 // where both rays start
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
 +        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
-+        add r18.y, r18.y, c162.w
-+        mad r31.xyz, r30, r18.y, r31
-+        mov r18.w, c158.w
-+        mov r18.z, r13.w // view depth of the previous sample
-+        mov r18.x, c158.w // part of the ray marched so far
++        // two rays, the second's steps half a step after the first's, halve that noise
++        mov r17.y, r18.y // this pixel's step offset
++        mov r17.x, c158.w // shadow summed over both rays
++        mov r17.z, c158.w // extra offset of the ray being marched
++        rep i2
++          add r18.y, r17.y, r17.z
++          frc r18.y, r18.y
++          add r18.y, r18.y, c162.w
++          mad r31.xyz, r30, r18.y, r13
++          mov r18.w, c158.w
++          mov r18.z, r13.w // view depth of the previous sample
++          mov r18.x, c158.w // part of the ray marched so far
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -800,6 +844,10 @@ index 86f2d477..4a027e66 100644
 +            endif
 +          endif
 +        endrep
++          add r17.x, r17.x, r18.w
++          mov r17.z, c158.x
++        endrep
++        mul r18.w, r17.x, c158.x // both rays' average
 +        // fade out over the last quarter of the distance limit
 +        add r13.x, r29.z, -r13.w
 +        rcp r13.y, r29.z
@@ -901,10 +949,10 @@ index 86f2d477..4a027e66 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index d104b6c1..15827673 100644
+index d104b6c1..c577e251 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-@@ -71,6 +71,16 @@
+@@ -71,6 +71,17 @@
      def c136, -0.7515861305520581, -0.41609876195815027, 0.9102937449894895, -0.17014527555321657
      def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
      // ----------------------------------------------------------------------------------------------------------------------------------------------
@@ -918,10 +966,11 @@ index d104b6c1..15827673 100644
 +    // --- FusionFix volumetric light: 1/samples; samples
 +    def c163, 0.125, 0, 0, 0
 +    defi i1, 8, 0, 0, 0
++    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -268,8 +278,203 @@
+@@ -268,8 +279,214 @@
      mul r1.yzw, c83.w, c83.xxyz
      mul r1.yzw, r0.w, r1
      mul r0.xyz, r0, r1.yzww
@@ -976,18 +1025,25 @@ index d104b6c1..15827673 100644
 +        mul r30.xyz, r17, r17.w
 +        mul r30.xyz, r30, c157.z
 +        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
-+        mad r31.xyz, r17, r18.x, r16
++        mad r13.xyz, r17, r18.x, r16 // where both rays start
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
 +        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
-+        add r18.y, r18.y, c162.w
-+        mad r31.xyz, r30, r18.y, r31
-+        mov r18.w, c158.w
-+        mov r18.z, r13.w // view depth of the previous sample
-+        mov r18.x, c158.w // part of the ray marched so far
++        // two rays, the second's steps half a step after the first's, halve that noise
++        mov r17.y, r18.y // this pixel's step offset
++        mov r17.x, c158.w // shadow summed over both rays
++        mov r17.z, c158.w // extra offset of the ray being marched
++        rep i2
++          add r18.y, r17.y, r17.z
++          frc r18.y, r18.y
++          add r18.y, r18.y, c162.w
++          mad r31.xyz, r30, r18.y, r13
++          mov r18.w, c158.w
++          mov r18.z, r13.w // view depth of the previous sample
++          mov r18.x, c158.w // part of the ray marched so far
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -1027,6 +1083,10 @@ index d104b6c1..15827673 100644
 +            endif
 +          endif
 +        endrep
++          add r17.x, r17.x, r18.w
++          mov r17.z, c158.x
++        endrep
++        mul r18.w, r17.x, c158.x // both rays' average
 +        // fade out over the last quarter of the distance limit
 +        add r13.x, r29.z, -r13.w
 +        rcp r13.y, r29.z
@@ -1128,10 +1188,10 @@ index d104b6c1..15827673 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 963ce403..26163c76 100644
+index 963ce403..86507de2 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-@@ -48,6 +48,16 @@
+@@ -48,6 +48,17 @@
      def c0, 0.50999999, 512, 2, -0.999989986
      def c1, 1, 0.5, 0, 9.99999975e-006
      def c2, -0.100000001, 1.11111116, 0, 0
@@ -1145,10 +1205,11 @@ index 963ce403..26163c76 100644
 +    // --- FusionFix volumetric light: 1/samples; samples
 +    def c163, 0.125, 0, 0, 0
 +    defi i1, 8, 0, 0, 0
++    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -137,7 +147,202 @@
+@@ -137,7 +148,213 @@
      mad r0.xyz, r2, r0, r1
      mad_sat r1.x, r4.z, r4.z, c1.y
      mov r0.w, c1.x
@@ -1201,18 +1262,25 @@ index 963ce403..26163c76 100644
 +        mul r30.xyz, r17, r17.w
 +        mul r30.xyz, r30, c157.z
 +        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
-+        mad r31.xyz, r17, r18.x, r16
++        mad r13.xyz, r17, r18.x, r16 // where both rays start
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
 +        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
-+        add r18.y, r18.y, c162.w
-+        mad r31.xyz, r30, r18.y, r31
-+        mov r18.w, c158.w
-+        mov r18.z, r13.w // view depth of the previous sample
-+        mov r18.x, c158.w // part of the ray marched so far
++        // two rays, the second's steps half a step after the first's, halve that noise
++        mov r17.y, r18.y // this pixel's step offset
++        mov r17.x, c158.w // shadow summed over both rays
++        mov r17.z, c158.w // extra offset of the ray being marched
++        rep i2
++          add r18.y, r17.y, r17.z
++          frc r18.y, r18.y
++          add r18.y, r18.y, c162.w
++          mad r31.xyz, r30, r18.y, r13
++          mov r18.w, c158.w
++          mov r18.z, r13.w // view depth of the previous sample
++          mov r18.x, c158.w // part of the ray marched so far
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -1252,6 +1320,10 @@ index 963ce403..26163c76 100644
 +            endif
 +          endif
 +        endrep
++          add r17.x, r17.x, r18.w
++          mov r17.z, c158.x
++        endrep
++        mul r18.w, r17.x, c158.x // both rays' average
 +        // fade out over the last quarter of the distance limit
 +        add r13.x, r29.z, -r13.w
 +        rcp r13.y, r29.z
@@ -1353,10 +1425,10 @@ index 963ce403..26163c76 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 6cdc2ec6..73ad3182 100644
+index 6cdc2ec6..04acc423 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-@@ -79,6 +79,16 @@
+@@ -79,6 +79,17 @@
      def c136, -0.7515861305520581, -0.41609876195815027, 0.9102937449894895, -0.17014527555321657
      def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
      // ----------------------------------------------------------------------------------------------------------------------------------------------
@@ -1370,10 +1442,11 @@ index 6cdc2ec6..73ad3182 100644
 +    // --- FusionFix volumetric light: 1/samples; samples
 +    def c163, 0.125, 0, 0, 0
 +    defi i1, 8, 0, 0, 0
++    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -322,8 +332,203 @@
+@@ -322,8 +333,214 @@
      mul r0.xyz, r0, r0.w
      mul r2.xyz, r3, r6
      mul r1.xyz, r1.z, r1.xyww
@@ -1428,18 +1501,25 @@ index 6cdc2ec6..73ad3182 100644
 +        mul r30.xyz, r17, r17.w
 +        mul r30.xyz, r30, c157.z
 +        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
-+        mad r31.xyz, r17, r18.x, r16
++        mad r13.xyz, r17, r18.x, r16 // where both rays start
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
 +        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
-+        add r18.y, r18.y, c162.w
-+        mad r31.xyz, r30, r18.y, r31
-+        mov r18.w, c158.w
-+        mov r18.z, r13.w // view depth of the previous sample
-+        mov r18.x, c158.w // part of the ray marched so far
++        // two rays, the second's steps half a step after the first's, halve that noise
++        mov r17.y, r18.y // this pixel's step offset
++        mov r17.x, c158.w // shadow summed over both rays
++        mov r17.z, c158.w // extra offset of the ray being marched
++        rep i2
++          add r18.y, r17.y, r17.z
++          frc r18.y, r18.y
++          add r18.y, r18.y, c162.w
++          mad r31.xyz, r30, r18.y, r13
++          mov r18.w, c158.w
++          mov r18.z, r13.w // view depth of the previous sample
++          mov r18.x, c158.w // part of the ray marched so far
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -1479,6 +1559,10 @@ index 6cdc2ec6..73ad3182 100644
 +            endif
 +          endif
 +        endrep
++          add r17.x, r17.x, r18.w
++          mov r17.z, c158.x
++        endrep
++        mul r18.w, r17.x, c158.x // both rays' average
 +        // fade out over the last quarter of the distance limit
 +        add r13.x, r29.z, -r13.w
 +        rcp r13.y, r29.z
@@ -1580,10 +1664,10 @@ index 6cdc2ec6..73ad3182 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 21f11d1d..d99d1dd6 100644
+index 21f11d1d..3123c565 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-@@ -43,6 +43,16 @@
+@@ -43,6 +43,17 @@
      def c1, 0.998046875, 7.984375, 63.875, -127.999992
      def c2, 0.5, 9.99999975e-006, 1, -0.100000001
      def c3, 1.11111116, 0, 0, 0.125
@@ -1597,10 +1681,11 @@ index 21f11d1d..d99d1dd6 100644
 +    // --- FusionFix volumetric light: 1/samples; samples
 +    def c163, 0.125, 0, 0, 0
 +    defi i1, 8, 0, 0, 0
++    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -103,7 +113,202 @@
+@@ -103,7 +114,213 @@
      mad_sat r1.x, r1.z, r1.z, c2.x
      mad r0.xyz, r0.w, r2, r0
      mov r0.w, c2.z
@@ -1653,18 +1738,25 @@ index 21f11d1d..d99d1dd6 100644
 +        mul r30.xyz, r17, r17.w
 +        mul r30.xyz, r30, c157.z
 +        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
-+        mad r31.xyz, r17, r18.x, r16
++        mad r13.xyz, r17, r18.x, r16 // where both rays start
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
 +        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
-+        add r18.y, r18.y, c162.w
-+        mad r31.xyz, r30, r18.y, r31
-+        mov r18.w, c158.w
-+        mov r18.z, r13.w // view depth of the previous sample
-+        mov r18.x, c158.w // part of the ray marched so far
++        // two rays, the second's steps half a step after the first's, halve that noise
++        mov r17.y, r18.y // this pixel's step offset
++        mov r17.x, c158.w // shadow summed over both rays
++        mov r17.z, c158.w // extra offset of the ray being marched
++        rep i2
++          add r18.y, r17.y, r17.z
++          frc r18.y, r18.y
++          add r18.y, r18.y, c162.w
++          mad r31.xyz, r30, r18.y, r13
++          mov r18.w, c158.w
++          mov r18.z, r13.w // view depth of the previous sample
++          mov r18.x, c158.w // part of the ray marched so far
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -1704,6 +1796,10 @@ index 21f11d1d..d99d1dd6 100644
 +            endif
 +          endif
 +        endrep
++          add r17.x, r17.x, r18.w
++          mov r17.z, c158.x
++        endrep
++        mul r18.w, r17.x, c158.x // both rays' average
 +        // fade out over the last quarter of the distance limit
 +        add r13.x, r29.z, -r13.w
 +        rcp r13.y, r29.z
@@ -1805,10 +1901,10 @@ index 21f11d1d..d99d1dd6 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 3a813bf9..b55b83cb 100644
+index 3a813bf9..16e5135c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-@@ -46,6 +46,16 @@
+@@ -46,6 +46,17 @@
      def c2, 255, -128, -0, -7.9000001
      def c3, 1, 0, 9.99999975e-006, -0.100000001
      def c4, 1.11111116, 0, 0, 0.125
@@ -1822,10 +1918,11 @@ index 3a813bf9..b55b83cb 100644
 +    // --- FusionFix volumetric light: 1/samples; samples
 +    def c163, 0.125, 0, 0, 0
 +    defi i1, 8, 0, 0, 0
++    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -112,7 +122,202 @@
+@@ -112,7 +123,213 @@
      mad r0.x, r0.x, c2.x, r0.y
      add r0.x, r0.x, c2.w
      cmp r0.x, r0.x, c3.x, c3.y
@@ -1878,18 +1975,25 @@ index 3a813bf9..b55b83cb 100644
 +        mul r30.xyz, r17, r17.w
 +        mul r30.xyz, r30, c157.z
 +        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
-+        mad r31.xyz, r17, r18.x, r16
++        mad r13.xyz, r17, r18.x, r16 // where both rays start
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
 +        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
-+        add r18.y, r18.y, c162.w
-+        mad r31.xyz, r30, r18.y, r31
-+        mov r18.w, c158.w
-+        mov r18.z, r13.w // view depth of the previous sample
-+        mov r18.x, c158.w // part of the ray marched so far
++        // two rays, the second's steps half a step after the first's, halve that noise
++        mov r17.y, r18.y // this pixel's step offset
++        mov r17.x, c158.w // shadow summed over both rays
++        mov r17.z, c158.w // extra offset of the ray being marched
++        rep i2
++          add r18.y, r17.y, r17.z
++          frc r18.y, r18.y
++          add r18.y, r18.y, c162.w
++          mad r31.xyz, r30, r18.y, r13
++          mov r18.w, c158.w
++          mov r18.z, r13.w // view depth of the previous sample
++          mov r18.x, c158.w // part of the ray marched so far
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -1929,6 +2033,10 @@ index 3a813bf9..b55b83cb 100644
 +            endif
 +          endif
 +        endrep
++          add r17.x, r17.x, r18.w
++          mov r17.z, c158.x
++        endrep
++        mul r18.w, r17.x, c158.x // both rays' average
 +        // fade out over the last quarter of the distance limit
 +        add r13.x, r29.z, -r13.w
 +        rcp r13.y, r29.z
@@ -2030,10 +2138,10 @@ index 3a813bf9..b55b83cb 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 43331379..a3fb664a 100644
+index 43331379..1a2f59a1 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-@@ -46,6 +46,16 @@
+@@ -46,6 +46,17 @@
      def c2, 0.998046875, 7.984375, 63.875, -127.999992
      def c3, 255, -128, -0, -7.9000001
      def c4, -0.100000001, 1.11111116, 0, 0.125
@@ -2047,10 +2155,11 @@ index 43331379..a3fb664a 100644
 +    // --- FusionFix volumetric light: 1/samples; samples
 +    def c163, 0.125, 0, 0, 0
 +    defi i1, 8, 0, 0, 0
++    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -114,7 +124,202 @@
+@@ -114,7 +125,213 @@
      add r0.x, r0.x, c3.w
      cmp r0.x, r0.x, c0.x, c0.y
      mul r0, r2, r0.x
@@ -2103,18 +2212,25 @@ index 43331379..a3fb664a 100644
 +        mul r30.xyz, r17, r17.w
 +        mul r30.xyz, r30, c157.z
 +        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
-+        mad r31.xyz, r17, r18.x, r16
++        mad r13.xyz, r17, r18.x, r16 // where both rays start
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
 +        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
-+        add r18.y, r18.y, c162.w
-+        mad r31.xyz, r30, r18.y, r31
-+        mov r18.w, c158.w
-+        mov r18.z, r13.w // view depth of the previous sample
-+        mov r18.x, c158.w // part of the ray marched so far
++        // two rays, the second's steps half a step after the first's, halve that noise
++        mov r17.y, r18.y // this pixel's step offset
++        mov r17.x, c158.w // shadow summed over both rays
++        mov r17.z, c158.w // extra offset of the ray being marched
++        rep i2
++          add r18.y, r17.y, r17.z
++          frc r18.y, r18.y
++          add r18.y, r18.y, c162.w
++          mad r31.xyz, r30, r18.y, r13
++          mov r18.w, c158.w
++          mov r18.z, r13.w // view depth of the previous sample
++          mov r18.x, c158.w // part of the ray marched so far
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -2154,6 +2270,10 @@ index 43331379..a3fb664a 100644
 +            endif
 +          endif
 +        endrep
++          add r17.x, r17.x, r18.w
++          mov r17.z, c158.x
++        endrep
++        mul r18.w, r17.x, c158.x // both rays' average
 +        // fade out over the last quarter of the distance limit
 +        add r13.x, r29.z, -r13.w
 +        rcp r13.y, r29.z
@@ -2255,10 +2375,10 @@ index 43331379..a3fb664a 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 76eac906..fd46baae 100644
+index 76eac906..b6e14114 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-@@ -46,6 +46,16 @@
+@@ -46,6 +46,17 @@
      def c2, 255, -128, -0, -7.9000001
      def c3, -8, -0, -1, 0.100000001
      def c4, 9.99999975e-006, 1.11111116, 0, 0.125
@@ -2272,10 +2392,11 @@ index 76eac906..fd46baae 100644
 +    // --- FusionFix volumetric light: 1/samples; samples
 +    def c163, 0.125, 0, 0, 0
 +    defi i1, 8, 0, 0, 0
++    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -116,7 +126,202 @@
+@@ -116,7 +127,213 @@
      add r0.x, -r0_abs.x, c3.w
      cmp r0.x, r0.x, -c3.z, -c3.y
      mov r1.w, -c3.z
@@ -2328,18 +2449,25 @@ index 76eac906..fd46baae 100644
 +        mul r30.xyz, r17, r17.w
 +        mul r30.xyz, r30, c157.z
 +        mad r18.x, r13.w, c161.x, c161.y // start offset grows with distance, against self shadowing
-+        mad r31.xyz, r17, r18.x, r16
++        mad r13.xyz, r17, r18.x, r16 // where both rays start
 +        // interleaved gradient noise shifts each pixel's steps by up to one step, otherwise
 +        // every pixel samples at the same distances and thin occluders repeat as copies
 +        dp2add r18.y, vPos, c162, c162.w // -1 only shifts the integer part, frc drops it
 +        frc r18.y, r18.y
 +        mul r18.y, r18.y, c162.z
 +        frc r18.y, r18.y
-+        add r18.y, r18.y, c162.w
-+        mad r31.xyz, r30, r18.y, r31
-+        mov r18.w, c158.w
-+        mov r18.z, r13.w // view depth of the previous sample
-+        mov r18.x, c158.w // part of the ray marched so far
++        // two rays, the second's steps half a step after the first's, halve that noise
++        mov r17.y, r18.y // this pixel's step offset
++        mov r17.x, c158.w // shadow summed over both rays
++        mov r17.z, c158.w // extra offset of the ray being marched
++        rep i2
++          add r18.y, r17.y, r17.z
++          frc r18.y, r18.y
++          add r18.y, r18.y, c162.w
++          mad r31.xyz, r30, r18.y, r13
++          mov r18.w, c158.w
++          mov r18.z, r13.w // view depth of the previous sample
++          mov r18.x, c158.w // part of the ray marched so far
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -2379,6 +2507,10 @@ index 76eac906..fd46baae 100644
 +            endif
 +          endif
 +        endrep
++          add r17.x, r17.x, r18.w
++          mov r17.z, c158.x
++        endrep
++        mul r18.w, r17.x, c158.x // both rays' average
 +        // fade out over the last quarter of the distance limit
 +        add r13.x, r29.z, -r13.w
 +        rcp r13.y, r29.z
