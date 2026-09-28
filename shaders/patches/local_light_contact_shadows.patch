@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index 2337a596..1d5d2164 100644
+index 2337a596..e50dc6e2 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 @@ -40,6 +40,13 @@
@@ -39,8 +39,8 @@ index 2337a596..1d5d2164 100644
 +      mul r13.xy, r13, c77.zw
 +      mov r13.zw, c158.w
 +      texldl r14, r13, s2
-+      pow r14.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
-+      mul r14.x, r14.x, c209.w
++      pow r14.z, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r14.z, c209.w
 +      mov r13.w, r14.x // this pixel's linear depth
 +      if_lt r14.x, r29.z
 +        // view space position from screen uv and depth, then world space
@@ -102,8 +102,8 @@ index 2337a596..1d5d2164 100644
 +          max r15.w, r12.x, r12.y
 +          break_gt r15.w, c157.y
 +          texldl r14, r12, s2
-+          pow r14.x, c209_abs.z, r14.x
-+          mul r14.x, r14.x, c209.w
++          pow r14.z, c209_abs.z, r14.x
++          mul r14.x, r14.z, c209.w
 +          add r14.y, r16.w, -r14.x
 +          // depth only knows the front of a ped, so a sample far behind it keeps marching
 +          // instead of ending as a miss, which left only the thin edges of the shadow; the
@@ -135,7 +135,7 @@ index 2337a596..1d5d2164 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index 1800ea70..835fbef2 100644
+index 1800ea70..6fb46651 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 @@ -43,6 +43,13 @@
@@ -173,8 +173,8 @@ index 1800ea70..835fbef2 100644
 +      mul r13.xy, r13, c77.zw
 +      mov r13.zw, c158.w
 +      texldl r14, r13, s2
-+      pow r14.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
-+      mul r14.x, r14.x, c209.w
++      pow r14.z, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r14.z, c209.w
 +      mov r13.w, r14.x // this pixel's linear depth
 +      if_lt r14.x, r29.z
 +        // view space position from screen uv and depth, then world space
@@ -236,8 +236,8 @@ index 1800ea70..835fbef2 100644
 +          max r15.w, r12.x, r12.y
 +          break_gt r15.w, c157.y
 +          texldl r14, r12, s2
-+          pow r14.x, c209_abs.z, r14.x
-+          mul r14.x, r14.x, c209.w
++          pow r14.z, c209_abs.z, r14.x
++          mul r14.x, r14.z, c209.w
 +          add r14.y, r16.w, -r14.x
 +          // depth only knows the front of a ped, so a sample far behind it keeps marching
 +          // instead of ending as a miss, which left only the thin edges of the shadow; the
@@ -269,7 +269,7 @@ index 1800ea70..835fbef2 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 0b4d1074..8b16cc0b 100644
+index 0b4d1074..85e17621 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 @@ -43,6 +43,13 @@
@@ -307,8 +307,8 @@ index 0b4d1074..8b16cc0b 100644
 +      mul r13.xy, r13, c77.zw
 +      mov r13.zw, c158.w
 +      texldl r14, r13, s2
-+      pow r14.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
-+      mul r14.x, r14.x, c209.w
++      pow r14.z, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r14.z, c209.w
 +      mov r13.w, r14.x // this pixel's linear depth
 +      if_lt r14.x, r29.z
 +        // view space position from screen uv and depth, then world space
@@ -370,8 +370,8 @@ index 0b4d1074..8b16cc0b 100644
 +          max r15.w, r12.x, r12.y
 +          break_gt r15.w, c157.y
 +          texldl r14, r12, s2
-+          pow r14.x, c209_abs.z, r14.x
-+          mul r14.x, r14.x, c209.w
++          pow r14.z, c209_abs.z, r14.x
++          mul r14.x, r14.z, c209.w
 +          add r14.y, r16.w, -r14.x
 +          // depth only knows the front of a ped, so a sample far behind it keeps marching
 +          // instead of ending as a miss, which left only the thin edges of the shadow; the
@@ -403,7 +403,7 @@ index 0b4d1074..8b16cc0b 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 86f2d477..71554826 100644
+index 86f2d477..433552dc 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -77,6 +77,13 @@
@@ -441,8 +441,8 @@ index 86f2d477..71554826 100644
 +      mul r13.xy, r13, c84.zw
 +      mov r13.zw, c158.w
 +      texldl r14, r13, s2
-+      pow r14.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
-+      mul r14.x, r14.x, c209.w
++      pow r14.z, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r14.z, c209.w
 +      mov r13.w, r14.x // this pixel's linear depth
 +      if_lt r14.x, r29.z
 +        // view space position from screen uv and depth, then world space
@@ -504,8 +504,8 @@ index 86f2d477..71554826 100644
 +          max r15.w, r12.x, r12.y
 +          break_gt r15.w, c157.y
 +          texldl r14, r12, s2
-+          pow r14.x, c209_abs.z, r14.x
-+          mul r14.x, r14.x, c209.w
++          pow r14.z, c209_abs.z, r14.x
++          mul r14.x, r14.z, c209.w
 +          add r14.y, r16.w, -r14.x
 +          // depth only knows the front of a ped, so a sample far behind it keeps marching
 +          // instead of ending as a miss, which left only the thin edges of the shadow; the
@@ -537,7 +537,7 @@ index 86f2d477..71554826 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index d104b6c1..2091beb9 100644
+index d104b6c1..4aef6c51 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 @@ -71,6 +71,13 @@
@@ -577,8 +577,8 @@ index d104b6c1..2091beb9 100644
 +      mul r13.xy, r13, c84.zw
 +      mov r13.zw, c158.w
 +      texldl r14, r13, s2
-+      pow r14.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
-+      mul r14.x, r14.x, c209.w
++      pow r14.z, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r14.z, c209.w
 +      mov r13.w, r14.x // this pixel's linear depth
 +      if_lt r14.x, r29.z
 +        // view space position from screen uv and depth, then world space
@@ -640,8 +640,8 @@ index d104b6c1..2091beb9 100644
 +          max r15.w, r12.x, r12.y
 +          break_gt r15.w, c157.y
 +          texldl r14, r12, s2
-+          pow r14.x, c209_abs.z, r14.x
-+          mul r14.x, r14.x, c209.w
++          pow r14.z, c209_abs.z, r14.x
++          mul r14.x, r14.z, c209.w
 +          add r14.y, r16.w, -r14.x
 +          // depth only knows the front of a ped, so a sample far behind it keeps marching
 +          // instead of ending as a miss, which left only the thin edges of the shadow; the
@@ -673,7 +673,7 @@ index d104b6c1..2091beb9 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 963ce403..e679d7fc 100644
+index 963ce403..b17c3b9d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -48,6 +48,13 @@
@@ -711,8 +711,8 @@ index 963ce403..e679d7fc 100644
 +      mul r13.xy, r13, c79.zw
 +      mov r13.zw, c158.w
 +      texldl r14, r13, s2
-+      pow r14.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
-+      mul r14.x, r14.x, c209.w
++      pow r14.z, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r14.z, c209.w
 +      mov r13.w, r14.x // this pixel's linear depth
 +      if_lt r14.x, r29.z
 +        // view space position from screen uv and depth, then world space
@@ -774,8 +774,8 @@ index 963ce403..e679d7fc 100644
 +          max r15.w, r12.x, r12.y
 +          break_gt r15.w, c157.y
 +          texldl r14, r12, s2
-+          pow r14.x, c209_abs.z, r14.x
-+          mul r14.x, r14.x, c209.w
++          pow r14.z, c209_abs.z, r14.x
++          mul r14.x, r14.z, c209.w
 +          add r14.y, r16.w, -r14.x
 +          // depth only knows the front of a ped, so a sample far behind it keeps marching
 +          // instead of ending as a miss, which left only the thin edges of the shadow; the
@@ -807,7 +807,7 @@ index 963ce403..e679d7fc 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 6cdc2ec6..0830466c 100644
+index 6cdc2ec6..261597ea 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -79,6 +79,13 @@
@@ -847,8 +847,8 @@ index 6cdc2ec6..0830466c 100644
 +      mul r13.xy, r13, c86.zw
 +      mov r13.zw, c158.w
 +      texldl r14, r13, s2
-+      pow r14.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
-+      mul r14.x, r14.x, c209.w
++      pow r14.z, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r14.z, c209.w
 +      mov r13.w, r14.x // this pixel's linear depth
 +      if_lt r14.x, r29.z
 +        // view space position from screen uv and depth, then world space
@@ -910,8 +910,8 @@ index 6cdc2ec6..0830466c 100644
 +          max r15.w, r12.x, r12.y
 +          break_gt r15.w, c157.y
 +          texldl r14, r12, s2
-+          pow r14.x, c209_abs.z, r14.x
-+          mul r14.x, r14.x, c209.w
++          pow r14.z, c209_abs.z, r14.x
++          mul r14.x, r14.z, c209.w
 +          add r14.y, r16.w, -r14.x
 +          // depth only knows the front of a ped, so a sample far behind it keeps marching
 +          // instead of ending as a miss, which left only the thin edges of the shadow; the
@@ -943,7 +943,7 @@ index 6cdc2ec6..0830466c 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 21f11d1d..21186b38 100644
+index 21f11d1d..de89651b 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -43,6 +43,13 @@
@@ -981,8 +981,8 @@ index 21f11d1d..21186b38 100644
 +      mul r13.xy, r13, c77.zw
 +      mov r13.zw, c158.w
 +      texldl r14, r13, s2
-+      pow r14.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
-+      mul r14.x, r14.x, c209.w
++      pow r14.z, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r14.z, c209.w
 +      mov r13.w, r14.x // this pixel's linear depth
 +      if_lt r14.x, r29.z
 +        // view space position from screen uv and depth, then world space
@@ -1044,8 +1044,8 @@ index 21f11d1d..21186b38 100644
 +          max r15.w, r12.x, r12.y
 +          break_gt r15.w, c157.y
 +          texldl r14, r12, s2
-+          pow r14.x, c209_abs.z, r14.x
-+          mul r14.x, r14.x, c209.w
++          pow r14.z, c209_abs.z, r14.x
++          mul r14.x, r14.z, c209.w
 +          add r14.y, r16.w, -r14.x
 +          // depth only knows the front of a ped, so a sample far behind it keeps marching
 +          // instead of ending as a miss, which left only the thin edges of the shadow; the
@@ -1077,7 +1077,7 @@ index 21f11d1d..21186b38 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 3a813bf9..b225631b 100644
+index 3a813bf9..5a19a99a 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -46,6 +46,13 @@
@@ -1115,8 +1115,8 @@ index 3a813bf9..b225631b 100644
 +      mul r13.xy, r13, c77.zw
 +      mov r13.zw, c158.w
 +      texldl r14, r13, s2
-+      pow r14.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
-+      mul r14.x, r14.x, c209.w
++      pow r14.z, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r14.z, c209.w
 +      mov r13.w, r14.x // this pixel's linear depth
 +      if_lt r14.x, r29.z
 +        // view space position from screen uv and depth, then world space
@@ -1178,8 +1178,8 @@ index 3a813bf9..b225631b 100644
 +          max r15.w, r12.x, r12.y
 +          break_gt r15.w, c157.y
 +          texldl r14, r12, s2
-+          pow r14.x, c209_abs.z, r14.x
-+          mul r14.x, r14.x, c209.w
++          pow r14.z, c209_abs.z, r14.x
++          mul r14.x, r14.z, c209.w
 +          add r14.y, r16.w, -r14.x
 +          // depth only knows the front of a ped, so a sample far behind it keeps marching
 +          // instead of ending as a miss, which left only the thin edges of the shadow; the
@@ -1211,7 +1211,7 @@ index 3a813bf9..b225631b 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 43331379..75187f5a 100644
+index 43331379..d8e8e96a 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -46,6 +46,13 @@
@@ -1249,8 +1249,8 @@ index 43331379..75187f5a 100644
 +      mul r13.xy, r13, c77.zw
 +      mov r13.zw, c158.w
 +      texldl r14, r13, s2
-+      pow r14.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
-+      mul r14.x, r14.x, c209.w
++      pow r14.z, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r14.z, c209.w
 +      mov r13.w, r14.x // this pixel's linear depth
 +      if_lt r14.x, r29.z
 +        // view space position from screen uv and depth, then world space
@@ -1312,8 +1312,8 @@ index 43331379..75187f5a 100644
 +          max r15.w, r12.x, r12.y
 +          break_gt r15.w, c157.y
 +          texldl r14, r12, s2
-+          pow r14.x, c209_abs.z, r14.x
-+          mul r14.x, r14.x, c209.w
++          pow r14.z, c209_abs.z, r14.x
++          mul r14.x, r14.z, c209.w
 +          add r14.y, r16.w, -r14.x
 +          // depth only knows the front of a ped, so a sample far behind it keeps marching
 +          // instead of ending as a miss, which left only the thin edges of the shadow; the
@@ -1345,7 +1345,7 @@ index 43331379..75187f5a 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 76eac906..68605eec 100644
+index 76eac906..4f804b52 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -46,6 +46,13 @@
@@ -1383,8 +1383,8 @@ index 76eac906..68605eec 100644
 +      mul r13.xy, r13, c77.zw
 +      mov r13.zw, c158.w
 +      texldl r14, r13, s2
-+      pow r14.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
-+      mul r14.x, r14.x, c209.w
++      pow r14.z, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r14.z, c209.w
 +      mov r13.w, r14.x // this pixel's linear depth
 +      if_lt r14.x, r29.z
 +        // view space position from screen uv and depth, then world space
@@ -1446,8 +1446,8 @@ index 76eac906..68605eec 100644
 +          max r15.w, r12.x, r12.y
 +          break_gt r15.w, c157.y
 +          texldl r14, r12, s2
-+          pow r14.x, c209_abs.z, r14.x
-+          mul r14.x, r14.x, c209.w
++          pow r14.z, c209_abs.z, r14.x
++          mul r14.x, r14.z, c209.w
 +          add r14.y, r16.w, -r14.x
 +          // depth only knows the front of a ped, so a sample far behind it keeps marching
 +          // instead of ending as a miss, which left only the thin edges of the shadow; the
