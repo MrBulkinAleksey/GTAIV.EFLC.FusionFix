@@ -266,7 +266,7 @@ public:
     // Exaggerates the relief of normal mapped surfaces such as brick before lighting, see
     // NormalDetail_PS in SSR.fx; 1.0 leaves the G-buffer untouched.
     float fNormalDetail = 1.0f;
-    float fNormalDetailRadius = 4.0f;
+    float fNormalDetailRadius = 16.0f;
     float fNormalDetailFade = 60.0f;
     // A copy of _DEFERRED_GBUFFER_1_ in its own format; D3DPOOL_DEFAULT, released on device loss.
     IDirect3DTexture9* NormalCopyTex = nullptr;
@@ -910,7 +910,7 @@ public:
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         fNormalDetail = std::clamp(iniReader.ReadFloat("POSTFX", "NormalDetail", 1.0f), 1.0f, 4.0f);
-        fNormalDetailRadius = std::clamp(iniReader.ReadFloat("POSTFX", "NormalDetailRadius", 4.0f), 1.0f, 16.0f);
+        fNormalDetailRadius = std::clamp(iniReader.ReadFloat("POSTFX", "NormalDetailRadius", 16.0f), 1.0f, 64.0f);
         fNormalDetailFade = std::clamp(iniReader.ReadFloat("POSTFX", "NormalDetailFadeDistance", 60.0f), 5.0f, 500.0f);
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
