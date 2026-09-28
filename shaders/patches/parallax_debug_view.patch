@@ -1,16 +1,8 @@
 diff --git a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm b/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
-index 315ca1a4..66069b87 100644
+index 315ca1a4..99b8f951 100644
 --- a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
 +++ b/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
-@@ -28,6 +28,7 @@
- //
- 
-     ps_3_0
-+    def c205, 1, 1, 0, 0 // TEMPORARY: debug colours always on, to see whether these shaders draw anything
-     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.4599859205e-43 // 461
-     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
-     def c153, 0.5, 2, 1, 0
-@@ -55,6 +56,12 @@
+@@ -55,6 +55,12 @@
      mad r0.z, r0.w, c66.x, -r0.z
      mad r0.xy, r0.z, r0, v0
      texld r2, r0, s0
@@ -24,18 +16,10 @@ index 315ca1a4..66069b87 100644
      // mul r0.z, r2.w, v4.w disabled vertex alpha
      // mul r0.w, r0.z, c39.x
 diff --git a/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm b/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
-index baa3a8b0..18d4a686 100644
+index baa3a8b0..44cafed6 100644
 --- a/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
 +++ b/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
-@@ -30,6 +30,7 @@
- //
- 
-     ps_3_0
-+    def c205, 1, 1, 0, 0 // TEMPORARY: debug colours always on, to see whether these shaders draw anything
-     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.4739989052e-43 // 462
-     def c0, 0.5, -0.5, -0.00200000009, 0.001953125
-     def c1, 0, -1, -0, 9.99999975e-006
-@@ -56,6 +57,12 @@
+@@ -56,6 +56,12 @@
      mad r0.xy, r0.z, r0, v0
      texld r2, r0, s1
      texld r0, r0, s0
@@ -49,18 +33,10 @@ index baa3a8b0..18d4a686 100644
      mul r1.xy, r1, c74.x
      dp2add r1.z, r2, -r2, -c1.y
 diff --git a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
-index 53536b58..624097f2 100644
+index 53536b58..fca98d3a 100644
 --- a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
 +++ b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
-@@ -32,6 +32,7 @@
- //
- 
-     ps_3_0
-+    def c205, 1, 1, 0, 0 // TEMPORARY: debug colours always on, to see whether these shaders draw anything
-     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.1517002584e-43 // 439
-     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
-     def c153, 0.5, 2, 1, 0
-@@ -60,6 +61,12 @@
+@@ -60,6 +60,12 @@
      mad r0.z, r0.w, c66.x, -r0.z
      mad r0.xy, r0.z, r0, v0
      texld r2, r0, s0
@@ -74,18 +50,10 @@ index 53536b58..624097f2 100644
      // mul r0.z, r2.w, v4.w disabled vertex alpha
      // mul r0.w, r0.z, c39.x
 diff --git a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
-index 4f9d5e58..1f31a13c 100644
+index 4f9d5e58..c776c9a6 100644
 --- a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
 +++ b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
-@@ -34,6 +34,7 @@
- //
- 
-     ps_3_0
-+    def c205, 1, 1, 0, 0 // TEMPORARY: debug colours always on, to see whether these shaders draw anything
-     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.1657132430e-43 // 440
-     def c0, 0.5, -0.5, -0.00200000009, 0.001953125
-     def c1, 0, -1, -0, 9.99999975e-006
-@@ -61,6 +62,12 @@
+@@ -61,6 +61,12 @@
      mad r0.xy, r0.z, r0, v0
      texld r1, r0, s1
      texld r0, r0, s0
