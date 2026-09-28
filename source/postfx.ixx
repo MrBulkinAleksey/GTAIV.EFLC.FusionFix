@@ -253,11 +253,15 @@ public:
     // Contact shadows from street lights and headlights, marched in the light shaders
     // themselves (shaders/patches/local_light_contact_shadows.patch); they follow the Contact
     // Shadows menu toggle.
-    bool bLocalContactShadows = true;
+    bool bLocalContactShadows = false; // off until they show right
     float fLocalContactShadowLength = 2.0f;
     float fLocalContactShadowThickness = 0.3f;
     float fLocalContactShadowMaxDistance = 40.0f;
     float fLocalContactShadowIntensity = 1.0f;
+    // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
+    // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
+    // the viewport hook runs for every view and the last before lighting is not the camera's.
+    float LocalContactShadowConsts[12] = {};
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
     IDirect3DSurface9* ContactRawSurf = nullptr;
     rage::grcRenderTargetPC* ContactTex = nullptr;
@@ -886,7 +890,7 @@ public:
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
         fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
-        bLocalContactShadows = iniReader.ReadInteger("POSTFX", "LocalContactShadows", 1) != 0;
+        bLocalContactShadows = iniReader.ReadInteger("POSTFX", "LocalContactShadows", 0) != 0;
         fLocalContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsLength", 2.0f), 0.05f, 10.0f);
         fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.3f), 0.01f, 5.0f);
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
@@ -2907,11 +2911,18 @@ private:
         R.bContactValid = false;
 
         // For the light shaders, whatever becomes of the sun's pass below.
-        const bool local = R.bLocalContactShadows && R.ContactShadowsEnabled() && R.fLocalContactShadowIntensity > 0.0f;
-        LocalContactShadowParams[0] = R.fLocalContactShadowLength;
-        LocalContactShadowParams[1] = R.fLocalContactShadowThickness;
-        LocalContactShadowParams[2] = local ? R.fLocalContactShadowMaxDistance : 0.0f;
-        LocalContactShadowParams[3] = R.fLocalContactShadowIntensity;
+        {
+            rage::grcViewport* camera = rage::GetCurrentViewport();
+            const bool local = camera && R.bLocalContactShadows && R.ContactShadowsEnabled() && R.fLocalContactShadowIntensity > 0.0f;
+            const D3DMATRIX proj = camera ? *(const D3DMATRIX*)camera->mProjectionMatrix : D3DMATRIX{};
+            const float consts[12] =
+            {
+                R.fLocalContactShadowLength, R.fLocalContactShadowThickness, R.fLocalContactShadowMaxDistance, R.fLocalContactShadowIntensity,
+                proj._34, 0.0f, 0.0f, local ? 12345.0f : 0.0f,
+                proj._11, proj._22, proj._31, proj._32,
+            };
+            memcpy(R.LocalContactShadowConsts, consts, sizeof(consts));
+        }
 
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
         rage::grcViewport* vp = rage::GetCurrentViewport();
@@ -3090,6 +3101,8 @@ public:
             R.bContactBound = true;
         }
 
+        pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
+
         pDevice->SetTexture(3, tex);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
@@ -3123,6 +3136,9 @@ public:
             pDevice->SetTexture(9, nullptr);
             R.bContactBound = false;
         }
+        // Lights drawn for other views (reflections, mirrors) must not march with this camera.
+        const float noLocalContactShadows[4] = {};
+        pDevice->SetPixelShaderConstantF(203, noLocalContactShadows, 1);
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;

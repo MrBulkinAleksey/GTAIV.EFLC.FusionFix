@@ -26,7 +26,7 @@ index 2337a596..299b88d3 100644
 +    mov r26.w, c1.x
 +    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
 +    // --- through the opaque depth catches small occluders, also for lights without a shadow
-+    // --- map. FusionFix sets c202-c204 with each viewport, as c209 (c203.w the magic value
++    // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
 +    // --- while they are on); the depth is the game's own log depth in s2, decoded with c209.
 +    mov r31.w, c157.y
 +    mov r27, c204 // projection _11, _22, _31, _32
@@ -160,7 +160,7 @@ index 1800ea70..04bc5953 100644
 +    cmp r26, r1.x, r0, -c1.z
 +    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
 +    // --- through the opaque depth catches small occluders, also for lights without a shadow
-+    // --- map. FusionFix sets c202-c204 with each viewport, as c209 (c203.w the magic value
++    // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
 +    // --- while they are on); the depth is the game's own log depth in s2, decoded with c209.
 +    mov r31.w, c157.y
 +    mov r27, c204 // projection _11, _22, _31, _32
@@ -294,7 +294,7 @@ index 0b4d1074..75af8278 100644
 +    cmp r26, r1.x, -c1.z, r0
 +    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
 +    // --- through the opaque depth catches small occluders, also for lights without a shadow
-+    // --- map. FusionFix sets c202-c204 with each viewport, as c209 (c203.w the magic value
++    // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
 +    // --- while they are on); the depth is the game's own log depth in s2, decoded with c209.
 +    mov r31.w, c157.y
 +    mov r27, c204 // projection _11, _22, _31, _32
@@ -428,7 +428,7 @@ index 86f2d477..dfcbd403 100644
 +    mul r26, r1, r0.x
 +    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
 +    // --- through the opaque depth catches small occluders, also for lights without a shadow
-+    // --- map. FusionFix sets c202-c204 with each viewport, as c209 (c203.w the magic value
++    // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
 +    // --- while they are on); the depth is the game's own log depth in s2, decoded with c209.
 +    mov r31.w, c157.y
 +    mov r27, c204 // projection _11, _22, _31, _32
@@ -564,7 +564,7 @@ index d104b6c1..52a205dd 100644
 +    mov r26.w, c1.x
 +    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
 +    // --- through the opaque depth catches small occluders, also for lights without a shadow
-+    // --- map. FusionFix sets c202-c204 with each viewport, as c209 (c203.w the magic value
++    // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
 +    // --- while they are on); the depth is the game's own log depth in s2, decoded with c209.
 +    mov r31.w, c157.y
 +    mov r27, c204 // projection _11, _22, _31, _32
@@ -698,7 +698,7 @@ index 963ce403..c0d218eb 100644
 +    mul r26, r0, r1.x
 +    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
 +    // --- through the opaque depth catches small occluders, also for lights without a shadow
-+    // --- map. FusionFix sets c202-c204 with each viewport, as c209 (c203.w the magic value
++    // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
 +    // --- while they are on); the depth is the game's own log depth in s2, decoded with c209.
 +    mov r31.w, c157.y
 +    mov r27, c204 // projection _11, _22, _31, _32
@@ -834,7 +834,7 @@ index 6cdc2ec6..de276540 100644
 +    mov r26.w, c1.x
 +    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
 +    // --- through the opaque depth catches small occluders, also for lights without a shadow
-+    // --- map. FusionFix sets c202-c204 with each viewport, as c209 (c203.w the magic value
++    // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
 +    // --- while they are on); the depth is the game's own log depth in s2, decoded with c209.
 +    mov r31.w, c157.y
 +    mov r27, c204 // projection _11, _22, _31, _32
@@ -968,7 +968,7 @@ index 21f11d1d..d842f117 100644
 +    mul r26, r1.x, r0
 +    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
 +    // --- through the opaque depth catches small occluders, also for lights without a shadow
-+    // --- map. FusionFix sets c202-c204 with each viewport, as c209 (c203.w the magic value
++    // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
 +    // --- while they are on); the depth is the game's own log depth in s2, decoded with c209.
 +    mov r31.w, c157.y
 +    mov r27, c204 // projection _11, _22, _31, _32
@@ -1102,7 +1102,7 @@ index 3a813bf9..265b16fd 100644
 +    mul r26, r1, r0.x
 +    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
 +    // --- through the opaque depth catches small occluders, also for lights without a shadow
-+    // --- map. FusionFix sets c202-c204 with each viewport, as c209 (c203.w the magic value
++    // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
 +    // --- while they are on); the depth is the game's own log depth in s2, decoded with c209.
 +    mov r31.w, c157.y
 +    mov r27, c204 // projection _11, _22, _31, _32
@@ -1236,7 +1236,7 @@ index 43331379..b0681baf 100644
 +    mul r26, r1.y, r0
 +    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
 +    // --- through the opaque depth catches small occluders, also for lights without a shadow
-+    // --- map. FusionFix sets c202-c204 with each viewport, as c209 (c203.w the magic value
++    // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
 +    // --- while they are on); the depth is the game's own log depth in s2, decoded with c209.
 +    mov r31.w, c157.y
 +    mov r27, c204 // projection _11, _22, _31, _32
@@ -1370,7 +1370,7 @@ index 76eac906..02f479d1 100644
 +    mul r26, r1, r0.x
 +    // --- FusionFix local contact shadows: a short ray from this pixel towards the light
 +    // --- through the opaque depth catches small occluders, also for lights without a shadow
-+    // --- map. FusionFix sets c202-c204 with each viewport, as c209 (c203.w the magic value
++    // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
 +    // --- while they are on); the depth is the game's own log depth in s2, decoded with c209.
 +    mov r31.w, c157.y
 +    mov r27, c204 // projection _11, _22, _31, _32
