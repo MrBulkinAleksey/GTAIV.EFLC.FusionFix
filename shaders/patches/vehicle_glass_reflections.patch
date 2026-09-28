@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 366992fd..720c713e 100644
+index 366992fd..5de051e3 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 @@ -157,6 +157,19 @@
@@ -32,7 +32,7 @@ index 366992fd..720c713e 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
-@@ -201,7 +217,209 @@
+@@ -201,7 +217,222 @@
      add r4.xy, -r4, c1.w
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -104,6 +104,18 @@ index 366992fd..720c713e 100644
 +      max r29.x, r29.x, c164.x
 +      min r29.x, r29.x, c164.y
 +      rcp r17.y, r29.x
++      // The toward camera fade further down, worked out here too: rays it takes out entirely,
++      // such as a window seen almost head on, skip the march (r18.w, until the start of s).
++      add r18.xyz, v4, -c15
++      nrm r14.xyz, r18
++      nrm r18.xyz, r5
++      dp3 r29.y, r14, r18
++      mad_sat r29.z, r29.y, c163.x, c163.y
++      add r29.w, r29.y, c163.z
++      mul_sat r29.w, r29.w, c163.w
++      mov r14, c162
++      texldl r14, r14, s9
++      lrp r18.w, r14.w, r29.w, r29.z
 +      // s11 holds the game's log depth; linear = near * 2^(raw * log2(far / near)). The ray
 +      // length in r28.z is no longer needed, so it takes log2(far / near); r15.w takes near.
 +      mov r16, c162
@@ -117,6 +129,7 @@ index 366992fd..720c713e 100644
 +      add r29.x, r29.x, c159.w
 +      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsGlassStepJitter)
 +      mul r30.w, r29.x, r17.y
++      cmp r30.w, -r18.w, c157.w, r30.w // past the end at once when the fade keeps nothing
 +      mov r17.w, c155.z
 +      mov r17.x, c157.y // r17.x 1 while the previous sample was in front of the scene
 +      rep i0
@@ -243,7 +256,7 @@ index 366992fd..720c713e 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 2847833c..66b4803f 100644
+index 2847833c..317652ff 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 @@ -108,6 +108,19 @@
@@ -276,7 +289,7 @@ index 2847833c..66b4803f 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c1.x, v1
-@@ -151,7 +167,209 @@
+@@ -151,7 +167,222 @@
      add r4.xy, -r4, c1.z
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -348,6 +361,18 @@ index 2847833c..66b4803f 100644
 +      max r29.x, r29.x, c164.x
 +      min r29.x, r29.x, c164.y
 +      rcp r17.y, r29.x
++      // The toward camera fade further down, worked out here too: rays it takes out entirely,
++      // such as a window seen almost head on, skip the march (r18.w, until the start of s).
++      add r18.xyz, v4, -c15
++      nrm r14.xyz, r18
++      nrm r18.xyz, r5
++      dp3 r29.y, r14, r18
++      mad_sat r29.z, r29.y, c163.x, c163.y
++      add r29.w, r29.y, c163.z
++      mul_sat r29.w, r29.w, c163.w
++      mov r14, c162
++      texldl r14, r14, s9
++      lrp r18.w, r14.w, r29.w, r29.z
 +      // s11 holds the game's log depth; linear = near * 2^(raw * log2(far / near)). The ray
 +      // length in r28.z is no longer needed, so it takes log2(far / near); r15.w takes near.
 +      mov r16, c162
@@ -361,6 +386,7 @@ index 2847833c..66b4803f 100644
 +      add r29.x, r29.x, c159.w
 +      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsGlassStepJitter)
 +      mul r30.w, r29.x, r17.y
++      cmp r30.w, -r18.w, c157.w, r30.w // past the end at once when the fade keeps nothing
 +      mov r17.w, c155.z
 +      mov r17.x, c157.y // r17.x 1 while the previous sample was in front of the scene
 +      rep i0
@@ -487,7 +513,7 @@ index 2847833c..66b4803f 100644
      mul r4.xyz, r1.z, r4
      mul r4.xyz, r4, c3.y
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 1d5cecf5..9ee48716 100644
+index 1d5cecf5..5aac5d8b 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 @@ -133,6 +133,19 @@
@@ -520,7 +546,7 @@ index 1d5cecf5..9ee48716 100644
      dcl_2d s15
      texld r0, v0, s0
      add r1.xyz, c0.x, v1
-@@ -177,7 +193,209 @@
+@@ -177,7 +193,222 @@
      add r4.xy, -r4, c0.w
      mov r4.zw, c2.w
      texldl r4, r4, s4
@@ -592,6 +618,18 @@ index 1d5cecf5..9ee48716 100644
 +      max r29.x, r29.x, c164.x
 +      min r29.x, r29.x, c164.y
 +      rcp r17.y, r29.x
++      // The toward camera fade further down, worked out here too: rays it takes out entirely,
++      // such as a window seen almost head on, skip the march (r18.w, until the start of s).
++      add r18.xyz, v4, -c15
++      nrm r14.xyz, r18
++      nrm r18.xyz, r5
++      dp3 r29.y, r14, r18
++      mad_sat r29.z, r29.y, c163.x, c163.y
++      add r29.w, r29.y, c163.z
++      mul_sat r29.w, r29.w, c163.w
++      mov r14, c162
++      texldl r14, r14, s9
++      lrp r18.w, r14.w, r29.w, r29.z
 +      // s11 holds the game's log depth; linear = near * 2^(raw * log2(far / near)). The ray
 +      // length in r28.z is no longer needed, so it takes log2(far / near); r15.w takes near.
 +      mov r16, c162
@@ -605,6 +643,7 @@ index 1d5cecf5..9ee48716 100644
 +      add r29.x, r29.x, c159.w
 +      mul r29.x, r29.x, r16.z // step jitter on or off (ScreenSpaceReflectionsGlassStepJitter)
 +      mul r30.w, r29.x, r17.y
++      cmp r30.w, -r18.w, c157.w, r30.w // past the end at once when the fade keeps nothing
 +      mov r17.w, c155.z
 +      mov r17.x, c157.y // r17.x 1 while the previous sample was in front of the scene
 +      rep i0
