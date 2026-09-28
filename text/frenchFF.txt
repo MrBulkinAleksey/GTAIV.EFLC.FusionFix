@@ -160,9 +160,6 @@ Specular and Gloss
 [SSRDbgGlass]
 Glass Rays
 
-[SSRDbgParallax]
-Parallax
-
 [SSRDbgContact]
 Contact Shadows
 
