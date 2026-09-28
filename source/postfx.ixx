@@ -203,6 +203,9 @@ public:
     bool bSSRPrevViewProjValid = false;
     D3DXVECTOR4 SSRReprojRows[4] = {};
     bool bSSRReprojValid = false;
+    // Set once the fog pass has copied this frame's scene into SSRHistoryTex; SSR runs before
+    // that and sees last frame's, water may run after it.
+    bool bSSRHistoryThisFrame = false;
 
     // Copies of the scene right before and right after CWater::Render. They differ only
     // where water was drawn, which limits the water reflection pass to real water.
@@ -277,13 +280,11 @@ public:
     //       texel 4 near and log2(far / near), to make the depth in s11 linear, the step
     //       jitter flag (ScreenSpaceReflectionsGlassStepJitter) and how far reflections
     //       pointing back at the camera reach (ScreenSpaceReflectionsTowardCamera, as in SSR)
-    //   s11 PreAlphaDepthCopyRT, into which the fog pass copies the game's own log depth
-    //       (_DEFERRED_GBUFFER_3_) with a draw. GBUFFER_3 itself is written by the passes the
-    //       glass is drawn in, and read while bound its hits broke up into patches; a separate
-    //       linear depth pass made lights and lit windows drift while the camera turned.
-    //   s13 SSRHistoryTex, into which the fog pass copies the lit opaque scene with a draw
-    //       before any glass is drawn. A StretchRect of the scene target right after lighting
-    //       made foliage and glass drawn after it tremble, so the glass takes no copy of its own.
+    //   s11 PreAlphaDepthCopyRT and s13 SSRHistoryTex, the log depth (_DEFERRED_GBUFFER_3_)
+    //       and the lit opaque scene, which the fog pass copies with draws before the alpha
+    //       passes. The glass takes no copies of its own: a StretchRect of the scene target
+    //       after lighting made foliage and glass tremble, and GBUFFER_3 itself is written
+    //       by the passes the glass is drawn in.
     bool bGlassReflections = true;
     float fGlassReflectionsLength = 15.0f;
     float fGlassReflectionsThickness = 0.5f;
@@ -291,16 +292,6 @@ public:
     // slices; with it, as fine noise, since glass has no smoothing pass. Averaging pixel quads
     // in the shader with dsx and dsy left bright dots where the derivatives are per quad.
     bool bGlassStepJitter = true;
-    // Temporary, to find which part of the glass path after lighting makes foliage and glass
-    // tremble: 1 nothing, 2 the parameter upload, 3 everything.
-    int nGlassStage = 3;
-    // Temporary, to find why the glass hits broke up once the scene copy after lighting was
-    // gone: s11 0 GBUFFER_3 itself, 1 the fog pass's copy; and 1 to take that scene copy
-    // again, into a texture nothing reads.
-    int nGlassDepthSource = 1;
-    bool bGlassSceneCopy = false;
-    IDirect3DTexture9* GlassSceneTex = nullptr; // D3DPOOL_DEFAULT, released on device loss
-    D3DSURFACE_DESC GlassSceneDesc = {};
     IDirect3DTexture9* GlassParamsTex = nullptr; // managed, so it survives device resets
     float GlassParams[20] = {};
     bool bGlassFrameValid = false;
@@ -874,9 +865,6 @@ public:
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
         bGlassStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStepJitter", 1) != 0;
-        nGlassStage = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStage", 3), 1, 3);
-        nGlassDepthSource = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassDepthSource", 1), 0, 1);
-        bGlassSceneCopy = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassSceneCopy", 0) != 0;
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -953,11 +941,10 @@ public:
         FullScreenDownsampleTex = CreateEmptyRT("FullScreenDownsampleTex", 3, Width / 2, Height / 2, 64, &desc);
         FullScreenDownsampleTex2 = CreateEmptyRT("FullScreenDownsampleTex2", 3, Width / 2, Height / 2, 64, &desc);
 
-        if (bEnablePreAlphaDepth)
-        {
-            desc.mFormat = rage::GRCFMT_R32F;
-            PreAlphaDepthCopyRT = CreateEmptyRT("PreAlphaDepthCopy", 3, Width, Height, 32, &desc);
-        }
+        // Always taken: SSR, its history check and the car glass read it. EnablePreAlphaDepth
+        // decides only whether depth of field and sun shafts use it.
+        desc.mFormat = rage::GRCFMT_R32F;
+        PreAlphaDepthCopyRT = CreateEmptyRT("PreAlphaDepthCopy", 3, Width, Height, 32, &desc);
 
 
         if (!SMAA_areaTex)
@@ -1017,8 +1004,6 @@ private:
         PostFxResources.ReleaseTextures();
         PostFxResources.ReleaseWaterMask();
         UnbindGlassReflections();
-        SAFE_RELEASE(PostFxResources.GlassSceneTex);
-        PostFxResources.GlassSceneDesc = {};
         // PostFxResources.mSpecularAoRT    =nullptr;
         PostFxResources.mNormalRT = nullptr;
         PostFxResources.mDiffuseRT = nullptr;
@@ -1382,6 +1367,7 @@ private:
                         pDevice->SetRenderTarget(0, PostFxResources.SSRSurf);
                         pDevice->StretchRect(PostFxResources.HDRFullScreenSurface, nullptr, PostFxResources.SSRHistorySurf, nullptr, D3DTEXF_NONE);
                         pDevice->SetRenderTarget(0, PostFxResources.HDRFullScreenSurface);
+                        PostFxResources.bSSRHistoryThisFrame = true;
 
                         pDevice->SetViewport(&vpBeforeCapture);
                     }
@@ -1890,9 +1876,24 @@ private:
         out = r;
     }
 
+    // vec4ViewToPrevClip: from SSR.fx's reconstruction space, whose x (and z, when _34 is
+    // negative) run opposite to the game's view space, to viewProj's clip space.
+    static void ViewToClipRows(const rage::grcViewport* vp, const D3DXMATRIX& viewProj, D3DXVECTOR4 rows[4])
+    {
+        D3DXMATRIX m;
+        MatrixMultiply(m, *(const D3DXMATRIX*)vp->mViewInverseMatrix, viewProj);
+        const float axisSign[4] = { -1.0f, 1.0f, (((const D3DMATRIX*)vp->mProjectionMatrix)->_34 < 0.0f) ? -1.0f : 1.0f, 1.0f };
+        for (int row = 0; row < 4; ++row)
+        {
+            float s = axisSign[row];
+            rows[row] = D3DXVECTOR4(m.m[row][0] * s, m.m[row][1] * s, m.m[row][2] * s, m.m[row][3] * s);
+        }
+    }
+
     static void RenderScreenSpaceReflections()
     {
         auto& R = PostFxResources;
+        R.bSSRHistoryThisFrame = false;
         R.bSSRValidThisFrame = false;
         R.bSSRDebugValid = false;
         R.bGlassFrameValid = false;
@@ -1976,7 +1977,7 @@ private:
         effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
         // Last frame's fog pass copied this depth along with the history; this frame's has not
         // run yet.
-        const bool prevDepth = R.bEnablePreAlphaDepth && R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
+        const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
         effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
         effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
 
@@ -2009,17 +2010,8 @@ private:
         if (!R.bSSRPrevViewProjValid)
             R.SSRPrevViewProj = viewProj;
 
-        D3DXMATRIX reproj;
-        MatrixMultiply(reproj, *(const D3DXMATRIX*)vp->mViewInverseMatrix, R.SSRPrevViewProj);
-
-        const float axisSign[4] = { -1.0f, 1.0f, (proj._34 < 0.0f) ? -1.0f : 1.0f, 1.0f };
         D3DXVECTOR4 reprojRows[4];
-        for (int row = 0; row < 4; ++row)
-        {
-            float s = axisSign[row];
-            reprojRows[row] = D3DXVECTOR4(reproj.m[row][0] * s, reproj.m[row][1] * s,
-                                          reproj.m[row][2] * s, reproj.m[row][3] * s);
-        }
+        ViewToClipRows(vp, R.SSRPrevViewProj, reprojRows);
         effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
         memcpy(R.SSRReprojRows, reprojRows, sizeof(reprojRows));
         R.bSSRReprojValid = true;
@@ -2242,11 +2234,20 @@ private:
         projInfo.w = (1.0f + proj._32) / proj._22;
         effect->SetVector(h.vec4ProjInfo, &projInfo);
 
-        effect->SetVectorArray(h.vec4ViewToPrevClip, R.SSRReprojRows, 4);
+        // The history and its depth come from one fog pass, this frame's if it already ran.
+        if (R.bSSRHistoryThisFrame)
+        {
+            D3DXMATRIX viewProj;
+            MatrixMultiply(viewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
+            D3DXVECTOR4 rows[4];
+            ViewToClipRows(vp, viewProj, rows);
+            effect->SetVectorArray(h.vec4ViewToPrevClip, rows, 4);
+        }
+        else
+            effect->SetVectorArray(h.vec4ViewToPrevClip, R.SSRReprojRows, 4);
         effect->SetVector(h.vec4WaterPlane, &plane);
-        // The history may already hold this frame here, with the reprojection still last frame's.
-        effect->SetTexture(h.PrevDepthTex2D, nullptr);
-        effect->SetFloat(h.fUsePrevDepth, 0.0f);
+        effect->SetTexture(h.PrevDepthTex2D, R.PreAlphaDepthCopyRT ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
+        effect->SetFloat(h.fUsePrevDepth, R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture ? 1.0f : 0.0f);
 
         // Without both copies the pass falls back to the whole water plane.
         const bool waterMask = R.bWaterMaskCaptured && CopyRenderTargetToWaterMask(1);
@@ -3011,12 +3012,9 @@ public:
             R.bContactBound = false;
         }
 
-        // The fog pass copies the scene and the depth only with EnablePreAlphaDepth.
-        bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.bEnablePreAlphaDepth &&
-                  R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
+        bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
+                  R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
         R.bGlassFrameValid = false;
-        if (R.nGlassStage < 2)
-            ok = false;
 
         if (ok && !R.GlassParamsTex)
             ok = SUCCEEDED(pDevice->CreateTexture(5, 1, 1, 0, D3DFMT_A32B32G32R32F, D3DPOOL_MANAGED, &R.GlassParamsTex, nullptr));
@@ -3032,33 +3030,14 @@ public:
             }
         }
 
-        IDirect3DSurface9* scene = nullptr;
-        if (ok && R.bGlassSceneCopy && SUCCEEDED(pDevice->GetRenderTarget(0, &scene)) && scene)
-        {
-            D3DSURFACE_DESC desc = {};
-            scene->GetDesc(&desc);
-            if (R.GlassSceneTex && (desc.Width != R.GlassSceneDesc.Width || desc.Height != R.GlassSceneDesc.Height ||
-                desc.Format != R.GlassSceneDesc.Format))
-                SAFE_RELEASE(R.GlassSceneTex);
-            if (!R.GlassSceneTex && SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET,
-                desc.Format, D3DPOOL_DEFAULT, &R.GlassSceneTex, nullptr)))
-                R.GlassSceneDesc = desc;
-            IDirect3DSurface9* dst = nullptr;
-            if (R.GlassSceneTex && SUCCEEDED(R.GlassSceneTex->GetSurfaceLevel(0, &dst)))
-                pDevice->StretchRect(scene, nullptr, dst, nullptr, D3DTEXF_NONE);
-            SAFE_RELEASE(dst);
-        }
-        SAFE_RELEASE(scene);
-
-        if (!ok || R.nGlassStage < 3)
+        if (!ok)
         {
             UnbindGlassReflections();
             return;
         }
 
         BindSampler(pDevice, 9, R.GlassParamsTex, D3DTEXF_POINT);
-        BindSampler(pDevice, 11, R.nGlassDepthSource == 0 && R.mDepthRT && R.mDepthRT->mD3DTexture ? R.mDepthRT->mD3DTexture
-                                                                                                  : R.PreAlphaDepthCopyRT->mD3DTexture, D3DTEXF_POINT);
+        BindSampler(pDevice, 11, R.PreAlphaDepthCopyRT->mD3DTexture, D3DTEXF_POINT);
         BindSampler(pDevice, 13, R.SSRHistoryTex->mD3DTexture, D3DTEXF_LINEAR);
         R.bGlassBound = true;
     }
@@ -3117,7 +3096,8 @@ public:
                     };
                 }
 
-                if (PostFxResources.bEnablePreAlphaDepth)
+                // The fog pass takes the pre-alpha depth copy and SSR's scene history, so it is
+                // hooked whatever EnablePreAlphaDepth says; without it SSR never saw the scene.
                 {
                     pattern = hook::pattern("6A ? E8 ? ? ? ? 5E 8B E5 5D C3");
                     if (!pattern.empty())

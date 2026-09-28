@@ -487,6 +487,8 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 //      G-buffer
 //   4: green what SSR found and the game shows, red what SSR found but deferred_lighting
 //      fades out, because it keeps reflections only when they point above the horizon
+//   6: car glass, drawn by the patched glass shaders themselves: green a hit, red a miss,
+//      blue how much the fade for reflections pointing back at the camera keeps
 //   7: contact shadows alone, white lit, black shadowed
 //   5: _DEFERRED_GBUFFER_2_ as stored: red specular intensity, green gloss, blue the
 //      reflection strength deferred_lighting uses; see SSRSurfaceWeight
