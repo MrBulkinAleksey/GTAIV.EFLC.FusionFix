@@ -321,14 +321,17 @@ public:
     // Accumulation over frames (SSRTemporal_PS in SSR.fx): each frame blends the smoothed
     // result with the previous accumulation into the other target of a pair, one pair per
     // resolution. ScreenSpaceReflectionsTemporal is the share of the history kept, 0 turns
-    // it off, and with it the step offsets that change every frame.
+    // it off, and with it the step offsets that change every frame. Off by default: the
+    // history follows the reflecting surface, not the reflection, so on car paint it slid off
+    // while the camera moved, and clamping it to a neighbourhood noisy from the moving offsets
+    // left reflections trembling in a still scene.
     rage::grcRenderTargetPC* SSRAccumTex[2][2] = {}; // [half][ping-pong]
     IDirect3DSurface9* SSRAccumSurf[2][2] = {};
     int nSSRAccumIndex = 0;
     bool bSSRAccumValid = false;
     bool bSSRAccumHalf = false;
     uint32_t nSSRFrame = 0;
-    float fSSRTemporalBlend = 0.85f;
+    float fSSRTemporalBlend = 0.0f;
     // What deferred_lighting gets this frame: one of the textures above.
     IDirect3DTexture9* SSRResult = nullptr;
     rage::grcRenderTargetPC* SSRDebugTex = nullptr;
@@ -928,7 +931,7 @@ public:
         fSSRDenoiseRadius = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsSmoothing", 2.0f), 0.0f, 8.0f);
         bSSRPassThinObjects = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsPastThinObjects", 1) != 0;
         bSSRStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsStepJitter", 1) != 0;
-        fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporal", 0.85f), 0.0f, 0.97f);
+        fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporal", 0.0f), 0.0f, 0.97f);
         fSSRTowardCamera = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", 0.0f), 0.0f, 1.0f);
         fSSRReflectionBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsBlur", 0.0f), 0.0f, 32.0f);
         fSSRDistanceFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsDistanceFade", 0.0f), 0.0f, 100.0f);
