@@ -236,6 +236,7 @@ public:
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY;
         D3DXHANDLE techSSR, techSSRWater;
+        D3DXHANDLE SSRAccumTex2D, fTemporalBlend, fJitterOffset, techSSRTemporal;
     } SSREffectHandles = {};
 
     // PREF_SSR: 0 off, 1 half resolution, 2 full resolution.
@@ -317,7 +318,18 @@ public:
     IDirect3DSurface9* SSRHalfSurf = nullptr;
     rage::grcRenderTargetPC* SSRHalfDenoisedTex = nullptr;
     IDirect3DSurface9* SSRHalfDenoisedSurf = nullptr;
-    // What deferred_lighting gets this frame: one of the four textures above.
+    // Accumulation over frames (SSRTemporal_PS in SSR.fx): each frame blends the smoothed
+    // result with the previous accumulation into the other target of a pair, one pair per
+    // resolution. ScreenSpaceReflectionsTemporal is the share of the history kept, 0 turns
+    // it off, and with it the step offsets that change every frame.
+    rage::grcRenderTargetPC* SSRAccumTex[2][2] = {}; // [half][ping-pong]
+    IDirect3DSurface9* SSRAccumSurf[2][2] = {};
+    int nSSRAccumIndex = 0;
+    bool bSSRAccumValid = false;
+    bool bSSRAccumHalf = false;
+    uint32_t nSSRFrame = 0;
+    float fSSRTemporalBlend = 0.85f;
+    // What deferred_lighting gets this frame: one of the textures above.
     IDirect3DTexture9* SSRResult = nullptr;
     rage::grcRenderTargetPC* SSRDebugTex = nullptr;
     IDirect3DSurface9* SSRDebugSurf = nullptr;
@@ -777,6 +789,10 @@ public:
                 h.techSSRDenoise = SSREffect->GetTechniqueByName("SSRDenoise");
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
+                h.SSRAccumTex2D = SSREffect->GetParameterByName(nullptr, "SSRAccumTex2D");
+                h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
+                h.fJitterOffset = SSREffect->GetParameterByName(nullptr, "fJitterOffset");
+                h.techSSRTemporal = SSREffect->GetTechniqueByName("SSRTemporal");
             }
         }
 
@@ -912,6 +928,7 @@ public:
         fSSRDenoiseRadius = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsSmoothing", 2.0f), 0.0f, 8.0f);
         bSSRPassThinObjects = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsPastThinObjects", 1) != 0;
         bSSRStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsStepJitter", 1) != 0;
+        fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporal", 0.85f), 0.0f, 0.97f);
         fSSRTowardCamera = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", 0.0f), 0.0f, 1.0f);
         fSSRReflectionBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsBlur", 0.0f), 0.0f, 32.0f);
         fSSRDistanceFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsDistanceFade", 0.0f), 0.0f, 100.0f);
@@ -1146,6 +1163,17 @@ private:
             PostFxResources.SSRDebugTex->Destroy();
             PostFxResources.SSRDebugTex = nullptr;
         }
+        for (int half = 0; half < 2; ++half)
+            for (int i = 0; i < 2; ++i)
+            {
+                SAFE_RELEASE(PostFxResources.SSRAccumSurf[half][i]);
+                if (PostFxResources.SSRAccumTex[half][i])
+                {
+                    PostFxResources.SSRAccumTex[half][i]->Destroy();
+                    PostFxResources.SSRAccumTex[half][i] = nullptr;
+                }
+            }
+        PostFxResources.bSSRAccumValid = false;
         PostFxResources.bSSRDebugValid = false;
         PostFxResources.bSSRValidThisFrame = false;
         PostFxResources.bSSRPrevViewProjValid = false;
@@ -1341,6 +1369,19 @@ private:
             PostFxResources.ContactTex = CreateEmptyRT("ContactShadowTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.ContactTex && PostFxResources.ContactTex->mD3DTexture)
                 PostFxResources.ContactTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactSurf);
+
+            if (PostFxResources.fSSRTemporalBlend > 0.0f)
+            {
+                static const char* names[2][2] = { { "SSRAccumTex0", "SSRAccumTex1" }, { "SSRHalfAccumTex0", "SSRHalfAccumTex1" } };
+                for (int half = 0; half < 2; ++half)
+                    for (int i = 0; i < 2; ++i)
+                    {
+                        auto& rt = PostFxResources.SSRAccumTex[half][i];
+                        rt = CreateEmptyRT(names[half][i], 3, half ? width / 2 : width, half ? height / 2 : height, 64, &aoDesc);
+                        if (rt && rt->mD3DTexture)
+                            rt->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRAccumSurf[half][i]);
+                    }
+            }
 
             PostFxResources.SSRDebugTex = CreateEmptyRT("SSRDebugTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.SSRDebugTex && PostFxResources.SSRDebugTex->mD3DTexture)
@@ -2046,6 +2087,7 @@ private:
         if (!R.SSREnabled())
         {
             clearSSR();
+            R.bSSRAccumValid = false;
             return;
         }
 
@@ -2053,6 +2095,7 @@ private:
         if (!R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex || !vp || R.fSSRIntensity <= 0.0f)
         {
             clearSSR();
+            R.bSSRAccumValid = false;
             return;
         }
 
@@ -2166,6 +2209,11 @@ private:
         effect->SetFloat(h.fIntensity, R.fSSRIntensity);
         effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);
         effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
+        // Accumulating, the step offsets move on each frame by the golden ratio, which spreads
+        // any run of frames evenly over the step.
+        const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1];
+        ++R.nSSRFrame;
+        effect->SetFloat(h.fJitterOffset, temporal ? float(fmod(double(R.nSSRFrame) * 0.6180339887, 1.0)) : 0.0f);
         effect->SetFloat(h.fTowardCamera, R.fSSRTowardCamera);
         effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
         effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
@@ -2244,6 +2292,31 @@ private:
             R.bSSRDenoised = true;
         }
         IDirect3DTexture9* ssrResult = R.bSSRDenoised ? denoisedTex : ssrTex;
+
+        if (temporal)
+        {
+            const int sizeIndex = half ? 1 : 0;
+            if (R.bSSRAccumHalf != half)
+                R.bSSRAccumValid = false;
+            R.bSSRAccumHalf = half;
+            const int prev = R.nSSRAccumIndex, next = prev ^ 1;
+            effect->SetTexture(h.SSRResultTex2D, ssrResult);
+            effect->SetTexture(h.SSRAccumTex2D, R.SSRAccumTex[sizeIndex][prev]->mD3DTexture);
+            effect->SetFloat(h.fTemporalBlend, R.bSSRAccumValid ? R.fSSRTemporalBlend : 0.0f);
+            pDevice->SetRenderTarget(0, R.SSRAccumSurf[sizeIndex][next]);
+            effect->SetTechnique(h.techSSRTemporal);
+            effect->Begin(&passes, 0);
+            effect->BeginPass(0);
+            effect->CommitChanges();
+            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            effect->EndPass();
+            effect->End();
+            ssrResult = R.SSRAccumTex[sizeIndex][next]->mD3DTexture;
+            R.nSSRAccumIndex = next;
+            R.bSSRAccumValid = true;
+        }
+        else
+            R.bSSRAccumValid = false;
         R.SSRResult = ssrResult;
 
         const int debugMode = R.SSRDebugMode();
