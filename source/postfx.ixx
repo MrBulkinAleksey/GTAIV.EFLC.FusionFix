@@ -240,6 +240,7 @@ public:
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, SSRHitTex2D, fTemporalBlend, fJitterOffset, techSSRTemporal;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
+        D3DXHANDLE fGIMaxBrightness, techGIUpsample;
     } SSREffectHandles = {};
 
     // PREF_SSR: 0 off, 1 half resolution, 2 full resolution.
@@ -260,7 +261,8 @@ public:
     // shows the lighting whatever another shader left there.
     static bool SSGIEnabled() { static auto p = FusionFixSettings.GetRef("PREF_SSGI"); return p && p->get() != 0; }
     static constexpr int kGIDebugMode = 8;
-    float fGIIntensity = 1.0f;
+    float fGIIntensity = 0.5f;
+    float fGIMaxBrightness = 1.0f;
     float fGIRayLength = 2.0f;
     float fGIThickness = 0.5f;
     float fGIMaxDistance = 60.0f;
@@ -273,6 +275,9 @@ public:
     IDirect3DSurface9* GIDenoisedSurf = nullptr;
     rage::grcRenderTargetPC* GIAccumTex[2] = {};
     IDirect3DSurface9* GIAccumSurf[2] = {};
+    // The accumulation brought to full resolution with the depth in mind (GIUpsample_PS).
+    rage::grcRenderTargetPC* GIFullTex = nullptr;
+    IDirect3DSurface9* GIFullSurf = nullptr;
     int nGIAccumIndex = 0;
     bool bGIAccumValid = false;
     D3DXMATRIX GIPrevViewProj = {};
@@ -840,6 +845,8 @@ public:
                 h.fGIMaxViewDistance = SSREffect->GetParameterByName(nullptr, "fGIMaxViewDistance");
                 h.fGIIntensity = SSREffect->GetParameterByName(nullptr, "fGIIntensity");
                 h.techSSGI = SSREffect->GetTechniqueByName("SSGI");
+                h.fGIMaxBrightness = SSREffect->GetParameterByName(nullptr, "fGIMaxBrightness");
+                h.techGIUpsample = SSREffect->GetTechniqueByName("GIUpsample");
             }
         }
 
@@ -985,7 +992,8 @@ public:
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
         fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
-        fGIIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightIntensity", 1.0f), 0.0f, 8.0f);
+        fGIIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightIntensity", 0.5f), 0.0f, 8.0f);
+        fGIMaxBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxBrightness", 1.0f), 0.05f, 8.0f);
         fGIRayLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", 2.0f), 0.1f, 20.0f);
         fGIThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightThickness", 0.5f), 0.01f, 10.0f);
         fGIMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxDistance", 60.0f), 1.0f, 1000.0f);
@@ -1240,7 +1248,7 @@ private:
             }
         }
         PostFxResources.bSSRAccumValid = false;
-        for (auto* rt : { &PostFxResources.GIRawTex, &PostFxResources.GIDenoisedTex, &PostFxResources.GIAccumTex[0], &PostFxResources.GIAccumTex[1] })
+        for (auto* rt : { &PostFxResources.GIRawTex, &PostFxResources.GIDenoisedTex, &PostFxResources.GIAccumTex[0], &PostFxResources.GIAccumTex[1], &PostFxResources.GIFullTex })
         {
             if (*rt)
             {
@@ -1252,6 +1260,7 @@ private:
         SAFE_RELEASE(PostFxResources.GIDenoisedSurf);
         SAFE_RELEASE(PostFxResources.GIAccumSurf[0]);
         SAFE_RELEASE(PostFxResources.GIAccumSurf[1]);
+        SAFE_RELEASE(PostFxResources.GIFullSurf);
         PostFxResources.GIResult = nullptr;
         PostFxResources.bGIAccumValid = false;
         PostFxResources.bGIPrevViewProjValid = false;
@@ -1485,6 +1494,9 @@ private:
                 create(PostFxResources.GIDenoisedTex, PostFxResources.GIDenoisedSurf, "GIDenoisedTex");
                 create(PostFxResources.GIAccumTex[0], PostFxResources.GIAccumSurf[0], "GIAccumTex0");
                 create(PostFxResources.GIAccumTex[1], PostFxResources.GIAccumSurf[1], "GIAccumTex1");
+                PostFxResources.GIFullTex = CreateEmptyRT("GIFullTex", 3, width, height, 64, &aoDesc);
+                if (PostFxResources.GIFullTex && PostFxResources.GIFullTex->mD3DTexture)
+                    PostFxResources.GIFullTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.GIFullSurf);
             }
 
             PostFxResources.SSRDebugTex = CreateEmptyRT("SSRDebugTex", 3, width, height, 64, &aoDesc);
@@ -3419,6 +3431,7 @@ private:
         effect->SetFloat(h.fGIThickness, R.fGIThickness);
         effect->SetFloat(h.fGIMaxViewDistance, R.fGIMaxDistance);
         effect->SetFloat(h.fGIIntensity, R.fGIIntensity);
+        effect->SetFloat(h.fGIMaxBrightness, R.fGIMaxBrightness);
 
         IDirect3DSurface9* rt0 = nullptr;
         IDirect3DSurface9* ds = nullptr;
@@ -3488,12 +3501,19 @@ private:
         R.bGIAccumValid = true;
         R.GIResult = R.GIAccumTex[next]->mD3DTexture;
 
+        vpDesc.Width = DWORD(fullWidth);
+        vpDesc.Height = DWORD(fullHeight);
+        pDevice->SetViewport(&vpDesc);
+        setPassSize(fullWidth, fullHeight);
+        if (h.techGIUpsample && R.GIFullSurf)
+        {
+            effect->SetTexture(h.SSRResultTex2D, R.GIResult);
+            DrawEffectPass(pDevice, effect, h.techGIUpsample, R.GIFullSurf, fullWidth, fullHeight);
+            R.GIResult = R.GIFullTex->mD3DTexture;
+        }
+
         if (R.SSRDebugMode() == R.kGIDebugMode && R.SSRDebugSurf && h.techSSRDebug)
         {
-            vpDesc.Width = DWORD(fullWidth);
-            vpDesc.Height = DWORD(fullHeight);
-            pDevice->SetViewport(&vpDesc);
-            setPassSize(fullWidth, fullHeight);
             effect->SetTexture(h.SSRResultTex2D, R.GIResult);
             effect->SetFloat(h.fDebugMode, float(R.kGIDebugMode));
             DrawEffectPass(pDevice, effect, h.techSSRDebug, R.SSRDebugSurf, fullWidth, fullHeight);

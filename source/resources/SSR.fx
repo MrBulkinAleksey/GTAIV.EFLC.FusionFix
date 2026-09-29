@@ -149,6 +149,7 @@ uniform float fGIRayLength;         // world units an indirect light ray travels
 uniform float fGIThickness;         // how deep behind the scene a sample may land and still be a hit
 uniform float fGIMaxViewDistance;   // indirect light fades out towards this view distance
 uniform float fGIIntensity;         // multiplier on the light gathered
+uniform float fGIMaxBrightness;     // brightness a single hit may bring, so a headlight or neon sign does not flare
 
 #ifndef GI_RAYS
 #define GI_RAYS 4
@@ -903,10 +904,29 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
             prevZ = P.z;
             if (delta > 0.0 && delta < thickness)
             {
-                float2 histUV = HistoryUV(P);
-                if (all(histUV > 0.0) && all(histUV < 1.0))
-                    sum += clamp(tex2Dlod(HistoryTex, float4(histUV, 0, 0)).rgb, 0.0, HISTORY_CLAMP) * (1.0 - t); // fades out towards the ray's end
-                break;
+                // Only a surface facing the ray lights it. Next to its start a ray often lands
+                // behind the very surface it left, which depth precision puts in its way, and
+                // that surface lit itself in its own colour; others it reaches from behind.
+                // Such a sample is no hit, and the ray marches on.
+                float facingRay = -1.0;
+                if (fUseGBufferNormals > 0.0)
+                {
+                    float3 hitN = GBufferNormal(sampleUV);
+                    hitN = (dot(hitN, P) > 0.0) ? -hitN : hitN;
+                    facingRay = dot(hitN, dir);
+                }
+                if (facingRay < -0.1)
+                {
+                    float2 histUV = HistoryUV(P);
+                    if (all(histUV > 0.0) && all(histUV < 1.0))
+                    {
+                        float3 L = clamp(tex2Dlod(HistoryTex, float4(histUV, 0, 0)).rgb, 0.0, HISTORY_CLAMP);
+                        float lum = dot(L, float3(0.2126, 0.7152, 0.0722));
+                        L *= min(1.0, fGIMaxBrightness / max(lum, 1e-4));
+                        sum += L * (1.0 - t); // fades out towards the ray's end
+                    }
+                    break;
+                }
             }
         }
     }
@@ -916,6 +936,46 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     if (any(gi != gi))
         return float4(0.0, 0.0, 0.0, 1.0);
     return float4(gi, 1.0);
+}
+
+// Indirect light from half to full resolution, for deferred_lighting. Of the four half size
+// texels around a pixel, those whose depth is close to the pixel's weigh most, so light from
+// behind an object's outline does not spill onto it as bilinear filtering let it.
+// vec2InvViewportSize is the full size pixel.
+float4 GIUpsample_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
+    if (rawDepth >= 0.9999)
+        return float4(0.0, 0.0, 0.0, 1.0);
+    float z = pow(fFarDivNear, rawDepth) * fNearPlane;
+
+    float2 halfTexel = vec2InvViewportSize * 2.0;
+    float2 pos = uv / halfTexel - 0.5;
+    float2 base = floor(pos);
+    float2 f = pos - base;
+    float3 sum = 0.0;
+    float weightSum = 0.0;
+    float3 nearest = 0.0;
+    float nearestDiff = 1e30;
+    static const float2 corners[4] = { float2(0.0, 0.0), float2(1.0, 0.0), float2(0.0, 1.0), float2(1.0, 1.0) };
+    [unroll]
+    for (int i = 0; i < 4; ++i)
+    {
+        float2 o = corners[i];
+        float2 tuv = (base + o + 0.5) * halfTexel;
+        float3 gi = tex2Dlod(SSRResultTex, float4(tuv, 0, 0)).rgb;
+        float diff = abs(LinearDepth(tuv) - z);
+        float2 b = lerp(1.0 - f, f, o);
+        float w = b.x * b.y / (1.0 + diff / (0.02 * z + 0.02));
+        sum += gi * w;
+        weightSum += w;
+        if (diff < nearestDiff)
+        {
+            nearestDiff = diff;
+            nearest = gi;
+        }
+    }
+    return float4(weightSum > 1e-3 ? sum / weightSum : nearest, 1.0);
 }
 
 float4 SSRDebugCopy_PS(float2 uv : TEXCOORD0) : COLOR0
@@ -981,6 +1041,15 @@ technique SSGI
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSGI_PS();
+    }
+}
+
+technique GIUpsample
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 GIUpsample_PS();
     }
 }
 
