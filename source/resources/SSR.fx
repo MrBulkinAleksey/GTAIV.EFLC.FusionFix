@@ -134,6 +134,7 @@ uniform float fReflectionBlur;    // blur radius in pixels a reflection reaches 
 uniform float fDistanceFade;      // reflections fade out towards this distance from the surface, 0 disables
 uniform float fTemporalBlend;     // share of last frame's SSR kept each frame, 0 while there is none to keep
 uniform float fJitterOffset;      // added to each pixel's step offset, changed every frame while SSR accumulates
+uniform float fTemporalAnySurface; // 1 while accumulating indirect light, which every surface gets, not only glossy ones
 
 // Contact shadows, see ContactShadows_PS.
 uniform float4 vec4SunView;         // direction towards the sun in reconstruction space, w 0 if unknown
@@ -142,6 +143,19 @@ uniform float fCSThickness;         // how deep behind the scene a sample may la
 uniform float fCSMaxThickness;      // deeper than that, up to this, it occludes only if the ray stays behind the scene
 uniform float fCSMaxViewDistance;   // contact shadows fade out towards this view distance
 uniform float fCSIntensity;         // strength, 0..1
+
+// Screen space indirect light, see SSGI_PS.
+uniform float fGIRayLength;         // world units an indirect light ray travels
+uniform float fGIThickness;         // how deep behind the scene a sample may land and still be a hit
+uniform float fGIMaxViewDistance;   // indirect light fades out towards this view distance
+uniform float fGIIntensity;         // multiplier on the light gathered
+
+#ifndef GI_RAYS
+#define GI_RAYS 4
+#endif
+#ifndef GI_STEPS
+#define GI_STEPS 8
+#endif
 
 #ifndef CS_STEPS
 #define CS_STEPS 16
@@ -549,6 +563,7 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 //   6: car glass, drawn by the patched glass shaders themselves: green a hit, red a miss,
 //      blue how much the fade for reflections pointing back at the camera keeps
 //   7: contact shadows alone, white lit, black shadowed
+//   8: indirect light alone
 //   5: _DEFERRED_GBUFFER_2_ as stored: red specular intensity, green gloss, blue the
 //      reflection strength deferred_lighting uses; see SSRSurfaceWeight
 
@@ -568,6 +583,10 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         return float4(1.0, 1.0, 1.0, 1.0);
 
     float4 ssr = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+
+    // 8: indirect light alone (SSRResultTex holds it in this mode)
+    if (fDebugMode > 7.5)
+        return float4(ssr.rgb, 1.0);
 
     // 7: contact shadows, white lit, black shadowed (SSRResultTex holds them in this mode)
     if (fDebugMode > 6.5)
@@ -762,7 +781,7 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 // Blending is premultiplied: a miss (alpha 0) must fade a reflection out, not darken its colour.
 float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
-    if (SSRSurfaceWeight(uv) <= 0.0)
+    if (fTemporalAnySurface > 0.0 ? tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999 : SSRSurfaceWeight(uv) <= 0.0)
         return 0.0;
 
     float4 current = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
@@ -790,7 +809,8 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float4 lo = m1 - 1.5 * spread, hi = m1 + 1.5 * spread;
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
-    float hitDist = tex2Dlod(SSRHitTex, float4(uv, 0, 0)).r;
+    // Indirect light has no reflected image to follow: its history follows the surface.
+    float hitDist = fTemporalAnySurface > 0.0 ? 0.0 : tex2Dlod(SSRHitTex, float4(uv, 0, 0)).r;
     float2 prevUV = HistoryUV(C + normalize(C) * hitDist);
     float keep = fTemporalBlend;
     if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
@@ -814,6 +834,88 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 
     float4 result = lerp(current, history, keep);
     return float4(result.a > 1e-4 ? result.rgb / result.a : 0.0, result.a);
+}
+
+// One bounce of indirect light: rays spread over the hemisphere around the G-buffer normal,
+// denser towards the normal (cosine weighted, so each ray counts the same), pick up last
+// frame's lit scene where they hit. deferred_lighting adds the result to its ambient term
+// before multiplying by albedo, so a red wall tints the white floor next to it. Rays that
+// hit nothing add nothing: the game's ambient already stands for the open sky. The history
+// holds last frame's indirect light too, so light bounces on from frame to frame.
+float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+{
+    float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
+    if (rawDepth >= 0.9999)
+        return float4(0.0, 0.0, 0.0, 1.0);
+
+    float3 C = ReconstructViewPos(vPos, pow(fFarDivNear, rawDepth) * fNearPlane);
+    if (C.z >= fGIMaxViewDistance)
+        return float4(0.0, 0.0, 0.0, 1.0);
+
+    float3 n;
+    [branch]
+    if (fUseGBufferNormals > 0.0)
+        n = GBufferNormal(uv);
+    else
+        n = ReconstructNormal(uv, C);
+    n = (dot(n, C) > 0.0) ? -n : n;
+    float3 up = (abs(n.z) < 0.999) ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
+    float3 T = normalize(cross(up, n));
+    float3 B = cross(n, T);
+
+    // Off the surface by more with distance, as depth gets coarser; otherwise rays hit the
+    // surface they start from and it lights itself.
+    float3 P0 = C + n * (0.05 + C.z * 0.003);
+    float jitter = SSRJitter(vPos);
+    float jitter2 = SSRJitter(vPos.yx + float2(17.0, 59.0));
+    float3 sum = 0.0;
+
+    [loop]
+    for (int r = 0; r < GI_RAYS; ++r)
+    {
+        float u1 = frac(jitter + (float) r * 0.618034);
+        float u2 = frac(jitter2 + (float) r * 0.7548777);
+        float phi = 6.2831853 * u1;
+        float sinTheta = sqrt(u2);
+        float3 dir = T * (cos(phi) * sinTheta) + B * (sin(phi) * sinTheta) + n * sqrt(1.0 - u2);
+
+        // A ray heading back towards the camera must stay in front of the near plane.
+        float len = fGIRayLength;
+        if (dir.z < 0.0)
+            len = min(len, (P0.z - fNearPlane * 2.0) / -dir.z);
+        if (len <= 0.0)
+            continue;
+
+        float prevZ = P0.z;
+        [loop]
+        for (int i = 0; i < GI_STEPS; ++i)
+        {
+            // Steps grow with the square of the distance: most light comes from close by.
+            float s = ((float) i + jitter) / (float) GI_STEPS;
+            float t = s * s;
+            float3 P = P0 + dir * (len * t);
+            float2 sampleUV = ViewToUV(P);
+            if (any(sampleUV <= 0.0) || any(sampleUV >= 1.0))
+                break;
+
+            float delta = P.z - LinearDepth(sampleUV);
+            float thickness = abs(P.z - prevZ) + fGIThickness;
+            prevZ = P.z;
+            if (delta > 0.0 && delta < thickness)
+            {
+                float2 histUV = HistoryUV(P);
+                if (all(histUV > 0.0) && all(histUV < 1.0))
+                    sum += clamp(tex2Dlod(HistoryTex, float4(histUV, 0, 0)).rgb, 0.0, HISTORY_CLAMP) * (1.0 - t); // fades out towards the ray's end
+                break;
+            }
+        }
+    }
+
+    float fade = 1.0 - smoothstep(fGIMaxViewDistance * 0.75, fGIMaxViewDistance, C.z);
+    float3 gi = sum * (fGIIntensity * fade / (float) GI_RAYS);
+    if (any(gi != gi))
+        return float4(0.0, 0.0, 0.0, 1.0);
+    return float4(gi, 1.0);
 }
 
 float4 SSRDebugCopy_PS(float2 uv : TEXCOORD0) : COLOR0
@@ -870,6 +972,15 @@ technique SSRTemporal
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSRTemporal_PS();
+    }
+}
+
+technique SSGI
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SSGI_PS();
     }
 }
 

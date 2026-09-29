@@ -453,6 +453,7 @@
             <options text="SSRDbgSpecular" action="ACTION_NONE" value="5" />
             <options text="SSRDbgGlass" action="ACTION_NONE" value="6" />
             <options text="SSRDbgContact" action="ACTION_NONE" value="7" />
+            <options text="SSRDbgGI" action="ACTION_NONE" value="8" />
         </menupc>
 
         <menupc enum="MENU_DISPLAY_GRAPHICS_API">
@@ -1216,10 +1217,11 @@
             <optionspc action="MENUOPT_ADJUST" label="Tone Mapping" value="PREF_TONEMAPPING" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="AO" value="PREF_SAO" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="SSR" value="PREF_SSR" scaler="3" displayValue="MENU_DISPLAY_SSR_QUALITY" />
-			<optionspc action="MENUOPT_ADJUST" label="SSR Debug" value="PREF_SSR_DEBUG" scaler="8" displayValue="MENU_DISPLAY_SSR_DEBUG" />
+			<optionspc action="MENUOPT_ADJUST" label="SSR Debug" value="PREF_SSR_DEBUG" scaler="9" displayValue="MENU_DISPLAY_SSR_DEBUG" />
 			<optionspc action="MENUOPT_ADJUST" label="Fill Lights" value="PREF_FILL_LIGHTS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="VolumetricLight" value="PREF_VOLUMETRIC_LIGHT" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="Contact Shadows" value="PREF_CONTACTSHADOWS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+			<optionspc action="MENUOPT_ADJUST" label="SSGI" value="PREF_SSGI" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
             <optionspc action="MENUOPT_ADJUST" label="Shadow Filter" value="PREF_SHADOWFILTER" scaler="3" displayValue="MENU_DISPLAY_SHADOWFILTER" />
             <optionspc action="MENUOPT_ADJUST" label="Graphics API" value="PREF_GRAPHICSAPI" scaler="2" displayValue="MENU_DISPLAY_GRAPHICS_API" />
       
@@ -1284,10 +1286,11 @@
             <optionspc action="MENUOPT_ADJUST" label="Tone Mapping" value="PREF_TONEMAPPING" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="AO" value="PREF_SAO" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="SSR" value="PREF_SSR" scaler="3" displayValue="MENU_DISPLAY_SSR_QUALITY" />
-			<optionspc action="MENUOPT_ADJUST" label="SSR Debug" value="PREF_SSR_DEBUG" scaler="8" displayValue="MENU_DISPLAY_SSR_DEBUG" />
+			<optionspc action="MENUOPT_ADJUST" label="SSR Debug" value="PREF_SSR_DEBUG" scaler="9" displayValue="MENU_DISPLAY_SSR_DEBUG" />
 			<optionspc action="MENUOPT_ADJUST" label="Fill Lights" value="PREF_FILL_LIGHTS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="VolumetricLight" value="PREF_VOLUMETRIC_LIGHT" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="Contact Shadows" value="PREF_CONTACTSHADOWS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+			<optionspc action="MENUOPT_ADJUST" label="SSGI" value="PREF_SSGI" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
             <optionspc action="MENUOPT_ADJUST" label="Shadow Filter" value="PREF_SHADOWFILTER" scaler="3" displayValue="MENU_DISPLAY_SHADOWFILTER" />
             <optionspc action="MENUOPT_ADJUST" label="Graphics API" value="PREF_GRAPHICSAPI" scaler="2" displayValue="MENU_DISPLAY_GRAPHICS_API" />
       

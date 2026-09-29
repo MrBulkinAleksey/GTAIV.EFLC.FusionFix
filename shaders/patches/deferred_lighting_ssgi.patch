@@ -1,0 +1,144 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+index 59d892a..d5d28e7 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+@@ -109,6 +109,7 @@
+     dcl_2d s15
+     dcl_2d s3	// FusionFix SSR
+     dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
++    dcl_2d s8	// FusionFix screen space indirect light (black when off)
+     texld r1, v0, s1
+     mul r2.xyz, r1.w, c0.yzww
+     frc r2.xyz, r2
+@@ -453,6 +454,7 @@
+     mov r27.xy, v0
+     mov r27.zw, c110.w
+     texldl r29, r27, s9
++    texldl r28, r27, s8 // FusionFix indirect light, added to the ambient term below
+     add r29.x, c110.y, -r29.x
+     mul r0.y, r0.y, r29.x
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+@@ -537,6 +539,7 @@
+       cmp r1.x, -r21_abs.x, r1.x, r21.y // tree half lambert toggle
+       mul r2.xyz, r6, r1.x
+       mad r1.xyz, r2, r0.y, r1.yzww
++      add r1.xyz, r1, r28 // FusionFix indirect light joins the ambient term
+       texld r2, v0, s0
+       mad oC0.xyz, r2, r1, r0.xzww
+       mov oC0.w, c2.w
+@@ -598,6 +601,7 @@
+       //diffuseLight * shadow + r0
+       mad r0.xyz, r5.xyz, r8.x, r0.xyz
+       
++      add r0.xyz, r0.xyz, r28.xyz // FusionFix indirect light joins the ambient term
+       //diffuse * r0
+       texld r2.xyz, v0, s0
+       mul r0.xyz, r0.xyz, r2.xyz
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+index 5a42e39..c48dda4 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+@@ -110,6 +110,7 @@
+     dcl_2d s15
+     dcl_2d s3	// FusionFix SSR
+     dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
++    dcl_2d s8	// FusionFix screen space indirect light (black when off)
+     texld r1, v0, s1
+     mul r2.xyz, r1.w, c1
+     frc r2.xyz, r2
+@@ -454,6 +455,7 @@
+     mov r27.xy, v0
+     mov r27.zw, c110.w
+     texldl r29, r27, s9
++    texldl r28, r27, s8 // FusionFix indirect light, added to the ambient term below
+     add r29.x, c110.y, -r29.x
+     mul r0.y, r0.y, r29.x
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+@@ -554,6 +556,7 @@
+       cmp r1.x, -r21_abs.x, r1.x, r21.y // tree half lambert toggle
+       mul r1.xyw, r5.yzzw, r1.x
+       mad r1.xyw, r1, r0.y, r2.xyzz
++      add r1.xyw, r1, r28.xyzz // FusionFix indirect light joins the ambient term
+       texld r2, v0, s0
+       mul r2.xyz, r1.z, r2
+       mad oC0.xyz, r2, r1.xyww, r0.xzww
+@@ -616,6 +619,7 @@
+       //diffuseLight * shadow + r0
+       mad r0.xyz, r5.xyz, r8.x, r0.xyz
+       
++      add r0.xyz, r0.xyz, r28.xyz // FusionFix indirect light joins the ambient term
+       //diffuse * r0
+       texld r2.xyz, v0, s0
+       mul r0.xyz, r0.xyz, r2.xyz
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
+index b0a07f1..2f286d6 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
+@@ -59,6 +59,7 @@
+     dcl_2d s6
+     dcl_2d s3	// FusionFix SSR
+     dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
++    dcl_2d s8	// FusionFix screen space indirect light (black when off)
+     texld r0, v0, s1
+     mul r1.xyz, r0.w, c1
+     frc r1.xyz, r1
+@@ -79,6 +80,7 @@
+     mov r27.xy, v0
+     mov r27.zw, c159.x
+     texldl r29, r27, s9
++    texldl r28, r27, s8 // FusionFix indirect light, added to the ambient term below
+     add r29.x, c159.y, -r29.x
+     texld r21, v0, s6
+     add r21.x, r21.x, -c22.x
+@@ -148,6 +150,7 @@
+       mul r2.xyz, c18.w, c18
+       mul r1.x, r1.x, r29.x // FusionFix contact shadow on the direct light
+       mad r1.xyz, r2, r1.x, r1.yzww
++      add r1.xyz, r1, r28 // FusionFix indirect light joins the ambient term
+       texld r2, v0, s0
+       mad oC0.xyz, r2, r1, r0
+       mov oC0.w, c0.z
+@@ -206,6 +209,7 @@
+       //diffuseLight + r0
+       add r0.xyz, r5.xyz, r0.xyz
+       
++      add r0.xyz, r0.xyz, r28.xyz // FusionFix indirect light joins the ambient term
+       //diffuse * r0
+       texld r2.xyz, v0, s0
+       mul r0.xyz, r0.xyz, r2.xyz
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
+index 1786b28..8a14bf4 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
+@@ -60,6 +60,7 @@
+     dcl_2d s6
+     dcl_2d s3	// FusionFix SSR
+     dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
++    dcl_2d s8	// FusionFix screen space indirect light (black when off)
+     texld r0, v0, s1
+     mul r1.xyz, r0.w, c1
+     frc r1.xyz, r1
+@@ -80,6 +81,7 @@
+     mov r27.xy, v0
+     mov r27.zw, c159.x
+     texldl r29, r27, s9
++    texldl r28, r27, s8 // FusionFix indirect light, added to the ambient term below
+     add r29.x, c159.y, -r29.x
+     texld r22, v0, s5
+     add r21.x, r22.x, -c22.x
+@@ -168,6 +170,7 @@
+       mul r3.xyz, c18.w, c18
+       mul r1.x, r1.x, r29.x // FusionFix contact shadow on the direct light
+       mad r1.xyz, r3, r1.x, r1.yzww
++      add r1.xyz, r1, r28 // FusionFix indirect light joins the ambient term
+       mad oC0.xyz, r2, r1, r0.xzww
+       mov oC0.w, c3.z
+     else
+@@ -225,6 +228,7 @@
+       //diffuseLight + r0
+       add r0.xyz, r5.xyz, r0.xyz
+       
++      add r0.xyz, r0.xyz, r28.xyz // FusionFix indirect light joins the ambient term
+       //diffuse * r0
+       texld r2.xyz, v0, s0
+       mul r0.xyz, r0.xyz, r2.xyz

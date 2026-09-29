@@ -163,8 +163,14 @@ Logitech LightSync RGB
 [SSRDbgContact]
 Контактные тени
 
+[SSRDbgGI]
+Непрямой свет
+
 [Contact Shadows]
 Контактные тени
+
+[SSGI]
+Непрямой свет (SSGI)
 
 [Fill Lights]
 Заливающий свет зданий

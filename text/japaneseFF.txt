@@ -163,8 +163,14 @@ Glass Rays
 [SSRDbgContact]
 Contact Shadows
 
+[SSRDbgGI]
+Indirect Light
+
 [Contact Shadows]
 Contact Shadows
+
+[SSGI]
+Indirect Light (SSGI)
 
 [Fill Lights]
 Building Fill Lights
