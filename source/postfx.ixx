@@ -2,7 +2,9 @@ module;
 
 #include <common.hxx>
 #include <d3dx9tex.h>
+#include <algorithm>
 #include <fstream>
+#include <vector>
 
 export module postfx;
 
@@ -3168,18 +3170,44 @@ private:
     }
 
     // Counts every kind of light copied within 60 m of the camera (type, flags, rounded radius)
-    // and rewrites the log with them every 5 s.
-    static void LogCopiedLight(const rage::CLightSource& light, float distance)
+    // and rewrites the log with them every second, after the lights within 40 m copied in the
+    // last whole frame, to compare two camera positions light by light.
+    static void LogCopiedLight(const rage::CLightSource& light, const rage::Vector3& cameraPos, float distance)
     {
+        struct Nearby
+        {
+            float distance;
+            rage::CLightSource light;
+        };
         static std::map<std::tuple<int, uint32_t, int>, uint32_t> kinds;
+        static std::vector<Nearby> frame, lastFrame;
+        static const rage::CLightSource* previous = nullptr;
         static ULONGLONG last = 0;
+        // Within a frame the game copies into consecutive slots of one list.
+        if (&light != previous + 1)
+        {
+            lastFrame.swap(frame);
+            frame.clear();
+        }
+        previous = &light;
+        if (distance < 40.0f)
+            frame.push_back({distance, light});
         if (distance < 60.0f)
             ++kinds[{int(light.mType), light.mFlags, int(light.mRadius + 0.5f)}];
         const auto now = GetTickCount64();
-        if (now - last < 5000)
+        if (now - last < 1000)
             return;
         last = now;
         std::ofstream out(PostFxResources.VolumetricLightLogPath, std::ios::trunc);
+        std::sort(lastFrame.begin(), lastFrame.end(), [](const Nearby& a, const Nearby& b) { return a.distance < b.distance; });
+        out << std::fixed << std::setprecision(1)
+            << "last frame, within 40 m of the camera at " << cameraPos.x << ' ' << cameraPos.y << ' ' << cameraPos.z
+            << "\ndistance type flags radius intensity r g b x y z\n";
+        for (const auto& [d, l] : lastFrame)
+            out << d << ' ' << int(l.mType) << " 0x" << std::hex << l.mFlags << std::dec << ' ' << l.mRadius << ' '
+                << std::setprecision(2) << l.mIntensity << ' ' << l.mColor.x << ' ' << l.mColor.y << ' ' << l.mColor.z
+                << std::setprecision(1) << ' ' << l.mPosition.x << ' ' << l.mPosition.y << ' ' << l.mPosition.z << '\n';
+        out << '\n';
         out << "type flags radius count (within 60 m of the camera since start; type 2 is spot)\n";
         for (const auto& [kind, count] : kinds)
             out << std::get<0>(kind) << " 0x" << std::hex << std::get<1>(kind) << std::dec << ' '
@@ -3213,7 +3241,7 @@ private:
         const float dz = cameraPos.z - light->mPosition.z;
         const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
         if (R.bVolumetricLightLog)
-            LogCopiedLight(*light, distance);
+            LogCopiedLight(*light, cameraPos, distance);
 
         // Light flags, from the game's own calls to its light submission (CE 0xABCC50, which
         // clears the shaft bit, and 0xABCCD0): 0x1 map (2dfx) lights, and effects; 0x2 and 0x10
