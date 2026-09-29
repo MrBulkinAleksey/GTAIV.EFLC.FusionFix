@@ -891,9 +891,11 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         [loop]
         for (int i = 0; i < GI_STEPS; ++i)
         {
-            // Steps grow with the square of the distance: most light comes from close by.
+            // Steps grow with the distance, denser next to the surface but reaching the ray's
+            // end; with steps growing with its square, most fell within its first fifth, and a
+            // wall got nothing from the sunlit pavement a metre or two below.
             float s = ((float) i + jitter) / (float) GI_STEPS;
-            float t = s * s;
+            float t = s * sqrt(s);
             float3 P = P0 + dir * (len * t);
             float2 sampleUV = ViewToUV(P);
             if (any(sampleUV <= 0.0) || any(sampleUV >= 1.0))
@@ -923,7 +925,7 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
                         float3 L = clamp(tex2Dlod(HistoryTex, float4(histUV, 0, 0)).rgb, 0.0, HISTORY_CLAMP);
                         float lum = dot(L, float3(0.2126, 0.7152, 0.0722));
                         L *= min(1.0, fGIMaxBrightness / max(lum, 1e-4));
-                        sum += L * (1.0 - t); // fades out towards the ray's end
+                        sum += L * (1.0 - t * t); // fades out towards the ray's end, not along it
                     }
                     break;
                 }
