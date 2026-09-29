@@ -114,7 +114,6 @@ uniform float fDistanceFade;      // reflections fade out towards this distance 
 uniform float4 vec4SunView;         // direction towards the sun in reconstruction space, w 0 if unknown
 uniform float fCSLength;            // world units a contact shadow ray travels
 uniform float fCSThickness;         // how deep behind the scene a sample may land and still occlude
-uniform float fCSMaxThickness;      // deeper than that, up to this, it occludes only if the ray stays behind the scene
 uniform float fCSMaxViewDistance;   // contact shadows fade out towards this view distance
 uniform float fCSIntensity;         // strength, 0..1
 
@@ -655,11 +654,6 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float jitter = fStepJitter > 0.0 ? PixelJitter(vPos) : 1.0;
     float occlusion = 0.0;
     float prevZ = P0.z;
-    // A sample deeper behind the scene than fCSThickness may be inside something thick, such
-    // as a car, or merely behind something thin, such as a ped's leg a metre in front of the
-    // ground. Past a leg the ray soon comes out in front of the scene again, past a car it
-    // does not, so such a sample occludes only if no later sample of the ray is in front.
-    float deepT = -1.0;
 
     [loop]
     for (int i = 0; i < CS_STEPS; ++i)
@@ -679,22 +673,9 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         if (delta > 0.0 && delta < thickness)
         {
             occlusion = 1.0 - t * t; // occluders further along the ray cast softer shadows
-            deepT = -1.0;
             break;
         }
-        if (delta >= thickness && delta < fCSMaxThickness + thickness)
-        {
-            if (deepT < 0.0)
-                deepT = t;
-        }
-        else if (deepT >= 0.0)
-        {
-            // In front of the scene again, or behind something much nearer: it went past.
-            deepT = -2.0;
-        }
     }
-    if (deepT >= 0.0)
-        occlusion = 1.0 - deepT * deepT;
 
     float fade = 1.0 - smoothstep(fCSMaxViewDistance * 0.75, fCSMaxViewDistance, C.z);
     // With the sun grazing the surface the ray runs along it and any seam blocks it; the game's
