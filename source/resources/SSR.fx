@@ -134,6 +134,7 @@ uniform float fReflectionBlur;    // blur radius in pixels a reflection reaches 
 uniform float fDistanceFade;      // reflections fade out towards this distance from the surface, 0 disables
 uniform float fTemporalBlend;     // share of last frame's SSR kept each frame, 0 while there is none to keep
 uniform float fJitterOffset;      // added to each pixel's step offset, changed every frame while SSR accumulates
+uniform float fTemporalFollowImage; // 1 takes the history where the reflected image was, 0 where the surface was
 
 // Contact shadows, see ContactShadows_PS.
 uniform float4 vec4SunView;         // direction towards the sun in reconstruction space, w 0 if unknown
@@ -790,7 +791,7 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float4 lo = m1 - 1.5 * spread, hi = m1 + 1.5 * spread;
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
-    float hitDist = tex2Dlod(SSRHitTex, float4(uv, 0, 0)).r;
+    float hitDist = tex2Dlod(SSRHitTex, float4(uv, 0, 0)).r * fTemporalFollowImage;
     float2 prevUV = HistoryUV(C + normalize(C) * hitDist);
     float keep = fTemporalBlend;
     if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
