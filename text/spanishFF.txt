@@ -166,18 +166,6 @@ Contact Shadows
 [Contact Shadows]
 Contact Shadows
 
-[Light Debug]
-Light Debug
-
-[LightDbgLog]
-Log Lights
-
-[LightDbgHold]
-Hold Lights
-
-[LightDbgBoth]
-Log and Hold
-
 [Fill Lights]
 Building Fill Lights
 

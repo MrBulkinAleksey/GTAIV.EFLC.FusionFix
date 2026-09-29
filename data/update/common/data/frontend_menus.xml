@@ -388,13 +388,6 @@
             <options text="SSRDbgContact" action="ACTION_NONE" value="7" />
         </menupc>
 
-        <menupc enum="MENU_DISPLAY_LIGHT_DEBUG">
-            <options text="MO_OFF" action="ACTION_NONE" value="0" />
-            <options text="LightDbgLog" action="ACTION_NONE" value="1" />
-            <options text="LightDbgHold" action="ACTION_NONE" value="2" />
-            <options text="LightDbgBoth" action="ACTION_NONE" value="3" />
-        </menupc>
-
         <menupc enum="MENU_DISPLAY_GRAPHICS_API">
             <options text="DirectX 9" action="ACTION_NONE" value="0" />
             <options text="Vulkan" action="ACTION_NONE" value="1" />
@@ -885,8 +878,7 @@
 			<optionspc action="MENUOPT_ADJUST" label="AO" value="PREF_SAO" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="SSR" value="PREF_SSR" scaler="3" displayValue="MENU_DISPLAY_SSR_QUALITY" />
 			<optionspc action="MENUOPT_ADJUST" label="SSR Debug" value="PREF_SSR_DEBUG" scaler="8" displayValue="MENU_DISPLAY_SSR_DEBUG" />
-			<optionspc action="MENUOPT_ADJUST" label="Light Debug" value="PREF_LIGHT_DEBUG" scaler="4" displayValue="MENU_DISPLAY_LIGHT_DEBUG" />
-			<optionspc action="MENUOPT_ADJUST" label="Fill Lights" value="PREF_FILL_LIGHTS" scaler="11" displayValue="MENU_DISPLAY_SLIDERBAR" />
+			<optionspc action="MENUOPT_ADJUST" label="Fill Lights" value="PREF_FILL_LIGHTS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="Contact Shadows" value="PREF_CONTACTSHADOWS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
             <optionspc action="MENUOPT_ADJUST" label="Shadow Filter" value="PREF_SHADOWFILTER" scaler="3" displayValue="MENU_DISPLAY_SHADOWFILTER" />
             <optionspc action="MENUOPT_ADJUST" label="Graphics API" value="PREF_GRAPHICSAPI" scaler="2" displayValue="MENU_DISPLAY_GRAPHICS_API" />
@@ -922,8 +914,7 @@
 			<optionspc action="MENUOPT_ADJUST" label="AO" value="PREF_SAO" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="SSR" value="PREF_SSR" scaler="3" displayValue="MENU_DISPLAY_SSR_QUALITY" />
 			<optionspc action="MENUOPT_ADJUST" label="SSR Debug" value="PREF_SSR_DEBUG" scaler="8" displayValue="MENU_DISPLAY_SSR_DEBUG" />
-			<optionspc action="MENUOPT_ADJUST" label="Light Debug" value="PREF_LIGHT_DEBUG" scaler="4" displayValue="MENU_DISPLAY_LIGHT_DEBUG" />
-			<optionspc action="MENUOPT_ADJUST" label="Fill Lights" value="PREF_FILL_LIGHTS" scaler="11" displayValue="MENU_DISPLAY_SLIDERBAR" />
+			<optionspc action="MENUOPT_ADJUST" label="Fill Lights" value="PREF_FILL_LIGHTS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="Contact Shadows" value="PREF_CONTACTSHADOWS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
             <optionspc action="MENUOPT_ADJUST" label="Shadow Filter" value="PREF_SHADOWFILTER" scaler="3" displayValue="MENU_DISPLAY_SHADOWFILTER" />
             <optionspc action="MENUOPT_ADJUST" label="Graphics API" value="PREF_GRAPHICSAPI" scaler="2" displayValue="MENU_DISPLAY_GRAPHICS_API" />

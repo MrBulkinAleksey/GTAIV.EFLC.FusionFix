@@ -3,9 +3,6 @@ module;
 #include <common.hxx>
 #include <d3dx9tex.h>
 #include <algorithm>
-#include <fstream>
-#include <sstream>
-#include <vector>
 
 export module postfx;
 
@@ -288,20 +285,12 @@ public:
     // Headlight shafts with the headlight's shadow map, which leaves them unseen (see
     // InstallShaftHooks).
     bool bVolumetricLightHeadlightShadow = false;
-    // Light Debug in the graphics menu (PREF_LIGHT_DEBUG), to look into lighting that comes and
-    // goes with a step of the camera: 1 logs the lights near the camera to
-    // GTAIV.EFLC.FusionFix.lights.log next to the INI (see LogCopiedLight), 2 holds the exterior
-    // map lights the game stops sending while the camera is within their reach (see HoldLights),
-    // 3 does both.
-    std::filesystem::path VolumetricLightLogPath;
-    // Fill Lights in the graphics menu (PREF_FILL_LIGHTS, 0 to 10): the brightness of the large
-    // exterior map lights, of at least FillLightsMinRadius, that flood whole squares and building
-    // fronts, in tenths; 10 leaves them as the game has them.
+    // Building Fill Lights in the graphics menu (PREF_FILL_LIGHTS): off darkens the large
+    // exterior map lights, reaching at least FillLightsMinRadius, that flood whole squares and
+    // building fronts. They made scenes look washed out, and at some cell edges (a garage at
+    // x -900 in Algonquin) the game stops sending them with a step of the camera.
     float fFillLightsMinRadius = 30.0f;
-    static float FillLights() { static auto p = FusionFixSettings.GetRef("PREF_FILL_LIGHTS"); return p ? p->get() / 10.0f : 1.0f; }
-    static int LightDebugMode() { static auto p = FusionFixSettings.GetRef("PREF_LIGHT_DEBUG"); return p ? p->get() : 0; }
-    static bool LightLog() { return (LightDebugMode() & 1) != 0; }
-    static bool LightHold() { return (LightDebugMode() & 2) != 0; }
+    static bool FillLights() { static auto p = FusionFixSettings.GetRef("PREF_FILL_LIGHTS"); return p ? p->get() != 0 : true; }
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
     IDirect3DSurface9* ContactRawSurf = nullptr;
     rage::grcRenderTargetPC* ContactTex = nullptr;
@@ -943,7 +932,6 @@ public:
         nVolumetricLightHeadlightAddFlags = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightAddFlags", 0));
         fFillLightsMinRadius = std::clamp(iniReader.ReadFloat("POSTFX", "FillLightsMinRadius", 30.0f), 0.0f, 1000.0f);
         bVolumetricLightHeadlightShadow = iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightShadow", 0) != 0;
-        VolumetricLightLogPath = iniReader.GetIniPath().parent_path() / "GTAIV.EFLC.FusionFix.lights.log";
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
@@ -3130,447 +3118,28 @@ private:
         R.bContactValid = true;
     }
 
-    // The game's light shaft loop (CE 0xAC2A09) walks the render thread's light list: lights with
-    // the shaft bit enter it, those whose shaft volume is on screen go on to be drawn, with the
-    // shadowed shaft technique when a shadow map is found for them. Both steps are counted by
-    // flags, the second also by that shadow, for the log.
-    // Headlights nearly always have a shadow map there, and a shaft drawn with it shows nothing,
-    // so unless VolumetricLightHeadlightShadow is on, the draw hook clears that choice for lights
-    // with the headlight flag and they take the plain shaft technique.
-    static inline std::mutex ShaftLogMutex;
-    static inline std::map<uint32_t, uint32_t> ShaftEntered;
-    static inline std::map<std::pair<uint32_t, bool>, uint32_t> ShaftDrawn;
-    static inline SafetyHookMid shShaftEnter{};
+    // The game's light shaft loop (CE 0xAC2A09) draws a shaft with the shadowed shaft technique
+    // when a shadow map is found for its light. Headlights nearly always have one there, and a
+    // shaft drawn with it shows nothing, so unless VolumetricLightHeadlightShadow is on, the draw
+    // hook clears that choice for lights with the headlight flag and they take the plain one.
     static inline SafetyHookMid shShaftDraw{};
 
     static void InstallShaftHooks()
     {
-        auto pattern = hook::pattern("F6 44 0E 48 08 0F 84 ? ? ? ? 8B 44 0E 44 85 C0 74 ? 83 F8 02");
-        if (!pattern.empty())
-            shShaftEnter = safetyhook::create_mid(pattern.get_first(11), [](SafetyHookContext& regs)
-            {
-                if (!PostFxResources.LightLog())
-                    return;
-                const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.ecx + regs.esi);
-                std::lock_guard lock(ShaftLogMutex);
-                ++ShaftEntered[light.mFlags];
-            });
-        pattern = hook::pattern("A1 ? ? ? ? 0F 28 05 ? ? ? ? 0F 29 84 24 A0 00 00 00 F3 0F 10 44 06 70");
+        auto& R = PostFxResources;
+        if (!R.nVolumetricLightHeadlightFlag || R.bVolumetricLightHeadlightShadow)
+            return;
+        auto pattern = hook::pattern("A1 ? ? ? ? 0F 28 05 ? ? ? ? 0F 29 84 24 A0 00 00 00 F3 0F 10 44 06 70");
         if (!pattern.empty())
         {
             static uintptr_t* list = *pattern.get_first<uintptr_t*>(1);
             shShaftDraw = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
             {
-                auto& R = PostFxResources;
                 const auto& light = *reinterpret_cast<const rage::CLightSource*>(*list + regs.esi);
-                auto& shadowed = *reinterpret_cast<uint8_t*>(regs.esp + 0xF);
-                if (!R.bVolumetricLightHeadlightShadow && (light.mFlags & R.nVolumetricLightHeadlightFlag))
-                    shadowed = 0;
-                if (R.LightLog())
-                {
-                    std::lock_guard lock(ShaftLogMutex);
-                    ++ShaftDrawn[{light.mFlags, shadowed != 0}];
-                }
+                if (light.mFlags & PostFxResources.nVolumetricLightHeadlightFlag)
+                    *reinterpret_cast<uint8_t*>(regs.esp + 0xF) = 0;
             });
         }
-    }
-
-    static void WriteLogLight(std::ostream& out, char mark, float distance, const rage::CLightSource& l)
-    {
-        out << mark << ' ' << distance << ' ' << int(l.mType) << " 0x" << std::hex << l.mFlags << std::dec << ' '
-            << l.mRadius << ' ' << std::setprecision(2) << l.mIntensity << ' ' << l.mColor.x << ' ' << l.mColor.y << ' '
-            << l.mColor.z << std::setprecision(1) << ' ' << l.mPosition.x << ' ' << l.mPosition.y << ' ' << l.mPosition.z << '\n';
-    }
-
-    // The lights log follows the lights near the camera through the whole session: after the
-    // lights within 40 m at the start, it appends every change between whole frames, a light
-    // coming within 40 m (+), leaving 45 m or no longer copied (-), or its flags, radius or
-    // intensity changing (~), or the interior of the camera or the player or the player's room
-    // changing (i), with the time and the camera. Vehicle lights (0x100), which move
-    // and would log every frame, are left out. Next to it the lights summary counts every kind
-    // of light within 60 m since start, with the light shaft loop counts, rewritten every 5 s.
-    static void LogCopiedLight(const rage::CLightSource& light, const rage::Vector3& cameraPos, float distance)
-    {
-        struct Nearby
-        {
-            float distance;
-            rage::CLightSource light;
-        };
-        // Static lights are copied from the same data every frame, so the type and the exact
-        // position tell one from another.
-        using Key = std::tuple<int, float, float, float>;
-        static std::map<std::tuple<int, uint32_t, int>, uint32_t> kinds;
-        static std::map<Key, Nearby> frame, logged;
-        static int32_t frameTime = INT32_MIN;
-        static rage::Vector3 frameCamera{};
-        static bool started = false;
-        static uint32_t lines = 0;
-        static const ULONGLONG start = GetTickCount64();
-        static ULONGLONG lastSummary = 0;
-        const auto& path = PostFxResources.VolumetricLightLogPath;
-
-        // A new frame when the game's clock moves on (a full list takes new lights out of order).
-        const int32_t time = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds : 0;
-        if (time != frameTime && frameTime != INT32_MIN && lines < 50000)
-        {
-            std::ostringstream out;
-            out << std::fixed << std::setprecision(1);
-            bool header = false;
-            auto writeHeader = [&]()
-            {
-                if (header)
-                    return;
-                header = true;
-                out << "\nt " << std::setprecision(2) << (GetTickCount64() - start) / 1000.0 << std::setprecision(1)
-                    << " s, camera " << frameCamera.x << ' ' << frameCamera.y << ' ' << frameCamera.z << '\n';
-                ++lines;
-            };
-            // The interior the camera and the player are in, and the player's room, as the game's
-            // scan of the world may follow them.
-            {
-                static std::tuple<Interior, Interior, uint32_t> place{-2, -2, 0};
-                Interior cameraInterior = 0, playerInterior = 0;
-                uint32_t room = 0;
-                Ped player = 0;
-                Natives::GetInteriorAtCoords(frameCamera.x, frameCamera.y, frameCamera.z, &cameraInterior);
-                Natives::GetPlayerChar(Natives::GetPlayerId(), &player);
-                if (player)
-                {
-                    Natives::GetInteriorFromChar(player, &playerInterior);
-                    Natives::GetKeyForCharInRoom(player, &room);
-                }
-                if (place != std::tuple{cameraInterior, playerInterior, room})
-                {
-                    place = {cameraInterior, playerInterior, room};
-                    writeHeader();
-                    out << "i camera interior " << cameraInterior << ", player interior " << playerInterior
-                        << ", room 0x" << std::hex << room << std::dec << '\n';
-                    ++lines;
-                }
-            }
-            for (auto it = logged.begin(); it != logged.end();)
-            {
-                const auto now = frame.find(it->first);
-                if (now == frame.end())
-                {
-                    writeHeader();
-                    WriteLogLight(out, '-', it->second.distance, it->second.light);
-                    ++lines;
-                    it = logged.erase(it);
-                    continue;
-                }
-                const auto& a = it->second.light;
-                const auto& b = now->second.light;
-                const bool dark = (a.mIntensity > 0.01f) != (b.mIntensity > 0.01f);
-                const bool intensity = dark || b.mIntensity > a.mIntensity * 2.0f || b.mIntensity < a.mIntensity * 0.5f;
-                if (a.mFlags != b.mFlags || std::abs(a.mRadius - b.mRadius) > 0.5f || intensity)
-                {
-                    writeHeader();
-                    WriteLogLight(out, '~', now->second.distance, b);
-                    ++lines;
-                    it->second = now->second;
-                }
-                ++it;
-            }
-            for (const auto& [key, nearby] : frame)
-            {
-                if (nearby.distance < 40.0f && logged.emplace(key, nearby).second)
-                {
-                    writeHeader();
-                    WriteLogLight(out, '+', nearby.distance, nearby.light);
-                    ++lines;
-                }
-            }
-            frame.clear();
-            if (header || !started)
-            {
-                std::ofstream file(path, started ? std::ios::app : std::ios::trunc);
-                if (!started)
-                    file << "build " << __DATE__ << ' ' << __TIME__ << "\n"
-                            "lights within 40 m of the camera, then changes between frames; vehicle lights left out\n"
-                            "+ came within 40 m, - left 45 m or no longer sent, ~ changed, i interior or room changed,\n"
-                            "hold events (lines starting with hold): T taken, E dropped, h held, r released, F list full\n"
-                            "mark distance type flags radius intensity r g b x y z\n";
-                file << out.str();
-                started = true;
-            }
-        }
-        if (time != frameTime)
-            frame.clear();
-        frameTime = time;
-        frameCamera = cameraPos;
-        if (distance < 45.0f && !(light.mFlags & 0x100))
-            frame[{int(light.mType), light.mPosition.x, light.mPosition.y, light.mPosition.z}] = {distance, light};
-        if (distance < 60.0f)
-            ++kinds[{int(light.mType), light.mFlags, int(light.mRadius + 0.5f)}];
-
-        const auto now = GetTickCount64();
-        if (now - lastSummary < 5000)
-            return;
-        lastSummary = now;
-        auto summaryPath = path;
-        summaryPath.replace_filename("GTAIV.EFLC.FusionFix.lights-summary.log");
-        std::ofstream out(summaryPath, std::ios::trunc);
-        out << "type flags radius count (within 60 m of the camera since start; type 2 is spot)\n";
-        for (const auto& [kind, count] : kinds)
-            out << std::get<0>(kind) << " 0x" << std::hex << std::get<1>(kind) << std::dec << ' '
-                << std::get<2>(kind) << ' ' << count << '\n';
-        const auto heldNow = std::count_if(HeldLights.begin(), HeldLights.end(), [](const auto& h) { return h.second.held; });
-        const auto& H = Hold;
-        out << "\nbuild " << __DATE__ << ' ' << __TIME__ << ", light debug mode " << PostFxResources.LightDebugMode()
-            << "\nhold hook " << (shCloseLightFrame ? "installed" : "missing") << ", add " << (AddLight ? "found" : "missing")
-            << ", light count " << (pLightCount ? int(*pLightCount) : -1)
-            << "\nthreads: copy " << H.copyThread << ", close " << H.closeThread
-            << "; game time at last copy " << H.lastCopyTime << ", at last close " << H.lastCloseTime
-            << ", closes with another time than the last copy " << H.timeMismatch
-            << "\nhold runs " << H.runs << ", cleared " << H.clears
-            << "\nlights seen " << H.seen << ": not taken for flags " << H.rejectedFlags << ", for type " << H.rejectedType
-            << ", camera out of their radius " << H.rejectedRadius << "; taken " << H.taken
-            << "\ntracked: dropped out of radius " << H.droppedFar << ", dropped as moved " << H.droppedMoved
-            << ", fading " << H.skippedFading << "; held " << H.heldEpisodes << " times, held now " << heldNow
-            << "\nadded back " << H.adds << " (no effect " << H.addNoEffect << "), list full " << H.listFull
-            << ", last add: count " << H.countBefore << " -> " << H.countAfter << ", buffer count " << H.bufferCount
-            << "\ncamera " << HeldLightsCamera.x << ' ' << HeldLightsCamera.y << ' ' << HeldLightsCamera.z
-            << "\nflags of lights within 45 m not taken (flags count):";
-        for (const auto& [flags, count] : H.rejectedNearby)
-            out << " 0x" << std::hex << flags << std::dec << ' ' << count;
-        out << "\ntracked now (" << HeldLights.size() << "): distance type flags radius intensity peak held age-ms x y z\n";
-        int listed = 0;
-        for (const auto& [key, h] : HeldLights)
-        {
-            if (++listed > 30)
-                break;
-            out << "  " << h.distance << ' ' << int(h.light.mType) << " 0x" << std::hex << h.light.mFlags << std::dec << ' '
-                << h.light.mRadius << ' ' << h.light.mIntensity << ' ' << h.peak << ' ' << h.held << ' '
-                << (H.lastCopyTime - h.seen) << ' ' << h.light.mPosition.x << ' ' << h.light.mPosition.y << ' '
-                << h.light.mPosition.z << '\n';
-        }
-        std::lock_guard lock(ShaftLogMutex);
-        out << "\nshaft loop: flags entered drawn drawn-with-shadow (all distances)"
-            << (shShaftEnter && shShaftDraw ? "" : " -- hooks not installed") << '\n';
-        for (const auto& [flags, entered] : ShaftEntered)
-        {
-            const auto plain = ShaftDrawn.find({flags, false});
-            const auto shadowed = ShaftDrawn.find({flags, true});
-            out << "0x" << std::hex << flags << std::dec << ' ' << entered << ' '
-                << (plain != ShaftDrawn.end() ? plain->second : 0) << ' '
-                << (shadowed != ShaftDrawn.end() ? shadowed->second : 0) << '\n';
-        }
-    }
-
-    // Light Debug hold: the game sends each frame's lights anew, and at the edge of some areas
-    // (a garage at x -900 in Algonquin) it stops sending every light of a building while the
-    // camera is still under them, which lights and darkens the street with every step. The
-    // exterior map lights (0x1 and 0x40, and no interior 0x20, vehicle 0x100 or traffic light
-    // and fire 0x200) seen near the camera are kept; one that is not sent in a frame while the
-    // camera is within its radius, and that did not fade out before, is added back through
-    // the game's own add (CE 0xABD2C0) as the frame's list is closed (CE 0xAC4F00), until the
-    // camera leaves its radius. Lights switched off on purpose while the camera stays under
-    // them are kept as well, which is why this is a debug mode.
-    struct HeldLight
-    {
-        rage::CLightSource light;
-        float peak = 0.0f;
-        float distance = 0.0f;
-        int32_t seen = 0;
-        bool held = false;
-    };
-    static inline std::map<std::tuple<int, float, float, float>, HeldLight> HeldLights;
-    static inline std::vector<std::pair<int, rage::Vector3>> SentHeldCandidates;
-    static inline bool bAddingHeldLights = false;
-    // The camera as the lights were copied: natives called from the frame close gave none.
-    static inline rage::Vector3 HeldLightsCamera{};
-    static inline SafetyHookInline shCloseLightFrame{};
-    static inline void(__cdecl* AddLight)(const rage::CLightSource* light, float distance) = nullptr;
-    static inline uint32_t* pLightCount = nullptr;
-    static inline uint32_t* pLightBuffer = nullptr;
-    static inline uint32_t* pLightBufferCounts = nullptr;
-
-    // What the hold did, for the lights summary.
-    struct HoldStats
-    {
-        uint32_t runs = 0, clears = 0, timeMismatch = 0;
-        uint32_t seen = 0, rejectedFlags = 0, rejectedType = 0, rejectedRadius = 0, taken = 0;
-        uint32_t droppedFar = 0, droppedMoved = 0, skippedFading = 0, heldEpisodes = 0;
-        uint32_t adds = 0, addNoEffect = 0, listFull = 0;
-        DWORD copyThread = 0, closeThread = 0;
-        int32_t lastCopyTime = 0, lastCloseTime = 0;
-        uint32_t countBefore = 0, countAfter = 0, bufferCount = 0;
-        std::map<uint32_t, uint32_t> rejectedNearby; // flags of nearby lights not taken
-    };
-    static inline HoldStats Hold;
-
-    static int32_t LightFrameTime() { return CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds : 0; }
-
-    // Hold events of lights within 45 m of the camera go to the lights log: T taken first,
-    // E dropped (reason after the mark), h held, r released, F not added as the list is full.
-    static void LogHold(char mark, const char* reason, const rage::CLightSource& light, float distance)
-    {
-        if (!PostFxResources.LightLog() || distance > 45.0f)
-            return;
-        std::ofstream out(PostFxResources.VolumetricLightLogPath, std::ios::app);
-        out << std::fixed << std::setprecision(1) << "  hold " << reason << ' ';
-        WriteLogLight(out, mark, distance, light);
-    }
-
-    static void TrackHeldLight(const rage::CLightSource& light, float distance)
-    {
-        ++Hold.seen;
-        Hold.copyThread = GetCurrentThreadId();
-        Hold.lastCopyTime = LightFrameTime();
-        if ((light.mFlags & 0x361) != 0x41)
-        {
-            ++Hold.rejectedFlags;
-            if (distance < 45.0f && light.mType != 3)
-                ++Hold.rejectedNearby[light.mFlags];
-            return;
-        }
-        if (light.mType != rage::LT_POINT && light.mType != rage::LT_SPOT)
-        {
-            ++Hold.rejectedType;
-            return;
-        }
-        // Only a light the camera is within could be missed.
-        if (distance > light.mRadius)
-        {
-            ++Hold.rejectedRadius;
-            return;
-        }
-        ++Hold.taken;
-        auto [it, first] = HeldLights.try_emplace({int(light.mType), light.mPosition.x, light.mPosition.y, light.mPosition.z});
-        auto& held = it->second;
-        held.light = light;
-        held.distance = distance;
-        held.peak = (std::max)(held.peak, light.mIntensity);
-        held.seen = Hold.lastCopyTime;
-        SentHeldCandidates.push_back({int(light.mType), light.mPosition});
-        if (first)
-            LogHold('T', "taken", light, distance);
-        if (held.held)
-        {
-            held.held = false;
-            LogHold('r', "sent again", held.light, distance);
-        }
-    }
-
-    static void HoldLights()
-    {
-        Hold.closeThread = GetCurrentThreadId();
-        if (!PostFxResources.LightHold() || !AddLight)
-        {
-            if (!HeldLights.empty())
-                ++Hold.clears;
-            HeldLights.clear();
-            SentHeldCandidates.clear();
-            return;
-        }
-        const rage::Vector3 cameraPos = HeldLightsCamera;
-        const int32_t now = LightFrameTime();
-        Hold.lastCloseTime = now;
-        if (now != Hold.lastCopyTime)
-            ++Hold.timeMismatch;
-        ++Hold.runs;
-        bAddingHeldLights = true;
-        for (auto it = HeldLights.begin(); it != HeldLights.end();)
-        {
-            auto& held = it->second;
-            const auto& l = held.light;
-            const float dx = cameraPos.x - l.mPosition.x;
-            const float dy = cameraPos.y - l.mPosition.y;
-            const float dz = cameraPos.z - l.mPosition.z;
-            const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-            held.distance = distance;
-            if (distance > l.mRadius)
-            {
-                ++Hold.droppedFar;
-                LogHold('E', "out of radius", l, distance);
-                it = HeldLights.erase(it);
-                continue;
-            }
-            // Sent in the frame being closed: nothing to hold.
-            if (held.seen == Hold.lastCopyTime)
-            {
-                ++it;
-                continue;
-            }
-            // Fading out when last sent: switched off on purpose.
-            if (!held.held && l.mIntensity < held.peak * 0.8f)
-            {
-                ++Hold.skippedFading;
-                ++it;
-                continue;
-            }
-            // A light of the same type sent within a metre is this one on a moving object.
-            const bool moved = std::any_of(SentHeldCandidates.begin(), SentHeldCandidates.end(), [&](const auto& sent)
-            {
-                const float mx = sent.second.x - l.mPosition.x;
-                const float my = sent.second.y - l.mPosition.y;
-                const float mz = sent.second.z - l.mPosition.z;
-                return sent.first == int(l.mType) && mx * mx + my * my + mz * mz < 1.0f;
-            });
-            if (moved)
-            {
-                ++Hold.droppedMoved;
-                LogHold('E', "moved", l, distance);
-                it = HeldLights.erase(it);
-                continue;
-            }
-            const bool first = !held.held;
-            if (first)
-            {
-                held.held = true;
-                ++Hold.heldEpisodes;
-            }
-            // The game's list holds 640 lights and would drop another one for this.
-            if (*pLightCount + 1 < 0x280)
-            {
-                const uint32_t before = *pLightCount;
-                // No shadow: its shadow map is set up only for the lights sent in the frame, and a
-                // copy with the last one's index draws black squares.
-                auto copy = l;
-                copy.mFlags &= ~0x6u;
-                copy.mShadowCacheIndex = -1;
-                AddLight(&copy, (std::max)(distance - l.mRadius, 0.0f));
-                pLightBufferCounts[*pLightBuffer] = *pLightCount;
-                ++Hold.adds;
-                if (*pLightCount != before + 1)
-                    ++Hold.addNoEffect;
-                Hold.countBefore = before;
-                Hold.countAfter = *pLightCount;
-                Hold.bufferCount = pLightBufferCounts[*pLightBuffer];
-                if (first)
-                    LogHold('h', "held", l, distance);
-            }
-            else
-            {
-                ++Hold.listFull;
-                if (first)
-                    LogHold('F', "list full", l, distance);
-            }
-            ++it;
-        }
-        bAddingHeldLights = false;
-        SentHeldCandidates.clear();
-    }
-
-    static void __cdecl CloseLightFrame()
-    {
-        HoldLights();
-        shCloseLightFrame.unsafe_ccall();
-    }
-
-    static void InstallLightHold()
-    {
-        auto add = hook::pattern("56 8B 35 ? ? ? ? 8D 46 01 3D 80 02 00 00 7D");
-        auto counts = hook::pattern("8B 0D ? ? ? ? A1 ? ? ? ? 83 C4 08 89 04 8D ? ? ? ? 5F 5E 8B E5 5D C3");
-        auto close = hook::pattern("55 8B EC 83 E4 F0 83 EC 30 A1 ? ? ? ? 8B 0D ? ? ? ? 8B 04 85");
-        if (add.empty() || counts.empty() || close.empty())
-            return;
-        AddLight = reinterpret_cast<decltype(AddLight)>(add.get_first(0));
-        pLightCount = *add.get_first<uint32_t*>(3);
-        pLightBuffer = *counts.get_first<uint32_t*>(2);
-        pLightBufferCounts = *counts.get_first<uint32_t*>(17);
-        shCloseLightFrame = safetyhook::create_inline(close.get_first(0), CloseLightFrame);
     }
 
     // Runs as the game copies each light into the frame's draw list, on the main thread.
@@ -3579,15 +3148,12 @@ private:
         auto& R = PostFxResources;
         if (!light)
             return;
-        // Fill Lights: large exterior map lights (0x1 and 0x40, no interior 0x20, vehicle 0x100
-        // or traffic light and fire 0x200), once as the game sends them.
-        const float fill = R.FillLights();
-        if (fill < 1.0f && !bAddingHeldLights && (light->mFlags & 0x361) == 0x41 &&
+        // Building Fill Lights off: the large exterior map lights (0x1 and 0x40, no interior 0x20,
+        // vehicle 0x100 or traffic light and fire 0x200) that flood whole squares go dark.
+        if (!R.FillLights() && (light->mFlags & 0x361) == 0x41 &&
             (light->mType == rage::LT_POINT || light->mType == rage::LT_SPOT) && light->mRadius >= R.fFillLightsMinRadius)
-            light->mIntensity *= fill;
-        const bool volumetric = R.bVolumetricLight && R.fVolumetricLightIntensity > 0.0f;
-        const int debug = R.LightDebugMode();
-        if (!volumetric && !debug)
+            light->mIntensity = 0.0f;
+        if (!R.bVolumetricLight || R.fVolumetricLightIntensity <= 0.0f)
             return;
 
         Cam camera = 0;
@@ -3598,19 +3164,6 @@ private:
         const float dy = cameraPos.y - light->mPosition.y;
         const float dz = cameraPos.z - light->mPosition.z;
         const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-        // Lights put back by HoldLights are neither logged nor tracked again.
-        if (!bAddingHeldLights)
-        {
-            if (debug & 1)
-                LogCopiedLight(*light, cameraPos, distance);
-            if (debug & 2)
-            {
-                HeldLightsCamera = cameraPos;
-                TrackHeldLight(*light, distance);
-            }
-        }
-        if (!volumetric)
-            return;
 
         // Light flags, from the game's own calls to its light submission (CE 0xABCC50, which
         // clears the shaft bit, and 0xABCCD0): 0x1 map (2dfx) lights, and effects; 0x2 and 0x10
@@ -3777,7 +3330,6 @@ public:
 
                 {
                     CRenderPhaseDeferredLighting_LightsToScreen::OnAfterCopyLight() += OnAfterCopyLight;
-                    InstallLightHold();
                     if (PostFxResources.bVolumetricLight)
                         InstallShaftHooks();
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
