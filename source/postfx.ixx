@@ -2,6 +2,7 @@ module;
 
 #include <common.hxx>
 #include <d3dx9tex.h>
+#include <fstream>
 
 export module postfx;
 
@@ -271,11 +272,15 @@ public:
     float fVolumetricLightIntensity = 4.0f;
     float fVolumetricLightScale = 0.25f;
     float fVolumetricLightMaxDistance = 100.0f;
-    // Headlights too: spot lights of at least 8 m carrying this flag, taken for the vehicle
-    // light bit of the snow season's exclusions (0x398 lists previous shafts, vehicle, traffic,
-    // fill and cutscene lights, 0x10 first after the shaft bit); 0 leaves headlights out.
-    uint32_t nVolumetricLightHeadlightFlag = 0x10;
+    // Headlights too: spot lights carrying this flag, whatever their radius and other flags.
+    // 0x100 is the vehicle beam bit the night shadow code goes by (ShadowAllocationRuntime);
+    // 0 leaves headlights out.
+    uint32_t nVolumetricLightHeadlightFlag = 0x100;
     float fVolumetricLightHeadlightIntensity = 2.0f;
+    // VolumetricLightLog writes the kinds of lights the game copies near the camera to
+    // GTAIV.EFLC.FusionFix.lights.log next to the INI.
+    bool bVolumetricLightLog = false;
+    std::filesystem::path VolumetricLightLogPath;
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
     IDirect3DSurface9* ContactRawSurf = nullptr;
     rage::grcRenderTargetPC* ContactTex = nullptr;
@@ -911,8 +916,10 @@ public:
         fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 4.0f), 0.0f, 20.0f);
         fVolumetricLightScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightScale", 0.25f), 0.0f, 2.0f);
         fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 100.0f), 10.0f, 1000.0f);
-        nVolumetricLightHeadlightFlag = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightFlag", 0x10));
+        nVolumetricLightHeadlightFlag = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightFlag", 0x100));
         fVolumetricLightHeadlightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightIntensity", 2.0f), 0.0f, 20.0f);
+        bVolumetricLightLog = iniReader.ReadInteger("POSTFX", "VolumetricLightLog", 0) != 0;
+        VolumetricLightLogPath = iniReader.GetIniPath().parent_path() / "GTAIV.EFLC.FusionFix.lights.log";
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
@@ -3099,21 +3106,30 @@ private:
         R.bContactValid = true;
     }
 
+    // Counts every kind of light copied within 60 m of the camera (type, flags, rounded radius)
+    // and rewrites the log with them every 5 s.
+    static void LogCopiedLight(const rage::CLightSource& light, float distance)
+    {
+        static std::map<std::tuple<int, uint32_t, int>, uint32_t> kinds;
+        static ULONGLONG last = 0;
+        if (distance < 60.0f)
+            ++kinds[{int(light.mType), light.mFlags, int(light.mRadius + 0.5f)}];
+        const auto now = GetTickCount64();
+        if (now - last < 5000)
+            return;
+        last = now;
+        std::ofstream out(PostFxResources.VolumetricLightLogPath, std::ios::trunc);
+        out << "type flags radius count (within 60 m of the camera since start; type 2 is spot)\n";
+        for (const auto& [kind, count] : kinds)
+            out << std::get<0>(kind) << " 0x" << std::hex << std::get<1>(kind) << std::dec << ' '
+                << std::get<2>(kind) << ' ' << count << '\n';
+    }
+
     // Runs as the game copies each light into the frame's draw list, on the main thread.
     static void OnAfterCopyLight(rage::CLightSource* light)
     {
         auto& R = PostFxResources;
         if (!R.bVolumetricLight || R.fVolumetricLightIntensity <= 0.0f || !light)
-            return;
-        // Spot lights of 8 to 20 m, most of lamppost.img, and none of the vehicle, traffic,
-        // fill and cutscene lights (0x398) or lights that have a shaft already (8); headlights
-        // are the spot lights of at least 8 m with the vehicle light bit and no other of those.
-        if (light->mType != rage::LT_SPOT || light->mRadius < 8.0f)
-            return;
-        const uint32_t headlightFlag = R.nVolumetricLightHeadlightFlag;
-        const bool headlight = headlightFlag && (light->mFlags & headlightFlag) &&
-                               !(light->mFlags & ((0x398 | 8) & ~headlightFlag)) && R.fVolumetricLightHeadlightIntensity > 0.0f;
-        if (!headlight && (light->mRadius > 20.0f || (light->mFlags & (0x398 | 8))))
             return;
 
         Cam camera = 0;
@@ -3124,6 +3140,18 @@ private:
         const float dy = cameraPos.y - light->mPosition.y;
         const float dz = cameraPos.z - light->mPosition.z;
         const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (R.bVolumetricLightLog)
+            LogCopiedLight(*light, distance);
+
+        // Spot lights of 8 to 20 m, most of lamppost.img, and none of the vehicle, traffic,
+        // fill and cutscene lights (0x398) or lights that have a shaft already (8); headlights
+        // are the spot lights with the headlight flag, whatever their radius and other flags.
+        if (light->mType != rage::LT_SPOT || (light->mFlags & 8))
+            return;
+        const uint32_t headlightFlag = R.nVolumetricLightHeadlightFlag;
+        const bool headlight = headlightFlag && (light->mFlags & headlightFlag) && R.fVolumetricLightHeadlightIntensity > 0.0f;
+        if (!headlight && (light->mRadius < 8.0f || light->mRadius > 20.0f || (light->mFlags & 0x398)))
+            return;
         const float fadeStart = R.fVolumetricLightMaxDistance * 0.3f;
         const float x = std::clamp((distance - fadeStart) / (R.fVolumetricLightMaxDistance - fadeStart), 0.0f, 1.0f);
         const float fade = 1.0f - x * x * (3.0f - 2.0f * x);
