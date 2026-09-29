@@ -1,7 +1,6 @@
 module;
 
 #include <common.hxx>
-#include <psapi.h>
 
 export module extrainfo;
 
@@ -130,11 +129,13 @@ public:
                                 auto FF_WARN0 = CText::getText("FF_WARN0");
                                 extra += (FF_WARN0[0] ? FF_WARN0 : L"~p~IMG Files:") + std::wstring(L" ") + std::to_wstring(imgNum) + L" / " + std::to_wstring(imgArrSize);
 
-                                ::PROCESS_MEMORY_COUNTERS pmc;
-                                if (::GetProcessMemoryInfo(::GetCurrentProcess(), &pmc, sizeof(pmc)))
-                                {
-                                    extra += L"; RAM: " + std::to_wstring(pmc.WorkingSetSize / 1024 / 1024) + L" MB";
-                                }
+                                // Available physical memory decreases as used memory increases, used plus available is the total
+                                constexpr uint32_t MB = 1024 * 1024;
+                                uint32_t nUsedPhysical = (CStreamingEngine::ms_info->m_PhysicalUsed + MB / 2) / MB;
+                                uint32_t nMaxPhysical = (CStreamingEngine::ms_info->m_ResourcePhysicalAvailable + MB / 2) / MB;
+                                uint32_t nUsedVirtual = (CStreamingEngine::ms_info->m_VirtualUsed + MB / 2) / MB;
+                                uint32_t nMaxVirtual = (CStreamingEngine::ms_info->m_ResourceVirtualMax + MB / 2) / MB;
+                                extra += std::format(L"; Streaming memory: {} / {} MB; Virtual heap size: {} / {} MB", nUsedPhysical, nUsedPhysical + nMaxPhysical, nUsedVirtual, nMaxVirtual);
 
                                 auto FF_WARN1 = CText::getText("FF_WARN1");
                                 if (imgNum >= imgArrSize) extra += FF_WARN1[0] ? FF_WARN1 : L"; ~r~WARNING: 255 IMG limit exceeded, will cause streaming issues.";

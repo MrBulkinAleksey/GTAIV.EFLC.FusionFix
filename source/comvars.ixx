@@ -790,6 +790,120 @@ namespace CVehicle
 
 export namespace rage
 {
+    class Vector2
+    {
+    public:
+        float x, y;
+
+    public:
+        Vector2() = default;
+        Vector2(float x, float y) : x(x), y(y)
+        {
+        }
+
+        Vector2 operator+(const Vector2& other) const
+        {
+            return Vector2(x + other.x, y + other.y);
+        }
+
+        Vector2 operator-(const Vector2& other) const
+        {
+            return Vector2(x - other.x, y - other.y);
+        }
+
+        Vector2 operator*(float scalar) const
+        {
+            return Vector2(x * scalar, y * scalar);
+        }
+
+        Vector2 operator/(float scalar) const
+        {
+            if (scalar != 0.0f)
+                return Vector2(x / scalar, y / scalar);
+            else
+                throw std::runtime_error("Division by zero");
+        }
+
+        Vector2& operator=(const Vector2& other)
+        {
+            if (this != &other)
+            {
+                x = other.x;
+                y = other.y;
+            }
+            return *this;
+        }
+
+        Vector2& operator+=(const Vector2& other)
+        {
+            x += other.x;
+            y += other.y;
+            return *this;
+        }
+
+        Vector2& operator+=(float scalar)
+        {
+            x += scalar;
+            y += scalar;
+            return *this;
+        }
+
+        Vector2& operator-=(const Vector2& other)
+        {
+            x -= other.x;
+            y -= other.y;
+            return *this;
+        }
+
+        Vector2& operator*=(const Vector2& other)
+        {
+            x *= other.x;
+            y *= other.y;
+            return *this;
+        }
+
+        bool operator==(const Vector2& other) const
+        {
+            return x == other.x && y == other.y;
+        }
+
+        bool operator!=(const Vector2& other) const
+        {
+            return !(*this == other);
+        }
+
+        float Heading() const
+        {
+            return atan2f(-x, y);
+        }
+
+        float Magnitude()
+        {
+            return sqrt(x * x + y * y);
+        }
+
+        void Translate(float x, float y, float z)
+        {
+            this->x += x;
+            this->y += y;
+        }
+
+        void Normalize()
+        {
+            float mag = Magnitude();
+            if (mag > 0.0f)
+            {
+                x /= mag;
+                y /= mag;
+            }
+            else
+            {
+                x = 0.0f;
+                y = 0.0f;
+            }
+        }
+    };
+
     class Vector3
     {
     public:
@@ -2863,6 +2977,32 @@ export namespace CCutsceneManager
     float* ms_fTimePassedSinceLastAudioStart = nullptr;
 }
 
+struct CStreamingInfoManager
+{
+    int* m_StreamingFiles;
+    int m_NumStreamingFiles;
+    int* field_8[6];
+
+    int m_ResourceVirtualMax;
+    int m_VirtualUsed;
+    int m_ResourceVirtualUsed;
+
+    int m_ResourcePhysicalAvailable;
+    int m_PhysicalUsed;
+    int m_ResourcePhysicalUsed;
+
+    int m_NumRequests;
+    int m_NumRealRequests;
+    int m_NumPriorityRequests;
+    int field_44;
+    int m_Device;
+};
+
+export namespace CStreamingEngine
+{
+    CStreamingInfoManager* ms_info = nullptr;
+}
+
 export enum eControllerButtons
 {
     BUTTON_BUMPER_LEFT = 4,
@@ -3350,5 +3490,8 @@ public:
 
         pattern = find_pattern("F3 0F 10 05 ? ? ? ? EB ? 66 0F 6E C0", "F3 0F 10 05 ? ? ? ? EB ? F3 0F 2A C0");
         CTimer::m_systemTime = *pattern.get_first<float*>(4);
+
+        pattern = find_pattern("B9 ? ? ? ? A3 ? ? ? ? C6 05 ? ? ? ? ? C6 05", "B9 ? ? ? ? A3 ? ? ? ? 88 1D");
+        CStreamingEngine::ms_info = *pattern.get_first<CStreamingInfoManager*>(1);
     }
 } Common;
