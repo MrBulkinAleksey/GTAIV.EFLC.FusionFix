@@ -294,6 +294,11 @@ public:
     // map lights the game stops sending while the camera is within their reach (see HoldLights),
     // 3 does both.
     std::filesystem::path VolumetricLightLogPath;
+    // Fill Lights in the graphics menu (PREF_FILL_LIGHTS, 0 to 10): the brightness of the large
+    // exterior map lights, of at least FillLightsMinRadius, that flood whole squares and building
+    // fronts, in tenths; 10 leaves them as the game has them.
+    float fFillLightsMinRadius = 30.0f;
+    static float FillLights() { static auto p = FusionFixSettings.GetRef("PREF_FILL_LIGHTS"); return p ? p->get() / 10.0f : 1.0f; }
     static int LightDebugMode() { static auto p = FusionFixSettings.GetRef("PREF_LIGHT_DEBUG"); return p ? p->get() : 0; }
     static bool LightLog() { return (LightDebugMode() & 1) != 0; }
     static bool LightHold() { return (LightDebugMode() & 2) != 0; }
@@ -936,6 +941,7 @@ public:
         fVolumetricLightHeadlightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightIntensity", 2.0f), 0.0f, 20.0f);
         fVolumetricLightHeadlightLength = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightLength", 25.0f), 1.0f, 200.0f);
         nVolumetricLightHeadlightAddFlags = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightAddFlags", 0));
+        fFillLightsMinRadius = std::clamp(iniReader.ReadFloat("POSTFX", "FillLightsMinRadius", 30.0f), 0.0f, 1000.0f);
         bVolumetricLightHeadlightShadow = iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightShadow", 0) != 0;
         VolumetricLightLogPath = iniReader.GetIniPath().parent_path() / "GTAIV.EFLC.FusionFix.lights.log";
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
@@ -3519,7 +3525,12 @@ private:
             if (*pLightCount + 1 < 0x280)
             {
                 const uint32_t before = *pLightCount;
-                AddLight(&l, (std::max)(distance - l.mRadius, 0.0f));
+                // No shadow: its shadow map is set up only for the lights sent in the frame, and a
+                // copy with the last one's index draws black squares.
+                auto copy = l;
+                copy.mFlags &= ~0x6u;
+                copy.mShadowCacheIndex = -1;
+                AddLight(&copy, (std::max)(distance - l.mRadius, 0.0f));
                 pLightBufferCounts[*pLightBuffer] = *pLightCount;
                 ++Hold.adds;
                 if (*pLightCount != before + 1)
@@ -3566,9 +3577,17 @@ private:
     static void OnAfterCopyLight(rage::CLightSource* light)
     {
         auto& R = PostFxResources;
+        if (!light)
+            return;
+        // Fill Lights: large exterior map lights (0x1 and 0x40, no interior 0x20, vehicle 0x100
+        // or traffic light and fire 0x200), once as the game sends them.
+        const float fill = R.FillLights();
+        if (fill < 1.0f && !bAddingHeldLights && (light->mFlags & 0x361) == 0x41 &&
+            (light->mType == rage::LT_POINT || light->mType == rage::LT_SPOT) && light->mRadius >= R.fFillLightsMinRadius)
+            light->mIntensity *= fill;
         const bool volumetric = R.bVolumetricLight && R.fVolumetricLightIntensity > 0.0f;
         const int debug = R.LightDebugMode();
-        if (!light || (!volumetric && !debug))
+        if (!volumetric && !debug)
             return;
 
         Cam camera = 0;

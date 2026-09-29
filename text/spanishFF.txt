@@ -178,6 +178,9 @@ Hold Lights
 [LightDbgBoth]
 Log and Hold
 
+[Fill Lights]
+Building Fill Lights
+
 [Zoomed Movement]
 Permitir movimiento al acercar la mirilla
 

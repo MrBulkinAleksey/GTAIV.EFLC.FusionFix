@@ -178,6 +178,9 @@ Hold Lights
 [LightDbgBoth]
 Log and Hold
 
+[Fill Lights]
+Building Fill Lights
+
 [Zoomed Movement]
 Permettre le mouvement en zoomant
 
