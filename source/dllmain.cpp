@@ -1,4 +1,5 @@
 #include <common.hxx>
+#include "crashlog.hpp"
 
 import common;
 import comvars;
@@ -127,6 +128,11 @@ void Init()
         FusionFix::onReadGameConfig().executeAll();
     });
 
+    FusionFix::onGameInitEvent() += []()
+    {
+        CrashLog::Install();
+    };
+
     initializationFutures = FusionFix::onInitEventAsync().executeAllAsync();
 
     FusionFix::onInitEvent().executeAll();
@@ -138,6 +144,7 @@ extern "C"
     {
         std::call_once(CallbackHandler::flag, []()
         {
+            CrashLog::Install();
             CompatibilityWarnings();
             CallbackHandler::RegisterCallback(Init, hook::pattern("F3 0F 10 44 24 ? F3 0F 59 05 ? ? ? ? EB ? E8"));
         });

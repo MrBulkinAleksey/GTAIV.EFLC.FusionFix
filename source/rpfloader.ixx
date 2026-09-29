@@ -1,6 +1,7 @@
 module;
 
 #include <common.hxx>
+#include "crashlog.hpp"
 #include <filesystem>
 #include <vector>
 #include <memory>
@@ -1244,6 +1245,9 @@ public:
                                 {
                                     // Merge original RPF with the folder inside update
                                     auto mergedRpfData = MergeRpfWithFolder(originalRpfPath, folderPath);
+                                    UpdateLog::Write(std::wstring(L"RPF merge ") + folderPath.wstring() + (mergedRpfData
+                                        ? L": " + std::to_wstring(mergedRpfData->size()) + L" bytes"
+                                        : std::wstring(L": FAILED, the original archive is used")));
                                     if (mergedRpfData)
                                     {
                                         UAL::AddVirtualFileForOverloadW(relativePath.wstring().c_str(), mergedRpfData->data(), mergedRpfData->size(), 1000);
@@ -1253,6 +1257,9 @@ public:
                                 {
                                     // Create new RPF from folder (default to RPF3 format)
                                     auto rpfData = CreateRpfFromFolder(folderPath, RPF_VERSION_3);
+                                    UpdateLog::Write(std::wstring(L"RPF new ") + folderPath.wstring() + (rpfData
+                                        ? L": " + std::to_wstring(rpfData->size()) + L" bytes"
+                                        : std::wstring(L": FAILED, left out")));
                                     if (rpfData)
                                     {
                                         auto gamePath = GetExeModulePath();

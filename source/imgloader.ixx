@@ -2,6 +2,7 @@ module;
 
 #define NOMINMAX
 #include <common.hxx>
+#include "crashlog.hpp"
 #include <filesystem>
 #include <vector>
 #include <memory>
@@ -1077,6 +1078,9 @@ public:
                                 {
                                     // Merge original IMG with the folder inside update
                                     auto mergedImgData = MergeImgWithFolder(originalImgPath, folderPath);
+                                    UpdateLog::Write(std::wstring(L"IMG merge ") + folderPath.wstring() + (mergedImgData
+                                        ? L": " + std::to_wstring(mergedImgData->size()) + L" bytes"
+                                        : std::wstring(L": FAILED, the original archive is used")));
                                     if (mergedImgData)
                                     {
                                         UAL::AddVirtualFileForOverloadW(relativePath.wstring().c_str(), mergedImgData->data(), mergedImgData->size(), 1000);
@@ -1085,6 +1089,9 @@ public:
                                 else
                                 {
                                     auto ImgData = CreateImgFromFolder(folderPath);
+                                    UpdateLog::Write(std::wstring(L"IMG new ") + folderPath.wstring() + (ImgData
+                                        ? L": " + std::to_wstring(ImgData->size()) + L" bytes"
+                                        : std::wstring(L": FAILED, left out")));
                                     if (ImgData)
                                     {
                                         auto gamePath = GetExeModulePath();
