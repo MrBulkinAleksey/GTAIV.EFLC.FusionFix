@@ -1,7 +1,6 @@
 texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, SSRResultTex2D, DebugTex2D;
 texture PreWaterTex2D, PostWaterTex2D;
 texture PrevDepthTex2D;
-texture SSRAccumTex2D;
 
 sampler2D DepthTex
 {
@@ -44,17 +43,6 @@ sampler2D SSRResultTex
 sampler2D DebugTex
 {
     Texture = <DebugTex2D>;
-};
-
-// Last frame's accumulated SSR, see SSRTemporal_PS.
-sampler2D SSRAccumTex
-{
-    Texture = <SSRAccumTex2D>;
-    AddressU = Clamp;
-    AddressV = Clamp;
-    MinFilter = LINEAR;
-    MagFilter = LINEAR;
-    MipFilter = NONE;
 };
 
 // The scene right before and right after the game draws water; they differ only where
@@ -121,8 +109,6 @@ uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one st
 uniform float fTowardCamera;      // 0..1, how far reflections pointing back at the camera reach
 uniform float fReflectionBlur;    // blur radius in pixels a reflection reaches at fMaxDistance, 0 keeps it sharp
 uniform float fDistanceFade;      // reflections fade out towards this distance from the surface, 0 disables
-uniform float fTemporalBlend;     // share of last frame's SSR kept each frame, 0 while there is none to keep
-uniform float fJitterOffset;      // added to each pixel's step offset, changed every frame while SSR accumulates
 
 // Contact shadows, see ContactShadows_PS.
 uniform float4 vec4SunView;         // direction towards the sun in reconstruction space, w 0 if unknown
@@ -247,13 +233,6 @@ float3 GBufferNormal(float2 uv)
 float PixelJitter(float2 pixel)
 {
     return 1.0 - frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
-}
-
-// PixelJitter moved on by fJitterOffset: while SSR accumulates, each frame's steps land
-// elsewhere and the accumulation averages the noise out instead of freezing it on screen.
-float SSRJitter(float2 pixel)
-{
-    return 1.0 - frac(1.0 - PixelJitter(pixel) + fJitterOffset);
 }
 
 // jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
@@ -455,7 +434,7 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         n = ReconstructNormal(uv, C);
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, fReflectionBlur, fStepJitter > 0.0 ? SSRJitter(vPos) : 1.0, fDistanceFade);
+    float4 r = TraceReflection(C, n, fReflectionBlur, fStepJitter > 0.0 ? PixelJitter(vPos) : 1.0, fDistanceFade);
     return float4(r.rgb, saturate(r.a * surfaceWeight * fIntensity));
 }
 
@@ -724,62 +703,6 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return float4(saturate(occlusion * fade * fCSIntensity), 0.0, 0.0, 1.0);
 }
 
-// Blends this frame's SSR (SSRResultTex, after smoothing) with last frame's accumulation
-// (SSRAccumTex), found where this pixel's surface was last frame. The history is clamped to
-// the range of this frame's 3x3 neighbourhood, so it cannot bring back what is no longer
-// there, a ped that walked off a car door, and is dropped where last frame's depth shows
-// another surface there. Blending is premultiplied: a miss (alpha 0) must fade a reflection
-// out, not darken its colour.
-float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
-{
-    if (SSRSurfaceWeight(uv) <= 0.0)
-        return 0.0;
-
-    float4 current = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
-    current.rgb *= current.a;
-    if (fTemporalBlend <= 0.0)
-        return float4(current.a > 1e-4 ? current.rgb / current.a : 0.0, current.a);
-
-    float4 lo = current, hi = current;
-    [unroll]
-    for (int y = -1; y <= 1; ++y)
-    {
-        [unroll]
-        for (int x = -1; x <= 1; ++x)
-        {
-            if (x == 0 && y == 0)
-                continue;
-            float4 s = tex2Dlod(SSRResultTex, float4(uv + float2(x, y) * vec2InvViewportSize, 0, 0));
-            s.rgb *= s.a;
-            lo = min(lo, s);
-            hi = max(hi, s);
-        }
-    }
-
-    float z = LinearDepth(uv);
-    float3 C = ReconstructViewPos(vPos, z);
-    float2 prevUV = HistoryUV(C);
-    float keep = fTemporalBlend;
-    if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
-        keep = 0.0;
-    else if (fUsePrevDepth > 0.0)
-    {
-        float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]
-                    + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
-        float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * fNearPlane;
-        // Another surface there last frame: its reflection is not this one's.
-        if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
-            keep = 0.0;
-    }
-
-    float4 history = tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0));
-    history.rgb *= history.a;
-    history = clamp(history, lo, hi);
-
-    float4 result = lerp(current, history, keep);
-    return float4(result.a > 1e-4 ? result.rgb / result.a : 0.0, result.a);
-}
-
 float4 SSRDebugCopy_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     return float4(tex2Dlod(DebugTex, float4(uv, 0, 0)).rgb, 1.0);
@@ -825,15 +748,6 @@ technique SSRDenoise
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSRDenoise_PS();
-    }
-}
-
-technique SSRTemporal
-{
-    pass P0
-    {
-        VertexShader = compile vs_3_0 FullscreenQuadVS();
-        PixelShader = compile ps_3_0 SSRTemporal_PS();
     }
 }
 
