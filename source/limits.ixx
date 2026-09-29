@@ -404,50 +404,60 @@ public:
             // [BudgetedIV]
             auto bExtendedLimits = iniReader.ReadInteger("BudgetedIV", "ExtendedLimits", 0);
 
+            enum CModelInfoStore
+            {
+                ms_baseModels,
+                ms_instanceModels,
+                ms_timeModels,
+                ms_weaponModels,
+                ms_vehicleModels,
+                ms_pedModels,
+                ms_mloModels,
+                ms_mlo,
+                stru_F27FC4,
+                ms_amat,
+                ms_2dfxRefs1,
+                ms_2dfxRefs2,
+                ms_particleAttrs,
+                ms_explosionAttrs,
+                ms_procObjsAttrs,
+                ms_ladderInfo,
+                ms_spawnPointAttrs,
+                ms_lightShaftAttrs,
+                ms_scrollBars,
+                ms_swayableAttrs,
+                ms_bouyancyAttrs,
+                ms_audioAttrs,
+                ms_worldPointAttrs,
+                ms_walkDontWalkAttrs,
+
+                amount
+            };
+
+            struct CDataStore
+            {
+                uint32_t nSize;
+                uint32_t nAllocated;
+                uint32_t pData;
+            };
+
+            auto pattern = hook::pattern("8B C8 E8 ? ? ? ? B9 ? ? ? ? A3");
+            auto CModelInfoStore__ms_baseModels = pattern.empty() ? nullptr : *pattern.get_first<CDataStore*>(8);
+
+            // The weapon model store holds 100 and its allocator has no bounds check. TBoGT's weapons plus a mod's
+            // weap entries (an extra ide of ambient props) went past it at episode start, and the vtable call on the
+            // next slot jumped to garbage. A slot is 0x80 bytes, so raise it without ExtendedLimits too.
+            if (CModelInfoStore__ms_baseModels)
+            {
+                auto& nWeaponModels = CModelInfoStore__ms_baseModels[CModelInfoStore::ms_weaponModels].nSize;
+                nWeaponModels = std::max(nWeaponModels, 200u);
+            }
+
             if (bExtendedLimits)
             {
                 // Stores
+                if (CModelInfoStore__ms_baseModels)
                 {
-                    enum CModelInfoStore
-                    {
-                        ms_baseModels,
-                        ms_instanceModels,
-                        ms_timeModels,
-                        ms_weaponModels,
-                        ms_vehicleModels,
-                        ms_pedModels,
-                        ms_mloModels,
-                        ms_mlo,
-                        stru_F27FC4,
-                        ms_amat,
-                        ms_2dfxRefs1,
-                        ms_2dfxRefs2,
-                        ms_particleAttrs,
-                        ms_explosionAttrs,
-                        ms_procObjsAttrs,
-                        ms_ladderInfo,
-                        ms_spawnPointAttrs,
-                        ms_lightShaftAttrs,
-                        ms_scrollBars,
-                        ms_swayableAttrs,
-                        ms_bouyancyAttrs,
-                        ms_audioAttrs,
-                        ms_worldPointAttrs,
-                        ms_walkDontWalkAttrs,
-
-                        amount
-                    };
-
-                    struct CDataStore
-                    {
-                        uint32_t nSize;
-                        uint32_t nAllocated;
-                        uint32_t pData;
-                    };
-
-                    auto pattern = hook::pattern("8B C8 E8 ? ? ? ? B9 ? ? ? ? A3");
-                    auto CModelInfoStore__ms_baseModels = *pattern.get_first<CDataStore*>(8);
-
                     for (size_t i = CModelInfoStore::ms_baseModels; i < CModelInfoStore::amount; i++)
                     {
                         CModelInfoStore__ms_baseModels[i].nSize *= 2;

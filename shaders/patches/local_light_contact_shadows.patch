@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index 2337a59..65d384d 100644
+index 2337a596..115c514c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 @@ -40,6 +40,14 @@
@@ -17,7 +17,7 @@ index 2337a59..65d384d 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -80,8 +88,160 @@
+@@ -80,8 +88,135 @@
      mul r1.xyz, c76.w, c76
      mul r0.xyw, r0.x, r1.xyzz
      mul r0.xyw, r3.xyzz, r0
@@ -93,7 +93,6 @@ index 2337a59..65d384d 100644
 +          mov r18.w, c158.w
 +          mov r18.z, r13.w // view depth of the previous sample
 +          mov r18.x, c158.w // part of the ray marched so far
-+          mov r19.z, -c157.y // where a deep sample began, -1 none, -2 the ray came out again
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -129,34 +128,10 @@ index 2337a59..65d384d 100644
 +          if_gt r14.y, c158.w
 +            if_lt r14.y, r18.y
 +              add r18.w, c157.y, -r18.x // weaker the further along the ray the occluder stands
-+              mov r19.z, -c157.y
 +              break
 +            endif
 +          endif
-+          // deeper behind the scene, up to c203.y more, the sample may be inside something
-+          // thick, a car, or merely behind something thin, a ped's leg: past a leg the ray soon
-+          // comes out in front of the scene again, under a car it does not, so it shadows only
-+          // if no later sample of the ray is in front
-+          add r19.w, r18.y, r28.y
-+          if_ge r14.y, r18.y
-+            if_lt r14.y, r19.w
-+              if_lt r19.z, c158.w
-+                mov r19.z, r18.x
-+              endif
-+            else
-+              if_ge r19.z, c158.w
-+                mov r19.z, -c160.x // behind something much nearer: it went past
-+              endif
-+            endif
-+          else
-+            if_ge r19.z, c158.w
-+              mov r19.z, -c160.x // in front of the scene again
-+            endif
-+          endif
 +        endrep
-+          if_ge r19.z, c158.w
-+            add r18.w, c157.y, -r19.z
-+          endif
 +          add r17.x, r17.x, r18.w
 +          add r17.w, r17.w, c157.y
 +          mul r14.x, r29.z, c158.x
@@ -181,7 +156,7 @@ index 2337a59..65d384d 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index 1800ea7..398e595 100644
+index 1800ea70..56917527 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 @@ -43,6 +43,14 @@
@@ -199,7 +174,7 @@ index 1800ea7..398e595 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -91,7 +99,159 @@
+@@ -91,7 +99,134 @@
      mad r1.x, r3.x, c0.w, r1.x
      add r1.x, r1.x, c1.w
      mov r0.w, c2.y
@@ -273,7 +248,6 @@ index 1800ea7..398e595 100644
 +          mov r18.w, c158.w
 +          mov r18.z, r13.w // view depth of the previous sample
 +          mov r18.x, c158.w // part of the ray marched so far
-+          mov r19.z, -c157.y // where a deep sample began, -1 none, -2 the ray came out again
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -309,34 +283,10 @@ index 1800ea7..398e595 100644
 +          if_gt r14.y, c158.w
 +            if_lt r14.y, r18.y
 +              add r18.w, c157.y, -r18.x // weaker the further along the ray the occluder stands
-+              mov r19.z, -c157.y
 +              break
 +            endif
 +          endif
-+          // deeper behind the scene, up to c203.y more, the sample may be inside something
-+          // thick, a car, or merely behind something thin, a ped's leg: past a leg the ray soon
-+          // comes out in front of the scene again, under a car it does not, so it shadows only
-+          // if no later sample of the ray is in front
-+          add r19.w, r18.y, r28.y
-+          if_ge r14.y, r18.y
-+            if_lt r14.y, r19.w
-+              if_lt r19.z, c158.w
-+                mov r19.z, r18.x
-+              endif
-+            else
-+              if_ge r19.z, c158.w
-+                mov r19.z, -c160.x // behind something much nearer: it went past
-+              endif
-+            endif
-+          else
-+            if_ge r19.z, c158.w
-+              mov r19.z, -c160.x // in front of the scene again
-+            endif
-+          endif
 +        endrep
-+          if_ge r19.z, c158.w
-+            add r18.w, c157.y, -r19.z
-+          endif
 +          add r17.x, r17.x, r18.w
 +          add r17.w, r17.w, c157.y
 +          mul r14.x, r29.z, c158.x
@@ -361,7 +311,7 @@ index 1800ea7..398e595 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 0b4d107..b52edce 100644
+index 0b4d1074..a7de22f6 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 @@ -43,6 +43,14 @@
@@ -379,7 +329,7 @@ index 0b4d107..b52edce 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -91,7 +99,159 @@
+@@ -91,7 +99,134 @@
      mad r1.x, r3.x, c0.w, r1.x
      add r1.x, r1.x, c1.w
      mov r0.w, c2.y
@@ -453,7 +403,6 @@ index 0b4d107..b52edce 100644
 +          mov r18.w, c158.w
 +          mov r18.z, r13.w // view depth of the previous sample
 +          mov r18.x, c158.w // part of the ray marched so far
-+          mov r19.z, -c157.y // where a deep sample began, -1 none, -2 the ray came out again
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -489,34 +438,10 @@ index 0b4d107..b52edce 100644
 +          if_gt r14.y, c158.w
 +            if_lt r14.y, r18.y
 +              add r18.w, c157.y, -r18.x // weaker the further along the ray the occluder stands
-+              mov r19.z, -c157.y
 +              break
 +            endif
 +          endif
-+          // deeper behind the scene, up to c203.y more, the sample may be inside something
-+          // thick, a car, or merely behind something thin, a ped's leg: past a leg the ray soon
-+          // comes out in front of the scene again, under a car it does not, so it shadows only
-+          // if no later sample of the ray is in front
-+          add r19.w, r18.y, r28.y
-+          if_ge r14.y, r18.y
-+            if_lt r14.y, r19.w
-+              if_lt r19.z, c158.w
-+                mov r19.z, r18.x
-+              endif
-+            else
-+              if_ge r19.z, c158.w
-+                mov r19.z, -c160.x // behind something much nearer: it went past
-+              endif
-+            endif
-+          else
-+            if_ge r19.z, c158.w
-+              mov r19.z, -c160.x // in front of the scene again
-+            endif
-+          endif
 +        endrep
-+          if_ge r19.z, c158.w
-+            add r18.w, c157.y, -r19.z
-+          endif
 +          add r17.x, r17.x, r18.w
 +          add r17.w, r17.w, c157.y
 +          mul r14.x, r29.z, c158.x
@@ -541,7 +466,7 @@ index 0b4d107..b52edce 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 86f2d47..0ea0041 100644
+index 86f2d477..cefce9ca 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -77,6 +77,14 @@
@@ -559,7 +484,7 @@ index 86f2d47..0ea0041 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -305,7 +313,159 @@
+@@ -305,7 +313,134 @@
      mad r0.x, r0.x, c6.z, r0.z
      add r0.x, r0.x, c7.z
      cmp r0.x, r0.x, c2.y, r0.y
@@ -633,7 +558,6 @@ index 86f2d47..0ea0041 100644
 +          mov r18.w, c158.w
 +          mov r18.z, r13.w // view depth of the previous sample
 +          mov r18.x, c158.w // part of the ray marched so far
-+          mov r19.z, -c157.y // where a deep sample began, -1 none, -2 the ray came out again
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -669,34 +593,10 @@ index 86f2d47..0ea0041 100644
 +          if_gt r14.y, c158.w
 +            if_lt r14.y, r18.y
 +              add r18.w, c157.y, -r18.x // weaker the further along the ray the occluder stands
-+              mov r19.z, -c157.y
 +              break
 +            endif
 +          endif
-+          // deeper behind the scene, up to c203.y more, the sample may be inside something
-+          // thick, a car, or merely behind something thin, a ped's leg: past a leg the ray soon
-+          // comes out in front of the scene again, under a car it does not, so it shadows only
-+          // if no later sample of the ray is in front
-+          add r19.w, r18.y, r28.y
-+          if_ge r14.y, r18.y
-+            if_lt r14.y, r19.w
-+              if_lt r19.z, c158.w
-+                mov r19.z, r18.x
-+              endif
-+            else
-+              if_ge r19.z, c158.w
-+                mov r19.z, -c160.x // behind something much nearer: it went past
-+              endif
-+            endif
-+          else
-+            if_ge r19.z, c158.w
-+              mov r19.z, -c160.x // in front of the scene again
-+            endif
-+          endif
 +        endrep
-+          if_ge r19.z, c158.w
-+            add r18.w, c157.y, -r19.z
-+          endif
 +          add r17.x, r17.x, r18.w
 +          add r17.w, r17.w, c157.y
 +          mul r14.x, r29.z, c158.x
@@ -721,7 +621,7 @@ index 86f2d47..0ea0041 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index d104b6c..0e70b0e 100644
+index d104b6c1..be12b5c3 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 @@ -71,6 +71,14 @@
@@ -739,7 +639,7 @@ index d104b6c..0e70b0e 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -268,8 +276,160 @@
+@@ -268,8 +276,135 @@
      mul r1.yzw, c83.w, c83.xxyz
      mul r1.yzw, r0.w, r1
      mul r0.xyz, r0, r1.yzww
@@ -815,7 +715,6 @@ index d104b6c..0e70b0e 100644
 +          mov r18.w, c158.w
 +          mov r18.z, r13.w // view depth of the previous sample
 +          mov r18.x, c158.w // part of the ray marched so far
-+          mov r19.z, -c157.y // where a deep sample began, -1 none, -2 the ray came out again
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -851,34 +750,10 @@ index d104b6c..0e70b0e 100644
 +          if_gt r14.y, c158.w
 +            if_lt r14.y, r18.y
 +              add r18.w, c157.y, -r18.x // weaker the further along the ray the occluder stands
-+              mov r19.z, -c157.y
 +              break
 +            endif
 +          endif
-+          // deeper behind the scene, up to c203.y more, the sample may be inside something
-+          // thick, a car, or merely behind something thin, a ped's leg: past a leg the ray soon
-+          // comes out in front of the scene again, under a car it does not, so it shadows only
-+          // if no later sample of the ray is in front
-+          add r19.w, r18.y, r28.y
-+          if_ge r14.y, r18.y
-+            if_lt r14.y, r19.w
-+              if_lt r19.z, c158.w
-+                mov r19.z, r18.x
-+              endif
-+            else
-+              if_ge r19.z, c158.w
-+                mov r19.z, -c160.x // behind something much nearer: it went past
-+              endif
-+            endif
-+          else
-+            if_ge r19.z, c158.w
-+              mov r19.z, -c160.x // in front of the scene again
-+            endif
-+          endif
 +        endrep
-+          if_ge r19.z, c158.w
-+            add r18.w, c157.y, -r19.z
-+          endif
 +          add r17.x, r17.x, r18.w
 +          add r17.w, r17.w, c157.y
 +          mul r14.x, r29.z, c158.x
@@ -903,7 +778,7 @@ index d104b6c..0e70b0e 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 963ce40..5c97355 100644
+index 963ce403..0f5445ea 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -48,6 +48,14 @@
@@ -921,7 +796,7 @@ index 963ce40..5c97355 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -137,7 +145,159 @@
+@@ -137,7 +145,134 @@
      mad r0.xyz, r2, r0, r1
      mad_sat r1.x, r4.z, r4.z, c1.y
      mov r0.w, c1.x
@@ -995,7 +870,6 @@ index 963ce40..5c97355 100644
 +          mov r18.w, c158.w
 +          mov r18.z, r13.w // view depth of the previous sample
 +          mov r18.x, c158.w // part of the ray marched so far
-+          mov r19.z, -c157.y // where a deep sample began, -1 none, -2 the ray came out again
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -1031,34 +905,10 @@ index 963ce40..5c97355 100644
 +          if_gt r14.y, c158.w
 +            if_lt r14.y, r18.y
 +              add r18.w, c157.y, -r18.x // weaker the further along the ray the occluder stands
-+              mov r19.z, -c157.y
 +              break
 +            endif
 +          endif
-+          // deeper behind the scene, up to c203.y more, the sample may be inside something
-+          // thick, a car, or merely behind something thin, a ped's leg: past a leg the ray soon
-+          // comes out in front of the scene again, under a car it does not, so it shadows only
-+          // if no later sample of the ray is in front
-+          add r19.w, r18.y, r28.y
-+          if_ge r14.y, r18.y
-+            if_lt r14.y, r19.w
-+              if_lt r19.z, c158.w
-+                mov r19.z, r18.x
-+              endif
-+            else
-+              if_ge r19.z, c158.w
-+                mov r19.z, -c160.x // behind something much nearer: it went past
-+              endif
-+            endif
-+          else
-+            if_ge r19.z, c158.w
-+              mov r19.z, -c160.x // in front of the scene again
-+            endif
-+          endif
 +        endrep
-+          if_ge r19.z, c158.w
-+            add r18.w, c157.y, -r19.z
-+          endif
 +          add r17.x, r17.x, r18.w
 +          add r17.w, r17.w, c157.y
 +          mul r14.x, r29.z, c158.x
@@ -1083,7 +933,7 @@ index 963ce40..5c97355 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 6cdc2ec..add1c2b 100644
+index 6cdc2ec6..dccf188d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -79,6 +79,14 @@
@@ -1101,7 +951,7 @@ index 6cdc2ec..add1c2b 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -322,8 +330,160 @@
+@@ -322,8 +330,135 @@
      mul r0.xyz, r0, r0.w
      mul r2.xyz, r3, r6
      mul r1.xyz, r1.z, r1.xyww
@@ -1177,7 +1027,6 @@ index 6cdc2ec..add1c2b 100644
 +          mov r18.w, c158.w
 +          mov r18.z, r13.w // view depth of the previous sample
 +          mov r18.x, c158.w // part of the ray marched so far
-+          mov r19.z, -c157.y // where a deep sample began, -1 none, -2 the ray came out again
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -1213,34 +1062,10 @@ index 6cdc2ec..add1c2b 100644
 +          if_gt r14.y, c158.w
 +            if_lt r14.y, r18.y
 +              add r18.w, c157.y, -r18.x // weaker the further along the ray the occluder stands
-+              mov r19.z, -c157.y
 +              break
 +            endif
 +          endif
-+          // deeper behind the scene, up to c203.y more, the sample may be inside something
-+          // thick, a car, or merely behind something thin, a ped's leg: past a leg the ray soon
-+          // comes out in front of the scene again, under a car it does not, so it shadows only
-+          // if no later sample of the ray is in front
-+          add r19.w, r18.y, r28.y
-+          if_ge r14.y, r18.y
-+            if_lt r14.y, r19.w
-+              if_lt r19.z, c158.w
-+                mov r19.z, r18.x
-+              endif
-+            else
-+              if_ge r19.z, c158.w
-+                mov r19.z, -c160.x // behind something much nearer: it went past
-+              endif
-+            endif
-+          else
-+            if_ge r19.z, c158.w
-+              mov r19.z, -c160.x // in front of the scene again
-+            endif
-+          endif
 +        endrep
-+          if_ge r19.z, c158.w
-+            add r18.w, c157.y, -r19.z
-+          endif
 +          add r17.x, r17.x, r18.w
 +          add r17.w, r17.w, c157.y
 +          mul r14.x, r29.z, c158.x
@@ -1265,7 +1090,7 @@ index 6cdc2ec..add1c2b 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 21f11d1..ac05656 100644
+index 21f11d1d..e2816d40 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -43,6 +43,14 @@
@@ -1283,7 +1108,7 @@ index 21f11d1..ac05656 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -103,7 +111,159 @@
+@@ -103,7 +111,134 @@
      mad_sat r1.x, r1.z, r1.z, c2.x
      mad r0.xyz, r0.w, r2, r0
      mov r0.w, c2.z
@@ -1357,7 +1182,6 @@ index 21f11d1..ac05656 100644
 +          mov r18.w, c158.w
 +          mov r18.z, r13.w // view depth of the previous sample
 +          mov r18.x, c158.w // part of the ray marched so far
-+          mov r19.z, -c157.y // where a deep sample began, -1 none, -2 the ray came out again
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -1393,34 +1217,10 @@ index 21f11d1..ac05656 100644
 +          if_gt r14.y, c158.w
 +            if_lt r14.y, r18.y
 +              add r18.w, c157.y, -r18.x // weaker the further along the ray the occluder stands
-+              mov r19.z, -c157.y
 +              break
 +            endif
 +          endif
-+          // deeper behind the scene, up to c203.y more, the sample may be inside something
-+          // thick, a car, or merely behind something thin, a ped's leg: past a leg the ray soon
-+          // comes out in front of the scene again, under a car it does not, so it shadows only
-+          // if no later sample of the ray is in front
-+          add r19.w, r18.y, r28.y
-+          if_ge r14.y, r18.y
-+            if_lt r14.y, r19.w
-+              if_lt r19.z, c158.w
-+                mov r19.z, r18.x
-+              endif
-+            else
-+              if_ge r19.z, c158.w
-+                mov r19.z, -c160.x // behind something much nearer: it went past
-+              endif
-+            endif
-+          else
-+            if_ge r19.z, c158.w
-+              mov r19.z, -c160.x // in front of the scene again
-+            endif
-+          endif
 +        endrep
-+          if_ge r19.z, c158.w
-+            add r18.w, c157.y, -r19.z
-+          endif
 +          add r17.x, r17.x, r18.w
 +          add r17.w, r17.w, c157.y
 +          mul r14.x, r29.z, c158.x
@@ -1445,7 +1245,7 @@ index 21f11d1..ac05656 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 3a813bf..bad440f 100644
+index 3a813bf9..e2424c1f 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -46,6 +46,14 @@
@@ -1463,7 +1263,7 @@ index 3a813bf..bad440f 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -112,7 +120,159 @@
+@@ -112,7 +120,134 @@
      mad r0.x, r0.x, c2.x, r0.y
      add r0.x, r0.x, c2.w
      cmp r0.x, r0.x, c3.x, c3.y
@@ -1537,7 +1337,6 @@ index 3a813bf..bad440f 100644
 +          mov r18.w, c158.w
 +          mov r18.z, r13.w // view depth of the previous sample
 +          mov r18.x, c158.w // part of the ray marched so far
-+          mov r19.z, -c157.y // where a deep sample began, -1 none, -2 the ray came out again
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -1573,34 +1372,10 @@ index 3a813bf..bad440f 100644
 +          if_gt r14.y, c158.w
 +            if_lt r14.y, r18.y
 +              add r18.w, c157.y, -r18.x // weaker the further along the ray the occluder stands
-+              mov r19.z, -c157.y
 +              break
 +            endif
 +          endif
-+          // deeper behind the scene, up to c203.y more, the sample may be inside something
-+          // thick, a car, or merely behind something thin, a ped's leg: past a leg the ray soon
-+          // comes out in front of the scene again, under a car it does not, so it shadows only
-+          // if no later sample of the ray is in front
-+          add r19.w, r18.y, r28.y
-+          if_ge r14.y, r18.y
-+            if_lt r14.y, r19.w
-+              if_lt r19.z, c158.w
-+                mov r19.z, r18.x
-+              endif
-+            else
-+              if_ge r19.z, c158.w
-+                mov r19.z, -c160.x // behind something much nearer: it went past
-+              endif
-+            endif
-+          else
-+            if_ge r19.z, c158.w
-+              mov r19.z, -c160.x // in front of the scene again
-+            endif
-+          endif
 +        endrep
-+          if_ge r19.z, c158.w
-+            add r18.w, c157.y, -r19.z
-+          endif
 +          add r17.x, r17.x, r18.w
 +          add r17.w, r17.w, c157.y
 +          mul r14.x, r29.z, c158.x
@@ -1625,7 +1400,7 @@ index 3a813bf..bad440f 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 4333137..e8dbe4b 100644
+index 43331379..142fb3e8 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -46,6 +46,14 @@
@@ -1643,7 +1418,7 @@ index 4333137..e8dbe4b 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -114,7 +122,159 @@
+@@ -114,7 +122,134 @@
      add r0.x, r0.x, c3.w
      cmp r0.x, r0.x, c0.x, c0.y
      mul r0, r2, r0.x
@@ -1717,7 +1492,6 @@ index 4333137..e8dbe4b 100644
 +          mov r18.w, c158.w
 +          mov r18.z, r13.w // view depth of the previous sample
 +          mov r18.x, c158.w // part of the ray marched so far
-+          mov r19.z, -c157.y // where a deep sample began, -1 none, -2 the ray came out again
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -1753,34 +1527,10 @@ index 4333137..e8dbe4b 100644
 +          if_gt r14.y, c158.w
 +            if_lt r14.y, r18.y
 +              add r18.w, c157.y, -r18.x // weaker the further along the ray the occluder stands
-+              mov r19.z, -c157.y
 +              break
 +            endif
 +          endif
-+          // deeper behind the scene, up to c203.y more, the sample may be inside something
-+          // thick, a car, or merely behind something thin, a ped's leg: past a leg the ray soon
-+          // comes out in front of the scene again, under a car it does not, so it shadows only
-+          // if no later sample of the ray is in front
-+          add r19.w, r18.y, r28.y
-+          if_ge r14.y, r18.y
-+            if_lt r14.y, r19.w
-+              if_lt r19.z, c158.w
-+                mov r19.z, r18.x
-+              endif
-+            else
-+              if_ge r19.z, c158.w
-+                mov r19.z, -c160.x // behind something much nearer: it went past
-+              endif
-+            endif
-+          else
-+            if_ge r19.z, c158.w
-+              mov r19.z, -c160.x // in front of the scene again
-+            endif
-+          endif
 +        endrep
-+          if_ge r19.z, c158.w
-+            add r18.w, c157.y, -r19.z
-+          endif
 +          add r17.x, r17.x, r18.w
 +          add r17.w, r17.w, c157.y
 +          mul r14.x, r29.z, c158.x
@@ -1805,7 +1555,7 @@ index 4333137..e8dbe4b 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 76eac90..36f9335 100644
+index 76eac906..fa58e3d7 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -46,6 +46,14 @@
@@ -1823,7 +1573,7 @@ index 76eac90..36f9335 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -116,7 +124,159 @@
+@@ -116,7 +124,134 @@
      add r0.x, -r0_abs.x, c3.w
      cmp r0.x, r0.x, -c3.z, -c3.y
      mov r1.w, -c3.z
@@ -1897,7 +1647,6 @@ index 76eac90..36f9335 100644
 +          mov r18.w, c158.w
 +          mov r18.z, r13.w // view depth of the previous sample
 +          mov r18.x, c158.w // part of the ray marched so far
-+          mov r19.z, -c157.y // where a deep sample began, -1 none, -2 the ray came out again
 +        rep i0
 +          add r31.xyz, r31, r30
 +          add r18.x, r18.x, c157.z
@@ -1933,34 +1682,10 @@ index 76eac90..36f9335 100644
 +          if_gt r14.y, c158.w
 +            if_lt r14.y, r18.y
 +              add r18.w, c157.y, -r18.x // weaker the further along the ray the occluder stands
-+              mov r19.z, -c157.y
 +              break
 +            endif
 +          endif
-+          // deeper behind the scene, up to c203.y more, the sample may be inside something
-+          // thick, a car, or merely behind something thin, a ped's leg: past a leg the ray soon
-+          // comes out in front of the scene again, under a car it does not, so it shadows only
-+          // if no later sample of the ray is in front
-+          add r19.w, r18.y, r28.y
-+          if_ge r14.y, r18.y
-+            if_lt r14.y, r19.w
-+              if_lt r19.z, c158.w
-+                mov r19.z, r18.x
-+              endif
-+            else
-+              if_ge r19.z, c158.w
-+                mov r19.z, -c160.x // behind something much nearer: it went past
-+              endif
-+            endif
-+          else
-+            if_ge r19.z, c158.w
-+              mov r19.z, -c160.x // in front of the scene again
-+            endif
-+          endif
 +        endrep
-+          if_ge r19.z, c158.w
-+            add r18.w, c157.y, -r19.z
-+          endif
 +          add r17.x, r17.x, r18.w
 +          add r17.w, r17.w, c157.y
 +          mul r14.x, r29.z, c158.x

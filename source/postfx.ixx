@@ -231,7 +231,7 @@ public:
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade;
-        D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
+        D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
@@ -253,7 +253,6 @@ public:
     static bool ContactShadowsEnabled() { static auto p = FusionFixSettings.GetRef("PREF_CONTACTSHADOWS"); return p && p->get() != 0; }
     float fContactShadowLength = 0.3f;
     float fContactShadowThickness = 0.15f;
-    float fContactShadowMaxThickness = 2.0f;
     // Screen space indirect light (SSGI_PS in SSR.fx), at half resolution: marched into
     // GIRawTex, smoothed into GIDenoisedTex, accumulated over frames into one of GIAccumTex, and
     // bound to s8 for deferred_lighting (shaders/patches/deferred_lighting_ssgi.patch), which
@@ -294,11 +293,10 @@ public:
     bool bLocalContactShadows = true;
     float fLocalContactShadowLength = 0.5f;
     float fLocalContactShadowThickness = 0.2f;
-    float fLocalContactShadowMaxThickness = 2.0f; // c203.y, see ContactShadowsMaxThickness
     float fLocalContactShadowMaxDistance = 40.0f;
     float fLocalContactShadowIntensity = 1.0f;
-    // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34, the
-    // max thickness and 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
+    // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
+    // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
     float LocalContactShadowConsts[12] = {};
     // The engine's own light shafts on street lights, as the snow season turns them on (see
@@ -827,7 +825,6 @@ public:
                 h.vec4SunView = SSREffect->GetParameterByName(nullptr, "vec4SunView");
                 h.fCSLength = SSREffect->GetParameterByName(nullptr, "fCSLength");
                 h.fCSThickness = SSREffect->GetParameterByName(nullptr, "fCSThickness");
-                h.fCSMaxThickness = SSREffect->GetParameterByName(nullptr, "fCSMaxThickness");
                 h.fCSMaxViewDistance = SSREffect->GetParameterByName(nullptr, "fCSMaxViewDistance");
                 h.fCSIntensity = SSREffect->GetParameterByName(nullptr, "fCSIntensity");
                 h.techContactShadows = SSREffect->GetTechniqueByName("ContactShadows");
@@ -988,7 +985,6 @@ public:
         fSSRDistanceFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsDistanceFade", 0.0f), 0.0f, 100.0f);
         fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 0.3f), 0.05f, 10.0f);
         fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.15f), 0.01f, 10.0f);
-        fContactShadowMaxThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxThickness", 2.0f), 0.0f, 10.0f);
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
         fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
@@ -1003,7 +999,6 @@ public:
         bLocalContactShadows = iniReader.ReadInteger("POSTFX", "LocalContactShadows", 1) != 0;
         fLocalContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsLength", 0.5f), 0.05f, 10.0f);
         fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.2f), 0.01f, 5.0f);
-        fLocalContactShadowMaxThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxThickness", 2.0f), 0.0f, 10.0f);
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 4.0f), 0.0f, 20.0f);
@@ -3189,7 +3184,7 @@ private:
             const float consts[12] =
             {
                 R.fLocalContactShadowLength, R.fLocalContactShadowThickness, R.fLocalContactShadowMaxDistance, R.fLocalContactShadowIntensity,
-                proj._34, R.fLocalContactShadowMaxThickness, 0.0f, local ? 12345.0f : 0.0f,
+                proj._34, 0.0f, 0.0f, local ? 12345.0f : 0.0f,
                 proj._11, proj._22, proj._31, proj._32,
             };
             memcpy(R.LocalContactShadowConsts, consts, sizeof(consts));
@@ -3254,7 +3249,6 @@ private:
         effect->SetFloat(h.fStepJitter, R.bContactShadowStepJitter ? 1.0f : 0.0f);
         effect->SetFloat(h.fCSLength, R.fContactShadowLength);
         effect->SetFloat(h.fCSThickness, R.fContactShadowThickness);
-        effect->SetFloat(h.fCSMaxThickness, R.fContactShadowMaxThickness);
         effect->SetFloat(h.fCSMaxViewDistance, R.fContactShadowMaxDistance);
         effect->SetFloat(h.fCSIntensity, R.fContactShadowIntensity);
 
