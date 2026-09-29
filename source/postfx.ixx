@@ -3110,6 +3110,40 @@ private:
         R.bContactValid = true;
     }
 
+    // The game's light shaft loop (CE 0xAC2A09) walks the render thread's light list: lights with
+    // the shaft bit enter it, those whose shaft volume is on screen go on to be drawn, with the
+    // shadowed shaft technique when a shadow map is found for them. Both steps are counted by
+    // flags, the second also by that shadow, for the log.
+    static inline std::mutex ShaftLogMutex;
+    static inline std::map<uint32_t, uint32_t> ShaftEntered;
+    static inline std::map<std::pair<uint32_t, bool>, uint32_t> ShaftDrawn;
+    static inline SafetyHookMid shShaftEnter{};
+    static inline SafetyHookMid shShaftDraw{};
+
+    static void InstallShaftLogHooks()
+    {
+        auto pattern = hook::pattern("F6 44 0E 48 08 0F 84 ? ? ? ? 8B 44 0E 44 85 C0 74 ? 83 F8 02");
+        if (!pattern.empty())
+            shShaftEnter = safetyhook::create_mid(pattern.get_first(11), [](SafetyHookContext& regs)
+            {
+                const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.ecx + regs.esi);
+                std::lock_guard lock(ShaftLogMutex);
+                ++ShaftEntered[light.mFlags];
+            });
+        pattern = hook::pattern("A1 ? ? ? ? 0F 28 05 ? ? ? ? 0F 29 84 24 A0 00 00 00 F3 0F 10 44 06 70");
+        if (!pattern.empty())
+        {
+            static uintptr_t* list = *pattern.get_first<uintptr_t*>(1);
+            shShaftDraw = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
+            {
+                const auto& light = *reinterpret_cast<const rage::CLightSource*>(*list + regs.esi);
+                const bool shadowed = *reinterpret_cast<const uint8_t*>(regs.esp + 0xF) != 0;
+                std::lock_guard lock(ShaftLogMutex);
+                ++ShaftDrawn[{light.mFlags, shadowed}];
+            });
+        }
+    }
+
     // Counts every kind of light copied within 60 m of the camera (type, flags, rounded radius)
     // and rewrites the log with them every 5 s.
     static void LogCopiedLight(const rage::CLightSource& light, float distance)
@@ -3127,6 +3161,17 @@ private:
         for (const auto& [kind, count] : kinds)
             out << std::get<0>(kind) << " 0x" << std::hex << std::get<1>(kind) << std::dec << ' '
                 << std::get<2>(kind) << ' ' << count << '\n';
+        std::lock_guard lock(ShaftLogMutex);
+        out << "\nshaft loop: flags entered drawn drawn-with-shadow (all distances)"
+            << (shShaftEnter && shShaftDraw ? "" : " -- hooks not installed") << '\n';
+        for (const auto& [flags, entered] : ShaftEntered)
+        {
+            const auto plain = ShaftDrawn.find({flags, false});
+            const auto shadowed = ShaftDrawn.find({flags, true});
+            out << "0x" << std::hex << flags << std::dec << ' ' << entered << ' '
+                << (plain != ShaftDrawn.end() ? plain->second : 0) << ' '
+                << (shadowed != ShaftDrawn.end() ? shadowed->second : 0) << '\n';
+        }
     }
 
     // Runs as the game copies each light into the frame's draw list, on the main thread.
@@ -3302,6 +3347,8 @@ public:
 
                 {
                     CRenderPhaseDeferredLighting_LightsToScreen::OnAfterCopyLight() += OnAfterCopyLight;
+                    if (PostFxResources.bVolumetricLightLog)
+                        InstallShaftLogHooks();
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
                         auto cb = new T_CB_Generic_NoArgs(BindSSRTexture);
