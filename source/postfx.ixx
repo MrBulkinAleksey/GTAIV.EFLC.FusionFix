@@ -3308,6 +3308,11 @@ private:
         for (const auto& [kind, count] : kinds)
             out << std::get<0>(kind) << " 0x" << std::hex << std::get<1>(kind) << std::dec << ' '
                 << std::get<2>(kind) << ' ' << count << '\n';
+        const auto held = std::count_if(HeldLights.begin(), HeldLights.end(), [](const auto& h) { return h.second.held; });
+        out << "\nlight debug mode " << PostFxResources.LightDebugMode() << ", hold hook "
+            << (shCloseLightFrame ? "installed" : "missing") << ", add " << (AddLight ? "found" : "missing")
+            << ", runs " << HoldRuns << ", lights added back " << HoldAdds << ", tracked " << HeldLights.size()
+            << ", held now " << held << '\n';
         std::lock_guard lock(ShaftLogMutex);
         out << "\nshaft loop: flags entered drawn drawn-with-shadow (all distances)"
             << (shShaftEnter && shShaftDraw ? "" : " -- hooks not installed") << '\n';
@@ -3340,6 +3345,7 @@ private:
     static inline std::map<std::tuple<int, float, float, float>, HeldLight> HeldLights;
     static inline std::vector<std::pair<int, rage::Vector3>> SentHeldCandidates;
     static inline bool bAddingHeldLights = false;
+    static inline uint32_t HoldRuns = 0, HoldAdds = 0;
     static inline SafetyHookInline shCloseLightFrame{};
     static inline void(__cdecl* AddLight)(const rage::CLightSource* light, float distance) = nullptr;
     static inline uint32_t* pLightCount = nullptr;
@@ -3386,6 +3392,7 @@ private:
         Natives::GetRootCam(&camera);
         Natives::GetCamPos(camera, &cameraPos.x, &cameraPos.y, &cameraPos.z);
         const int32_t now = LightFrameTime();
+        ++HoldRuns;
         bAddingHeldLights = true;
         for (auto it = HeldLights.begin(); it != HeldLights.end();)
         {
@@ -3432,6 +3439,7 @@ private:
             if (*pLightCount + 1 < 0x280)
             {
                 AddLight(&l, (std::max)(distance - l.mRadius, 0.0f));
+                ++HoldAdds;
                 pLightBufferCounts[*pLightBuffer] = *pLightCount;
             }
             ++it;
