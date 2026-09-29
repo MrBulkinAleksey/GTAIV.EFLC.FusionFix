@@ -277,6 +277,8 @@ public:
     // 0 leaves headlights out.
     uint32_t nVolumetricLightHeadlightFlag = 0x100;
     float fVolumetricLightHeadlightIntensity = 2.0f;
+    // Headlight shaft size in metres, radius times scale for the shaft mesh.
+    float fVolumetricLightHeadlightLength = 25.0f;
     // Flags headlights get besides the shaft bit, none by default: the shaft draw loop (CE
     // 0xAC2A09) looks at no flag but the shaft bit and 0x10, so 0x1 made no difference.
     uint32_t nVolumetricLightHeadlightAddFlags = 0;
@@ -924,6 +926,7 @@ public:
         fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 100.0f), 10.0f, 1000.0f);
         nVolumetricLightHeadlightFlag = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightFlag", 0x100));
         fVolumetricLightHeadlightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightIntensity", 2.0f), 0.0f, 20.0f);
+        fVolumetricLightHeadlightLength = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightLength", 25.0f), 1.0f, 200.0f);
         nVolumetricLightHeadlightAddFlags = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightAddFlags", 0));
         bVolumetricLightHeadlightShadow = iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightShadow", 0) != 0;
         bVolumetricLightLog = iniReader.ReadInteger("POSTFX", "VolumetricLightLog", 0) != 0;
@@ -3239,7 +3242,11 @@ private:
         if (headlight)
             light->mFlags |= R.nVolumetricLightHeadlightAddFlags;
         light->mVolumeIntensity = (headlight ? R.fVolumetricLightHeadlightIntensity : R.fVolumetricLightIntensity) * fade;
-        light->mVolumeScale = R.fVolumetricLightScale;
+        // The shaft mesh reaches about 0.66 to 0.85 of radius times scale (light shaft VS), so
+        // headlights take a scale that gives the same length to low beams of 33 m and high
+        // beams of 75 to 98 m, never past their own reach.
+        light->mVolumeScale = headlight ? (std::min)(R.fVolumetricLightHeadlightLength / light->mRadius, 1.0f)
+                                        : R.fVolumetricLightScale;
     }
 
 public:
