@@ -259,10 +259,12 @@ public:
     float fLocalContactShadowLength = 0.5f;
     float fLocalContactShadowThickness = 0.2f;
     float fLocalContactShadowMaxThickness = 2.0f; // c203.y, see ContactShadowsMaxThickness
+    // c203.z: 1 paints what the local contact shadows take from each light red, to see them.
+    bool bLocalContactShadowsDebug = false;
     float fLocalContactShadowMaxDistance = 40.0f;
     float fLocalContactShadowIntensity = 1.0f;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34, the
-    // max thickness and 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
+    // max thickness, the debug flag and 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
     float LocalContactShadowConsts[12] = {};
     // The engine's own light shafts on street lights, as the snow season turns them on (see
@@ -926,6 +928,7 @@ public:
         fLocalContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsLength", 0.5f), 0.05f, 10.0f);
         fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.2f), 0.01f, 5.0f);
         fLocalContactShadowMaxThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxThickness", 2.0f), 0.0f, 10.0f);
+        bLocalContactShadowsDebug = iniReader.ReadInteger("POSTFX", "LocalContactShadowsDebug", 0) != 0;
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 4.0f), 0.0f, 20.0f);
@@ -2989,7 +2992,7 @@ private:
             const float consts[12] =
             {
                 R.fLocalContactShadowLength, R.fLocalContactShadowThickness, R.fLocalContactShadowMaxDistance, R.fLocalContactShadowIntensity,
-                proj._34, R.fLocalContactShadowMaxThickness, 0.0f, local ? 12345.0f : 0.0f,
+                proj._34, R.fLocalContactShadowMaxThickness, R.bLocalContactShadowsDebug ? 1.0f : 0.0f, local ? 12345.0f : 0.0f,
                 proj._11, proj._22, proj._31, proj._32,
             };
             memcpy(R.LocalContactShadowConsts, consts, sizeof(consts));
