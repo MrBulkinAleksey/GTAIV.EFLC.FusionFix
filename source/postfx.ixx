@@ -3345,6 +3345,8 @@ private:
     static inline std::map<std::tuple<int, float, float, float>, HeldLight> HeldLights;
     static inline std::vector<std::pair<int, rage::Vector3>> SentHeldCandidates;
     static inline bool bAddingHeldLights = false;
+    // The camera as the lights were copied: natives called from the frame close gave none.
+    static inline rage::Vector3 HeldLightsCamera{};
     static inline uint32_t HoldRuns = 0, HoldAdds = 0;
     static inline SafetyHookInline shCloseLightFrame{};
     static inline void(__cdecl* AddLight)(const rage::CLightSource* light, float distance) = nullptr;
@@ -3387,10 +3389,7 @@ private:
             SentHeldCandidates.clear();
             return;
         }
-        Cam camera = 0;
-        rage::Vector3 cameraPos{};
-        Natives::GetRootCam(&camera);
-        Natives::GetCamPos(camera, &cameraPos.x, &cameraPos.y, &cameraPos.z);
+        const rage::Vector3 cameraPos = HeldLightsCamera;
         const int32_t now = LightFrameTime();
         ++HoldRuns;
         bAddingHeldLights = true;
@@ -3491,7 +3490,10 @@ private:
             if (debug & 1)
                 LogCopiedLight(*light, cameraPos, distance);
             if (debug & 2)
+            {
+                HeldLightsCamera = cameraPos;
                 TrackHeldLight(*light);
+            }
         }
         if (!volumetric)
             return;
