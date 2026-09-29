@@ -4,6 +4,7 @@ module;
 #include <d3dx9tex.h>
 #include <algorithm>
 #include <fstream>
+#include <sstream>
 #include <vector>
 
 export module postfx;
@@ -287,8 +288,8 @@ public:
     // Headlight shafts with the headlight's shadow map, which leaves them unseen (see
     // InstallShaftHooks).
     bool bVolumetricLightHeadlightShadow = false;
-    // VolumetricLightLog writes the kinds of lights the game copies near the camera to
-    // GTAIV.EFLC.FusionFix.lights.log next to the INI.
+    // VolumetricLightLog follows the lights the game copies near the camera in
+    // GTAIV.EFLC.FusionFix.lights.log next to the INI (see LogCopiedLight).
     bool bVolumetricLightLog = false;
     std::filesystem::path VolumetricLightLogPath;
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
@@ -3169,9 +3170,19 @@ private:
         }
     }
 
-    // Counts every kind of light copied within 60 m of the camera (type, flags, rounded radius)
-    // and rewrites the log with them every second, after the lights within 40 m copied in the
-    // last whole frame, to compare two camera positions light by light.
+    static void WriteLogLight(std::ostream& out, char mark, float distance, const rage::CLightSource& l)
+    {
+        out << mark << ' ' << distance << ' ' << int(l.mType) << " 0x" << std::hex << l.mFlags << std::dec << ' '
+            << l.mRadius << ' ' << std::setprecision(2) << l.mIntensity << ' ' << l.mColor.x << ' ' << l.mColor.y << ' '
+            << l.mColor.z << std::setprecision(1) << ' ' << l.mPosition.x << ' ' << l.mPosition.y << ' ' << l.mPosition.z << '\n';
+    }
+
+    // The lights log follows the lights near the camera through the whole session: after the
+    // lights within 40 m at the start, it appends every change between whole frames, a light
+    // coming within 40 m (+), leaving 45 m or no longer copied (-), or its flags, radius or
+    // intensity changing (~), with the time and the camera. Vehicle lights (0x100), which move
+    // and would log every frame, are left out. Next to it the lights summary counts every kind
+    // of light within 60 m since start, with the light shaft loop counts, rewritten every 5 s.
     static void LogCopiedLight(const rage::CLightSource& light, const rage::Vector3& cameraPos, float distance)
     {
         struct Nearby
@@ -3179,35 +3190,92 @@ private:
             float distance;
             rage::CLightSource light;
         };
+        // Static lights are copied from the same data every frame, so the type and the exact
+        // position tell one from another.
+        using Key = std::tuple<int, float, float, float>;
         static std::map<std::tuple<int, uint32_t, int>, uint32_t> kinds;
-        static std::vector<Nearby> frame, lastFrame;
+        static std::map<Key, Nearby> frame, logged;
         static const rage::CLightSource* previous = nullptr;
-        static ULONGLONG last = 0;
+        static rage::Vector3 frameCamera{};
+        static bool started = false;
+        static uint32_t lines = 0;
+        static const ULONGLONG start = GetTickCount64();
+        static ULONGLONG lastSummary = 0;
+        const auto& path = PostFxResources.VolumetricLightLogPath;
+
         // Within a frame the game copies into consecutive slots of one list.
-        if (&light != previous + 1)
+        if (&light != previous + 1 && previous && lines < 50000)
         {
-            lastFrame.swap(frame);
+            std::ostringstream out;
+            out << std::fixed << std::setprecision(1);
+            bool header = false;
+            auto writeHeader = [&]()
+            {
+                if (header)
+                    return;
+                header = true;
+                out << "\nt " << std::setprecision(2) << (GetTickCount64() - start) / 1000.0 << std::setprecision(1)
+                    << " s, camera " << frameCamera.x << ' ' << frameCamera.y << ' ' << frameCamera.z << '\n';
+                ++lines;
+            };
+            for (auto it = logged.begin(); it != logged.end();)
+            {
+                const auto now = frame.find(it->first);
+                if (now == frame.end())
+                {
+                    writeHeader();
+                    WriteLogLight(out, '-', it->second.distance, it->second.light);
+                    ++lines;
+                    it = logged.erase(it);
+                    continue;
+                }
+                const auto& a = it->second.light;
+                const auto& b = now->second.light;
+                const bool dark = (a.mIntensity > 0.01f) != (b.mIntensity > 0.01f);
+                const bool intensity = dark || b.mIntensity > a.mIntensity * 2.0f || b.mIntensity < a.mIntensity * 0.5f;
+                if (a.mFlags != b.mFlags || std::abs(a.mRadius - b.mRadius) > 0.5f || intensity)
+                {
+                    writeHeader();
+                    WriteLogLight(out, '~', now->second.distance, b);
+                    ++lines;
+                    it->second = now->second;
+                }
+                ++it;
+            }
+            for (const auto& [key, nearby] : frame)
+            {
+                if (nearby.distance < 40.0f && logged.emplace(key, nearby).second)
+                {
+                    writeHeader();
+                    WriteLogLight(out, '+', nearby.distance, nearby.light);
+                    ++lines;
+                }
+            }
             frame.clear();
+            if (header || !started)
+            {
+                std::ofstream file(path, started ? std::ios::app : std::ios::trunc);
+                if (!started)
+                    file << "lights within 40 m of the camera, then changes between frames; vehicle lights left out\n"
+                            "mark distance type flags radius intensity r g b x y z\n";
+                file << out.str();
+                started = true;
+            }
         }
         previous = &light;
-        if (distance < 40.0f)
-            frame.push_back({distance, light});
+        frameCamera = cameraPos;
+        if (distance < 45.0f && !(light.mFlags & 0x100))
+            frame[{int(light.mType), light.mPosition.x, light.mPosition.y, light.mPosition.z}] = {distance, light};
         if (distance < 60.0f)
             ++kinds[{int(light.mType), light.mFlags, int(light.mRadius + 0.5f)}];
+
         const auto now = GetTickCount64();
-        if (now - last < 1000)
+        if (now - lastSummary < 5000)
             return;
-        last = now;
-        std::ofstream out(PostFxResources.VolumetricLightLogPath, std::ios::trunc);
-        std::sort(lastFrame.begin(), lastFrame.end(), [](const Nearby& a, const Nearby& b) { return a.distance < b.distance; });
-        out << std::fixed << std::setprecision(1)
-            << "last frame, within 40 m of the camera at " << cameraPos.x << ' ' << cameraPos.y << ' ' << cameraPos.z
-            << "\ndistance type flags radius intensity r g b x y z\n";
-        for (const auto& [d, l] : lastFrame)
-            out << d << ' ' << int(l.mType) << " 0x" << std::hex << l.mFlags << std::dec << ' ' << l.mRadius << ' '
-                << std::setprecision(2) << l.mIntensity << ' ' << l.mColor.x << ' ' << l.mColor.y << ' ' << l.mColor.z
-                << std::setprecision(1) << ' ' << l.mPosition.x << ' ' << l.mPosition.y << ' ' << l.mPosition.z << '\n';
-        out << '\n';
+        lastSummary = now;
+        auto summaryPath = path;
+        summaryPath.replace_filename("GTAIV.EFLC.FusionFix.lights-summary.log");
+        std::ofstream out(summaryPath, std::ios::trunc);
         out << "type flags radius count (within 60 m of the camera since start; type 2 is spot)\n";
         for (const auto& [kind, count] : kinds)
             out << std::get<0>(kind) << " 0x" << std::hex << std::get<1>(kind) << std::dec << ' '
