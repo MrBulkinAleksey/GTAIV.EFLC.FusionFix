@@ -277,6 +277,9 @@ public:
     // 0 leaves headlights out.
     uint32_t nVolumetricLightHeadlightFlag = 0x100;
     float fVolumetricLightHeadlightIntensity = 2.0f;
+    // Flags headlights get besides the shaft bit. Every light that shows a shaft carries 0x1,
+    // which no headlight has, so the engine may draw shafts only for lights with it.
+    uint32_t nVolumetricLightHeadlightAddFlags = 0x1;
     // VolumetricLightLog writes the kinds of lights the game copies near the camera to
     // GTAIV.EFLC.FusionFix.lights.log next to the INI.
     bool bVolumetricLightLog = false;
@@ -918,6 +921,7 @@ public:
         fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 100.0f), 10.0f, 1000.0f);
         nVolumetricLightHeadlightFlag = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightFlag", 0x100));
         fVolumetricLightHeadlightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightIntensity", 2.0f), 0.0f, 20.0f);
+        nVolumetricLightHeadlightAddFlags = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightAddFlags", 0x1));
         bVolumetricLightLog = iniReader.ReadInteger("POSTFX", "VolumetricLightLog", 0) != 0;
         VolumetricLightLogPath = iniReader.GetIniPath().parent_path() / "GTAIV.EFLC.FusionFix.lights.log";
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
@@ -3145,11 +3149,13 @@ private:
 
         // Spot lights of 8 to 20 m, most of lamppost.img, and none of the vehicle, traffic,
         // fill and cutscene lights (0x398) or lights that have a shaft already (8); headlights
-        // are the spot lights with the headlight flag, whatever their radius and other flags.
+        // are the spot lights of at least 8 m with the headlight flag (smaller ones are tail and
+        // brake lights), whatever their other flags.
         if (light->mType != rage::LT_SPOT || (light->mFlags & 8))
             return;
         const uint32_t headlightFlag = R.nVolumetricLightHeadlightFlag;
-        const bool headlight = headlightFlag && (light->mFlags & headlightFlag) && R.fVolumetricLightHeadlightIntensity > 0.0f;
+        const bool headlight = headlightFlag && (light->mFlags & headlightFlag) && light->mRadius >= 8.0f &&
+                               R.fVolumetricLightHeadlightIntensity > 0.0f;
         if (!headlight && (light->mRadius < 8.0f || light->mRadius > 20.0f || (light->mFlags & 0x398)))
             return;
         const float fadeStart = R.fVolumetricLightMaxDistance * 0.3f;
@@ -3159,6 +3165,8 @@ private:
             return;
 
         light->mFlags |= 8; // light shaft
+        if (headlight)
+            light->mFlags |= R.nVolumetricLightHeadlightAddFlags;
         light->mVolumeIntensity = (headlight ? R.fVolumetricLightHeadlightIntensity : R.fVolumetricLightIntensity) * fade;
         light->mVolumeScale = R.fVolumetricLightScale;
     }
