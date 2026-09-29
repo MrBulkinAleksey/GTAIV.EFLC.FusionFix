@@ -229,7 +229,7 @@ public:
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade;
-        D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
+        D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
@@ -248,6 +248,7 @@ public:
     static bool ContactShadowsEnabled() { static auto p = FusionFixSettings.GetRef("PREF_CONTACTSHADOWS"); return p && p->get() != 0; }
     float fContactShadowLength = 0.3f;
     float fContactShadowThickness = 0.15f;
+    float fContactShadowMaxThickness = 2.0f;
     float fContactShadowMaxDistance = 60.0f;
     float fContactShadowIntensity = 1.0f;
     bool bContactShadowStepJitter = true;
@@ -769,6 +770,7 @@ public:
                 h.vec4SunView = SSREffect->GetParameterByName(nullptr, "vec4SunView");
                 h.fCSLength = SSREffect->GetParameterByName(nullptr, "fCSLength");
                 h.fCSThickness = SSREffect->GetParameterByName(nullptr, "fCSThickness");
+                h.fCSMaxThickness = SSREffect->GetParameterByName(nullptr, "fCSMaxThickness");
                 h.fCSMaxViewDistance = SSREffect->GetParameterByName(nullptr, "fCSMaxViewDistance");
                 h.fCSIntensity = SSREffect->GetParameterByName(nullptr, "fCSIntensity");
                 h.techContactShadows = SSREffect->GetTechniqueByName("ContactShadows");
@@ -915,6 +917,7 @@ public:
         fSSRDistanceFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsDistanceFade", 0.0f), 0.0f, 100.0f);
         fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 0.3f), 0.05f, 10.0f);
         fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.15f), 0.01f, 10.0f);
+        fContactShadowMaxThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxThickness", 2.0f), 0.0f, 10.0f);
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
         fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
@@ -3049,6 +3052,7 @@ private:
         effect->SetFloat(h.fStepJitter, R.bContactShadowStepJitter ? 1.0f : 0.0f);
         effect->SetFloat(h.fCSLength, R.fContactShadowLength);
         effect->SetFloat(h.fCSThickness, R.fContactShadowThickness);
+        effect->SetFloat(h.fCSMaxThickness, R.fContactShadowMaxThickness);
         effect->SetFloat(h.fCSMaxViewDistance, R.fContactShadowMaxDistance);
         effect->SetFloat(h.fCSIntensity, R.fContactShadowIntensity);
 
