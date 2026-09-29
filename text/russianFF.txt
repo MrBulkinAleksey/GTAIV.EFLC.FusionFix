@@ -166,6 +166,18 @@ Fusion Fix: Проверять Обновления
 [Contact Shadows]
 Контактные тени
 
+[Light Debug]
+Отладка света
+
+[LightDbgLog]
+Лог источников
+
+[LightDbgHold]
+Удержание источников
+
+[LightDbgBoth]
+Лог и удержание
+
 [Zoomed Movement]
 Разрешить движение при прицеливании
 
