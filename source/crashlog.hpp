@@ -96,7 +96,8 @@ namespace CrashLog
         if (VirtualQuery(reinterpret_cast<LPCVOID>(c->Esp), &region, sizeof(region)) && region.State == MEM_COMMIT)
         {
             const auto end = reinterpret_cast<uintptr_t>(region.BaseAddress) + region.RegionSize;
-            const SIZE_T bytes = (std::min)<SIZE_T>(end - c->Esp, sizeof(stack));
+            const SIZE_T available = static_cast<SIZE_T>(end - c->Esp);
+            const SIZE_T bytes = available < sizeof(stack) ? available : sizeof(stack);
             ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<LPCVOID>(c->Esp), stack, bytes, &read);
         }
         int shown = 0;
