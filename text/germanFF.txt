@@ -169,6 +169,9 @@ Contact Shadows
 [Fill Lights]
 Building Fill Lights
 
+[VolumetricLight]
+Volumetric Light
+
 [Zoomed Movement]
 Bewegung beim Zoomen erlauben
 

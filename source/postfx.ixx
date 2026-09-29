@@ -268,7 +268,8 @@ public:
     // no vehicle light, traffic light or fire (0x398, see OnAfterCopyLight) get the shaft flag, VolumetricLightIntensity
     // and VolumetricLightScale, fading out towards VolumetricLightMaxDistance. When the snow
     // season gives the weather shafts of its own, its handler, which runs after this one, wins.
-    bool bVolumetricLight = true;
+    // Volumetric Light in the graphics menu (PREF_VOLUMETRIC_LIGHT) turns them on and off.
+    static bool VolumetricLight() { static auto p = FusionFixSettings.GetRef("PREF_VOLUMETRIC_LIGHT"); return p ? p->get() != 0 : true; }
     float fVolumetricLightIntensity = 4.0f;
     float fVolumetricLightScale = 0.25f;
     float fVolumetricLightMaxDistance = 100.0f;
@@ -922,7 +923,6 @@ public:
         fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.2f), 0.01f, 5.0f);
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
-        bVolumetricLight = iniReader.ReadInteger("POSTFX", "VolumetricLight", 1) != 0;
         fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 4.0f), 0.0f, 20.0f);
         fVolumetricLightScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightScale", 0.25f), 0.0f, 2.0f);
         fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 100.0f), 10.0f, 1000.0f);
@@ -3136,7 +3136,7 @@ private:
             shShaftDraw = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
             {
                 const auto& light = *reinterpret_cast<const rage::CLightSource*>(*list + regs.esi);
-                if (light.mFlags & PostFxResources.nVolumetricLightHeadlightFlag)
+                if (PostFxResources.VolumetricLight() && (light.mFlags & PostFxResources.nVolumetricLightHeadlightFlag))
                     *reinterpret_cast<uint8_t*>(regs.esp + 0xF) = 0;
             });
         }
@@ -3153,7 +3153,7 @@ private:
         if (!R.FillLights() && (light->mFlags & 0x361) == 0x41 &&
             (light->mType == rage::LT_POINT || light->mType == rage::LT_SPOT) && light->mRadius >= R.fFillLightsMinRadius)
             light->mIntensity = 0.0f;
-        if (!R.bVolumetricLight || R.fVolumetricLightIntensity <= 0.0f)
+        if (!R.VolumetricLight() || R.fVolumetricLightIntensity <= 0.0f)
             return;
 
         Cam camera = 0;
@@ -3330,8 +3330,7 @@ public:
 
                 {
                     CRenderPhaseDeferredLighting_LightsToScreen::OnAfterCopyLight() += OnAfterCopyLight;
-                    if (PostFxResources.bVolumetricLight)
-                        InstallShaftHooks();
+                    InstallShaftHooks();
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
                         auto cb = new T_CB_Generic_NoArgs(BindSSRTexture);

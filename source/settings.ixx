@@ -1556,6 +1556,7 @@ public:
             { 0, "PREF_SSR",                    "POSTFX",     "ScreenSpaceReflections",             "MENU_DISPLAY_SSR_QUALITY",   0, nullptr, 0, 2 },
             { 0, "PREF_SSR_DEBUG",              "POSTFX",     "ScreenSpaceReflectionsDebug",        "MENU_DISPLAY_SSR_DEBUG",     0, nullptr, 0, 7 },
             { 0, "PREF_FILL_LIGHTS",            "POSTFX",     "FillLights",                         "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_VOLUMETRIC_LIGHT",       "POSTFX",     "VolumetricLight",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_CONTACTSHADOWS",         "POSTFX",     "ContactShadows",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_HEADLIGHT_REACH",        "SHADOWS",    "HeadlightShadowReach",               "",                           10, nullptr, 0, 40 },
             { 0, "PREF_LAMP_REACH",             "SHADOWS",    "LamppostShadowReach",                "",                           10, nullptr, 0, 40 },

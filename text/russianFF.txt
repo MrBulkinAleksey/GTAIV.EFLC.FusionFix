@@ -169,6 +169,9 @@ Logitech LightSync RGB
 [Fill Lights]
 Заливающий свет зданий
 
+[VolumetricLight]
+Объёмный свет
+
 [Zoomed Movement]
 Разрешить движение при прицеливании
 
