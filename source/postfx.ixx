@@ -3280,9 +3280,10 @@ private:
             {
                 std::ofstream file(path, started ? std::ios::app : std::ios::trunc);
                 if (!started)
-                    file << "lights within 40 m of the camera, then changes between frames; vehicle lights left out\n"
+                    file << "build " << __DATE__ << ' ' << __TIME__ << "\n"
+                            "lights within 40 m of the camera, then changes between frames; vehicle lights left out\n"
                             "+ came within 40 m, - left 45 m or no longer sent, ~ changed, i interior or room changed,\n"
-                            "h held by Light Debug (distance 0), r no longer held\n"
+                            "hold events (lines starting with hold): T taken, E dropped, h held, r released, F list full\n"
                             "mark distance type flags radius intensity r g b x y z\n";
                 file << out.str();
                 started = true;
@@ -3308,11 +3309,36 @@ private:
         for (const auto& [kind, count] : kinds)
             out << std::get<0>(kind) << " 0x" << std::hex << std::get<1>(kind) << std::dec << ' '
                 << std::get<2>(kind) << ' ' << count << '\n';
-        const auto held = std::count_if(HeldLights.begin(), HeldLights.end(), [](const auto& h) { return h.second.held; });
-        out << "\nlight debug mode " << PostFxResources.LightDebugMode() << ", hold hook "
-            << (shCloseLightFrame ? "installed" : "missing") << ", add " << (AddLight ? "found" : "missing")
-            << ", runs " << HoldRuns << ", lights added back " << HoldAdds << ", tracked " << HeldLights.size()
-            << ", held now " << held << '\n';
+        const auto heldNow = std::count_if(HeldLights.begin(), HeldLights.end(), [](const auto& h) { return h.second.held; });
+        const auto& H = Hold;
+        out << "\nbuild " << __DATE__ << ' ' << __TIME__ << ", light debug mode " << PostFxResources.LightDebugMode()
+            << "\nhold hook " << (shCloseLightFrame ? "installed" : "missing") << ", add " << (AddLight ? "found" : "missing")
+            << ", light count " << (pLightCount ? int(*pLightCount) : -1)
+            << "\nthreads: copy " << H.copyThread << ", close " << H.closeThread
+            << "; game time at last copy " << H.lastCopyTime << ", at last close " << H.lastCloseTime
+            << ", closes with another time than the last copy " << H.timeMismatch
+            << "\nhold runs " << H.runs << ", cleared " << H.clears
+            << "\nlights seen " << H.seen << ": not taken for flags " << H.rejectedFlags << ", for type " << H.rejectedType
+            << ", camera out of their radius " << H.rejectedRadius << "; taken " << H.taken
+            << "\ntracked: dropped out of radius " << H.droppedFar << ", dropped as moved " << H.droppedMoved
+            << ", fading " << H.skippedFading << "; held " << H.heldEpisodes << " times, held now " << heldNow
+            << "\nadded back " << H.adds << " (no effect " << H.addNoEffect << "), list full " << H.listFull
+            << ", last add: count " << H.countBefore << " -> " << H.countAfter << ", buffer count " << H.bufferCount
+            << "\ncamera " << HeldLightsCamera.x << ' ' << HeldLightsCamera.y << ' ' << HeldLightsCamera.z
+            << "\nflags of lights within 45 m not taken (flags count):";
+        for (const auto& [flags, count] : H.rejectedNearby)
+            out << " 0x" << std::hex << flags << std::dec << ' ' << count;
+        out << "\ntracked now (" << HeldLights.size() << "): distance type flags radius intensity peak held age-ms x y z\n";
+        int listed = 0;
+        for (const auto& [key, h] : HeldLights)
+        {
+            if (++listed > 30)
+                break;
+            out << "  " << h.distance << ' ' << int(h.light.mType) << " 0x" << std::hex << h.light.mFlags << std::dec << ' '
+                << h.light.mRadius << ' ' << h.light.mIntensity << ' ' << h.peak << ' ' << h.held << ' '
+                << (H.lastCopyTime - h.seen) << ' ' << h.light.mPosition.x << ' ' << h.light.mPosition.y << ' '
+                << h.light.mPosition.z << '\n';
+        }
         std::lock_guard lock(ShaftLogMutex);
         out << "\nshaft loop: flags entered drawn drawn-with-shadow (all distances)"
             << (shShaftEnter && shShaftDraw ? "" : " -- hooks not installed") << '\n';
@@ -3339,6 +3365,7 @@ private:
     {
         rage::CLightSource light;
         float peak = 0.0f;
+        float distance = 0.0f;
         int32_t seen = 0;
         bool held = false;
     };
@@ -3347,51 +3374,96 @@ private:
     static inline bool bAddingHeldLights = false;
     // The camera as the lights were copied: natives called from the frame close gave none.
     static inline rage::Vector3 HeldLightsCamera{};
-    static inline uint32_t HoldRuns = 0, HoldAdds = 0;
     static inline SafetyHookInline shCloseLightFrame{};
     static inline void(__cdecl* AddLight)(const rage::CLightSource* light, float distance) = nullptr;
     static inline uint32_t* pLightCount = nullptr;
     static inline uint32_t* pLightBuffer = nullptr;
     static inline uint32_t* pLightBufferCounts = nullptr;
 
+    // What the hold did, for the lights summary.
+    struct HoldStats
+    {
+        uint32_t runs = 0, clears = 0, timeMismatch = 0;
+        uint32_t seen = 0, rejectedFlags = 0, rejectedType = 0, rejectedRadius = 0, taken = 0;
+        uint32_t droppedFar = 0, droppedMoved = 0, skippedFading = 0, heldEpisodes = 0;
+        uint32_t adds = 0, addNoEffect = 0, listFull = 0;
+        DWORD copyThread = 0, closeThread = 0;
+        int32_t lastCopyTime = 0, lastCloseTime = 0;
+        uint32_t countBefore = 0, countAfter = 0, bufferCount = 0;
+        std::map<uint32_t, uint32_t> rejectedNearby; // flags of nearby lights not taken
+    };
+    static inline HoldStats Hold;
+
     static int32_t LightFrameTime() { return CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds : 0; }
 
-    static void TrackHeldLight(const rage::CLightSource& light)
+    // Hold events of lights within 45 m of the camera go to the lights log: T taken first,
+    // E dropped (reason after the mark), h held, r released, F not added as the list is full.
+    static void LogHold(char mark, const char* reason, const rage::CLightSource& light, float distance)
     {
-        if ((light.mFlags & 0x361) != 0x41 || (light.mType != rage::LT_POINT && light.mType != rage::LT_SPOT))
+        if (!PostFxResources.LightLog() || distance > 45.0f)
             return;
-        auto& held = HeldLights[{int(light.mType), light.mPosition.x, light.mPosition.y, light.mPosition.z}];
+        std::ofstream out(PostFxResources.VolumetricLightLogPath, std::ios::app);
+        out << std::fixed << std::setprecision(1) << "  hold " << reason << ' ';
+        WriteLogLight(out, mark, distance, light);
+    }
+
+    static void TrackHeldLight(const rage::CLightSource& light, float distance)
+    {
+        ++Hold.seen;
+        Hold.copyThread = GetCurrentThreadId();
+        Hold.lastCopyTime = LightFrameTime();
+        if ((light.mFlags & 0x361) != 0x41)
+        {
+            ++Hold.rejectedFlags;
+            if (distance < 45.0f && light.mType != 3)
+                ++Hold.rejectedNearby[light.mFlags];
+            return;
+        }
+        if (light.mType != rage::LT_POINT && light.mType != rage::LT_SPOT)
+        {
+            ++Hold.rejectedType;
+            return;
+        }
+        // Only a light the camera is within could be missed.
+        if (distance > light.mRadius)
+        {
+            ++Hold.rejectedRadius;
+            return;
+        }
+        ++Hold.taken;
+        auto [it, first] = HeldLights.try_emplace({int(light.mType), light.mPosition.x, light.mPosition.y, light.mPosition.z});
+        auto& held = it->second;
         held.light = light;
+        held.distance = distance;
         held.peak = (std::max)(held.peak, light.mIntensity);
-        held.seen = LightFrameTime();
+        held.seen = Hold.lastCopyTime;
         SentHeldCandidates.push_back({int(light.mType), light.mPosition});
+        if (first)
+            LogHold('T', "taken", light, distance);
         if (held.held)
         {
             held.held = false;
-            LogHold('r', held.light);
+            LogHold('r', "sent again", held.light, distance);
         }
-    }
-
-    static void LogHold(char mark, const rage::CLightSource& light)
-    {
-        if (!PostFxResources.LightLog())
-            return;
-        std::ofstream out(PostFxResources.VolumetricLightLogPath, std::ios::app);
-        out << std::fixed << std::setprecision(1);
-        WriteLogLight(out, mark, 0.0f, light);
     }
 
     static void HoldLights()
     {
+        Hold.closeThread = GetCurrentThreadId();
         if (!PostFxResources.LightHold() || !AddLight)
         {
+            if (!HeldLights.empty())
+                ++Hold.clears;
             HeldLights.clear();
             SentHeldCandidates.clear();
             return;
         }
         const rage::Vector3 cameraPos = HeldLightsCamera;
         const int32_t now = LightFrameTime();
-        ++HoldRuns;
+        Hold.lastCloseTime = now;
+        if (now != Hold.lastCopyTime)
+            ++Hold.timeMismatch;
+        ++Hold.runs;
         bAddingHeldLights = true;
         for (auto it = HeldLights.begin(); it != HeldLights.end();)
         {
@@ -3401,16 +3473,24 @@ private:
             const float dy = cameraPos.y - l.mPosition.y;
             const float dz = cameraPos.z - l.mPosition.z;
             const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+            held.distance = distance;
             if (distance > l.mRadius)
             {
-                if (held.held)
-                    LogHold('r', l);
+                ++Hold.droppedFar;
+                LogHold('E', "out of radius", l, distance);
                 it = HeldLights.erase(it);
                 continue;
             }
-            // Sent this frame, or fading out when last sent: nothing to hold.
-            if (held.seen == now || (!held.held && l.mIntensity < held.peak * 0.8f))
+            // Sent in the frame being closed: nothing to hold.
+            if (held.seen == Hold.lastCopyTime)
             {
+                ++it;
+                continue;
+            }
+            // Fading out when last sent: switched off on purpose.
+            if (!held.held && l.mIntensity < held.peak * 0.8f)
+            {
+                ++Hold.skippedFading;
                 ++it;
                 continue;
             }
@@ -3424,22 +3504,37 @@ private:
             });
             if (moved)
             {
-                if (held.held)
-                    LogHold('r', l);
+                ++Hold.droppedMoved;
+                LogHold('E', "moved", l, distance);
                 it = HeldLights.erase(it);
                 continue;
             }
-            if (!held.held)
+            const bool first = !held.held;
+            if (first)
             {
                 held.held = true;
-                LogHold('h', l);
+                ++Hold.heldEpisodes;
             }
             // The game's list holds 640 lights and would drop another one for this.
             if (*pLightCount + 1 < 0x280)
             {
+                const uint32_t before = *pLightCount;
                 AddLight(&l, (std::max)(distance - l.mRadius, 0.0f));
-                ++HoldAdds;
                 pLightBufferCounts[*pLightBuffer] = *pLightCount;
+                ++Hold.adds;
+                if (*pLightCount != before + 1)
+                    ++Hold.addNoEffect;
+                Hold.countBefore = before;
+                Hold.countAfter = *pLightCount;
+                Hold.bufferCount = pLightBufferCounts[*pLightBuffer];
+                if (first)
+                    LogHold('h', "held", l, distance);
+            }
+            else
+            {
+                ++Hold.listFull;
+                if (first)
+                    LogHold('F', "list full", l, distance);
             }
             ++it;
         }
@@ -3492,7 +3587,7 @@ private:
             if (debug & 2)
             {
                 HeldLightsCamera = cameraPos;
-                TrackHeldLight(*light);
+                TrackHeldLight(*light, distance);
             }
         }
         if (!volumetric)
