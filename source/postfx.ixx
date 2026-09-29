@@ -1070,12 +1070,92 @@ private:
         }
     }
 
+    // SSR, contact shadow and debug targets are D3DPOOL_DEFAULT, and the SSR effect keeps a
+    // reference to every texture set on it. Reset fails while any of that is still held, so
+    // this runs on device loss, before Reset, and again ahead of recreating them.
+    static void ReleaseScreenSpaceTargets()
+    {
+        if (auto effect = PostFxResources.SSREffect)
+        {
+            D3DXEFFECT_DESC effectDesc = {};
+            if (SUCCEEDED(effect->GetDesc(&effectDesc)))
+            {
+                for (UINT i = 0; i < effectDesc.Parameters; ++i)
+                {
+                    D3DXHANDLE param = effect->GetParameter(nullptr, i);
+                    D3DXPARAMETER_DESC paramDesc = {};
+                    if (param && SUCCEEDED(effect->GetParameterDesc(param, &paramDesc)) &&
+                        paramDesc.Type >= D3DXPT_TEXTURE && paramDesc.Type <= D3DXPT_TEXTURECUBE)
+                        effect->SetTexture(param, nullptr);
+                }
+            }
+        }
+        if (auto pDevice = rage::grcDevice::GetD3DDevice())
+        {
+            pDevice->SetTexture(3, nullptr);
+            pDevice->SetTexture(9, nullptr);
+        }
+        SAFE_RELEASE(PostFxResources.SSRSurf);
+        if (PostFxResources.SSRTex)
+        {
+            PostFxResources.SSRTex->Destroy();
+            PostFxResources.SSRTex = nullptr;
+        }
+        SAFE_RELEASE(PostFxResources.SSRHistorySurf);
+        if (PostFxResources.SSRHistoryTex)
+        {
+            PostFxResources.SSRHistoryTex->Destroy();
+            PostFxResources.SSRHistoryTex = nullptr;
+        }
+        SAFE_RELEASE(PostFxResources.SSRDenoisedSurf);
+        if (PostFxResources.SSRDenoisedTex)
+        {
+            PostFxResources.SSRDenoisedTex->Destroy();
+            PostFxResources.SSRDenoisedTex = nullptr;
+        }
+        PostFxResources.bSSRDenoised = false;
+        SAFE_RELEASE(PostFxResources.SSRHalfSurf);
+        SAFE_RELEASE(PostFxResources.SSRHalfDenoisedSurf);
+        for (auto* rt : { &PostFxResources.SSRHalfTex, &PostFxResources.SSRHalfDenoisedTex })
+        {
+            if (*rt)
+            {
+                (*rt)->Destroy();
+                *rt = nullptr;
+            }
+        }
+        PostFxResources.SSRResult = nullptr;
+        for (auto* rt : { &PostFxResources.ContactRawTex, &PostFxResources.ContactTex })
+        {
+            if (*rt)
+            {
+                (*rt)->Destroy();
+                *rt = nullptr;
+            }
+        }
+        SAFE_RELEASE(PostFxResources.ContactRawSurf);
+        SAFE_RELEASE(PostFxResources.ContactSurf);
+        PostFxResources.bContactValid = false;
+        PostFxResources.bGlassFrameValid = false;
+        SAFE_RELEASE(PostFxResources.SSRDebugSurf);
+        if (PostFxResources.SSRDebugTex)
+        {
+            PostFxResources.SSRDebugTex->Destroy();
+            PostFxResources.SSRDebugTex = nullptr;
+        }
+        PostFxResources.bSSRDebugValid = false;
+        PostFxResources.bSSRValidThisFrame = false;
+        PostFxResources.bSSRPrevViewProjValid = false;
+        PostFxResources.bSSRReprojValid = false;
+    }
+
     static void __fastcall OnDeviceLost()
     {
         PostFxResources.ReleaseTextures();
         PostFxResources.ReleaseWaterMask();
         UnbindGlassReflections();
         SAFE_RELEASE(PostFxResources.GlassParamsTex);
+        ReleaseScreenSpaceTargets();
         // PostFxResources.mSpecularAoRT    =nullptr;
         PostFxResources.mNormalRT = nullptr;
         PostFxResources.mDiffuseRT = nullptr;
@@ -1198,58 +1278,7 @@ private:
             PostFxResources.AOBlurTex->Destroy();
             PostFxResources.AOBlurTex = nullptr;
         }
-        SAFE_RELEASE(PostFxResources.SSRSurf);
-        if (PostFxResources.SSRTex)
-        {
-            PostFxResources.SSRTex->Destroy();
-            PostFxResources.SSRTex = nullptr;
-        }
-        SAFE_RELEASE(PostFxResources.SSRHistorySurf);
-        if (PostFxResources.SSRHistoryTex)
-        {
-            PostFxResources.SSRHistoryTex->Destroy();
-            PostFxResources.SSRHistoryTex = nullptr;
-        }
-        SAFE_RELEASE(PostFxResources.SSRDenoisedSurf);
-        if (PostFxResources.SSRDenoisedTex)
-        {
-            PostFxResources.SSRDenoisedTex->Destroy();
-            PostFxResources.SSRDenoisedTex = nullptr;
-        }
-        PostFxResources.bSSRDenoised = false;
-        SAFE_RELEASE(PostFxResources.SSRHalfSurf);
-        SAFE_RELEASE(PostFxResources.SSRHalfDenoisedSurf);
-        for (auto* rt : { &PostFxResources.SSRHalfTex, &PostFxResources.SSRHalfDenoisedTex })
-        {
-            if (*rt)
-            {
-                (*rt)->Destroy();
-                *rt = nullptr;
-            }
-        }
-        PostFxResources.SSRResult = nullptr;
-        for (auto* rt : { &PostFxResources.ContactRawTex, &PostFxResources.ContactTex })
-        {
-            if (*rt)
-            {
-                (*rt)->Destroy();
-                *rt = nullptr;
-            }
-        }
-        SAFE_RELEASE(PostFxResources.ContactRawSurf);
-        SAFE_RELEASE(PostFxResources.ContactSurf);
-        PostFxResources.bContactValid = false;
-        PostFxResources.bGlassFrameValid = false;
-        SAFE_RELEASE(PostFxResources.SSRDebugSurf);
-        if (PostFxResources.SSRDebugTex)
-        {
-            PostFxResources.SSRDebugTex->Destroy();
-            PostFxResources.SSRDebugTex = nullptr;
-        }
-        PostFxResources.bSSRDebugValid = false;
-        PostFxResources.bSSRValidThisFrame = false;
-        PostFxResources.bSSRPrevViewProjValid = false;
-        PostFxResources.bSSRReprojValid = false;
+        ReleaseScreenSpaceTargets();
 
         auto pDevice = rage::grcDevice::GetD3DDevice();
 
