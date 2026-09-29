@@ -1,7 +1,7 @@
 texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, SSRResultTex2D, DebugTex2D;
 texture PreWaterTex2D, PostWaterTex2D;
 texture PrevDepthTex2D;
-texture SSRAccumTex2D;
+texture SSRAccumTex2D, SSRHitTex2D;
 
 sampler2D DepthTex
 {
@@ -44,6 +44,17 @@ sampler2D SSRResultTex
 sampler2D DebugTex
 {
     Texture = <DebugTex2D>;
+};
+
+// This frame's reflected ray lengths, 0 for a miss, see SSR_PS.
+sampler2D SSRHitTex
+{
+    Texture = <SSRHitTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
 };
 
 // Last frame's accumulated SSR, see SSRTemporal_PS.
@@ -258,8 +269,10 @@ float SSRJitter(float2 pixel)
 
 // jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
 // distanceFade: reflections fade out towards this distance from the surface, 0 disables.
-float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float distanceFade)
+// hitDist: length of the reflected ray to what it hit, 0 for a miss.
+float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float distanceFade, out float hitDist)
 {
+    hitDist = 0.0;
     float z = C.z;
     float3 V = normalize(C);
     float3 R = reflect(V, n);
@@ -389,6 +402,7 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     float confidence = e * e * (3.0 - 2.0 * e);
 
     float rayLen = length(hitP - C);
+    hitDist = rayLen;
 
     confidence *= facing;
     confidence *= saturate((1.0 - rayLen / fMaxDistance) * 4.0);
@@ -439,11 +453,21 @@ float SSRSurfaceWeight(float2 uv)
     return smoothstep(fGlossCutoff, fGlossCutoff + 0.2, gloss) * (1.0 + fGlossBoost * gloss);
 }
 
-float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+// COLOR1 holds the reflected ray's length for SSRTemporal_PS, 0 for a miss.
+struct SSROutput
 {
+    float4 colour : COLOR0;
+    float4 hit : COLOR1;
+};
+
+SSROutput SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
+{
+    SSROutput o;
+    o.colour = 0.0;
+    o.hit = 0.0;
     float surfaceWeight = SSRSurfaceWeight(uv);
     if (surfaceWeight <= 0.0)
-        return 0.0;
+        return o;
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
 
@@ -455,8 +479,11 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         n = ReconstructNormal(uv, C);
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, fReflectionBlur, fStepJitter > 0.0 ? SSRJitter(vPos) : 1.0, fDistanceFade);
-    return float4(r.rgb, saturate(r.a * surfaceWeight * fIntensity));
+    float hitDist;
+    float4 r = TraceReflection(C, n, fReflectionBlur, fStepJitter > 0.0 ? SSRJitter(vPos) : 1.0, fDistanceFade, hitDist);
+    o.colour = float4(r.rgb, saturate(r.a * surfaceWeight * fIntensity));
+    o.hit = float4(o.colour.a > 0.0 ? hitDist : 0.0, 0.0, 0.0, 1.0);
+    return o;
 }
 
 float3 WaterNormal(float2 worldXY, float distSq)
@@ -504,7 +531,8 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 n = WaterNormal(worldXY, dot(C, C));
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, fWaterBlur, 1.0, 0.0);
+    float hitDist;
+    float4 r = TraceReflection(C, n, fWaterBlur, 1.0, 0.0, hitDist);
 
     return float4(r.rgb, saturate(r.a * fWaterIntensity));
 }
@@ -725,11 +753,13 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 }
 
 // Blends this frame's SSR (SSRResultTex, after smoothing) with last frame's accumulation
-// (SSRAccumTex), found where this pixel's surface was last frame. The history is clamped to
-// the range of this frame's 3x3 neighbourhood, so it cannot bring back what is no longer
-// there, a ped that walked off a car door, and is dropped where last frame's depth shows
-// another surface there. Blending is premultiplied: a miss (alpha 0) must fade a reflection
-// out, not darken its colour.
+// (SSRAccumTex). A reflection moves like the mirror image of what it shows, which lies behind
+// the surface along the view ray, as far behind it as the reflected ray was long (SSRHitTex):
+// the history is taken where that image was last frame. Taking it where the surface was left
+// reflections trailing off car paint while the camera moved. The history is clamped to the
+// mean of this frame's 3x3 neighbourhood give or take 1.5 times its spread, so it cannot bring
+// back what is no longer there, and is dropped where last frame's depth shows another surface.
+// Blending is premultiplied: a miss (alpha 0) must fade a reflection out, not darken its colour.
 float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     if (SSRSurfaceWeight(uv) <= 0.0)
@@ -740,7 +770,7 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     if (fTemporalBlend <= 0.0)
         return float4(current.a > 1e-4 ? current.rgb / current.a : 0.0, current.a);
 
-    float4 lo = current, hi = current;
+    float4 m1 = current, m2 = current * current;
     [unroll]
     for (int y = -1; y <= 1; ++y)
     {
@@ -751,24 +781,30 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
                 continue;
             float4 s = tex2Dlod(SSRResultTex, float4(uv + float2(x, y) * vec2InvViewportSize, 0, 0));
             s.rgb *= s.a;
-            lo = min(lo, s);
-            hi = max(hi, s);
+            m1 += s;
+            m2 += s * s;
         }
     }
+    m1 /= 9.0;
+    float4 spread = sqrt(max(m2 / 9.0 - m1 * m1, 0.0));
+    float4 lo = m1 - 1.5 * spread, hi = m1 + 1.5 * spread;
 
-    float z = LinearDepth(uv);
-    float3 C = ReconstructViewPos(vPos, z);
-    float2 prevUV = HistoryUV(C);
+    float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
+    float hitDist = tex2Dlod(SSRHitTex, float4(uv, 0, 0)).r;
+    float2 prevUV = HistoryUV(C + normalize(C) * hitDist);
     float keep = fTemporalBlend;
     if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
         keep = 0.0;
     else if (fUsePrevDepth > 0.0)
     {
+        // Last frame's surface where the history is taken must be about as far as this one.
+        // Following the image it is a neighbouring spot of the surface, not this one, so the
+        // margin is wider there.
         float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]
                     + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
         float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * fNearPlane;
-        // Another surface there last frame: its reflection is not this one's.
-        if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
+        float margin = hitDist > 0.0 ? 0.15 * clip.w + 0.3 : 0.05 * clip.w + 0.1;
+        if (abs(prevZ - clip.w) > margin)
             keep = 0.0;
     }
 
