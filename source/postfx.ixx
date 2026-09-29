@@ -265,7 +265,7 @@ public:
     float LocalContactShadowConsts[12] = {};
     // The engine's own light shafts on street lights, as the snow season turns them on (see
     // OnAfterCopyLight in seasonal/snow.ixx), at all times: spot lights of 8 to 20 m that are
-    // no vehicle, traffic, fill or cutscene light get the shaft flag, VolumetricLightIntensity
+    // no vehicle light, traffic light or fire (0x398, see OnAfterCopyLight) get the shaft flag, VolumetricLightIntensity
     // and VolumetricLightScale, fading out towards VolumetricLightMaxDistance. When the snow
     // season gives the weather shafts of its own, its handler, which runs after this one, wins.
     bool bVolumetricLight = true;
@@ -277,9 +277,12 @@ public:
     // 0 leaves headlights out.
     uint32_t nVolumetricLightHeadlightFlag = 0x100;
     float fVolumetricLightHeadlightIntensity = 2.0f;
-    // Flags headlights get besides the shaft bit. Every light that shows a shaft carries 0x1,
-    // which no headlight has, so the engine may draw shafts only for lights with it.
-    uint32_t nVolumetricLightHeadlightAddFlags = 0x1;
+    // Flags headlights get besides the shaft bit, none by default: the shaft draw loop (CE
+    // 0xAC2A09) looks at no flag but the shaft bit and 0x10, so 0x1 made no difference.
+    uint32_t nVolumetricLightHeadlightAddFlags = 0;
+    // Headlight shafts with the headlight's shadow map, which leaves them unseen (see
+    // InstallShaftHooks).
+    bool bVolumetricLightHeadlightShadow = false;
     // VolumetricLightLog writes the kinds of lights the game copies near the camera to
     // GTAIV.EFLC.FusionFix.lights.log next to the INI.
     bool bVolumetricLightLog = false;
@@ -921,7 +924,8 @@ public:
         fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 100.0f), 10.0f, 1000.0f);
         nVolumetricLightHeadlightFlag = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightFlag", 0x100));
         fVolumetricLightHeadlightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightIntensity", 2.0f), 0.0f, 20.0f);
-        nVolumetricLightHeadlightAddFlags = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightAddFlags", 0x1));
+        nVolumetricLightHeadlightAddFlags = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightAddFlags", 0));
+        bVolumetricLightHeadlightShadow = iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightShadow", 0) != 0;
         bVolumetricLightLog = iniReader.ReadInteger("POSTFX", "VolumetricLightLog", 0) != 0;
         VolumetricLightLogPath = iniReader.GetIniPath().parent_path() / "GTAIV.EFLC.FusionFix.lights.log";
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
@@ -3114,32 +3118,48 @@ private:
     // the shaft bit enter it, those whose shaft volume is on screen go on to be drawn, with the
     // shadowed shaft technique when a shadow map is found for them. Both steps are counted by
     // flags, the second also by that shadow, for the log.
+    // Headlights nearly always have a shadow map there, and a shaft drawn with it shows nothing,
+    // so unless VolumetricLightHeadlightShadow is on, the draw hook clears that choice for lights
+    // with the headlight flag and they take the plain shaft technique.
     static inline std::mutex ShaftLogMutex;
     static inline std::map<uint32_t, uint32_t> ShaftEntered;
     static inline std::map<std::pair<uint32_t, bool>, uint32_t> ShaftDrawn;
     static inline SafetyHookMid shShaftEnter{};
     static inline SafetyHookMid shShaftDraw{};
 
-    static void InstallShaftLogHooks()
+    static void InstallShaftHooks()
     {
-        auto pattern = hook::pattern("F6 44 0E 48 08 0F 84 ? ? ? ? 8B 44 0E 44 85 C0 74 ? 83 F8 02");
-        if (!pattern.empty())
-            shShaftEnter = safetyhook::create_mid(pattern.get_first(11), [](SafetyHookContext& regs)
-            {
-                const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.ecx + regs.esi);
-                std::lock_guard lock(ShaftLogMutex);
-                ++ShaftEntered[light.mFlags];
-            });
-        pattern = hook::pattern("A1 ? ? ? ? 0F 28 05 ? ? ? ? 0F 29 84 24 A0 00 00 00 F3 0F 10 44 06 70");
+        auto& R = PostFxResources;
+        const bool headlightsPlain = R.nVolumetricLightHeadlightFlag && !R.bVolumetricLightHeadlightShadow;
+        if (!R.bVolumetricLightLog && !headlightsPlain)
+            return;
+        if (R.bVolumetricLightLog)
+        {
+            auto pattern = hook::pattern("F6 44 0E 48 08 0F 84 ? ? ? ? 8B 44 0E 44 85 C0 74 ? 83 F8 02");
+            if (!pattern.empty())
+                shShaftEnter = safetyhook::create_mid(pattern.get_first(11), [](SafetyHookContext& regs)
+                {
+                    const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.ecx + regs.esi);
+                    std::lock_guard lock(ShaftLogMutex);
+                    ++ShaftEntered[light.mFlags];
+                });
+        }
+        auto pattern = hook::pattern("A1 ? ? ? ? 0F 28 05 ? ? ? ? 0F 29 84 24 A0 00 00 00 F3 0F 10 44 06 70");
         if (!pattern.empty())
         {
             static uintptr_t* list = *pattern.get_first<uintptr_t*>(1);
             shShaftDraw = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
             {
+                auto& R = PostFxResources;
                 const auto& light = *reinterpret_cast<const rage::CLightSource*>(*list + regs.esi);
-                const bool shadowed = *reinterpret_cast<const uint8_t*>(regs.esp + 0xF) != 0;
-                std::lock_guard lock(ShaftLogMutex);
-                ++ShaftDrawn[{light.mFlags, shadowed}];
+                auto& shadowed = *reinterpret_cast<uint8_t*>(regs.esp + 0xF);
+                if (!R.bVolumetricLightHeadlightShadow && (light.mFlags & R.nVolumetricLightHeadlightFlag))
+                    shadowed = 0;
+                if (R.bVolumetricLightLog)
+                {
+                    std::lock_guard lock(ShaftLogMutex);
+                    ++ShaftDrawn[{light.mFlags, shadowed != 0}];
+                }
             });
         }
     }
@@ -3192,8 +3212,14 @@ private:
         if (R.bVolumetricLightLog)
             LogCopiedLight(*light, distance);
 
-        // Spot lights of 8 to 20 m, most of lamppost.img, and none of the vehicle, traffic,
-        // fill and cutscene lights (0x398) or lights that have a shaft already (8); headlights
+        // Light flags, from the game's own calls to its light submission (CE 0xABCC50, which
+        // clears the shaft bit, and 0xABCCD0): 0x1 map (2dfx) lights, and effects; 0x2 and 0x10
+        // two 2dfx flags, 0x10 also vehicle point lights; 0x4 casts a shadow; 0x8 light shaft;
+        // 0x20/0x40 set by the game for interior/exterior; 0x80 lights the game never culls;
+        // 0x100 vehicle lights, 0x400 more with it on headlights; 0x200 traffic lights, fires
+        // and explosions (0x201).
+        // Spot lights of 8 to 20 m, most of lamppost.img, and none of 0x398 or lights that have
+        // a shaft already (8); headlights
         // are the spot lights of at least 8 m with the headlight flag (smaller ones are tail and
         // brake lights), whatever their other flags.
         if (light->mType != rage::LT_SPOT || (light->mFlags & 8))
@@ -3347,8 +3373,8 @@ public:
 
                 {
                     CRenderPhaseDeferredLighting_LightsToScreen::OnAfterCopyLight() += OnAfterCopyLight;
-                    if (PostFxResources.bVolumetricLightLog)
-                        InstallShaftLogHooks();
+                    if (PostFxResources.bVolumetricLight)
+                        InstallShaftHooks();
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
                         auto cb = new T_CB_Generic_NoArgs(BindSSRTexture);
