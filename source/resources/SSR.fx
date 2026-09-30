@@ -136,6 +136,7 @@ uniform float fDistanceFade;      // reflections fade out towards this distance 
 uniform float fTemporalBlend;     // share of last frame's SSR kept each frame, 0 while there is none to keep
 uniform float fJitterOffset;      // added to each pixel's step offset, changed every frame while SSR accumulates
 uniform float fTemporalFollowImage; // 1 takes the history where the reflected image was, 0 where the surface was
+uniform float fTemporalMotion;    // pass pixels the history may move in a frame before none of it is kept, 0 keeps it at any speed
 uniform float fTemporalDebug;     // SSR debug modes 8 to 10 as 1 to 3, see SSRTemporalDebug, else 0
 uniform float4 vec4CameraPos;     // camera position in world space, for SSRTemporalDebug
 
@@ -779,8 +780,10 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 // reflections, shown as is. They tell apart why reflections slide while the camera moves.
 //   1: a checkerboard of 1 m cells fixed to the world, kept over frames as reflections are,
 //      taken where the surface was last frame. It stays sharp while the camera moves only if
-//      vec4ViewToPrevClip finds last frame's spot; if not, it smears along the motion. Around
-//      outlines it leaves ghosts either way, as nothing rejects the history there.
+//      vec4ViewToPrevClip finds last frame's spot; if not, it smears along the motion. History
+//      is dropped where last frame's depth shows another surface, as for reflections: without
+//      that, turning around the player left ghosts of him hundreds of pixels long, as the
+//      ground behind him moved some 60 pixels a frame.
 //   2: the same checkerboard, not kept over frames, to compare with.
 //   3: the reflected ray lengths this pass reads (SSRHitTex): green, brighter the longer, up
 //      to fMaxDistance; dark red a glossy pixel whose length is 0, as for a miss.
@@ -805,6 +808,14 @@ float4 SSRTemporalDebug(float2 uv, float2 vPos)
     float2 prevUV = HistoryUV(C);
     if (fTemporalDebug > 1.5 || fTemporalBlend <= 0.0 || any(prevUV <= 0.0) || any(prevUV >= 1.0))
         return float4(current, 1.0);
+    if (fUsePrevDepth > 0.0)
+    {
+        float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]
+                    + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
+        float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * fNearPlane;
+        if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
+            return float4(current, 1.0);
+    }
     float3 history = tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0)).rgb;
     return float4(lerp(current, history, fTemporalBlend), 1.0);
 }
@@ -887,6 +898,13 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         if (abs(prevZ - clip.w) > margin)
             keep = 0.0;
     }
+    // A reflection is what the surface shows from where the camera stands, so history kept from
+    // earlier cameras shows it as they saw it. At 27 fps turning the camera moved the history
+    // 55 to 60 pixels a frame, and the accumulation dragged reflections behind the turn for
+    // several frames, with either Follow. The share kept falls with how far the history moved
+    // and is gone at fTemporalMotion, so a still or slow camera keeps the steady accumulation.
+    if (fTemporalMotion > 0.0)
+        keep *= saturate(1.0 - length((prevUV - uv) / vec2InvViewportSize) / fTemporalMotion);
 
     float4 history = tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0));
     history.rgb *= history.a;

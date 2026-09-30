@@ -252,7 +252,7 @@ public:
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY;
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, SSRHitTex2D, fTemporalBlend, fJitterOffset, fTemporalFollowImage, techSSRTemporal;
-        D3DXHANDLE fTemporalDebug, vec4CameraPos, techSSRProbe;
+        D3DXHANDLE fTemporalDebug, vec4CameraPos, techSSRProbe, fTemporalMotion;
     } SSREffectHandles = {};
 
     // PREF_SSR: 0 off, 1 half resolution, 2 full resolution.
@@ -354,6 +354,9 @@ public:
     uint32_t nSSRFrame = 0;
     float fSSRTemporalBlend = 0.85f;
     bool bSSRTemporalFollowImage = true; // ScreenSpaceReflectionsTemporalFollow
+    // ScreenSpaceReflectionsTemporalMotion: screen pixels the history may move in a frame before
+    // none of it is kept, see SSRTemporal_PS; 0 keeps it at any speed.
+    float fSSRTemporalMotion = 8.0f;
     // What deferred_lighting gets this frame: one of the textures above.
     IDirect3DTexture9* SSRResult = nullptr;
     rage::grcRenderTargetPC* SSRDebugTex = nullptr;
@@ -824,6 +827,7 @@ public:
                 h.fJitterOffset = SSREffect->GetParameterByName(nullptr, "fJitterOffset");
                 h.techSSRTemporal = SSREffect->GetTechniqueByName("SSRTemporal");
                 h.techSSRProbe = SSREffect->GetTechniqueByName("SSRProbe");
+                h.fTemporalMotion = SSREffect->GetParameterByName(nullptr, "fTemporalMotion");
             }
         }
 
@@ -961,6 +965,7 @@ public:
         bSSRStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsStepJitter", 1) != 0;
         fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporal", 0.85f), 0.0f, 0.97f);
         bSSRTemporalFollowImage = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsTemporalFollow", 1) != 0;
+        fSSRTemporalMotion = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporalMotion", 8.0f), 0.0f, 200.0f);
         fSSRTowardCamera = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", 0.0f), 0.0f, 1.0f);
         fSSRReflectionBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsBlur", 0.0f), 0.0f, 32.0f);
         fSSRDistanceFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsDistanceFade", 0.0f), 0.0f, 100.0f);
@@ -2638,6 +2643,8 @@ private:
             effect->SetTexture(h.SSRAccumTex2D, R.SSRAccumTex[sizeIndex][prev]->mD3DTexture);
             effect->SetTexture(h.SSRHitTex2D, R.SSRHitTex[sizeIndex]->mD3DTexture);
             effect->SetFloat(h.fTemporalFollowImage, R.bSSRTemporalFollowImage ? 1.0f : 0.0f);
+            // In pixels of the pass, which is half the screen's at half resolution.
+            effect->SetFloat(h.fTemporalMotion, half ? R.fSSRTemporalMotion * 0.5f : R.fSSRTemporalMotion);
             const int debugMode = R.SSRDebugMode();
             effect->SetFloat(h.fTemporalDebug, debugMode >= R.kTemporalDebugMode ? float(debugMode - R.kTemporalDebugMode + 1) : 0.0f);
             const D3DXVECTOR4 cameraPos(viewInv.m[3][0], viewInv.m[3][1], viewInv.m[3][2], 0.0f);
