@@ -230,7 +230,7 @@ public:
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
-        D3DXHANDLE techContactTemporal, fJitterOffset;
+        D3DXHANDLE techContactTemporal, fJitterOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
@@ -253,6 +253,9 @@ public:
     float fContactShadowMaxDistance = 60.0f;
     float fContactShadowIntensity = 1.0f;
     bool bContactShadowStepJitter = true;
+    // ContactShadowsHalfResolution: the march runs at half size into ContactRawHalfTex and
+    // ContactUpsample_PS brings it to full size, weighing by depth, before the smoothing.
+    bool bContactShadowsHalfRes = true;
     // Contact shadows from street lights and headlights, marched in the light shaders
     // themselves (shaders/patches/local_light_contact_shadows.patch); they follow the Contact
     // Shadows menu toggle.
@@ -298,6 +301,8 @@ public:
     static bool FillLights() { static auto p = FusionFixSettings.GetRef("PREF_FILL_LIGHTS"); return p ? p->get() != 0 : true; }
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
     IDirect3DSurface9* ContactRawSurf = nullptr;
+    rage::grcRenderTargetPC* ContactRawHalfTex = nullptr;
+    IDirect3DSurface9* ContactRawHalfSurf = nullptr;
     rage::grcRenderTargetPC* ContactTex = nullptr;
     IDirect3DSurface9* ContactSurf = nullptr;
     // Accumulation over frames (ContactTemporal_PS in SSR.fx): each frame blends the smoothed
@@ -805,6 +810,7 @@ public:
                 h.fCSIntensity = SSREffect->GetParameterByName(nullptr, "fCSIntensity");
                 h.techContactShadows = SSREffect->GetTechniqueByName("ContactShadows");
                 h.techContactTemporal = SSREffect->GetTechniqueByName("ContactTemporal");
+                h.techContactUpsample = SSREffect->GetTechniqueByName("ContactUpsample");
                 h.fJitterOffset = SSREffect->GetParameterByName(nullptr, "fJitterOffset");
                 h.techSSRDenoise = SSREffect->GetTechniqueByName("SSRDenoise");
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
@@ -957,6 +963,7 @@ public:
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
         fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
+        bContactShadowsHalfRes = iniReader.ReadInteger("POSTFX", "ContactShadowsHalfResolution", 1) != 0;
         fContactTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsTemporal", 0.8f), 0.0f, 0.95f);
         bLocalContactShadows = iniReader.ReadInteger("POSTFX", "LocalContactShadows", 1) != 0;
         fLocalContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsLength", 0.5f), 0.05f, 10.0f);
@@ -1166,8 +1173,8 @@ private:
             }
         }
         PostFxResources.SSRResult = nullptr;
-        for (auto* rt : { &PostFxResources.ContactRawTex, &PostFxResources.ContactTex, &PostFxResources.ContactAccumTex[0],
-                          &PostFxResources.ContactAccumTex[1] })
+        for (auto* rt : { &PostFxResources.ContactRawTex, &PostFxResources.ContactRawHalfTex, &PostFxResources.ContactTex,
+                          &PostFxResources.ContactAccumTex[0], &PostFxResources.ContactAccumTex[1] })
         {
             if (*rt)
             {
@@ -1176,6 +1183,7 @@ private:
             }
         }
         SAFE_RELEASE(PostFxResources.ContactRawSurf);
+        SAFE_RELEASE(PostFxResources.ContactRawHalfSurf);
         SAFE_RELEASE(PostFxResources.ContactSurf);
         SAFE_RELEASE(PostFxResources.ContactAccumSurf[0]);
         SAFE_RELEASE(PostFxResources.ContactAccumSurf[1]);
@@ -1393,6 +1401,12 @@ private:
             PostFxResources.ContactRawTex = CreateEmptyRT("ContactShadowRawTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.ContactRawTex && PostFxResources.ContactRawTex->mD3DTexture)
                 PostFxResources.ContactRawTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactRawSurf);
+            if (PostFxResources.bContactShadowsHalfRes)
+            {
+                PostFxResources.ContactRawHalfTex = CreateEmptyRT("ContactShadowRawHalfTex", 3, width / 2, height / 2, 64, &aoDesc);
+                if (PostFxResources.ContactRawHalfTex && PostFxResources.ContactRawHalfTex->mD3DTexture)
+                    PostFxResources.ContactRawHalfTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactRawHalfSurf);
+            }
             PostFxResources.ContactTex = CreateEmptyRT("ContactShadowTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.ContactTex && PostFxResources.ContactTex->mD3DTexture)
                 PostFxResources.ContactTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactSurf);
@@ -3299,7 +3313,23 @@ private:
         vpDesc.MaxZ = 1.0f;
         pDevice->SetViewport(&vpDesc);
 
-        DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawSurf, width, height);
+        if (R.bContactShadowsHalfRes && R.ContactRawHalfSurf && h.techContactUpsample)
+        {
+            // The march at half size, with the pixel size and reconstruction basis of that size,
+            // then back to full size for the rest.
+            const float halfWidth = float(DWORD(width) / 2), halfHeight = float(DWORD(height) / 2);
+            const float invHalfSize[] = { 1.0f / halfWidth, 1.0f / halfHeight };
+            D3DXVECTOR4 halfProjInfo(-2.0f / (halfWidth * proj._11), -2.0f / (halfHeight * proj._22), projInfo.z, projInfo.w);
+            effect->SetFloatArray(h.vec2InvViewportSize, invHalfSize, 2);
+            effect->SetVector(h.vec4ProjInfo, &halfProjInfo);
+            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawHalfSurf, halfWidth, halfHeight);
+            effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
+            effect->SetVector(h.vec4ProjInfo, &projInfo);
+            effect->SetTexture(h.SSRResultTex2D, R.ContactRawHalfTex->mD3DTexture);
+            DrawEffectPass(pDevice, effect, h.techContactUpsample, R.ContactRawSurf, width, height);
+        }
+        else
+            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawSurf, width, height);
 
         // The same depth aware smoothing SSR uses; the raw result has alpha 1 everywhere, so
         // it is a plain weighted blur.

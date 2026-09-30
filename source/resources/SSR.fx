@@ -716,6 +716,35 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return float4(saturate(occlusion * fade * fCSIntensity), 0.0, 0.0, 1.0);
 }
 
+// Contact shadows marched at half size (SSRResultTex), brought up to full size: each of the four
+// half size pixels around this one weighs by how near it is, as bilinear filtering would, and
+// by how close the depth it marched from is to this pixel's, so a shadow on the ground does not
+// spread up a ped's leg or onto the wall behind a kerb. vec2InvViewportSize is the full size.
+float4 ContactUpsample_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float z = LinearDepth(uv);
+    float2 halfSize = floor(0.5 / vec2InvViewportSize);
+    float2 p = uv * halfSize - 0.5;
+    float2 f = frac(p);
+    float2 base = (floor(p) + 0.5) / halfSize;
+    float sum = 0.0, weightSum = 0.0;
+    [unroll]
+    for (int y = 0; y < 2; ++y)
+    {
+        [unroll]
+        for (int x = 0; x < 2; ++x)
+        {
+            float2 tapUV = base + float2(x, y) / halfSize;
+            float bilinear = (x ? f.x : 1.0 - f.x) * (y ? f.y : 1.0 - f.y);
+            // The depth the half size pass read at that pixel's centre, as it read it.
+            float w = bilinear * (saturate(1.0 - abs(LinearDepth(tapUV) - z) / (z * 0.02)) + 1e-3);
+            sum += w * tex2Dlod(SSRResultTex, float4(tapUV, 0, 0)).r;
+            weightSum += w;
+        }
+    }
+    return float4(sum / max(weightSum, 1e-6), 0.0, 0.0, 1.0);
+}
+
 // Blends this frame's contact shadows (SSRResultTex, after smoothing) with last frame's
 // accumulation (SSRAccumTex), taken where the surface was last frame; a shadow lies on its
 // surface, so that is where it was. The history is clamped between the least and the most
@@ -892,6 +921,15 @@ technique ContactShadows
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 ContactShadows_PS();
+    }
+}
+
+technique ContactUpsample
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 ContactUpsample_PS();
     }
 }
 
