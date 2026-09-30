@@ -1,7 +1,7 @@
 texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, SSRResultTex2D, DebugTex2D;
 texture PreWaterTex2D, PostWaterTex2D;
 texture PrevDepthTex2D;
-texture SSRAccumTex2D, SSRHitTex2D;
+texture SSRAccumTex2D;
 
 sampler2D DepthTex
 {
@@ -44,17 +44,6 @@ sampler2D SSRResultTex
 sampler2D DebugTex
 {
     Texture = <DebugTex2D>;
-};
-
-// This frame's reflected ray lengths, 0 for a miss, see SSR_PS.
-sampler2D SSRHitTex
-{
-    Texture = <SSRHitTex2D>;
-    AddressU = Clamp;
-    AddressV = Clamp;
-    MinFilter = POINT;
-    MagFilter = POINT;
-    MipFilter = NONE;
 };
 
 // Last frame's accumulated SSR, see SSRTemporal_PS.
@@ -129,11 +118,11 @@ uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDeno
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
 uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step (set per pass: SSR and contact shadows each have their own switch)
+uniform float fJitterOffset;      // added to each pixel's step offset (set per pass: SSR and contact shadows), changed every frame while they accumulate
 uniform float fTowardCamera;      // 0..1, how far reflections pointing back at the camera reach
 uniform float fReflectionBlur;    // blur radius in pixels a reflection reaches at fMaxDistance, 0 keeps it sharp
 uniform float fDistanceFade;      // reflections fade out towards this distance from the surface, 0 disables
 uniform float fTemporalBlend;     // share of last frame's SSR kept each frame, 0 while there is none to keep
-uniform float fJitterOffset;      // added to each pixel's step offset, changed every frame while SSR accumulates
 uniform float fTemporalAnySurface; // 1 while accumulating indirect light, which every surface gets, not only glossy ones
 
 // Contact shadows, see ContactShadows_PS.
@@ -274,19 +263,10 @@ float PixelJitter(float2 pixel)
     return 1.0 - frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
 }
 
-// PixelJitter moved on by fJitterOffset: while SSR accumulates, each frame's steps land
-// elsewhere and the accumulation averages the noise out instead of freezing it on screen.
-float SSRJitter(float2 pixel)
-{
-    return 1.0 - frac(1.0 - PixelJitter(pixel) + fJitterOffset);
-}
-
 // jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
 // distanceFade: reflections fade out towards this distance from the surface, 0 disables.
-// hitDist: length of the reflected ray to what it hit, 0 for a miss.
-float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float distanceFade, out float hitDist)
+float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float distanceFade)
 {
-    hitDist = 0.0;
     float z = C.z;
     float3 V = normalize(C);
     float3 R = reflect(V, n);
@@ -416,7 +396,6 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     float confidence = e * e * (3.0 - 2.0 * e);
 
     float rayLen = length(hitP - C);
-    hitDist = rayLen;
 
     confidence *= facing;
     confidence *= saturate((1.0 - rayLen / fMaxDistance) * 4.0);
@@ -467,21 +446,11 @@ float SSRSurfaceWeight(float2 uv)
     return smoothstep(fGlossCutoff, fGlossCutoff + 0.2, gloss) * (1.0 + fGlossBoost * gloss);
 }
 
-// COLOR1 holds the reflected ray's length for SSRTemporal_PS, 0 for a miss.
-struct SSROutput
+float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
-    float4 colour : COLOR0;
-    float4 hit : COLOR1;
-};
-
-SSROutput SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
-{
-    SSROutput o;
-    o.colour = 0.0;
-    o.hit = 0.0;
     float surfaceWeight = SSRSurfaceWeight(uv);
     if (surfaceWeight <= 0.0)
-        return o;
+        return 0.0;
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
 
@@ -493,11 +462,11 @@ SSROutput SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
         n = ReconstructNormal(uv, C);
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float hitDist;
-    float4 r = TraceReflection(C, n, fReflectionBlur, fStepJitter > 0.0 ? SSRJitter(vPos) : 1.0, fDistanceFade, hitDist);
-    o.colour = float4(r.rgb, saturate(r.a * surfaceWeight * fIntensity));
-    o.hit = float4(o.colour.a > 0.0 ? hitDist : 0.0, 0.0, 0.0, 1.0);
-    return o;
+    // While accumulating, fJitterOffset moves every pixel's steps on each frame, so the
+    // accumulation averages the steps out and fewer of them do.
+    float jitter = fStepJitter > 0.0 ? 1.0 - frac(1.0 - PixelJitter(vPos) + fJitterOffset) : 1.0;
+    float4 r = TraceReflection(C, n, fReflectionBlur, jitter, fDistanceFade);
+    return float4(r.rgb, saturate(r.a * surfaceWeight * fIntensity));
 }
 
 float3 WaterNormal(float2 worldXY, float distSq)
@@ -545,8 +514,7 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 n = WaterNormal(worldXY, dot(C, C));
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float hitDist;
-    float4 r = TraceReflection(C, n, fWaterBlur, 1.0, 0.0, hitDist);
+    float4 r = TraceReflection(C, n, fWaterBlur, 1.0, 0.0);
 
     return float4(r.rgb, saturate(r.a * fWaterIntensity));
 }
@@ -661,20 +629,33 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
         return 0.0;
 
     float4 centre = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
-    float centreZ = LinearDepth(uv);
     float2 radius = fDenoiseRadius * vec2InvViewportSize;
 
+    // Where every tap reads what the centre does, the blur gives the centre back, whatever the
+    // weights: for contact shadows most of the screen, lit through. Telling that takes the
+    // colour taps alone, not the depth of every tap, which is most of what the pass costs.
+    float4 s[12];
+    bool same = true;
+    [unroll]
+    for (int i = 0; i < 12; ++i)
+    {
+        s[i] = tex2Dlod(SSRResultTex, float4(uv + taps[i] * radius, 0, 0));
+        same = same && all(s[i] == centre);
+    }
+    [branch]
+    if (same)
+        return centre;
+
+    float centreZ = LinearDepth(uv);
     float4 sum = float4(centre.rgb * centre.a, centre.a);
     float weightSum = 1.0;
 
     [unroll]
-    for (int i = 0; i < 12; ++i)
+    for (int j = 0; j < 12; ++j)
     {
-        float2 tapUV = uv + taps[i] * radius;
-        float4 s = tex2Dlod(SSRResultTex, float4(tapUV, 0, 0));
-        float w = exp(-dot(taps[i], taps[i]) * 2.0);
-        w *= saturate(1.0 - abs(LinearDepth(tapUV) - centreZ) / (centreZ * 0.02));
-        sum += w * float4(s.rgb * s.a, s.a);
+        float w = exp(-dot(taps[j], taps[j]) * 2.0);
+        w *= saturate(1.0 - abs(LinearDepth(uv + taps[j] * radius) - centreZ) / (centreZ * 0.02));
+        sum += w * float4(s[j].rgb * s[j].a, s[j].a);
         weightSum += w;
     }
 
@@ -686,8 +667,8 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
 // Contact shadows: a short ray from each pixel towards the sun through the depth buffer. The
 // game's sun shadow map is too coarse for the contact between a ped's feet or a car's tyres
 // and the ground; this fills that in. The result is occlusion (0 lit, 1 shadowed), so an
-// unbound sampler in deferred_lighting changes nothing. No temporal accumulation: history
-// reprojected for the camera trailed behind moving peds, so the result is smoothed spatially.
+// unbound sampler in deferred_lighting changes nothing. It is smoothed spatially, then
+// accumulated over frames by ContactTemporal_PS.
 float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
@@ -720,7 +701,9 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     if (len <= 0.0)
         return float4(0.0, 0.0, 0.0, 1.0);
 
-    float jitter = fStepJitter > 0.0 ? PixelJitter(vPos) : 1.0;
+    // While accumulating, fJitterOffset moves every pixel's steps on each frame, so the
+    // accumulation averages the steps out instead of keeping one frame's noise.
+    float jitter = fStepJitter > 0.0 ? 1.0 - frac(1.0 - PixelJitter(vPos) + fJitterOffset) : 1.0;
     float occlusion = 0.0;
     float prevZ = P0.z;
 
@@ -753,13 +736,90 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return float4(saturate(occlusion * fade * fCSIntensity), 0.0, 0.0, 1.0);
 }
 
+// Contact shadows marched at half size (SSRResultTex), brought up to full size: each of the four
+// half size pixels around this one weighs by how near it is, as bilinear filtering would, and
+// by how close the depth it marched from is to this pixel's, so a shadow on the ground does not
+// spread up a ped's leg or onto the wall behind a kerb. vec2InvViewportSize is the full size.
+float4 ContactUpsample_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float z = LinearDepth(uv);
+    float2 halfSize = floor(0.5 / vec2InvViewportSize);
+    float2 p = uv * halfSize - 0.5;
+    float2 f = frac(p);
+    float2 base = (floor(p) + 0.5) / halfSize;
+    float sum = 0.0, weightSum = 0.0;
+    [unroll]
+    for (int y = 0; y < 2; ++y)
+    {
+        [unroll]
+        for (int x = 0; x < 2; ++x)
+        {
+            float2 tapUV = base + float2(x, y) / halfSize;
+            float bilinear = (x ? f.x : 1.0 - f.x) * (y ? f.y : 1.0 - f.y);
+            // The depth the half size pass read at that pixel's centre, as it read it.
+            float w = bilinear * (saturate(1.0 - abs(LinearDepth(tapUV) - z) / (z * 0.02)) + 1e-3);
+            sum += w * tex2Dlod(SSRResultTex, float4(tapUV, 0, 0)).r;
+            weightSum += w;
+        }
+    }
+    return float4(sum / max(weightSum, 1e-6), 0.0, 0.0, 1.0);
+}
+
+// Blends this frame's contact shadows (SSRResultTex, after smoothing) with last frame's
+// accumulation (SSRAccumTex), taken where the surface was last frame; a shadow lies on its
+// surface, so that is where it was. The history is clamped between the least and the most
+// shadow of this frame's 3x3 neighbourhood, so the shadow of a ped that walked on cannot stay
+// behind him, and it is dropped where last frame's depth shows another surface.
+float4 ContactTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+{
+    float current = tex2Dlod(SSRResultTex, float4(uv, 0, 0)).r;
+    if (fTemporalBlend <= 0.0 || tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999)
+        return float4(current, 0.0, 0.0, 1.0);
+
+    float lo = current, hi = current;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            if (x == 0 && y == 0)
+                continue;
+            float s = tex2Dlod(SSRResultTex, float4(uv + float2(x, y) * vec2InvViewportSize, 0, 0)).r;
+            lo = min(lo, s);
+            hi = max(hi, s);
+        }
+    }
+    // A neighbourhood all alike clamps any history to the current value: lit ground, mostly.
+    [branch]
+    if (hi <= lo)
+        return float4(current, 0.0, 0.0, 1.0);
+
+    float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
+    float2 prevUV = HistoryUV(C);
+    float keep = fTemporalBlend;
+    if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
+        keep = 0.0;
+    else if (fUsePrevDepth > 0.0)
+    {
+        float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]
+                    + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
+        float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * fNearPlane;
+        if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
+            keep = 0.0;
+    }
+
+    float history = clamp(tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0)).r, lo, hi);
+    return float4(lerp(current, history, keep), 0.0, 0.0, 1.0);
+}
+
 // Blends this frame's SSR (SSRResultTex, after smoothing) with last frame's accumulation
-// (SSRAccumTex). A reflection moves like the mirror image of what it shows, which lies behind
-// the surface along the view ray, as far behind it as the reflected ray was long (SSRHitTex):
-// the history is taken where that image was last frame. Taking it where the surface was left
-// reflections trailing off car paint while the camera moved. The history is clamped to the
-// mean of this frame's 3x3 neighbourhood give or take 1.5 times its spread, so it cannot bring
-// back what is no longer there, and is dropped where last frame's depth shows another surface.
+// (SSRAccumTex), taken where the surface was last frame. Taking it where the reflected image
+// was, which is right for a flat mirror, looked no different on car paint or van sides and
+// cost a second render target the SSR pass wrote at full size. The history is clamped to the
+// mean of this frame's 3x3 neighbourhood give or take 1.5 times its spread, so it cannot
+// bring back what is no longer there, and is dropped where last frame's depth shows another
+// surface.
 // Blending is premultiplied: a miss (alpha 0) must fade a reflection out, not darken its colour.
 float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
@@ -788,25 +848,25 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     }
     m1 /= 9.0;
     float4 spread = sqrt(max(m2 / 9.0 - m1 * m1, 0.0));
+    // A neighbourhood all alike clamps any history to the current value, as where a glossy
+    // surface reflects nothing this frame.
+    [branch]
+    if (all(spread <= 0.0))
+        return float4(current.a > 1e-4 ? current.rgb / current.a : 0.0, current.a);
     float4 lo = m1 - 1.5 * spread, hi = m1 + 1.5 * spread;
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
-    // Indirect light has no reflected image to follow: its history follows the surface.
-    float hitDist = fTemporalAnySurface > 0.0 ? 0.0 : tex2Dlod(SSRHitTex, float4(uv, 0, 0)).r;
-    float2 prevUV = HistoryUV(C + normalize(C) * hitDist);
+    float2 prevUV = HistoryUV(C);
     float keep = fTemporalBlend;
     if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
         keep = 0.0;
     else if (fUsePrevDepth > 0.0)
     {
         // Last frame's surface where the history is taken must be about as far as this one.
-        // Following the image it is a neighbouring spot of the surface, not this one, so the
-        // margin is wider there.
         float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]
                     + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
         float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * fNearPlane;
-        float margin = hitDist > 0.0 ? 0.15 * clip.w + 0.3 : 0.05 * clip.w + 0.1;
-        if (abs(prevZ - clip.w) > margin)
+        if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
             keep = 0.0;
     }
 
@@ -848,8 +908,9 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     // Off the surface by more with distance, as depth gets coarser; otherwise rays hit the
     // surface they start from and it lights itself.
     float3 P0 = C + n * (0.05 + C.z * 0.003);
-    float jitter = SSRJitter(vPos);
-    float jitter2 = SSRJitter(vPos.yx + float2(17.0, 59.0));
+    // fJitterOffset moves both on every frame while it accumulates, as for SSR.
+    float jitter = 1.0 - frac(1.0 - PixelJitter(vPos) + fJitterOffset);
+    float jitter2 = 1.0 - frac(1.0 - PixelJitter(vPos.yx + float2(17.0, 59.0)) + fJitterOffset);
     float3 sum = 0.0;
 
     [loop]
@@ -1042,6 +1103,24 @@ technique ContactShadows
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 ContactShadows_PS();
+    }
+}
+
+technique ContactUpsample
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 ContactUpsample_PS();
+    }
+}
+
+technique ContactTemporal
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 ContactTemporal_PS();
     }
 }
 

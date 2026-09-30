@@ -3,6 +3,7 @@ module;
 #include <common.hxx>
 #include <d3dx9tex.h>
 #include <algorithm>
+#include <cstdio>
 
 export module postfx;
 
@@ -232,13 +233,14 @@ public:
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
+        D3DXHANDLE techContactTemporal, fJitterOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY;
         D3DXHANDLE techSSR, techSSRWater;
-        D3DXHANDLE SSRAccumTex2D, SSRHitTex2D, fTemporalBlend, fJitterOffset, techSSRTemporal;
+        D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
         D3DXHANDLE fGIMaxBrightness, techGIUpsample;
     } SSREffectHandles = {};
@@ -287,6 +289,9 @@ public:
     float fContactShadowMaxDistance = 60.0f;
     float fContactShadowIntensity = 1.0f;
     bool bContactShadowStepJitter = true;
+    // ContactShadowsHalfResolution: the march runs at half size into ContactRawHalfTex and
+    // ContactUpsample_PS brings it to full size, weighing by depth, before the smoothing.
+    bool bContactShadowsHalfRes = true;
     // Contact shadows from street lights and headlights, marched in the light shaders
     // themselves (shaders/patches/local_light_contact_shadows.patch); they follow the Contact
     // Shadows menu toggle.
@@ -322,6 +327,8 @@ public:
     // Headlight shafts with the headlight's shadow map, which leaves them unseen (see
     // InstallShaftHooks).
     bool bVolumetricLightHeadlightShadow = false;
+    // Degrees headlight shafts are tilted down, the shaft alone (see InstallShaftHooks).
+    float fVolumetricLightHeadlightPitch = 6.0f;
     // Building Fill Lights in the graphics menu (PREF_FILL_LIGHTS): off darkens the large
     // exterior map lights, reaching at least FillLightsMinRadius, that flood whole squares and
     // building fronts. They made scenes look washed out, and at some cell edges (a garage at
@@ -330,8 +337,23 @@ public:
     static bool FillLights() { static auto p = FusionFixSettings.GetRef("PREF_FILL_LIGHTS"); return p ? p->get() != 0 : true; }
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
     IDirect3DSurface9* ContactRawSurf = nullptr;
+    rage::grcRenderTargetPC* ContactRawHalfTex = nullptr;
+    IDirect3DSurface9* ContactRawHalfSurf = nullptr;
     rage::grcRenderTargetPC* ContactTex = nullptr;
     IDirect3DSurface9* ContactSurf = nullptr;
+    // Accumulation over frames (ContactTemporal_PS in SSR.fx): each frame blends the smoothed
+    // contact shadows with the previous accumulation into the other target of the pair, and
+    // moves every pixel's step offset on. ContactShadowsTemporal is the share of the history
+    // kept, 0 turns it off. ContactPrevViewProj is kept here, as SSR's is only while SSR is on.
+    rage::grcRenderTargetPC* ContactAccumTex[2] = {};
+    IDirect3DSurface9* ContactAccumSurf[2] = {};
+    int nContactAccumIndex = 0;
+    bool bContactAccumValid = false;
+    D3DXMATRIX ContactPrevViewProj = {};
+    uint32_t nContactFrame = 0;
+    float fContactTemporalBlend = 0.8f;
+    // What deferred_lighting gets on s9: ContactTex, or the accumulation.
+    IDirect3DTexture9* ContactResult = nullptr;
     bool bContactValid = false;
     bool bContactBound = false;
     static constexpr int kContactDebugMode = 7;
@@ -340,6 +362,12 @@ public:
     float fSSRDenoiseRadius = 2.0f;
     bool bSSRPassThinObjects = true;
     bool bSSRStepJitter = true;
+    // ScreenSpaceReflectionsTemporalJitter: while SSR accumulates, the step offsets move on every
+    // frame (fJitterOffset in SSR.fx), so the accumulation averages them.
+    bool bSSRTemporalJitter = true;
+    // PostFxProfiler: GPU time of FusionFix's passes to FusionFix.PostFx.log, see ProfilerNextFrame.
+    bool bPostFxProfiler = false;
+    uint32_t nSSRFrame = 0;
     float fSSRTowardCamera = 0.0f;
     float fSSRReflectionBlur = 0.0f;
     float fSSRDistanceFade = 0.0f;
@@ -355,18 +383,13 @@ public:
     // Accumulation over frames (SSRTemporal_PS in SSR.fx): each frame blends the smoothed
     // result with the previous accumulation into the other target of a pair, one pair per
     // resolution. ScreenSpaceReflectionsTemporal is the share of the history kept, 0 turns
-    // it off. The history is taken where the reflected image was last frame (SSRHitTex), and
-    // the step offsets stay the same every frame: moving them left reflections trembling in a
-    // still scene.
+    // it off. The history is taken where the surface was last frame.
+    // The pair is why lighting must get the result only once SSR is done, see BindSSRTexture.
     rage::grcRenderTargetPC* SSRAccumTex[2][2] = {}; // [half][ping-pong]
     IDirect3DSurface9* SSRAccumSurf[2][2] = {};
-    // The reflected ray lengths of this frame's SSR pass, its second output, [half].
-    rage::grcRenderTargetPC* SSRHitTex[2] = {};
-    IDirect3DSurface9* SSRHitSurf[2] = {};
     int nSSRAccumIndex = 0;
     bool bSSRAccumValid = false;
     bool bSSRAccumHalf = false;
-    uint32_t nSSRFrame = 0;
     float fSSRTemporalBlend = 0.85f;
     // What deferred_lighting gets this frame: one of the textures above.
     IDirect3DTexture9* SSRResult = nullptr;
@@ -428,7 +451,7 @@ public:
         }
         return TransparentTexture;
     }
-    int nSSRSteps = 48;
+    int nSSRSteps = 32;
     int nSSRRefineSteps = 8;
     float fSSRMaxDistance = 24.0f;
     float fSSRThickness = 0.3f;
@@ -828,13 +851,14 @@ public:
                 h.fCSMaxViewDistance = SSREffect->GetParameterByName(nullptr, "fCSMaxViewDistance");
                 h.fCSIntensity = SSREffect->GetParameterByName(nullptr, "fCSIntensity");
                 h.techContactShadows = SSREffect->GetTechniqueByName("ContactShadows");
+                h.techContactTemporal = SSREffect->GetTechniqueByName("ContactTemporal");
+                h.techContactUpsample = SSREffect->GetTechniqueByName("ContactUpsample");
+                h.fJitterOffset = SSREffect->GetParameterByName(nullptr, "fJitterOffset");
                 h.techSSRDenoise = SSREffect->GetTechniqueByName("SSRDenoise");
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
                 h.SSRAccumTex2D = SSREffect->GetParameterByName(nullptr, "SSRAccumTex2D");
-                h.SSRHitTex2D = SSREffect->GetParameterByName(nullptr, "SSRHitTex2D");
                 h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
-                h.fJitterOffset = SSREffect->GetParameterByName(nullptr, "fJitterOffset");
                 h.techSSRTemporal = SSREffect->GetTechniqueByName("SSRTemporal");
                 h.fTemporalAnySurface = SSREffect->GetParameterByName(nullptr, "fTemporalAnySurface");
                 h.fGIRayLength = SSREffect->GetParameterByName(nullptr, "fGIRayLength");
@@ -963,7 +987,7 @@ public:
 
         bEnablePreAlphaDepth = iniReader.ReadInteger("POSTFX", "EnablePreAlphaDepth", 1) != 0;
 
-        nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 48), 4, 128);
+        nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 32), 4, 128);
         nSSRRefineSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsRefineSteps", 8), 0, 16);
         fSSRMaxDistance = std::max(1.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsMaxDistance", 24.0f));
         fSSRThickness = std::max(0.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsThickness", 0.3f));
@@ -979,6 +1003,8 @@ public:
         fSSRDenoiseRadius = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsSmoothing", 2.0f), 0.0f, 8.0f);
         bSSRPassThinObjects = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsPastThinObjects", 1) != 0;
         bSSRStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsStepJitter", 1) != 0;
+        bSSRTemporalJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsTemporalJitter", 1) != 0;
+        bPostFxProfiler = iniReader.ReadInteger("POSTFX", "PostFxProfiler", 0) != 0;
         fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporal", 0.85f), 0.0f, 0.97f);
         fSSRTowardCamera = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", 0.0f), 0.0f, 1.0f);
         fSSRReflectionBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsBlur", 0.0f), 0.0f, 32.0f);
@@ -988,6 +1014,8 @@ public:
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
         fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
+        bContactShadowsHalfRes = iniReader.ReadInteger("POSTFX", "ContactShadowsHalfResolution", 1) != 0;
+        fContactTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsTemporal", 0.8f), 0.0f, 0.95f);
         fGIIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightIntensity", 1.0f), 0.0f, 8.0f);
         fGIMaxBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxBrightness", 4.0f), 0.05f, 8.0f);
         fGIRayLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", 4.0f), 0.1f, 20.0f);
@@ -1010,6 +1038,7 @@ public:
         nVolumetricLightHeadlightAddFlags = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightAddFlags", 0));
         fFillLightsMinRadius = std::clamp(iniReader.ReadFloat("POSTFX", "FillLightsMinRadius", 30.0f), 0.0f, 1000.0f);
         bVolumetricLightHeadlightShadow = iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightShadow", 0) != 0;
+        fVolumetricLightHeadlightPitch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightPitch", 6.0f), -45.0f, 45.0f);
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
@@ -1205,7 +1234,8 @@ private:
             }
         }
         PostFxResources.SSRResult = nullptr;
-        for (auto* rt : { &PostFxResources.ContactRawTex, &PostFxResources.ContactTex })
+        for (auto* rt : { &PostFxResources.ContactRawTex, &PostFxResources.ContactRawHalfTex, &PostFxResources.ContactTex,
+                          &PostFxResources.ContactAccumTex[0], &PostFxResources.ContactAccumTex[1] })
         {
             if (*rt)
             {
@@ -1214,7 +1244,12 @@ private:
             }
         }
         SAFE_RELEASE(PostFxResources.ContactRawSurf);
+        SAFE_RELEASE(PostFxResources.ContactRawHalfSurf);
         SAFE_RELEASE(PostFxResources.ContactSurf);
+        SAFE_RELEASE(PostFxResources.ContactAccumSurf[0]);
+        SAFE_RELEASE(PostFxResources.ContactAccumSurf[1]);
+        PostFxResources.ContactResult = nullptr;
+        PostFxResources.bContactAccumValid = false;
         PostFxResources.bContactValid = false;
         PostFxResources.bGlassFrameValid = false;
         SAFE_RELEASE(PostFxResources.SSRDebugSurf);
@@ -1233,15 +1268,6 @@ private:
                     PostFxResources.SSRAccumTex[half][i] = nullptr;
                 }
             }
-        for (int half = 0; half < 2; ++half)
-        {
-            SAFE_RELEASE(PostFxResources.SSRHitSurf[half]);
-            if (PostFxResources.SSRHitTex[half])
-            {
-                PostFxResources.SSRHitTex[half]->Destroy();
-                PostFxResources.SSRHitTex[half] = nullptr;
-            }
-        }
         PostFxResources.bSSRAccumValid = false;
         for (auto* rt : { &PostFxResources.GIRawTex, &PostFxResources.GIDenoisedTex, &PostFxResources.GIAccumTex[0], &PostFxResources.GIAccumTex[1], &PostFxResources.GIFullTex })
         {
@@ -1301,6 +1327,8 @@ private:
             PostFxResources.AOEffect->OnLostDevice();
         if (PostFxResources.SSREffect)
             PostFxResources.SSREffect->OnLostDevice();
+        effectSamplers.clear();
+        ReleaseProfiler();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             SAFE_RELEASE(PostFxResources.AOCamDepthSurf[i]);
@@ -1451,9 +1479,26 @@ private:
             PostFxResources.ContactRawTex = CreateEmptyRT("ContactShadowRawTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.ContactRawTex && PostFxResources.ContactRawTex->mD3DTexture)
                 PostFxResources.ContactRawTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactRawSurf);
+            if (PostFxResources.bContactShadowsHalfRes)
+            {
+                PostFxResources.ContactRawHalfTex = CreateEmptyRT("ContactShadowRawHalfTex", 3, width / 2, height / 2, 64, &aoDesc);
+                if (PostFxResources.ContactRawHalfTex && PostFxResources.ContactRawHalfTex->mD3DTexture)
+                    PostFxResources.ContactRawHalfTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactRawHalfSurf);
+            }
             PostFxResources.ContactTex = CreateEmptyRT("ContactShadowTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.ContactTex && PostFxResources.ContactTex->mD3DTexture)
                 PostFxResources.ContactTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactSurf);
+            if (PostFxResources.fContactTemporalBlend > 0.0f)
+            {
+                static const char* names[2] = { "ContactShadowAccumTex0", "ContactShadowAccumTex1" };
+                for (int i = 0; i < 2; ++i)
+                {
+                    auto& rt = PostFxResources.ContactAccumTex[i];
+                    rt = CreateEmptyRT(names[i], 3, width, height, 64, &aoDesc);
+                    if (rt && rt->mD3DTexture)
+                        rt->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactAccumSurf[i]);
+                }
+            }
 
             if (PostFxResources.fSSRTemporalBlend > 0.0f)
             {
@@ -1466,16 +1511,6 @@ private:
                         if (rt && rt->mD3DTexture)
                             rt->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRAccumSurf[half][i]);
                     }
-                // The same format as the SSR target it is written along with: older hardware
-                // takes multiple render targets only of one bit depth.
-                static const char* hitNames[2] = { "SSRHitTex", "SSRHalfHitTex" };
-                for (int half = 0; half < 2; ++half)
-                {
-                    auto& rt = PostFxResources.SSRHitTex[half];
-                    rt = CreateEmptyRT(hitNames[half], 3, half ? width / 2 : width, half ? height / 2 : height, 64, &aoDesc);
-                    if (rt && rt->mD3DTexture)
-                        rt->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRHitSurf[half]);
-                }
             }
 
             {
@@ -1677,6 +1712,7 @@ private:
 
     static void NewPostFX()
     {
+        ProfilerNextFrame(rage::grcDevice::GetD3DDevice());
         IDirect3DPixelShader9* oldps = 0;
         IDirect3DVertexShader9* oldvs = 0;
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
@@ -2123,8 +2159,6 @@ private:
         { D3DRS_CLIPPING,         FALSE },
         { D3DRS_CULLMODE,         D3DCULL_NONE },
         { D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA },
-        // The SSR pass writes its ray lengths to a second target while it accumulates.
-        { D3DRS_COLORWRITEENABLE1, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA },
     };
 
     static constexpr struct { D3DSAMPLERSTATETYPE state; DWORD value; } kSSRSamplerStates[] =
@@ -2150,6 +2184,220 @@ private:
                 r.m[i][j] = a.m[i][0] * b.m[0][j] + a.m[i][1] * b.m[1][j]
                           + a.m[i][2] * b.m[2][j] + a.m[i][3] * b.m[3][j];
         out = r;
+    }
+
+    // PostFxProfiler: GPU time of FusionFix's passes, from timestamp queries. Each frame's queries
+    // are read kProfilerFrames frames later, without waiting on the GPU, and every 120 frames the
+    // averages in milliseconds per frame are written to FusionFix.PostFx.log next to GTAIV.exe.
+    // Lights is the lighting phase less the AO, SSR and contact shadow passes that run inside it:
+    // the game's lights with their local contact shadows, and the light shafts. Off, no query is
+    // made.
+    enum ProfilerSection { kProfAO, kProfSSR, kProfContact, kProfWater, kProfLighting, kProfSections };
+    static constexpr int kProfilerFrames = 4;
+    static constexpr int kProfilerAverage = 120;
+    struct ProfilerFrame
+    {
+        IDirect3DQuery9* disjoint = nullptr;
+        IDirect3DQuery9* freq = nullptr;
+        IDirect3DQuery9* start = nullptr;
+        IDirect3DQuery9* stop = nullptr;
+        IDirect3DQuery9* begin[kProfSections] = {};
+        IDirect3DQuery9* end[kProfSections] = {};
+        bool issued = false;
+        bool used[kProfSections] = {};
+    };
+    static inline ProfilerFrame profilerFrames[kProfilerFrames];
+    static inline int nProfilerFrame = -1;
+    static inline double profilerSums[kProfSections + 1] = {}; // the last is the whole frame
+    static inline int nProfilerSamples = 0;
+    static inline bool bProfilerLogStarted = false;
+
+    static void ReleaseProfilerFrame(ProfilerFrame& f)
+    {
+        SAFE_RELEASE(f.disjoint);
+        SAFE_RELEASE(f.freq);
+        SAFE_RELEASE(f.start);
+        SAFE_RELEASE(f.stop);
+        for (int i = 0; i < kProfSections; ++i)
+        {
+            SAFE_RELEASE(f.begin[i]);
+            SAFE_RELEASE(f.end[i]);
+        }
+        f.issued = false;
+    }
+
+    static void ReleaseProfiler()
+    {
+        for (auto& f : profilerFrames)
+            ReleaseProfilerFrame(f);
+        nProfilerFrame = -1;
+    }
+
+    static bool CreateProfilerFrame(IDirect3DDevice9* pDevice, ProfilerFrame& f)
+    {
+        if (f.disjoint)
+            return true;
+        bool ok = SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMPDISJOINT, &f.disjoint)) &&
+                  SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMPFREQ, &f.freq)) &&
+                  SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.start)) &&
+                  SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.stop));
+        for (int i = 0; ok && i < kProfSections; ++i)
+            ok = SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.begin[i])) &&
+                 SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.end[i]));
+        if (!ok)
+            ReleaseProfilerFrame(f);
+        return ok;
+    }
+
+    static void WriteProfilerLine()
+    {
+        FILE* log = _wfopen((GetExeModulePath() / L"FusionFix.PostFx.log").c_str(), bProfilerLogStarted ? L"a" : L"w");
+        if (log)
+        {
+            if (!bProfilerLogStarted)
+                fprintf(log, "GPU milliseconds per frame, averaged over %d frames. lights: the game's lights with their "
+                             "local contact shadows, and the light shafts\n", kProfilerAverage);
+            const double n = double(nProfilerSamples);
+            fprintf(log, "frame %6.2f   AO %5.2f   SSR %5.2f   contact shadows %5.2f   water SSR %5.2f   lights %6.2f\n",
+                    profilerSums[kProfSections] / n, profilerSums[kProfAO] / n, profilerSums[kProfSSR] / n,
+                    profilerSums[kProfContact] / n, profilerSums[kProfWater] / n, profilerSums[kProfLighting] / n);
+            fclose(log);
+            bProfilerLogStarted = true;
+        }
+        std::fill(std::begin(profilerSums), std::end(profilerSums), 0.0);
+        nProfilerSamples = 0;
+    }
+
+    // Adds a frame whose queries were issued kProfilerFrames frames ago, if the GPU has them.
+    static void ReadProfilerFrame(ProfilerFrame& f)
+    {
+        BOOL disjoint = TRUE;
+        UINT64 freq = 0, start = 0, stop = 0;
+        if (f.disjoint->GetData(&disjoint, sizeof(disjoint), 0) != S_OK || disjoint ||
+            f.freq->GetData(&freq, sizeof(freq), 0) != S_OK || !freq ||
+            f.start->GetData(&start, sizeof(start), 0) != S_OK || f.stop->GetData(&stop, sizeof(stop), 0) != S_OK)
+            return;
+        double ms[kProfSections] = {};
+        for (int i = 0; i < kProfSections; ++i)
+        {
+            UINT64 b = 0, e = 0;
+            if (f.used[i] && f.begin[i]->GetData(&b, sizeof(b), 0) == S_OK && f.end[i]->GetData(&e, sizeof(e), 0) == S_OK && e >= b)
+                ms[i] = double(e - b) * 1000.0 / double(freq);
+        }
+        ms[kProfLighting] = (std::max)(ms[kProfLighting] - ms[kProfAO] - ms[kProfSSR] - ms[kProfContact], 0.0);
+        for (int i = 0; i < kProfSections; ++i)
+            profilerSums[i] += ms[i];
+        profilerSums[kProfSections] += double(stop - start) * 1000.0 / double(freq);
+        if (++nProfilerSamples >= kProfilerAverage)
+            WriteProfilerLine();
+    }
+
+    // Once a frame, as post processing begins: closes this frame's queries and opens the next.
+    static void ProfilerNextFrame(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        if (!R.bPostFxProfiler || !pDevice)
+            return;
+        if (nProfilerFrame >= 0 && profilerFrames[nProfilerFrame].issued)
+        {
+            auto& cur = profilerFrames[nProfilerFrame];
+            cur.stop->Issue(D3DISSUE_END);
+            cur.freq->Issue(D3DISSUE_END);
+            cur.disjoint->Issue(D3DISSUE_END);
+        }
+        nProfilerFrame = (nProfilerFrame + 1) % kProfilerFrames;
+        auto& f = profilerFrames[nProfilerFrame];
+        if (f.issued)
+        {
+            ReadProfilerFrame(f);
+            f.issued = false;
+        }
+        if (!CreateProfilerFrame(pDevice, f))
+        {
+            R.bPostFxProfiler = false; // no timestamp queries on this device
+            ReleaseProfiler();
+            return;
+        }
+        std::fill(std::begin(f.used), std::end(f.used), false);
+        f.disjoint->Issue(D3DISSUE_BEGIN);
+        f.start->Issue(D3DISSUE_END);
+        f.issued = true;
+    }
+
+    static void ProfilerMark(IDirect3DDevice9* pDevice, int section, bool begin)
+    {
+        if (!PostFxResources.bPostFxProfiler || !pDevice || nProfilerFrame < 0)
+            return;
+        auto& f = profilerFrames[nProfilerFrame];
+        if (!f.issued)
+            return;
+        (begin ? f.begin : f.end)[section]->Issue(D3DISSUE_END);
+        if (!begin)
+            f.used[section] = true;
+    }
+
+    // Binds every sampler of the pixel shader of the pass just begun to the texture its effect
+    // parameter holds, found through the shader's constant table (sampler X reads X2D in SSR.fx
+    // and AO.fx). D3DX left some holding what the game had bound, about four a frame in the SSR
+    // passes: a diagnostic pass read a G-buffer texture where it sampled the depth.
+    // Each shader's samplers are looked up once, as (register, parameter), and kept per effect
+    // and shader: reading the bytecode and its constant table for every draw cost CPU time for
+    // nothing, the effects keep their shaders for the whole game. Cleared on a lost device.
+    static inline std::map<std::pair<ID3DXEffect*, IDirect3DPixelShader9*>, std::vector<std::pair<UINT, D3DXHANDLE>>> effectSamplers;
+
+    static std::vector<std::pair<UINT, D3DXHANDLE>> FindEffectSamplers(ID3DXEffect* effect, IDirect3DPixelShader9* ps)
+    {
+        std::vector<std::pair<UINT, D3DXHANDLE>> samplers;
+        std::vector<DWORD> function;
+        UINT size = 0;
+        if (SUCCEEDED(ps->GetFunction(nullptr, &size)) && size)
+        {
+            function.resize((size + 3) / 4);
+            if (FAILED(ps->GetFunction(function.data(), &size)))
+                function.clear();
+        }
+        ID3DXConstantTable* table = nullptr;
+        if (function.empty() || FAILED(D3DXGetShaderConstantTable(function.data(), &table)) || !table)
+            return samplers;
+
+        D3DXCONSTANTTABLE_DESC tableDesc = {};
+        table->GetDesc(&tableDesc);
+        for (UINT i = 0; i < tableDesc.Constants; ++i)
+        {
+            D3DXCONSTANT_DESC desc = {};
+            UINT count = 1;
+            if (FAILED(table->GetConstantDesc(table->GetConstant(nullptr, i), &desc, &count)) ||
+                desc.RegisterSet != D3DXRS_SAMPLER || !desc.Name)
+                continue;
+            if (D3DXHANDLE param = effect->GetParameterByName(nullptr, (std::string(desc.Name) + "2D").c_str()))
+                samplers.emplace_back(desc.RegisterIndex, param);
+        }
+        table->Release();
+        return samplers;
+    }
+
+    static void BindEffectSamplers(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
+    {
+        IDirect3DPixelShader9* ps = nullptr;
+        if (FAILED(pDevice->GetPixelShader(&ps)) || !ps)
+            return;
+        const auto key = std::make_pair(effect, ps);
+        auto it = effectSamplers.find(key);
+        if (it == effectSamplers.end())
+            it = effectSamplers.emplace(key, FindEffectSamplers(effect, ps)).first;
+        ps->Release();
+
+        for (const auto& [reg, param] : it->second)
+        {
+            IDirect3DBaseTexture9* want = nullptr;
+            IDirect3DBaseTexture9* have = nullptr;
+            effect->GetTexture(param, &want);
+            pDevice->GetTexture(reg, &have);
+            if (want != have)
+                pDevice->SetTexture(reg, want);
+            SAFE_RELEASE(want);
+            SAFE_RELEASE(have);
+        }
     }
 
     // vec4ViewToPrevClip: from SSR.fx's reconstruction space, whose x (and z, when _34 is
@@ -2323,10 +2571,10 @@ private:
         effect->SetFloat(h.fIntensity, R.fSSRIntensity);
         effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);
         effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
-        const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1] &&
-                              R.SSRHitSurf[half];
+        const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1];
+        // Golden ratio steps through the offsets, as for contact shadows.
         ++R.nSSRFrame;
-        effect->SetFloat(h.fJitterOffset, 0.0f);
+        effect->SetFloat(h.fJitterOffset, temporal && R.bSSRTemporalJitter ? float(R.nSSRFrame * 2654435769u) * (1.0f / 4294967296.0f) : 0.0f);
         effect->SetFloat(h.fTowardCamera, R.fSSRTowardCamera);
         effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
         effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
@@ -2374,22 +2622,17 @@ private:
             effect->SetTechnique(h.techSSR);
             effect->Begin(&passes, 0);
         }
-        // SSR_PS writes its ray lengths to COLOR1: into SSRHitTex while accumulating, else
-        // nowhere, never into whatever target the game left there.
-        IDirect3DSurface9* oldRT1 = nullptr;
-        pDevice->GetRenderTarget(1, &oldRT1);
-        pDevice->SetRenderTarget(1, temporal ? R.SSRHitSurf[half ? 1 : 0] : nullptr);
         {
             pDevice->SetRenderTarget(0, ssrSurf);
             pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
 
             effect->BeginPass(0);
             effect->CommitChanges();
+            BindEffectSamplers(pDevice, effect);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
         }
         effect->End();
-        pDevice->SetRenderTarget(1, nullptr);
 
         // Debug view, while the G-buffer still holds this frame. Changes nothing the game sees.
         // Smooth the result into the texture deferred_lighting reads.
@@ -2405,6 +2648,7 @@ private:
             effect->Begin(&passes, 0);
             effect->BeginPass(0);
             effect->CommitChanges();
+            BindEffectSamplers(pDevice, effect);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
@@ -2421,7 +2665,6 @@ private:
             const int prev = R.nSSRAccumIndex, next = prev ^ 1;
             effect->SetTexture(h.SSRResultTex2D, ssrResult);
             effect->SetTexture(h.SSRAccumTex2D, R.SSRAccumTex[sizeIndex][prev]->mD3DTexture);
-            effect->SetTexture(h.SSRHitTex2D, R.SSRHitTex[sizeIndex]->mD3DTexture);
             effect->SetFloat(h.fTemporalBlend, R.bSSRAccumValid ? R.fSSRTemporalBlend : 0.0f);
             effect->SetFloat(h.fTemporalAnySurface, 0.0f);
             pDevice->SetRenderTarget(0, R.SSRAccumSurf[sizeIndex][next]);
@@ -2429,6 +2672,7 @@ private:
             effect->Begin(&passes, 0);
             effect->BeginPass(0);
             effect->CommitChanges();
+            BindEffectSamplers(pDevice, effect);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
@@ -2453,6 +2697,7 @@ private:
             effect->Begin(&passes, 0);
             effect->BeginPass(0);
             effect->CommitChanges();
+            BindEffectSamplers(pDevice, effect);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
@@ -2495,8 +2740,6 @@ private:
         R.bSSRValidThisFrame = true;
 
         pDevice->SetRenderTarget(0, rt0);
-        pDevice->SetRenderTarget(1, oldRT1);
-        SAFE_RELEASE(oldRT1);
         pDevice->SetDepthStencilSurface(ds);
         pDevice->SetViewport(&oldViewport);
         pDevice->SetFVF(oldFVF);
@@ -2672,6 +2915,7 @@ private:
         effect->Begin(&passes, 0);
         effect->BeginPass(0);
         effect->CommitChanges();
+        BindEffectSamplers(pDevice, effect);
         pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
         effect->EndPass();
         effect->End();
@@ -2771,7 +3015,10 @@ private:
         shWaterRender.unsafe_ccall<void>(a1);
         if (mainScene)
         {
+            auto pDevice = rage::grcDevice::GetD3DDevice();
+            ProfilerMark(pDevice, kProfWater, true);
             RenderWaterReflections();
+            ProfilerMark(pDevice, kProfWater, false);
             R.bWaterDoneThisFrame = true;
         }
         R.bWaterMaskCaptured = false;
@@ -2853,6 +3100,7 @@ private:
 
                 pDevice->SetRenderTarget(0, camDepthSurf[0]);
                 effect->BeginPass(0);
+                BindEffectSamplers(pDevice, effect);
                 pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
 
@@ -2880,6 +3128,7 @@ private:
                     effect->CommitChanges();
 
                     pDevice->SetRenderTarget(0, PostFxResources.AOCamDepthSurf[i]);
+                    BindEffectSamplers(pDevice, effect);
                     pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, mipVertices, sizeof(ScreenVertex));
                 }
                 effect->EndPass();
@@ -2905,6 +3154,7 @@ private:
                 effect->CommitChanges();
 
                 effect->BeginPass(2);
+                BindEffectSamplers(pDevice, effect);
                 pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
 
@@ -2918,6 +3168,7 @@ private:
                     effect->SetFloatArray(h.vec2BlurDirection, hor, 2);
                     effect->CommitChanges();
 
+                    BindEffectSamplers(pDevice, effect);
                     pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
 
                     pDevice->SetRenderTarget(0, aoSurf);
@@ -2925,6 +3176,7 @@ private:
                     effect->SetFloatArray(h.vec2BlurDirection, ver, 2);
                     effect->CommitChanges();
 
+                    BindEffectSamplers(pDevice, effect);
                     pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 }
                 effect->EndPass();
@@ -2934,6 +3186,7 @@ private:
                 effect->SetTexture(h.AOTexture2D, aoTex);
 
                 effect->BeginPass(4);
+                BindEffectSamplers(pDevice, effect);
                 pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
             }
@@ -3052,6 +3305,7 @@ private:
         effect->Begin(&passes, 0);
         effect->BeginPass(0);
         effect->CommitChanges();
+        BindEffectSamplers(pDevice, effect);
         pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
         effect->EndPass();
         effect->End();
@@ -3138,10 +3392,20 @@ private:
     {
         DWORD result = RenderPedAndVehicleFakeShadowsInlineHook.unsafe_ccall<DWORD>(a1);
 
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        ProfilerMark(pDevice, kProfAO, true);
         RenderAmbientOcclusion();
+        ProfilerMark(pDevice, kProfAO, false);
+        ProfilerMark(pDevice, kProfSSR, true);
         RenderScreenSpaceReflections();
+        ProfilerMark(pDevice, kProfSSR, false);
+        ProfilerMark(pDevice, kProfContact, true);
         RenderContactShadows();
+        ProfilerMark(pDevice, kProfContact, false);
         RenderIndirectLight();
+        // deferred_lighting draws after this; BindSSRTexture bound last frame's results.
+        if (pDevice)
+            BindLightingInputs(pDevice);
 
         return result;
     }
@@ -3164,17 +3428,23 @@ private:
         effect->Begin(&passes, 0);
         effect->BeginPass(0);
         effect->CommitChanges();
+        BindEffectSamplers(pDevice, effect);
         pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
         effect->EndPass();
         effect->End();
     }
 
-    // Before deferred lighting, next to SSR: contact shadows towards the sun, smoothed, into
-    // ContactTex for deferred_lighting. Independent of SSR being on.
+    // Before deferred lighting, next to SSR: contact shadows towards the sun, smoothed into
+    // ContactTex and accumulated over frames into ContactAccumTex, for deferred_lighting (see
+    // BindLightingInputs). Independent of SSR being on.
     static void RenderContactShadows()
     {
         auto& R = PostFxResources;
         R.bContactValid = false;
+        R.ContactResult = nullptr;
+        // The history stays usable only if this frame accumulates too; any return below drops it.
+        const bool accumWasValid = R.bContactAccumValid;
+        R.bContactAccumValid = false;
 
         // For the light shaders, whatever becomes of the sun's pass below.
         {
@@ -3247,6 +3517,12 @@ private:
         effect->SetVector(h.vec4ProjInfo, &projInfo);
         effect->SetVector(h.vec4SunView, &sun);
         effect->SetFloat(h.fStepJitter, R.bContactShadowStepJitter ? 1.0f : 0.0f);
+        const bool temporal = R.fContactTemporalBlend > 0.0f && h.techContactTemporal && R.ContactAccumSurf[0] &&
+                              R.ContactAccumSurf[1];
+        // Golden ratio steps through the offsets, from an integer so they stay spread however
+        // long the game runs.
+        ++R.nContactFrame;
+        effect->SetFloat(h.fJitterOffset, temporal ? float(R.nContactFrame * 2654435769u) * (1.0f / 4294967296.0f) : 0.0f);
         effect->SetFloat(h.fCSLength, R.fContactShadowLength);
         effect->SetFloat(h.fCSThickness, R.fContactShadowThickness);
         effect->SetFloat(h.fCSMaxViewDistance, R.fContactShadowMaxDistance);
@@ -3295,7 +3571,23 @@ private:
         vpDesc.MaxZ = 1.0f;
         pDevice->SetViewport(&vpDesc);
 
-        DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawSurf, width, height);
+        if (R.bContactShadowsHalfRes && R.ContactRawHalfSurf && h.techContactUpsample)
+        {
+            // The march at half size, with the pixel size and reconstruction basis of that size,
+            // then back to full size for the rest.
+            const float halfWidth = float(DWORD(width) / 2), halfHeight = float(DWORD(height) / 2);
+            const float invHalfSize[] = { 1.0f / halfWidth, 1.0f / halfHeight };
+            D3DXVECTOR4 halfProjInfo(-2.0f / (halfWidth * proj._11), -2.0f / (halfHeight * proj._22), projInfo.z, projInfo.w);
+            effect->SetFloatArray(h.vec2InvViewportSize, invHalfSize, 2);
+            effect->SetVector(h.vec4ProjInfo, &halfProjInfo);
+            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawHalfSurf, halfWidth, halfHeight);
+            effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
+            effect->SetVector(h.vec4ProjInfo, &projInfo);
+            effect->SetTexture(h.SSRResultTex2D, R.ContactRawHalfTex->mD3DTexture);
+            DrawEffectPass(pDevice, effect, h.techContactUpsample, R.ContactRawSurf, width, height);
+        }
+        else
+            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawSurf, width, height);
 
         // The same depth aware smoothing SSR uses; the raw result has alpha 1 everywhere, so
         // it is a plain weighted blur.
@@ -3311,6 +3603,34 @@ private:
         else
         {
             pDevice->StretchRect(R.ContactRawSurf, nullptr, R.ContactSurf, nullptr, D3DTEXF_NONE);
+        }
+        R.ContactResult = R.ContactTex->mD3DTexture;
+
+        if (temporal)
+        {
+            D3DXMATRIX viewProj;
+            MatrixMultiply(viewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
+            if (!accumWasValid)
+                R.ContactPrevViewProj = viewProj;
+            D3DXVECTOR4 reprojRows[4];
+            ViewToClipRows(vp, R.ContactPrevViewProj, reprojRows);
+            // Last frame's fog pass copied its depth; this frame's has not run yet.
+            const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
+
+            const int prev = R.nContactAccumIndex, next = prev ^ 1;
+            effect->SetTexture(h.SSRResultTex2D, R.ContactTex->mD3DTexture);
+            effect->SetTexture(h.SSRAccumTex2D, R.ContactAccumTex[prev]->mD3DTexture);
+            effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
+            effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
+            effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
+            effect->SetFloat(h.fTemporalBlend, accumWasValid ? R.fContactTemporalBlend : 0.0f);
+            DrawEffectPass(pDevice, effect, h.techContactTemporal, R.ContactAccumSurf[next], width, height);
+
+            result = R.ContactAccumTex[next]->mD3DTexture;
+            R.ContactResult = result;
+            R.nContactAccumIndex = next;
+            R.ContactPrevViewProj = viewProj;
+            R.bContactAccumValid = true;
         }
 
         if (R.SSRDebugMode() == R.kContactDebugMode && R.SSRDebugSurf && h.techSSRDebug)
@@ -3543,22 +3863,73 @@ private:
     // shaft drawn with it shows nothing, so unless VolumetricLightHeadlightShadow is on, the draw
     // hook clears that choice for lights with the headlight flag and they take the plain one.
     static inline SafetyHookMid shShaftDraw{};
+    // A headlight's cone is round and aimed level, so the upper half of its shaft rose metres
+    // above the road. Before the loop draws a shaft (CE 0xAC4580) it copies the light's direction
+    // and tangent to its stack; for headlights the aim hook turns those copies down by
+    // VolumetricLightHeadlightPitch, about the level axis across the beam. The light itself, which
+    // lights the road and casts the headlight's shadow, keeps its aim.
+    static inline SafetyHookMid shShaftAim{};
 
     static void InstallShaftHooks()
     {
         auto& R = PostFxResources;
-        if (!R.nVolumetricLightHeadlightFlag || R.bVolumetricLightHeadlightShadow)
+        if (!R.nVolumetricLightHeadlightFlag)
             return;
-        auto pattern = hook::pattern("A1 ? ? ? ? 0F 28 05 ? ? ? ? 0F 29 84 24 A0 00 00 00 F3 0F 10 44 06 70");
-        if (!pattern.empty())
+        if (!R.bVolumetricLightHeadlightShadow)
         {
-            static uintptr_t* list = *pattern.get_first<uintptr_t*>(1);
-            shShaftDraw = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
+            auto pattern = hook::pattern("A1 ? ? ? ? 0F 28 05 ? ? ? ? 0F 29 84 24 A0 00 00 00 F3 0F 10 44 06 70");
+            if (!pattern.empty())
             {
-                const auto& light = *reinterpret_cast<const rage::CLightSource*>(*list + regs.esi);
-                if (PostFxResources.VolumetricLight() && (light.mFlags & PostFxResources.nVolumetricLightHeadlightFlag))
-                    *reinterpret_cast<uint8_t*>(regs.esp + 0xF) = 0;
-            });
+                static uintptr_t* list = *pattern.get_first<uintptr_t*>(1);
+                shShaftDraw = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
+                {
+                    const auto& light = *reinterpret_cast<const rage::CLightSource*>(*list + regs.esi);
+                    if (PostFxResources.VolumetricLight() && (light.mFlags & PostFxResources.nVolumetricLightHeadlightFlag))
+                        *reinterpret_cast<uint8_t*>(regs.esp + 0xF) = 0;
+                });
+            }
+        }
+        if (R.fVolumetricLightHeadlightPitch != 0.0f)
+        {
+            // The copies of direction (esp + 0xF0) and tangent (esp + 0xE0), then push 0; the
+            // hook sits on the load of the outer cone angle right after, eax the light list and
+            // esi this light's offset in it.
+            auto pattern = hook::pattern("F3 0F 10 04 06 F3 0F 11 84 24 F0 00 00 00 F3 0F 10 44 06 04 F3 0F 11 84 24 F4 00 00 00 "
+                                         "F3 0F 10 44 06 08 F3 0F 11 84 24 F8 00 00 00 F3 0F 10 44 06 10 F3 0F 11 84 24 E0 00 00 00 "
+                                         "F3 0F 10 44 06 14 F3 0F 11 84 24 E4 00 00 00 F3 0F 10 44 06 18 6A 00 "
+                                         "F3 0F 11 84 24 EC 00 00 00 F3 0F 10 6C 06 5C");
+            if (!pattern.empty())
+            {
+                static const float pitch = R.fVolumetricLightHeadlightPitch * 3.14159265f / 180.0f;
+                static const float c = std::cos(pitch), s = -std::sin(pitch);
+                shShaftAim = safetyhook::create_mid(pattern.get_first(0x5B), [](SafetyHookContext& regs)
+                {
+                    const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.eax + regs.esi);
+                    if (!PostFxResources.VolumetricLight() || !(light.mFlags & PostFxResources.nVolumetricLightHeadlightFlag))
+                        return;
+                    // 4 bytes further off esp for the push 0.
+                    float* dir = reinterpret_cast<float*>(regs.esp + 0xF4);
+                    float* tangent = reinterpret_cast<float*>(regs.esp + 0xE4);
+                    // The level axis across the beam, dir x up.
+                    float kx = dir[1], ky = -dir[0];
+                    const float len = std::sqrt(kx * kx + ky * ky);
+                    if (len < 1e-3f)
+                        return; // aimed straight up or down
+                    kx /= len;
+                    ky /= len;
+                    // Rodrigues: v cos + (k x v) sin + k (k . v)(1 - cos), turning down.
+                    auto turn = [&](float* v)
+                    {
+                        const float kv = kx * v[0] + ky * v[1];
+                        const float cx = ky * v[2], cy = -kx * v[2], cz = kx * v[1] - ky * v[0];
+                        v[0] = v[0] * c + cx * s + kx * kv * (1.0f - c);
+                        v[1] = v[1] * c + cy * s + ky * kv * (1.0f - c);
+                        v[2] = v[2] * c + cz * s;
+                    };
+                    turn(dir);
+                    turn(tangent);
+                });
+            }
         }
     }
 
@@ -3620,38 +3991,55 @@ private:
     }
 
 public:
-    static void BindSSRTexture()
+    // What deferred_lighting reads besides the game's own inputs: s3 the SSR result (the cleared
+    // SSR target while SSR is off, else a transparent 1x1), s9 the contact shadows while they
+    // are valid, s8 the indirect light, and c202-c204 the local light contact shadow constants.
+    static void BindLightingInputs(IDirect3DDevice9* pDevice)
     {
         auto& R = PostFxResources;
-        auto pDevice = rage::grcDevice::GetD3DDevice();
-        if (!pDevice)
-            return;
+        // s9 is read by no game shader, and the car glass takes it over right after lighting.
+        if (R.bContactValid && R.ContactResult)
+        {
+            BindSampler(pDevice, 9, R.ContactResult, D3DTEXF_POINT);
+            R.bContactBound = true;
+        }
+        else if (R.bContactBound)
+        {
+            pDevice->SetTexture(9, nullptr);
+            R.bContactBound = false;
+        }
+        pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
+
+        // Indirect light, black while there is none; unbound after lighting.
+        BindSampler(pDevice, 8, R.GIResult ? static_cast<IDirect3DBaseTexture9*>(R.GIResult) : R.TransparentTex(), D3DTEXF_LINEAR);
+        R.bGIBound = true;
 
         IDirect3DBaseTexture9* tex = R.TransparentTex();
         if (R.SSRResult)
             tex = R.SSRResult;
         else if (R.SSRTex && R.SSRTex->mD3DTexture)
             tex = R.SSRTex->mD3DTexture; // cleared while SSR is off
-        // Contact shadows for deferred_lighting; s9 is read by no game shader, and the car glass
-        // takes it over right after lighting.
-        if (R.bContactValid && R.ContactTex && R.ContactTex->mD3DTexture)
-        {
-            BindSampler(pDevice, 9, R.ContactTex->mD3DTexture, D3DTEXF_POINT);
-            R.bContactBound = true;
-        }
-
-        // Indirect light for deferred_lighting, black while there is none; unbound after lighting.
-        BindSampler(pDevice, 8, R.GIResult ? static_cast<IDirect3DBaseTexture9*>(R.GIResult) : R.TransparentTex(), D3DTEXF_LINEAR);
-        R.bGIBound = true;
-
-        pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
-
         pDevice->SetTexture(3, tex);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(3, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
         pDevice->SetSamplerState(3, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
         pDevice->SetSamplerState(3, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    }
+
+    // Runs as the first command of the lighting phase's list (OnBuildRenderList), before the
+    // command in that list that renders AO, SSR and contact shadows, so what it binds is last
+    // frame's. For the accumulated SSR that was the other target of the pair, and lighting
+    // showed last frame's reflections, which swung off the car while the camera turned and came
+    // back when it stopped; the contact shadows' validity and constants were a frame old too.
+    // RenderPedAndVehicleFakeShadows binds this frame's once they are done.
+    static void BindSSRTexture()
+    {
+        if (auto pDevice = rage::grcDevice::GetD3DDevice())
+        {
+            ProfilerMark(pDevice, kProfLighting, true);
+            BindLightingInputs(pDevice);
+        }
     }
 
     static void BindSampler(IDirect3DDevice9* pDevice, DWORD slot, IDirect3DBaseTexture9* tex, DWORD filter)
@@ -3673,6 +4061,7 @@ public:
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
+        ProfilerMark(pDevice, kProfLighting, false);
 
         if (R.bContactBound)
         {
