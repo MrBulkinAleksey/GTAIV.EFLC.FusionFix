@@ -234,7 +234,7 @@ public:
         D3DXHANDLE techContactTemporal, fJitterOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
-        D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
+        D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff, fWetness, fWetGroundBoost;
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY;
         D3DXHANDLE techSSR, techSSRWater;
@@ -424,6 +424,9 @@ public:
     float fSSRIntensity = 1.0f;
     float fSSRGlossBoost = 2.0f;
     float fSSRGlossCutoff = 0.5f;
+    // ScreenSpaceReflectionsWetGround: while it rains, SSR on ground facing up that is under the
+    // gloss cutoff, drawn this many times brighter (fWetGroundBoost in SSR.fx); 0 turns it off.
+    float fSSRWetGround = 2.0f;
     float fSSRWaterIntensity = 1.0f;
     // CWater::Render loads this as the Z of every flat water vertex, so it is the real
     // surface height rather than an assumed sea level.
@@ -782,6 +785,8 @@ public:
                 h.vec4ViewToPrevClip = SSREffect->GetParameterByName(nullptr, "vec4ViewToPrevClip");
                 h.fGlossBoost = SSREffect->GetParameterByName(nullptr, "fGlossBoost");
                 h.fGlossCutoff = SSREffect->GetParameterByName(nullptr, "fGlossCutoff");
+                h.fWetness = SSREffect->GetParameterByName(nullptr, "fWetness");
+                h.fWetGroundBoost = SSREffect->GetParameterByName(nullptr, "fWetGroundBoost");
                 h.vec4WaterPlane = SSREffect->GetParameterByName(nullptr, "vec4WaterPlane");
                 h.fWaterIntensity = SSREffect->GetParameterByName(nullptr, "fWaterIntensity");
                 h.fWaterBlur = SSREffect->GetParameterByName(nullptr, "fWaterBlur");
@@ -948,6 +953,7 @@ public:
         fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRGlossBoost = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossBoost", 2.0f), 0.0f, 8.0f);
         fSSRGlossCutoff = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossCutoff", 0.5f), 0.0f, 1.0f);
+        fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 2.0f), 0.0f, 8.0f);
         fSSRWaterIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWaterLevelOffset = iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterLevelOffset", 0.0f);
         fSSRWaterBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterBlur", 3.0f), 0.0f, 32.0f);
@@ -2503,6 +2509,13 @@ private:
         if (hasNormals)
             effect->SetTexture(h.NormalTex2D, R.mNormalRT->mD3DTexture);
         effect->SetFloat(h.fUseGBufferNormals, (hasNormals && R.bSSRGBufferNormals) ? 1.0f : 0.0f);
+        // CWeather::Rain eases towards the weather's rain amount, 0.3 for drizzle, 0.7 for rain
+        // and 1.0 for a thunderstorm, so the ground wets and dries with it; rain counts as wet.
+        // Telling ground from walls takes the G-buffer normals, and the gloss the specular one.
+        const float rain = CWeather::Rain ? *CWeather::Rain : 0.0f;
+        const bool wetGround = R.fSSRWetGround > 0.0f && hasNormals && hasSpecular;
+        effect->SetFloat(h.fWetness, wetGround ? std::clamp(rain / 0.7f, 0.0f, 1.0f) : 0.0f);
+        effect->SetFloat(h.fWetGroundBoost, R.fSSRWetGround);
 
         UINT passes = 0;
         IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
