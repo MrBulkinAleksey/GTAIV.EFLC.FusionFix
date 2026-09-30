@@ -3,6 +3,7 @@ module;
 #include <common.hxx>
 #include <d3dx9tex.h>
 #include <algorithm>
+#include <cstdio>
 
 export module postfx;
 
@@ -206,6 +207,11 @@ public:
     // 10 (fViewCheck in SSR.fx), which shows for a second after the two disagreed.
     D3DXMATRIX SSRPrevViewInv = {}, SSRPrevGameView = {};
     int nSSRViewCheck = 0, nSSRViewCheckFrames = 0;
+    // While debug mode 8 to 10 is picked, each SSR pass is logged to FusionFix.SSR.log next to
+    // GTAIV.exe, see LogSSRPass. nPostFXFrame counts NewPostFX, which runs once a frame.
+    FILE* SSRLog = nullptr;
+    int nSSRLogLines = 0;
+    uint32_t nPostFXFrame = 0;
     D3DXVECTOR4 SSRReprojRows[4] = {};
     bool bSSRReprojValid = false;
     // Set once the fog pass has copied this frame's scene into SSRHistoryTex; SSR runs before
@@ -1606,6 +1612,7 @@ private:
 
     static void NewPostFX()
     {
+        ++PostFxResources.nPostFXFrame;
         IDirect3DPixelShader9* oldps = 0;
         IDirect3DVertexShader9* oldvs = 0;
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
@@ -2135,6 +2142,67 @@ private:
         R.SSRPrevGameView = gameView;
     }
 
+    // One line per SSR pass while debug mode 8 to 10 is picked, up to 3000, written to
+    // FusionFix.SSR.log next to GTAIV.exe from the moment the mode is picked: the frame, the
+    // time, the viewport and its camera, whether there is history to keep, and in pixels how
+    // far vec4ViewToPrevClip moves the screen centre at 10 m, which should follow the camera.
+    static void LogSSRPass(const rage::grcViewport* vp, const D3DMATRIX& proj, float width, float height,
+                           const D3DXVECTOR4 rows[4])
+    {
+        auto& R = PostFxResources;
+        if (R.SSRDebugMode() < R.kTemporalDebugMode)
+        {
+            if (R.SSRLog)
+                fclose(R.SSRLog);
+            R.SSRLog = nullptr;
+            R.nSSRLogLines = 0;
+            return;
+        }
+        if (R.nSSRLogLines >= 3000)
+        {
+            if (R.SSRLog)
+                fclose(R.SSRLog);
+            R.SSRLog = nullptr;
+            return;
+        }
+        if (!R.SSRLog)
+        {
+            R.SSRLog = _wfopen((GetExeModulePath() / L"FusionFix.SSR.log").c_str(), L"w");
+            if (!R.SSRLog)
+            {
+                R.nSSRLogLines = 3000;
+                return;
+            }
+            fprintf(R.SSRLog, "frame,ms,viewport,fwdX,fwdY,fwdZ,posX,posY,posZ,p11,p22,p31,p32,accumValid,accumIndex,shiftX,shiftY\n");
+        }
+
+        LARGE_INTEGER now, freq;
+        QueryPerformanceCounter(&now);
+        QueryPerformanceFrequency(&freq);
+        const double ms = double(now.QuadPart) * 1000.0 / double(freq.QuadPart);
+
+        // The screen centre at 10 m in SSR.fx's reconstruction space, through HistoryUV.
+        const float z = 10.0f;
+        const float x = -proj._31 / proj._11 * z, y = proj._32 / proj._22 * z;
+        float clip[4];
+        for (int i = 0; i < 4; ++i)
+            clip[i] = x * rows[0][i] + y * rows[1][i] + z * rows[2][i] + rows[3][i];
+        float shiftX = 0.0f, shiftY = 0.0f;
+        if (clip[3] > 0.0f)
+        {
+            shiftX = clip[0] / clip[3] * 0.5f * width;
+            shiftY = -clip[1] / clip[3] * 0.5f * height;
+        }
+
+        const auto& viewInv = vp->mViewInverseMatrix;
+        fprintf(R.SSRLog, "%u,%.3f,%p,%.5f,%.5f,%.5f,%.3f,%.3f,%.3f,%.5f,%.5f,%.5f,%.5f,%d,%d,%.2f,%.2f\n",
+                R.nPostFXFrame, ms, (const void*)vp, viewInv[2][0], viewInv[2][1], viewInv[2][2],
+                viewInv[3][0], viewInv[3][1], viewInv[3][2], proj._11, proj._22, proj._31, proj._32,
+                R.bSSRAccumValid ? 1 : 0, R.nSSRAccumIndex, shiftX, shiftY);
+        fflush(R.SSRLog);
+        ++R.nSSRLogLines;
+    }
+
     // vec4ViewToPrevClip: from SSR.fx's reconstruction space, whose x (and z, when _34 is
     // negative) run opposite to the game's view space, to viewProj's clip space.
     static void ViewToClipRows(const rage::grcViewport* vp, const D3DXMATRIX& viewProj, D3DXVECTOR4 rows[4])
@@ -2296,6 +2364,7 @@ private:
         effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
         memcpy(R.SSRReprojRows, reprojRows, sizeof(reprojRows));
         R.bSSRReprojValid = true;
+        LogSSRPass(vp, proj, width, height, reprojRows);
 
         R.SSRPrevViewProj = viewProj;
         R.bSSRPrevViewProjValid = true;
