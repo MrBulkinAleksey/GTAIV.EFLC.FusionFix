@@ -2,6 +2,7 @@ texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, SSRR
 texture PreWaterTex2D, PostWaterTex2D;
 texture PrevDepthTex2D;
 texture SSRAccumTex2D;
+texture AlbedoTex2D, GIPrevTex2D;
 
 sampler2D DepthTex
 {
@@ -50,6 +51,28 @@ sampler2D DebugTex
 sampler2D SSRAccumTex
 {
     Texture = <SSRAccumTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = NONE;
+};
+
+// This frame's diffuse colour (_DEFERRED_GBUFFER_0_), and the indirect light deferred_lighting
+// added last frame, see SSGI_PS.
+sampler2D AlbedoTex
+{
+    Texture = <AlbedoTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
+};
+
+sampler2D GIPrevTex
+{
+    Texture = <GIPrevTex2D>;
     AddressU = Clamp;
     AddressV = Clamp;
     MinFilter = LINEAR;
@@ -138,6 +161,7 @@ uniform float fGIThickness;         // how deep behind the scene a sample may la
 uniform float fGIMaxViewDistance;   // indirect light fades out towards this view distance
 uniform float fGIIntensity;         // multiplier on the light gathered
 uniform float fGIMaxBrightness;     // brightness a single hit may bring, so a headlight or neon sign does not flare
+uniform float fGIFeedback;          // share of last frame's indirect light a hit takes back out, 0 while there is none
 
 #ifndef GI_RAYS
 #define GI_RAYS 4
@@ -883,7 +907,8 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 // frame's lit scene where they hit. deferred_lighting adds the result to its ambient term
 // before multiplying by albedo, so a red wall tints the white floor next to it. Rays that
 // hit nothing add nothing: the game's ambient already stands for the open sky. The history
-// holds last frame's indirect light too, so light bounces on from frame to frame.
+// holds last frame's indirect light too, so light bounces on from frame to frame, at its true
+// strength whatever fGIIntensity is (see fGIFeedback).
 float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
@@ -964,7 +989,14 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
                     float2 histUV = HistoryUV(P);
                     if (all(histUV > 0.0) && all(histUV < 1.0))
                     {
-                        float3 L = clamp(tex2Dlod(HistoryTex, float4(histUV, 0, 0)).rgb, 0.0, HISTORY_CLAMP);
+                        // Last frame's lighting added the surface's colour times the indirect
+                        // light it got. All of that but an intensity 1 share comes back out:
+                        // otherwise fGIIntensity multiplied every bounce again, and at 3 surfaces
+                        // next to each other lit each other brighter every frame, up to the caps.
+                        float3 L = tex2Dlod(HistoryTex, float4(histUV, 0, 0)).rgb;
+                        L -= tex2Dlod(AlbedoTex, float4(sampleUV, 0, 0)).rgb *
+                             tex2Dlod(GIPrevTex, float4(histUV, 0, 0)).rgb * fGIFeedback;
+                        L = clamp(L, 0.0, HISTORY_CLAMP);
                         float lum = dot(L, float3(0.2126, 0.7152, 0.0722));
                         L *= min(1.0, fGIMaxBrightness / max(lum, 1e-4));
                         sum += L * (1.0 - t * t); // fades out towards the ray's end, not along it

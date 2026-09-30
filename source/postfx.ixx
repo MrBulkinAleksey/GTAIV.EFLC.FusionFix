@@ -242,7 +242,7 @@ public:
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
-        D3DXHANDLE fGIMaxBrightness, techGIUpsample;
+        D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, GIPrevTex2D, fGIFeedback;
     } SSREffectHandles = {};
 
     // PREF_SSR: 0 off, 1 half resolution, 2 full resolution.
@@ -280,6 +280,8 @@ public:
     rage::grcRenderTargetPC* GIFullTex = nullptr;
     IDirect3DSurface9* GIFullSurf = nullptr;
     int nGIAccumIndex = 0;
+    // Steps the rays' offsets on every frame; SSR's count stands still while SSR is off.
+    uint32_t nGIFrame = 0;
     bool bGIAccumValid = false;
     D3DXMATRIX GIPrevViewProj = {};
     bool bGIPrevViewProjValid = false;
@@ -868,6 +870,9 @@ public:
                 h.techSSGI = SSREffect->GetTechniqueByName("SSGI");
                 h.fGIMaxBrightness = SSREffect->GetParameterByName(nullptr, "fGIMaxBrightness");
                 h.techGIUpsample = SSREffect->GetTechniqueByName("GIUpsample");
+                h.AlbedoTex2D = SSREffect->GetParameterByName(nullptr, "AlbedoTex2D");
+                h.GIPrevTex2D = SSREffect->GetParameterByName(nullptr, "GIPrevTex2D");
+                h.fGIFeedback = SSREffect->GetParameterByName(nullptr, "fGIFeedback");
             }
         }
 
@@ -3677,6 +3682,8 @@ private:
     static void RenderIndirectLight()
     {
         auto& R = PostFxResources;
+        // What deferred_lighting added last frame, still in its target, null if nothing.
+        IDirect3DTexture9* prevGI = R.GIResult;
         R.GIResult = nullptr;
 
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
@@ -3743,12 +3750,21 @@ private:
         effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
         effect->SetFloat(h.fNearPlane, vp->mNearClip);
         effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
-        effect->SetFloat(h.fJitterOffset, R.fGITemporalBlend > 0.0f ? float(fmod(double(R.nSSRFrame) * 0.6180339887 + 0.5, 1.0)) : 0.0f);
+        // Golden ratio steps through the offsets, as for contact shadows, so the accumulation
+        // averages the rays out; with SSR's frame count they stood still while SSR was off.
+        ++R.nGIFrame;
+        effect->SetFloat(h.fJitterOffset, R.fGITemporalBlend > 0.0f ? float(R.nGIFrame * 2654435769u) * (1.0f / 4294967296.0f) : 0.0f);
         effect->SetFloat(h.fGIRayLength, R.fGIRayLength);
         effect->SetFloat(h.fGIThickness, R.fGIThickness);
         effect->SetFloat(h.fGIMaxViewDistance, R.fGIMaxDistance);
         effect->SetFloat(h.fGIIntensity, R.fGIIntensity);
         effect->SetFloat(h.fGIMaxBrightness, R.fGIMaxBrightness);
+        // Last frame's scene holds the surfaces' colour times the indirect light at fGIIntensity;
+        // the rays take all but an intensity 1 share of it back out, see SSGI_PS.
+        const bool albedo = R.mDiffuseRT && R.mDiffuseRT->mD3DTexture;
+        effect->SetTexture(h.AlbedoTex2D, albedo ? R.mDiffuseRT->mD3DTexture : nullptr);
+        effect->SetTexture(h.GIPrevTex2D, prevGI);
+        effect->SetFloat(h.fGIFeedback, (albedo && prevGI) ? (std::max)(1.0f - 1.0f / R.fGIIntensity, 0.0f) : 0.0f);
 
         IDirect3DSurface9* rt0 = nullptr;
         IDirect3DSurface9* ds = nullptr;
