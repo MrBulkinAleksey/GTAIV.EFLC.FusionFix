@@ -75,13 +75,13 @@ namespace CDeferredLightingHelper
     }
 }
 
-SafetyHookInline shsub_5ADB20 = {};
+int (__cdecl* sub_5ADB20Original)() = nullptr;
 int sub_5ADB20()
 {
     if (Natives::IsUsingController())
         return 0;
 
-    return shsub_5ADB20.unsafe_ccall<int>();
+    return sub_5ADB20Original();
 }
 
 namespace CRadarNY
@@ -655,8 +655,11 @@ public:
             // Note: It only disables it visually, so a mouse can still be used simultaneously with a controller to select things. The start menu also uses a different cursor, so this won't also hide that one.
             // TODO: Improve this in the future? Like locking the mouse positions in place at least when a gamepad is used?
             {
+                // Its callers are redirected instead of its entry: other mods find and call it by its first bytes
                 auto pattern = hook::pattern("83 EC ? 53 55 56 57 6A ? E8 ? ? ? ? 83 C4");
-                shsub_5ADB20 = safetyhook::create_inline(pattern.get_first(0), sub_5ADB20);
+                sub_5ADB20Original = pattern.get_first<int(__cdecl)()>(0);
+                for (auto call : FindModuleCallsTo(reinterpret_cast<uintptr_t>(sub_5ADB20Original)))
+                    injector::MakeCALL(call, sub_5ADB20, true);
             }
 
             // Pause menu map crosshair aspect ratio scaling
