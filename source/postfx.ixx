@@ -3,6 +3,7 @@ module;
 #include <common.hxx>
 #include <d3dx9tex.h>
 #include <algorithm>
+#include <cstdio>
 
 export module postfx;
 
@@ -329,6 +330,8 @@ public:
     // ScreenSpaceReflectionsTemporalJitter: while SSR accumulates, the step offsets move on every
     // frame (fJitterOffset in SSR.fx), so the accumulation averages them.
     bool bSSRTemporalJitter = true;
+    // PostFxProfiler: GPU time of FusionFix's passes to FusionFix.PostFx.log, see ProfilerNextFrame.
+    bool bPostFxProfiler = false;
     uint32_t nSSRFrame = 0;
     float fSSRTowardCamera = 0.0f;
     float fSSRReflectionBlur = 0.0f;
@@ -954,6 +957,7 @@ public:
         bSSRPassThinObjects = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsPastThinObjects", 1) != 0;
         bSSRStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsStepJitter", 1) != 0;
         bSSRTemporalJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsTemporalJitter", 1) != 0;
+        bPostFxProfiler = iniReader.ReadInteger("POSTFX", "PostFxProfiler", 0) != 0;
         fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporal", 0.85f), 0.0f, 0.97f);
         fSSRTowardCamera = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", 0.0f), 0.0f, 1.0f);
         fSSRReflectionBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsBlur", 0.0f), 0.0f, 32.0f);
@@ -1251,6 +1255,7 @@ private:
         if (PostFxResources.SSREffect)
             PostFxResources.SSREffect->OnLostDevice();
         effectSamplers.clear();
+        ReleaseProfiler();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             SAFE_RELEASE(PostFxResources.AOCamDepthSurf[i]);
@@ -1618,6 +1623,7 @@ private:
 
     static void NewPostFX()
     {
+        ProfilerNextFrame(rage::grcDevice::GetD3DDevice());
         IDirect3DPixelShader9* oldps = 0;
         IDirect3DVertexShader9* oldvs = 0;
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
@@ -2089,6 +2095,156 @@ private:
                 r.m[i][j] = a.m[i][0] * b.m[0][j] + a.m[i][1] * b.m[1][j]
                           + a.m[i][2] * b.m[2][j] + a.m[i][3] * b.m[3][j];
         out = r;
+    }
+
+    // PostFxProfiler: GPU time of FusionFix's passes, from timestamp queries. Each frame's queries
+    // are read kProfilerFrames frames later, without waiting on the GPU, and every 120 frames the
+    // averages in milliseconds per frame are written to FusionFix.PostFx.log next to GTAIV.exe.
+    // Lights is the lighting phase less the AO, SSR and contact shadow passes that run inside it:
+    // the game's lights with their local contact shadows, and the light shafts. Off, no query is
+    // made.
+    enum ProfilerSection { kProfAO, kProfSSR, kProfContact, kProfWater, kProfLighting, kProfSections };
+    static constexpr int kProfilerFrames = 4;
+    static constexpr int kProfilerAverage = 120;
+    struct ProfilerFrame
+    {
+        IDirect3DQuery9* disjoint = nullptr;
+        IDirect3DQuery9* freq = nullptr;
+        IDirect3DQuery9* start = nullptr;
+        IDirect3DQuery9* stop = nullptr;
+        IDirect3DQuery9* begin[kProfSections] = {};
+        IDirect3DQuery9* end[kProfSections] = {};
+        bool issued = false;
+        bool used[kProfSections] = {};
+    };
+    static inline ProfilerFrame profilerFrames[kProfilerFrames];
+    static inline int nProfilerFrame = -1;
+    static inline double profilerSums[kProfSections + 1] = {}; // the last is the whole frame
+    static inline int nProfilerSamples = 0;
+    static inline bool bProfilerLogStarted = false;
+
+    static void ReleaseProfilerFrame(ProfilerFrame& f)
+    {
+        SAFE_RELEASE(f.disjoint);
+        SAFE_RELEASE(f.freq);
+        SAFE_RELEASE(f.start);
+        SAFE_RELEASE(f.stop);
+        for (int i = 0; i < kProfSections; ++i)
+        {
+            SAFE_RELEASE(f.begin[i]);
+            SAFE_RELEASE(f.end[i]);
+        }
+        f.issued = false;
+    }
+
+    static void ReleaseProfiler()
+    {
+        for (auto& f : profilerFrames)
+            ReleaseProfilerFrame(f);
+        nProfilerFrame = -1;
+    }
+
+    static bool CreateProfilerFrame(IDirect3DDevice9* pDevice, ProfilerFrame& f)
+    {
+        if (f.disjoint)
+            return true;
+        bool ok = SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMPDISJOINT, &f.disjoint)) &&
+                  SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMPFREQ, &f.freq)) &&
+                  SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.start)) &&
+                  SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.stop));
+        for (int i = 0; ok && i < kProfSections; ++i)
+            ok = SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.begin[i])) &&
+                 SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.end[i]));
+        if (!ok)
+            ReleaseProfilerFrame(f);
+        return ok;
+    }
+
+    static void WriteProfilerLine()
+    {
+        FILE* log = _wfopen((GetExeModulePath() / L"FusionFix.PostFx.log").c_str(), bProfilerLogStarted ? L"a" : L"w");
+        if (log)
+        {
+            if (!bProfilerLogStarted)
+                fprintf(log, "GPU milliseconds per frame, averaged over %d frames. lights: the game's lights with their "
+                             "local contact shadows, and the light shafts\n", kProfilerAverage);
+            const double n = double(nProfilerSamples);
+            fprintf(log, "frame %6.2f   AO %5.2f   SSR %5.2f   contact shadows %5.2f   water SSR %5.2f   lights %6.2f\n",
+                    profilerSums[kProfSections] / n, profilerSums[kProfAO] / n, profilerSums[kProfSSR] / n,
+                    profilerSums[kProfContact] / n, profilerSums[kProfWater] / n, profilerSums[kProfLighting] / n);
+            fclose(log);
+            bProfilerLogStarted = true;
+        }
+        std::fill(std::begin(profilerSums), std::end(profilerSums), 0.0);
+        nProfilerSamples = 0;
+    }
+
+    // Adds a frame whose queries were issued kProfilerFrames frames ago, if the GPU has them.
+    static void ReadProfilerFrame(ProfilerFrame& f)
+    {
+        BOOL disjoint = TRUE;
+        UINT64 freq = 0, start = 0, stop = 0;
+        if (f.disjoint->GetData(&disjoint, sizeof(disjoint), 0) != S_OK || disjoint ||
+            f.freq->GetData(&freq, sizeof(freq), 0) != S_OK || !freq ||
+            f.start->GetData(&start, sizeof(start), 0) != S_OK || f.stop->GetData(&stop, sizeof(stop), 0) != S_OK)
+            return;
+        double ms[kProfSections] = {};
+        for (int i = 0; i < kProfSections; ++i)
+        {
+            UINT64 b = 0, e = 0;
+            if (f.used[i] && f.begin[i]->GetData(&b, sizeof(b), 0) == S_OK && f.end[i]->GetData(&e, sizeof(e), 0) == S_OK && e >= b)
+                ms[i] = double(e - b) * 1000.0 / double(freq);
+        }
+        ms[kProfLighting] = (std::max)(ms[kProfLighting] - ms[kProfAO] - ms[kProfSSR] - ms[kProfContact], 0.0);
+        for (int i = 0; i < kProfSections; ++i)
+            profilerSums[i] += ms[i];
+        profilerSums[kProfSections] += double(stop - start) * 1000.0 / double(freq);
+        if (++nProfilerSamples >= kProfilerAverage)
+            WriteProfilerLine();
+    }
+
+    // Once a frame, as post processing begins: closes this frame's queries and opens the next.
+    static void ProfilerNextFrame(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        if (!R.bPostFxProfiler || !pDevice)
+            return;
+        if (nProfilerFrame >= 0 && profilerFrames[nProfilerFrame].issued)
+        {
+            auto& cur = profilerFrames[nProfilerFrame];
+            cur.stop->Issue(D3DISSUE_END);
+            cur.freq->Issue(D3DISSUE_END);
+            cur.disjoint->Issue(D3DISSUE_END);
+        }
+        nProfilerFrame = (nProfilerFrame + 1) % kProfilerFrames;
+        auto& f = profilerFrames[nProfilerFrame];
+        if (f.issued)
+        {
+            ReadProfilerFrame(f);
+            f.issued = false;
+        }
+        if (!CreateProfilerFrame(pDevice, f))
+        {
+            R.bPostFxProfiler = false; // no timestamp queries on this device
+            ReleaseProfiler();
+            return;
+        }
+        std::fill(std::begin(f.used), std::end(f.used), false);
+        f.disjoint->Issue(D3DISSUE_BEGIN);
+        f.start->Issue(D3DISSUE_END);
+        f.issued = true;
+    }
+
+    static void ProfilerMark(IDirect3DDevice9* pDevice, int section, bool begin)
+    {
+        if (!PostFxResources.bPostFxProfiler || !pDevice || nProfilerFrame < 0)
+            return;
+        auto& f = profilerFrames[nProfilerFrame];
+        if (!f.issued)
+            return;
+        (begin ? f.begin : f.end)[section]->Issue(D3DISSUE_END);
+        if (!begin)
+            f.used[section] = true;
     }
 
     // Binds every sampler of the pixel shader of the pass just begun to the texture its effect
@@ -2768,7 +2924,10 @@ private:
         shWaterRender.unsafe_ccall<void>(a1);
         if (mainScene)
         {
+            auto pDevice = rage::grcDevice::GetD3DDevice();
+            ProfilerMark(pDevice, kProfWater, true);
             RenderWaterReflections();
+            ProfilerMark(pDevice, kProfWater, false);
             R.bWaterDoneThisFrame = true;
         }
         R.bWaterMaskCaptured = false;
@@ -3142,11 +3301,18 @@ private:
     {
         DWORD result = RenderPedAndVehicleFakeShadowsInlineHook.unsafe_ccall<DWORD>(a1);
 
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        ProfilerMark(pDevice, kProfAO, true);
         RenderAmbientOcclusion();
+        ProfilerMark(pDevice, kProfAO, false);
+        ProfilerMark(pDevice, kProfSSR, true);
         RenderScreenSpaceReflections();
+        ProfilerMark(pDevice, kProfSSR, false);
+        ProfilerMark(pDevice, kProfContact, true);
         RenderContactShadows();
+        ProfilerMark(pDevice, kProfContact, false);
         // deferred_lighting draws after this; BindSSRTexture bound last frame's results.
-        if (auto pDevice = rage::grcDevice::GetD3DDevice())
+        if (pDevice)
             BindLightingInputs(pDevice);
 
         return result;
@@ -3583,7 +3749,10 @@ public:
     static void BindSSRTexture()
     {
         if (auto pDevice = rage::grcDevice::GetD3DDevice())
+        {
+            ProfilerMark(pDevice, kProfLighting, true);
             BindLightingInputs(pDevice);
+        }
     }
 
     static void BindSampler(IDirect3DDevice9* pDevice, DWORD slot, IDirect3DBaseTexture9* tex, DWORD filter)
@@ -3605,6 +3774,7 @@ public:
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
+        ProfilerMark(pDevice, kProfLighting, false);
 
         if (R.bContactBound)
         {
