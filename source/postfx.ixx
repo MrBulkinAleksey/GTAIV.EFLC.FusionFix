@@ -1237,6 +1237,7 @@ private:
             PostFxResources.AOEffect->OnLostDevice();
         if (PostFxResources.SSREffect)
             PostFxResources.SSREffect->OnLostDevice();
+        effectSamplers.clear();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             SAFE_RELEASE(PostFxResources.AOCamDepthSurf[i]);
@@ -2075,11 +2076,14 @@ private:
     // parameter holds, found through the shader's constant table (sampler X reads X2D in SSR.fx
     // and AO.fx). D3DX left some holding what the game had bound, about four a frame in the SSR
     // passes: a diagnostic pass read a G-buffer texture where it sampled the depth.
-    static void BindEffectSamplers(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
+    // Each shader's samplers are looked up once, as (register, parameter), and kept per effect
+    // and shader: reading the bytecode and its constant table for every draw cost CPU time for
+    // nothing, the effects keep their shaders for the whole game. Cleared on a lost device.
+    static inline std::map<std::pair<ID3DXEffect*, IDirect3DPixelShader9*>, std::vector<std::pair<UINT, D3DXHANDLE>>> effectSamplers;
+
+    static std::vector<std::pair<UINT, D3DXHANDLE>> FindEffectSamplers(ID3DXEffect* effect, IDirect3DPixelShader9* ps)
     {
-        IDirect3DPixelShader9* ps = nullptr;
-        if (FAILED(pDevice->GetPixelShader(&ps)) || !ps)
-            return;
+        std::vector<std::pair<UINT, D3DXHANDLE>> samplers;
         std::vector<DWORD> function;
         UINT size = 0;
         if (SUCCEEDED(ps->GetFunction(nullptr, &size)) && size)
@@ -2088,10 +2092,9 @@ private:
             if (FAILED(ps->GetFunction(function.data(), &size)))
                 function.clear();
         }
-        ps->Release();
         ID3DXConstantTable* table = nullptr;
         if (function.empty() || FAILED(D3DXGetShaderConstantTable(function.data(), &table)) || !table)
-            return;
+            return samplers;
 
         D3DXCONSTANTTABLE_DESC tableDesc = {};
         table->GetDesc(&tableDesc);
@@ -2102,19 +2105,35 @@ private:
             if (FAILED(table->GetConstantDesc(table->GetConstant(nullptr, i), &desc, &count)) ||
                 desc.RegisterSet != D3DXRS_SAMPLER || !desc.Name)
                 continue;
-            D3DXHANDLE param = effect->GetParameterByName(nullptr, (std::string(desc.Name) + "2D").c_str());
-            if (!param)
-                continue;
+            if (D3DXHANDLE param = effect->GetParameterByName(nullptr, (std::string(desc.Name) + "2D").c_str()))
+                samplers.emplace_back(desc.RegisterIndex, param);
+        }
+        table->Release();
+        return samplers;
+    }
+
+    static void BindEffectSamplers(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
+    {
+        IDirect3DPixelShader9* ps = nullptr;
+        if (FAILED(pDevice->GetPixelShader(&ps)) || !ps)
+            return;
+        const auto key = std::make_pair(effect, ps);
+        auto it = effectSamplers.find(key);
+        if (it == effectSamplers.end())
+            it = effectSamplers.emplace(key, FindEffectSamplers(effect, ps)).first;
+        ps->Release();
+
+        for (const auto& [reg, param] : it->second)
+        {
             IDirect3DBaseTexture9* want = nullptr;
             IDirect3DBaseTexture9* have = nullptr;
             effect->GetTexture(param, &want);
-            pDevice->GetTexture(desc.RegisterIndex, &have);
+            pDevice->GetTexture(reg, &have);
             if (want != have)
-                pDevice->SetTexture(desc.RegisterIndex, want);
+                pDevice->SetTexture(reg, want);
             SAFE_RELEASE(want);
             SAFE_RELEASE(have);
         }
-        table->Release();
     }
 
     // vec4ViewToPrevClip: from SSR.fx's reconstruction space, whose x (and z, when _34 is
