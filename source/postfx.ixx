@@ -237,7 +237,7 @@ public:
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY;
         D3DXHANDLE techSSR, techSSRWater;
-        D3DXHANDLE SSRAccumTex2D, SSRHitTex2D, fTemporalBlend, techSSRTemporal;
+        D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal;
     } SSREffectHandles = {};
 
     // PREF_SSR: 0 off, 1 half resolution, 2 full resolution.
@@ -336,13 +336,10 @@ public:
     // Accumulation over frames (SSRTemporal_PS in SSR.fx): each frame blends the smoothed
     // result with the previous accumulation into the other target of a pair, one pair per
     // resolution. ScreenSpaceReflectionsTemporal is the share of the history kept, 0 turns
-    // it off. The history is taken where the reflected image was last frame (SSRHitTex).
+    // it off. The history is taken where the surface was last frame.
     // The pair is why lighting must get the result only once SSR is done, see BindSSRTexture.
     rage::grcRenderTargetPC* SSRAccumTex[2][2] = {}; // [half][ping-pong]
     IDirect3DSurface9* SSRAccumSurf[2][2] = {};
-    // The reflected ray lengths of this frame's SSR pass, its second output, [half].
-    rage::grcRenderTargetPC* SSRHitTex[2] = {};
-    IDirect3DSurface9* SSRHitSurf[2] = {};
     int nSSRAccumIndex = 0;
     bool bSSRAccumValid = false;
     bool bSSRAccumHalf = false;
@@ -809,7 +806,6 @@ public:
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
                 h.SSRAccumTex2D = SSREffect->GetParameterByName(nullptr, "SSRAccumTex2D");
-                h.SSRHitTex2D = SSREffect->GetParameterByName(nullptr, "SSRHitTex2D");
                 h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
                 h.techSSRTemporal = SSREffect->GetTechniqueByName("SSRTemporal");
             }
@@ -1198,15 +1194,6 @@ private:
                     PostFxResources.SSRAccumTex[half][i] = nullptr;
                 }
             }
-        for (int half = 0; half < 2; ++half)
-        {
-            SAFE_RELEASE(PostFxResources.SSRHitSurf[half]);
-            if (PostFxResources.SSRHitTex[half])
-            {
-                PostFxResources.SSRHitTex[half]->Destroy();
-                PostFxResources.SSRHitTex[half] = nullptr;
-            }
-        }
         PostFxResources.bSSRAccumValid = false;
         PostFxResources.bSSRDebugValid = false;
         PostFxResources.bSSRValidThisFrame = false;
@@ -1426,16 +1413,6 @@ private:
                         if (rt && rt->mD3DTexture)
                             rt->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRAccumSurf[half][i]);
                     }
-                // The same format as the SSR target it is written along with: older hardware
-                // takes multiple render targets only of one bit depth.
-                static const char* hitNames[2] = { "SSRHitTex", "SSRHalfHitTex" };
-                for (int half = 0; half < 2; ++half)
-                {
-                    auto& rt = PostFxResources.SSRHitTex[half];
-                    rt = CreateEmptyRT(hitNames[half], 3, half ? width / 2 : width, half ? height / 2 : height, 64, &aoDesc);
-                    if (rt && rt->mD3DTexture)
-                        rt->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRHitSurf[half]);
-                }
             }
 
             PostFxResources.SSRDebugTex = CreateEmptyRT("SSRDebugTex", 3, width, height, 64, &aoDesc);
@@ -2067,8 +2044,6 @@ private:
         { D3DRS_CLIPPING,         FALSE },
         { D3DRS_CULLMODE,         D3DCULL_NONE },
         { D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA },
-        // The SSR pass writes its ray lengths to a second target while it accumulates.
-        { D3DRS_COLORWRITEENABLE1, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA },
     };
 
     static constexpr struct { D3DSAMPLERSTATETYPE state; DWORD value; } kSSRSamplerStates[] =
@@ -2312,8 +2287,7 @@ private:
         effect->SetFloat(h.fIntensity, R.fSSRIntensity);
         effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);
         effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
-        const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1] &&
-                              R.SSRHitSurf[half];
+        const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1];
         effect->SetFloat(h.fTowardCamera, R.fSSRTowardCamera);
         effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
         effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
@@ -2361,11 +2335,6 @@ private:
             effect->SetTechnique(h.techSSR);
             effect->Begin(&passes, 0);
         }
-        // SSR_PS writes its ray lengths to COLOR1: into SSRHitTex while accumulating, else
-        // nowhere, never into whatever target the game left there.
-        IDirect3DSurface9* oldRT1 = nullptr;
-        pDevice->GetRenderTarget(1, &oldRT1);
-        pDevice->SetRenderTarget(1, temporal ? R.SSRHitSurf[half ? 1 : 0] : nullptr);
         {
             pDevice->SetRenderTarget(0, ssrSurf);
             pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
@@ -2377,7 +2346,6 @@ private:
             effect->EndPass();
         }
         effect->End();
-        pDevice->SetRenderTarget(1, nullptr);
 
         // Debug view, while the G-buffer still holds this frame. Changes nothing the game sees.
         // Smooth the result into the texture deferred_lighting reads.
@@ -2410,7 +2378,6 @@ private:
             const int prev = R.nSSRAccumIndex, next = prev ^ 1;
             effect->SetTexture(h.SSRResultTex2D, ssrResult);
             effect->SetTexture(h.SSRAccumTex2D, R.SSRAccumTex[sizeIndex][prev]->mD3DTexture);
-            effect->SetTexture(h.SSRHitTex2D, R.SSRHitTex[sizeIndex]->mD3DTexture);
             effect->SetFloat(h.fTemporalBlend, R.bSSRAccumValid ? R.fSSRTemporalBlend : 0.0f);
             pDevice->SetRenderTarget(0, R.SSRAccumSurf[sizeIndex][next]);
             effect->SetTechnique(h.techSSRTemporal);
@@ -2485,8 +2452,6 @@ private:
         R.bSSRValidThisFrame = true;
 
         pDevice->SetRenderTarget(0, rt0);
-        pDevice->SetRenderTarget(1, oldRT1);
-        SAFE_RELEASE(oldRT1);
         pDevice->SetDepthStencilSurface(ds);
         pDevice->SetViewport(&oldViewport);
         pDevice->SetFVF(oldFVF);
