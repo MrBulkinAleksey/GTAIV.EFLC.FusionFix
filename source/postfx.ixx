@@ -202,6 +202,10 @@ public:
     bool bSSRValidThisFrame = false;
     D3DXMATRIX SSRPrevViewProj = {};
     bool bSSRPrevViewProjValid = false;
+    // Last frame's mViewInverseMatrix and mViewMatrix, for the check mark of debug modes 8 to
+    // 10 (fViewCheck in SSR.fx), which shows for a second after the two disagreed.
+    D3DXMATRIX SSRPrevViewInv = {}, SSRPrevGameView = {};
+    int nSSRViewCheck = 0, nSSRViewCheckFrames = 0;
     D3DXVECTOR4 SSRReprojRows[4] = {};
     bool bSSRReprojValid = false;
     // Set once the fog pass has copied this frame's scene into SSRHistoryTex; SSR runs before
@@ -225,7 +229,7 @@ public:
     struct
     {
         D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
-        D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
+        D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, fViewCheck, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade;
@@ -778,6 +782,7 @@ public:
                 h.SSRResultTex2D = SSREffect->GetParameterByName(nullptr, "SSRResultTex2D");
                 h.DebugTex2D = SSREffect->GetParameterByName(nullptr, "DebugTex2D");
                 h.fDebugMode = SSREffect->GetParameterByName(nullptr, "fDebugMode");
+                h.fViewCheck = SSREffect->GetParameterByName(nullptr, "fViewCheck");
                 h.fUseGBufferNormals = SSREffect->GetParameterByName(nullptr, "fUseGBufferNormals");
                 h.PreWaterTex2D = SSREffect->GetParameterByName(nullptr, "PreWaterTex2D");
                 h.PostWaterTex2D = SSREffect->GetParameterByName(nullptr, "PostWaterTex2D");
@@ -2076,6 +2081,60 @@ private:
         out = r;
     }
 
+    // View times projection, the view taken as the inverse of mViewInverseMatrix, which the
+    // game's own lighting reconstructs positions with. mViewMatrix is not used: reprojected
+    // with it, the history of debug mode 8 trailed far behind a turning camera.
+    static void ViewProjFromViewInverse(const rage::grcViewport* vp, D3DXMATRIX& viewProj)
+    {
+        D3DXMATRIX view;
+        D3DXMatrixInverse(&view, nullptr, (const D3DXMATRIX*)vp->mViewInverseMatrix);
+        MatrixMultiply(viewProj, view, *(const D3DXMATRIX*)vp->mProjectionMatrix);
+    }
+
+    // How far a times b is from the identity: 0 when b is the inverse of a.
+    static float OffIdentity(const D3DXMATRIX& a, const D3DXMATRIX& b)
+    {
+        D3DXMATRIX m;
+        MatrixMultiply(m, a, b);
+        float off = 0.0f;
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
+                off = (std::max)(off, fabsf(m.m[i][j] - (i == j ? 1.0f : 0.0f)));
+        return off;
+    }
+
+    // For the check mark of debug modes 8 to 10: whether mViewMatrix is the inverse of
+    // mViewInverseMatrix this frame. 0 it is; 1 it is last frame's camera; 2 it is right and
+    // mViewInverseMatrix is last frame's; 3 neither. Kept for 30 frames after it last was not 0.
+    static void CheckViewMatrices(const rage::grcViewport* vp)
+    {
+        auto& R = PostFxResources;
+        const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+        const D3DXMATRIX& gameView = *(const D3DXMATRIX*)vp->mViewMatrix;
+        // A centimetre, or about half a degree; turning the camera moves it several times that
+        // each frame.
+        constexpr float kTolerance = 0.01f;
+        int check = 0;
+        if (OffIdentity(viewInv, gameView) > kTolerance)
+        {
+            if (R.bSSRPrevViewProjValid && OffIdentity(R.SSRPrevViewInv, gameView) <= kTolerance)
+                check = 1;
+            else if (R.bSSRPrevViewProjValid && OffIdentity(viewInv, R.SSRPrevGameView) <= kTolerance)
+                check = 2;
+            else
+                check = 3;
+        }
+        if (check)
+        {
+            R.nSSRViewCheck = check;
+            R.nSSRViewCheckFrames = 30;
+        }
+        else if (R.nSSRViewCheckFrames > 0 && --R.nSSRViewCheckFrames == 0)
+            R.nSSRViewCheck = 0;
+        R.SSRPrevViewInv = viewInv;
+        R.SSRPrevGameView = gameView;
+    }
+
     // vec4ViewToPrevClip: from SSR.fx's reconstruction space, whose x (and z, when _34 is
     // negative) run opposite to the game's view space, to viewProj's clip space.
     static void ViewToClipRows(const rage::grcViewport* vp, const D3DXMATRIX& viewProj, D3DXVECTOR4 rows[4])
@@ -2225,8 +2284,9 @@ private:
         effect->SetFloat(h.fNearPlane, vp->mNearClip);
         effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
 
+        CheckViewMatrices(vp);
         D3DXMATRIX viewProj;
-        MatrixMultiply(viewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
+        ViewProjFromViewInverse(vp, viewProj);
 
         if (!R.bSSRPrevViewProjValid)
             R.SSRPrevViewProj = viewProj;
@@ -2374,6 +2434,7 @@ private:
                 setPassSize(width, height);
             effect->SetTexture(h.SSRResultTex2D, ssrResult);
             effect->SetFloat(h.fDebugMode, float(debugMode));
+            effect->SetFloat(h.fViewCheck, float(R.nSSRViewCheck));
 
             pDevice->SetRenderTarget(0, R.SSRDebugSurf);
             effect->SetTechnique(h.techSSRDebug);
@@ -2508,7 +2569,7 @@ private:
         if (R.bSSRHistoryThisFrame)
         {
             D3DXMATRIX viewProj;
-            MatrixMultiply(viewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
+            ViewProjFromViewInverse(vp, viewProj);
             D3DXVECTOR4 rows[4];
             ViewToClipRows(vp, viewProj, rows);
             effect->SetVectorArray(h.vec4ViewToPrevClip, rows, 4);

@@ -124,6 +124,7 @@ uniform float4 vec4WaterWorldX;
 uniform float4 vec4WaterWorldY;
 
 uniform float fDebugMode; // SSR debug view from the graphics menu, see SSRDebug_PS
+uniform float fViewCheck; // debug modes 8 to 10: whether the game's view matrices agree, see SSRDebug_PS
 uniform float fUseGBufferNormals; // 1 reads the G-buffer normal, 0 rebuilds it from depth
 uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDenoise_PS
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
@@ -554,7 +555,10 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 //   7: contact shadows alone, white lit, black shadowed
 //   5: _DEFERRED_GBUFFER_2_ as stored: red specular intensity, green gloss, blue the
 //      reflection strength deferred_lighting uses; see SSRSurfaceWeight
-//   8-10: what the accumulation pass wrote instead of reflections, see SSRTemporalDebug
+//   8-10: what the accumulation pass wrote instead of reflections, see SSRTemporalDebug.
+//      The square under the mode squares tells whether the viewport's mViewMatrix was the
+//      inverse of its mViewInverseMatrix in the last second: green it was, yellow it was
+//      last frame's camera, blue mViewInverseMatrix was last frame's, red neither.
 
 // vec4WaterToView rotates world into reconstruction space; its transpose rotates back.
 float3 ViewToWorld(float3 v)
@@ -574,7 +578,19 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float4 ssr = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
 
     if (fDebugMode > 7.5)
+    {
+        if (all(vPos >= float2(6.0, 34.0)) && all(vPos < float2(66.0, 94.0)))
+        {
+            if (fViewCheck > 2.5)
+                return float4(1.0, 0.0, 0.0, 1.0);
+            if (fViewCheck > 1.5)
+                return float4(0.2, 0.4, 1.0, 1.0);
+            if (fViewCheck > 0.5)
+                return float4(1.0, 1.0, 0.0, 1.0);
+            return float4(0.0, 1.0, 0.0, 1.0);
+        }
         return float4(ssr.rgb * ssr.a, 1.0);
+    }
 
     // 7: contact shadows, white lit, black shadowed (SSRResultTex holds them in this mode)
     if (fDebugMode > 6.5)
