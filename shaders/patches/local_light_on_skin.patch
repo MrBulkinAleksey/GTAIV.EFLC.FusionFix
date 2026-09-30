@@ -1,0 +1,316 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index 825d6bc..b30c929 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -79,6 +79,7 @@
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
++    def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -94,6 +95,7 @@
+     dcl_2d s4
+     dcl_2d s5
+     dcl_2d s14
++    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
+     add r0.zw, c0.x, vPos.xyxy
+     mul r0.zw, r0, c84
+     texld r2, r0.zwzw, s1
+@@ -290,8 +292,17 @@
+     add r0.x, r0.x, r0.x
+     mad r4.xyz, r3, -r0.x, r5
+     dp3_sat r0.x, r2, r3
++    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
++    texld r20, r0.zwzw, s10
++    mad r20.x, r20.x, c156.x, c156.y
++    frc r20.x, r20.x
++    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
++    dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
++    mad r21.xyz, c201, r20.x, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
++    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
+     dp3_sat r0.y, r2, r4
+-    mul r2.xyz, r1, r0.x
++    mul r2.xyz, r1, r21 // FusionFix skin lighting: the wrapped N.L per channel
+     texld r3, r0.zwzw, s2
+     mul r3.yz, r3, r3
+     add r0.x, r3.x, r3.x
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+index 42313f3..51fd3c3 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -50,6 +50,7 @@
+     def c2, -0.100000001, 1.11111116, 0, 0
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
++    def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -64,11 +65,17 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s5
++    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
+     mul r0.xyz, c78.w, c78
+     add r1.xy, c0.x, vPos
+     mul r1.xy, r1, c79.zwzw
+     texld r2, r1, s5
+     texld r3, r1, s1
++    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
++    texld r20, r1, s10
++    mad r20.x, r20.x, c156.x, c156.y
++    frc r20.x, r20.x
++    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
+     
+     // LogDepth Read
+     pow r19.x, c209_abs.z, r2.x
+@@ -135,11 +142,15 @@
+     mad r2.xyz, r5, -r1.y, r7
+     dp3_sat r1.y, r8, r2
+     dp3_sat r2.x, r8, r5
++    dp3 r21.w, r8, r5 // FusionFix skin lighting: N.L, unclamped
++    mad r21.xyz, c201, r20.x, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
++    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
+     mul r0.xyz, r0, r1.x
+     cmp r0.xyz, r0.w, r0, c1.z
+     pow r0.w, r1.y, r1.w
+     mul r1.xyw, r0.xyzz, r0.w
+-    mul r0.xyz, r2.x, r0
++    mul r0.xyz, r21, r0 // FusionFix skin lighting: the wrapped N.L per channel
+     mul r2.xyz, r3, r6
+     mul r1.xyz, r1.z, r1.xyww
+     mad r0.xyz, r2, r0, r1
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index 78cddfc..62687f8 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -81,6 +81,7 @@
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
++    def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -96,11 +97,17 @@
+     dcl_2d s4
+     dcl_2d s5
+     dcl_2d s14
++    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
+     mul r0.xyz, c85.w, c85
+     add r1.xy, c0.x, vPos
+     mul r1.xy, r1, c86.zwzw
+     texld r2, r1, s5
+     texld r3, r1, s1
++    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
++    texld r20.w, r1, s10.x
++    mad r20.w, r20.w, c156.x, c156.y
++    frc r20.w, r20.w
++    mad_sat r20.w, r20.w, c156.z, c156.w // 1 on skin, 0 elsewhere
+     
+     // LogDepth Read
+     pow r19.x, c209_abs.z, r2.x
+@@ -326,8 +333,12 @@
+     dp3_sat r0.w, r8, r2
+     pow r2.x, r0.w, r1.w
+     dp3_sat r0.w, r8, r5
++    dp3 r21.w, r8, r5 // FusionFix skin lighting: N.L, unclamped
++    mad r21.xyz, c201, r20.w, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r22.xyz, c205, r20.w // wrap / (1 + wrap) on skin, 0 elsewhere
++    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
+     mul r1.xyw, r0.xyzz, r2.x
+-    mul r0.xyz, r0, r0.w
++    mul r0.xyz, r0, r21 // FusionFix skin lighting: the wrapped N.L per channel
+     mul r2.xyz, r3, r6
+     mul r1.xyz, r1.z, r1.xyww
+     mad r26.xyz, r2, r0, r1
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+index 3a6badc..0f96291 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -45,6 +45,7 @@
+     def c3, 1.11111116, 0, 0, 0.125
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
++    def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -58,6 +59,7 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s4
++    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s1
+@@ -92,12 +94,21 @@
+     dp3_sat r0.w, r3, r1
+     texld r1, r0, s2
+     texld r4, r0, s0
++    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
++    texld r20, r0, s10
++    mad r20.x, r20.x, c156.x, c156.y
++    frc r20.x, r20.x
++    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
+     mul r0.x, r1.y, r1.y
+     mul r0.x, r0.x, c0.y
+     pow r1.y, r0.w, r0.x
+     mul r0.x, r0.z, c3.x
+     dp3 r0.y, r3, -c72
+     dp3_sat r0.w, r3, r2
++    dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
++    mad r21.xyz, c201, r20.x, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
++    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
+     add r0.y, r0.y, -c74.x
+     mul_sat r0.y, r0.y, c75.x
+     mul r0.x, r0.x, r0.y
+@@ -105,7 +116,7 @@
+     mul r2.xyz, r0.x, r2
+     cmp r0.xyz, r0.z, r2, c3.y
+     mul r2.xyz, r1.y, r0
+-    mul r0.xyz, r0.w, r0
++    mul r0.xyz, r21, r0 // FusionFix skin lighting: the wrapped N.L per channel
+     mul r0.xyz, r4, r0
+     add r0.w, r1.x, r1.x
+     mad_sat r1.x, r1.z, r1.z, c2.x
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+index 81c2ced..e0c39ce 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -48,6 +48,7 @@
+     def c4, 1.11111116, 0, 0, 0.125
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
++    def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -62,6 +63,7 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s5
++    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s1
+@@ -102,6 +104,15 @@
+     mul r0.w, r0.z, c4.x
+     dp3 r1.y, r3, -c72
+     dp3_sat r1.z, r3, r2
++    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
++    texld r20, r0, s10
++    mad r20.x, r20.x, c156.x, c156.y
++    frc r20.x, r20.x
++    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
++    dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
++    mad r21.xyz, c201, r20.x, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
++    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
+     add r1.y, r1.y, -c74.x
+     mul_sat r1.y, r1.y, c75.x
+     mul r0.w, r0.w, r1.y
+@@ -109,7 +120,7 @@
+     mul r2.xyz, r0.w, r2
+     cmp r2.xyz, r0.z, r2, -c2.z
+     mul r3.xyz, r2.w, r2
+-    mul r1.yzw, r1.z, r2.xxyz
++    mul r1.yzw, r21.xxyz, r2.xxyz // FusionFix skin lighting: the wrapped N.L per channel
+     texld r2, r0, s0
+     texld r0, r0, s5
+     mul r0.yzw, r1, r2.xxyz
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+index 0db9274..cc48d56 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -48,6 +48,7 @@
+     def c4, -0.100000001, 1.11111116, 0, 0.125
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
++    def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -62,6 +63,7 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s5
++    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
+     add r0.xy, c1.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s1
+@@ -101,6 +103,15 @@
+     mul r0.w, r0.z, c4.y
+     dp3 r1.y, r3, -c72
+     dp3_sat r1.w, r3, r2
++    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
++    texld r20, r0, s10
++    mad r20.x, r20.x, c156.x, c156.y
++    frc r20.x, r20.x
++    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
++    dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
++    mad r21.xyz, c201, r20.x, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
++    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
+     add r1.y, r1.y, -c74.x
+     mul_sat r1.y, r1.y, c75.x
+     mul r0.w, r0.w, r1.y
+@@ -108,7 +119,7 @@
+     mul r2.xyz, r0.w, r2
+     cmp r2.xyz, r0.z, r2, -c3.z
+     mul r3.xyz, r2.w, r2
+-    mul r2.xyz, r1.w, r2
++    mul r2.xyz, r21, r2 // FusionFix skin lighting: the wrapped N.L per channel
+     texld r4, r0, s0
+     texld r0, r0, s5
+     mul r0.yzw, r2.xxyz, r4.xxyz
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+index 0732660..3938154 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -48,6 +48,7 @@
+     def c4, 9.99999975e-006, 1.11111116, 0, 0.125
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
++    def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -62,6 +63,7 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s5
++    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s1
+@@ -102,6 +104,15 @@
+     mul r0.w, r0.z, c4.y
+     dp3 r1.y, r3, -c72
+     dp3_sat r1.z, r3, r2
++    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
++    texld r20, r0, s10
++    mad r20.x, r20.x, c156.x, c156.y
++    frc r20.x, r20.x
++    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
++    dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
++    mad r21.xyz, c201, r20.x, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
++    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
+     add r1.y, r1.y, -c74.x
+     mul_sat r1.y, r1.y, c75.x
+     mul r0.w, r0.w, r1.y
+@@ -109,7 +120,7 @@
+     mul r2.xyz, r0.w, r2
+     cmp r2.xyz, r0.z, r2, -c2.z
+     mul r3.xyz, r2.w, r2
+-    mul r1.yzw, r1.z, r2.xxyz
++    mul r1.yzw, r21.xxyz, r2.xxyz // FusionFix skin lighting: the wrapped N.L per channel
+     texld r2, r0, s0
+     texld r0, r0, s5
+     mul r0.yzw, r1, r2.xxyz

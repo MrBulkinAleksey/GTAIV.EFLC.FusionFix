@@ -293,6 +293,8 @@ public:
     // What deferred_lighting gets this frame, null while there is none.
     IDirect3DTexture9* GIResult = nullptr;
     bool bGIBound = false;
+    // mMaterialIdRT on s10 during lighting, for skin in the light volume shaders.
+    bool bMaterialIdBound = false;
 
     // Light scattering under the skin (SkinScatter_PS in SSR.fx), as the fog pass begins: the
     // light on skin with its view depth into SkinLightTex[0], blurred along x into [1], and along
@@ -303,9 +305,10 @@ public:
     static bool SkinScatteringEnabled() { static auto p = FusionFixSettings.GetRef("PREF_SKIN_SSS"); return p && p->get() != 0; }
     float fSkinScatteringWidth = 0.03f;
     float fSkinScatteringStrength = 1.0f;
-    // The sun's light on skin (deferred_lighting_sun_on_skin.patch, c201 and c205): wraps past the
-    // terminator by SkinLighting times 0.5 in red, 0.2 in green and 0.1 in blue, and red goes
-    // SkinLighting times half way to the square root of the shadow in its penumbra.
+    // The light on skin (c201 and c205; deferred_lighting_sun_on_skin.patch for the sun,
+    // local_light_on_skin.patch for lamps and headlights): wraps past the terminator by
+    // SkinLighting times 0.5 in red, 0.2 in green and 0.1 in blue, and in the sun's penumbra red
+    // goes SkinLighting times half way to the square root of the shadow.
     float fSkinLighting = 1.0f;
     static constexpr int kSkinDebugMode = 9;
     rage::grcRenderTargetPC* mMaterialIdRT = nullptr;
@@ -1253,8 +1256,10 @@ private:
             pDevice->SetTexture(3, nullptr);
             pDevice->SetTexture(8, nullptr);
             pDevice->SetTexture(9, nullptr);
+            pDevice->SetTexture(10, nullptr);
         }
         PostFxResources.bGIBound = false;
+        PostFxResources.bMaterialIdBound = false;
         SAFE_RELEASE(PostFxResources.SSRSurf);
         if (PostFxResources.SSRTex)
         {
@@ -4251,7 +4256,7 @@ public:
     // What deferred_lighting reads besides the game's own inputs: s3 the SSR result (the cleared
     // SSR target while SSR is off, else a transparent 1x1), s9 the contact shadows while they
     // are valid, s8 the indirect light, c202-c204 the local light contact shadow constants, and
-    // c201 and c205 the sun's light on skin.
+    // c201, c205 and s10 (the material IDs) the light on skin.
     static void BindLightingInputs(IDirect3DDevice9* pDevice)
     {
         auto& R = PostFxResources;
@@ -4281,6 +4286,12 @@ public:
             offset[3] = (std::min)(0.5f * k, 1.0f);
             pDevice->SetPixelShaderConstantF(201, scale, 1);
             pDevice->SetPixelShaderConstantF(205, offset, 1);
+        }
+        // The light volumes do not read the material IDs themselves (local_light_on_skin.patch).
+        if (R.mMaterialIdRT && R.mMaterialIdRT->mD3DTexture)
+        {
+            BindSampler(pDevice, 10, R.mMaterialIdRT->mD3DTexture, D3DTEXF_POINT);
+            R.bMaterialIdBound = true;
         }
 
         // Indirect light, black while there is none; unbound after lighting.
@@ -4345,6 +4356,11 @@ public:
         {
             pDevice->SetTexture(8, nullptr);
             R.bGIBound = false;
+        }
+        if (R.bMaterialIdBound)
+        {
+            pDevice->SetTexture(10, nullptr);
+            R.bMaterialIdBound = false;
         }
         // Lights drawn for other views (reflections, mirrors) must not march with this camera,
         // nor light skin by this view's material IDs.
