@@ -2189,10 +2189,10 @@ private:
     // PostFxProfiler: GPU time of FusionFix's passes, from timestamp queries. Each frame's queries
     // are read kProfilerFrames frames later, without waiting on the GPU, and every 120 frames the
     // averages in milliseconds per frame are written to FusionFix.PostFx.log next to GTAIV.exe.
-    // Lights is the lighting phase less the AO, SSR and contact shadow passes that run inside it:
-    // the game's lights with their local contact shadows, and the light shafts. Off, no query is
-    // made.
-    enum ProfilerSection { kProfAO, kProfSSR, kProfContact, kProfWater, kProfLighting, kProfSections };
+    // Lights is the lighting phase less the AO, SSR, contact shadow and indirect light passes that
+    // run inside it: the game's lights with their local contact shadows, and the light shafts.
+    // Off, no query is made.
+    enum ProfilerSection { kProfAO, kProfSSR, kProfContact, kProfGI, kProfWater, kProfLighting, kProfSections };
     static constexpr int kProfilerFrames = 4;
     static constexpr int kProfilerAverage = 120;
     struct ProfilerFrame
@@ -2258,9 +2258,10 @@ private:
                 fprintf(log, "GPU milliseconds per frame, averaged over %d frames. lights: the game's lights with their "
                              "local contact shadows, and the light shafts\n", kProfilerAverage);
             const double n = double(nProfilerSamples);
-            fprintf(log, "frame %6.2f   AO %5.2f   SSR %5.2f   contact shadows %5.2f   water SSR %5.2f   lights %6.2f\n",
+            fprintf(log, "frame %6.2f   AO %5.2f   SSR %5.2f   contact shadows %5.2f   indirect light %5.2f   water SSR %5.2f   lights %6.2f\n",
                     profilerSums[kProfSections] / n, profilerSums[kProfAO] / n, profilerSums[kProfSSR] / n,
-                    profilerSums[kProfContact] / n, profilerSums[kProfWater] / n, profilerSums[kProfLighting] / n);
+                    profilerSums[kProfContact] / n, profilerSums[kProfGI] / n, profilerSums[kProfWater] / n,
+                    profilerSums[kProfLighting] / n);
             fclose(log);
             bProfilerLogStarted = true;
         }
@@ -2284,7 +2285,7 @@ private:
             if (f.used[i] && f.begin[i]->GetData(&b, sizeof(b), 0) == S_OK && f.end[i]->GetData(&e, sizeof(e), 0) == S_OK && e >= b)
                 ms[i] = double(e - b) * 1000.0 / double(freq);
         }
-        ms[kProfLighting] = (std::max)(ms[kProfLighting] - ms[kProfAO] - ms[kProfSSR] - ms[kProfContact], 0.0);
+        ms[kProfLighting] = (std::max)(ms[kProfLighting] - ms[kProfAO] - ms[kProfSSR] - ms[kProfContact] - ms[kProfGI], 0.0);
         for (int i = 0; i < kProfSections; ++i)
             profilerSums[i] += ms[i];
         profilerSums[kProfSections] += double(stop - start) * 1000.0 / double(freq);
@@ -3402,7 +3403,9 @@ private:
         ProfilerMark(pDevice, kProfContact, true);
         RenderContactShadows();
         ProfilerMark(pDevice, kProfContact, false);
+        ProfilerMark(pDevice, kProfGI, true);
         RenderIndirectLight();
+        ProfilerMark(pDevice, kProfGI, false);
         // deferred_lighting draws after this; BindSSRTexture bound last frame's results.
         if (pDevice)
             BindLightingInputs(pDevice);
