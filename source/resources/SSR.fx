@@ -899,10 +899,10 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
             keep = 0.0;
     }
     // A reflection is what the surface shows from where the camera stands, so history kept from
-    // earlier cameras shows it as they saw it. At 27 fps turning the camera moved the history
-    // 55 to 60 pixels a frame, and the accumulation dragged reflections behind the turn for
-    // several frames, with either Follow. The share kept falls with how far the history moved
-    // and is gone at fTemporalMotion, so a still or slow camera keeps the steady accumulation.
+    // earlier cameras shows it as they saw it, most of all on curved car paint, which neither
+    // Follow tracks. The share kept falls with how far the history moved and is gone at
+    // fTemporalMotion, so a still or slow camera keeps the steady accumulation and a quick turn
+    // (55 to 60 pixels a frame at 27 fps) shows this frame's reflections.
     if (fTemporalMotion > 0.0)
         keep *= saturate(1.0 - length((prevUV - uv) / vec2InvViewportSize) / fTemporalMotion);
 

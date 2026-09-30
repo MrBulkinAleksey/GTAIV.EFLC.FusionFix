@@ -2164,10 +2164,8 @@ private:
     // Sets every input of the pixel shader of the pass just begun from the effect: binds each
     // sampler to the texture its parameter holds (sampler X reads X2D in SSR.fx) and sets each
     // float constant from the parameter of the same name, counting in PostFxResources what had
-    // to change. D3DX left some samplers holding what the game had bound, seen in the probe
-    // pass, and with ScreenSpaceReflectionsTemporalMotion at 4 the accumulation still dragged
-    // reflections through a turn that moved the history 55 to 60 pixels a frame, as if its
-    // vec4ViewToPrevClip barely moved it. This makes every draw read what the effect was given.
+    // to change. D3DX left samplers holding what the game had bound, about four a frame, seen
+    // in the probe pass reading a G-buffer texture as depth; the constants never differed.
     static void BindEffectInputs(IDirect3DDevice9* pDevice, ID3DXEffect* effect, int pass)
     {
         auto& R = PostFxResources;
@@ -2453,6 +2451,7 @@ private:
         {
             clearSSR();
             R.bSSRAccumValid = false;
+            BindSSRResult(pDevice);
             return;
         }
 
@@ -2461,6 +2460,7 @@ private:
         {
             clearSSR();
             R.bSSRAccumValid = false;
+            BindSSRResult(pDevice);
             return;
         }
 
@@ -2758,6 +2758,8 @@ private:
         }
 
         R.bSSRValidThisFrame = true;
+        // Lighting draws after this; what BindSSRTexture bound on s3 was last frame's result.
+        BindSSRResult(pDevice);
 
         pDevice->SetRenderTarget(0, rt0);
         pDevice->SetRenderTarget(1, oldRT1);
@@ -3697,6 +3699,30 @@ private:
     }
 
 public:
+    // s3 for deferred_lighting: this frame's SSR result, the cleared SSR target while SSR is
+    // off, else a transparent 1x1.
+    static void BindSSRResult(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        IDirect3DBaseTexture9* tex = R.TransparentTex();
+        if (R.SSRResult)
+            tex = R.SSRResult;
+        else if (R.SSRTex && R.SSRTex->mD3DTexture)
+            tex = R.SSRTex->mD3DTexture; // cleared while SSR is off
+        pDevice->SetTexture(3, tex);
+        pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(3, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+        pDevice->SetSamplerState(3, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+        pDevice->SetSamplerState(3, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    }
+
+    // Runs as the first command of the lighting phase's list (OnBuildRenderList), before the
+    // command in that list that renders SSR, so R.SSRResult here is still last frame's. Without
+    // accumulation that is the same texture SSR is about to overwrite, so lighting still saw this
+    // frame's; with it, SSR wrote the other target of the pair and lighting showed last frame's
+    // reflections, which swung off the car while the camera turned and came back when it
+    // stopped. RenderScreenSpaceReflections binds this frame's result again once it is done.
     static void BindSSRTexture()
     {
         auto& R = PostFxResources;
@@ -3704,11 +3730,6 @@ public:
         if (!pDevice)
             return;
 
-        IDirect3DBaseTexture9* tex = R.TransparentTex();
-        if (R.SSRResult)
-            tex = R.SSRResult;
-        else if (R.SSRTex && R.SSRTex->mD3DTexture)
-            tex = R.SSRTex->mD3DTexture; // cleared while SSR is off
         // Contact shadows for deferred_lighting; s9 is read by no game shader, and the car glass
         // takes it over right after lighting.
         if (R.bContactValid && R.ContactTex && R.ContactTex->mD3DTexture)
@@ -3718,13 +3739,7 @@ public:
         }
 
         pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
-
-        pDevice->SetTexture(3, tex);
-        pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-        pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-        pDevice->SetSamplerState(3, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-        pDevice->SetSamplerState(3, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-        pDevice->SetSamplerState(3, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        BindSSRResult(pDevice);
     }
 
     static void BindSampler(IDirect3DDevice9* pDevice, DWORD slot, IDirect3DBaseTexture9* tex, DWORD filter)
