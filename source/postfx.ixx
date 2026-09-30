@@ -321,6 +321,10 @@ public:
     float fSSRDenoiseRadius = 2.0f;
     bool bSSRPassThinObjects = true;
     bool bSSRStepJitter = true;
+    // ScreenSpaceReflectionsTemporalJitter: while SSR accumulates, the step offsets move on every
+    // frame (fJitterOffset in SSR.fx), so the accumulation averages them.
+    bool bSSRTemporalJitter = true;
+    uint32_t nSSRFrame = 0;
     float fSSRTowardCamera = 0.0f;
     float fSSRReflectionBlur = 0.0f;
     float fSSRDistanceFade = 0.0f;
@@ -404,7 +408,7 @@ public:
         }
         return TransparentTexture;
     }
-    int nSSRSteps = 48;
+    int nSSRSteps = 32;
     int nSSRRefineSteps = 8;
     float fSSRMaxDistance = 24.0f;
     float fSSRThickness = 0.3f;
@@ -927,7 +931,7 @@ public:
 
         bEnablePreAlphaDepth = iniReader.ReadInteger("POSTFX", "EnablePreAlphaDepth", 1) != 0;
 
-        nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 48), 4, 128);
+        nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 32), 4, 128);
         nSSRRefineSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsRefineSteps", 8), 0, 16);
         fSSRMaxDistance = std::max(1.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsMaxDistance", 24.0f));
         fSSRThickness = std::max(0.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsThickness", 0.3f));
@@ -943,6 +947,7 @@ public:
         fSSRDenoiseRadius = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsSmoothing", 2.0f), 0.0f, 8.0f);
         bSSRPassThinObjects = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsPastThinObjects", 1) != 0;
         bSSRStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsStepJitter", 1) != 0;
+        bSSRTemporalJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsTemporalJitter", 1) != 0;
         fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporal", 0.85f), 0.0f, 0.97f);
         fSSRTowardCamera = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", 0.0f), 0.0f, 1.0f);
         fSSRReflectionBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsBlur", 0.0f), 0.0f, 32.0f);
@@ -2307,6 +2312,9 @@ private:
         effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);
         effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
         const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1];
+        // Golden ratio steps through the offsets, as for contact shadows.
+        ++R.nSSRFrame;
+        effect->SetFloat(h.fJitterOffset, temporal && R.bSSRTemporalJitter ? float(R.nSSRFrame * 2654435769u) * (1.0f / 4294967296.0f) : 0.0f);
         effect->SetFloat(h.fTowardCamera, R.fSSRTowardCamera);
         effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
         effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);

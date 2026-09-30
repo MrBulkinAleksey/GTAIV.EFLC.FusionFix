@@ -118,7 +118,7 @@ uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDeno
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
 uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step (set per pass: SSR and contact shadows each have their own switch)
-uniform float fJitterOffset;      // added to each pixel's contact shadow step offset, changed every frame while they accumulate
+uniform float fJitterOffset;      // added to each pixel's step offset (set per pass: SSR and contact shadows), changed every frame while they accumulate
 uniform float fTowardCamera;      // 0..1, how far reflections pointing back at the camera reach
 uniform float fReflectionBlur;    // blur radius in pixels a reflection reaches at fMaxDistance, 0 keeps it sharp
 uniform float fDistanceFade;      // reflections fade out towards this distance from the surface, 0 disables
@@ -447,7 +447,10 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         n = ReconstructNormal(uv, C);
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, fReflectionBlur, fStepJitter > 0.0 ? PixelJitter(vPos) : 1.0, fDistanceFade);
+    // While accumulating, fJitterOffset moves every pixel's steps on each frame, so the
+    // accumulation averages the steps out and fewer of them do.
+    float jitter = fStepJitter > 0.0 ? 1.0 - frac(1.0 - PixelJitter(vPos) + fJitterOffset) : 1.0;
+    float4 r = TraceReflection(C, n, fReflectionBlur, jitter, fDistanceFade);
     return float4(r.rgb, saturate(r.a * surfaceWeight * fIntensity));
 }
 
