@@ -135,6 +135,8 @@ uniform float fDistanceFade;      // reflections fade out towards this distance 
 uniform float fTemporalBlend;     // share of last frame's SSR kept each frame, 0 while there is none to keep
 uniform float fJitterOffset;      // added to each pixel's step offset, changed every frame while SSR accumulates
 uniform float fTemporalFollowImage; // 1 takes the history where the reflected image was, 0 where the surface was
+uniform float fTemporalDebug;     // SSR debug modes 8 to 10 as 1 to 3, see SSRTemporalDebug, else 0
+uniform float4 vec4CameraPos;     // camera position in world space, for SSRTemporalDebug
 
 // Contact shadows, see ContactShadows_PS.
 uniform float4 vec4SunView;         // direction towards the sun in reconstruction space, w 0 if unknown
@@ -552,6 +554,7 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 //   7: contact shadows alone, white lit, black shadowed
 //   5: _DEFERRED_GBUFFER_2_ as stored: red specular intensity, green gloss, blue the
 //      reflection strength deferred_lighting uses; see SSRSurfaceWeight
+//   8-10: what the accumulation pass wrote instead of reflections, see SSRTemporalDebug
 
 // vec4WaterToView rotates world into reconstruction space; its transpose rotates back.
 float3 ViewToWorld(float3 v)
@@ -569,6 +572,9 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         return float4(1.0, 1.0, 1.0, 1.0);
 
     float4 ssr = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+
+    if (fDebugMode > 7.5)
+        return float4(ssr.rgb * ssr.a, 1.0);
 
     // 7: contact shadows, white lit, black shadowed (SSRResultTex holds them in this mode)
     if (fDebugMode > 6.5)
@@ -753,6 +759,40 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return float4(saturate(occlusion * fade * fCSIntensity), 0.0, 0.0, 1.0);
 }
 
+// SSR debug modes 8 to 10 (fTemporalDebug 1 to 3), what SSRTemporal_PS writes instead of
+// reflections, shown as is. They tell apart why reflections slide while the camera moves.
+//   1: a checkerboard of 1 m cells fixed to the world, kept over frames as reflections are,
+//      taken where the surface was last frame. It stays sharp while the camera moves only if
+//      vec4ViewToPrevClip finds last frame's spot; if not, it smears along the motion. Around
+//      outlines it leaves ghosts either way, as nothing rejects the history there.
+//   2: the same checkerboard, not kept over frames, to compare with.
+//   3: the reflected ray lengths this pass reads (SSRHitTex): green, brighter the longer, up
+//      to fMaxDistance; dark red a glossy pixel whose length is 0, as for a miss.
+float4 SSRTemporalDebug(float2 uv, float2 vPos)
+{
+    if (tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999)
+        return 0.0;
+
+    if (fTemporalDebug > 2.5)
+    {
+        if (SSRSurfaceWeight(uv) <= 0.0)
+            return float4(0.0, 0.0, 0.0, 1.0);
+        float hitDist = tex2Dlod(SSRHitTex, float4(uv, 0, 0)).r;
+        if (hitDist <= 0.0)
+            return float4(0.6, 0.0, 0.0, 1.0);
+        return float4(0.0, 0.2 + 0.8 * saturate(hitDist / fMaxDistance), 0.0, 1.0);
+    }
+
+    float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
+    float3 cell = floor(ViewToWorld(C) + vec4CameraPos.xyz);
+    float3 current = frac((cell.x + cell.y + cell.z) * 0.5) > 0.25 ? 0.9 : 0.1;
+    float2 prevUV = HistoryUV(C);
+    if (fTemporalDebug > 1.5 || fTemporalBlend <= 0.0 || any(prevUV <= 0.0) || any(prevUV >= 1.0))
+        return float4(current, 1.0);
+    float3 history = tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0)).rgb;
+    return float4(lerp(current, history, fTemporalBlend), 1.0);
+}
+
 // Blends this frame's SSR (SSRResultTex, after smoothing) with last frame's accumulation
 // (SSRAccumTex). A reflection moves like the mirror image of what it shows, which lies behind
 // the surface along the view ray, as far behind it as the reflected ray was long (SSRHitTex):
@@ -763,6 +803,9 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 // Blending is premultiplied: a miss (alpha 0) must fade a reflection out, not darken its colour.
 float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
+    if (fTemporalDebug > 0.0)
+        return SSRTemporalDebug(uv, vPos);
+
     if (SSRSurfaceWeight(uv) <= 0.0)
         return 0.0;
 

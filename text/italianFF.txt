@@ -163,6 +163,15 @@ Glass Rays
 [SSRDbgContact]
 Contact Shadows
 
+[SSRDbgTrailKept]
+Trail Test: Kept
+
+[SSRDbgTrailRef]
+Trail Test: Not Kept
+
+[SSRDbgRayLen]
+Ray Lengths
+
 [Contact Shadows]
 Contact Shadows
 

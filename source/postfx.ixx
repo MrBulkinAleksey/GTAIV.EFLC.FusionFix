@@ -237,6 +237,7 @@ public:
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY;
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, SSRHitTex2D, fTemporalBlend, fJitterOffset, fTemporalFollowImage, techSSRTemporal;
+        D3DXHANDLE fTemporalDebug, vec4CameraPos;
     } SSREffectHandles = {};
 
     // PREF_SSR: 0 off, 1 half resolution, 2 full resolution.
@@ -302,6 +303,8 @@ public:
     bool bContactValid = false;
     bool bContactBound = false;
     static constexpr int kContactDebugMode = 7;
+    // Debug modes 8 to 10: SSRTemporalDebug in SSR.fx 1 to 3, shown as mode 1 shows SSR.
+    static constexpr int kTemporalDebugMode = 8;
     static int SSRDebugMode() { static auto p = FusionFixSettings.GetRef("PREF_SSR_DEBUG"); return p ? p->get() : 0; }
     // The smoothed SSR result (SSRDenoise_PS) that deferred_lighting reads, when enabled.
     float fSSRDenoiseRadius = 2.0f;
@@ -799,6 +802,8 @@ public:
                 h.SSRAccumTex2D = SSREffect->GetParameterByName(nullptr, "SSRAccumTex2D");
                 h.SSRHitTex2D = SSREffect->GetParameterByName(nullptr, "SSRHitTex2D");
                 h.fTemporalFollowImage = SSREffect->GetParameterByName(nullptr, "fTemporalFollowImage");
+                h.fTemporalDebug = SSREffect->GetParameterByName(nullptr, "fTemporalDebug");
+                h.vec4CameraPos = SSREffect->GetParameterByName(nullptr, "vec4CameraPos");
                 h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
                 h.fJitterOffset = SSREffect->GetParameterByName(nullptr, "fJitterOffset");
                 h.techSSRTemporal = SSREffect->GetTechniqueByName("SSRTemporal");
@@ -2341,6 +2346,10 @@ private:
             effect->SetTexture(h.SSRAccumTex2D, R.SSRAccumTex[sizeIndex][prev]->mD3DTexture);
             effect->SetTexture(h.SSRHitTex2D, R.SSRHitTex[sizeIndex]->mD3DTexture);
             effect->SetFloat(h.fTemporalFollowImage, R.bSSRTemporalFollowImage ? 1.0f : 0.0f);
+            const int debugMode = R.SSRDebugMode();
+            effect->SetFloat(h.fTemporalDebug, debugMode >= R.kTemporalDebugMode ? float(debugMode - R.kTemporalDebugMode + 1) : 0.0f);
+            const D3DXVECTOR4 cameraPos(viewInv.m[3][0], viewInv.m[3][1], viewInv.m[3][2], 0.0f);
+            effect->SetVector(h.vec4CameraPos, &cameraPos);
             effect->SetFloat(h.fTemporalBlend, R.bSSRAccumValid ? R.fSSRTemporalBlend : 0.0f);
             pDevice->SetRenderTarget(0, R.SSRAccumSurf[sizeIndex][next]);
             effect->SetTechnique(h.techSSRTemporal);
@@ -2359,7 +2368,7 @@ private:
         R.SSRResult = ssrResult;
 
         const int debugMode = R.SSRDebugMode();
-        if (debugMode && debugMode < R.kGlassDebugMode && R.SSRDebugSurf && h.techSSRDebug && hasNormals)
+        if (debugMode && (debugMode < R.kGlassDebugMode || debugMode >= R.kTemporalDebugMode) && R.SSRDebugSurf && h.techSSRDebug && hasNormals)
         {
             if (half)
                 setPassSize(width, height);
