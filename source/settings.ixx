@@ -341,8 +341,8 @@ private:
     static inline SafetyHookInline queryInput;
     static inline SafetyHookInline switchToNewScreen;
     static inline SafetyHookInline getTabText;
-    static inline SafetyHookInline printTab;
-    static inline SafetyHookInline measureTab;
+    static inline void(__cdecl* printTab)(float, float, const wchar_t*, int32_t, int32_t) = nullptr;
+    static inline float(__cdecl* measureTab)(const wchar_t*, uint8_t) = nullptr;
     static inline SafetyHookMid tabTransitionHook;
     static inline SafetyHookMid gameVisibilityHook;
     static inline SafetyHookMid resetScreenRowsHook;
@@ -865,7 +865,7 @@ private:
         float added = 0.0f;
         for (auto& tab : tabs)
         {
-            auto width = measureTab.ccall<float>(GetTabLabel(tab), uint8_t(1));
+            auto width = measureTab(GetTabLabel(tab), uint8_t(1));
             (FindPage(tab.id) ? added : stock) += width;
         }
         if (stock > 0.0f && added > 0.0f)
@@ -886,13 +886,13 @@ private:
     static float __cdecl MeasureTab(const wchar_t* text, uint8_t full)
     {
         if (!tabTextEnabled)
-            return measureTab.ccall<float>(text, full);
+            return measureTab(text, full);
         auto found = FindTabByText(text);
         if (found == tabs.end())
-            return measureTab.ccall<float>(text, full);
-        auto width = measureTab.ccall<float>(GetTabLabel(*found), uint8_t(1));
+            return measureTab(text, full);
+        auto width = measureTab(GetTabLabel(*found), uint8_t(1));
         for (auto tab = found + 1; tab != tabs.end() && FindPage(tab->id); ++tab)
-            width += tabSpacing + measureTab.ccall<float>(GetTabLabel(*tab), uint8_t(1));
+            width += tabSpacing + measureTab(GetTabLabel(*tab), uint8_t(1));
         return width;
     }
 
@@ -901,7 +901,7 @@ private:
         auto found = tabDrawState ? FindTabByText(text) : tabs.end();
         if (found == tabs.end())
         {
-            printTab.ccall<void>(x, y, text, first, last);
+            printTab(x, y, text, first, last);
             return;
         }
 
@@ -912,7 +912,7 @@ private:
         {
             if (tab != found && !FindPage(tab->id))
                 break;
-            auto width = measureTab.ccall<float>(GetTabLabel(*tab), uint8_t(1));
+            auto width = measureTab(GetTabLabel(*tab), uint8_t(1));
             tab->left = x;
             tab->top = y;
             tab->right = x + width;
@@ -926,7 +926,7 @@ private:
                 getHudColour(&color, palette);
                 setTabColor(color);
             }
-            printTab.ccall<void>(x, y, GetTabLabel(*tab), first, last);
+            printTab(x, y, GetTabLabel(*tab), first, last);
             x += width + tabSpacing;
         }
     }
@@ -1061,6 +1061,18 @@ private:
         }
         setTabScale = reinterpret_cast<decltype(setTabScale)>(branch(scaleCalls[0]));
 
+        // Other mods find the game's text print and measure functions by their first bytes, so the tab code's calls
+        // to them are redirected instead of their entry. Found before the tab functions themselves are hooked
+        printTab = reinterpret_cast<decltype(printTab)>(printTabAddress);
+        measureTab = reinterpret_cast<decltype(measureTab)>(hook::pattern("D9 EE C3 89 44 24 04").get_first(-8));
+        for (auto function : { processTabsAddress, drawTabsAddress })
+        {
+            for (auto call : FindCallsTo(reinterpret_cast<uintptr_t>(function), reinterpret_cast<uintptr_t>(printTab)))
+                injector::MakeCALL(call, PrintTab, true);
+            for (auto call : FindCallsTo(reinterpret_cast<uintptr_t>(function), reinterpret_cast<uintptr_t>(measureTab)))
+                injector::MakeCALL(call, MeasureTab, true);
+        }
+
         if (legacyExecutable)
         {
             processTabs = safetyhook::create_inline(processTabsAddress, ProcessTabsLegacy);
@@ -1076,8 +1088,6 @@ private:
         queryInput = safetyhook::create_inline(queryInputAddress, QueryInput);
         switchToNewScreen = safetyhook::create_inline(switchScreenAddress, SwitchToNewScreen);
         getTabText = safetyhook::create_inline(getTabTextAddress, GetTabText);
-        printTab = safetyhook::create_inline(printTabAddress, PrintTab);
-        measureTab = safetyhook::create_inline(hook::pattern("D9 EE C3 89 44 24 04").get_first(-8), MeasureTab);
         for (auto call : scaleCalls)
             injector::MakeCALL(call, SetTabScale, true);
 

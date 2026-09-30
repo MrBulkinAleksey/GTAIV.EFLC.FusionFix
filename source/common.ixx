@@ -1290,3 +1290,57 @@ export std::optional<uintptr_t> resolve_next_displacement(auto ip)
 
     return std::nullopt;
 }
+
+// The direct calls to target in one function, found by following its branches and switch tables from the start
+// without leaving the first maxSize bytes
+export std::vector<uintptr_t> FindCallsTo(uintptr_t function, uintptr_t target, size_t maxSize = 0x4000)
+{
+    ZydisDecoder decoder;
+    #if defined(_M_X64) || defined(__x86_64__)
+    ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
+    #else
+    ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LEGACY_32, ZYDIS_STACK_WIDTH_32);
+    #endif
+
+    auto inside = [&](uintptr_t address) { return address >= function && address < function + maxSize; };
+    std::vector<uintptr_t> calls;
+    std::set<uintptr_t> visited;
+    std::vector<uintptr_t> pending{ function };
+    while (!pending.empty())
+    {
+        auto ip = pending.back();
+        pending.pop_back();
+        while (inside(ip) && visited.insert(ip).second)
+        {
+            ZydisDecodedInstruction instruction;
+            ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+            if (!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, (void*)ip, ZYDIS_MAX_INSTRUCTION_LENGTH, &instruction, operands)))
+                break;
+
+            auto next = ip + instruction.length;
+            const auto& operand = operands[0];
+            std::optional<uintptr_t> destination;
+            if (instruction.operand_count_visible > 0 && operand.type == ZYDIS_OPERAND_TYPE_IMMEDIATE && operand.imm.is_relative)
+                destination = next + ZyanISize(operand.imm.value.s);
+
+            auto category = instruction.meta.category;
+            if (category == ZYDIS_CATEGORY_CALL && destination == target)
+                calls.push_back(ip);
+            else if ((category == ZYDIS_CATEGORY_COND_BR || category == ZYDIS_CATEGORY_UNCOND_BR) && destination)
+                pending.push_back(*destination);
+            else if (category == ZYDIS_CATEGORY_UNCOND_BR && operand.type == ZYDIS_OPERAND_TYPE_MEMORY &&
+                operand.mem.base == ZYDIS_REGISTER_NONE && operand.mem.scale == sizeof(uintptr_t) && inside(static_cast<uintptr_t>(operand.mem.disp.value)))
+            {
+                // A switch, jmp [index * 4 + table]: the table lists addresses in the function
+                for (auto entry = reinterpret_cast<uintptr_t*>(static_cast<uintptr_t>(operand.mem.disp.value)); inside(*entry); ++entry)
+                    pending.push_back(*entry);
+            }
+
+            if (category == ZYDIS_CATEGORY_UNCOND_BR || category == ZYDIS_CATEGORY_RET || category == ZYDIS_CATEGORY_INTERRUPT)
+                break;
+            ip = next;
+        }
+    }
+
+    return calls;
+}
