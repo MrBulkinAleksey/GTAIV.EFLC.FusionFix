@@ -129,6 +129,7 @@ uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDeno
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
 uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step (set per pass: SSR and contact shadows each have their own switch)
+uniform float fJitterOffset;      // added to each pixel's contact shadow step offset, changed every frame while they accumulate
 uniform float fTowardCamera;      // 0..1, how far reflections pointing back at the camera reach
 uniform float fReflectionBlur;    // blur radius in pixels a reflection reaches at fMaxDistance, 0 keeps it sharp
 uniform float fDistanceFade;      // reflections fade out towards this distance from the surface, 0 disables
@@ -658,8 +659,8 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
 // Contact shadows: a short ray from each pixel towards the sun through the depth buffer. The
 // game's sun shadow map is too coarse for the contact between a ped's feet or a car's tyres
 // and the ground; this fills that in. The result is occlusion (0 lit, 1 shadowed), so an
-// unbound sampler in deferred_lighting changes nothing. No temporal accumulation: history
-// reprojected for the camera trailed behind moving peds, so the result is smoothed spatially.
+// unbound sampler in deferred_lighting changes nothing. It is smoothed spatially, then
+// accumulated over frames by ContactTemporal_PS.
 float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
@@ -692,7 +693,9 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     if (len <= 0.0)
         return float4(0.0, 0.0, 0.0, 1.0);
 
-    float jitter = fStepJitter > 0.0 ? PixelJitter(vPos) : 1.0;
+    // While accumulating, fJitterOffset moves every pixel's steps on each frame, so the
+    // accumulation averages the steps out instead of keeping one frame's noise.
+    float jitter = fStepJitter > 0.0 ? 1.0 - frac(1.0 - PixelJitter(vPos) + fJitterOffset) : 1.0;
     float occlusion = 0.0;
     float prevZ = P0.z;
 
@@ -723,6 +726,50 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     // own lighting already darkens such surfaces, so contact shadows fade out there.
     fade *= saturate(dot(n, L) * 5.0);
     return float4(saturate(occlusion * fade * fCSIntensity), 0.0, 0.0, 1.0);
+}
+
+// Blends this frame's contact shadows (SSRResultTex, after smoothing) with last frame's
+// accumulation (SSRAccumTex), taken where the surface was last frame; a shadow lies on its
+// surface, so that is where it was. The history is clamped between the least and the most
+// shadow of this frame's 3x3 neighbourhood, so the shadow of a ped that walked on cannot stay
+// behind him, and it is dropped where last frame's depth shows another surface.
+float4 ContactTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+{
+    float current = tex2Dlod(SSRResultTex, float4(uv, 0, 0)).r;
+    if (fTemporalBlend <= 0.0 || tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999)
+        return float4(current, 0.0, 0.0, 1.0);
+
+    float lo = current, hi = current;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            if (x == 0 && y == 0)
+                continue;
+            float s = tex2Dlod(SSRResultTex, float4(uv + float2(x, y) * vec2InvViewportSize, 0, 0)).r;
+            lo = min(lo, s);
+            hi = max(hi, s);
+        }
+    }
+
+    float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
+    float2 prevUV = HistoryUV(C);
+    float keep = fTemporalBlend;
+    if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
+        keep = 0.0;
+    else if (fUsePrevDepth > 0.0)
+    {
+        float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]
+                    + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
+        float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * fNearPlane;
+        if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
+            keep = 0.0;
+    }
+
+    float history = clamp(tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0)).r, lo, hi);
+    return float4(lerp(current, history, keep), 0.0, 0.0, 1.0);
 }
 
 // Blends this frame's SSR (SSRResultTex, after smoothing) with last frame's accumulation
@@ -853,6 +900,15 @@ technique ContactShadows
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 ContactShadows_PS();
+    }
+}
+
+technique ContactTemporal
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 ContactTemporal_PS();
     }
 }
 

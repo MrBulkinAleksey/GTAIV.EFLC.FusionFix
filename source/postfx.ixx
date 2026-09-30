@@ -230,6 +230,7 @@ public:
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
+        D3DXHANDLE techContactTemporal, fJitterOffset;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff;
@@ -297,6 +298,19 @@ public:
     IDirect3DSurface9* ContactRawSurf = nullptr;
     rage::grcRenderTargetPC* ContactTex = nullptr;
     IDirect3DSurface9* ContactSurf = nullptr;
+    // Accumulation over frames (ContactTemporal_PS in SSR.fx): each frame blends the smoothed
+    // contact shadows with the previous accumulation into the other target of the pair, and
+    // moves every pixel's step offset on. ContactShadowsTemporal is the share of the history
+    // kept, 0 turns it off. ContactPrevViewProj is kept here, as SSR's is only while SSR is on.
+    rage::grcRenderTargetPC* ContactAccumTex[2] = {};
+    IDirect3DSurface9* ContactAccumSurf[2] = {};
+    int nContactAccumIndex = 0;
+    bool bContactAccumValid = false;
+    D3DXMATRIX ContactPrevViewProj = {};
+    uint32_t nContactFrame = 0;
+    float fContactTemporalBlend = 0.8f;
+    // What deferred_lighting gets on s9: ContactTex, or the accumulation.
+    IDirect3DTexture9* ContactResult = nullptr;
     bool bContactValid = false;
     bool bContactBound = false;
     static constexpr int kContactDebugMode = 7;
@@ -787,6 +801,8 @@ public:
                 h.fCSMaxViewDistance = SSREffect->GetParameterByName(nullptr, "fCSMaxViewDistance");
                 h.fCSIntensity = SSREffect->GetParameterByName(nullptr, "fCSIntensity");
                 h.techContactShadows = SSREffect->GetTechniqueByName("ContactShadows");
+                h.techContactTemporal = SSREffect->GetTechniqueByName("ContactTemporal");
+                h.fJitterOffset = SSREffect->GetParameterByName(nullptr, "fJitterOffset");
                 h.techSSRDenoise = SSREffect->GetTechniqueByName("SSRDenoise");
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
@@ -938,6 +954,7 @@ public:
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
         fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
+        fContactTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsTemporal", 0.8f), 0.0f, 0.95f);
         bLocalContactShadows = iniReader.ReadInteger("POSTFX", "LocalContactShadows", 1) != 0;
         fLocalContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsLength", 0.5f), 0.05f, 10.0f);
         fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.2f), 0.01f, 5.0f);
@@ -1145,7 +1162,8 @@ private:
             }
         }
         PostFxResources.SSRResult = nullptr;
-        for (auto* rt : { &PostFxResources.ContactRawTex, &PostFxResources.ContactTex })
+        for (auto* rt : { &PostFxResources.ContactRawTex, &PostFxResources.ContactTex, &PostFxResources.ContactAccumTex[0],
+                          &PostFxResources.ContactAccumTex[1] })
         {
             if (*rt)
             {
@@ -1155,6 +1173,10 @@ private:
         }
         SAFE_RELEASE(PostFxResources.ContactRawSurf);
         SAFE_RELEASE(PostFxResources.ContactSurf);
+        SAFE_RELEASE(PostFxResources.ContactAccumSurf[0]);
+        SAFE_RELEASE(PostFxResources.ContactAccumSurf[1]);
+        PostFxResources.ContactResult = nullptr;
+        PostFxResources.bContactAccumValid = false;
         PostFxResources.bContactValid = false;
         PostFxResources.bGlassFrameValid = false;
         SAFE_RELEASE(PostFxResources.SSRDebugSurf);
@@ -1378,6 +1400,17 @@ private:
             PostFxResources.ContactTex = CreateEmptyRT("ContactShadowTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.ContactTex && PostFxResources.ContactTex->mD3DTexture)
                 PostFxResources.ContactTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactSurf);
+            if (PostFxResources.fContactTemporalBlend > 0.0f)
+            {
+                static const char* names[2] = { "ContactShadowAccumTex0", "ContactShadowAccumTex1" };
+                for (int i = 0; i < 2; ++i)
+                {
+                    auto& rt = PostFxResources.ContactAccumTex[i];
+                    rt = CreateEmptyRT(names[i], 3, width, height, 64, &aoDesc);
+                    if (rt && rt->mD3DTexture)
+                        rt->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactAccumSurf[i]);
+                }
+            }
 
             if (PostFxResources.fSSRTemporalBlend > 0.0f)
             {
@@ -3134,12 +3167,17 @@ private:
         effect->End();
     }
 
-    // Before deferred lighting, next to SSR: contact shadows towards the sun, smoothed, into
-    // ContactTex for deferred_lighting. Independent of SSR being on.
+    // Before deferred lighting, next to SSR: contact shadows towards the sun, smoothed into
+    // ContactTex and accumulated over frames into ContactAccumTex, for deferred_lighting (see
+    // BindLightingInputs). Independent of SSR being on.
     static void RenderContactShadows()
     {
         auto& R = PostFxResources;
         R.bContactValid = false;
+        R.ContactResult = nullptr;
+        // The history stays usable only if this frame accumulates too; any return below drops it.
+        const bool accumWasValid = R.bContactAccumValid;
+        R.bContactAccumValid = false;
 
         // For the light shaders, whatever becomes of the sun's pass below.
         {
@@ -3212,6 +3250,12 @@ private:
         effect->SetVector(h.vec4ProjInfo, &projInfo);
         effect->SetVector(h.vec4SunView, &sun);
         effect->SetFloat(h.fStepJitter, R.bContactShadowStepJitter ? 1.0f : 0.0f);
+        const bool temporal = R.fContactTemporalBlend > 0.0f && h.techContactTemporal && R.ContactAccumSurf[0] &&
+                              R.ContactAccumSurf[1];
+        // Golden ratio steps through the offsets, from an integer so they stay spread however
+        // long the game runs.
+        ++R.nContactFrame;
+        effect->SetFloat(h.fJitterOffset, temporal ? float(R.nContactFrame * 2654435769u) * (1.0f / 4294967296.0f) : 0.0f);
         effect->SetFloat(h.fCSLength, R.fContactShadowLength);
         effect->SetFloat(h.fCSThickness, R.fContactShadowThickness);
         effect->SetFloat(h.fCSMaxViewDistance, R.fContactShadowMaxDistance);
@@ -3276,6 +3320,34 @@ private:
         else
         {
             pDevice->StretchRect(R.ContactRawSurf, nullptr, R.ContactSurf, nullptr, D3DTEXF_NONE);
+        }
+        R.ContactResult = R.ContactTex->mD3DTexture;
+
+        if (temporal)
+        {
+            D3DXMATRIX viewProj;
+            MatrixMultiply(viewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
+            if (!accumWasValid)
+                R.ContactPrevViewProj = viewProj;
+            D3DXVECTOR4 reprojRows[4];
+            ViewToClipRows(vp, R.ContactPrevViewProj, reprojRows);
+            // Last frame's fog pass copied its depth; this frame's has not run yet.
+            const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
+
+            const int prev = R.nContactAccumIndex, next = prev ^ 1;
+            effect->SetTexture(h.SSRResultTex2D, R.ContactTex->mD3DTexture);
+            effect->SetTexture(h.SSRAccumTex2D, R.ContactAccumTex[prev]->mD3DTexture);
+            effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
+            effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
+            effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
+            effect->SetFloat(h.fTemporalBlend, accumWasValid ? R.fContactTemporalBlend : 0.0f);
+            DrawEffectPass(pDevice, effect, h.techContactTemporal, R.ContactAccumSurf[next], width, height);
+
+            result = R.ContactAccumTex[next]->mD3DTexture;
+            R.ContactResult = result;
+            R.nContactAccumIndex = next;
+            R.ContactPrevViewProj = viewProj;
+            R.bContactAccumValid = true;
         }
 
         if (R.SSRDebugMode() == R.kContactDebugMode && R.SSRDebugSurf && h.techSSRDebug)
@@ -3401,9 +3473,9 @@ public:
     {
         auto& R = PostFxResources;
         // s9 is read by no game shader, and the car glass takes it over right after lighting.
-        if (R.bContactValid && R.ContactTex && R.ContactTex->mD3DTexture)
+        if (R.bContactValid && R.ContactResult)
         {
-            BindSampler(pDevice, 9, R.ContactTex->mD3DTexture, D3DTEXF_POINT);
+            BindSampler(pDevice, 9, R.ContactResult, D3DTEXF_POINT);
             R.bContactBound = true;
         }
         else if (R.bContactBound)
