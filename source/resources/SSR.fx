@@ -125,6 +125,8 @@ uniform float fEdgeFade;        // 0..0.5, screen fraction over which to fade at
 uniform float fIntensity;       // final multiplier on confidence
 uniform float fGlossBoost;      // extra intensity on shiny materials, 0 disables
 uniform float fGlossCutoff;     // gloss below this is matte and reflects nothing
+uniform float fWetness;         // 0 dry to 1 raining, from the game's rain amount; 0 while wet ground is off
+uniform float fWetGroundBoost;  // how many times brighter reflections on wet ground are drawn
 uniform float fWaterIntensity;  // final multiplier for the water pass
 uniform float4 vec4WaterPlane;  // water plane in reconstruction space, (normal.xyz, d)
 uniform float fWaterBlur;       // reflection blur radius in pixels at max ray distance
@@ -457,8 +459,12 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
 // instead skipped car paint, whose small x times a small z fell under one 8-bit step though
 // the game still multiplies the result up into a visible reflection.
 // Gloss alone decides matte: weighting by x classed every car body as matte.
-float SSRSurfaceWeight(float2 uv)
+// While it rains, ground facing up (roads, pavements) reflects too though its gloss is under
+// fGlossCutoff: the game keeps the gloss it has dry and only strengthens its own sky reflection
+// in the rain. wetOnly is how much of the weight comes from that alone, for SSR_PS to brighten.
+float SSRSurfaceWeight(float2 uv, out float wetOnly)
 {
+    wetOnly = 0.0;
     if (tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999)
         return 0.0; // sky
     if (fGlossCutoff < 0.0)
@@ -467,12 +473,27 @@ float SSRSurfaceWeight(float2 uv)
     if (min(spec.x, spec.z) < 0.5 / 255.0)
         return 0.0;
     float gloss = spec.y;
-    return smoothstep(fGlossCutoff, fGlossCutoff + 0.2, gloss) * (1.0 + fGlossBoost * gloss);
+    float weight = smoothstep(fGlossCutoff, fGlossCutoff + 0.2, gloss) * (1.0 + fGlossBoost * gloss);
+    [branch]
+    if (fWetness > 0.0)
+    {
+        float wet = fWetness * smoothstep(0.75, 0.9, GBufferNormalWorld(uv).z);
+        wetOnly = saturate(wet - weight);
+        weight = max(weight, wet);
+    }
+    return weight;
+}
+
+float SSRSurfaceWeight(float2 uv)
+{
+    float wetOnly;
+    return SSRSurfaceWeight(uv, wetOnly);
 }
 
 float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
-    float surfaceWeight = SSRSurfaceWeight(uv);
+    float wetOnly;
+    float surfaceWeight = SSRSurfaceWeight(uv, wetOnly);
     if (surfaceWeight <= 0.0)
         return 0.0;
 
@@ -490,7 +511,9 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     // accumulation averages the steps out and fewer of them do.
     float jitter = fStepJitter > 0.0 ? 1.0 - frac(1.0 - PixelJitter(vPos) + fJitterOffset) : 1.0;
     float4 r = TraceReflection(C, n, fReflectionBlur, jitter, fDistanceFade);
-    return float4(r.rgb, saturate(r.a * surfaceWeight * fIntensity));
+    // On wet ground the game's reflection strength, which deferred_lighting multiplies SSR by,
+    // is that of dry asphalt, so the reflection is drawn brighter there.
+    return float4(r.rgb * (1.0 + (fWetGroundBoost - 1.0) * wetOnly), saturate(r.a * surfaceWeight * fIntensity));
 }
 
 float3 WaterNormal(float2 worldXY, float distSq)
