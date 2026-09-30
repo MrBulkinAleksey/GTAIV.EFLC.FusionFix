@@ -163,15 +163,6 @@ Logitech LightSync RGB
 [SSRDbgContact]
 Контактные тени
 
-[SSRDbgTrailKept]
-Шлейф: с накоплением
-
-[SSRDbgTrailRef]
-Шлейф: без накопления
-
-[SSRDbgRayLen]
-Длины лучей
-
 [Contact Shadows]
 Контактные тени
 

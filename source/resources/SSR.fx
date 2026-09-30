@@ -124,7 +124,6 @@ uniform float4 vec4WaterWorldX;
 uniform float4 vec4WaterWorldY;
 
 uniform float fDebugMode; // SSR debug view from the graphics menu, see SSRDebug_PS
-uniform float fViewCheck; // debug modes 8 to 10: whether the game's view matrices agree, see SSRDebug_PS
 uniform float fUseGBufferNormals; // 1 reads the G-buffer normal, 0 rebuilds it from depth
 uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDenoise_PS
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
@@ -134,11 +133,6 @@ uniform float fTowardCamera;      // 0..1, how far reflections pointing back at 
 uniform float fReflectionBlur;    // blur radius in pixels a reflection reaches at fMaxDistance, 0 keeps it sharp
 uniform float fDistanceFade;      // reflections fade out towards this distance from the surface, 0 disables
 uniform float fTemporalBlend;     // share of last frame's SSR kept each frame, 0 while there is none to keep
-uniform float fJitterOffset;      // added to each pixel's step offset, changed every frame while SSR accumulates
-uniform float fTemporalFollowImage; // 1 takes the history where the reflected image was, 0 where the surface was
-uniform float fTemporalMotion;    // pass pixels the history may move in a frame before none of it is kept, 0 keeps it at any speed
-uniform float fTemporalDebug;     // SSR debug modes 8 to 10 as 1 to 3, see SSRTemporalDebug, else 0
-uniform float4 vec4CameraPos;     // camera position in world space, for SSRTemporalDebug
 
 // Contact shadows, see ContactShadows_PS.
 uniform float4 vec4SunView;         // direction towards the sun in reconstruction space, w 0 if unknown
@@ -263,13 +257,6 @@ float3 GBufferNormal(float2 uv)
 float PixelJitter(float2 pixel)
 {
     return 1.0 - frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
-}
-
-// PixelJitter moved on by fJitterOffset: while SSR accumulates, each frame's steps land
-// elsewhere and the accumulation averages the noise out instead of freezing it on screen.
-float SSRJitter(float2 pixel)
-{
-    return 1.0 - frac(1.0 - PixelJitter(pixel) + fJitterOffset);
 }
 
 // jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
@@ -485,7 +472,7 @@ SSROutput SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
     n = (dot(n, C) > 0.0) ? -n : n;
 
     float hitDist;
-    float4 r = TraceReflection(C, n, fReflectionBlur, fStepJitter > 0.0 ? SSRJitter(vPos) : 1.0, fDistanceFade, hitDist);
+    float4 r = TraceReflection(C, n, fReflectionBlur, fStepJitter > 0.0 ? PixelJitter(vPos) : 1.0, fDistanceFade, hitDist);
     o.colour = float4(r.rgb, saturate(r.a * surfaceWeight * fIntensity));
     o.hit = float4(o.colour.a > 0.0 ? hitDist : 0.0, 0.0, 0.0, 1.0);
     return o;
@@ -556,10 +543,6 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 //   7: contact shadows alone, white lit, black shadowed
 //   5: _DEFERRED_GBUFFER_2_ as stored: red specular intensity, green gloss, blue the
 //      reflection strength deferred_lighting uses; see SSRSurfaceWeight
-//   8-10: what the accumulation pass wrote instead of reflections, see SSRTemporalDebug.
-//      The square under the mode squares tells whether the viewport's mViewMatrix was the
-//      inverse of its mViewInverseMatrix in the last second: green it was, yellow it was
-//      last frame's camera, blue mViewInverseMatrix was last frame's, red neither.
 
 // vec4WaterToView rotates world into reconstruction space; its transpose rotates back.
 float3 ViewToWorld(float3 v)
@@ -577,21 +560,6 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         return float4(1.0, 1.0, 1.0, 1.0);
 
     float4 ssr = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
-
-    if (fDebugMode > 7.5)
-    {
-        if (all(vPos >= float2(6.0, 34.0)) && all(vPos < float2(66.0, 94.0)))
-        {
-            if (fViewCheck > 2.5)
-                return float4(1.0, 0.0, 0.0, 1.0);
-            if (fViewCheck > 1.5)
-                return float4(0.2, 0.4, 1.0, 1.0);
-            if (fViewCheck > 0.5)
-                return float4(1.0, 1.0, 0.0, 1.0);
-            return float4(0.0, 1.0, 0.0, 1.0);
-        }
-        return float4(ssr.rgb * ssr.a, 1.0);
-    }
 
     // 7: contact shadows, white lit, black shadowed (SSRResultTex holds them in this mode)
     if (fDebugMode > 6.5)
@@ -776,83 +744,17 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return float4(saturate(occlusion * fade * fCSIntensity), 0.0, 0.0, 1.0);
 }
 
-// SSR debug modes 8 to 10 (fTemporalDebug 1 to 3), what SSRTemporal_PS writes instead of
-// reflections, shown as is. They tell apart why reflections slide while the camera moves.
-//   1: a checkerboard of 1 m cells fixed to the world, kept over frames as reflections are,
-//      taken where the surface was last frame. It stays sharp while the camera moves only if
-//      vec4ViewToPrevClip finds last frame's spot; if not, it smears along the motion. History
-//      is dropped where last frame's depth shows another surface, as for reflections: without
-//      that, turning around the player left ghosts of him hundreds of pixels long, as the
-//      ground behind him moved some 60 pixels a frame.
-//   2: the same checkerboard, not kept over frames, to compare with.
-//   3: the reflected ray lengths this pass reads (SSRHitTex): green, brighter the longer, up
-//      to fMaxDistance; dark red a glossy pixel whose length is 0, as for a miss.
-float4 SSRTemporalDebug(float2 uv, float2 vPos)
-{
-    if (tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999)
-        return 0.0;
-
-    if (fTemporalDebug > 2.5)
-    {
-        if (SSRSurfaceWeight(uv) <= 0.0)
-            return float4(0.0, 0.0, 0.0, 1.0);
-        float hitDist = tex2Dlod(SSRHitTex, float4(uv, 0, 0)).r;
-        if (hitDist <= 0.0)
-            return float4(0.6, 0.0, 0.0, 1.0);
-        return float4(0.0, 0.2 + 0.8 * saturate(hitDist / fMaxDistance), 0.0, 1.0);
-    }
-
-    float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
-    float3 cell = floor(ViewToWorld(C) + vec4CameraPos.xyz);
-    float3 current = frac((cell.x + cell.y + cell.z) * 0.5) > 0.25 ? 0.9 : 0.1;
-    float2 prevUV = HistoryUV(C);
-    if (fTemporalDebug > 1.5 || fTemporalBlend <= 0.0 || any(prevUV <= 0.0) || any(prevUV >= 1.0))
-        return float4(current, 1.0);
-    if (fUsePrevDepth > 0.0)
-    {
-        float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]
-                    + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
-        float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * fNearPlane;
-        if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
-            return float4(current, 1.0);
-    }
-    float3 history = tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0)).rgb;
-    return float4(lerp(current, history, fTemporalBlend), 1.0);
-}
-
-// Debug modes 8 to 10 also draw this into a 9x2 target that LogSSRPass reads back. Row 0, for
-// nine spots on a 3x3 grid over the screen: the view depth, where HistoryUV puts the spot in
-// last frame, and last frame's depth there. In a still scene that depth is the spot's own
-// depth as last frame's camera saw it, if the history is taken from the right place. x is -1
-// for sky. Row 1: DepthTex at the spot as stored, all four channels.
-float4 SSRProbe_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
-{
-    float i = floor(vPos.x + 0.25);
-    float2 p = float2(0.2 + 0.3 * fmod(i, 3.0), 0.2 + 0.3 * floor(i / 3.0));
-    p = (floor(p / vec2InvViewportSize) + 0.5) * vec2InvViewportSize;
-    if (vPos.y > 0.75)
-        return tex2Dlod(DepthTex, float4(p, 0, 0));
-    if (tex2Dlod(DepthTex, float4(p, 0, 0)).r >= 0.9999)
-        return float4(-1.0, 0.0, 0.0, 0.0);
-    float z = LinearDepth(p);
-    float2 prevUV = HistoryUV(ViewPosFromUVZ(p, z));
-    float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * fNearPlane;
-    return float4(z, prevUV, prevZ);
-}
-
 // Blends this frame's SSR (SSRResultTex, after smoothing) with last frame's accumulation
 // (SSRAccumTex). A reflection moves like the mirror image of what it shows, which lies behind
 // the surface along the view ray, as far behind it as the reflected ray was long (SSRHitTex):
-// the history is taken where that image was last frame. Taking it where the surface was left
-// reflections trailing off car paint while the camera moved. The history is clamped to the
-// mean of this frame's 3x3 neighbourhood give or take 1.5 times its spread, so it cannot bring
-// back what is no longer there, and is dropped where last frame's depth shows another surface.
+// the history is taken where that image was last frame, which is right for a flat mirror;
+// on car paint and van sides it looked no different from taking it where the surface was.
+// The history is clamped to the mean of this frame's 3x3 neighbourhood give or take 1.5
+// times its spread, so it cannot bring back what is no longer there, and is dropped where
+// last frame's depth shows another surface.
 // Blending is premultiplied: a miss (alpha 0) must fade a reflection out, not darken its colour.
 float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
-    if (fTemporalDebug > 0.0)
-        return SSRTemporalDebug(uv, vPos);
-
     if (SSRSurfaceWeight(uv) <= 0.0)
         return 0.0;
 
@@ -881,7 +783,7 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float4 lo = m1 - 1.5 * spread, hi = m1 + 1.5 * spread;
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
-    float hitDist = tex2Dlod(SSRHitTex, float4(uv, 0, 0)).r * fTemporalFollowImage;
+    float hitDist = tex2Dlod(SSRHitTex, float4(uv, 0, 0)).r;
     float2 prevUV = HistoryUV(C + normalize(C) * hitDist);
     float keep = fTemporalBlend;
     if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
@@ -898,13 +800,6 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         if (abs(prevZ - clip.w) > margin)
             keep = 0.0;
     }
-    // A reflection is what the surface shows from where the camera stands, so history kept from
-    // earlier cameras shows it as they saw it, most of all on curved car paint, which neither
-    // Follow tracks. The share kept falls with how far the history moved and is gone at
-    // fTemporalMotion, so a still or slow camera keeps the steady accumulation and a quick turn
-    // (55 to 60 pixels a frame at 27 fps) shows this frame's reflections.
-    if (fTemporalMotion > 0.0)
-        keep *= saturate(1.0 - length((prevUV - uv) / vec2InvViewportSize) / fTemporalMotion);
 
     float4 history = tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0));
     history.rgb *= history.a;
@@ -968,15 +863,6 @@ technique SSRTemporal
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSRTemporal_PS();
-    }
-}
-
-technique SSRProbe
-{
-    pass P0
-    {
-        VertexShader = compile vs_3_0 FullscreenQuadVS();
-        PixelShader = compile ps_3_0 SSRProbe_PS();
     }
 }
 
