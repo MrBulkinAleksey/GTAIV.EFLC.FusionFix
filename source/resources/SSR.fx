@@ -606,20 +606,33 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
         return 0.0;
 
     float4 centre = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
-    float centreZ = LinearDepth(uv);
     float2 radius = fDenoiseRadius * vec2InvViewportSize;
 
+    // Where every tap reads what the centre does, the blur gives the centre back, whatever the
+    // weights: for contact shadows most of the screen, lit through. Telling that takes the
+    // colour taps alone, not the depth of every tap, which is most of what the pass costs.
+    float4 s[12];
+    bool same = true;
+    [unroll]
+    for (int i = 0; i < 12; ++i)
+    {
+        s[i] = tex2Dlod(SSRResultTex, float4(uv + taps[i] * radius, 0, 0));
+        same = same && all(s[i] == centre);
+    }
+    [branch]
+    if (same)
+        return centre;
+
+    float centreZ = LinearDepth(uv);
     float4 sum = float4(centre.rgb * centre.a, centre.a);
     float weightSum = 1.0;
 
     [unroll]
-    for (int i = 0; i < 12; ++i)
+    for (int j = 0; j < 12; ++j)
     {
-        float2 tapUV = uv + taps[i] * radius;
-        float4 s = tex2Dlod(SSRResultTex, float4(tapUV, 0, 0));
-        float w = exp(-dot(taps[i], taps[i]) * 2.0);
-        w *= saturate(1.0 - abs(LinearDepth(tapUV) - centreZ) / (centreZ * 0.02));
-        sum += w * float4(s.rgb * s.a, s.a);
+        float w = exp(-dot(taps[j], taps[j]) * 2.0);
+        w *= saturate(1.0 - abs(LinearDepth(uv + taps[j] * radius) - centreZ) / (centreZ * 0.02));
+        sum += w * float4(s[j].rgb * s[j].a, s[j].a);
         weightSum += w;
     }
 
@@ -725,6 +738,10 @@ float4 ContactTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
             hi = max(hi, s);
         }
     }
+    // A neighbourhood all alike clamps any history to the current value: lit ground, mostly.
+    [branch]
+    if (hi <= lo)
+        return float4(current, 0.0, 0.0, 1.0);
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
     float2 prevUV = HistoryUV(C);
@@ -779,6 +796,11 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     }
     m1 /= 9.0;
     float4 spread = sqrt(max(m2 / 9.0 - m1 * m1, 0.0));
+    // A neighbourhood all alike clamps any history to the current value, as where a glossy
+    // surface reflects nothing this frame.
+    [branch]
+    if (all(spread <= 0.0))
+        return float4(current.a > 1e-4 ? current.rgb / current.a : 0.0, current.a);
     float4 lo = m1 - 1.5 * spread, hi = m1 + 1.5 * spread;
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
