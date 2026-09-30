@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index 2337a59..a6a6a57 100644
+index 2337a59..370487d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-@@ -40,6 +40,14 @@
+@@ -40,6 +40,15 @@
      def c0, 0.50999999, 2, -0.999989986, 9.99999975e-006
      def c1, 1, -0.333333343, 1.5, -0.200000003
      def c2, 1.25, 0, 0, 0
@@ -12,12 +12,13 @@ index 2337a59..a6a6a57 100644
 +    def c160, 2, -1, 0.899999976, 0
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 0.375, 0, 0, 0 // FusionFix local contact shadows: half of 0.75 m, for uv
 +    defi i0, 12, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -80,8 +88,173 @@
+@@ -80,8 +89,212 @@
      mul r1.xyz, c76.w, c76
      mul r0.xyw, r0.x, r1.xyzz
      mul r0.xyw, r3.xyzz, r0
@@ -163,6 +164,45 @@ index 2337a59..a6a6a57 100644
 +            endif
 +          endif
 +        endrep
++          // a ray still behind the scene at its end may be inside a car, or merely too short to
++          // pass a ped, whose back reads the same in depth; a car is wider than 1.5 m seen from
++          // any side, a ped or a pole is not, so the end stays in shadow only if it is also
++          // behind the scene 0.75 m to its left or right, at the depth of what hides it (r14.x)
++          if_ge r19.z, c158.w
++            rcp r15.x, r14.x
++            mul r15.x, r15.x, r27.x
++            mul r15.x, r15.x, c163.x // uv from the end to either side
++            mov r19.y, c158.w // sides where the end is behind the scene too
++            add r12.x, r12.x, -r15.x
++            texldl r14, r12, s2
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x // above 0 on the screen only, off it nothing tells
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            mad r12.x, r15.x, c160.x, r12.x
++            texldl r14, r12, s2
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            if_lt r19.y, c157.y
++              mov r19.z, -c160.x // past something thin
++            endif
++          endif
 +          if_ge r19.z, c158.w
 +            add r18.w, c157.y, -r19.z
 +          endif
@@ -194,10 +234,10 @@ index 2337a59..a6a6a57 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index 1800ea7..f02e9cb 100644
+index 1800ea7..3572613 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-@@ -43,6 +43,14 @@
+@@ -43,6 +43,15 @@
      def c1, 255, -128, -0, -7.9000001
      def c2, 9.99999975e-006, 1, -0.333333343, 1.5
      def c3, -0.200000003, 1.25, 0, 0
@@ -207,12 +247,13 @@ index 1800ea7..f02e9cb 100644
 +    def c160, 2, -1, 0.899999976, 0
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 0.375, 0, 0, 0 // FusionFix local contact shadows: half of 0.75 m, for uv
 +    defi i0, 12, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -91,7 +99,172 @@
+@@ -91,7 +100,211 @@
      mad r1.x, r3.x, c0.w, r1.x
      add r1.x, r1.x, c1.w
      mov r0.w, c2.y
@@ -356,6 +397,45 @@ index 1800ea7..f02e9cb 100644
 +            endif
 +          endif
 +        endrep
++          // a ray still behind the scene at its end may be inside a car, or merely too short to
++          // pass a ped, whose back reads the same in depth; a car is wider than 1.5 m seen from
++          // any side, a ped or a pole is not, so the end stays in shadow only if it is also
++          // behind the scene 0.75 m to its left or right, at the depth of what hides it (r14.x)
++          if_ge r19.z, c158.w
++            rcp r15.x, r14.x
++            mul r15.x, r15.x, r27.x
++            mul r15.x, r15.x, c163.x // uv from the end to either side
++            mov r19.y, c158.w // sides where the end is behind the scene too
++            add r12.x, r12.x, -r15.x
++            texldl r14, r12, s2
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x // above 0 on the screen only, off it nothing tells
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            mad r12.x, r15.x, c160.x, r12.x
++            texldl r14, r12, s2
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            if_lt r19.y, c157.y
++              mov r19.z, -c160.x // past something thin
++            endif
++          endif
 +          if_ge r19.z, c158.w
 +            add r18.w, c157.y, -r19.z
 +          endif
@@ -387,10 +467,10 @@ index 1800ea7..f02e9cb 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 0b4d107..878dae3 100644
+index 0b4d107..c126223 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-@@ -43,6 +43,14 @@
+@@ -43,6 +43,15 @@
      def c1, 255, -128, -0, -7.9000001
      def c2, 9.99999975e-006, 1, -0.333333343, 1.5
      def c3, -0.200000003, 1.25, 0, 0
@@ -400,12 +480,13 @@ index 0b4d107..878dae3 100644
 +    def c160, 2, -1, 0.899999976, 0
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 0.375, 0, 0, 0 // FusionFix local contact shadows: half of 0.75 m, for uv
 +    defi i0, 12, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -91,7 +99,172 @@
+@@ -91,7 +100,211 @@
      mad r1.x, r3.x, c0.w, r1.x
      add r1.x, r1.x, c1.w
      mov r0.w, c2.y
@@ -549,6 +630,45 @@ index 0b4d107..878dae3 100644
 +            endif
 +          endif
 +        endrep
++          // a ray still behind the scene at its end may be inside a car, or merely too short to
++          // pass a ped, whose back reads the same in depth; a car is wider than 1.5 m seen from
++          // any side, a ped or a pole is not, so the end stays in shadow only if it is also
++          // behind the scene 0.75 m to its left or right, at the depth of what hides it (r14.x)
++          if_ge r19.z, c158.w
++            rcp r15.x, r14.x
++            mul r15.x, r15.x, r27.x
++            mul r15.x, r15.x, c163.x // uv from the end to either side
++            mov r19.y, c158.w // sides where the end is behind the scene too
++            add r12.x, r12.x, -r15.x
++            texldl r14, r12, s2
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x // above 0 on the screen only, off it nothing tells
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            mad r12.x, r15.x, c160.x, r12.x
++            texldl r14, r12, s2
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            if_lt r19.y, c157.y
++              mov r19.z, -c160.x // past something thin
++            endif
++          endif
 +          if_ge r19.z, c158.w
 +            add r18.w, c157.y, -r19.z
 +          endif
@@ -580,10 +700,10 @@ index 0b4d107..878dae3 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 86f2d47..a1755e9 100644
+index 86f2d47..6c75371 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-@@ -77,6 +77,14 @@
+@@ -77,6 +77,15 @@
      def c136, -0.7515861305520581, -0.41609876195815027, 0.9102937449894895, -0.17014527555321657
      def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
      // ----------------------------------------------------------------------------------------------------------------------------------------------
@@ -593,12 +713,13 @@ index 86f2d47..a1755e9 100644
 +    def c160, 2, -1, 0.899999976, 0
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 0.375, 0, 0, 0 // FusionFix local contact shadows: half of 0.75 m, for uv
 +    defi i0, 12, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -305,7 +313,172 @@
+@@ -305,7 +314,211 @@
      mad r0.x, r0.x, c6.z, r0.z
      add r0.x, r0.x, c7.z
      cmp r0.x, r0.x, c2.y, r0.y
@@ -742,6 +863,45 @@ index 86f2d47..a1755e9 100644
 +            endif
 +          endif
 +        endrep
++          // a ray still behind the scene at its end may be inside a car, or merely too short to
++          // pass a ped, whose back reads the same in depth; a car is wider than 1.5 m seen from
++          // any side, a ped or a pole is not, so the end stays in shadow only if it is also
++          // behind the scene 0.75 m to its left or right, at the depth of what hides it (r14.x)
++          if_ge r19.z, c158.w
++            rcp r15.x, r14.x
++            mul r15.x, r15.x, r27.x
++            mul r15.x, r15.x, c163.x // uv from the end to either side
++            mov r19.y, c158.w // sides where the end is behind the scene too
++            add r12.x, r12.x, -r15.x
++            texldl r14, r12, s4
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x // above 0 on the screen only, off it nothing tells
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            mad r12.x, r15.x, c160.x, r12.x
++            texldl r14, r12, s4
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            if_lt r19.y, c157.y
++              mov r19.z, -c160.x // past something thin
++            endif
++          endif
 +          if_ge r19.z, c158.w
 +            add r18.w, c157.y, -r19.z
 +          endif
@@ -773,10 +933,10 @@ index 86f2d47..a1755e9 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index d104b6c..a13972a 100644
+index d104b6c..a2ee78b 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-@@ -71,6 +71,14 @@
+@@ -71,6 +71,15 @@
      def c136, -0.7515861305520581, -0.41609876195815027, 0.9102937449894895, -0.17014527555321657
      def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
      // ----------------------------------------------------------------------------------------------------------------------------------------------
@@ -786,12 +946,13 @@ index d104b6c..a13972a 100644
 +    def c160, 2, -1, 0.899999976, 0
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 0.375, 0, 0, 0 // FusionFix local contact shadows: half of 0.75 m, for uv
 +    defi i0, 12, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -268,8 +276,173 @@
+@@ -268,8 +277,212 @@
      mul r1.yzw, c83.w, c83.xxyz
      mul r1.yzw, r0.w, r1
      mul r0.xyz, r0, r1.yzww
@@ -937,6 +1098,45 @@ index d104b6c..a13972a 100644
 +            endif
 +          endif
 +        endrep
++          // a ray still behind the scene at its end may be inside a car, or merely too short to
++          // pass a ped, whose back reads the same in depth; a car is wider than 1.5 m seen from
++          // any side, a ped or a pole is not, so the end stays in shadow only if it is also
++          // behind the scene 0.75 m to its left or right, at the depth of what hides it (r14.x)
++          if_ge r19.z, c158.w
++            rcp r15.x, r14.x
++            mul r15.x, r15.x, r27.x
++            mul r15.x, r15.x, c163.x // uv from the end to either side
++            mov r19.y, c158.w // sides where the end is behind the scene too
++            add r12.x, r12.x, -r15.x
++            texldl r14, r12, s2
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x // above 0 on the screen only, off it nothing tells
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            mad r12.x, r15.x, c160.x, r12.x
++            texldl r14, r12, s2
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            if_lt r19.y, c157.y
++              mov r19.z, -c160.x // past something thin
++            endif
++          endif
 +          if_ge r19.z, c158.w
 +            add r18.w, c157.y, -r19.z
 +          endif
@@ -968,10 +1168,10 @@ index d104b6c..a13972a 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 963ce40..4820991 100644
+index 963ce40..51b4993 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-@@ -48,6 +48,14 @@
+@@ -48,6 +48,15 @@
      def c0, 0.50999999, 512, 2, -0.999989986
      def c1, 1, 0.5, 0, 9.99999975e-006
      def c2, -0.100000001, 1.11111116, 0, 0
@@ -981,12 +1181,13 @@ index 963ce40..4820991 100644
 +    def c160, 2, -1, 0.899999976, 0
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 0.375, 0, 0, 0 // FusionFix local contact shadows: half of 0.75 m, for uv
 +    defi i0, 12, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -137,7 +145,172 @@
+@@ -137,7 +146,211 @@
      mad r0.xyz, r2, r0, r1
      mad_sat r1.x, r4.z, r4.z, c1.y
      mov r0.w, c1.x
@@ -1130,6 +1331,45 @@ index 963ce40..4820991 100644
 +            endif
 +          endif
 +        endrep
++          // a ray still behind the scene at its end may be inside a car, or merely too short to
++          // pass a ped, whose back reads the same in depth; a car is wider than 1.5 m seen from
++          // any side, a ped or a pole is not, so the end stays in shadow only if it is also
++          // behind the scene 0.75 m to its left or right, at the depth of what hides it (r14.x)
++          if_ge r19.z, c158.w
++            rcp r15.x, r14.x
++            mul r15.x, r15.x, r27.x
++            mul r15.x, r15.x, c163.x // uv from the end to either side
++            mov r19.y, c158.w // sides where the end is behind the scene too
++            add r12.x, r12.x, -r15.x
++            texldl r14, r12, s5
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x // above 0 on the screen only, off it nothing tells
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            mad r12.x, r15.x, c160.x, r12.x
++            texldl r14, r12, s5
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            if_lt r19.y, c157.y
++              mov r19.z, -c160.x // past something thin
++            endif
++          endif
 +          if_ge r19.z, c158.w
 +            add r18.w, c157.y, -r19.z
 +          endif
@@ -1161,10 +1401,10 @@ index 963ce40..4820991 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 6cdc2ec..754f763 100644
+index 6cdc2ec..6bb6550 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-@@ -79,6 +79,14 @@
+@@ -79,6 +79,15 @@
      def c136, -0.7515861305520581, -0.41609876195815027, 0.9102937449894895, -0.17014527555321657
      def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
      // ----------------------------------------------------------------------------------------------------------------------------------------------
@@ -1174,12 +1414,13 @@ index 6cdc2ec..754f763 100644
 +    def c160, 2, -1, 0.899999976, 0
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 0.375, 0, 0, 0 // FusionFix local contact shadows: half of 0.75 m, for uv
 +    defi i0, 12, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -322,8 +330,173 @@
+@@ -322,8 +331,212 @@
      mul r0.xyz, r0, r0.w
      mul r2.xyz, r3, r6
      mul r1.xyz, r1.z, r1.xyww
@@ -1325,6 +1566,45 @@ index 6cdc2ec..754f763 100644
 +            endif
 +          endif
 +        endrep
++          // a ray still behind the scene at its end may be inside a car, or merely too short to
++          // pass a ped, whose back reads the same in depth; a car is wider than 1.5 m seen from
++          // any side, a ped or a pole is not, so the end stays in shadow only if it is also
++          // behind the scene 0.75 m to its left or right, at the depth of what hides it (r14.x)
++          if_ge r19.z, c158.w
++            rcp r15.x, r14.x
++            mul r15.x, r15.x, r27.x
++            mul r15.x, r15.x, c163.x // uv from the end to either side
++            mov r19.y, c158.w // sides where the end is behind the scene too
++            add r12.x, r12.x, -r15.x
++            texldl r14, r12, s5
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x // above 0 on the screen only, off it nothing tells
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            mad r12.x, r15.x, c160.x, r12.x
++            texldl r14, r12, s5
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            if_lt r19.y, c157.y
++              mov r19.z, -c160.x // past something thin
++            endif
++          endif
 +          if_ge r19.z, c158.w
 +            add r18.w, c157.y, -r19.z
 +          endif
@@ -1356,10 +1636,10 @@ index 6cdc2ec..754f763 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 21f11d1..cc8fc76 100644
+index 21f11d1..ba3811e 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-@@ -43,6 +43,14 @@
+@@ -43,6 +43,15 @@
      def c1, 0.998046875, 7.984375, 63.875, -127.999992
      def c2, 0.5, 9.99999975e-006, 1, -0.100000001
      def c3, 1.11111116, 0, 0, 0.125
@@ -1369,12 +1649,13 @@ index 21f11d1..cc8fc76 100644
 +    def c160, 2, -1, 0.899999976, 0
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 0.375, 0, 0, 0 // FusionFix local contact shadows: half of 0.75 m, for uv
 +    defi i0, 12, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -103,7 +111,172 @@
+@@ -103,7 +112,211 @@
      mad_sat r1.x, r1.z, r1.z, c2.x
      mad r0.xyz, r0.w, r2, r0
      mov r0.w, c2.z
@@ -1518,6 +1799,45 @@ index 21f11d1..cc8fc76 100644
 +            endif
 +          endif
 +        endrep
++          // a ray still behind the scene at its end may be inside a car, or merely too short to
++          // pass a ped, whose back reads the same in depth; a car is wider than 1.5 m seen from
++          // any side, a ped or a pole is not, so the end stays in shadow only if it is also
++          // behind the scene 0.75 m to its left or right, at the depth of what hides it (r14.x)
++          if_ge r19.z, c158.w
++            rcp r15.x, r14.x
++            mul r15.x, r15.x, r27.x
++            mul r15.x, r15.x, c163.x // uv from the end to either side
++            mov r19.y, c158.w // sides where the end is behind the scene too
++            add r12.x, r12.x, -r15.x
++            texldl r14, r12, s4
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x // above 0 on the screen only, off it nothing tells
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            mad r12.x, r15.x, c160.x, r12.x
++            texldl r14, r12, s4
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            if_lt r19.y, c157.y
++              mov r19.z, -c160.x // past something thin
++            endif
++          endif
 +          if_ge r19.z, c158.w
 +            add r18.w, c157.y, -r19.z
 +          endif
@@ -1549,10 +1869,10 @@ index 21f11d1..cc8fc76 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 3a813bf..2573679 100644
+index 3a813bf..94ba488 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-@@ -46,6 +46,14 @@
+@@ -46,6 +46,15 @@
      def c2, 255, -128, -0, -7.9000001
      def c3, 1, 0, 9.99999975e-006, -0.100000001
      def c4, 1.11111116, 0, 0, 0.125
@@ -1562,12 +1882,13 @@ index 3a813bf..2573679 100644
 +    def c160, 2, -1, 0.899999976, 0
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 0.375, 0, 0, 0 // FusionFix local contact shadows: half of 0.75 m, for uv
 +    defi i0, 12, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -112,7 +120,172 @@
+@@ -112,7 +121,211 @@
      mad r0.x, r0.x, c2.x, r0.y
      add r0.x, r0.x, c2.w
      cmp r0.x, r0.x, c3.x, c3.y
@@ -1711,6 +2032,45 @@ index 3a813bf..2573679 100644
 +            endif
 +          endif
 +        endrep
++          // a ray still behind the scene at its end may be inside a car, or merely too short to
++          // pass a ped, whose back reads the same in depth; a car is wider than 1.5 m seen from
++          // any side, a ped or a pole is not, so the end stays in shadow only if it is also
++          // behind the scene 0.75 m to its left or right, at the depth of what hides it (r14.x)
++          if_ge r19.z, c158.w
++            rcp r15.x, r14.x
++            mul r15.x, r15.x, r27.x
++            mul r15.x, r15.x, c163.x // uv from the end to either side
++            mov r19.y, c158.w // sides where the end is behind the scene too
++            add r12.x, r12.x, -r15.x
++            texldl r14, r12, s4
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x // above 0 on the screen only, off it nothing tells
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            mad r12.x, r15.x, c160.x, r12.x
++            texldl r14, r12, s4
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            if_lt r19.y, c157.y
++              mov r19.z, -c160.x // past something thin
++            endif
++          endif
 +          if_ge r19.z, c158.w
 +            add r18.w, c157.y, -r19.z
 +          endif
@@ -1742,10 +2102,10 @@ index 3a813bf..2573679 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 4333137..a92f9e4 100644
+index 4333137..2f9089c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-@@ -46,6 +46,14 @@
+@@ -46,6 +46,15 @@
      def c2, 0.998046875, 7.984375, 63.875, -127.999992
      def c3, 255, -128, -0, -7.9000001
      def c4, -0.100000001, 1.11111116, 0, 0.125
@@ -1755,12 +2115,13 @@ index 4333137..a92f9e4 100644
 +    def c160, 2, -1, 0.899999976, 0
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 0.375, 0, 0, 0 // FusionFix local contact shadows: half of 0.75 m, for uv
 +    defi i0, 12, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -114,7 +122,172 @@
+@@ -114,7 +123,211 @@
      add r0.x, r0.x, c3.w
      cmp r0.x, r0.x, c0.x, c0.y
      mul r0, r2, r0.x
@@ -1904,6 +2265,45 @@ index 4333137..a92f9e4 100644
 +            endif
 +          endif
 +        endrep
++          // a ray still behind the scene at its end may be inside a car, or merely too short to
++          // pass a ped, whose back reads the same in depth; a car is wider than 1.5 m seen from
++          // any side, a ped or a pole is not, so the end stays in shadow only if it is also
++          // behind the scene 0.75 m to its left or right, at the depth of what hides it (r14.x)
++          if_ge r19.z, c158.w
++            rcp r15.x, r14.x
++            mul r15.x, r15.x, r27.x
++            mul r15.x, r15.x, c163.x // uv from the end to either side
++            mov r19.y, c158.w // sides where the end is behind the scene too
++            add r12.x, r12.x, -r15.x
++            texldl r14, r12, s4
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x // above 0 on the screen only, off it nothing tells
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            mad r12.x, r15.x, c160.x, r12.x
++            texldl r14, r12, s4
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            if_lt r19.y, c157.y
++              mov r19.z, -c160.x // past something thin
++            endif
++          endif
 +          if_ge r19.z, c158.w
 +            add r18.w, c157.y, -r19.z
 +          endif
@@ -1935,10 +2335,10 @@ index 4333137..a92f9e4 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 76eac90..047e63a 100644
+index 76eac90..02a514f 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-@@ -46,6 +46,14 @@
+@@ -46,6 +46,15 @@
      def c2, 255, -128, -0, -7.9000001
      def c3, -8, -0, -1, 0.100000001
      def c4, 9.99999975e-006, 1.11111116, 0, 0.125
@@ -1948,12 +2348,13 @@ index 76eac90..047e63a 100644
 +    def c160, 2, -1, 0.899999976, 0
 +    def c161, 0.00300000003, 0.0199999996, 4, 0
 +    def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 0.375, 0, 0, 0 // FusionFix local contact shadows: half of 0.75 m, for uv
 +    defi i0, 12, 0, 0, 0
 +    defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -116,7 +124,172 @@
+@@ -116,7 +125,211 @@
      add r0.x, -r0_abs.x, c3.w
      cmp r0.x, r0.x, -c3.z, -c3.y
      mov r1.w, -c3.z
@@ -2097,6 +2498,45 @@ index 76eac90..047e63a 100644
 +            endif
 +          endif
 +        endrep
++          // a ray still behind the scene at its end may be inside a car, or merely too short to
++          // pass a ped, whose back reads the same in depth; a car is wider than 1.5 m seen from
++          // any side, a ped or a pole is not, so the end stays in shadow only if it is also
++          // behind the scene 0.75 m to its left or right, at the depth of what hides it (r14.x)
++          if_ge r19.z, c158.w
++            rcp r15.x, r14.x
++            mul r15.x, r15.x, r27.x
++            mul r15.x, r15.x, c163.x // uv from the end to either side
++            mov r19.y, c158.w // sides where the end is behind the scene too
++            add r12.x, r12.x, -r15.x
++            texldl r14, r12, s4
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x // above 0 on the screen only, off it nothing tells
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            mad r12.x, r15.x, c160.x, r12.x
++            texldl r14, r12, s4
++            pow r19.x, c209_abs.z, r14.x
++            mul r14.x, r19.x, c209.w
++            add r14.x, r16.w, -r14.x
++            mad r19.x, -r12.x, r12.x, r12.x
++            if_gt r14.x, c158.w
++              if_lt r14.x, r19.w
++                if_gt r19.x, c158.w
++                  add r19.y, r19.y, c157.y
++                endif
++              endif
++            endif
++            if_lt r19.y, c157.y
++              mov r19.z, -c160.x // past something thin
++            endif
++          endif
 +          if_ge r19.z, c158.w
 +            add r18.w, c157.y, -r19.z
 +          endif

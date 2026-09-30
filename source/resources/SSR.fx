@@ -146,6 +146,10 @@ uniform float fCSIntensity;         // strength, 0..1
 #ifndef CS_STEPS
 #define CS_STEPS 16
 #endif
+// Metres to either side of a deep contact shadow ray's end where it must still be behind the
+// scene: whatever is narrower than twice this, a ped, a pole, does not hide the end, see
+// ContactShadows_PS.
+static const float CS_PROBE_SIDE = 0.75;
 
 static const float HISTORY_CLAMP = 8.0;
 static const float SSR_SCALE = 1.0;
@@ -659,6 +663,17 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
     return float4(colour, a);
 }
 
+// Whether P lands behind the scene by less than maxDelta, as a deep contact shadow sample
+// does; off the screen that cannot be told.
+bool CSBehindScene(float3 P, float maxDelta)
+{
+    float2 uv = ViewToUV(P);
+    if (any(uv <= 0.0) || any(uv >= 1.0))
+        return false;
+    float delta = P.z - LinearDepth(uv);
+    return delta > 0.0 && delta < maxDelta;
+}
+
 // Contact shadows: a short ray from each pixel towards the sun through the depth buffer. The
 // game's sun shadow map is too coarse for the contact between a ped's feet or a car's tyres
 // and the ground; this fills that in. The result is occlusion (0 lit, 1 shadowed), so an
@@ -706,12 +721,14 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     // ground. Past a leg the ray soon comes out in front of the scene again, past a car it
     // does not, so such a sample occludes only if no later sample of the ray is in front.
     float deepT = -1.0;
+    float3 P = P0;
+    float sceneZ = 0.0, deepLimit = 0.0; // at the last sample
 
     [loop]
     for (int i = 0; i < CS_STEPS; ++i)
     {
         float t = ((float) i + jitter) / (float) CS_STEPS;
-        float3 P = P0 + L * (len * t);
+        P = P0 + L * (len * t);
         float2 sampleUV = ViewToUV(P);
         if (any(sampleUV <= 0.0) || any(sampleUV >= 1.0))
         {
@@ -724,8 +741,10 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         // The depth buffer only holds the front of things. Anything a sample lands behind by
         // less than the thickness occludes; the thickness grows by the depth this step covered,
         // so a long step does not jump over a ped.
-        float delta = P.z - LinearDepth(sampleUV);
+        sceneZ = LinearDepth(sampleUV);
+        float delta = P.z - sceneZ;
         float thickness = abs(P.z - prevZ) + fCSThickness;
+        deepLimit = fCSMaxThickness + thickness;
         prevZ = P.z;
         if (delta > 0.0 && delta < thickness)
         {
@@ -733,7 +752,7 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
             deepT = -1.0;
             break;
         }
-        if (delta >= thickness && delta < fCSMaxThickness + thickness)
+        if (delta >= thickness && delta < deepLimit)
         {
             if (deepT < 0.0)
                 deepT = t;
@@ -743,6 +762,18 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
             // In front of the scene again, or behind something much nearer: it went past.
             deepT = -2.0;
         }
+    }
+    // A ray still behind the scene at its end may be inside a car, or merely too short to
+    // pass a ped: behind a ped's back the depth reads the same as under a car, and such rays
+    // drew a dark outline round peds on the ground and walls close behind them. A car is
+    // wider than 2 * CS_PROBE_SIDE seen from any side, a ped or a pole is not, so the end
+    // stays in shadow only if it is also behind the scene CS_PROBE_SIDE to its left or right,
+    // measured at the depth of what hides it.
+    if (deepT >= 0.0)
+    {
+        float3 side = float3(CS_PROBE_SIDE * P.z / sceneZ, 0.0, 0.0);
+        if (!CSBehindScene(P - side, deepLimit) && !CSBehindScene(P + side, deepLimit))
+            deepT = -2.0;
     }
     if (deepT >= 0.0)
         occlusion = 1.0 - deepT * deepT;
