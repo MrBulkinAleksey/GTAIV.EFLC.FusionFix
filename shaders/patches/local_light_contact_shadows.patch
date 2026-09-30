@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index 2337a59..54d0c45 100644
+index 2337a59..9c343f7 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 @@ -40,6 +40,15 @@
@@ -18,7 +18,7 @@ index 2337a59..54d0c45 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -80,8 +89,226 @@
+@@ -80,8 +89,231 @@
      mul r1.xyz, c76.w, c76
      mul r0.xyw, r0.x, r1.xyzz
      mul r0.xyw, r3.xyzz, r0
@@ -238,17 +238,22 @@ index 2337a59..54d0c45 100644
 +        add r31.w, c157.y, -r18.w
 +      endif
 +    endif
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): the light the
++    // --- shadow takes, by this light's brightest channel, shows red on top; 0 adds nothing.
++    // --- Weighing by the light keeps out surfaces turned away from it, whose rays start
++    // --- inside them and count as shadowed though the light gives them nothing anyway
++    max r19.x, r26.x, r26.y
++    max r19.x, r19.x, r26.z
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
-+    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
++    mul r19.w, r19.w, r19.x
 +    mad r26.x, r19.w, r28.z, r26.x
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index 1800ea7..5914f20 100644
+index 1800ea7..a9af68d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 @@ -43,6 +43,15 @@
@@ -267,7 +272,7 @@ index 1800ea7..5914f20 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -91,7 +100,225 @@
+@@ -91,7 +100,230 @@
      mad r1.x, r3.x, c0.w, r1.x
      add r1.x, r1.x, c1.w
      mov r0.w, c2.y
@@ -485,17 +490,22 @@ index 1800ea7..5914f20 100644
 +        add r31.w, c157.y, -r18.w
 +      endif
 +    endif
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): the light the
++    // --- shadow takes, by this light's brightest channel, shows red on top; 0 adds nothing.
++    // --- Weighing by the light keeps out surfaces turned away from it, whose rays start
++    // --- inside them and count as shadowed though the light gives them nothing anyway
++    max r19.x, r26.x, r26.y
++    max r19.x, r19.x, r26.z
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
-+    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
++    mul r19.w, r19.w, r19.x
 +    mad r26.x, r19.w, r28.z, r26.x
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 0b4d107..1188331 100644
+index 0b4d107..55d030e 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 @@ -43,6 +43,15 @@
@@ -514,7 +524,7 @@ index 0b4d107..1188331 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -91,7 +100,225 @@
+@@ -91,7 +100,230 @@
      mad r1.x, r3.x, c0.w, r1.x
      add r1.x, r1.x, c1.w
      mov r0.w, c2.y
@@ -732,17 +742,22 @@ index 0b4d107..1188331 100644
 +        add r31.w, c157.y, -r18.w
 +      endif
 +    endif
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): the light the
++    // --- shadow takes, by this light's brightest channel, shows red on top; 0 adds nothing.
++    // --- Weighing by the light keeps out surfaces turned away from it, whose rays start
++    // --- inside them and count as shadowed though the light gives them nothing anyway
++    max r19.x, r26.x, r26.y
++    max r19.x, r19.x, r26.z
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
-+    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
++    mul r19.w, r19.w, r19.x
 +    mad r26.x, r19.w, r28.z, r26.x
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 86f2d47..a4d8776 100644
+index 86f2d47..f6a782b 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -77,6 +77,15 @@
@@ -761,7 +776,7 @@ index 86f2d47..a4d8776 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -305,7 +314,225 @@
+@@ -305,7 +314,230 @@
      mad r0.x, r0.x, c6.z, r0.z
      add r0.x, r0.x, c7.z
      cmp r0.x, r0.x, c2.y, r0.y
@@ -979,17 +994,22 @@ index 86f2d47..a4d8776 100644
 +        add r31.w, c157.y, -r18.w
 +      endif
 +    endif
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): the light the
++    // --- shadow takes, by this light's brightest channel, shows red on top; 0 adds nothing.
++    // --- Weighing by the light keeps out surfaces turned away from it, whose rays start
++    // --- inside them and count as shadowed though the light gives them nothing anyway
++    max r19.x, r26.x, r26.y
++    max r19.x, r19.x, r26.z
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
-+    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
++    mul r19.w, r19.w, r19.x
 +    mad r26.x, r19.w, r28.z, r26.x
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index d104b6c..d9699e7 100644
+index d104b6c..9304530 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 @@ -71,6 +71,15 @@
@@ -1008,7 +1028,7 @@ index d104b6c..d9699e7 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -268,8 +277,226 @@
+@@ -268,8 +277,231 @@
      mul r1.yzw, c83.w, c83.xxyz
      mul r1.yzw, r0.w, r1
      mul r0.xyz, r0, r1.yzww
@@ -1228,17 +1248,22 @@ index d104b6c..d9699e7 100644
 +        add r31.w, c157.y, -r18.w
 +      endif
 +    endif
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): the light the
++    // --- shadow takes, by this light's brightest channel, shows red on top; 0 adds nothing.
++    // --- Weighing by the light keeps out surfaces turned away from it, whose rays start
++    // --- inside them and count as shadowed though the light gives them nothing anyway
++    max r19.x, r26.x, r26.y
++    max r19.x, r19.x, r26.z
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
-+    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
++    mul r19.w, r19.w, r19.x
 +    mad r26.x, r19.w, r28.z, r26.x
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 963ce40..f8db8f4 100644
+index 963ce40..00713fa 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -48,6 +48,15 @@
@@ -1257,7 +1282,7 @@ index 963ce40..f8db8f4 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -137,7 +146,225 @@
+@@ -137,7 +146,230 @@
      mad r0.xyz, r2, r0, r1
      mad_sat r1.x, r4.z, r4.z, c1.y
      mov r0.w, c1.x
@@ -1475,17 +1500,22 @@ index 963ce40..f8db8f4 100644
 +        add r31.w, c157.y, -r18.w
 +      endif
 +    endif
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): the light the
++    // --- shadow takes, by this light's brightest channel, shows red on top; 0 adds nothing.
++    // --- Weighing by the light keeps out surfaces turned away from it, whose rays start
++    // --- inside them and count as shadowed though the light gives them nothing anyway
++    max r19.x, r26.x, r26.y
++    max r19.x, r19.x, r26.z
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
-+    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
++    mul r19.w, r19.w, r19.x
 +    mad r26.x, r19.w, r28.z, r26.x
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 6cdc2ec..a9765e7 100644
+index 6cdc2ec..2fe4544 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -79,6 +79,15 @@
@@ -1504,7 +1534,7 @@ index 6cdc2ec..a9765e7 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -322,8 +331,226 @@
+@@ -322,8 +331,231 @@
      mul r0.xyz, r0, r0.w
      mul r2.xyz, r3, r6
      mul r1.xyz, r1.z, r1.xyww
@@ -1724,17 +1754,22 @@ index 6cdc2ec..a9765e7 100644
 +        add r31.w, c157.y, -r18.w
 +      endif
 +    endif
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): the light the
++    // --- shadow takes, by this light's brightest channel, shows red on top; 0 adds nothing.
++    // --- Weighing by the light keeps out surfaces turned away from it, whose rays start
++    // --- inside them and count as shadowed though the light gives them nothing anyway
++    max r19.x, r26.x, r26.y
++    max r19.x, r19.x, r26.z
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
-+    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
++    mul r19.w, r19.w, r19.x
 +    mad r26.x, r19.w, r28.z, r26.x
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 21f11d1..26d20a3 100644
+index 21f11d1..d56f8bd 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -43,6 +43,15 @@
@@ -1753,7 +1788,7 @@ index 21f11d1..26d20a3 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -103,7 +112,225 @@
+@@ -103,7 +112,230 @@
      mad_sat r1.x, r1.z, r1.z, c2.x
      mad r0.xyz, r0.w, r2, r0
      mov r0.w, c2.z
@@ -1971,17 +2006,22 @@ index 21f11d1..26d20a3 100644
 +        add r31.w, c157.y, -r18.w
 +      endif
 +    endif
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): the light the
++    // --- shadow takes, by this light's brightest channel, shows red on top; 0 adds nothing.
++    // --- Weighing by the light keeps out surfaces turned away from it, whose rays start
++    // --- inside them and count as shadowed though the light gives them nothing anyway
++    max r19.x, r26.x, r26.y
++    max r19.x, r19.x, r26.z
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
-+    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
++    mul r19.w, r19.w, r19.x
 +    mad r26.x, r19.w, r28.z, r26.x
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 3a813bf..6c19355 100644
+index 3a813bf..9a2a708 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -46,6 +46,15 @@
@@ -2000,7 +2040,7 @@ index 3a813bf..6c19355 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -112,7 +121,225 @@
+@@ -112,7 +121,230 @@
      mad r0.x, r0.x, c2.x, r0.y
      add r0.x, r0.x, c2.w
      cmp r0.x, r0.x, c3.x, c3.y
@@ -2218,17 +2258,22 @@ index 3a813bf..6c19355 100644
 +        add r31.w, c157.y, -r18.w
 +      endif
 +    endif
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): the light the
++    // --- shadow takes, by this light's brightest channel, shows red on top; 0 adds nothing.
++    // --- Weighing by the light keeps out surfaces turned away from it, whose rays start
++    // --- inside them and count as shadowed though the light gives them nothing anyway
++    max r19.x, r26.x, r26.y
++    max r19.x, r19.x, r26.z
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
-+    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
++    mul r19.w, r19.w, r19.x
 +    mad r26.x, r19.w, r28.z, r26.x
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 4333137..687da75 100644
+index 4333137..43de9e7 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -46,6 +46,15 @@
@@ -2247,7 +2292,7 @@ index 4333137..687da75 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -114,7 +123,225 @@
+@@ -114,7 +123,230 @@
      add r0.x, r0.x, c3.w
      cmp r0.x, r0.x, c0.x, c0.y
      mul r0, r2, r0.x
@@ -2465,17 +2510,22 @@ index 4333137..687da75 100644
 +        add r31.w, c157.y, -r18.w
 +      endif
 +    endif
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): the light the
++    // --- shadow takes, by this light's brightest channel, shows red on top; 0 adds nothing.
++    // --- Weighing by the light keeps out surfaces turned away from it, whose rays start
++    // --- inside them and count as shadowed though the light gives them nothing anyway
++    max r19.x, r26.x, r26.y
++    max r19.x, r19.x, r26.z
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
-+    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
++    mul r19.w, r19.w, r19.x
 +    mad r26.x, r19.w, r28.z, r26.x
 +    mov oC0, r26
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 76eac90..94b4bff 100644
+index 76eac90..6ad1772 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -46,6 +46,15 @@
@@ -2494,7 +2544,7 @@ index 76eac90..94b4bff 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -116,7 +125,225 @@
+@@ -116,7 +125,230 @@
      add r0.x, -r0_abs.x, c3.w
      cmp r0.x, r0.x, -c3.z, -c3.y
      mov r1.w, -c3.z
@@ -2712,10 +2762,15 @@ index 76eac90..94b4bff 100644
 +        add r31.w, c157.y, -r18.w
 +      endif
 +    endif
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): the light the
++    // --- shadow takes, by this light's brightest channel, shows red on top; 0 adds nothing.
++    // --- Weighing by the light keeps out surfaces turned away from it, whose rays start
++    // --- inside them and count as shadowed though the light gives them nothing anyway
++    max r19.x, r26.x, r26.y
++    max r19.x, r19.x, r26.z
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
-+    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
++    mul r19.w, r19.w, r19.x
 +    mad r26.x, r19.w, r28.z, r26.x
 +    mov oC0, r26
      
