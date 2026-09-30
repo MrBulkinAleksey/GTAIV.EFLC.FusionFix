@@ -1,0 +1,44 @@
+diff --git a/win32_30_nv8/gta_ped_skin/gta_ped_skinPS5.asm b/win32_30_nv8/gta_ped_skin/gta_ped_skinPS5.asm
+index 5999a34..985de8a 100644
+--- a/win32_30_nv8/gta_ped_skin/gta_ped_skinPS5.asm
++++ b/win32_30_nv8/gta_ped_skin/gta_ped_skinPS5.asm
+@@ -50,6 +50,7 @@
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.7962975520e-43 // 485
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
++    def c155, 0.000980392157, 0, 0, 0 // FusionFix: a quarter step on the material ID marks skin
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+     def c0, 4, 0.125, 0.25, -0.5
+@@ -179,7 +180,8 @@
+     mov r20.x, -c152.w
+     add r20.x, r20.x, c39.x
+     cmp oC2.w, r20.x, c1.x, c1.y
+-    mul oC3, r3.yxxx, c52.x
++    mul r21, r3.yxxx, c52.x
++    add oC3, r21, c155 // FusionFix: skin for the scattering pass (SkinScatter in SSR.fx); every other ID is a whole step
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
+diff --git a/win32_30_nv8/gta_ped_skin_blendshape/gta_ped_skin_blendshapePS5.asm b/win32_30_nv8/gta_ped_skin_blendshape/gta_ped_skin_blendshapePS5.asm
+index f7fc938..c43d7a4 100644
+--- a/win32_30_nv8/gta_ped_skin_blendshape/gta_ped_skin_blendshapePS5.asm
++++ b/win32_30_nv8/gta_ped_skin_blendshape/gta_ped_skin_blendshapePS5.asm
+@@ -50,6 +50,7 @@
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.7262326288e-43 // 480
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
++    def c155, 0.000980392157, 0, 0, 0 // FusionFix: a quarter step on the material ID marks skin
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+     def c0, 4, 0.125, 0.25, -0.5
+@@ -179,7 +180,8 @@
+     mov r20.x, -c152.w
+     add r20.x, r20.x, c39.x
+     cmp oC2.w, r20.x, c1.x, c1.y
+-    mul oC3, r3.yxxx, c52.x
++    mul r21, r3.yxxx, c52.x
++    add oC3, r21, c155 // FusionFix: skin for the scattering pass (SkinScatter in SSR.fx); every other ID is a whole step
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x

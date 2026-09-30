@@ -166,6 +166,9 @@ Contact Shadows
 [SSRDbgGI]
 Indirect Light
 
+[SSRDbgSkin]
+Skin Scattering
+
 [Contact Shadows]
 Contact Shadows
 

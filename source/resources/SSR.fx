@@ -3,6 +3,7 @@ texture PreWaterTex2D, PostWaterTex2D;
 texture PrevDepthTex2D;
 texture SSRAccumTex2D;
 texture AlbedoTex2D, GIPrevTex2D;
+texture SceneTex2D, SkinIDTex2D, SkinLightTex2D;
 
 sampler2D DepthTex
 {
@@ -77,6 +78,38 @@ sampler2D GIPrevTex
     AddressV = Clamp;
     MinFilter = LINEAR;
     MagFilter = LINEAR;
+    MipFilter = NONE;
+};
+
+// Light scattering under the skin, see SkinScatter_PS: the lit scene before fog, the material
+// IDs (_STENCIL_BUFFER_), and the light on skin being blurred.
+sampler2D SceneTex
+{
+    Texture = <SceneTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
+};
+
+sampler2D SkinIDTex
+{
+    Texture = <SkinIDTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
+};
+
+sampler2D SkinLightTex
+{
+    Texture = <SkinLightTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
     MipFilter = NONE;
 };
 
@@ -165,6 +198,10 @@ uniform float fGIIntensity;         // multiplier on the light gathered
 uniform float fGIMaxBrightness;     // brightness a single hit may bring, so a headlight or neon sign does not flare
 uniform float fGIFeedback;          // share of last frame's indirect light a hit takes back out, 0 while there is none
 uniform float fGIOcclusion;         // 0..1, how much of the ambient the indirect light takes the place of where its rays hit
+
+// Light scattering under the skin, see SkinScatter_PS.
+uniform float4 vec4SkinStep;        // xy: screen offset of one kernel unit at view depth 1, along this pass; z: SkinScatteringWidth
+uniform float fSkinStrength;        // 0..1, how much the scattered light replaces the lit colour
 
 #ifndef GI_RAYS
 #define GI_RAYS 4
@@ -1096,6 +1133,99 @@ float4 GIUpsample_PS(float2 uv : TEXCOORD0) : COLOR0
     return weightSum > 1e-3 ? sum / weightSum : nearest;
 }
 
+// Light scattering under the skin (separable screen space subsurface scattering, Jimenez et
+// al.): once all lights are drawn, the light on skin is blurred with the profile of skin,
+// which carries red furthest and green and blue less, along x (SkinScatter_PS) and then y
+// (SkinScatterFinal_PS). What is blurred is the light, the lit colour over the diffuse colour,
+// which is multiplied back after, so pores, freckles and stubble stay sharp. Skin is where the
+// skin shaders add a quarter step to the material ID (shaders/patches/ped_skin_scattering_mask.patch).
+// The weights (x, y, z for red, green, blue, each summing to 1) and offsets (w, in half of
+// SkinScatteringWidth) are the 17 sample kernel of Jimenez's SeparableSSS for its default skin:
+// strength 0.48, 0.41, 0.28, falloff 1.0, 0.37, 0.3.
+static const float4 kSkinKernel[17] =
+{
+    float4(0.536343, 0.624624, 0.748867,  0.000000),
+    float4(0.003174, 0.000135, 0.000038, -2.000000),
+    float4(0.010039, 0.000915, 0.000276, -1.531250),
+    float4(0.014461, 0.003173, 0.001064, -1.125000),
+    float4(0.021630, 0.007946, 0.003770, -0.781250),
+    float4(0.034732, 0.015109, 0.008720, -0.500000),
+    float4(0.057106, 0.028743, 0.017284, -0.281250),
+    float4(0.058242, 0.065996, 0.041133, -0.125000),
+    float4(0.032446, 0.065672, 0.053282, -0.031250),
+    float4(0.032446, 0.065672, 0.053282,  0.031250),
+    float4(0.058242, 0.065996, 0.041133,  0.125000),
+    float4(0.057106, 0.028743, 0.017284,  0.281250),
+    float4(0.034732, 0.015109, 0.008720,  0.500000),
+    float4(0.021630, 0.007946, 0.003770,  0.781250),
+    float4(0.014461, 0.003173, 0.001064,  1.125000),
+    float4(0.010039, 0.000915, 0.000276,  1.531250),
+    float4(0.003174, 0.000135, 0.000038,  2.000000),
+};
+
+// Material IDs are whole steps of 1/255; skin's is a quarter over.
+float SkinMask(float2 uv)
+{
+    float id = tex2Dlod(SkinIDTex, float4(uv, 0, 0)).r * 255.0;
+    return abs(frac(id + 0.5) - 0.75) < 0.125 ? 1.0 : 0.0;
+}
+
+float3 SkinAlbedo(float2 uv)
+{
+    return max(tex2Dlod(AlbedoTex, float4(uv, 0, 0)).rgb, 0.03);
+}
+
+// The light on skin, with its view depth in alpha; 0 where there is no skin.
+float4 SkinLight_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    if (SkinMask(uv) <= 0.0)
+        return 0.0;
+    return float4(tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb / SkinAlbedo(uv), LinearDepth(uv));
+}
+
+// SkinLightTex blurred along vec4SkinStep.xy around centre, its own texel.
+float3 SkinBlur(float2 uv, float4 centre)
+{
+    float2 stepUV = vec4SkinStep.xy / centre.a;
+    float3 sum = centre.rgb * kSkinKernel[0].rgb;
+    [unroll]
+    for (int i = 1; i < 17; ++i)
+    {
+        float4 s = tex2Dlod(SkinLightTex, float4(uv + kSkinKernel[i].w * stepUV, 0, 0));
+        // Where it is not skin, or skin further off in depth than the light spreads (a nose
+        // past a cheek), the centre's light stands in.
+        float away = s.a > 0.0 ? saturate(abs(s.a - centre.a) / vec4SkinStep.z) : 1.0;
+        sum += kSkinKernel[i].rgb * lerp(s.rgb, centre.rgb, away);
+    }
+    return sum;
+}
+
+float4 SkinScatter_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 centre = tex2Dlod(SkinLightTex, float4(uv, 0, 0));
+    if (centre.a <= 0.0)
+        return 0.0;
+    return float4(SkinBlur(uv, centre), centre.a);
+}
+
+// The scene with the scattered light on skin, for the fog pass.
+float4 SkinScatterFinal_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 scene = tex2Dlod(SceneTex, float4(uv, 0, 0));
+    float4 centre = tex2Dlod(SkinLightTex, float4(uv, 0, 0));
+    if (centre.a <= 0.0)
+        return scene;
+    return float4(lerp(scene.rgb, SkinBlur(uv, centre) * SkinAlbedo(uv), fSkinStrength), scene.a);
+}
+
+// SSR Debug 9: skin in red over the scene in grey.
+float4 SkinDebug_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float l = dot(tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb, float3(0.2126, 0.7152, 0.0722));
+    l = l / (1.0 + l);
+    return SkinMask(uv) > 0.0 ? float4(0.4 + 0.6 * l, 0.1 * l, 0.1 * l, 1.0) : float4(l, l, l, 1.0);
+}
+
 float4 SSRDebugCopy_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     return float4(tex2Dlod(DebugTex, float4(uv, 0, 0)).rgb, 1.0);
@@ -1195,6 +1325,42 @@ technique ContactTemporal
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 ContactTemporal_PS();
+    }
+}
+
+technique SkinLight
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SkinLight_PS();
+    }
+}
+
+technique SkinScatter
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SkinScatter_PS();
+    }
+}
+
+technique SkinScatterFinal
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SkinScatterFinal_PS();
+    }
+}
+
+technique SkinDebug
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SkinDebug_PS();
     }
 }
 

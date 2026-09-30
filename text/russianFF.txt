@@ -166,6 +166,9 @@ Logitech LightSync RGB
 [SSRDbgGI]
 Непрямой свет
 
+[SSRDbgSkin]
+Рассеяние в коже
+
 [Contact Shadows]
 Контактные тени
 

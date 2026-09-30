@@ -243,6 +243,8 @@ public:
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
         D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion;
+        D3DXHANDLE SceneTex2D, SkinIDTex2D, SkinLightTex2D, vec4SkinStep, fSkinStrength;
+        D3DXHANDLE techSkinLight, techSkinScatter, techSkinScatterFinal, techSkinDebug;
     } SSREffectHandles = {};
 
     // PREF_SSR: 0 off, 1 half resolution, 2 full resolution.
@@ -291,6 +293,22 @@ public:
     // What deferred_lighting gets this frame, null while there is none.
     IDirect3DTexture9* GIResult = nullptr;
     bool bGIBound = false;
+
+    // Light scattering under the skin (SkinScatter_PS in SSR.fx), as the fog pass begins: the
+    // light on skin with its view depth into SkinLightTex[0], blurred along x into [1], and along
+    // y, with the rest of the scene, back into [0], which the fog pass reads instead of the scene.
+    // Skin is where shaders/patches/ped_skin_scattering_mask.patch puts a quarter step on the
+    // material ID the G-buffer pass writes to _STENCIL_BUFFER_.
+    bool bSkinScattering = true;
+    float fSkinScatteringWidth = 0.01f;
+    float fSkinScatteringStrength = 1.0f;
+    static constexpr int kSkinDebugMode = 9;
+    rage::grcRenderTargetPC* mMaterialIdRT = nullptr;
+    rage::grcRenderTargetPC* SkinLightTex[2] = {};
+    IDirect3DSurface9* SkinLightSurf[2] = {};
+    // The lighting phase's camera, which the fog pass has not: |_11| and |_22| of the projection,
+    // near and far clip; all 0 until the lighting phase has run.
+    float SkinCamera[4] = {};
     float fContactShadowMaxDistance = 60.0f;
     float fContactShadowIntensity = 1.0f;
     bool bContactShadowStepJitter = true;
@@ -882,6 +900,15 @@ public:
                 h.GIPrevTex2D = SSREffect->GetParameterByName(nullptr, "GIPrevTex2D");
                 h.fGIFeedback = SSREffect->GetParameterByName(nullptr, "fGIFeedback");
                 h.fGIOcclusion = SSREffect->GetParameterByName(nullptr, "fGIOcclusion");
+                h.SceneTex2D = SSREffect->GetParameterByName(nullptr, "SceneTex2D");
+                h.SkinIDTex2D = SSREffect->GetParameterByName(nullptr, "SkinIDTex2D");
+                h.SkinLightTex2D = SSREffect->GetParameterByName(nullptr, "SkinLightTex2D");
+                h.vec4SkinStep = SSREffect->GetParameterByName(nullptr, "vec4SkinStep");
+                h.fSkinStrength = SSREffect->GetParameterByName(nullptr, "fSkinStrength");
+                h.techSkinLight = SSREffect->GetTechniqueByName("SkinLight");
+                h.techSkinScatter = SSREffect->GetTechniqueByName("SkinScatter");
+                h.techSkinScatterFinal = SSREffect->GetTechniqueByName("SkinScatterFinal");
+                h.techSkinDebug = SSREffect->GetTechniqueByName("SkinDebug");
             }
         }
 
@@ -1034,6 +1061,9 @@ public:
         fGIIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightIntensity", 1.0f), 0.0f, 8.0f);
         fGIMaxBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxBrightness", 4.0f), 0.05f, 8.0f);
         fGIOcclusion = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightOcclusion", 1.0f), 0.0f, 1.0f);
+        bSkinScattering = iniReader.ReadInteger("POSTFX", "SkinScattering", 1) != 0;
+        fSkinScatteringWidth = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringWidth", 0.01f), 0.001f, 0.1f);
+        fSkinScatteringStrength = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringStrength", 1.0f), 0.0f, 1.0f);
         fGIRayLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", 4.0f), 0.1f, 20.0f);
         fGIThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightThickness", 0.5f), 0.01f, 10.0f);
         fGIMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxDistance", 60.0f), 1.0f, 1000.0f);
@@ -1299,6 +1329,15 @@ private:
         SAFE_RELEASE(PostFxResources.GIAccumSurf[1]);
         SAFE_RELEASE(PostFxResources.GIFullSurf);
         PostFxResources.GIResult = nullptr;
+        for (int i = 0; i < 2; ++i)
+        {
+            SAFE_RELEASE(PostFxResources.SkinLightSurf[i]);
+            if (PostFxResources.SkinLightTex[i])
+            {
+                PostFxResources.SkinLightTex[i]->Destroy();
+                PostFxResources.SkinLightTex[i] = nullptr;
+            }
+        }
         PostFxResources.bGIAccumValid = false;
         PostFxResources.bGIPrevViewProjValid = false;
         PostFxResources.bSSRDebugValid = false;
@@ -1317,6 +1356,7 @@ private:
         // PostFxResources.mSpecularAoRT    =nullptr;
         PostFxResources.mNormalRT = nullptr;
         PostFxResources.mDiffuseRT = nullptr;
+        PostFxResources.mMaterialIdRT = nullptr;
         // PostFxResources.mSpecularRT      =nullptr;
         // PostFxResources.mDepthRT         =nullptr;
         // PostFxResources.mStencilRT       =nullptr;
@@ -1374,7 +1414,9 @@ private:
         PostFxResources.mDiffuseRT = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_0_");
         PostFxResources.mSpecularRT = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_2_");
         PostFxResources.mDepthRT = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_3_");
-        // PostFxResources.mStencilRT      = rage::grcTextureFactoryPC::GetRTByName( "_STENCIL_BUFFER_"      );
+        // Not the stencil buffer: the G-buffer pass writes each material's ID (whole steps of 1/255)
+        // to it, as R32F or R16F, for the lighting and fog shaders.
+        PostFxResources.mMaterialIdRT = rage::grcTextureFactoryPC::GetRTByName("_STENCIL_BUFFER_");
         // PostFxResources.mCascadeAtlasRT = rage::grcTextureFactoryPC::GetRTByName( "CASCADE_ATLAS"         );
         PostFxResources.mFullScreenRT = rage::grcTextureFactoryPC::GetRTByName("FullScreenCopy");
         // PostFxResources.mFullScreenRT2  = rage::grcTextureFactoryPC::GetRTByName( "FullScreenCopy2"       );
@@ -1545,6 +1587,13 @@ private:
                     PostFxResources.GIFullTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.GIFullSurf);
             }
 
+            for (int i = 0; i < 2; ++i)
+            {
+                PostFxResources.SkinLightTex[i] = CreateEmptyRT(i ? "SkinLightTex1" : "SkinLightTex0", 3, width, height, 64, &aoDesc);
+                if (PostFxResources.SkinLightTex[i] && PostFxResources.SkinLightTex[i]->mD3DTexture)
+                    PostFxResources.SkinLightTex[i]->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SkinLightSurf[i]);
+            }
+
             PostFxResources.SSRDebugTex = CreateEmptyRT("SSRDebugTex", 3, width, height, 64, &aoDesc);
             if (PostFxResources.SSRDebugTex && PostFxResources.SSRDebugTex->mD3DTexture)
                 PostFxResources.SSRDebugTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRDebugSurf);
@@ -1654,6 +1703,12 @@ private:
                 }
             }
 
+            // The lit scene, sampler 1 of the fog pass, with the light scattered under the skin
+            // if that runs; the fog, the copy below and SSR's history all take it.
+            IDirect3DBaseTexture9* scene = prevTex[1];
+            if (auto skin = RenderSkinScattering(pDevice, prevTex[1]))
+                scene = skin;
+
             if (PostFxResources.FullScreenTex_temp1)
             {
                 // Get custom rendertarget D3D surfaces
@@ -1671,7 +1726,7 @@ private:
                     pDevice->SetRenderTarget(0, PostFxResources.HDRFullScreenSurface);
                     pDevice->SetDepthStencilSurface(nullptr);
 
-                    pDevice->SetTexture(0, prevTex[1]);
+                    pDevice->SetTexture(0, scene);
 
                     pDevice->SetPixelShader(PostFxResources.Blit_PS);
 
@@ -1709,7 +1764,9 @@ private:
 
                     pDevice->SetPixelShader(prevPS);
 
+                    pDevice->SetTexture(1, scene);
                     hbDrawPrimitivePostFX.fun();
+                    pDevice->SetTexture(1, prevTex[1]);
                 }
             }
         }
@@ -3417,6 +3474,12 @@ private:
         DWORD result = RenderPedAndVehicleFakeShadowsInlineHook.unsafe_ccall<DWORD>(a1);
 
         auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (auto vp = rage::GetCurrentViewport())
+        {
+            const D3DMATRIX& proj = *(const D3DMATRIX*)vp->mProjectionMatrix;
+            const float camera[4] = { fabsf(proj._11), fabsf(proj._22), vp->mNearClip, vp->mFarClip };
+            memcpy(PostFxResources.SkinCamera, camera, sizeof(camera));
+        }
         ProfilerMark(pDevice, kProfAO, true);
         RenderAmbientOcclusion();
         ProfilerMark(pDevice, kProfAO, false);
@@ -3894,6 +3957,129 @@ private:
         SAFE_RELEASE(ds);
         SAFE_RELEASE(oldDecl);
         SAFE_RELEASE(oldVB);
+    }
+
+    // As the fog pass begins, once every light is drawn: scatters the light under the skin of
+    // scene, the lit scene the fog pass reads (see SkinLight_PS in SSR.fx), and returns the scene
+    // with it, or null when it does not run. SSR Debug 9 shows what counts as skin.
+    static IDirect3DBaseTexture9* RenderSkinScattering(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* scene)
+    {
+        auto& R = PostFxResources;
+        auto& h = R.SSREffectHandles;
+        ID3DXEffect* effect = R.SSREffect;
+        const bool scatter = R.bSkinScattering && R.fSkinScatteringStrength > 0.0f;
+        const bool debug = R.SSRDebugMode() == R.kSkinDebugMode && R.SSRDebugSurf && h.techSkinDebug;
+        if ((!scatter && !debug) || !pDevice || !effect || !scene || scene->GetType() != D3DRTYPE_TEXTURE ||
+            !h.techSkinLight || !h.techSkinScatter || !h.techSkinScatterFinal || !R.mMaterialIdRT || !R.mMaterialIdRT->mD3DTexture ||
+            !R.mDiffuseRT || !R.mDiffuseRT->mD3DTexture || !R.mDepthRT || !R.mDepthRT->mD3DTexture ||
+            !R.SkinLightSurf[0] || !R.SkinLightSurf[1] || R.SkinCamera[2] <= 0.0f)
+            return nullptr;
+
+        D3DSURFACE_DESC sceneDesc = {}, lightDesc = {};
+        if (FAILED(static_cast<IDirect3DTexture9*>(scene)->GetLevelDesc(0, &sceneDesc)) || FAILED(R.SkinLightSurf[0]->GetDesc(&lightDesc)) ||
+            sceneDesc.Width != lightDesc.Width || sceneDesc.Height != lightDesc.Height)
+            return nullptr;
+        const float width = float(lightDesc.Width);
+        const float height = float(lightDesc.Height);
+
+        effect->SetTexture(h.SceneTex2D, scene);
+        effect->SetTexture(h.SkinIDTex2D, R.mMaterialIdRT->mD3DTexture);
+        effect->SetTexture(h.AlbedoTex2D, R.mDiffuseRT->mD3DTexture);
+        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        effect->SetFloat(h.fNearPlane, R.SkinCamera[2]);
+        effect->SetFloat(h.fFarDivNear, R.SkinCamera[3] / R.SkinCamera[2]);
+        effect->SetFloat(h.fSkinStrength, R.fSkinScatteringStrength);
+
+        IDirect3DSurface9* rt0 = nullptr;
+        IDirect3DSurface9* ds = nullptr;
+        IDirect3DVertexDeclaration9* oldDecl = nullptr;
+        IDirect3DVertexBuffer9* oldVB = nullptr;
+        UINT oldOffset = 0, oldStride = 0;
+        DWORD oldFVF = 0;
+        D3DVIEWPORT9 oldViewport;
+        pDevice->GetFVF(&oldFVF);
+        pDevice->GetVertexDeclaration(&oldDecl);
+        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        pDevice->GetRenderTarget(0, &rt0);
+        pDevice->GetDepthStencilSurface(&ds);
+        pDevice->GetViewport(&oldViewport);
+
+        IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
+        DWORD savedRenderStates[std::size(kSSRRenderStates)] = {};
+        DWORD savedSamplerStates[kSSRSamplerSlots][std::size(kSSRSamplerStates)] = {};
+        for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+            pDevice->GetTexture(slot, &oldTextures[slot]);
+        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+        for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
+        {
+            pDevice->GetRenderState(kSSRRenderStates[i].state, &savedRenderStates[i]);
+            pDevice->SetRenderState(kSSRRenderStates[i].state, kSSRRenderStates[i].value);
+        }
+        for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+            {
+                pDevice->GetSamplerState(slot, kSSRSamplerStates[i].state, &savedSamplerStates[slot][i]);
+                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
+            }
+
+        pDevice->SetDepthStencilSurface(nullptr);
+        pDevice->SetStreamSource(0, nullptr, 0, 0);
+        pDevice->SetVertexDeclaration(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        D3DVIEWPORT9 vpDesc = {};
+        vpDesc.Width = DWORD(width);
+        vpDesc.Height = DWORD(height);
+        vpDesc.MaxZ = 1.0f;
+        pDevice->SetViewport(&vpDesc);
+
+        IDirect3DBaseTexture9* result = nullptr;
+        if (scatter)
+        {
+            DrawEffectPass(pDevice, effect, h.techSkinLight, R.SkinLightSurf[0], width, height);
+            // A kernel unit is half SkinScatteringWidth, and a metre at view depth 1 spans _11 / 2
+            // of the screen across and _22 / 2 down.
+            const float unit = R.fSkinScatteringWidth * 0.25f;
+            D3DXVECTOR4 step(R.SkinCamera[0] * unit, 0.0f, R.fSkinScatteringWidth, 0.0f);
+            effect->SetVector(h.vec4SkinStep, &step);
+            effect->SetTexture(h.SkinLightTex2D, R.SkinLightTex[0]->mD3DTexture);
+            DrawEffectPass(pDevice, effect, h.techSkinScatter, R.SkinLightSurf[1], width, height);
+            step = D3DXVECTOR4(0.0f, R.SkinCamera[1] * unit, R.fSkinScatteringWidth, 0.0f);
+            effect->SetVector(h.vec4SkinStep, &step);
+            effect->SetTexture(h.SkinLightTex2D, R.SkinLightTex[1]->mD3DTexture);
+            DrawEffectPass(pDevice, effect, h.techSkinScatterFinal, R.SkinLightSurf[0], width, height);
+            result = R.SkinLightTex[0]->mD3DTexture;
+        }
+
+        if (debug)
+        {
+            DrawEffectPass(pDevice, effect, h.techSkinDebug, R.SSRDebugSurf, width, height);
+            R.bSSRDebugValid = true;
+        }
+
+        for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
+            pDevice->SetRenderState(kSSRRenderStates[i].state, savedRenderStates[i]);
+        for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, savedSamplerStates[slot][i]);
+        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+        for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+        {
+            pDevice->SetTexture(slot, oldTextures[slot]);
+            SAFE_RELEASE(oldTextures[slot]);
+        }
+        pDevice->SetRenderTarget(0, rt0);
+        pDevice->SetDepthStencilSurface(ds);
+        pDevice->SetViewport(&oldViewport);
+        pDevice->SetFVF(oldFVF);
+        pDevice->SetVertexDeclaration(oldDecl);
+        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
+        SAFE_RELEASE(rt0);
+        SAFE_RELEASE(ds);
+        SAFE_RELEASE(oldDecl);
+        SAFE_RELEASE(oldVB);
+        return result;
     }
 
     // The game's light shaft loop (CE 0xAC2A09) draws a shaft with the shadowed shaft technique
