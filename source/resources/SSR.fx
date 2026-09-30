@@ -809,15 +809,18 @@ float4 SSRTemporalDebug(float2 uv, float2 vPos)
     return float4(lerp(current, history, fTemporalBlend), 1.0);
 }
 
-// Debug modes 8 to 10 also draw this into a 9x1 target that LogSSRPass reads back: for nine
-// spots on a 3x3 grid over the screen, the view depth, where HistoryUV puts the spot in last
-// frame, and last frame's depth there. In a still scene that depth is the spot's own depth as
-// last frame's camera saw it, if the history is taken from the right place. x is -1 for sky.
+// Debug modes 8 to 10 also draw this into a 9x2 target that LogSSRPass reads back. Row 0, for
+// nine spots on a 3x3 grid over the screen: the view depth, where HistoryUV puts the spot in
+// last frame, and last frame's depth there. In a still scene that depth is the spot's own
+// depth as last frame's camera saw it, if the history is taken from the right place. x is -1
+// for sky. Row 1: DepthTex at the spot as stored, all four channels.
 float4 SSRProbe_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     float i = floor(vPos.x + 0.25);
     float2 p = float2(0.2 + 0.3 * fmod(i, 3.0), 0.2 + 0.3 * floor(i / 3.0));
     p = (floor(p / vec2InvViewportSize) + 0.5) * vec2InvViewportSize;
+    if (vPos.y > 0.75)
+        return tex2Dlod(DepthTex, float4(p, 0, 0));
     if (tex2Dlod(DepthTex, float4(p, 0, 0)).r >= 0.9999)
         return float4(-1.0, 0.0, 0.0, 0.0);
     float z = LinearDepth(p);

@@ -211,7 +211,7 @@ public:
     // GTAIV.exe, see LogSSRPass. nPostFXFrame counts NewPostFX, which runs once a frame.
     FILE* SSRLog = nullptr;
     int nSSRLogLines = 0;
-    // 9x1 target for SSRProbe_PS in SSR.fx and its copy in system memory, see ReadSSRProbes.
+    // 9x2 target for SSRProbe_PS in SSR.fx and its copy in system memory, see ReadSSRProbes.
     IDirect3DSurface9* SSRProbeSurf = nullptr;
     IDirect3DSurface9* SSRProbeSysSurf = nullptr;
     uint32_t nPostFXFrame = 0;
@@ -2148,18 +2148,19 @@ private:
         R.SSRPrevGameView = gameView;
     }
 
-    // Draws SSRProbe_PS into the 9x1 target and reads it back; the effect still holds this
-    // frame's SSR parameters. Reading back waits for the GPU, which only the debug modes do.
-    static bool ReadSSRProbes(IDirect3DDevice9* pDevice, D3DXVECTOR4 probes[9])
+    // Draws SSRProbe_PS into the 9x2 target and reads it back, row 0 into probes and row 1 into
+    // raw; the effect still holds this frame's SSR parameters. Reading back waits for the GPU,
+    // which only the debug modes do.
+    static bool ReadSSRProbes(IDirect3DDevice9* pDevice, D3DXVECTOR4 probes[9], D3DXVECTOR4 raw[9])
     {
         auto& R = PostFxResources;
         auto& h = R.SSREffectHandles;
         if (!h.techSSRProbe)
             return false;
-        if (!R.SSRProbeSurf && FAILED(pDevice->CreateRenderTarget(9, 1, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE,
+        if (!R.SSRProbeSurf && FAILED(pDevice->CreateRenderTarget(9, 2, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE,
                                                                   &R.SSRProbeSurf, nullptr)))
             return false;
-        if (!R.SSRProbeSysSurf && FAILED(pDevice->CreateOffscreenPlainSurface(9, 1, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM,
+        if (!R.SSRProbeSysSurf && FAILED(pDevice->CreateOffscreenPlainSurface(9, 2, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM,
                                                                               &R.SSRProbeSysSurf, nullptr)))
             return false;
 
@@ -2167,9 +2168,9 @@ private:
         const ScreenVertex quad[4] =
         {
             { -0.5f, -0.5f, 0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,  0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+            { -0.5f,  1.5f, 0.0f, 1.0f, 0.0f, 1.0f },
             {  8.5f, -0.5f, 0.0f, 1.0f, 1.0f, 0.0f },
-            {  8.5f,  0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+            {  8.5f,  1.5f, 0.0f, 1.0f, 1.0f, 1.0f }
         };
         pDevice->SetRenderTarget(0, R.SSRProbeSurf);
         UINT passes = 0;
@@ -2187,6 +2188,7 @@ private:
         if (FAILED(R.SSRProbeSysSurf->LockRect(&locked, nullptr, D3DLOCK_READONLY)))
             return false;
         memcpy(probes, locked.pBits, 9 * sizeof(D3DXVECTOR4));
+        memcpy(raw, (const uint8_t*)locked.pBits + locked.Pitch, 9 * sizeof(D3DXVECTOR4));
         R.SSRProbeSysSurf->UnlockRect();
         return true;
     }
@@ -2198,7 +2200,9 @@ private:
     // Then for each of the nine probes of SSRProbe_PS, in pixels of the SSR pass (passWidth by
     // passHeight): z its view depth, gpuX/Y how far the shader moves it into last frame,
     // cpuX/Y how far the same maths moves it here, prevZ last frame's depth where the shader
-    // put it and expZ the depth it should find there.
+    // put it and expZ the depth it should find there, and DepthTex there as stored (raw).
+    // Before them, the D3DFORMAT and size of DepthTex, of last frame's depth copy and of the
+    // depth buffer bound when SSR runs.
     static void LogSSRPass(IDirect3DDevice9* pDevice, const rage::grcViewport* vp, const D3DMATRIX& proj, float width,
                            float height, float passWidth, float passHeight, const D3DXVECTOR4 rows[4])
     {
@@ -2227,9 +2231,10 @@ private:
                 return;
             }
             fprintf(R.SSRLog, "frame,ms,viewport,width,height,near,far,fwdX,fwdY,fwdZ,posX,posY,posZ,p11,p22,p31,p32,"
-                              "accumValid,accumIndex,shiftX,shiftY");
+                              "accumValid,accumIndex,shiftX,shiftY,depthTex,depthFmt,depthW,depthH,prevDepthFmt,dsFmt,dsW,dsH");
             for (int k = 0; k < 9; ++k)
-                fprintf(R.SSRLog, ",z%d,gpuX%d,gpuY%d,cpuX%d,cpuY%d,prevZ%d,expZ%d", k, k, k, k, k, k, k);
+                fprintf(R.SSRLog, ",z%d,gpuX%d,gpuY%d,cpuX%d,cpuY%d,prevZ%d,expZ%d,rawR%d,rawG%d,rawB%d,rawA%d",
+                        k, k, k, k, k, k, k, k, k, k, k);
             fprintf(R.SSRLog, "\n");
         }
 
@@ -2260,17 +2265,33 @@ private:
                 viewInv[2][0], viewInv[2][1], viewInv[2][2], viewInv[3][0], viewInv[3][1], viewInv[3][2],
                 proj._11, proj._22, proj._31, proj._32, R.bSSRAccumValid ? 1 : 0, R.nSSRAccumIndex, shiftX, shiftY);
 
+        D3DSURFACE_DESC depthDesc = {}, prevDepthDesc = {}, dsDesc = {};
+        IDirect3DTexture9* depthTex = R.mDepthRT ? R.mDepthRT->mD3DTexture : nullptr;
+        if (depthTex)
+            depthTex->GetLevelDesc(0, &depthDesc);
+        if (R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture)
+            R.PreAlphaDepthCopyRT->mD3DTexture->GetLevelDesc(0, &prevDepthDesc);
+        IDirect3DSurface9* ds = nullptr;
+        pDevice->GetDepthStencilSurface(&ds);
+        if (ds)
+        {
+            ds->GetDesc(&dsDesc);
+            ds->Release();
+        }
+        fprintf(R.SSRLog, ",%p,%u,%u,%u,%u,%u,%u,%u", (const void*)depthTex, unsigned(depthDesc.Format), depthDesc.Width,
+                depthDesc.Height, unsigned(prevDepthDesc.Format), unsigned(dsDesc.Format), dsDesc.Width, dsDesc.Height);
+
         // SSR.fx's reconstruction basis for the pass size, as setPassSize sets it.
         const float projInfo[4] = { -2.0f / (passWidth * proj._11), -2.0f / (passHeight * proj._22),
                                     (1.0f - proj._31) / proj._11, (1.0f + proj._32) / proj._22 };
-        D3DXVECTOR4 probes[9] = {};
-        const bool probed = ReadSSRProbes(pDevice, probes);
+        D3DXVECTOR4 probes[9] = {}, raw[9] = {};
+        const bool probed = ReadSSRProbes(pDevice, probes, raw);
         for (int k = 0; k < 9; ++k)
         {
             const D3DXVECTOR4& pr = probes[k];
             if (!probed || pr.x <= 0.0f)
             {
-                fprintf(R.SSRLog, ",,,,,,,");
+                fprintf(R.SSRLog, ",,,,,,,,%.6f,%.6f,%.6f,%.6f", raw[k].x, raw[k].y, raw[k].z, raw[k].w);
                 continue;
             }
             // The probe's pixel centre, as SSRProbe_PS picks it.
@@ -2279,8 +2300,8 @@ private:
             reproject((px * projInfo[0] + projInfo[2]) * pr.x, (py * projInfo[1] + projInfo[3]) * pr.x, pr.x, clip);
             const float cpuX = (clip[0] / clip[3] * 0.5f + 0.5f) * passWidth - px;
             const float cpuY = (-clip[1] / clip[3] * 0.5f + 0.5f) * passHeight - py;
-            fprintf(R.SSRLog, ",%.3f,%.2f,%.2f,%.2f,%.2f,%.3f,%.3f", pr.x, pr.y * passWidth - px, pr.z * passHeight - py,
-                    cpuX, cpuY, pr.w, clip[3]);
+            fprintf(R.SSRLog, ",%.3f,%.2f,%.2f,%.2f,%.2f,%.3f,%.3f,%.6f,%.6f,%.6f,%.6f", pr.x, pr.y * passWidth - px,
+                    pr.z * passHeight - py, cpuX, cpuY, pr.w, clip[3], raw[k].x, raw[k].y, raw[k].z, raw[k].w);
         }
         fprintf(R.SSRLog, "\n");
         fflush(R.SSRLog);
