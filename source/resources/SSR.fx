@@ -200,8 +200,8 @@ uniform float fGIFeedback;          // share of last frame's indirect light a hi
 uniform float fGIOcclusion;         // 0..1, how much of the ambient the indirect light takes the place of where its rays hit
 
 // Light scattering under the skin, see SkinScatter_PS.
-uniform float4 vec4SkinStep;        // xy: screen offset of one kernel unit at view depth 1, along this pass; z: SkinScatteringWidth
-uniform float fSkinStrength;        // 0..1, how much the scattered light replaces the lit colour
+uniform float4 vec4SkinStep;        // xy: screen offset of one kernel unit at view depth 1, along this pass; w: metres in one kernel unit
+uniform float fSkinStrength;        // 0..2, the share of light that scatters, times the skin profile's
 
 #ifndef GI_RAYS
 #define GI_RAYS 4
@@ -1192,9 +1192,11 @@ float3 SkinBlur(float2 uv, float4 centre)
     for (int i = 1; i < 17; ++i)
     {
         float4 s = tex2Dlod(SkinLightTex, float4(uv + kSkinKernel[i].w * stepUV, 0, 0));
-        // Where it is not skin, or skin further off in depth than the light spreads (a nose
-        // past a cheek), the centre's light stands in.
-        float away = s.a > 0.0 ? saturate(abs(s.a - centre.a) / vec4SkinStep.z) : 1.0;
+        // Skin keeps its light across slopes of up to about 75 degrees to the view, give or take
+        // what the half float depth holds; a bigger step in depth is another surface (a nose
+        // past a cheek), and there, as where it is not skin, the centre's light stands in.
+        float lateral = abs(kSkinKernel[i].w) * vec4SkinStep.w;
+        float away = s.a > 0.0 ? saturate(abs(s.a - centre.a) / (4.0 * lateral + 0.005 + 0.002 * centre.a) - 1.0) : 1.0;
         sum += kSkinKernel[i].rgb * lerp(s.rgb, centre.rgb, away);
     }
     return sum;
@@ -1208,7 +1210,8 @@ float4 SkinScatter_PS(float2 uv : TEXCOORD0) : COLOR0
     return float4(SkinBlur(uv, centre), centre.a);
 }
 
-// The scene with the scattered light on skin, for the fog pass.
+// The scene with the scattered light on skin, for the fog pass. fSkinStrength above 1 takes more
+// light out of the centre than the profile does, up to 2, where red keeps 7% of its own.
 float4 SkinScatterFinal_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     float4 scene = tex2Dlod(SceneTex, float4(uv, 0, 0));
@@ -1218,12 +1221,17 @@ float4 SkinScatterFinal_PS(float2 uv : TEXCOORD0) : COLOR0
     return float4(lerp(scene.rgb, SkinBlur(uv, centre) * SkinAlbedo(uv), fSkinStrength), scene.a);
 }
 
-// SSR Debug 9: skin in red over the scene in grey.
+// SSR Debug 9: skin in red over the scene in grey, and yellow where the scattering changes the
+// scene, full at a quarter; SkinLightTex holds the scene after it, or the scene while it is off.
 float4 SkinDebug_PS(float2 uv : TEXCOORD0) : COLOR0
 {
-    float l = dot(tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb, float3(0.2126, 0.7152, 0.0722));
+    float3 scene = tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb;
+    float3 result = tex2Dlod(SkinLightTex, float4(uv, 0, 0)).rgb;
+    float l = dot(scene, float3(0.2126, 0.7152, 0.0722));
+    float change = saturate(4.0 * dot(abs(result - scene), 1.0) / (dot(scene, 1.0) + 1e-3));
     l = l / (1.0 + l);
-    return SkinMask(uv) > 0.0 ? float4(0.4 + 0.6 * l, 0.1 * l, 0.1 * l, 1.0) : float4(l, l, l, 1.0);
+    float3 c = SkinMask(uv) > 0.0 ? float3(0.4 + 0.6 * l, 0.1 * l, 0.1 * l) : l.xxx;
+    return float4(lerp(c, float3(1.0, 1.0, 0.0), change), 1.0);
 }
 
 float4 SSRDebugCopy_PS(float2 uv : TEXCOORD0) : COLOR0

@@ -300,7 +300,7 @@ public:
     // Skin is where shaders/patches/ped_skin_scattering_mask.patch puts a quarter step on the
     // material ID the G-buffer pass writes to _STENCIL_BUFFER_.
     static bool SkinScatteringEnabled() { static auto p = FusionFixSettings.GetRef("PREF_SKIN_SSS"); return p && p->get() != 0; }
-    float fSkinScatteringWidth = 0.01f;
+    float fSkinScatteringWidth = 0.03f;
     float fSkinScatteringStrength = 1.0f;
     static constexpr int kSkinDebugMode = 9;
     rage::grcRenderTargetPC* mMaterialIdRT = nullptr;
@@ -1061,8 +1061,8 @@ public:
         fGIIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightIntensity", 1.0f), 0.0f, 8.0f);
         fGIMaxBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxBrightness", 4.0f), 0.05f, 8.0f);
         fGIOcclusion = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightOcclusion", 1.0f), 0.0f, 1.0f);
-        fSkinScatteringWidth = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringWidth", 0.01f), 0.001f, 0.1f);
-        fSkinScatteringStrength = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringStrength", 1.0f), 0.0f, 1.0f);
+        fSkinScatteringWidth = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringWidth", 0.03f), 0.001f, 0.1f);
+        fSkinScatteringStrength = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringStrength", 1.0f), 0.0f, 2.0f);
         fGIRayLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", 4.0f), 0.1f, 20.0f);
         fGIThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightThickness", 0.5f), 0.01f, 10.0f);
         fGIMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxDistance", 60.0f), 1.0f, 1000.0f);
@@ -4039,11 +4039,11 @@ private:
             // A kernel unit is half SkinScatteringWidth, and a metre at view depth 1 spans _11 / 2
             // of the screen across and _22 / 2 down.
             const float unit = R.fSkinScatteringWidth * 0.25f;
-            D3DXVECTOR4 step(R.SkinCamera[0] * unit, 0.0f, R.fSkinScatteringWidth, 0.0f);
+            D3DXVECTOR4 step(R.SkinCamera[0] * unit, 0.0f, 0.0f, R.fSkinScatteringWidth * 0.5f);
             effect->SetVector(h.vec4SkinStep, &step);
             effect->SetTexture(h.SkinLightTex2D, R.SkinLightTex[0]->mD3DTexture);
             DrawEffectPass(pDevice, effect, h.techSkinScatter, R.SkinLightSurf[1], width, height);
-            step = D3DXVECTOR4(0.0f, R.SkinCamera[1] * unit, R.fSkinScatteringWidth, 0.0f);
+            step = D3DXVECTOR4(0.0f, R.SkinCamera[1] * unit, 0.0f, R.fSkinScatteringWidth * 0.5f);
             effect->SetVector(h.vec4SkinStep, &step);
             effect->SetTexture(h.SkinLightTex2D, R.SkinLightTex[1]->mD3DTexture);
             DrawEffectPass(pDevice, effect, h.techSkinScatterFinal, R.SkinLightSurf[0], width, height);
@@ -4052,6 +4052,7 @@ private:
 
         if (debug)
         {
+            effect->SetTexture(h.SkinLightTex2D, result ? result : scene);
             DrawEffectPass(pDevice, effect, h.techSkinDebug, R.SSRDebugSurf, width, height);
             R.bSSRDebugValid = true;
         }
