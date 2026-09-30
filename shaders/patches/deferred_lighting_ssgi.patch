@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-index 59d892a..d5d28e7 100644
+index 59d892a..afe31a6 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 @@ -109,6 +109,7 @@
@@ -10,15 +10,23 @@ index 59d892a..d5d28e7 100644
      texld r1, v0, s1
      mul r2.xyz, r1.w, c0.yzww
      frc r2.xyz, r2
-@@ -453,6 +454,7 @@
+@@ -453,6 +454,8 @@
      mov r27.xy, v0
      mov r27.zw, c110.w
      texldl r29, r27, s9
 +    texldl r28, r27, s8 // FusionFix indirect light, added to the ambient term below
++    add r28.w, c110.y, -r28.w // FusionFix: how much of the ambient indirect light leaves in place
      add r29.x, c110.y, -r29.x
      mul r0.y, r0.y, r29.x
      // ----------------------------------------------------------------------------------------------------------------------------------------------
-@@ -537,6 +539,7 @@
+@@ -531,12 +534,14 @@
+       
+       mad r1.yzw, r2.xxyz, r1.y, c37.xxyz
+       mul r1.yzw, r4.z, r1
++      mul r1.yzw, r1, r28.w // FusionFix: indirect light takes the ambient's place where its rays hit
+       // add r1.x, r1.x, -c1.x
+       // mul_sat r1.x, r1.x, c2.x
+       mad_sat r1.x, r1.x, c220.z, c220.w
        cmp r1.x, -r21_abs.x, r1.x, r21.y // tree half lambert toggle
        mul r2.xyz, r6, r1.x
        mad r1.xyz, r2, r0.y, r1.yzww
@@ -26,7 +34,11 @@ index 59d892a..d5d28e7 100644
        texld r2, v0, s0
        mad oC0.xyz, r2, r1, r0.xzww
        mov oC0.w, c2.w
-@@ -598,6 +601,7 @@
+@@ -595,9 +600,11 @@
+       mul r0.w, c1.x, r0.z
+       
+       mul r0.xyz, r2.w, r1.yzw
++      mul r0.xyz, r0.xyz, r28.w // FusionFix: indirect light takes the ambient's place where its rays hit
        //diffuseLight * shadow + r0
        mad r0.xyz, r5.xyz, r8.x, r0.xyz
        
@@ -35,7 +47,7 @@ index 59d892a..d5d28e7 100644
        texld r2.xyz, v0, s0
        mul r0.xyz, r0.xyz, r2.xyz
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-index 5a42e39..c48dda4 100644
+index 5a42e39..4607e9c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 @@ -110,6 +110,7 @@
@@ -46,15 +58,23 @@ index 5a42e39..c48dda4 100644
      texld r1, v0, s1
      mul r2.xyz, r1.w, c1
      frc r2.xyz, r2
-@@ -454,6 +455,7 @@
+@@ -454,6 +455,8 @@
      mov r27.xy, v0
      mov r27.zw, c110.w
      texldl r29, r27, s9
 +    texldl r28, r27, s8 // FusionFix indirect light, added to the ambient term below
++    add r28.w, c110.y, -r28.w // FusionFix: how much of the ambient indirect light leaves in place
      add r29.x, c110.y, -r29.x
      mul r0.y, r0.y, r29.x
      // ----------------------------------------------------------------------------------------------------------------------------------------------
-@@ -554,6 +556,7 @@
+@@ -548,12 +551,14 @@
+       
+       mad r2.xyz, r2, r1.y, c37
+       mul r2.xyz, r4.z, r2
++      mul r2.xyz, r2, r28.w // FusionFix: indirect light takes the ambient's place where its rays hit
+       // add r1.x, r1.x, -c1.w
+       // mul_sat r1.x, r1.x, c4.x
+       mad_sat r1.x, r1.x, c220.z, c220.w
        cmp r1.x, -r21_abs.x, r1.x, r21.y // tree half lambert toggle
        mul r1.xyw, r5.yzzw, r1.x
        mad r1.xyw, r1, r0.y, r2.xyzz
@@ -62,7 +82,11 @@ index 5a42e39..c48dda4 100644
        texld r2, v0, s0
        mul r2.xyz, r1.z, r2
        mad oC0.xyz, r2, r1.xyww, r0.xzww
-@@ -616,6 +619,7 @@
+@@ -613,9 +618,11 @@
+       mul r0.w, c1.w, r0.z
+       
+       mul r0.xyz, r2.w, r1.yzw
++      mul r0.xyz, r0.xyz, r28.w // FusionFix: indirect light takes the ambient's place where its rays hit
        //diffuseLight * shadow + r0
        mad r0.xyz, r5.xyz, r8.x, r0.xyz
        
@@ -71,7 +95,7 @@ index 5a42e39..c48dda4 100644
        texld r2.xyz, v0, s0
        mul r0.xyz, r0.xyz, r2.xyz
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
-index b0a07f1..2f286d6 100644
+index b0a07f1..6ff62dc 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
 @@ -59,6 +59,7 @@
@@ -82,15 +106,20 @@ index b0a07f1..2f286d6 100644
      texld r0, v0, s1
      mul r1.xyz, r0.w, c1
      frc r1.xyz, r1
-@@ -79,6 +80,7 @@
+@@ -79,6 +80,8 @@
      mov r27.xy, v0
      mov r27.zw, c159.x
      texldl r29, r27, s9
 +    texldl r28, r27, s8 // FusionFix indirect light, added to the ambient term below
++    add r28.w, c159.y, -r28.w // FusionFix: how much of the ambient indirect light leaves in place
      add r29.x, c159.y, -r29.x
      texld r21, v0, s6
      add r21.x, r21.x, -c22.x
-@@ -148,6 +150,7 @@
+@@ -145,9 +148,11 @@
+       
+       mad r1.yzw, r2.xxyz, r0.w, c37.xxyz
+       mul r1.yzw, r3.z, r1
++      mul r1.yzw, r1, r28.w // FusionFix: indirect light takes the ambient's place where its rays hit
        mul r2.xyz, c18.w, c18
        mul r1.x, r1.x, r29.x // FusionFix contact shadow on the direct light
        mad r1.xyz, r2, r1.x, r1.yzww
@@ -98,7 +127,11 @@ index b0a07f1..2f286d6 100644
        texld r2, v0, s0
        mad oC0.xyz, r2, r1, r0
        mov oC0.w, c0.z
-@@ -206,6 +209,7 @@
+@@ -203,9 +208,11 @@
+       mul r0.w, c1.w, r0.z
+       
+       mul r0.xyz, r2.w, r1.yzw
++      mul r0.xyz, r0.xyz, r28.w // FusionFix: indirect light takes the ambient's place where its rays hit
        //diffuseLight + r0
        add r0.xyz, r5.xyz, r0.xyz
        
@@ -107,7 +140,7 @@ index b0a07f1..2f286d6 100644
        texld r2.xyz, v0, s0
        mul r0.xyz, r0.xyz, r2.xyz
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
-index 1786b28..8a14bf4 100644
+index 1786b28..17782ab 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
 @@ -60,6 +60,7 @@
@@ -118,15 +151,20 @@ index 1786b28..8a14bf4 100644
      texld r0, v0, s1
      mul r1.xyz, r0.w, c1
      frc r1.xyz, r1
-@@ -80,6 +81,7 @@
+@@ -80,6 +81,8 @@
      mov r27.xy, v0
      mov r27.zw, c159.x
      texldl r29, r27, s9
 +    texldl r28, r27, s8 // FusionFix indirect light, added to the ambient term below
++    add r28.w, c159.y, -r28.w // FusionFix: how much of the ambient indirect light leaves in place
      add r29.x, c159.y, -r29.x
      texld r22, v0, s5
      add r21.x, r22.x, -c22.x
-@@ -168,6 +170,7 @@
+@@ -165,9 +168,11 @@
+       
+       mad r1.yzw, r4.xxyz, r0.y, c37.xxyz
+       mul r1.yzw, r3.z, r1
++      mul r1.yzw, r1, r28.w // FusionFix: indirect light takes the ambient's place where its rays hit
        mul r3.xyz, c18.w, c18
        mul r1.x, r1.x, r29.x // FusionFix contact shadow on the direct light
        mad r1.xyz, r3, r1.x, r1.yzww
@@ -134,7 +172,11 @@ index 1786b28..8a14bf4 100644
        mad oC0.xyz, r2, r1, r0.xzww
        mov oC0.w, c3.z
      else
-@@ -225,6 +228,7 @@
+@@ -222,9 +227,11 @@
+       mul r0.w, c1.w, r0.z
+       
+       mul r0.xyz, r2.w, r1.yzw
++      mul r0.xyz, r0.xyz, r28.w // FusionFix: indirect light takes the ambient's place where its rays hit
        //diffuseLight + r0
        add r0.xyz, r5.xyz, r0.xyz
        

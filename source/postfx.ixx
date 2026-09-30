@@ -242,7 +242,7 @@ public:
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
-        D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, GIPrevTex2D, fGIFeedback;
+        D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion;
     } SSREffectHandles = {};
 
     // PREF_SSR: 0 off, 1 half resolution, 2 full resolution.
@@ -264,6 +264,9 @@ public:
     static constexpr int kGIDebugMode = 8;
     float fGIIntensity = 1.0f;
     float fGIMaxBrightness = 4.0f;
+    // How much of the ambient the indirect light takes the place of where its rays hit (alpha of
+    // GIResult, see SSGI_PS); 0 adds it on top of the full ambient.
+    float fGIOcclusion = 1.0f;
     float fGIRayLength = 4.0f;
     float fGIThickness = 0.5f;
     float fGIMaxDistance = 60.0f;
@@ -878,6 +881,7 @@ public:
                 h.AlbedoTex2D = SSREffect->GetParameterByName(nullptr, "AlbedoTex2D");
                 h.GIPrevTex2D = SSREffect->GetParameterByName(nullptr, "GIPrevTex2D");
                 h.fGIFeedback = SSREffect->GetParameterByName(nullptr, "fGIFeedback");
+                h.fGIOcclusion = SSREffect->GetParameterByName(nullptr, "fGIOcclusion");
             }
         }
 
@@ -1029,6 +1033,7 @@ public:
         fContactTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsTemporal", 0.8f), 0.0f, 0.95f);
         fGIIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightIntensity", 1.0f), 0.0f, 8.0f);
         fGIMaxBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxBrightness", 4.0f), 0.05f, 8.0f);
+        fGIOcclusion = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightOcclusion", 1.0f), 0.0f, 1.0f);
         fGIRayLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", 4.0f), 0.1f, 20.0f);
         fGIThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightThickness", 0.5f), 0.01f, 10.0f);
         fGIMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxDistance", 60.0f), 1.0f, 1000.0f);
@@ -3772,6 +3777,7 @@ private:
         effect->SetFloat(h.fGIMaxViewDistance, R.fGIMaxDistance);
         effect->SetFloat(h.fGIIntensity, R.fGIIntensity);
         effect->SetFloat(h.fGIMaxBrightness, R.fGIMaxBrightness);
+        effect->SetFloat(h.fGIOcclusion, R.fGIOcclusion);
         // Last frame's scene holds the surfaces' colour times the indirect light at fGIIntensity;
         // the rays take all but an intensity 1 share of it back out, see SSGI_PS.
         const bool albedo = R.mDiffuseRT && R.mDiffuseRT->mD3DTexture;

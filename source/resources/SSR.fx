@@ -164,6 +164,7 @@ uniform float fGIMaxViewDistance;   // indirect light fades out towards this vie
 uniform float fGIIntensity;         // multiplier on the light gathered
 uniform float fGIMaxBrightness;     // brightness a single hit may bring, so a headlight or neon sign does not flare
 uniform float fGIFeedback;          // share of last frame's indirect light a hit takes back out, 0 while there is none
+uniform float fGIOcclusion;         // 0..1, how much of the ambient the indirect light takes the place of where its rays hit
 
 #ifndef GI_RAYS
 #define GI_RAYS 4
@@ -658,7 +659,9 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 // Each pixel decides on its own whether its ray hit and where, so neighbours on a car panel
 // pick slightly different points and the reflection looks grainy. A small depth aware blur,
 // in premultiplied form so misses (alpha 0) neither darken the colour nor bleed a halo, and
-// weighted by depth so a bonnet does not pick up the road behind it.
+// weighted by depth so a bonnet does not pick up the road behind it. Contact shadows and
+// indirect light (fDenoiseSSROnly 0) are plain values, alpha included: indirect light keeps
+// the share of the ambient it replaces there.
 float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     static const float2 taps[12] =
@@ -694,7 +697,9 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
         return centre;
 
     float centreZ = LinearDepth(uv);
-    float4 sum = float4(centre.rgb * centre.a, centre.a);
+    float colourWeight = fDenoiseSSROnly > 0.0 ? centre.a : 1.0;
+    float4 sum = float4(centre.rgb * colourWeight, colourWeight);
+    float alphaSum = centre.a;
     float weightSum = 1.0;
 
     [unroll]
@@ -702,11 +707,13 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
     {
         float w = exp(-dot(taps[j], taps[j]) * 2.0);
         w *= saturate(1.0 - abs(LinearDepth(uv + taps[j] * radius) - centreZ) / (centreZ * 0.02));
-        sum += w * float4(s[j].rgb * s[j].a, s[j].a);
+        colourWeight = w * (fDenoiseSSROnly > 0.0 ? s[j].a : 1.0);
+        sum += float4(s[j].rgb * colourWeight, colourWeight);
+        alphaSum += w * s[j].a;
         weightSum += w;
     }
 
-    float a = sum.a / weightSum;
+    float a = alphaSum / weightSum;
     float3 colour = sum.a > 1e-4 ? sum.rgb / sum.a : centre.rgb;
     return float4(colour, a);
 }
@@ -868,15 +875,26 @@ float4 ContactTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 // bring back what is no longer there, and is dropped where last frame's depth shows another
 // surface.
 // Blending is premultiplied: a miss (alpha 0) must fade a reflection out, not darken its colour.
+// Indirect light (fTemporalAnySurface) blends as it is: its alpha is the share of the ambient
+// it replaces, see SSGI_PS.
+float4 TemporalPremultiply(float4 c)
+{
+    return fTemporalAnySurface > 0.0 ? c : float4(c.rgb * c.a, c.a);
+}
+
+float4 TemporalResult(float4 c)
+{
+    return fTemporalAnySurface > 0.0 ? c : float4(c.a > 1e-4 ? c.rgb / c.a : 0.0, c.a);
+}
+
 float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     if (fTemporalAnySurface > 0.0 ? tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999 : SSRSurfaceWeight(uv) <= 0.0)
         return 0.0;
 
-    float4 current = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
-    current.rgb *= current.a;
+    float4 current = TemporalPremultiply(tex2Dlod(SSRResultTex, float4(uv, 0, 0)));
     if (fTemporalBlend <= 0.0)
-        return float4(current.a > 1e-4 ? current.rgb / current.a : 0.0, current.a);
+        return TemporalResult(current);
 
     float4 m1 = current, m2 = current * current;
     [unroll]
@@ -887,8 +905,7 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         {
             if (x == 0 && y == 0)
                 continue;
-            float4 s = tex2Dlod(SSRResultTex, float4(uv + float2(x, y) * vec2InvViewportSize, 0, 0));
-            s.rgb *= s.a;
+            float4 s = TemporalPremultiply(tex2Dlod(SSRResultTex, float4(uv + float2(x, y) * vec2InvViewportSize, 0, 0)));
             m1 += s;
             m2 += s * s;
         }
@@ -899,7 +916,7 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     // surface reflects nothing this frame.
     [branch]
     if (all(spread <= 0.0))
-        return float4(current.a > 1e-4 ? current.rgb / current.a : 0.0, current.a);
+        return TemporalResult(current);
     float4 lo = m1 - 1.5 * spread, hi = m1 + 1.5 * spread;
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
@@ -917,30 +934,29 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
             keep = 0.0;
     }
 
-    float4 history = tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0));
-    history.rgb *= history.a;
-    history = clamp(history, lo, hi);
-
-    float4 result = lerp(current, history, keep);
-    return float4(result.a > 1e-4 ? result.rgb / result.a : 0.0, result.a);
+    float4 history = clamp(TemporalPremultiply(tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0))), lo, hi);
+    return TemporalResult(lerp(current, history, keep));
 }
 
 // One bounce of indirect light: rays spread over the hemisphere around the G-buffer normal,
 // denser towards the normal (cosine weighted, so each ray counts the same), pick up last
 // frame's lit scene where they hit. deferred_lighting adds the result to its ambient term
-// before multiplying by albedo, so a red wall tints the white floor next to it. Rays that
-// hit nothing add nothing: the game's ambient already stands for the open sky. The history
+// before multiplying by albedo, so a red wall tints the white floor next to it. The game's
+// ambient stands for the open sky, which a ray that hits something does not see: alpha holds
+// the share of rays that hit, weighted as their light, and deferred_lighting takes that share
+// (times fGIOcclusion) off the ambient, so the light of the surroundings takes its place. Added
+// on top of the full ambient it washed out the contact shadows and barely showed. The history
 // holds last frame's indirect light too, so light bounces on from frame to frame, at its true
 // strength whatever fGIIntensity is (see fGIFeedback).
 float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
     if (rawDepth >= 0.9999)
-        return float4(0.0, 0.0, 0.0, 1.0);
+        return 0.0;
 
     float3 C = ReconstructViewPos(vPos, pow(fFarDivNear, rawDepth) * fNearPlane);
     if (C.z >= fGIMaxViewDistance)
-        return float4(0.0, 0.0, 0.0, 1.0);
+        return 0.0;
 
     float3 n;
     [branch]
@@ -960,6 +976,7 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float jitter = 1.0 - frac(1.0 - PixelJitter(vPos) + fJitterOffset);
     float jitter2 = 1.0 - frac(1.0 - PixelJitter(vPos.yx + float2(17.0, 59.0)) + fJitterOffset);
     float3 sum = 0.0;
+    float hits = 0.0;
 
     [loop]
     for (int r = 0; r < GI_RAYS; ++r)
@@ -1023,6 +1040,7 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
                         float lum = dot(L, float3(0.2126, 0.7152, 0.0722));
                         L *= min(1.0, fGIMaxBrightness / max(lum, 1e-4));
                         sum += L * (1.0 - t * t); // fades out towards the ray's end, not along it
+                        hits += 1.0 - t * t;
                     }
                     break;
                 }
@@ -1032,29 +1050,30 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 
     float fade = 1.0 - smoothstep(fGIMaxViewDistance * 0.75, fGIMaxViewDistance, C.z);
     float3 gi = sum * (fGIIntensity * fade / (float) GI_RAYS);
-    if (any(gi != gi))
-        return float4(0.0, 0.0, 0.0, 1.0);
-    return float4(gi, 1.0);
+    float occlusion = saturate(hits * fade / (float) GI_RAYS) * fGIOcclusion;
+    if (any(gi != gi) || occlusion != occlusion)
+        return 0.0;
+    return float4(gi, occlusion);
 }
 
 // Indirect light from half to full resolution, for deferred_lighting. Of the four half size
 // texels around a pixel, those whose depth is close to the pixel's weigh most, so light from
-// behind an object's outline does not spill onto it as bilinear filtering let it.
-// vec2InvViewportSize is the full size pixel.
+// behind an object's outline does not spill onto it as bilinear filtering let it. The share of
+// the ambient it replaces (alpha) comes along. vec2InvViewportSize is the full size pixel.
 float4 GIUpsample_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
     if (rawDepth >= 0.9999)
-        return float4(0.0, 0.0, 0.0, 1.0);
+        return 0.0;
     float z = pow(fFarDivNear, rawDepth) * fNearPlane;
 
     float2 halfTexel = vec2InvViewportSize * 2.0;
     float2 pos = uv / halfTexel - 0.5;
     float2 base = floor(pos);
     float2 f = pos - base;
-    float3 sum = 0.0;
+    float4 sum = 0.0;
     float weightSum = 0.0;
-    float3 nearest = 0.0;
+    float4 nearest = 0.0;
     float nearestDiff = 1e30;
     static const float2 corners[4] = { float2(0.0, 0.0), float2(1.0, 0.0), float2(0.0, 1.0), float2(1.0, 1.0) };
     [unroll]
@@ -1062,7 +1081,7 @@ float4 GIUpsample_PS(float2 uv : TEXCOORD0) : COLOR0
     {
         float2 o = corners[i];
         float2 tuv = (base + o + 0.5) * halfTexel;
-        float3 gi = tex2Dlod(SSRResultTex, float4(tuv, 0, 0)).rgb;
+        float4 gi = tex2Dlod(SSRResultTex, float4(tuv, 0, 0));
         float diff = abs(LinearDepth(tuv) - z);
         float2 b = lerp(1.0 - f, f, o);
         float w = b.x * b.y / (1.0 + diff / (0.02 * z + 0.02));
@@ -1074,7 +1093,7 @@ float4 GIUpsample_PS(float2 uv : TEXCOORD0) : COLOR0
             nearest = gi;
         }
     }
-    return float4(weightSum > 1e-3 ? sum / weightSum : nearest, 1.0);
+    return weightSum > 1e-3 ? sum / weightSum : nearest;
 }
 
 float4 SSRDebugCopy_PS(float2 uv : TEXCOORD0) : COLOR0
