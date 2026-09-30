@@ -215,8 +215,14 @@ public:
     IDirect3DSurface9* SSRProbeSurf = nullptr;
     IDirect3DSurface9* SSRProbeSysSurf = nullptr;
     uint32_t nPostFXFrame = 0;
-    // Samplers BindEffectSamplers had to rebind since the SSR pass began, for the log.
+    // What BindEffectInputs had to change since the SSR pass began, for the log: samplers
+    // rebound, float constants set anew, and a mask of the passes (kInput...) whose
+    // vec4ViewToPrevClip was not what the effect held.
     int nSSRSamplerRebinds = 0;
+    int nSSRConstantResets = 0;
+    int nSSRReprojStaleMask = 0;
+    static constexpr int kInputSSR = 1, kInputDenoise = 2, kInputTemporal = 4, kInputDebug = 8, kInputWater = 16,
+                         kInputDebugCopy = 32, kInputOther = 64, kInputProbe = 128;
     D3DXVECTOR4 SSRReprojRows[4] = {};
     bool bSSRReprojValid = false;
     // Set once the fog pass has copied this frame's scene into SSRHistoryTex; SSR runs before
@@ -2155,16 +2161,19 @@ private:
         R.SSRPrevGameView = gameView;
     }
 
-    // Binds every sampler of the pass just begun to the texture its effect parameter holds, and
-    // returns how many it had to change. D3DX left some holding what the game had bound: for
-    // stretches of frames DepthTex read an 8-bit G-buffer texture instead of the depth, and
-    // PrevDepthTex likewise, so every position SSR rebuilt from depth was wrong and history
-    // taken with it slid. The samplers of SSR.fx are named after their textures: X reads X2D.
-    static int BindEffectSamplers(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
+    // Sets every input of the pixel shader of the pass just begun from the effect: binds each
+    // sampler to the texture its parameter holds (sampler X reads X2D in SSR.fx) and sets each
+    // float constant from the parameter of the same name, counting in PostFxResources what had
+    // to change. D3DX left some samplers holding what the game had bound, seen in the probe
+    // pass, and with ScreenSpaceReflectionsTemporalMotion at 4 the accumulation still dragged
+    // reflections through a turn that moved the history 55 to 60 pixels a frame, as if its
+    // vec4ViewToPrevClip barely moved it. This makes every draw read what the effect was given.
+    static void BindEffectInputs(IDirect3DDevice9* pDevice, ID3DXEffect* effect, int pass)
     {
+        auto& R = PostFxResources;
         IDirect3DPixelShader9* ps = nullptr;
         if (FAILED(pDevice->GetPixelShader(&ps)) || !ps)
-            return 0;
+            return;
         std::vector<DWORD> function;
         UINT size = 0;
         if (SUCCEEDED(ps->GetFunction(nullptr, &size)) && size)
@@ -2176,35 +2185,58 @@ private:
         ps->Release();
         ID3DXConstantTable* table = nullptr;
         if (function.empty() || FAILED(D3DXGetShaderConstantTable(function.data(), &table)) || !table)
-            return 0;
+            return;
 
-        int rebound = 0;
         D3DXCONSTANTTABLE_DESC tableDesc = {};
         table->GetDesc(&tableDesc);
+        std::vector<BYTE> value;
+        std::vector<float> before, after;
         for (UINT i = 0; i < tableDesc.Constants; ++i)
         {
+            D3DXHANDLE constant = table->GetConstant(nullptr, i);
             D3DXCONSTANT_DESC desc = {};
             UINT count = 1;
-            if (FAILED(table->GetConstantDesc(table->GetConstant(nullptr, i), &desc, &count)) ||
-                desc.RegisterSet != D3DXRS_SAMPLER || !desc.Name)
+            if (FAILED(table->GetConstantDesc(constant, &desc, &count)) || !desc.Name)
                 continue;
-            D3DXHANDLE param = effect->GetParameterByName(nullptr, (std::string(desc.Name) + "2D").c_str());
-            if (!param)
-                continue;
-            IDirect3DBaseTexture9* want = nullptr;
-            IDirect3DBaseTexture9* have = nullptr;
-            effect->GetTexture(param, &want);
-            pDevice->GetTexture(desc.RegisterIndex, &have);
-            if (want != have)
+            if (desc.RegisterSet == D3DXRS_SAMPLER)
             {
-                pDevice->SetTexture(desc.RegisterIndex, want);
-                ++rebound;
+                D3DXHANDLE param = effect->GetParameterByName(nullptr, (std::string(desc.Name) + "2D").c_str());
+                if (!param)
+                    continue;
+                IDirect3DBaseTexture9* want = nullptr;
+                IDirect3DBaseTexture9* have = nullptr;
+                effect->GetTexture(param, &want);
+                pDevice->GetTexture(desc.RegisterIndex, &have);
+                if (want != have)
+                {
+                    pDevice->SetTexture(desc.RegisterIndex, want);
+                    ++R.nSSRSamplerRebinds;
+                }
+                SAFE_RELEASE(want);
+                SAFE_RELEASE(have);
             }
-            SAFE_RELEASE(want);
-            SAFE_RELEASE(have);
+            else if (desc.RegisterSet == D3DXRS_FLOAT4 && desc.RegisterCount && desc.Bytes)
+            {
+                D3DXHANDLE param = effect->GetParameterByName(nullptr, desc.Name);
+                if (!param)
+                    continue;
+                value.resize(desc.Bytes);
+                if (FAILED(effect->GetValue(param, value.data(), desc.Bytes)))
+                    continue;
+                before.resize(desc.RegisterCount * 4);
+                after.resize(desc.RegisterCount * 4);
+                pDevice->GetPixelShaderConstantF(desc.RegisterIndex, before.data(), desc.RegisterCount);
+                table->SetValue(pDevice, constant, value.data(), desc.Bytes);
+                pDevice->GetPixelShaderConstantF(desc.RegisterIndex, after.data(), desc.RegisterCount);
+                if (memcmp(before.data(), after.data(), before.size() * sizeof(float)) != 0)
+                {
+                    ++R.nSSRConstantResets;
+                    if (strcmp(desc.Name, "vec4ViewToPrevClip") == 0)
+                        R.nSSRReprojStaleMask |= pass;
+                }
+            }
         }
         table->Release();
-        return rebound;
     }
 
     // Draws SSRProbe_PS into the 9x2 target and reads it back, row 0 into probes and row 1 into
@@ -2237,7 +2269,7 @@ private:
         R.SSREffect->Begin(&passes, 0);
         R.SSREffect->BeginPass(0);
         R.SSREffect->CommitChanges();
-        R.nSSRSamplerRebinds += BindEffectSamplers(pDevice, R.SSREffect);
+        BindEffectInputs(pDevice, R.SSREffect, R.kInputProbe);
         pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(ScreenVertex));
         R.SSREffect->EndPass();
         R.SSREffect->End();
@@ -2262,7 +2294,7 @@ private:
     // cpuX/Y how far the same maths moves it here, prevZ last frame's depth where the shader
     // put it and expZ the depth it should find there, and DepthTex there as stored (raw).
     // Before them, the D3DFORMAT and size of DepthTex, of last frame's depth copy and of the
-    // depth buffer bound when SSR runs; last, how many samplers BindEffectSamplers rebound.
+    // depth buffer bound when SSR runs; last, what BindEffectInputs had to change.
     static void LogSSRPass(IDirect3DDevice9* pDevice, const rage::grcViewport* vp, const D3DMATRIX& proj, float width,
                            float height, float passWidth, float passHeight, const D3DXVECTOR4 rows[4])
     {
@@ -2295,7 +2327,7 @@ private:
             for (int k = 0; k < 9; ++k)
                 fprintf(R.SSRLog, ",z%d,gpuX%d,gpuY%d,cpuX%d,cpuY%d,prevZ%d,expZ%d,rawR%d,rawG%d,rawB%d,rawA%d",
                         k, k, k, k, k, k, k, k, k, k, k);
-            fprintf(R.SSRLog, ",rebinds\n");
+            fprintf(R.SSRLog, ",rebinds,constantResets,reprojStaleMask\n");
         }
 
         LARGE_INTEGER now, freq;
@@ -2364,7 +2396,7 @@ private:
                     pr.z * passHeight - py, cpuX, cpuY, pr.w, clip[3], raw[k].x, raw[k].y, raw[k].z, raw[k].w);
         }
         // After the probe pass, so its own rebinds count too.
-        fprintf(R.SSRLog, ",%d\n", R.nSSRSamplerRebinds);
+        fprintf(R.SSRLog, ",%d,%d,%d\n", R.nSSRSamplerRebinds, R.nSSRConstantResets, R.nSSRReprojStaleMask);
         fflush(R.SSRLog);
         ++R.nSSRLogLines;
     }
@@ -2394,6 +2426,8 @@ private:
         R.bGlassFrameValid = false;
         R.bSSRDenoised = false;
         R.nSSRSamplerRebinds = 0;
+        R.nSSRConstantResets = 0;
+        R.nSSRReprojStaleMask = 0;
 
         if (!R.SSRSurf)
             return;
@@ -2603,7 +2637,7 @@ private:
 
             effect->BeginPass(0);
             effect->CommitChanges();
-            R.nSSRSamplerRebinds += BindEffectSamplers(pDevice, effect);
+            BindEffectInputs(pDevice, effect, R.kInputSSR);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
         }
@@ -2624,7 +2658,7 @@ private:
             effect->Begin(&passes, 0);
             effect->BeginPass(0);
             effect->CommitChanges();
-            R.nSSRSamplerRebinds += BindEffectSamplers(pDevice, effect);
+            BindEffectInputs(pDevice, effect, R.kInputDenoise);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
@@ -2655,7 +2689,7 @@ private:
             effect->Begin(&passes, 0);
             effect->BeginPass(0);
             effect->CommitChanges();
-            R.nSSRSamplerRebinds += BindEffectSamplers(pDevice, effect);
+            BindEffectInputs(pDevice, effect, R.kInputTemporal);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
@@ -2683,7 +2717,7 @@ private:
             effect->Begin(&passes, 0);
             effect->BeginPass(0);
             effect->CommitChanges();
-            R.nSSRSamplerRebinds += BindEffectSamplers(pDevice, effect);
+            BindEffectInputs(pDevice, effect, R.kInputDebug);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
@@ -2903,7 +2937,7 @@ private:
         effect->Begin(&passes, 0);
         effect->BeginPass(0);
         effect->CommitChanges();
-        R.nSSRSamplerRebinds += BindEffectSamplers(pDevice, effect);
+        BindEffectInputs(pDevice, effect, R.kInputWater);
         pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
         effect->EndPass();
         effect->End();
@@ -3284,7 +3318,7 @@ private:
         effect->Begin(&passes, 0);
         effect->BeginPass(0);
         effect->CommitChanges();
-        R.nSSRSamplerRebinds += BindEffectSamplers(pDevice, effect);
+        BindEffectInputs(pDevice, effect, R.kInputDebugCopy);
         pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
         effect->EndPass();
         effect->End();
@@ -3396,7 +3430,7 @@ private:
         effect->Begin(&passes, 0);
         effect->BeginPass(0);
         effect->CommitChanges();
-        PostFxResources.nSSRSamplerRebinds += BindEffectSamplers(pDevice, effect);
+        BindEffectInputs(pDevice, effect, PostFxResources.kInputOther);
         pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
         effect->EndPass();
         effect->End();
