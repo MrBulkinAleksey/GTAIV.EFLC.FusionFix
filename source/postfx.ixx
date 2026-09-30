@@ -303,6 +303,10 @@ public:
     static bool SkinScatteringEnabled() { static auto p = FusionFixSettings.GetRef("PREF_SKIN_SSS"); return p && p->get() != 0; }
     float fSkinScatteringWidth = 0.03f;
     float fSkinScatteringStrength = 1.0f;
+    // The sun's light on skin (deferred_lighting_sun_on_skin.patch, c201 and c205): wraps past the
+    // terminator by SkinLighting times 0.5 in red, 0.2 in green and 0.1 in blue, and red goes
+    // SkinLighting times half way to the square root of the shadow in its penumbra.
+    float fSkinLighting = 1.0f;
     static constexpr int kSkinDebugMode = 9;
     rage::grcRenderTargetPC* mMaterialIdRT = nullptr;
     rage::grcRenderTargetPC* SkinLightTex[2] = {};
@@ -1064,6 +1068,7 @@ public:
         fGIOcclusion = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightOcclusion", 1.0f), 0.0f, 1.0f);
         fSkinScatteringWidth = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringWidth", 0.03f), 0.001f, 0.1f);
         fSkinScatteringStrength = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringStrength", 1.0f), 0.0f, 2.0f);
+        fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
         fGIRayLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", 4.0f), 0.1f, 20.0f);
         fGIThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightThickness", 0.5f), 0.01f, 10.0f);
         fGIMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxDistance", 60.0f), 1.0f, 1000.0f);
@@ -4245,7 +4250,8 @@ private:
 public:
     // What deferred_lighting reads besides the game's own inputs: s3 the SSR result (the cleared
     // SSR target while SSR is off, else a transparent 1x1), s9 the contact shadows while they
-    // are valid, s8 the indirect light, and c202-c204 the local light contact shadow constants.
+    // are valid, s8 the indirect light, c202-c204 the local light contact shadow constants, and
+    // c201 and c205 the sun's light on skin.
     static void BindLightingInputs(IDirect3DDevice9* pDevice)
     {
         auto& R = PostFxResources;
@@ -4261,6 +4267,21 @@ public:
             R.bContactBound = false;
         }
         pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
+
+        // The sun on skin: c201 the scale of the N.L curve less 1, c205 its offset and the red penumbra.
+        {
+            const float k = R.SkinScatteringEnabled() ? R.fSkinLighting : 0.0f;
+            const float wrap[3] = { 0.5f * k, 0.2f * k, 0.1f * k };
+            float scale[4] = {}, offset[4] = {};
+            for (int i = 0; i < 3; ++i)
+            {
+                scale[i] = 1.0f / (1.0f + wrap[i]) - 1.0f;
+                offset[i] = wrap[i] / (1.0f + wrap[i]);
+            }
+            offset[3] = (std::min)(0.5f * k, 1.0f);
+            pDevice->SetPixelShaderConstantF(201, scale, 1);
+            pDevice->SetPixelShaderConstantF(205, offset, 1);
+        }
 
         // Indirect light, black while there is none; unbound after lighting.
         BindSampler(pDevice, 8, R.GIResult ? static_cast<IDirect3DBaseTexture9*>(R.GIResult) : R.TransparentTex(), D3DTEXF_LINEAR);
@@ -4325,9 +4346,12 @@ public:
             pDevice->SetTexture(8, nullptr);
             R.bGIBound = false;
         }
-        // Lights drawn for other views (reflections, mirrors) must not march with this camera.
+        // Lights drawn for other views (reflections, mirrors) must not march with this camera,
+        // nor light skin by this view's material IDs.
         const float noLocalContactShadows[4] = {};
         pDevice->SetPixelShaderConstantF(203, noLocalContactShadows, 1);
+        pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
+        pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
