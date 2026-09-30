@@ -1,3 +1,33 @@
+diff --git a/win32_30_nv8/gta_ped/gta_pedPS5.asm b/win32_30_nv8/gta_ped/gta_pedPS5.asm
+index af6acf8..c8c3082 100644
+--- a/win32_30_nv8/gta_ped/gta_pedPS5.asm
++++ b/win32_30_nv8/gta_ped/gta_pedPS5.asm
+@@ -148,7 +148,9 @@
+     add r20.x, r20.x, c39.x
+     cmp oC2.w, r20.x, c2.x, c2.y
+     mov r0.xy, c2
+-    mul oC3, r0.yxxx, c52.x
++    mul r21, r0.yxxx, c52.x
++    add r21.x, r21.x, c150.x // FusionFix: a quarter step on the material ID for the HEAD and HAND components, set per component (postfx.ixx), marks skin
++    mov oC3, r21
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
+diff --git a/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm b/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm
+index 24685ed..7c88b0f 100644
+--- a/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm
++++ b/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm
+@@ -148,7 +148,9 @@
+     add r20.x, r20.x, c39.x
+     cmp oC2.w, r20.x, c2.x, c2.y
+     mov r0.xy, c2
+-    mul oC3, r0.yxxx, c52.x
++    mul r21, r0.yxxx, c52.x
++    add r21.x, r21.x, c150.x // FusionFix: a quarter step on the material ID for the HEAD and HAND components, set per component (postfx.ixx), marks skin
++    mov oC3, r21
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/gta_ped_skin/gta_ped_skinPS5.asm b/win32_30_nv8/gta_ped_skin/gta_ped_skinPS5.asm
 index 5999a34..985de8a 100644
 --- a/win32_30_nv8/gta_ped_skin/gta_ped_skinPS5.asm

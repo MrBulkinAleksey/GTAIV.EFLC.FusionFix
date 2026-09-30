@@ -298,7 +298,8 @@ public:
     // light on skin with its view depth into SkinLightTex[0], blurred along x into [1], and along
     // y, with the rest of the scene, back into [0], which the fog pass reads instead of the scene.
     // Skin is where shaders/patches/ped_skin_scattering_mask.patch puts a quarter step on the
-    // material ID the G-buffer pass writes to _STENCIL_BUFFER_.
+    // material ID the G-buffer pass writes to _STENCIL_BUFFER_: the skin shaders always, gta_ped
+    // for the HEAD and HAND components (InstallPedSkinHooks).
     static bool SkinScatteringEnabled() { static auto p = FusionFixSettings.GetRef("PREF_SKIN_SSS"); return p && p->get() != 0; }
     float fSkinScatteringWidth = 0.03f;
     float fSkinScatteringStrength = 1.0f;
@@ -4157,6 +4158,33 @@ private:
         }
     }
 
+    // Most people's heads and every player's hands are drawn with gta_ped, the shader of clothes,
+    // which cannot tell skin in a pixel; the component loops of the ped draw can. Each turn of
+    // the loop (CE 0xAB7C20 for component peds, 0xAB7EB0 the other) sets c150.x for its
+    // component: a quarter step for HEAD and HAND, which gta_ped and gta_ped_reflect add to the
+    // material ID as the skin shaders do (ped_skin_scattering_mask.patch), 0 for the rest. FACE,
+    // the last turn, leaves it at 0 for whatever is drawn next.
+    static inline SafetyHookMid shPedSkinComponent[2]{};
+
+    static void MarkPedSkin(uintptr_t component)
+    {
+        auto& R = PostFxResources;
+        const bool on = R.SkinScatteringEnabled() || R.SSRDebugMode() == R.kSkinDebugMode;
+        const float mark[4] = { (on && (component == 0 || component == 4)) ? 0.25f / 255.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+        if (auto pDevice = rage::grcDevice::GetD3DDevice())
+            pDevice->SetPixelShaderConstantF(150, mark, 1);
+    }
+
+    static void InstallPedSkinHooks()
+    {
+        auto pattern = hook::pattern("8B 44 24 24 8B B6 28 01 00 00 0F B6 7C 28 5C 0F B7 46 0C");
+        if (!pattern.empty())
+            shPedSkinComponent[0] = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs) { MarkPedSkin(regs.ebp); });
+        pattern = hook::pattern("80 78 5C 00 74 09 83 FE 03 0F 84 ? ? ? ? 80 BE ? ? ? ? 00 0F 84");
+        if (!pattern.empty())
+            shPedSkinComponent[1] = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs) { MarkPedSkin(regs.esi); });
+    }
+
     // Runs as the game copies each light into the frame's draw list, on the main thread.
     static void OnAfterCopyLight(rage::CLightSource* light)
     {
@@ -4373,6 +4401,7 @@ public:
                 {
                     CRenderPhaseDeferredLighting_LightsToScreen::OnAfterCopyLight() += OnAfterCopyLight;
                     InstallShaftHooks();
+                    InstallPedSkinHooks();
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
                         auto cb = new T_CB_Generic_NoArgs(BindSSRTexture);

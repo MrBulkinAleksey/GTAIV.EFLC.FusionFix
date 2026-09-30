@@ -1138,7 +1138,8 @@ float4 GIUpsample_PS(float2 uv : TEXCOORD0) : COLOR0
 // which carries red furthest and green and blue less, along x (SkinScatter_PS) and then y
 // (SkinScatterFinal_PS). What is blurred is the light, the lit colour over the diffuse colour,
 // which is multiplied back after, so pores, freckles and stubble stay sharp. Skin is where the
-// skin shaders add a quarter step to the material ID (shaders/patches/ped_skin_scattering_mask.patch).
+// skin shaders, and gta_ped for the HEAD and HAND components (InstallPedSkinHooks), add a quarter
+// step to the material ID (shaders/patches/ped_skin_scattering_mask.patch).
 // The weights (x, y, z for red, green, blue, each summing to 1) and offsets (w, in half of
 // SkinScatteringWidth) are the 17 sample kernel of Jimenez's SeparableSSS for its default skin:
 // strength 0.48, 0.41, 0.28, falloff 1.0, 0.37, 0.3.
