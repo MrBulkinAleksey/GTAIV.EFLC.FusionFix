@@ -288,6 +288,8 @@ public:
     // Headlight shafts with the headlight's shadow map, which leaves them unseen (see
     // InstallShaftHooks).
     bool bVolumetricLightHeadlightShadow = false;
+    // Degrees headlight shafts are tilted down, the shaft alone (see InstallShaftHooks).
+    float fVolumetricLightHeadlightPitch = 6.0f;
     // Building Fill Lights in the graphics menu (PREF_FILL_LIGHTS): off darkens the large
     // exterior map lights, reaching at least FillLightsMinRadius, that flood whole squares and
     // building fronts. They made scenes look washed out, and at some cell edges (a garage at
@@ -969,6 +971,7 @@ public:
         nVolumetricLightHeadlightAddFlags = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightAddFlags", 0));
         fFillLightsMinRadius = std::clamp(iniReader.ReadFloat("POSTFX", "FillLightsMinRadius", 30.0f), 0.0f, 1000.0f);
         bVolumetricLightHeadlightShadow = iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightShadow", 0) != 0;
+        fVolumetricLightHeadlightPitch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightPitch", 6.0f), -45.0f, 45.0f);
         bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
         fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
         fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
@@ -3389,22 +3392,73 @@ private:
     // shaft drawn with it shows nothing, so unless VolumetricLightHeadlightShadow is on, the draw
     // hook clears that choice for lights with the headlight flag and they take the plain one.
     static inline SafetyHookMid shShaftDraw{};
+    // A headlight's cone is round and aimed level, so the upper half of its shaft rose metres
+    // above the road. Before the loop draws a shaft (CE 0xAC4580) it copies the light's direction
+    // and tangent to its stack; for headlights the aim hook turns those copies down by
+    // VolumetricLightHeadlightPitch, about the level axis across the beam. The light itself, which
+    // lights the road and casts the headlight's shadow, keeps its aim.
+    static inline SafetyHookMid shShaftAim{};
 
     static void InstallShaftHooks()
     {
         auto& R = PostFxResources;
-        if (!R.nVolumetricLightHeadlightFlag || R.bVolumetricLightHeadlightShadow)
+        if (!R.nVolumetricLightHeadlightFlag)
             return;
-        auto pattern = hook::pattern("A1 ? ? ? ? 0F 28 05 ? ? ? ? 0F 29 84 24 A0 00 00 00 F3 0F 10 44 06 70");
-        if (!pattern.empty())
+        if (!R.bVolumetricLightHeadlightShadow)
         {
-            static uintptr_t* list = *pattern.get_first<uintptr_t*>(1);
-            shShaftDraw = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
+            auto pattern = hook::pattern("A1 ? ? ? ? 0F 28 05 ? ? ? ? 0F 29 84 24 A0 00 00 00 F3 0F 10 44 06 70");
+            if (!pattern.empty())
             {
-                const auto& light = *reinterpret_cast<const rage::CLightSource*>(*list + regs.esi);
-                if (PostFxResources.VolumetricLight() && (light.mFlags & PostFxResources.nVolumetricLightHeadlightFlag))
-                    *reinterpret_cast<uint8_t*>(regs.esp + 0xF) = 0;
-            });
+                static uintptr_t* list = *pattern.get_first<uintptr_t*>(1);
+                shShaftDraw = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
+                {
+                    const auto& light = *reinterpret_cast<const rage::CLightSource*>(*list + regs.esi);
+                    if (PostFxResources.VolumetricLight() && (light.mFlags & PostFxResources.nVolumetricLightHeadlightFlag))
+                        *reinterpret_cast<uint8_t*>(regs.esp + 0xF) = 0;
+                });
+            }
+        }
+        if (R.fVolumetricLightHeadlightPitch != 0.0f)
+        {
+            // The copies of direction (esp + 0xF0) and tangent (esp + 0xE0), then push 0; the
+            // hook sits on the load of the outer cone angle right after, eax the light list and
+            // esi this light's offset in it.
+            auto pattern = hook::pattern("F3 0F 10 04 06 F3 0F 11 84 24 F0 00 00 00 F3 0F 10 44 06 04 F3 0F 11 84 24 F4 00 00 00 "
+                                         "F3 0F 10 44 06 08 F3 0F 11 84 24 F8 00 00 00 F3 0F 10 44 06 10 F3 0F 11 84 24 E0 00 00 00 "
+                                         "F3 0F 10 44 06 14 F3 0F 11 84 24 E4 00 00 00 F3 0F 10 44 06 18 6A 00 "
+                                         "F3 0F 11 84 24 EC 00 00 00 F3 0F 10 6C 06 5C");
+            if (!pattern.empty())
+            {
+                static const float pitch = R.fVolumetricLightHeadlightPitch * 3.14159265f / 180.0f;
+                static const float c = std::cos(pitch), s = -std::sin(pitch);
+                shShaftAim = safetyhook::create_mid(pattern.get_first(0x5B), [](SafetyHookContext& regs)
+                {
+                    const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.eax + regs.esi);
+                    if (!PostFxResources.VolumetricLight() || !(light.mFlags & PostFxResources.nVolumetricLightHeadlightFlag))
+                        return;
+                    // 4 bytes further off esp for the push 0.
+                    float* dir = reinterpret_cast<float*>(regs.esp + 0xF4);
+                    float* tangent = reinterpret_cast<float*>(regs.esp + 0xE4);
+                    // The level axis across the beam, dir x up.
+                    float kx = dir[1], ky = -dir[0];
+                    const float len = std::sqrt(kx * kx + ky * ky);
+                    if (len < 1e-3f)
+                        return; // aimed straight up or down
+                    kx /= len;
+                    ky /= len;
+                    // Rodrigues: v cos + (k x v) sin + k (k . v)(1 - cos), turning down.
+                    auto turn = [&](float* v)
+                    {
+                        const float kv = kx * v[0] + ky * v[1];
+                        const float cx = ky * v[2], cy = -kx * v[2], cz = kx * v[1] - ky * v[0];
+                        v[0] = v[0] * c + cx * s + kx * kv * (1.0f - c);
+                        v[1] = v[1] * c + cy * s + ky * kv * (1.0f - c);
+                        v[2] = v[2] * c + cz * s;
+                    };
+                    turn(dir);
+                    turn(tangent);
+                });
+            }
         }
     }
 
