@@ -542,6 +542,8 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 //   6: car glass, drawn by the patched glass shaders themselves: green a hit, red a miss,
 //      blue how much the fade for reflections pointing back at the camera keeps
 //   7: contact shadows alone, white lit, black shadowed
+//   8: local contact shadows, drawn by the patched light shaders themselves: what they take
+//      from each street light and headlight shows red over the frame; no debug view is drawn
 //   5: _DEFERRED_GBUFFER_2_ as stored: red specular intensity, green gloss, blue the
 //      reflection strength deferred_lighting uses; see SSRSurfaceWeight
 

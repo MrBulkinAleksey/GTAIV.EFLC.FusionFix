@@ -163,6 +163,9 @@ Glass Rays
 [SSRDbgContact]
 Contact Shadows
 
+[SSRDbgLocalContact]
+Local Contact Shadows
+
 [Contact Shadows]
 Contact Shadows
 

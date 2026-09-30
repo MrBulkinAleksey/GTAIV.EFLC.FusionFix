@@ -163,6 +163,9 @@ Logitech LightSync RGB
 [SSRDbgContact]
 Контактные тени
 
+[SSRDbgLocalContact]
+Контактные тени фонарей
+
 [Contact Shadows]
 Контактные тени
 

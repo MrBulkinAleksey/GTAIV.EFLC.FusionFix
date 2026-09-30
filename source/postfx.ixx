@@ -261,8 +261,6 @@ public:
     float fLocalContactShadowLength = 0.5f;
     float fLocalContactShadowThickness = 0.2f;
     float fLocalContactShadowMaxThickness = 2.0f; // c203.y, see ContactShadowsMaxThickness
-    // c203.z: 1 paints what the local contact shadows take from each light red, to see them.
-    bool bLocalContactShadowsDebug = false;
     float fLocalContactShadowMaxDistance = 40.0f;
     float fLocalContactShadowIntensity = 1.0f;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34,
@@ -319,6 +317,9 @@ public:
     bool bContactValid = false;
     bool bContactBound = false;
     static constexpr int kContactDebugMode = 7;
+    // SSR debug mode 8: the light shaders paint what the local contact shadows take from each
+    // light red (c203.z), over the frame as it is; no debug view is drawn.
+    static constexpr int kLocalContactDebugMode = 8;
     static int SSRDebugMode() { static auto p = FusionFixSettings.GetRef("PREF_SSR_DEBUG"); return p ? p->get() : 0; }
     // The smoothed SSR result (SSRDenoise_PS) that deferred_lighting reads, when enabled.
     float fSSRDenoiseRadius = 2.0f;
@@ -966,7 +967,6 @@ public:
         fLocalContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsLength", 0.5f), 0.05f, 10.0f);
         fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.2f), 0.01f, 5.0f);
         fLocalContactShadowMaxThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxThickness", 2.0f), 0.0f, 10.0f);
-        bLocalContactShadowsDebug = iniReader.ReadInteger("POSTFX", "LocalContactShadowsDebug", 0) != 0;
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 4.0f), 0.0f, 20.0f);
@@ -3196,7 +3196,7 @@ private:
             const float consts[12] =
             {
                 R.fLocalContactShadowLength, R.fLocalContactShadowThickness, R.fLocalContactShadowMaxDistance, R.fLocalContactShadowIntensity,
-                proj._34, R.fLocalContactShadowMaxThickness, R.bLocalContactShadowsDebug ? 1.0f : 0.0f, local ? 12345.0f : 0.0f,
+                proj._34, R.fLocalContactShadowMaxThickness, R.SSRDebugMode() == R.kLocalContactDebugMode ? 1.0f : 0.0f, local ? 12345.0f : 0.0f,
                 proj._11, proj._22, proj._31, proj._32,
             };
             memcpy(R.LocalContactShadowConsts, consts, sizeof(consts));

@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index 2337a59..ef744ad 100644
+index 2337a59..a6a6a57 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 @@ -40,6 +40,14 @@
@@ -185,7 +185,7 @@ index 2337a59..ef744ad 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, LocalContactShadowsDebug): what the
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
 +    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
 +    mad r26.x, r19.w, r28.z, r26.x
@@ -194,7 +194,7 @@ index 2337a59..ef744ad 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index 1800ea7..da5997a 100644
+index 1800ea7..f02e9cb 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 @@ -43,6 +43,14 @@
@@ -378,7 +378,7 @@ index 1800ea7..da5997a 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, LocalContactShadowsDebug): what the
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
 +    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
 +    mad r26.x, r19.w, r28.z, r26.x
@@ -387,7 +387,7 @@ index 1800ea7..da5997a 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 0b4d107..0b20b3a 100644
+index 0b4d107..878dae3 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 @@ -43,6 +43,14 @@
@@ -571,7 +571,7 @@ index 0b4d107..0b20b3a 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, LocalContactShadowsDebug): what the
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
 +    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
 +    mad r26.x, r19.w, r28.z, r26.x
@@ -580,7 +580,7 @@ index 0b4d107..0b20b3a 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 86f2d47..bfdb83b 100644
+index 86f2d47..a1755e9 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -77,6 +77,14 @@
@@ -764,7 +764,7 @@ index 86f2d47..bfdb83b 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, LocalContactShadowsDebug): what the
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
 +    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
 +    mad r26.x, r19.w, r28.z, r26.x
@@ -773,7 +773,7 @@ index 86f2d47..bfdb83b 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index d104b6c..c9ae161 100644
+index d104b6c..a13972a 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 @@ -71,6 +71,14 @@
@@ -959,7 +959,7 @@ index d104b6c..c9ae161 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, LocalContactShadowsDebug): what the
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
 +    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
 +    mad r26.x, r19.w, r28.z, r26.x
@@ -968,7 +968,7 @@ index d104b6c..c9ae161 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 963ce40..da5d11c 100644
+index 963ce40..4820991 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -48,6 +48,14 @@
@@ -1152,7 +1152,7 @@ index 963ce40..da5d11c 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, LocalContactShadowsDebug): what the
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
 +    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
 +    mad r26.x, r19.w, r28.z, r26.x
@@ -1161,7 +1161,7 @@ index 963ce40..da5d11c 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 6cdc2ec..bd2e66f 100644
+index 6cdc2ec..754f763 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -79,6 +79,14 @@
@@ -1347,7 +1347,7 @@ index 6cdc2ec..bd2e66f 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, LocalContactShadowsDebug): what the
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
 +    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
 +    mad r26.x, r19.w, r28.z, r26.x
@@ -1356,7 +1356,7 @@ index 6cdc2ec..bd2e66f 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 21f11d1..9fbab64 100644
+index 21f11d1..cc8fc76 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -43,6 +43,14 @@
@@ -1540,7 +1540,7 @@ index 21f11d1..9fbab64 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, LocalContactShadowsDebug): what the
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
 +    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
 +    mad r26.x, r19.w, r28.z, r26.x
@@ -1549,7 +1549,7 @@ index 21f11d1..9fbab64 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 3a813bf..bca8d92 100644
+index 3a813bf..2573679 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -46,6 +46,14 @@
@@ -1733,7 +1733,7 @@ index 3a813bf..bca8d92 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, LocalContactShadowsDebug): what the
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
 +    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
 +    mad r26.x, r19.w, r28.z, r26.x
@@ -1742,7 +1742,7 @@ index 3a813bf..bca8d92 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 4333137..bc21438 100644
+index 4333137..a92f9e4 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -46,6 +46,14 @@
@@ -1926,7 +1926,7 @@ index 4333137..bc21438 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, LocalContactShadowsDebug): what the
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
 +    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
 +    mad r26.x, r19.w, r28.z, r26.x
@@ -1935,7 +1935,7 @@ index 4333137..bc21438 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 76eac90..c97b4e7 100644
+index 76eac90..047e63a 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -46,6 +46,14 @@
@@ -2119,7 +2119,7 @@ index 76eac90..c97b4e7 100644
 +      endif
 +    endif
 +    mul r26.xyz, r26, r31.w
-+    // --- FusionFix local contact shadow debug (c203.z, LocalContactShadowsDebug): what the
++    // --- FusionFix local contact shadow debug (c203.z, SSR Debug mode 8): what the
 +    // --- shadow takes from this light shows red on top; 0 adds nothing
 +    add r19.w, c157.y, -r31.w
 +    mad r26.x, r19.w, r28.z, r26.x
