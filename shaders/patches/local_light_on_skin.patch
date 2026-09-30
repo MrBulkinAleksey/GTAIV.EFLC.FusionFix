@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 825d6bc..b30c929 100644
+index 825d6bc..5f5328b 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -79,6 +79,7 @@
@@ -18,7 +18,7 @@ index 825d6bc..b30c929 100644
      add r0.zw, c0.x, vPos.xyxy
      mul r0.zw, r0, c84
      texld r2, r0.zwzw, s1
-@@ -290,8 +292,17 @@
+@@ -290,8 +292,18 @@
      add r0.x, r0.x, r0.x
      mad r4.xyz, r3, -r0.x, r5
      dp3_sat r0.x, r2, r3
@@ -28,9 +28,10 @@ index 825d6bc..b30c929 100644
 +    frc r20.x, r20.x
 +    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
 +    dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
-+    mad r21.xyz, c201, r20.x, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r21.xyz, c201, r20.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
++    mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
 +    mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
-+    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
++    add_sat r21.xyz, r21, r22 // the game's N.L off skin
      dp3_sat r0.y, r2, r4
 -    mul r2.xyz, r1, r0.x
 +    mul r2.xyz, r1, r21 // FusionFix skin lighting: the wrapped N.L per channel
@@ -38,7 +39,7 @@ index 825d6bc..b30c929 100644
      mul r3.yz, r3, r3
      add r0.x, r3.x, r3.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 42313f3..51fd3c3 100644
+index 42313f3..25677c8 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -50,6 +50,7 @@
@@ -67,14 +68,15 @@ index 42313f3..51fd3c3 100644
      
      // LogDepth Read
      pow r19.x, c209_abs.z, r2.x
-@@ -135,11 +142,15 @@
+@@ -135,11 +142,16 @@
      mad r2.xyz, r5, -r1.y, r7
      dp3_sat r1.y, r8, r2
      dp3_sat r2.x, r8, r5
 +    dp3 r21.w, r8, r5 // FusionFix skin lighting: N.L, unclamped
-+    mad r21.xyz, c201, r20.x, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r21.xyz, c201, r20.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
++    mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
 +    mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
-+    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
++    add_sat r21.xyz, r21, r22 // the game's N.L off skin
      mul r0.xyz, r0, r1.x
      cmp r0.xyz, r0.w, r0, c1.z
      pow r0.w, r1.y, r1.w
@@ -85,7 +87,7 @@ index 42313f3..51fd3c3 100644
      mul r1.xyz, r1.z, r1.xyww
      mad r0.xyz, r2, r0, r1
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 78cddfc..62687f8 100644
+index 78cddfc..45d7253 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -81,6 +81,7 @@
@@ -114,14 +116,15 @@ index 78cddfc..62687f8 100644
      
      // LogDepth Read
      pow r19.x, c209_abs.z, r2.x
-@@ -326,8 +333,12 @@
+@@ -326,8 +333,13 @@
      dp3_sat r0.w, r8, r2
      pow r2.x, r0.w, r1.w
      dp3_sat r0.w, r8, r5
 +    dp3 r21.w, r8, r5 // FusionFix skin lighting: N.L, unclamped
-+    mad r21.xyz, c201, r20.w, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r21.xyz, c201, r20.w // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
++    mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
 +    mul r22.xyz, c205, r20.w // wrap / (1 + wrap) on skin, 0 elsewhere
-+    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
++    add_sat r21.xyz, r21, r22 // the game's N.L off skin
      mul r1.xyw, r0.xyzz, r2.x
 -    mul r0.xyz, r0, r0.w
 +    mul r0.xyz, r0, r21 // FusionFix skin lighting: the wrapped N.L per channel
@@ -129,7 +132,7 @@ index 78cddfc..62687f8 100644
      mul r1.xyz, r1.z, r1.xyww
      mad r26.xyz, r2, r0, r1
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 3a6badc..0f96291 100644
+index 3a6badc..3c49537 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -45,6 +45,7 @@
@@ -148,7 +151,7 @@ index 3a6badc..0f96291 100644
      add r0.xy, c0.x, vPos
      mul r0.xy, r0, c77.zwzw
      texld r1, r0, s1
-@@ -92,12 +94,21 @@
+@@ -92,12 +94,22 @@
      dp3_sat r0.w, r3, r1
      texld r1, r0, s2
      texld r4, r0, s0
@@ -164,13 +167,14 @@ index 3a6badc..0f96291 100644
      dp3 r0.y, r3, -c72
      dp3_sat r0.w, r3, r2
 +    dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
-+    mad r21.xyz, c201, r20.x, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r21.xyz, c201, r20.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
++    mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
 +    mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
-+    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
++    add_sat r21.xyz, r21, r22 // the game's N.L off skin
      add r0.y, r0.y, -c74.x
      mul_sat r0.y, r0.y, c75.x
      mul r0.x, r0.x, r0.y
-@@ -105,7 +116,7 @@
+@@ -105,7 +117,7 @@
      mul r2.xyz, r0.x, r2
      cmp r0.xyz, r0.z, r2, c3.y
      mul r2.xyz, r1.y, r0
@@ -180,7 +184,7 @@ index 3a6badc..0f96291 100644
      add r0.w, r1.x, r1.x
      mad_sat r1.x, r1.z, r1.z, c2.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 81c2ced..e0c39ce 100644
+index 81c2ced..ee5986a 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -48,6 +48,7 @@
@@ -199,7 +203,7 @@ index 81c2ced..e0c39ce 100644
      add r0.xy, c0.x, vPos
      mul r0.xy, r0, c77.zwzw
      texld r1, r0, s1
-@@ -102,6 +104,15 @@
+@@ -102,6 +104,16 @@
      mul r0.w, r0.z, c4.x
      dp3 r1.y, r3, -c72
      dp3_sat r1.z, r3, r2
@@ -209,13 +213,14 @@ index 81c2ced..e0c39ce 100644
 +    frc r20.x, r20.x
 +    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
 +    dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
-+    mad r21.xyz, c201, r20.x, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r21.xyz, c201, r20.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
++    mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
 +    mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
-+    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
++    add_sat r21.xyz, r21, r22 // the game's N.L off skin
      add r1.y, r1.y, -c74.x
      mul_sat r1.y, r1.y, c75.x
      mul r0.w, r0.w, r1.y
-@@ -109,7 +120,7 @@
+@@ -109,7 +121,7 @@
      mul r2.xyz, r0.w, r2
      cmp r2.xyz, r0.z, r2, -c2.z
      mul r3.xyz, r2.w, r2
@@ -225,7 +230,7 @@ index 81c2ced..e0c39ce 100644
      texld r0, r0, s5
      mul r0.yzw, r1, r2.xxyz
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 0db9274..cc48d56 100644
+index 0db9274..a5578b9 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -48,6 +48,7 @@
@@ -244,7 +249,7 @@ index 0db9274..cc48d56 100644
      add r0.xy, c1.x, vPos
      mul r0.xy, r0, c77.zwzw
      texld r1, r0, s1
-@@ -101,6 +103,15 @@
+@@ -101,6 +103,16 @@
      mul r0.w, r0.z, c4.y
      dp3 r1.y, r3, -c72
      dp3_sat r1.w, r3, r2
@@ -254,13 +259,14 @@ index 0db9274..cc48d56 100644
 +    frc r20.x, r20.x
 +    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
 +    dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
-+    mad r21.xyz, c201, r20.x, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r21.xyz, c201, r20.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
++    mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
 +    mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
-+    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
++    add_sat r21.xyz, r21, r22 // the game's N.L off skin
      add r1.y, r1.y, -c74.x
      mul_sat r1.y, r1.y, c75.x
      mul r0.w, r0.w, r1.y
-@@ -108,7 +119,7 @@
+@@ -108,7 +120,7 @@
      mul r2.xyz, r0.w, r2
      cmp r2.xyz, r0.z, r2, -c3.z
      mul r3.xyz, r2.w, r2
@@ -270,7 +276,7 @@ index 0db9274..cc48d56 100644
      texld r0, r0, s5
      mul r0.yzw, r2.xxyz, r4.xxyz
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 0732660..3938154 100644
+index 0732660..97a51cf 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -48,6 +48,7 @@
@@ -289,7 +295,7 @@ index 0732660..3938154 100644
      add r0.xy, c0.x, vPos
      mul r0.xy, r0, c77.zwzw
      texld r1, r0, s1
-@@ -102,6 +104,15 @@
+@@ -102,6 +104,16 @@
      mul r0.w, r0.z, c4.y
      dp3 r1.y, r3, -c72
      dp3_sat r1.z, r3, r2
@@ -299,13 +305,14 @@ index 0732660..3938154 100644
 +    frc r20.x, r20.x
 +    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
 +    dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
-+    mad r21.xyz, c201, r20.x, c157.y // 1 / (1 + wrap) on skin, 1 elsewhere
++    mul r21.xyz, c201, r20.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
++    mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
 +    mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
-+    mad_sat r21.xyz, r21.w, r21, r22 // the game's N.L off skin
++    add_sat r21.xyz, r21, r22 // the game's N.L off skin
      add r1.y, r1.y, -c74.x
      mul_sat r1.y, r1.y, c75.x
      mul r0.w, r0.w, r1.y
-@@ -109,7 +120,7 @@
+@@ -109,7 +121,7 @@
      mul r2.xyz, r0.w, r2
      cmp r2.xyz, r0.z, r2, -c2.z
      mul r3.xyz, r2.w, r2
