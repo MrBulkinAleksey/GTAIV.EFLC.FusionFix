@@ -2061,9 +2061,9 @@ private:
     }
 
     // Binds every sampler of the pixel shader of the pass just begun to the texture its effect
-    // parameter holds, found through the shader's constant table (sampler X reads X2D in
-    // SSR.fx). D3DX left some holding what the game had bound, about four a frame: a diagnostic
-    // pass read a G-buffer texture where it sampled the depth.
+    // parameter holds, found through the shader's constant table (sampler X reads X2D in SSR.fx
+    // and AO.fx). D3DX left some holding what the game had bound, about four a frame in the SSR
+    // passes: a diagnostic pass read a G-buffer texture where it sampled the depth.
     static void BindEffectSamplers(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
     {
         IDirect3DPixelShader9* ps = nullptr;
@@ -2155,7 +2155,6 @@ private:
         {
             clearSSR();
             R.bSSRAccumValid = false;
-            BindSSRResult(pDevice);
             return;
         }
 
@@ -2164,7 +2163,6 @@ private:
         {
             clearSSR();
             R.bSSRAccumValid = false;
-            BindSSRResult(pDevice);
             return;
         }
 
@@ -2449,8 +2447,6 @@ private:
         }
 
         R.bSSRValidThisFrame = true;
-        // Lighting draws after this; what BindSSRTexture bound on s3 was last frame's result.
-        BindSSRResult(pDevice);
 
         pDevice->SetRenderTarget(0, rt0);
         pDevice->SetRenderTarget(1, oldRT1);
@@ -2812,6 +2808,7 @@ private:
 
                 pDevice->SetRenderTarget(0, camDepthSurf[0]);
                 effect->BeginPass(0);
+                BindEffectSamplers(pDevice, effect);
                 pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
 
@@ -2839,6 +2836,7 @@ private:
                     effect->CommitChanges();
 
                     pDevice->SetRenderTarget(0, PostFxResources.AOCamDepthSurf[i]);
+                    BindEffectSamplers(pDevice, effect);
                     pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, mipVertices, sizeof(ScreenVertex));
                 }
                 effect->EndPass();
@@ -2864,6 +2862,7 @@ private:
                 effect->CommitChanges();
 
                 effect->BeginPass(2);
+                BindEffectSamplers(pDevice, effect);
                 pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
 
@@ -2877,6 +2876,7 @@ private:
                     effect->SetFloatArray(h.vec2BlurDirection, hor, 2);
                     effect->CommitChanges();
 
+                    BindEffectSamplers(pDevice, effect);
                     pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
 
                     pDevice->SetRenderTarget(0, aoSurf);
@@ -2884,6 +2884,7 @@ private:
                     effect->SetFloatArray(h.vec2BlurDirection, ver, 2);
                     effect->CommitChanges();
 
+                    BindEffectSamplers(pDevice, effect);
                     pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 }
                 effect->EndPass();
@@ -2893,6 +2894,7 @@ private:
                 effect->SetTexture(h.AOTexture2D, aoTex);
 
                 effect->BeginPass(4);
+                BindEffectSamplers(pDevice, effect);
                 pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
             }
@@ -3101,6 +3103,9 @@ private:
         RenderAmbientOcclusion();
         RenderScreenSpaceReflections();
         RenderContactShadows();
+        // deferred_lighting draws after this; BindSSRTexture bound last frame's results.
+        if (auto pDevice = rage::grcDevice::GetD3DDevice())
+            BindLightingInputs(pDevice);
 
         return result;
     }
@@ -3389,11 +3394,25 @@ private:
     }
 
 public:
-    // s3 for deferred_lighting: this frame's SSR result, the cleared SSR target while SSR is
-    // off, else a transparent 1x1.
-    static void BindSSRResult(IDirect3DDevice9* pDevice)
+    // What deferred_lighting reads besides the game's own inputs: s3 the SSR result (the cleared
+    // SSR target while SSR is off, else a transparent 1x1), s9 the contact shadows while they
+    // are valid, and c202-c204 the local light contact shadow constants.
+    static void BindLightingInputs(IDirect3DDevice9* pDevice)
     {
         auto& R = PostFxResources;
+        // s9 is read by no game shader, and the car glass takes it over right after lighting.
+        if (R.bContactValid && R.ContactTex && R.ContactTex->mD3DTexture)
+        {
+            BindSampler(pDevice, 9, R.ContactTex->mD3DTexture, D3DTEXF_POINT);
+            R.bContactBound = true;
+        }
+        else if (R.bContactBound)
+        {
+            pDevice->SetTexture(9, nullptr);
+            R.bContactBound = false;
+        }
+        pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
+
         IDirect3DBaseTexture9* tex = R.TransparentTex();
         if (R.SSRResult)
             tex = R.SSRResult;
@@ -3408,28 +3427,15 @@ public:
     }
 
     // Runs as the first command of the lighting phase's list (OnBuildRenderList), before the
-    // command in that list that renders SSR, so R.SSRResult here is still last frame's. Without
-    // accumulation that is the same texture SSR is about to overwrite, so lighting still saw this
-    // frame's; with it, SSR wrote the other target of the pair and lighting showed last frame's
-    // reflections, which swung off the car while the camera turned and came back when it
-    // stopped. RenderScreenSpaceReflections binds this frame's result again once it is done.
+    // command in that list that renders AO, SSR and contact shadows, so what it binds is last
+    // frame's. For the accumulated SSR that was the other target of the pair, and lighting
+    // showed last frame's reflections, which swung off the car while the camera turned and came
+    // back when it stopped; the contact shadows' validity and constants were a frame old too.
+    // RenderPedAndVehicleFakeShadows binds this frame's once they are done.
     static void BindSSRTexture()
     {
-        auto& R = PostFxResources;
-        auto pDevice = rage::grcDevice::GetD3DDevice();
-        if (!pDevice)
-            return;
-
-        // Contact shadows for deferred_lighting; s9 is read by no game shader, and the car glass
-        // takes it over right after lighting.
-        if (R.bContactValid && R.ContactTex && R.ContactTex->mD3DTexture)
-        {
-            BindSampler(pDevice, 9, R.ContactTex->mD3DTexture, D3DTEXF_POINT);
-            R.bContactBound = true;
-        }
-
-        pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
-        BindSSRResult(pDevice);
+        if (auto pDevice = rage::grcDevice::GetD3DDevice())
+            BindLightingInputs(pDevice);
     }
 
     static void BindSampler(IDirect3DDevice9* pDevice, DWORD slot, IDirect3DBaseTexture9* tex, DWORD filter)
