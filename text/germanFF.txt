@@ -175,6 +175,9 @@ Contact Shadows
 [SSGI]
 Indirect Light (SSGI)
 
+[SkinSSS]
+Skin Scattering (SSS)
+
 [Fill Lights]
 Building Fill Lights
 

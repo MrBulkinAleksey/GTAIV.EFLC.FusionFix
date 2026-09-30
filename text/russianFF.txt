@@ -175,6 +175,9 @@ Logitech LightSync RGB
 [SSGI]
 Непрямой свет (SSGI)
 
+[SkinSSS]
+Рассеяние в коже (SSS)
+
 [Fill Lights]
 Заливающий свет зданий
 

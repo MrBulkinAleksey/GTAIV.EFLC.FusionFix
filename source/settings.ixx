@@ -1569,6 +1569,7 @@ public:
             { 0, "PREF_VOLUMETRIC_LIGHT",       "POSTFX",     "VolumetricLight",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_CONTACTSHADOWS",         "POSTFX",     "ContactShadows",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSGI",                   "POSTFX",     "ScreenSpaceIndirectLight",           "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_SKIN_SSS",               "POSTFX",     "SkinScattering",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_HEADLIGHT_REACH",        "SHADOWS",    "HeadlightShadowReach",               "",                           10, nullptr, 0, 40 },
             { 0, "PREF_LAMP_REACH",             "SHADOWS",    "LamppostShadowReach",                "",                           10, nullptr, 0, 40 },
         };

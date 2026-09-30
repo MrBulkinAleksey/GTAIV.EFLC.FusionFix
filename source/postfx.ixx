@@ -299,7 +299,7 @@ public:
     // y, with the rest of the scene, back into [0], which the fog pass reads instead of the scene.
     // Skin is where shaders/patches/ped_skin_scattering_mask.patch puts a quarter step on the
     // material ID the G-buffer pass writes to _STENCIL_BUFFER_.
-    bool bSkinScattering = true;
+    static bool SkinScatteringEnabled() { static auto p = FusionFixSettings.GetRef("PREF_SKIN_SSS"); return p && p->get() != 0; }
     float fSkinScatteringWidth = 0.01f;
     float fSkinScatteringStrength = 1.0f;
     static constexpr int kSkinDebugMode = 9;
@@ -1061,7 +1061,6 @@ public:
         fGIIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightIntensity", 1.0f), 0.0f, 8.0f);
         fGIMaxBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxBrightness", 4.0f), 0.05f, 8.0f);
         fGIOcclusion = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightOcclusion", 1.0f), 0.0f, 1.0f);
-        bSkinScattering = iniReader.ReadInteger("POSTFX", "SkinScattering", 1) != 0;
         fSkinScatteringWidth = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringWidth", 0.01f), 0.001f, 0.1f);
         fSkinScatteringStrength = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringStrength", 1.0f), 0.0f, 1.0f);
         fGIRayLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", 4.0f), 0.1f, 20.0f);
@@ -3967,7 +3966,7 @@ private:
         auto& R = PostFxResources;
         auto& h = R.SSREffectHandles;
         ID3DXEffect* effect = R.SSREffect;
-        const bool scatter = R.bSkinScattering && R.fSkinScatteringStrength > 0.0f;
+        const bool scatter = R.SkinScatteringEnabled() && R.fSkinScatteringStrength > 0.0f;
         const bool debug = R.SSRDebugMode() == R.kSkinDebugMode && R.SSRDebugSurf && h.techSkinDebug;
         if ((!scatter && !debug) || !pDevice || !effect || !scene || scene->GetType() != D3DRTYPE_TEXTURE ||
             !h.techSkinLight || !h.techSkinScatter || !h.techSkinScatterFinal || !R.mMaterialIdRT || !R.mMaterialIdRT->mD3DTexture ||
