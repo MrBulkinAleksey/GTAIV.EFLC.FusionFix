@@ -146,10 +146,11 @@ uniform float fCSIntensity;         // strength, 0..1
 #ifndef CS_STEPS
 #define CS_STEPS 16
 #endif
-// Metres to either side of a deep contact shadow ray's end where it must still be behind the
-// scene: whatever is narrower than twice this, a ped, a pole, does not hide the end, see
-// ContactShadows_PS.
+// A deep contact shadow ray's end stays in shadow only if what hides it reaches this many
+// metres to its left or right, which a ped or a pole does not, and the depth there may be
+// this far off that surface; see ContactShadows_PS.
 static const float CS_PROBE_SIDE = 0.75;
+static const float CS_PROBE_TOLERANCE = 0.2;
 
 static const float HISTORY_CLAMP = 8.0;
 static const float SSR_SCALE = 1.0;
@@ -663,15 +664,19 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
     return float4(colour, a);
 }
 
-// Whether P lands behind the scene by less than maxDelta, as a deep contact shadow sample
-// does; off the screen that cannot be told.
-bool CSBehindScene(float3 P, float maxDelta)
+// Whether the surface at depth sceneZ that hides P goes on CS_PROBE_SIDE to the side given by
+// dir: the depth there must lie on the line through sceneZ and the depth a third of the way
+// out, so the surface may slope away from the camera, as a car's side seen at an angle does.
+// Off the screen that cannot be told.
+bool CSSurfaceGoesOn(float3 P, float sceneZ, float dir)
 {
-    float2 uv = ViewToUV(P);
-    if (any(uv <= 0.0) || any(uv >= 1.0))
+    float3 side = float3(dir * CS_PROBE_SIDE * P.z / sceneZ, 0.0, 0.0);
+    float2 uvNear = ViewToUV(P + side / 3.0);
+    float2 uvFar = ViewToUV(P + side);
+    if (any(uvFar <= 0.0) || any(uvFar >= 1.0))
         return false;
-    float delta = P.z - LinearDepth(uv);
-    return delta > 0.0 && delta < maxDelta;
+    float expected = sceneZ + 3.0 * (LinearDepth(uvNear) - sceneZ);
+    return abs(LinearDepth(uvFar) - expected) < CS_PROBE_TOLERANCE;
 }
 
 // Contact shadows: a short ray from each pixel towards the sun through the depth buffer. The
@@ -722,7 +727,7 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     // does not, so such a sample occludes only if no later sample of the ray is in front.
     float deepT = -1.0;
     float3 P = P0;
-    float sceneZ = 0.0, deepLimit = 0.0; // at the last sample
+    float sceneZ = 0.0; // at the last sample
 
     [loop]
     for (int i = 0; i < CS_STEPS; ++i)
@@ -744,7 +749,6 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         sceneZ = LinearDepth(sampleUV);
         float delta = P.z - sceneZ;
         float thickness = abs(P.z - prevZ) + fCSThickness;
-        deepLimit = fCSMaxThickness + thickness;
         prevZ = P.z;
         if (delta > 0.0 && delta < thickness)
         {
@@ -752,7 +756,7 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
             deepT = -1.0;
             break;
         }
-        if (delta >= thickness && delta < deepLimit)
+        if (delta >= thickness && delta < fCSMaxThickness + thickness)
         {
             if (deepT < 0.0)
                 deepT = t;
@@ -765,14 +769,15 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     }
     // A ray still behind the scene at its end may be inside a car, or merely too short to
     // pass a ped: behind a ped's back the depth reads the same as under a car, and such rays
-    // drew a dark outline round peds on the ground and walls close behind them. A car is
-    // wider than 2 * CS_PROBE_SIDE seen from any side, a ped or a pole is not, so the end
-    // stays in shadow only if it is also behind the scene CS_PROBE_SIDE to its left or right,
-    // measured at the depth of what hides it.
+    // drew a dark outline round peds on the ground, walls and cars close behind them. A car
+    // is wider than 2 * CS_PROBE_SIDE seen from any side, a ped or a pole is not, so the end
+    // stays in shadow only if the surface hiding it goes on that far to its left or right,
+    // measured at its depth. Asking only whether the end is behind the scene there was not
+    // enough: a car's side seen at an angle behind a ped comes nearer on one side.
+    [branch]
     if (deepT >= 0.0)
     {
-        float3 side = float3(CS_PROBE_SIDE * P.z / sceneZ, 0.0, 0.0);
-        if (!CSBehindScene(P - side, deepLimit) && !CSBehindScene(P + side, deepLimit))
+        if (!CSSurfaceGoesOn(P, sceneZ, -1.0) && !CSSurfaceGoesOn(P, sceneZ, 1.0))
             deepT = -2.0;
     }
     if (deepT >= 0.0)
