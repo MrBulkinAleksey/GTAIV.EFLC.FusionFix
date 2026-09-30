@@ -712,7 +712,12 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         float3 P = P0 + L * (len * t);
         float2 sampleUV = ViewToUV(P);
         if (any(sampleUV <= 0.0) || any(sampleUV >= 1.0))
+        {
+            // Off the screen a deep sample cannot tell whether the ray came out again, and one
+            // counted as shadow drew false shadows along the screen edges.
+            deepT = -1.0;
             break;
+        }
 
         // The depth buffer only holds the front of things. Anything a sample lands behind by
         // less than the thickness occludes; the thickness grows by the depth this step covered,

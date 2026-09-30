@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index 2337a59..8adf726 100644
+index 2337a59..ef744ad 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 @@ -40,6 +40,14 @@
@@ -17,7 +17,7 @@ index 2337a59..8adf726 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -80,8 +88,164 @@
+@@ -80,8 +88,173 @@
      mul r1.xyz, c76.w, c76
      mul r0.xyw, r0.x, r1.xyzz
      mul r0.xyw, r3.xyzz, r0
@@ -102,7 +102,10 @@ index 2337a59..8adf726 100644
 +          dp3 r15.y, r14, c13
 +          dp3 r15.z, r14, c14
 +          mul r16.w, r15.z, r28.x
-+          break_le r16.w, c158.w // behind the camera
++          if_le r16.w, c158.w // behind the camera; a deep sample cannot tell there whether it came out again
++            mov r19.z, -c157.y
++            break
++          endif
 +          mul r16.x, r15.x, r27.x
 +          mad r16.x, r15.z, r27.z, r16.x
 +          mul r16.y, r15.y, r27.y
@@ -112,9 +115,15 @@ index 2337a59..8adf726 100644
 +          mad r12.xy, r16, c158.xy, c158.zz
 +          mov r12.zw, c158.w
 +          min r15.w, r12.x, r12.y
-+          break_lt r15.w, c158.w // left the screen
++          if_lt r15.w, c158.w // left the screen, where a deep sample cannot tell either
++            mov r19.z, -c157.y
++            break
++          endif
 +          max r15.w, r12.x, r12.y
-+          break_gt r15.w, c157.y
++          if_gt r15.w, c157.y
++            mov r19.z, -c157.y
++            break
++          endif
 +          texldl r14, r12, s2
 +          pow r19.x, c209_abs.z, r14.x
 +          mul r14.x, r19.x, c209.w
@@ -185,7 +194,7 @@ index 2337a59..8adf726 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index 1800ea7..1a5e8e9 100644
+index 1800ea7..da5997a 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 @@ -43,6 +43,14 @@
@@ -203,7 +212,7 @@ index 1800ea7..1a5e8e9 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -91,7 +99,163 @@
+@@ -91,7 +99,172 @@
      mad r1.x, r3.x, c0.w, r1.x
      add r1.x, r1.x, c1.w
      mov r0.w, c2.y
@@ -286,7 +295,10 @@ index 1800ea7..1a5e8e9 100644
 +          dp3 r15.y, r14, c13
 +          dp3 r15.z, r14, c14
 +          mul r16.w, r15.z, r28.x
-+          break_le r16.w, c158.w // behind the camera
++          if_le r16.w, c158.w // behind the camera; a deep sample cannot tell there whether it came out again
++            mov r19.z, -c157.y
++            break
++          endif
 +          mul r16.x, r15.x, r27.x
 +          mad r16.x, r15.z, r27.z, r16.x
 +          mul r16.y, r15.y, r27.y
@@ -296,9 +308,15 @@ index 1800ea7..1a5e8e9 100644
 +          mad r12.xy, r16, c158.xy, c158.zz
 +          mov r12.zw, c158.w
 +          min r15.w, r12.x, r12.y
-+          break_lt r15.w, c158.w // left the screen
++          if_lt r15.w, c158.w // left the screen, where a deep sample cannot tell either
++            mov r19.z, -c157.y
++            break
++          endif
 +          max r15.w, r12.x, r12.y
-+          break_gt r15.w, c157.y
++          if_gt r15.w, c157.y
++            mov r19.z, -c157.y
++            break
++          endif
 +          texldl r14, r12, s2
 +          pow r19.x, c209_abs.z, r14.x
 +          mul r14.x, r19.x, c209.w
@@ -369,7 +387,7 @@ index 1800ea7..1a5e8e9 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 0b4d107..c656abc 100644
+index 0b4d107..0b20b3a 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 @@ -43,6 +43,14 @@
@@ -387,7 +405,7 @@ index 0b4d107..c656abc 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -91,7 +99,163 @@
+@@ -91,7 +99,172 @@
      mad r1.x, r3.x, c0.w, r1.x
      add r1.x, r1.x, c1.w
      mov r0.w, c2.y
@@ -470,7 +488,10 @@ index 0b4d107..c656abc 100644
 +          dp3 r15.y, r14, c13
 +          dp3 r15.z, r14, c14
 +          mul r16.w, r15.z, r28.x
-+          break_le r16.w, c158.w // behind the camera
++          if_le r16.w, c158.w // behind the camera; a deep sample cannot tell there whether it came out again
++            mov r19.z, -c157.y
++            break
++          endif
 +          mul r16.x, r15.x, r27.x
 +          mad r16.x, r15.z, r27.z, r16.x
 +          mul r16.y, r15.y, r27.y
@@ -480,9 +501,15 @@ index 0b4d107..c656abc 100644
 +          mad r12.xy, r16, c158.xy, c158.zz
 +          mov r12.zw, c158.w
 +          min r15.w, r12.x, r12.y
-+          break_lt r15.w, c158.w // left the screen
++          if_lt r15.w, c158.w // left the screen, where a deep sample cannot tell either
++            mov r19.z, -c157.y
++            break
++          endif
 +          max r15.w, r12.x, r12.y
-+          break_gt r15.w, c157.y
++          if_gt r15.w, c157.y
++            mov r19.z, -c157.y
++            break
++          endif
 +          texldl r14, r12, s2
 +          pow r19.x, c209_abs.z, r14.x
 +          mul r14.x, r19.x, c209.w
@@ -553,7 +580,7 @@ index 0b4d107..c656abc 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 86f2d47..3f33a74 100644
+index 86f2d47..bfdb83b 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -77,6 +77,14 @@
@@ -571,7 +598,7 @@ index 86f2d47..3f33a74 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -305,7 +313,163 @@
+@@ -305,7 +313,172 @@
      mad r0.x, r0.x, c6.z, r0.z
      add r0.x, r0.x, c7.z
      cmp r0.x, r0.x, c2.y, r0.y
@@ -654,7 +681,10 @@ index 86f2d47..3f33a74 100644
 +          dp3 r15.y, r14, c13
 +          dp3 r15.z, r14, c14
 +          mul r16.w, r15.z, r28.x
-+          break_le r16.w, c158.w // behind the camera
++          if_le r16.w, c158.w // behind the camera; a deep sample cannot tell there whether it came out again
++            mov r19.z, -c157.y
++            break
++          endif
 +          mul r16.x, r15.x, r27.x
 +          mad r16.x, r15.z, r27.z, r16.x
 +          mul r16.y, r15.y, r27.y
@@ -664,9 +694,15 @@ index 86f2d47..3f33a74 100644
 +          mad r12.xy, r16, c158.xy, c158.zz
 +          mov r12.zw, c158.w
 +          min r15.w, r12.x, r12.y
-+          break_lt r15.w, c158.w // left the screen
++          if_lt r15.w, c158.w // left the screen, where a deep sample cannot tell either
++            mov r19.z, -c157.y
++            break
++          endif
 +          max r15.w, r12.x, r12.y
-+          break_gt r15.w, c157.y
++          if_gt r15.w, c157.y
++            mov r19.z, -c157.y
++            break
++          endif
 +          texldl r14, r12, s4
 +          pow r19.x, c209_abs.z, r14.x
 +          mul r14.x, r19.x, c209.w
@@ -737,7 +773,7 @@ index 86f2d47..3f33a74 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index d104b6c..b98e170 100644
+index d104b6c..c9ae161 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 @@ -71,6 +71,14 @@
@@ -755,7 +791,7 @@ index d104b6c..b98e170 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -268,8 +276,164 @@
+@@ -268,8 +276,173 @@
      mul r1.yzw, c83.w, c83.xxyz
      mul r1.yzw, r0.w, r1
      mul r0.xyz, r0, r1.yzww
@@ -840,7 +876,10 @@ index d104b6c..b98e170 100644
 +          dp3 r15.y, r14, c13
 +          dp3 r15.z, r14, c14
 +          mul r16.w, r15.z, r28.x
-+          break_le r16.w, c158.w // behind the camera
++          if_le r16.w, c158.w // behind the camera; a deep sample cannot tell there whether it came out again
++            mov r19.z, -c157.y
++            break
++          endif
 +          mul r16.x, r15.x, r27.x
 +          mad r16.x, r15.z, r27.z, r16.x
 +          mul r16.y, r15.y, r27.y
@@ -850,9 +889,15 @@ index d104b6c..b98e170 100644
 +          mad r12.xy, r16, c158.xy, c158.zz
 +          mov r12.zw, c158.w
 +          min r15.w, r12.x, r12.y
-+          break_lt r15.w, c158.w // left the screen
++          if_lt r15.w, c158.w // left the screen, where a deep sample cannot tell either
++            mov r19.z, -c157.y
++            break
++          endif
 +          max r15.w, r12.x, r12.y
-+          break_gt r15.w, c157.y
++          if_gt r15.w, c157.y
++            mov r19.z, -c157.y
++            break
++          endif
 +          texldl r14, r12, s2
 +          pow r19.x, c209_abs.z, r14.x
 +          mul r14.x, r19.x, c209.w
@@ -923,7 +968,7 @@ index d104b6c..b98e170 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 963ce40..5a35787 100644
+index 963ce40..da5d11c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -48,6 +48,14 @@
@@ -941,7 +986,7 @@ index 963ce40..5a35787 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -137,7 +145,163 @@
+@@ -137,7 +145,172 @@
      mad r0.xyz, r2, r0, r1
      mad_sat r1.x, r4.z, r4.z, c1.y
      mov r0.w, c1.x
@@ -1024,7 +1069,10 @@ index 963ce40..5a35787 100644
 +          dp3 r15.y, r14, c13
 +          dp3 r15.z, r14, c14
 +          mul r16.w, r15.z, r28.x
-+          break_le r16.w, c158.w // behind the camera
++          if_le r16.w, c158.w // behind the camera; a deep sample cannot tell there whether it came out again
++            mov r19.z, -c157.y
++            break
++          endif
 +          mul r16.x, r15.x, r27.x
 +          mad r16.x, r15.z, r27.z, r16.x
 +          mul r16.y, r15.y, r27.y
@@ -1034,9 +1082,15 @@ index 963ce40..5a35787 100644
 +          mad r12.xy, r16, c158.xy, c158.zz
 +          mov r12.zw, c158.w
 +          min r15.w, r12.x, r12.y
-+          break_lt r15.w, c158.w // left the screen
++          if_lt r15.w, c158.w // left the screen, where a deep sample cannot tell either
++            mov r19.z, -c157.y
++            break
++          endif
 +          max r15.w, r12.x, r12.y
-+          break_gt r15.w, c157.y
++          if_gt r15.w, c157.y
++            mov r19.z, -c157.y
++            break
++          endif
 +          texldl r14, r12, s5
 +          pow r19.x, c209_abs.z, r14.x
 +          mul r14.x, r19.x, c209.w
@@ -1107,7 +1161,7 @@ index 963ce40..5a35787 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 6cdc2ec..c187ded 100644
+index 6cdc2ec..bd2e66f 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -79,6 +79,14 @@
@@ -1125,7 +1179,7 @@ index 6cdc2ec..c187ded 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -322,8 +330,164 @@
+@@ -322,8 +330,173 @@
      mul r0.xyz, r0, r0.w
      mul r2.xyz, r3, r6
      mul r1.xyz, r1.z, r1.xyww
@@ -1210,7 +1264,10 @@ index 6cdc2ec..c187ded 100644
 +          dp3 r15.y, r14, c13
 +          dp3 r15.z, r14, c14
 +          mul r16.w, r15.z, r28.x
-+          break_le r16.w, c158.w // behind the camera
++          if_le r16.w, c158.w // behind the camera; a deep sample cannot tell there whether it came out again
++            mov r19.z, -c157.y
++            break
++          endif
 +          mul r16.x, r15.x, r27.x
 +          mad r16.x, r15.z, r27.z, r16.x
 +          mul r16.y, r15.y, r27.y
@@ -1220,9 +1277,15 @@ index 6cdc2ec..c187ded 100644
 +          mad r12.xy, r16, c158.xy, c158.zz
 +          mov r12.zw, c158.w
 +          min r15.w, r12.x, r12.y
-+          break_lt r15.w, c158.w // left the screen
++          if_lt r15.w, c158.w // left the screen, where a deep sample cannot tell either
++            mov r19.z, -c157.y
++            break
++          endif
 +          max r15.w, r12.x, r12.y
-+          break_gt r15.w, c157.y
++          if_gt r15.w, c157.y
++            mov r19.z, -c157.y
++            break
++          endif
 +          texldl r14, r12, s5
 +          pow r19.x, c209_abs.z, r14.x
 +          mul r14.x, r19.x, c209.w
@@ -1293,7 +1356,7 @@ index 6cdc2ec..c187ded 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 21f11d1..9c5ac76 100644
+index 21f11d1..9fbab64 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -43,6 +43,14 @@
@@ -1311,7 +1374,7 @@ index 21f11d1..9c5ac76 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -103,7 +111,163 @@
+@@ -103,7 +111,172 @@
      mad_sat r1.x, r1.z, r1.z, c2.x
      mad r0.xyz, r0.w, r2, r0
      mov r0.w, c2.z
@@ -1394,7 +1457,10 @@ index 21f11d1..9c5ac76 100644
 +          dp3 r15.y, r14, c13
 +          dp3 r15.z, r14, c14
 +          mul r16.w, r15.z, r28.x
-+          break_le r16.w, c158.w // behind the camera
++          if_le r16.w, c158.w // behind the camera; a deep sample cannot tell there whether it came out again
++            mov r19.z, -c157.y
++            break
++          endif
 +          mul r16.x, r15.x, r27.x
 +          mad r16.x, r15.z, r27.z, r16.x
 +          mul r16.y, r15.y, r27.y
@@ -1404,9 +1470,15 @@ index 21f11d1..9c5ac76 100644
 +          mad r12.xy, r16, c158.xy, c158.zz
 +          mov r12.zw, c158.w
 +          min r15.w, r12.x, r12.y
-+          break_lt r15.w, c158.w // left the screen
++          if_lt r15.w, c158.w // left the screen, where a deep sample cannot tell either
++            mov r19.z, -c157.y
++            break
++          endif
 +          max r15.w, r12.x, r12.y
-+          break_gt r15.w, c157.y
++          if_gt r15.w, c157.y
++            mov r19.z, -c157.y
++            break
++          endif
 +          texldl r14, r12, s4
 +          pow r19.x, c209_abs.z, r14.x
 +          mul r14.x, r19.x, c209.w
@@ -1477,7 +1549,7 @@ index 21f11d1..9c5ac76 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 3a813bf..bcf0776 100644
+index 3a813bf..bca8d92 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -46,6 +46,14 @@
@@ -1495,7 +1567,7 @@ index 3a813bf..bcf0776 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -112,7 +120,163 @@
+@@ -112,7 +120,172 @@
      mad r0.x, r0.x, c2.x, r0.y
      add r0.x, r0.x, c2.w
      cmp r0.x, r0.x, c3.x, c3.y
@@ -1578,7 +1650,10 @@ index 3a813bf..bcf0776 100644
 +          dp3 r15.y, r14, c13
 +          dp3 r15.z, r14, c14
 +          mul r16.w, r15.z, r28.x
-+          break_le r16.w, c158.w // behind the camera
++          if_le r16.w, c158.w // behind the camera; a deep sample cannot tell there whether it came out again
++            mov r19.z, -c157.y
++            break
++          endif
 +          mul r16.x, r15.x, r27.x
 +          mad r16.x, r15.z, r27.z, r16.x
 +          mul r16.y, r15.y, r27.y
@@ -1588,9 +1663,15 @@ index 3a813bf..bcf0776 100644
 +          mad r12.xy, r16, c158.xy, c158.zz
 +          mov r12.zw, c158.w
 +          min r15.w, r12.x, r12.y
-+          break_lt r15.w, c158.w // left the screen
++          if_lt r15.w, c158.w // left the screen, where a deep sample cannot tell either
++            mov r19.z, -c157.y
++            break
++          endif
 +          max r15.w, r12.x, r12.y
-+          break_gt r15.w, c157.y
++          if_gt r15.w, c157.y
++            mov r19.z, -c157.y
++            break
++          endif
 +          texldl r14, r12, s4
 +          pow r19.x, c209_abs.z, r14.x
 +          mul r14.x, r19.x, c209.w
@@ -1661,7 +1742,7 @@ index 3a813bf..bcf0776 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 4333137..2dbed0c 100644
+index 4333137..bc21438 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -46,6 +46,14 @@
@@ -1679,7 +1760,7 @@ index 4333137..2dbed0c 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -114,7 +122,163 @@
+@@ -114,7 +122,172 @@
      add r0.x, r0.x, c3.w
      cmp r0.x, r0.x, c0.x, c0.y
      mul r0, r2, r0.x
@@ -1762,7 +1843,10 @@ index 4333137..2dbed0c 100644
 +          dp3 r15.y, r14, c13
 +          dp3 r15.z, r14, c14
 +          mul r16.w, r15.z, r28.x
-+          break_le r16.w, c158.w // behind the camera
++          if_le r16.w, c158.w // behind the camera; a deep sample cannot tell there whether it came out again
++            mov r19.z, -c157.y
++            break
++          endif
 +          mul r16.x, r15.x, r27.x
 +          mad r16.x, r15.z, r27.z, r16.x
 +          mul r16.y, r15.y, r27.y
@@ -1772,9 +1856,15 @@ index 4333137..2dbed0c 100644
 +          mad r12.xy, r16, c158.xy, c158.zz
 +          mov r12.zw, c158.w
 +          min r15.w, r12.x, r12.y
-+          break_lt r15.w, c158.w // left the screen
++          if_lt r15.w, c158.w // left the screen, where a deep sample cannot tell either
++            mov r19.z, -c157.y
++            break
++          endif
 +          max r15.w, r12.x, r12.y
-+          break_gt r15.w, c157.y
++          if_gt r15.w, c157.y
++            mov r19.z, -c157.y
++            break
++          endif
 +          texldl r14, r12, s4
 +          pow r19.x, c209_abs.z, r14.x
 +          mul r14.x, r19.x, c209.w
@@ -1845,7 +1935,7 @@ index 4333137..2dbed0c 100644
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 76eac90..22fe8f6 100644
+index 76eac90..c97b4e7 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -46,6 +46,14 @@
@@ -1863,7 +1953,7 @@ index 76eac90..22fe8f6 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -116,7 +124,163 @@
+@@ -116,7 +124,172 @@
      add r0.x, -r0_abs.x, c3.w
      cmp r0.x, r0.x, -c3.z, -c3.y
      mov r1.w, -c3.z
@@ -1946,7 +2036,10 @@ index 76eac90..22fe8f6 100644
 +          dp3 r15.y, r14, c13
 +          dp3 r15.z, r14, c14
 +          mul r16.w, r15.z, r28.x
-+          break_le r16.w, c158.w // behind the camera
++          if_le r16.w, c158.w // behind the camera; a deep sample cannot tell there whether it came out again
++            mov r19.z, -c157.y
++            break
++          endif
 +          mul r16.x, r15.x, r27.x
 +          mad r16.x, r15.z, r27.z, r16.x
 +          mul r16.y, r15.y, r27.y
@@ -1956,9 +2049,15 @@ index 76eac90..22fe8f6 100644
 +          mad r12.xy, r16, c158.xy, c158.zz
 +          mov r12.zw, c158.w
 +          min r15.w, r12.x, r12.y
-+          break_lt r15.w, c158.w // left the screen
++          if_lt r15.w, c158.w // left the screen, where a deep sample cannot tell either
++            mov r19.z, -c157.y
++            break
++          endif
 +          max r15.w, r12.x, r12.y
-+          break_gt r15.w, c157.y
++          if_gt r15.w, c157.y
++            mov r19.z, -c157.y
++            break
++          endif
 +          texldl r14, r12, s4
 +          pow r19.x, c209_abs.z, r14.x
 +          mul r14.x, r19.x, c209.w

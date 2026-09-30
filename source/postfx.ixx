@@ -265,9 +265,10 @@ public:
     bool bLocalContactShadowsDebug = false;
     float fLocalContactShadowMaxDistance = 40.0f;
     float fLocalContactShadowIntensity = 1.0f;
-    // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34, the
-    // max thickness, the debug flag and 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
-    // the viewport hook runs for every view and the last before lighting is not the camera's.
+    // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34,
+    // the max thickness, the debug flag and 12345 in w while they are on; c204 its _11, _22,
+    // _31, _32. Set right before lighting, as the viewport hook runs for every view and the
+    // last before lighting is not the camera's.
     float LocalContactShadowConsts[12] = {};
     // The engine's own light shafts on street lights, as the snow season turns them on (see
     // OnAfterCopyLight in seasonal/snow.ixx), at all times: spot lights of 8 to 20 m that are
