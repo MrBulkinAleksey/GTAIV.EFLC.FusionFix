@@ -211,6 +211,9 @@ public:
     // GTAIV.exe, see LogSSRPass. nPostFXFrame counts NewPostFX, which runs once a frame.
     FILE* SSRLog = nullptr;
     int nSSRLogLines = 0;
+    // 9x1 target for SSRProbe_PS in SSR.fx and its copy in system memory, see ReadSSRProbes.
+    IDirect3DSurface9* SSRProbeSurf = nullptr;
+    IDirect3DSurface9* SSRProbeSysSurf = nullptr;
     uint32_t nPostFXFrame = 0;
     D3DXVECTOR4 SSRReprojRows[4] = {};
     bool bSSRReprojValid = false;
@@ -247,7 +250,7 @@ public:
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY;
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, SSRHitTex2D, fTemporalBlend, fJitterOffset, fTemporalFollowImage, techSSRTemporal;
-        D3DXHANDLE fTemporalDebug, vec4CameraPos;
+        D3DXHANDLE fTemporalDebug, vec4CameraPos, techSSRProbe;
     } SSREffectHandles = {};
 
     // PREF_SSR: 0 off, 1 half resolution, 2 full resolution.
@@ -818,6 +821,7 @@ public:
                 h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
                 h.fJitterOffset = SSREffect->GetParameterByName(nullptr, "fJitterOffset");
                 h.techSSRTemporal = SSREffect->GetTechniqueByName("SSRTemporal");
+                h.techSSRProbe = SSREffect->GetTechniqueByName("SSRProbe");
             }
         }
 
@@ -1209,6 +1213,8 @@ private:
                 PostFxResources.SSRHitTex[half] = nullptr;
             }
         }
+        SAFE_RELEASE(PostFxResources.SSRProbeSurf);
+        SAFE_RELEASE(PostFxResources.SSRProbeSysSurf);
         PostFxResources.bSSRAccumValid = false;
         PostFxResources.bSSRDebugValid = false;
         PostFxResources.bSSRValidThisFrame = false;
@@ -2142,12 +2148,59 @@ private:
         R.SSRPrevGameView = gameView;
     }
 
+    // Draws SSRProbe_PS into the 9x1 target and reads it back; the effect still holds this
+    // frame's SSR parameters. Reading back waits for the GPU, which only the debug modes do.
+    static bool ReadSSRProbes(IDirect3DDevice9* pDevice, D3DXVECTOR4 probes[9])
+    {
+        auto& R = PostFxResources;
+        auto& h = R.SSREffectHandles;
+        if (!h.techSSRProbe)
+            return false;
+        if (!R.SSRProbeSurf && FAILED(pDevice->CreateRenderTarget(9, 1, D3DFMT_A32B32G32R32F, D3DMULTISAMPLE_NONE, 0, FALSE,
+                                                                  &R.SSRProbeSurf, nullptr)))
+            return false;
+        if (!R.SSRProbeSysSurf && FAILED(pDevice->CreateOffscreenPlainSurface(9, 1, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM,
+                                                                              &R.SSRProbeSysSurf, nullptr)))
+            return false;
+
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        const ScreenVertex quad[4] =
+        {
+            { -0.5f, -0.5f, 0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,  0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+            {  8.5f, -0.5f, 0.0f, 1.0f, 1.0f, 0.0f },
+            {  8.5f,  0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+        };
+        pDevice->SetRenderTarget(0, R.SSRProbeSurf);
+        UINT passes = 0;
+        R.SSREffect->SetTechnique(h.techSSRProbe);
+        R.SSREffect->Begin(&passes, 0);
+        R.SSREffect->BeginPass(0);
+        R.SSREffect->CommitChanges();
+        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(ScreenVertex));
+        R.SSREffect->EndPass();
+        R.SSREffect->End();
+
+        if (FAILED(pDevice->GetRenderTargetData(R.SSRProbeSurf, R.SSRProbeSysSurf)))
+            return false;
+        D3DLOCKED_RECT locked = {};
+        if (FAILED(R.SSRProbeSysSurf->LockRect(&locked, nullptr, D3DLOCK_READONLY)))
+            return false;
+        memcpy(probes, locked.pBits, 9 * sizeof(D3DXVECTOR4));
+        R.SSRProbeSysSurf->UnlockRect();
+        return true;
+    }
+
     // One line per SSR pass while debug mode 8 to 10 is picked, up to 3000, written to
     // FusionFix.SSR.log next to GTAIV.exe from the moment the mode is picked: the frame, the
     // time, the viewport and its camera, whether there is history to keep, and in pixels how
     // far vec4ViewToPrevClip moves the screen centre at 10 m, which should follow the camera.
-    static void LogSSRPass(const rage::grcViewport* vp, const D3DMATRIX& proj, float width, float height,
-                           const D3DXVECTOR4 rows[4])
+    // Then for each of the nine probes of SSRProbe_PS, in pixels of the SSR pass (passWidth by
+    // passHeight): z its view depth, gpuX/Y how far the shader moves it into last frame,
+    // cpuX/Y how far the same maths moves it here, prevZ last frame's depth where the shader
+    // put it and expZ the depth it should find there.
+    static void LogSSRPass(IDirect3DDevice9* pDevice, const rage::grcViewport* vp, const D3DMATRIX& proj, float width,
+                           float height, float passWidth, float passHeight, const D3DXVECTOR4 rows[4])
     {
         auto& R = PostFxResources;
         if (R.SSRDebugMode() < R.kTemporalDebugMode)
@@ -2173,7 +2226,11 @@ private:
                 R.nSSRLogLines = 3000;
                 return;
             }
-            fprintf(R.SSRLog, "frame,ms,viewport,fwdX,fwdY,fwdZ,posX,posY,posZ,p11,p22,p31,p32,accumValid,accumIndex,shiftX,shiftY\n");
+            fprintf(R.SSRLog, "frame,ms,viewport,width,height,near,far,fwdX,fwdY,fwdZ,posX,posY,posZ,p11,p22,p31,p32,"
+                              "accumValid,accumIndex,shiftX,shiftY");
+            for (int k = 0; k < 9; ++k)
+                fprintf(R.SSRLog, ",z%d,gpuX%d,gpuY%d,cpuX%d,cpuY%d,prevZ%d,expZ%d", k, k, k, k, k, k, k);
+            fprintf(R.SSRLog, "\n");
         }
 
         LARGE_INTEGER now, freq;
@@ -2181,12 +2238,15 @@ private:
         QueryPerformanceFrequency(&freq);
         const double ms = double(now.QuadPart) * 1000.0 / double(freq.QuadPart);
 
+        auto reproject = [&](float x, float y, float z, float clip[4])
+        {
+            for (int i = 0; i < 4; ++i)
+                clip[i] = x * rows[0][i] + y * rows[1][i] + z * rows[2][i] + rows[3][i];
+        };
+
         // The screen centre at 10 m in SSR.fx's reconstruction space, through HistoryUV.
-        const float z = 10.0f;
-        const float x = -proj._31 / proj._11 * z, y = proj._32 / proj._22 * z;
         float clip[4];
-        for (int i = 0; i < 4; ++i)
-            clip[i] = x * rows[0][i] + y * rows[1][i] + z * rows[2][i] + rows[3][i];
+        reproject(-proj._31 / proj._11 * 10.0f, proj._32 / proj._22 * 10.0f, 10.0f, clip);
         float shiftX = 0.0f, shiftY = 0.0f;
         if (clip[3] > 0.0f)
         {
@@ -2195,10 +2255,34 @@ private:
         }
 
         const auto& viewInv = vp->mViewInverseMatrix;
-        fprintf(R.SSRLog, "%u,%.3f,%p,%.5f,%.5f,%.5f,%.3f,%.3f,%.3f,%.5f,%.5f,%.5f,%.5f,%d,%d,%.2f,%.2f\n",
-                R.nPostFXFrame, ms, (const void*)vp, viewInv[2][0], viewInv[2][1], viewInv[2][2],
-                viewInv[3][0], viewInv[3][1], viewInv[3][2], proj._11, proj._22, proj._31, proj._32,
-                R.bSSRAccumValid ? 1 : 0, R.nSSRAccumIndex, shiftX, shiftY);
+        fprintf(R.SSRLog, "%u,%.3f,%p,%d,%d,%.4f,%.2f,%.5f,%.5f,%.5f,%.3f,%.3f,%.3f,%.5f,%.5f,%.5f,%.5f,%d,%d,%.2f,%.2f",
+                R.nPostFXFrame, ms, (const void*)vp, vp->mWidth, vp->mHeight, vp->mNearClip, vp->mFarClip,
+                viewInv[2][0], viewInv[2][1], viewInv[2][2], viewInv[3][0], viewInv[3][1], viewInv[3][2],
+                proj._11, proj._22, proj._31, proj._32, R.bSSRAccumValid ? 1 : 0, R.nSSRAccumIndex, shiftX, shiftY);
+
+        // SSR.fx's reconstruction basis for the pass size, as setPassSize sets it.
+        const float projInfo[4] = { -2.0f / (passWidth * proj._11), -2.0f / (passHeight * proj._22),
+                                    (1.0f - proj._31) / proj._11, (1.0f + proj._32) / proj._22 };
+        D3DXVECTOR4 probes[9] = {};
+        const bool probed = ReadSSRProbes(pDevice, probes);
+        for (int k = 0; k < 9; ++k)
+        {
+            const D3DXVECTOR4& pr = probes[k];
+            if (!probed || pr.x <= 0.0f)
+            {
+                fprintf(R.SSRLog, ",,,,,,,");
+                continue;
+            }
+            // The probe's pixel centre, as SSRProbe_PS picks it.
+            const float px = floorf((0.2f + 0.3f * float(k % 3)) * passWidth) + 0.5f;
+            const float py = floorf((0.2f + 0.3f * float(k / 3)) * passHeight) + 0.5f;
+            reproject((px * projInfo[0] + projInfo[2]) * pr.x, (py * projInfo[1] + projInfo[3]) * pr.x, pr.x, clip);
+            const float cpuX = (clip[0] / clip[3] * 0.5f + 0.5f) * passWidth - px;
+            const float cpuY = (-clip[1] / clip[3] * 0.5f + 0.5f) * passHeight - py;
+            fprintf(R.SSRLog, ",%.3f,%.2f,%.2f,%.2f,%.2f,%.3f,%.3f", pr.x, pr.y * passWidth - px, pr.z * passHeight - py,
+                    cpuX, cpuY, pr.w, clip[3]);
+        }
+        fprintf(R.SSRLog, "\n");
         fflush(R.SSRLog);
         ++R.nSSRLogLines;
     }
@@ -2364,7 +2448,6 @@ private:
         effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
         memcpy(R.SSRReprojRows, reprojRows, sizeof(reprojRows));
         R.bSSRReprojValid = true;
-        LogSSRPass(vp, proj, width, height, reprojRows);
 
         R.SSRPrevViewProj = viewProj;
         R.bSSRPrevViewProjValid = true;
@@ -2495,6 +2578,8 @@ private:
         else
             R.bSSRAccumValid = false;
         R.SSRResult = ssrResult;
+        LogSSRPass(pDevice, vp, proj, width, height, half ? float(DWORD(width) / 2) : width,
+                   half ? float(DWORD(height) / 2) : height, reprojRows);
 
         const int debugMode = R.SSRDebugMode();
         if (debugMode && (debugMode < R.kGlassDebugMode || debugMode >= R.kTemporalDebugMode) && R.SSRDebugSurf && h.techSSRDebug && hasNormals)

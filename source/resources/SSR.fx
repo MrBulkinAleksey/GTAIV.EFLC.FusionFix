@@ -809,6 +809,23 @@ float4 SSRTemporalDebug(float2 uv, float2 vPos)
     return float4(lerp(current, history, fTemporalBlend), 1.0);
 }
 
+// Debug modes 8 to 10 also draw this into a 9x1 target that LogSSRPass reads back: for nine
+// spots on a 3x3 grid over the screen, the view depth, where HistoryUV puts the spot in last
+// frame, and last frame's depth there. In a still scene that depth is the spot's own depth as
+// last frame's camera saw it, if the history is taken from the right place. x is -1 for sky.
+float4 SSRProbe_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+{
+    float i = floor(vPos.x + 0.25);
+    float2 p = float2(0.2 + 0.3 * fmod(i, 3.0), 0.2 + 0.3 * floor(i / 3.0));
+    p = (floor(p / vec2InvViewportSize) + 0.5) * vec2InvViewportSize;
+    if (tex2Dlod(DepthTex, float4(p, 0, 0)).r >= 0.9999)
+        return float4(-1.0, 0.0, 0.0, 0.0);
+    float z = LinearDepth(p);
+    float2 prevUV = HistoryUV(ViewPosFromUVZ(p, z));
+    float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * fNearPlane;
+    return float4(z, prevUV, prevZ);
+}
+
 // Blends this frame's SSR (SSRResultTex, after smoothing) with last frame's accumulation
 // (SSRAccumTex). A reflection moves like the mirror image of what it shows, which lies behind
 // the surface along the view ray, as far behind it as the reflected ray was long (SSRHitTex):
@@ -930,6 +947,15 @@ technique SSRTemporal
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSRTemporal_PS();
+    }
+}
+
+technique SSRProbe
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SSRProbe_PS();
     }
 }
 
