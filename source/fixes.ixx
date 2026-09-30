@@ -1090,7 +1090,9 @@ public:
 
             // Fix the date going backwards when dying or getting busted between 12pm and 11pm, and respraying between 9pm and 11:59pm (https://github.com/GTAmodding/GTAIV-Issues-List/issues/164)
             {
-                auto pattern = hook::pattern("6A ? 53 55 56");
+                // The call and imul keep it unique: the bare push sequence also shows up inside relocated addresses,
+                // e.g. 8B 0D 94 44 6A 01 53 55 56 at 0x905D80 with the exe loaded at 0xA70000
+                auto pattern = hook::pattern("6A ? 53 55 56 E8 ? ? ? ? 69 FF");
                 if (!pattern.empty())
                 {
                     uint8_t* ptr = (uint8_t*)pattern.get_first(0);
