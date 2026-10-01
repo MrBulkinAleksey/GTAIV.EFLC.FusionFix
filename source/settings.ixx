@@ -2097,6 +2097,12 @@ public:
             { 0, "PREF_SKIN_SSS",               "POSTFX",     "SkinScattering",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_HEADLIGHT_REACH",        "SHADOWS",    "HeadlightShadowReach",               "",                           10, nullptr, 0, 40 },
             { 0, "PREF_LAMP_REACH",             "SHADOWS",    "LamppostShadowReach",                "",                           10, nullptr, 0, 40 },
+            { 0, "PREF_SHARPENING",             "TEXTURES",   "Sharpening",                         "MENU_DISPLAY_SHARPENING",    0, nullptr, 0, 3 },
+            { 0, "PREF_TEXTURE_LOD_BIAS",       "TEXTURES",   "TextureLodBias",                     "MENU_DISPLAY_TEXTURE_LOD_BIAS", 0, nullptr, 0, 4 },
+            { 0, "PREF_ANISO_ALL_MAPS",         "TEXTURES",   "AnisotropicAllMaps",                 "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_DETAIL_TEXTURES",        "TEXTURES",   "DetailTextures",                     "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_BICUBIC_TEXTURES",       "TEXTURES",   "BicubicFiltering",                   "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_SPECULAR_AA",            "TEXTURES",   "SpecularAntiAliasing",               "",                           0, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2141,6 +2147,8 @@ public:
         DefineDisplay("MENU_DISPLAY_DISTANT_LIGHTS", { "MO_DEF", "Project2DFX" });
         DefineDisplay("MENU_DISPLAY_CUTSCENE_BARS", { "MO_OFF", "CutscBars1", "CutscBars2", "CutscBars3" });
         DefineDisplay("MENU_DISPLAY_WINDOW_MODE", { "MO_OFF", "MO_ON", "FF_BORDERLESS" });
+        DefineDisplay("MENU_DISPLAY_SHARPENING", { "MO_OFF", "MO_LOW", "MO_MED", "MO_HIGH" });
+        DefineDisplay("MENU_DISPLAY_TEXTURE_LOD_BIAS", { "MO_OFF", "LodBias1", "LodBias2", "LodBias3", "LodBias4" });
         DefineDisplay("MENU_DISPLAY_SSR_QUALITY", { "MO_OFF", "SSRHalf", "SSRFull" });
         DefineDisplay("MENU_DISPLAY_SSR_DEBUG", { "MO_OFF", "SSRDbgColour", "SSRDbgHits", "SSRDbgNormals", "SSRDbgHorizon", "SSRDbgSpecular", "SSRDbgGlass", "SSRDbgContact", "SSRDbgGI", "SSRDbgSkin" });
 
@@ -2331,6 +2339,22 @@ public:
             }
             AddEmptyLine(category);
             AddRow(category, "SSR Debug", "PREF_SSR_DEBUG", 10, "MENU_DISPLAY_SSR_DEBUG");
+        }
+
+        // Graphics: a Textures category for the sharpness and filtering of surfaces (texturequality.ixx)
+        for (auto screen : { MenuScreen::Graphics, MenuScreen::TitleGraphics })
+        {
+            auto category = AddCategory(screen, "FF_TEXTURES", "MO_ANALYZER");
+            if (category == MenuScreen::Invalid)
+                continue;
+            AddRow(category, "Sharpening", "PREF_SHARPENING", 4, "MENU_DISPLAY_SHARPENING");
+            AddEmptyLine(category);
+            AddRow(category, "TexLodBias", "PREF_TEXTURE_LOD_BIAS", 5, "MENU_DISPLAY_TEXTURE_LOD_BIAS");
+            AddRow(category, "AnisoAllMaps", "PREF_ANISO_ALL_MAPS", 2, toggle);
+            AddRow(category, "BicubicTex", "PREF_BICUBIC_TEXTURES", 2, toggle);
+            AddEmptyLine(category);
+            AddRow(category, "DetailTex", "PREF_DETAIL_TEXTURES", 2, toggle);
+            AddRow(category, "SpecularAA", "PREF_SPECULAR_AA", 2, toggle);
         }
     }
 

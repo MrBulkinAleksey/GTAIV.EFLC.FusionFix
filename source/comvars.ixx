@@ -2483,6 +2483,7 @@ public:
         static FusionFix::Event<> BuildRenderListEvent;
         return BuildRenderListEvent;
     }
+    // Commands appended here run after the whole G-buffer pass, before deferred lighting.
     static FusionFix::Event<>& OnAfterBuildRenderList()
     {
         static FusionFix::Event<> AfterBuildRenderListEvent;

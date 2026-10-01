@@ -193,6 +193,36 @@ Indirect Light (SSGI)
 [SkinSSS]
 Skin Scattering (SSS)
 
+[Sharpening]
+Sharpening (CAS)
+
+[TexLodBias]
+Texture LOD Bias
+
+[AnisoAllMaps]
+Anisotropic: All Maps
+
+[DetailTex]
+Detail Textures
+
+[BicubicTex]
+Bicubic Filtering
+
+[SpecularAA]
+Specular Anti-Aliasing
+
+[LodBias1]
+-0.25
+
+[LodBias2]
+-0.5
+
+[LodBias3]
+-0.75
+
+[LodBias4]
+-1.0
+
 [Fill Lights]
 Building Fill Lights
 
@@ -267,6 +297,9 @@ Erweitert
 
 [FF_LIGHTING]
 Beleuchtung
+
+[FF_TEXTURES]
+Texturen
 
 [FF_HREACH]
 Reichweite Scheinwerferschatten
