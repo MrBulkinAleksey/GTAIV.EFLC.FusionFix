@@ -15,10 +15,6 @@ namespace HeadlightEnhancement
     // the same game code turns the hook off at install, or replaces the jump later.
     static std::string brightnessStatus = "not checked";
     static uint8_t siteBytes[5]{};
-    static SafetyHookMid highBeamHook;
-    static const uint32_t* pGameTime = nullptr;
-    static std::atomic<uint32_t> keptHighBeams{0};
-    static std::string highBeamStatus = "not checked";
     static std::atomic<bool> diagnosticsReady{false};
     static std::filesystem::path logPath;
 
@@ -71,21 +67,6 @@ namespace HeadlightEnhancement
         ++retainedSubmissions;
     }
 
-    // Earlier in the same function (CE 0xA3F868) the game switches off the high beams of a car
-    // whose engine is off (vehicle+0xF15 & 1 clear) once 40 s have passed since they were switched
-    // on (vehicle+0xF30). Leaving a car stops its engine, so high beams that had been on longer
-    // went out the moment the player got out. Runs at "add eax, 40000" with eax the switch-on
-    // time: for the car the player drove, the 40 s count from now, so its high beams stay on
-    // with the low beams the hook above keeps at the player's brightness. Other cars, and this
-    // one once the player drives another, time out as before.
-    static void KeepHighBeamsAfterExit(SafetyHookContext& regs)
-    {
-        const auto token = lastDrivenToken.load();
-        if (!token || VehicleToken(static_cast<uintptr_t>(regs.esi)) != token) return;
-        regs.eax = *pGameTime;
-        ++keptHighBeams;
-    }
-
     static void WriteDiagnostics()
     {
         if (!diagnosticsReady.load(std::memory_order_acquire)) return;
@@ -101,8 +82,6 @@ namespace HeadlightEnhancement
             << "\nsiteIntact=" << siteIntact
             << "\nhookCalls=" << hookCalls.load(std::memory_order_relaxed)
             << "\nretainedSubmissions=" << retainedSubmissions.load()
-            << "\nhighBeamStatus=" << highBeamStatus
-            << "\nkeptHighBeams=" << keptHighBeams.load()
             << "\ntrackedVehicle=" << (lastDrivenToken.load() != 0) << '\n';
     }
 
@@ -116,30 +95,6 @@ namespace HeadlightEnhancement
             out << (i ? " " : "") << (byte < 0x10 ? "0" : "") << unsigned(byte);
         }
         return out.str();
-    }
-
-    // Without it the low beams still keep the player's brightness.
-    static void InstallHighBeams()
-    {
-        // test [esi+F15],1 / jnz / mov cl,[esi+F19] / test cl,2 / jz / mov eax,[esi+F30] /
-        // mov edx,[esp+1C] / add eax,9C40 / cmp [game time],eax / jbe
-        constexpr uint8_t timeout[]{
-            0xF6,0x86,0x15,0x0F,0,0,0x01,0x75,0x2D,
-            0x8A,0x8E,0x19,0x0F,0,0,0xF6,0xC1,0x02,0x74,0x22,
-            0x8B,0x86,0x30,0x0F,0,0,0x8B,0x54,0x24,0x1C,
-            0x05,0x40,0x9C,0,0,0x39,0x05
-        };
-        const auto block = imageBase + 0x63F868;
-        if (std::memcmp(reinterpret_cast<const void*>(block), timeout, sizeof(timeout)) ||
-            *reinterpret_cast<const uint32_t*>(block + sizeof(timeout)) != imageBase + 0xD735B4 ||
-            *reinterpret_cast<const uint8_t*>(block + sizeof(timeout) + 4) != 0x76)
-        {
-            highBeamStatus = "game code differs: " + DumpBytes(block, sizeof(timeout) + 5);
-            return;
-        }
-        pGameTime = reinterpret_cast<const uint32_t*>(imageBase + 0xD735B4);
-        highBeamHook = safetyhook::create_mid(imageBase + 0x63F886, KeepHighBeamsAfterExit);
-        highBeamStatus = highBeamHook ? "installed" : "hook failed";
     }
 
     static bool InstallBrightness(bool enabled)
@@ -175,7 +130,6 @@ namespace HeadlightEnhancement
         }
         std::memcpy(siteBytes, site, sizeof(siteBytes));
         brightnessStatus = "installed";
-        InstallHighBeams();
         return true;
     }
 }
