@@ -106,6 +106,26 @@ namespace HeadlightEnhancement
         ++retainedSubmissions;
     }
 
+    // At the end of the same function the beams are submitted with 0x504 instead of 0x104 only
+    // while the local player drives (CE 0xA4A9E0 compares the player with vehicle+F50). The car
+    // the player just left kept the high beam flag and the brightness above, yet its high beams
+    // went out, and that bit is all its submission still differs in. Runs after each of the
+    // three calls: for that car, with no one at the wheel, the answer stays "the player drives".
+    static SafetyHookMid ownBeamHooks[3];
+    static std::atomic<uint32_t> keptOwnBeams{0};
+    static std::string ownBeamStatus = "not checked";
+
+    static void KeepOwnBeamAfterExit(SafetyHookContext& regs)
+    {
+        if (regs.eax & 0xFF) return;
+        const auto vehicle = static_cast<uintptr_t>(regs.esi);
+        const auto token = lastDrivenToken.load();
+        if (!token || *reinterpret_cast<const uintptr_t*>(vehicle + 0xF50) ||
+            VehicleToken(vehicle) != token) return;
+        regs.eax |= 1;
+        ++keptOwnBeams;
+    }
+
     static void WriteDiagnostics()
     {
         if (!diagnosticsReady.load(std::memory_order_acquire)) return;
@@ -121,6 +141,8 @@ namespace HeadlightEnhancement
             << "\nsiteIntact=" << siteIntact
             << "\nhookCalls=" << hookCalls.load(std::memory_order_relaxed)
             << "\nretainedSubmissions=" << retainedSubmissions.load()
+            << "\nownBeamStatus=" << ownBeamStatus
+            << "\nkeptOwnBeams=" << keptOwnBeams.load()
             << "\ntrackedVehicle=" << (lastDrivenToken.load() != 0) << '\n';
 
         // Oldest first. highBeam is the flag the function uses (vehicle+F19 & 2, or highBeamArg);
@@ -149,6 +171,35 @@ namespace HeadlightEnhancement
             out << (i ? " " : "") << (byte < 0x10 ? "0" : "") << unsigned(byte);
         }
         return out.str();
+    }
+
+    // Without it the low beams still keep the player's brightness.
+    static void InstallOwnBeam()
+    {
+        // call 0xA4A9E0 followed by movss xmm0, [esp+disp8], the instruction hooked.
+        constexpr uint32_t calls[]{ 0x63FDBB, 0x63FE40, 0x63FEB1 };
+        constexpr uint8_t movss[]{ 0xF3,0x0F,0x10,0x44,0x24 };
+        for (const auto call : calls)
+        {
+            const auto site = imageBase + call;
+            if (*reinterpret_cast<const uint8_t*>(site) != 0xE8 ||
+                site + 5 + *reinterpret_cast<const int32_t*>(site + 1) != imageBase + 0x64A9E0 ||
+                std::memcmp(reinterpret_cast<const void*>(site + 5), movss, sizeof(movss)))
+            {
+                ownBeamStatus = "game code differs: " + DumpBytes(site, 11);
+                return;
+            }
+        }
+        for (size_t i = 0; i < std::size(calls); ++i)
+        {
+            ownBeamHooks[i] = safetyhook::create_mid(imageBase + calls[i] + 5, KeepOwnBeamAfterExit);
+            if (!ownBeamHooks[i])
+            {
+                ownBeamStatus = "hook failed";
+                return;
+            }
+        }
+        ownBeamStatus = "installed";
     }
 
     static bool InstallBrightness(bool enabled)
@@ -184,6 +235,7 @@ namespace HeadlightEnhancement
         }
         std::memcpy(siteBytes, site, sizeof(siteBytes));
         brightnessStatus = "installed";
+        InstallOwnBeam();
         return true;
     }
 }
