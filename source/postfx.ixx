@@ -331,6 +331,9 @@ public:
     float fLocalContactShadowThickness = 0.2f;
     float fLocalContactShadowMaxDistance = 40.0f;
     float fLocalContactShadowIntensity = 1.0f;
+    // [SHADOWS] ExperimentalShadowDiagnostics: the headlights near the camera as they reach the
+    // frame's light list, in FusionFix.Headlights.log (see LogCopiedHeadlight).
+    bool bHeadlightCopyLog = false;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
@@ -1035,6 +1038,7 @@ public:
         useStippleFilter = iniReader.ReadInteger("SRF", "StippleFilter", 1) != 0;
 
         bEnablePreAlphaDepth = iniReader.ReadInteger("POSTFX", "EnablePreAlphaDepth", 1) != 0;
+        bHeadlightCopyLog = iniReader.ReadInteger("SHADOWS", "ExperimentalShadowDiagnostics", 0) != 0;
 
         nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 32), 4, 128);
         nSSRRefineSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsRefineSteps", 8), 0, 16);
@@ -4195,12 +4199,60 @@ private:
             shPedSkinComponent[1] = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs) { MarkPedSkin(regs.esi); });
     }
 
+    // Every 2 s, one frame's vehicle spot lights of 8 m or more (headlights) within 30 m of the
+    // camera, as they reach the frame's light list: to tell whether the beams of a car the player
+    // just got out of still arrive, and how, next to those of the car while driven.
+    static void LogCopiedHeadlight(const rage::CLightSource* light)
+    {
+        static uint32_t frame = 0;
+        static ULONGLONG lastWrite = 0;
+        static bool started = false;
+        static FILE* log = nullptr;
+        static rage::Vector3 cameraPos{};
+        const auto current = CTimer::m_frameCount ? *CTimer::m_frameCount : 0;
+        if (current != frame)
+        {
+            frame = current;
+            if (log)
+            {
+                fclose(log);
+                log = nullptr;
+            }
+            const auto now = GetTickCount64();
+            if (now - lastWrite >= 2000)
+            {
+                lastWrite = now;
+                log = _wfopen((GetExeModulePath() / L"FusionFix.Headlights.log").c_str(), started ? L"a" : L"w");
+                started = true;
+                Cam camera = 0;
+                Natives::GetRootCam(&camera);
+                Natives::GetCamPos(camera, &cameraPos.x, &cameraPos.y, &cameraPos.z);
+                if (log)
+                    fprintf(log, "t=%llu frame=%u camera %.1f %.1f %.1f\n", now, frame, cameraPos.x, cameraPos.y, cameraPos.z);
+            }
+        }
+        if (!log || light->mType != rage::LT_SPOT || !(light->mFlags & 0x100) || light->mRadius < 8.0f)
+            return;
+        const float dx = cameraPos.x - light->mPosition.x;
+        const float dy = cameraPos.y - light->mPosition.y;
+        const float dz = cameraPos.z - light->mPosition.z;
+        const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (distance > 30.0f)
+            return;
+        fprintf(log, "  flags=0x%x radius=%.1f intensity=%.2f cone=%.1f/%.1f dir=%.2f %.2f %.2f pos=%.1f %.1f %.1f distance=%.1f shadow=%d cache=%d\n",
+            light->mFlags, light->mRadius, light->mIntensity, light->mInnerConeAngle, light->mOuterConeAngle,
+            light->mDirection.x, light->mDirection.y, light->mDirection.z,
+            light->mPosition.x, light->mPosition.y, light->mPosition.z, distance, light->mCastShadows, light->mShadowCacheIndex);
+    }
+
     // Runs as the game copies each light into the frame's draw list, on the main thread.
     static void OnAfterCopyLight(rage::CLightSource* light)
     {
         auto& R = PostFxResources;
         if (!light)
             return;
+        if (R.bHeadlightCopyLog)
+            LogCopiedHeadlight(light);
         // Building Fill Lights off: the large exterior map lights (0x1 and 0x40, no interior 0x20,
         // vehicle 0x100 or traffic light and fire 0x200) that flood whole squares go dark.
         if (!R.FillLights() && (light->mFlags & 0x361) == 0x41 &&
