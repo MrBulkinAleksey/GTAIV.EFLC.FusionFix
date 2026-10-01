@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_cutout_fence/gta_cutout_fencePS3.asm b/win32_30_nv8/gta_cutout_fence/gta_cutout_fencePS3.asm
-index fb5fb9dc..d3acf9da 100644
+index fb5fb9d..d661ed2 100644
 --- a/win32_30_nv8/gta_cutout_fence/gta_cutout_fencePS3.asm
 +++ b/win32_30_nv8/gta_cutout_fence/gta_cutout_fencePS3.asm
 @@ -25,6 +25,9 @@
@@ -12,7 +12,7 @@ index fb5fb9dc..d3acf9da 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -32,6 +35,69 @@
+@@ -32,6 +35,71 @@
      dcl vPos.xy
      dcl_2d s0
      texld r0, v0, s0
@@ -40,7 +40,8 @@ index fb5fb9dc..d3acf9da 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -76,14 +77,15 @@ index fb5fb9dc..d3acf9da 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v2.w disabled vertex alpha
      add r20.x, r0.w, -c2.x
 diff --git a/win32_30_nv8/gta_cutout_fence/gta_cutout_fencePS4.asm b/win32_30_nv8/gta_cutout_fence/gta_cutout_fencePS4.asm
-index 3c6dae8d..9c6b2ab3 100644
+index 3c6dae8..a8a1f1e 100644
 --- a/win32_30_nv8/gta_cutout_fence/gta_cutout_fencePS4.asm
 +++ b/win32_30_nv8/gta_cutout_fence/gta_cutout_fencePS4.asm
 @@ -24,6 +24,9 @@
@@ -96,7 +98,7 @@ index 3c6dae8d..9c6b2ab3 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -32,6 +35,69 @@
+@@ -32,6 +35,71 @@
      dcl_2d s0
      dcl_2d s10
      texld r0, v0, s0
@@ -124,7 +126,8 @@ index 3c6dae8d..9c6b2ab3 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -160,14 +163,15 @@ index 3c6dae8d..9c6b2ab3 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_decal/gta_decalPS3.asm b/win32_30_nv8/gta_decal/gta_decalPS3.asm
-index 8045c556..742d5bc4 100644
+index 8045c55..878239b 100644
 --- a/win32_30_nv8/gta_decal/gta_decalPS3.asm
 +++ b/win32_30_nv8/gta_decal/gta_decalPS3.asm
 @@ -31,6 +31,9 @@
@@ -180,7 +184,7 @@ index 8045c556..742d5bc4 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -46,6 +49,69 @@
+@@ -46,6 +49,71 @@
      add r20, -r20.x, c39.x
      texkill r20
      texld r0, v0, s0
@@ -208,7 +212,8 @@ index 8045c556..742d5bc4 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -244,14 +249,15 @@ index 8045c556..742d5bc4 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_decal/gta_decalPS4.asm b/win32_30_nv8/gta_decal/gta_decalPS4.asm
-index 21cfda27..7cd856bc 100644
+index 21cfda2..3f5289d 100644
 --- a/win32_30_nv8/gta_decal/gta_decalPS4.asm
 +++ b/win32_30_nv8/gta_decal/gta_decalPS4.asm
 @@ -28,6 +28,9 @@
@@ -264,7 +270,7 @@ index 21cfda27..7cd856bc 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -36,6 +39,69 @@
+@@ -36,6 +39,71 @@
      dcl_2d s0
      dcl_2d s10
      texld r0, v0, s0
@@ -292,7 +298,8 @@ index 21cfda27..7cd856bc 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -328,14 +335,15 @@ index 21cfda27..7cd856bc 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS3.asm b/win32_30_nv8/gta_default/gta_defaultPS3.asm
-index 7e32535b..9635dffa 100644
+index 7e32535..fbf2b10 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS3.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS3.asm
 @@ -27,6 +27,9 @@
@@ -348,7 +356,7 @@ index 7e32535b..9635dffa 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -34,6 +37,69 @@
+@@ -34,6 +37,71 @@
      dcl vPos.xy
      dcl_2d s0
      texld r0, v0, s0
@@ -376,7 +384,8 @@ index 7e32535b..9635dffa 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -412,14 +421,15 @@ index 7e32535b..9635dffa 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v2.w disabled vertex alpha
      add r20.x, r0.w, -c2.x
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS4.asm b/win32_30_nv8/gta_default/gta_defaultPS4.asm
-index d013ec0b..526bfdc3 100644
+index d013ec0..509f0e4 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS4.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS4.asm
 @@ -24,6 +24,9 @@
@@ -432,7 +442,7 @@ index d013ec0b..526bfdc3 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -32,6 +35,69 @@
+@@ -32,6 +35,71 @@
      dcl_2d s0
      dcl_2d s10
      texld r0, v0, s0
@@ -460,7 +470,8 @@ index d013ec0b..526bfdc3 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -496,17 +507,18 @@ index d013ec0b..526bfdc3 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_diffuse_instance/gta_diffuse_instancePS3.asm b/win32_30_nv8/gta_diffuse_instance/gta_diffuse_instancePS3.asm
-index 95ecbc4b..bdef2a57 100644
+index 95ecbc4..0a5ee2f 100644
 --- a/win32_30_nv8/gta_diffuse_instance/gta_diffuse_instancePS3.asm
 +++ b/win32_30_nv8/gta_diffuse_instance/gta_diffuse_instancePS3.asm
-@@ -20,12 +20,78 @@
+@@ -20,12 +20,80 @@
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.2701035122e-43 // 162
      def c0, 0.5, 0, 1, 0.25
@@ -543,7 +555,8 @@ index 95ecbc4b..bdef2a57 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -579,14 +592,15 @@ index 95ecbc4b..bdef2a57 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      mov oC0.xyz, r0
      mul r0.x, r0.w, v0.w
      mul r0.x, r0.x, c39.x
 diff --git a/win32_30_nv8/gta_emissive/gta_emissivePS3.asm b/win32_30_nv8/gta_emissive/gta_emissivePS3.asm
-index a2411e58..f4395c17 100644
+index a2411e5..997010a 100644
 --- a/win32_30_nv8/gta_emissive/gta_emissivePS3.asm
 +++ b/win32_30_nv8/gta_emissive/gta_emissivePS3.asm
 @@ -26,6 +26,9 @@
@@ -599,7 +613,7 @@ index a2411e58..f4395c17 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.w
-@@ -33,6 +36,69 @@
+@@ -33,6 +36,71 @@
      dcl vPos.xy
      dcl_2d s0
      texld r0, v0, s0
@@ -627,7 +641,8 @@ index a2411e58..f4395c17 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -663,14 +678,15 @@ index a2411e58..f4395c17 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      mul_sat r0.w, r0.w, c154.x
      mul r0, r0, c51
      // mul r0.w, r0.w, v2.w disabled vertex alpha
 diff --git a/win32_30_nv8/gta_emissive/gta_emissivePS4.asm b/win32_30_nv8/gta_emissive/gta_emissivePS4.asm
-index be2e4db1..b961053f 100644
+index be2e4db..c8ab2dd 100644
 --- a/win32_30_nv8/gta_emissive/gta_emissivePS4.asm
 +++ b/win32_30_nv8/gta_emissive/gta_emissivePS4.asm
 @@ -26,6 +26,9 @@
@@ -683,7 +699,7 @@ index be2e4db1..b961053f 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.w
-@@ -34,6 +37,69 @@
+@@ -34,6 +37,71 @@
      dcl_2d s0
      dcl_2d s10
      texld r0, v0, s0
@@ -711,7 +727,8 @@ index be2e4db1..b961053f 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -747,14 +764,15 @@ index be2e4db1..b961053f 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_emissivenight/gta_emissivenightPS3.asm b/win32_30_nv8/gta_emissivenight/gta_emissivenightPS3.asm
-index 2697cd96..e86679cf 100644
+index 2697cd9..92c8542 100644
 --- a/win32_30_nv8/gta_emissivenight/gta_emissivenightPS3.asm
 +++ b/win32_30_nv8/gta_emissivenight/gta_emissivenightPS3.asm
 @@ -26,6 +26,9 @@
@@ -767,7 +785,7 @@ index 2697cd96..e86679cf 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.w
-@@ -33,6 +36,69 @@
+@@ -33,6 +36,71 @@
      dcl vPos.xy
      dcl_2d s0
      texld r0, v0, s0
@@ -795,7 +813,8 @@ index 2697cd96..e86679cf 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -831,14 +850,15 @@ index 2697cd96..e86679cf 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      mul_sat r0.w, r0.w, c154.x
      mul r0, r0, c51
      // mul r0.w, r0.w, v2.w disabled vertex alpha
 diff --git a/win32_30_nv8/gta_emissivenight/gta_emissivenightPS4.asm b/win32_30_nv8/gta_emissivenight/gta_emissivenightPS4.asm
-index 651ed161..33676e33 100644
+index 651ed16..374b725 100644
 --- a/win32_30_nv8/gta_emissivenight/gta_emissivenightPS4.asm
 +++ b/win32_30_nv8/gta_emissivenight/gta_emissivenightPS4.asm
 @@ -26,6 +26,9 @@
@@ -851,7 +871,7 @@ index 651ed161..33676e33 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.w
-@@ -34,6 +37,69 @@
+@@ -34,6 +37,71 @@
      dcl_2d s0
      dcl_2d s10
      texld r0, v0, s0
@@ -879,7 +899,8 @@ index 651ed161..33676e33 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -915,14 +936,15 @@ index 651ed161..33676e33 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS3.asm b/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS3.asm
-index 4b52835e..ea1a0163 100644
+index 4b52835..cbfa140 100644
 --- a/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS3.asm
 +++ b/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS3.asm
 @@ -26,6 +26,9 @@
@@ -935,7 +957,7 @@ index 4b52835e..ea1a0163 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.w
-@@ -33,6 +36,69 @@
+@@ -33,6 +36,71 @@
      dcl vPos.xy
      dcl_2d s0
      texld r0, v0, s0
@@ -963,7 +985,8 @@ index 4b52835e..ea1a0163 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -999,14 +1022,15 @@ index 4b52835e..ea1a0163 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      mul_sat r0.w, r0.w, c154.x
      mul r0, r0, c51
      // mul r0.w, r0.w, v2.w disabled vertex alpha
 diff --git a/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS4.asm b/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS4.asm
-index 22f74a0e..c6baf05b 100644
+index 22f74a0..8b1c517 100644
 --- a/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS4.asm
 +++ b/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS4.asm
 @@ -26,6 +26,9 @@
@@ -1019,7 +1043,7 @@ index 22f74a0e..c6baf05b 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.w
-@@ -34,6 +37,69 @@
+@@ -34,6 +37,71 @@
      dcl_2d s0
      dcl_2d s10
      texld r0, v0, s0
@@ -1047,7 +1071,8 @@ index 22f74a0e..c6baf05b 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -1083,14 +1108,15 @@ index 22f74a0e..c6baf05b 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_normal/gta_normalPS3.asm b/win32_30_nv8/gta_normal/gta_normalPS3.asm
-index 015d8600..1b4c7fcd 100644
+index 015d860..6155923 100644
 --- a/win32_30_nv8/gta_normal/gta_normalPS3.asm
 +++ b/win32_30_nv8/gta_normal/gta_normalPS3.asm
 @@ -32,6 +32,9 @@
@@ -1103,7 +1129,7 @@ index 015d8600..1b4c7fcd 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord4 v2.xyz
-@@ -41,7 +44,79 @@
+@@ -41,7 +44,81 @@
      dcl vPos.xy
      dcl_2d s0
      dcl_2d s1
@@ -1133,7 +1159,8 @@ index 015d8600..1b4c7fcd 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -1169,7 +1196,8 @@ index 015d8600..1b4c7fcd 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -1183,7 +1211,7 @@ index 015d8600..1b4c7fcd 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v4.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -58,6 +133,10 @@
+@@ -58,6 +135,10 @@
      add r0.w, -r3.x, r0.w
      cmp r1.yz, r0.w, r3.xwyw, r3.xxyw
      add r2.xw, r1.yyzz, c0.x
@@ -1194,7 +1222,7 @@ index 015d8600..1b4c7fcd 100644
      mul r2.xw, r2, c73.x
      dp2add r0.w, r1.yzzw, -r1.yzzw, c1.w
      rsq r0.w, r0.w
-@@ -70,15 +149,39 @@
+@@ -70,15 +151,39 @@
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, c1.w
@@ -1236,7 +1264,7 @@ index 015d8600..1b4c7fcd 100644
      // mov oC2.w, r1.x
      add r20.x, -c152.w, r1.x
 diff --git a/win32_30_nv8/gta_normal/gta_normalPS4.asm b/win32_30_nv8/gta_normal/gta_normalPS4.asm
-index 6cc2745e..a3d10af8 100644
+index 6cc2745..cef7cdb 100644
 --- a/win32_30_nv8/gta_normal/gta_normalPS4.asm
 +++ b/win32_30_nv8/gta_normal/gta_normalPS4.asm
 @@ -32,6 +32,9 @@
@@ -1249,7 +1277,7 @@ index 6cc2745e..a3d10af8 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord4 v2.xyz
-@@ -42,12 +45,88 @@
+@@ -42,12 +45,90 @@
      dcl_2d s0
      dcl_2d s1
      dcl_2d s10
@@ -1283,7 +1311,8 @@ index 6cc2745e..a3d10af8 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -1319,7 +1348,8 @@ index 6cc2745e..a3d10af8 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -1338,7 +1368,7 @@ index 6cc2745e..a3d10af8 100644
      mul r0.zw, r0, c73.x
      dp2add r0.x, r0, -r0, c2.w
      rsq r0.x, r0.x
-@@ -60,16 +139,40 @@
+@@ -60,16 +141,40 @@
      rsq r0.w, r0.w
      mul r1.w, r1.w, v4.w
      mad r0.xyz, r0, r0.w, c2.w
@@ -1381,7 +1411,7 @@ index 6cc2745e..a3d10af8 100644
      mov oC2.w, r0.x
      mov r0.xw, c2
 diff --git a/win32_30_nv8/gta_normal_cubemap_reflect/gta_normal_cubemap_reflectPS3.asm b/win32_30_nv8/gta_normal_cubemap_reflect/gta_normal_cubemap_reflectPS3.asm
-index 5516bcb4..39885e11 100644
+index 5516bcb..7cb2aa5 100644
 --- a/win32_30_nv8/gta_normal_cubemap_reflect/gta_normal_cubemap_reflectPS3.asm
 +++ b/win32_30_nv8/gta_normal_cubemap_reflect/gta_normal_cubemap_reflectPS3.asm
 @@ -33,6 +33,9 @@
@@ -1394,7 +1424,7 @@ index 5516bcb4..39885e11 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -43,8 +46,80 @@
+@@ -43,8 +46,82 @@
      dcl vPos.xy
      dcl_2d s0
      dcl_2d s1
@@ -1425,7 +1455,8 @@ index 5516bcb4..39885e11 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -1461,7 +1492,8 @@ index 5516bcb4..39885e11 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -1475,7 +1507,7 @@ index 5516bcb4..39885e11 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v5.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -61,6 +136,10 @@
+@@ -61,6 +138,10 @@
      add r0.w, -r3.x, r0.w
      cmp r1.yz, r0.w, r3.xwyw, r3.xxyw
      add r2.xw, r1.yyzz, c0.x
@@ -1487,7 +1519,7 @@ index 5516bcb4..39885e11 100644
      dp2add r0.w, r1.yzzw, -r1.yzzw, c1.w
      rsq r0.w, r0.w
 diff --git a/win32_30_nv8/gta_normal_cubemap_reflect/gta_normal_cubemap_reflectPS4.asm b/win32_30_nv8/gta_normal_cubemap_reflect/gta_normal_cubemap_reflectPS4.asm
-index d0ce93bd..42a45190 100644
+index d0ce93b..f3ce0e8 100644
 --- a/win32_30_nv8/gta_normal_cubemap_reflect/gta_normal_cubemap_reflectPS4.asm
 +++ b/win32_30_nv8/gta_normal_cubemap_reflect/gta_normal_cubemap_reflectPS4.asm
 @@ -33,6 +33,9 @@
@@ -1500,7 +1532,7 @@ index d0ce93bd..42a45190 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -45,12 +48,88 @@
+@@ -45,12 +48,90 @@
      dcl_2d s1
      dcl_cube s2
      dcl_2d s10
@@ -1534,7 +1566,8 @@ index d0ce93bd..42a45190 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -1570,7 +1603,8 @@ index d0ce93bd..42a45190 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -1590,7 +1624,7 @@ index d0ce93bd..42a45190 100644
      dp2add r0.x, r0, -r0, c2.w
      rsq r0.x, r0.x
 diff --git a/win32_30_nv8/gta_normal_decal/gta_normal_decalPS3.asm b/win32_30_nv8/gta_normal_decal/gta_normal_decalPS3.asm
-index acbe37de..f0770b21 100644
+index acbe37d..fb785ad 100644
 --- a/win32_30_nv8/gta_normal_decal/gta_normal_decalPS3.asm
 +++ b/win32_30_nv8/gta_normal_decal/gta_normal_decalPS3.asm
 @@ -35,6 +35,9 @@
@@ -1603,7 +1637,7 @@ index acbe37de..f0770b21 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord4 v2.xyz
-@@ -57,6 +60,69 @@
+@@ -57,6 +60,71 @@
      add r0.z, -r0.x, r0.z
      cmp r0.xy, r0.z, r0.wyzw, r0
      texld r1, v0, s0
@@ -1631,7 +1665,8 @@ index acbe37de..f0770b21 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -1667,13 +1702,14 @@ index acbe37de..f0770b21 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
      add r0.zw, r0.xyxy, c0.x
      mul r0.zw, r0, c73.x
      dp2add r0.x, r0, -r0, c2.w
-@@ -70,16 +136,40 @@
+@@ -70,16 +138,40 @@
      rsq r0.w, r0.w
      mul r1.w, r1.w, v4.w
      mad r0.xyz, r0, r0.w, c2.w
@@ -1716,7 +1752,7 @@ index acbe37de..f0770b21 100644
      mov oC2.w, r0.x
      mov r0.xw, c2
 diff --git a/win32_30_nv8/gta_normal_decal/gta_normal_decalPS4.asm b/win32_30_nv8/gta_normal_decal/gta_normal_decalPS4.asm
-index 20f70e18..c391869a 100644
+index 20f70e1..d6568fd 100644
 --- a/win32_30_nv8/gta_normal_decal/gta_normal_decalPS4.asm
 +++ b/win32_30_nv8/gta_normal_decal/gta_normal_decalPS4.asm
 @@ -32,6 +32,9 @@
@@ -1729,7 +1765,7 @@ index 20f70e18..c391869a 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord4 v2.xyz
-@@ -47,6 +50,69 @@
+@@ -47,6 +50,71 @@
      add r0.z, -r0.x, r0.z
      cmp r0.xy, r0.z, r0.wyzw, r0
      texld r1, v0, s0
@@ -1757,7 +1793,8 @@ index 20f70e18..c391869a 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -1793,13 +1830,14 @@ index 20f70e18..c391869a 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
      add r0.zw, r0.xyxy, c0.x
      mul r0.zw, r0, c73.x
      dp2add r0.x, r0, -r0, c2.w
-@@ -60,16 +126,40 @@
+@@ -60,16 +128,40 @@
      rsq r0.w, r0.w
      mul r1.w, r1.w, v4.w
      mad r0.xyz, r0, r0.w, c2.w
@@ -1842,7 +1880,7 @@ index 20f70e18..c391869a 100644
      mov oC2.w, r0.x
      mov r0.xw, c2
 diff --git a/win32_30_nv8/gta_normal_reflect/gta_normal_reflectPS3.asm b/win32_30_nv8/gta_normal_reflect/gta_normal_reflectPS3.asm
-index 5cdb755d..44e5b8e1 100644
+index 5cdb755..30ea2d5 100644
 --- a/win32_30_nv8/gta_normal_reflect/gta_normal_reflectPS3.asm
 +++ b/win32_30_nv8/gta_normal_reflect/gta_normal_reflectPS3.asm
 @@ -33,6 +33,9 @@
@@ -1855,7 +1893,7 @@ index 5cdb755d..44e5b8e1 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -44,7 +47,79 @@
+@@ -44,7 +47,81 @@
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
@@ -1885,7 +1923,8 @@ index 5cdb755d..44e5b8e1 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -1921,7 +1960,8 @@ index 5cdb755d..44e5b8e1 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -1935,7 +1975,7 @@ index 5cdb755d..44e5b8e1 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v5.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -61,6 +136,10 @@
+@@ -61,6 +138,10 @@
      add r0.w, -r3.x, r0.w
      cmp r1.yz, r0.w, r3.xwyw, r3.xxyw
      add r2.xw, r1.yyzz, c0.x
@@ -1947,7 +1987,7 @@ index 5cdb755d..44e5b8e1 100644
      dp2add r0.w, r1.yzzw, -r1.yzzw, c1.w
      rsq r0.w, r0.w
 diff --git a/win32_30_nv8/gta_normal_reflect/gta_normal_reflectPS4.asm b/win32_30_nv8/gta_normal_reflect/gta_normal_reflectPS4.asm
-index d08322cc..7864621b 100644
+index d08322c..ac44b35 100644
 --- a/win32_30_nv8/gta_normal_reflect/gta_normal_reflectPS4.asm
 +++ b/win32_30_nv8/gta_normal_reflect/gta_normal_reflectPS4.asm
 @@ -33,6 +33,9 @@
@@ -1960,7 +2000,7 @@ index d08322cc..7864621b 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -45,12 +48,88 @@
+@@ -45,12 +48,90 @@
      dcl_2d s1
      dcl_2d s2
      dcl_2d s10
@@ -1994,7 +2034,8 @@ index d08322cc..7864621b 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -2030,7 +2071,8 @@ index d08322cc..7864621b 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -2050,7 +2092,7 @@ index d08322cc..7864621b 100644
      dp2add r0.x, r0, -r0, c2.w
      rsq r0.x, r0.x
 diff --git a/win32_30_nv8/gta_normal_reflect_alpha/gta_normal_reflect_alphaPS3.asm b/win32_30_nv8/gta_normal_reflect_alpha/gta_normal_reflect_alphaPS3.asm
-index 9a4d8d8f..da9a45dc 100644
+index 9a4d8d8..726226e 100644
 --- a/win32_30_nv8/gta_normal_reflect_alpha/gta_normal_reflect_alphaPS3.asm
 +++ b/win32_30_nv8/gta_normal_reflect_alpha/gta_normal_reflect_alphaPS3.asm
 @@ -36,6 +36,9 @@
@@ -2063,7 +2105,7 @@ index 9a4d8d8f..da9a45dc 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -60,6 +63,69 @@
+@@ -60,6 +63,71 @@
      add r0.z, -r0.x, r0.z
      cmp r0.xy, r0.z, r0.wyzw, r0
      texld r1, v0, s0
@@ -2091,7 +2133,8 @@ index 9a4d8d8f..da9a45dc 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -2127,14 +2170,15 @@ index 9a4d8d8f..da9a45dc 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
      add r0.zw, r0.xyxy, c0.x
      mul r0.zw, r0, c66.x
      dp2add r0.x, r0, -r0, c2.w
 diff --git a/win32_30_nv8/gta_normal_reflect_alpha/gta_normal_reflect_alphaPS4.asm b/win32_30_nv8/gta_normal_reflect_alpha/gta_normal_reflect_alphaPS4.asm
-index 97104d8f..a12d4be5 100644
+index 97104d8..a4f5024 100644
 --- a/win32_30_nv8/gta_normal_reflect_alpha/gta_normal_reflect_alphaPS4.asm
 +++ b/win32_30_nv8/gta_normal_reflect_alpha/gta_normal_reflect_alphaPS4.asm
 @@ -33,6 +33,9 @@
@@ -2147,7 +2191,7 @@ index 97104d8f..a12d4be5 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -50,6 +53,69 @@
+@@ -50,6 +53,71 @@
      add r0.z, -r0.x, r0.z
      cmp r0.xy, r0.z, r0.wyzw, r0
      texld r1, v0, s0
@@ -2175,7 +2219,8 @@ index 97104d8f..a12d4be5 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -2211,14 +2256,15 @@ index 97104d8f..a12d4be5 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
      add r0.zw, r0.xyxy, c0.x
      mul r0.zw, r0, c66.x
      dp2add r0.x, r0, -r0, c2.w
 diff --git a/win32_30_nv8/gta_normal_reflect_decal/gta_normal_reflect_decalPS3.asm b/win32_30_nv8/gta_normal_reflect_decal/gta_normal_reflect_decalPS3.asm
-index b01836f1..ebcc2f9e 100644
+index b01836f..c1a83f9 100644
 --- a/win32_30_nv8/gta_normal_reflect_decal/gta_normal_reflect_decalPS3.asm
 +++ b/win32_30_nv8/gta_normal_reflect_decal/gta_normal_reflect_decalPS3.asm
 @@ -36,6 +36,9 @@
@@ -2231,7 +2277,7 @@ index b01836f1..ebcc2f9e 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -60,6 +63,69 @@
+@@ -60,6 +63,71 @@
      add r0.z, -r0.x, r0.z
      cmp r0.xy, r0.z, r0.wyzw, r0
      texld r1, v0, s0
@@ -2259,7 +2305,8 @@ index b01836f1..ebcc2f9e 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -2295,14 +2342,15 @@ index b01836f1..ebcc2f9e 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
      add r0.zw, r0.xyxy, c0.x
      mul r0.zw, r0, c66.x
      dp2add r0.x, r0, -r0, c2.w
 diff --git a/win32_30_nv8/gta_normal_reflect_decal/gta_normal_reflect_decalPS4.asm b/win32_30_nv8/gta_normal_reflect_decal/gta_normal_reflect_decalPS4.asm
-index 9430f2c2..38a46679 100644
+index 9430f2c..4dd3e63 100644
 --- a/win32_30_nv8/gta_normal_reflect_decal/gta_normal_reflect_decalPS4.asm
 +++ b/win32_30_nv8/gta_normal_reflect_decal/gta_normal_reflect_decalPS4.asm
 @@ -33,6 +33,9 @@
@@ -2315,7 +2363,7 @@ index 9430f2c2..38a46679 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -50,6 +53,69 @@
+@@ -50,6 +53,71 @@
      add r0.z, -r0.x, r0.z
      cmp r0.xy, r0.z, r0.wyzw, r0
      texld r1, v0, s0
@@ -2343,7 +2391,8 @@ index 9430f2c2..38a46679 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -2379,14 +2428,15 @@ index 9430f2c2..38a46679 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
      add r0.zw, r0.xyxy, c0.x
      mul r0.zw, r0, c66.x
      dp2add r0.x, r0, -r0, c2.w
 diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
-index 54edca97..7bf30a89 100644
+index 54edca9..95f58df 100644
 --- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
 +++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
 @@ -36,6 +36,9 @@
@@ -2399,7 +2449,7 @@ index 54edca97..7bf30a89 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord4 v2.xyz
-@@ -46,7 +49,79 @@
+@@ -46,7 +49,81 @@
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
@@ -2429,7 +2479,8 @@ index 54edca97..7bf30a89 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -2465,7 +2516,8 @@ index 54edca97..7bf30a89 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -2479,7 +2531,7 @@ index 54edca97..7bf30a89 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v4.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -63,6 +138,10 @@
+@@ -63,6 +140,10 @@
      add r0.w, -r3.x, r0.w
      cmp r1.yz, r0.w, r3.xwyw, r3.xxyw
      add r2.xw, r1.yyzz, c0.x
@@ -2490,7 +2542,7 @@ index 54edca97..7bf30a89 100644
      mul r2.xw, r2, c74.x
      dp2add r0.w, r1.yzzw, -r1.yzzw, c1.w
      rsq r0.w, r0.w
-@@ -79,9 +158,33 @@
+@@ -79,9 +160,33 @@
      dp3 r2.w, r3, c73
      mul r2.w, r2.w, c72.x
      mad r1.yzw, r1, r0.w, c1.w
@@ -2526,7 +2578,7 @@ index 54edca97..7bf30a89 100644
      rcp oC2.y, r0.w
      mov oC0.xyz, r0
 diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
-index dcf7da7e..834e73bc 100644
+index dcf7da7..5bdd4d9 100644
 --- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
 +++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
 @@ -36,6 +36,9 @@
@@ -2539,7 +2591,7 @@ index dcf7da7e..834e73bc 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord4 v2.xyz
-@@ -47,12 +50,88 @@
+@@ -47,12 +50,90 @@
      dcl_2d s1
      dcl_2d s2
      dcl_2d s10
@@ -2573,7 +2625,8 @@ index dcf7da7e..834e73bc 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -2609,7 +2662,8 @@ index dcf7da7e..834e73bc 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -2628,7 +2682,7 @@ index dcf7da7e..834e73bc 100644
      mul r0.zw, r0, c74.x
      dp2add r0.x, r0, -r0, c2.w
      rsq r0.x, r0.x
-@@ -69,9 +148,33 @@
+@@ -69,9 +150,33 @@
      mul r2.x, r2.x, c72.x
      mul r1.w, r1.w, v4.w
      mad r0.xyz, r0, r0.w, c2.w
@@ -2664,7 +2718,7 @@ index dcf7da7e..834e73bc 100644
      rcp oC2.y, r0.x
      mul r0.x, r1.w, c39.x
 diff --git a/win32_30_nv8/gta_normal_spec_cubemap_reflect/gta_normal_spec_cubemap_reflectPS3.asm b/win32_30_nv8/gta_normal_spec_cubemap_reflect/gta_normal_spec_cubemap_reflectPS3.asm
-index e2de8b64..4d5709eb 100644
+index e2de8b6..ad19e94 100644
 --- a/win32_30_nv8/gta_normal_spec_cubemap_reflect/gta_normal_spec_cubemap_reflectPS3.asm
 +++ b/win32_30_nv8/gta_normal_spec_cubemap_reflect/gta_normal_spec_cubemap_reflectPS3.asm
 @@ -40,6 +40,9 @@
@@ -2677,7 +2731,7 @@ index e2de8b64..4d5709eb 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -51,8 +54,80 @@
+@@ -51,8 +54,82 @@
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
@@ -2708,7 +2762,8 @@ index e2de8b64..4d5709eb 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -2744,7 +2799,8 @@ index e2de8b64..4d5709eb 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -2758,7 +2814,7 @@ index e2de8b64..4d5709eb 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v5.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -69,6 +144,10 @@
+@@ -69,6 +146,10 @@
      add r0.w, -r3.x, r0.w
      cmp r1.yz, r0.w, r3.xwyw, r3.xxyw
      add r2.xw, r1.yyzz, c0.x
@@ -2769,7 +2825,7 @@ index e2de8b64..4d5709eb 100644
      mul r2.xw, r2, c74.x
      dp2add r0.w, r1.yzzw, -r1.yzzw, c1.w
      rsq r0.w, r0.w
-@@ -99,9 +178,33 @@
+@@ -99,9 +180,33 @@
      mul r3.xyz, r2.w, r3
      mad oC0.xyz, r3, c75.x, r0
      mad r0.xyz, r1.yzww, r0.w, c1.w
@@ -2805,7 +2861,7 @@ index e2de8b64..4d5709eb 100644
      rcp oC2.y, r0.x
      mov oC0.w, r1.x
 diff --git a/win32_30_nv8/gta_normal_spec_cubemap_reflect/gta_normal_spec_cubemap_reflectPS4.asm b/win32_30_nv8/gta_normal_spec_cubemap_reflect/gta_normal_spec_cubemap_reflectPS4.asm
-index 74023a49..f1042317 100644
+index 74023a4..2164031 100644
 --- a/win32_30_nv8/gta_normal_spec_cubemap_reflect/gta_normal_spec_cubemap_reflectPS4.asm
 +++ b/win32_30_nv8/gta_normal_spec_cubemap_reflect/gta_normal_spec_cubemap_reflectPS4.asm
 @@ -40,6 +40,9 @@
@@ -2818,7 +2874,7 @@ index 74023a49..f1042317 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -53,12 +56,88 @@
+@@ -53,12 +56,90 @@
      dcl_2d s2
      dcl_cube s4
      dcl_2d s10
@@ -2852,7 +2908,8 @@ index 74023a49..f1042317 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -2888,7 +2945,8 @@ index 74023a49..f1042317 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -2907,7 +2965,7 @@ index 74023a49..f1042317 100644
      mul r0.zw, r0, c74.x
      dp2add r0.x, r0, -r0, c2.w
      rsq r0.x, r0.x
-@@ -90,9 +169,33 @@
+@@ -90,9 +171,33 @@
      mul r1.w, r1.w, v5.w
      mad oC0.xyz, r2, c75.x, r1
      mad r0.xyz, r0, r0.w, c2.w
@@ -2943,7 +3001,7 @@ index 74023a49..f1042317 100644
      rcp oC2.y, r0.x
      mul r0.x, r1.w, c39.x
 diff --git a/win32_30_nv8/gta_normal_spec_decal/gta_normal_spec_decalPS3.asm b/win32_30_nv8/gta_normal_spec_decal/gta_normal_spec_decalPS3.asm
-index f108aee4..4c509689 100644
+index f108aee..f0c9f09 100644
 --- a/win32_30_nv8/gta_normal_spec_decal/gta_normal_spec_decalPS3.asm
 +++ b/win32_30_nv8/gta_normal_spec_decal/gta_normal_spec_decalPS3.asm
 @@ -39,6 +39,9 @@
@@ -2956,7 +3014,7 @@ index f108aee4..4c509689 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord4 v2.xyz
-@@ -62,6 +65,69 @@
+@@ -62,6 +65,71 @@
      add r0.z, -r0.x, r0.z
      cmp r0.xy, r0.z, r0.wyzw, r0
      texld r1, v0, s0
@@ -2984,7 +3042,8 @@ index f108aee4..4c509689 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -3020,13 +3079,14 @@ index f108aee4..4c509689 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
      add r0.zw, r0.xyxy, c0.x
      mul r0.zw, r0, c74.x
      dp2add r0.x, r0, -r0, c2.w
-@@ -79,9 +145,33 @@
+@@ -79,9 +147,33 @@
      mul r2.x, r2.x, c72.x
      mul r1.w, r1.w, v4.w
      mad r0.xyz, r0, r0.w, c2.w
@@ -3062,7 +3122,7 @@ index f108aee4..4c509689 100644
      rcp oC2.y, r0.x
      mul r0.x, r1.w, c39.x
 diff --git a/win32_30_nv8/gta_normal_spec_decal/gta_normal_spec_decalPS4.asm b/win32_30_nv8/gta_normal_spec_decal/gta_normal_spec_decalPS4.asm
-index 5b9eb7f2..3aec3ad7 100644
+index 5b9eb7f..2d997a4 100644
 --- a/win32_30_nv8/gta_normal_spec_decal/gta_normal_spec_decalPS4.asm
 +++ b/win32_30_nv8/gta_normal_spec_decal/gta_normal_spec_decalPS4.asm
 @@ -36,6 +36,9 @@
@@ -3075,7 +3135,7 @@ index 5b9eb7f2..3aec3ad7 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord4 v2.xyz
-@@ -52,6 +55,69 @@
+@@ -52,6 +55,71 @@
      add r0.z, -r0.x, r0.z
      cmp r0.xy, r0.z, r0.wyzw, r0
      texld r1, v0, s0
@@ -3103,7 +3163,8 @@ index 5b9eb7f2..3aec3ad7 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -3139,13 +3200,14 @@ index 5b9eb7f2..3aec3ad7 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
      add r0.zw, r0.xyxy, c0.x
      mul r0.zw, r0, c74.x
      dp2add r0.x, r0, -r0, c2.w
-@@ -69,9 +135,33 @@
+@@ -69,9 +137,33 @@
      mul r2.x, r2.x, c72.x
      mul r1.w, r1.w, v4.w
      mad r0.xyz, r0, r0.w, c2.w
@@ -3181,7 +3243,7 @@ index 5b9eb7f2..3aec3ad7 100644
      rcp oC2.y, r0.x
      mul r0.x, r1.w, c39.x
 diff --git a/win32_30_nv8/gta_normal_spec_reflect/gta_normal_spec_reflectPS3.asm b/win32_30_nv8/gta_normal_spec_reflect/gta_normal_spec_reflectPS3.asm
-index f26d10d4..3a3ab072 100644
+index f26d10d..91e9569 100644
 --- a/win32_30_nv8/gta_normal_spec_reflect/gta_normal_spec_reflectPS3.asm
 +++ b/win32_30_nv8/gta_normal_spec_reflect/gta_normal_spec_reflectPS3.asm
 @@ -40,6 +40,9 @@
@@ -3194,7 +3256,7 @@ index f26d10d4..3a3ab072 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -52,7 +55,79 @@
+@@ -52,7 +55,81 @@
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
@@ -3224,7 +3286,8 @@ index f26d10d4..3a3ab072 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -3260,7 +3323,8 @@ index f26d10d4..3a3ab072 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -3274,7 +3338,7 @@ index f26d10d4..3a3ab072 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v5.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -69,6 +144,10 @@
+@@ -69,6 +146,10 @@
      add r0.w, -r3.x, r0.w
      cmp r1.yz, r0.w, r3.xwyw, r3.xxyw
      add r2.xw, r1.yyzz, c0.x
@@ -3285,7 +3349,7 @@ index f26d10d4..3a3ab072 100644
      mul r2.xw, r2, c74.x
      dp2add r0.w, r1.yzzw, -r1.yzzw, c1.w
      rsq r0.w, r0.w
-@@ -98,9 +177,33 @@
+@@ -98,9 +179,33 @@
      mul r3.xyz, r2.w, r3
      mad oC0.xyz, r3, c75.x, r0
      mad r0.xyz, r1.yzww, r0.w, c1.w
@@ -3321,7 +3385,7 @@ index f26d10d4..3a3ab072 100644
      rcp oC2.y, r0.x
      mov oC0.w, r1.x
 diff --git a/win32_30_nv8/gta_normal_spec_reflect/gta_normal_spec_reflectPS4.asm b/win32_30_nv8/gta_normal_spec_reflect/gta_normal_spec_reflectPS4.asm
-index d3353f40..b42b2dc2 100644
+index d3353f4..f165ee8 100644
 --- a/win32_30_nv8/gta_normal_spec_reflect/gta_normal_spec_reflectPS4.asm
 +++ b/win32_30_nv8/gta_normal_spec_reflect/gta_normal_spec_reflectPS4.asm
 @@ -40,6 +40,9 @@
@@ -3334,7 +3398,7 @@ index d3353f40..b42b2dc2 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -53,12 +56,88 @@
+@@ -53,12 +56,90 @@
      dcl_2d s2
      dcl_2d s4
      dcl_2d s10
@@ -3368,7 +3432,8 @@ index d3353f40..b42b2dc2 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -3404,7 +3469,8 @@ index d3353f40..b42b2dc2 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -3423,7 +3489,7 @@ index d3353f40..b42b2dc2 100644
      mul r0.zw, r0, c74.x
      dp2add r0.x, r0, -r0, c2.w
      rsq r0.x, r0.x
-@@ -89,9 +168,33 @@
+@@ -89,9 +170,33 @@
      mul r1.w, r1.w, v5.w
      mad oC0.xyz, r2, c75.x, r1
      mad r0.xyz, r0, r0.w, c2.w
@@ -3459,7 +3525,7 @@ index d3353f40..b42b2dc2 100644
      rcp oC2.y, r0.x
      mul r0.x, r1.w, c39.x
 diff --git a/win32_30_nv8/gta_normal_spec_reflect_decal/gta_normal_spec_reflect_decalPS3.asm b/win32_30_nv8/gta_normal_spec_reflect_decal/gta_normal_spec_reflect_decalPS3.asm
-index a7938afe..7f6c3b66 100644
+index a7938af..6f09de7 100644
 --- a/win32_30_nv8/gta_normal_spec_reflect_decal/gta_normal_spec_reflect_decalPS3.asm
 +++ b/win32_30_nv8/gta_normal_spec_reflect_decal/gta_normal_spec_reflect_decalPS3.asm
 @@ -43,6 +43,9 @@
@@ -3472,7 +3538,7 @@ index a7938afe..7f6c3b66 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -68,6 +71,69 @@
+@@ -68,6 +71,71 @@
      add r0.z, -r0.x, r0.z
      cmp r0.xy, r0.z, r0.wyzw, r0
      texld r1, v0, s0
@@ -3500,7 +3566,8 @@ index a7938afe..7f6c3b66 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -3536,13 +3603,14 @@ index a7938afe..7f6c3b66 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
      add r0.zw, r0.xyxy, c0.x
      mul r0.zw, r0, c74.x
      dp2add r0.x, r0, -r0, c2.w
-@@ -99,9 +165,33 @@
+@@ -99,9 +167,33 @@
      mul r1.w, r1.w, v5.w
      mad oC0.xyz, r2, c75.x, r1
      mad r0.xyz, r0, r0.w, c2.w
@@ -3578,7 +3646,7 @@ index a7938afe..7f6c3b66 100644
      rcp oC2.y, r0.x
      mul r0.x, r1.w, c39.x
 diff --git a/win32_30_nv8/gta_normal_spec_reflect_decal/gta_normal_spec_reflect_decalPS4.asm b/win32_30_nv8/gta_normal_spec_reflect_decal/gta_normal_spec_reflect_decalPS4.asm
-index e47ee2dc..91b9470f 100644
+index e47ee2d..2d6f1d5 100644
 --- a/win32_30_nv8/gta_normal_spec_reflect_decal/gta_normal_spec_reflect_decalPS4.asm
 +++ b/win32_30_nv8/gta_normal_spec_reflect_decal/gta_normal_spec_reflect_decalPS4.asm
 @@ -40,6 +40,9 @@
@@ -3591,7 +3659,7 @@ index e47ee2dc..91b9470f 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -58,6 +61,69 @@
+@@ -58,6 +61,71 @@
      add r0.z, -r0.x, r0.z
      cmp r0.xy, r0.z, r0.wyzw, r0
      texld r1, v0, s0
@@ -3619,7 +3687,8 @@ index e47ee2dc..91b9470f 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -3655,13 +3724,14 @@ index e47ee2dc..91b9470f 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r1.xyz, r30.z, r25, r1
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
 +      endif
 +    endif
      add r0.zw, r0.xyxy, c0.x
      mul r0.zw, r0, c74.x
      dp2add r0.x, r0, -r0, c2.w
-@@ -89,9 +155,33 @@
+@@ -89,9 +157,33 @@
      mul r1.w, r1.w, v5.w
      mad oC0.xyz, r2, c75.x, r1
      mad r0.xyz, r0, r0.w, c2.w
@@ -3697,7 +3767,7 @@ index e47ee2dc..91b9470f 100644
      rcp oC2.y, r0.x
      mul r0.x, r1.w, c39.x
 diff --git a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm b/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
-index 315ca1a4..04e3f17e 100644
+index 315ca1a..651fe30 100644
 --- a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
 +++ b/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
 @@ -35,6 +35,9 @@
@@ -3718,7 +3788,7 @@ index 315ca1a4..04e3f17e 100644
      texld r0, v0, s1
      add r0.xyz, c0.x, v5
      dp3 r0.z, r0, r0
-@@ -55,6 +59,77 @@
+@@ -55,6 +59,79 @@
      mad r0.z, r0.w, c66.x, -r0.z
      mad r0.xy, r0.z, r0, v0
      texld r2, r0, s0
@@ -3746,7 +3816,8 @@ index 315ca1a4..04e3f17e 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -3782,7 +3853,8 @@ index 315ca1a4..04e3f17e 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r2.xyz, r30.z, r25, r2
++        lrp r25.xyz, r30.z, r25, r2
++        mov r2.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -3796,7 +3868,7 @@ index 315ca1a4..04e3f17e 100644
      mul_sat r2.w, r2.w, c154.x
      // mul r0.z, r2.w, v4.w disabled vertex alpha
      // mul r0.w, r0.z, c39.x
-@@ -68,6 +143,10 @@
+@@ -68,6 +145,10 @@
      texkill r20
      texld r1, r0, s1
      add r0.xy, r1, c0.w
@@ -3807,7 +3879,7 @@ index 315ca1a4..04e3f17e 100644
      mul r0.xy, r0, c74.x
      dp2add r0.z, r1, -r1, c2.z
      rsq r0.z, r0.z
-@@ -84,10 +163,34 @@
+@@ -84,10 +165,34 @@
      mul oC2.z, r1.x, v4.x
      mul r1.x, r1.x, c73.x
      mad r0.xyz, r0, r1.z, c2.z
@@ -3844,7 +3916,7 @@ index 315ca1a4..04e3f17e 100644
      rcp oC2.y, r0.x
      mov oC0.w, r0.w
 diff --git a/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm b/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
-index baa3a8b0..6b958276 100644
+index baa3a8b..1a11347 100644
 --- a/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
 +++ b/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
 @@ -34,6 +34,9 @@
@@ -3865,7 +3937,7 @@ index baa3a8b0..6b958276 100644
      texld r0, v0, s1
      add r0.xyz, c1.w, v5
      dp3 r0.z, r0, r0
-@@ -56,7 +60,82 @@
+@@ -56,7 +60,84 @@
      mad r0.xy, r0.z, r0, v0
      texld r2, r0, s1
      texld r0, r0, s0
@@ -3893,7 +3965,8 @@ index baa3a8b0..6b958276 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -3929,7 +4002,8 @@ index baa3a8b0..6b958276 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -3948,7 +4022,7 @@ index baa3a8b0..6b958276 100644
      mul r1.xy, r1, c74.x
      dp2add r1.z, r2, -r2, -c1.y
      rsq r1.z, r1.z
-@@ -74,9 +153,33 @@
+@@ -74,9 +155,33 @@
      mul r0.x, r2.x, c73.x
      mul r0.y, r0.w, v4.w
      mad r1.xyz, r1, r2.z, -c1.y
@@ -3984,7 +4058,7 @@ index baa3a8b0..6b958276 100644
      rcp oC2.y, r0.x
      mul r0.x, r0.y, c39.x
 diff --git a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
-index 53536b58..f6d319f3 100644
+index 53536b5..1234f9b 100644
 --- a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
 +++ b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
 @@ -39,6 +39,9 @@
@@ -4005,7 +4079,7 @@ index 53536b58..f6d319f3 100644
      texld r0, v0, s1
      add r0.xyz, c0.x, v5
      dp3 r0.z, r0, r0
-@@ -60,6 +64,77 @@
+@@ -60,6 +64,79 @@
      mad r0.z, r0.w, c66.x, -r0.z
      mad r0.xy, r0.z, r0, v0
      texld r2, r0, s0
@@ -4033,7 +4107,8 @@ index 53536b58..f6d319f3 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -4069,7 +4144,8 @@ index 53536b58..f6d319f3 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r2.xyz, r30.z, r25, r2
++        lrp r25.xyz, r30.z, r25, r2
++        mov r2.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -4083,7 +4159,7 @@ index 53536b58..f6d319f3 100644
      mul_sat r2.w, r2.w, c154.x
      // mul r0.z, r2.w, v4.w disabled vertex alpha
      // mul r0.w, r0.z, c39.x
-@@ -73,6 +148,10 @@
+@@ -73,6 +150,10 @@
      texkill r20
      texld r1, r0, s1
      add r0.xy, r1, c0.w
@@ -4094,7 +4170,7 @@ index 53536b58..f6d319f3 100644
      mul r0.xy, r0, c75.x
      dp2add r0.z, r1, -r1, c2.z
      rsq r0.z, r0.z
-@@ -93,9 +172,33 @@
+@@ -93,9 +174,33 @@
      mul oC2.z, r1.x, v4.x
      mul r1.x, r2.w, r1.x
      mad r0.xyz, r0, r1.z, c2.z
@@ -4130,7 +4206,7 @@ index 53536b58..f6d319f3 100644
      rcp oC2.y, r0.x
      mov oC0.w, r0.w
 diff --git a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
-index 4f9d5e58..a464be1a 100644
+index 4f9d5e5..828f4ae 100644
 --- a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
 +++ b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
 @@ -38,6 +38,9 @@
@@ -4151,7 +4227,7 @@ index 4f9d5e58..a464be1a 100644
      texld r0, v0, s1
      add r0.xyz, c1.w, v5
      dp3 r0.z, r0, r0
-@@ -61,7 +65,82 @@
+@@ -61,7 +65,84 @@
      mad r0.xy, r0.z, r0, v0
      texld r1, r0, s1
      texld r0, r0, s0
@@ -4179,7 +4255,8 @@ index 4f9d5e58..a464be1a 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -4215,7 +4292,8 @@ index 4f9d5e58..a464be1a 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -4234,7 +4312,7 @@ index 4f9d5e58..a464be1a 100644
      mul r1.zw, r1, c75.x
      dp2add r2.x, r1, -r1, -c1.y
      rsq r2.x, r2.x
-@@ -83,9 +162,33 @@
+@@ -83,9 +164,33 @@
      mul r0.x, r2.w, r1.x
      mul r0.y, r0.w, v4.w
      mad r1.xyz, r2, r1.z, -c1.y
@@ -4270,7 +4348,7 @@ index 4f9d5e58..a464be1a 100644
      rcp oC2.y, r0.x
      mul r0.x, r0.y, c39.x
 diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
-index 01673f32..282a986b 100644
+index 01673f3..88a09b5 100644
 --- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
 +++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
 @@ -36,6 +36,9 @@
@@ -4291,7 +4369,7 @@ index 01673f32..282a986b 100644
      texld r0, v0, s1
      add r1.xyz, c0.x, v5
      dp3 r0.z, r1, r1
-@@ -66,6 +70,77 @@
+@@ -66,6 +70,79 @@
        cmp r2, r0.z, r2, r3
      endrep
      texld r0, r1.zwzw, s0
@@ -4319,7 +4397,8 @@ index 01673f32..282a986b 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -4355,7 +4434,8 @@ index 01673f32..282a986b 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -4369,7 +4449,7 @@ index 01673f32..282a986b 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v4.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -78,6 +153,10 @@
+@@ -78,6 +155,10 @@
      add r20, -r20.x, r1.x
      texkill r20
      add r1.yz, r2, c1.w
@@ -4380,7 +4460,7 @@ index 01673f32..282a986b 100644
      mul r1.yz, r1, c74.x
      dp2add r0.w, r2.yzzw, -r2.yzzw, c0.z
      rsq r0.w, r0.w
-@@ -94,10 +173,34 @@
+@@ -94,10 +175,34 @@
      mul oC2.z, r2.x, v4.x
      mul r0.x, r2.x, c73.x
      mad r0.yzw, r1, r0.w, c0.z
@@ -4417,7 +4497,7 @@ index 01673f32..282a986b 100644
      rcp oC2.y, r0.x
      mov oC0.w, r1.x
 diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
-index b23193c4..0bab7594 100644
+index b23193c..7d9644a 100644
 --- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
 +++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
 @@ -36,6 +36,9 @@
@@ -4438,7 +4518,7 @@ index b23193c4..0bab7594 100644
      texld r0, v0, s1
      add r1.xyz, c0.x, v5
      dp3 r0.z, r1, r1
-@@ -67,7 +71,82 @@
+@@ -67,7 +71,84 @@
        cmp r2, r0.z, r2, r3
      endrep
      texld r0, r1.zwzw, s0
@@ -4466,7 +4546,8 @@ index b23193c4..0bab7594 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -4502,7 +4583,8 @@ index b23193c4..0bab7594 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
 +    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
@@ -4521,7 +4603,7 @@ index b23193c4..0bab7594 100644
      mul r1.xy, r1, c74.x
      dp2add r1.z, r2.yzzw, -r2.yzzw, c0.z
      rsq r1.z, r1.z
-@@ -85,10 +164,34 @@
+@@ -85,10 +166,34 @@
      mul r0.x, r2.x, c73.x
      mul r0.y, r0.w, v4.w
      mad r1.xyz, r1, r1.w, c0.z
@@ -4558,7 +4640,7 @@ index b23193c4..0bab7594 100644
      rcp oC2.y, r0.x
      mul r0.x, r0.y, c39.x
 diff --git a/win32_30_nv8/gta_reflect/gta_reflectPS3.asm b/win32_30_nv8/gta_reflect/gta_reflectPS3.asm
-index 4bad075b..c2b770e3 100644
+index 4bad075..8e35d75 100644
 --- a/win32_30_nv8/gta_reflect/gta_reflectPS3.asm
 +++ b/win32_30_nv8/gta_reflect/gta_reflectPS3.asm
 @@ -32,6 +32,9 @@
@@ -4571,7 +4653,7 @@ index 4bad075b..c2b770e3 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -41,6 +44,69 @@
+@@ -41,6 +44,71 @@
      dcl_2d s0
      dcl_2d s1
      texld r0, v0, s0
@@ -4599,7 +4681,8 @@ index 4bad075b..c2b770e3 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -4635,14 +4718,15 @@ index 4bad075b..c2b770e3 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v3.w disabled vertex alpha
      mov r20.x, c39.x
 diff --git a/win32_30_nv8/gta_reflect/gta_reflectPS4.asm b/win32_30_nv8/gta_reflect/gta_reflectPS4.asm
-index f7bb3f65..8d42225d 100644
+index f7bb3f6..cdf6279 100644
 --- a/win32_30_nv8/gta_reflect/gta_reflectPS4.asm
 +++ b/win32_30_nv8/gta_reflect/gta_reflectPS4.asm
 @@ -29,6 +29,9 @@
@@ -4655,7 +4739,7 @@ index f7bb3f65..8d42225d 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -39,6 +42,69 @@
+@@ -39,6 +42,71 @@
      dcl_2d s1
      dcl_2d s10
      texld r0, v0, s0
@@ -4683,7 +4767,8 @@ index f7bb3f65..8d42225d 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -4719,14 +4804,15 @@ index f7bb3f65..8d42225d 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_reflect_decal/gta_reflect_decalPS3.asm b/win32_30_nv8/gta_reflect_decal/gta_reflect_decalPS3.asm
-index 20f7a638..a3051e9f 100644
+index 20f7a63..a59324f 100644
 --- a/win32_30_nv8/gta_reflect_decal/gta_reflect_decalPS3.asm
 +++ b/win32_30_nv8/gta_reflect_decal/gta_reflect_decalPS3.asm
 @@ -32,6 +32,9 @@
@@ -4739,7 +4825,7 @@ index 20f7a638..a3051e9f 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -49,6 +52,69 @@
+@@ -49,6 +52,71 @@
      add r20, -r20.x, c39.x
      texkill r20
      texld r0, v0, s0
@@ -4767,7 +4853,8 @@ index 20f7a638..a3051e9f 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -4803,14 +4890,15 @@ index 20f7a638..a3051e9f 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_reflect_decal/gta_reflect_decalPS4.asm b/win32_30_nv8/gta_reflect_decal/gta_reflect_decalPS4.asm
-index f74638c1..584201ab 100644
+index f74638c..c735f0a 100644
 --- a/win32_30_nv8/gta_reflect_decal/gta_reflect_decalPS4.asm
 +++ b/win32_30_nv8/gta_reflect_decal/gta_reflect_decalPS4.asm
 @@ -29,6 +29,9 @@
@@ -4823,7 +4911,7 @@ index f74638c1..584201ab 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -39,6 +42,69 @@
+@@ -39,6 +42,71 @@
      dcl_2d s1
      dcl_2d s10
      texld r0, v0, s0
@@ -4851,7 +4939,8 @@ index f74638c1..584201ab 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -4887,14 +4976,15 @@ index f74638c1..584201ab 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_spec/gta_specPS3.asm b/win32_30_nv8/gta_spec/gta_specPS3.asm
-index 8a35846f..7bdbd6df 100644
+index 8a35846..4e073d2 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS3.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS3.asm
 @@ -32,6 +32,9 @@
@@ -4907,7 +4997,7 @@ index 8a35846f..7bdbd6df 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -40,6 +43,69 @@
+@@ -40,6 +43,71 @@
      dcl_2d s0
      dcl_2d s1
      texld r0, v0, s0
@@ -4935,7 +5025,8 @@ index 8a35846f..7bdbd6df 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -4971,14 +5062,15 @@ index 8a35846f..7bdbd6df 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v2.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
 diff --git a/win32_30_nv8/gta_spec/gta_specPS4.asm b/win32_30_nv8/gta_spec/gta_specPS4.asm
-index 2b9435aa..5b999181 100644
+index 2b9435a..01a7372 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS4.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS4.asm
 @@ -32,6 +32,9 @@
@@ -4991,7 +5083,7 @@ index 2b9435aa..5b999181 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -41,6 +44,69 @@
+@@ -41,6 +44,71 @@
      dcl_2d s1
      dcl_2d s10
      texld r0, v0, s0
@@ -5019,7 +5111,8 @@ index 2b9435aa..5b999181 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -5055,14 +5148,15 @@ index 2b9435aa..5b999181 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_spec_decal/gta_spec_decalPS3.asm b/win32_30_nv8/gta_spec_decal/gta_spec_decalPS3.asm
-index f7aa622a..c7a2699f 100644
+index f7aa622..21655d4 100644
 --- a/win32_30_nv8/gta_spec_decal/gta_spec_decalPS3.asm
 +++ b/win32_30_nv8/gta_spec_decal/gta_spec_decalPS3.asm
 @@ -35,6 +35,9 @@
@@ -5075,7 +5169,7 @@ index f7aa622a..c7a2699f 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -51,6 +54,69 @@
+@@ -51,6 +54,71 @@
      add r20, -r20.x, c39.x
      texkill r20
      texld r0, v0, s0
@@ -5103,7 +5197,8 @@ index f7aa622a..c7a2699f 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -5139,14 +5234,15 @@ index f7aa622a..c7a2699f 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_spec_decal/gta_spec_decalPS4.asm b/win32_30_nv8/gta_spec_decal/gta_spec_decalPS4.asm
-index b49e5466..8df899cb 100644
+index b49e546..83e5762 100644
 --- a/win32_30_nv8/gta_spec_decal/gta_spec_decalPS4.asm
 +++ b/win32_30_nv8/gta_spec_decal/gta_spec_decalPS4.asm
 @@ -32,6 +32,9 @@
@@ -5159,7 +5255,7 @@ index b49e5466..8df899cb 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -41,6 +44,69 @@
+@@ -41,6 +44,71 @@
      dcl_2d s1
      dcl_2d s10
      texld r0, v0, s0
@@ -5187,7 +5283,8 @@ index b49e5466..8df899cb 100644
 +        mul r28.xy, r25, c195.w
 +        mad r28.xy, r26, c194.w, r28
 +        mad r28.xy, r26.zwzw, -c196.y, r28
-+        mad r28.zw, r25.xyxy, c195.w, c194.y
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
 +        mad r28.zw, r26.xyxy, c196.x, r28
 +        rcp r29.x, r28.z
 +        rcp r29.y, r28.w
@@ -5223,14 +5320,15 @@ index b49e5466..8df899cb 100644
 +        texldl r28, r31, s0
 +        mad r25.xyz, r28, r24.x, r25
 +        mul_sat r25.xyz, r25, r24.y
-+        lrp r0.xyz, r30.z, r25, r0
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
 +      endif
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm b/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
-index bc2a8525..a58f2814 100644
+index bc2a852..a58f281 100644
 --- a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
 +++ b/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
 @@ -26,6 +26,9 @@
@@ -5267,7 +5365,7 @@ index bc2a8525..a58f2814 100644
      mov oC0.w, c39.x
      mad oC1.xyz, v4, c0.x, c0.x
 diff --git a/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm b/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
-index c6bfa0b2..bb035dda 100644
+index c6bfa0b..bb035dd 100644
 --- a/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
 +++ b/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
 @@ -28,6 +28,9 @@
@@ -5304,7 +5402,7 @@ index c6bfa0b2..bb035dda 100644
      mov oC0.w, c39.x
      mad oC1.xyz, v5, c0.x, c0.x
 diff --git a/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm b/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
-index a5116fd7..eab8b146 100644
+index a5116fd..eab8b14 100644
 --- a/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
 +++ b/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
 @@ -30,6 +30,9 @@
