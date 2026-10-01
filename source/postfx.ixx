@@ -10,6 +10,7 @@ export module postfx;
 import common;
 import comvars;
 import d3dx9_43;
+import framehistory;
 import hdr;
 import natives;
 import settings;
@@ -219,15 +220,13 @@ public:
     rage::grcRenderTargetPC* SSRHistoryTex = nullptr;
     IDirect3DSurface9* SSRHistorySurf = nullptr;
     bool bSSRValidThisFrame = false;
-    D3DXMATRIX SSRPrevViewProj = {};
-    bool bSSRPrevViewProjValid = false;
     D3DXVECTOR4 SSRReprojRows[4] = {};
     bool bSSRReprojValid = false;
     // Set once the fog pass has copied this frame's scene into SSRHistoryTex; SSR runs before
     // that and sees last frame's, water may run after it.
     bool bSSRHistoryThisFrame = false;
-    // Whether last frame's fog pass did, taken as the SSR pass starts; indirect light needs it.
-    bool bSSRHistoryLastFrame = false;
+    // FrameHistory::Frame() of the scene in SSRHistoryTex, 0 if none; indirect light reprojects it.
+    uint32_t nSSRHistoryFrame = 0;
 
     // Copies of the scene right before and right after CWater::Render. They differ only
     // where water was drawn, which limits the water reflection pass to real water.
@@ -305,9 +304,7 @@ public:
     int nGIAccumIndex = 0;
     // Steps the rays' offsets on every frame; SSR's count stands still while SSR is off.
     uint32_t nGIFrame = 0;
-    bool bGIAccumValid = false;
-    D3DXMATRIX GIPrevViewProj = {};
-    bool bGIPrevViewProjValid = false;
+    uint32_t nGIAccumFrame = 0;     // FrameHistory::Frame() of GIAccumTex[nGIAccumIndex], 0 if none
     // What deferred_lighting gets this frame, null while there is none.
     IDirect3DTexture9* GIResult = nullptr;
     bool bGIBound = false;
@@ -396,12 +393,11 @@ public:
     // Accumulation over frames (ContactTemporal_PS in SSR.fx): each frame blends the smoothed
     // contact shadows with the previous accumulation into the other target of the pair, and
     // moves every pixel's step offset on. ContactShadowsTemporal is the share of the history
-    // kept, 0 turns it off. ContactPrevViewProj is kept here, as SSR's is only while SSR is on.
+    // kept, 0 turns it off.
     rage::grcRenderTargetPC* ContactAccumTex[2] = {};
     IDirect3DSurface9* ContactAccumSurf[2] = {};
     int nContactAccumIndex = 0;
-    bool bContactAccumValid = false;
-    D3DXMATRIX ContactPrevViewProj = {};
+    uint32_t nContactAccumFrame = 0;    // FrameHistory::Frame() of ContactAccumTex[nContactAccumIndex], 0 if none
     uint32_t nContactFrame = 0;
     float fContactTemporalBlend = 0.8f;
     // What deferred_lighting gets on s9: ContactTex, or the accumulation.
@@ -440,7 +436,7 @@ public:
     rage::grcRenderTargetPC* SSRAccumTex[2][2] = {}; // [half][ping-pong]
     IDirect3DSurface9* SSRAccumSurf[2][2] = {};
     int nSSRAccumIndex = 0;
-    bool bSSRAccumValid = false;
+    uint32_t nSSRAccumFrame = 0;    // FrameHistory::Frame() of SSRAccumTex[..][nSSRAccumIndex], 0 if none
     bool bSSRAccumHalf = false;
     float fSSRTemporalBlend = 0.85f;
     // What deferred_lighting gets this frame: one of the textures above.
@@ -1330,7 +1326,7 @@ private:
         SAFE_RELEASE(PostFxResources.ContactAccumSurf[0]);
         SAFE_RELEASE(PostFxResources.ContactAccumSurf[1]);
         PostFxResources.ContactResult = nullptr;
-        PostFxResources.bContactAccumValid = false;
+        PostFxResources.nContactAccumFrame = 0;
         PostFxResources.bContactValid = false;
         PostFxResources.bGlassFrameValid = false;
         SAFE_RELEASE(PostFxResources.SSRDebugSurf);
@@ -1349,7 +1345,7 @@ private:
                     PostFxResources.SSRAccumTex[half][i] = nullptr;
                 }
             }
-        PostFxResources.bSSRAccumValid = false;
+        PostFxResources.nSSRAccumFrame = 0;
         for (auto* rt : { &PostFxResources.GIRawTex, &PostFxResources.GIDenoisedTex, &PostFxResources.GIAccumTex[0], &PostFxResources.GIAccumTex[1], &PostFxResources.GIFullTex })
         {
             if (*rt)
@@ -1373,11 +1369,10 @@ private:
                 PostFxResources.SkinLightTex[i] = nullptr;
             }
         }
-        PostFxResources.bGIAccumValid = false;
-        PostFxResources.bGIPrevViewProjValid = false;
+        PostFxResources.nGIAccumFrame = 0;
         PostFxResources.bSSRDebugValid = false;
         PostFxResources.bSSRValidThisFrame = false;
-        PostFxResources.bSSRPrevViewProjValid = false;
+        PostFxResources.nSSRHistoryFrame = 0;
         PostFxResources.bSSRReprojValid = false;
     }
 
@@ -1785,6 +1780,7 @@ private:
                         pDevice->StretchRect(PostFxResources.HDRFullScreenSurface, nullptr, PostFxResources.SSRHistorySurf, nullptr, D3DTEXF_NONE);
                         pDevice->SetRenderTarget(0, PostFxResources.HDRFullScreenSurface);
                         PostFxResources.bSSRHistoryThisFrame = true;
+                        PostFxResources.nSSRHistoryFrame = FrameHistory::Frame();
 
                         pDevice->SetViewport(&vpBeforeCapture);
                     }
@@ -2547,7 +2543,6 @@ private:
     static void RenderScreenSpaceReflections()
     {
         auto& R = PostFxResources;
-        R.bSSRHistoryLastFrame = R.bSSRHistoryThisFrame;
         R.bSSRHistoryThisFrame = false;
         R.bWaterDoneThisFrame = false;
         R.SSRResult = nullptr;
@@ -2579,7 +2574,7 @@ private:
         if (!R.SSREnabled())
         {
             clearSSR();
-            R.bSSRAccumValid = false;
+            R.nSSRAccumFrame = 0;
             return;
         }
 
@@ -2587,7 +2582,7 @@ private:
         if (!R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex || !vp || R.fSSRIntensity <= 0.0f)
         {
             clearSSR();
-            R.bSSRAccumValid = false;
+            R.nSSRAccumFrame = 0;
             return;
         }
 
@@ -2680,20 +2675,18 @@ private:
         effect->SetFloat(h.fNearPlane, vp->mNearClip);
         effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
 
-        D3DXMATRIX viewProj;
-        MatrixMultiply(viewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
-
-        if (!R.bSSRPrevViewProjValid)
-            R.SSRPrevViewProj = viewProj;
+        // Last frame's camera, which the scene history and the accumulation were rendered with
+        D3DXMATRIX prevViewProj;
+        if (FrameHistory::Previous().Valid)
+            prevViewProj = FrameHistory::Previous().ViewProjection;
+        else
+            MatrixMultiply(prevViewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
 
         D3DXVECTOR4 reprojRows[4];
-        ViewToClipRows(vp, R.SSRPrevViewProj, reprojRows);
+        ViewToClipRows(vp, prevViewProj, reprojRows);
         effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
         memcpy(R.SSRReprojRows, reprojRows, sizeof(reprojRows));
         R.bSSRReprojValid = true;
-
-        R.SSRPrevViewProj = viewProj;
-        R.bSSRPrevViewProjValid = true;
 
         effect->SetFloat(h.fMaxDistance, R.fSSRMaxDistance);
         effect->SetFloat(h.fThickness, R.fSSRThickness);
@@ -2797,12 +2790,12 @@ private:
         {
             const int sizeIndex = half ? 1 : 0;
             if (R.bSSRAccumHalf != half)
-                R.bSSRAccumValid = false;
+                R.nSSRAccumFrame = 0;
             R.bSSRAccumHalf = half;
             const int prev = R.nSSRAccumIndex, next = prev ^ 1;
             effect->SetTexture(h.SSRResultTex2D, ssrResult);
             effect->SetTexture(h.SSRAccumTex2D, R.SSRAccumTex[sizeIndex][prev]->mD3DTexture);
-            effect->SetFloat(h.fTemporalBlend, R.bSSRAccumValid ? R.fSSRTemporalBlend : 0.0f);
+            effect->SetFloat(h.fTemporalBlend, FrameHistory::CanReproject(R.nSSRAccumFrame) ? R.fSSRTemporalBlend : 0.0f);
             effect->SetFloat(h.fTemporalAnySurface, 0.0f);
             pDevice->SetRenderTarget(0, R.SSRAccumSurf[sizeIndex][next]);
             effect->SetTechnique(h.techSSRTemporal);
@@ -2815,10 +2808,10 @@ private:
             effect->End();
             ssrResult = R.SSRAccumTex[sizeIndex][next]->mD3DTexture;
             R.nSSRAccumIndex = next;
-            R.bSSRAccumValid = true;
+            R.nSSRAccumFrame = FrameHistory::Frame();
         }
         else
-            R.bSSRAccumValid = false;
+            R.nSSRAccumFrame = 0;
         R.SSRResult = ssrResult;
 
         const int debugMode = R.SSRDebugMode();
@@ -3577,14 +3570,6 @@ private:
             const float camera[4] = { fabsf(proj._11), fabsf(proj._22), vp->mNearClip, vp->mFarClip };
             memcpy(PostFxResources.SkinCamera, camera, sizeof(camera));
         }
-        // After a cut of the camera the histories of SSR, contact shadows and indirect light would smear the
-        // previous shot over this one: they start over
-        if (TemporalAA::IsCameraCut())
-        {
-            PostFxResources.bSSRAccumValid = false;
-            PostFxResources.bContactAccumValid = false;
-            PostFxResources.bGIAccumValid = false;
-        }
         ProfilerMark(pDevice, kProfAO, true);
         RenderAmbientOcclusion();
         ProfilerMark(pDevice, kProfAO, false);
@@ -3637,8 +3622,8 @@ private:
         R.bContactValid = false;
         R.ContactResult = nullptr;
         // The history stays usable only if this frame accumulates too; any return below drops it.
-        const bool accumWasValid = R.bContactAccumValid;
-        R.bContactAccumValid = false;
+        const bool accumWasValid = FrameHistory::CanReproject(R.nContactAccumFrame);
+        R.nContactAccumFrame = 0;
 
         // For the light shaders, whatever becomes of the sun's pass below.
         {
@@ -3802,12 +3787,14 @@ private:
 
         if (temporal)
         {
-            D3DXMATRIX viewProj;
-            MatrixMultiply(viewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
-            if (!accumWasValid)
-                R.ContactPrevViewProj = viewProj;
+            // Without a history to reproject the blend is 0, any camera does
+            D3DXMATRIX prevViewProj;
+            if (accumWasValid)
+                prevViewProj = FrameHistory::Previous().ViewProjection;
+            else
+                MatrixMultiply(prevViewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
             D3DXVECTOR4 reprojRows[4];
-            ViewToClipRows(vp, R.ContactPrevViewProj, reprojRows);
+            ViewToClipRows(vp, prevViewProj, reprojRows);
             // Last frame's fog pass copied its depth; this frame's has not run yet.
             const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
 
@@ -3823,8 +3810,7 @@ private:
             result = R.ContactAccumTex[next]->mD3DTexture;
             R.ContactResult = result;
             R.nContactAccumIndex = next;
-            R.ContactPrevViewProj = viewProj;
-            R.bContactAccumValid = true;
+            R.nContactAccumFrame = FrameHistory::Frame();
         }
 
         if (R.SSRDebugMode() == R.kContactDebugMode && R.SSRDebugSurf && h.techSSRDebug)
@@ -3863,8 +3849,7 @@ private:
 
     // Before deferred lighting, after contact shadows: indirect light at half resolution,
     // smoothed and accumulated, into GIResult for deferred_lighting. It reads the scene the fog
-    // pass copied last frame, with the camera of last frame, which it keeps itself so it does
-    // not depend on SSR being on.
+    // pass copied last frame, with the camera of last frame (FrameHistory).
     static void RenderIndirectLight()
     {
         auto& R = PostFxResources;
@@ -3879,24 +3864,18 @@ private:
         if (!R.SSGIEnabled() || R.fGIIntensity <= 0.0f || !pDevice || !vp || !effect || !h.techSSGI || !h.techSSRTemporal ||
             !R.mDepthRT || !R.SSRHistoryTex || !R.GIRawSurf || !R.GIDenoisedSurf || !R.GIAccumSurf[0] || !R.GIAccumSurf[1])
         {
-            R.bGIAccumValid = false;
-            R.bGIPrevViewProjValid = false;
+            R.nGIAccumFrame = 0;
             return;
         }
 
-        D3DXMATRIX viewProj;
-        MatrixMultiply(viewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
-        // The first frame on, the scene copy may be from long ago, when neither SSR nor this ran.
-        if (!R.bGIPrevViewProjValid || !R.bSSRHistoryLastFrame)
+        // The rays read last frame's scene: none on the first frame on, after a cut of the camera it shows another shot
+        if (!FrameHistory::CanReproject(R.nSSRHistoryFrame))
         {
-            R.GIPrevViewProj = viewProj;
-            R.bGIPrevViewProjValid = true;
-            R.bGIAccumValid = false;
+            R.nGIAccumFrame = 0;
             return;
         }
         D3DXVECTOR4 reprojRows[4];
-        ViewToClipRows(vp, R.GIPrevViewProj, reprojRows);
-        R.GIPrevViewProj = viewProj;
+        ViewToClipRows(vp, FrameHistory::Previous().ViewProjection, reprojRows);
 
         const float fullWidth = float(vp->mWidth);
         const float fullHeight = float(vp->mHeight);
@@ -4013,12 +3992,12 @@ private:
         const int prev = R.nGIAccumIndex, next = prev ^ 1;
         effect->SetTexture(h.SSRResultTex2D, gathered);
         effect->SetTexture(h.SSRAccumTex2D, R.GIAccumTex[prev]->mD3DTexture);
-        effect->SetFloat(h.fTemporalBlend, R.bGIAccumValid ? R.fGITemporalBlend : 0.0f);
+        effect->SetFloat(h.fTemporalBlend, FrameHistory::CanReproject(R.nGIAccumFrame) ? R.fGITemporalBlend : 0.0f);
         effect->SetFloat(h.fTemporalAnySurface, 1.0f);
         DrawEffectPass(pDevice, effect, h.techSSRTemporal, R.GIAccumSurf[next], width, height);
         effect->SetFloat(h.fTemporalAnySurface, 0.0f);
         R.nGIAccumIndex = next;
-        R.bGIAccumValid = true;
+        R.nGIAccumFrame = FrameHistory::Frame();
         R.GIResult = R.GIAccumTex[next]->mD3DTexture;
 
         vpDesc.Width = DWORD(fullWidth);
