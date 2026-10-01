@@ -4513,10 +4513,10 @@ public:
                 // The fog pass takes the pre-alpha depth copy and SSR's scene history, so it is
                 // hooked whatever EnablePreAlphaDepth says; without it SSR never saw the scene.
                 {
-                    pattern = hook::pattern("6A ? E8 ? ? ? ? 5E 8B E5 5D C3");
+                    pattern = hook::pattern("FF B6 ? ? ? ? 6A ? E8 ? ? ? ? 5E 8B E5 5D C3");
                     if (!pattern.empty())
                     {
-                        hbDrawCallFog.fun = injector::MakeCALL(pattern.get_first(2), DrawCallFog).get();
+                        hbDrawCallFog.fun = injector::MakeCALL(pattern.get_first(8), DrawCallFog).get();
                     }
                     else
                     {
