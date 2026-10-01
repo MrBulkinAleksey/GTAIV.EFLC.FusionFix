@@ -9,7 +9,12 @@ namespace HeadlightEnhancement
     static uintptr_t imageBase = 0;
     static std::atomic<uint64_t> lastDrivenToken{0};
     static std::atomic<uint32_t> retainedSubmissions{0};
+    static std::atomic<uint32_t> hookCalls{0};
     static bool brightnessInstalled = false;
+    // Why the hook is or is not in place, and the jump it wrote: another plugin that patches
+    // the same game code turns the hook off at install, or replaces the jump later.
+    static std::string brightnessStatus = "not checked";
+    static uint8_t siteBytes[5]{};
     static std::atomic<bool> diagnosticsReady{false};
     static std::filesystem::path logPath;
 
@@ -32,6 +37,7 @@ namespace HeadlightEnhancement
 
     static void RetainAfterExit(SafetyHookContext& regs)
     {
+        hookCalls.fetch_add(1, std::memory_order_relaxed);
         const auto vehicle = static_cast<uintptr_t>(regs.esi);
         const auto token = VehicleToken(vehicle);
         if (!token) return;
@@ -69,14 +75,35 @@ namespace HeadlightEnhancement
         if (logPath.empty() || now - last < 5000) return;
         last = now;
         std::ofstream out(logPath, std::ios::trunc);
+        const bool siteIntact = brightnessInstalled &&
+            !std::memcmp(reinterpret_cast<const void*>(imageBase + 0x63FB77), siteBytes, sizeof(siteBytes));
         out << "brightnessInstalled=" << brightnessInstalled
+            << "\nbrightnessStatus=" << brightnessStatus
+            << "\nsiteIntact=" << siteIntact
+            << "\nhookCalls=" << hookCalls.load(std::memory_order_relaxed)
             << "\nretainedSubmissions=" << retainedSubmissions.load()
             << "\ntrackedVehicle=" << (lastDrivenToken.load() != 0) << '\n';
     }
 
+    static std::string DumpBytes(uintptr_t address, size_t count)
+    {
+        std::ostringstream out;
+        out << std::hex;
+        for (size_t i = 0; i < count; ++i)
+        {
+            const auto byte = reinterpret_cast<const uint8_t*>(address)[i];
+            out << (i ? " " : "") << (byte < 0x10 ? "0" : "") << unsigned(byte);
+        }
+        return out.str();
+    }
+
     static bool InstallBrightness(bool enabled)
     {
-        if (!enabled) return false;
+        if (!enabled)
+        {
+            brightnessStatus = "off in the ini";
+            return false;
+        }
         imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
         constexpr uint8_t driverBlock[]{
             0x74,0x33,0x8B,0x8E,0x50,0x0F,0,0,0x85,0xC9,0x74,0x29,
@@ -88,10 +115,21 @@ namespace HeadlightEnhancement
         if (std::memcmp(reinterpret_cast<void*>(imageBase + 0x63FB42), driverBlock, sizeof(driverBlock)) ||
             std::memcmp(site, instruction, sizeof(instruction)) || site[6] != 0 ||
             *reinterpret_cast<const uint32_t*>(site + 2) != imageBase + 0xC3CC49)
+        {
+            brightnessStatus = "game code differs: " + DumpBytes(imageBase + 0x63FB42, sizeof(driverBlock)) +
+                " | " + DumpBytes(imageBase + 0x63FB77, 7);
             return false;
+        }
         // Runs after original player-only scaling, before high-beam scaling.
         // Do not bypass or alter the original driver eligibility instructions.
         brightnessHook = safetyhook::create_mid(imageBase + 0x63FB77, RetainAfterExit);
-        return static_cast<bool>(brightnessHook);
+        if (!brightnessHook)
+        {
+            brightnessStatus = "hook failed";
+            return false;
+        }
+        std::memcpy(siteBytes, site, sizeof(siteBytes));
+        brightnessStatus = "installed";
+        return true;
     }
 }
