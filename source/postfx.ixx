@@ -293,7 +293,7 @@ public:
     // What deferred_lighting gets this frame, null while there is none.
     IDirect3DTexture9* GIResult = nullptr;
     bool bGIBound = false;
-    // mMaterialIdRT on s10 during lighting, for skin in the light volume shaders.
+    // mMaterialIdRT on s11 during lighting, for skin in the light volume shaders.
     bool bMaterialIdBound = false;
 
     // Light scattering under the skin (SkinScatter_PS in SSR.fx), as the fog pass begins: the
@@ -1256,7 +1256,7 @@ private:
             pDevice->SetTexture(3, nullptr);
             pDevice->SetTexture(8, nullptr);
             pDevice->SetTexture(9, nullptr);
-            pDevice->SetTexture(10, nullptr);
+            pDevice->SetTexture(11, nullptr);
         }
         PostFxResources.bGIBound = false;
         PostFxResources.bMaterialIdBound = false;
@@ -4256,7 +4256,7 @@ public:
     // What deferred_lighting reads besides the game's own inputs: s3 the SSR result (the cleared
     // SSR target while SSR is off, else a transparent 1x1), s9 the contact shadows while they
     // are valid, s8 the indirect light, c202-c204 the local light contact shadow constants, and
-    // c201, c205 and s10 (the material IDs) the light on skin.
+    // c201, c205 and s11 (the material IDs) the light on skin.
     static void BindLightingInputs(IDirect3DDevice9* pDevice)
     {
         auto& R = PostFxResources;
@@ -4288,9 +4288,11 @@ public:
             pDevice->SetPixelShaderConstantF(205, offset, 1);
         }
         // The light volumes do not read the material IDs themselves (local_light_on_skin.patch).
+        // s11 is read by no game shader, and the car glass takes it over right after lighting;
+        // s10 is the game's StippleTexture, which the final post fx pass reads as its colour LUT.
         if (R.mMaterialIdRT && R.mMaterialIdRT->mD3DTexture)
         {
-            BindSampler(pDevice, 10, R.mMaterialIdRT->mD3DTexture, D3DTEXF_POINT);
+            BindSampler(pDevice, 11, R.mMaterialIdRT->mD3DTexture, D3DTEXF_POINT);
             R.bMaterialIdBound = true;
         }
 
@@ -4359,7 +4361,7 @@ public:
         }
         if (R.bMaterialIdBound)
         {
-            pDevice->SetTexture(10, nullptr);
+            pDevice->SetTexture(11, nullptr);
             R.bMaterialIdBound = false;
         }
         // Lights drawn for other views (reflections, mirrors) must not march with this camera,

@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 825d6bc..5f5328b 100644
+index 825d6bc..dee4384 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -79,6 +79,7 @@
@@ -14,7 +14,7 @@ index 825d6bc..5f5328b 100644
      dcl_2d s4
      dcl_2d s5
      dcl_2d s14
-+    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
++    dcl_2d s11 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
      add r0.zw, c0.x, vPos.xyxy
      mul r0.zw, r0, c84
      texld r2, r0.zwzw, s1
@@ -23,7 +23,7 @@ index 825d6bc..5f5328b 100644
      mad r4.xyz, r3, -r0.x, r5
      dp3_sat r0.x, r2, r3
 +    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
-+    texld r20, r0.zwzw, s10
++    texld r20, r0.zwzw, s11
 +    mad r20.x, r20.x, c156.x, c156.y
 +    frc r20.x, r20.x
 +    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
@@ -39,7 +39,7 @@ index 825d6bc..5f5328b 100644
      mul r3.yz, r3, r3
      add r0.x, r3.x, r3.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 42313f3..25677c8 100644
+index 42313f3..31cfc0a 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -50,6 +50,7 @@
@@ -54,14 +54,14 @@ index 42313f3..25677c8 100644
      dcl_2d s2
      dcl_2d s4
      dcl_2d s5
-+    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
++    dcl_2d s11 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
      mul r0.xyz, c78.w, c78
      add r1.xy, c0.x, vPos
      mul r1.xy, r1, c79.zwzw
      texld r2, r1, s5
      texld r3, r1, s1
 +    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
-+    texld r20, r1, s10
++    texld r20, r1, s11
 +    mad r20.x, r20.x, c156.x, c156.y
 +    frc r20.x, r20.x
 +    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
@@ -87,7 +87,7 @@ index 42313f3..25677c8 100644
      mul r1.xyz, r1.z, r1.xyww
      mad r0.xyz, r2, r0, r1
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 78cddfc..45d7253 100644
+index 78cddfc..91955bc 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -81,6 +81,7 @@
@@ -102,14 +102,14 @@ index 78cddfc..45d7253 100644
      dcl_2d s4
      dcl_2d s5
      dcl_2d s14
-+    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
++    dcl_2d s11 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
      mul r0.xyz, c85.w, c85
      add r1.xy, c0.x, vPos
      mul r1.xy, r1, c86.zwzw
      texld r2, r1, s5
      texld r3, r1, s1
 +    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
-+    texld r20.w, r1, s10.x
++    texld r20.w, r1, s11.x
 +    mad r20.w, r20.w, c156.x, c156.y
 +    frc r20.w, r20.w
 +    mad_sat r20.w, r20.w, c156.z, c156.w // 1 on skin, 0 elsewhere
@@ -132,7 +132,7 @@ index 78cddfc..45d7253 100644
      mul r1.xyz, r1.z, r1.xyww
      mad r26.xyz, r2, r0, r1
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 3a6badc..3c49537 100644
+index 3a6badc..311b0a4 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -45,6 +45,7 @@
@@ -147,7 +147,7 @@ index 3a6badc..3c49537 100644
      dcl_2d s1
      dcl_2d s2
      dcl_2d s4
-+    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
++    dcl_2d s11 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
      add r0.xy, c0.x, vPos
      mul r0.xy, r0, c77.zwzw
      texld r1, r0, s1
@@ -156,7 +156,7 @@ index 3a6badc..3c49537 100644
      texld r1, r0, s2
      texld r4, r0, s0
 +    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
-+    texld r20, r0, s10
++    texld r20, r0, s11
 +    mad r20.x, r20.x, c156.x, c156.y
 +    frc r20.x, r20.x
 +    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
@@ -184,7 +184,7 @@ index 3a6badc..3c49537 100644
      add r0.w, r1.x, r1.x
      mad_sat r1.x, r1.z, r1.z, c2.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 81c2ced..ee5986a 100644
+index 81c2ced..ffaab0b 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -48,6 +48,7 @@
@@ -199,7 +199,7 @@ index 81c2ced..ee5986a 100644
      dcl_2d s2
      dcl_2d s4
      dcl_2d s5
-+    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
++    dcl_2d s11 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
      add r0.xy, c0.x, vPos
      mul r0.xy, r0, c77.zwzw
      texld r1, r0, s1
@@ -208,7 +208,7 @@ index 81c2ced..ee5986a 100644
      dp3 r1.y, r3, -c72
      dp3_sat r1.z, r3, r2
 +    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
-+    texld r20, r0, s10
++    texld r20, r0, s11
 +    mad r20.x, r20.x, c156.x, c156.y
 +    frc r20.x, r20.x
 +    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
@@ -230,7 +230,7 @@ index 81c2ced..ee5986a 100644
      texld r0, r0, s5
      mul r0.yzw, r1, r2.xxyz
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 0db9274..a5578b9 100644
+index 0db9274..b7a116d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -48,6 +48,7 @@
@@ -245,7 +245,7 @@ index 0db9274..a5578b9 100644
      dcl_2d s2
      dcl_2d s4
      dcl_2d s5
-+    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
++    dcl_2d s11 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
      add r0.xy, c1.x, vPos
      mul r0.xy, r0, c77.zwzw
      texld r1, r0, s1
@@ -254,7 +254,7 @@ index 0db9274..a5578b9 100644
      dp3 r1.y, r3, -c72
      dp3_sat r1.w, r3, r2
 +    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
-+    texld r20, r0, s10
++    texld r20, r0, s11
 +    mad r20.x, r20.x, c156.x, c156.y
 +    frc r20.x, r20.x
 +    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
@@ -276,7 +276,7 @@ index 0db9274..a5578b9 100644
      texld r0, r0, s5
      mul r0.yzw, r2.xxyz, r4.xxyz
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 0732660..97a51cf 100644
+index 0732660..b32e9e9 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -48,6 +48,7 @@
@@ -291,7 +291,7 @@ index 0732660..97a51cf 100644
      dcl_2d s2
      dcl_2d s4
      dcl_2d s5
-+    dcl_2d s10 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
++    dcl_2d s11 // FusionFix skin lighting: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
      add r0.xy, c0.x, vPos
      mul r0.xy, r0, c77.zwzw
      texld r1, r0, s1
@@ -300,7 +300,7 @@ index 0732660..97a51cf 100644
      dp3 r1.y, r3, -c72
      dp3_sat r1.z, r3, r2
 +    // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
-+    texld r20, r0, s10
++    texld r20, r0, s11
 +    mad r20.x, r20.x, c156.x, c156.y
 +    frc r20.x, r20.x
 +    mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
