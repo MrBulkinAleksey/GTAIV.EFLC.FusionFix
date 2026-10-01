@@ -14,6 +14,12 @@ namespace HeadlightEnhancement
     // Why the hook is or is not in place, and the jump it wrote: another plugin that patches
     // the same game code turns the hook off at install, or replaces the jump later.
     static std::string brightnessStatus = "not checked";
+    // The radius of the beams is (floor(vehicle+F74) * bonus + base) * range. F74 climbs to 1 while
+    // a player sits in the car and falls back to 0 once none does (CE 0xA4EA3B), so the bonus,
+    // 20 m on top of a base of 10 m, is the player's alone and was lost right after getting out,
+    // a third of the driving reach with ConsistentBrightness. Both read from the instructions.
+    static const float* pRadiusBonus = nullptr;
+    static const float* pRadiusBase = nullptr;
     static uint8_t siteBytes[5]{};
     static std::atomic<bool> diagnosticsReady{false};
     static std::filesystem::path logPath;
@@ -104,6 +110,15 @@ namespace HeadlightEnhancement
             intensity <= 0 || range <= 0 || intensity > 10 || range > 10) return;
         regs.xmm1.f32[0] *= intensity;
         regs.xmm4.f32[0] *= range;
+        if (pRadiusBonus && pRadiusBase)
+        {
+            // The bonus as it would be with the ramp still full, over what F74 leaves of it.
+            const float bonus = *pRadiusBonus, base = *pRadiusBase;
+            const float ramp = std::floor(*reinterpret_cast<const float*>(vehicle + 0xF74));
+            const float kept = ramp * bonus + base;
+            if (std::isfinite(bonus) && std::isfinite(kept) && bonus > 0 && kept > 0 && ramp < 1)
+                regs.xmm4.f32[0] *= (bonus + base) / kept;
+        }
         ++retainedSubmissions;
     }
 
@@ -122,6 +137,7 @@ namespace HeadlightEnhancement
             << "\nsiteIntact=" << siteIntact
             << "\nhookCalls=" << hookCalls.load(std::memory_order_relaxed)
             << "\nretainedSubmissions=" << retainedSubmissions.load()
+            << "\nradiusBonus=" << (pRadiusBonus ? *pRadiusBonus : -1.0f)
             << "\ntrackedVehicle=" << (lastDrivenToken.load() != 0) << '\n';
 
         // Oldest first. highBeam is the flag the function uses (vehicle+F19 & 2, or highBeamArg);
@@ -185,6 +201,16 @@ namespace HeadlightEnhancement
             return false;
         }
         std::memcpy(siteBytes, site, sizeof(siteBytes));
+        // mulss xmm5, [bonus] / addss xmm5, [base] in the radius computation.
+        constexpr uint8_t mulss[]{0xF3,0x0F,0x59,0x2D}, addss[]{0xF3,0x0F,0x58,0x2D};
+        const auto bonusAt = reinterpret_cast<const uint8_t*>(imageBase + 0x63FC45);
+        const auto baseAt = reinterpret_cast<const uint8_t*>(imageBase + 0x63FC51);
+        if (!std::memcmp(bonusAt, mulss, sizeof(mulss)) && !std::memcmp(baseAt, addss, sizeof(addss)) &&
+            !std::memcmp(reinterpret_cast<const void*>(imageBase + 0x63FBAB), "\xF3\x0F\x10\x96\x74\x0F\0\0", 8))
+        {
+            pRadiusBonus = *reinterpret_cast<const float* const*>(bonusAt + 4);
+            pRadiusBase = *reinterpret_cast<const float* const*>(baseAt + 4);
+        }
         brightnessStatus = "installed";
         return true;
     }
