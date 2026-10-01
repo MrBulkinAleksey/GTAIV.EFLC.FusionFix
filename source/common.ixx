@@ -1291,6 +1291,22 @@ export std::optional<uintptr_t> resolve_next_displacement(auto ip)
     return std::nullopt;
 }
 
+// The direct calls to target anywhere in the executable's code section, found by their E8 displacement
+export std::vector<uintptr_t> FindModuleCallsTo(uintptr_t target)
+{
+    auto module = reinterpret_cast<uintptr_t>(GetModuleHandle(NULL));
+    auto ntHeader = reinterpret_cast<IMAGE_NT_HEADERS*>(module + reinterpret_cast<IMAGE_DOS_HEADER*>(module)->e_lfanew);
+    auto begin = module + ntHeader->OptionalHeader.BaseOfCode;
+    auto end = begin + ntHeader->OptionalHeader.SizeOfCode;
+    std::vector<uintptr_t> calls;
+    for (auto ip = begin; ip + 5 <= end; ++ip)
+    {
+        if (*reinterpret_cast<uint8_t*>(ip) == 0xE8 && ip + 5 + *reinterpret_cast<int32_t*>(ip + 1) == target)
+            calls.push_back(ip);
+    }
+    return calls;
+}
+
 // The direct calls to target in one function, found by following its branches and switch tables from the start
 // without leaving the first maxSize bytes
 export std::vector<uintptr_t> FindCallsTo(uintptr_t function, uintptr_t target, size_t maxSize = 0x4000)

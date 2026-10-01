@@ -75,13 +75,13 @@ namespace CDeferredLightingHelper
     }
 }
 
-SafetyHookInline shsub_5ADB20 = {};
+int (__cdecl* sub_5ADB20Original)() = nullptr;
 int sub_5ADB20()
 {
     if (Natives::IsUsingController())
         return 0;
 
-    return shsub_5ADB20.unsafe_ccall<int>();
+    return sub_5ADB20Original();
 }
 
 namespace CRadarNY
@@ -655,8 +655,11 @@ public:
             // Note: It only disables it visually, so a mouse can still be used simultaneously with a controller to select things. The start menu also uses a different cursor, so this won't also hide that one.
             // TODO: Improve this in the future? Like locking the mouse positions in place at least when a gamepad is used?
             {
+                // Its callers are redirected instead of its entry: other mods find and call it by its first bytes
                 auto pattern = hook::pattern("83 EC ? 53 55 56 57 6A ? E8 ? ? ? ? 83 C4");
-                shsub_5ADB20 = safetyhook::create_inline(pattern.get_first(0), sub_5ADB20);
+                sub_5ADB20Original = pattern.get_first<int(__cdecl)()>(0);
+                for (auto call : FindModuleCallsTo(reinterpret_cast<uintptr_t>(sub_5ADB20Original)))
+                    injector::MakeCALL(call, sub_5ADB20, true);
             }
 
             // Pause menu map crosshair aspect ratio scaling
@@ -664,7 +667,7 @@ public:
                 auto pattern = hook::pattern("8B 44 24 ? 56 8B 35 ? ? ? ? 85 F6");
                 if (!pattern.empty())
                 {
-                    static auto CFrontEnd__GetWidgetValue = (rage::Vector2*(__cdecl*)(rage::Vector2*, int))pattern.get_first(0);
+                    static auto CFrontEnd__GetWidgetValue = (rage::Vector2 * (__cdecl*)(rage::Vector2*, int))pattern.get_first(0);
 
                     static rage::Vector2 mapCursorThickness{};
                     pattern = hook::pattern("F3 0F 11 4C 24 ? FF D7 39 05 ? ? ? ? 8B 0D ? ? ? ? 0F 44 0D ? ? ? ? F3 0F 10 0D ? ? ? ? 66 0F 6E C1 0F 5B C0 8D 44 24");
@@ -691,7 +694,7 @@ public:
                 else
                 {
                     pattern = hook::pattern("8B 0D ? ? ? ? 85 C9 8B 44 24 ? 74");
-                    static auto CFrontEnd__GetWidgetValue = (rage::Vector2*(__cdecl*)(rage::Vector2*, int))pattern.get_first(0);
+                    static auto CFrontEnd__GetWidgetValue = (rage::Vector2 * (__cdecl*)(rage::Vector2*, int))pattern.get_first(0);
 
                     static rage::Vector2 crosshairThickness{};
                     pattern = hook::pattern("F3 0F 11 44 24 ? FF D6 39 05 ? ? ? ? A1 ? ? ? ? 74 ? A1 ? ? ? ? F3 0F 10 05 ? ? ? ? 8D 4C 24");
@@ -708,7 +711,7 @@ public:
                     {
                         *(float*)(regs.esp + 0x64 - 0x28) = crosshairThickness.y;
                     });
-                    
+
                     pattern = hook::pattern("F3 0F 10 1D ? ? ? ? F3 0F 10 54 24 ? 0F B6 C8");
                     static auto CCustomMenu__RenderMapCrosshairHook3 = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
                     {
@@ -1090,9 +1093,7 @@ public:
 
             // Fix the date going backwards when dying or getting busted between 12pm and 11pm, and respraying between 9pm and 11:59pm (https://github.com/GTAmodding/GTAIV-Issues-List/issues/164)
             {
-                // The call and imul keep it unique: the bare push sequence also shows up inside relocated addresses,
-                // e.g. 8B 0D 94 44 6A 01 53 55 56 at 0x905D80 with the exe loaded at 0xA70000
-                auto pattern = hook::pattern("6A ? 53 55 56 E8 ? ? ? ? 69 FF");
+                auto pattern = hook::pattern("6A ? 53 55 56 E8 ? ? ? ? 69 FF 88 13");
                 if (!pattern.empty())
                 {
                     uint8_t* ptr = (uint8_t*)pattern.get_first(0);
