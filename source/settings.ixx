@@ -2468,32 +2468,36 @@ public:
             }; injector::MakeInline<MenuBackgroundHook6>(pattern.get_first(0), pattern.get_first(9));
 
             //menu scrolling
+            // The game starts scrolling the options once the selection is past row 16. About 25 rows fit above the
+            // bottom of the menu and the memory meter of Graphics, so scrolling starts past row 22 instead of 32,
+            // which left the selection off screen. The scroll offsets keep their original ratio to that row.
+            constexpr int8_t ScrollRow = 22;
             pattern = find_pattern("83 F8 10 7E 37 6A 00 E8 ? ? ? ? 83 C4 04 8D 70 F8 E8 ? ? ? ? D9 5C 24 30", "83 F8 10 7E 2A 6A 00 E8 ? ? ? ? 83 E8 08 89 44 24 14");
-            injector::WriteMemory<uint8_t>(pattern.get_first(2), 0x10 * 2, true);
+            injector::WriteMemory<int8_t>(pattern.get_first(2), ScrollRow, true);
             pattern = hook::pattern("8D 70 F8 E8 ? ? ? ? D9 5C 24 30");
             if (!pattern.empty())
-                injector::WriteMemory<uint8_t>(pattern.get_first(2), 0xF0, true);
+                injector::WriteMemory<int8_t>(pattern.get_first(2), -ScrollRow / 2, true);
             else
             {
                 pattern = hook::pattern("83 E8 08 89 44 24 14");
                 if (!pattern.empty())
-                    injector::WriteMemory<uint8_t>(pattern.get_first(2), 0x10, true);
+                    injector::WriteMemory<int8_t>(pattern.get_first(2), ScrollRow / 2, true);
             }
             pattern = find_pattern("83 FE 10 7F 08", "83 FF 10 7F 0C");
-            injector::WriteMemory<uint8_t>(pattern.get_first(2), 0x10 * 2, true);
+            injector::WriteMemory<int8_t>(pattern.get_first(2), ScrollRow, true);
             pattern = find_pattern("83 F8 10 7E 37 6A 00 E8 ? ? ? ? 83 C4 04 8D 70 F8", "83 F8 ? 7E ? 6A 00 E8 ? ? ? ? 83 E8 08 89 44 24 24");
-            injector::WriteMemory<uint8_t>(pattern.get_first(2), 0x10 * 2, true);
+            injector::WriteMemory<int8_t>(pattern.get_first(2), ScrollRow, true);
             pattern = hook::pattern("8D 70 F8 E8 ? ? ? ? D9 5C 24 38");
             if (!pattern.empty())
-                injector::WriteMemory<uint8_t>(pattern.get_first(2), 0xF0, true);
+                injector::WriteMemory<int8_t>(pattern.get_first(2), -ScrollRow / 2, true);
             else
             {
                 pattern = hook::pattern("83 E8 08 89 44 24 24");
                 if (!pattern.empty())
-                    injector::WriteMemory<uint8_t>(pattern.get_first(2), 0x10, true);
+                    injector::WriteMemory<int8_t>(pattern.get_first(2), ScrollRow / 2, true);
             }
             pattern = find_pattern("8D 46 F0 66 0F 6E C0", "83 C7 F0 89 7C");
-            injector::WriteMemory<uint8_t>(pattern.get_first(2), 0xE0, true);
+            injector::WriteMemory<int8_t>(pattern.get_first(2), -ScrollRow, true);
 
             //Text
             CText::Hook();
