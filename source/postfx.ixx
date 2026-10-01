@@ -4290,50 +4290,58 @@ private:
             shPedSkinComponent[1] = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs) { MarkPedSkin(regs.esi); });
     }
 
-    // Every 2 s, one frame's vehicle spot lights of 8 m or more (headlights) within 30 m of the
-    // camera, as they reach the frame's light list: to tell whether the beams of a car the player
-    // just got out of still arrive, and how, next to those of the car while driven.
+    // Frame by frame, the nearest headlight beam of 20 m or more (the player's, other cars' are
+    // 10 m) within 30 m of the camera, as it reaches the frame's light list, with a line each
+    // time it changes or goes: to see what the beams of the player's car do while they get in.
     static void LogCopiedHeadlight(const rage::CLightSource* light)
     {
+        struct Beam
+        {
+            bool present;
+            uint32_t flags;
+            float radius, intensity, x, y, z;
+            bool Same(const Beam& o) const
+            {
+                return present == o.present && flags == o.flags && radius == o.radius && intensity == o.intensity;
+            }
+        };
         static uint32_t frame = 0;
-        static ULONGLONG lastWrite = 0;
-        static bool started = false;
+        static Beam best{}, last{};
+        static float bestDistance = 0.0f;
         static FILE* log = nullptr;
         static rage::Vector3 cameraPos{};
         const auto current = CTimer::m_frameCount ? *CTimer::m_frameCount : 0;
         if (current != frame)
         {
+            if (!log)
+                log = _wfopen((GetExeModulePath() / L"FusionFix.Headlights.log").c_str(), L"w");
+            if (log && !best.Same(last))
+            {
+                if (best.present)
+                    fprintf(log, "t=%llu frame=%u flags=0x%x radius=%.1f intensity=%.2f pos=%.1f %.1f %.1f distance=%.1f\n",
+                        GetTickCount64(), frame, best.flags, best.radius, best.intensity, best.x, best.y, best.z, bestDistance);
+                else
+                    fprintf(log, "t=%llu frame=%u none\n", GetTickCount64(), frame);
+                fflush(log);
+            }
+            last = best;
+            best = {};
             frame = current;
-            if (log)
-            {
-                fclose(log);
-                log = nullptr;
-            }
-            const auto now = GetTickCount64();
-            if (now - lastWrite >= 2000)
-            {
-                lastWrite = now;
-                log = _wfopen((GetExeModulePath() / L"FusionFix.Headlights.log").c_str(), started ? L"a" : L"w");
-                started = true;
-                Cam camera = 0;
-                Natives::GetRootCam(&camera);
-                Natives::GetCamPos(camera, &cameraPos.x, &cameraPos.y, &cameraPos.z);
-                if (log)
-                    fprintf(log, "t=%llu frame=%u camera %.1f %.1f %.1f\n", now, frame, cameraPos.x, cameraPos.y, cameraPos.z);
-            }
+            Cam camera = 0;
+            Natives::GetRootCam(&camera);
+            Natives::GetCamPos(camera, &cameraPos.x, &cameraPos.y, &cameraPos.z);
         }
-        if (!log || light->mType != rage::LT_SPOT || !(light->mFlags & 0x100) || light->mRadius < 8.0f)
+        if (light->mType != rage::LT_SPOT || !(light->mFlags & 0x100) || light->mRadius < 20.0f)
             return;
         const float dx = cameraPos.x - light->mPosition.x;
         const float dy = cameraPos.y - light->mPosition.y;
         const float dz = cameraPos.z - light->mPosition.z;
         const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-        if (distance > 30.0f)
+        if (distance > 30.0f || (best.present && distance >= bestDistance))
             return;
-        fprintf(log, "  flags=0x%x radius=%.1f intensity=%.2f cone=%.1f/%.1f dir=%.2f %.2f %.2f pos=%.1f %.1f %.1f distance=%.1f shadow=%d cache=%d\n",
-            light->mFlags, light->mRadius, light->mIntensity, light->mInnerConeAngle, light->mOuterConeAngle,
-            light->mDirection.x, light->mDirection.y, light->mDirection.z,
-            light->mPosition.x, light->mPosition.y, light->mPosition.z, distance, light->mCastShadows, light->mShadowCacheIndex);
+        best = { true, light->mFlags, light->mRadius, light->mIntensity,
+                 light->mPosition.x, light->mPosition.y, light->mPosition.z };
+        bestDistance = distance;
     }
 
     // Runs as the game copies each light into the frame's draw list, on the main thread.
