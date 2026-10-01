@@ -19,12 +19,12 @@ namespace HeadlightEnhancement
     static std::filesystem::path logPath;
 
     // Diagnostics: changes of the light state of the car the player drives or last drove, as
-    // this function sees them, to find what turns its high beams off when the player gets out.
+    // this function sees them, to find why its headlights stop lighting when the player gets out.
     struct LightEvent
     {
         ULONGLONG time;
         bool driver;
-        uint8_t f15, f19, f21, highBeam, highBeamArg;
+        uint8_t f15, f19, f21, highBeam, highBeamArg, left, right;
         float intensity, range;
     };
     static LightEvent lightEvents[24]{};
@@ -38,10 +38,11 @@ namespace HeadlightEnhancement
         const auto byteAt = [](uintptr_t address) { return *reinterpret_cast<const uint8_t*>(address); };
         LightEvent state{ GetTickCount64(), driver, byteAt(vehicle + 0xF15), byteAt(vehicle + 0xF19),
             byteAt(vehicle + 0xF21), static_cast<uint8_t>(regs.eax & 0xFF), byteAt(regs.ebp + 0x28),
-            regs.xmm1.f32[0], regs.xmm4.f32[0] };
+            byteAt(regs.ebp + 0x10), byteAt(regs.ebp + 0x14), regs.xmm1.f32[0], regs.xmm4.f32[0] };
         const bool changed = token != lastLightToken || state.driver != lastLightState.driver ||
             state.f15 != lastLightState.f15 || state.f19 != lastLightState.f19 ||
-            state.highBeam != lastLightState.highBeam || state.highBeamArg != lastLightState.highBeamArg;
+            state.highBeam != lastLightState.highBeam || state.highBeamArg != lastLightState.highBeamArg ||
+            state.left != lastLightState.left || state.right != lastLightState.right;
         lastLightToken = token;
         lastLightState = state;
         if (!changed)
@@ -124,7 +125,8 @@ namespace HeadlightEnhancement
             << "\ntrackedVehicle=" << (lastDrivenToken.load() != 0) << '\n';
 
         // Oldest first. highBeam is the flag the function uses (vehicle+F19 & 2, or highBeamArg);
-        // intensity and range are the multipliers before high beam scaling.
+        // left and right its lamp arguments, the beams are only submitted for 1; intensity and
+        // range are the multipliers before high beam scaling.
         while (lightEventsLock.test_and_set(std::memory_order_acquire)) {}
         const auto count = lightEventCount;
         const auto first = count > std::size(lightEvents) ? count - std::size(lightEvents) : 0;
@@ -134,7 +136,7 @@ namespace HeadlightEnhancement
             out << "t=" << e.time << " driver=" << e.driver << std::hex
                 << " f15=" << unsigned(e.f15) << " f19=" << unsigned(e.f19) << " f21=" << unsigned(e.f21)
                 << std::dec << " highBeam=" << unsigned(e.highBeam) << " highBeamArg=" << unsigned(e.highBeamArg)
-                << " intensity=" << e.intensity << " range=" << e.range << '\n';
+                << " left=" << unsigned(e.left) << " right=" << unsigned(e.right) << " intensity=" << e.intensity << " range=" << e.range << '\n';
         }
         lightEventsLock.clear(std::memory_order_release);
     }
