@@ -2,6 +2,7 @@ texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, SSRR
 texture PreWaterTex2D, PostWaterTex2D;
 texture PrevDepthTex2D;
 texture SSRAccumTex2D;
+texture MotionTex2D;
 texture AlbedoTex2D, GIPrevTex2D;
 texture SceneTex2D, SkinIDTex2D, SkinLightTex2D;
 
@@ -46,6 +47,17 @@ sampler2D SSRResultTex
 sampler2D DebugTex
 {
     Texture = <DebugTex2D>;
+};
+
+// Temporal AA's motion vectors, see TemporalHistoryUV.
+sampler2D MotionTex
+{
+    Texture = <MotionTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
 };
 
 // Last frame's accumulated SSR, see SSRTemporal_PS.
@@ -150,6 +162,10 @@ uniform float fFarDivNear;
 uniform float4 vec4ProjInfo;
 
 uniform float4 vec4ViewToPrevClip[4];
+// Temporal AA's motion vectors are bound (MotionTex): previous - current position in texture coordinates, without
+// the jitter, which vec2MotionJitter (previous - current) adds back for the jittered histories.
+uniform float fUseMotion;
+uniform float2 vec2MotionJitter;
 uniform float fUsePrevDepth; // 1 when PrevDepthTex holds the depth HistoryTex was taken with
 
 uniform float fMaxDistance;     // world units to march before giving up
@@ -273,6 +289,26 @@ float2 HistoryUV(float3 P)
         return float2(-1.0, -1.0);
 
     return (clip.xy / clip.w) * float2(0.5, -0.5) + 0.5;
+}
+
+// Where the surface at uv was last frame, for the accumulations. The camera alone takes it to HistoryUV; with
+// temporal AA's motion vectors, peds, vehicles and objects that moved themselves are followed too. Last frame's depth
+// can only confirm surfaces that moved with the camera (checkDepth), a moving one was elsewhere and its neighbourhood
+// clamp has to do.
+float2 TemporalHistoryUV(float2 uv, float3 C, out bool checkDepth)
+{
+    float2 prevUV = HistoryUV(C);
+    checkDepth = true;
+    [branch]
+    if (fUseMotion > 0.0)
+    {
+        float2 moved = uv + tex2Dlod(MotionTex, float4(uv, 0, 0)).xy + vec2MotionJitter;
+        // More than a pixel and a half from where the camera alone takes it
+        if (any(abs(moved - prevUV) > 1.5 * vec2InvViewportSize))
+            checkDepth = false;
+        prevUV = moved;
+    }
+    return prevUV;
 }
 
 float3 ViewPosFromUVZ(float2 uv, float z)
@@ -887,11 +923,12 @@ float4 ContactTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         return float4(current, 0.0, 0.0, 1.0);
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
-    float2 prevUV = HistoryUV(C);
+    bool checkDepth;
+    float2 prevUV = TemporalHistoryUV(uv, C, checkDepth);
     float keep = fTemporalBlend;
     if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
         keep = 0.0;
-    else if (fUsePrevDepth > 0.0)
+    else if (fUsePrevDepth > 0.0 && checkDepth)
     {
         float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]
                     + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
@@ -957,11 +994,12 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float4 lo = m1 - 1.5 * spread, hi = m1 + 1.5 * spread;
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
-    float2 prevUV = HistoryUV(C);
+    bool checkDepth;
+    float2 prevUV = TemporalHistoryUV(uv, C, checkDepth);
     float keep = fTemporalBlend;
     if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
         keep = 0.0;
-    else if (fUsePrevDepth > 0.0)
+    else if (fUsePrevDepth > 0.0 && checkDepth)
     {
         // Last frame's surface where the history is taken must be about as far as this one.
         float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]

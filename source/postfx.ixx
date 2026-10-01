@@ -258,6 +258,7 @@ public:
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY;
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal;
+        D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
         D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion;
         D3DXHANDLE SceneTex2D, SkinIDTex2D, SkinLightTex2D, vec4SkinStep, fSkinStrength;
@@ -913,6 +914,9 @@ public:
                 h.SSRAccumTex2D = SSREffect->GetParameterByName(nullptr, "SSRAccumTex2D");
                 h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
                 h.techSSRTemporal = SSREffect->GetTechniqueByName("SSRTemporal");
+                h.MotionTex2D = SSREffect->GetParameterByName(nullptr, "MotionTex2D");
+                h.fUseMotion = SSREffect->GetParameterByName(nullptr, "fUseMotion");
+                h.vec2MotionJitter = SSREffect->GetParameterByName(nullptr, "vec2MotionJitter");
                 h.fTemporalAnySurface = SSREffect->GetParameterByName(nullptr, "fTemporalAnySurface");
                 h.fGIRayLength = SSREffect->GetParameterByName(nullptr, "fGIRayLength");
                 h.fGIThickness = SSREffect->GetParameterByName(nullptr, "fGIThickness");
@@ -2526,6 +2530,18 @@ private:
         }
     }
 
+    // The accumulation passes of SSR.fx follow temporal AA's motion vectors, when it drew them this frame and there is
+    // a history to take from them (see TemporalHistoryUV), else the camera alone.
+    static void BindMotionVectors(ID3DXEffect* effect, bool history)
+    {
+        auto& h = PostFxResources.SSREffectHandles;
+        auto motion = history ? FrameHistory::MotionVectors() : nullptr;
+        auto jitter = FrameHistory::JitterDeltaUV();
+        effect->SetTexture(h.MotionTex2D, motion);
+        effect->SetFloat(h.fUseMotion, motion ? 1.0f : 0.0f);
+        effect->SetFloatArray(h.vec2MotionJitter, jitter.data(), 2);
+    }
+
     // vec4ViewToPrevClip: from SSR.fx's reconstruction space, whose x (and z, when _34 is
     // negative) run opposite to the game's view space, to viewProj's clip space.
     static void ViewToClipRows(const rage::grcViewport* vp, const D3DXMATRIX& viewProj, D3DXVECTOR4 rows[4])
@@ -2795,7 +2811,9 @@ private:
             const int prev = R.nSSRAccumIndex, next = prev ^ 1;
             effect->SetTexture(h.SSRResultTex2D, ssrResult);
             effect->SetTexture(h.SSRAccumTex2D, R.SSRAccumTex[sizeIndex][prev]->mD3DTexture);
-            effect->SetFloat(h.fTemporalBlend, FrameHistory::CanReproject(R.nSSRAccumFrame) ? R.fSSRTemporalBlend : 0.0f);
+            const bool history = FrameHistory::CanReproject(R.nSSRAccumFrame);
+            BindMotionVectors(effect, history);
+            effect->SetFloat(h.fTemporalBlend, history ? R.fSSRTemporalBlend : 0.0f);
             effect->SetFloat(h.fTemporalAnySurface, 0.0f);
             pDevice->SetRenderTarget(0, R.SSRAccumSurf[sizeIndex][next]);
             effect->SetTechnique(h.techSSRTemporal);
@@ -3804,6 +3822,7 @@ private:
             effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
             effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
             effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
+            BindMotionVectors(effect, accumWasValid);
             effect->SetFloat(h.fTemporalBlend, accumWasValid ? R.fContactTemporalBlend : 0.0f);
             DrawEffectPass(pDevice, effect, h.techContactTemporal, R.ContactAccumSurf[next], width, height);
 
@@ -3992,7 +4011,9 @@ private:
         const int prev = R.nGIAccumIndex, next = prev ^ 1;
         effect->SetTexture(h.SSRResultTex2D, gathered);
         effect->SetTexture(h.SSRAccumTex2D, R.GIAccumTex[prev]->mD3DTexture);
-        effect->SetFloat(h.fTemporalBlend, FrameHistory::CanReproject(R.nGIAccumFrame) ? R.fGITemporalBlend : 0.0f);
+        const bool history = FrameHistory::CanReproject(R.nGIAccumFrame);
+        BindMotionVectors(effect, history);
+        effect->SetFloat(h.fTemporalBlend, history ? R.fGITemporalBlend : 0.0f);
         effect->SetFloat(h.fTemporalAnySurface, 1.0f);
         DrawEffectPass(pDevice, effect, h.techSSRTemporal, R.GIAccumSurf[next], width, height);
         effect->SetFloat(h.fTemporalAnySurface, 0.0f);

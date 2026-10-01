@@ -29,6 +29,8 @@ export namespace FrameHistory
         float JitterPixels[2]{};            // how far the rendered content moved, in pixels (y down)
         float Near = 0.0f;
         float Far = 0.0f;
+        int32_t Width = 0;
+        int32_t Height = 0;
         uint32_t Frame = 0;
         bool Valid = false;
     };
@@ -46,6 +48,8 @@ namespace FrameHistoryDetail
         to.JitterPixels[1] = from.JitterPixels[1];
         to.Near = from.Near;
         to.Far = from.Far;
+        to.Width = from.Width;
+        to.Height = from.Height;
         to.Frame = from.Frame;
         to.Valid = from.Valid;
     }
@@ -133,6 +137,18 @@ export namespace FrameHistory
     {
         auto& camera = Current();
         return camera.Valid && (camera.JitterPixels[0] != 0.0f || camera.JitterPixels[1] != 0.0f);
+    }
+
+    // How far the content of the previous scene sits from this one's through the jitter alone, in texture coordinates
+    // (y down): added to a jitter-free motion vector, it reaches a history that was rendered jittered. 0 without jitter.
+    std::array<float, 2> JitterDeltaUV()
+    {
+        auto& current = Current();
+        auto& previous = Previous();
+        if (!current.Valid || !previous.Valid || current.Width <= 0 || current.Height <= 0)
+            return {};
+        return { (previous.JitterPixels[0] - current.JitterPixels[0]) / static_cast<float>(current.Width),
+                 (previous.JitterPixels[1] - current.JitterPixels[1]) / static_cast<float>(current.Height) };
     }
 
     // Motion of every pixel since the previous scene, in texture coordinates (previous - current), drawn by temporal
