@@ -3577,6 +3577,14 @@ private:
             const float camera[4] = { fabsf(proj._11), fabsf(proj._22), vp->mNearClip, vp->mFarClip };
             memcpy(PostFxResources.SkinCamera, camera, sizeof(camera));
         }
+        // After a cut of the camera the histories of SSR, contact shadows and indirect light would smear the
+        // previous shot over this one: they start over
+        if (TemporalAA::IsCameraCut())
+        {
+            PostFxResources.bSSRAccumValid = false;
+            PostFxResources.bContactAccumValid = false;
+            PostFxResources.bGIAccumValid = false;
+        }
         ProfilerMark(pDevice, kProfAO, true);
         RenderAmbientOcclusion();
         ProfilerMark(pDevice, kProfAO, false);

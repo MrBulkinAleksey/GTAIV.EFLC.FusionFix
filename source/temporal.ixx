@@ -160,6 +160,7 @@ export namespace TemporalAA
     bool IsMotionVectorsReady();
     IDirect3DTexture9* GetMotionVectors();
     bool HistoryValid();
+    bool IsCameraCut();
     void OnFogDrawn();
 }
 
@@ -1649,6 +1650,18 @@ export namespace TemporalAA
     bool HistoryValid()
     {
         return Temporal::HistoryFrame != 0;
+    }
+
+    // The camera of this scene jumped from the previous one (a cutscene shot, a teleport), or there is no previous
+    // one: nothing can be reprojected. Render thread, once the G-buffer pass of the scene started. False while no
+    // camera is known, e.g. before the first scene.
+    bool IsCameraCut()
+    {
+        if (!CurrentCamera.Valid)
+            return false;
+        if (!PreviousCamera.Valid || PreviousCamera.Frame + 1 != CurrentCamera.Frame)
+            return true;
+        return Temporal::IsCameraCut();
     }
 
     void LoadShaders(IDirect3DDevice9* device)
