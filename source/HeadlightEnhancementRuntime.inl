@@ -87,21 +87,6 @@ namespace HeadlightEnhancement
         while (lightEventsLock.test_and_set(std::memory_order_acquire)) {}
         lightEvents[lightEventCount++ % std::size(lightEvents)] = state;
         lightEventsLock.clear(std::memory_order_release);
-
-        // The shadow passes of that car's beam, oldest first: own and traffic tell which of the
-        // night shadow fixes took the car out of its own headlight shadow, and whether the car and
-        // its occupants were then left out of that pass.
-        while (shadowPassLock.test_and_set(std::memory_order_acquire)) {}
-        const auto passes = shadowPassEventCount;
-        const auto firstPass = passes > std::size(shadowPassEvents) ? passes - std::size(shadowPassEvents) : 0;
-        for (auto i = firstPass; i < passes; ++i)
-        {
-            const auto& e = shadowPassEvents[i % std::size(shadowPassEvents)];
-            out << "pass t=" << e.time << " frame=" << e.frame << " slot=" << e.slot << " kind=" << e.kind
-                << " active=" << e.active << " own=" << e.own << " traffic=" << e.traffic
-                << " carExcluded=" << e.carExcluded << " occupantsExcluded=" << e.occupantsExcluded << '\n';
-        }
-        shadowPassLock.clear(std::memory_order_release);
     }
 
     // Identify the live pool slot and generation, not only a reusable pointer.
@@ -211,6 +196,21 @@ namespace HeadlightEnhancement
                 << " left=" << unsigned(e.left) << " right=" << unsigned(e.right) << " intensity=" << e.intensity << " range=" << e.range << '\n';
         }
         lightEventsLock.clear(std::memory_order_release);
+
+        // The shadow passes of that car's beam, oldest first: own and traffic tell which of the
+        // night shadow fixes took the car out of its own headlight shadow, and whether the car and
+        // its occupants were then left out of that pass.
+        while (shadowPassLock.test_and_set(std::memory_order_acquire)) {}
+        const auto passes = shadowPassEventCount;
+        const auto firstPass = passes > std::size(shadowPassEvents) ? passes - std::size(shadowPassEvents) : 0;
+        for (auto i = firstPass; i < passes; ++i)
+        {
+            const auto& e = shadowPassEvents[i % std::size(shadowPassEvents)];
+            out << "pass t=" << e.time << " frame=" << e.frame << " slot=" << e.slot << " kind=" << e.kind
+                << " active=" << e.active << " own=" << e.own << " traffic=" << e.traffic
+                << " carExcluded=" << e.carExcluded << " occupantsExcluded=" << e.occupantsExcluded << '\n';
+        }
+        shadowPassLock.clear(std::memory_order_release);
     }
 
     static std::string DumpBytes(uintptr_t address, size_t count)

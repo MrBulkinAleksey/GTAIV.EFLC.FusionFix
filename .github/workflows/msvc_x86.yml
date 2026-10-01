@@ -92,8 +92,10 @@ jobs:
       run: ./premake5 vs2026 --with-version=${{ steps.versioning.outputs.version }}
 
     - name: Build
+      # PowerShell takes the exit code of the last command only: a failed plugin build must stop here
       run: |
         msbuild -m build/GTAIV.EFLC.FusionFix.slnx /property:Configuration=Release /property:Platform=Win32
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         msbuild -m build/GTAIV.EFLC.FusionFix.Helper.slnx /property:Configuration=Release /property:Platform=x64
 
     - name: Download Ultimate ASI Loader x86
