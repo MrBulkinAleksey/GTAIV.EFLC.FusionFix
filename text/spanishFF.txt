@@ -10,6 +10,9 @@ Ventana
 [Borderless]
 Ventana sin bordes
 
+[FF_BORDERLESS]
+Sin bordes
+
 [Focus Loss]
 Pausar en segundo plano
 
@@ -24,6 +27,18 @@ Barras horizontales en escenas
 
 [Pillarbox]
 Barras laterales en escenas
+
+[CutscBars]
+Barras en escenas
+
+[CutscBars1]
+Barras laterales
+
+[CutscBars2]
+Barras horizontales
+
+[CutscBars3]
+Horizontales + laterales
 
 [Alt. Dialogues]
 Diálogos alternativos
@@ -246,6 +261,12 @@ Recurso de memoria de «streaming»
 
 [Graphics API]
 API gráfica
+
+[FF_ADVANCED]
+Avanzado
+
+[FF_LIGHTING]
+Iluminación
 
 [FF_RESTART]
 Es necesario reiniciar GTA IV para aplicar el ajuste.

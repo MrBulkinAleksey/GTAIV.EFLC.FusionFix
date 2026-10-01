@@ -74,6 +74,7 @@ void Init()
             {
                 *(LPDIRECT3DDEVICE9*)&regs.eax = *Direct3DDevice;
                 FusionFix::onEndScene().executeAll();
+                FusionFix::onAfterEndScene().executeAll();
             }
         }; injector::MakeInline<AuxEndSceneHook>(pattern.get_first(0));
     }
@@ -106,6 +107,7 @@ void Init()
             {
                 *(LPDIRECT3DDEVICE9*)&regs.eax = *Direct3DDevice;
                 FusionFix::onEndScene().executeAll();
+                FusionFix::onAfterEndScene().executeAll();
             }
         }; injector::MakeInline<AuxEndSceneHook>(pattern.get_first(0));
     }
