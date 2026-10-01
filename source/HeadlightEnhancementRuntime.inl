@@ -16,8 +16,9 @@ namespace HeadlightEnhancement
     static std::string brightnessStatus = "not checked";
     // The radius of the beams is (floor(vehicle+F74) * bonus + base) * range. F74 climbs to 1 while
     // a player sits in the car and falls back to 0 once none does (CE 0xA4EA3B), so the bonus,
-    // 20 m on top of a base of 10 m, is the player's alone and was lost right after getting out,
-    // a third of the driving reach with ConsistentBrightness. Both read from the instructions.
+    // 20 m on top of a base of 10 m, is the player's alone: it was lost right after getting out,
+    // a third of the driving reach with ConsistentBrightness, and for a second after getting in.
+    // Both read from the instructions.
     static const float* pRadiusBonus = nullptr;
     static const float* pRadiusBase = nullptr;
     static uint8_t siteBytes[5]{};
@@ -75,6 +76,17 @@ namespace HeadlightEnhancement
         return (static_cast<uint64_t>(handle) << 32) | vehicle;
     }
 
+    // Scales the range by the bonus as it would be with the ramp full, over what F74 leaves of it.
+    static void KeepRadiusBonus(SafetyHookContext& regs, uintptr_t vehicle)
+    {
+        if (!pRadiusBonus || !pRadiusBase) return;
+        const float bonus = *pRadiusBonus, base = *pRadiusBase;
+        const float ramp = std::floor(*reinterpret_cast<const float*>(vehicle + 0xF74));
+        const float kept = ramp * bonus + base;
+        if (std::isfinite(bonus) && std::isfinite(kept) && bonus > 0 && kept > 0 && ramp < 1)
+            regs.xmm4.f32[0] *= (bonus + base) / kept;
+    }
+
     static void RetainAfterExit(SafetyHookContext& regs)
     {
         hookCalls.fetch_add(1, std::memory_order_relaxed);
@@ -92,6 +104,10 @@ namespace HeadlightEnhancement
                 lastDrivenToken.store(token);
                 if (diagnosticsReady.load(std::memory_order_relaxed))
                     TraceLightState(regs, vehicle, token, true);
+                // F74 takes about a second to climb back to 1 after getting in, and the beams
+                // reached a third as far until it did.
+                if (*reinterpret_cast<const uint8_t*>(imageBase + 0xC3CC4A))
+                    KeepRadiusBonus(regs, vehicle);
             }
             else
             {
@@ -110,15 +126,7 @@ namespace HeadlightEnhancement
             intensity <= 0 || range <= 0 || intensity > 10 || range > 10) return;
         regs.xmm1.f32[0] *= intensity;
         regs.xmm4.f32[0] *= range;
-        if (pRadiusBonus && pRadiusBase)
-        {
-            // The bonus as it would be with the ramp still full, over what F74 leaves of it.
-            const float bonus = *pRadiusBonus, base = *pRadiusBase;
-            const float ramp = std::floor(*reinterpret_cast<const float*>(vehicle + 0xF74));
-            const float kept = ramp * bonus + base;
-            if (std::isfinite(bonus) && std::isfinite(kept) && bonus > 0 && kept > 0 && ramp < 1)
-                regs.xmm4.f32[0] *= (bonus + base) / kept;
-        }
+        KeepRadiusBonus(regs, vehicle);
         ++retainedSubmissions;
     }
 
