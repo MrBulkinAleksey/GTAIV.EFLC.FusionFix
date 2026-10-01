@@ -377,6 +377,21 @@
             <options text="SSRFull" action="ACTION_NONE" value="2" />
         </menupc>
 
+        <menupc enum="MENU_DISPLAY_SHARPENING">
+            <options text="MO_OFF" action="ACTION_NONE" value="0" />
+            <options text="MO_LOW" action="ACTION_NONE" value="1" />
+            <options text="MO_MED" action="ACTION_NONE" value="2" />
+            <options text="MO_HIGH" action="ACTION_NONE" value="3" />
+        </menupc>
+
+        <menupc enum="MENU_DISPLAY_TEXTURE_LOD_BIAS">
+            <options text="MO_OFF" action="ACTION_NONE" value="0" />
+            <options text="LodBias1" action="ACTION_NONE" value="1" />
+            <options text="LodBias2" action="ACTION_NONE" value="2" />
+            <options text="LodBias3" action="ACTION_NONE" value="3" />
+            <options text="LodBias4" action="ACTION_NONE" value="4" />
+        </menupc>
+
         <menupc enum="MENU_DISPLAY_SSR_DEBUG">
             <options text="MO_OFF" action="ACTION_NONE" value="0" />
             <options text="SSRDbgColour" action="ACTION_NONE" value="1" />
@@ -887,6 +902,12 @@
 			<optionspc action="MENUOPT_ADJUST" label="Contact Shadows" value="PREF_CONTACTSHADOWS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="SSGI" value="PREF_SSGI" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="SkinSSS" value="PREF_SKIN_SSS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+			<optionspc action="MENUOPT_ADJUST" label="Sharpening" value="PREF_SHARPENING" scaler="4" displayValue="MENU_DISPLAY_SHARPENING" />
+			<optionspc action="MENUOPT_ADJUST" label="TexLodBias" value="PREF_TEXTURE_LOD_BIAS" scaler="5" displayValue="MENU_DISPLAY_TEXTURE_LOD_BIAS" />
+			<optionspc action="MENUOPT_ADJUST" label="AnisoAllMaps" value="PREF_ANISO_ALL_MAPS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+			<optionspc action="MENUOPT_ADJUST" label="DetailTex" value="PREF_DETAIL_TEXTURES" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+			<optionspc action="MENUOPT_ADJUST" label="BicubicTex" value="PREF_BICUBIC_TEXTURES" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+			<optionspc action="MENUOPT_ADJUST" label="SpecularAA" value="PREF_SPECULAR_AA" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
             <optionspc action="MENUOPT_ADJUST" label="Shadow Filter" value="PREF_SHADOWFILTER" scaler="3" displayValue="MENU_DISPLAY_SHADOWFILTER" />
             <optionspc action="MENUOPT_ADJUST" label="Graphics API" value="PREF_GRAPHICSAPI" scaler="2" displayValue="MENU_DISPLAY_GRAPHICS_API" />
             
@@ -926,6 +947,12 @@
 			<optionspc action="MENUOPT_ADJUST" label="Contact Shadows" value="PREF_CONTACTSHADOWS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="SSGI" value="PREF_SSGI" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
 			<optionspc action="MENUOPT_ADJUST" label="SkinSSS" value="PREF_SKIN_SSS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+			<optionspc action="MENUOPT_ADJUST" label="Sharpening" value="PREF_SHARPENING" scaler="4" displayValue="MENU_DISPLAY_SHARPENING" />
+			<optionspc action="MENUOPT_ADJUST" label="TexLodBias" value="PREF_TEXTURE_LOD_BIAS" scaler="5" displayValue="MENU_DISPLAY_TEXTURE_LOD_BIAS" />
+			<optionspc action="MENUOPT_ADJUST" label="AnisoAllMaps" value="PREF_ANISO_ALL_MAPS" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+			<optionspc action="MENUOPT_ADJUST" label="DetailTex" value="PREF_DETAIL_TEXTURES" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+			<optionspc action="MENUOPT_ADJUST" label="BicubicTex" value="PREF_BICUBIC_TEXTURES" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
+			<optionspc action="MENUOPT_ADJUST" label="SpecularAA" value="PREF_SPECULAR_AA" scaler="2" displayValue="MENU_DISPLAY_ON_OFF" />
             <optionspc action="MENUOPT_ADJUST" label="Shadow Filter" value="PREF_SHADOWFILTER" scaler="3" displayValue="MENU_DISPLAY_SHADOWFILTER" />
             <optionspc action="MENUOPT_ADJUST" label="Graphics API" value="PREF_GRAPHICSAPI" scaler="2" displayValue="MENU_DISPLAY_GRAPHICS_API" />
             

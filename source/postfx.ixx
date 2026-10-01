@@ -38,6 +38,7 @@ import shaders;
 
 #define IDR_AO_FX                                133
 #define IDR_SSR_FX                               136
+#define IDR_CAS                                  137
 
 #define IDR_SSDraw_PS_compiled                   2127
 #define IDR_SSPrepass_PS_compiled                2128
@@ -49,6 +50,7 @@ import shaders;
 #define IDR_SMAA_EdgeDetectionVS_compiled        2105
 #define IDR_SMAA_BlendingWeightsCalculationVS_compiled 2106
 #define IDR_SMAA_NeighborhoodBlendingVS_compiled 2107
+#define IDR_CAS_PS_compiled                      2137
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -149,6 +151,7 @@ public:
 
     // shaders
     IDirect3DPixelShader9* FxaaPS = nullptr;
+    IDirect3DPixelShader9* CAS_PS = nullptr; // Sharpening
 
     IDirect3DPixelShader9* SSDraw_PS = nullptr;
     IDirect3DPixelShader9* SSAdd_PS = nullptr;
@@ -664,6 +667,22 @@ public:
             else
             {
                 loadCompiledShader(IDR_FxaaPS_compiled, FxaaPS);
+            }
+            SAFE_RELEASE(bf1);
+            SAFE_RELEASE(bf2);
+            SAFE_RELEASE(ppConstantTable);
+        }
+
+        if (!CAS_PS)
+        {
+            if (D3DXCompileShaderFromResourceW(hm, MAKEINTRESOURCEW(IDR_CAS), NULL, NULL, "ApplyCAS", "ps_3_0", 0, &bf1, &bf2, &ppConstantTable) == S_OK)
+            {
+                if (pDevice->CreatePixelShader((DWORD*)bf1->GetBufferPointer(), &CAS_PS) != S_OK || !CAS_PS)
+                    SAFE_RELEASE(CAS_PS);
+            }
+            else
+            {
+                loadCompiledShader(IDR_CAS_PS_compiled, CAS_PS);
             }
             SAFE_RELEASE(bf1);
             SAFE_RELEASE(bf2);
@@ -1883,6 +1902,48 @@ private:
         PostFxResources.surfaceRead = nullptr;
     }
 
+    // Sharpening (CAS.hlsl) of the finished frame, after anti-aliasing and before the HUD. The
+    // frame is copied to FullScreenTex_temp2, which anti-aliasing has read by now, and sharpened
+    // from there back into the back buffer.
+    static void ApplySharpening(IDirect3DDevice9* pDevice, IDirect3DPixelShader9* pShader, IDirect3DVertexShader9* vShader)
+    {
+        static auto sharpening = FusionFixSettings.GetRef("PREF_SHARPENING");
+        auto& R = PostFxResources;
+        if (!sharpening || sharpening->get() <= 0 || !R.CAS_PS || !R.backBuffer || !R.FullScreenTex_temp2 || !R.FullScreenSurface_temp2)
+            return;
+        if (FAILED(pDevice->StretchRect(R.backBuffer, nullptr, R.FullScreenSurface_temp2, nullptr, D3DTEXF_NONE)))
+            return;
+
+        // Low, medium and high; the peak CAS weighs the neighbours with is -1 / lerp(8, 5, sharpness).
+        static constexpr float kSharpness[] = { 0.3f, 0.6f, 1.0f };
+        const float sharpness = kSharpness[std::clamp(sharpening->get(), 1, 3) - 1];
+        const float params[4] = { -1.0f / (8.0f - 3.0f * sharpness), 0.0f, 0.0f, 0.0f };
+
+        static constexpr D3DSAMPLERSTATETYPE kStates[] = { D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER, D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_SRGBTEXTURE };
+        static constexpr DWORD kValues[] = { D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, FALSE };
+        DWORD saved[std::size(kStates)] = {};
+        for (size_t i = 0; i < std::size(kStates); ++i)
+        {
+            pDevice->GetSamplerState(2, kStates[i], &saved[i]);
+            pDevice->SetSamplerState(2, kStates[i], kValues[i]);
+        }
+        DWORD srgbWrite = FALSE;
+        pDevice->GetRenderState(D3DRS_SRGBWRITEENABLE, &srgbWrite);
+        pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
+
+        pDevice->SetRenderTarget(0, R.backBuffer);
+        pDevice->SetTexture(2, R.FullScreenTex_temp2->mD3DTexture);
+        pDevice->SetPixelShaderConstantF(200, params, 1);
+        pDevice->SetPixelShader(R.CAS_PS);
+        pDevice->SetVertexShader(vShader);
+        pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
+
+        pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, srgbWrite);
+        for (size_t i = 0; i < std::size(kStates); ++i)
+            pDevice->SetSamplerState(2, kStates[i], saved[i]);
+        pDevice->SetPixelShader(pShader);
+    }
+
     static HRESULT PostFx3(LPDIRECT3DDEVICE9 pDevice, IDirect3DPixelShader9* pShader, IDirect3DVertexShader9* vShader)
     {
         auto currGrcViewport = rage::GetCurrentViewport();
@@ -2206,6 +2267,8 @@ private:
                             pDevice->SetVertexShader(vShader);
                         }
                     }
+
+                    ApplySharpening(pDevice, pShader, vShader);
 
                     for (int i = 0; i < PostfxTextureCount; i++)
                     {

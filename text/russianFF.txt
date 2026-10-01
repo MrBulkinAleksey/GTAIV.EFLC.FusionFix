@@ -178,6 +178,36 @@ Logitech LightSync RGB
 [SkinSSS]
 Рассеяние в коже (SSS)
 
+[Sharpening]
+Резкость (CAS)
+
+[TexLodBias]
+Смещение LOD текстур
+
+[AnisoAllMaps]
+Анизотропия для всех карт
+
+[DetailTex]
+Детальные текстуры
+
+[BicubicTex]
+Бикубическая фильтрация
+
+[SpecularAA]
+Сглаживание бликов
+
+[LodBias1]
+-0.25
+
+[LodBias2]
+-0.5
+
+[LodBias3]
+-0.75
+
+[LodBias4]
+-1.0
+
 [Fill Lights]
 Заливающий свет зданий
 

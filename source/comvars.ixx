@@ -2483,12 +2483,19 @@ public:
         static FusionFix::Event<> BuildRenderListEvent;
         return BuildRenderListEvent;
     }
+    // Commands appended here run after the whole G-buffer pass, before deferred lighting.
+    static FusionFix::Event<>& OnAfterBuildRenderList()
+    {
+        static FusionFix::Event<> AfterBuildRenderListEvent;
+        return AfterBuildRenderListEvent;
+    }
 
     static inline SafetyHookInline shBuildRenderList{};
     static void __fastcall BuildRenderList(CBaseDC* _this, void* edx)
     {
         OnBuildRenderList().executeAll();
         shBuildRenderList.fastcall<void*>(_this, edx);
+        OnAfterBuildRenderList().executeAll();
     }
 };
 
