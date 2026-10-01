@@ -127,6 +127,18 @@ namespace HeadlightEnhancement
         submitLock.clear(std::memory_order_release);
     }
 
+    static std::string DumpBytes(uintptr_t address, size_t count)
+    {
+        std::ostringstream out;
+        out << std::hex;
+        for (size_t i = 0; i < count; ++i)
+        {
+            const auto byte = reinterpret_cast<const uint8_t*>(address)[i];
+            out << (i ? " " : "") << (byte < 0x10 ? "0" : "") << unsigned(byte);
+        }
+        return out.str();
+    }
+
     static void InstallSubmitStages()
     {
         const auto image = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
@@ -322,18 +334,6 @@ namespace HeadlightEnhancement
                 << " carExcluded=" << e.carExcluded << " occupantsExcluded=" << e.occupantsExcluded << '\n';
         }
         shadowPassLock.clear(std::memory_order_release);
-    }
-
-    static std::string DumpBytes(uintptr_t address, size_t count)
-    {
-        std::ostringstream out;
-        out << std::hex;
-        for (size_t i = 0; i < count; ++i)
-        {
-            const auto byte = reinterpret_cast<const uint8_t*>(address)[i];
-            out << (i ? " " : "") << (byte < 0x10 ? "0" : "") << unsigned(byte);
-        }
-        return out.str();
     }
 
     static bool InstallBrightness(bool enabled)
