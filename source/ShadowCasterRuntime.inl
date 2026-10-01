@@ -15,6 +15,9 @@ namespace OwnHeadlightCaster
     static std::atomic<uint32_t> passes{0}, deferredPasses{0}, ownPasses{0};
     static std::atomic<uint32_t> casterVisits{0}, carExcluded{0}, occupantsExcluded{0};
     static std::atomic<uint32_t> trafficCarExcluded{0};
+    // Diagnostics: this render thread's current pass and what it excluded (see TracePass).
+    struct PassInfo { uint32_t key, slot, kind; bool active; uint32_t carExcluded, occupantsExcluded; };
+    static thread_local PassInfo passInfo{};
 
     static policy::Context Capture(void* renderPass) noexcept
     {
@@ -38,6 +41,7 @@ namespace OwnHeadlightCaster
         const auto key = *reinterpret_cast<const uint32_t*>(base + guard::SlotKeyRva + offset);
         const auto kind = *reinterpret_cast<const uint32_t*>(base + guard::SlotKindRva + offset);
         const bool active = *reinterpret_cast<const uint8_t*>(base + guard::SlotActiveRva + offset) == 1;
+        passInfo = { key, slot, kind, active, 0, 0 };
         ShadowTrace34::Emit({5,CShadows::pFrameCounter?*CShadows::pFrameCounter:0,GetTickCount(),key,
             static_cast<int>(slot),static_cast<int>(kind),active?1:0,0,0,0,0,0});
         const auto car = CPlayer::findPlayerCar();
@@ -63,9 +67,22 @@ namespace OwnHeadlightCaster
         ++casterVisits;
         if (!bHeadlightShadows || !bVehicleNightShadows ||
             !policy::Exclude(context, entity, type, artificial)) return false;
-        if (type == 2) { ++carExcluded; if (context.trafficBeamKey) ++trafficCarExcluded; }
-        else ++occupantsExcluded;
+        if (type == 2) { ++carExcluded; ++passInfo.carExcluded; if (context.trafficBeamKey) ++trafficCarExcluded; }
+        else { ++occupantsExcluded; ++passInfo.occupantsExcluded; }
         return true;
+    }
+
+    // After a pass: its trace when it was the beam of the car the player drives or last drove.
+    static void TracePass() noexcept
+    {
+        const auto vehicle = static_cast<uintptr_t>(HeadlightEnhancement::lastDrivenToken.load() & 0xFFFFFFFF);
+        if (!HeadlightEnhancement::diagnosticsReady.load(std::memory_order_relaxed) || !vehicle ||
+            !fusionfix::shadows::ce::IsVehicleBeam(passInfo.key, vehicle))
+            return;
+        HeadlightEnhancement::TraceShadowPass({ GetTickCount64(),
+            CShadows::pFrameCounter ? *CShadows::pFrameCounter : 0, passInfo.slot, passInfo.kind,
+            passInfo.active, context.ownBeam, context.trafficBeamKey != 0,
+            passInfo.carExcluded != 0, passInfo.occupantsExcluded != 0 });
     }
 }
 
