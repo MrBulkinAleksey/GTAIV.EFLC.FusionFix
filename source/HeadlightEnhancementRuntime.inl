@@ -18,6 +18,39 @@ namespace HeadlightEnhancement
     static std::atomic<bool> diagnosticsReady{false};
     static std::filesystem::path logPath;
 
+    // Diagnostics: changes of the light state of the car the player drives or last drove, as
+    // this function sees them, to find what turns its high beams off when the player gets out.
+    struct LightEvent
+    {
+        ULONGLONG time;
+        bool driver;
+        uint8_t f15, f19, f21, highBeam, highBeamArg;
+        float intensity, range;
+    };
+    static LightEvent lightEvents[24]{};
+    static uint32_t lightEventCount = 0;
+    static LightEvent lastLightState{};
+    static uint64_t lastLightToken = 0;
+    static std::atomic_flag lightEventsLock = ATOMIC_FLAG_INIT;
+
+    static void TraceLightState(SafetyHookContext& regs, uintptr_t vehicle, uint64_t token, bool driver)
+    {
+        const auto byteAt = [](uintptr_t address) { return *reinterpret_cast<const uint8_t*>(address); };
+        LightEvent state{ GetTickCount64(), driver, byteAt(vehicle + 0xF15), byteAt(vehicle + 0xF19),
+            byteAt(vehicle + 0xF21), static_cast<uint8_t>(regs.eax & 0xFF), byteAt(regs.ebp + 0x28),
+            regs.xmm1.f32[0], regs.xmm4.f32[0] };
+        const bool changed = token != lastLightToken || state.driver != lastLightState.driver ||
+            state.f15 != lastLightState.f15 || state.f19 != lastLightState.f19 ||
+            state.highBeam != lastLightState.highBeam || state.highBeamArg != lastLightState.highBeamArg;
+        lastLightToken = token;
+        lastLightState = state;
+        if (!changed)
+            return;
+        while (lightEventsLock.test_and_set(std::memory_order_acquire)) {}
+        lightEvents[lightEventCount++ % std::size(lightEvents)] = state;
+        lightEventsLock.clear(std::memory_order_release);
+    }
+
     // Identify the live pool slot and generation, not only a reusable pointer.
     static uint64_t VehicleToken(uintptr_t vehicle)
     {
@@ -48,7 +81,11 @@ namespace HeadlightEnhancement
             // Occupied cars have ALREADY received their original scaling.
             if (!*reinterpret_cast<const uint8_t*>(driver + 0x218) &&
                  *reinterpret_cast<const uint8_t*>(driver + 0x219))
+            {
                 lastDrivenToken.store(token);
+                if (diagnosticsReady.load(std::memory_order_relaxed))
+                    TraceLightState(regs, vehicle, token, true);
+            }
             else
             {
                 auto expected = token;
@@ -56,8 +93,10 @@ namespace HeadlightEnhancement
             }
             return;
         }
-        if (lastDrivenToken.load() != token ||
-            !*reinterpret_cast<const uint8_t*>(imageBase + 0xC3CC4A)) return;
+        if (lastDrivenToken.load() != token) return;
+        if (diagnosticsReady.load(std::memory_order_relaxed))
+            TraceLightState(regs, vehicle, token, false);
+        if (!*reinterpret_cast<const uint8_t*>(imageBase + 0xC3CC4A)) return;
         const float intensity = *reinterpret_cast<const float*>(imageBase + 0xC3CC74);
         const float range = *reinterpret_cast<const float*>(imageBase + 0xC3CC78);
         if (!std::isfinite(intensity) || !std::isfinite(range) ||
@@ -83,6 +122,21 @@ namespace HeadlightEnhancement
             << "\nhookCalls=" << hookCalls.load(std::memory_order_relaxed)
             << "\nretainedSubmissions=" << retainedSubmissions.load()
             << "\ntrackedVehicle=" << (lastDrivenToken.load() != 0) << '\n';
+
+        // Oldest first. highBeam is the flag the function uses (vehicle+F19 & 2, or highBeamArg);
+        // intensity and range are the multipliers before high beam scaling.
+        while (lightEventsLock.test_and_set(std::memory_order_acquire)) {}
+        const auto count = lightEventCount;
+        const auto first = count > std::size(lightEvents) ? count - std::size(lightEvents) : 0;
+        for (auto i = first; i < count; ++i)
+        {
+            const auto& e = lightEvents[i % std::size(lightEvents)];
+            out << "t=" << e.time << " driver=" << e.driver << std::hex
+                << " f15=" << unsigned(e.f15) << " f19=" << unsigned(e.f19) << " f21=" << unsigned(e.f21)
+                << std::dec << " highBeam=" << unsigned(e.highBeam) << " highBeamArg=" << unsigned(e.highBeamArg)
+                << " intensity=" << e.intensity << " range=" << e.range << '\n';
+        }
+        lightEventsLock.clear(std::memory_order_release);
     }
 
     static std::string DumpBytes(uintptr_t address, size_t count)
