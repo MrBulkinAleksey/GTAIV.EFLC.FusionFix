@@ -340,9 +340,11 @@ static void __fastcall sub_D77A00(void* _this, void* edx)
         }
     }
 
+    OwnHeadlightCaster::passInfo = {};
     const fusionfix::shadows::caster::Scope scope(OwnHeadlightCaster::context,
                                                 OwnHeadlightCaster::Capture(_this));
-    return shsub_D77A00.unsafe_fastcall(_this, edx);
+    shsub_D77A00.unsafe_fastcall(_this, edx);
+    OwnHeadlightCaster::TracePass();
 }
 
 int GetNightShadowQuality()

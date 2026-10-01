@@ -43,6 +43,33 @@ namespace HeadlightEnhancement
     static uint64_t lastLightToken = 0;
     static std::atomic_flag lightEventsLock = ATOMIC_FLAG_INIT;
 
+    // Diagnostics: the shadow passes of the beam of the car the player drives or last drove, as
+    // the night shadow code sees them, on each change: to find why its headlight shadow blinks
+    // while the player gets in.
+    struct ShadowPassEvent
+    {
+        ULONGLONG time;
+        uint32_t frame, slot, kind;
+        bool active, own, traffic, carExcluded, occupantsExcluded;
+    };
+    static ShadowPassEvent shadowPassEvents[32]{};
+    static uint32_t shadowPassEventCount = 0;
+    static ShadowPassEvent lastShadowPass{};
+    static std::atomic_flag shadowPassLock = ATOMIC_FLAG_INIT;
+
+    static void TraceShadowPass(const ShadowPassEvent& pass)
+    {
+        const auto& l = lastShadowPass;
+        if (shadowPassEventCount && pass.slot == l.slot && pass.kind == l.kind && pass.active == l.active &&
+            pass.own == l.own && pass.traffic == l.traffic && pass.carExcluded == l.carExcluded &&
+            pass.occupantsExcluded == l.occupantsExcluded)
+            return;
+        while (shadowPassLock.test_and_set(std::memory_order_acquire)) {}
+        lastShadowPass = pass;
+        shadowPassEvents[shadowPassEventCount++ % std::size(shadowPassEvents)] = pass;
+        shadowPassLock.clear(std::memory_order_release);
+    }
+
     static void TraceLightState(SafetyHookContext& regs, uintptr_t vehicle, uint64_t token, bool driver)
     {
         const auto byteAt = [](uintptr_t address) { return *reinterpret_cast<const uint8_t*>(address); };
@@ -60,6 +87,21 @@ namespace HeadlightEnhancement
         while (lightEventsLock.test_and_set(std::memory_order_acquire)) {}
         lightEvents[lightEventCount++ % std::size(lightEvents)] = state;
         lightEventsLock.clear(std::memory_order_release);
+
+        // The shadow passes of that car's beam, oldest first: own and traffic tell which of the
+        // night shadow fixes took the car out of its own headlight shadow, and whether the car and
+        // its occupants were then left out of that pass.
+        while (shadowPassLock.test_and_set(std::memory_order_acquire)) {}
+        const auto passes = shadowPassEventCount;
+        const auto firstPass = passes > std::size(shadowPassEvents) ? passes - std::size(shadowPassEvents) : 0;
+        for (auto i = firstPass; i < passes; ++i)
+        {
+            const auto& e = shadowPassEvents[i % std::size(shadowPassEvents)];
+            out << "pass t=" << e.time << " frame=" << e.frame << " slot=" << e.slot << " kind=" << e.kind
+                << " active=" << e.active << " own=" << e.own << " traffic=" << e.traffic
+                << " carExcluded=" << e.carExcluded << " occupantsExcluded=" << e.occupantsExcluded << '\n';
+        }
+        shadowPassLock.clear(std::memory_order_release);
     }
 
     // Identify the live pool slot and generation, not only a reusable pointer.
