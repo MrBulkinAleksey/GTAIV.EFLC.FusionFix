@@ -22,6 +22,7 @@ namespace HeadlightEnhancement
     static const float* pRadiusBonus = nullptr;
     static const float* pRadiusBase = nullptr;
     static uint8_t siteBytes[5]{};
+    static std::string lightModesStatus = "off in the ini";
     static std::atomic<bool> diagnosticsReady{false};
     static std::filesystem::path logPath;
 
@@ -145,6 +146,7 @@ namespace HeadlightEnhancement
             << "\nsiteIntact=" << siteIntact
             << "\nhookCalls=" << hookCalls.load(std::memory_order_relaxed)
             << "\nretainedSubmissions=" << retainedSubmissions.load()
+            << "\nlightModesStatus=" << lightModesStatus
             << "\nradiusBonus=" << (pRadiusBonus ? *pRadiusBonus : -1.0f)
             << "\ntrackedVehicle=" << (lastDrivenToken.load() != 0) << '\n';
 
@@ -221,5 +223,83 @@ namespace HeadlightEnhancement
         }
         brightnessStatus = "installed";
         return true;
+    }
+
+    // Three light modes for the car the player drives: off, on and high beams. The game has the
+    // headlights follow the time of day, and the player's tap on the headlight control only
+    // flips the high beams (CE 0xA3F82F toggles vehicle+F19 & 2 and stores it at 0xA3F844).
+    // vehicle+10C2 & 3 is the mode FORCE_CAR_LIGHTS sets, which the light code reads: 0 follows
+    // the time of day, 1 keeps the lights off, 2 keeps them on. At the store, the tap now steps
+    // on -> high beams -> off -> on, the lights forced on or off as it goes; where they still
+    // follow the time of day, it counts as on or off by what that gives (vehicle+F15 & 1).
+    static SafetyHookMid lightModeHook, highBeamTimeoutHook;
+    static const uint32_t* pGameTime = nullptr;
+
+    static void StepLightMode(SafetyHookContext& regs)
+    {
+        const auto vehicle = static_cast<uintptr_t>(regs.esi);
+        auto& mode = *reinterpret_cast<uint8_t*>(vehicle + 0x10C2);
+        const auto old = *reinterpret_cast<const uint8_t*>(vehicle + 0xF19);
+        const bool on = (mode & 3) == 2 || ((mode & 3) == 0 && (*reinterpret_cast<const uint8_t*>(vehicle + 0xF15) & 1));
+        auto lights = static_cast<uint8_t>(regs.ecx & 0xFF);
+        if (!on)
+        {
+            mode = static_cast<uint8_t>((mode & ~3) | 2);
+            lights &= ~2;
+        }
+        else if (old & 2)
+        {
+            mode = static_cast<uint8_t>((mode & ~3) | 1);
+            lights &= ~2;
+        }
+        else
+        {
+            mode = static_cast<uint8_t>((mode & ~3) | 2);
+            lights |= 2;
+        }
+        regs.ecx = (regs.ecx & ~0xFFu) | lights;
+    }
+
+    // The game switches off high beams 40 s after they went on where the time of day keeps the
+    // lights off (CE 0xA3F868, only with the player at the wheel); lights forced on keep them.
+    // Runs at "add eax, 40000" with eax the switch-on time.
+    static void KeepForcedHighBeams(SafetyHookContext& regs)
+    {
+        if ((*reinterpret_cast<const uint8_t*>(regs.esi + 0x10C2) & 3) == 2)
+            regs.eax = *pGameTime;
+    }
+
+    static void InstallLightModes(bool enabled)
+    {
+        if (!enabled) return;
+        imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+        // mov al,[esi+F19] / mov cl,al / shr cl,1 / not cl / add cl,cl / xor cl,al / and cl,2 /
+        // xor cl,al / mov [esi+F19],cl
+        constexpr uint8_t toggle[]{
+            0x8A,0x86,0x19,0x0F,0,0,0x8A,0xC8,0xD0,0xE9,0xF6,0xD1,0x02,0xC9,
+            0x32,0xC8,0x80,0xE1,0x02,0x32,0xC8,0x88,0x8E,0x19,0x0F,0,0
+        };
+        // test [esi+F15],1 / jnz / mov cl,[esi+F19] / test cl,2 / jz / mov eax,[esi+F30] /
+        // mov edx,[esp+1C] / add eax,9C40 / cmp [game time],eax / jbe
+        constexpr uint8_t timeout[]{
+            0xF6,0x86,0x15,0x0F,0,0,0x01,0x75,0x2D,
+            0x8A,0x8E,0x19,0x0F,0,0,0xF6,0xC1,0x02,0x74,0x22,
+            0x8B,0x86,0x30,0x0F,0,0,0x8B,0x54,0x24,0x1C,
+            0x05,0x40,0x9C,0,0,0x39,0x05
+        };
+        const auto toggleAt = imageBase + 0x63F82F, timeoutAt = imageBase + 0x63F868;
+        if (std::memcmp(reinterpret_cast<const void*>(toggleAt), toggle, sizeof(toggle)) ||
+            std::memcmp(reinterpret_cast<const void*>(timeoutAt), timeout, sizeof(timeout)) ||
+            *reinterpret_cast<const uint32_t*>(timeoutAt + sizeof(timeout)) != imageBase + 0xD735B4 ||
+            *reinterpret_cast<const uint8_t*>(timeoutAt + sizeof(timeout) + 4) != 0x76)
+        {
+            lightModesStatus = "game code differs: " + DumpBytes(toggleAt, sizeof(toggle)) +
+                " | " + DumpBytes(timeoutAt, sizeof(timeout) + 5);
+            return;
+        }
+        pGameTime = reinterpret_cast<const uint32_t*>(imageBase + 0xD735B4);
+        lightModeHook = safetyhook::create_mid(imageBase + 0x63F844, StepLightMode);
+        highBeamTimeoutHook = safetyhook::create_mid(imageBase + 0x63F886, KeepForcedHighBeams);
+        lightModesStatus = lightModeHook && highBeamTimeoutHook ? "installed" : "hook failed";
     }
 }
