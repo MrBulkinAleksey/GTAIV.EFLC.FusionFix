@@ -35,7 +35,8 @@ namespace HeadlightEnhancement
         ULONGLONG time;
         bool driver;
         uint8_t f15, f19, f21, highBeam, highBeamArg, left, right;
-        float intensity, range;
+        float intensity, range, radius;
+        uint32_t frame, gap;
     };
     static LightEvent lightEvents[24]{};
     static uint32_t lightEventCount = 0;
@@ -73,10 +74,17 @@ namespace HeadlightEnhancement
     static void TraceLightState(SafetyHookContext& regs, uintptr_t vehicle, uint64_t token, bool driver)
     {
         const auto byteAt = [](uintptr_t address) { return *reinterpret_cast<const uint8_t*>(address); };
+        // The radius the beams will have, as the function goes on to compute it.
+        const float ramp = std::floor(*reinterpret_cast<const float*>(vehicle + 0xF74));
+        const float radius = pRadiusBonus && pRadiusBase ? (ramp * *pRadiusBonus + *pRadiusBase) * regs.xmm4.f32[0] : 0.0f;
+        const uint32_t frame = CTimer::m_frameCount ? *CTimer::m_frameCount : 0;
+        const uint32_t gap = token == lastLightToken ? frame - lastLightState.frame : 0;
         LightEvent state{ GetTickCount64(), driver, byteAt(vehicle + 0xF15), byteAt(vehicle + 0xF19),
             byteAt(vehicle + 0xF21), static_cast<uint8_t>(regs.eax & 0xFF), byteAt(regs.ebp + 0x28),
-            byteAt(regs.ebp + 0x10), byteAt(regs.ebp + 0x14), regs.xmm1.f32[0], regs.xmm4.f32[0] };
-        const bool changed = token != lastLightToken || state.driver != lastLightState.driver ||
+            byteAt(regs.ebp + 0x10), byteAt(regs.ebp + 0x14), regs.xmm1.f32[0], regs.xmm4.f32[0],
+            radius, frame, gap };
+        const bool changed = token != lastLightToken || state.driver != lastLightState.driver || gap > 1 ||
+            std::fabs(state.radius - lastLightState.radius) > 0.5f ||
             state.f15 != lastLightState.f15 || state.f19 != lastLightState.f19 ||
             state.highBeam != lastLightState.highBeam || state.highBeamArg != lastLightState.highBeamArg ||
             state.left != lastLightState.left || state.right != lastLightState.right;
@@ -147,12 +155,12 @@ namespace HeadlightEnhancement
                  *reinterpret_cast<const uint8_t*>(driver + 0x219))
             {
                 lastDrivenToken.store(token);
-                if (diagnosticsReady.load(std::memory_order_relaxed))
-                    TraceLightState(regs, vehicle, token, true);
                 // F74 takes about a second to climb back to 1 after getting in, and the beams
                 // reached a third as far until it did.
                 if (*reinterpret_cast<const uint8_t*>(imageBase + 0xC3CC4A))
                     KeepRadiusBonus(regs, vehicle);
+                if (diagnosticsReady.load(std::memory_order_relaxed))
+                    TraceLightState(regs, vehicle, token, true);
             }
             else
             {
@@ -162,17 +170,18 @@ namespace HeadlightEnhancement
             return;
         }
         if (lastDrivenToken.load() != token) return;
-        if (diagnosticsReady.load(std::memory_order_relaxed))
-            TraceLightState(regs, vehicle, token, false);
-        if (!*reinterpret_cast<const uint8_t*>(imageBase + 0xC3CC4A)) return;
         const float intensity = *reinterpret_cast<const float*>(imageBase + 0xC3CC74);
         const float range = *reinterpret_cast<const float*>(imageBase + 0xC3CC78);
-        if (!std::isfinite(intensity) || !std::isfinite(range) ||
-            intensity <= 0 || range <= 0 || intensity > 10 || range > 10) return;
-        regs.xmm1.f32[0] *= intensity;
-        regs.xmm4.f32[0] *= range;
-        KeepRadiusBonus(regs, vehicle);
-        ++retainedSubmissions;
+        if (*reinterpret_cast<const uint8_t*>(imageBase + 0xC3CC4A) && std::isfinite(intensity) &&
+            std::isfinite(range) && intensity > 0 && range > 0 && intensity <= 10 && range <= 10)
+        {
+            regs.xmm1.f32[0] *= intensity;
+            regs.xmm4.f32[0] *= range;
+            KeepRadiusBonus(regs, vehicle);
+            ++retainedSubmissions;
+        }
+        if (diagnosticsReady.load(std::memory_order_relaxed))
+            TraceLightState(regs, vehicle, token, false);
     }
 
     static void WriteDiagnostics()
@@ -197,8 +206,9 @@ namespace HeadlightEnhancement
             << "\ntrackedVehicle=" << (lastDrivenToken.load() != 0) << '\n';
 
         // Oldest first. highBeam is the flag the function uses (vehicle+F19 & 2, or highBeamArg);
-        // left and right its lamp arguments, the beams are only submitted for 1; intensity and
-        // range are the multipliers before high beam scaling.
+        // left and right its lamp arguments, the beams are only submitted for 1; intensity, range
+        // and radius are as they leave the hook, before high beam scaling (x1.1, x1.3); frame is
+        // the game's frame, gap the frames since the function last ran for that car.
         while (lightEventsLock.test_and_set(std::memory_order_acquire)) {}
         const auto count = lightEventCount;
         const auto first = count > std::size(lightEvents) ? count - std::size(lightEvents) : 0;
@@ -208,7 +218,8 @@ namespace HeadlightEnhancement
             out << "t=" << e.time << " driver=" << e.driver << std::hex
                 << " f15=" << unsigned(e.f15) << " f19=" << unsigned(e.f19) << " f21=" << unsigned(e.f21)
                 << std::dec << " highBeam=" << unsigned(e.highBeam) << " highBeamArg=" << unsigned(e.highBeamArg)
-                << " left=" << unsigned(e.left) << " right=" << unsigned(e.right) << " intensity=" << e.intensity << " range=" << e.range << '\n';
+                << " left=" << unsigned(e.left) << " right=" << unsigned(e.right) << " intensity=" << e.intensity
+                << " range=" << e.range << " radius=" << e.radius << " frame=" << e.frame << " gap=" << e.gap << '\n';
         }
         lightEventsLock.clear(std::memory_order_release);
     }
