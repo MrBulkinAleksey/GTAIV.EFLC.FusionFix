@@ -215,8 +215,11 @@ namespace CShadows
     {
         if (!gStableHeadlightShadow.ShouldCast(direction, position, stableKey, a11))
             flags &= ~4u;
+        const bool traced = HeadlightEnhancement::BeginSubmitTrace(stableKey);
         hbStoreStaticShadow.fun(a1, a2, flags, direction, tangent, position,
                                 a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey);
+        if (traced)
+            HeadlightEnhancement::EndSubmitTrace(flags, a11);
     }
 
     void __cdecl StoreStaticShadowNPC(int a1, int a2, uint32_t flags,
@@ -225,8 +228,11 @@ namespace CShadows
     {
         if (!gStableHeadlightShadow.ShouldCast(direction, position, stableKey, a11))
             flags &= ~4u;
+        const bool traced = HeadlightEnhancement::BeginSubmitTrace(stableKey);
         hbStoreStaticShadow.fun(a1, a2, flags, direction, tangent, position,
                                 a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey);
+        if (traced)
+            HeadlightEnhancement::EndSubmitTrace(flags, a11);
     }
 
     static bool ValidateAdapter()
@@ -433,6 +439,8 @@ public:
                 HeadlightEnhancement::brightnessInstalled = HeadlightEnhancement::InstallBrightness(
                     iniReader.ReadInteger("HEADLIGHTS", "ConsistentBrightness", 0) != 0);
                 HeadlightEnhancement::InstallLightModes(iniReader.ReadInteger("HEADLIGHTS", "LightModes", 0) != 0);
+                if (shadowDiagnostics)
+                    HeadlightEnhancement::InstallSubmitStages();
                 bCloseHeadlightRelevance = iniReader.ReadInteger("SHADOWS", "ExperimentalCloseHeadlightRelevance", 0) != 0;
                 bTrafficSelfShadowFix = iniReader.ReadInteger("SHADOWS", "ExperimentalTrafficSelfShadowFix", 0) != 0;
                 NearbyVehicleLighting36::enabled.store(iniReader.ReadInteger("SHADOWS", "NearbyVehicleHeadlightReceivers", 0) != 0, std::memory_order_release);

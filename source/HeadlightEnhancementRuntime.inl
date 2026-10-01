@@ -71,6 +71,92 @@ namespace HeadlightEnhancement
         shadowPassLock.clear(std::memory_order_release);
     }
 
+    // Diagnostics: what becomes of the beam of the car the player drives or last drove once
+    // submitted, on each change. The night shadow wrappers on the submission (CE 0xABCC50 from
+    // 0xA3DE90 and 0xA3E070) mark it, and with shadow diagnostics mid hooks in the light add
+    // function (0xABCCD0) record how far it gets: 1 past the intensity test, 2 past the camera
+    // flag test, 3 in front of the camera's near plane, 4 inside the view, 5 past the interior
+    // and occlusion tests, 6 handed to the light list. 0 means it never reached the function.
+    struct SubmitEvent
+    {
+        ULONGLONG time;
+        uint32_t frame, gap, flags;
+        float radius;
+        bool shadow;
+        uint8_t stage;
+    };
+    static SubmitEvent submitEvents[32]{};
+    static uint32_t submitEventCount = 0;
+    static SubmitEvent lastSubmit{};
+    static std::atomic_flag submitLock = ATOMIC_FLAG_INIT;
+    static thread_local bool submitTraced = false;
+    static thread_local uint8_t submitStage = 0;
+    static SafetyHookMid submitStageHooks[6];
+    static std::string submitStagesStatus = "off";
+
+    template <uint8_t stage>
+    static void SubmitStage(SafetyHookContext&)
+    {
+        if (submitTraced && submitStage < stage)
+            submitStage = stage;
+    }
+
+    static bool BeginSubmitTrace(int stableKey)
+    {
+        const auto vehicle = static_cast<uintptr_t>(lastDrivenToken.load() & 0xFFFFFFFF);
+        submitTraced = diagnosticsReady.load(std::memory_order_relaxed) && vehicle &&
+            fusionfix::shadows::ce::IsVehicleBeam(static_cast<uintptr_t>(static_cast<uint32_t>(stableKey)), vehicle);
+        submitStage = 0;
+        return submitTraced;
+    }
+
+    static void EndSubmitTrace(uint32_t flags, int radiusBits)
+    {
+        submitTraced = false;
+        float radius;
+        std::memcpy(&radius, &radiusBits, sizeof(radius));
+        const uint32_t frame = CTimer::m_frameCount ? *CTimer::m_frameCount : 0;
+        const SubmitEvent e{ GetTickCount64(), frame, submitEventCount ? frame - lastSubmit.frame : 0,
+            flags, radius, (flags & 4) != 0, submitStage };
+        const bool changed = !submitEventCount || e.gap > 1 || e.flags != lastSubmit.flags ||
+            e.stage != lastSubmit.stage || std::fabs(e.radius - lastSubmit.radius) > 0.5f;
+        while (submitLock.test_and_set(std::memory_order_acquire)) {}
+        lastSubmit = e;
+        if (changed)
+            submitEvents[submitEventCount++ % std::size(submitEvents)] = e;
+        submitLock.clear(std::memory_order_release);
+    }
+
+    static void InstallSubmitStages()
+    {
+        const auto image = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+        struct Site { uint32_t rva; uint8_t bytes[6]; size_t count; };
+        constexpr Site sites[]{
+            { 0x6BCD00, {0x8B,0x45,0x14,0x8B,0x75,0x0C}, 6 },   // mov eax,[ebp+14] / mov esi,[ebp+C]
+            { 0x6BD05F, {0x0F,0x28,0xC1,0x0F,0x57,0xC3}, 6 },   // movaps xmm0,xmm1 / xorps xmm0,xmm3
+            { 0x6BD06E, {0x6A,0x00,0x83,0xEC,0x10}, 5 },        // push 0 / sub esp,10
+            { 0x6BD099, {0x8B,0x75,0x10,0x8B,0x45,0x48}, 6 },   // mov esi,[ebp+10] / mov eax,[ebp+48]
+            { 0x6BD104, {0x8B,0x0D}, 2 },                       // mov ecx,[...]
+            { 0x6BD294, {0x51,0x8D,0x44,0x24,0x64}, 5 },        // push ecx / lea eax,[esp+64]
+        };
+        for (const auto& site : sites)
+            if (std::memcmp(reinterpret_cast<const void*>(image + site.rva), site.bytes, site.count))
+            {
+                submitStagesStatus = "game code differs: " + DumpBytes(image + site.rva, 6);
+                return;
+            }
+        submitStageHooks[0] = safetyhook::create_mid(image + sites[0].rva, SubmitStage<1>);
+        submitStageHooks[1] = safetyhook::create_mid(image + sites[1].rva, SubmitStage<2>);
+        submitStageHooks[2] = safetyhook::create_mid(image + sites[2].rva, SubmitStage<3>);
+        submitStageHooks[3] = safetyhook::create_mid(image + sites[3].rva, SubmitStage<4>);
+        submitStageHooks[4] = safetyhook::create_mid(image + sites[4].rva, SubmitStage<5>);
+        submitStageHooks[5] = safetyhook::create_mid(image + sites[5].rva, SubmitStage<6>);
+        submitStagesStatus = "installed";
+        for (const auto& hook : submitStageHooks)
+            if (!hook)
+                submitStagesStatus = "hook failed";
+    }
+
     static void TraceLightState(SafetyHookContext& regs, uintptr_t vehicle, uint64_t token, bool driver)
     {
         const auto byteAt = [](uintptr_t address) { return *reinterpret_cast<const uint8_t*>(address); };
@@ -95,6 +181,20 @@ namespace HeadlightEnhancement
         while (lightEventsLock.test_and_set(std::memory_order_acquire)) {}
         lightEvents[lightEventCount++ % std::size(lightEvents)] = state;
         lightEventsLock.clear(std::memory_order_release);
+
+        // Its beam once submitted, oldest first (see SubmitEvent).
+        out << "submitStages=" << submitStagesStatus << '\n';
+        while (submitLock.test_and_set(std::memory_order_acquire)) {}
+        const auto submits = submitEventCount;
+        const auto firstSubmit = submits > std::size(submitEvents) ? submits - std::size(submitEvents) : 0;
+        for (auto i = firstSubmit; i < submits; ++i)
+        {
+            const auto& e = submitEvents[i % std::size(submitEvents)];
+            out << "submit t=" << e.time << " frame=" << e.frame << " gap=" << e.gap << std::hex
+                << " flags=0x" << e.flags << std::dec << " radius=" << e.radius << " shadow=" << e.shadow
+                << " stage=" << unsigned(e.stage) << '\n';
+        }
+        submitLock.clear(std::memory_order_release);
 
         // The shadow passes of that car's beam, oldest first: own and traffic tell which of the
         // night shadow fixes took the car out of its own headlight shadow, and whether the car and
