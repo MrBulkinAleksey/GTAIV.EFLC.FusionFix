@@ -268,6 +268,12 @@ Avanzate
 [FF_LIGHTING]
 Illuminazione
 
+[FF_HREACH]
+Portata ombre dei fari
+
+[FF_LREACH]
+Portata ombre dei lampioni
+
 [FF_RESTART]
 GTA IV deve essere riavviato per applicare le impostazioni.
 

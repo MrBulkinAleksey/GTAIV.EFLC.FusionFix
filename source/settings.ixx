@@ -85,7 +85,6 @@ namespace SettingsTables
 
 namespace CText
 {
-    const wchar_t* ShadowReachLabel(uint32_t hash);
     using CText = void;
     CText* g_text = nullptr;
 
@@ -107,9 +106,7 @@ namespace CText
     SafetyHookInline shGetText{};
     const wchar_t* __fastcall getText(CText* text, void* edx, const char* key)
     {
-        auto hash = GetHash(key);
-        if (const auto label = ShadowReachLabel(hash)) return label;
-        if (auto found = FindMenuText(hash))
+        if (auto found = FindMenuText(GetHash(key)))
             return found;
 
         return shGetText.fastcall<const wchar_t*>(text, edx, key);
@@ -118,7 +115,6 @@ namespace CText
     SafetyHookInline shGetTextByKey{};
     const wchar_t* __fastcall getTextByKey(CText* text, void* edx, uint32_t hash, int a3)
     {
-        if (const auto label = ShadowReachLabel(hash)) return label;
         if (auto found = FindMenuText(hash))
             return found;
 
@@ -128,9 +124,7 @@ namespace CText
     SafetyHookInline shDoesTextLabelExist{};
     char __fastcall doesTextLabelExist(CText* text, void* edx, const char* key)
     {
-        auto hash = GetHash(key);
-        if (ShadowReachLabel(hash)) return 1;
-        if (FindMenuText(hash))
+        if (FindMenuText(GetHash(key)))
             return 1;
 
         return shDoesTextLabelExist.fastcall<char>(text, edx, key);
@@ -2327,8 +2321,14 @@ public:
             AddRow(category, "Fill Lights", "PREF_FILL_LIGHTS", 2, toggle);
             AddRow(category, "VolumetricLight", "PREF_VOLUMETRIC_LIGHT", 2, toggle);
             AddEmptyLine(category);
-            AddRow(category, "FF_HREACH", "PREF_HEADLIGHT_REACH", 41, slider);
-            AddRow(category, "FF_LREACH", "PREF_LAMP_REACH", 41, slider);
+            // The number next to the slider is the reach in feet, 0 keeps the game's own
+            for (auto [label, preference] : { std::pair{ "FF_HREACH", "PREF_HEADLIGHT_REACH" }, std::pair{ "FF_LREACH", "PREF_LAMP_REACH" } })
+            {
+                auto id = GetPrefIDByName(preference);
+                if (id && valueTextHook)
+                    valueTexts[*id] = [this, id = *id] { auto step = std::clamp(Get(id), 0, 40); return step ? std::format(L"{} ft", step * 5) : std::wstring(CText::getText("MO_DEF")); };
+                AddRow(category, label, preference, 41, valueTextHook ? "MENU_DISPLAY_VALUE_SLIDERBAR" : slider);
+            }
             AddEmptyLine(category);
             AddRow(category, "SSR Debug", "PREF_SSR_DEBUG", 10, "MENU_DISPLAY_SSR_DEBUG");
         }
@@ -3064,20 +3064,6 @@ public:
     } ExtraNightShadowsText;
 
 } FusionFixSettings;
-
-const wchar_t* CText::ShadowReachLabel(uint32_t hash)
-{
-    static const auto headlightHash = GetHash("FF_HREACH");
-    static const auto lampHash = GetHash("FF_LREACH");
-    if (hash != headlightHash && hash != lampHash) return nullptr;
-    const bool headlight = hash == headlightHash;
-    const auto step = std::clamp(FusionFixSettings.Get(headlight ? "PREF_HEADLIGHT_REACH" : "PREF_LAMP_REACH"), 0, 40);
-    static thread_local std::wstring labels[2];
-    auto& label = labels[headlight ? 0 : 1];
-    label = headlight ? L"Headlight shadow reach: " : L"Lamppost shadow reach: ";
-    label += step ? std::to_wstring(step * 5) + L" ft" : L"Original";
-    return label.c_str();
-}
 
 export bool shouldModifyMapMenuBackground(int curMenuTab = *pMenuTab)
 {

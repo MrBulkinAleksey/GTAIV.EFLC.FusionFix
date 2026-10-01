@@ -268,6 +268,12 @@ Advanced
 [FF_LIGHTING]
 Lighting
 
+[FF_HREACH]
+Headlight shadow reach
+
+[FF_LREACH]
+Lamppost shadow reach
+
 [FF_RESTART]
 GTA IV must be restarted in order to apply settings.
 
