@@ -737,12 +737,17 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 // the share of the ambient it replaces there.
 float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
 {
+    // In pairs opposite each other, so the blur takes as much from every side and moves nothing. The Poisson
+    // disk before leaned 6% of the radius up: indirect light gathers last frame's scene, which holds last frame's
+    // smoothed indirect light, and the lean added up frame after frame into noise flowing up the screen.
     static const float2 taps[12] =
     {
-        float2(-0.326, -0.406), float2(-0.840, -0.074), float2(-0.696,  0.457),
-        float2(-0.203,  0.621), float2( 0.962, -0.195), float2( 0.473, -0.480),
-        float2( 0.519,  0.767), float2( 0.185, -0.893), float2( 0.507,  0.064),
-        float2( 0.896,  0.412), float2(-0.322, -0.933), float2(-0.792, -0.598)
+        float2(-0.326, -0.406), float2( 0.326,  0.406),
+        float2(-0.840, -0.074), float2( 0.840,  0.074),
+        float2(-0.696,  0.457), float2( 0.696, -0.457),
+        float2(-0.203,  0.621), float2( 0.203, -0.621),
+        float2( 0.962, -0.195), float2(-0.962,  0.195),
+        float2( 0.473, -0.480), float2(-0.473,  0.480)
     };
 
     // Most of the screen is sky, roads and walls, which SSR does not trace and deferred_lighting
