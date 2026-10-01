@@ -151,6 +151,26 @@ export namespace FrameHistory
                  (previous.JitterPixels[1] - current.JitterPixels[1]) / static_cast<float>(current.Height) };
     }
 
+    // Where effects that accumulate over frames look up their screen space noise this frame, in pixels: a pattern read
+    // at pixel + offset gives every pixel another value each frame, which the accumulation averages. The offsets are a
+    // hash of the frame, anywhere within 64 pixels, so successive frames jump about the pattern without any steady step
+    // between them. A steady step moves the pattern: stepping the values by the golden ratio moved the interleaved
+    // gradient noise of SSR.fx by two pixels up every frame, which showed as noise flowing up the screen.
+    std::array<float, 2> NoiseOffset()
+    {
+        auto hash = [](uint32_t x)
+        {
+            x ^= x >> 16;
+            x *= 0x7FEB352Du;
+            x ^= x >> 15;
+            x *= 0x846CA68Bu;
+            x ^= x >> 16;
+            return static_cast<float>(x >> 8) * (64.0f / 16777216.0f);
+        };
+        const auto frame = Frame();
+        return { hash(frame), hash(frame ^ 0x9E3779B9u) };
+    }
+
     // Motion of every pixel since the previous scene, in texture coordinates (previous - current), drawn by temporal
     // AA after the G-buffer pass while it is on. Null otherwise.
     IDirect3DTexture9* MotionVectors()

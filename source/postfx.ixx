@@ -250,7 +250,7 @@ public:
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
-        D3DXHANDLE techContactTemporal, fJitterOffset, techContactUpsample;
+        D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff, fWetness, fWetGroundBoost;
@@ -303,8 +303,6 @@ public:
     rage::grcRenderTargetPC* GIFullTex = nullptr;
     IDirect3DSurface9* GIFullSurf = nullptr;
     int nGIAccumIndex = 0;
-    // Steps the rays' offsets on every frame; SSR's count stands still while SSR is off.
-    uint32_t nGIFrame = 0;
     uint32_t nGIAccumFrame = 0;     // FrameHistory::Frame() of GIAccumTex[nGIAccumIndex], 0 if none
     // What deferred_lighting gets this frame, null while there is none.
     IDirect3DTexture9* GIResult = nullptr;
@@ -399,7 +397,6 @@ public:
     IDirect3DSurface9* ContactAccumSurf[2] = {};
     int nContactAccumIndex = 0;
     uint32_t nContactAccumFrame = 0;    // FrameHistory::Frame() of ContactAccumTex[nContactAccumIndex], 0 if none
-    uint32_t nContactFrame = 0;
     float fContactTemporalBlend = 0.8f;
     // What deferred_lighting gets on s9: ContactTex, or the accumulation.
     IDirect3DTexture9* ContactResult = nullptr;
@@ -412,11 +409,10 @@ public:
     bool bSSRPassThinObjects = true;
     bool bSSRStepJitter = true;
     // ScreenSpaceReflectionsTemporalJitter: while SSR accumulates, the step offsets move on every
-    // frame (fJitterOffset in SSR.fx), so the accumulation averages them.
+    // frame (vec2NoiseOffset in SSR.fx), so the accumulation averages them.
     bool bSSRTemporalJitter = true;
     // PostFxProfiler: GPU time of FusionFix's passes to FusionFix.PostFx.log, see ProfilerNextFrame.
     bool bPostFxProfiler = false;
-    uint32_t nSSRFrame = 0;
     float fSSRTowardCamera = 0.0f;
     float fSSRReflectionBlur = 0.0f;
     float fSSRDistanceFade = 0.0f;
@@ -907,7 +903,7 @@ public:
                 h.techContactShadows = SSREffect->GetTechniqueByName("ContactShadows");
                 h.techContactTemporal = SSREffect->GetTechniqueByName("ContactTemporal");
                 h.techContactUpsample = SSREffect->GetTechniqueByName("ContactUpsample");
-                h.fJitterOffset = SSREffect->GetParameterByName(nullptr, "fJitterOffset");
+                h.vec2NoiseOffset = SSREffect->GetParameterByName(nullptr, "vec2NoiseOffset");
                 h.techSSRDenoise = SSREffect->GetTechniqueByName("SSRDenoise");
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
@@ -2530,6 +2526,14 @@ private:
         }
     }
 
+    // Where the passes of SSR.fx read their noise this frame: moved on every frame while they accumulate, so the
+    // accumulation averages it out, else the same every frame.
+    static void SetNoiseOffset(ID3DXEffect* effect, bool accumulating)
+    {
+        auto offset = accumulating ? FrameHistory::NoiseOffset() : std::array<float, 2>{};
+        effect->SetFloatArray(PostFxResources.SSREffectHandles.vec2NoiseOffset, offset.data(), 2);
+    }
+
     // The accumulation passes of SSR.fx follow temporal AA's motion vectors, when it drew them this frame and there is
     // a history to take from them (see TemporalHistoryUV), else the camera alone.
     static void BindMotionVectors(ID3DXEffect* effect, bool history)
@@ -2711,9 +2715,7 @@ private:
         effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);
         effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
         const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1];
-        // Golden ratio steps through the offsets, as for contact shadows.
-        ++R.nSSRFrame;
-        effect->SetFloat(h.fJitterOffset, temporal && R.bSSRTemporalJitter ? float(R.nSSRFrame * 2654435769u) * (1.0f / 4294967296.0f) : 0.0f);
+        SetNoiseOffset(effect, temporal && R.bSSRTemporalJitter);
         effect->SetFloat(h.fTowardCamera, R.fSSRTowardCamera);
         effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
         effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
@@ -3716,10 +3718,7 @@ private:
         effect->SetFloat(h.fStepJitter, R.bContactShadowStepJitter ? 1.0f : 0.0f);
         const bool temporal = R.fContactTemporalBlend > 0.0f && h.techContactTemporal && R.ContactAccumSurf[0] &&
                               R.ContactAccumSurf[1];
-        // Golden ratio steps through the offsets, from an integer so they stay spread however
-        // long the game runs.
-        ++R.nContactFrame;
-        effect->SetFloat(h.fJitterOffset, temporal ? float(R.nContactFrame * 2654435769u) * (1.0f / 4294967296.0f) : 0.0f);
+        SetNoiseOffset(effect, temporal);
         effect->SetFloat(h.fCSLength, R.fContactShadowLength);
         effect->SetFloat(h.fCSThickness, R.fContactShadowThickness);
         effect->SetFloat(h.fCSMaxViewDistance, R.fContactShadowMaxDistance);
@@ -3934,10 +3933,7 @@ private:
         effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
         effect->SetFloat(h.fNearPlane, vp->mNearClip);
         effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
-        // Golden ratio steps through the offsets, as for contact shadows, so the accumulation
-        // averages the rays out; with SSR's frame count they stood still while SSR was off.
-        ++R.nGIFrame;
-        effect->SetFloat(h.fJitterOffset, R.fGITemporalBlend > 0.0f ? float(R.nGIFrame * 2654435769u) * (1.0f / 4294967296.0f) : 0.0f);
+        SetNoiseOffset(effect, R.fGITemporalBlend > 0.0f);
         effect->SetFloat(h.fGIRayLength, R.fGIRayLength);
         effect->SetFloat(h.fGIThickness, R.fGIThickness);
         effect->SetFloat(h.fGIMaxViewDistance, R.fGIMaxDistance);

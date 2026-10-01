@@ -192,7 +192,7 @@ uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDeno
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
 uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step (set per pass: SSR and contact shadows each have their own switch)
-uniform float fJitterOffset;      // added to each pixel's step offset (set per pass: SSR and contact shadows), changed every frame while they accumulate
+uniform float2 vec2NoiseOffset;   // pixels, moves where PixelJitter is read every frame while the passes accumulate (FrameHistory::NoiseOffset), 0 otherwise
 uniform float fTowardCamera;      // 0..1, how far reflections pointing back at the camera reach
 uniform float fReflectionBlur;    // blur radius in pixels a reflection reaches at fMaxDistance, 0 keeps it sharp
 uniform float fDistanceFade;      // reflections fade out towards this distance from the surface, 0 disables
@@ -581,9 +581,9 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         n = ReconstructNormal(uv, C);
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    // While accumulating, fJitterOffset moves every pixel's steps on each frame, so the
+    // While accumulating, vec2NoiseOffset moves every pixel's steps on each frame, so the
     // accumulation averages the steps out and fewer of them do.
-    float jitter = fStepJitter > 0.0 ? 1.0 - frac(1.0 - PixelJitter(vPos) + fJitterOffset) : 1.0;
+    float jitter = fStepJitter > 0.0 ? PixelJitter(vPos + vec2NoiseOffset) : 1.0;
     float4 r = TraceReflection(C, n, fReflectionBlur, jitter, fDistanceFade);
     // On wet ground the game's reflection strength, which deferred_lighting multiplies SSR by,
     // is that of dry asphalt, so the reflection is drawn brighter there.
@@ -833,9 +833,9 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     if (len <= 0.0)
         return float4(0.0, 0.0, 0.0, 1.0);
 
-    // While accumulating, fJitterOffset moves every pixel's steps on each frame, so the
+    // While accumulating, vec2NoiseOffset moves every pixel's steps on each frame, so the
     // accumulation averages the steps out instead of keeping one frame's noise.
-    float jitter = fStepJitter > 0.0 ? 1.0 - frac(1.0 - PixelJitter(vPos) + fJitterOffset) : 1.0;
+    float jitter = fStepJitter > 0.0 ? PixelJitter(vPos + vec2NoiseOffset) : 1.0;
     float occlusion = 0.0;
     float prevZ = P0.z;
 
@@ -1052,9 +1052,9 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     // Off the surface by more with distance, as depth gets coarser; otherwise rays hit the
     // surface they start from and it lights itself.
     float3 P0 = C + n * (0.05 + C.z * 0.003);
-    // fJitterOffset moves both on every frame while it accumulates, as for SSR.
-    float jitter = 1.0 - frac(1.0 - PixelJitter(vPos) + fJitterOffset);
-    float jitter2 = 1.0 - frac(1.0 - PixelJitter(vPos.yx + float2(17.0, 59.0)) + fJitterOffset);
+    // vec2NoiseOffset moves both on every frame while it accumulates, as for SSR.
+    float jitter = PixelJitter(vPos + vec2NoiseOffset);
+    float jitter2 = PixelJitter(vPos.yx + float2(17.0, 59.0) + vec2NoiseOffset.yx);
     float3 sum = 0.0;
     float hits = 0.0;
 
