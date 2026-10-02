@@ -21,6 +21,7 @@ namespace HeadlightEnhancement
     static const float* pRadiusBonus = nullptr;
     static const float* pRadiusBase = nullptr;
     static std::string lightModesStatus = "off in the ini";
+    static std::string splitBeamsStatus = "off in the ini";
     static std::atomic<bool> diagnosticsReady{false};
     static std::filesystem::path logPath;
 
@@ -114,6 +115,7 @@ namespace HeadlightEnhancement
             << "\nbrightnessStatus=" << brightnessStatus
             << "\nretainedSubmissions=" << retainedSubmissions.load()
             << "\nlightModesStatus=" << lightModesStatus
+            << "\nsplitBeamsStatus=" << splitBeamsStatus
             << "\ntrackedVehicle=" << (lastDrivenToken.load() != 0) << '\n';
     }
 
@@ -280,5 +282,68 @@ namespace HeadlightEnhancement
         lightModeApplyHook = safetyhook::create_mid(readAt, ApplyLightMode);
         highBeamTimeoutHook = safetyhook::create_mid(imageBase + 0x63F886, KeepForcedHighBeams);
         lightModesStatus = lightModeHook && lightModeApplyHook && highBeamTimeoutHook ? "installed" : "hook failed";
+    }
+
+    // Both lit lamps of a car make one beam from the point between them (CE 0xA3FCA5: the two
+    // lamp bones averaged, then 0xA3E070), so a hand at the car's edge shadowed the far half of
+    // the beam. For a car within a few metres of the player on foot, the call at 0xA3FE11 now
+    // submits each lamp as a beam of its own from its bone, at half the intensity each, keyed by
+    // the car and the car + 1 as the game keys a single lamp. Further away, or while the player
+    // drives, one beam as before.
+    using SubmitBeams = void(__cdecl*)(void*, float*, float*, void*, float, float, float, float, int, int,
+                                       uintptr_t, int);
+    static SubmitBeams submitBeams = nullptr;
+    static constexpr float SplitBeamsDistance = 6.0f;
+
+    static void __cdecl SubmitSplitBeams(void* matrix, float* position, float* direction, void* colour,
+        float intensity, float radius, float a7, float a8, int a9, int a10, uintptr_t vehicle, int player)
+    {
+        const auto ped = CPlayer::getLocalPlayerPed ? CPlayer::getLocalPlayerPed() : 0;
+        const auto carMatrix = vehicle ? *reinterpret_cast<const float* const*>(vehicle + 0x20) : nullptr;
+        const auto pedMatrix = ped ? *reinterpret_cast<const float* const*>(ped + 0x20) : nullptr;
+        bool split = bHeadlightShadows && carMatrix && pedMatrix && CPlayer::findPlayerCar && !CPlayer::findPlayerCar();
+        if (split)
+        {
+            const float dx = carMatrix[12] - pedMatrix[12], dy = carMatrix[13] - pedMatrix[13], dz = carMatrix[14] - pedMatrix[14];
+            split = dx * dx + dy * dy + dz * dz < SplitBeamsDistance * SplitBeamsDistance;
+        }
+        if (!split)
+            return submitBeams(matrix, position, direction, colour, intensity, radius, a7, a8, a9, a10, vehicle, player);
+
+        // The caller's frame: the world position at position[0..2], the lamps' bones in car space
+        // at position + 0x30 and + 0x40 (x, -, z), and their shared forward offset at position - 0xC.
+        const auto bytes = reinterpret_cast<const uint8_t*>(position);
+        const float y = *reinterpret_cast<const float*>(bytes - 0xC);
+        for (int lamp = 0; lamp < 2; ++lamp)
+        {
+            const auto bone = reinterpret_cast<const float*>(bytes + (lamp ? 0x30 : 0x40));
+            const float x = bone[0], z = bone[2];
+            float world[4] = { position[0], position[1], position[2], position[3] };
+            const auto& m = carMatrix;
+            world[0] = m[0] * x + m[4] * y + m[8] * z + m[12];
+            world[1] = m[1] * x + m[5] * y + m[9] * z + m[13];
+            world[2] = m[2] * x + m[6] * y + m[10] * z + m[14];
+            submitBeams(matrix, world, direction, colour, intensity * 0.5f, radius, a7, a8, a9, a10,
+                        vehicle + lamp, player);
+        }
+    }
+
+    static void InstallSplitBeams(bool enabled)
+    {
+        if (!enabled) return;
+        imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+        const auto call = imageBase + 0x63FE11;
+        // push dword ptr [ebp+24] / call 0xA3E070 / add esp, 30
+        constexpr uint8_t before[]{0xFF,0x75,0x24,0xE8}, after[]{0x83,0xC4,0x30};
+        if (std::memcmp(reinterpret_cast<const void*>(call - 3), before, sizeof(before)) ||
+            call + 5 + *reinterpret_cast<const int32_t*>(call + 1) != imageBase + 0x63E070 ||
+            std::memcmp(reinterpret_cast<const void*>(call + 5), after, sizeof(after)))
+        {
+            splitBeamsStatus = "game code differs: " + DumpBytes(call - 3, 11);
+            return;
+        }
+        submitBeams = reinterpret_cast<SubmitBeams>(imageBase + 0x63E070);
+        injector::MakeCALL(call, SubmitSplitBeams, true);
+        splitBeamsStatus = "installed";
     }
 }

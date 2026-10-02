@@ -186,8 +186,11 @@ namespace fusionfix::shadows
                 if (candidate.playerHeadlight)
                 {
                     bool haveOwn = false;
+                    // Near the player on foot both lamps of a car can be beams of their own,
+                    // keyed by the car and the car + 1; the other lamp of the same car may join.
                     for (const auto& slot : active_)
-                        haveOwn |= slot.candidate.identity && slot.candidate.playerHeadlight;
+                        haveOwn |= slot.candidate.identity && slot.candidate.playerHeadlight &&
+                            (slot.candidate.identity & ~std::uintptr_t(1)) != (candidate.identity & ~std::uintptr_t(1));
                     if (haveOwn) continue;
                 }
                 std::size_t replace = SlotCount;
