@@ -37,6 +37,44 @@ namespace HeadlightEnhancement
         return out.str();
     }
 
+    // The game code a hook relies on, checked before it is changed. Offsets are from the image
+    // base; a failed check names the bytes found, so the log shows what another plugin or another
+    // game version put there.
+    class CodeCheck
+    {
+    public:
+        template <size_t N>
+        CodeCheck& Bytes(uintptr_t offset, const uint8_t (&bytes)[N])
+        {
+            return Expect(offset, N, !std::memcmp(reinterpret_cast<const void*>(imageBase + offset), bytes, N));
+        }
+
+        // A 4-byte absolute address operand.
+        CodeCheck& Address(uintptr_t offset, uintptr_t target)
+        {
+            return Expect(offset, 4, *reinterpret_cast<const uint32_t*>(imageBase + offset) == imageBase + target);
+        }
+
+        // A 4-byte relative branch operand, counted from its end.
+        CodeCheck& Branch(uintptr_t offset, uintptr_t target)
+        {
+            return Expect(offset, 4, offset + 4 + *reinterpret_cast<const int32_t*>(imageBase + offset) == target);
+        }
+
+        explicit operator bool() const { return differs.empty(); }
+        std::string Status() const { return "game code differs: " + differs; }
+
+    private:
+        CodeCheck& Expect(uintptr_t offset, size_t count, bool matches)
+        {
+            if (!matches)
+                differs += (differs.empty() ? "" : " | ") + DumpBytes(imageBase + offset, count);
+            return *this;
+        }
+
+        std::string differs;
+    };
+
     // Scales the range by the bonus as it would be with the ramp full, over what F74 leaves of it.
     static void KeepRadiusBonus(SafetyHookContext& regs, uintptr_t vehicle)
     {
@@ -106,14 +144,12 @@ namespace HeadlightEnhancement
             0x80,0xB9,0x18,0x02,0,0,0,0x75,0x20,
             0x80,0xB9,0x19,0x02,0,0,0,0x74,0x17
         };
-        constexpr uint8_t instruction[]{0x80,0x3D};
-        const auto site = reinterpret_cast<const uint8_t*>(imageBase + 0x63FB77);
-        if (std::memcmp(reinterpret_cast<void*>(imageBase + 0x63FB42), driverBlock, sizeof(driverBlock)) ||
-            std::memcmp(site, instruction, sizeof(instruction)) || site[6] != 0 ||
-            *reinterpret_cast<const uint32_t*>(site + 2) != imageBase + 0xC3CC49)
+        // cmp byte ptr [0xC3CC49], 0
+        const auto check = CodeCheck().Bytes(0x63FB42, driverBlock).Bytes(0x63FB77, {0x80,0x3D})
+            .Address(0x63FB79, 0xC3CC49).Bytes(0x63FB7D, {0x00});
+        if (!check)
         {
-            brightnessStatus = "game code differs: " + DumpBytes(imageBase + 0x63FB42, sizeof(driverBlock)) +
-                " | " + DumpBytes(imageBase + 0x63FB77, 7);
+            brightnessStatus = check.Status();
             return false;
         }
         // Runs after original player-only scaling, before high-beam scaling.
@@ -125,14 +161,12 @@ namespace HeadlightEnhancement
             return false;
         }
         // mulss xmm5, [bonus] / addss xmm5, [base] in the radius computation.
-        constexpr uint8_t mulss[]{0xF3,0x0F,0x59,0x2D}, addss[]{0xF3,0x0F,0x58,0x2D};
-        const auto bonusAt = reinterpret_cast<const uint8_t*>(imageBase + 0x63FC45);
-        const auto baseAt = reinterpret_cast<const uint8_t*>(imageBase + 0x63FC51);
-        if (!std::memcmp(bonusAt, mulss, sizeof(mulss)) && !std::memcmp(baseAt, addss, sizeof(addss)) &&
-            !std::memcmp(reinterpret_cast<const void*>(imageBase + 0x63FBAB), "\xF3\x0F\x10\x96\x74\x0F\0\0", 8))
+        // The ramp read: movss xmm2, [esi+F74].
+        if (CodeCheck().Bytes(0x63FC45, {0xF3,0x0F,0x59,0x2D}).Bytes(0x63FC51, {0xF3,0x0F,0x58,0x2D})
+                .Bytes(0x63FBAB, {0xF3,0x0F,0x10,0x96,0x74,0x0F,0x00,0x00}))
         {
-            pRadiusBonus = *reinterpret_cast<const float* const*>(bonusAt + 4);
-            pRadiusBase = *reinterpret_cast<const float* const*>(baseAt + 4);
+            pRadiusBonus = *reinterpret_cast<const float* const*>(imageBase + 0x63FC49);
+            pRadiusBase = *reinterpret_cast<const float* const*>(imageBase + 0x63FC55);
         }
         brightnessStatus = "installed";
         return true;
@@ -240,20 +274,17 @@ namespace HeadlightEnhancement
         };
         // mov al,[esi+10C2] / xor cl,cl / mov [esp+6C],ecx / and al,3
         constexpr uint8_t read[]{0x8A,0x86,0xC2,0x10,0,0,0x32,0xC9,0x89,0x4C,0x24,0x6C,0x24,0x03};
-        const auto toggleAt = imageBase + 0x63F82F, timeoutAt = imageBase + 0x63F868, readAt = imageBase + 0x643867;
-        if (std::memcmp(reinterpret_cast<const void*>(toggleAt), toggle, sizeof(toggle)) ||
-            std::memcmp(reinterpret_cast<const void*>(readAt), read, sizeof(read)) ||
-            std::memcmp(reinterpret_cast<const void*>(timeoutAt), timeout, sizeof(timeout)) ||
-            *reinterpret_cast<const uint32_t*>(timeoutAt + sizeof(timeout)) != imageBase + 0xD735B4 ||
-            *reinterpret_cast<const uint8_t*>(timeoutAt + sizeof(timeout) + 4) != 0x76)
+        constexpr uintptr_t timeoutAt = 0x63F868, gameTimeAt = timeoutAt + sizeof(timeout);
+        const auto check = CodeCheck().Bytes(0x63F82F, toggle).Bytes(timeoutAt, timeout)
+            .Address(gameTimeAt, 0xD735B4).Bytes(gameTimeAt + 4, {0x76}).Bytes(0x643867, read);
+        if (!check)
         {
-            lightModesStatus = "game code differs: " + DumpBytes(toggleAt, sizeof(toggle)) +
-                " | " + DumpBytes(timeoutAt, sizeof(timeout) + 5) + " | " + DumpBytes(readAt, sizeof(read));
+            lightModesStatus = check.Status();
             return;
         }
         pGameTime = reinterpret_cast<const uint32_t*>(imageBase + 0xD735B4);
         lightModeHook = safetyhook::create_mid(imageBase + 0x63F844, StepLightMode);
-        lightModeApplyHook = safetyhook::create_mid(readAt, ApplyLightMode);
+        lightModeApplyHook = safetyhook::create_mid(imageBase + 0x643867, ApplyLightMode);
         highBeamTimeoutHook = safetyhook::create_mid(imageBase + 0x63F886, KeepForcedHighBeams);
         lightModesStatus = lightModeHook && lightModeApplyHook && highBeamTimeoutHook ? "installed" : "hook failed";
     }
@@ -345,12 +376,11 @@ namespace HeadlightEnhancement
         imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
         const auto call = imageBase + 0x63FE11;
         // push dword ptr [ebp+24] / call 0xA3E070 / add esp, 30
-        constexpr uint8_t before[]{0xFF,0x75,0x24,0xE8}, after[]{0x83,0xC4,0x30};
-        if (std::memcmp(reinterpret_cast<const void*>(call - 3), before, sizeof(before)) ||
-            call + 5 + *reinterpret_cast<const int32_t*>(call + 1) != imageBase + 0x63E070 ||
-            std::memcmp(reinterpret_cast<const void*>(call + 5), after, sizeof(after)))
+        const auto check = CodeCheck().Bytes(0x63FE0E, {0xFF,0x75,0x24,0xE8}).Branch(0x63FE12, 0x63E070)
+            .Bytes(0x63FE16, {0x83,0xC4,0x30});
+        if (!check)
         {
-            splitBeamsStatus = "game code differs: " + DumpBytes(call - 3, 11);
+            splitBeamsStatus = check.Status();
             return;
         }
         submitBeams = reinterpret_cast<SubmitBeams>(imageBase + 0x63E070);
@@ -386,13 +416,11 @@ namespace HeadlightEnhancement
         imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
         const auto at = imageBase + 0x643616;
         // mov eax, [0x159B75C] / test [esi+8], eax / je 0xA44CAA
-        constexpr uint8_t test[]{0x85,0x46,0x08,0x0F,0x84};
-        if (*reinterpret_cast<const uint8_t*>(at) != 0xA1 ||
-            *reinterpret_cast<const uint32_t*>(at + 1) != imageBase + 0x119B75C ||
-            std::memcmp(reinterpret_cast<const void*>(at + 5), test, sizeof(test)) ||
-            at + 14 + *reinterpret_cast<const int32_t*>(at + 10) != imageBase + 0x644CAA)
+        const auto check = CodeCheck().Bytes(0x643616, {0xA1}).Address(0x643617, 0x119B75C)
+            .Bytes(0x64361B, {0x85,0x46,0x08,0x0F,0x84}).Branch(0x643620, 0x644CAA);
+        if (!check)
         {
-            offscreenLightsStatus = "game code differs: " + DumpBytes(at, 14);
+            offscreenLightsStatus = check.Status();
             return;
         }
         pPhaseMask = reinterpret_cast<const uint32_t*>(imageBase + 0x119B75C);
