@@ -276,6 +276,12 @@ public:
     // Contact shadows (ContactShadows_PS in SSR.fx), bound to s9 for deferred_lighting
     // (shaders/patches/deferred_lighting_contact_shadows.patch) and unbound right after it.
     static bool ContactShadowsEnabled() { static auto p = FusionFixSettings.GetRef("PREF_CONTACTSHADOWS"); return p && p->get() != 0; }
+    // Extra Night Shadows at its last setting: lampposts, headlights and vehicle night shadows.
+    static bool AllNightShadowsEnabled()
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_EXTRANIGHTSHADOWS");
+        return p && p->get() == FusionFixSettings.ExtraNightShadowsText.eLampHeadlVNS;
+    }
     float fContactShadowLength = 0.3f;
     float fContactShadowThickness = 0.15f;
     // Screen space indirect light (SSGI_PS in SSR.fx), at half resolution: marched into
@@ -3711,8 +3717,9 @@ private:
         // For the light shaders, whatever becomes of the sun's pass below.
         {
             rage::grcViewport* camera = rage::GetCurrentViewport();
-            // Night shadows off in the menu (Extra Night Shadows) leaves no halo of them under cars.
-            const bool local = camera && R.bLocalContactShadows && R.ContactShadowsEnabled() && bExtraNightShadows &&
+            // Only with every night shadow on in the menu (Extra Night Shadows with vehicle night
+            // shadows): with fewer, cars have no night shadow for them to meet, only a dark halo.
+            const bool local = camera && R.bLocalContactShadows && R.ContactShadowsEnabled() && R.AllNightShadowsEnabled() &&
                                R.fLocalContactShadowIntensity > 0.0f;
             const D3DMATRIX proj = camera ? *(const D3DMATRIX*)camera->mProjectionMatrix : D3DMATRIX{};
             const float consts[12] =
@@ -4278,9 +4285,7 @@ private:
             auto& R = PostFxResources;
             if (!R.bLocalContactPass || R.LocalContactShadowConsts[7] == 0.0f)
                 return;
-            // Headlights (0x100) too while the Extra Night Shadows setting leaves them no shadows.
-            const uint32_t flags = *reinterpret_cast<const uint32_t*>(regs.edi + 0x20);
-            const bool off = (flags & 0x200) || ((flags & 0x100) && !bHeadlightShadows);
+            const bool off = (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x200) != 0;
             if (off == R.bLocalContactLightOff)
                 return;
             R.bLocalContactLightOff = off;
