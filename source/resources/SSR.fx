@@ -368,6 +368,11 @@ float PixelJitter(float2 pixel)
 // depth direction (negative towards the camera).
 static float gTraceHitZ = 0.0;
 static float gTraceRayZ = 0.0;
+// The screen path of the last TraceReflection's ray, for ScreenFallback: from gTraceUV0 to
+// gTraceUVEnd, where it leaves the screen; gTracePath is 0 when the ray was not marched.
+static float2 gTraceUV0 = 0.0;
+static float2 gTraceUVEnd = 0.0;
+static float gTracePath = 0.0;
 
 // jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
 // distanceFade: reflections fade out towards this distance from the surface, 0 disables.
@@ -410,6 +415,9 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     float2 dUV = uv1 - uv0;
     float2 tEdge = (step(0.0, dUV) - uv0) / (abs(dUV) < 1e-5 ? 1e-5 : dUV);
     float tEnd = clamp(min(tEdge.x, tEdge.y), 0.0, 1.0);
+    gTraceUV0 = uv0;
+    gTraceUVEnd = lerp(uv0, uv1, tEnd);
+    gTracePath = 1.0;
 
     // A ray short on screen needs fewer steps: a car far away reflects over a few dozen pixels,
     // and all NUM_STEPS there sampled each pixel several times. About one step per two pixels
@@ -627,6 +635,41 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
 
     float prevCZ = dot(float4(C, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
                                               vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
+
+    // Where the ray went behind the player on its way across the screen, what it would have
+    // reached is most likely what lies just past his outline along the same path: the lit road
+    // the rays beside his figure hit. The road next to the car, which the rings below find,
+    // lies in its shadow, and the figure showed darker than the rest of the door.
+    [branch]
+    if (gTracePath > 0.0)
+    {
+        bool behind = false;
+        [loop]
+        for (int k = 1; k <= 16; ++k)
+        {
+            float2 pathUV = lerp(gTraceUV0, gTraceUVEnd, k / 16.0);
+            float pathZ = LinearDepth(pathUV);
+            if (pathZ < C.z * 0.7)
+                behind = true;
+            else if (behind)
+            {
+                float2 pathHist = HistoryUV(ViewPosFromUVZ(pathUV, pathZ));
+                if (all(pathHist > 0.0) && all(pathHist < 1.0))
+                {
+                    float2 r = 0.01 * float2(vec2InvViewportSize.x / vec2InvViewportSize.y, 1.0);
+                    float3 c = 0.0;
+                    c += tex2Dlod(HistoryTex, float4(pathHist, 0, 0)).rgb;
+                    c += tex2Dlod(HistoryTex, float4(saturate(pathHist + float2(r.x, 0.0)), 0, 0)).rgb;
+                    c += tex2Dlod(HistoryTex, float4(saturate(pathHist - float2(r.x, 0.0)), 0, 0)).rgb;
+                    c += tex2Dlod(HistoryTex, float4(saturate(pathHist + float2(0.0, r.y)), 0, 0)).rgb;
+                    c += tex2Dlod(HistoryTex, float4(saturate(pathHist - float2(0.0, r.y)), 0, 0)).rgb;
+                    weight = fFallback * (1.0 - saturate(Rw.z * 5.0));
+                    return clamp(c * 0.2, 0.0, HISTORY_CLAMP) * SSR_SCALE;
+                }
+                break;
+            }
+        }
+    }
     // Rings of taps further and further out, until enough of them show the road: the player
     // covering the door covers a good part of the screen around where its rays look, and the
     // nearest ring alone found nothing but him, leaving the door black.
