@@ -348,6 +348,11 @@ public:
     // c203 off for a light and back on (see InstallLocalContactLightHook).
     bool bLocalContactPass = false;
     bool bLocalContactLightOff = false;
+    // Diagnostics with [SHADOWS] ExperimentalShadowDiagnostics: every 3 s, one lighting pass's
+    // coloured lights in FusionFix.ContactLights.log, with what the light loop hook did to them.
+    bool bContactLightLog = false;
+    FILE* ContactLightLog = nullptr;
+    uint32_t nContactLightHookCalls = 0;
     float fLocalContactShadowLength = 0.5f;
     float fLocalContactShadowThickness = 0.2f;
     float fLocalContactShadowMaxDistance = 40.0f;
@@ -1122,6 +1127,7 @@ public:
         fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.2f), 0.01f, 5.0f);
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
+        bContactLightLog = iniReader.ReadInteger("SHADOWS", "ExperimentalShadowDiagnostics", 0) != 0;
         fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 4.0f), 0.0f, 20.0f);
         fVolumetricLightScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightScale", 0.25f), 0.0f, 2.0f);
         fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 100.0f), 10.0f, 1000.0f);
@@ -4274,9 +4280,21 @@ private:
         shLocalContactLight = safetyhook::create_mid(pattern.get_first(7), [](SafetyHookContext& regs)
         {
             auto& R = PostFxResources;
+            const bool off = (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x200) != 0;
+            if (R.ContactLightLog)
+            {
+                ++R.nContactLightHookCalls;
+                // Coloured lights only: traffic lights are red, amber or green.
+                const auto light = reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28);
+                const float hi = (std::max)({ light->mColor.x, light->mColor.y, light->mColor.z });
+                const float lo = (std::min)({ light->mColor.x, light->mColor.y, light->mColor.z });
+                if (hi > 0.0f && hi - lo > 0.5f * hi)
+                    fprintf(R.ContactLightLog, "  type=%d flags=0x%x radius=%.1f intensity=%.2f colour=%.2f %.2f %.2f pos=%.1f %.1f %.1f pass=%d contactOff=%d\n",
+                        static_cast<int>(light->mType), light->mFlags, light->mRadius, light->mIntensity, light->mColor.x, light->mColor.y,
+                        light->mColor.z, light->mPosition.x, light->mPosition.y, light->mPosition.z, R.bLocalContactPass, off);
+            }
             if (!R.bLocalContactPass || R.LocalContactShadowConsts[7] == 0.0f)
                 return;
-            const bool off = (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x200) != 0;
             if (off == R.bLocalContactLightOff)
                 return;
             R.bLocalContactLightOff = off;
@@ -4457,6 +4475,22 @@ public:
         pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
         R.bLocalContactPass = true;
         R.bLocalContactLightOff = false;
+        if (R.bContactLightLog)
+        {
+            static ULONGLONG lastLog = 0;
+            const auto now = GetTickCount64();
+            if (!R.ContactLightLog && now - lastLog >= 3000)
+            {
+                static bool started = false;
+                lastLog = now;
+                R.ContactLightLog = _wfopen((GetExeModulePath() / L"FusionFix.ContactLights.log").c_str(), started ? L"a" : L"w");
+                started = true;
+                R.nContactLightHookCalls = 0;
+                if (R.ContactLightLog)
+                    fprintf(R.ContactLightLog, "t=%llu pass c203.w=%.0f hook=%d\n", now, R.LocalContactShadowConsts[7],
+                        static_cast<bool>(shLocalContactLight));
+            }
+        }
 
         // The sun on skin: c201 the scale of the N.L curve less 1, c205 its offset and the red penumbra.
         {
@@ -4554,6 +4588,12 @@ public:
         const float noLocalContactShadows[4] = {};
         pDevice->SetPixelShaderConstantF(203, noLocalContactShadows, 1);
         R.bLocalContactPass = false;
+        if (R.ContactLightLog)
+        {
+            fprintf(R.ContactLightLog, "  lights through the hook: %u\n", R.nContactLightHookCalls);
+            fclose(R.ContactLightLog);
+            R.ContactLightLog = nullptr;
+        }
         pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
 
