@@ -486,10 +486,8 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     // a car, the rays from the sills and bumper down to the road went behind him and ended
     // there; below the horizon a miss leaves no reflection at all (deferred_lighting keeps
     // that fade where SSR found nothing), so he showed on the car as a dark figure. Such a
-    // ray takes the scene where it went out of view, the road just beside his outline. So
-    // does one that came out again and hit after running far behind him (see the fade on
-    // hidden below): faded to nothing, it cut the same dark figure into the door.
-    bool blocked = blockedT >= 0.0 && (hit <= 0.0 ? prevDelta > 0.0 : hidden > 0.6);
+    // ray takes the scene where it went out of view, the road just beside his outline.
+    bool blocked = hit <= 0.0 && blockedT >= 0.0 && prevDelta > 0.0;
     if (hit <= 0.0 && !blocked)
         return 0.0;
 
@@ -547,9 +545,7 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     // standing metres in front of a door, with the camera turned so the door shows next to his
     // shoulder, rays from the door ran a metre or more behind him and took the colour of the
     // pavement beyond: a bright strip on the door beside him. The longer the hidden stretch,
-    // the less a hit after it counts. A ray that was in front of the scene before going behind
-    // him takes the scene there instead (blocked), so this fades only rays that went out of
-    // view right where they left the surface.
+    // the less a hit after it counts.
     confidence *= 1.0 - smoothstep(0.4, 0.8, hidden);
 
     // The colour comes from the history, the hit from this frame's depth. Next to an outline
