@@ -68,7 +68,6 @@ uniform float2 vec2BlurDirection;
 uniform float4 vec4WorldToView[3]; // world to reconstruction space rotation, for the G-buffer normals
 uniform float fUseNormals;         // 1 when NormalTex holds the G-buffer normals, 0 rebuilds them from depth
 uniform float fGTAOStrength;       // exponent on GTAO's visibility, 1 as computed
-uniform float fGTAO;               // 1 computes GTAO, 0 SAO (Ambient Occlusion in the graphics menu)
 
 #ifndef NUM_SAMPLES
 #define NUM_SAMPLES 9
@@ -243,8 +242,9 @@ float ComputeGTAO(float2 ssC, float2 uv, float3 C, float3 n)
     float noiseSlice = frac(52.9829189 * frac(dot(ssC, float2(0.06711056, 0.00583715))));
     float noiseStep = frac(52.9829189 * frac(dot(ssC.yx + float2(5.0, 13.0), float2(0.06711056, 0.00583715))));
 
+    // Real loops, not unrolled, to stay within ps_3_0's 512 instruction slots.
     float visibility = 0.0;
-    [unroll]
+    [loop]
     for (int slice = 0; slice < GTAO_SLICES; ++slice)
     {
         float phi = ((float) slice + noiseSlice) * (PI / (float) GTAO_SLICES);
@@ -266,7 +266,7 @@ float ComputeGTAO(float2 ssC, float2 uv, float3 C, float3 n)
         float horizonCos0 = lowCos0;
         float horizonCos1 = lowCos1;
 
-        [unroll]
+        [loop]
         for (int step = 0; step < GTAO_STEPS; ++step)
         {
             // Denser next to the pixel, where small creases are.
@@ -298,7 +298,10 @@ float ComputeGTAO(float2 ssC, float2 uv, float3 C, float3 n)
     return pow(saturate(visibility), fGTAOStrength);
 }
 
-float4 ComputeAO_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+// SAO, or GTAO with gtao: two shaders, as together they took more than the 512 instruction
+// slots ps_3_0 promises, and where the device would not create the shader the whole
+// post-processing stayed off and the screen went black.
+float4 ComputeAO(float2 uv, float2 vPos, uniform bool gtao)
 {
     float depth = tex2D(AOCamDepthTexture, uv).r;
 
@@ -317,8 +320,7 @@ float4 ComputeAO_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 n_C = ReconstructNormal(C);
 
     float A;
-    [branch]
-    if (fGTAO > 0.0)
+    if (gtao)
     {
         float3 n = n_C;
         if (fUseNormals > 0.0)
@@ -366,6 +368,16 @@ float4 ComputeAO_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     A = lerp(A, 1.0f, t);
     
     return float4(A, A, A, 1.0);
+}
+
+float4 ComputeAO_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+{
+    return ComputeAO(uv, vPos, false);
+}
+
+float4 ComputeGTAO_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+{
+    return ComputeAO(uv, vPos, true);
 }
 
 float4 BlurAOToBuffer_PS(float2 uv : TEXCOORD0) : COLOR0
@@ -474,5 +486,18 @@ technique AmbientOcclusion
         FogEnable = FALSE;
         Clipping = FALSE;   
         ColorWriteEnable = BLUE; // output ao
+    }
+    pass ComputeGTAO // in place of ComputeAO, see ComputeAO
+    {
+        PixelShader = compile ps_3_0 ComputeGTAO_PS();
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable = FALSE;
+        ZEnable = 0;
+        ZWriteEnable = FALSE;
+        StencilEnable = FALSE;
+        CullMode = NONE;
+        FogEnable = FALSE;
+        Clipping = FALSE;
     }
 }

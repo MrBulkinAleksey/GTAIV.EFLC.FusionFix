@@ -544,7 +544,7 @@ public:
     struct
     {
         D3DXHANDLE AOTexture2D, AOCamDepthTexture2D, DepthTex2D, NormalTex2D;
-        D3DXHANDLE vec4WorldToView, fUseNormals, fGTAOStrength, fGTAO;
+        D3DXHANDLE vec4WorldToView, fUseNormals, fGTAOStrength;
 
         D3DXHANDLE vec2InvViewportSize;
         D3DXHANDLE fNearPlane;
@@ -854,7 +854,6 @@ public:
                 AOEffectHandles.vec4WorldToView = AOEffect->GetParameterByName(nullptr, "vec4WorldToView");
                 AOEffectHandles.fUseNormals = AOEffect->GetParameterByName(nullptr, "fUseNormals");
                 AOEffectHandles.fGTAOStrength = AOEffect->GetParameterByName(nullptr, "fGTAOStrength");
-                AOEffectHandles.fGTAO = AOEffect->GetParameterByName(nullptr, "fGTAO");
                 AOEffectHandles.vec2InvViewportSize = AOEffect->GetParameterByName(nullptr, "vec2InvViewportSize");
                 AOEffectHandles.fNearPlane = AOEffect->GetParameterByName(nullptr, "fNearPlane");
                 AOEffectHandles.fFarPlane = AOEffect->GetParameterByName(nullptr, "fFarPlane");
@@ -3251,7 +3250,7 @@ private:
 
             UINT passes = 0;
             ID3DXEffect* effect = PostFxResources.AOEffect;
-            effect->Begin(&passes, 0); assert(passes == 5);
+            effect->Begin(&passes, 0); assert(passes == 6);
             {
                 rage::grcViewport* currGrcViewport = rage::GetCurrentViewport();
 
@@ -3339,7 +3338,6 @@ private:
                     WorldToViewRows(currGrcViewport, toView);
                     effect->SetVectorArray(h.vec4WorldToView, toView, 3);
                     effect->SetFloat(h.fGTAOStrength, PostFxResources.fAmbientOcclusionGTAOStrength);
-                    effect->SetFloat(h.fGTAO, AO->get() == 2 ? 1.0f : 0.0f); // 1 SAO, 2 GTAO
                 }
                 effect->SetFloat(h.fBias, PostFxResources.fAmbientOcclusionBias);
                 effect->SetFloat(h.fIntensity, PostFxResources.fAmbientOcclusionIntensity);
@@ -3347,7 +3345,7 @@ private:
 
                 effect->CommitChanges();
 
-                effect->BeginPass(2);
+                effect->BeginPass(AO->get() == 2 ? 5 : 2); // 1 SAO, 2 GTAO
                 BindEffectSamplers(pDevice, effect);
                 pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
