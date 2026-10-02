@@ -365,7 +365,8 @@ float PixelJitter(float2 pixel)
 
 // jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
 // distanceFade: reflections fade out towards this distance from the surface, 0 disables.
-float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float distanceFade)
+// hitNormals: the G-buffer normals are bound, so a hit on the back of something can be told.
+float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float distanceFade, bool hitNormals)
 {
     float z = C.z;
     float3 V = normalize(C);
@@ -519,6 +520,18 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     // the less a hit after it counts.
     confidence *= 1.0 - smoothstep(0.4, 0.8, hidden);
 
+    // A ray that runs the way the surface it hit faces came at it from behind, and the screen
+    // holds the other side. A ped standing between the camera and a car showed in its body:
+    // the rays from the car reach the side of him that faces it, the screen holds the side
+    // that faces the camera, and that was what the car reflected.
+    [branch]
+    if (hitNormals)
+    {
+        float3 hitN = GBufferNormal(finalUV);
+        hitN = (dot(hitN, hitP) > 0.0) ? -hitN : hitN;
+        confidence *= 1.0 - smoothstep(-0.1, 0.15, dot(normalize(hitP - C), hitN));
+    }
+
     // The colour comes from the history, the hit from this frame's depth. Next to an outline
     // the history pixel can belong to what is behind, a white roof behind a ped's legs, and
     // his reflection got a bright rim. The depth copied with the history tells them apart:
@@ -598,7 +611,7 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     // While accumulating, vec2NoiseOffset moves every pixel's steps on each frame, so the
     // accumulation averages the steps out and fewer of them do.
     float jitter = fStepJitter > 0.0 ? PixelJitter(vPos + vec2NoiseOffset) : 1.0;
-    float4 r = TraceReflection(C, n, fReflectionBlur, jitter, fDistanceFade);
+    float4 r = TraceReflection(C, n, fReflectionBlur, jitter, fDistanceFade, fUseGBufferNormals > 0.0);
     // On wet ground the game's reflection strength, which deferred_lighting multiplies SSR by,
     // is that of dry asphalt, so the reflection is drawn brighter there.
     return float4(r.rgb * (1.0 + (fWetGroundBoost - 1.0) * wetOnly), saturate(r.a * surfaceWeight * fIntensity));
@@ -649,7 +662,7 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 n = WaterNormal(worldXY, dot(C, C));
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, fWaterBlur, 1.0, 0.0);
+    float4 r = TraceReflection(C, n, fWaterBlur, 1.0, 0.0, false);
 
     return float4(r.rgb, saturate(r.a * fWaterIntensity));
 }
