@@ -2910,7 +2910,9 @@ private:
         {
             if (half)
                 setPassSize(width, height);
-            effect->SetTexture(h.SSRResultTex2D, ssrResult);
+            // View 3 reads where the rays hit straight from the march: smoothing and accumulation
+            // would average the positions of neighbouring hits into places no ray went.
+            effect->SetTexture(h.SSRResultTex2D, debugMode == 3 ? ssrTex : ssrResult);
             effect->SetFloat(h.fDebugMode, float(debugMode));
 
             pDevice->SetRenderTarget(0, R.SSRDebugSurf);

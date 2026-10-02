@@ -727,8 +727,8 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 
     float3 C = ViewPosFromUVZ(uv, LinearDepth(uv));
 
-    // 3 (for now): where each ray ends, which SSR_PS writes in place of the colour; for exact
-    // positions turn SSR smoothing and accumulation off. A surface SSR does not trace shows its
+    // 3 (for now): where each ray ends, which SSR_PS writes in place of the colour, read
+    // before smoothing and accumulation. A surface SSR does not trace shows its
     // own screen position dimmed (red across, green down, blue 0.25); a ray that hit shows the
     // screen position of its hit (red across, green down) with blue for how much it counts; a
     // miss is black.
