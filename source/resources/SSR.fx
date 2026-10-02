@@ -439,6 +439,8 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     float prevDelta = -1.0;
     // How far the ray travelled hidden behind what the screen shows, in world units.
     float hidden = 0.0;
+    // How far the ray had come when it first went far behind something, -1 if it never did.
+    float firstHidden = -1.0;
     float3 prevRayP = P0;
 
     // One loop, no nested refinement inside it: D3DX compiles this effect while the game
@@ -476,6 +478,8 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
                 hitHi = t;
                 break;
             }
+            if (firstHidden < 0.0)
+                firstHidden = length(prevRayP - P0);
             if (fPassThinObjects <= 0.0)
                 break;
         }
@@ -534,8 +538,12 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     // standing metres in front of a door, with the camera turned so the door shows next to his
     // shoulder, rays from the door ran a metre or more behind him and took the colour of the
     // pavement beyond: a bright strip on the door beside him. The longer the hidden stretch,
-    // the less a hit after it counts.
-    confidence *= 1.0 - smoothstep(0.4, 0.8, hidden);
+    // the less a hit after it counts. That is only for rays that went out of view right off
+    // the surface: one that crossed half a metre of the scene first and then passed behind
+    // the player to the road beyond hit the same road as the rays beside his figure, and
+    // fading it left the figure darker on the car.
+    if (firstHidden >= 0.0 && firstHidden < 0.5)
+        confidence *= 1.0 - smoothstep(0.4, 0.8, hidden);
 
     // The colour comes from the history, the hit from this frame's depth. Next to an outline
     // the history pixel can belong to what is in front or behind: a white roof behind a ped's
@@ -644,34 +652,50 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
     if (gTracePath > 0.0)
     {
         bool behind = false;
+        int past = 0;
         [loop]
-        for (int k = 1; k <= 16; ++k)
+        for (int k = 1; k <= 24; ++k)
         {
-            float2 pathUV = lerp(gTraceUV0, gTraceUVEnd, k / 16.0);
+            float2 pathUV = lerp(gTraceUV0, gTraceUVEnd, k / 24.0);
             float pathZ = LinearDepth(pathUV);
             if (pathZ < C.z * 0.7)
-                behind = true;
-            else if (behind)
             {
-                float2 pathHist = HistoryUV(ViewPosFromUVZ(pathUV, pathZ));
-                if (all(pathHist > 0.0) && all(pathHist < 1.0))
-                {
-                    float2 r = 0.01 * float2(vec2InvViewportSize.x / vec2InvViewportSize.y, 1.0);
-                    float3 c = 0.0;
-                    c += tex2Dlod(HistoryTex, float4(pathHist, 0, 0)).rgb;
-                    c += tex2Dlod(HistoryTex, float4(saturate(pathHist + float2(r.x, 0.0)), 0, 0)).rgb;
-                    c += tex2Dlod(HistoryTex, float4(saturate(pathHist - float2(r.x, 0.0)), 0, 0)).rgb;
-                    c += tex2Dlod(HistoryTex, float4(saturate(pathHist + float2(0.0, r.y)), 0, 0)).rgb;
-                    c += tex2Dlod(HistoryTex, float4(saturate(pathHist - float2(0.0, r.y)), 0, 0)).rgb;
-                    // Near enough to what the ray would have hit to take its full weight, as
-                    // the hits beside it do; at fFallback's 0.8 the figure stayed a shade darker.
-                    weight = 1.0 - saturate(Rw.z * 5.0);
-                    return clamp(c * 0.2, 0.0, HISTORY_CLAMP) * SSR_SCALE;
-                }
-                break;
+                behind = true;
+                past = 0;
+                continue;
             }
+            if (!behind)
+                continue;
+            // Not the first point past his outline: the road there lies in his own shadow,
+            // and a pixel of movement puts him there in last frame's scene.
+            if (++past < 2)
+                continue;
+            float3 pathP = ViewPosFromUVZ(pathUV, pathZ);
+            float2 pathHist = HistoryUV(pathP);
+            if (any(pathHist <= 0.0) || any(pathHist >= 1.0))
+                break;
+            if (fUsePrevDepth > 0.0)
+            {
+                float prevPathZ = dot(float4(pathP, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
+                                                                 vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
+                float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(pathHist, 0, 0)).r) * fNearPlane;
+                if (abs(prevZ - prevPathZ) > 0.05 * prevPathZ + 0.1)
+                    continue;
+            }
+            float2 r = 0.01 * float2(vec2InvViewportSize.x / vec2InvViewportSize.y, 1.0);
+            float3 c = 0.0;
+            c += tex2Dlod(HistoryTex, float4(pathHist, 0, 0)).rgb;
+            c += tex2Dlod(HistoryTex, float4(saturate(pathHist + float2(r.x, 0.0)), 0, 0)).rgb;
+            c += tex2Dlod(HistoryTex, float4(saturate(pathHist - float2(r.x, 0.0)), 0, 0)).rgb;
+            c += tex2Dlod(HistoryTex, float4(saturate(pathHist + float2(0.0, r.y)), 0, 0)).rgb;
+            c += tex2Dlod(HistoryTex, float4(saturate(pathHist - float2(0.0, r.y)), 0, 0)).rgb;
+            // Near enough to what the ray would have hit to take its full weight, as the hits
+            // beside it do; at fFallback's 0.8 the figure stayed a shade darker.
+            weight = 1.0 - saturate(Rw.z * 5.0);
+            return clamp(c * 0.2, 0.0, HISTORY_CLAMP) * SSR_SCALE;
         }
     }
+
     // Rings of taps further and further out, until enough of them show the road: the player
     // covering the door covers a good part of the screen around where its rays look, and the
     // nearest ring alone found nothing but him, leaving the door black.
