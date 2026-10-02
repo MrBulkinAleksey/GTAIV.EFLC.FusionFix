@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "ShadowAdapterCE.hpp"
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -119,11 +120,26 @@ namespace fusionfix::shadows
             const bool newDrivingVehicle = next.driving &&
                 (!frame_.driving || next.occupiedVehicle != frame_.occupiedVehicle);
             if (pendingReset_ || next.session != frame_.session || next.frame < frame_.frame ||
-                elapsed > policy_.resetGapMs || newDrivingVehicle)
+                elapsed > policy_.resetGapMs)
+            {
+                StartEmpty(next);
+                return;
+            }
+            if (newDrivingVehicle)
             {
                 // Do not reuse last frame's player flag after entering another
                 // vehicle. Collect its beam requests for selection next frame.
+                // A slot already held by the beam of the car being entered stays:
+                // on foot it was the player's beam already (the last vehicle), and
+                // dropping it for this frame took its shadow away for a frame, to be
+                // drawn anew, a blink of the headlight shadow on getting back in.
+                auto kept = active_;
+                for (auto& slot : kept)
+                    if (!ce::IsVehicleBeam(slot.candidate.identity, next.occupiedVehicle))
+                        slot = {};
                 StartEmpty(next);
+                active_ = kept;
+                ClearObservations();
                 return;
             }
 
