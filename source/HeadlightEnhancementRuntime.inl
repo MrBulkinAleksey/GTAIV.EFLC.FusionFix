@@ -9,10 +9,9 @@ namespace HeadlightEnhancement
     static uintptr_t imageBase = 0;
     static std::atomic<uint64_t> lastDrivenToken{0};
     static std::atomic<uint32_t> retainedSubmissions{0};
-    static std::atomic<uint32_t> hookCalls{0};
     static bool brightnessInstalled = false;
-    // Why the hook is or is not in place, and the jump it wrote: another plugin that patches
-    // the same game code turns the hook off at install, or replaces the jump later.
+    // Why the hook is or is not in place: another plugin that patches the same game code turns it
+    // off at install.
     static std::string brightnessStatus = "not checked";
     // The radius of the beams is (floor(vehicle+F74) * bonus + base) * range. F74 climbs to 1 while
     // a player sits in the car and falls back to 0 once none does (CE 0xA4EA3B), so the bonus,
@@ -21,111 +20,9 @@ namespace HeadlightEnhancement
     // Both read from the instructions.
     static const float* pRadiusBonus = nullptr;
     static const float* pRadiusBase = nullptr;
-    static uint8_t siteBytes[5]{};
     static std::string lightModesStatus = "off in the ini";
-    static std::atomic<uint32_t> lightModeSteps{0};
-    static std::atomic<uint8_t> lastLightModeFrom{0}, lastLightModeTo{0};
     static std::atomic<bool> diagnosticsReady{false};
     static std::filesystem::path logPath;
-
-    // Diagnostics: changes of the light state of the car the player drives or last drove, as
-    // this function sees them, to find why its headlights stop lighting when the player gets out.
-    struct LightEvent
-    {
-        ULONGLONG time;
-        bool driver;
-        uint8_t f15, f19, f21, highBeam, highBeamArg, left, right;
-        float intensity, range, radius;
-        uint32_t frame, gap;
-    };
-    static LightEvent lightEvents[24]{};
-    static uint32_t lightEventCount = 0;
-    static LightEvent lastLightState{};
-    static uint64_t lastLightToken = 0;
-    static std::atomic_flag lightEventsLock = ATOMIC_FLAG_INIT;
-
-    // Diagnostics: the shadow passes of the beam of the car the player drives or last drove, as
-    // the night shadow code sees them, on each change: to find why its headlight shadow blinks
-    // while the player gets in.
-    struct ShadowPassEvent
-    {
-        ULONGLONG time;
-        uint32_t frame, slot, kind;
-        bool active, own, traffic, carExcluded, occupantsExcluded;
-    };
-    static ShadowPassEvent shadowPassEvents[32]{};
-    static uint32_t shadowPassEventCount = 0;
-    static ShadowPassEvent lastShadowPass{};
-    static std::atomic_flag shadowPassLock = ATOMIC_FLAG_INIT;
-
-    static void TraceShadowPass(const ShadowPassEvent& pass)
-    {
-        const auto& l = lastShadowPass;
-        if (shadowPassEventCount && pass.slot == l.slot && pass.kind == l.kind && pass.active == l.active &&
-            pass.own == l.own && pass.traffic == l.traffic && pass.carExcluded == l.carExcluded &&
-            pass.occupantsExcluded == l.occupantsExcluded)
-            return;
-        while (shadowPassLock.test_and_set(std::memory_order_acquire)) {}
-        lastShadowPass = pass;
-        shadowPassEvents[shadowPassEventCount++ % std::size(shadowPassEvents)] = pass;
-        shadowPassLock.clear(std::memory_order_release);
-    }
-
-    // Diagnostics: what becomes of the beam of the car the player drives or last drove once
-    // submitted, on each change. The night shadow wrappers on the submission (CE 0xABCC50 from
-    // 0xA3DE90 and 0xA3E070) mark it, and with shadow diagnostics mid hooks in the light add
-    // function (0xABCCD0) record how far it gets: 1 past the intensity test, 2 past the camera
-    // flag test, 3 in front of the camera's near plane, 4 inside the view, 5 past the interior
-    // and occlusion tests, 6 handed to the light list. 0 means it never reached the function.
-    struct SubmitEvent
-    {
-        ULONGLONG time;
-        uint32_t frame, gap, flags;
-        float radius;
-        bool shadow;
-        uint8_t stage;
-    };
-    static SubmitEvent submitEvents[32]{};
-    static uint32_t submitEventCount = 0;
-    static SubmitEvent lastSubmit{};
-    static std::atomic_flag submitLock = ATOMIC_FLAG_INIT;
-    static thread_local bool submitTraced = false;
-    static thread_local uint8_t submitStage = 0;
-    static SafetyHookMid submitStageHooks[6];
-    static std::string submitStagesStatus = "off";
-
-    template <uint8_t stage>
-    static void SubmitStage(SafetyHookContext&)
-    {
-        if (submitTraced && submitStage < stage)
-            submitStage = stage;
-    }
-
-    static bool BeginSubmitTrace(int stableKey)
-    {
-        const auto vehicle = static_cast<uintptr_t>(lastDrivenToken.load() & 0xFFFFFFFF);
-        submitTraced = diagnosticsReady.load(std::memory_order_relaxed) && vehicle &&
-            fusionfix::shadows::ce::IsVehicleBeam(static_cast<uintptr_t>(static_cast<uint32_t>(stableKey)), vehicle);
-        submitStage = 0;
-        return submitTraced;
-    }
-
-    static void EndSubmitTrace(uint32_t flags, int radiusBits)
-    {
-        submitTraced = false;
-        float radius;
-        std::memcpy(&radius, &radiusBits, sizeof(radius));
-        const uint32_t frame = CTimer::m_frameCount ? *CTimer::m_frameCount : 0;
-        const SubmitEvent e{ GetTickCount64(), frame, submitEventCount ? frame - lastSubmit.frame : 0,
-            flags, radius, (flags & 4) != 0, submitStage };
-        const bool changed = !submitEventCount || e.gap > 1 || e.flags != lastSubmit.flags ||
-            e.stage != lastSubmit.stage || std::fabs(e.radius - lastSubmit.radius) > 0.5f;
-        while (submitLock.test_and_set(std::memory_order_acquire)) {}
-        lastSubmit = e;
-        if (changed)
-            submitEvents[submitEventCount++ % std::size(submitEvents)] = e;
-        submitLock.clear(std::memory_order_release);
-    }
 
     static std::string DumpBytes(uintptr_t address, size_t count)
     {
@@ -137,62 +34,6 @@ namespace HeadlightEnhancement
             out << (i ? " " : "") << (byte < 0x10 ? "0" : "") << unsigned(byte);
         }
         return out.str();
-    }
-
-    static void InstallSubmitStages()
-    {
-        const auto image = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-        struct Site { uint32_t rva; uint8_t bytes[6]; size_t count; };
-        constexpr Site sites[]{
-            { 0x6BCD00, {0x8B,0x45,0x14,0x8B,0x75,0x0C}, 6 },   // mov eax,[ebp+14] / mov esi,[ebp+C]
-            { 0x6BD05F, {0x0F,0x28,0xC1,0x0F,0x57,0xC3}, 6 },   // movaps xmm0,xmm1 / xorps xmm0,xmm3
-            { 0x6BD06E, {0x6A,0x00,0x83,0xEC,0x10}, 5 },        // push 0 / sub esp,10
-            { 0x6BD099, {0x8B,0x75,0x10,0x8B,0x45,0x48}, 6 },   // mov esi,[ebp+10] / mov eax,[ebp+48]
-            { 0x6BD104, {0x8B,0x0D}, 2 },                       // mov ecx,[...]
-            { 0x6BD294, {0x51,0x8D,0x44,0x24,0x64}, 5 },        // push ecx / lea eax,[esp+64]
-        };
-        for (const auto& site : sites)
-            if (std::memcmp(reinterpret_cast<const void*>(image + site.rva), site.bytes, site.count))
-            {
-                submitStagesStatus = "game code differs: " + DumpBytes(image + site.rva, 6);
-                return;
-            }
-        submitStageHooks[0] = safetyhook::create_mid(image + sites[0].rva, SubmitStage<1>);
-        submitStageHooks[1] = safetyhook::create_mid(image + sites[1].rva, SubmitStage<2>);
-        submitStageHooks[2] = safetyhook::create_mid(image + sites[2].rva, SubmitStage<3>);
-        submitStageHooks[3] = safetyhook::create_mid(image + sites[3].rva, SubmitStage<4>);
-        submitStageHooks[4] = safetyhook::create_mid(image + sites[4].rva, SubmitStage<5>);
-        submitStageHooks[5] = safetyhook::create_mid(image + sites[5].rva, SubmitStage<6>);
-        submitStagesStatus = "installed";
-        for (const auto& hook : submitStageHooks)
-            if (!hook)
-                submitStagesStatus = "hook failed";
-    }
-
-    static void TraceLightState(SafetyHookContext& regs, uintptr_t vehicle, uint64_t token, bool driver)
-    {
-        const auto byteAt = [](uintptr_t address) { return *reinterpret_cast<const uint8_t*>(address); };
-        // The radius the beams will have, as the function goes on to compute it.
-        const float ramp = std::floor(*reinterpret_cast<const float*>(vehicle + 0xF74));
-        const float radius = pRadiusBonus && pRadiusBase ? (ramp * *pRadiusBonus + *pRadiusBase) * regs.xmm4.f32[0] : 0.0f;
-        const uint32_t frame = CTimer::m_frameCount ? *CTimer::m_frameCount : 0;
-        const uint32_t gap = token == lastLightToken ? frame - lastLightState.frame : 0;
-        LightEvent state{ GetTickCount64(), driver, byteAt(vehicle + 0xF15), byteAt(vehicle + 0xF19),
-            byteAt(vehicle + 0xF21), static_cast<uint8_t>(regs.eax & 0xFF), byteAt(regs.ebp + 0x28),
-            byteAt(regs.ebp + 0x10), byteAt(regs.ebp + 0x14), regs.xmm1.f32[0], regs.xmm4.f32[0],
-            radius, frame, gap };
-        const bool changed = token != lastLightToken || state.driver != lastLightState.driver || gap > 1 ||
-            std::fabs(state.radius - lastLightState.radius) > 0.5f ||
-            state.f15 != lastLightState.f15 || state.f19 != lastLightState.f19 ||
-            state.highBeam != lastLightState.highBeam || state.highBeamArg != lastLightState.highBeamArg ||
-            state.left != lastLightState.left || state.right != lastLightState.right;
-        lastLightToken = token;
-        lastLightState = state;
-        if (!changed)
-            return;
-        while (lightEventsLock.test_and_set(std::memory_order_acquire)) {}
-        lightEvents[lightEventCount++ % std::size(lightEvents)] = state;
-        lightEventsLock.clear(std::memory_order_release);
     }
 
     // Identify the live pool slot and generation, not only a reusable pointer.
@@ -225,7 +66,6 @@ namespace HeadlightEnhancement
 
     static void RetainAfterExit(SafetyHookContext& regs)
     {
-        hookCalls.fetch_add(1, std::memory_order_relaxed);
         const auto vehicle = static_cast<uintptr_t>(regs.esi);
         const auto token = VehicleToken(vehicle);
         if (!token) return;
@@ -242,8 +82,6 @@ namespace HeadlightEnhancement
                 // reached a third as far until it did.
                 if (*reinterpret_cast<const uint8_t*>(imageBase + 0xC3CC4A))
                     KeepRadiusBonus(regs, vehicle);
-                if (diagnosticsReady.load(std::memory_order_relaxed))
-                    TraceLightState(regs, vehicle, token, true);
             }
             else
             {
@@ -252,19 +90,16 @@ namespace HeadlightEnhancement
             }
             return;
         }
-        if (lastDrivenToken.load() != token) return;
+        if (lastDrivenToken.load() != token ||
+            !*reinterpret_cast<const uint8_t*>(imageBase + 0xC3CC4A)) return;
         const float intensity = *reinterpret_cast<const float*>(imageBase + 0xC3CC74);
         const float range = *reinterpret_cast<const float*>(imageBase + 0xC3CC78);
-        if (*reinterpret_cast<const uint8_t*>(imageBase + 0xC3CC4A) && std::isfinite(intensity) &&
-            std::isfinite(range) && intensity > 0 && range > 0 && intensity <= 10 && range <= 10)
-        {
-            regs.xmm1.f32[0] *= intensity;
-            regs.xmm4.f32[0] *= range;
-            KeepRadiusBonus(regs, vehicle);
-            ++retainedSubmissions;
-        }
-        if (diagnosticsReady.load(std::memory_order_relaxed))
-            TraceLightState(regs, vehicle, token, false);
+        if (!std::isfinite(intensity) || !std::isfinite(range) ||
+            intensity <= 0 || range <= 0 || intensity > 10 || range > 10) return;
+        regs.xmm1.f32[0] *= intensity;
+        regs.xmm4.f32[0] *= range;
+        KeepRadiusBonus(regs, vehicle);
+        ++retainedSubmissions;
     }
 
     static void WriteDiagnostics()
@@ -275,65 +110,11 @@ namespace HeadlightEnhancement
         if (logPath.empty() || now - last < 5000) return;
         last = now;
         std::ofstream out(logPath, std::ios::trunc);
-        const bool siteIntact = brightnessInstalled &&
-            !std::memcmp(reinterpret_cast<const void*>(imageBase + 0x63FB77), siteBytes, sizeof(siteBytes));
         out << "brightnessInstalled=" << brightnessInstalled
             << "\nbrightnessStatus=" << brightnessStatus
-            << "\nsiteIntact=" << siteIntact
-            << "\nhookCalls=" << hookCalls.load(std::memory_order_relaxed)
             << "\nretainedSubmissions=" << retainedSubmissions.load()
             << "\nlightModesStatus=" << lightModesStatus
-            << "\nlightModeSteps=" << lightModeSteps.load() << " (last " << unsigned(lastLightModeFrom.load())
-            << " -> " << unsigned(lastLightModeTo.load()) << ", 0 off 1 on 2 high)"
-            << "\nradiusBonus=" << (pRadiusBonus ? *pRadiusBonus : -1.0f)
             << "\ntrackedVehicle=" << (lastDrivenToken.load() != 0) << '\n';
-
-        // Oldest first. highBeam is the flag the function uses (vehicle+F19 & 2, or highBeamArg);
-        // left and right its lamp arguments, the beams are only submitted for 1; intensity, range
-        // and radius are as they leave the hook, before high beam scaling (x1.1, x1.3); frame is
-        // the game's frame, gap the frames since the function last ran for that car.
-        while (lightEventsLock.test_and_set(std::memory_order_acquire)) {}
-        const auto count = lightEventCount;
-        const auto first = count > std::size(lightEvents) ? count - std::size(lightEvents) : 0;
-        for (auto i = first; i < count; ++i)
-        {
-            const auto& e = lightEvents[i % std::size(lightEvents)];
-            out << "t=" << e.time << " driver=" << e.driver << std::hex
-                << " f15=" << unsigned(e.f15) << " f19=" << unsigned(e.f19) << " f21=" << unsigned(e.f21)
-                << std::dec << " highBeam=" << unsigned(e.highBeam) << " highBeamArg=" << unsigned(e.highBeamArg)
-                << " left=" << unsigned(e.left) << " right=" << unsigned(e.right) << " intensity=" << e.intensity
-                << " range=" << e.range << " radius=" << e.radius << " frame=" << e.frame << " gap=" << e.gap << '\n';
-        }
-        lightEventsLock.clear(std::memory_order_release);
-
-        // Its beam once submitted, oldest first (see SubmitEvent).
-        out << "submitStages=" << submitStagesStatus << '\n';
-        while (submitLock.test_and_set(std::memory_order_acquire)) {}
-        const auto submits = submitEventCount;
-        const auto firstSubmit = submits > std::size(submitEvents) ? submits - std::size(submitEvents) : 0;
-        for (auto i = firstSubmit; i < submits; ++i)
-        {
-            const auto& e = submitEvents[i % std::size(submitEvents)];
-            out << "submit t=" << e.time << " frame=" << e.frame << " gap=" << e.gap << std::hex
-                << " flags=0x" << e.flags << std::dec << " radius=" << e.radius << " shadow=" << e.shadow
-                << " stage=" << unsigned(e.stage) << '\n';
-        }
-        submitLock.clear(std::memory_order_release);
-
-        // The shadow passes of that car's beam, oldest first: own and traffic tell which of the
-        // night shadow fixes took the car out of its own headlight shadow, and whether the car and
-        // its occupants were then left out of that pass.
-        while (shadowPassLock.test_and_set(std::memory_order_acquire)) {}
-        const auto passes = shadowPassEventCount;
-        const auto firstPass = passes > std::size(shadowPassEvents) ? passes - std::size(shadowPassEvents) : 0;
-        for (auto i = firstPass; i < passes; ++i)
-        {
-            const auto& e = shadowPassEvents[i % std::size(shadowPassEvents)];
-            out << "pass t=" << e.time << " frame=" << e.frame << " slot=" << e.slot << " kind=" << e.kind
-                << " active=" << e.active << " own=" << e.own << " traffic=" << e.traffic
-                << " carExcluded=" << e.carExcluded << " occupantsExcluded=" << e.occupantsExcluded << '\n';
-        }
-        shadowPassLock.clear(std::memory_order_release);
     }
 
     static bool InstallBrightness(bool enabled)
@@ -367,7 +148,6 @@ namespace HeadlightEnhancement
             brightnessStatus = "hook failed";
             return false;
         }
-        std::memcpy(siteBytes, site, sizeof(siteBytes));
         // mulss xmm5, [bonus] / addss xmm5, [base] in the radius computation.
         constexpr uint8_t mulss[]{0xF3,0x0F,0x59,0x2D}, addss[]{0xF3,0x0F,0x58,0x2D};
         const auto bonusAt = reinterpret_cast<const uint8_t*>(imageBase + 0x63FC45);
@@ -425,7 +205,6 @@ namespace HeadlightEnhancement
         const bool lit = *reinterpret_cast<const uint8_t*>(regs.ebp + 0x10) == 1 ||
                          *reinterpret_cast<const uint8_t*>(regs.ebp + 0x14) == 1;
         const bool on = entry->mode == 2 || (entry->mode == 0 && lit);
-        const auto from = static_cast<uint8_t>(!on ? 0 : (old & 2) ? 2 : 1);
         auto lights = static_cast<uint8_t>(regs.ecx & 0xFF);
         if (!on)
         {
@@ -443,9 +222,6 @@ namespace HeadlightEnhancement
             lights |= 2;
         }
         regs.ecx = (regs.ecx & ~0xFFu) | lights;
-        ++lightModeSteps;
-        lastLightModeFrom = from;
-        lastLightModeTo = static_cast<uint8_t>(entry->mode == 1 ? 0 : (lights & 2) ? 2 : 1);
     }
 
     // Runs at the read of vehicle+10C2 in the light code, esi the vehicle.

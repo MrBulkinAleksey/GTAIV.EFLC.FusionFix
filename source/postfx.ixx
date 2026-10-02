@@ -348,9 +348,6 @@ public:
     float fLocalContactShadowThickness = 0.2f;
     float fLocalContactShadowMaxDistance = 40.0f;
     float fLocalContactShadowIntensity = 1.0f;
-    // [SHADOWS] ExperimentalShadowDiagnostics: the headlights near the camera as they reach the
-    // frame's light list, in FusionFix.Headlights.log (see LogCopiedHeadlight).
-    bool bHeadlightCopyLog = false;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
@@ -1073,7 +1070,6 @@ public:
         useStippleFilter = iniReader.ReadInteger("SRF", "StippleFilter", 1) != 0;
 
         bEnablePreAlphaDepth = iniReader.ReadInteger("POSTFX", "EnablePreAlphaDepth", 1) != 0;
-        bHeadlightCopyLog = iniReader.ReadInteger("SHADOWS", "ExperimentalShadowDiagnostics", 0) != 0;
 
         nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 32), 4, 128);
         nSSRRefineSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsRefineSteps", 8), 0, 16);
@@ -4349,68 +4345,12 @@ private:
             shPedSkinComponent[1] = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs) { MarkPedSkin(regs.esi); });
     }
 
-    // Frame by frame, the nearest headlight beam of 20 m or more (the player's, other cars' are
-    // 10 m) within 30 m of the camera, as it reaches the frame's light list, with a line each
-    // time it changes or goes: to see what the beams of the player's car do while they get in.
-    static void LogCopiedHeadlight(const rage::CLightSource* light)
-    {
-        struct Beam
-        {
-            bool present;
-            uint32_t flags;
-            float radius, intensity, x, y, z;
-            bool Same(const Beam& o) const
-            {
-                return present == o.present && flags == o.flags && radius == o.radius && intensity == o.intensity;
-            }
-        };
-        static uint32_t frame = 0;
-        static Beam best{}, last{};
-        static float bestDistance = 0.0f;
-        static FILE* log = nullptr;
-        static rage::Vector3 cameraPos{};
-        const auto current = CTimer::m_frameCount ? *CTimer::m_frameCount : 0;
-        if (current != frame)
-        {
-            if (!log)
-                log = _wfopen((GetExeModulePath() / L"FusionFix.Headlights.log").c_str(), L"w");
-            if (log && !best.Same(last))
-            {
-                if (best.present)
-                    fprintf(log, "t=%llu frame=%u flags=0x%x radius=%.1f intensity=%.2f pos=%.1f %.1f %.1f distance=%.1f\n",
-                        GetTickCount64(), frame, best.flags, best.radius, best.intensity, best.x, best.y, best.z, bestDistance);
-                else
-                    fprintf(log, "t=%llu frame=%u none\n", GetTickCount64(), frame);
-                fflush(log);
-            }
-            last = best;
-            best = {};
-            frame = current;
-            Cam camera = 0;
-            Natives::GetRootCam(&camera);
-            Natives::GetCamPos(camera, &cameraPos.x, &cameraPos.y, &cameraPos.z);
-        }
-        if (light->mType != rage::LT_SPOT || !(light->mFlags & 0x100) || light->mRadius < 20.0f)
-            return;
-        const float dx = cameraPos.x - light->mPosition.x;
-        const float dy = cameraPos.y - light->mPosition.y;
-        const float dz = cameraPos.z - light->mPosition.z;
-        const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-        if (distance > 30.0f || (best.present && distance >= bestDistance))
-            return;
-        best = { true, light->mFlags, light->mRadius, light->mIntensity,
-                 light->mPosition.x, light->mPosition.y, light->mPosition.z };
-        bestDistance = distance;
-    }
-
     // Runs as the game copies each light into the frame's draw list, on the main thread.
     static void OnAfterCopyLight(rage::CLightSource* light)
     {
         auto& R = PostFxResources;
         if (!light)
             return;
-        if (R.bHeadlightCopyLog)
-            LogCopiedHeadlight(light);
         // Building Fill Lights off: the large exterior map lights (0x1 and 0x40, no interior 0x20,
         // vehicle 0x100 or traffic light and fire 0x200) that flood whole squares go dark.
         if (!R.FillLights() && (light->mFlags & 0x361) == 0x41 &&
