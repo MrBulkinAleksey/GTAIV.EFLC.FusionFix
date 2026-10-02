@@ -287,8 +287,8 @@ namespace HeadlightEnhancement
     // Both lit lamps of a car make one beam from the point between them (CE 0xA3FCA5: the two
     // lamp bones averaged, then 0xA3E070), so a hand at the car's edge shadowed the far half of
     // the beam. For a car within a few metres of the player on foot, the call at 0xA3FE11 now
-    // moves that beam: mode 2 to the lamp on the player's side of the car, one beam and one
-    // shadow as before, changing sides only once the player is 0.3 m past the car's middle;
+    // moves that beam: mode 2 slides it from the middle towards the lamp on the player's side,
+    // one beam and one shadow as before, as far as the player stands out to that side;
     // mode 1 splits it into a beam from each lamp at half the intensity, keyed by the car and the
     // car + 1 as the game keys a single lamp, two softer shadows apart. Further away, or while
     // the player drives, one beam from between them as before.
@@ -339,17 +339,28 @@ namespace HeadlightEnhancement
             }
             return;
         }
-        // The player's side: across the car (its matrix's x axis), kept until 0.3 m past the middle.
-        static uintptr_t sideCar = 0;
-        static float side = 0.0f;
-        const float across = (pedMatrix[12] - m[12]) * m[0] + (pedMatrix[13] - m[13]) * m[1] + (pedMatrix[14] - m[14]) * m[2];
-        if (vehicle != sideCar || side == 0.0f || std::fabs(across) > 0.3f)
-            side = across < 0.0f ? -1.0f : 1.0f;
-        sideCar = vehicle;
+        // Slid from the middle towards the lamp on the player's side, as far as the player stands
+        // across the car (its matrix's x axis) out of the lamp's own offset: the middle as the game
+        // has it with the player in front, the lamp itself at the car's edge, back to the middle
+        // over the last 2 m before SplitBeamsDistance.
         float other[4];
         const float x0 = lampAt(0, world), x1 = lampAt(1, other);
-        const float* lamp = (x0 - x1) * side >= 0.0f ? world : other;
-        float at[4] = { lamp[0], lamp[1], lamp[2], lamp[3] };
+        const float halfWidth = std::fabs(x0 - x1) * 0.5f;
+        if (!(halfWidth > 0.05f))
+            return submitBeams(matrix, position, direction, colour, intensity, radius, a7, a8, a9, a10, vehicle, player);
+        const float px = pedMatrix[12] - m[12], py = pedMatrix[13] - m[13], pz = pedMatrix[14] - m[14];
+        const float across = px * m[0] + py * m[1] + pz * m[2];
+        const float distance = std::sqrt(px * px + py * py + pz * pz);
+        const float closeness = std::clamp((SplitBeamsDistance - distance) / 2.0f, 0.0f, 1.0f);
+        const float t = std::clamp(across / halfWidth, -1.0f, 1.0f) * closeness; // -1 the lamp at -x, +1 at +x
+        const float* plus = x0 >= x1 ? world : other;
+        const float* minus = x0 >= x1 ? other : world;
+        const float* lamp = t >= 0.0f ? plus : minus;
+        const float k = std::fabs(t);
+        float at[4];
+        for (int i = 0; i < 3; ++i)
+            at[i] = position[i] + (lamp[i] - position[i]) * k;
+        at[3] = position[3];
         submitBeams(matrix, at, direction, colour, intensity, radius, a7, a8, a9, a10, vehicle, player);
     }
 
@@ -370,6 +381,6 @@ namespace HeadlightEnhancement
         }
         submitBeams = reinterpret_cast<SubmitBeams>(imageBase + 0x63E070);
         injector::MakeCALL(call, SubmitSplitBeams, true);
-        splitBeamsStatus = mode == 1 ? "installed, two beams" : "installed, beam from the lamp on the player's side";
+        splitBeamsStatus = mode == 1 ? "installed, two beams" : "installed, beam slid towards the player's side";
     }
 }
