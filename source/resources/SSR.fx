@@ -425,9 +425,6 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     // How far the ray travelled hidden behind what the screen shows, in world units.
     float hidden = 0.0;
     float3 prevRayP = P0;
-    // The last sample in front of the scene before the ray went far behind something, -1 if it
-    // never did.
-    float blockedT = -1.0;
 
     // One loop, no nested refinement inside it: D3DX compiles this effect while the game
     // loads, and an unrolled refinement inside the march made it take long enough to look
@@ -464,13 +461,8 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
                 hitHi = t;
                 break;
             }
-            if (prevT > 0.0)
-                blockedT = prevT;
             if (fPassThinObjects <= 0.0)
-            {
-                prevDelta = delta;
                 break;
-            }
         }
 
         float3 rayP = ViewPosFromUVZ(sampleUV, rayZ);
@@ -481,48 +473,27 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
         prevDelta = delta;
     }
 
-    // A ray that ends hidden behind something standing in front of what it reflects found
-    // nothing, though what it went to is only out of view. With a ped between the camera and
-    // a car, the rays from the sills and bumper down to the road went behind him and ended
-    // there; below the horizon a miss leaves no reflection at all (deferred_lighting keeps
-    // that fade where SSR found nothing), so he showed on the car as a dark figure. Such a
-    // ray takes the scene where it went out of view, the road just beside his outline.
-    bool blocked = hit <= 0.0 && blockedT >= 0.0 && prevDelta > 0.0;
-    if (hit <= 0.0 && !blocked)
+    if (hit <= 0.0)
         return 0.0;
 
-    float2 finalUV;
-    float hitZ;
-    float hitDelta = 0.0;
-    float hitThickness = fThickness;
-    [branch]
-    if (blocked)
+    // Binary refinement between the last sample in front of the scene and the first behind it.
+    float lo = hitLo;
+    float hi = hitHi;
+    [unroll]
+    for (int j = 0; j < NUM_REFINE_STEPS; ++j)
     {
-        finalUV = lerp(uv0, uv1, blockedT);
-        hitZ = LinearDepth(finalUV);
-        hidden = 0.0;
+        float mid = (lo + hi) * 0.5;
+        float midZ = 1.0 / lerp(invZ0, invZ1, mid);
+        if (midZ - LinearDepth(lerp(uv0, uv1, mid)) > 0.0)
+            hi = mid;
+        else
+            lo = mid;
     }
-    else
-    {
-        // Binary refinement between the last sample in front of the scene and the first behind it.
-        float lo = hitLo;
-        float hi = hitHi;
-        [unroll]
-        for (int j = 0; j < NUM_REFINE_STEPS; ++j)
-        {
-            float mid = (lo + hi) * 0.5;
-            float midZ = 1.0 / lerp(invZ0, invZ1, mid);
-            if (midZ - LinearDepth(lerp(uv0, uv1, mid)) > 0.0)
-                hi = mid;
-            else
-                lo = mid;
-        }
 
-        finalUV = lerp(uv0, uv1, hi);
-        hitZ = 1.0 / lerp(invZ0, invZ1, hi);
-        hitDelta = max(hitZ - LinearDepth(finalUV), 0.0);
-        hitThickness = abs(hitZ - 1.0 / lerp(invZ0, invZ1, lo)) + fThickness;
-    }
+    float2 finalUV = lerp(uv0, uv1, hi);
+    float hitZ = 1.0 / lerp(invZ0, invZ1, hi);
+    float hitDelta = max(hitZ - LinearDepth(finalUV), 0.0);
+    float hitThickness = abs(hitZ - 1.0 / lerp(invZ0, invZ1, lo)) + fThickness;
     float3 hitP = ViewPosFromUVZ(finalUV, hitZ);
 
     float2 histUV = HistoryUV(hitP);
@@ -690,8 +661,8 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 //      found nothing, dark blue a matte pixel that is not traced, black the sky
 //   3: surface normals, left half rebuilt from depth (what SSR uses), right half from the
 //      G-buffer
-//   4: what SSR found, green pointing above the horizon, red below it, where deferred_lighting
-//      shows a reflection only because SSR found one (its own map holds just the sky)
+//   4: green what SSR found and the game shows, red what SSR found but deferred_lighting
+//      fades out, because it keeps reflections only when they point above the horizon
 //   6: car glass, drawn by the patched glass shaders themselves: green a hit, red a miss,
 //      blue how much the fade for reflections pointing back at the camera keeps
 //   7: contact shadows alone, white lit, black shadowed
