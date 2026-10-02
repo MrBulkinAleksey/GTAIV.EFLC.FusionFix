@@ -500,7 +500,9 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     float3 hitP = ViewPosFromUVZ(finalUV, hitZ);
     gTraceHitUV = finalUV;
 
-    float2 histUV = HistoryUV(hitP);
+    // The surface the depth buffer holds where the ray hit; hitP is up to a thickness off it.
+    float3 surfP = ViewPosFromUVZ(finalUV, LinearDepth(finalUV));
+    float2 histUV = HistoryUV(surfP);
 
     float2 edge = saturate(min(min(finalUV, histUV), 1.0 - max(finalUV, histUV)) / max(fEdgeFade, 1e-4));
     float e = min(edge.x, edge.y);
@@ -524,16 +526,21 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     confidence *= 1.0 - smoothstep(0.4, 0.8, hidden);
 
     // The colour comes from the history, the hit from this frame's depth. Next to an outline
-    // the history pixel can belong to what is behind, a white roof behind a ped's legs, and
-    // his reflection got a bright rim. The depth copied with the history tells them apart:
-    // clip.w is the hit's view depth in the history's camera.
+    // the history pixel can belong to what is in front or behind: a white roof behind a ped's
+    // legs gave his reflection a bright rim, and a ped a few metres in front of the road a car
+    // door reflects, moved by a pixel or two since, put his dark figure into the door. The
+    // depth copied with the history tells them apart. It is compared at the surface the depth
+    // buffer holds, with the temporal passes' tolerance: the ray's thickness grows with its
+    // step to metres far out and let the ped through. clip.w is the view depth in the
+    // history's camera.
     [branch]
     if (fUsePrevDepth > 0.0)
     {
-        float prevHitZ = dot(float4(hitP, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
-                                                       vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
+        float prevSurfZ = dot(float4(surfP, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
+                                                         vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
         float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(histUV, 0, 0)).r) * fNearPlane;
-        confidence *= 1.0 - smoothstep(hitThickness * 0.75, hitThickness, abs(prevZ - prevHitZ));
+        float tolerance = 0.05 * prevSurfZ + 0.1;
+        confidence *= 1.0 - smoothstep(tolerance * 0.5, tolerance, abs(prevZ - prevSurfZ));
     }
 
     float3 colour = SampleHistoryBlurred(histUV, blurPixels * saturate(rayLen / fMaxDistance));
