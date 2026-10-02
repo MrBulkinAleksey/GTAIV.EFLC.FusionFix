@@ -594,13 +594,14 @@ float SSRSurfaceWeight(float2 uv)
 }
 
 // A reflection for rays that found nothing, from last frame's scene without any depth search:
-// what lies a few metres along the ray, blurred. Below the horizon deferred_lighting shows a
+// what lies a metre and a half along the ray, blurred. Below the horizon deferred_lighting shows a
 // reflection only where SSR found one (its own map holds just the sky), so a miss there left
 // the surface without any: rays to the road hidden behind the player cut a hole of his shape
 // into a car beside him, and the misses among the hits on a door showed as dark grain. Car
 // paint is no perfect mirror, and a blurred guess at the colour there reads as reflection.
-// Taps on something nearer than that point, the player standing in front of the road, are
-// left out, so the guess takes the road around him and not him. weight is 0 where it does not
+// Taps on something well nearer the camera than the reflecting surface, the player standing
+// in front of the car, are left out, so the guess takes the road around him and not him;
+// judged against the point itself, the road it lies under was left out too. weight is 0 where it does not
 // apply: above the horizon, where the game's own map shows the sky.
 float3 ScreenFallback(float3 C, float3 R, out float weight)
 {
@@ -609,7 +610,7 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
     if (weight <= 0.0)
         return 0.0;
 
-    float d = 4.0;
+    float d = 1.5;
     if (R.z < 0.0)
         d = min(d, (C.z - fNearPlane * 2.0) / -R.z);
     float3 P = C + R * max(d, 0.0);
@@ -624,7 +625,7 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
     weight *= saturate(1.0 - max(outside.x, outside.y) * 10.0);
     centre = saturate(centre);
 
-    float prevPZ = dot(float4(P, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
+    float prevCZ = dot(float4(C, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
                                               vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
     static const float2 taps[9] =
     {
@@ -643,7 +644,7 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
         if (fUsePrevDepth > 0.0)
         {
             float tapZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(tapUV, 0, 0)).r) * fNearPlane;
-            w = saturate((tapZ - prevPZ * 0.7) / max(prevPZ * 0.1, 0.1));
+            w = saturate((tapZ - prevCZ * 0.7) / max(prevCZ * 0.1, 0.1));
         }
         sum += clamp(tex2Dlod(HistoryTex, float4(tapUV, 0, 0)).rgb, 0.0, HISTORY_CLAMP) * SSR_SCALE * w;
         sumW += w;
