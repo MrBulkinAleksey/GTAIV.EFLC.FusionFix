@@ -786,6 +786,30 @@ namespace CVehicle
     {
         return *pVehiclePool;
     }
+
+    // The vehicle pool where its storage, flags, size and stride look sane, nullptr otherwise.
+    export CPool<void*>* GetCheckedVehiclePool()
+    {
+        const auto pool = pVehiclePool ? *pVehiclePool : nullptr;
+        if (!pool || !pool->m_aStorage || !pool->m_aFlags || pool->m_nSize <= 0 || pool->m_nSize > 4096 ||
+            pool->m_nStorageSize < 0x24 || pool->m_nStorageSize > 0x10000 ||
+            reinterpret_cast<uintptr_t>(pool->m_aStorage) >
+                UINTPTR_MAX - static_cast<uintptr_t>(pool->m_nSize) * pool->m_nStorageSize)
+            return nullptr;
+        return pool;
+    }
+
+    // Calls visit(vehicle) for every vehicle in the pool; false where the pool is not usable.
+    export template <typename Visit>
+    bool ForEachVehicle(Visit&& visit)
+    {
+        const auto pool = GetCheckedVehiclePool();
+        if (!pool) return false;
+        for (int32_t i = 0; i < pool->m_nSize; ++i)
+            if (const auto vehicle = reinterpret_cast<uintptr_t>(pool->GetSlot(i)))
+                visit(vehicle);
+        return true;
+    }
 }
 
 // Placed entities: a matrix at +0x20, rows right, forward, up and position of 4 floats each, or,

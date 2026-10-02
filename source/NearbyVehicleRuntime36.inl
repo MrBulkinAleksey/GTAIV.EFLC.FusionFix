@@ -23,18 +23,10 @@ namespace NearbyVehicleLighting36 {
                         next.view=PlayerShadowAllocation::gameplayView;
                     PlayerShadowAllocation::gameplayViewLock.clear(std::memory_order_release);
                 }
-                const auto pool=CVehicle::GetVehiclePool();
-                if(pool && pool->m_aStorage && pool->m_aFlags && pool->m_nSize>0 && pool->m_nSize<=4096 &&
-                    pool->m_nStorageSize>=0x24 && pool->m_nStorageSize<=0x10000 &&
-                    reinterpret_cast<uintptr_t>(pool->m_aStorage)<=UINTPTR_MAX-
-                        static_cast<uintptr_t>(pool->m_nSize)*pool->m_nStorageSize) {
-                    for(int i=0;i<pool->m_nSize;++i) {
-                        const auto vehicle=reinterpret_cast<uintptr_t>(pool->GetSlot(i));
-                        if(!vehicle) continue;
-                        float position[3];
-                        if(CEntity::GetPosition(vehicle,position)) next.Add({position[0],position[1],position[2]},vehicle);
-                    }
-                } else ++invalidPool;
+                if(!CVehicle::ForEachVehicle([&](uintptr_t vehicle) {
+                    float position[3];
+                    if(CEntity::GetPosition(vehicle,position)) next.Add({position[0],position[1],position[2]},vehicle);
+                })) ++invalidPool;
             }
         }
         if(!snapshotLock.test_and_set(std::memory_order_acquire)) {

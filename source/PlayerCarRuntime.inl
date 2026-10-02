@@ -6,9 +6,8 @@ namespace PlayerCar
     // Identify the live pool slot and generation, not only a reusable pointer.
     static uint64_t VehicleToken(uintptr_t vehicle)
     {
-        const auto pool = CVehicle::GetVehiclePool();
-        if (!pool || !pool->m_aStorage || !pool->m_aFlags ||
-            pool->m_nStorageSize <= 0 || pool->m_nSize <= 0) return 0;
+        const auto pool = CVehicle::GetCheckedVehiclePool();
+        if (!pool) return 0;
         const auto start = reinterpret_cast<uintptr_t>(pool->m_aStorage);
         if (vehicle < start) return 0;
         const auto offset = vehicle - start;
