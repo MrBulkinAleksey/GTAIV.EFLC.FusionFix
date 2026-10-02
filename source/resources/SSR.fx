@@ -425,6 +425,9 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     float hitHi = 0.0;
     float prevT = 0.0;
     float prevDelta = -1.0;
+    // How far the ray travelled hidden behind what the screen shows, in world units.
+    float hidden = 0.0;
+    float3 prevRayP = P0;
 
     // One loop, no nested refinement inside it: D3DX compiles this effect while the game
     // loads, and an unrolled refinement inside the march made it take long enough to look
@@ -465,6 +468,10 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
                 break;
         }
 
+        float3 rayP = ViewPosFromUVZ(sampleUV, rayZ);
+        if (delta > 0.0)
+            hidden += length(rayP - prevRayP);
+        prevRayP = rayP;
         prevT = t;
         prevDelta = delta;
     }
@@ -510,6 +517,13 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     if (distanceFade > 0.0)
         confidence *= 1.0 - smoothstep(distanceFade * 0.5, distanceFade, rayLen);
     confidence *= 1.0 - smoothstep(hitThickness * 0.75, hitThickness, hitDelta);
+    // Behind an object the screen holds nothing, so a ray passing there may have run into
+    // something it does not show. Behind a trunk that is a few dozen centimetres; behind a ped
+    // standing metres in front of a door, with the camera turned so the door shows next to his
+    // shoulder, rays from the door ran a metre or more behind him and took the colour of the
+    // pavement beyond: a bright strip on the door beside him. The longer the hidden stretch,
+    // the less a hit after it counts.
+    confidence *= 1.0 - smoothstep(0.4, 0.8, hidden);
 
     // The colour comes from the history, the hit from this frame's depth. Next to an outline
     // the history pixel can belong to what is in front or behind: a white roof behind a ped's
