@@ -251,7 +251,7 @@ public:
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
-        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade;
+        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
@@ -426,6 +426,7 @@ public:
     float fSSRTowardCamera = 0.0f;
     float fSSRReflectionBlur = 0.0f;
     float fSSRDistanceFade = 0.0f;
+    float fSSRFallback = 0.8f;
     rage::grcRenderTargetPC* SSRDenoisedTex = nullptr;
     IDirect3DSurface9* SSRDenoisedSurf = nullptr;
     bool bSSRDenoised = false;
@@ -921,6 +922,7 @@ public:
                 h.fTowardCamera = SSREffect->GetParameterByName(nullptr, "fTowardCamera");
                 h.fReflectionBlur = SSREffect->GetParameterByName(nullptr, "fReflectionBlur");
                 h.fDistanceFade = SSREffect->GetParameterByName(nullptr, "fDistanceFade");
+                h.fFallback = SSREffect->GetParameterByName(nullptr, "fFallback");
                 h.vec4SunView = SSREffect->GetParameterByName(nullptr, "vec4SunView");
                 h.fCSLength = SSREffect->GetParameterByName(nullptr, "fCSLength");
                 h.fCSThickness = SSREffect->GetParameterByName(nullptr, "fCSThickness");
@@ -1104,6 +1106,7 @@ public:
         fSSRTowardCamera = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", 0.0f), 0.0f, 1.0f);
         fSSRReflectionBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsBlur", 0.0f), 0.0f, 32.0f);
         fSSRDistanceFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsDistanceFade", 0.0f), 0.0f, 100.0f);
+        fSSRFallback = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsFallback", 0.8f), 0.0f, 1.0f);
         fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 0.3f), 0.05f, 10.0f);
         fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.15f), 0.01f, 10.0f);
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
@@ -2788,6 +2791,7 @@ private:
         effect->SetFloat(h.fTowardCamera, R.fSSRTowardCamera);
         effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
         effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
+        effect->SetFloat(h.fFallback, R.fSSRFallback);
         // Debug view 3 has SSR_PS write where its rays hit in place of the colour.
         effect->SetFloat(h.fDebugMode, float(R.SSRDebugMode()));
 

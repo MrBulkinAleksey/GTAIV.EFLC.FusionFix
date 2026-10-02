@@ -198,6 +198,7 @@ uniform float fReflectionBlur;    // blur radius in pixels a reflection reaches 
 uniform float fDistanceFade;      // reflections fade out towards this distance from the surface, 0 disables
 uniform float fTemporalBlend;     // share of last frame's SSR kept each frame, 0 while there is none to keep
 uniform float fTemporalAnySurface; // 1 while accumulating indirect light, which every surface gets, not only glossy ones
+uniform float fFallback;          // 0..1, strength of the blurred screen reflection where rays below the horizon find nothing, see ScreenFallback
 
 // Contact shadows, see ContactShadows_PS.
 uniform float4 vec4SunView;         // direction towards the sun in reconstruction space, w 0 if unknown
@@ -592,6 +593,65 @@ float SSRSurfaceWeight(float2 uv)
     return SSRSurfaceWeight(uv, wetOnly);
 }
 
+// A reflection for rays that found nothing, from last frame's scene without any depth search:
+// what lies a few metres along the ray, blurred. Below the horizon deferred_lighting shows a
+// reflection only where SSR found one (its own map holds just the sky), so a miss there left
+// the surface without any: rays to the road hidden behind the player cut a hole of his shape
+// into a car beside him, and the misses among the hits on a door showed as dark grain. Car
+// paint is no perfect mirror, and a blurred guess at the colour there reads as reflection.
+// Taps on something nearer than that point, the player standing in front of the road, are
+// left out, so the guess takes the road around him and not him. weight is 0 where it does not
+// apply: above the horizon, where the game's own map shows the sky.
+float3 ScreenFallback(float3 C, float3 R, out float weight)
+{
+    float3 Rw = R.x * vec4WaterToView[0].xyz + R.y * vec4WaterToView[1].xyz + R.z * vec4WaterToView[2].xyz;
+    weight = fFallback * (1.0 - saturate(Rw.z * 5.0)); // deferred_lighting's own horizon fade
+    if (weight <= 0.0)
+        return 0.0;
+
+    float d = 4.0;
+    if (R.z < 0.0)
+        d = min(d, (C.z - fNearPlane * 2.0) / -R.z);
+    float3 P = C + R * max(d, 0.0);
+    float2 centre = HistoryUV(P);
+    if (any(centre < 0.0))
+    {
+        weight = 0.0;
+        return 0.0;
+    }
+    // Off screen the edge is stretched; fade it out over a tenth of the screen.
+    float2 outside = max(-centre, centre - 1.0);
+    weight *= saturate(1.0 - max(outside.x, outside.y) * 10.0);
+    centre = saturate(centre);
+
+    float prevPZ = dot(float4(P, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
+                                              vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
+    static const float2 taps[9] =
+    {
+        float2( 0.0,  0.0),
+        float2( 1.0,  0.0), float2(-1.0,  0.0), float2( 0.0,  1.0), float2( 0.0, -1.0),
+        float2( 0.7,  0.7), float2(-0.7,  0.7), float2( 0.7, -0.7), float2(-0.7, -0.7)
+    };
+    float2 radius = 0.03 * float2(vec2InvViewportSize.y / vec2InvViewportSize.x, 1.0) * 0.6;
+    float3 sum = 0.0;
+    float sumW = 0.0;
+    [unroll]
+    for (int i = 0; i < 9; ++i)
+    {
+        float2 tapUV = saturate(centre + taps[i] * radius);
+        float w = 1.0;
+        if (fUsePrevDepth > 0.0)
+        {
+            float tapZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(tapUV, 0, 0)).r) * fNearPlane;
+            w = saturate((tapZ - prevPZ * 0.7) / max(prevPZ * 0.1, 0.1));
+        }
+        sum += clamp(tex2Dlod(HistoryTex, float4(tapUV, 0, 0)).rgb, 0.0, HISTORY_CLAMP) * SSR_SCALE * w;
+        sumW += w;
+    }
+    weight *= saturate(sumW / 3.0);
+    return sumW > 1e-3 ? sum / sumW : 0.0;
+}
+
 float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     float wetOnly;
@@ -618,6 +678,17 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     {
         float nearer = gTraceHitZ < C.z - 0.25 ? 1.0 : 0.0;
         return float4(nearer, 1.0 - nearer, gTraceRayZ < 0.0 ? 1.0 : 0.0, r.a);
+    }
+    // Where the ray found little or nothing, the blurred guess fills in (premultiplied).
+    [branch]
+    if (fFallback > 0.0 && r.a < 1.0)
+    {
+        float fallbackWeight;
+        float3 fallback = ScreenFallback(C, reflect(normalize(C), n), fallbackWeight);
+        float fill = fallbackWeight * (1.0 - r.a);
+        float a = r.a + fill;
+        r.rgb = a > 1e-4 ? (r.rgb * r.a + fallback * fill) / a : 0.0;
+        r.a = a;
     }
     // On wet ground the game's reflection strength, which deferred_lighting multiplies SSR by,
     // is that of dry asphalt, so the reflection is drawn brighter there.
