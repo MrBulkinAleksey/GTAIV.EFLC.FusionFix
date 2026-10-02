@@ -47,6 +47,31 @@ namespace OwnHeadlightCaster
         if (bTrafficSelfShadowFix && kind == 4 && active &&
             CShadows::gStableHeadlightShadow.IsSubmittedBeam(key))
             result.trafficBeamKey = key;
+        // Both lamps of a car make one beam from between them, so a player on foot right at the
+        // car, even a hand of theirs at the edge of the cone, threw a shadow over the half of
+        // the beam on the other side, blinking as they moved in and out. Within 4 m of the car
+        // the player is left out of its beam's shadow; the key is only read as a car once the
+        // vehicle pool holds one there.
+        if (!car && kind == 4 && active && key && CPlayer::getLocalPlayerPed)
+        {
+            uintptr_t beamCar = 0;
+            if (HeadlightEnhancement::VehicleToken(key)) beamCar = key;
+            else if (HeadlightEnhancement::VehicleToken(key - 1)) beamCar = key - 1;
+            const auto ped = CPlayer::getLocalPlayerPed();
+            if (beamCar && ped)
+            {
+                const auto carMatrix = *reinterpret_cast<const float* const*>(beamCar + 0x20);
+                const auto pedMatrix = *reinterpret_cast<const float* const*>(ped + 0x20);
+                if (carMatrix && pedMatrix)
+                {
+                    const float dx = carMatrix[12] - pedMatrix[12];
+                    const float dy = carMatrix[13] - pedMatrix[13];
+                    const float dz = carMatrix[14] - pedMatrix[14];
+                    if (dx * dx + dy * dy + dz * dz < 4.0f * 4.0f)
+                        result.nearPed = ped;
+                }
+            }
+        }
         if (!policy::OwnBeam(slot, kind, active, key, car)) return result;
         result.car = car;
         result.ownBeam = true;

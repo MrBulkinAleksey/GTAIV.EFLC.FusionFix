@@ -15,6 +15,7 @@ namespace fusionfix::shadows::caster
         std::array<std::uintptr_t, 9> occupants{};
         bool ownBeam = false;
         std::uintptr_t trafficBeamKey = 0; // Validated submitted beam; never dereferenced.
+        std::uintptr_t nearPed = 0; // The player on foot right at the car of the beam.
     };
 
     inline bool OwnBeam(std::uint32_t slot, std::uint32_t kind, bool active,
@@ -29,6 +30,7 @@ namespace fusionfix::shadows::caster
     {
         if (!entity || !artificial) return false;
         if (type == 2 && ce::IsVehicleBeam(context.trafficBeamKey, entity)) return true;
+        if (type == 3 && entity == context.nearPed) return true;
         if (!context.ownBeam || !context.car) return false;
         if (type == 2) return entity == context.car;
         if (type == 3)
