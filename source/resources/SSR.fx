@@ -627,27 +627,37 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
 
     float prevCZ = dot(float4(C, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
                                               vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
-    static const float2 taps[9] =
+    // Rings of taps further and further out, until enough of them show the road: the player
+    // covering the door covers a good part of the screen around where its rays look, and the
+    // nearest ring alone found nothing but him, leaving the door black.
+    static const float2 taps[8] =
     {
-        float2( 0.0,  0.0),
         float2( 1.0,  0.0), float2(-1.0,  0.0), float2( 0.0,  1.0), float2( 0.0, -1.0),
         float2( 0.7,  0.7), float2(-0.7,  0.7), float2( 0.7, -0.7), float2(-0.7, -0.7)
     };
-    float2 radius = 0.03 * float2(vec2InvViewportSize.y / vec2InvViewportSize.x, 1.0) * 0.6;
+    static const float rings[3] = { 0.02, 0.07, 0.18 }; // fractions of the screen height
+    float2 aspect = float2(vec2InvViewportSize.x / vec2InvViewportSize.y, 1.0);
     float3 sum = 0.0;
     float sumW = 0.0;
-    [unroll]
-    for (int i = 0; i < 9; ++i)
+    [loop]
+    for (int ring = 0; ring < 3; ++ring)
     {
-        float2 tapUV = saturate(centre + taps[i] * radius);
-        float w = 1.0;
-        if (fUsePrevDepth > 0.0)
+        if (sumW >= 3.0)
+            break;
+        float2 radius = rings[ring] * aspect;
+        [unroll]
+        for (int i = 0; i < 8; ++i)
         {
-            float tapZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(tapUV, 0, 0)).r) * fNearPlane;
-            w = saturate((tapZ - prevCZ * 0.7) / max(prevCZ * 0.1, 0.1));
+            float2 tapUV = saturate(centre + taps[i] * radius);
+            float w = 1.0;
+            if (fUsePrevDepth > 0.0)
+            {
+                float tapZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(tapUV, 0, 0)).r) * fNearPlane;
+                w = saturate((tapZ - prevCZ * 0.7) / max(prevCZ * 0.1, 0.1));
+            }
+            sum += clamp(tex2Dlod(HistoryTex, float4(tapUV, 0, 0)).rgb, 0.0, HISTORY_CLAMP) * SSR_SCALE * w;
+            sumW += w;
         }
-        sum += clamp(tex2Dlod(HistoryTex, float4(tapUV, 0, 0)).rgb, 0.0, HISTORY_CLAMP) * SSR_SCALE * w;
-        sumW += w;
     }
     weight *= saturate(sumW / 3.0);
     return sumW > 1e-3 ? sum / sumW : 0.0;
