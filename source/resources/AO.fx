@@ -13,6 +13,7 @@
 //  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 texture AOTexture2D, AOCamDepthTexture2D, DepthTex2D, NormalTex2D;
+texture AOHistoryTex2D, PrevDepthTex2D, MotionTex2D, AlbedoTex2D;
 
 sampler2D AOCamDepthTexture
 {
@@ -55,6 +56,50 @@ sampler2D NormalTex
     MagFilter = Point;
 };
 
+// Last frame's accumulated GTAO, see TemporalAO_PS.
+sampler2D AOHistoryTex
+{
+    Texture = <AOHistoryTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MipFilter = None;
+    MinFilter = Linear;
+    MagFilter = Linear;
+};
+
+// The log depth the history was taken with (PreAlphaDepthCopy, last frame's).
+sampler2D PrevDepthTex
+{
+    Texture = <PrevDepthTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MipFilter = None;
+    MinFilter = Point;
+    MagFilter = Point;
+};
+
+// Temporal AA's motion vectors, as in SSR.fx's TemporalHistoryUV.
+sampler2D MotionTex
+{
+    Texture = <MotionTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MipFilter = None;
+    MinFilter = Point;
+    MagFilter = Point;
+};
+
+// _DEFERRED_GBUFFER_0_, the surfaces' colour, for the multiple bounce approximation.
+sampler2D AlbedoTex
+{
+    Texture = <AlbedoTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MipFilter = None;
+    MinFilter = Point;
+    MagFilter = Point;
+};
+
 uniform float2 vec2InvViewportSize;
 uniform float fNearPlane;
 uniform float fFarPlane;
@@ -68,6 +113,15 @@ uniform float2 vec2BlurDirection;
 uniform float4 vec4WorldToView[3]; // world to reconstruction space rotation, for the G-buffer normals
 uniform float fUseNormals;         // 1 when NormalTex holds the G-buffer normals, 0 rebuilds them from depth
 uniform float fGTAOStrength;       // exponent on GTAO's visibility, 1 as computed
+uniform float fThinOccluders;      // 0..1, how much sooner occluders far in front or behind fade out, see ComputeGTAO
+uniform float2 vec2NoiseOffset;    // pixels, moves where the noise is read every frame while GTAO accumulates, 0 otherwise
+uniform float fMultiBounce;        // 1 brightens occlusion on light surfaces, which bounce light into their own corners
+// Accumulation over frames, see TemporalAO_PS.
+uniform float4 vec4ViewToPrevClip[4];
+uniform float fUseMotion;
+uniform float2 vec2MotionJitter;
+uniform float fUsePrevDepth;
+uniform float fTemporalBlend;      // share of last frame's GTAO kept, 0 while there is none to keep
 
 #ifndef NUM_SAMPLES
 #define NUM_SAMPLES 9
@@ -239,8 +293,11 @@ float ComputeGTAO(float2 ssC, float2 uv, float3 C, float3 n)
 
     // Interleaved gradient noise: the slices turn and the steps shift from pixel to pixel,
     // which the blur afterwards evens out.
-    float noiseSlice = frac(52.9829189 * frac(dot(ssC, float2(0.06711056, 0.00583715))));
-    float noiseStep = frac(52.9829189 * frac(dot(ssC.yx + float2(5.0, 13.0), float2(0.06711056, 0.00583715))));
+    // While accumulating, vec2NoiseOffset reads the noise elsewhere every frame, so the slices
+    // turn on and the accumulation averages many of them.
+    float2 noisePos = ssC + vec2NoiseOffset;
+    float noiseSlice = frac(52.9829189 * frac(dot(noisePos, float2(0.06711056, 0.00583715))));
+    float noiseStep = frac(52.9829189 * frac(dot(noisePos.yx + float2(5.0, 13.0), float2(0.06711056, 0.00583715))));
 
     // Real loops, not unrolled, to stay within ps_3_0's 512 instruction slots.
     float visibility = 0.0;
@@ -279,8 +336,15 @@ float ComputeGTAO(float2 ssC, float2 uv, float3 C, float3 n)
             float3 delta1 = getOffsetPosition(ssC, -omega, offsetPx) - C;
             float len0 = length(delta0);
             float len1 = length(delta1);
-            float sampleCos0 = lerp(lowCos0, dot(delta0, viewV) / max(len0, 1e-4), saturate(len0 * falloffMul + falloffAdd));
-            float sampleCos1 = lerp(lowCos1, dot(delta1, viewV) / max(len1, 1e-4), saturate(len1 * falloffMul + falloffAdd));
+            // A thin object, a pole or a railing, raises the horizon as if a wall stood
+            // there, and the ground around it darkened in its shape. Stretching the depth part
+            // of the distance (XeGTAO's thin occluder compensation) lets samples far in front
+            // or behind fade out sooner.
+            float3 thin = float3(1.0, 1.0, 1.0 + fThinOccluders);
+            float fall0 = saturate(length(delta0 * thin) * falloffMul + falloffAdd);
+            float fall1 = saturate(length(delta1 * thin) * falloffMul + falloffAdd);
+            float sampleCos0 = lerp(lowCos0, dot(delta0, viewV) / max(len0, 1e-4), fall0);
+            float sampleCos1 = lerp(lowCos1, dot(delta1, viewV) / max(len1, 1e-4), fall1);
             horizonCos0 = max(horizonCos0, sampleCos0);
             horizonCos1 = max(horizonCos1, sampleCos1);
         }
@@ -380,6 +444,71 @@ float4 ComputeGTAO_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return ComputeAO(uv, vPos, true);
 }
 
+// Accumulation of GTAO over frames: the slices turn every frame (vec2NoiseOffset), and last
+// frame's result, followed to where this pixel was (the camera, or temporal AA's motion
+// vectors for what moved itself), is blended in, so a few slices a frame add up to many.
+// The history is clamped to the neighbourhood of this frame's values, and dropped where last
+// frame's depth there shows another surface, which a moving car uncovers.
+float4 TemporalAO_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+{
+    float current = tex2Dlod(AOTexture, float4(uv, 0, 0)).r;
+    if (fTemporalBlend <= 0.0)
+        return float4(current, 0, 0, 1);
+
+    float m1 = 0.0, m2 = 0.0;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            float v = tex2Dlod(AOTexture, float4(uv + float2(x, y) * vec2InvViewportSize, 0, 0)).r;
+            m1 += v;
+            m2 += v * v;
+        }
+    }
+    m1 /= 9.0;
+    float spread = sqrt(max(m2 / 9.0 - m1 * m1, 0.0));
+    float lo = m1 - 1.5 * spread - 0.02, hi = m1 + 1.5 * spread + 0.02;
+
+    float3 C = ReconstructViewPos(vPos, tex2Dlod(AOCamDepthTexture, float4(uv, 0, 0)).r);
+    float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1] + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
+    if (clip.w <= 0.0)
+        return float4(current, 0, 0, 1);
+    float2 prevUV = (clip.xy / clip.w) * float2(0.5, -0.5) + 0.5;
+    bool checkDepth = true;
+    if (fUseMotion > 0.0)
+    {
+        float2 moved = uv + tex2Dlod(MotionTex, float4(uv, 0, 0)).xy + vec2MotionJitter;
+        if (any(abs(moved - prevUV) > 1.5 * vec2InvViewportSize))
+            checkDepth = false;
+        prevUV = moved;
+    }
+
+    float keep = fTemporalBlend;
+    if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
+        keep = 0.0;
+    else if (fUsePrevDepth > 0.0 && checkDepth)
+    {
+        float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * fNearPlane;
+        if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
+            keep = 0.0;
+    }
+
+    float history = clamp(tex2Dlod(AOHistoryTex, float4(prevUV, 0, 0)).r, lo, hi);
+    return float4(lerp(current, history, keep), 0, 0, 1);
+}
+
+// Light surfaces bounce light into their own corners, so they darken less there than dark
+// ones (Jimenez et al. 2016's fit of multiple bounces from the occlusion and the colour).
+float MultiBounce(float ao, float albedo)
+{
+    float a = 2.0404 * albedo - 0.3324;
+    float b = -4.7951 * albedo + 0.6417;
+    float c = 2.7552 * albedo + 0.6903;
+    return max(ao, ((ao * a + b) * ao + c) * ao);
+}
+
 float4 BlurAOToBuffer_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     float2 blur = BilateralBlur(AOTexture, AOCamDepthTexture, uv);
@@ -389,6 +518,9 @@ float4 BlurAOToBuffer_PS(float2 uv : TEXCOORD0) : COLOR0
 float4 OutputAO_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     float ao = tex2D(AOTexture, uv).r;
+    [branch]
+    if (fMultiBounce > 0.0)
+        ao = MultiBounce(ao, dot(tex2Dlod(AlbedoTex, float4(uv, 0, 0)).rgb, float3(0.2126, 0.7152, 0.0722)));
     return float4(0, 0, 0, 1.0 - ao);
 }
 
@@ -490,6 +622,19 @@ technique AmbientOcclusion
     pass ComputeGTAO // in place of ComputeAO, see ComputeAO
     {
         PixelShader = compile ps_3_0 ComputeGTAO_PS();
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        AlphaBlendEnable = FALSE;
+        AlphaTestEnable = FALSE;
+        ZEnable = 0;
+        ZWriteEnable = FALSE;
+        StencilEnable = FALSE;
+        CullMode = NONE;
+        FogEnable = FALSE;
+        Clipping = FALSE;
+    }
+    pass TemporalAO // after ComputeGTAO, into the accumulation
+    {
+        PixelShader = compile ps_3_0 TemporalAO_PS();
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         AlphaBlendEnable = FALSE;
         AlphaTestEnable = FALSE;
