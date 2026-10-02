@@ -72,7 +72,6 @@ namespace CShadows
     using SubmitHeadlight = void(__cdecl*)(int, int, uint32_t, int, int, int, int, int,
                                           int, int, int, int, int, int, int, int);
     injector::hook_back<SubmitHeadlight> hbStoreStaticShadow;
-    static uint32_t* pFrameCounter = nullptr;
     static std::atomic<uint32_t> drivingBeamAccepted{0}, drivingBeamRejected{0};
 
     struct StableHeadlightShadow
@@ -88,7 +87,7 @@ namespace CShadows
 
         bool PrepareFrame()
         {
-            if (!bHeadlightShadows || !pFrameCounter || !CTimer::m_snTimeInMilliseconds ||
+            if (!bHeadlightShadows || !CTimer::m_frameCount || !CTimer::m_snTimeInMilliseconds ||
                 !CPlayer::getLocalPlayerPed || !CPlayer::findPlayerCar)
             {
                 selector.Reset();
@@ -99,7 +98,7 @@ namespace CShadows
 
             // Use the game's verified frame counter. A timer tick does not
             // identify a frame when time is paused, slowed or reset.
-            const uint32_t nextFrame = *pFrameCounter;
+            const uint32_t nextFrame = *CTimer::m_frameCount;
             if (hasFrame && nextFrame == frame)
                 return playerValid;
             frame = nextFrame;
@@ -147,7 +146,7 @@ namespace CShadows
         {
             const std::lock_guard<std::mutex> lock(stateMutex);
             if (!key || !hasFrame || !playerValid) return false;
-            return pFrameCounter && submitted.Contains(key, *pFrameCounter);
+            return CTimer::m_frameCount && submitted.Contains(key, *CTimer::m_frameCount);
         }
 
         bool ShouldCast(int directionAddress, int positionAddress, int stableKey, int radiusBits)
@@ -240,8 +239,6 @@ namespace CShadows
         if (!fusionfix::shadows::ce::ValidateMappedImage(
                 image, nt->OptionalHeader.SizeOfImage, reinterpret_cast<uintptr_t>(image)))
             return false;
-        pFrameCounter = reinterpret_cast<uint32_t*>(
-            reinterpret_cast<uintptr_t>(image) + fusionfix::shadows::ce::FrameCounterRva);
         hbStoreStaticShadow.fun = reinterpret_cast<SubmitHeadlight>(
             reinterpret_cast<uintptr_t>(image) + fusionfix::shadows::ce::SubmitRva);
         return true;

@@ -6,10 +6,10 @@ namespace NearbyVehicleLighting36 {
 
     static void Update() noexcept {
         using namespace fusionfix::shadows;
-        if(!enabled.load(std::memory_order_acquire) || !CShadows::pFrameCounter ||
+        if(!enabled.load(std::memory_order_acquire) || !CTimer::m_frameCount ||
             !CTimer::m_snTimeInMilliseconds || !CPlayer::getLocalPlayerPed || !CPlayer::findPlayerCar) return;
         NearbyVehicleReceivers36 next{};
-        next.frame=*CShadows::pFrameCounter;next.timeMs=*CTimer::m_snTimeInMilliseconds;
+        next.frame=*CTimer::m_frameCount;next.timeMs=*CTimer::m_snTimeInMilliseconds;
         // Keep the accepted driving behavior unchanged. Collect only on the
         // game-process callback; render hooks consume copied positions.
         next.session=CPlayer::getLocalPlayerPed();

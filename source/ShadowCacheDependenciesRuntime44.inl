@@ -5,7 +5,7 @@
         const FloatingPointState fp;
         if(!Enabled() || state.depth!=1 || !state.pass.Active() || !state.continuityActive) return;
         if(!state.stackAnchor || regs.esp!=state.stackAnchor ||
-           !CShadows::pFrameCounter || *CShadows::pFrameCounter!=state.frame) {++cacheDependencyRejected;return;}
+           !CTimer::m_frameCount || *CTimer::m_frameCount!=state.frame) {++cacheDependencyRejected;return;}
         const int native=static_cast<int>(regs.edx);
         if(native<0 || native>=8)return;
         const auto* lights=CurrentLights();const auto count=CurrentCount();

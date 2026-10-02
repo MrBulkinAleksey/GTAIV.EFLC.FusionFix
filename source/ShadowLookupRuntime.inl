@@ -17,7 +17,7 @@ namespace ShadowLookupGuard {
     static int Filter(int nativeResult, uint32_t key, int cache, int before) noexcept {
         const auto traceResult=[&](int result,int buffer) noexcept {
             if(ShadowTrace34::Tracked(key)) ShadowTrace34::Emit({4,
-                CShadows::pFrameCounter?*CShadows::pFrameCounter:0,GetTickCount(),key,
+                CTimer::m_frameCount?*CTimer::m_frameCount:0,GetTickCount(),key,
                 nativeResult,result,cache,buffer,0,0,0,0});
             return result;
         };

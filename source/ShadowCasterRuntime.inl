@@ -38,7 +38,7 @@ namespace OwnHeadlightCaster
         const auto key = *reinterpret_cast<const uint32_t*>(base + guard::SlotKeyRva + offset);
         const auto kind = *reinterpret_cast<const uint32_t*>(base + guard::SlotKindRva + offset);
         const bool active = *reinterpret_cast<const uint8_t*>(base + guard::SlotActiveRva + offset) == 1;
-        ShadowTrace34::Emit({5,CShadows::pFrameCounter?*CShadows::pFrameCounter:0,GetTickCount(),key,
+        ShadowTrace34::Emit({5,CTimer::m_frameCount?*CTimer::m_frameCount:0,GetTickCount(),key,
             static_cast<int>(slot),static_cast<int>(kind),active?1:0,0,0,0,0,0});
         const auto car = CPlayer::findPlayerCar();
         // Exclude only the source vehicle from its own immediate

@@ -136,7 +136,7 @@ namespace PlayerShadowAllocation
             site[6]!=0xC6 || site[7]!=0x05) return false;
         cameraCaptureHook = safetyhook::create_mid(base + 0x30C6F, [](SafetyHookContext& regs) {
             const FloatingPointState fp;
-            if (!CShadows::pFrameCounter) return;
+            if (!CTimer::m_frameCount) return;
             ++captureCalls;
             const auto* viewport = reinterpret_cast<const rage::grcViewport*>(regs.ecx);
             if(viewport!=SceneViewport()) {++auxiliaryViewsRejected;return;}
@@ -147,7 +147,7 @@ namespace PlayerShadowAllocation
             const auto view = ReadView(viewport);
             if (view.valid) ++captureValid;
             if (view.valid && !gameplayViewLock.test_and_set(std::memory_order_acquire)) {
-                gameplayView = view; gameplayViewFrame = *CShadows::pFrameCounter;
+                gameplayView = view; gameplayViewFrame = *CTimer::m_frameCount;
                 gameplayViewLock.clear(std::memory_order_release);
             }
         });
@@ -155,7 +155,7 @@ namespace PlayerShadowAllocation
     }
     static bool Prepare() noexcept
     {
-        if (!Enabled() || !CShadows::pFrameCounter || !CTimer::m_snTimeInMilliseconds ||
+        if (!Enabled() || !CTimer::m_frameCount || !CTimer::m_snTimeInMilliseconds ||
             !CPlayer::getLocalPlayerPed || !CPlayer::findPlayerCar)
             return false;
         const auto ped = CPlayer::getLocalPlayerPed();
@@ -177,7 +177,7 @@ namespace PlayerShadowAllocation
                 state.player = {carMatrix[12], carMatrix[13], carMatrix[14]};
         }
         state.drivingFocus=state.motionFocus.Update(state.player,state.occupiedCar,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
-        state.frame = *CShadows::pFrameCounter;
+        state.frame = *CTimer::m_frameCount;
         state.lampContinuity.Begin(ped,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
         state.continuity.Begin(ped,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
         state.nativeCandidates.fill({});
@@ -394,7 +394,7 @@ namespace PlayerShadowAllocation
         const FloatingPointState fp;
         if (!Enabled() || state.depth != 1 || !state.pass.Active()) return;
         if (!state.stackAnchor || state.stackAnchor != regs.esp ||
-            !CShadows::pFrameCounter || *CShadows::pFrameCounter != state.frame ||
+            !CTimer::m_frameCount || *CTimer::m_frameCount != state.frame ||
             CPlayer::getLocalPlayerPed() != state.ped || CPlayer::findPlayerCar() != state.occupiedCar)
         {
             RejectPass();
