@@ -439,14 +439,25 @@ namespace HeadlightEnhancement
     static const uint32_t* pPhaseMask = nullptr;
 
     // Called in place of the mask test with the car in ECX; ECX and EDX are dead after it.
-    static bool __fastcall MakesLights(uintptr_t vehicle)
+    static bool OffscreenLightsReach(uintptr_t vehicle)
     {
-        if (*reinterpret_cast<const uint32_t*>(vehicle + 8) & *pPhaseMask) return true;
         if (offscreenLightsMode == 1 && !PlayerCar::IsLast(vehicle)) return false;
         float position[3], camera[3];
         if (!CEntity::GetPosition(vehicle, position) || !GameCamera::Position(camera)) return false;
         const float dx = position[0] - camera[0], dy = position[1] - camera[1], dz = position[2] - camera[2];
         return dx * dx + dy * dy + dz * dz <= offscreenLightsDistance * offscreenLightsDistance;
+    }
+
+    static bool __fastcall MakesLights(uintptr_t vehicle)
+    {
+        const bool seen = (*reinterpret_cast<const uint32_t*>(vehicle + 8) & *pPhaseMask) != 0;
+        const bool made = seen || OffscreenLightsReach(vehicle);
+        if (!BeamTrace::path.empty() && PlayerCar::IsLast(vehicle))
+        {
+            if (seen) BeamTrace::Mark(BeamTrace::CarSeen);
+            if (made) BeamTrace::Mark(BeamTrace::LightsMade);
+        }
+        return made;
     }
 
     static void InstallOffscreenLights(int mode, float distance)

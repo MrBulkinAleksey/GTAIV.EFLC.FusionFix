@@ -306,6 +306,7 @@ namespace PlayerShadowAllocation
         if (flags & rage::LF_VEHICLE)
             kind = fusionfix::shadows::ce::IsVehicleBeam(key, state.occupiedCar ? state.occupiedCar : PlayerCar::Last())
                 ? budget::Kind::PlayerBeam : budget::Kind::OtherBeam;
+        if (kind == budget::Kind::PlayerBeam) BeamTrace::Mark(BeamTrace::Candidate);
         if (flags & rage::LF_VEHICLE)
             geometry.distanceSquared = fusionfix::shadows::ReceiverDistanceSquared(state.player,
                 {light.mPosition.x,light.mPosition.y,light.mPosition.z},state.occupiedCar ? 3.0f : 1.5f);
@@ -432,6 +433,8 @@ namespace PlayerShadowAllocation
                         else ++lampMissingInput;
                     }
                 }
+                for(const auto& slot:selection.slots)
+                    if(slot.key && slot.kind==budget::Kind::PlayerBeam) BeamTrace::Mark(BeamTrace::Selected);
                 state.previousSelection=selection.slots;
                 state.previousSelectionFrame=state.frame;
                 std::array<fusionfix::shadows::NativeShadowContinuity42::Identity,7> identities{};

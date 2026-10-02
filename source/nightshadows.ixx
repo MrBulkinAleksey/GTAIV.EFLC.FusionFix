@@ -43,6 +43,7 @@ bool bHighResolutionNightShadows = false;
 static bool bCloseHeadlightRelevance = false;
 static bool bTrafficSelfShadowFix = false;
 #include "PlayerCarRuntime.inl"
+#include "BeamTraceRuntime.inl"
 #include "HeadlightEnhancementRuntime.inl"
 
 // Queried for every light on every frame; a lookup by name scans the whole preference table.
@@ -181,6 +182,8 @@ namespace CShadows
             if (accepted) submitted.Record(identity, frame);
             if (playerHeadlight)
             {
+                BeamTrace::Mark(BeamTrace::BeamOffered);
+                if (accepted) BeamTrace::Mark(BeamTrace::ShadowKept);
                 if (accepted) ++drivingBeamAccepted;
                 else ++drivingBeamRejected;
             }
@@ -381,7 +384,7 @@ public:
         }
 
         // Registered before game callbacks start, independent of async init.
-        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); NearbyVehicleLighting36::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
+        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
@@ -406,6 +409,7 @@ public:
             if (ceAdapter)
             {
                 PlayerCar::driverOffset = 0xF50;
+                BeamTrace::path = iniReader.GetIniPath().parent_path() / "GTAIV-beam-trace.log";
                 HeadlightEnhancement::log.path = iniReader.GetIniPath().parent_path() / "GTAIV-headlights.log";
                 HeadlightEnhancement::brightnessInstalled = HeadlightEnhancement::InstallBrightness(
                     iniReader.ReadInteger("HEADLIGHTS", "ConsistentBrightness", 0) != 0);
