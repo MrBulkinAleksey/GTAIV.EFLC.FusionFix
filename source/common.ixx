@@ -1297,10 +1297,17 @@ export std::optional<uintptr_t> resolve_next_displacement(auto ip)
     return std::nullopt;
 }
 
+// The game executable's base in memory, which the audited CE offsets are relative to.
+export uintptr_t GameBase()
+{
+    static const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    return base;
+}
+
 // The direct calls to target anywhere in the executable's code section, found by their E8 displacement
 export std::vector<uintptr_t> FindModuleCallsTo(uintptr_t target)
 {
-    auto module = reinterpret_cast<uintptr_t>(GetModuleHandle(NULL));
+    auto module = GameBase();
     auto ntHeader = reinterpret_cast<IMAGE_NT_HEADERS*>(module + reinterpret_cast<IMAGE_DOS_HEADER*>(module)->e_lfanew);
     auto begin = module + ntHeader->OptionalHeader.BaseOfCode;
     auto end = begin + ntHeader->OptionalHeader.SizeOfCode;

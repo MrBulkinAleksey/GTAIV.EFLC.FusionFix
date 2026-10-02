@@ -11,7 +11,7 @@ namespace ShadowLookupGuard {
         return ready ? *reinterpret_cast<const int*>(base + shadow_lookup_layout::ReadBufferRva) : -1;
     }
     static void Initialize() noexcept {
-        base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+        base = GameBase();
         ready = shadow_lookup_layout::Validate(base);
     }
     static int Filter(int nativeResult, uint32_t key, int cache, int before) noexcept {

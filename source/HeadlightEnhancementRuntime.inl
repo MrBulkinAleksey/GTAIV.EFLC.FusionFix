@@ -6,7 +6,7 @@
 namespace HeadlightEnhancement
 {
     static SafetyHookMid brightnessHook;
-    static uintptr_t imageBase = 0;
+    static const uintptr_t imageBase = GameBase();
     static std::atomic<uint32_t> retainedSubmissions{0};
     static bool brightnessInstalled = false;
     // Why the hook is or is not in place: another plugin that patches the same game code turns it
@@ -133,7 +133,6 @@ namespace HeadlightEnhancement
             brightnessStatus = "off in the ini";
             return false;
         }
-        imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
         constexpr uint8_t driverBlock[]{
             0x74,0x33,0x8B,0x8E,0x50,0x0F,0,0,0x85,0xC9,0x74,0x29,
             0x80,0xB9,0x18,0x02,0,0,0,0x75,0x20,
@@ -252,7 +251,6 @@ namespace HeadlightEnhancement
     static void InstallLightModes(bool enabled)
     {
         if (!enabled) return;
-        imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
         // mov al,[esi+F19] / mov cl,al / shr cl,1 / not cl / add cl,cl / xor cl,al / and cl,2 /
         // xor cl,al / mov [esi+F19],cl
         constexpr uint8_t toggle[]{
@@ -368,7 +366,6 @@ namespace HeadlightEnhancement
     {
         if (mode != 1 && mode != 2) return;
         splitBeamsMode = mode;
-        imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
         const auto call = imageBase + 0x63FE11;
         // push dword ptr [ebp+24] / call 0xA3E070 / add esp, 30
         const auto check = CodeCheck().Bytes(0x63FE0E, {0xFF,0x75,0x24,0xE8}).Branch(0x63FE12, 0x63E070)
@@ -408,7 +405,6 @@ namespace HeadlightEnhancement
     {
         if (mode != 1 && mode != 2) return;
         offscreenLightsMode = mode;
-        imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
         const auto at = imageBase + 0x643616;
         // mov eax, [0x159B75C] / test [esi+8], eax / je 0xA44CAA
         const auto check = CodeCheck().Bytes(0x643616, {0xA1}).Address(0x643617, 0x119B75C)

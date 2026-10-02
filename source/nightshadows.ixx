@@ -211,7 +211,7 @@ namespace CShadows
 
     static bool ValidateAdapter()
     {
-        const auto image = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
+        const auto image = reinterpret_cast<const uint8_t*>(GameBase());
         const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
         if (!image || dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0 ||
             dos->e_lfanew > 0x100000)
@@ -361,7 +361,7 @@ public:
     {
         {
             ceAdapter = CShadows::ValidateAdapter();
-            const auto image = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
+            const auto image = reinterpret_cast<const uint8_t*>(GameBase());
             // Uses the real image size, so an unexpected executable is never read past its end.
             const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
             const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(image + dos->e_lfanew);
@@ -417,7 +417,7 @@ public:
                 NearbyVehicleLighting36::enabled.store(iniReader.ReadInteger("SHADOWS", "NearbyVehicleHeadlightReceivers", 0) != 0, std::memory_order_release);
 
                 casterMode = iniReader.ReadInteger("SHADOWS", "ExperimentalOwnHeadlightCasterFix", 0);
-                OwnHeadlightCaster::base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+                OwnHeadlightCaster::base = GameBase();
                 // Publication happens after all hooks are installed below.
                 ShadowDiagnostics::guardPassed = casterGuard;
                 ShadowDiagnostics::casterMode = casterMode;
@@ -495,7 +495,7 @@ public:
             // Headlight shadows
             if (ceAdapter)
             {
-                const uintptr_t image = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+                const uintptr_t image = GameBase();
                 for (size_t i = 0; i < fusionfix::shadows::ce::CallRvas.size(); ++i)
                 {
                     const auto wrapper = i < 2 ? CShadows::StoreStaticShadowPlayerDriving :

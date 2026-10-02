@@ -126,7 +126,7 @@ namespace PlayerShadowAllocation
     }
     static bool InstallCameraCapture() noexcept
     {
-        const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+        const auto base = GameBase();
         // CE setter verified in the running CE executable: mov [viewport],ecx.
         // Guard both opcode and relocated destination before installing.
         const auto site = reinterpret_cast<const uint8_t*>(base + 0x30C6F);
@@ -472,7 +472,7 @@ namespace PlayerShadowAllocation
 
     static bool Install(bool publish)
     {
-        gameBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+        gameBase = GameBase();
         publicationEnabled = publish;
         if (!allocation::ValidateMappedImage(reinterpret_cast<const uint8_t*>(gameBase),
                 fusionfix::shadows::ce::ImageSize, gameBase))
