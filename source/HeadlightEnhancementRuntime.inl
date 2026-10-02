@@ -287,13 +287,16 @@ namespace HeadlightEnhancement
     // Both lit lamps of a car make one beam from the point between them (CE 0xA3FCA5: the two
     // lamp bones averaged, then 0xA3E070), so a hand at the car's edge shadowed the far half of
     // the beam. For a car within a few metres of the player on foot, the call at 0xA3FE11 now
-    // submits each lamp as a beam of its own from its bone, at half the intensity each, keyed by
-    // the car and the car + 1 as the game keys a single lamp. Further away, or while the player
-    // drives, one beam as before.
+    // moves that beam: mode 2 to the lamp on the player's side of the car, one beam and one
+    // shadow as before, changing sides only once the player is 0.3 m past the car's middle;
+    // mode 1 splits it into a beam from each lamp at half the intensity, keyed by the car and the
+    // car + 1 as the game keys a single lamp, two softer shadows apart. Further away, or while
+    // the player drives, one beam from between them as before.
     using SubmitBeams = void(__cdecl*)(void*, float*, float*, void*, float, float, float, float, int, int,
                                        uintptr_t, int);
     static SubmitBeams submitBeams = nullptr;
     static constexpr float SplitBeamsDistance = 6.0f;
+    static int splitBeamsMode = 0;
 
     static void __cdecl SubmitSplitBeams(void* matrix, float* position, float* direction, void* colour,
         float intensity, float radius, float a7, float a8, int a9, int a10, uintptr_t vehicle, int player)
@@ -314,23 +317,46 @@ namespace HeadlightEnhancement
         // at position + 0x30 and + 0x40 (x, -, z), and their shared forward offset at position - 0xC.
         const auto bytes = reinterpret_cast<const uint8_t*>(position);
         const float y = *reinterpret_cast<const float*>(bytes - 0xC);
-        for (int lamp = 0; lamp < 2; ++lamp)
+        const auto& m = carMatrix;
+        const auto lampAt = [&](int lamp, float* world)
         {
             const auto bone = reinterpret_cast<const float*>(bytes + (lamp ? 0x30 : 0x40));
             const float x = bone[0], z = bone[2];
-            float world[4] = { position[0], position[1], position[2], position[3] };
-            const auto& m = carMatrix;
             world[0] = m[0] * x + m[4] * y + m[8] * z + m[12];
             world[1] = m[1] * x + m[5] * y + m[9] * z + m[13];
             world[2] = m[2] * x + m[6] * y + m[10] * z + m[14];
-            submitBeams(matrix, world, direction, colour, intensity * 0.5f, radius, a7, a8, a9, a10,
-                        vehicle + lamp, player);
+            world[3] = position[3];
+            return x;
+        };
+        float world[4];
+        if (splitBeamsMode == 1)
+        {
+            for (int lamp = 0; lamp < 2; ++lamp)
+            {
+                lampAt(lamp, world);
+                submitBeams(matrix, world, direction, colour, intensity * 0.5f, radius, a7, a8, a9, a10,
+                            vehicle + lamp, player);
+            }
+            return;
         }
+        // The player's side: across the car (its matrix's x axis), kept until 0.3 m past the middle.
+        static uintptr_t sideCar = 0;
+        static float side = 0.0f;
+        const float across = (pedMatrix[12] - m[12]) * m[0] + (pedMatrix[13] - m[13]) * m[1] + (pedMatrix[14] - m[14]) * m[2];
+        if (vehicle != sideCar || side == 0.0f || std::fabs(across) > 0.3f)
+            side = across < 0.0f ? -1.0f : 1.0f;
+        sideCar = vehicle;
+        float other[4];
+        const float x0 = lampAt(0, world), x1 = lampAt(1, other);
+        const float* lamp = (x0 - x1) * side >= 0.0f ? world : other;
+        float at[4] = { lamp[0], lamp[1], lamp[2], lamp[3] };
+        submitBeams(matrix, at, direction, colour, intensity, radius, a7, a8, a9, a10, vehicle, player);
     }
 
-    static void InstallSplitBeams(bool enabled)
+    static void InstallSplitBeams(int mode)
     {
-        if (!enabled) return;
+        if (mode != 1 && mode != 2) return;
+        splitBeamsMode = mode;
         imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
         const auto call = imageBase + 0x63FE11;
         // push dword ptr [ebp+24] / call 0xA3E070 / add esp, 30
@@ -344,6 +370,6 @@ namespace HeadlightEnhancement
         }
         submitBeams = reinterpret_cast<SubmitBeams>(imageBase + 0x63E070);
         injector::MakeCALL(call, SubmitSplitBeams, true);
-        splitBeamsStatus = "installed";
+        splitBeamsStatus = mode == 1 ? "installed, two beams" : "installed, beam from the lamp on the player's side";
     }
 }
