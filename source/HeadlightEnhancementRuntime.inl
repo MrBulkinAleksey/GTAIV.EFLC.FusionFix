@@ -385,8 +385,10 @@ namespace HeadlightEnhancement
     // Outdoors some phase still takes in a car behind the camera; in a tunnel none does, so the
     // beam of a car behind the camera went out and came back on once the car was in view. Map
     // lights keep theirs within 35 m of the camera whether seen or not (CE 0xC1DBA4); mode 1 does
-    // the same for the player's car (PlayerCar::Last), mode 2 for every car.
-    static constexpr float OffscreenLightsDistance = 35.0f;
+    // the same for the player's car (PlayerCar::Last), mode 2 for every car. Cars take a distance of
+    // their own, by default as far as high beams reach (75 to 98 m): a car 35 m behind the camera
+    // still lit the road ahead of it.
+    static float offscreenLightsDistance = 100.0f;
     static int offscreenLightsMode = 0;
     static const uint32_t* pPhaseMask = nullptr;
 
@@ -398,13 +400,14 @@ namespace HeadlightEnhancement
         float position[3], camera[3];
         if (!CEntity::GetPosition(vehicle, position) || !GameCamera::Position(camera)) return false;
         const float dx = position[0] - camera[0], dy = position[1] - camera[1], dz = position[2] - camera[2];
-        return dx * dx + dy * dy + dz * dz <= OffscreenLightsDistance * OffscreenLightsDistance;
+        return dx * dx + dy * dy + dz * dz <= offscreenLightsDistance * offscreenLightsDistance;
     }
 
-    static void InstallOffscreenLights(int mode)
+    static void InstallOffscreenLights(int mode, float distance)
     {
         if (mode != 1 && mode != 2) return;
         offscreenLightsMode = mode;
+        offscreenLightsDistance = distance;
         const auto at = imageBase + 0x643616;
         // mov eax, [0x159B75C] / test [esi+8], eax / je 0xA44CAA
         const auto check = CodeCheck().Bytes(0x643616, {0xA1}).Address(0x643617, 0x119B75C)
