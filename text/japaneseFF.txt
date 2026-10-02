@@ -223,9 +223,6 @@ Specular Anti-Aliasing
 [LodBias4]
 -1.0
 
-[Fill Lights]
-Building Fill Lights
-
 [VolumetricLight]
 Volumetric Light
 

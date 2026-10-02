@@ -387,12 +387,12 @@ public:
     bool bVolumetricLightHeadlightShadow = false;
     // Degrees headlight shafts are tilted down, the shaft alone (see InstallShaftHooks).
     float fVolumetricLightHeadlightPitch = 6.0f;
-    // Building Fill Lights in the graphics menu (PREF_FILL_LIGHTS): off darkens the large
-    // exterior map lights, reaching at least FillLightsMinRadius, that flood whole squares and
-    // building fronts. They made scenes look washed out, and at some cell edges (a garage at
-    // x -900 in Algonquin) the game stops sending them with a step of the camera.
+    // FillLights in the INI, off by default: off darkens the large exterior map lights, reaching
+    // at least FillLightsMinRadius, that flood whole squares and building fronts. They made scenes
+    // look washed out, and at some cell edges (a garage at x -900 in Algonquin) the game stops
+    // sending them with a step of the camera.
+    bool bFillLights = false;
     float fFillLightsMinRadius = 30.0f;
-    static bool FillLights() { static auto p = FusionFixSettings.GetRef("PREF_FILL_LIGHTS"); return p ? p->get() != 0 : true; }
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
     IDirect3DSurface9* ContactRawSurf = nullptr;
     rage::grcRenderTargetPC* ContactRawHalfTex = nullptr;
@@ -1138,6 +1138,7 @@ public:
         fVolumetricLightHeadlightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightIntensity", 2.0f), 0.0f, 20.0f);
         fVolumetricLightHeadlightLength = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightLength", 25.0f), 1.0f, 200.0f);
         nVolumetricLightHeadlightAddFlags = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightAddFlags", 0));
+        bFillLights = iniReader.ReadInteger("POSTFX", "FillLights", 0) != 0;
         fFillLightsMinRadius = std::clamp(iniReader.ReadFloat("POSTFX", "FillLightsMinRadius", 30.0f), 0.0f, 1000.0f);
         bVolumetricLightHeadlightShadow = iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightShadow", 0) != 0;
         fVolumetricLightHeadlightPitch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightPitch", 6.0f), -45.0f, 45.0f);
@@ -4403,7 +4404,7 @@ private:
             return;
         // Building Fill Lights off: the large exterior map lights (0x1 and 0x40, no interior 0x20,
         // vehicle 0x100 or traffic light and fire 0x200) that flood whole squares go dark.
-        if (!R.FillLights() && (light->mFlags & 0x361) == 0x41 &&
+        if (!R.bFillLights && (light->mFlags & 0x361) == 0x41 &&
             (light->mType == rage::LT_POINT || light->mType == rage::LT_SPOT) && light->mRadius >= R.fFillLightsMinRadius)
             light->mIntensity = 0.0f;
         if (!R.VolumetricLight() || R.fVolumetricLightIntensity <= 0.0f)

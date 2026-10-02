@@ -2090,7 +2090,6 @@ public:
             { 0, "PREF_ACTIONCAM",              "MISC",       "ActionCamera",                       "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSR",                    "POSTFX",     "ScreenSpaceReflections",             "MENU_DISPLAY_SSR_QUALITY",   0, nullptr, 0, 2 },
             { 0, "PREF_SSR_DEBUG",              "POSTFX",     "ScreenSpaceReflectionsDebug",        "MENU_DISPLAY_SSR_DEBUG",     0, nullptr, 0, 9 },
-            { 0, "PREF_FILL_LIGHTS",            "POSTFX",     "FillLights",                         "",                           0, nullptr, 0, 1 },
             { 0, "PREF_VOLUMETRIC_LIGHT",       "POSTFX",     "VolumetricLight",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_CONTACTSHADOWS",         "POSTFX",     "ContactShadows",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSGI",                   "POSTFX",     "ScreenSpaceIndirectLight",           "",                           1, nullptr, 0, 1 },
@@ -2326,7 +2325,6 @@ public:
             AddRow(category, "SSGI", "PREF_SSGI", 2, toggle);
             AddRow(category, "Contact Shadows", "PREF_CONTACTSHADOWS", 2, toggle);
             AddRow(category, "SkinSSS", "PREF_SKIN_SSS", 2, toggle);
-            AddRow(category, "Fill Lights", "PREF_FILL_LIGHTS", 2, toggle);
             AddRow(category, "VolumetricLight", "PREF_VOLUMETRIC_LIGHT", 2, toggle);
             AddEmptyLine(category);
             // The number next to the slider is the reach in feet, 0 keeps the game's own

@@ -223,9 +223,6 @@ Logitech LightSync RGB
 [LodBias4]
 -1.0
 
-[Fill Lights]
-Заливающий свет зданий
-
 [VolumetricLight]
 Объёмный свет
 
