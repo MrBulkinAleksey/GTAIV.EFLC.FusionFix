@@ -390,16 +390,22 @@ namespace HeadlightEnhancement
     // of the frame's render phases (CE 0xA43616 tests vehicle+8 against the phase mask 0x159B75C).
     // Outdoors some phase still takes in a car behind the camera; in a tunnel none does, so the
     // beam of a car behind the camera went out and came back on once the car was in view. Map
-    // lights keep theirs within 35 m of the camera whether seen or not (CE 0xC1DBA4); cars now
-    // do the same.
+    // lights keep theirs within 35 m of the camera whether seen or not (CE 0xC1DBA4); mode 1 does
+    // the same for the player's car, the one he drives or last drove, mode 2 for every car.
     static constexpr float OffscreenLightsDistance = 35.0f;
+    static int offscreenLightsMode = 0;
     static const uint32_t* pPhaseMask = nullptr;
     static const float* pCameraPosition = nullptr;
+    static uint64_t playerCarToken = 0;
 
     // Called in place of the mask test with the car in ECX; ECX and EDX are dead after it.
     static bool __fastcall MakesLights(uintptr_t vehicle)
     {
+        const bool playerCar = CPlayer::findPlayerCar && CPlayer::findPlayerCar() == vehicle;
+        if (playerCar) playerCarToken = VehicleToken(vehicle);
         if (*reinterpret_cast<const uint32_t*>(vehicle + 8) & *pPhaseMask) return true;
+        if (offscreenLightsMode == 1 && !playerCar && (!playerCarToken || VehicleToken(vehicle) != playerCarToken))
+            return false;
         const auto matrix = *reinterpret_cast<const float* const*>(vehicle + 0x20);
         const auto position = matrix ? matrix + 12 : reinterpret_cast<const float*>(vehicle + 0x10);
         const float dx = position[0] - pCameraPosition[0], dy = position[1] - pCameraPosition[1],
@@ -407,9 +413,10 @@ namespace HeadlightEnhancement
         return dx * dx + dy * dy + dz * dz <= OffscreenLightsDistance * OffscreenLightsDistance;
     }
 
-    static void InstallOffscreenLights(bool enabled)
+    static void InstallOffscreenLights(int mode)
     {
-        if (!enabled) return;
+        if (mode != 1 && mode != 2) return;
+        offscreenLightsMode = mode;
         imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
         const auto at = imageBase + 0x643616;
         // mov eax, [0x159B75C] / test [esi+8], eax / je 0xA44CAA
@@ -431,6 +438,6 @@ namespace HeadlightEnhancement
             injector::WriteMemory<uint8_t>(at + 5 + i, branch[i], true);
         injector::WriteMemory<int32_t>(at + 9, static_cast<int32_t>(imageBase + 0x644CAA - (at + 13)), true);
         injector::WriteMemory<uint8_t>(at + 13, 0x90, true);
-        offscreenLightsStatus = "installed";
+        offscreenLightsStatus = mode == 1 ? "installed, the player's car" : "installed, every car";
     }
 }
