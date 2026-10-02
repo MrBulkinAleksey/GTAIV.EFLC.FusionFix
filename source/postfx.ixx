@@ -344,6 +344,10 @@ public:
     // themselves (shaders/patches/local_light_contact_shadows.patch); they follow the Contact
     // Shadows menu toggle.
     bool bLocalContactShadows = true;
+    // From binding the lighting inputs to the end of deferred lighting, the light loop may turn
+    // c203 off for a light and back on (see InstallLocalContactLightHook).
+    bool bLocalContactPass = false;
+    bool bLocalContactLightOff = false;
     float fLocalContactShadowLength = 0.5f;
     float fLocalContactShadowThickness = 0.2f;
     float fLocalContactShadowMaxDistance = 40.0f;
@@ -4255,6 +4259,35 @@ private:
     // lights the road and casts the headlight's shadow, keeps its aim.
     static inline SafetyHookMid shShaftAim{};
 
+    // Traffic lights and fires (0x200) get no shadow map, so their contact shadow stood alone: at
+    // night, in the shadow of a street light, the light of a traffic light coloured the ground
+    // right up to a car, and its contact shadow cut a black band along the car into that colour.
+    // At the top of the loop that draws each of the frame's lights (CE 0xAC10B7, edi the light
+    // + 0x28, its flags at edi + 0x20), contact shadows go off for those lights and back on after.
+    static inline SafetyHookMid shLocalContactLight{};
+
+    static void InstallLocalContactLightHook()
+    {
+        auto pattern = hook::pattern("83 C7 28 89 7C 24 1C 8B 47 1C 85 C0");
+        if (pattern.empty())
+            return;
+        shLocalContactLight = safetyhook::create_mid(pattern.get_first(7), [](SafetyHookContext& regs)
+        {
+            auto& R = PostFxResources;
+            if (!R.bLocalContactPass || R.LocalContactShadowConsts[7] == 0.0f)
+                return;
+            const bool off = (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x200) != 0;
+            if (off == R.bLocalContactLightOff)
+                return;
+            R.bLocalContactLightOff = off;
+            auto pDevice = rage::grcDevice::GetD3DDevice();
+            if (!pDevice)
+                return;
+            const float none[4] = {};
+            pDevice->SetPixelShaderConstantF(203, off ? none : &R.LocalContactShadowConsts[4], 1);
+        });
+    }
+
     static void InstallShaftHooks()
     {
         auto& R = PostFxResources;
@@ -4422,6 +4455,8 @@ public:
             R.bContactBound = false;
         }
         pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
+        R.bLocalContactPass = true;
+        R.bLocalContactLightOff = false;
 
         // The sun on skin: c201 the scale of the N.L curve less 1, c205 its offset and the red penumbra.
         {
@@ -4518,6 +4553,7 @@ public:
         // nor light skin by this view's material IDs.
         const float noLocalContactShadows[4] = {};
         pDevice->SetPixelShaderConstantF(203, noLocalContactShadows, 1);
+        R.bLocalContactPass = false;
         pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
 
@@ -4604,6 +4640,7 @@ public:
                 {
                     CRenderPhaseDeferredLighting_LightsToScreen::OnAfterCopyLight() += OnAfterCopyLight;
                     InstallShaftHooks();
+                    InstallLocalContactLightHook();
                     InstallPedSkinHooks();
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
