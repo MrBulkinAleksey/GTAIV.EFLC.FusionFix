@@ -2795,6 +2795,8 @@ private:
         effect->SetFloat(h.fTowardCamera, R.fSSRTowardCamera);
         effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
         effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
+        // Debug view 3 has SSR_PS write where its rays hit in place of the colour.
+        effect->SetFloat(h.fDebugMode, float(R.SSRDebugMode()));
 
         // World to reconstruction space rotation, for the G-buffer normals and the debug view.
         const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;

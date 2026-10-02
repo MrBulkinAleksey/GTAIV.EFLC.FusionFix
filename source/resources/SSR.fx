@@ -363,6 +363,9 @@ float PixelJitter(float2 pixel)
     return 1.0 - frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
 }
 
+// Where the last TraceReflection hit, on screen, for debug view 3.
+static float2 gTraceHitUV = 0.0;
+
 // jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
 // distanceFade: reflections fade out towards this distance from the surface, 0 disables.
 float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float distanceFade)
@@ -495,6 +498,7 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     float hitDelta = max(hitZ - LinearDepth(finalUV), 0.0);
     float hitThickness = abs(hitZ - 1.0 / lerp(invZ0, invZ1, lo)) + fThickness;
     float3 hitP = ViewPosFromUVZ(finalUV, hitZ);
+    gTraceHitUV = finalUV;
 
     float2 histUV = HistoryUV(hitP);
 
@@ -599,6 +603,9 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     // accumulation averages the steps out and fewer of them do.
     float jitter = fStepJitter > 0.0 ? PixelJitter(vPos + vec2NoiseOffset) : 1.0;
     float4 r = TraceReflection(C, n, fReflectionBlur, jitter, fDistanceFade);
+    // Debug view 3 (for now): where the ray hit on screen instead of the colour, see SSRDebug_PS.
+    if (fDebugMode > 2.5 && fDebugMode < 3.5)
+        return float4(gTraceHitUV, r.a, r.a);
     // On wet ground the game's reflection strength, which deferred_lighting multiplies SSR by,
     // is that of dry asphalt, so the reflection is drawn brighter there.
     return float4(r.rgb * (1.0 + (fWetGroundBoost - 1.0) * wetOnly), saturate(r.a * surfaceWeight * fIntensity));
@@ -720,19 +727,20 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 
     float3 C = ViewPosFromUVZ(uv, LinearDepth(uv));
 
+    // 3 (for now): where each ray ends, which SSR_PS writes in place of the colour; for exact
+    // positions turn SSR smoothing and accumulation off. A surface SSR does not trace shows its
+    // own screen position dimmed (red across, green down, blue 0.25); a ray that hit shows the
+    // screen position of its hit (red across, green down) with blue for how much it counts; a
+    // miss is black.
     if (fDebugMode < 3.5)
     {
         if (sky)
             return float4(0.0, 0.0, 0.0, 1.0);
-        float3 n;
-        if (uv.x < 0.5)
-            n = ReconstructNormal(uv, C);
-        else
-            n = GBufferNormal(uv);
-        n = (dot(n, C) > 0.0) ? -n : n;
-        if (abs(uv.x - 0.5) < vec2InvViewportSize.x)
-            return float4(1.0, 1.0, 1.0, 1.0);
-        return float4(n * 0.5 + 0.5, 1.0);
+        if (SSRSurfaceWeight(uv) <= 0.0)
+            return float4(uv * 0.35, 0.25, 1.0);
+        if (ssr.a <= 0.0)
+            return float4(0.0, 0.0, 0.0, 1.0);
+        return float4(ssr.rgb, 1.0);
     }
 
     if (sky || ssr.a <= 0.0)
