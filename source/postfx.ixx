@@ -2550,6 +2550,46 @@ private:
         effect->SetFloatArray(h.vec2MotionJitter, jitter.data(), 2);
     }
 
+    // The camera parameters the screen space effects share, under the same names in each effect.
+
+    // View space from depth for a width x height target: the scale and offset that turn a pixel
+    // into its view ray.
+    static D3DXVECTOR4 ProjInfo(const D3DMATRIX& proj, float width, float height)
+    {
+        return D3DXVECTOR4(-2.0f / (width * proj._11), -2.0f / (height * proj._22),
+                           (1.0f - proj._31) / proj._11, (1.0f + proj._32) / proj._22);
+    }
+
+    // vec2InvViewportSize and vec4ProjInfo: pixel size and reconstruction basis for a width x
+    // height target.
+    template <typename Handles>
+    static void SetTargetSize(ID3DXEffect* effect, const Handles& h, const D3DMATRIX& proj, float width, float height)
+    {
+        const float invViewportSize[] = { 1.0f / width, 1.0f / height };
+        effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
+        const auto projInfo = ProjInfo(proj, width, height);
+        effect->SetVector(h.vec4ProjInfo, &projInfo);
+    }
+
+    // fNearPlane and fFarDivNear, for linear depth from the depth buffer.
+    template <typename Handles>
+    static void SetDepthRange(ID3DXEffect* effect, const Handles& h, float nearClip, float farClip)
+    {
+        effect->SetFloat(h.fNearPlane, nearClip);
+        effect->SetFloat(h.fFarDivNear, farClip / nearClip);
+    }
+
+    // World to reconstruction space rotation rows: the view's axes with x (and z, when _34 is
+    // negative) flipped, as ViewToClipRows below.
+    static void WorldToViewRows(const rage::grcViewport* vp, D3DXVECTOR4 rows[3])
+    {
+        const auto& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+        const float axisSign[3] = { -1.0f, 1.0f, (((const D3DMATRIX*)vp->mProjectionMatrix)->_34 < 0.0f) ? -1.0f : 1.0f };
+        for (int row = 0; row < 3; ++row)
+            rows[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
+                                    viewInv.m[row][2] * axisSign[row], 0.0f);
+    }
+
     // vec4ViewToPrevClip: from SSR.fx's reconstruction space, whose x (and z, when _34 is
     // negative) run opposite to the game's view space, to viewProj's clip space.
     static void ViewToClipRows(const rage::grcViewport* vp, const D3DXMATRIX& viewProj, D3DXVECTOR4 rows[4])
@@ -2665,17 +2705,7 @@ private:
                 { w - 0.5f,    hgt - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
             };
             memcpy(screenVertices, quad, sizeof(quad));
-
-            float invViewportSize[] = { 1.0f / w, 1.0f / hgt };
-            effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
-
-            // Same reconstruction basis the AO pass uses.
-            D3DXVECTOR4 projInfo;
-            projInfo.x = -2.0f / (w * proj._11);
-            projInfo.y = -2.0f / (hgt * proj._22);
-            projInfo.z = (1.0f - proj._31) / proj._11;
-            projInfo.w = (1.0f + proj._32) / proj._22;
-            effect->SetVector(h.vec4ProjInfo, &projInfo);
+            SetTargetSize(effect, h, proj, w, hgt);
         };
         setPassSize(half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height);
 
@@ -2696,8 +2726,7 @@ private:
         effect->SetFloat(h.fGlossBoost, hasSpecular ? R.fSSRGlossBoost : 0.0f);
         effect->SetFloat(h.fGlossCutoff, hasSpecular ? R.fSSRGlossCutoff : -1.0f);
 
-        effect->SetFloat(h.fNearPlane, vp->mNearClip);
-        effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
+        SetDepthRange(effect, h, vp->mNearClip, vp->mFarClip);
 
         // Last frame's camera, which the scene history and the accumulation were rendered with
         D3DXMATRIX prevViewProj;
@@ -2730,11 +2759,8 @@ private:
         // World to reconstruction space rotation, for the G-buffer normals and the debug view.
         const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
         {
-            const float axisSign[3] = { -1.0f, 1.0f, (proj._34 < 0.0f) ? -1.0f : 1.0f };
             D3DXVECTOR4 toView[3];
-            for (int row = 0; row < 3; ++row)
-                toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
-                                          viewInv.m[row][2] * axisSign[row], 0.0f);
+            WorldToViewRows(vp, toView);
             effect->SetVectorArray(h.vec4WaterToView, toView, 3);
         }
         const bool hasNormals = R.mNormalRT && R.mNormalRT->mD3DTexture;
@@ -2967,17 +2993,8 @@ private:
         effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
         effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
 
-        float invViewportSize[] = { 1.0f / width, 1.0f / height };
-        effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
-        effect->SetFloat(h.fNearPlane, vp->mNearClip);
-        effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
-
-        D3DXVECTOR4 projInfo;
-        projInfo.x = -2.0f / ((width) * proj._11);
-        projInfo.y = -2.0f / ((height) * proj._22);
-        projInfo.z = (1.0f - proj._31) / proj._11;
-        projInfo.w = (1.0f + proj._32) / proj._22;
-        effect->SetVector(h.vec4ProjInfo, &projInfo);
+        SetTargetSize(effect, h, proj, width, height);
+        SetDepthRange(effect, h, vp->mNearClip, vp->mFarClip);
 
         // The history and its depth come from one fog pass, this frame's if it already ran.
         if (R.bSSRHistoryThisFrame)
@@ -3001,9 +3018,7 @@ private:
         effect->SetFloat(h.fUseWaterMask, waterMask ? 1.0f : 0.0f);
 
         D3DXVECTOR4 toView[3];
-        for (int row = 0; row < 3; ++row)
-            toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
-                                      viewInv.m[row][2] * axisSign[row], 0.0f);
+        WorldToViewRows(vp, toView);
         effect->SetVectorArray(h.vec4WaterToView, toView, 3);
 
         D3DXVECTOR4 worldX(toView[0].x, toView[1].x, toView[2].x, viewInv.m[3][0]);
@@ -3252,10 +3267,9 @@ private:
                 float invViewportSize[] = { 1.0f / width, 1.0f / height };
 
                 effect->SetTexture(h.DepthTex2D, PostFxResources.DepthTex);
-                effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
-                effect->SetFloat(h.fNearPlane, currGrcViewport->mNearClip);
+                SetTargetSize(effect, h, *(const D3DMATRIX*)currGrcViewport->mProjectionMatrix, width, height);
+                SetDepthRange(effect, h, currGrcViewport->mNearClip, currGrcViewport->mFarClip);
                 effect->SetFloat(h.fFarPlane, currGrcViewport->mFarClip);
-                effect->SetFloat(h.fFarDivNear, currGrcViewport->mFarClip / currGrcViewport->mNearClip);
 
                 pDevice->SetRenderTarget(0, camDepthSurf[0]);
                 effect->BeginPass(0);
@@ -3301,14 +3315,6 @@ private:
                 effect->SetFloat(h.fBias, PostFxResources.fAmbientOcclusionBias);
                 effect->SetFloat(h.fIntensity, PostFxResources.fAmbientOcclusionIntensity);
                 effect->SetFloat(h.fProjScale, proj._22 * 0.5f * height);
-
-                D3DXVECTOR4 projInfo;
-                projInfo.x = -2.0f / ((width)*proj._11);
-                projInfo.y = -2.0f / ((height)*proj._22);
-                projInfo.z = (1.0f - proj._31) / proj._11;
-                projInfo.w = (1.0f + proj._32) / proj._22;
-
-                effect->SetVector(h.vec4ProjInfo, &projInfo);
 
                 effect->CommitChanges();
 
@@ -3697,35 +3703,21 @@ private:
 
         const float width = float(vp->mWidth);
         const float height = float(vp->mHeight);
-        D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
-        const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
-        const float axisSign[3] = { -1.0f, 1.0f, (proj._34 < 0.0f) ? -1.0f : 1.0f };
-
+        const D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
         D3DXVECTOR4 toView[3];
-        for (int row = 0; row < 3; ++row)
-            toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
-                                      viewInv.m[row][2] * axisSign[row], 0.0f);
+        WorldToViewRows(vp, toView);
         D3DXVECTOR4 sun(0.0f, 0.0f, 0.0f, 1.0f);
         for (int row = 0; row < 3; ++row)
             (&sun.x)[row] = -(toView[row].x * light[0] + toView[row].y * light[1] + toView[row].z * light[2]) / lightLen;
 
-        D3DXVECTOR4 projInfo;
-        projInfo.x = -2.0f / (width * proj._11);
-        projInfo.y = -2.0f / (height * proj._22);
-        projInfo.z = (1.0f - proj._31) / proj._11;
-        projInfo.w = (1.0f + proj._32) / proj._22;
-
         const bool hasNormals = R.mNormalRT && R.mNormalRT->mD3DTexture;
-        const float invViewportSize[] = { 1.0f / width, 1.0f / height };
         effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
         if (hasNormals)
             effect->SetTexture(h.NormalTex2D, R.mNormalRT->mD3DTexture);
         effect->SetFloat(h.fUseGBufferNormals, (hasNormals && R.bSSRGBufferNormals) ? 1.0f : 0.0f);
         effect->SetVectorArray(h.vec4WaterToView, toView, 3);
-        effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
-        effect->SetFloat(h.fNearPlane, vp->mNearClip);
-        effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
-        effect->SetVector(h.vec4ProjInfo, &projInfo);
+        SetTargetSize(effect, h, proj, width, height);
+        SetDepthRange(effect, h, vp->mNearClip, vp->mFarClip);
         effect->SetVector(h.vec4SunView, &sun);
         effect->SetFloat(h.fStepJitter, R.bContactShadowStepJitter ? 1.0f : 0.0f);
         const bool temporal = R.fContactTemporalBlend > 0.0f && h.techContactTemporal && R.ContactAccumSurf[0] &&
@@ -3784,13 +3776,9 @@ private:
             // The march at half size, with the pixel size and reconstruction basis of that size,
             // then back to full size for the rest.
             const float halfWidth = float(DWORD(width) / 2), halfHeight = float(DWORD(height) / 2);
-            const float invHalfSize[] = { 1.0f / halfWidth, 1.0f / halfHeight };
-            D3DXVECTOR4 halfProjInfo(-2.0f / (halfWidth * proj._11), -2.0f / (halfHeight * proj._22), projInfo.z, projInfo.w);
-            effect->SetFloatArray(h.vec2InvViewportSize, invHalfSize, 2);
-            effect->SetVector(h.vec4ProjInfo, &halfProjInfo);
+            SetTargetSize(effect, h, proj, halfWidth, halfHeight);
             DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawHalfSurf, halfWidth, halfHeight);
-            effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
-            effect->SetVector(h.vec4ProjInfo, &projInfo);
+            SetTargetSize(effect, h, proj, width, height);
             effect->SetTexture(h.SSRResultTex2D, R.ContactRawHalfTex->mD3DTexture);
             DrawEffectPass(pDevice, effect, h.techContactUpsample, R.ContactRawSurf, width, height);
         }
@@ -3911,26 +3899,10 @@ private:
         const float fullHeight = float(vp->mHeight);
         const float width = float(DWORD(fullWidth) / 2);
         const float height = float(DWORD(fullHeight) / 2);
-        D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
-        const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
-        const float axisSign[3] = { -1.0f, 1.0f, (proj._34 < 0.0f) ? -1.0f : 1.0f };
+        const D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
         D3DXVECTOR4 toView[3];
-        for (int row = 0; row < 3; ++row)
-            toView[row] = D3DXVECTOR4(viewInv.m[row][0] * axisSign[row], viewInv.m[row][1] * axisSign[row],
-                                      viewInv.m[row][2] * axisSign[row], 0.0f);
-        // Pixel size and reconstruction basis for a w x h target.
-        auto setPassSize = [&](float w, float hgt)
-        {
-            const float invViewportSize[] = { 1.0f / w, 1.0f / hgt };
-            effect->SetFloatArray(h.vec2InvViewportSize, invViewportSize, 2);
-            D3DXVECTOR4 projInfo;
-            projInfo.x = -2.0f / (w * proj._11);
-            projInfo.y = -2.0f / (hgt * proj._22);
-            projInfo.z = (1.0f - proj._31) / proj._11;
-            projInfo.w = (1.0f + proj._32) / proj._22;
-            effect->SetVector(h.vec4ProjInfo, &projInfo);
-        };
-        setPassSize(width, height);
+        WorldToViewRows(vp, toView);
+        SetTargetSize(effect, h, proj, width, height);
 
         const bool hasNormals = R.mNormalRT && R.mNormalRT->mD3DTexture;
         const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
@@ -3943,8 +3915,7 @@ private:
         effect->SetFloat(h.fUseGBufferNormals, (hasNormals && R.bSSRGBufferNormals) ? 1.0f : 0.0f);
         effect->SetVectorArray(h.vec4WaterToView, toView, 3);
         effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
-        effect->SetFloat(h.fNearPlane, vp->mNearClip);
-        effect->SetFloat(h.fFarDivNear, vp->mFarClip / vp->mNearClip);
+        SetDepthRange(effect, h, vp->mNearClip, vp->mFarClip);
         SetNoiseOffset(effect, R.fGITemporalBlend > 0.0f);
         effect->SetFloat(h.fGIRayLength, R.fGIRayLength);
         effect->SetFloat(h.fGIThickness, R.fGIThickness);
@@ -4032,7 +4003,7 @@ private:
         vpDesc.Width = DWORD(fullWidth);
         vpDesc.Height = DWORD(fullHeight);
         pDevice->SetViewport(&vpDesc);
-        setPassSize(fullWidth, fullHeight);
+        SetTargetSize(effect, h, proj, fullWidth, fullHeight);
         if (h.techGIUpsample && R.GIFullSurf)
         {
             effect->SetTexture(h.SSRResultTex2D, R.GIResult);
@@ -4099,8 +4070,7 @@ private:
         effect->SetTexture(h.SkinIDTex2D, R.mMaterialIdRT->mD3DTexture);
         effect->SetTexture(h.AlbedoTex2D, R.mDiffuseRT->mD3DTexture);
         effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
-        effect->SetFloat(h.fNearPlane, R.SkinCamera[2]);
-        effect->SetFloat(h.fFarDivNear, R.SkinCamera[3] / R.SkinCamera[2]);
+        SetDepthRange(effect, h, R.SkinCamera[2], R.SkinCamera[3]);
         effect->SetFloat(h.fSkinStrength, R.fSkinScatteringStrength);
 
         IDirect3DSurface9* rt0 = nullptr;
