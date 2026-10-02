@@ -209,7 +209,7 @@ namespace PlayerShadowAllocation
     {
         const Vec3 position{light.mPosition.x,light.mPosition.y,light.mPosition.z};
         const Vec3 direction{light.mDirection.x,light.mDirection.y,light.mDirection.z};
-        if (light.mFlags & 0x100u) {
+        if (light.mFlags & rage::LF_VEHICLE) {
             if (fusionfix::shadows::BeamTouchesReceiver(state.player, state.occupiedCar ? 3.0f : 1.5f,
                 position, direction, light.mOuterConeAngle, light.mRadius)) return true;
             return !state.occupiedCar && NearbyVehicleLighting36::Relevant(state.ped,state.frame,
@@ -249,7 +249,7 @@ namespace PlayerShadowAllocation
         if(address<0x10000 || count>4096 || index>=count || regs.edi!=address ||
             regs.esi!=index*sizeof(rage::CLightSource) || address>UINTPTR_MAX-count*sizeof(rage::CLightSource)) return;
         const auto& light=lights[index];
-        if(!(light.mFlags&6u) || (light.mFlags&0x100u) ||
+        if(!(light.mFlags&(rage::LF_STATIC_SHADOW|rage::LF_DYNAMIC_SHADOW)) || (light.mFlags&rage::LF_VEHICLE) ||
             *reinterpret_cast<const uint32_t*>(regs.esp+0x1C)!=light.mFlags) return;
         const Vec3 position{light.mPosition.x,light.mPosition.y,light.mPosition.z};
         const float visibleWeight=fusionfix::shadows::ShadowViewWeight(state.view,position,
@@ -293,7 +293,8 @@ namespace PlayerShadowAllocation
         }
         const auto& light = lights[index];
         const auto flags = *reinterpret_cast<const uint32_t*>(regs.esp + 0x1C);
-        if (flags != light.mFlags || !(flags & 4u) || ((flags & 2u) && light.mShadowCacheIndex < 0))
+        if (flags != light.mFlags || !(flags & rage::LF_DYNAMIC_SHADOW) ||
+            ((flags & rage::LF_STATIC_SHADOW) && light.mShadowCacheIndex < 0))
         {
             RejectPass();
             return;
@@ -302,10 +303,10 @@ namespace PlayerShadowAllocation
         auto geometry = fusionfix::shadows::EvaluateGeometry(state.player,
             {light.mPosition.x, light.mPosition.y, light.mPosition.z});
         auto kind = budget::Kind::Lamp;
-        if (flags & 0x100u)
+        if (flags & rage::LF_VEHICLE)
             kind = fusionfix::shadows::ce::IsVehicleBeam(key, state.occupiedCar ? state.occupiedCar : PlayerCar::Last())
                 ? budget::Kind::PlayerBeam : budget::Kind::OtherBeam;
-        if (flags & 0x100u)
+        if (flags & rage::LF_VEHICLE)
             geometry.distanceSquared = fusionfix::shadows::ReceiverDistanceSquared(state.player,
                 {light.mPosition.x,light.mPosition.y,light.mPosition.z},state.occupiedCar ? 3.0f : 1.5f);
         const int feet = fusionfix::shadows::ShadowReachFeet(ShadowReachStep(kind != budget::Kind::Lamp));
@@ -314,7 +315,7 @@ namespace PlayerShadowAllocation
             ? (std::max)(configuredReach,light.mRadius) : configuredReach;
         const auto viewWeight=fusionfix::shadows::ShadowViewWeight(state.view,
             {light.mPosition.x,light.mPosition.y,light.mPosition.z},
-            {light.mDirection.x,light.mDirection.y,light.mDirection.z},light.mRadius,(flags&0x100u)!=0);
+            {light.mDirection.x,light.mDirection.y,light.mDirection.z},light.mRadius,(flags&rage::LF_VEHICLE)!=0);
         const float priorityDistance=state.occupiedCar && kind==budget::Kind::Lamp && viewWeight>1.0f
             ? fusionfix::shadows::DrivingLampPriorityDistance(state.player,state.drivingFocus,
                 {light.mPosition.x,light.mPosition.y,light.mPosition.z},geometry.distanceSquared,viewWeight)

@@ -1775,6 +1775,22 @@ export namespace rage
         LT_CLAMPED = 0x4,
     };
 
+    // CLightSource::mFlags, from the game's own calls to its light submission (CE 0xABCC50, which
+    // clears the shaft bit, and 0xABCCD0).
+    enum eLightFlags : uint32_t
+    {
+        LF_MAP = 0x1,             // map (2dfx) lights, and effects
+        LF_STATIC_SHADOW = 0x2,   // shadow map kept in the cache (mShadowCacheIndex)
+        LF_DYNAMIC_SHADOW = 0x4,  // shadow map drawn every frame
+        LF_SHAFT = 0x8,           // light shaft
+        LF_10 = 0x10,             // a 2dfx flag, also vehicle point lights
+        LF_INTERIOR = 0x20,       // set by the game
+        LF_EXTERIOR = 0x40,       // set by the game
+        LF_UNCULLED = 0x80,       // one source the game never culls
+        LF_VEHICLE = 0x100,       // headlights 0x104 or 0x504
+        LF_TRAFFIC = 0x200,       // traffic lights; with LF_MAP fires and explosions
+    };
+
     class CLightSource
     {
     public:

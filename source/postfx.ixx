@@ -375,7 +375,7 @@ public:
     // Headlights too: spot lights carrying this flag, whatever their radius and other flags.
     // 0x100 is the vehicle beam bit the night shadow code goes by (ShadowAllocationRuntime);
     // 0 leaves headlights out.
-    uint32_t nVolumetricLightHeadlightFlag = 0x100;
+    uint32_t nVolumetricLightHeadlightFlag = rage::LF_VEHICLE;
     float fVolumetricLightHeadlightIntensity = 2.0f;
     // Headlight shaft size in metres, radius times scale for the shaft mesh.
     float fVolumetricLightHeadlightLength = 25.0f;
@@ -1134,7 +1134,7 @@ public:
         fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 4.0f), 0.0f, 20.0f);
         fVolumetricLightScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightScale", 0.25f), 0.0f, 2.0f);
         fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 100.0f), 10.0f, 1000.0f);
-        nVolumetricLightHeadlightFlag = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightFlag", 0x100));
+        nVolumetricLightHeadlightFlag = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightFlag", rage::LF_VEHICLE));
         fVolumetricLightHeadlightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightIntensity", 2.0f), 0.0f, 20.0f);
         fVolumetricLightHeadlightLength = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightLength", 25.0f), 1.0f, 200.0f);
         nVolumetricLightHeadlightAddFlags = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightAddFlags", 0));
@@ -4402,9 +4402,10 @@ private:
         auto& R = PostFxResources;
         if (!light)
             return;
-        // Building Fill Lights off: the large exterior map lights (0x1 and 0x40, no interior 0x20,
-        // vehicle 0x100 or traffic light and fire 0x200) that flood whole squares go dark.
-        if (!R.bFillLights && (light->mFlags & 0x361) == 0x41 &&
+        // Building Fill Lights off: the large exterior map lights, no interior, vehicle, traffic
+        // light or fire, that flood whole squares go dark.
+        constexpr uint32_t fillMask = rage::LF_MAP | rage::LF_INTERIOR | rage::LF_EXTERIOR | rage::LF_VEHICLE | rage::LF_TRAFFIC;
+        if (!R.bFillLights && (light->mFlags & fillMask) == (rage::LF_MAP | rage::LF_EXTERIOR) &&
             (light->mType == rage::LT_POINT || light->mType == rage::LT_SPOT) && light->mRadius >= R.fFillLightsMinRadius)
             light->mIntensity = 0.0f;
         if (!R.VolumetricLight() || R.fVolumetricLightIntensity <= 0.0f)
@@ -4419,22 +4420,17 @@ private:
         const float dz = cameraPos.z - light->mPosition.z;
         const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-        // Light flags, from the game's own calls to its light submission (CE 0xABCC50, which
-        // clears the shaft bit, and 0xABCCD0): 0x1 map (2dfx) lights, and effects; 0x2 and 0x10
-        // two 2dfx flags, 0x10 also vehicle point lights; 0x4 casts a shadow; 0x8 light shaft;
-        // 0x20/0x40 set by the game for interior/exterior; 0x80 lights the game never culls;
-        // 0x100 vehicle lights, 0x400 more with it on headlights; 0x200 traffic lights, fires
-        // and explosions (0x201).
-        // Spot lights of 8 to 20 m, most of lamppost.img, and none of 0x398 or lights that have
-        // a shaft already (8); headlights
-        // are the spot lights of at least 8 m with the headlight flag (smaller ones are tail and
-        // brake lights), whatever their other flags.
-        if (light->mType != rage::LT_SPOT || (light->mFlags & 8))
+        // Spot lights of 8 to 20 m, most of lamppost.img, none of a vehicle, traffic light, the
+        // unculled source or LF_10, and none with a shaft already; headlights are the spot lights
+        // of at least 8 m with the headlight flag (smaller ones are tail and brake lights),
+        // whatever their other flags.
+        if (light->mType != rage::LT_SPOT || (light->mFlags & rage::LF_SHAFT))
             return;
         const uint32_t headlightFlag = R.nVolumetricLightHeadlightFlag;
         const bool headlight = headlightFlag && (light->mFlags & headlightFlag) && light->mRadius >= 8.0f &&
                                R.fVolumetricLightHeadlightIntensity > 0.0f;
-        if (!headlight && (light->mRadius < 8.0f || light->mRadius > 20.0f || (light->mFlags & 0x398)))
+        constexpr uint32_t noShaft = rage::LF_TRAFFIC | rage::LF_VEHICLE | rage::LF_UNCULLED | rage::LF_10 | rage::LF_SHAFT;
+        if (!headlight && (light->mRadius < 8.0f || light->mRadius > 20.0f || (light->mFlags & noShaft)))
             return;
         const float fadeStart = R.fVolumetricLightMaxDistance * 0.3f;
         const float x = std::clamp((distance - fadeStart) / (R.fVolumetricLightMaxDistance - fadeStart), 0.0f, 1.0f);
@@ -4442,7 +4438,7 @@ private:
         if (fade <= 0.0f)
             return;
 
-        light->mFlags |= 8; // light shaft
+        light->mFlags |= rage::LF_SHAFT;
         if (headlight)
             light->mFlags |= R.nVolumetricLightHeadlightAddFlags;
         light->mVolumeIntensity = (headlight ? R.fVolumetricLightHeadlightIntensity : R.fVolumetricLightIntensity) * fade;

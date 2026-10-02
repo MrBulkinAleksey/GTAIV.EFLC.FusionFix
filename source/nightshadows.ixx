@@ -193,7 +193,7 @@ namespace CShadows
         int a11, int a12, int a13, int a14, int a15, int stableKey)
     {
         if (!gStableHeadlightShadow.ShouldCast(direction, position, stableKey, a11))
-            flags &= ~4u;
+            flags &= ~rage::LF_DYNAMIC_SHADOW;
         hbStoreStaticShadow.fun(a1, a2, flags, direction, tangent, position,
                                 a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey);
     }
@@ -203,7 +203,7 @@ namespace CShadows
         int a11, int a12, int a13, int a14, int a15, int stableKey)
     {
         if (!gStableHeadlightShadow.ShouldCast(direction, position, stableKey, a11))
-            flags &= ~4u;
+            flags &= ~rage::LF_DYNAMIC_SHADOW;
         hbStoreStaticShadow.fun(a1, a2, flags, direction, tangent, position,
                                 a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey);
     }
