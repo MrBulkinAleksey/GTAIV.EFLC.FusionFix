@@ -354,12 +354,6 @@ public:
     // c203 off for a light and back on (see InstallLocalContactLightHook).
     bool bLocalContactPass = false;
     bool bLocalContactLightOff = false;
-    // Both lamps of a car make one beam from between them, so a hand at the car's edge, a metre
-    // from that point, shadowed the far half of the beam and blinked it. Within this many metres
-    // of a headlight what stands casts no shadow from it, c207.x = -that, set per light by the
-    // light loop hook for the shadowed light shaders (local_light_shadow_near.patch).
-    float fHeadlightShadowNear = 1.0f;
-    bool bShadowNearLight = false;
     float fLocalContactShadowLength = 0.5f;
     float fLocalContactShadowThickness = 0.2f;
     float fLocalContactShadowMaxDistance = 40.0f;
@@ -1130,7 +1124,6 @@ public:
         nGIRays = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceIndirectLightRays", 4), 1, 16);
         nGISteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceIndirectLightSteps", 8), 2, 32);
         bLocalContactShadows = iniReader.ReadInteger("POSTFX", "LocalContactShadows", 1) != 0;
-        fHeadlightShadowNear = std::clamp(iniReader.ReadFloat("SHADOWS", "HeadlightShadowNear", 1.0f), 0.0f, 5.0f);
         fLocalContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsLength", 0.5f), 0.05f, 10.0f);
         fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.2f), 0.01f, 5.0f);
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
@@ -4281,8 +4274,7 @@ private:
     // night, in the shadow of a street light, the light of a traffic light coloured the ground
     // right up to a car, and its contact shadow cut a black band along the car into that colour.
     // At the top of the loop that draws each of the frame's lights (CE 0xAC10B7, edi the light
-    // + 0x28, its flags at edi + 0x20), contact shadows go off for those lights and back on after,
-    // and headlights get their shadow near cut (see fHeadlightShadowNear).
+    // + 0x28, its flags at edi + 0x20), contact shadows go off for those lights and back on after.
     static inline SafetyHookMid shLocalContactLight{};
 
     static void InstallLocalContactLightHook()
@@ -4293,27 +4285,17 @@ private:
         shLocalContactLight = safetyhook::create_mid(pattern.get_first(7), [](SafetyHookContext& regs)
         {
             auto& R = PostFxResources;
-            if (!R.bLocalContactPass)
+            if (!R.bLocalContactPass || R.LocalContactShadowConsts[7] == 0.0f)
                 return;
+            const bool off = (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x200) != 0;
+            if (off == R.bLocalContactLightOff)
+                return;
+            R.bLocalContactLightOff = off;
             auto pDevice = rage::grcDevice::GetD3DDevice();
             if (!pDevice)
                 return;
-            const uint32_t flags = *reinterpret_cast<const uint32_t*>(regs.edi + 0x20);
             const float none[4] = {};
-            const bool off = (flags & 0x200) != 0;
-            if (R.LocalContactShadowConsts[7] != 0.0f && off != R.bLocalContactLightOff)
-            {
-                R.bLocalContactLightOff = off;
-                pDevice->SetPixelShaderConstantF(203, off ? none : &R.LocalContactShadowConsts[4], 1);
-            }
-            // Vehicle lights (0x100), of which only headlights get shadows.
-            const bool nearCut = (flags & 0x100) && R.fHeadlightShadowNear > 0.0f;
-            if (nearCut != R.bShadowNearLight)
-            {
-                R.bShadowNearLight = nearCut;
-                const float cut[4] = { -R.fHeadlightShadowNear, 0.0f, 0.0f, 0.0f };
-                pDevice->SetPixelShaderConstantF(207, nearCut ? cut : none, 1);
-            }
+            pDevice->SetPixelShaderConstantF(203, off ? none : &R.LocalContactShadowConsts[4], 1);
         });
     }
 
@@ -4485,9 +4467,6 @@ public:
         }
         pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
         R.bLocalContactPass = true;
-        R.bShadowNearLight = false;
-        const float noShadowNear[4] = {};
-        pDevice->SetPixelShaderConstantF(207, noShadowNear, 1);
         R.bLocalContactLightOff = false;
 
         // The sun on skin: c201 the scale of the N.L curve less 1, c205 its offset and the red penumbra.
@@ -4588,7 +4567,6 @@ public:
         R.bLocalContactPass = false;
         pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
-        pDevice->SetPixelShaderConstantF(207, noLocalContactShadows, 1);
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
