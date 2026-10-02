@@ -22,8 +22,7 @@ namespace HeadlightEnhancement
     static std::string lightModesStatus = "off in the ini";
     static std::string splitBeamsStatus = "off in the ini";
     static std::string offscreenLightsStatus = "off in the ini";
-    static std::atomic<bool> diagnosticsReady{false};
-    static std::filesystem::path logPath;
+    static fusionfix::DiagnosticsLog log;
 
     static std::string DumpBytes(uintptr_t address, size_t count)
     {
@@ -116,19 +115,15 @@ namespace HeadlightEnhancement
 
     static void WriteDiagnostics()
     {
-        if (!diagnosticsReady.load(std::memory_order_acquire)) return;
-        static ULONGLONG last = 0;
-        const auto now = GetTickCount64();
-        if (logPath.empty() || now - last < 5000) return;
-        last = now;
-        std::ofstream out(logPath, std::ios::trunc);
-        out << "brightnessInstalled=" << brightnessInstalled
-            << "\nbrightnessStatus=" << brightnessStatus
-            << "\nretainedSubmissions=" << retainedSubmissions.load()
-            << "\nlightModesStatus=" << lightModesStatus
-            << "\nsplitBeamsStatus=" << splitBeamsStatus
-            << "\noffscreenLightsStatus=" << offscreenLightsStatus
-            << "\ntrackedVehicle=" << (PlayerCar::Last() != 0) << '\n';
+        log.Write(std::ios::trunc, [](std::ofstream& out, uint64_t) {
+            out << "brightnessInstalled=" << brightnessInstalled
+                << "\nbrightnessStatus=" << brightnessStatus
+                << "\nretainedSubmissions=" << retainedSubmissions.load()
+                << "\nlightModesStatus=" << lightModesStatus
+                << "\nsplitBeamsStatus=" << splitBeamsStatus
+                << "\noffscreenLightsStatus=" << offscreenLightsStatus
+                << "\ntrackedVehicle=" << (PlayerCar::Last() != 0) << '\n';
+        });
     }
 
     static bool InstallBrightness(bool enabled)

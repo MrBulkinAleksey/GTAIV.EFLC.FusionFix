@@ -71,9 +71,7 @@ namespace OwnHeadlightCaster
 
 namespace ShadowDiagnostics
 {
-    static std::atomic<bool> ready{false};
-    static std::filesystem::path path;
-    static uint64_t lastWrite = 0;
+    static fusionfix::DiagnosticsLog log;
     static bool guardPassed = false;
     static int casterMode = 0, allocationMode = 0;
     static std::string startupGuardDetails;
@@ -83,16 +81,10 @@ namespace ShadowDiagnostics
 
     static void Write() noexcept
     {
-        if (!ready.load(std::memory_order_acquire)) return;
-        const auto now = GetTickCount64();
-        if (now - lastWrite < 5000) return;
-        lastWrite = now;
-        ShadowTrace34::Flush();
         // Low-frequency game-event I/O, never inside submission/caster hooks.
-        // Failure to write diagnostics must not escape into game code.
-        try
+        log.Write(std::ios::app, [](std::ofstream& log, uint64_t now)
         {
-            std::ofstream log(path, std::ios::app);
+            ShadowTrace34::Flush();
             if (!startupWritten)
             {
                 log << "adapter " << adapterStatus << '\n';
@@ -159,7 +151,6 @@ namespace ShadowDiagnostics
                 << " occupants_excluded=" << OwnHeadlightCaster::occupantsExcluded.load()
                 << " driving_beam_yes=" << CShadows::drivingBeamAccepted.load()
                 << " driving_beam_no=" << CShadows::drivingBeamRejected.load() << '\n';
-        }
-        catch (...) {}
+        });
     }
 }

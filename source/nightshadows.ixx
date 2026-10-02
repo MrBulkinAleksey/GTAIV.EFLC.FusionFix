@@ -27,6 +27,7 @@ module;
 #include "SubmittedHeadlightHistory.hpp"
 #include "ShadowLookupLayout.hpp"
 #include "ShadowCrashTrace30.hpp"
+#include "DiagnosticsLog.hpp"
 #include <fstream>
 #include <atomic>
 #include <intrin.h>
@@ -400,12 +401,12 @@ public:
 
             // The experimental adapter has only been audited for CE 1.2.0.59. Any other
             // layout skips it and keeps the official FusionFix night shadow behaviour.
-            ShadowDiagnostics::path = iniReader.GetIniPath().parent_path() / "GTAIV-shadows.log";
+            ShadowDiagnostics::log.path = iniReader.GetIniPath().parent_path() / "GTAIV-shadows.log";
             int casterMode = 0;
             if (ceAdapter)
             {
                 PlayerCar::driverOffset = 0xF50;
-                HeadlightEnhancement::logPath = iniReader.GetIniPath().parent_path() / "GTAIV-headlights.log";
+                HeadlightEnhancement::log.path = iniReader.GetIniPath().parent_path() / "GTAIV-headlights.log";
                 HeadlightEnhancement::brightnessInstalled = HeadlightEnhancement::InstallBrightness(
                     iniReader.ReadInteger("HEADLIGHTS", "ConsistentBrightness", 0) != 0);
                 HeadlightEnhancement::InstallLightModes(iniReader.ReadInteger("HEADLIGHTS", "LightModes", 0) != 0);
@@ -674,9 +675,9 @@ public:
             }
             OwnHeadlightCaster::enabled.store(ceAdapter && casterGuard && casterMode == 1 &&
                 static_cast<bool>(shsub_D77A00), std::memory_order_release);
-            HeadlightEnhancement::diagnosticsReady.store(ceAdapter && shadowDiagnostics, std::memory_order_release);
+            HeadlightEnhancement::log.ready.store(ceAdapter && shadowDiagnostics, std::memory_order_release);
             // Written on every executable, so a missing adapter shows up with its reason.
-            ShadowDiagnostics::ready.store(shadowDiagnostics, std::memory_order_release);
+            ShadowDiagnostics::log.ready.store(shadowDiagnostics, std::memory_order_release);
         };
     }
 } NightShadows;
