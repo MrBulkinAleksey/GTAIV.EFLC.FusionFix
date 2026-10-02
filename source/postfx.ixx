@@ -3711,7 +3711,9 @@ private:
         // For the light shaders, whatever becomes of the sun's pass below.
         {
             rage::grcViewport* camera = rage::GetCurrentViewport();
-            const bool local = camera && R.bLocalContactShadows && R.ContactShadowsEnabled() && R.fLocalContactShadowIntensity > 0.0f;
+            // Night shadows off in the menu (Extra Night Shadows) leaves no halo of them under cars.
+            const bool local = camera && R.bLocalContactShadows && R.ContactShadowsEnabled() && bExtraNightShadows &&
+                               R.fLocalContactShadowIntensity > 0.0f;
             const D3DMATRIX proj = camera ? *(const D3DMATRIX*)camera->mProjectionMatrix : D3DMATRIX{};
             const float consts[12] =
             {
@@ -4276,7 +4278,9 @@ private:
             auto& R = PostFxResources;
             if (!R.bLocalContactPass || R.LocalContactShadowConsts[7] == 0.0f)
                 return;
-            const bool off = (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x200) != 0;
+            // Headlights (0x100) too while the Extra Night Shadows setting leaves them no shadows.
+            const uint32_t flags = *reinterpret_cast<const uint32_t*>(regs.edi + 0x20);
+            const bool off = (flags & 0x200) || ((flags & 0x100) && !bHeadlightShadows);
             if (off == R.bLocalContactLightOff)
                 return;
             R.bLocalContactLightOff = off;
