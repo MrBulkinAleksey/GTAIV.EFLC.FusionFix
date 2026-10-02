@@ -367,6 +367,7 @@ float PixelJitter(float2 pixel)
 // depth direction (negative towards the camera).
 static float gTraceHitZ = 0.0;
 static float gTraceRayZ = 0.0;
+static float gTraceBlocked = 0.0;
 
 // jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
 // distanceFade: reflections fade out towards this distance from the surface, 0 disables.
@@ -431,6 +432,9 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     // How far the ray travelled hidden behind what the screen shows, in world units.
     float hidden = 0.0;
     float3 prevRayP = P0;
+    // The last sample in front of the scene before the ray went far behind something, after
+    // half a metre of travel; -1 if there was none.
+    float blockedT = -1.0;
 
     // One loop, no nested refinement inside it: D3DX compiles this effect while the game
     // loads, and an unrolled refinement inside the march made it take long enough to look
@@ -467,8 +471,13 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
                 hitHi = t;
                 break;
             }
+            if (length(prevRayP - P0) > 0.5)
+                blockedT = prevT;
             if (fPassThinObjects <= 0.0)
+            {
+                prevDelta = delta;
                 break;
+            }
         }
 
         float3 rayP = ViewPosFromUVZ(sampleUV, rayZ);
@@ -479,29 +488,52 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
         prevDelta = delta;
     }
 
-    if (hit <= 0.0)
+    // What a ray reflects can be hidden behind something standing between it and the camera:
+    // the road a car reflects, behind the player's legs. The ray then ends behind him, or comes
+    // out and is faded for running far out of view (see hidden below), and below the horizon,
+    // where deferred_lighting shows a reflection only where SSR found one, the car showed a
+    // hole of his shape that changed as he moved. Such a ray takes the scene where it went out
+    // of view, the road beside his outline, if it crossed half a metre of the screen's scene
+    // first: rays that went behind him straight off a door took the door's own colour, a halo.
+    bool blocked = blockedT >= 0.0 && (hit <= 0.0 ? prevDelta > 0.0 : hidden > 0.6);
+    if (hit <= 0.0 && !blocked)
         return 0.0;
 
-    // Binary refinement between the last sample in front of the scene and the first behind it.
-    float lo = hitLo;
-    float hi = hitHi;
-    [unroll]
-    for (int j = 0; j < NUM_REFINE_STEPS; ++j)
+    float2 finalUV;
+    float hitZ;
+    float hitDelta = 0.0;
+    float hitThickness = fThickness;
+    [branch]
+    if (blocked)
     {
-        float mid = (lo + hi) * 0.5;
-        float midZ = 1.0 / lerp(invZ0, invZ1, mid);
-        if (midZ - LinearDepth(lerp(uv0, uv1, mid)) > 0.0)
-            hi = mid;
-        else
-            lo = mid;
+        finalUV = lerp(uv0, uv1, blockedT);
+        hitZ = LinearDepth(finalUV);
+        hidden = 0.0;
     }
+    else
+    {
+        // Binary refinement between the last sample in front of the scene and the first behind it.
+        float lo = hitLo;
+        float hi = hitHi;
+        [unroll]
+        for (int j = 0; j < NUM_REFINE_STEPS; ++j)
+        {
+            float mid = (lo + hi) * 0.5;
+            float midZ = 1.0 / lerp(invZ0, invZ1, mid);
+            if (midZ - LinearDepth(lerp(uv0, uv1, mid)) > 0.0)
+                hi = mid;
+            else
+                lo = mid;
+        }
 
-    float2 finalUV = lerp(uv0, uv1, hi);
-    float hitZ = 1.0 / lerp(invZ0, invZ1, hi);
-    float hitDelta = max(hitZ - LinearDepth(finalUV), 0.0);
-    float hitThickness = abs(hitZ - 1.0 / lerp(invZ0, invZ1, lo)) + fThickness;
+        finalUV = lerp(uv0, uv1, hi);
+        hitZ = 1.0 / lerp(invZ0, invZ1, hi);
+        hitDelta = max(hitZ - LinearDepth(finalUV), 0.0);
+        hitThickness = abs(hitZ - 1.0 / lerp(invZ0, invZ1, lo)) + fThickness;
+    }
     float3 hitP = ViewPosFromUVZ(finalUV, hitZ);
     gTraceHitZ = hitP.z;
+    gTraceBlocked = blocked ? 1.0 : 0.0;
 
     // The surface the depth buffer holds where the ray hit; hitP is up to a thickness off it.
     float3 surfP = ViewPosFromUVZ(finalUV, LinearDepth(finalUV));
@@ -617,6 +649,8 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     if (fDebugMode > 2.5 && fDebugMode < 3.5)
     {
         float nearer = gTraceHitZ < C.z - 0.25 ? 1.0 : 0.0;
+        if (gTraceBlocked > 0.0)
+            return float4(1.0, 1.0, 0.0, r.a);
         return float4(nearer, 1.0 - nearer, gTraceRayZ < 0.0 ? 1.0 : 0.0, r.a);
     }
     // On wet ground the game's reflection strength, which deferred_lighting multiplies SSR by,
@@ -742,7 +776,8 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 
     // 3 (for now): what each ray hit, which SSR_PS writes in place of the colour, read before
     // smoothing and accumulation. Red: something nearer the camera than the surface reflecting
-    // it, green: something farther; blue added where the ray heads towards the camera; brighter
+    // it, green: something farther; yellow: the scene where the ray went out of view behind
+    // something (blocked in TraceReflection); blue added where the ray heads towards the camera; brighter
     // the more the hit counts. Black a miss, dark grey a surface SSR does not trace.
     if (fDebugMode < 3.5)
     {
