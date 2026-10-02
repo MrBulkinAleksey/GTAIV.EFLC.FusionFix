@@ -4411,13 +4411,11 @@ private:
         if (!R.VolumetricLight() || R.fVolumetricLightIntensity <= 0.0f)
             return;
 
-        Cam camera = 0;
-        rage::Vector3 cameraPos{};
-        Natives::GetRootCam(&camera);
-        Natives::GetCamPos(camera, &cameraPos.x, &cameraPos.y, &cameraPos.z);
-        const float dx = cameraPos.x - light->mPosition.x;
-        const float dy = cameraPos.y - light->mPosition.y;
-        const float dz = cameraPos.z - light->mPosition.z;
+        float cameraPos[3]{};
+        GameCamera::Position(cameraPos);
+        const float dx = cameraPos[0] - light->mPosition.x;
+        const float dy = cameraPos[1] - light->mPosition.y;
+        const float dz = cameraPos[2] - light->mPosition.z;
         const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
 
         // Spot lights of 8 to 20 m, most of lamppost.img, none of a vehicle, traffic light, the

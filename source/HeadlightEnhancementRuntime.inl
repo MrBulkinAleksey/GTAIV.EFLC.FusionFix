@@ -367,17 +367,15 @@ namespace HeadlightEnhancement
     static constexpr float OffscreenLightsDistance = 35.0f;
     static int offscreenLightsMode = 0;
     static const uint32_t* pPhaseMask = nullptr;
-    static const float* pCameraPosition = nullptr;
 
     // Called in place of the mask test with the car in ECX; ECX and EDX are dead after it.
     static bool __fastcall MakesLights(uintptr_t vehicle)
     {
         if (*reinterpret_cast<const uint32_t*>(vehicle + 8) & *pPhaseMask) return true;
         if (offscreenLightsMode == 1 && !PlayerCar::IsLast(vehicle)) return false;
-        float position[3];
-        if (!CEntity::GetPosition(vehicle, position)) return false;
-        const float dx = position[0] - pCameraPosition[0], dy = position[1] - pCameraPosition[1],
-                    dz = position[2] - pCameraPosition[2];
+        float position[3], camera[3];
+        if (!CEntity::GetPosition(vehicle, position) || !GameCamera::Position(camera)) return false;
+        const float dx = position[0] - camera[0], dy = position[1] - camera[1], dz = position[2] - camera[2];
         return dx * dx + dy * dy + dz * dz <= OffscreenLightsDistance * OffscreenLightsDistance;
     }
 
@@ -398,7 +396,6 @@ namespace HeadlightEnhancement
             return;
         }
         pPhaseMask = reinterpret_cast<const uint32_t*>(imageBase + 0x119B75C);
-        pCameraPosition = reinterpret_cast<const float*>(imageBase + 0xE8E340);
         // call MakesLights / test al, al / je 0xA44CAA / nop
         injector::MakeCALL(at, MakesLights, true);
         constexpr uint8_t branch[]{0x84,0xC0,0x0F,0x84};

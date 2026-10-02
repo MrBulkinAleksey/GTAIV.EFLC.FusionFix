@@ -6373,6 +6373,31 @@ public:
     static inline auto WriteLobbyPreference() { return NativeInvoke::Invoke<3013, std::to_underlying(NativeHashes::WRITE_LOBBY_PREFERENCE), Any>(); }
 };
 
+// The gameplay camera's position, read through the root camera once per game frame. Main thread,
+// where the natives run.
+export namespace GameCamera
+{
+    inline bool Position(float (&position)[3])
+    {
+        static uint32_t frame = 0;
+        static bool valid = false;
+        static float cached[3]{};
+        const uint32_t now = CTimer::m_frameCount ? *CTimer::m_frameCount : 0;
+        if (!valid || !now || now != frame)
+        {
+            Cam camera = 0;
+            Natives::GetRootCam(&camera);
+            valid = camera != 0;
+            if (valid)
+                Natives::GetCamPos(camera, &cached[0], &cached[1], &cached[2]);
+            valid = valid && std::isfinite(cached[0]) && std::isfinite(cached[1]) && std::isfinite(cached[2]);
+            frame = now;
+        }
+        for (int i = 0; i < 3; ++i) position[i] = cached[i];
+        return valid;
+    }
+}
+
 export class NativeOverride
 {
 public:
