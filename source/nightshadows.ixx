@@ -105,39 +105,19 @@ namespace CShadows
             hasFrame = true;
             playerValid = false;
 
-            const uintptr_t ped = CPlayer::getLocalPlayerPed();
-            if (!ped)
+            PlayerCar::Focus focus;
+            if (!PlayerCar::ReadFocus(focus))
             {
                 selector.Reset();
                 submitted.Reset();
                 return false;
             }
-            const auto matrix = *reinterpret_cast<const float* const*>(ped + 0x20);
-            if (!matrix)
-            {
-                selector.Reset();
-                submitted.Reset();
-                return false;
-            }
-            playerPosition = {matrix[12], matrix[13], matrix[14]};
-            if (!std::isfinite(playerPosition.x) || !std::isfinite(playerPosition.y) ||
-                !std::isfinite(playerPosition.z))
-            {
-                selector.Reset();
-                submitted.Reset();
-                return false;
-            }
-            const uintptr_t car = CPlayer::findPlayerCar();
-            if (ped != playerSession) submitted.Reset();
-            playerSession = ped;
-            occupiedVehicle = car;
-            if (car) {
-                const auto carMatrix = *reinterpret_cast<const float* const*>(car + 0x20);
-                if (carMatrix && std::isfinite(carMatrix[12]) && std::isfinite(carMatrix[13]) && std::isfinite(carMatrix[14]))
-                    playerPosition = {carMatrix[12], carMatrix[13], carMatrix[14]};
-            }
+            if (focus.ped != playerSession) submitted.Reset();
+            playerSession = focus.ped;
+            occupiedVehicle = focus.car;
+            playerPosition = {focus.position[0], focus.position[1], focus.position[2]};
             selector.BeginFrame({nextFrame, static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),
-                                 ped, car != 0, car});
+                                 focus.ped, focus.car != 0, focus.car});
             playerValid = true;
             return true;
         }

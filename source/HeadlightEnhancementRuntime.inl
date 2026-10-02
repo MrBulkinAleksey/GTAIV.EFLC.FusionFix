@@ -276,8 +276,8 @@ namespace HeadlightEnhancement
         float intensity, float radius, float a7, float a8, int a9, int a10, uintptr_t vehicle, int player)
     {
         const auto ped = CPlayer::getLocalPlayerPed ? CPlayer::getLocalPlayerPed() : 0;
-        const auto carMatrix = vehicle ? *reinterpret_cast<const float* const*>(vehicle + 0x20) : nullptr;
-        const auto pedMatrix = ped ? *reinterpret_cast<const float* const*>(ped + 0x20) : nullptr;
+        const auto carMatrix = CEntity::GetMatrix(vehicle);
+        const auto pedMatrix = CEntity::GetMatrix(ped);
         bool split = bHeadlightShadows && carMatrix && pedMatrix && CPlayer::findPlayerCar && !CPlayer::findPlayerCar();
         if (split)
         {
@@ -374,8 +374,8 @@ namespace HeadlightEnhancement
     {
         if (*reinterpret_cast<const uint32_t*>(vehicle + 8) & *pPhaseMask) return true;
         if (offscreenLightsMode == 1 && !PlayerCar::IsLast(vehicle)) return false;
-        const auto matrix = *reinterpret_cast<const float* const*>(vehicle + 0x20);
-        const auto position = matrix ? matrix + 12 : reinterpret_cast<const float*>(vehicle + 0x10);
+        float position[3];
+        if (!CEntity::GetPosition(vehicle, position)) return false;
         const float dx = position[0] - pCameraPosition[0], dy = position[1] - pCameraPosition[1],
                     dz = position[2] - pCameraPosition[2];
         return dx * dx + dy * dy + dz * dz <= OffscreenLightsDistance * OffscreenLightsDistance;

@@ -14,9 +14,9 @@ namespace NearbyVehicleLighting36 {
         // game-process callback; render hooks consume copied positions.
         next.session=CPlayer::getLocalPlayerPed();
         if(next.session && !CPlayer::findPlayerCar()) {
-            const auto matrix=*reinterpret_cast<const float* const*>(next.session+0x20);
-            if(matrix) {
-                next.origin={matrix[12],matrix[13],matrix[14]};
+            float origin[3];
+            if(CEntity::GetPosition(next.session,origin)) {
+                next.origin={origin[0],origin[1],origin[2]};
                 next.view=PlayerShadowAllocation::ReadGameplayView();
                 if(!next.view.valid && !PlayerShadowAllocation::gameplayViewLock.test_and_set(std::memory_order_acquire)) {
                     if(next.frame-PlayerShadowAllocation::gameplayViewFrame<=2)
@@ -31,8 +31,8 @@ namespace NearbyVehicleLighting36 {
                     for(int i=0;i<pool->m_nSize;++i) {
                         const auto vehicle=reinterpret_cast<uintptr_t>(pool->GetSlot(i));
                         if(!vehicle) continue;
-                        const auto transform=*reinterpret_cast<const float* const*>(vehicle+0x20);
-                        if(transform) next.Add({transform[12],transform[13],transform[14]},vehicle);
+                        float position[3];
+                        if(CEntity::GetPosition(vehicle,position)) next.Add({position[0],position[1],position[2]},vehicle);
                     }
                 } else ++invalidPool;
             }

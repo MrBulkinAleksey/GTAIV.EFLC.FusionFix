@@ -40,6 +40,27 @@ namespace PlayerCar
         return vehicle && Last() == vehicle;
     }
 
+    // The player as the shadows around him take him: his ped, the car he sits in, and where he
+    // is, the car's position while he is in one. Read when asked, on whichever thread asks.
+    struct Focus
+    {
+        uintptr_t ped = 0, car = 0;
+        float position[3]{};
+    };
+
+    // False without a ped or a position for him.
+    static bool ReadFocus(Focus& focus) noexcept
+    {
+        if (!CPlayer::getLocalPlayerPed || !CPlayer::findPlayerCar) return false;
+        focus.ped = CPlayer::getLocalPlayerPed();
+        if (!CEntity::GetPosition(focus.ped, focus.position)) return false;
+        focus.car = CPlayer::findPlayerCar();
+        float car[3];
+        if (CEntity::GetPosition(focus.car, car))
+            std::copy(std::begin(car), std::end(car), focus.position);
+        return true;
+    }
+
     // Once a game frame, from the process callback.
     static void Update() noexcept
     {

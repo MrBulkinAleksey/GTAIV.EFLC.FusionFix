@@ -788,6 +788,26 @@ namespace CVehicle
     }
 }
 
+// Placed entities: a matrix at +0x20, rows right, forward, up and position of 4 floats each, or,
+// without one, the position alone at +0x10, as the game reads it (CE 0xC1DBB1).
+namespace CEntity
+{
+    export const float* GetMatrix(uintptr_t entity)
+    {
+        return entity ? *reinterpret_cast<const float* const*>(entity + 0x20) : nullptr;
+    }
+
+    // The world position; false without an entity or where it is not finite.
+    export bool GetPosition(uintptr_t entity, float (&position)[3])
+    {
+        if (!entity) return false;
+        const auto matrix = GetMatrix(entity);
+        const auto at = matrix ? matrix + 12 : reinterpret_cast<const float*>(entity + 0x10);
+        for (int i = 0; i < 3; ++i) position[i] = at[i];
+        return std::isfinite(position[0]) && std::isfinite(position[1]) && std::isfinite(position[2]);
+    }
+}
+
 export namespace rage
 {
     class Vector2

@@ -158,24 +158,16 @@ namespace PlayerShadowAllocation
         if (!Enabled() || !CTimer::m_frameCount || !CTimer::m_snTimeInMilliseconds ||
             !CPlayer::getLocalPlayerPed || !CPlayer::findPlayerCar)
             return false;
-        const auto ped = CPlayer::getLocalPlayerPed();
-        if (!ped) return false;
-        const auto matrix = *reinterpret_cast<const float* const*>(ped + 0x20);
-        if (!matrix) return false;
-        const Vec3 position{matrix[12], matrix[13], matrix[14]};
-        if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)) return false;
+        PlayerCar::Focus focus;
+        if (!PlayerCar::ReadFocus(focus)) return false;
+        const auto ped = focus.ped;
         if (ped != state.ped) {
             state.view = {};
             state.previousSelection = {}; state.previousSelectionFrame = 0;
         }
         state.ped = ped;
-        state.player = position;
-        state.occupiedCar = CPlayer::findPlayerCar();
-        if (state.occupiedCar) {
-            const auto carMatrix = *reinterpret_cast<const float* const*>(state.occupiedCar + 0x20);
-            if (carMatrix && std::isfinite(carMatrix[12]) && std::isfinite(carMatrix[13]) && std::isfinite(carMatrix[14]))
-                state.player = {carMatrix[12], carMatrix[13], carMatrix[14]};
-        }
+        state.player = {focus.position[0], focus.position[1], focus.position[2]};
+        state.occupiedCar = focus.car;
         state.drivingFocus=state.motionFocus.Update(state.player,state.occupiedCar,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
         state.frame = *CTimer::m_frameCount;
         state.lampContinuity.Begin(ped,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));

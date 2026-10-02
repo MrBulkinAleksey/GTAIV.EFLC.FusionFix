@@ -18,7 +18,7 @@ static float GetForwardSpeed(uintptr_t pVehicle)
 
     CPhysical::GetLocalSpeed((void*)pVehicle, nullptr, vecSpeed, vecOffset, 0, 0);
 
-    auto matrix = *(float**)(pVehicle + 0x20);
+    auto matrix = CEntity::GetMatrix(pVehicle);
 
     return vecSpeed[0] * matrix[4] + vecSpeed[1] * matrix[5] + vecSpeed[2] * matrix[6];
 }
