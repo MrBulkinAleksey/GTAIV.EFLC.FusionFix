@@ -215,6 +215,7 @@ uniform float fGIIntensity;         // multiplier on the light gathered
 uniform float fGIMaxBrightness;     // brightness a single hit may bring, so a headlight or neon sign does not flare
 uniform float fGIFeedback;          // share of last frame's indirect light a hit takes back out, 0 while there is none
 uniform float fGIOcclusion;         // 0..1, how much of the ambient the indirect light takes the place of where its rays hit
+uniform float fGIRespectAO;         // 1 when SpecularTex holds the occlusion deferred_lighting multiplies the ambient by, see SSGI_PS
 
 // Light scattering under the skin, see SkinScatter_PS.
 uniform float4 vec4SkinStep;        // xy: screen offset of one kernel unit at view depth 1, along this pass; w: metres in one kernel unit
@@ -1316,6 +1317,18 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float fade = 1.0 - smoothstep(fGIMaxViewDistance * 0.75, fGIMaxViewDistance, C.z);
     float3 gi = sum * (fGIIntensity * fade / (float) GI_RAYS);
     float occlusion = saturate(hits * fade / (float) GI_RAYS) * fGIOcclusion;
+    // deferred_lighting multiplies the ambient by the occlusion in _DEFERRED_GBUFFER_2_ (the
+    // game's own and SAO's or GTAO's) and then by what this leaves of it, so a corner both
+    // found was darkened twice and the indirect light that should take the ambient's place
+    // showed little. Only what the rays find closed in beyond that occlusion is taken off:
+    // the ambient left is the smaller of the two instead of their product.
+    [branch]
+    if (fGIRespectAO > 0.0)
+    {
+        float ao = tex2Dlod(SpecularTex, float4(uv, 0, 0)).z;
+        float open = 1.0 - occlusion;
+        occlusion = open < ao ? 1.0 - open / max(ao, 1e-3) : 0.0;
+    }
     if (any(gi != gi) || occlusion != occlusion)
         return 0.0;
     return float4(gi, occlusion);

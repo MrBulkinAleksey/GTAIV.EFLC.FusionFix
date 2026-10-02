@@ -269,7 +269,7 @@ public:
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
-        D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion;
+        D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
         D3DXHANDLE SceneTex2D, SkinIDTex2D, SkinLightTex2D, vec4SkinStep, fSkinStrength;
         D3DXHANDLE techSkinLight, techSkinScatter, techSkinScatterFinal, techSkinDebug;
     } SSREffectHandles = {};
@@ -978,6 +978,7 @@ public:
                 h.fGIThickness = SSREffect->GetParameterByName(nullptr, "fGIThickness");
                 h.fGIMaxViewDistance = SSREffect->GetParameterByName(nullptr, "fGIMaxViewDistance");
                 h.fGIIntensity = SSREffect->GetParameterByName(nullptr, "fGIIntensity");
+                h.fGIRespectAO = SSREffect->GetParameterByName(nullptr, "fGIRespectAO");
                 h.techSSGI = SSREffect->GetTechniqueByName("SSGI");
                 h.fGIMaxBrightness = SSREffect->GetParameterByName(nullptr, "fGIMaxBrightness");
                 h.techGIUpsample = SSREffect->GetTechniqueByName("GIUpsample");
@@ -4047,6 +4048,10 @@ private:
         const bool albedo = R.mDiffuseRT && R.mDiffuseRT->mD3DTexture;
         effect->SetTexture(h.AlbedoTex2D, albedo ? R.mDiffuseRT->mD3DTexture : nullptr);
         effect->SetTexture(h.GIPrevTex2D, prevGI);
+        // The occlusion deferred_lighting already takes off the ambient, so SSGI_PS does not take it off again.
+        const bool specular = R.mSpecularRT && R.mSpecularRT->mD3DTexture;
+        effect->SetTexture(h.SpecularTex2D, specular ? R.mSpecularRT->mD3DTexture : nullptr);
+        effect->SetFloat(h.fGIRespectAO, specular ? 1.0f : 0.0f);
         effect->SetFloat(h.fGIFeedback, (albedo && prevGI) ? (std::max)(1.0f - 1.0f / R.fGIIntensity, 0.0f) : 0.0f);
 
         IDirect3DSurface9* rt0 = nullptr;
