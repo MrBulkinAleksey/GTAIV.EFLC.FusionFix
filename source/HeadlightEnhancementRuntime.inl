@@ -20,7 +20,6 @@ namespace HeadlightEnhancement
     static const float* pRadiusBonus = nullptr;
     static const float* pRadiusBase = nullptr;
     static std::string lightModesStatus = "off in the ini";
-    static std::string splitBeamsStatus = "off in the ini";
     static std::string offscreenLightsStatus = "off in the ini";
     static fusionfix::DiagnosticsLog log;
 
@@ -120,7 +119,6 @@ namespace HeadlightEnhancement
                 << "\nbrightnessStatus=" << brightnessStatus
                 << "\nretainedSubmissions=" << retainedSubmissions.load()
                 << "\nlightModesStatus=" << lightModesStatus
-                << "\nsplitBeamsStatus=" << splitBeamsStatus
                 << "\noffscreenLightsStatus=" << offscreenLightsStatus
                 << "\ntrackedVehicle=" << (PlayerCar::Last() != 0) << '\n';
         });
@@ -280,150 +278,6 @@ namespace HeadlightEnhancement
         lightModeApplyHook = safetyhook::create_mid(imageBase + 0x643867, ApplyLightMode);
         highBeamTimeoutHook = safetyhook::create_mid(imageBase + 0x63F886, KeepForcedHighBeams);
         lightModesStatus = lightModeHook && lightModeApplyHook && highBeamTimeoutHook ? "installed" : "hook failed";
-    }
-
-    // Both lit lamps of a car make one beam from the point between them (CE 0xA3FCA5: the two
-    // lamp bones averaged, then 0xA3E070), so a hand at the car's edge shadowed the far half of
-    // the beam. For a car within a few metres of the player on foot, the call at 0xA3FE11 now
-    // moves that beam: mode 2 slides it from the middle towards the lamp on the player's side,
-    // one beam and one shadow as before, as far as the player stands out to that side;
-    // mode 1 splits it into a beam from each lamp at half the intensity, keyed by the car and the
-    // car + 1 as the game keys a single lamp, two softer shadows apart. Further away, or while
-    // the player drives, one beam from between them as before.
-    using SubmitBeams = void(__cdecl*)(void*, float*, float*, void*, float, float, float, float, int, int,
-                                       uintptr_t, int);
-    static SubmitBeams submitBeams = nullptr;
-    static constexpr float SplitBeamsDistance = 6.0f;
-    static int splitBeamsMode = 0;
-
-    // How far the beams have moved out of the middle, easing towards where the player stands
-    // instead of following him at once: getting in or out switched it between the lamp at the
-    // door and the middle in one frame. Mode 2: -1 the lamp at -x to +1 the lamp at +x; mode 1:
-    // 0 one beam to 1 a beam from each lamp. A car with none is in the middle.
-    struct BeamSlide
-    {
-        uint64_t token = 0;
-        float t = 0.0f;
-        int32_t timeMs = 0;
-    };
-    static std::array<BeamSlide, 4> beamSlides{};
-    static constexpr float BeamSlidePerSecond = 2.5f; // lamp to middle in 0.4 s
-    static constexpr int32_t BeamSlideStaleMs = 1000; // lights off or out of range for longer start anew
-
-    static float EaseBeamSlide(uintptr_t vehicle, float target)
-    {
-        if (!CTimer::m_snTimeInMilliseconds) return target;
-        const int32_t now = *CTimer::m_snTimeInMilliseconds;
-        BeamSlide* slide = nullptr;
-        for (auto& entry : beamSlides)
-            if (entry.token && static_cast<uintptr_t>(static_cast<uint32_t>(entry.token)) == vehicle)
-                slide = &entry;
-        const auto token = (slide || target != 0.0f) ? PlayerCar::VehicleToken(vehicle) : 0;
-        if (slide && (slide->token != token || now - slide->timeMs > BeamSlideStaleMs))
-        {
-            *slide = {};
-            slide = nullptr;
-        }
-        if (!slide)
-        {
-            if (target == 0.0f || !token) return 0.0f;
-            slide = &beamSlides[0];
-            for (auto& entry : beamSlides)
-                if (!entry.token || entry.timeMs - slide->timeMs < 0)
-                    slide = &entry;
-            *slide = { token, 0.0f, now };
-        }
-        const float step = BeamSlidePerSecond * std::clamp(now - slide->timeMs, 0, 100) / 1000.0f;
-        slide->t += std::clamp(target - slide->t, -step, step);
-        slide->timeMs = now;
-        const float t = slide->t;
-        if (t == 0.0f && target == 0.0f)
-            *slide = {};
-        return t;
-    }
-
-    static void __cdecl SubmitSplitBeams(void* matrix, float* position, float* direction, void* colour,
-        float intensity, float radius, float a7, float a8, int a9, int a10, uintptr_t vehicle, int player)
-    {
-        const auto m = CEntity::GetMatrix(vehicle);
-        if (!bHeadlightShadows || !m)
-            return submitBeams(matrix, position, direction, colour, intensity, radius, a7, a8, a9, a10, vehicle, player);
-
-        // The caller's frame: the world position at position[0..2], the lamps' bones in car space
-        // at position + 0x30 and + 0x40 (x, -, z), and their shared forward offset at position - 0xC.
-        const auto bytes = reinterpret_cast<const uint8_t*>(position);
-        const float y = *reinterpret_cast<const float*>(bytes - 0xC);
-        const auto lampAt = [&](int lamp, float* world)
-        {
-            const auto bone = reinterpret_cast<const float*>(bytes + (lamp ? 0x30 : 0x40));
-            const float x = bone[0], z = bone[2];
-            world[0] = m[0] * x + m[4] * y + m[8] * z + m[12];
-            world[1] = m[1] * x + m[5] * y + m[9] * z + m[13];
-            world[2] = m[2] * x + m[6] * y + m[10] * z + m[14];
-            world[3] = position[3];
-            return x;
-        };
-        float lamps[2][4];
-        const float x0 = lampAt(0, lamps[0]), x1 = lampAt(1, lamps[1]);
-        const float halfWidth = std::fabs(x0 - x1) * 0.5f;
-
-        // Where the beams go for where the player stands: on foot within SplitBeamsDistance, as far
-        // as he stands across the car (its matrix's x axis) out of the lamp's own offset for mode 2,
-        // back to the middle over the last 2 m before SplitBeamsDistance.
-        float target = 0.0f;
-        const auto ped = CPlayer::getLocalPlayerPed ? CPlayer::getLocalPlayerPed() : 0;
-        const auto pedMatrix = CEntity::GetMatrix(ped);
-        if (halfWidth > 0.05f && pedMatrix && CPlayer::findPlayerCar && !CPlayer::findPlayerCar())
-        {
-            const float px = pedMatrix[12] - m[12], py = pedMatrix[13] - m[13], pz = pedMatrix[14] - m[14];
-            const float distance = std::sqrt(px * px + py * py + pz * pz);
-            const float closeness = std::clamp((SplitBeamsDistance - distance) / 2.0f, 0.0f, 1.0f);
-            const float across = px * m[0] + py * m[1] + pz * m[2];
-            target = splitBeamsMode == 1 ? closeness : std::clamp(across / halfWidth, -1.0f, 1.0f) * closeness;
-        }
-        const float t = EaseBeamSlide(vehicle, target);
-        if (t == 0.0f)
-            return submitBeams(matrix, position, direction, colour, intensity, radius, a7, a8, a9, a10, vehicle, player);
-
-        const auto toward = [&](const float* lamp, float k, float* at)
-        {
-            for (int i = 0; i < 3; ++i)
-                at[i] = position[i] + (lamp[i] - position[i]) * k;
-            at[3] = position[3];
-        };
-        float at[4];
-        if (splitBeamsMode == 1)
-        {
-            for (int lamp = 0; lamp < 2; ++lamp)
-            {
-                toward(lamps[lamp], t, at);
-                submitBeams(matrix, at, direction, colour, intensity * 0.5f, radius, a7, a8, a9, a10,
-                            vehicle + lamp, player);
-            }
-            return;
-        }
-        const float* plus = x0 >= x1 ? lamps[0] : lamps[1];
-        const float* minus = x0 >= x1 ? lamps[1] : lamps[0];
-        toward(t >= 0.0f ? plus : minus, std::fabs(t), at);
-        submitBeams(matrix, at, direction, colour, intensity, radius, a7, a8, a9, a10, vehicle, player);
-    }
-
-    static void InstallSplitBeams(int mode)
-    {
-        if (mode != 1 && mode != 2) return;
-        splitBeamsMode = mode;
-        const auto call = imageBase + 0x63FE11;
-        // push dword ptr [ebp+24] / call 0xA3E070 / add esp, 30
-        const auto check = CodeCheck().Bytes(0x63FE0E, {0xFF,0x75,0x24,0xE8}).Branch(0x63FE12, 0x63E070)
-            .Bytes(0x63FE16, {0x83,0xC4,0x30});
-        if (!check)
-        {
-            splitBeamsStatus = check.Status();
-            return;
-        }
-        submitBeams = reinterpret_cast<SubmitBeams>(imageBase + 0x63E070);
-        injector::MakeCALL(call, SubmitSplitBeams, true);
-        splitBeamsStatus = mode == 1 ? "installed, two beams" : "installed, beam slid towards the player's side";
     }
 
     // A car's lights, its headlight beams among them, are only made while the car was seen by one
