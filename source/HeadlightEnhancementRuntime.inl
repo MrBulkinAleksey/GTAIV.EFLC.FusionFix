@@ -7,7 +7,6 @@ namespace HeadlightEnhancement
 {
     static SafetyHookMid brightnessHook;
     static uintptr_t imageBase = 0;
-    static std::atomic<uint64_t> lastDrivenToken{0};
     static std::atomic<uint32_t> retainedSubmissions{0};
     static bool brightnessInstalled = false;
     // Why the hook is or is not in place: another plugin that patches the same game code turns it
@@ -38,23 +37,6 @@ namespace HeadlightEnhancement
         return out.str();
     }
 
-    // Identify the live pool slot and generation, not only a reusable pointer.
-    static uint64_t VehicleToken(uintptr_t vehicle)
-    {
-        const auto pool = CVehicle::GetVehiclePool();
-        if (!pool || !pool->m_aStorage || !pool->m_aFlags ||
-            pool->m_nStorageSize <= 0 || pool->m_nSize <= 0) return 0;
-        const auto start = reinterpret_cast<uintptr_t>(pool->m_aStorage);
-        if (vehicle < start) return 0;
-        const auto offset = vehicle - start;
-        const auto stride = static_cast<uint32_t>(pool->m_nStorageSize);
-        const auto index = offset / stride;
-        if (offset % stride || index >= static_cast<uint32_t>(pool->m_nSize) ||
-            index > 0x7FFFFF || pool->GetIsFree(index)) return 0;
-        const auto handle = (index << 8) | pool->GetReference(index);
-        return (static_cast<uint64_t>(handle) << 32) | vehicle;
-    }
-
     // Scales the range by the bonus as it would be with the ramp full, over what F74 leaves of it.
     static void KeepRadiusBonus(SafetyHookContext& regs, uintptr_t vehicle)
     {
@@ -69,30 +51,20 @@ namespace HeadlightEnhancement
     static void RetainAfterExit(SafetyHookContext& regs)
     {
         const auto vehicle = static_cast<uintptr_t>(regs.esi);
-        const auto token = VehicleToken(vehicle);
-        if (!token) return;
         const auto driver = *reinterpret_cast<const uintptr_t*>(vehicle + 0xF50);
         if (driver)
         {
             // Same driver classification used by the original multiplier block.
             // Occupied cars have ALREADY received their original scaling.
+            // F74 takes about a second to climb back to 1 after getting in, and the beams
+            // reached a third as far until it did.
             if (!*reinterpret_cast<const uint8_t*>(driver + 0x218) &&
-                 *reinterpret_cast<const uint8_t*>(driver + 0x219))
-            {
-                lastDrivenToken.store(token);
-                // F74 takes about a second to climb back to 1 after getting in, and the beams
-                // reached a third as far until it did.
-                if (*reinterpret_cast<const uint8_t*>(imageBase + 0xC3CC4A))
-                    KeepRadiusBonus(regs, vehicle);
-            }
-            else
-            {
-                auto expected = token;
-                lastDrivenToken.compare_exchange_strong(expected, 0);
-            }
+                 *reinterpret_cast<const uint8_t*>(driver + 0x219) &&
+                 *reinterpret_cast<const uint8_t*>(imageBase + 0xC3CC4A))
+                KeepRadiusBonus(regs, vehicle);
             return;
         }
-        if (lastDrivenToken.load() != token ||
+        if (!PlayerCar::IsLast(vehicle) ||
             !*reinterpret_cast<const uint8_t*>(imageBase + 0xC3CC4A)) return;
         const float intensity = *reinterpret_cast<const float*>(imageBase + 0xC3CC74);
         const float range = *reinterpret_cast<const float*>(imageBase + 0xC3CC78);
@@ -118,7 +90,7 @@ namespace HeadlightEnhancement
             << "\nlightModesStatus=" << lightModesStatus
             << "\nsplitBeamsStatus=" << splitBeamsStatus
             << "\noffscreenLightsStatus=" << offscreenLightsStatus
-            << "\ntrackedVehicle=" << (lastDrivenToken.load() != 0) << '\n';
+            << "\ntrackedVehicle=" << (PlayerCar::Last() != 0) << '\n';
     }
 
     static bool InstallBrightness(bool enabled)
@@ -197,7 +169,7 @@ namespace HeadlightEnhancement
     static void StepLightMode(SafetyHookContext& regs)
     {
         const auto vehicle = static_cast<uintptr_t>(regs.esi);
-        const auto token = VehicleToken(vehicle);
+        const auto token = PlayerCar::VehicleToken(vehicle);
         if (!token) return;
         auto entry = FindLightMode(token);
         if (!entry)
@@ -233,7 +205,7 @@ namespace HeadlightEnhancement
     {
         if (!nextLightMode) return;
         const auto vehicle = static_cast<uintptr_t>(regs.esi);
-        const auto entry = FindLightMode(VehicleToken(vehicle));
+        const auto entry = FindLightMode(PlayerCar::VehicleToken(vehicle));
         if (!entry || !entry->mode) return;
         auto& mode = *reinterpret_cast<uint8_t*>(vehicle + 0x10C2);
         mode = static_cast<uint8_t>((mode & ~3) | entry->mode);
@@ -391,21 +363,17 @@ namespace HeadlightEnhancement
     // Outdoors some phase still takes in a car behind the camera; in a tunnel none does, so the
     // beam of a car behind the camera went out and came back on once the car was in view. Map
     // lights keep theirs within 35 m of the camera whether seen or not (CE 0xC1DBA4); mode 1 does
-    // the same for the player's car, the one he drives or last drove, mode 2 for every car.
+    // the same for the player's car (PlayerCar::Last), mode 2 for every car.
     static constexpr float OffscreenLightsDistance = 35.0f;
     static int offscreenLightsMode = 0;
     static const uint32_t* pPhaseMask = nullptr;
     static const float* pCameraPosition = nullptr;
-    static uint64_t playerCarToken = 0;
 
     // Called in place of the mask test with the car in ECX; ECX and EDX are dead after it.
     static bool __fastcall MakesLights(uintptr_t vehicle)
     {
-        const bool playerCar = CPlayer::findPlayerCar && CPlayer::findPlayerCar() == vehicle;
-        if (playerCar) playerCarToken = VehicleToken(vehicle);
         if (*reinterpret_cast<const uint32_t*>(vehicle + 8) & *pPhaseMask) return true;
-        if (offscreenLightsMode == 1 && !playerCar && (!playerCarToken || VehicleToken(vehicle) != playerCarToken))
-            return false;
+        if (offscreenLightsMode == 1 && !PlayerCar::IsLast(vehicle)) return false;
         const auto matrix = *reinterpret_cast<const float* const*>(vehicle + 0x20);
         const auto position = matrix ? matrix + 12 : reinterpret_cast<const float*>(vehicle + 0x10);
         const float dx = position[0] - pCameraPosition[0], dy = position[1] - pCameraPosition[1],

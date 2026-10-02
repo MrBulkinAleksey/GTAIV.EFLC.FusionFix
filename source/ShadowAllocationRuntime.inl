@@ -43,7 +43,7 @@ namespace PlayerShadowAllocation
         bool continuityActive=false;
         bool tracedComparison=false;
         fusionfix::shadows::ShadowView view{};
-        uintptr_t ped = 0, occupiedCar = 0, lastCar = 0;
+        uintptr_t ped = 0, occupiedCar = 0;
         uint32_t frame = 0, viewFrame = 0;
         uintptr_t stackAnchor = 0;
         unsigned depth = 0;
@@ -165,14 +165,13 @@ namespace PlayerShadowAllocation
         const Vec3 position{matrix[12], matrix[13], matrix[14]};
         if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)) return false;
         if (ped != state.ped) {
-            state.lastCar = 0; state.view = {};
+            state.view = {};
             state.previousSelection = {}; state.previousSelectionFrame = 0;
         }
         state.ped = ped;
         state.player = position;
         state.occupiedCar = CPlayer::findPlayerCar();
         if (state.occupiedCar) {
-            state.lastCar = state.occupiedCar;
             const auto carMatrix = *reinterpret_cast<const float* const*>(state.occupiedCar + 0x20);
             if (carMatrix && std::isfinite(carMatrix[12]) && std::isfinite(carMatrix[13]) && std::isfinite(carMatrix[14]))
                 state.player = {carMatrix[12], carMatrix[13], carMatrix[14]};
@@ -312,7 +311,7 @@ namespace PlayerShadowAllocation
             {light.mPosition.x, light.mPosition.y, light.mPosition.z});
         auto kind = budget::Kind::Lamp;
         if (flags & 0x100u)
-            kind = fusionfix::shadows::ce::IsVehicleBeam(key, state.occupiedCar ? state.occupiedCar : state.lastCar)
+            kind = fusionfix::shadows::ce::IsVehicleBeam(key, state.occupiedCar ? state.occupiedCar : PlayerCar::Last())
                 ? budget::Kind::PlayerBeam : budget::Kind::OtherBeam;
         if (flags & 0x100u)
             geometry.distanceSquared = fusionfix::shadows::ReceiverDistanceSquared(state.player,

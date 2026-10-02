@@ -41,6 +41,7 @@ import settings;
 bool bHighResolutionNightShadows = false;
 static bool bCloseHeadlightRelevance = false;
 static bool bTrafficSelfShadowFix = false;
+#include "PlayerCarRuntime.inl"
 #include "HeadlightEnhancementRuntime.inl"
 
 // Queried for every light on every frame; a lookup by name scans the whole preference table.
@@ -80,7 +81,7 @@ namespace CShadows
         fusionfix::shadows::StableHeadlightSelector selector;
         fusionfix::shadows::SubmittedHeadlightHistory submitted;
         fusionfix::shadows::Vec3 playerPosition{};
-        uintptr_t occupiedVehicle = 0, lastVehicle = 0, playerSession = 0;
+        uintptr_t occupiedVehicle = 0, playerSession = 0;
         uint32_t frame = 0;
         bool hasFrame = false;
         bool playerValid = false;
@@ -128,11 +129,10 @@ namespace CShadows
                 return false;
             }
             const uintptr_t car = CPlayer::findPlayerCar();
-            if (ped != playerSession) { lastVehicle = 0; submitted.Reset(); }
+            if (ped != playerSession) submitted.Reset();
             playerSession = ped;
             occupiedVehicle = car;
             if (car) {
-                lastVehicle = car;
                 const auto carMatrix = *reinterpret_cast<const float* const*>(car + 0x20);
                 if (carMatrix && std::isfinite(carMatrix[12]) && std::isfinite(carMatrix[13]) && std::isfinite(carMatrix[14]))
                     playerPosition = {carMatrix[12], carMatrix[13], carMatrix[14]};
@@ -189,7 +189,7 @@ namespace CShadows
             }
             const auto identity = static_cast<uintptr_t>(static_cast<uint32_t>(stableKey));
             const bool playerHeadlight = fusionfix::shadows::ce::IsVehicleBeam(identity,
-                occupiedVehicle ? occupiedVehicle : lastVehicle);
+                occupiedVehicle ? occupiedVehicle : PlayerCar::Last());
             // NPC beams must reach the receiver; source-to-ped distance is not a ten-foot gate.
             // The current/recent car may light scenery beyond Niko instead.
             const int feet = fusionfix::shadows::ShadowReachFeet(ShadowReachStep(true));
@@ -403,7 +403,7 @@ public:
         }
 
         // Registered before game callbacks start, independent of async init.
-        FusionFix::onGameProcessEvent() += []() { NearbyVehicleLighting36::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
+        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); NearbyVehicleLighting36::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
@@ -427,6 +427,7 @@ public:
             int casterMode = 0;
             if (ceAdapter)
             {
+                PlayerCar::driverOffset = 0xF50;
                 HeadlightEnhancement::logPath = iniReader.GetIniPath().parent_path() / "GTAIV-headlights.log";
                 HeadlightEnhancement::brightnessInstalled = HeadlightEnhancement::InstallBrightness(
                     iniReader.ReadInteger("HEADLIGHTS", "ConsistentBrightness", 0) != 0);
