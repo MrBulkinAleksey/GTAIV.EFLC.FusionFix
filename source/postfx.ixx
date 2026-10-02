@@ -348,14 +348,6 @@ public:
     // c203 off for a light and back on (see InstallLocalContactLightHook).
     bool bLocalContactPass = false;
     bool bLocalContactLightOff = false;
-    // Diagnostics with [SHADOWS] ExperimentalShadowDiagnostics: every 3 s, one lighting pass's
-    // coloured lights in FusionFix.ContactLights.log, with what the light loop hook did to them.
-    bool bContactLightLog = false;
-    FILE* ContactLightLog = nullptr;
-    uint32_t nContactLightHookCalls = 0;
-    const rage::CLightSource* pContactLogLight = nullptr; // the logged light being drawn
-    float ContactLogCamera[3] = {};                        // taken on the main thread once a frame
-    bool bContactLogCamera = false;
     float fLocalContactShadowLength = 0.5f;
     float fLocalContactShadowThickness = 0.2f;
     float fLocalContactShadowMaxDistance = 40.0f;
@@ -1130,7 +1122,6 @@ public:
         fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.2f), 0.01f, 5.0f);
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
-        bContactLightLog = iniReader.ReadInteger("SHADOWS", "ExperimentalShadowDiagnostics", 0) != 0;
         fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 4.0f), 0.0f, 20.0f);
         fVolumetricLightScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightScale", 0.25f), 0.0f, 2.0f);
         fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 100.0f), 10.0f, 1000.0f);
@@ -4275,63 +4266,17 @@ private:
     // + 0x28, its flags at edi + 0x20), contact shadows go off for those lights and back on after.
     static inline SafetyHookMid shLocalContactLight{};
 
-    static inline SafetyHookMid shContactLogTechnique{};
-
     static void InstallLocalContactLightHook()
     {
-        // Diagnostics only: the light technique selector (CE 0xAD3560, its index at esp + 4)
-        // as the light loop draws a logged light.
-        if (PostFxResources.bContactLightLog)
-        {
-            auto selector = hook::pattern("8B 44 24 04 56 83 F8 17 0F 87");
-            if (!selector.empty())
-                shContactLogTechnique = safetyhook::create_mid(selector.get_first(0), [](SafetyHookContext& regs)
-                {
-                    auto& R = PostFxResources;
-                    if (!R.ContactLightLog || !R.pContactLogLight)
-                        return;
-                    float c203[4] = {};
-                    if (auto pDevice = rage::grcDevice::GetD3DDevice())
-                        pDevice->GetPixelShaderConstantF(203, c203, 1);
-                    fprintf(R.ContactLightLog, "    technique=%d arg=%d c203.w=%.0f\n",
-                        *reinterpret_cast<const int*>(regs.esp + 4), *reinterpret_cast<const int*>(regs.esp + 8), c203[3]);
-                });
-        }
-
         auto pattern = hook::pattern("83 C7 28 89 7C 24 1C 8B 47 1C 85 C0");
         if (pattern.empty())
             return;
         shLocalContactLight = safetyhook::create_mid(pattern.get_first(7), [](SafetyHookContext& regs)
         {
             auto& R = PostFxResources;
-            const bool off = (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x200) != 0;
-            if (R.ContactLightLog)
-            {
-                // Every light within 40 m of the camera; the selector hook below adds the
-                // techniques it gets drawn with, and c203 as the device then holds it.
-                ++R.nContactLightHookCalls;
-                const auto light = reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28);
-                const float dx = light->mPosition.x - R.ContactLogCamera[0];
-                const float dy = light->mPosition.y - R.ContactLogCamera[1];
-                const float dz = light->mPosition.z - R.ContactLogCamera[2];
-                const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-                R.pContactLogLight = nullptr;
-                if (!R.bContactLogCamera || distance <= 40.0f)
-                {
-                    R.pContactLogLight = light;
-                    fprintf(R.ContactLightLog, "  light %p type=%d flags=0x%x radius=%.1f intensity=%.2f colour=%.2f %.2f %.2f "
-                        "pos=%.1f %.1f %.1f distance=%.1f dir=%.2f %.2f %.2f cone=%.2f/%.2f castShadows=%d cache=%d interior=%d room=%d "
-                        "pass=%d contactOff=%d\n",
-                        static_cast<const void*>(light), static_cast<int>(light->mType), light->mFlags, light->mRadius,
-                        light->mIntensity, light->mColor.x, light->mColor.y, light->mColor.z,
-                        light->mPosition.x, light->mPosition.y, light->mPosition.z, distance,
-                        light->mDirection.x, light->mDirection.y, light->mDirection.z, light->mInnerConeAngle,
-                        light->mOuterConeAngle, light->mCastShadows, light->mShadowCacheIndex, light->mInteriorIndex,
-                        light->mRoomIndex, R.bLocalContactPass, off);
-                }
-            }
             if (!R.bLocalContactPass || R.LocalContactShadowConsts[7] == 0.0f)
                 return;
+            const bool off = (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x200) != 0;
             if (off == R.bLocalContactLightOff)
                 return;
             R.bLocalContactLightOff = off;
@@ -4439,19 +4384,6 @@ private:
         auto& R = PostFxResources;
         if (!light)
             return;
-        if (R.bContactLightLog)
-        {
-            static uint32_t cameraFrame = 0;
-            const auto frame = CTimer::m_frameCount ? *CTimer::m_frameCount : 0;
-            if (frame != cameraFrame)
-            {
-                cameraFrame = frame;
-                Cam camera = 0;
-                Natives::GetRootCam(&camera);
-                Natives::GetCamPos(camera, &R.ContactLogCamera[0], &R.ContactLogCamera[1], &R.ContactLogCamera[2]);
-                R.bContactLogCamera = true;
-            }
-        }
         // Building Fill Lights off: the large exterior map lights (0x1 and 0x40, no interior 0x20,
         // vehicle 0x100 or traffic light and fire 0x200) that flood whole squares go dark.
         if (!R.FillLights() && (light->mFlags & 0x361) == 0x41 &&
@@ -4525,23 +4457,6 @@ public:
         pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
         R.bLocalContactPass = true;
         R.bLocalContactLightOff = false;
-        if (R.bContactLightLog)
-        {
-            static ULONGLONG lastLog = 0;
-            const auto now = GetTickCount64();
-            if (!R.ContactLightLog && now - lastLog >= 3000)
-            {
-                static bool started = false;
-                lastLog = now;
-                R.ContactLightLog = _wfopen((GetExeModulePath() / L"FusionFix.ContactLights.log").c_str(), started ? L"a" : L"w");
-                started = true;
-                R.nContactLightHookCalls = 0;
-                if (R.ContactLightLog)
-                    fprintf(R.ContactLightLog, "t=%llu pass c203.w=%.0f hook=%d camera %.1f %.1f %.1f\n", now,
-                        R.LocalContactShadowConsts[7], static_cast<bool>(shLocalContactLight),
-                        R.ContactLogCamera[0], R.ContactLogCamera[1], R.ContactLogCamera[2]);
-            }
-        }
 
         // The sun on skin: c201 the scale of the N.L curve less 1, c205 its offset and the red penumbra.
         {
@@ -4639,13 +4554,6 @@ public:
         const float noLocalContactShadows[4] = {};
         pDevice->SetPixelShaderConstantF(203, noLocalContactShadows, 1);
         R.bLocalContactPass = false;
-        R.pContactLogLight = nullptr;
-        if (R.ContactLightLog)
-        {
-            fprintf(R.ContactLightLog, "  lights through the hook: %u\n", R.nContactLightHookCalls);
-            fclose(R.ContactLightLog);
-            R.ContactLightLog = nullptr;
-        }
         pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
 
