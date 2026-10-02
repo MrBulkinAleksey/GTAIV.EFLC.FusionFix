@@ -260,24 +260,8 @@ public:
 
         if (!CompositeRT)
         {
-            rage::grcRenderTargetDesc rtDesc{};
-            rtDesc.mMultisampleCount = 0;
-            rtDesc.field_0 = 1;
-            rtDesc.field_12 = 1;
-            rtDesc.mDepthRT = nullptr;
-            rtDesc.field_8 = 1;
-            rtDesc.field_10 = 1;
-            rtDesc.field_11 = 1;
-            rtDesc.field_24 = false;
-            rtDesc.mFormat = rage::GRCFMT_A16B16G16R16F;
-
-            CompositeRT = rage::grcTextureFactory::GetInstance()->CreateRenderTarget("HDRComposite", 3, desc.Width, desc.Height, 64, &rtDesc);
-            if (CompositeRT)
-            {
-                rage::grcDevice::grcResolveFlags resolveFlags{};
-                rage::grcTextureFactoryPC::GetInstance()->LockRenderTarget(0, CompositeRT, nullptr);
-                rage::grcTextureFactoryPC::GetInstance()->UnlockRenderTarget(0, &resolveFlags);
-            }
+            auto rtDesc = rage::OwnRenderTargetDesc(rage::GRCFMT_A16B16G16R16F);
+            CompositeRT = rage::CreateEmptyRenderTarget("HDRComposite", desc.Width, desc.Height, 64, rtDesc);
         }
 
         return OutputPS && CompositeRT && CompositeRT->mD3DTexture;

@@ -279,46 +279,27 @@ public:
 public:
     static void CreateResources(uint32_t width, uint32_t height)
     {
-        rage::grcRenderTargetDesc desc{};
-        desc.mMultisampleCount = 0;
-        desc.field_0 = 1;
-        desc.field_12 = 1;
-        desc.mDepthRT = nullptr;
-        desc.field_8 = 1;
-        desc.field_10 = 1;
-        desc.field_11 = 1;
-        desc.field_24 = false;
-
-        auto CreateEmptyRT = [](const char* name, int32_t a2, uint32_t w, uint32_t h, uint32_t bitsPerPixel, rage::grcRenderTargetDesc* d) -> rage::grcRenderTargetPC*
-        {
-            auto rt = rage::grcTextureFactory::GetInstance()->CreateRenderTarget(name, a2, w, h, bitsPerPixel, d);
-            rage::grcDevice::grcResolveFlags resolveFlags{};
-            rage::grcTextureFactoryPC::GetInstance()->LockRenderTarget(0, rt, nullptr);
-            rage::grcTextureFactoryPC::GetInstance()->UnlockRenderTarget(0, &resolveFlags);
-            return rt;
-        };
-
-        desc.mFormat = rage::GRCFMT_G16R16F;
-        MotionRT = CreateEmptyRT("TemporalMotion", 3, width, height, 32, &desc);
+        auto desc = rage::OwnRenderTargetDesc(rage::GRCFMT_G16R16F);
+        MotionRT = rage::CreateEmptyRenderTarget("TemporalMotion", width, height, 32, desc);
 
         desc.mFormat = rage::GRCFMT_A16B16G16R16F;
-        HistoryRT[0] = CreateEmptyRT("TemporalHistory0", 3, width, height, 64, &desc);
-        HistoryRT[1] = CreateEmptyRT("TemporalHistory1", 3, width, height, 64, &desc);
+        HistoryRT[0] = rage::CreateEmptyRenderTarget("TemporalHistory0", width, height, 64, desc);
+        HistoryRT[1] = rage::CreateEmptyRenderTarget("TemporalHistory1", width, height, 64, desc);
 
         if (bVertexTextureSupported && bSkinnedMotionVectors)
         {
             desc.mFormat = rage::GRCFMT_A32B32G32R32F;
-            BoneRT = CreateEmptyRT("TemporalBones", 3, BoneTexels, BoneRows, 128, &desc);
+            BoneRT = rage::CreateEmptyRenderTarget("TemporalBones", BoneTexels, BoneRows, 128, desc);
         }
 
         desc.mFormat = rage::GRCFMT_R32F;
-        DepthRT = CreateEmptyRT("TemporalDepth", 3, width, height, 32, &desc);
+        DepthRT = rage::CreateEmptyRenderTarget("TemporalDepth", width, height, 32, desc);
 
         if (bReactiveMask)
         {
             desc.mFormat = rage::GRCFMT_R16F;
-            OpaqueRT = CreateEmptyRT("TemporalOpaque", 3, width, height, 16, &desc);
-            ReactiveRT = CreateEmptyRT("TemporalReactive", 3, width, height, 16, &desc);
+            OpaqueRT = rage::CreateEmptyRenderTarget("TemporalOpaque", width, height, 16, desc);
+            ReactiveRT = rage::CreateEmptyRenderTarget("TemporalReactive", width, height, 16, desc);
         }
 
         HistoryWidth = width;

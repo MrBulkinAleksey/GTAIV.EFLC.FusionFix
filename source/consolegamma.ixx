@@ -153,27 +153,14 @@ private:
 
         backBuffer->Release();
 
-        rage::grcRenderTargetDesc renderTargetDesc{};
-        renderTargetDesc.mMultisampleCount = 0;
-        renderTargetDesc.field_0 = 1;
-        renderTargetDesc.field_12 = 1;
-        renderTargetDesc.mDepthRT = nullptr;
-        renderTargetDesc.field_8 = 1;
-        renderTargetDesc.field_10 = 1;
-        renderTargetDesc.field_11 = 1;
-        renderTargetDesc.field_24 = false;
-        renderTargetDesc.mFormat = rage::getEngineTextureFormat(backBufferInfo.format);
+        auto renderTargetDesc = rage::OwnRenderTargetDesc(rage::getEngineTextureFormat(backBufferInfo.format));
 
         // The back buffer is 16-bit float with HDR output
         auto bitsPerPixel = backBufferInfo.format == D3DFMT_A16B16G16R16F ? 64 : 32;
-        auto* renderTarget = rage::grcTextureFactory::GetInstance()->CreateRenderTarget("ConsoleGammaScene", 3, backBufferInfo.width, backBufferInfo.height, bitsPerPixel, &renderTargetDesc);
+        auto* renderTarget = rage::CreateEmptyRenderTarget("ConsoleGammaScene", backBufferInfo.width, backBufferInfo.height, bitsPerPixel, renderTargetDesc);
 
         if (!renderTarget)
             return false;
-
-        rage::grcDevice::grcResolveFlags resolveFlags{};
-        rage::grcTextureFactoryPC::GetInstance()->LockRenderTarget(0, renderTarget, nullptr);
-        rage::grcTextureFactoryPC::GetInstance()->UnlockRenderTarget(0, &resolveFlags);
 
         pSceneRT = renderTarget;
 

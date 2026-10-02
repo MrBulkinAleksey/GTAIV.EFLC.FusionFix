@@ -1179,54 +1179,35 @@ public:
     {
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
 
-        rage::grcRenderTargetDesc desc{};
-        desc.mMultisampleCount = 0;
-        desc.field_0 = 1;
-        desc.field_12 = 1;
-        desc.mDepthRT = nullptr;
-        desc.field_8 = 1;
-        desc.field_10 = 1;
-        desc.field_11 = 1;
-        desc.field_24 = false;
-        desc.mFormat = rage::GRCFMT_A16B16G16R16F;
-
-        auto CreateEmptyRT = [](const char* name, int32_t a2, uint32_t width, uint32_t height, uint32_t bitsPerPixel, rage::grcRenderTargetDesc* desc) -> rage::grcRenderTargetPC*
-        {
-            auto rt = rage::grcTextureFactory::GetInstance()->CreateRenderTarget(name, a2, width, height, bitsPerPixel, desc);
-            rage::grcDevice::grcResolveFlags resolveFlags{};
-            rage::grcTextureFactoryPC::GetInstance()->LockRenderTarget(0, rt, nullptr);
-            rage::grcTextureFactoryPC::GetInstance()->UnlockRenderTarget(0, &resolveFlags);
-            return rt;
-        };
-
-        FullScreenTex_temp1 = CreateEmptyRT("FullScreenTex_temp1", 3, Width, Height, 64, &desc);
+        auto desc = rage::OwnRenderTargetDesc(rage::GRCFMT_A16B16G16R16F);
+        FullScreenTex_temp1 = rage::CreateEmptyRenderTarget("FullScreenTex_temp1", Width, Height, 64, desc);
 
         // Composited into the back buffer by FXAA and SMAA, it must not clip the highlights of an HDR back buffer
         desc.mFormat = HDROutput::IsBackBufferFloat() ? rage::GRCFMT_A16B16G16R16F : rage::GRCFMT_A8R8G8B8;
-        FullScreenTex_temp2 = CreateEmptyRT("FullScreenTex_temp2", 3, Width, Height, HDROutput::IsBackBufferFloat() ? 64 : 32, &desc);
+        FullScreenTex_temp2 = rage::CreateEmptyRenderTarget("FullScreenTex_temp2", Width, Height, HDROutput::IsBackBufferFloat() ? 64 : 32, desc);
 
         //desc.mFormat = rage::GRCFMT_G16R16F;
         // 
-        //pShadowBlurTex1 = CreateEmptyRT("pShadowBlurTex1", 3, Width, Height, 32, &desc);
-        //pShadowBlurTex2 = CreateEmptyRT("pShadowBlurTex2", 3, Width, Height, 32, &desc);
+        //pShadowBlurTex1 = rage::CreateEmptyRenderTarget("pShadowBlurTex1", Width, Height, 32, desc);
+        //pShadowBlurTex2 = rage::CreateEmptyRenderTarget("pShadowBlurTex2", Width, Height, 32, desc);
 
         desc.mFormat = rage::GRCFMT_X8R8G8B8;
 
-        edgesTex = CreateEmptyRT("edgesTex", 3, Width, Height, 32, &desc);
+        edgesTex = rage::CreateEmptyRenderTarget("edgesTex", Width, Height, 32, desc);
 
         desc.mFormat = rage::GRCFMT_A8R8G8B8;
 
-        blendTex = CreateEmptyRT("blendTex", 3, Width, Height, 32, &desc);
+        blendTex = rage::CreateEmptyRenderTarget("blendTex", Width, Height, 32, desc);
 
         desc.mFormat = rage::GRCFMT_A16B16G16R16F;
 
-        FullScreenDownsampleTex = CreateEmptyRT("FullScreenDownsampleTex", 3, Width / 2, Height / 2, 64, &desc);
-        FullScreenDownsampleTex2 = CreateEmptyRT("FullScreenDownsampleTex2", 3, Width / 2, Height / 2, 64, &desc);
+        FullScreenDownsampleTex = rage::CreateEmptyRenderTarget("FullScreenDownsampleTex", Width / 2, Height / 2, 64, desc);
+        FullScreenDownsampleTex2 = rage::CreateEmptyRenderTarget("FullScreenDownsampleTex2", Width / 2, Height / 2, 64, desc);
 
         // Always taken: SSR, its history check and the car glass read it. EnablePreAlphaDepth
         // decides only whether depth of field and sun shafts use it.
         desc.mFormat = rage::GRCFMT_R32F;
-        PreAlphaDepthCopyRT = CreateEmptyRT("PreAlphaDepthCopy", 3, Width, Height, 32, &desc);
+        PreAlphaDepthCopyRT = rage::CreateEmptyRenderTarget("PreAlphaDepthCopy", Width, Height, 32, desc);
 
 
         if (!SMAA_areaTex)
@@ -1545,78 +1526,40 @@ private:
 
         auto pDevice = rage::grcDevice::GetD3DDevice();
 
-        rage::grcRenderTargetDesc aoDesc{};
-        aoDesc.mMultisampleCount = 0;
-        aoDesc.field_0 = 1;
-        aoDesc.field_12 = 1;
-        aoDesc.mDepthRT = nullptr;
-        aoDesc.field_8 = 1;
-        aoDesc.field_10 = 1;
-        aoDesc.field_11 = 1;
-        aoDesc.field_24 = false;
-
-        auto CreateEmptyRT = [](const char* name, int32_t a2, uint32_t w, uint32_t h, uint32_t bpp, rage::grcRenderTargetDesc* d) -> rage::grcRenderTargetPC*
-        {
-            auto rt = rage::grcTextureFactory::GetInstance()->CreateRenderTarget(name, a2, w, h, bpp, d);
-            rage::grcDevice::grcResolveFlags resolveFlags{};
-            rage::grcTextureFactoryPC::GetInstance()->LockRenderTarget(0, rt, nullptr);
-            rage::grcTextureFactoryPC::GetInstance()->UnlockRenderTarget(0, &resolveFlags);
-            return rt;
-        };
+        auto aoDesc = rage::OwnRenderTargetDesc(rage::GRCFMT_UNKNOWN);
 
         aoDesc.mFormat = rage::GRCFMT_R32F;
         aoDesc.mLevels = PostFxResources.nAmbientOcclusionMaxMipLevel;
-        PostFxResources.AOCamDepthTex = CreateEmptyRT("AOCamDepthTex", 3, width, height, 32, &aoDesc);
+        PostFxResources.AOCamDepthTex = rage::CreateEmptyRenderTarget("AOCamDepthTex", width, height, 32, aoDesc);
 
         aoDesc.mFormat = rage::GRCFMT_L8;
         aoDesc.mLevels = 1;
-        PostFxResources.AOTex = CreateEmptyRT("AOTex", 3, width, height, 8, &aoDesc);
-        PostFxResources.AOBlurTex = CreateEmptyRT("AOBlurTex", 3, width, height, 8, &aoDesc);
+        PostFxResources.AOTex = rage::CreateEmptyRenderTarget("AOTex", width, height, 8, aoDesc);
+        PostFxResources.AOBlurTex = rage::CreateEmptyRenderTarget("AOBlurTex", width, height, 8, aoDesc);
 
         {
             aoDesc.mFormat = rage::GRCFMT_A16B16G16R16F;
             aoDesc.mLevels = 1;
-            PostFxResources.SSRTex = CreateEmptyRT("SSRTex", 3, width, height, 64, &aoDesc);
-            if (PostFxResources.SSRTex && PostFxResources.SSRTex->mD3DTexture)
-                PostFxResources.SSRTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRSurf);
+            PostFxResources.SSRTex = rage::CreateEmptyRenderTarget("SSRTex", width, height, 64, aoDesc, PostFxResources.SSRSurf);
 
-            PostFxResources.SSRHistoryTex = CreateEmptyRT("SSRHistoryTex", 3, width, height, 64, &aoDesc);
-            if (PostFxResources.SSRHistoryTex && PostFxResources.SSRHistoryTex->mD3DTexture)
-                PostFxResources.SSRHistoryTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRHistorySurf);
+            PostFxResources.SSRHistoryTex = rage::CreateEmptyRenderTarget("SSRHistoryTex", width, height, 64, aoDesc, PostFxResources.SSRHistorySurf);
 
-            PostFxResources.SSRDenoisedTex = CreateEmptyRT("SSRDenoisedTex", 3, width, height, 64, &aoDesc);
-            if (PostFxResources.SSRDenoisedTex && PostFxResources.SSRDenoisedTex->mD3DTexture)
-                PostFxResources.SSRDenoisedTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRDenoisedSurf);
+            PostFxResources.SSRDenoisedTex = rage::CreateEmptyRenderTarget("SSRDenoisedTex", width, height, 64, aoDesc, PostFxResources.SSRDenoisedSurf);
 
-            PostFxResources.SSRHalfTex = CreateEmptyRT("SSRHalfTex", 3, width / 2, height / 2, 64, &aoDesc);
-            if (PostFxResources.SSRHalfTex && PostFxResources.SSRHalfTex->mD3DTexture)
-                PostFxResources.SSRHalfTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRHalfSurf);
-            PostFxResources.SSRHalfDenoisedTex = CreateEmptyRT("SSRHalfDenoisedTex", 3, width / 2, height / 2, 64, &aoDesc);
-            if (PostFxResources.SSRHalfDenoisedTex && PostFxResources.SSRHalfDenoisedTex->mD3DTexture)
-                PostFxResources.SSRHalfDenoisedTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRHalfDenoisedSurf);
+            PostFxResources.SSRHalfTex = rage::CreateEmptyRenderTarget("SSRHalfTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfSurf);
+            PostFxResources.SSRHalfDenoisedTex = rage::CreateEmptyRenderTarget("SSRHalfDenoisedTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfDenoisedSurf);
 
-            PostFxResources.ContactRawTex = CreateEmptyRT("ContactShadowRawTex", 3, width, height, 64, &aoDesc);
-            if (PostFxResources.ContactRawTex && PostFxResources.ContactRawTex->mD3DTexture)
-                PostFxResources.ContactRawTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactRawSurf);
+            PostFxResources.ContactRawTex = rage::CreateEmptyRenderTarget("ContactShadowRawTex", width, height, 64, aoDesc, PostFxResources.ContactRawSurf);
             if (PostFxResources.bContactShadowsHalfRes)
             {
-                PostFxResources.ContactRawHalfTex = CreateEmptyRT("ContactShadowRawHalfTex", 3, width / 2, height / 2, 64, &aoDesc);
-                if (PostFxResources.ContactRawHalfTex && PostFxResources.ContactRawHalfTex->mD3DTexture)
-                    PostFxResources.ContactRawHalfTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactRawHalfSurf);
+                PostFxResources.ContactRawHalfTex = rage::CreateEmptyRenderTarget("ContactShadowRawHalfTex", width / 2, height / 2, 64, aoDesc, PostFxResources.ContactRawHalfSurf);
             }
-            PostFxResources.ContactTex = CreateEmptyRT("ContactShadowTex", 3, width, height, 64, &aoDesc);
-            if (PostFxResources.ContactTex && PostFxResources.ContactTex->mD3DTexture)
-                PostFxResources.ContactTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactSurf);
+            PostFxResources.ContactTex = rage::CreateEmptyRenderTarget("ContactShadowTex", width, height, 64, aoDesc, PostFxResources.ContactSurf);
             if (PostFxResources.fContactTemporalBlend > 0.0f)
             {
                 static const char* names[2] = { "ContactShadowAccumTex0", "ContactShadowAccumTex1" };
                 for (int i = 0; i < 2; ++i)
-                {
-                    auto& rt = PostFxResources.ContactAccumTex[i];
-                    rt = CreateEmptyRT(names[i], 3, width, height, 64, &aoDesc);
-                    if (rt && rt->mD3DTexture)
-                        rt->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.ContactAccumSurf[i]);
-                }
+                    PostFxResources.ContactAccumTex[i] = rage::CreateEmptyRenderTarget(names[i], width, height, 64, aoDesc, PostFxResources.ContactAccumSurf[i]);
             }
 
             if (PostFxResources.fSSRTemporalBlend > 0.0f)
@@ -1624,40 +1567,28 @@ private:
                 static const char* names[2][2] = { { "SSRAccumTex0", "SSRAccumTex1" }, { "SSRHalfAccumTex0", "SSRHalfAccumTex1" } };
                 for (int half = 0; half < 2; ++half)
                     for (int i = 0; i < 2; ++i)
-                    {
-                        auto& rt = PostFxResources.SSRAccumTex[half][i];
-                        rt = CreateEmptyRT(names[half][i], 3, half ? width / 2 : width, half ? height / 2 : height, 64, &aoDesc);
-                        if (rt && rt->mD3DTexture)
-                            rt->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRAccumSurf[half][i]);
-                    }
+                        PostFxResources.SSRAccumTex[half][i] = rage::CreateEmptyRenderTarget(names[half][i], half ? width / 2 : width,
+                            half ? height / 2 : height, 64, aoDesc, PostFxResources.SSRAccumSurf[half][i]);
             }
 
             {
                 auto create = [&](rage::grcRenderTargetPC*& rt, IDirect3DSurface9*& surf, const char* name)
                 {
-                    rt = CreateEmptyRT(name, 3, width / 2, height / 2, 64, &aoDesc);
-                    if (rt && rt->mD3DTexture)
-                        rt->mD3DTexture->GetSurfaceLevel(0, &surf);
+                    rt = rage::CreateEmptyRenderTarget(name, width / 2, height / 2, 64, aoDesc, surf);
                 };
                 create(PostFxResources.GIRawTex, PostFxResources.GIRawSurf, "GIRawTex");
                 create(PostFxResources.GIDenoisedTex, PostFxResources.GIDenoisedSurf, "GIDenoisedTex");
                 create(PostFxResources.GIAccumTex[0], PostFxResources.GIAccumSurf[0], "GIAccumTex0");
                 create(PostFxResources.GIAccumTex[1], PostFxResources.GIAccumSurf[1], "GIAccumTex1");
-                PostFxResources.GIFullTex = CreateEmptyRT("GIFullTex", 3, width, height, 64, &aoDesc);
-                if (PostFxResources.GIFullTex && PostFxResources.GIFullTex->mD3DTexture)
-                    PostFxResources.GIFullTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.GIFullSurf);
+                PostFxResources.GIFullTex = rage::CreateEmptyRenderTarget("GIFullTex", width, height, 64, aoDesc, PostFxResources.GIFullSurf);
             }
 
             for (int i = 0; i < 2; ++i)
             {
-                PostFxResources.SkinLightTex[i] = CreateEmptyRT(i ? "SkinLightTex1" : "SkinLightTex0", 3, width, height, 64, &aoDesc);
-                if (PostFxResources.SkinLightTex[i] && PostFxResources.SkinLightTex[i]->mD3DTexture)
-                    PostFxResources.SkinLightTex[i]->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SkinLightSurf[i]);
+                PostFxResources.SkinLightTex[i] = rage::CreateEmptyRenderTarget(i ? "SkinLightTex1" : "SkinLightTex0", width, height, 64, aoDesc, PostFxResources.SkinLightSurf[i]);
             }
 
-            PostFxResources.SSRDebugTex = CreateEmptyRT("SSRDebugTex", 3, width, height, 64, &aoDesc);
-            if (PostFxResources.SSRDebugTex && PostFxResources.SSRDebugTex->mD3DTexture)
-                PostFxResources.SSRDebugTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.SSRDebugSurf);
+            PostFxResources.SSRDebugTex = rage::CreateEmptyRenderTarget("SSRDebugTex", width, height, 64, aoDesc, PostFxResources.SSRDebugSurf);
 
             IDirect3DSurface9* oldRT = nullptr;
             pDevice->GetRenderTarget(0, &oldRT);

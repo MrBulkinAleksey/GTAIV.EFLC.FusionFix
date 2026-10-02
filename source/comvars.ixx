@@ -1788,6 +1788,48 @@ export namespace rage
         }
     };
 
+    // The desc FusionFix makes its own render targets with: no multisampling and no depth target.
+    inline grcRenderTargetDesc OwnRenderTargetDesc(grcTextureFormat format, int levels = 1)
+    {
+        grcRenderTargetDesc desc{};
+        desc.mMultisampleCount = 0;
+        desc.field_0 = 1;
+        desc.field_12 = 1;
+        desc.mDepthRT = nullptr;
+        desc.field_8 = 1;
+        desc.field_10 = 1;
+        desc.field_11 = 1;
+        desc.field_24 = false;
+        desc.mLevels = levels;
+        desc.mFormat = format;
+        return desc;
+    }
+
+    // Creates a render target (type 3) and locks and unlocks it once, as each of FusionFix's own is made.
+    inline grcRenderTargetPC* CreateEmptyRenderTarget(const char* name, uint32_t width, uint32_t height,
+                                                      uint32_t bitsPerPixel, grcRenderTargetDesc& desc)
+    {
+        auto rt = grcTextureFactory::GetInstance()->CreateRenderTarget(name, 3, width, height, bitsPerPixel, &desc);
+        if (rt)
+        {
+            grcDevice::grcResolveFlags resolveFlags{};
+            grcTextureFactoryPC::GetInstance()->LockRenderTarget(0, rt, nullptr);
+            grcTextureFactoryPC::GetInstance()->UnlockRenderTarget(0, &resolveFlags);
+        }
+        return rt;
+    }
+
+    // The same, with its top level surface for drawing into, nullptr where there is none.
+    inline grcRenderTargetPC* CreateEmptyRenderTarget(const char* name, uint32_t width, uint32_t height,
+                                                      uint32_t bitsPerPixel, grcRenderTargetDesc& desc,
+                                                      IDirect3DSurface9*& surface)
+    {
+        auto rt = CreateEmptyRenderTarget(name, width, height, bitsPerPixel, desc);
+        if (rt && rt->mD3DTexture)
+            rt->mD3DTexture->GetSurfaceLevel(0, &surface);
+        return rt;
+    }
+
     VALIDATE_SIZE(grcTextureFactoryPC, 0x74);
 
     enum eLightType
