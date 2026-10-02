@@ -663,7 +663,9 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
                     c += tex2Dlod(HistoryTex, float4(saturate(pathHist - float2(r.x, 0.0)), 0, 0)).rgb;
                     c += tex2Dlod(HistoryTex, float4(saturate(pathHist + float2(0.0, r.y)), 0, 0)).rgb;
                     c += tex2Dlod(HistoryTex, float4(saturate(pathHist - float2(0.0, r.y)), 0, 0)).rgb;
-                    weight = fFallback * (1.0 - saturate(Rw.z * 5.0));
+                    // Near enough to what the ray would have hit to take its full weight, as
+                    // the hits beside it do; at fFallback's 0.8 the figure stayed a shade darker.
+                    weight = 1.0 - saturate(Rw.z * 5.0);
                     return clamp(c * 0.2, 0.0, HISTORY_CLAMP) * SSR_SCALE;
                 }
                 break;
