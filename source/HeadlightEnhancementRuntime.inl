@@ -22,6 +22,7 @@ namespace HeadlightEnhancement
     static const float* pRadiusBase = nullptr;
     static std::string lightModesStatus = "off in the ini";
     static std::string splitBeamsStatus = "off in the ini";
+    static std::string offscreenLightsStatus = "off in the ini";
     static std::atomic<bool> diagnosticsReady{false};
     static std::filesystem::path logPath;
 
@@ -116,6 +117,7 @@ namespace HeadlightEnhancement
             << "\nretainedSubmissions=" << retainedSubmissions.load()
             << "\nlightModesStatus=" << lightModesStatus
             << "\nsplitBeamsStatus=" << splitBeamsStatus
+            << "\noffscreenLightsStatus=" << offscreenLightsStatus
             << "\ntrackedVehicle=" << (lastDrivenToken.load() != 0) << '\n';
     }
 
@@ -382,5 +384,53 @@ namespace HeadlightEnhancement
         submitBeams = reinterpret_cast<SubmitBeams>(imageBase + 0x63E070);
         injector::MakeCALL(call, SubmitSplitBeams, true);
         splitBeamsStatus = mode == 1 ? "installed, two beams" : "installed, beam slid towards the player's side";
+    }
+
+    // A car's lights, its headlight beams among them, are only made while the car was seen by one
+    // of the frame's render phases (CE 0xA43616 tests vehicle+8 against the phase mask 0x159B75C).
+    // Outdoors some phase still takes in a car behind the camera; in a tunnel none does, so the
+    // beam of a car behind the camera went out and came back on once the car was in view. Map
+    // lights keep theirs within 35 m of the camera whether seen or not (CE 0xC1DBA4); cars now
+    // do the same.
+    static constexpr float OffscreenLightsDistance = 35.0f;
+    static const uint32_t* pPhaseMask = nullptr;
+    static const float* pCameraPosition = nullptr;
+
+    // Called in place of the mask test with the car in ECX; ECX and EDX are dead after it.
+    static bool __fastcall MakesLights(uintptr_t vehicle)
+    {
+        if (*reinterpret_cast<const uint32_t*>(vehicle + 8) & *pPhaseMask) return true;
+        const auto matrix = *reinterpret_cast<const float* const*>(vehicle + 0x20);
+        const auto position = matrix ? matrix + 12 : reinterpret_cast<const float*>(vehicle + 0x10);
+        const float dx = position[0] - pCameraPosition[0], dy = position[1] - pCameraPosition[1],
+                    dz = position[2] - pCameraPosition[2];
+        return dx * dx + dy * dy + dz * dz <= OffscreenLightsDistance * OffscreenLightsDistance;
+    }
+
+    static void InstallOffscreenLights(bool enabled)
+    {
+        if (!enabled) return;
+        imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+        const auto at = imageBase + 0x643616;
+        // mov eax, [0x159B75C] / test [esi+8], eax / je 0xA44CAA
+        constexpr uint8_t test[]{0x85,0x46,0x08,0x0F,0x84};
+        if (*reinterpret_cast<const uint8_t*>(at) != 0xA1 ||
+            *reinterpret_cast<const uint32_t*>(at + 1) != imageBase + 0x119B75C ||
+            std::memcmp(reinterpret_cast<const void*>(at + 5), test, sizeof(test)) ||
+            at + 14 + *reinterpret_cast<const int32_t*>(at + 10) != imageBase + 0x644CAA)
+        {
+            offscreenLightsStatus = "game code differs: " + DumpBytes(at, 14);
+            return;
+        }
+        pPhaseMask = reinterpret_cast<const uint32_t*>(imageBase + 0x119B75C);
+        pCameraPosition = reinterpret_cast<const float*>(imageBase + 0xE8E340);
+        // call MakesLights / test al, al / je 0xA44CAA / nop
+        injector::MakeCALL(at, MakesLights, true);
+        constexpr uint8_t branch[]{0x84,0xC0,0x0F,0x84};
+        for (size_t i = 0; i < sizeof(branch); ++i)
+            injector::WriteMemory<uint8_t>(at + 5 + i, branch[i], true);
+        injector::WriteMemory<int32_t>(at + 9, static_cast<int32_t>(imageBase + 0x644CAA - (at + 13)), true);
+        injector::WriteMemory<uint8_t>(at + 13, 0x90, true);
+        offscreenLightsStatus = "installed";
     }
 }
