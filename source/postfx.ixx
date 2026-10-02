@@ -535,10 +535,16 @@ public:
     float fAmbientOcclusionBias = 0.03f;
     float fAmbientOcclusionIntensity = 0.4f;
     float fAmbientOcclusionBlurRadius = 2.0f;
+    // GTAO (AO.fx, Ambient Occlusion: GTAO in the graphics menu): slices through the view
+    // direction and steps per side.
+    int nAmbientOcclusionGTAOSlices = 3;
+    int nAmbientOcclusionGTAOSteps = 4;
+    float fAmbientOcclusionGTAOStrength = 1.0f;
 
     struct
     {
-        D3DXHANDLE AOTexture2D, AOCamDepthTexture2D, DepthTex2D;
+        D3DXHANDLE AOTexture2D, AOCamDepthTexture2D, DepthTex2D, NormalTex2D;
+        D3DXHANDLE vec4WorldToView, fUseNormals, fGTAOStrength, fGTAO;
 
         D3DXHANDLE vec2InvViewportSize;
         D3DXHANDLE fNearPlane;
@@ -822,7 +828,11 @@ public:
             static std::string logMaxOffset = std::to_string(nAmbientOcclusionLogMaxOffset);
             static std::string maxMipLevel = std::to_string(nAmbientOcclusionMaxMipLevel);
             static std::string farClip = std::to_string(fAmbientOcclusionFarClip);
+            static std::string gtaoSlices = std::to_string(nAmbientOcclusionGTAOSlices);
+            static std::string gtaoSteps = std::to_string(nAmbientOcclusionGTAOSteps);
             D3DXMACRO defines[] = {
+                {"GTAO_SLICES", gtaoSlices.c_str()},
+                {"GTAO_STEPS", gtaoSteps.c_str()},
                 {"NUM_SAMPLES", sampleCount.c_str()},
                 {"LOG_MAX_OFFSET", logMaxOffset.c_str()},
                 {"MAX_MIP_LEVEL", maxMipLevel.c_str()},
@@ -840,6 +850,11 @@ public:
                 AOEffectHandles.AOTexture2D = AOEffect->GetParameterByName(nullptr, "AOTexture2D");
                 AOEffectHandles.AOCamDepthTexture2D = AOEffect->GetParameterByName(nullptr, "AOCamDepthTexture2D");
                 AOEffectHandles.DepthTex2D = AOEffect->GetParameterByName(nullptr, "DepthTex2D");
+                AOEffectHandles.NormalTex2D = AOEffect->GetParameterByName(nullptr, "NormalTex2D");
+                AOEffectHandles.vec4WorldToView = AOEffect->GetParameterByName(nullptr, "vec4WorldToView");
+                AOEffectHandles.fUseNormals = AOEffect->GetParameterByName(nullptr, "fUseNormals");
+                AOEffectHandles.fGTAOStrength = AOEffect->GetParameterByName(nullptr, "fGTAOStrength");
+                AOEffectHandles.fGTAO = AOEffect->GetParameterByName(nullptr, "fGTAO");
                 AOEffectHandles.vec2InvViewportSize = AOEffect->GetParameterByName(nullptr, "vec2InvViewportSize");
                 AOEffectHandles.fNearPlane = AOEffect->GetParameterByName(nullptr, "fNearPlane");
                 AOEffectHandles.fFarPlane = AOEffect->GetParameterByName(nullptr, "fFarPlane");
@@ -1153,6 +1168,9 @@ public:
         nAmbientOcclusionMaxMipLevel = iniReader.ReadInteger("POSTFX", "AmbientOcclusionMaxMipLevel", 5);
         fAmbientOcclusionFarClip = iniReader.ReadFloat("POSTFX", "AmbientOcclusionFarClip", 150.0f);
         fAmbientOcclusionBlurRadius = iniReader.ReadFloat("POSTFX", "AmbientOcclusionBlurRadius", 2.0f);
+        nAmbientOcclusionGTAOSlices = std::clamp(iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOSlices", 3), 1, 8);
+        nAmbientOcclusionGTAOSteps = std::clamp(iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOSteps", 4), 1, 16);
+        fAmbientOcclusionGTAOStrength = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOStrength", 1.0f), 0.0f, 4.0f);
 
         nAmbientOcclusionBlurPasses = std::max(0, nAmbientOcclusionBlurPasses);
         nAmbientOcclusionSamples = std::clamp(nAmbientOcclusionSamples, 0, 128);
@@ -3312,6 +3330,17 @@ private:
                 D3DMATRIX proj = *(D3DMATRIX*)currGrcViewport->mProjectionMatrix;
 
                 effect->SetFloat(h.fRadius, PostFxResources.fAmbientOcclusionRadius);
+                // GTAO's normals, from the G-buffer when there is one
+                {
+                    const bool normals = PostFxResources.mNormalRT && PostFxResources.mNormalRT->mD3DTexture;
+                    effect->SetTexture(h.NormalTex2D, normals ? PostFxResources.mNormalRT->mD3DTexture : nullptr);
+                    effect->SetFloat(h.fUseNormals, normals ? 1.0f : 0.0f);
+                    D3DXVECTOR4 toView[3];
+                    WorldToViewRows(currGrcViewport, toView);
+                    effect->SetVectorArray(h.vec4WorldToView, toView, 3);
+                    effect->SetFloat(h.fGTAOStrength, PostFxResources.fAmbientOcclusionGTAOStrength);
+                    effect->SetFloat(h.fGTAO, AO->get() == 2 ? 1.0f : 0.0f); // 1 SAO, 2 GTAO
+                }
                 effect->SetFloat(h.fBias, PostFxResources.fAmbientOcclusionBias);
                 effect->SetFloat(h.fIntensity, PostFxResources.fAmbientOcclusionIntensity);
                 effect->SetFloat(h.fProjScale, proj._22 * 0.5f * height);

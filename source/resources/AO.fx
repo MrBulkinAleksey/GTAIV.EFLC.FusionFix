@@ -12,7 +12,7 @@
 //  Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
 //  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-texture AOTexture2D, AOCamDepthTexture2D, DepthTex2D;
+texture AOTexture2D, AOCamDepthTexture2D, DepthTex2D, NormalTex2D;
 
 sampler2D AOCamDepthTexture
 {
@@ -44,6 +44,17 @@ sampler2D DepthTex
     MagFilter = Point;
 };
 
+// _DEFERRED_GBUFFER_1_, the normals GTAO works with.
+sampler2D NormalTex
+{
+    Texture = <NormalTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MipFilter = Point;
+    MinFilter = Point;
+    MagFilter = Point;
+};
+
 uniform float2 vec2InvViewportSize;
 uniform float fNearPlane;
 uniform float fFarPlane;
@@ -54,6 +65,10 @@ uniform float fIntensity;
 uniform float fProjScale;
 uniform float4 vec4ProjInfo;
 uniform float2 vec2BlurDirection;
+uniform float4 vec4WorldToView[3]; // world to reconstruction space rotation, for the G-buffer normals
+uniform float fUseNormals;         // 1 when NormalTex holds the G-buffer normals, 0 rebuilds them from depth
+uniform float fGTAOStrength;       // exponent on GTAO's visibility, 1 as computed
+uniform float fGTAO;               // 1 computes GTAO, 0 SAO (Ambient Occlusion in the graphics menu)
 
 #ifndef NUM_SAMPLES
 #define NUM_SAMPLES 9
@@ -69,6 +84,12 @@ uniform float2 vec2BlurDirection;
 #endif
 #ifndef NUM_SPIRAL_TURNS
 #define NUM_SPIRAL_TURNS 7
+#endif
+#ifndef GTAO_SLICES
+#define GTAO_SLICES 3
+#endif
+#ifndef GTAO_STEPS
+#define GTAO_STEPS 4
 #endif
 static const float PI = 3.14159265;
 
@@ -179,6 +200,104 @@ float2 BilateralBlur(sampler2D Texture, sampler2D CamDepthTexture, in float2 uv)
     return float2(blurredValue, refTap.y);
 }
 
+// _DEFERRED_GBUFFER_1_ decoded the way deferred_lighting decodes it, turned into
+// reconstruction space (as GBufferNormal in SSR.fx).
+float3 GBufferViewNormal(float2 uv)
+{
+    float4 g = tex2Dlod(NormalTex, float4(uv, 0, 0));
+    float3 f = frac(g.w * float3(0.998046875, 7.984375, 63.875));
+    f.xy -= f.yz * 0.125;
+    float3 n = normalize(g.xyz * 256.0 + f - 127.999992);
+    return normalize(float3(dot(vec4WorldToView[0].xyz, n),
+                            dot(vec4WorldToView[1].xyz, n),
+                            dot(vec4WorldToView[2].xyz, n)));
+}
+
+float FastAcos(float x)
+{
+    float a = abs(x);
+    float r = (-0.156583 * a + 1.570796) * sqrt(1.0 - a);
+    return x >= 0.0 ? r : PI - r;
+}
+
+// Ground truth ambient occlusion (Jimenez et al. 2016, after Intel's XeGTAO): in a few slices
+// through the view direction, the highest horizon on either side is found by stepping across
+// the screen, and the cosine weighted share of the hemisphere above the normal that lies
+// between the two horizons is integrated exactly. Unlike SAO's sum of point obscurances it
+// gives the visible fraction of the sky, so a corner, a gap under a car or the ground along a
+// wall darkens as much as it is closed in, and open ground keeps its full light. Occluders
+// fade out over the outer part of fRadius, so a building behind a ped does not darken him.
+float ComputeGTAO(float2 ssC, float2 uv, float3 C, float3 n)
+{
+    float3 viewV = normalize(-C);
+    float radiusPx = min(abs(fProjScale) * fRadius / C.z, 0.25 / vec2InvViewportSize.y);
+    if (radiusPx < 1.0)
+        return 1.0;
+
+    float falloffRange = 0.615 * fRadius;
+    float falloffMul = -1.0 / falloffRange;
+    float falloffAdd = (fRadius - falloffRange) / falloffRange + 1.0;
+
+    // Interleaved gradient noise: the slices turn and the steps shift from pixel to pixel,
+    // which the blur afterwards evens out.
+    float noiseSlice = frac(52.9829189 * frac(dot(ssC, float2(0.06711056, 0.00583715))));
+    float noiseStep = frac(52.9829189 * frac(dot(ssC.yx + float2(5.0, 13.0), float2(0.06711056, 0.00583715))));
+
+    float visibility = 0.0;
+    [unroll]
+    for (int slice = 0; slice < GTAO_SLICES; ++slice)
+    {
+        float phi = ((float) slice + noiseSlice) * (PI / (float) GTAO_SLICES);
+        float2 omega = float2(cos(phi), sin(phi));
+
+        // The slice's direction in reconstruction space: where a step along omega on the
+        // screen leads at this depth.
+        float3 dirV = ReconstructViewPos(ssC + omega, C.z) - C;
+        float3 orthoDir = normalize(dirV - dot(dirV, viewV) * viewV);
+        float3 axis = normalize(cross(orthoDir, viewV));
+        float3 projN = n - axis * dot(n, axis);
+        float projLen = length(projN);
+        float cosN = saturate(dot(projN, viewV) / max(projLen, 1e-4));
+        float angN = (dot(orthoDir, projN) >= 0.0 ? 1.0 : -1.0) * FastAcos(cosN);
+
+        // Horizons start at the tangent plane on each side.
+        float lowCos0 = cos(angN + PI * 0.5);
+        float lowCos1 = cos(angN - PI * 0.5);
+        float horizonCos0 = lowCos0;
+        float horizonCos1 = lowCos1;
+
+        [unroll]
+        for (int step = 0; step < GTAO_STEPS; ++step)
+        {
+            // Denser next to the pixel, where small creases are.
+            float t = ((float) step + noiseStep) / (float) GTAO_STEPS;
+            t *= t;
+            float offsetPx = max(t * radiusPx, (float) step + 1.0);
+            float2 offset = omega * offsetPx;
+
+            float3 delta0 = getOffsetPosition(ssC, omega, offsetPx) - C;
+            float3 delta1 = getOffsetPosition(ssC, -omega, offsetPx) - C;
+            float len0 = length(delta0);
+            float len1 = length(delta1);
+            float sampleCos0 = lerp(lowCos0, dot(delta0, viewV) / max(len0, 1e-4), saturate(len0 * falloffMul + falloffAdd));
+            float sampleCos1 = lerp(lowCos1, dot(delta1, viewV) / max(len1, 1e-4), saturate(len1 * falloffMul + falloffAdd));
+            horizonCos0 = max(horizonCos0, sampleCos0);
+            horizonCos1 = max(horizonCos1, sampleCos1);
+        }
+
+        float h0 = -FastAcos(horizonCos1);
+        float h1 = FastAcos(horizonCos0);
+        h0 = angN + clamp(h0 - angN, -PI * 0.5, PI * 0.5);
+        h1 = angN + clamp(h1 - angN, -PI * 0.5, PI * 0.5);
+        float sinN = sin(angN);
+        float arc0 = (cosN + 2.0 * h0 * sinN - cos(2.0 * h0 - angN)) * 0.25;
+        float arc1 = (cosN + 2.0 * h1 * sinN - cos(2.0 * h1 - angN)) * 0.25;
+        visibility += projLen * (arc0 + arc1);
+    }
+    visibility /= (float) GTAO_SLICES;
+    return pow(saturate(visibility), fGTAOStrength);
+}
+
 float4 ComputeAO_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     float depth = tex2D(AOCamDepthTexture, uv).r;
@@ -197,20 +316,33 @@ float4 ComputeAO_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 	// in the final image.
     float3 n_C = ReconstructNormal(C);
 
-	// Choose the screen-space sample radius
-	// proportional to the projected area of the sphere
-    float ssDiskRadius = -fProjScale * fRadius / C.z;
-    
-    float sum = 0.0;
-    [unroll]
-    for (int i = 0; i < NUM_SAMPLES; ++i)
+    float A;
+    [branch]
+    if (fGTAO > 0.0)
     {
-        sum += sampleAO(ssC, C, n_C, ssDiskRadius, i, randomPatternRotationAngle);
+        float3 n = n_C;
+        if (fUseNormals > 0.0)
+            n = GBufferViewNormal(uv);
+        n = (dot(n, C) > 0.0) ? -n : n;
+        A = ComputeGTAO(ssC, uv, C, n);
     }
-    
-    float temp = fRadius * fRadius * fRadius;
-    sum /= temp * temp;
-    float A = max(0.0, 1.0 - sum * fIntensity * (5.0 / NUM_SAMPLES));
+    else
+    {
+        // Choose the screen-space sample radius
+        // proportional to the projected area of the sphere
+        float ssDiskRadius = -fProjScale * fRadius / C.z;
+
+        float sum = 0.0;
+        [unroll]
+        for (int i = 0; i < NUM_SAMPLES; ++i)
+        {
+            sum += sampleAO(ssC, C, n_C, ssDiskRadius, i, randomPatternRotationAngle);
+        }
+
+        float temp = fRadius * fRadius * fRadius;
+        sum /= temp * temp;
+        A = max(0.0, 1.0 - sum * fIntensity * (5.0 / NUM_SAMPLES));
+    }
 
 	// Bilateral box-filter over a quad for free, respecting depth edges
 	// (the difference that this makes is subtle)
