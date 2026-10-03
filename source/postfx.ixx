@@ -3236,6 +3236,15 @@ private:
             BindMotionVectors(effect, history);
             effect->SetFloat(h.fTemporalBlend, history ? R.fSSRTemporalBlend : 0.0f);
             effect->SetFloat(h.fTemporalAnySurface, 0.0f);
+            if (SSRTrace::Active())
+            {
+                SSRTrace::Line("ssr temporal: input %s, history %s of scene %u, reprojects %d, motion %p, into %s",
+                    SSRTrace::TextureName(ssrResult).c_str(), SSRTrace::TextureName(R.SSRAccumTex[sizeIndex][prev]->mD3DTexture).c_str(),
+                    unsigned(R.nSSRAccumFrame), int(history), static_cast<void*>(history ? FrameHistory::MotionVectors() : nullptr),
+                    SSRTrace::TextureName(R.SSRAccumTex[sizeIndex][next]->mD3DTexture).c_str());
+                SSRTrace::Contents(pDevice, "temporal input", ssrResult);
+                SSRTrace::Contents(pDevice, "temporal history", R.SSRAccumTex[sizeIndex][prev]->mD3DTexture);
+            }
             pDevice->SetRenderTarget(0, R.SSRAccumSurf[sizeIndex][next]);
             effect->SetTechnique(h.techSSRTemporal);
             effect->Begin(&passes, 0);
