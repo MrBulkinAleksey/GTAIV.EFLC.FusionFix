@@ -445,9 +445,8 @@ public:
     rage::grcRenderTargetPC* SSRHalfDenoisedTex = nullptr;
     IDirect3DSurface9* SSRHalfDenoisedSurf = nullptr;
     // The passes of SSR before its result (technique SSR in SSR.fx), at full [0] and half [1]
-    // resolution: the hits of the march, in 16 bits fixed point as they hold where to read the
-    // history, which half floats put up to a pixel off at 4K, and the blurred guess for the
-    // misses.
+    // resolution: the reflections the march found, colour and confidence in half floats as
+    // SSRTex holds them, and what fills in the misses.
     rage::grcRenderTargetPC* SSRTraceTex[2] = {};
     IDirect3DSurface9* SSRTraceSurf[2] = {};
     rage::grcRenderTargetPC* SSRFallbackTex[2] = {};
@@ -1638,18 +1637,8 @@ private:
                         PostFxResources.SSRFallbackSurf[half]);
                     PostFxResources.SSRSpreadTex[half] = rage::CreateEmptyRenderTarget(half ? "SSRHalfSpreadTex" : "SSRSpreadTex", w, hgt,
                         64, aoDesc, PostFxResources.SSRSpreadSurf[half]);
-                    auto traceDesc = aoDesc;
-                    traceDesc.mFormat = rage::GRCFMT_A16B16G16R16;
-                    PostFxResources.SSRTraceTex[half] = rage::CreateEmptyRenderTarget(traceNames[half], w, hgt, 64, traceDesc,
+                    PostFxResources.SSRTraceTex[half] = rage::CreateEmptyRenderTarget(traceNames[half], w, hgt, 64, aoDesc,
                         PostFxResources.SSRTraceSurf[half]);
-                    // Half floats where the card has no 16 bit fixed point target.
-                    if (!PostFxResources.SSRTraceSurf[half])
-                    {
-                        if (PostFxResources.SSRTraceTex[half])
-                            PostFxResources.SSRTraceTex[half]->Destroy();
-                        PostFxResources.SSRTraceTex[half] = rage::CreateEmptyRenderTarget(traceNames[half], w, hgt, 64, aoDesc,
-                            PostFxResources.SSRTraceSurf[half]);
-                    }
                 }
             }
 

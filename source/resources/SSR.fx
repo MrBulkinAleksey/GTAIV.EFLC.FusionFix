@@ -732,8 +732,8 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
     return 0.0;
 }
 
-// Misses among hits, SSRTrace_PS's in SSRResultTex: the reflection of the hits around them, read
-// from the history where each of them hit, those on about the same surface only. A miss next to
+// Misses among hits, SSRTrace_PS's in SSRResultTex: the reflection of the hits around them, those
+// on about the same surface only. A miss next to
 // what a car reflects, or among the hits on a door, showed the game's own map there, which holds
 // only the sky: a dark rim around the reflection at night and dark grain on the doors. The
 // blurred scene around the point a metre and a half along the ray, which filled them before,
@@ -754,11 +754,11 @@ float3 NeighbourFill(float2 uv, float z, out float weight)
     {
         float2 tapUV = uv + taps[i] * vec2InvViewportSize;
         float4 hit = tex2Dlod(SSRResultTex, float4(tapUV, 0, 0));
-        float w = hit.z * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
+        float w = hit.a * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
         [branch]
         if (w > 0.0)
         {
-            sum += clamp(tex2Dlod(HistoryTex, float4(hit.xy, 0, 0)).rgb, 0.0, HISTORY_CLAMP) * SSR_SCALE * w;
+            sum += hit.rgb * w;
             sumW += w;
         }
     }
@@ -779,10 +779,12 @@ float3 SSRSurface(float2 uv, float2 vPos, out float3 n)
     return C;
 }
 
-// SSR runs in three passes, as one pixel shader it took about a thousand instruction slots
-// where ps_3_0 promises 512: SSRTrace_PS marches the rays into a target of the same size, the
-// hit as TraceHit returns it, SSRFallback_PS works out what fills in where it found next to
-// nothing into another, and SSR_PS puts the two together into the reflection.
+// SSR runs in passes, as one pixel shader it took about a thousand instruction slots where
+// ps_3_0 promises 512: SSRTrace_PS marches the rays and reads the history where they hit, into
+// a half float target of the same size, colour and confidence as the single pass had them;
+// SSRFallback_PS and SSRSpread_PS work out what fills in where the rays found next to nothing
+// into another, and SSR_PS puts the two together into the reflection. The march once handed
+// on where it hit, for SSR_PS to read the history there; the reflections came out dull.
 float4 SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     if (SSRSurfaceWeight(uv) <= 0.0)
@@ -801,7 +803,7 @@ float4 SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         float nearer = gTraceHitZ < C.z - 0.25 ? 1.0 : 0.0;
         return float4(nearer, 1.0 - nearer, gTraceRayZ < 0.0 ? 1.0 : 0.0, hit.z);
     }
-    return hit;
+    return HitColour(hit, fReflectionBlur);
 }
 
 // Only rays that found next to nothing are filled in, fully at confidence 0 and not at all from
@@ -814,7 +816,7 @@ static const float kFallbackBelow = 0.1;
 // SetupReflectionRay works out again.
 float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
-    if (SSRSurfaceWeight(uv) <= 0.0 || tex2Dlod(SSRResultTex, float4(uv, 0, 0)).z >= kFallbackBelow)
+    if (SSRSurfaceWeight(uv) <= 0.0 || tex2Dlod(SSRResultTex, float4(uv, 0, 0)).a >= kFallbackBelow)
         return 0.0;
     float3 n;
     float3 C = SSRSurface(uv, vPos, n);
@@ -836,7 +838,7 @@ float4 SSRSpread_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     float4 own = tex2Dlod(SSRFallbackTex, float4(uv, 0, 0));
     if (own.a >= fFallback * 0.99 || SSRSurfaceWeight(uv) <= 0.0 ||
-        tex2Dlod(SSRResultTex, float4(uv, 0, 0)).z >= kFallbackBelow)
+        tex2Dlod(SSRResultTex, float4(uv, 0, 0)).a >= kFallbackBelow)
         return own;
     static const float2 taps[8] =
     {
@@ -875,7 +877,7 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float4 hit = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
     if (fDebugMode > 2.5 && fDebugMode < 3.5)
         return hit;
-    float4 r = HitColour(hit, fReflectionBlur);
+    float4 r = hit;
     [branch]
     if (fFallback > 0.0 && r.a < 1.0)
     {
