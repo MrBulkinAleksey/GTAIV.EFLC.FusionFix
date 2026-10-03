@@ -3,6 +3,8 @@ module;
 #include <common.hxx>
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
+#include <cstdio>
 #include <string_view>
 
 export module renderscale;
@@ -37,12 +39,40 @@ namespace
     uint32_t RenderWidth = 0;
     uint32_t RenderHeight = 0;
 
-    // FullScreenCopy at the screen size, and the targets FullScreenCopy had at the render size
+    // FullScreenCopy at the screen size, and the targets FullScreenCopy had at the render size. The game
+    // leaves mD3DSurface of its targets empty at times, the scene's surface is taken from its texture.
     IDirect3DTexture9* OutputTexture = nullptr;
     IDirect3DSurface9* OutputSurface = nullptr;
     rage::grcRenderTargetPC* SwappedRT = nullptr;
     IDirect3DTexture9* SceneTexture = nullptr;
-    IDirect3DSurface9* SceneSurface = nullptr;
+    IDirect3DSurface9* SceneSurface = nullptr;      // mD3DSurface as the game had it
+    IDirect3DSurface9* SceneLevel = nullptr;        // level 0 of SceneTexture, referenced
+
+    // GTAIV.EFLC.FusionFix.RenderScale.log next to the plugin: the sizes, the hooks, and why the post
+    // processing could not start at the screen size, each reason once
+    void Log(const char* format, ...)
+    {
+        static bool started = false;
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, (GetThisModulePath() / L"GTAIV.EFLC.FusionFix.RenderScale.log").c_str(), started ? L"a" : L"w") || !f)
+            return;
+        started = true;
+        va_list args;
+        va_start(args, format);
+        vfprintf(f, format, args);
+        va_end(args);
+        fputc('\n', f);
+        fclose(f);
+    }
+
+    void LogOnce(int reason, const char* message)
+    {
+        static uint32_t logged = 0;
+        if (logged & (1u << reason))
+            return;
+        logged |= 1u << reason;
+        Log("%s", message);
+    }
 
     // Depth buffer of the screen size for targets of the screen size, and the scene's one it stands in for
     IDirect3DSurface9* FullDepth = nullptr;
@@ -76,6 +106,8 @@ namespace
         RenderHeight = Scaled(screenHeight);
         width = RenderWidth;
         height = RenderHeight;
+        if (!bActive || std::string_view(name) == "FullScreenCopy")
+            Log("%s: %ux%u for a %ux%u screen", name, RenderWidth, RenderHeight, DisplayWidth, DisplayHeight);
         bActive = true;
     }
 
@@ -289,7 +321,7 @@ namespace
 
     // ---------------------------------------------------------------------------------------------
 
-    void ReleaseOutput()
+    void RestoreScene()
     {
         if (SwappedRT)
         {
@@ -299,6 +331,14 @@ namespace
             SwappedRT->mHeight = static_cast<uint16_t>(RenderHeight);
             SwappedRT = nullptr;
         }
+        if (SceneLevel)
+            SceneLevel->Release();
+        SceneLevel = nullptr;
+    }
+
+    void ReleaseOutput()
+    {
+        RestoreScene();
         if (OutputSurface)
             OutputSurface->Release();
         if (OutputTexture)
@@ -324,14 +364,7 @@ namespace
         }
         if (!bInPost)
             return;
-        if (SwappedRT)
-        {
-            SwappedRT->mD3DTexture = SceneTexture;
-            SwappedRT->mD3DSurface = SceneSurface;
-            SwappedRT->mWidth = static_cast<uint16_t>(RenderWidth);
-            SwappedRT->mHeight = static_cast<uint16_t>(RenderHeight);
-            SwappedRT = nullptr;
-        }
+        RestoreScene();
         bInPost = false;
     }
 }
@@ -375,24 +408,39 @@ export namespace RenderScale
         if (!bActive || bInPost)
             return false;
         auto rt = rage::grcTextureFactoryPC::GetRTByName("FullScreenCopy");
-        if (!rt || !rt->mD3DTexture || !rt->mD3DSurface)
+        if (!rt || !rt->mD3DTexture)
+        {
+            LogOnce(0, "post: FullScreenCopy has no texture");
             return false;
+        }
+        D3DSURFACE_DESC desc{};
+        rt->mD3DTexture->GetLevelDesc(0, &desc);
+        if (!IsRenderSize(desc.Width, desc.Height))
+        {
+            LogOnce(1, "post: FullScreenCopy is not at the render size");
+            return false;
+        }
 
         if (!OutputTexture)
         {
-            D3DSURFACE_DESC desc{};
-            rt->mD3DTexture->GetLevelDesc(0, &desc);
             if (FAILED(device->CreateTexture(DisplayWidth, DisplayHeight, 1, D3DUSAGE_RENDERTARGET, desc.Format, D3DPOOL_DEFAULT, &OutputTexture, nullptr)) || !OutputTexture)
+            {
+                LogOnce(2, "post: the full size texture could not be created");
                 return false;
+            }
             OutputTexture->GetSurfaceLevel(0, &OutputSurface);
             if (!OutputSurface)
                 return false;
+            Log("post: FullScreenCopy is %ux%u from the post processing on (mD3DSurface %s)", DisplayWidth, DisplayHeight, rt->mD3DSurface ? "set" : "empty");
         }
 
+        if (FAILED(rt->mD3DTexture->GetSurfaceLevel(0, &SceneLevel)) || !SceneLevel)
+            return false;
         SceneTexture = rt->mD3DTexture;
         SceneSurface = rt->mD3DSurface;
         rt->mD3DTexture = OutputTexture;
-        rt->mD3DSurface = OutputSurface;
+        if (rt->mD3DSurface)
+            rt->mD3DSurface = OutputSurface;
         rt->mWidth = static_cast<uint16_t>(DisplayWidth);
         rt->mHeight = static_cast<uint16_t>(DisplayHeight);
         SwappedRT = rt;
@@ -413,7 +461,7 @@ export namespace RenderScale
         }
 
         scene = SceneTexture;
-        sceneSurface = SceneSurface;
+        sceneSurface = SceneLevel;
         output = OutputSurface;
         return true;
     }
@@ -445,6 +493,7 @@ public:
             auto pattern = hook::pattern("8B 4C 24 04 F3 0F 10 05 ? ? ? ? F3 0F 10 09 0F 2E C1 9F F6 C4 44 7A 12 F3 0F 10 05 ? ? ? ? 0F 2E 41 04 9F F6 C4 44 7B ? F3 0F 11 0D");
             if (!pattern.empty())
                 shSetGlobalScreenSize = safetyhook::create_inline(pattern.get_first(0), SetGlobalScreenSize);
+            Log("render scale %.3f; globalScreenSize hook %s", fScale, shSetGlobalScreenSize ? "installed" : "NOT FOUND");
 
             // The lights' deferredLightScreenSize = (0, 0, 1/w, 1/h), set right before this call
             pattern = hook::pattern("8D 44 24 10 50 FF 35 ? ? ? ? C7 44 24 18 00 00 00 00 C7 44 24 1C 00 00 00 00 F3 0F 11 44 24 24 E8");
@@ -461,6 +510,7 @@ public:
                         size[3] = 1.0f / static_cast<float>(RenderHeight);
                 });
             }
+            Log("deferredLightScreenSize hook %s", pattern.empty() ? "NOT FOUND" : "installed");
 
             FusionFix::onAfterEndScene() += []()
             {

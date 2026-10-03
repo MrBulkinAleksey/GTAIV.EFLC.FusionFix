@@ -1565,6 +1565,10 @@ private:
 
         mQuadVertexBuffer->Unlock();
 
+        // The screen space effects work on the scene, at the size it renders at
+        width = static_cast<int32_t>(RenderScale::ToRenderWidth(static_cast<uint32_t>(width)));
+        height = static_cast<int32_t>(RenderScale::ToRenderHeight(static_cast<uint32_t>(height)));
+
         if (PostFxResources.AOEffect)
             PostFxResources.AOEffect->OnResetDevice();
         if (PostFxResources.SSREffect)
@@ -2830,8 +2834,8 @@ private:
         pDevice->SetVertexDeclaration(nullptr);
         pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
 
-        float width = float(vp->mWidth);
-        float height = float(vp->mHeight);
+        float width = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
+        float height = float(RenderScale::ToRenderHeight(uint32_t(vp->mHeight)));
 
         // Half: the march and the smoothing run on the half size targets, created as the full
         // size halved; the debug view stays full size.
@@ -3154,8 +3158,8 @@ private:
                           viewInv.m[2][2] * axisSign[2],
                           viewInv.m[3][2] - waterLevel);
 
-        float width = float(vp->mWidth);
-        float height = float(vp->mHeight);
+        float width = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
+        float height = float(RenderScale::ToRenderHeight(uint32_t(vp->mHeight)));
 
         auto& h = R.SSREffectHandles;
         ID3DXEffect* effect = R.SSREffect;
@@ -3416,8 +3420,8 @@ private:
                 IDirect3DSurface9* aoSurf = PostFxResources.AOSurf;
                 IDirect3DSurface9* aoBlurSurf = PostFxResources.AOBlurSurf;
 
-                float width = float(currGrcViewport->mWidth);
-                float height = float(currGrcViewport->mHeight);
+                float width = float(RenderScale::ToRenderWidth(uint32_t(currGrcViewport->mWidth)));
+                float height = float(RenderScale::ToRenderHeight(uint32_t(currGrcViewport->mHeight)));
 
                 D3DVIEWPORT9 vp = {};
                 vp.MaxZ = 1.0;
@@ -3966,8 +3970,8 @@ private:
         if (-light[2] / lightLen <= 0.0f)
             return;
 
-        const float width = float(vp->mWidth);
-        const float height = float(vp->mHeight);
+        const float width = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
+        const float height = float(RenderScale::ToRenderHeight(uint32_t(vp->mHeight)));
         const D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
         D3DXVECTOR4 toView[3];
         WorldToViewRows(vp, toView);
@@ -4160,8 +4164,8 @@ private:
         D3DXVECTOR4 reprojRows[4];
         ViewToClipRows(vp, FrameHistory::Previous().ViewProjection, reprojRows);
 
-        const float fullWidth = float(vp->mWidth);
-        const float fullHeight = float(vp->mHeight);
+        const float fullWidth = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
+        const float fullHeight = float(RenderScale::ToRenderHeight(uint32_t(vp->mHeight)));
         const float width = float(DWORD(fullWidth) / 2);
         const float height = float(DWORD(fullHeight) / 2);
         const D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
