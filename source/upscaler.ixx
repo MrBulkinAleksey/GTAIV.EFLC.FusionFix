@@ -1196,6 +1196,12 @@ export namespace Upscaler
         return backend == Backend::DLSS ? dlssAvailable.load() : fsrAvailable.load();
     }
 
+    // The helper has started or failed to: IsAvailable won't change on its own any more
+    bool IsSettled()
+    {
+        return state == State::Ready || state == State::Failed;
+    }
+
     // Changes whenever the availability does
     uint32_t Generation()
     {

@@ -11,9 +11,15 @@ export module renderscale;
 
 import common;
 import comvars;
+import hdr;
+import settings;
+import upscaler;
 
 // Render scale: the scene renders at a fraction of the screen size and DLSS or FSR upscales it.
 //
+// - The fraction is the Upscaler Quality of the menu, with DLAA or FSR as the antialiasing and the upscaler
+//   available. It's decided when the game creates its targets; a change resets the device in the current display
+//   mode, which creates them again.
 // - The scene's targets are created smaller: the G-buffer, the material ID target, the depth buffers and
 //   FullScreenCopy, which the lighting, water, fog and transparent geometry draw into. Everything else, the
 //   post processing and the interface included, keeps the screen size.
@@ -30,7 +36,9 @@ import comvars;
 
 namespace
 {
-    float fScale = 1.0f;
+    float fScale = 1.0f;             // of the targets the game creates, decided at their first one
+    bool bScaleDecided = false;
+    float fRequestedScale = 0.0f;    // the scale a device reset was asked for, so it's asked once
     bool bActive = false;            // the scene's targets were created at the render size
     bool bInScene = false;           // from the G-buffer pass of the main scene to the post processing
     bool bInPost = false;            // FullScreenCopy is the full size texture, until the frame ends
@@ -84,6 +92,33 @@ namespace
         "_STENCIL_BUFFER_", "_BACK_ZBUFFER_", "FullScreenCopy",
     };
 
+    // Upscaler Quality: native (DLAA), quality, balanced, performance, ultra performance
+    constexpr float QualityScales[] = { 1.0f, 0.667f, 0.58f, 0.5f, 0.333f };
+
+    float DesiredScale()
+    {
+        static auto antialiasing = FusionFixSettings.GetRef("PREF_ANTIALIASING");
+        static auto quality = FusionFixSettings.GetRef("PREF_UPSCALER_QUALITY");
+        if (!antialiasing || !quality)
+            return 1.0f;
+        auto mode = antialiasing->get();
+        if (mode != FusionFixSettings.AntialiasingText.eDLAA && mode != FusionFixSettings.AntialiasingText.eFSR)
+            return 1.0f;
+        // Until the helper has started the upscaler counts as there
+        auto backend = mode == FusionFixSettings.AntialiasingText.eDLAA ? Upscaler::Backend::DLSS : Upscaler::Backend::FSR;
+        if (Upscaler::IsSettled() && !Upscaler::IsAvailable(backend))
+            return 1.0f;
+        return QualityScales[std::clamp(quality->get(), 0, static_cast<int32_t>(std::size(QualityScales)) - 1)];
+    }
+
+    void DecideScale()
+    {
+        if (bScaleDecided)
+            return;
+        fScale = DesiredScale();
+        bScaleDecided = true;
+    }
+
     uint32_t Scaled(uint32_t size)
     {
         return std::max(1u, static_cast<uint32_t>(std::lround(static_cast<double>(size) * fScale)));
@@ -91,6 +126,7 @@ namespace
 
     void CreateRTSize(const char* name, uint32_t& width, uint32_t& height)
     {
+        DecideScale();
         if (fScale >= 1.0f || !rage::grcDevice::ms_nActiveWidth || !rage::grcDevice::ms_nActiveHeight)
             return;
         auto screenWidth = static_cast<uint32_t>(*rage::grcDevice::ms_nActiveWidth);
@@ -392,6 +428,10 @@ namespace
         BoundDepth = {};
         bInPost = false;
         bInScene = false;
+        // The targets are created again, at the scale of the moment
+        bActive = false;
+        bScaleDecided = false;
+        fRequestedScale = 0.0f;
     }
 
     // The frame is over: FullScreenCopy is the scene's target again
@@ -437,9 +477,20 @@ export namespace RenderScale
         ApplyGlobalScreenSize(true);
     }
 
-    // A size of the screen as the scene renders it
-    uint32_t ToRenderWidth(uint32_t width) { return bActive && width == DisplayWidth ? RenderWidth : width; }
-    uint32_t ToRenderHeight(uint32_t height) { return bActive && height == DisplayHeight ? RenderHeight : height; }
+    // A size of the screen as the scene renders it, also while the targets are being created again
+    uint32_t ToRenderWidth(uint32_t width)
+    {
+        DecideScale();
+        bool screen = rage::grcDevice::ms_nActiveWidth && width == static_cast<uint32_t>(*rage::grcDevice::ms_nActiveWidth);
+        return fScale < 1.0f && screen ? Scaled(width) : width;
+    }
+
+    uint32_t ToRenderHeight(uint32_t height)
+    {
+        DecideScale();
+        bool screen = rage::grcDevice::ms_nActiveHeight && height == static_cast<uint32_t>(*rage::grcDevice::ms_nActiveHeight);
+        return fScale < 1.0f && screen ? Scaled(height) : height;
+    }
 
     // Render thread, at the start of post processing: FullScreenCopy becomes a texture of the screen size
     // for the rest of the frame. Returns the scene at the render size; the caller fills the returned
@@ -525,19 +576,11 @@ public:
 
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
-            fScale = std::clamp(iniReader.ReadFloat("TEMPORAL", "RenderScale", 1.0f), 0.33f, 1.0f);
-            if (fScale >= 0.999f)
-            {
-                fScale = 1.0f;
-                return;
-            }
-
             // globalScreenSize = (w, h, 1/w, 1/h) from the screen size, once a frame
             auto pattern = hook::pattern("8B 4C 24 04 F3 0F 10 05 ? ? ? ? F3 0F 10 09 0F 2E C1 9F F6 C4 44 7A 12 F3 0F 10 05 ? ? ? ? 0F 2E 41 04 9F F6 C4 44 7B ? F3 0F 11 0D");
             if (!pattern.empty())
                 shSetGlobalScreenSize = safetyhook::create_inline(pattern.get_first(0), SetGlobalScreenSize);
-            Log("render scale %.3f; globalScreenSize hook %s", fScale, shSetGlobalScreenSize ? "installed" : "NOT FOUND");
+            Log("globalScreenSize hook %s", shSetGlobalScreenSize ? "installed" : "NOT FOUND");
 
             // The lights' deferredLightScreenSize = (0, 0, 1/w, 1/h), set right before this call
             pattern = hook::pattern("8D 44 24 10 50 FF 35 ? ? ? ? C7 44 24 18 00 00 00 00 C7 44 24 1C 00 00 00 00 F3 0F 11 44 24 24 E8");
@@ -560,6 +603,18 @@ public:
             {
                 InstallHooks();
                 EndFrame();
+
+                // The menu or the upscaler's availability changed the scale: once for each scale asked for
+                if (bScaleDecided)
+                {
+                    auto desired = DesiredScale();
+                    if (desired != fScale && desired != fRequestedScale)
+                    {
+                        Log("render scale %.3f -> %.3f: resetting the device", fScale, desired);
+                        fRequestedScale = desired;
+                        DisplayMode::RequestReset();
+                    }
+                }
             };
 
             FusionFix::onBeforeReset() += []()

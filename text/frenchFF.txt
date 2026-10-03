@@ -106,6 +106,24 @@ Rayons de soleil
 [Antialiasing]
 Anticrénelage
 
+[UpscalerQuality]
+Upscaling
+
+[UpscNative]
+Native
+
+[UpscQuality]
+Quality
+
+[UpscBalanced]
+Balanced
+
+[UpscPerf]
+Performance
+
+[UpscUltraPerf]
+Ultra Performance
+
 [FPS Limiter]
 Limiteur de FPS
 
