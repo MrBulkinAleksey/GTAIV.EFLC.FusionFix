@@ -2357,6 +2357,42 @@ private:
     };
     static constexpr DWORD kSSRSamplerSlots = 8;
     static constexpr DWORD kSSRTextureSlots = 8;
+
+    // The textures and the sampler states of the first kSSRTextureSlots samplers, saved on
+    // construction and put back on destruction: deferred_lighting draws right after FusionFix's
+    // passes and reads what the game bound there before them (the G-buffer normals on s1,
+    // the sun's shadow on s4). The AO pass left its own textures on s1 to s4 once GTAO used
+    // them, and the sun stopped lighting anything.
+    struct SavedSamplerSlots
+    {
+        IDirect3DDevice9* device;
+        IDirect3DBaseTexture9* textures[kSSRTextureSlots] = {};
+        DWORD states[kSSRSamplerSlots][std::size(kSSRSamplerStates)] = {};
+
+        explicit SavedSamplerSlots(IDirect3DDevice9* pDevice) : device(pDevice)
+        {
+            for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+                device->GetTexture(slot, &textures[slot]);
+            for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+                for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+                    device->GetSamplerState(slot, kSSRSamplerStates[i].state, &states[slot][i]);
+        }
+
+        ~SavedSamplerSlots()
+        {
+            for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+                for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+                    device->SetSamplerState(slot, kSSRSamplerStates[i].state, states[slot][i]);
+            for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+            {
+                device->SetTexture(slot, textures[slot]);
+                SAFE_RELEASE(textures[slot]);
+            }
+        }
+
+        SavedSamplerSlots(const SavedSamplerSlots&) = delete;
+        SavedSamplerSlots& operator=(const SavedSamplerSlots&) = delete;
+    };
     static constexpr UINT kPSConstCount = 224;
     static constexpr UINT kVSConstCount = 256;
     static inline float savedPSConsts[kPSConstCount * 4];
@@ -3261,6 +3297,7 @@ private:
         if (PostFxResources.AOEffect && PostFxResources.AOEnabled && AO->get())
         { // AO
             IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+            SavedSamplerSlots savedSamplers(pDevice);
 
             IDirect3DSurface9* rt0 = nullptr;
             IDirect3DSurface9* ds = nullptr;
