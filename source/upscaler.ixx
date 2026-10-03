@@ -74,13 +74,15 @@ namespace
     public:
         LUID luid{};
         uint32_t vendorId = 0;
-        uint32_t width = 0;
+        uint32_t width = 0;           // render size of the inputs
         uint32_t height = 0;
+        uint32_t outputWidth = 0;
+        uint32_t outputHeight = 0;
         bool sharedBuffers = false;   // ConfigureFlags::SharedBuffers
 
         virtual ~Bridge() = default;
         // Opens the shared textures and the fence of a configuration, and closes their handles
-        virtual bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h) = 0;
+        virtual bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) = 0;
         virtual void ReleaseImports() = 0;
         // Game textures -> shared textures, then the fence reaches signalValue. Null inputs are skipped.
         virtual bool SubmitInputs(IDirect3DTexture9* const (&inputs)[InputCount], uint64_t signalValue) = 0;
@@ -364,7 +366,7 @@ namespace
             if (semaphore)
                 vk.vkDestroySemaphore(device, semaphore, nullptr);
             semaphore = VK_NULL_HANDLE;
-            width = height = 0;
+            width = height = outputWidth = outputHeight = 0;
         }
 
         bool ImportImage(SharedImage& target, HANDLE handle, VkFormat format, uint32_t w, uint32_t h)
@@ -480,7 +482,7 @@ namespace
             return vk.vkBindBufferMemory(device, target.buffer, target.memory, 0) == VK_SUCCESS;
         }
 
-        bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h) override
+        bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
         {
             ReleaseImports();
 
@@ -489,8 +491,10 @@ namespace
             {
                 auto handle = reinterpret_cast<HANDLE>(shared.TextureHandles[i]);
                 auto texture = static_cast<Protocol::Texture>(i);
-                ok = ok && handle && (sharedBuffers ? ImportBuffer(images[i], handle, Protocol::BufferSize(texture, w, h)) :
-                    ImportImage(images[i], handle, Formats[i], w, h));
+                auto iw = i == OutputIndex ? ow : w;
+                auto ih = i == OutputIndex ? oh : h;
+                ok = ok && handle && (sharedBuffers ? ImportBuffer(images[i], handle, Protocol::BufferSize(texture, iw, ih)) :
+                    ImportImage(images[i], handle, Formats[i], iw, ih));
             }
 
             auto fenceHandle = reinterpret_cast<HANDLE>(shared.FenceHandle);
@@ -529,6 +533,8 @@ namespace
 
             width = w;
             height = h;
+            outputWidth = ow;
+            outputHeight = oh;
             return true;
         }
 
@@ -687,7 +693,7 @@ namespace
             auto after = ImageBarrier(destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, destination.layout, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
 
             vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &acquire, 1, &before);
-            auto copy = BufferCopy(Protocol::Texture::Output, width, height);
+            auto copy = BufferCopy(Protocol::Texture::Output, outputWidth, outputHeight);
             vk.vkCmdCopyBufferToImage(cmd, output, destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
             vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 1, &release, 1, &after);
             vk.vkEndCommandBuffer(cmd);
@@ -702,7 +708,7 @@ namespace
         {
             GameImage destination;
             if (!GetGameImage(target, destination) || destination.format != Formats[OutputIndex] ||
-                destination.extent.width != width || destination.extent.height != height)
+                destination.extent.width != outputWidth || destination.extent.height != outputHeight)
                 return false;
             if (sharedBuffers)
                 return SubmitOutputBuffer(destination);
@@ -727,7 +733,7 @@ namespace
             };
 
             vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, before);
-            auto copy = FullCopy(width, height);
+            auto copy = FullCopy(outputWidth, outputHeight);
             vk.vkCmdCopyImage(cmd, output, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
             vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 2, after);
             vk.vkEndCommandBuffer(cmd);
@@ -878,7 +884,9 @@ namespace
             from.pResource = source;
             from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
             from.SubresourceIndex = 0;
-            D3D12_BOX box{ 0, 0, 0, width, height, 1 };
+            // Matches() made sure both have the source's size
+            auto desc = source->GetDesc();
+            D3D12_BOX box{ 0, 0, 0, static_cast<UINT>(desc.Width), desc.Height, 1 };
             list->CopyTextureRegion(&to, 0, 0, 0, &from, &box);
         }
 
@@ -894,10 +902,10 @@ namespace
             if (sharedFence)
                 sharedFence->Release();
             sharedFence = nullptr;
-            width = height = 0;
+            width = height = outputWidth = outputHeight = 0;
         }
 
-        bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h) override
+        bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
         {
             ReleaseImports();
 
@@ -919,6 +927,8 @@ namespace
 
             width = w;
             height = h;
+            outputWidth = ow;
+            outputHeight = oh;
             return true;
         }
 
@@ -1165,6 +1175,8 @@ namespace
     uint32_t configuredBackend = 0;
     uint32_t configuredWidth = 0;
     uint32_t configuredHeight = 0;
+    uint32_t configuredOutputWidth = 0;
+    uint32_t configuredOutputHeight = 0;
     uint32_t configuredPreset = 0;
     uint32_t configuredFlags = 0;
     bool configureFailed = false;
@@ -1209,8 +1221,10 @@ export namespace Upscaler
         IDirect3DTexture9* Motion = nullptr;  // G16R16F, previous - current in texture coordinates
         IDirect3DTexture9* Reactive = nullptr; // R16F, optional
         IDirect3DTexture9* Output = nullptr;  // A16B16G16R16F
-        uint32_t Width = 0;
+        uint32_t Width = 0;           // render size of the inputs
         uint32_t Height = 0;
+        uint32_t OutputWidth = 0;     // size of Output, 0 for the render size
+        uint32_t OutputHeight = 0;
         float JitterX = 0.0f;
         float JitterY = 0.0f;
         float CameraNear = 0.1f;
@@ -1293,7 +1307,10 @@ export namespace Upscaler
         auto flags = frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u;
         if (bridge->sharedBuffers)
             flags |= Protocol::ConfigureFlags::SharedBuffers;
+        auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
+        auto outputHeight = frame.OutputHeight ? frame.OutputHeight : frame.Height;
         bool reconfigure = configuredBackend != backendId || configuredWidth != frame.Width || configuredHeight != frame.Height ||
+            configuredOutputWidth != outputWidth || configuredOutputHeight != outputHeight ||
             configuredPreset != frame.DLSSPreset || configuredFlags != flags;
         if (reconfigure)
         {
@@ -1301,6 +1318,8 @@ export namespace Upscaler
             configuredBackend = backendId;
             configuredWidth = frame.Width;
             configuredHeight = frame.Height;
+            configuredOutputWidth = outputWidth;
+            configuredOutputHeight = outputHeight;
             configuredPreset = frame.DLSSPreset;
             configuredFlags = flags;
             configureFailed = true;
@@ -1309,6 +1328,8 @@ export namespace Upscaler
             shared.ConfigureBackend = static_cast<Protocol::Backend>(backendId);
             shared.Width = frame.Width;
             shared.Height = frame.Height;
+            shared.OutputWidth = outputWidth;
+            shared.OutputHeight = outputHeight;
             shared.DLSSPreset = frame.DLSSPreset;
             shared.Flags = flags;
             if (!helper.Request(Protocol::Command::Configure, 15000))
@@ -1317,7 +1338,7 @@ export namespace Upscaler
                     Fail();
                 return false;
             }
-            if (!bridge->Import(shared, frame.Width, frame.Height))
+            if (!bridge->Import(shared, frame.Width, frame.Height, outputWidth, outputHeight))
                 return false;
 
             configureFailed = false;

@@ -23,7 +23,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 3;
+    constexpr uint32_t Version = 4;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -31,7 +31,7 @@ namespace UpscalerProtocol
     enum class Command : uint32_t
     {
         None,
-        Configure,      // (re)create the shared textures and the upscaler for Backend at Width x Height
+        Configure,      // (re)create the shared textures and the upscaler for Backend, Width x Height to OutputWidth x OutputHeight
         Evaluate,       // upscale one frame
         Shutdown,
     };
@@ -50,7 +50,7 @@ namespace UpscalerProtocol
         Failed,
     };
 
-    // Shared textures, all of them at the render size:
+    // Shared textures, the inputs at the render size (Width x Height), the output at OutputWidth x OutputHeight:
     // Color     DXGI_FORMAT_R16G16B16A16_FLOAT  HDR scene
     // Depth     DXGI_FORMAT_R32_FLOAT           standard [0, 1] depth
     // Motion    DXGI_FORMAT_R16G16_FLOAT        previous - current position in texture coordinates, no jitter
@@ -121,6 +121,8 @@ namespace UpscalerProtocol
         uint32_t Height;
         uint32_t DLSSPreset;          // NVSDK_NGX_DLSS_Hint_Render_Preset, 0 is the default
         uint32_t Flags;               // ConfigureFlags
+        uint32_t OutputWidth;         // upscaled size, Width x Height or larger
+        uint32_t OutputHeight;
         uint32_t Reserved;
 
         // Evaluate
@@ -151,7 +153,7 @@ namespace UpscalerProtocol
     static_assert(sizeof(wchar_t) == 2);
     static_assert(offsetof(Shared, WaitValue) % 8 == 0);
     static_assert(offsetof(Shared, TextureHandles) % 8 == 0);
-    static_assert(sizeof(Shared) == 3840, "The layout must be identical in the x86 and x64 builds");
+    static_assert(sizeof(Shared) == 3848, "The layout must be identical in the x86 and x64 builds");
 
     inline const wchar_t* MappingSuffix = L".Mapping";
     inline const wchar_t* RequestSuffix = L".Request";

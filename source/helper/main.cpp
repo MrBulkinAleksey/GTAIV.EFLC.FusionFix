@@ -139,8 +139,6 @@ namespace
         // Wine: the game exchanges linear buffers and the GPU work is waited for on the CPU, see the protocol
         bool sharedBuffers = false;
         std::array<SharedTexture, static_cast<size_t>(Protocol::Texture::Count)> buffers;
-        uint32_t width = 0;
-        uint32_t height = 0;
 
         bool Create(LUID luid)
         {
@@ -348,12 +346,13 @@ namespace
             D3D12_TEXTURE_COPY_LOCATION bufferLocation{};
             bufferLocation.pResource = buffers[i].resource.Get();
             bufferLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            auto desc = texture->GetDesc();
             bufferLocation.PlacedFootprint.Offset = 0;
-            bufferLocation.PlacedFootprint.Footprint.Format = texture->GetDesc().Format;
-            bufferLocation.PlacedFootprint.Footprint.Width = width;
-            bufferLocation.PlacedFootprint.Footprint.Height = height;
+            bufferLocation.PlacedFootprint.Footprint.Format = desc.Format;
+            bufferLocation.PlacedFootprint.Footprint.Width = static_cast<UINT>(desc.Width);
+            bufferLocation.PlacedFootprint.Footprint.Height = desc.Height;
             bufferLocation.PlacedFootprint.Footprint.Depth = 1;
-            bufferLocation.PlacedFootprint.Footprint.RowPitch = Protocol::RowPitch(index, width);
+            bufferLocation.PlacedFootprint.Footprint.RowPitch = Protocol::RowPitch(index, static_cast<uint32_t>(desc.Width));
 
             if (toTexture)
                 cmd->CopyTextureRegion(&textureLocation, 0, 0, 0, &bufferLocation, nullptr);
@@ -399,8 +398,10 @@ namespace
 
     struct FrameParams
     {
-        uint32_t width = 0;
+        uint32_t width = 0;           // render size
         uint32_t height = 0;
+        uint32_t outputWidth = 0;
+        uint32_t outputHeight = 0;
         float jitterX = 0.0f;
         float jitterY = 0.0f;
         float motionScaleX = 1.0f;
@@ -482,18 +483,37 @@ namespace
             return true;
         }
 
-        bool Create(ID3D12GraphicsCommandList* cmd, uint32_t width, uint32_t height, uint32_t preset)
+        // The quality mode nearest to the render scale; DLAA when nothing is upscaled
+        static NVSDK_NGX_PerfQuality_Value PerfQuality(uint32_t width, uint32_t outputWidth)
+        {
+            if (width >= outputWidth)
+                return NVSDK_NGX_PerfQuality_Value_DLAA;
+            auto scale = static_cast<float>(width) / static_cast<float>(outputWidth);
+            if (scale >= 0.62f)
+                return NVSDK_NGX_PerfQuality_Value_MaxQuality;
+            if (scale >= 0.54f)
+                return NVSDK_NGX_PerfQuality_Value_Balanced;
+            if (scale >= 0.42f)
+                return NVSDK_NGX_PerfQuality_Value_MaxPerf;
+            return NVSDK_NGX_PerfQuality_Value_UltraPerformance;
+        }
+
+        bool Create(ID3D12GraphicsCommandList* cmd, uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, uint32_t preset)
         {
             Release();
 
-            NVSDK_NGX_Parameter_SetUI(parameters, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, preset);
+            // The preset applies to whichever quality mode the scale picks
+            for (auto hint : { NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality,
+                NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance,
+                NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality })
+                NVSDK_NGX_Parameter_SetUI(parameters, hint, preset);
 
             NVSDK_NGX_DLSS_Create_Params create{};
             create.Feature.InWidth = width;
             create.Feature.InHeight = height;
-            create.Feature.InTargetWidth = width;
-            create.Feature.InTargetHeight = height;
-            create.Feature.InPerfQualityValue = NVSDK_NGX_PerfQuality_Value_DLAA;
+            create.Feature.InTargetWidth = outputWidth;
+            create.Feature.InTargetHeight = outputHeight;
+            create.Feature.InPerfQualityValue = PerfQuality(width, outputWidth);
             // HDR scene color, motion vectors at render resolution without jitter, standard depth
             create.InFeatureCreateFlags = NVSDK_NGX_DLSS_Feature_Flags_IsHDR | NVSDK_NGX_DLSS_Feature_Flags_MVLowRes | NVSDK_NGX_DLSS_Feature_Flags_AutoExposure;
             create.InEnableOutputSubrects = false;
@@ -637,7 +657,7 @@ namespace
             return true;
         }
 
-        bool Create(uint32_t width, uint32_t height)
+        bool Create(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight)
         {
             Release();
 
@@ -650,7 +670,7 @@ namespace
             create.header.pNext = &backend.header;
             create.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
             create.maxRenderSize = { width, height };
-            create.maxUpscaleSize = { width, height };
+            create.maxUpscaleSize = { outputWidth, outputHeight };
 
             auto result = functions.CreateContext(&context, &create.header, nullptr);
             if (result != FFX_API_RETURN_OK)
@@ -684,7 +704,7 @@ namespace
             dispatch.jitterOffset = { frame.jitterX, frame.jitterY };
             dispatch.motionVectorScale = { frame.motionScaleX, frame.motionScaleY };
             dispatch.renderSize = { frame.width, frame.height };
-            dispatch.upscaleSize = { frame.width, frame.height };
+            dispatch.upscaleSize = { frame.outputWidth, frame.outputHeight };
             dispatch.enableSharpening = frame.sharpness > 0.0f;
             dispatch.sharpness = frame.sharpness;
             dispatch.frameTimeDelta = frame.frameTimeMs;
@@ -731,6 +751,8 @@ namespace
         Protocol::Backend backend = Protocol::Backend::None;
         uint32_t width = 0;
         uint32_t height = 0;
+        uint32_t outputWidth = 0;
+        uint32_t outputHeight = 0;
         uint32_t flags = 0;
 
         bool Duplicate(HANDLE source, uint64_t& target)
@@ -754,18 +776,18 @@ namespace
             width = shared.Width;
             height = shared.Height;
             flags = shared.Flags;
-            if (width == 0 || height == 0 || width > 16384 || height > 16384)
+            outputWidth = shared.OutputWidth ? shared.OutputWidth : width;
+            outputHeight = shared.OutputHeight ? shared.OutputHeight : height;
+            if (width == 0 || height == 0 || outputWidth > 16384 || outputHeight > 16384 || outputWidth < width || outputHeight < height)
                 return false;
             device.sharedBuffers = (flags & Protocol::ConfigureFlags::SharedBuffers) != 0;
-            device.width = width;
-            device.height = height;
 
             using T = Protocol::Texture;
             if (!device.CreateTexture(T::Color, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, false) ||
                 !device.CreateTexture(T::Depth, width, height, DXGI_FORMAT_R32_FLOAT, false) ||
                 !device.CreateTexture(T::Motion, width, height, DXGI_FORMAT_R16G16_FLOAT, false) ||
                 !device.CreateTexture(T::Reactive, width, height, DXGI_FORMAT_R16_FLOAT, false) ||
-                !device.CreateTexture(T::Output, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, true) ||
+                !device.CreateTexture(T::Output, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, true) ||
                 (!device.sharedBuffers && !device.CreateSharedFence()))
             {
                 connection.Message("Shared textures could not be created");
@@ -776,17 +798,17 @@ namespace
             if (shared.ConfigureBackend == Protocol::Backend::DLSS && dlss.available)
             {
                 auto cmd = device.BeginImmediate();
-                created = dlss.Create(cmd, width, height, shared.DLSSPreset);
+                created = dlss.Create(cmd, width, height, outputWidth, outputHeight, shared.DLSSPreset);
                 created = device.SubmitImmediate() && created;
             }
             else if (shared.ConfigureBackend == Protocol::Backend::FSR && fsr.available)
             {
-                created = fsr.Create(width, height);
+                created = fsr.Create(width, height, outputWidth, outputHeight);
             }
 
             if (!created)
             {
-                connection.Message("The upscaler could not be created at %ux%u", width, height);
+                connection.Message("The upscaler could not be created at %ux%u -> %ux%u", width, height, outputWidth, outputHeight);
                 return false;
             }
 
@@ -801,7 +823,7 @@ namespace
                 return false;
 
             backend = shared.ConfigureBackend;
-            connection.Message("%s ready at %ux%u", backend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height);
+            connection.Message("%s ready at %ux%u -> %ux%u", backend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height, outputWidth, outputHeight);
             return true;
         }
 
@@ -814,6 +836,8 @@ namespace
             FrameParams frame;
             frame.width = width;
             frame.height = height;
+            frame.outputWidth = outputWidth;
+            frame.outputHeight = outputHeight;
             frame.jitterX = shared.JitterX;
             frame.jitterY = shared.JitterY;
             frame.motionScaleX = shared.MotionScaleX;
