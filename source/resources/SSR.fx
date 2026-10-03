@@ -619,7 +619,11 @@ float SSRSurfaceWeight(float2 uv)
 // Taps on something well nearer the camera than the reflecting surface, the player standing
 // in front of the car, are left out, so the guess takes the road around him and not him;
 // judged against the point itself, the road it lies under was left out too. weight is 0 where it does not
-// apply: above the horizon, where the game's own map shows the sky.
+// apply: above the horizon, where the game's own map shows the sky, and for rays that passed
+// behind nothing nearer than the surface on their way. Those found nothing because what they
+// would reach is off the screen or out of their range, not hidden; filling every such miss
+// with the blurred guess put a dull smear of the road in place of reflections all over car
+// bodies, while the game's own map, faded by the horizon, had shown more there.
 float3 ScreenFallback(float3 C, float3 R, out float weight)
 {
     float3 Rw = R.x * vec4WaterToView[0].xyz + R.y * vec4WaterToView[1].xyz + R.z * vec4WaterToView[2].xyz;
@@ -649,10 +653,10 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
     // reached is most likely what lies just past his outline along the same path: the lit road
     // the rays beside his figure hit. The road next to the car, which the rings below find,
     // lies in its shadow, and the figure showed darker than the rest of the door.
+    bool behind = false;
     [branch]
     if (gTracePath > 0.0)
     {
-        bool behind = false;
         int past = 0;
         [loop]
         for (int k = 1; k <= 24; ++k)
@@ -695,6 +699,11 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
             weight = 1.0 - saturate(Rw.z * 5.0);
             return clamp(c * 0.2, 0.0, HISTORY_CLAMP) * SSR_SCALE;
         }
+    }
+    if (!behind)
+    {
+        weight = 0.0;
+        return 0.0;
     }
 
     // Rings of taps further and further out, until enough of them show the road: the player
