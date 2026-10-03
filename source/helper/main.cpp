@@ -136,6 +136,12 @@ namespace
         std::array<SharedTexture, static_cast<size_t>(Protocol::Texture::Count)> textures;
         HANDLE sharedFenceHandle = nullptr;
 
+        // Wine: the game exchanges linear buffers and the GPU work is waited for on the CPU, see the protocol
+        bool sharedBuffers = false;
+        std::array<SharedTexture, static_cast<size_t>(Protocol::Texture::Count)> buffers;
+        uint32_t width = 0;
+        uint32_t height = 0;
+
         bool Create(LUID luid)
         {
             ComPtr<IDXGIFactory4> factory;
@@ -197,11 +203,29 @@ namespace
         ID3D12GraphicsCommandList* BeginFrame()
         {
             frame = (frame + 1) % Frames;
-            if (sharedFence)
-                WaitFence(sharedFence.Get(), allocatorValues[frame], 1000);
+            if (auto fence = FrameFence())
+                WaitFence(fence, allocatorValues[frame], 1000);
             allocators[frame]->Reset();
             list->Reset(allocators[frame].Get(), nullptr);
             return list.Get();
+        }
+
+        // The fence the frames' allocators are tracked with
+        ID3D12Fence* FrameFence()
+        {
+            return sharedBuffers ? localFence.Get() : sharedFence.Get();
+        }
+
+        // Wine: runs the frame and waits for it, the game copies the output once Evaluate is answered
+        bool SubmitFrameAndWait()
+        {
+            if (FAILED(list->Close()))
+                return false;
+            ID3D12CommandList* lists[] = { list.Get() };
+            queue->ExecuteCommandLists(1, lists);
+            queue->Signal(localFence.Get(), ++localValue);
+            allocatorValues[frame] = localValue;
+            return WaitFence(localFence.Get(), localValue, 2000);
         }
 
         void SubmitFrame(uint64_t waitValue, uint64_t signalValue, bool execute)
@@ -220,13 +244,19 @@ namespace
         void ReleaseTextures()
         {
             // The game has already imported or dropped its duplicates
-            if (sharedFence)
-                WaitFence(sharedFence.Get(), *std::max_element(allocatorValues.begin(), allocatorValues.end()), 1000);
+            if (auto fence = FrameFence())
+                WaitFence(fence, *std::max_element(allocatorValues.begin(), allocatorValues.end()), 1000);
             for (auto& texture : textures)
             {
                 if (texture.handle)
                     CloseHandle(texture.handle);
                 texture = {};
+            }
+            for (auto& buffer : buffers)
+            {
+                if (buffer.handle)
+                    CloseHandle(buffer.handle);
+                buffer = {};
             }
             if (sharedFenceHandle)
                 CloseHandle(sharedFenceHandle);
@@ -251,16 +281,88 @@ namespace
             desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
             desc.Flags = unorderedAccess ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
 
+            // With shared buffers the textures stay in the helper
             auto& texture = textures[static_cast<size_t>(index)];
-            if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_SHARED, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&texture.resource))))
+            auto heapFlags = sharedBuffers ? D3D12_HEAP_FLAG_NONE : D3D12_HEAP_FLAG_SHARED;
+            if (FAILED(device->CreateCommittedResource(&heap, heapFlags, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&texture.resource))))
                 return false;
+            if (sharedBuffers)
+                return CreateBuffer(index, width, height);
             return SUCCEEDED(device->CreateSharedHandle(texture.resource.Get(), nullptr, GENERIC_ALL, nullptr, &texture.handle));
+        }
+
+        bool CreateBuffer(Protocol::Texture index, uint32_t width, uint32_t height)
+        {
+            D3D12_HEAP_PROPERTIES heap{};
+            heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+            D3D12_RESOURCE_DESC desc{};
+            desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+            desc.Width = Protocol::BufferSize(index, width, height);
+            desc.Height = 1;
+            desc.DepthOrArraySize = 1;
+            desc.MipLevels = 1;
+            desc.Format = DXGI_FORMAT_UNKNOWN;
+            desc.SampleDesc.Count = 1;
+            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+            auto& buffer = buffers[static_cast<size_t>(index)];
+            if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_SHARED, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&buffer.resource))))
+                return false;
+            return SUCCEEDED(device->CreateSharedHandle(buffer.resource.Get(), nullptr, GENERIC_ALL, nullptr, &buffer.handle));
+        }
+
+        // What the game imports: the shared textures, or the buffers under Wine
+        SharedTexture& Shared(Protocol::Texture index)
+        {
+            return sharedBuffers ? buffers[static_cast<size_t>(index)] : textures[static_cast<size_t>(index)];
         }
 
         uint64_t AllocationSize(Protocol::Texture index)
         {
-            auto desc = textures[static_cast<size_t>(index)].resource->GetDesc();
+            auto desc = Shared(index).resource->GetDesc();
             return device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+        }
+
+        // Wine: buffer -> texture for the inputs (toTexture), texture -> buffer for the output. Both are in the
+        // common state before and after, buffers are promoted implicitly.
+        void CopyBuffer(ID3D12GraphicsCommandList* cmd, Protocol::Texture index, bool toTexture)
+        {
+            auto i = static_cast<size_t>(index);
+            auto texture = textures[i].resource.Get();
+            auto copyState = toTexture ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_COPY_SOURCE;
+
+            D3D12_RESOURCE_BARRIER barrier{};
+            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Transition.pResource = texture;
+            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+            barrier.Transition.StateAfter = copyState;
+            cmd->ResourceBarrier(1, &barrier);
+
+            D3D12_TEXTURE_COPY_LOCATION textureLocation{};
+            textureLocation.pResource = texture;
+            textureLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            textureLocation.SubresourceIndex = 0;
+
+            D3D12_TEXTURE_COPY_LOCATION bufferLocation{};
+            bufferLocation.pResource = buffers[i].resource.Get();
+            bufferLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            bufferLocation.PlacedFootprint.Offset = 0;
+            bufferLocation.PlacedFootprint.Footprint.Format = texture->GetDesc().Format;
+            bufferLocation.PlacedFootprint.Footprint.Width = width;
+            bufferLocation.PlacedFootprint.Footprint.Height = height;
+            bufferLocation.PlacedFootprint.Footprint.Depth = 1;
+            bufferLocation.PlacedFootprint.Footprint.RowPitch = Protocol::RowPitch(index, width);
+
+            if (toTexture)
+                cmd->CopyTextureRegion(&textureLocation, 0, 0, 0, &bufferLocation, nullptr);
+            else
+                cmd->CopyTextureRegion(&bufferLocation, 0, 0, 0, &textureLocation, nullptr);
+
+            barrier.Transition.StateBefore = copyState;
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+            cmd->ResourceBarrier(1, &barrier);
         }
 
         bool CreateSharedFence()
@@ -654,6 +756,9 @@ namespace
             flags = shared.Flags;
             if (width == 0 || height == 0 || width > 16384 || height > 16384)
                 return false;
+            device.sharedBuffers = (flags & Protocol::ConfigureFlags::SharedBuffers) != 0;
+            device.width = width;
+            device.height = height;
 
             using T = Protocol::Texture;
             if (!device.CreateTexture(T::Color, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, false) ||
@@ -661,7 +766,7 @@ namespace
                 !device.CreateTexture(T::Motion, width, height, DXGI_FORMAT_R16G16_FLOAT, false) ||
                 !device.CreateTexture(T::Reactive, width, height, DXGI_FORMAT_R16_FLOAT, false) ||
                 !device.CreateTexture(T::Output, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, true) ||
-                !device.CreateSharedFence())
+                (!device.sharedBuffers && !device.CreateSharedFence()))
             {
                 connection.Message("Shared textures could not be created");
                 return false;
@@ -688,10 +793,11 @@ namespace
             for (size_t i = 0; i < static_cast<size_t>(T::Count); ++i)
             {
                 shared.TextureSizes[i] = device.AllocationSize(static_cast<T>(i));
-                if (!Duplicate(device.textures[i].handle, shared.TextureHandles[i]))
+                if (!Duplicate(device.Shared(static_cast<T>(i)).handle, shared.TextureHandles[i]))
                     return false;
             }
-            if (!Duplicate(device.sharedFenceHandle, shared.FenceHandle))
+            shared.FenceHandle = 0;
+            if (!device.sharedBuffers && !Duplicate(device.sharedFenceHandle, shared.FenceHandle))
                 return false;
 
             backend = shared.ConfigureBackend;
@@ -702,7 +808,7 @@ namespace
         bool Evaluate()
         {
             auto& shared = *connection.shared;
-            if (backend == Protocol::Backend::None || !device.sharedFence)
+            if (backend == Protocol::Backend::None || (!device.sharedBuffers && !device.sharedFence))
                 return false;
 
             FrameParams frame;
@@ -720,10 +826,24 @@ namespace
             frame.reset = shared.Reset != 0;
             frame.reactive = (flags & Protocol::ConfigureFlags::ReactiveMask) != 0;
 
+            using T = Protocol::Texture;
             auto cmd = device.BeginFrame();
+            if (device.sharedBuffers)
+            {
+                for (auto input : { T::Color, T::Depth, T::Motion, T::Reactive })
+                    if (input != T::Reactive || frame.reactive)
+                        device.CopyBuffer(cmd, input, true);
+            }
             device.Transition(cmd, true);
             bool evaluated = backend == Protocol::Backend::DLSS ? dlss.Evaluate(cmd, device, frame) : fsr.Evaluate(cmd, device, frame);
             device.Transition(cmd, false);
+
+            // Answered once the output is in its buffer
+            if (device.sharedBuffers)
+            {
+                device.CopyBuffer(cmd, T::Output, false);
+                return device.SubmitFrameAndWait() && evaluated;
+            }
 
             // The fence always advances, so the game can rely on the values it waits for
             device.SubmitFrame(shared.WaitValue, shared.SignalValue, evaluated);
