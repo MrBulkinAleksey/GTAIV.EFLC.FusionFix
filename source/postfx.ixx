@@ -15,6 +15,7 @@ import hdr;
 import natives;
 import settings;
 import shaders;
+import renderscale;
 import temporal;
 
 #define IDR_FXAA                                 101
@@ -1536,7 +1537,8 @@ private:
         auto height = *rage::grcDevice::ms_nActiveHeight;
 
         PostFxResources.createTextures(width, height, hm);
-        TemporalAA::CreateResources(width, height);
+        // Motion vectors, depth and the reactive mask at the size the scene renders at
+        TemporalAA::CreateResources(RenderScale::ToRenderWidth(width), RenderScale::ToRenderHeight(height));
 
         D3DVERTEXELEMENT9 vertexDeclElements[] =
         {
@@ -2073,7 +2075,7 @@ private:
 
                     // Temporal anti-aliasing resolves the HDR scene before everything else. Normally ResolveScene did
                     // it before the game computed bloom and exposure.
-                    if (TemporalAA::GetMode() != TemporalAA::Mode::Off && !TemporalAA::IsSceneResolved())
+                    if (TemporalAA::GetMode() != TemporalAA::Mode::Off && !TemporalAA::IsSceneResolved() && !RenderScale::IsActive())
                     {
                         if (TemporalAA::Resolve(pDevice, PostFxResources.textureRead, PostFxResources.renderTargetTex, PostFxResources.renderTargetSurf))
                         {
@@ -3341,7 +3343,7 @@ private:
         rt->GetDesc(&desc);
         R.SSRSurf->GetDesc(&screen);
         SAFE_RELEASE(rt);
-        return desc.Width == screen.Width && desc.Height == screen.Height;
+        return desc.Width == RenderScale::ToRenderWidth(screen.Width) && desc.Height == RenderScale::ToRenderHeight(screen.Height);
     }
 
     static void __cdecl WaterRenderHook(int a1)
@@ -3737,16 +3739,46 @@ private:
     static inline injector::hook_back<void(__fastcall*)(void*, void*, int, int, int)> hbDrawCallDownsample;
     static void __fastcall DrawCallDownsample(void* _this, void* edx, int a2, int a3, int a4)
     {
+        // Before the game binds FullScreenCopy and computes its texel size for the downsample
+        UpscaleScene();
         bInsteadDrawPrimitiveDownsample = true;
         hbDrawCallDownsample.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitiveDownsample = false;
+    }
+
+    // Render scale: from here on FullScreenCopy is a texture of the screen size, with the scene upscaled by DLSS
+    // or FSR, or stretched when neither runs
+    static void UpscaleScene()
+    {
+        if (!RenderScale::IsActive() || !PostFxResources.FullScreenTex_temp1 || !PostFxResources.FullScreenTex_temp1->mD3DTexture)
+            return;
+
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        IDirect3DTexture9* scene = nullptr;
+        IDirect3DSurface9* sceneSurface = nullptr;
+        IDirect3DSurface9* output = nullptr;
+        if (!RenderScale::BeginPost(pDevice, scene, sceneSurface, output))
+            return;
+
+        auto upscaled = PostFxResources.FullScreenTex_temp1->mD3DTexture;
+        IDirect3DSurface9* upscaledSurface = nullptr;
+        upscaled->GetSurfaceLevel(0, &upscaledSurface);
+
+        auto mode = TemporalAA::GetMode();
+        if (upscaledSurface && (mode == TemporalAA::Mode::DLAA || mode == TemporalAA::Mode::FSR) &&
+            TemporalAA::Resolve(pDevice, scene, upscaled, upscaledSurface))
+            pDevice->StretchRect(upscaledSurface, nullptr, output, nullptr, D3DTEXF_POINT);
+        else
+            pDevice->StretchRect(sceneSurface, nullptr, output, nullptr, D3DTEXF_LINEAR);
+        SAFE_RELEASE(upscaledSurface);
     }
 
     // Temporal anti-aliasing resolves the scene before the game computes bloom from it, which would otherwise
     // follow the jitter. The result goes back into the scene copy that the game and PostFx3 read.
     static void ResolveScene()
     {
-        if (TemporalAA::GetMode() == TemporalAA::Mode::Off || TemporalAA::IsSceneResolved())
+        // With the render scale UpscaleScene did it, on the scene at the render size
+        if (TemporalAA::GetMode() == TemporalAA::Mode::Off || TemporalAA::IsSceneResolved() || RenderScale::IsActive())
             return;
         if (!PostFxResources.mFullScreenRT || !PostFxResources.mFullScreenRT->mD3DTexture ||
             !PostFxResources.FullScreenTex_temp1 || !PostFxResources.FullScreenTex_temp1->mD3DTexture)

@@ -7,6 +7,7 @@ export module temporal;
 import common;
 import comvars;
 import d3dx9_43;
+import renderscale;
 import settings;
 import upscaler;
 
@@ -400,16 +401,25 @@ public:
             phases = std::max(phases, 32u);
         else if (mode == TemporalAA::Mode::FSR)
             phases = std::max(phases, 16u);
+        // NVIDIA's rule for a lower render size: 8 phases per output pixel area of a rendered pixel
+        if (RenderScale::IsActive())
+        {
+            auto scale = RenderScale::GetScale();
+            phases = std::max(phases, static_cast<uint32_t>(std::ceil(8.0f / (scale * scale))));
+        }
         auto index = (JitterCounter++ % phases) + 1;
         auto jitterX = Halton(index, 2) - 0.5f;
         auto jitterY = Halton(index, 3) - 0.5f;
 
         // Perspective() copies these projection offsets into P[2][0] and P[2][1]. With P[2][3] = -1 the
-        // rendered content moves by -offset in NDC, so this shifts the image right/down by jitterX/jitterY pixels.
+        // rendered content moves by -offset in NDC, so this shifts the image right/down by jitterX/jitterY pixels,
+        // pixels of the render size.
         auto shiftX = viewport->field_2D8;
         auto shiftY = viewport->field_2DC;
-        viewport->field_2D8 = shiftX - 2.0f * jitterX / static_cast<float>(viewport->mWidth);
-        viewport->field_2DC = shiftY + 2.0f * jitterY / static_cast<float>(viewport->mHeight);
+        auto width = static_cast<float>(RenderScale::ToRenderWidth(static_cast<uint32_t>(viewport->mWidth)));
+        auto height = static_cast<float>(RenderScale::ToRenderHeight(static_cast<uint32_t>(viewport->mHeight)));
+        viewport->field_2D8 = shiftX - 2.0f * jitterX / width;
+        viewport->field_2DC = shiftY + 2.0f * jitterY / height;
         hbSetCameraPerspective.fun(_this, edx, viewport, fov, aspect, nearClip, farClip);
         viewport->field_2D8 = shiftX;
         viewport->field_2DC = shiftY;
@@ -488,6 +498,8 @@ public:
     {
         using namespace TemporalAA;
 
+        RenderScale::BeginScene();
+
         auto viewport = rage::GetCurrentViewport();
         if (!viewport)
             return;
@@ -501,8 +513,9 @@ public:
         camera.View = TemporalMath::Matrix::From(viewport->mViewMatrix);
         camera.Projection = TemporalMath::Matrix::From(viewport->mProjectionMatrix);
         camera.ProjectionNoJitter = camera.Projection;
-        camera.Width = viewport->mWidth;
-        camera.Height = viewport->mHeight;
+        // The size the scene renders at
+        camera.Width = static_cast<int32_t>(RenderScale::ToRenderWidth(static_cast<uint32_t>(viewport->mWidth)));
+        camera.Height = static_cast<int32_t>(RenderScale::ToRenderHeight(static_cast<uint32_t>(viewport->mHeight)));
         camera.Near = viewport->mNearClip;
         camera.Far = viewport->mFarClip;
         camera.FovY = viewport->mFov * 0.017453292f;
@@ -1340,6 +1353,8 @@ public:
         frame.Output = output;
         frame.Width = static_cast<uint32_t>(HistoryWidth);
         frame.Height = static_cast<uint32_t>(HistoryHeight);
+        frame.OutputWidth = RenderScale::GetDisplayWidth();
+        frame.OutputHeight = RenderScale::GetDisplayHeight();
         frame.JitterX = CurrentCamera.JitterPixels[0];
         frame.JitterY = CurrentCamera.JitterPixels[1];
         frame.CameraNear = CurrentCamera.Near;
@@ -1382,6 +1397,10 @@ public:
             }
         }
         UpscalerFrame = 0;
+
+        // TAA resolves at the render size only, the post processing stretches the scene instead
+        if (RenderScale::IsActive())
+            return false;
 
         auto previousIndex = HistoryIndex;
         auto currentIndex = HistoryIndex ^ 1u;
