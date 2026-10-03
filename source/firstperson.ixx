@@ -1,8 +1,6 @@
 module;
 
 #include <common.hxx>
-#include <filesystem>
-#include <fstream>
 
 export module firstperson;
 
@@ -34,33 +32,6 @@ namespace FirstPerson
     static SafetyHookInline updateHook;
     static SafetyHookMid finalHook;
 
-    // Temporary: GTAIV-firstperson.log, which step it stops at.
-    namespace Log
-    {
-        static std::filesystem::path path;
-        static std::atomic<uint32_t> updates{0}, otherTarget{0}, boneMissing{0}, eyes{0}, finals{0}, finalsMoved{0}, hidden{0};
-        static float lastHead[3]{}, lastPed[3]{}, lastFinal[3]{};
-        static ULONGLONG lastWrite = 0;
-
-        static void Write() noexcept
-        {
-            if (path.empty() || GetTickCount64() - lastWrite < 2000) return;
-            lastWrite = GetTickCount64();
-            try
-            {
-                std::ofstream out(path, std::ios::app);
-                out << "tick=" << lastWrite << " active=" << active << " updates=" << updates.load()
-                    << " other_target=" << otherTarget.load() << " bone_missing=" << boneMissing.load()
-                    << " eyes=" << eyes.load() << " finals=" << finals.load() << " finals_moved=" << finalsMoved.load()
-                    << " hidden=" << hidden.load()
-                    << " head=" << lastHead[0] << ',' << lastHead[1] << ',' << lastHead[2]
-                    << " ped=" << lastPed[0] << ',' << lastPed[1] << ',' << lastPed[2]
-                    << " final=" << lastFinal[0] << ',' << lastFinal[1] << ',' << lastFinal[2] << '\n';
-            }
-            catch (...) {}
-        }
-    }
-
     static bool EyeCurrent() noexcept
     {
         return active && CTimer::m_frameCount && *CTimer::m_frameCount - eyeFrame <= 1;
@@ -91,15 +62,11 @@ namespace FirstPerson
     static bool __fastcall Update(uintptr_t camera, void*)
     {
         const bool result = updateHook.unsafe_thiscall<bool>(camera);
-        ++Log::updates;
         if (!active || !CPlayer::getLocalPlayerPed || !CTimer::m_frameCount)
             return result;
         const auto ped = CPlayer::getLocalPlayerPed();
         if (!ped || *reinterpret_cast<const uintptr_t*>(camera + TargetOffset) != ped)
-        {
-            ++Log::otherTarget;
             return result;
-        }
 
         float head[3]{};
         Ped handle = 0;
@@ -107,7 +74,6 @@ namespace FirstPerson
         Vector3 bone{};
         if (handle)
             Natives::GetPedBonePosition(handle, HeadBone, 0.0f, 0.0f, 0.0f, &bone);
-        CEntity::GetPosition(ped, Log::lastPed);
         if (std::isfinite(bone.fX) && std::isfinite(bone.fY) && std::isfinite(bone.fZ) &&
             (bone.fX != 0.0f || bone.fY != 0.0f || bone.fZ != 0.0f))
         {
@@ -115,11 +81,9 @@ namespace FirstPerson
         }
         else
         {
-            ++Log::boneMissing;
             if (!CEntity::GetPosition(ped, head)) return result;
             head[2] += HeadAbovePed;
         }
-        std::copy(std::begin(head), std::end(head), Log::lastHead);
 
         auto frame = reinterpret_cast<float*>(camera + 0x10);
         const float* front = frame + 4;
@@ -128,7 +92,6 @@ namespace FirstPerson
             eye[i] = head[i] + front[i] * forwardOffset + up[i] * upOffset;
         std::copy(std::begin(eye), std::end(eye), frame + 12);
         eyeFrame = *CTimer::m_frameCount;
-        ++Log::eyes;
         return result;
     }
 
@@ -137,22 +100,17 @@ namespace FirstPerson
     // view as rendered, whichever cameras the follow camera's position went through on the way.
     static void PlaceFinal(SafetyHookContext& regs)
     {
-        ++Log::finals;
         const auto matrix = *reinterpret_cast<float**>(regs.esp);
         if (!matrix) return;
-        std::copy(matrix + 12, matrix + 15, Log::lastFinal);
         if (!EyeCurrent()) return;
         std::copy(std::begin(eye), std::end(eye), matrix + 12);
         std::copy(std::begin(eye), std::end(eye), reinterpret_cast<float*>(regs.esi) + 12);
-        ++Log::finalsMoved;
     }
 
     static bool SkipInScene(void* entity)
     {
-        const bool skip = EyeCurrent() && CPlayer::getLocalPlayerPed &&
+        return EyeCurrent() && CPlayer::getLocalPlayerPed &&
             reinterpret_cast<uintptr_t>(entity) == CPlayer::getLocalPlayerPed();
-        if (skip) ++Log::hidden;
-        return skip;
     }
 }
 
@@ -181,15 +139,6 @@ public:
             if (!finalSite.empty())
                 FirstPerson::finalHook = safetyhook::create_mid(finalSite.get_first(7), FirstPerson::PlaceFinal);
             CRenderPhaseDeferredLighting_SceneToGBuffer::SkipEntity = FirstPerson::SkipInScene;
-            FirstPerson::Log::path = iniReader.GetIniPath().parent_path() / "GTAIV-firstperson.log";
-            try
-            {
-                std::ofstream out(FirstPerson::Log::path, std::ios::trunc);
-                out << "zoom_hook=" << bool(FirstPerson::zoomHook) << " update_hook=" << bool(FirstPerson::updateHook)
-                    << " final_hook=" << bool(FirstPerson::finalHook) << '\n';
-            }
-            catch (...) {}
-            FusionFix::onGameProcessEvent() += []() { FirstPerson::Log::Write(); };
         };
     }
 } FirstPersonCamera;
