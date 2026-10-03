@@ -1736,7 +1736,6 @@ private:
             PostFxResources.AOEffect->OnLostDevice();
         if (PostFxResources.SSREffect)
             PostFxResources.SSREffect->OnLostDevice();
-        effectSamplers.clear();
         ReleaseProfiler();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
@@ -2866,10 +2865,11 @@ private:
     // parameter holds, found through the shader's constant table (sampler X reads X2D in SSR.fx
     // and AO.fx). D3DX left some holding what the game had bound, about four a frame in the SSR
     // passes: a diagnostic pass read a G-buffer texture where it sampled the depth.
-    // Each shader's samplers are looked up once, as (register, parameter), and kept per effect
-    // and shader: reading the bytecode and its constant table for every draw cost CPU time for
-    // nothing, the effects keep their shaders for the whole game. Cleared on a lost device.
-    static inline std::map<std::pair<ID3DXEffect*, IDirect3DPixelShader9*>, std::vector<std::pair<UINT, D3DXHANDLE>>> effectSamplers;
+    // Each shader's samplers are looked up for every draw, from its bytecode and constant table,
+    // a few dozen draws a frame. Kept per effect and shader they went wrong in play: the smoothing
+    // and accumulation of SSR left registers with what the game had bound, a G-buffer texture
+    // where they sampled the specular one, and SSR came out empty, while it worked in the pause
+    // menu, where the game had bound others.
 
     static std::vector<std::pair<UINT, D3DXHANDLE>> FindEffectSamplers(ID3DXEffect* effect, IDirect3DPixelShader9* ps)
     {
@@ -2907,13 +2907,12 @@ private:
         IDirect3DPixelShader9* ps = nullptr;
         if (FAILED(pDevice->GetPixelShader(&ps)) || !ps)
             return;
-        const auto key = std::make_pair(effect, ps);
-        auto it = effectSamplers.find(key);
-        if (it == effectSamplers.end())
-            it = effectSamplers.emplace(key, FindEffectSamplers(effect, ps)).first;
+        const auto samplers = FindEffectSamplers(effect, ps);
+        const void* shader = ps;
         ps->Release();
 
-        for (const auto& [reg, param] : it->second)
+        std::string traced;
+        for (const auto& [reg, param] : samplers)
         {
             IDirect3DBaseTexture9* want = nullptr;
             IDirect3DBaseTexture9* have = nullptr;
@@ -2921,9 +2920,18 @@ private:
             pDevice->GetTexture(reg, &have);
             if (want != have)
                 pDevice->SetTexture(reg, want);
+            if (SSRTrace::Active())
+            {
+                D3DXPARAMETER_DESC desc = {};
+                effect->GetParameterDesc(param, &desc);
+                traced += " s" + std::to_string(reg) + "=" + (desc.Name ? desc.Name : "?") + ":" + SSRTrace::TextureName(want) +
+                    (want != have ? "(was " + SSRTrace::TextureName(have) + ")" : "");
+            }
             SAFE_RELEASE(want);
             SAFE_RELEASE(have);
         }
+        if (SSRTrace::Active())
+            SSRTrace::Line("  bind ps %p, %u samplers:%s", shader, unsigned(samplers.size()), traced.c_str());
     }
 
     // Where the passes of SSR.fx read their noise this frame: moved on every frame while they accumulate, so the
