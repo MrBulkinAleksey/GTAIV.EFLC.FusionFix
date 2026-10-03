@@ -349,6 +349,20 @@ public:
     // they write no specular intensity, and the sun left no highlight on buildings and LOD roads.
     // They get this much of one, scaled down by how saturated their colour is.
     float fSpecularSheen = 0.1f;
+    // Cloud shadows on the ground (c197.y-w, c198, c199, s7; deferred_lighting_sun_under_clouds.patch):
+    // the ray from a surface towards the sun meets a cloud deck CloudShadowsHeight up, and the sun is
+    // dimmed by up to CloudShadows where the clouds cover it there. The sky's clouds are on a dome
+    // at infinity and cannot cast a real shadow, so the deck has its own noise, CloudShadowsScale
+    // metres a tile, drifting CloudShadowsWind metres a second; its coverage is the game's own
+    // cloud threshold, bias and thickness, so it follows the weather and the timecycle.
+    float fCloudShadows = 0.6f;
+    float fCloudShadowsHeight = 1200.0f;
+    float fCloudShadowsScale = 4000.0f;
+    float fCloudShadowsWind = 6.0f;
+    float fCloudShadowsSoftness = 1.0f;
+    IDirect3DTexture9* CloudNoiseTexture = nullptr;
+    IDirect3DTexture9* CloudNoiseTex();
+    bool bCloudNoiseBound = false;
     static constexpr int kSkinDebugMode = 9;
     rage::grcRenderTargetPC* mMaterialIdRT = nullptr;
     rage::grcRenderTargetPC* SkinLightTex[2] = {};
@@ -1176,6 +1190,11 @@ public:
         fSkinScatteringStrength = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringStrength", 1.0f), 0.0f, 2.0f);
         fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
         fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 1.0f);
+        fCloudShadows = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadows", 0.6f), 0.0f, 1.0f);
+        fCloudShadowsHeight = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsHeight", 1200.0f), 100.0f, 10000.0f);
+        fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 4000.0f), 100.0f, 50000.0f);
+        fCloudShadowsWind = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsWind", 6.0f), 0.0f, 100.0f);
+        fCloudShadowsSoftness = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsSoftness", 1.0f), 0.0f, 6.0f);
         fGIRayLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", 4.0f), 0.1f, 20.0f);
         fGIThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightThickness", 0.5f), 0.01f, 10.0f);
         fGIMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxDistance", 60.0f), 1.0f, 1000.0f);
@@ -1278,6 +1297,79 @@ public:
             D3DXCreateTextureFromResourceExW(pDevice, hm, MAKEINTRESOURCEW(IDR_SearchTex), 64, 16, 1, 0, D3DFMT_UNKNOWN, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_LINEAR, 0, NULL, NULL, &SMAA_searchTex);
     }
 };
+
+// The cloud deck's noise for the cloud shadows: 256 x 256, tiling, five octaves of value noise
+// from four cells a tile up, spread over 0..1 like the game's own cloud noise. Managed, so it
+// survives device resets.
+IDirect3DTexture9* PostFxResource::CloudNoiseTex()
+{
+    if (CloudNoiseTexture)
+        return CloudNoiseTexture;
+    auto pDevice = rage::grcDevice::GetD3DDevice();
+    if (!pDevice)
+        return nullptr;
+
+    constexpr int size = 256;
+    std::vector<float> value(size * size, 0.0f);
+    auto lattice = [](int x, int y, int seed) {
+        uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u + static_cast<uint32_t>(seed) * 2246822519u;
+        h = (h ^ (h >> 13)) * 1274126177u;
+        return static_cast<float>((h ^ (h >> 16)) & 0xffff) / 65535.0f;
+    };
+    float amplitude = 1.0f;
+    for (int octave = 0, cells = 4; octave < 5; ++octave, cells *= 2, amplitude *= 0.5f)
+    {
+        const float cell = static_cast<float>(size) / cells;
+        for (int y = 0; y < size; ++y)
+        {
+            for (int x = 0; x < size; ++x)
+            {
+                const float fx = x / cell, fy = y / cell;
+                const int x0 = static_cast<int>(fx), y0 = static_cast<int>(fy);
+                float tx = fx - x0, ty = fy - y0;
+                tx = tx * tx * (3.0f - 2.0f * tx);
+                ty = ty * ty * (3.0f - 2.0f * ty);
+                const int x1 = (x0 + 1) % cells, y1 = (y0 + 1) % cells;
+                const float a = lattice(x0, y0, octave), b = lattice(x1, y0, octave);
+                const float c = lattice(x0, y1, octave), d = lattice(x1, y1, octave);
+                value[y * size + x] += amplitude * ((a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * ty);
+            }
+        }
+    }
+    const auto [lo, hi] = std::minmax_element(value.begin(), value.end());
+    const float minValue = *lo, range = (std::max)(*hi - *lo, 1e-5f);
+    for (auto& v : value)
+        v = (v - minValue) / range;
+
+    if (FAILED(pDevice->CreateTexture(size, size, 0, 0, D3DFMT_L8, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr)))
+    {
+        CloudNoiseTexture = nullptr;
+        return nullptr;
+    }
+    // Each mip a box filter of the one above, so a wider mip gives the shadow a softer edge.
+    for (DWORD level = 0, n = size; level < CloudNoiseTexture->GetLevelCount(); ++level, n /= 2)
+    {
+        D3DLOCKED_RECT locked = {};
+        if (FAILED(CloudNoiseTexture->LockRect(level, &locked, nullptr, 0)))
+            continue;
+        for (DWORD y = 0; y < n; ++y)
+        {
+            auto row = static_cast<uint8_t*>(locked.pBits) + y * locked.Pitch;
+            for (DWORD x = 0; x < n; ++x)
+                row[x] = static_cast<uint8_t>(std::clamp(value[y * n + x], 0.0f, 1.0f) * 255.0f + 0.5f);
+        }
+        CloudNoiseTexture->UnlockRect(level);
+        if (n > 1)
+        {
+            const DWORD half = n / 2;
+            for (DWORD y = 0; y < half; ++y)
+                for (DWORD x = 0; x < half; ++x)
+                    value[y * half + x] = 0.25f * (value[2 * y * n + 2 * x] + value[2 * y * n + 2 * x + 1] +
+                                                   value[(2 * y + 1) * n + 2 * x] + value[(2 * y + 1) * n + 2 * x + 1]);
+        }
+    }
+    return CloudNoiseTexture;
+}
 
 PostFxResource PostFxResources;
 
@@ -4957,10 +5049,50 @@ public:
             pDevice->SetPixelShaderConstantF(201, scale, 1);
             pDevice->SetPixelShaderConstantF(205, offset, 1);
         }
-        // The sun on materials with no specular map.
+        // The sun on materials with no specular map (x) and the cloud shadows (yzw, c198, c199, s7).
         {
-            const float sheen[4] = { R.fSpecularSheen, 0.0f, 0.0f, 0.0f };
-            pDevice->SetPixelShaderConstantF(197, sheen, 1);
+            static auto thresholdIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudThreshold");
+            static auto biasIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudBias");
+            static auto thicknessIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudThicknessEdgeSmoothDetailScaleStrength");
+            float threshold = rage::grmShaderInfo::getShaderParamData(thresholdIdx)[0];
+            float bias = rage::grmShaderInfo::getShaderParamData(biasIdx)[0];
+            float thickness = rage::grmShaderInfo::getShaderParamData(thicknessIdx)[0];
+            // Until the sky has been drawn once its parameters read zero, which is no cloud at all.
+            if (threshold == 0.0f && bias == 0.0f)
+            {
+                threshold = 1.6f;
+                bias = 0.6f;
+            }
+            if (thickness <= 0.0f)
+                thickness = 1.0f;
+
+            auto noise = R.fCloudShadows > 0.0f ? R.CloudNoiseTex() : nullptr;
+            const float strength = noise ? R.fCloudShadows : 0.0f;
+            const float invScale = 1.0f / R.fCloudShadowsScale;
+            // The wind blows the same way all the time; only how far it has carried the noise
+            // changes, wrapped to one tile so the offset keeps its precision.
+            const double seconds = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds * 0.001 : 0.0;
+            const double drift = seconds * R.fCloudShadowsWind * invScale;
+            const float windX = static_cast<float>(std::fmod(drift * 0.93, 1.0));
+            const float windY = static_cast<float>(std::fmod(drift * 0.37, 1.0));
+
+            const float c197[4] = { R.fSpecularSheen, strength, R.fCloudShadowsHeight, invScale };
+            const float c198[4] = { windX, windY, threshold, bias };
+            const float c199[4] = { thickness, R.fCloudShadowsSoftness, 0.0f, 0.0f };
+            pDevice->SetPixelShaderConstantF(197, c197, 1);
+            pDevice->SetPixelShaderConstantF(198, c198, 1);
+            pDevice->SetPixelShaderConstantF(199, c199, 1);
+            if (noise)
+            {
+                // s7 is read by rage_postfx alone, which binds its own.
+                pDevice->SetTexture(7, noise);
+                pDevice->SetSamplerState(7, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+                pDevice->SetSamplerState(7, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+                pDevice->SetSamplerState(7, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+                pDevice->SetSamplerState(7, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+                pDevice->SetSamplerState(7, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+                R.bCloudNoiseBound = true;
+            }
         }
         // The light volumes do not read the material IDs themselves (local_light_on_skin.patch).
         // s11 is read by no game shader, and the car glass takes it over right after lighting;
@@ -5039,6 +5171,11 @@ public:
         {
             pDevice->SetTexture(11, nullptr);
             R.bMaterialIdBound = false;
+        }
+        if (R.bCloudNoiseBound)
+        {
+            pDevice->SetTexture(7, nullptr);
+            R.bCloudNoiseBound = false;
         }
         // Lights drawn for other views (reflections, mirrors) must not march with this camera,
         // nor light skin by this view's material IDs.

@@ -1,0 +1,120 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+index de9f3e53..aadd21e5 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+@@ -80,6 +80,7 @@
+     def c110, -0.25, 1, -1, 0
+     def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
+     def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
++    def c157, 0.05, 0, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at
+     def c111, 0.159154937, 0.5, 6.28318548, -3.14159274
+     def c112, 3, 7.13800001, 0, 0
+     def c113, 0.75, -0.5, 0.5, 0.0008
+@@ -112,6 +113,7 @@
+     dcl_2d s3	// FusionFix SSR
+     dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
+     dcl_2d s8	// FusionFix screen space indirect light (black when off)
++    dcl_2d s7	// FusionFix cloud shadows: the cloud noise
+     texld r1, v0, s1
+     mul r2.xyz, r1.w, c0.yzww
+     frc r2.xyz, r2
+@@ -126,6 +128,7 @@
+     mul r0.x, r19.x, c209.w
+     
+     mad r0.yzw, v1.xxyz, -r0.x, c15.xxyz
++    mov r14.xyz, r0.yzww // FusionFix cloud shadows: the world position
+     dp3 r1.x, c14, r0.yzww
+     add r1.xyz, -r1.x, -c54
+     cmp r1.yzw, r1.xxyz, c3.x, c3.y
+@@ -460,6 +463,31 @@
+     add r28.w, c110.y, -r28.w // FusionFix: how much of the ambient indirect light leaves in place
+     add r29.x, c110.y, -r29.x
+     mul r0.y, r0.y, r29.x
++    // --- FusionFix cloud shadows (c197.y-w, c198, c199.xy, s7; CloudShadows in postfx.ixx): the ray
++    // --- from the surface towards the sun meets the cloud deck, a plane CloudShadowsHeight up, where
++    // --- the clouds' coverage comes from the game's own cloud threshold, bias and thickness over a
++    // --- noise drifting with the wind. Only the sun's light is shaded.
++    mov r15.x, c197.y
++    if_lt c158.z, r15.x
++      mov r15.xyz, -c17 // towards the sun
++      max r15.w, r15.z, c157.x
++      rcp r15.w, r15.w
++      add r16.x, -r14.z, c197.z
++      max r16.x, r16.x, c158.z
++      mul r16.x, r16.x, r15.w
++      mad r16.xy, r15.xy, r16.x, r14.xy // where the ray meets the deck
++      mul r16.xy, r16.xy, c197.w
++      add r16.xy, r16.xy, c198.xy // the wind
++      mov r16.z, c158.z
++      mov r16.w, c199.y // the mip, for the softness of the shadow's edge
++      texldl r17, r16, s7
++      mul r17.x, r17.x, c198.z
++      add_sat r17.x, r17.x, -c198.w
++      pow r17.x, r17.x, c199.x // coverage
++      mul r17.x, r17.x, c197.y
++      add r17.x, -r17.x, c158.x
++      mul r0.y, r0.y, r17.x
++    endif
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     mov r2.xyz, r31.xyz
+     mad r1.xyz, v1, -r0.x, c1.w
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+index eaf12614..86f7c320 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+@@ -81,6 +81,7 @@
+     def c110, -0.25, 1, -1, 0
+     def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
+     def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
++    def c157, 0.05, 0, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at
+     def c111, 0.159154937, 0.5, 6.28318548, -3.14159274
+     def c112, 3, 7.13800001, 0, 0
+     def c113, 0.75, -0.5, 0.5, 0.0008
+@@ -113,6 +114,7 @@
+     dcl_2d s3	// FusionFix SSR
+     dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
+     dcl_2d s8	// FusionFix screen space indirect light (black when off)
++    dcl_2d s7	// FusionFix cloud shadows: the cloud noise
+     texld r1, v0, s1
+     mul r2.xyz, r1.w, c1
+     frc r2.xyz, r2
+@@ -127,6 +129,7 @@
+     mul r0.x, r19.x, c209.w
+     
+     mad r0.yzw, v1.xxyz, -r0.x, c15.xxyz
++    mov r14.xyz, r0.yzww // FusionFix cloud shadows: the world position
+     dp3 r1.x, c14, r0.yzww
+     add r1.xyz, -r1.x, -c54
+     cmp r1.yzw, r1.xxyz, c4.z, c4.w
+@@ -461,6 +464,31 @@
+     add r28.w, c110.y, -r28.w // FusionFix: how much of the ambient indirect light leaves in place
+     add r29.x, c110.y, -r29.x
+     mul r0.y, r0.y, r29.x
++    // --- FusionFix cloud shadows (c197.y-w, c198, c199.xy, s7; CloudShadows in postfx.ixx): the ray
++    // --- from the surface towards the sun meets the cloud deck, a plane CloudShadowsHeight up, where
++    // --- the clouds' coverage comes from the game's own cloud threshold, bias and thickness over a
++    // --- noise drifting with the wind. Only the sun's light is shaded.
++    mov r15.x, c197.y
++    if_lt c158.z, r15.x
++      mov r15.xyz, -c17 // towards the sun
++      max r15.w, r15.z, c157.x
++      rcp r15.w, r15.w
++      add r16.x, -r14.z, c197.z
++      max r16.x, r16.x, c158.z
++      mul r16.x, r16.x, r15.w
++      mad r16.xy, r15.xy, r16.x, r14.xy // where the ray meets the deck
++      mul r16.xy, r16.xy, c197.w
++      add r16.xy, r16.xy, c198.xy // the wind
++      mov r16.z, c158.z
++      mov r16.w, c199.y // the mip, for the softness of the shadow's edge
++      texldl r17, r16, s7
++      mul r17.x, r17.x, c198.z
++      add_sat r17.x, r17.x, -c198.w
++      pow r17.x, r17.x, c199.x // coverage
++      mul r17.x, r17.x, c197.y
++      add r17.x, -r17.x, c158.x
++      mul r0.y, r0.y, r17.x
++    endif
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     mov r2.xyz, r31.xyz
+     mad r1.xyz, v1, -r0.x, c3.w
