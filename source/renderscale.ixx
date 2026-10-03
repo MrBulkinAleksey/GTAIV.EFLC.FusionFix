@@ -121,15 +121,54 @@ namespace
         return true;
     }
 
+    // The bound render target 0 and depth buffer with their sizes, kept by the device hooks so that the thousands of
+    // calls a frame don't ask the device. Unknown after a reset, until the next call sets them.
+    struct Bound
+    {
+        IDirect3DSurface9* surface = nullptr;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        bool known = false;
+
+        void Set(IDirect3DSurface9* s)
+        {
+            surface = s;
+            width = height = 0;
+            SurfaceSize(s, width, height);
+            known = true;
+        }
+    };
+    Bound BoundTarget;
+    Bound BoundDepth;
+
     // Size of render target 0
     bool TargetSize(IDirect3DDevice9* device, uint32_t& width, uint32_t& height)
     {
-        IDirect3DSurface9* rt = nullptr;
-        if (FAILED(device->GetRenderTarget(0, &rt)) || !rt)
-            return false;
-        bool ok = SurfaceSize(rt, width, height);
-        rt->Release();
-        return ok;
+        if (!BoundTarget.known)
+        {
+            IDirect3DSurface9* rt = nullptr;
+            if (FAILED(device->GetRenderTarget(0, &rt)))
+                return false;
+            BoundTarget.Set(rt);
+            if (rt)
+                rt->Release();
+        }
+        width = BoundTarget.width;
+        height = BoundTarget.height;
+        return BoundTarget.surface != nullptr;
+    }
+
+    Bound& DepthBound(IDirect3DDevice9* device)
+    {
+        if (!BoundDepth.known)
+        {
+            IDirect3DSurface9* ds = nullptr;
+            device->GetDepthStencilSurface(&ds);
+            BoundDepth.Set(ds);
+            if (ds)
+                ds->Release();
+        }
+        return BoundDepth;
     }
 
     bool IsRenderSize(uint32_t width, uint32_t height)
@@ -153,53 +192,61 @@ namespace
     HRESULT(__stdcall* RealSetScissorRect)(IDirect3DDevice9*, const RECT*) = nullptr;
     void** HookedVTable = nullptr;
 
+    // Binds a depth buffer past the hooks, and keeps track of it
+    void BindDepth(IDirect3DDevice9* device, IDirect3DSurface9* surface)
+    {
+        if (SUCCEEDED(RealSetDepthStencilSurface(device, surface)))
+            BoundDepth.Set(surface);
+    }
+
     // Pairs the scene's depth buffer with targets of its size, and the full size one with the others
     void MatchDepth(IDirect3DDevice9* device)
     {
         uint32_t rtWidth = 0, rtHeight = 0;
         if (!TargetSize(device, rtWidth, rtHeight))
             return;
-        IDirect3DSurface9* ds = nullptr;
-        if (FAILED(device->GetDepthStencilSurface(&ds)) || !ds)
+        auto& ds = DepthBound(device);
+        if (!ds.surface)
             return;
 
-        uint32_t dsWidth = 0, dsHeight = 0;
-        SurfaceSize(ds, dsWidth, dsHeight);
-        if (ds != FullDepth && IsRenderSize(dsWidth, dsHeight) && (rtWidth > dsWidth || rtHeight > dsHeight))
+        if (ds.surface != FullDepth && IsRenderSize(ds.width, ds.height) && (rtWidth > ds.width || rtHeight > ds.height))
         {
+            // INTZ is a texture format, a plain depth surface takes D24S8
             if (!FullDepth)
-            {
-                D3DSURFACE_DESC desc{};
-                ds->GetDesc(&desc);
-                // INTZ is a texture format, a plain depth surface takes D24S8
                 device->CreateDepthStencilSurface(DisplayWidth, DisplayHeight, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, FALSE, &FullDepth, nullptr);
-            }
             if (FullDepth && rtWidth <= DisplayWidth && rtHeight <= DisplayHeight)
             {
-                SceneDepth = ds;
-                RealSetDepthStencilSurface(device, FullDepth);
+                SceneDepth = ds.surface;
+                BindDepth(device, FullDepth);
             }
         }
-        else if (ds == FullDepth && IsRenderSize(rtWidth, rtHeight) && SceneDepth)
+        else if (ds.surface == FullDepth && IsRenderSize(rtWidth, rtHeight) && SceneDepth)
         {
-            RealSetDepthStencilSurface(device, SceneDepth);
+            BindDepth(device, SceneDepth);
         }
-        ds->Release();
     }
 
     HRESULT __stdcall SetRenderTarget(IDirect3DDevice9* device, DWORD index, IDirect3DSurface9* surface)
     {
         auto hr = RealSetRenderTarget(device, index, surface);
-        if (bActive && index == 0 && surface)
-            MatchDepth(device);
+        if (index == 0 && SUCCEEDED(hr))
+        {
+            BoundTarget.Set(surface);
+            if (bActive && surface)
+                MatchDepth(device);
+        }
         return hr;
     }
 
     HRESULT __stdcall SetDepthStencilSurface(IDirect3DDevice9* device, IDirect3DSurface9* surface)
     {
         auto hr = RealSetDepthStencilSurface(device, surface);
-        if (bActive && surface)
-            MatchDepth(device);
+        if (SUCCEEDED(hr))
+        {
+            BoundDepth.Set(surface);
+            if (bActive && surface)
+                MatchDepth(device);
+        }
         return hr;
     }
 
@@ -209,19 +256,11 @@ namespace
     {
         auto hr = RealClear(device, count, rects, flags, color, z, stencil);
         auto depthFlags = flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL);
-        if (bActive && depthFlags && count == 0 && FullDepth && SceneDepth)
+        if (bActive && depthFlags && count == 0 && FullDepth && SceneDepth && DepthBound(device).surface == FullDepth)
         {
-            IDirect3DSurface9* ds = nullptr;
-            if (SUCCEEDED(device->GetDepthStencilSurface(&ds)) && ds)
-            {
-                if (ds == FullDepth)
-                {
-                    RealSetDepthStencilSurface(device, SceneDepth);
-                    RealClear(device, 0, nullptr, depthFlags, 0, z, stencil);
-                    RealSetDepthStencilSurface(device, FullDepth);
-                }
-                ds->Release();
-            }
+            RealSetDepthStencilSurface(device, SceneDepth);
+            RealClear(device, 0, nullptr, depthFlags, 0, z, stencil);
+            RealSetDepthStencilSurface(device, FullDepth);
         }
         return hr;
     }
@@ -349,6 +388,8 @@ namespace
         OutputTexture = nullptr;
         FullDepth = nullptr;
         SceneDepth = nullptr;
+        BoundTarget = {};
+        BoundDepth = {};
         bInPost = false;
         bInScene = false;
     }
