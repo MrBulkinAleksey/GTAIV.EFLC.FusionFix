@@ -13,17 +13,18 @@
 // back. The helper answers Evaluate after its GPU work is submitted, so the game never waits on the GPU
 // for a value that nobody will signal.
 //
-// Under Wine (ConfigureFlags::SharedBuffers) neither the textures nor the fence are shared: Wine can't import
-// a D3D12 fence of another process (it crashes the importer) and older Proton can't import D3D12 resources.
-// The helper shares linear buffers instead, the game copies its textures into them and waits for that on the
-// CPU before Evaluate, and the helper answers Evaluate once its GPU work has finished.
+// Under Wine (ConfigureFlags::CpuSync) there is no shared fence: Wine can't import a D3D12 fence of another
+// process (it crashes the importer). The game waits for its copies into the shared textures on the CPU before
+// Evaluate, and the helper answers Evaluate once its GPU work has finished. The shared textures have no UAV
+// flag there, and the game imports them as opaque Win32 handles, which every Wine supports. Only textures can
+// be shared: vkd3d-proton gives a buffer an empty handle.
 
 #include <cstdint>
 #include <cstddef>
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 4;
+    constexpr uint32_t Version = 5;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -67,30 +68,7 @@ namespace UpscalerProtocol
     namespace ConfigureFlags
     {
         constexpr uint32_t ReactiveMask = 1 << 0;   // Reactive is written every frame and used by FSR
-        constexpr uint32_t SharedBuffers = 1 << 1;  // Wine: linear buffers instead of textures, no shared fence
-    }
-
-    // Layout of a texture in its shared buffer: rows of RowPitch bytes from offset 0
-    constexpr uint32_t BytesPerPixel(Texture texture)
-    {
-        switch (texture)
-        {
-        case Texture::Color: case Texture::Output: return 8;
-        case Texture::Reactive: return 2;
-        default: return 4;
-        }
-    }
-
-    // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT, a whole number of pixels for every format above
-    constexpr uint32_t RowPitch(Texture texture, uint32_t width)
-    {
-        return (width * BytesPerPixel(texture) + 255u) & ~255u;
-    }
-
-    // Rounded to 64 KiB, D3D12's buffer placement alignment, so both sides agree on the allocation size
-    constexpr uint64_t BufferSize(Texture texture, uint32_t width, uint32_t height)
-    {
-        return (static_cast<uint64_t>(RowPitch(texture, width)) * height + 0xFFFFu) & ~static_cast<uint64_t>(0xFFFFu);
+        constexpr uint32_t CpuSync = 1 << 1;        // Wine: no shared fence, both sides wait for their GPU work
     }
 
 #pragma pack(push, 8)
@@ -143,10 +121,10 @@ namespace UpscalerProtocol
         uint32_t ResponseSerial;
         Status ResponseStatus;
 
-        // Configure results, handles already duplicated into the game process (buffers with SharedBuffers)
+        // Configure results, handles already duplicated into the game process
         uint64_t TextureHandles[static_cast<size_t>(Texture::Count)];
         uint64_t TextureSizes[static_cast<size_t>(Texture::Count)];
-        uint64_t FenceHandle;         // 0 with SharedBuffers
+        uint64_t FenceHandle;         // 0 with CpuSync
     };
 #pragma pack(pop)
 
