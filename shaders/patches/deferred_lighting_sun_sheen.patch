@@ -1,0 +1,74 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+index 3bec465b..de9f3e53 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+@@ -79,6 +79,7 @@
+     // -------------------------------------------------------------- Shadow Constants --------------------------------------------------------------
+     def c110, -0.25, 1, -1, 0
+     def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
++    def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
+     def c111, 0.159154937, 0.5, 6.28318548, -3.14159274
+     def c112, 3, 7.13800001, 0, 0
+     def c113, 0.75, -0.5, 0.5, 0.0008
+@@ -527,6 +528,24 @@
+       mad r0.xzw, r7.xyyz, r1.x, r0
+       add r1.x, r4.x, r4.x
+       mul r0.xzw, r0, r1.x
++      // --- FusionFix specular sheen (c197.x, SpecularSheen in postfx.ixx): a material with no specular
++      // --- map writes no specular intensity, so the sun left no highlight at all on buildings and LOD
++      // --- roads. Those get a faint one, most on grey surfaces (asphalt, concrete), less on saturated
++      // --- colours.
++      texld r12, v0, s0
++      max r13.x, r12.x, r12.y
++      max r13.x, r13.x, r12.z
++      min r13.y, r12.x, r12.y
++      min r13.y, r13.y, r12.z
++      add r13.y, r13.x, -r13.y
++      add r13.x, r13.x, c158.y
++      rcp r13.x, r13.x
++      mad_sat r13.x, r13.y, -r13.x, c158.x // 1 less the saturation
++      mul r13.x, r13.x, c197.x
++      cmp r13.x, -r4.x, r13.x, c158.z // only where the G-buffer holds no specular intensity
++      add r13.y, c17.w, c17.w
++      mul r13.x, r13.x, r13.y
++      mad r0.xzw, r7.xyyz, r13.x, r0
+       dp3 r1.x, r2, -c17
+       // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin, the sun's light wraps past the terminator further in red than in green and blue, and red keeps on longer into the penumbra of shadows.
+       mad r26.x, r26.x, c156.x, c156.y
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+index 6f1cf18c..eaf12614 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+@@ -80,6 +80,7 @@
+     // -------------------------------------------------------------- Shadow Constants --------------------------------------------------------------
+     def c110, -0.25, 1, -1, 0
+     def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
++    def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
+     def c111, 0.159154937, 0.5, 6.28318548, -3.14159274
+     def c112, 3, 7.13800001, 0, 0
+     def c113, 0.75, -0.5, 0.5, 0.0008
+@@ -544,6 +545,24 @@
+       mad r1.z, r3.w, -c3.y, c3.z
+       max r2.w, r1.x, r1.y
+       mul r0.xzw, r0, r2.w
++      // --- FusionFix specular sheen (c197.x, SpecularSheen in postfx.ixx): a material with no specular
++      // --- map writes no specular intensity, so the sun left no highlight at all on buildings and LOD
++      // --- roads. Those get a faint one, most on grey surfaces (asphalt, concrete), less on saturated
++      // --- colours.
++      texld r12, v0, s0
++      max r13.x, r12.x, r12.y
++      max r13.x, r13.x, r12.z
++      min r13.y, r12.x, r12.y
++      min r13.y, r13.y, r12.z
++      add r13.y, r13.x, -r13.y
++      add r13.x, r13.x, c158.y
++      rcp r13.x, r13.x
++      mad_sat r13.x, r13.y, -r13.x, c158.x // 1 less the saturation
++      mul r13.x, r13.x, c197.x
++      cmp r13.x, -r2.w, r13.x, c158.z // only where the specular came out as nothing
++      add r13.y, c17.w, c17.w
++      mul r13.x, r13.x, r13.y
++      mad r0.xzw, r6.yyzw, r13.x, r0
+       dp3 r1.x, r2, -c17
+       // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin, the sun's light wraps past the terminator further in red than in green and blue, and red keeps on longer into the penumbra of shadows.
+       mad r26.x, r26.x, c156.x, c156.y

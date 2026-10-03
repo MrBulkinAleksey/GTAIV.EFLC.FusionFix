@@ -345,6 +345,10 @@ public:
     // stay close: past where green and blue end only red is lit, and with 0.5, 0.2 and 0.1 that
     // band reached a fifth of full light and turned the dark side of faces red.
     float fSkinLighting = 1.0f;
+    // The sun on materials with no specular map (c197.x; deferred_lighting_sun_sheen.patch):
+    // they write no specular intensity, and the sun left no highlight on buildings and LOD roads.
+    // They get this much of one, scaled down by how saturated their colour is.
+    float fSpecularSheen = 0.1f;
     static constexpr int kSkinDebugMode = 9;
     rage::grcRenderTargetPC* mMaterialIdRT = nullptr;
     rage::grcRenderTargetPC* SkinLightTex[2] = {};
@@ -1171,6 +1175,7 @@ public:
         fSkinScatteringWidth = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringWidth", 0.03f), 0.001f, 0.1f);
         fSkinScatteringStrength = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringStrength", 1.0f), 0.0f, 2.0f);
         fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
+        fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 1.0f);
         fGIRayLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", 4.0f), 0.1f, 20.0f);
         fGIThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightThickness", 0.5f), 0.01f, 10.0f);
         fGIMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxDistance", 60.0f), 1.0f, 1000.0f);
@@ -4952,6 +4957,11 @@ public:
             pDevice->SetPixelShaderConstantF(201, scale, 1);
             pDevice->SetPixelShaderConstantF(205, offset, 1);
         }
+        // The sun on materials with no specular map.
+        {
+            const float sheen[4] = { R.fSpecularSheen, 0.0f, 0.0f, 0.0f };
+            pDevice->SetPixelShaderConstantF(197, sheen, 1);
+        }
         // The light volumes do not read the material IDs themselves (local_light_on_skin.patch).
         // s11 is read by no game shader, and the car glass takes it over right after lighting;
         // s10 is the game's StippleTexture, which the final post fx pass reads as its colour LUT.
@@ -5037,6 +5047,7 @@ public:
         R.bLocalContactPass = false;
         pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
+        pDevice->SetPixelShaderConstantF(197, noLocalContactShadows, 1);
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
