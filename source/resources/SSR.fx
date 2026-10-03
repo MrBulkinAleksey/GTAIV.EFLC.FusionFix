@@ -663,17 +663,11 @@ float SSRSurfaceWeight(float2 uv)
     return SSRSurfaceWeight(uv, wetOnly);
 }
 
-// A reflection for rays that found nothing, from last frame's scene without any depth search:
-// what lies a metre and a half along the ray, blurred. Below the horizon deferred_lighting shows a
-// reflection only where SSR found one (its own map holds just the sky), so a miss there left
-// the surface without any: rays to the road hidden behind the player cut a hole of his shape
-// into a car beside him, and the misses among the hits on a door showed as dark grain. Car
-// paint is no perfect mirror, and a blurred guess at the colour there reads as reflection.
-// Taps on something well nearer the camera than the reflecting surface, the player standing
-// in front of the car, are left out, so the guess takes the road around him and not him;
-// judged against the point itself, the road it lies under was left out too. weight is 0 where it does not
-// apply: above the horizon, where the game's own map shows the sky. SSR_PS takes it only for
-// rays that found next to nothing, see there.
+// A reflection for rays hidden behind something well nearer the camera than the reflecting
+// surface, the player standing in front of a car, from last frame's scene just past his outline
+// along the ray's path. Rays to the road hidden behind him cut a hole of his shape into the car
+// beside him. weight is 0 where it does not apply: above the horizon, where the game's own map
+// shows the sky, and for rays nothing nearer hid, which NeighbourFill takes.
 float3 ScreenFallback(float3 C, float3 R, out float weight)
 {
     float3 Rw = R.x * vec4WaterToView[0].xyz + R.y * vec4WaterToView[1].xyz + R.z * vec4WaterToView[2].xyz;
@@ -681,28 +675,10 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
     if (weight <= 0.0)
         return 0.0;
 
-    float d = 1.5;
-    if (R.z < 0.0)
-        d = min(d, (C.z - fNearPlane * 2.0) / -R.z);
-    float3 P = C + R * max(d, 0.0);
-    float2 centre = HistoryUV(P);
-    if (any(centre < 0.0))
-    {
-        weight = 0.0;
-        return 0.0;
-    }
-    // Off screen the edge is stretched; fade it out over a tenth of the screen.
-    float2 outside = max(-centre, centre - 1.0);
-    weight *= saturate(1.0 - max(outside.x, outside.y) * 10.0);
-    centre = saturate(centre);
-
-    float prevCZ = dot(float4(C, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
-                                              vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
-
     // Where the ray went behind the player on its way across the screen, what it would have
     // reached is most likely what lies just past his outline along the same path: the lit road
-    // the rays beside his figure hit. The road next to the car, which the rings below find,
-    // lies in its shadow, and the figure showed darker than the rest of the door.
+    // the rays beside his figure hit. The road next to the car lies in its shadow, and taken
+    // from there the figure showed darker than the rest of the door.
     bool behind = false;
     [branch]
     if (gTracePath > 0.0)
@@ -750,39 +726,42 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
             return clamp(c * 0.2, 0.0, HISTORY_CLAMP) * SSR_SCALE;
         }
     }
-    // Rings of taps further and further out, until enough of them show the road: the player
-    // covering the door covers a good part of the screen around where its rays look, and the
-    // nearest ring alone found nothing but him, leaving the door black.
-    static const float2 taps[8] =
+    // No point past him: NeighbourFill takes over.
+    weight = 0.0;
+    return 0.0;
+}
+
+// Misses among hits, SSRTrace_PS's in SSRResultTex: the reflection of the hits around them, read
+// from the history where each of them hit, those on about the same surface only. A miss next to
+// what a car reflects, or among the hits on a door, showed the game's own map there, which holds
+// only the sky: a dark rim around the reflection at night and dark grain on the doors. The
+// blurred scene around the point a metre and a half along the ray, which filled them before,
+// was duller than the reflection around them and dimmed it. Where no hit is near, weight is 0
+// and the game's map stays, as it should where SSR finds nothing at all.
+float3 NeighbourFill(float2 uv, float z, out float weight)
+{
+    static const float2 taps[12] =
     {
-        float2( 1.0,  0.0), float2(-1.0,  0.0), float2( 0.0,  1.0), float2( 0.0, -1.0),
-        float2( 0.7,  0.7), float2(-0.7,  0.7), float2( 0.7, -0.7), float2(-0.7, -0.7)
-    };
-    static const float rings[3] = { 0.02, 0.07, 0.18 }; // fractions of the screen height
-    float2 aspect = float2(vec2InvViewportSize.x / vec2InvViewportSize.y, 1.0);
+        float2( 2.0,  0.0), float2(-2.0,  0.0), float2( 0.0,  2.0), float2( 0.0, -2.0),
+        float2( 4.0,  4.0), float2(-4.0,  4.0), float2( 4.0, -4.0), float2(-4.0, -4.0),
+        float2( 9.0,  0.0), float2(-9.0,  0.0), float2( 0.0,  9.0), float2( 0.0, -9.0)
+    }; // pixels of this pass's target
     float3 sum = 0.0;
     float sumW = 0.0;
     [loop]
-    for (int ring = 0; ring < 3; ++ring)
+    for (int i = 0; i < 12; ++i)
     {
-        if (sumW >= 3.0)
-            break;
-        float2 radius = rings[ring] * aspect;
-        [loop]
-        for (int i = 0; i < 8; ++i)
+        float2 tapUV = uv + taps[i] * vec2InvViewportSize;
+        float4 hit = tex2Dlod(SSRResultTex, float4(tapUV, 0, 0));
+        float w = hit.z * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
+        [branch]
+        if (w > 0.0)
         {
-            float2 tapUV = saturate(centre + taps[i] * radius);
-            float w = 1.0;
-            if (fUsePrevDepth > 0.0)
-            {
-                float tapZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(tapUV, 0, 0)).r) * fNearPlane;
-                w = saturate((tapZ - prevCZ * 0.7) / max(prevCZ * 0.1, 0.1));
-            }
-            sum += clamp(tex2Dlod(HistoryTex, float4(tapUV, 0, 0)).rgb, 0.0, HISTORY_CLAMP) * SSR_SCALE * w;
+            sum += clamp(tex2Dlod(HistoryTex, float4(hit.xy, 0, 0)).rgb, 0.0, HISTORY_CLAMP) * SSR_SCALE * w;
             sumW += w;
         }
     }
-    weight *= saturate(sumW / 3.0);
+    weight = fFallback * saturate(sumW / 2.0);
     return sumW > 1e-3 ? sum / sumW : 0.0;
 }
 
@@ -801,8 +780,8 @@ float3 SSRSurface(float2 uv, float2 vPos, out float3 n)
 
 // SSR runs in three passes, as one pixel shader it took about a thousand instruction slots
 // where ps_3_0 promises 512: SSRTrace_PS marches the rays into a target of the same size, the
-// hit as TraceHit returns it, SSRFallback_PS works out the blurred guess for where it found
-// little or nothing into another, and SSR_PS puts the two together into the reflection.
+// hit as TraceHit returns it, SSRFallback_PS works out what fills in where it found next to
+// nothing into another, and SSR_PS puts the two together into the reflection.
 float4 SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     if (SSRSurfaceWeight(uv) <= 0.0)
@@ -824,16 +803,13 @@ float4 SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return hit;
 }
 
-// Only rays that found next to nothing take the guess, fully at confidence 0 and not at all
-// from kFallbackBelow up. The rest leave a hole without it: the game's own map, which shows only
-// the sky, a dark rim around what the car reflects at night and dark grain on its doors. A hit
-// faded only part of the way, at the screen's edge or by distance, keeps its own colour over the
-// game's map: filled up with the blurred guess, it took on its dullness, and reflections all over
-// car bodies looked much weaker.
-static const float kFallbackBelow = 0.25;
+// Only rays that found next to nothing are filled in, fully at confidence 0 and not at all from
+// kFallbackBelow up. A hit faded only part of the way, at the screen's edge or by distance,
+// keeps its own colour over the game's map.
+static const float kFallbackBelow = 0.1;
 
-// The blurred guess for where SSRTrace_PS's ray in SSRResultTex found little or nothing, and its
-// weight; 0 where it does not apply. It follows the ray's path on the screen, which
+// What fills in where SSRTrace_PS's ray in SSRResultTex found next to nothing, ScreenFallback or
+// NeighbourFill, and its weight; 0 where neither applies. It follows the ray's path on the screen, which
 // SetupReflectionRay works out again.
 float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
@@ -845,6 +821,8 @@ float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     SetupReflectionRay(C, n, ray);
     float weight;
     float3 fallback = ScreenFallback(C, reflect(normalize(C), n), weight);
+    if (weight <= 0.0)
+        fallback = NeighbourFill(uv, C.z, weight);
     return float4(fallback, weight);
 }
 
