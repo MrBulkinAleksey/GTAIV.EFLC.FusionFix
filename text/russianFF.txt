@@ -184,33 +184,6 @@ Logitech LightSync RGB
 [SSRDbgSkin]
 Рассеяние в коже
 
-[SSRSkipFade]
-Отражения без гашения
-
-[SSRSkipEdge]
-Край экрана
-
-[SSRSkipFacing]
-К камере
-
-[SSRSkipEnd]
-Конец луча
-
-[SSRSkipDist]
-Гашение по расстоянию
-
-[SSRSkipThick]
-Толщина
-
-[SSRSkipHidden]
-Скрытый участок
-
-[SSRSkipHist]
-Глубина истории
-
-[SSRSkipAll]
-Все гашения
-
 [Contact Shadows]
 Контактные тени
 

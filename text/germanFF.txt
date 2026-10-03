@@ -184,33 +184,6 @@ Indirect Light
 [SSRDbgSkin]
 Skin Scattering
 
-[SSRSkipFade]
-SSR Without Fade
-
-[SSRSkipEdge]
-Screen Edge
-
-[SSRSkipFacing]
-Towards Camera
-
-[SSRSkipEnd]
-End of Ray
-
-[SSRSkipDist]
-Distance Fade
-
-[SSRSkipThick]
-Thickness
-
-[SSRSkipHidden]
-Hidden Stretch
-
-[SSRSkipHist]
-History Depth
-
-[SSRSkipAll]
-All Fades
-
 [Contact Shadows]
 Contact Shadows
 
