@@ -2360,9 +2360,8 @@ private:
 
     // The textures and the sampler states of the first kSSRTextureSlots samplers, saved on
     // construction and put back on destruction: deferred_lighting draws right after FusionFix's
-    // passes and reads what the game bound there before them (the G-buffer normals on s1,
-    // the sun's shadow on s4). The AO pass left its own textures on s1 to s4 once GTAO used
-    // them, and the sun stopped lighting anything.
+    // passes and reads what the game bound there before them (the G-buffer normals on s1, and
+    // more on s4). The AO pass left its own textures on s1 to s4 once GTAO used them.
     struct SavedSamplerSlots
     {
         IDirect3DDevice9* device;
@@ -2397,6 +2396,32 @@ private:
     static constexpr UINT kVSConstCount = 256;
     static inline float savedPSConsts[kPSConstCount * 4];
     static inline float savedVSConsts[kVSConstCount * 4];
+
+    // The float shader constants, saved on construction and put back on destruction. An
+    // effect writes its parameters into them, over what the game set for deferred_lighting,
+    // which draws right after FusionFix's passes: once GTAO's accumulation took a dozen more,
+    // the sun's went and it stopped lighting anything.
+    struct SavedShaderConstants
+    {
+        IDirect3DDevice9* device;
+        std::vector<float> ps = std::vector<float>(kPSConstCount * 4);
+        std::vector<float> vs = std::vector<float>(kVSConstCount * 4);
+
+        explicit SavedShaderConstants(IDirect3DDevice9* pDevice) : device(pDevice)
+        {
+            device->GetPixelShaderConstantF(0, ps.data(), kPSConstCount);
+            device->GetVertexShaderConstantF(0, vs.data(), kVSConstCount);
+        }
+
+        ~SavedShaderConstants()
+        {
+            device->SetPixelShaderConstantF(0, ps.data(), kPSConstCount);
+            device->SetVertexShaderConstantF(0, vs.data(), kVSConstCount);
+        }
+
+        SavedShaderConstants(const SavedShaderConstants&) = delete;
+        SavedShaderConstants& operator=(const SavedShaderConstants&) = delete;
+    };
 
     static void MatrixMultiply(D3DXMATRIX& out, const D3DXMATRIX& a, const D3DXMATRIX& b)
     {
@@ -3298,6 +3323,7 @@ private:
         { // AO
             IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
             SavedSamplerSlots savedSamplers(pDevice);
+            SavedShaderConstants savedConstants(pDevice);
 
             IDirect3DSurface9* rt0 = nullptr;
             IDirect3DSurface9* ds = nullptr;
