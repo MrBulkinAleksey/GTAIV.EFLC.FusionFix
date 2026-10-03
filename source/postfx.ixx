@@ -1403,13 +1403,57 @@ namespace SSRTrace
             { R.SSRTex, "SSRTex" }, { R.SSRHalfTex, "SSRHalfTex" }, { R.SSRDenoisedTex, "SSRDenoisedTex" },
             { R.SSRHalfDenoisedTex, "SSRHalfDenoisedTex" }, { R.SSRAccumTex[0][0], "SSRAccumTex0" }, { R.SSRAccumTex[0][1], "SSRAccumTex1" },
             { R.SSRAccumTex[1][0], "SSRHalfAccumTex0" }, { R.SSRAccumTex[1][1], "SSRHalfAccumTex1" }, { R.SSRTraceTex[0], "SSRTraceTex" },
-            { R.SSRTraceTex[1], "SSRHalfTraceTex" }, { R.SSRHistoryTex, "SSRHistoryTex" } };
+            { R.SSRTraceTex[1], "SSRHalfTraceTex" }, { R.SSRHistoryTex, "SSRHistoryTex" }, { R.SSRFallbackTex[0], "SSRFallbackTex" },
+            { R.SSRFallbackTex[1], "SSRHalfFallbackTex" }, { R.SSRSpreadTex[0], "SSRSpreadTex" }, { R.SSRSpreadTex[1], "SSRHalfSpreadTex" },
+            { R.mDepthRT, "depth" }, { R.mSpecularRT, "specular" }, { R.mNormalRT, "normal" }, { R.PreAlphaDepthCopyRT, "prevDepth" } };
         for (auto [rt, name] : known)
             if (rt && rt->mD3DTexture == texture)
                 return name;
         char buffer[32];
         snprintf(buffer, sizeof(buffer), "%p", static_cast<void*>(texture));
         return buffer;
+    }
+
+    // The device state a draw runs with: render target, viewport, the states that could keep it
+    // from writing, and what every sampler holds.
+    static void State(IDirect3DDevice9* pDevice, const char* what)
+    {
+        if (!Active())
+            return;
+        IDirect3DSurface9* rt = nullptr;
+        pDevice->GetRenderTarget(0, &rt);
+        IDirect3DBaseTexture9* rtTexture = nullptr;
+        if (rt)
+            rt->GetContainer(IID_IDirect3DTexture9, reinterpret_cast<void**>(&rtTexture));
+        D3DVIEWPORT9 view = {};
+        pDevice->GetViewport(&view);
+        DWORD v[10] = {};
+        const D3DRENDERSTATETYPE states[10] = { D3DRS_COLORWRITEENABLE, D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND,
+            D3DRS_ALPHATESTENABLE, D3DRS_SCISSORTESTENABLE, D3DRS_STENCILENABLE, D3DRS_ZENABLE, D3DRS_SRGBWRITEENABLE, D3DRS_SEPARATEALPHABLENDENABLE };
+        for (int i = 0; i < 10; ++i)
+            pDevice->GetRenderState(states[i], &v[i]);
+        RECT scissor = {};
+        pDevice->GetScissorRect(&scissor);
+        std::string samplers;
+        for (DWORD slot = 0; slot < 16; ++slot)
+        {
+            IDirect3DBaseTexture9* t = nullptr;
+            pDevice->GetTexture(slot, &t);
+            if (t)
+            {
+                samplers += " s" + std::to_string(slot) + "=" + TextureName(t) + (t == rtTexture ? "(TARGET)" : "");
+                t->Release();
+            }
+        }
+        IDirect3DPixelShader9* ps = nullptr;
+        pDevice->GetPixelShader(&ps);
+        Line("  state %s: target %s view %ux%u+%u+%u write %x blend %u (%u,%u) test %u scissor %u (%d,%d,%d,%d) stencil %u z %u srgb %u sepalpha %u ps %p;%s",
+            what, TextureName(rtTexture).c_str(), unsigned(view.Width), unsigned(view.Height), unsigned(view.X), unsigned(view.Y),
+            unsigned(v[0]), unsigned(v[1]), unsigned(v[2]), unsigned(v[3]), unsigned(v[4]), unsigned(v[5]), int(scissor.left), int(scissor.top),
+            int(scissor.right), int(scissor.bottom), unsigned(v[6]), unsigned(v[7]), unsigned(v[8]), unsigned(v[9]), static_cast<void*>(ps), samplers.c_str());
+        SAFE_RELEASE(ps);
+        SAFE_RELEASE(rtTexture);
+        SAFE_RELEASE(rt);
     }
 
     // Once a frame, from the post fx pass, which runs in the pause menu too, where the game does
@@ -3164,6 +3208,7 @@ private:
                 const HRESULT passHr = effect->BeginPass(pass);
                 effect->CommitChanges();
                 BindEffectSamplers(pDevice, effect);
+                SSRTrace::State(pDevice, "ssr pass");
                 const HRESULT drawHr = pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
                 if (SSRTrace::Active())
@@ -3212,13 +3257,17 @@ private:
             effect->SetFloat(h.fDenoiseSSROnly, 1.0f);
             pDevice->SetRenderTarget(0, denoisedSurf);
             effect->SetTechnique(h.techSSRDenoise);
-            effect->Begin(&passes, 0);
-            effect->BeginPass(0);
+            const HRESULT beginHr = effect->Begin(&passes, 0);
+            const HRESULT passHr = effect->BeginPass(0);
             effect->CommitChanges();
             BindEffectSamplers(pDevice, effect);
-            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            SSRTrace::State(pDevice, "ssr denoise");
+            SSRTrace::Contents(pDevice, "denoise input", ssrTex);
+            const HRESULT drawHr = pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
+            SSRTrace::Line("ssr denoise: begin %08x pass %08x draw %08x passes %u", unsigned(beginHr), unsigned(passHr), unsigned(drawHr), passes);
+            SSRTrace::Contents(pDevice, "denoise output", denoisedTex);
             R.bSSRDenoised = true;
         }
         IDirect3DTexture9* ssrResult = R.bSSRDenoised ? denoisedTex : ssrTex;
@@ -3251,6 +3300,7 @@ private:
             effect->BeginPass(0);
             effect->CommitChanges();
             BindEffectSamplers(pDevice, effect);
+            SSRTrace::State(pDevice, "ssr temporal");
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
