@@ -21,6 +21,7 @@ namespace HeadlightEnhancement
     static const float* pRadiusBase = nullptr;
     static std::string lightModesStatus = "off in the ini";
     static std::string shadowOriginStatus = "off in the ini";
+    static std::atomic<uint32_t> shadowOriginsMoved{0}, shadowOriginCachesDropped{0};
     static std::string offscreenLightsStatus = "off in the ini";
     static fusionfix::DiagnosticsLog log;
 
@@ -314,7 +315,6 @@ namespace HeadlightEnhancement
     static std::array<ShadowOrigin, 4> shadowOrigins{};
     static constexpr float ShadowOriginPerSecond = 1.5f;  // lamp to middle in 0.7 s
     static constexpr int32_t ShadowOriginStaleMs = 1000; // lights off or out of range for longer start anew
-    static std::atomic<uint32_t> shadowOriginsMoved{0}, shadowOriginCachesDropped{0};
 
     static ShadowOrigin* EaseShadowOrigin(uintptr_t vehicle, float target)
     {
