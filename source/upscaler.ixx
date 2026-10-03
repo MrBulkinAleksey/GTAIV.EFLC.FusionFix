@@ -117,6 +117,8 @@ namespace
         virtual bool SubmitInputs(IDirect3DTexture9* const (&inputs)[InputCount], uint64_t signalValue) = 0;
         // Once the fence reaches waitValue: shared output -> game texture
         virtual bool SubmitOutput(IDirect3DTexture9* target, uint64_t waitValue) = 0;
+        // The helper won't signal value any more: the GPU work that waits for it is let go from the CPU
+        virtual void SignalFromCpu(uint64_t value) = 0;
     };
     struct Vulkan
     {
@@ -135,6 +137,8 @@ namespace
         PFN_vkDestroySemaphore vkDestroySemaphore = nullptr;
         PFN_vkImportSemaphoreWin32HandleKHR vkImportSemaphoreWin32HandleKHR = nullptr;
         PFN_vkGetSemaphoreWin32HandleKHR vkGetSemaphoreWin32HandleKHR = nullptr;   // optional, for the game's semaphore under Wine
+        PFN_vkSignalSemaphore vkSignalSemaphore = nullptr;                         // optional, when the helper is gone
+        PFN_vkGetSemaphoreCounterValue vkGetSemaphoreCounterValue = nullptr;
         PFN_vkCreateCommandPool vkCreateCommandPool = nullptr;
         PFN_vkAllocateCommandBuffers vkAllocateCommandBuffers = nullptr;
         PFN_vkBeginCommandBuffer vkBeginCommandBuffer = nullptr;
@@ -178,6 +182,8 @@ namespace
             LOAD_DEVICE(vkDestroySemaphore);
             LOAD_DEVICE(vkImportSemaphoreWin32HandleKHR);
             LOAD_DEVICE(vkGetSemaphoreWin32HandleKHR);
+            LOAD_DEVICE(vkSignalSemaphore);
+            LOAD_DEVICE(vkGetSemaphoreCounterValue);
             LOAD_DEVICE(vkCreateCommandPool);
             LOAD_DEVICE(vkAllocateCommandBuffers);
             LOAD_DEVICE(vkBeginCommandBuffer);
@@ -700,6 +706,19 @@ namespace
             s.submitted = true;
             return true;
         }
+
+        void SignalFromCpu(uint64_t value) override
+        {
+            if (!semaphore || !vk.vkSignalSemaphore || !vk.vkGetSemaphoreCounterValue)
+                return;
+            uint64_t current = 0;
+            if (vk.vkGetSemaphoreCounterValue(device, semaphore, &current) != VK_SUCCESS || current >= value)
+                return;
+            VkSemaphoreSignalInfo signal{ VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO };
+            signal.semaphore = semaphore;
+            signal.value = value;
+            vk.vkSignalSemaphore(device, &signal);
+        }
     };
 
     // ---------------------------------------------------------------------------------------------
@@ -845,6 +864,12 @@ namespace
             auto desc = source->GetDesc();
             D3D12_BOX box{ 0, 0, 0, static_cast<UINT>(desc.Width), desc.Height, 1 };
             list->CopyTextureRegion(&to, 0, 0, 0, &from, &box);
+        }
+
+        void SignalFromCpu(uint64_t value) override
+        {
+            if (sharedFence && sharedFence->GetCompletedValue() < value)
+                sharedFence->Signal(value);
         }
 
         void ReleaseImports() override
@@ -1072,30 +1097,50 @@ namespace
             return true;
         }
 
-        bool Request(Protocol::Command command, DWORD timeout)
+        // A request posted without waiting for its answer, which comes before the next one is written
+        bool pending = false;
+
+        void Post(Protocol::Command command)
         {
             shared->RequestCommand = command;
             shared->RequestSerial = ++serial;
             MemoryBarrier();
             SetEvent(request);
+            pending = true;
+        }
 
+        enum class Answer { Ok, Failed, None };
+
+        // The answer to the last request, None when the helper didn't give it in time or exited
+        Answer Collect(DWORD timeout)
+        {
+            pending = false;
             auto start = GetTickCount64();
             while (true)
             {
                 auto elapsed = static_cast<DWORD>(GetTickCount64() - start);
                 if (elapsed >= timeout)
-                    return false;
+                    return Answer::None;
 
                 HANDLE handles[] = { response, process };
                 auto wait = WaitForMultipleObjects(2, handles, FALSE, timeout - elapsed);
                 if (wait != WAIT_OBJECT_0)
-                    return false;
+                    return Answer::None;
 
                 MemoryBarrier();
                 // A late answer to an earlier request is skipped
                 if (shared->ResponseSerial == serial)
-                    return shared->ResponseStatus == Protocol::Status::Ok;
+                    return shared->ResponseStatus == Protocol::Status::Ok ? Answer::Ok : Answer::Failed;
             }
+        }
+
+        bool Request(Protocol::Command command, DWORD timeout)
+        {
+            // The helper reads a request's parameters before it answers: they can be written once it did
+            if (pending && Collect(timeout) == Answer::None)
+                return false;
+            Post(command);
+            return Collect(timeout) == Answer::Ok;
         }
 
         // graceful: ask the helper to release everything first, not while the game is being unloaded
@@ -1136,6 +1181,7 @@ namespace
     uint32_t configuredFlags = 0;
     bool configureFailed = false;
     uint64_t fenceValue = 0;
+    uint64_t pendingOutputValue = 0;   // signalled by the helper for the Evaluate posted last frame
 
     std::filesystem::path HelperPath()
     {
@@ -1271,6 +1317,31 @@ export namespace Upscaler
         if (state != State::Ready || !IsAvailable(backend) || !frame.Color || !frame.Depth || !frame.Motion || !frame.Output)
             return false;
 
+        // Last frame's Evaluate was posted without waiting: its answer comes before anything else is written. It
+        // came long ago, the helper answers once its GPU work is submitted.
+        if (helper.pending)
+        {
+            auto answer = helper.Collect(500);
+            if (answer != HelperProcess::Answer::Ok)
+            {
+                static uint32_t reported = 0;
+                bool exited = WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0;
+                if (Report(reported))
+                    Log("Evaluate %s%s", answer == HelperProcess::Answer::None ? "got no answer" : "failed", exited ? ", the helper exited" : "");
+                // The copy of the output waits on the GPU for a value nobody will signal now
+                if (answer == HelperProcess::Answer::None)
+                    bridge->SignalFromCpu(pendingOutputValue);
+                if (exited)
+                {
+                    Fail();
+                    return false;
+                }
+                configureFailed = true;
+                if (answer == HelperProcess::Answer::None)
+                    return false;
+            }
+        }
+
         auto backendId = static_cast<uint32_t>(backend);
         auto flags = frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u;
         if (bridge->wine)
@@ -1359,7 +1430,16 @@ export namespace Upscaler
         shared.Sharpness = frame.Sharpness;
         shared.Reset = frame.Reset ? 1 : 0;
 
-        // The helper answers once its GPU work, which signals outputValue, has been submitted
+        // Synchronized on the GPU: the copy of the output waits there for outputValue, and the answer is collected
+        // next frame
+        if (!bridge->WaitOnCpu())
+        {
+            helper.Post(Protocol::Command::Evaluate);
+            pendingOutputValue = outputValue;
+            return bridge->SubmitOutput(frame.Output, outputValue);
+        }
+
+        // On the CPU: the helper answers once its GPU work, which signals outputValue, has finished
         if (!helper.Request(Protocol::Command::Evaluate, 500))
         {
             static uint32_t reported = 0;
