@@ -13,18 +13,19 @@
 // back. The helper answers Evaluate after its GPU work is submitted, so the game never waits on the GPU
 // for a value that nobody will signal.
 //
-// Under Wine (ConfigureFlags::CpuSync) there is no shared fence: Wine can't import a D3D12 fence of another
-// process (it crashes the importer). The game waits for its copies into the shared textures on the CPU before
-// Evaluate, and the helper answers Evaluate once its GPU work has finished. The shared textures have no UAV
-// flag there, and the game imports them as opaque Win32 handles, which every Wine supports. Only textures can
-// be shared: vkd3d-proton gives a buffer an empty handle.
+// Under Wine (ConfigureFlags::Wine) the shared textures have no UAV flag, and the game imports them as opaque
+// Win32 handles, which every Wine supports. Only textures can be shared: vkd3d-proton gives a buffer an empty
+// handle. Wine can't import a D3D12 fence of another process (it crashes the importer), so the game shares a
+// Vulkan timeline semaphore of its own instead (ConfigureFlags::GameFence), which the helper opens as its fence.
+// Where the helper can't open it (older Proton), it clears GameFence in Flags, and then both sides wait for their
+// GPU work on the CPU: the game for its copies before Evaluate, the helper before it answers Evaluate.
 
 #include <cstdint>
 #include <cstddef>
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 5;
+    constexpr uint32_t Version = 6;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -68,7 +69,8 @@ namespace UpscalerProtocol
     namespace ConfigureFlags
     {
         constexpr uint32_t ReactiveMask = 1 << 0;   // Reactive is written every frame and used by FSR
-        constexpr uint32_t CpuSync = 1 << 1;        // Wine: no shared fence, both sides wait for their GPU work
+        constexpr uint32_t Wine = 1 << 1;           // textures without the UAV flag, for opaque handles
+        constexpr uint32_t GameFence = 1 << 2;      // FenceHandle is the game's semaphore; cleared by the helper if it can't open it
     }
 
 #pragma pack(push, 8)
@@ -98,7 +100,7 @@ namespace UpscalerProtocol
         uint32_t Width;
         uint32_t Height;
         uint32_t DLSSPreset;          // NVSDK_NGX_DLSS_Hint_Render_Preset, 0 is the default
-        uint32_t Flags;               // ConfigureFlags
+        uint32_t Flags;               // ConfigureFlags, GameFence cleared by the helper when it falls back to the CPU
         uint32_t OutputWidth;         // upscaled size, Width x Height or larger
         uint32_t OutputHeight;
         uint32_t Reserved;
@@ -124,7 +126,7 @@ namespace UpscalerProtocol
         // Configure results, handles already duplicated into the game process
         uint64_t TextureHandles[static_cast<size_t>(Texture::Count)];
         uint64_t TextureSizes[static_cast<size_t>(Texture::Count)];
-        uint64_t FenceHandle;         // 0 with CpuSync
+        uint64_t FenceHandle;         // the helper's fence; with GameFence, the game's semaphore duplicated into the helper
     };
 #pragma pack(pop)
 

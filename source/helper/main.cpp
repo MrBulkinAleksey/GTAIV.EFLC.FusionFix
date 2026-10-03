@@ -136,9 +136,10 @@ namespace
         std::array<SharedTexture, static_cast<size_t>(Protocol::Texture::Count)> textures;
         HANDLE sharedFenceHandle = nullptr;
 
-        // Wine: no shared fence, the GPU work is waited for on the CPU (see the protocol). The shared textures have
-        // no UAV flag, which keeps them plain for the game's Vulkan import: the upscaler writes into outputUav, which
-        // is copied into the shared output.
+        // Wine (see the protocol): the shared textures have no UAV flag, which keeps them plain for the game's Vulkan
+        // import, the upscaler writes into outputUav, which is copied into the shared output. sharedFence is then the
+        // game's semaphore, or without it (cpuSync) the GPU work is waited for on the CPU.
+        bool wine = false;
         bool cpuSync = false;
         ComPtr<ID3D12Resource> outputUav;
 
@@ -274,7 +275,7 @@ namespace
             desc.Format = format;
             desc.SampleDesc.Count = 1;
             desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            desc.Flags = unorderedAccess && !cpuSync ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
+            desc.Flags = unorderedAccess && !wine ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
 
             auto& texture = textures[static_cast<size_t>(index)];
             if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_SHARED, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&texture.resource))))
@@ -283,7 +284,7 @@ namespace
             if (FAILED(device->CreateSharedHandle(texture.resource.Get(), nullptr, GENERIC_ALL, nullptr, &texture.handle)) || !texture.handle)
                 return false;
 
-            if (cpuSync && unorderedAccess)
+            if (wine && unorderedAccess)
             {
                 desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
                 if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&outputUav))))
@@ -333,7 +334,7 @@ namespace
         // What the upscaler reads and writes
         ID3D12Resource* Texture(Protocol::Texture index)
         {
-            if (cpuSync && index == Protocol::Texture::Output)
+            if (wine && index == Protocol::Texture::Output)
                 return outputUav.Get();
             return textures[static_cast<size_t>(index)].resource.Get();
         }
@@ -729,6 +730,37 @@ namespace
             return true;
         }
 
+        // Wine: the game's timeline semaphore, duplicated into this process, as the shared fence. Without it GameFence
+        // is cleared in the answer and both sides wait on the CPU.
+        void OpenGameFence()
+        {
+            auto& shared = *connection.shared;
+            auto handle = reinterpret_cast<HANDLE>(shared.FenceHandle);
+            shared.FenceHandle = 0;
+            if (!(flags & Protocol::ConfigureFlags::GameFence))
+            {
+                if (handle)
+                    CloseHandle(handle);
+                return;
+            }
+
+            ComPtr<ID3D12Fence> fence;
+            auto hr = handle ? device.device->OpenSharedHandle(handle, IID_PPV_ARGS(&fence)) : E_INVALIDARG;
+            if (handle)
+                CloseHandle(handle);
+            if (SUCCEEDED(hr) && fence)
+            {
+                device.sharedFence = fence;
+                Log("The game's semaphore is the shared fence");
+            }
+            else
+            {
+                flags &= ~Protocol::ConfigureFlags::GameFence;
+                Log("The game's semaphore could not be opened (0x%08X): waiting on the CPU", static_cast<uint32_t>(hr));
+            }
+            shared.Flags = flags;
+        }
+
         bool Configure()
         {
             auto& shared = *connection.shared;
@@ -744,10 +776,12 @@ namespace
             outputWidth = shared.OutputWidth ? shared.OutputWidth : width;
             outputHeight = shared.OutputHeight ? shared.OutputHeight : height;
             Log("Configure %s at %ux%u -> %ux%u%s", shared.ConfigureBackend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height,
-                outputWidth, outputHeight, (flags & Protocol::ConfigureFlags::CpuSync) ? ", synchronized on the CPU" : "");
+                outputWidth, outputHeight, (flags & Protocol::ConfigureFlags::Wine) ? ", Wine" : "");
             if (width == 0 || height == 0 || outputWidth > 16384 || outputHeight > 16384 || outputWidth < width || outputHeight < height)
                 return false;
-            device.cpuSync = (flags & Protocol::ConfigureFlags::CpuSync) != 0;
+            device.wine = (flags & Protocol::ConfigureFlags::Wine) != 0;
+            OpenGameFence();
+            device.cpuSync = device.wine && !(flags & Protocol::ConfigureFlags::GameFence);
 
             using T = Protocol::Texture;
             if (!device.CreateTexture(T::Color, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, false) ||
@@ -755,7 +789,7 @@ namespace
                 !device.CreateTexture(T::Motion, width, height, DXGI_FORMAT_R16G16_FLOAT, false) ||
                 !device.CreateTexture(T::Reactive, width, height, DXGI_FORMAT_R16_FLOAT, false) ||
                 !device.CreateTexture(T::Output, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, true) ||
-                (!device.cpuSync && !device.CreateSharedFence()))
+                (!device.wine && !device.CreateSharedFence()))
             {
                 connection.Message("Shared textures could not be created");
                 return false;
@@ -786,7 +820,7 @@ namespace
                     return false;
             }
             shared.FenceHandle = 0;
-            if (!device.cpuSync && !Duplicate(device.sharedFenceHandle, shared.FenceHandle))
+            if (!device.wine && !Duplicate(device.sharedFenceHandle, shared.FenceHandle))
                 return false;
 
             backend = shared.ConfigureBackend;
@@ -822,12 +856,12 @@ namespace
             bool evaluated = backend == Protocol::Backend::DLSS ? dlss.Evaluate(cmd, device, frame) : fsr.Evaluate(cmd, device, frame);
             device.Transition(cmd, false);
 
+            if (device.wine)
+                device.CopyOutput(cmd);
+
             // Answered once the output is in the shared texture
             if (device.cpuSync)
-            {
-                device.CopyOutput(cmd);
                 return device.SubmitFrameAndWait() && evaluated;
-            }
 
             // The fence always advances, so the game can rely on the values it waits for
             device.SubmitFrame(shared.WaitValue, shared.SignalValue, evaluated);

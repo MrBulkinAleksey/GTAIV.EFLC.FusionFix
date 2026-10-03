@@ -103,11 +103,15 @@ namespace
         uint32_t height = 0;
         uint32_t outputWidth = 0;
         uint32_t outputHeight = 0;
-        bool cpuSync = false;         // ConfigureFlags::CpuSync
+        bool wine = false;            // ConfigureFlags::Wine
+        bool gameFence = false;       // Wine: the helper opened the game's semaphore, else both sides wait on the CPU
 
         virtual ~Bridge() = default;
+        // Wine: a semaphore of the game for the helper's fence, its handle duplicated into the helper. Before Configure.
+        virtual bool PrepareGameFence(Protocol::Shared& shared, HANDLE helperProcess) { return false; }
         // Opens the shared textures and the fence of a configuration, and closes their handles
         virtual bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) = 0;
+        bool WaitOnCpu() const { return wine && !gameFence; }
         virtual void ReleaseImports() = 0;
         // Game textures -> shared textures, then the fence reaches signalValue. Null inputs are skipped.
         virtual bool SubmitInputs(IDirect3DTexture9* const (&inputs)[InputCount], uint64_t signalValue) = 0;
@@ -130,6 +134,7 @@ namespace
         PFN_vkCreateSemaphore vkCreateSemaphore = nullptr;
         PFN_vkDestroySemaphore vkDestroySemaphore = nullptr;
         PFN_vkImportSemaphoreWin32HandleKHR vkImportSemaphoreWin32HandleKHR = nullptr;
+        PFN_vkGetSemaphoreWin32HandleKHR vkGetSemaphoreWin32HandleKHR = nullptr;   // optional, for the game's semaphore under Wine
         PFN_vkCreateCommandPool vkCreateCommandPool = nullptr;
         PFN_vkAllocateCommandBuffers vkAllocateCommandBuffers = nullptr;
         PFN_vkBeginCommandBuffer vkBeginCommandBuffer = nullptr;
@@ -172,6 +177,7 @@ namespace
             LOAD_DEVICE(vkCreateSemaphore);
             LOAD_DEVICE(vkDestroySemaphore);
             LOAD_DEVICE(vkImportSemaphoreWin32HandleKHR);
+            LOAD_DEVICE(vkGetSemaphoreWin32HandleKHR);
             LOAD_DEVICE(vkCreateCommandPool);
             LOAD_DEVICE(vkAllocateCommandBuffers);
             LOAD_DEVICE(vkBeginCommandBuffer);
@@ -302,7 +308,7 @@ namespace
                 return false;
             std::memcpy(&luid, id.deviceLUID, sizeof(luid));
             vendorId = properties.properties.vendorID;
-            cpuSync = IsWine();
+            wine = IsWine();
 
             VkCommandPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
             poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -359,7 +365,7 @@ namespace
         // and every winevulkan imports; the image then has the usage vkd3d-proton gives a texture without flags.
         bool ImportImage(SharedImage& target, HANDLE handle, VkFormat format, uint32_t w, uint32_t h)
         {
-            auto handleType = cpuSync ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT : VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
+            auto handleType = wine ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT : VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
             VkExternalMemoryImageCreateInfo external{ VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO };
             external.handleTypes = handleType;
 
@@ -372,7 +378,7 @@ namespace
             info.arrayLayers = 1;
             info.samples = VK_SAMPLE_COUNT_1_BIT;
             info.tiling = VK_IMAGE_TILING_OPTIMAL;
-            info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | (cpuSync ? VK_IMAGE_USAGE_SAMPLED_BIT : 0);
+            info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | (wine ? VK_IMAGE_USAGE_SAMPLED_BIT : 0);
             info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             if (auto vr = vk.vkCreateImage(device, &info, nullptr, &target.image); vr != VK_SUCCESS)
@@ -387,7 +393,7 @@ namespace
 
             // Opaque handles have no handle properties: the exporter's memory is plain device local memory
             auto types = requirements.memoryTypeBits;
-            if (!cpuSync)
+            if (!wine)
             {
                 VkMemoryWin32HandlePropertiesKHR handleProperties{ VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR };
                 if (auto vr = vk.vkGetMemoryWin32HandlePropertiesKHR(device, handleType, handle, &handleProperties); vr != VK_SUCCESS)
@@ -443,10 +449,45 @@ namespace
             return true;
         }
 
+        bool PrepareGameFence(Protocol::Shared& shared, HANDLE helperProcess) override
+        {
+            if (!wine || !vk.vkGetSemaphoreWin32HandleKHR || !helperProcess)
+                return false;
+
+            VkExportSemaphoreCreateInfo exportInfo{ VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO };
+            exportInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+            VkSemaphoreTypeCreateInfo type{ VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
+            type.pNext = &exportInfo;
+            type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+            VkSemaphoreCreateInfo info{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+            info.pNext = &type;
+            if (auto vr = vk.vkCreateSemaphore(device, &info, nullptr, &semaphore); vr != VK_SUCCESS)
+            {
+                Log("game fence: vkCreateSemaphore %d", vr);
+                semaphore = VK_NULL_HANDLE;
+                return false;
+            }
+
+            HANDLE handle = nullptr;
+            VkSemaphoreGetWin32HandleInfoKHR get{ VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR };
+            get.semaphore = semaphore;
+            get.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+            HANDLE duplicate = nullptr;
+            if (auto vr = vk.vkGetSemaphoreWin32HandleKHR(device, &get, &handle); vr != VK_SUCCESS || !handle ||
+                !DuplicateHandle(GetCurrentProcess(), handle, helperProcess, &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE))
+            {
+                Log("game fence: the semaphore could not be shared (%d, handle %p)", vr, handle);
+                vk.vkDestroySemaphore(device, semaphore, nullptr);
+                semaphore = VK_NULL_HANDLE;
+                return false;
+            }
+            shared.FenceHandle = reinterpret_cast<uint64_t>(duplicate);
+            return true;
+        }
+
+        // Evaluate released the previous imports before the helper's Configure
         bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
         {
-            ReleaseImports();
-
             bool ok = true;
             for (size_t i = 0; i < images.size(); ++i)
             {
@@ -462,9 +503,14 @@ namespace
             }
 
             auto fenceHandle = reinterpret_cast<HANDLE>(shared.FenceHandle);
-            if (ok && cpuSync)
+            if (ok && wine)
             {
-                // Synchronized on the CPU
+                // The game's own semaphore, or without it the CPU waits
+                if (!gameFence && semaphore)
+                {
+                    vk.vkDestroySemaphore(device, semaphore, nullptr);
+                    semaphore = VK_NULL_HANDLE;
+                }
             }
             else if (ok && fenceHandle)
             {
@@ -599,7 +645,7 @@ namespace
 
             // Everything the game rendered so far must reach the queue first
             interop->FlushRenderingCommands();
-            if (!cpuSync)
+            if (!WaitOnCpu())
                 return Submit(cmd, VK_NULL_HANDLE, 0, signalValue, VK_NULL_HANDLE);
 
             // Wine: done before the helper is asked to read them
@@ -649,7 +695,7 @@ namespace
             vk.vkEndCommandBuffer(cmd);
 
             // Wine: the helper answered Evaluate once the output was ready
-            if (!Submit(cmd, cpuSync ? VK_NULL_HANDLE : semaphore, cpuSync ? 0 : waitValue, 0, s.fence))
+            if (!Submit(cmd, WaitOnCpu() ? VK_NULL_HANDLE : semaphore, WaitOnCpu() ? 0 : waitValue, 0, s.fence))
                 return false;
             s.submitted = true;
             return true;
@@ -818,8 +864,6 @@ namespace
 
         bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
         {
-            ReleaseImports();
-
             bool ok = true;
             for (size_t i = 0; i < images.size(); ++i)
             {
@@ -1181,7 +1225,7 @@ export namespace Upscaler
                 Log("Neither DXVK nor D3D9on12 could share textures with the helper");
                 return;
             }
-            Log("%s, GPU vendor %04x%s", bridge == &dxvkBridge ? "DXVK" : "D3D9on12", bridge->vendorId, bridge->cpuSync ? ", Wine: synchronized on the CPU" : "");
+            Log("%s, GPU vendor %04x%s", bridge == &dxvkBridge ? "DXVK" : "D3D9on12", bridge->vendorId, bridge->wine ? ", Wine" : "");
 
             // Nothing to offer: neither an NVIDIA GPU nor AMD's FidelityFX runtime
             if (bridge->vendorId != 0x10DE && !FidelityFXPresent())
@@ -1223,8 +1267,8 @@ export namespace Upscaler
 
         auto backendId = static_cast<uint32_t>(backend);
         auto flags = frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u;
-        if (bridge->cpuSync)
-            flags |= Protocol::ConfigureFlags::CpuSync;
+        if (bridge->wine)
+            flags |= Protocol::ConfigureFlags::Wine;
         auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
         auto outputHeight = frame.OutputHeight ? frame.OutputHeight : frame.Height;
         bool reconfigure = configuredBackend != backendId || configuredWidth != frame.Width || configuredHeight != frame.Height ||
@@ -1250,6 +1294,9 @@ export namespace Upscaler
             shared.OutputHeight = outputHeight;
             shared.DLSSPreset = frame.DLSSPreset;
             shared.Flags = flags;
+            shared.FenceHandle = 0;
+            if (bridge->PrepareGameFence(shared, helper.process))
+                shared.Flags |= Protocol::ConfigureFlags::GameFence;
             if (!helper.Request(Protocol::Command::Configure, 15000))
             {
                 bool exited = WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0;
@@ -1259,6 +1306,9 @@ export namespace Upscaler
                     Fail();
                 return false;
             }
+            bridge->gameFence = (shared.Flags & Protocol::ConfigureFlags::GameFence) != 0;
+            if (bridge->wine)
+                Log("Synchronization: %s", bridge->gameFence ? "the game's semaphore, on the GPU" : "on the CPU");
             if (!bridge->Import(shared, frame.Width, frame.Height, outputWidth, outputHeight))
             {
                 Log("Configure %ux%u -> %ux%u: the shared resources could not be imported", frame.Width, frame.Height, outputWidth, outputHeight);
