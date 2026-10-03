@@ -1457,8 +1457,26 @@ namespace SSRTrace
                 t->Release();
             }
         }
+        // Whether a texture set now takes: one set on s15 and read back, then put back.
+        const char* takes = "?";
+        if (rtTexture || R.SSRHistoryTex)
+        {
+            IDirect3DBaseTexture9* old15 = nullptr;
+            pDevice->GetTexture(15, &old15);
+            IDirect3DBaseTexture9* probe = R.SSRHistoryTex ? R.SSRHistoryTex->mD3DTexture : rtTexture;
+            if (probe == old15)
+                probe = nullptr;
+            pDevice->SetTexture(15, probe);
+            IDirect3DBaseTexture9* now15 = nullptr;
+            pDevice->GetTexture(15, &now15);
+            takes = now15 == probe ? "yes" : "NO";
+            SAFE_RELEASE(now15);
+            pDevice->SetTexture(15, old15);
+            SAFE_RELEASE(old15);
+        }
         IDirect3DPixelShader9* ps = nullptr;
         pDevice->GetPixelShader(&ps);
+        Line("  set texture takes: %s", takes);
         Line("  state %s: target %s view %ux%u+%u+%u write %x blend %u (%u,%u) test %u scissor %u (%d,%d,%d,%d) stencil %u z %u srgb %u sepalpha %u ps %p;%s",
             what, TextureName(rtTexture).c_str(), unsigned(view.Width), unsigned(view.Height), unsigned(view.X), unsigned(view.Y),
             unsigned(v[0]), unsigned(v[1]), unsigned(v[2]), unsigned(v[3]), unsigned(v[4]), unsigned(v[5]), int(scissor.left), int(scissor.top),
@@ -3214,8 +3232,11 @@ private:
                     pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
                 }
 
+            // D3DX saving the state it changes, through state blocks, left the smoothing and the
+            // accumulation in play drawing with what the game had bound: the textures they set
+            // did not take. This function saves and puts back what the passes touch itself.
             effect->SetTechnique(h.techSSR);
-            effect->Begin(&passes, 0);
+            effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
         }
         {
             // The march, the guess for its misses (skipped while ScreenSpaceReflectionsFallback is
@@ -3276,7 +3297,7 @@ private:
             effect->SetFloat(h.fDenoiseSSROnly, 1.0f);
             pDevice->SetRenderTarget(0, denoisedSurf);
             effect->SetTechnique(h.techSSRDenoise);
-            const HRESULT beginHr = effect->Begin(&passes, 0);
+            const HRESULT beginHr = effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
             const HRESULT passHr = effect->BeginPass(0);
             effect->CommitChanges();
             BindEffectSamplers(pDevice, effect);
@@ -3315,7 +3336,7 @@ private:
             }
             pDevice->SetRenderTarget(0, R.SSRAccumSurf[sizeIndex][next]);
             effect->SetTechnique(h.techSSRTemporal);
-            effect->Begin(&passes, 0);
+            effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
             effect->BeginPass(0);
             effect->CommitChanges();
             BindEffectSamplers(pDevice, effect);
@@ -3352,7 +3373,7 @@ private:
 
             pDevice->SetRenderTarget(0, R.SSRDebugSurf);
             effect->SetTechnique(h.techSSRDebug);
-            effect->Begin(&passes, 0);
+            effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
             effect->BeginPass(0);
             effect->CommitChanges();
             BindEffectSamplers(pDevice, effect);
