@@ -468,6 +468,9 @@ public:
         static inline SafetyHookInline hook{};
         static int __fastcall AddToDrawList(void* entity, void* edx, int a2, int a3, int a4, int a5)
         {
+            if (bBuildingSceneList && CRenderPhaseDeferredLighting_SceneToGBuffer::SkipEntity &&
+                CRenderPhaseDeferredLighting_SceneToGBuffer::SkipEntity(entity))
+                return 0;
             if (!bBuildingSceneList || !bObjectMotionVectors)
                 return hook.unsafe_thiscall<int>(entity, a2, a3, a4, a5);
 
