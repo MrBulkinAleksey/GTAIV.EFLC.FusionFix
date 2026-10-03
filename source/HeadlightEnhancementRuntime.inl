@@ -20,6 +20,8 @@ namespace HeadlightEnhancement
     static const float* pRadiusBonus = nullptr;
     static const float* pRadiusBase = nullptr;
     static std::string lightModesStatus = "off in the ini";
+    static std::string shadowOriginStatus = "off in the ini";
+    static std::atomic<uint32_t> shadowOriginsMoved{0}, shadowOriginCachesDropped{0};
     static std::string offscreenLightsStatus = "off in the ini";
     static fusionfix::DiagnosticsLog log;
 
@@ -119,6 +121,9 @@ namespace HeadlightEnhancement
                 << "\nbrightnessStatus=" << brightnessStatus
                 << "\nretainedSubmissions=" << retainedSubmissions.load()
                 << "\nlightModesStatus=" << lightModesStatus
+                << "\nshadowOriginStatus=" << shadowOriginStatus
+                << "\nshadowOriginsMoved=" << shadowOriginsMoved.load()
+                << "\nshadowOriginCachesDropped=" << shadowOriginCachesDropped.load()
                 << "\noffscreenLightsStatus=" << offscreenLightsStatus
                 << "\ntrackedVehicle=" << (PlayerCar::Last() != 0) << '\n';
         });
@@ -278,6 +283,115 @@ namespace HeadlightEnhancement
         lightModeApplyHook = safetyhook::create_mid(imageBase + 0x643867, ApplyLightMode);
         highBeamTimeoutHook = safetyhook::create_mid(imageBase + 0x63F886, KeepForcedHighBeams);
         lightModesStatus = lightModeHook && lightModeApplyHook && highBeamTimeoutHook ? "installed" : "hook failed";
+    }
+
+    // Both lit lamps of a car make one beam from the point between them (CE 0xA3FCA5: the two
+    // lamp bones averaged, then 0xA3E070), and its shadow is drawn from there too, so a hand by
+    // one lamp, a few centimetres from that point, took up half of what it sees and cut away
+    // half of the beam with a hard edge down the middle. Sliding the beam (191e631, dropped) or
+    // only its shadow (c49f045) towards the lamp on the player's side moved the cut to the other
+    // side of the hand: anything right by the point a shadow is drawn from cuts it in half.
+    // The shadow of every car's headlights is now drawn from further back along the beam, inside
+    // the car, so a hand at a lamp is that far from it and casts a shadow of its own size, while
+    // things further out are hardly shadowed differently. The light stays where it is: the shadow
+    // selection copies the light's position into its slot (0x92810D, slots at 0x119F100 +
+    // n * 0x110, position at +0xC0, direction at +0xD0, radius at +0xE0), and both the shadow map
+    // (0xD784C6 -> 0x925070 / 0x924E50, the paraboloid matrices at +0x40) and the lighting's
+    // lookup of it are built from the slot, while the light is lit from its own position.
+    static float shadowOriginBack = 0.0f;
+    static SafetyHookMid shadowOriginHook;
+
+    // A slot moved last time and not filled anew since (the selection skips frames, leaving its
+    // slots as they were) still holds the moved position and radius, so it moves from those it
+    // had before.
+    struct MovedSlot
+    {
+        uint32_t key = 0;
+        float base[4]{}; // position, radius
+        float moved[4]{};
+    };
+    static std::array<MovedSlot, 8> movedSlots{};
+
+    static bool IsHeadlightBeam(uint32_t key)
+    {
+        const auto lights = *reinterpret_cast<const rage::CLightSource* const*>(imageBase + 0xC3EED8);
+        const auto count = *reinterpret_cast<const uint32_t*>(imageBase + 0x110E240);
+        if (!lights) return false;
+        constexpr uint32_t beam = rage::LF_VEHICLE | rage::LF_DYNAMIC_SHADOW;
+        for (uint32_t i = 0; i < count && i < 0x280; ++i)
+            if (static_cast<uint32_t>(lights[i].mCastShadows) == key)
+                return lights[i].mType == rage::LT_SPOT && (lights[i].mFlags & beam) == beam;
+        return false;
+    }
+
+    // At the end of the shadow selection (CE 0x9280C1, also where it leaves early on the frames
+    // it skips). The cached map of the static scene a slot may start from was drawn from the
+    // light's own position and would not match, so a moved slot draws without it (0x925BD0
+    // clears the map instead) and draws the static scene itself.
+    static void MoveShadowOrigins(SafetyHookContext&)
+    {
+        for (uint32_t n = 1; n < 8; ++n)
+        {
+            const auto slot = imageBase + 0xD9F100 + n * 0x110;
+            auto position = reinterpret_cast<float*>(slot + 0xC0);
+            auto& radius = *reinterpret_cast<float*>(slot + 0xE0);
+            const auto direction = reinterpret_cast<const float*>(slot + 0xD0);
+            const auto key = *reinterpret_cast<const uint32_t*>(slot + 0xF8);
+            const bool active = *reinterpret_cast<const uint8_t*>(slot + 0xED) != 0;
+            auto& moved = movedSlots[n];
+            float base[4] = { position[0], position[1], position[2], radius };
+            const float now[4] = { position[0], position[1], position[2], radius };
+            if (moved.key && moved.key == key && !std::memcmp(now, moved.moved, sizeof(now)))
+                std::copy(std::begin(moved.base), std::end(moved.base), base);
+            moved = {};
+            if (!active || !key || !IsHeadlightBeam(key))
+            {
+                std::copy(base, base + 3, position);
+                radius = base[3];
+                continue;
+            }
+            for (int i = 0; i < 3; ++i)
+                position[i] = base[i] - direction[i] * shadowOriginBack;
+            radius = base[3] + shadowOriginBack;
+            moved.key = key;
+            std::copy(std::begin(base), std::end(base), moved.base);
+            std::copy(position, position + 3, moved.moved);
+            moved.moved[3] = radius;
+            auto& cache = *reinterpret_cast<int32_t*>(slot + 0xF0);
+            if (cache != -1)
+            {
+                cache = -1;
+                ++shadowOriginCachesDropped;
+            }
+            ++shadowOriginsMoved;
+        }
+    }
+
+    static void InstallShadowOrigin(float back)
+    {
+        if (!(back > 0.0f)) return;
+        shadowOriginBack = back;
+        // mov [esi-8], eax (the slot's position from the light's) at 0x92810D, the slots' bounds
+        // at 0x928065 and 0x9280B9, the light list at 0x92807C, and mov ecx, [esp+BC] where the
+        // selection ends
+        const auto check = CodeCheck()
+            .Bytes(0x52810D, {0x89,0x46,0xF8}).Bytes(0x528065, {0xBE}).Address(0x528066, 0xD9F2D8)
+            .Bytes(0x5280B9, {0x81,0xFE}).Address(0x5280BB, 0xD9FA48)
+            .Bytes(0x52807C, {0x8B,0x0D}).Address(0x52807E, 0xC3EED8)
+            .Bytes(0x5280C1, {0x8B,0x8C,0x24,0xBC,0x00,0x00,0x00});
+        if (!check)
+        {
+            shadowOriginStatus = check.Status();
+            return;
+        }
+        auto hook = safetyhook::MidHook::create(imageBase + 0x5280C1, MoveShadowOrigins);
+        if (!hook)
+        {
+            shadowOriginStatus = "hook failed";
+            return;
+        }
+        shadowOriginHook = std::move(*hook);
+        shadowOriginStatus = "installed";
     }
 
     // A car's lights, its headlight beams among them, are only made while the car was seen by one
