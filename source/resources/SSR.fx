@@ -672,11 +672,8 @@ float SSRSurfaceWeight(float2 uv)
 // Taps on something well nearer the camera than the reflecting surface, the player standing
 // in front of the car, are left out, so the guess takes the road around him and not him;
 // judged against the point itself, the road it lies under was left out too. weight is 0 where it does not
-// apply: above the horizon, where the game's own map shows the sky, and for rays that passed
-// behind nothing nearer than the surface on their way. Those found nothing because what they
-// would reach is off the screen or out of their range, not hidden; filling every such miss
-// with the blurred guess put a dull smear of the road in place of reflections all over car
-// bodies, while the game's own map, faded by the horizon, had shown more there.
+// apply: above the horizon, where the game's own map shows the sky. SSR_PS takes it only for
+// rays that found next to nothing, see there.
 float3 ScreenFallback(float3 C, float3 R, out float weight)
 {
     float3 Rw = R.x * vec4WaterToView[0].xyz + R.y * vec4WaterToView[1].xyz + R.z * vec4WaterToView[2].xyz;
@@ -753,12 +750,6 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
             return clamp(c * 0.2, 0.0, HISTORY_CLAMP) * SSR_SCALE;
         }
     }
-    if (!behind)
-    {
-        weight = 0.0;
-        return 0.0;
-    }
-
     // Rings of taps further and further out, until enough of them show the road: the player
     // covering the door covers a good part of the screen around where its rays look, and the
     // nearest ring alone found nothing but him, leaving the door black.
@@ -833,12 +824,20 @@ float4 SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return hit;
 }
 
+// Only rays that found next to nothing take the guess, fully at confidence 0 and not at all
+// from kFallbackBelow up. The rest leave a hole without it: the game's own map, which shows only
+// the sky, a dark rim around what the car reflects at night and dark grain on its doors. A hit
+// faded only part of the way, at the screen's edge or by distance, keeps its own colour over the
+// game's map: filled up with the blurred guess, it took on its dullness, and reflections all over
+// car bodies looked much weaker.
+static const float kFallbackBelow = 0.25;
+
 // The blurred guess for where SSRTrace_PS's ray in SSRResultTex found little or nothing, and its
 // weight; 0 where it does not apply. It follows the ray's path on the screen, which
 // SetupReflectionRay works out again.
 float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
-    if (SSRSurfaceWeight(uv) <= 0.0 || tex2Dlod(SSRResultTex, float4(uv, 0, 0)).z >= 1.0)
+    if (SSRSurfaceWeight(uv) <= 0.0 || tex2Dlod(SSRResultTex, float4(uv, 0, 0)).z >= kFallbackBelow)
         return 0.0;
     float3 n;
     float3 C = SSRSurface(uv, vPos, n);
@@ -850,7 +849,7 @@ float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 }
 
 // The reflection from SSRTrace_PS's hit in SSRResultTex, SSRFallback_PS's guess in
-// SSRFallbackTex filling in where the ray found little or nothing (premultiplied).
+// SSRFallbackTex filling in where the ray found next to nothing (premultiplied).
 float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     float wetOnly;
@@ -866,7 +865,7 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     if (fFallback > 0.0 && r.a < 1.0)
     {
         float4 fallback = tex2Dlod(SSRFallbackTex, float4(uv, 0, 0));
-        float fill = fallback.a * (1.0 - r.a);
+        float fill = fallback.a * (1.0 - r.a) * saturate(1.0 - r.a / kFallbackBelow);
         float a = r.a + fill;
         r.rgb = a > 1e-4 ? (r.rgb * r.a + fallback.rgb * fill) / a : 0.0;
         r.a = a;
