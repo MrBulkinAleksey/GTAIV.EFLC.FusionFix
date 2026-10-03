@@ -266,7 +266,7 @@ public:
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY;
         D3DXHANDLE techSSR, techSSRWater;
-        D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal;
+        D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
         D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
@@ -444,6 +444,14 @@ public:
     IDirect3DSurface9* SSRHalfSurf = nullptr;
     rage::grcRenderTargetPC* SSRHalfDenoisedTex = nullptr;
     IDirect3DSurface9* SSRHalfDenoisedSurf = nullptr;
+    // The passes of SSR before its result (technique SSR in SSR.fx), at full [0] and half [1]
+    // resolution: the hits of the march, in 16 bits fixed point as they hold where to read the
+    // history, which half floats put up to a pixel off at 4K, and the blurred guess for the
+    // misses.
+    rage::grcRenderTargetPC* SSRTraceTex[2] = {};
+    IDirect3DSurface9* SSRTraceSurf[2] = {};
+    rage::grcRenderTargetPC* SSRFallbackTex[2] = {};
+    IDirect3DSurface9* SSRFallbackSurf[2] = {};
     // Accumulation over frames (SSRTemporal_PS in SSR.fx): each frame blends the smoothed
     // result with the previous accumulation into the other target of a pair, one pair per
     // resolution. ScreenSpaceReflectionsTemporal is the share of the history kept, 0 turns
@@ -970,6 +978,7 @@ public:
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
                 h.SSRAccumTex2D = SSREffect->GetParameterByName(nullptr, "SSRAccumTex2D");
+                h.SSRFallbackTex2D = SSREffect->GetParameterByName(nullptr, "SSRFallbackTex2D");
                 h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
                 h.techSSRTemporal = SSREffect->GetTechniqueByName("SSRTemporal");
                 h.MotionTex2D = SSREffect->GetParameterByName(nullptr, "MotionTex2D");
@@ -1353,7 +1362,13 @@ private:
         PostFxResources.bSSRDenoised = false;
         SAFE_RELEASE(PostFxResources.SSRHalfSurf);
         SAFE_RELEASE(PostFxResources.SSRHalfDenoisedSurf);
-        for (auto* rt : { &PostFxResources.SSRHalfTex, &PostFxResources.SSRHalfDenoisedTex })
+        for (int i = 0; i < 2; ++i)
+        {
+            SAFE_RELEASE(PostFxResources.SSRTraceSurf[i]);
+            SAFE_RELEASE(PostFxResources.SSRFallbackSurf[i]);
+        }
+        for (auto* rt : { &PostFxResources.SSRHalfTex, &PostFxResources.SSRHalfDenoisedTex, &PostFxResources.SSRTraceTex[0],
+                          &PostFxResources.SSRTraceTex[1], &PostFxResources.SSRFallbackTex[0], &PostFxResources.SSRFallbackTex[1] })
         {
             if (*rt)
             {
@@ -1607,6 +1622,28 @@ private:
 
             PostFxResources.SSRHalfTex = rage::CreateEmptyRenderTarget("SSRHalfTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfSurf);
             PostFxResources.SSRHalfDenoisedTex = rage::CreateEmptyRenderTarget("SSRHalfDenoisedTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfDenoisedSurf);
+            {
+                static const char* fallbackNames[2] = { "SSRFallbackTex", "SSRHalfFallbackTex" };
+                static const char* traceNames[2] = { "SSRTraceTex", "SSRHalfTraceTex" };
+                for (int half = 0; half < 2; ++half)
+                {
+                    const auto w = half ? width / 2 : width, hgt = half ? height / 2 : height;
+                    PostFxResources.SSRFallbackTex[half] = rage::CreateEmptyRenderTarget(fallbackNames[half], w, hgt, 64, aoDesc,
+                        PostFxResources.SSRFallbackSurf[half]);
+                    auto traceDesc = aoDesc;
+                    traceDesc.mFormat = rage::GRCFMT_A16B16G16R16;
+                    PostFxResources.SSRTraceTex[half] = rage::CreateEmptyRenderTarget(traceNames[half], w, hgt, 64, traceDesc,
+                        PostFxResources.SSRTraceSurf[half]);
+                    // Half floats where the card has no 16 bit fixed point target.
+                    if (!PostFxResources.SSRTraceSurf[half])
+                    {
+                        if (PostFxResources.SSRTraceTex[half])
+                            PostFxResources.SSRTraceTex[half]->Destroy();
+                        PostFxResources.SSRTraceTex[half] = rage::CreateEmptyRenderTarget(traceNames[half], w, hgt, 64, aoDesc,
+                            PostFxResources.SSRTraceSurf[half]);
+                    }
+                }
+            }
 
             PostFxResources.ContactRawTex = rage::CreateEmptyRenderTarget("ContactShadowRawTex", width, height, 64, aoDesc, PostFxResources.ContactRawSurf);
             if (PostFxResources.bContactShadowsHalfRes)
@@ -2763,7 +2800,8 @@ private:
         }
 
         rage::grcViewport* vp = rage::GetCurrentViewport();
-        if (!R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex || !vp || R.fSSRIntensity <= 0.0f)
+        if (!R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex || !vp || R.fSSRIntensity <= 0.0f ||
+            !R.SSRTraceSurf[0] || !R.SSRFallbackSurf[0])
         {
             clearSSR();
             R.nSSRAccumFrame = 0;
@@ -2795,7 +2833,7 @@ private:
 
         // Half: the march and the smoothing run on the half size targets, created as the full
         // size halved; the debug view stays full size.
-        const bool half = R.SSRHalfRes() && R.SSRHalfSurf && R.SSRHalfDenoisedSurf;
+        const bool half = R.SSRHalfRes() && R.SSRHalfSurf && R.SSRHalfDenoisedSurf && R.SSRTraceSurf[1] && R.SSRFallbackSurf[1];
         IDirect3DSurface9* ssrSurf = half ? R.SSRHalfSurf : R.SSRSurf;
         IDirect3DTexture9* ssrTex = half ? R.SSRHalfTex->mD3DTexture : R.SSRTex->mD3DTexture;
         IDirect3DSurface9* denoisedSurf = half ? R.SSRHalfDenoisedSurf : R.SSRDenoisedSurf;
@@ -2873,7 +2911,7 @@ private:
         effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
         effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
         effect->SetFloat(h.fFallback, R.fSSRFallback);
-        // Debug view 3 has SSR_PS write where its rays hit in place of the colour.
+        // Debug view 3 has SSRTrace_PS write where its rays hit in place of the hit, and SSR_PS pass it on.
         effect->SetFloat(h.fDebugMode, float(R.SSRDebugMode()));
 
         // World to reconstruction space rotation, for the G-buffer normals and the debug view.
@@ -2924,14 +2962,24 @@ private:
             effect->Begin(&passes, 0);
         }
         {
-            pDevice->SetRenderTarget(0, ssrSurf);
-            pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
-
-            effect->BeginPass(0);
-            effect->CommitChanges();
-            BindEffectSamplers(pDevice, effect);
-            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
-            effect->EndPass();
+            // The march, the guess for its misses (skipped while ScreenSpaceReflectionsFallback is
+            // 0, SSR_PS then does not read it), and the two together.
+            auto draw = [&](UINT pass, IDirect3DSurface9* target)
+            {
+                pDevice->SetRenderTarget(0, target);
+                pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+                effect->BeginPass(pass);
+                effect->CommitChanges();
+                BindEffectSamplers(pDevice, effect);
+                pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                effect->EndPass();
+            };
+            draw(0, R.SSRTraceSurf[half]);
+            effect->SetTexture(h.SSRResultTex2D, R.SSRTraceTex[half]->mD3DTexture);
+            if (R.fSSRFallback > 0.0f)
+                draw(1, R.SSRFallbackSurf[half]);
+            effect->SetTexture(h.SSRFallbackTex2D, R.SSRFallbackTex[half]->mD3DTexture);
+            draw(2, ssrSurf);
         }
         effect->End();
 

@@ -2,6 +2,7 @@ texture DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D, NormalTex2D, SSRR
 texture PreWaterTex2D, PostWaterTex2D;
 texture PrevDepthTex2D;
 texture SSRAccumTex2D;
+texture SSRFallbackTex2D;
 texture MotionTex2D;
 texture AlbedoTex2D, GIPrevTex2D;
 texture SceneTex2D, SkinIDTex2D, SkinLightTex2D;
@@ -42,6 +43,17 @@ sampler2D NormalTex
 sampler2D SSRResultTex
 {
     Texture = <SSRResultTex2D>;
+};
+
+// SSRFallback_PS's guess where SSR_PS fills in, the same size as SSRResultTex.
+sampler2D SSRFallbackTex
+{
+    Texture = <SSRFallbackTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
 };
 
 sampler2D DebugTex
@@ -365,20 +377,34 @@ float PixelJitter(float2 pixel)
     return 1.0 - frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
 }
 
-// For debug view 3: the view depth of the last TraceReflection's hit, and its ray's view
+// For debug view 3: the view depth of the last TraceHit's hit, and its ray's view
 // depth direction (negative towards the camera).
 static float gTraceHitZ = 0.0;
 static float gTraceRayZ = 0.0;
-// The screen path of the last TraceReflection's ray, for ScreenFallback: from gTraceUV0 to
+// The screen path of the last SetupReflectionRay's ray, for ScreenFallback: from gTraceUV0 to
 // gTraceUVEnd, where it leaves the screen; gTracePath is 0 when the ray was not marched.
 static float2 gTraceUV0 = 0.0;
 static float2 gTraceUVEnd = 0.0;
 static float gTracePath = 0.0;
 
-// jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
-// distanceFade: reflections fade out towards this distance from the surface, 0 disables.
-float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float distanceFade)
+// The reflected ray of the surface at C with normal n, on the screen: where it starts (P0, uv0)
+// and where it would end (uv1) at fMaxDistance, its inverse view depths for perspective
+// correct stepping, the share of it before it leaves the screen (tEnd) and how much rays
+// pointing back at the camera keep (facing). False where it is not traced. Also sets the
+// gTrace globals, so SSR_PS can follow the same path as SSRTrace_PS without tracing again.
+struct ReflectionRay
 {
+    float3 P0;
+    float2 uv0, uv1;
+    float invZ0, invZ1;
+    float tEnd;
+    float facing;
+};
+
+bool SetupReflectionRay(float3 C, float3 n, out ReflectionRay ray)
+{
+    ray = (ReflectionRay) 0;
+    gTracePath = 0.0;
     float z = C.z;
     float3 V = normalize(C);
     float3 R = reflect(V, n);
@@ -391,11 +417,11 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     // gone at -0.25, which keeps the ped out of the door; at 1 they keep full weight down to
     // -0.5 and fade by -0.8, which lets a roof seen steeply from above (about -0.5) reflect.
     float cosVR = dot(V, R);
-    float facing = lerp(saturate(cosVR * 2.0 + 0.5), saturate((cosVR + 0.8) / 0.3), fTowardCamera);
-    if (facing <= 0.0)
-        return 0.0;
+    ray.facing = lerp(saturate(cosVR * 2.0 + 0.5), saturate((cosVR + 0.8) / 0.3), fTowardCamera);
+    if (ray.facing <= 0.0)
+        return false;
 
-    float3 P0 = C + n * max(fMaxDistance / (float) NUM_STEPS * 0.1, z * 0.01);
+    ray.P0 = C + n * max(fMaxDistance / (float) NUM_STEPS * 0.1, z * 0.01);
 
     // With the camera looking down at a roof or bonnet more steeply than about 45 degrees,
     // the reflected ray heads up the screen towards what stands behind the car, but its view
@@ -403,22 +429,43 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     // ends stay projectable; dropping them made reflections vanish as the camera tilted down.
     float len = fMaxDistance;
     if (R.z < 0.0)
-        len = min(len, (P0.z - fNearPlane * 2.0) / -R.z);
+        len = min(len, (ray.P0.z - fNearPlane * 2.0) / -R.z);
     if (len <= 0.0)
-        return 0.0;
-    float3 P1 = P0 + R * len;
+        return false;
+    float3 P1 = ray.P0 + R * len;
 
-    float2 uv0 = ViewToUV(P0);
-    float2 uv1 = ViewToUV(P1);
-    float invZ0 = 1.0 / P0.z;
-    float invZ1 = 1.0 / P1.z;
+    ray.uv0 = ViewToUV(ray.P0);
+    ray.uv1 = ViewToUV(P1);
+    ray.invZ0 = 1.0 / ray.P0.z;
+    ray.invZ1 = 1.0 / P1.z;
 
-    float2 dUV = uv1 - uv0;
-    float2 tEdge = (step(0.0, dUV) - uv0) / (abs(dUV) < 1e-5 ? 1e-5 : dUV);
-    float tEnd = clamp(min(tEdge.x, tEdge.y), 0.0, 1.0);
-    gTraceUV0 = uv0;
-    gTraceUVEnd = lerp(uv0, uv1, tEnd);
+    float2 dUV = ray.uv1 - ray.uv0;
+    float2 tEdge = (step(0.0, dUV) - ray.uv0) / (abs(dUV) < 1e-5 ? 1e-5 : dUV);
+    ray.tEnd = clamp(min(tEdge.x, tEdge.y), 0.0, 1.0);
+    gTraceUV0 = ray.uv0;
+    gTraceUVEnd = lerp(ray.uv0, ray.uv1, ray.tEnd);
     gTracePath = 1.0;
+    return true;
+}
+
+// Marches the reflected ray of the surface at C with normal n. The hit is (where to read it in
+// HistoryTex, confidence 0..1, the ray's length over fMaxDistance), 0 for a miss; HitColour
+// turns it into a colour.
+// jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
+// distanceFade: reflections fade out towards this distance from the surface, 0 disables.
+float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
+{
+    ReflectionRay ray;
+    if (!SetupReflectionRay(C, n, ray))
+        return 0.0;
+    float facing = ray.facing;
+    float3 P0 = ray.P0;
+    float2 uv0 = ray.uv0;
+    float2 uv1 = ray.uv1;
+    float invZ0 = ray.invZ0;
+    float invZ1 = ray.invZ1;
+    float tEnd = ray.tEnd;
+    float2 dUV = uv1 - uv0;
 
     // A ray short on screen needs fewer steps: a car far away reflects over a few dozen pixels,
     // and all NUM_STEPS there sampled each pixel several times. About one step per two pixels
@@ -499,7 +546,7 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
     // Binary refinement between the last sample in front of the scene and the first behind it.
     float lo = hitLo;
     float hi = hitHi;
-    [unroll]
+    [loop]
     for (int j = 0; j < NUM_REFINE_STEPS; ++j)
     {
         float mid = (lo + hi) * 0.5;
@@ -564,12 +611,18 @@ float4 TraceReflection(float3 C, float3 n, float blurPixels, float jitter, float
         confidence *= 1.0 - smoothstep(tolerance * 0.5, tolerance, abs(prevZ - prevSurfZ));
     }
 
-    float3 colour = SampleHistoryBlurred(histUV, blurPixels * saturate(rayLen / fMaxDistance));
+    return float4(histUV, confidence, saturate(rayLen / fMaxDistance));
+}
 
+// The colour of a hit from TraceHit, blurred by blurPixels at fMaxDistance, with its confidence.
+float4 HitColour(float4 hit, float blurPixels)
+{
+    if (hit.z <= 0.0)
+        return 0.0;
+    float3 colour = SampleHistoryBlurred(hit.xy, blurPixels * hit.w);
     if (any(colour != colour))
         return 0.0;
-
-    return float4(colour, confidence);
+    return float4(colour, hit.z);
 }
 
 // How strongly SSR may show at this pixel, 0 where the ray is not worth tracing: the sky,
@@ -724,7 +777,7 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
         if (sumW >= 3.0)
             break;
         float2 radius = rings[ring] * aspect;
-        [unroll]
+        [loop]
         for (int i = 0; i < 8; ++i)
         {
             float2 tapUV = saturate(centre + taps[i] * radius);
@@ -742,6 +795,62 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
     return sumW > 1e-3 ? sum / sumW : 0.0;
 }
 
+// The surface position and normal SSR traces from at this pixel.
+float3 SSRSurface(float2 uv, float2 vPos, out float3 n)
+{
+    float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
+    [branch]
+    if (fUseGBufferNormals > 0.0)
+        n = GBufferNormal(uv);
+    else
+        n = ReconstructNormal(uv, C);
+    n = (dot(n, C) > 0.0) ? -n : n;
+    return C;
+}
+
+// SSR runs in three passes, as one pixel shader it took about a thousand instruction slots
+// where ps_3_0 promises 512: SSRTrace_PS marches the rays into a target of the same size, the
+// hit as TraceHit returns it, SSRFallback_PS works out the blurred guess for where it found
+// little or nothing into another, and SSR_PS puts the two together into the reflection.
+float4 SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+{
+    if (SSRSurfaceWeight(uv) <= 0.0)
+        return 0.0;
+    float3 n;
+    float3 C = SSRSurface(uv, vPos, n);
+
+    // While accumulating, vec2NoiseOffset moves every pixel's steps on each frame, so the
+    // accumulation averages the steps out and fewer of them do.
+    float jitter = fStepJitter > 0.0 ? PixelJitter(vPos + vec2NoiseOffset) : 1.0;
+    float4 hit = TraceHit(C, n, jitter, fDistanceFade);
+    // Debug view 3 (for now): what the ray hit in place of the hit, which SSR_PS passes on, see
+    // SSRDebug_PS.
+    if (fDebugMode > 2.5 && fDebugMode < 3.5)
+    {
+        float nearer = gTraceHitZ < C.z - 0.25 ? 1.0 : 0.0;
+        return float4(nearer, 1.0 - nearer, gTraceRayZ < 0.0 ? 1.0 : 0.0, hit.z);
+    }
+    return hit;
+}
+
+// The blurred guess for where SSRTrace_PS's ray in SSRResultTex found little or nothing, and its
+// weight; 0 where it does not apply. It follows the ray's path on the screen, which
+// SetupReflectionRay works out again.
+float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+{
+    if (SSRSurfaceWeight(uv) <= 0.0 || tex2Dlod(SSRResultTex, float4(uv, 0, 0)).z >= 1.0)
+        return 0.0;
+    float3 n;
+    float3 C = SSRSurface(uv, vPos, n);
+    ReflectionRay ray;
+    SetupReflectionRay(C, n, ray);
+    float weight;
+    float3 fallback = ScreenFallback(C, reflect(normalize(C), n), weight);
+    return float4(fallback, weight);
+}
+
+// The reflection from SSRTrace_PS's hit in SSRResultTex, SSRFallback_PS's guess in
+// SSRFallbackTex filling in where the ray found little or nothing (premultiplied).
 float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     float wetOnly;
@@ -749,35 +858,17 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     if (surfaceWeight <= 0.0)
         return 0.0;
 
-    float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
-
-    float3 n;
-    [branch]
-    if (fUseGBufferNormals > 0.0)
-        n = GBufferNormal(uv);
-    else
-        n = ReconstructNormal(uv, C);
-    n = (dot(n, C) > 0.0) ? -n : n;
-
-    // While accumulating, vec2NoiseOffset moves every pixel's steps on each frame, so the
-    // accumulation averages the steps out and fewer of them do.
-    float jitter = fStepJitter > 0.0 ? PixelJitter(vPos + vec2NoiseOffset) : 1.0;
-    float4 r = TraceReflection(C, n, fReflectionBlur, jitter, fDistanceFade);
-    // Debug view 3 (for now): what the ray hit in place of the colour, see SSRDebug_PS.
+    float4 hit = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
     if (fDebugMode > 2.5 && fDebugMode < 3.5)
-    {
-        float nearer = gTraceHitZ < C.z - 0.25 ? 1.0 : 0.0;
-        return float4(nearer, 1.0 - nearer, gTraceRayZ < 0.0 ? 1.0 : 0.0, r.a);
-    }
-    // Where the ray found little or nothing, the blurred guess fills in (premultiplied).
+        return hit;
+    float4 r = HitColour(hit, fReflectionBlur);
     [branch]
     if (fFallback > 0.0 && r.a < 1.0)
     {
-        float fallbackWeight;
-        float3 fallback = ScreenFallback(C, reflect(normalize(C), n), fallbackWeight);
-        float fill = fallbackWeight * (1.0 - r.a);
+        float4 fallback = tex2Dlod(SSRFallbackTex, float4(uv, 0, 0));
+        float fill = fallback.a * (1.0 - r.a);
         float a = r.a + fill;
-        r.rgb = a > 1e-4 ? (r.rgb * r.a + fallback * fill) / a : 0.0;
+        r.rgb = a > 1e-4 ? (r.rgb * r.a + fallback.rgb * fill) / a : 0.0;
         r.a = a;
     }
     // On wet ground the game's reflection strength, which deferred_lighting multiplies SSR by,
@@ -830,7 +921,7 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 n = WaterNormal(worldXY, dot(C, C));
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = TraceReflection(C, n, fWaterBlur, 1.0, 0.0);
+    float4 r = HitColour(TraceHit(C, n, 1.0, 0.0), fWaterBlur);
 
     return float4(r.rgb, saturate(r.a * fWaterIntensity));
 }
@@ -1499,7 +1590,17 @@ void FullscreenQuadVS(in float4 iPos : POSITION, in float2 iUV : TEXCOORD0,
 
 technique SSR
 {
-    pass P0
+    pass Trace
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SSRTrace_PS();
+    }
+    pass Fallback // SSRResultTex2D: the trace pass's target
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SSRFallback_PS();
+    }
+    pass Resolve // SSRResultTex2D: the trace pass's target, SSRFallbackTex2D the fallback pass's
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSR_PS();
