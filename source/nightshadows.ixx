@@ -446,7 +446,7 @@ public:
                 }
                 // After the allocation adapter, which checks the selection's bytes this hooks.
                 HeadlightEnhancement::InstallShadowOrigin(
-                    std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowBehindLamps", 0.5f), 0.0f, 2.0f));
+                    std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowBehindLamps", 0.7f), 0.0f, 2.0f));
             }
             else
             {
