@@ -257,7 +257,7 @@ public:
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
-        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, vec4SkipFadesA, vec4SkipFadesB;
+        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, vec4SkipFadesA, vec4SkipFadesB, fSpreadRadius;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
@@ -462,6 +462,9 @@ public:
     IDirect3DSurface9* SSRTraceSurf[2] = {};
     rage::grcRenderTargetPC* SSRFallbackTex[2] = {};
     IDirect3DSurface9* SSRFallbackSurf[2] = {};
+    // The other target of the fill's cascade (SSRSpread_PS), which takes turns with SSRFallbackTex.
+    rage::grcRenderTargetPC* SSRSpreadTex[2] = {};
+    IDirect3DSurface9* SSRSpreadSurf[2] = {};
     // Accumulation over frames (SSRTemporal_PS in SSR.fx): each frame blends the smoothed
     // result with the previous accumulation into the other target of a pair, one pair per
     // resolution. ScreenSpaceReflectionsTemporal is the share of the history kept, 0 turns
@@ -975,6 +978,7 @@ public:
                 h.fReflectionBlur = SSREffect->GetParameterByName(nullptr, "fReflectionBlur");
                 h.fDistanceFade = SSREffect->GetParameterByName(nullptr, "fDistanceFade");
                 h.fFallback = SSREffect->GetParameterByName(nullptr, "fFallback");
+                h.fSpreadRadius = SSREffect->GetParameterByName(nullptr, "fSpreadRadius");
                 h.vec4SkipFadesA = SSREffect->GetParameterByName(nullptr, "vec4SkipFadesA");
                 h.vec4SkipFadesB = SSREffect->GetParameterByName(nullptr, "vec4SkipFadesB");
                 h.vec4SunView = SSREffect->GetParameterByName(nullptr, "vec4SunView");
@@ -1378,9 +1382,11 @@ private:
         {
             SAFE_RELEASE(PostFxResources.SSRTraceSurf[i]);
             SAFE_RELEASE(PostFxResources.SSRFallbackSurf[i]);
+            SAFE_RELEASE(PostFxResources.SSRSpreadSurf[i]);
         }
         for (auto* rt : { &PostFxResources.SSRHalfTex, &PostFxResources.SSRHalfDenoisedTex, &PostFxResources.SSRTraceTex[0],
-                          &PostFxResources.SSRTraceTex[1], &PostFxResources.SSRFallbackTex[0], &PostFxResources.SSRFallbackTex[1] })
+                          &PostFxResources.SSRTraceTex[1], &PostFxResources.SSRFallbackTex[0], &PostFxResources.SSRFallbackTex[1],
+                          &PostFxResources.SSRSpreadTex[0], &PostFxResources.SSRSpreadTex[1] })
         {
             if (*rt)
             {
@@ -1642,6 +1648,8 @@ private:
                     const auto w = half ? width / 2 : width, hgt = half ? height / 2 : height;
                     PostFxResources.SSRFallbackTex[half] = rage::CreateEmptyRenderTarget(fallbackNames[half], w, hgt, 64, aoDesc,
                         PostFxResources.SSRFallbackSurf[half]);
+                    PostFxResources.SSRSpreadTex[half] = rage::CreateEmptyRenderTarget(half ? "SSRHalfSpreadTex" : "SSRSpreadTex", w, hgt,
+                        64, aoDesc, PostFxResources.SSRSpreadSurf[half]);
                     auto traceDesc = aoDesc;
                     traceDesc.mFormat = rage::GRCFMT_A16B16G16R16;
                     PostFxResources.SSRTraceTex[half] = rage::CreateEmptyRenderTarget(traceNames[half], w, hgt, 64, traceDesc,
@@ -2995,10 +3003,27 @@ private:
             };
             draw(0, R.SSRTraceSurf[half]);
             effect->SetTexture(h.SSRResultTex2D, R.SSRTraceTex[half]->mD3DTexture);
+            IDirect3DTexture9* fill = R.SSRFallbackTex[half]->mD3DTexture;
             if (R.fSSRFallback > 0.0f)
+            {
                 draw(1, R.SSRFallbackSurf[half]);
-            effect->SetTexture(h.SSRFallbackTex2D, R.SSRFallbackTex[half]->mD3DTexture);
-            draw(2, ssrSurf);
+                // The fill's cascade, each step twice as far out as the last (the first reached nine
+                // pixels), taking turns between the two targets; in pixels of this size.
+                if (R.SSRSpreadSurf[half])
+                {
+                    IDirect3DSurface9* surfs[2] = { R.SSRSpreadSurf[half], R.SSRFallbackSurf[half] };
+                    IDirect3DTexture9* texs[2] = { R.SSRSpreadTex[half]->mD3DTexture, R.SSRFallbackTex[half]->mD3DTexture };
+                    for (int step = 0; step < 2; ++step)
+                    {
+                        effect->SetTexture(h.SSRFallbackTex2D, fill);
+                        effect->SetFloat(h.fSpreadRadius, step ? 36.0f : 18.0f);
+                        draw(2, surfs[step]);
+                        fill = texs[step];
+                    }
+                }
+            }
+            effect->SetTexture(h.SSRFallbackTex2D, fill);
+            draw(3, ssrSurf);
         }
         effect->End();
 

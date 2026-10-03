@@ -212,7 +212,8 @@ uniform float fTemporalBlend;     // share of last frame's SSR kept each frame, 
 uniform float fTemporalAnySurface; // 1 while accumulating indirect light, which every surface gets, not only glossy ones
 uniform float4 vec4SkipFadesA;    // for now: 1 skips a fade of the hit's confidence, x screen edge, y towards the camera, z end of the ray, w distance fade
 uniform float4 vec4SkipFadesB;    // for now: x thickness, y hidden stretch, z history depth
-uniform float fFallback;          // 0..1, strength of the blurred screen reflection where rays below the horizon find nothing, see ScreenFallback
+uniform float fFallback;
+uniform float fSpreadRadius;      // pixels, how far SSRSpread_PS looks this step          // 0..1, strength of the blurred screen reflection where rays below the horizon find nothing, see ScreenFallback
 
 // Contact shadows, see ContactShadows_PS.
 uniform float4 vec4SunView;         // direction towards the sun in reconstruction space, w 0 if unknown
@@ -826,6 +827,42 @@ float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     if (weight <= 0.0)
         fallback = NeighbourFill(uv, C.z, weight);
     return float4(fallback, weight);
+}
+
+// One step of a cascade after SSRFallback_PS: misses still empty or faint take what the last step
+// filled in around them, fSpreadRadius pixels out, on about the same surface, a fifth weaker. The
+// first step reaches only the hits within nine pixels, and a wider hole, as around what stands
+// near a car, kept a dark rim. Weakening with each step leaves the game's own map showing
+// through where SSR finds nothing over a wide area. Reads the last step from SSRFallbackTex.
+float4 SSRSpread_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 own = tex2Dlod(SSRFallbackTex, float4(uv, 0, 0));
+    if (own.a >= fFallback * 0.99 || SSRSurfaceWeight(uv) <= 0.0 ||
+        tex2Dlod(SSRResultTex, float4(uv, 0, 0)).z >= kFallbackBelow)
+        return own;
+    static const float2 taps[8] =
+    {
+        float2( 1.0,  0.0), float2(-1.0,  0.0), float2( 0.0,  1.0), float2( 0.0, -1.0),
+        float2( 0.7,  0.7), float2(-0.7,  0.7), float2( 0.7, -0.7), float2(-0.7, -0.7)
+    };
+    float z = LinearDepth(uv);
+    float3 sum = 0.0;
+    float sumW = 0.0, top = 0.0;
+    [loop]
+    for (int i = 0; i < 8; ++i)
+    {
+        float2 tapUV = uv + taps[i] * fSpreadRadius * vec2InvViewportSize;
+        float4 tap = tex2Dlod(SSRFallbackTex, float4(tapUV, 0, 0));
+        float w = tap.a * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
+        sum += tap.rgb * w;
+        sumW += w;
+        top = max(top, w);
+    }
+    float a = max(own.a, 0.8 * min(top, saturate(sumW / 2.0)));
+    if (sumW <= 1e-3 || a <= own.a)
+        return own;
+    // own keeps its share, the spread fills up the rest.
+    return float4((own.rgb * own.a + sum / sumW * (a - own.a)) / a, a);
 }
 
 // The reflection from SSRTrace_PS's hit in SSRResultTex, SSRFallback_PS's guess in
@@ -1579,7 +1616,12 @@ technique SSR
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSRFallback_PS();
     }
-    pass Resolve // SSRResultTex2D: the trace pass's target, SSRFallbackTex2D the fallback pass's
+    pass Spread // SSRResultTex2D: the trace pass's target, SSRFallbackTex2D the last fill
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SSRSpread_PS();
+    }
+    pass Resolve // SSRResultTex2D: the trace pass's target, SSRFallbackTex2D the last fill
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSR_PS();
