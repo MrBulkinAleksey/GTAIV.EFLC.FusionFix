@@ -257,7 +257,7 @@ public:
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
-        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback;
+        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, vec4SkipFadesA, vec4SkipFadesB;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
@@ -435,6 +435,16 @@ public:
     float fSSRReflectionBlur = 0.0f;
     float fSSRDistanceFade = 0.0f;
     float fSSRFallback = 0.8f;
+    // For now: SSR Without Fade in the graphics menu (PREF_SSR_SKIP_FADE), a fade of a hit's
+    // confidence to skip, 1 to 7 one of them, 8 all, to find which one dims the reflections
+    // (TraceHit in SSR.fx). As bits: 1 screen edge, 2 towards the camera, 4 end of the ray,
+    // 8 distance fade, 16 thickness, 32 hidden stretch, 64 history depth.
+    static int SSRSkipFades()
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_SSR_SKIP_FADE");
+        const int v = p ? p->get() : 0;
+        return v >= 8 ? 127 : v > 0 ? 1 << (v - 1) : 0;
+    }
     rage::grcRenderTargetPC* SSRDenoisedTex = nullptr;
     IDirect3DSurface9* SSRDenoisedSurf = nullptr;
     bool bSSRDenoised = false;
@@ -965,6 +975,8 @@ public:
                 h.fReflectionBlur = SSREffect->GetParameterByName(nullptr, "fReflectionBlur");
                 h.fDistanceFade = SSREffect->GetParameterByName(nullptr, "fDistanceFade");
                 h.fFallback = SSREffect->GetParameterByName(nullptr, "fFallback");
+                h.vec4SkipFadesA = SSREffect->GetParameterByName(nullptr, "vec4SkipFadesA");
+                h.vec4SkipFadesB = SSREffect->GetParameterByName(nullptr, "vec4SkipFadesB");
                 h.vec4SunView = SSREffect->GetParameterByName(nullptr, "vec4SunView");
                 h.fCSLength = SSREffect->GetParameterByName(nullptr, "fCSLength");
                 h.fCSThickness = SSREffect->GetParameterByName(nullptr, "fCSThickness");
@@ -2911,6 +2923,13 @@ private:
         effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
         effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
         effect->SetFloat(h.fFallback, R.fSSRFallback);
+        {
+            const int skip = R.SSRSkipFades();
+            auto bit = [&](int i) { return (skip >> i) & 1 ? 1.0f : 0.0f; };
+            const D3DXVECTOR4 skipA(bit(0), bit(1), bit(2), bit(3)), skipB(bit(4), bit(5), bit(6), 0.0f);
+            effect->SetVector(h.vec4SkipFadesA, &skipA);
+            effect->SetVector(h.vec4SkipFadesB, &skipB);
+        }
         // Debug view 3 has SSRTrace_PS write where its rays hit in place of the hit, and SSR_PS pass it on.
         effect->SetFloat(h.fDebugMode, float(R.SSRDebugMode()));
 

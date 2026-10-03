@@ -210,6 +210,8 @@ uniform float fReflectionBlur;    // blur radius in pixels a reflection reaches 
 uniform float fDistanceFade;      // reflections fade out towards this distance from the surface, 0 disables
 uniform float fTemporalBlend;     // share of last frame's SSR kept each frame, 0 while there is none to keep
 uniform float fTemporalAnySurface; // 1 while accumulating indirect light, which every surface gets, not only glossy ones
+uniform float4 vec4SkipFadesA;    // for now: 1 skips a fade of the hit's confidence, x screen edge, y towards the camera, z end of the ray, w distance fade
+uniform float4 vec4SkipFadesB;    // for now: x thickness, y hidden stretch, z history depth
 uniform float fFallback;          // 0..1, strength of the blurred screen reflection where rays below the horizon find nothing, see ScreenFallback
 
 // Contact shadows, see ContactShadows_PS.
@@ -570,17 +572,17 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
 
     float2 edge = saturate(min(min(finalUV, histUV), 1.0 - max(finalUV, histUV)) / max(fEdgeFade, 1e-4));
     float e = min(edge.x, edge.y);
-    float confidence = e * e * (3.0 - 2.0 * e);
+    float confidence = lerp(e * e * (3.0 - 2.0 * e), 1.0, vec4SkipFadesA.x);
 
     float rayLen = length(hitP - C);
 
-    confidence *= facing;
-    confidence *= saturate((1.0 - rayLen / fMaxDistance) * 4.0);
+    confidence *= lerp(facing, 1.0, vec4SkipFadesA.y);
+    confidence *= lerp(saturate((1.0 - rayLen / fMaxDistance) * 4.0), 1.0, vec4SkipFadesA.z);
     // Car paint is no perfect mirror: it shows what stands next to it and barely what stands
     // metres away, such as a ped between the camera and a door at night.
-    if (distanceFade > 0.0)
+    if (distanceFade > 0.0 && vec4SkipFadesA.w <= 0.0)
         confidence *= 1.0 - smoothstep(distanceFade * 0.5, distanceFade, rayLen);
-    confidence *= 1.0 - smoothstep(hitThickness * 0.75, hitThickness, hitDelta);
+    confidence *= lerp(1.0 - smoothstep(hitThickness * 0.75, hitThickness, hitDelta), 1.0, vec4SkipFadesB.x);
     // Behind an object the screen holds nothing, so a ray passing there may have run into
     // something it does not show. Behind a trunk that is a few dozen centimetres; behind a ped
     // standing metres in front of a door, with the camera turned so the door shows next to his
@@ -590,7 +592,7 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
     // the surface: one that crossed half a metre of the scene first and then passed behind
     // the player to the road beyond hit the same road as the rays beside his figure, and
     // fading it left the figure darker on the car.
-    if (firstHidden >= 0.0 && firstHidden < 0.5)
+    if (firstHidden >= 0.0 && firstHidden < 0.5 && vec4SkipFadesB.y <= 0.0)
         confidence *= 1.0 - smoothstep(0.4, 0.8, hidden);
 
     // The colour comes from the history, the hit from this frame's depth. Next to an outline
@@ -602,7 +604,7 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
     // step to metres far out and let the ped through. clip.w is the view depth in the
     // history's camera.
     [branch]
-    if (fUsePrevDepth > 0.0)
+    if (fUsePrevDepth > 0.0 && vec4SkipFadesB.z <= 0.0)
     {
         float prevSurfZ = dot(float4(surfP, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
                                                          vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
