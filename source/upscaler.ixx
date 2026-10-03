@@ -1,6 +1,8 @@
 module;
 
 #include <common.hxx>
+#include <cstdarg>
+#include <cstdio>
 #include <d3d12.h>
 #include <d3d9on12.h>
 #include <dxvk_interop.hpp>
@@ -45,6 +47,29 @@ namespace
         if (shared.FenceHandle)
             CloseHandle(reinterpret_cast<HANDLE>(shared.FenceHandle));
         shared.FenceHandle = 0;
+    }
+
+    // GTAIV.EFLC.FusionFix.UpscalerGame.log next to the plugin: what the game side did with the helper, the
+    // first time each thing fails (the helper writes GTAIV.EFLC.FusionFix.Upscaler.log)
+    void Log(const char* format, ...)
+    {
+        static bool started = false;
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, (GetThisModulePath() / L"GTAIV.EFLC.FusionFix.UpscalerGame.log").c_str(), started ? L"a" : L"w") || !f)
+            return;
+        started = true;
+        va_list args;
+        va_start(args, format);
+        vfprintf(f, format, args);
+        va_end(args);
+        fputc('\n', f);
+        fclose(f);
+    }
+
+    // Logs a failure the first few times it happens
+    bool Report(uint32_t& count)
+    {
+        return count++ < 3;
     }
 
     bool IsWine()
@@ -386,16 +411,22 @@ namespace
             info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
             info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            if (vk.vkCreateImage(device, &info, nullptr, &target.image) != VK_SUCCESS)
+            if (auto vr = vk.vkCreateImage(device, &info, nullptr, &target.image); vr != VK_SUCCESS)
+            {
+                Log("import: vkCreateImage %d", vr);
                 return false;
+            }
             target.format = format;
 
             VkMemoryRequirements requirements{};
             vk.vkGetImageMemoryRequirements(device, target.image, &requirements);
 
             VkMemoryWin32HandlePropertiesKHR handleProperties{ VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR };
-            if (vk.vkGetMemoryWin32HandlePropertiesKHR(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT, handle, &handleProperties) != VK_SUCCESS)
+            if (auto vr = vk.vkGetMemoryWin32HandlePropertiesKHR(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT, handle, &handleProperties); vr != VK_SUCCESS)
+            {
+                Log("import: vkGetMemoryWin32HandlePropertiesKHR %d", vr);
                 return false;
+            }
 
             VkPhysicalDeviceMemoryProperties memoryProperties{};
             vk.vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
@@ -410,7 +441,10 @@ namespace
                 }
             }
             if (typeIndex == UINT32_MAX)
+            {
+                Log("import: no device local memory type in %08x", requirements.memoryTypeBits);
                 return false;
+            }
 
             VkMemoryDedicatedAllocateInfo dedicated{ VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO };
             dedicated.image = target.image;
@@ -424,8 +458,11 @@ namespace
             allocate.pNext = &import;
             allocate.allocationSize = requirements.size;
             allocate.memoryTypeIndex = typeIndex;
-            if (vk.vkAllocateMemory(device, &allocate, nullptr, &target.memory) != VK_SUCCESS)
+            if (auto vr = vk.vkAllocateMemory(device, &allocate, nullptr, &target.memory); vr != VK_SUCCESS)
+            {
+                Log("import: vkAllocateMemory %d (size %llu, type %u)", vr, static_cast<unsigned long long>(allocate.allocationSize), allocate.memoryTypeIndex);
                 return false;
+            }
 
             return vk.vkBindImageMemory(device, target.image, target.memory, 0) == VK_SUCCESS;
         }
@@ -441,8 +478,11 @@ namespace
             info.size = size;
             info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
             info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            if (vk.vkCreateBuffer(device, &info, nullptr, &target.buffer) != VK_SUCCESS)
+            if (auto vr = vk.vkCreateBuffer(device, &info, nullptr, &target.buffer); vr != VK_SUCCESS)
+            {
+                Log("import: vkCreateBuffer %d", vr);
                 return false;
+            }
 
             VkMemoryRequirements requirements{};
             vk.vkGetBufferMemoryRequirements(device, target.buffer, &requirements);
@@ -462,7 +502,10 @@ namespace
                     break;
             }
             if (typeIndex == UINT32_MAX)
+            {
+                Log("import: no device local memory type in %08x", requirements.memoryTypeBits);
                 return false;
+            }
 
             VkMemoryDedicatedAllocateInfo dedicated{ VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO };
             dedicated.buffer = target.buffer;
@@ -476,10 +519,18 @@ namespace
             allocate.pNext = &import;
             allocate.allocationSize = std::max(requirements.size, size);
             allocate.memoryTypeIndex = typeIndex;
-            if (vk.vkAllocateMemory(device, &allocate, nullptr, &target.memory) != VK_SUCCESS)
+            if (auto vr = vk.vkAllocateMemory(device, &allocate, nullptr, &target.memory); vr != VK_SUCCESS)
+            {
+                Log("import: vkAllocateMemory %d (size %llu, type %u)", vr, static_cast<unsigned long long>(allocate.allocationSize), allocate.memoryTypeIndex);
                 return false;
+            }
 
-            return vk.vkBindBufferMemory(device, target.buffer, target.memory, 0) == VK_SUCCESS;
+            if (auto vr = vk.vkBindBufferMemory(device, target.buffer, target.memory, 0); vr != VK_SUCCESS)
+            {
+                Log("import: vkBindBufferMemory %d", vr);
+                return false;
+            }
+            return true;
         }
 
         bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
@@ -495,6 +546,11 @@ namespace
                 auto ih = i == OutputIndex ? oh : h;
                 ok = ok && handle && (sharedBuffers ? ImportBuffer(images[i], handle, Protocol::BufferSize(texture, iw, ih)) :
                     ImportImage(images[i], handle, Formats[i], iw, ih));
+                if (!ok)
+                {
+                    Log("import: shared %s %zu (%ux%u) failed, handle %p", sharedBuffers ? "buffer" : "texture", i, iw, ih, handle);
+                    break;
+                }
             }
 
             auto fenceHandle = reinterpret_cast<HANDLE>(shared.FenceHandle);
@@ -590,7 +646,13 @@ namespace
                 if (!inputs[i])
                     continue;
                 if (!GetGameImage(inputs[i], sources[i]) || sources[i].format != Formats[i] || sources[i].extent.width != width || sources[i].extent.height != height)
+                {
+                    static uint32_t reported = 0;
+                    if (Report(reported))
+                        Log("inputs: texture %zu is format %d %ux%u, expected %d %ux%u", i, sources[i].format, sources[i].extent.width,
+                            sources[i].extent.height, Formats[i], width, height);
                     return false;
+                }
             }
 
             auto& s = NextSlot();
@@ -709,7 +771,13 @@ namespace
             GameImage destination;
             if (!GetGameImage(target, destination) || destination.format != Formats[OutputIndex] ||
                 destination.extent.width != outputWidth || destination.extent.height != outputHeight)
+            {
+                static uint32_t reported = 0;
+                if (Report(reported))
+                    Log("output: target is format %d %ux%u, expected %d %ux%u", destination.format, destination.extent.width,
+                        destination.extent.height, Formats[OutputIndex], outputWidth, outputHeight);
                 return false;
+            }
             if (sharedBuffers)
                 return SubmitOutputBuffer(destination);
 
@@ -1266,7 +1334,11 @@ export namespace Upscaler
             else if (d3d12Bridge.Init(device))
                 bridge = &d3d12Bridge;
             else
+            {
+                Log("Neither DXVK nor D3D9on12 could share textures with the helper");
                 return;
+            }
+            Log("%s, GPU vendor %04x%s", bridge == &dxvkBridge ? "DXVK" : "D3D9on12", bridge->vendorId, bridge->sharedBuffers ? ", Wine: shared buffers" : "");
 
             // Nothing to offer: neither an NVIDIA GPU nor AMD's FidelityFX runtime
             if (bridge->vendorId != 0x10DE && !FidelityFXPresent())
@@ -1274,6 +1346,7 @@ export namespace Upscaler
 
             if (!helper.Start(HelperPath(), bridge->luid))
             {
+                Log("The helper could not be started: error %lu", GetLastError());
                 helper.Stop(false);
                 return;
             }
@@ -1287,9 +1360,11 @@ export namespace Upscaler
                 return;
             if (!ok)
             {
+                Log("The helper failed to start: %s", helper.shared ? helper.shared->Message : "");
                 Fail();
                 return;
             }
+            Log("Helper: %s", helper.shared->Message);
             dlssAvailable = helper.shared->DLSSAvailable != 0;
             fsrAvailable = helper.shared->FSRAvailable != 0;
             state = State::Ready;
@@ -1334,12 +1409,19 @@ export namespace Upscaler
             shared.Flags = flags;
             if (!helper.Request(Protocol::Command::Configure, 15000))
             {
-                if (WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0)
+                bool exited = WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0;
+                Log("Configure %ux%u -> %ux%u failed%s: %s", frame.Width, frame.Height, outputWidth, outputHeight,
+                    exited ? ", the helper exited" : "", shared.Message);
+                if (exited)
                     Fail();
                 return false;
             }
             if (!bridge->Import(shared, frame.Width, frame.Height, outputWidth, outputHeight))
+            {
+                Log("Configure %ux%u -> %ux%u: the shared resources could not be imported", frame.Width, frame.Height, outputWidth, outputHeight);
                 return false;
+            }
+            Log("Configured: %s", shared.Message);
 
             configureFailed = false;
             fenceValue = 0;
@@ -1357,6 +1439,9 @@ export namespace Upscaler
         if (!bridge->SubmitInputs(inputs, inputValue))
         {
             // Nothing was submitted, the helper was not asked for this frame. Retried when the mode or size changes.
+            static uint32_t reported = 0;
+            if (Report(reported))
+                Log("The inputs could not be submitted");
             configureFailed = true;
             return false;
         }
@@ -1378,7 +1463,11 @@ export namespace Upscaler
         // The helper answers once its GPU work, which signals outputValue, has been submitted
         if (!helper.Request(Protocol::Command::Evaluate, 500))
         {
-            if (WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0)
+            static uint32_t reported = 0;
+            bool exited = WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0;
+            if (Report(reported))
+                Log("Evaluate failed%s", exited ? ", the helper exited" : "");
+            if (exited)
                 Fail();
             else
                 configureFailed = true;

@@ -758,8 +758,11 @@ namespace
         bool Duplicate(HANDLE source, uint64_t& target)
         {
             HANDLE duplicate = nullptr;
-            if (!DuplicateHandle(GetCurrentProcess(), source, connection.game, &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS))
+            if (!source || !DuplicateHandle(GetCurrentProcess(), source, connection.game, &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS))
+            {
+                Log("Handle %p could not be duplicated into the game: error %lu", source, GetLastError());
                 return false;
+            }
             target = reinterpret_cast<uint64_t>(duplicate);
             return true;
         }
@@ -778,6 +781,8 @@ namespace
             flags = shared.Flags;
             outputWidth = shared.OutputWidth ? shared.OutputWidth : width;
             outputHeight = shared.OutputHeight ? shared.OutputHeight : height;
+            Log("Configure %s at %ux%u -> %ux%u%s", shared.ConfigureBackend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height,
+                outputWidth, outputHeight, (flags & Protocol::ConfigureFlags::SharedBuffers) ? ", shared buffers" : "");
             if (width == 0 || height == 0 || outputWidth > 16384 || outputHeight > 16384 || outputWidth < width || outputHeight < height)
                 return false;
             device.sharedBuffers = (flags & Protocol::ConfigureFlags::SharedBuffers) != 0;
@@ -931,8 +936,22 @@ namespace
                 bool ok = false;
                 switch (command)
                 {
-                case Protocol::Command::Configure: ok = Configure(); break;
-                case Protocol::Command::Evaluate: ok = Evaluate(); break;
+                case Protocol::Command::Configure:
+                    ok = Configure();
+                    if (!ok)
+                        Log("Configure failed");
+                    break;
+                case Protocol::Command::Evaluate:
+                {
+                    ok = Evaluate();
+                    // The first frame, and the first failures
+                    static uint32_t evaluated = 0, failed = 0;
+                    if (ok && evaluated++ == 0)
+                        Log("First frame upscaled");
+                    if (!ok && failed++ < 5)
+                        Log("Evaluate failed");
+                    break;
+                }
                 default: break;
                 }
                 connection.Respond(ok ? Protocol::Status::Ok : Protocol::Status::Failed);
