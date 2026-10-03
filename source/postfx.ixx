@@ -127,6 +127,12 @@ public:
     std::vector<IDirect3DSurface9*> AOCamDepthSurf = {};
     IDirect3DSurface9* AOSurf = nullptr;
     IDirect3DSurface9* AOBlurSurf = nullptr;
+    // GTAO's accumulation over frames (TemporalAO_PS in AO.fx): each frame blends this frame's
+    // GTAO with the previous accumulation into the other target of the pair, before the blur.
+    rage::grcRenderTargetPC* AOAccumTex[2] = {};
+    IDirect3DSurface9* AOAccumSurf[2] = {};
+    int nAOAccumIndex = 0;
+    uint32_t nAOAccumFrame = 0; // FrameHistory::Frame() of AOAccumTex[nAOAccumIndex], 0 if none
     bool AOEnabled = true;
 
     // Pre alpha pass depth texture copy
@@ -263,7 +269,7 @@ public:
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
-        D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion;
+        D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
         D3DXHANDLE SceneTex2D, SkinIDTex2D, SkinLightTex2D, vec4SkinStep, fSkinStrength;
         D3DXHANDLE techSkinLight, techSkinScatter, techSkinScatterFinal, techSkinDebug;
     } SSREffectHandles = {};
@@ -535,10 +541,20 @@ public:
     float fAmbientOcclusionBias = 0.03f;
     float fAmbientOcclusionIntensity = 0.4f;
     float fAmbientOcclusionBlurRadius = 2.0f;
+    // GTAO (AO.fx, Ambient Occlusion: GTAO in the graphics menu): slices through the view
+    // direction and steps per side.
+    int nAmbientOcclusionGTAOSlices = 3;
+    int nAmbientOcclusionGTAOSteps = 4;
+    float fAmbientOcclusionGTAOStrength = 1.0f;
+    float fAmbientOcclusionGTAOThinOccluders = 0.5f;
+    float fAmbientOcclusionTemporal = 0.9f;  // share of last frames' GTAO kept, 0 turns accumulation off
+    bool bAmbientOcclusionMultiBounce = true;
 
     struct
     {
-        D3DXHANDLE AOTexture2D, AOCamDepthTexture2D, DepthTex2D;
+        D3DXHANDLE AOTexture2D, AOCamDepthTexture2D, DepthTex2D, NormalTex2D;
+        D3DXHANDLE vec4WorldToView, fUseNormals, fGTAOStrength, fThinOccluders, vec2NoiseOffset, fMultiBounce, AlbedoTex2D;
+        D3DXHANDLE AOHistoryTex2D, PrevDepthTex2D, MotionTex2D, vec4ViewToPrevClip, fUseMotion, vec2MotionJitter, fUsePrevDepth, fTemporalBlend;
 
         D3DXHANDLE vec2InvViewportSize;
         D3DXHANDLE fNearPlane;
@@ -822,7 +838,11 @@ public:
             static std::string logMaxOffset = std::to_string(nAmbientOcclusionLogMaxOffset);
             static std::string maxMipLevel = std::to_string(nAmbientOcclusionMaxMipLevel);
             static std::string farClip = std::to_string(fAmbientOcclusionFarClip);
+            static std::string gtaoSlices = std::to_string(nAmbientOcclusionGTAOSlices);
+            static std::string gtaoSteps = std::to_string(nAmbientOcclusionGTAOSteps);
             D3DXMACRO defines[] = {
+                {"GTAO_SLICES", gtaoSlices.c_str()},
+                {"GTAO_STEPS", gtaoSteps.c_str()},
                 {"NUM_SAMPLES", sampleCount.c_str()},
                 {"LOG_MAX_OFFSET", logMaxOffset.c_str()},
                 {"MAX_MIP_LEVEL", maxMipLevel.c_str()},
@@ -840,6 +860,18 @@ public:
                 AOEffectHandles.AOTexture2D = AOEffect->GetParameterByName(nullptr, "AOTexture2D");
                 AOEffectHandles.AOCamDepthTexture2D = AOEffect->GetParameterByName(nullptr, "AOCamDepthTexture2D");
                 AOEffectHandles.DepthTex2D = AOEffect->GetParameterByName(nullptr, "DepthTex2D");
+                AOEffectHandles.NormalTex2D = AOEffect->GetParameterByName(nullptr, "NormalTex2D");
+                AOEffectHandles.vec4WorldToView = AOEffect->GetParameterByName(nullptr, "vec4WorldToView");
+                AOEffectHandles.fUseNormals = AOEffect->GetParameterByName(nullptr, "fUseNormals");
+                AOEffectHandles.fGTAOStrength = AOEffect->GetParameterByName(nullptr, "fGTAOStrength");
+                for (auto [handle, name] : std::initializer_list<std::pair<D3DXHANDLE*, const char*>>{
+                         { &AOEffectHandles.fThinOccluders, "fThinOccluders" }, { &AOEffectHandles.vec2NoiseOffset, "vec2NoiseOffset" },
+                         { &AOEffectHandles.fMultiBounce, "fMultiBounce" }, { &AOEffectHandles.AlbedoTex2D, "AlbedoTex2D" },
+                         { &AOEffectHandles.AOHistoryTex2D, "AOHistoryTex2D" }, { &AOEffectHandles.PrevDepthTex2D, "PrevDepthTex2D" },
+                         { &AOEffectHandles.MotionTex2D, "MotionTex2D" }, { &AOEffectHandles.vec4ViewToPrevClip, "vec4ViewToPrevClip" },
+                         { &AOEffectHandles.fUseMotion, "fUseMotion" }, { &AOEffectHandles.vec2MotionJitter, "vec2MotionJitter" },
+                         { &AOEffectHandles.fUsePrevDepth, "fUsePrevDepth" }, { &AOEffectHandles.fTemporalBlend, "fTemporalBlend" } })
+                    *handle = AOEffect->GetParameterByName(nullptr, name);
                 AOEffectHandles.vec2InvViewportSize = AOEffect->GetParameterByName(nullptr, "vec2InvViewportSize");
                 AOEffectHandles.fNearPlane = AOEffect->GetParameterByName(nullptr, "fNearPlane");
                 AOEffectHandles.fFarPlane = AOEffect->GetParameterByName(nullptr, "fFarPlane");
@@ -946,6 +978,7 @@ public:
                 h.fGIThickness = SSREffect->GetParameterByName(nullptr, "fGIThickness");
                 h.fGIMaxViewDistance = SSREffect->GetParameterByName(nullptr, "fGIMaxViewDistance");
                 h.fGIIntensity = SSREffect->GetParameterByName(nullptr, "fGIIntensity");
+                h.fGIRespectAO = SSREffect->GetParameterByName(nullptr, "fGIRespectAO");
                 h.techSSGI = SSREffect->GetTechniqueByName("SSGI");
                 h.fGIMaxBrightness = SSREffect->GetParameterByName(nullptr, "fGIMaxBrightness");
                 h.techGIUpsample = SSREffect->GetTechniqueByName("GIUpsample");
@@ -1153,6 +1186,12 @@ public:
         nAmbientOcclusionMaxMipLevel = iniReader.ReadInteger("POSTFX", "AmbientOcclusionMaxMipLevel", 5);
         fAmbientOcclusionFarClip = iniReader.ReadFloat("POSTFX", "AmbientOcclusionFarClip", 150.0f);
         fAmbientOcclusionBlurRadius = iniReader.ReadFloat("POSTFX", "AmbientOcclusionBlurRadius", 2.0f);
+        nAmbientOcclusionGTAOSlices = std::clamp(iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOSlices", 3), 1, 8);
+        nAmbientOcclusionGTAOSteps = std::clamp(iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOSteps", 4), 1, 16);
+        fAmbientOcclusionGTAOStrength = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOStrength", 1.0f), 0.0f, 4.0f);
+        fAmbientOcclusionGTAOThinOccluders = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOThinOccluders", 0.5f), 0.0f, 1.0f);
+        fAmbientOcclusionTemporal = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOTemporal", 0.9f), 0.0f, 0.98f);
+        bAmbientOcclusionMultiBounce = iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOMultiBounce", 1) != 0;
 
         nAmbientOcclusionBlurPasses = std::max(0, nAmbientOcclusionBlurPasses);
         nAmbientOcclusionSamples = std::clamp(nAmbientOcclusionSamples, 0, 128);
@@ -1321,6 +1360,16 @@ private:
             }
         }
         PostFxResources.SSRResult = nullptr;
+        for (int i = 0; i < 2; ++i)
+        {
+            SAFE_RELEASE(PostFxResources.AOAccumSurf[i]);
+            if (PostFxResources.AOAccumTex[i])
+            {
+                PostFxResources.AOAccumTex[i]->Destroy();
+                PostFxResources.AOAccumTex[i] = nullptr;
+            }
+        }
+        PostFxResources.nAOAccumFrame = 0;
         for (auto* rt : { &PostFxResources.ContactRawTex, &PostFxResources.ContactRawHalfTex, &PostFxResources.ContactTex,
                           &PostFxResources.ContactAccumTex[0], &PostFxResources.ContactAccumTex[1] })
         {
@@ -1536,6 +1585,14 @@ private:
         aoDesc.mLevels = 1;
         PostFxResources.AOTex = rage::CreateEmptyRenderTarget("AOTex", width, height, 8, aoDesc);
         PostFxResources.AOBlurTex = rage::CreateEmptyRenderTarget("AOBlurTex", width, height, 8, aoDesc);
+        if (PostFxResources.fAmbientOcclusionTemporal > 0.0f)
+        {
+            // 16-bit: blending a small share of each frame into 8 bits gets stuck on its steps.
+            aoDesc.mFormat = rage::GRCFMT_R16F;
+            static const char* names[2] = { "AOAccumTex0", "AOAccumTex1" };
+            for (int i = 0; i < 2; ++i)
+                PostFxResources.AOAccumTex[i] = rage::CreateEmptyRenderTarget(names[i], width, height, 16, aoDesc, PostFxResources.AOAccumSurf[i]);
+        }
 
         {
             aoDesc.mFormat = rage::GRCFMT_A16B16G16R16F;
@@ -2300,10 +2357,71 @@ private:
     };
     static constexpr DWORD kSSRSamplerSlots = 8;
     static constexpr DWORD kSSRTextureSlots = 8;
+
+    // The textures and the sampler states of the first kSSRTextureSlots samplers, saved on
+    // construction and put back on destruction: deferred_lighting draws right after FusionFix's
+    // passes and reads what the game bound there before them (the G-buffer normals on s1, and
+    // more on s4). The AO pass left its own textures on s1 to s4 once GTAO used them.
+    struct SavedSamplerSlots
+    {
+        IDirect3DDevice9* device;
+        IDirect3DBaseTexture9* textures[kSSRTextureSlots] = {};
+        DWORD states[kSSRSamplerSlots][std::size(kSSRSamplerStates)] = {};
+
+        explicit SavedSamplerSlots(IDirect3DDevice9* pDevice) : device(pDevice)
+        {
+            for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+                device->GetTexture(slot, &textures[slot]);
+            for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+                for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+                    device->GetSamplerState(slot, kSSRSamplerStates[i].state, &states[slot][i]);
+        }
+
+        ~SavedSamplerSlots()
+        {
+            for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+                for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+                    device->SetSamplerState(slot, kSSRSamplerStates[i].state, states[slot][i]);
+            for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+            {
+                device->SetTexture(slot, textures[slot]);
+                SAFE_RELEASE(textures[slot]);
+            }
+        }
+
+        SavedSamplerSlots(const SavedSamplerSlots&) = delete;
+        SavedSamplerSlots& operator=(const SavedSamplerSlots&) = delete;
+    };
     static constexpr UINT kPSConstCount = 224;
     static constexpr UINT kVSConstCount = 256;
     static inline float savedPSConsts[kPSConstCount * 4];
     static inline float savedVSConsts[kVSConstCount * 4];
+
+    // The float shader constants, saved on construction and put back on destruction. An
+    // effect writes its parameters into them, over what the game set for deferred_lighting,
+    // which draws right after FusionFix's passes: once GTAO's accumulation took a dozen more,
+    // the sun's went and it stopped lighting anything.
+    struct SavedShaderConstants
+    {
+        IDirect3DDevice9* device;
+        std::vector<float> ps = std::vector<float>(kPSConstCount * 4);
+        std::vector<float> vs = std::vector<float>(kVSConstCount * 4);
+
+        explicit SavedShaderConstants(IDirect3DDevice9* pDevice) : device(pDevice)
+        {
+            device->GetPixelShaderConstantF(0, ps.data(), kPSConstCount);
+            device->GetVertexShaderConstantF(0, vs.data(), kVSConstCount);
+        }
+
+        ~SavedShaderConstants()
+        {
+            device->SetPixelShaderConstantF(0, ps.data(), kPSConstCount);
+            device->SetVertexShaderConstantF(0, vs.data(), kVSConstCount);
+        }
+
+        SavedShaderConstants(const SavedShaderConstants&) = delete;
+        SavedShaderConstants& operator=(const SavedShaderConstants&) = delete;
+    };
 
     static void MatrixMultiply(D3DXMATRIX& out, const D3DXMATRIX& a, const D3DXMATRIX& b)
     {
@@ -3204,6 +3322,8 @@ private:
         if (PostFxResources.AOEffect && PostFxResources.AOEnabled && AO->get())
         { // AO
             IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+            SavedSamplerSlots savedSamplers(pDevice);
+            SavedShaderConstants savedConstants(pDevice);
 
             IDirect3DSurface9* rt0 = nullptr;
             IDirect3DSurface9* ds = nullptr;
@@ -3233,7 +3353,7 @@ private:
 
             UINT passes = 0;
             ID3DXEffect* effect = PostFxResources.AOEffect;
-            effect->Begin(&passes, 0); assert(passes == 5);
+            effect->Begin(&passes, 0); assert(passes == 7);
             {
                 rage::grcViewport* currGrcViewport = rage::GetCurrentViewport();
 
@@ -3312,16 +3432,79 @@ private:
                 D3DMATRIX proj = *(D3DMATRIX*)currGrcViewport->mProjectionMatrix;
 
                 effect->SetFloat(h.fRadius, PostFxResources.fAmbientOcclusionRadius);
+                // GTAO's normals, from the G-buffer when there is one
+                {
+                    const bool normals = PostFxResources.mNormalRT && PostFxResources.mNormalRT->mD3DTexture;
+                    effect->SetTexture(h.NormalTex2D, normals ? PostFxResources.mNormalRT->mD3DTexture : nullptr);
+                    effect->SetFloat(h.fUseNormals, normals ? 1.0f : 0.0f);
+                    D3DXVECTOR4 toView[3];
+                    WorldToViewRows(currGrcViewport, toView);
+                    effect->SetVectorArray(h.vec4WorldToView, toView, 3);
+                    effect->SetFloat(h.fGTAOStrength, PostFxResources.fAmbientOcclusionGTAOStrength);
+                    effect->SetFloat(h.fThinOccluders, PostFxResources.fAmbientOcclusionGTAOThinOccluders);
+                }
+                auto& R = PostFxResources;
+                const bool gtao = AO->get() == 2;
+                const bool temporal = gtao && R.fAmbientOcclusionTemporal > 0.0f && R.AOAccumSurf[0] && R.AOAccumSurf[1];
+                {
+                    // While GTAO accumulates, its noise is read elsewhere every frame (FrameHistory::NoiseOffset).
+                    auto offset = temporal ? FrameHistory::NoiseOffset() : std::array<float, 2>{};
+                    effect->SetFloatArray(h.vec2NoiseOffset, offset.data(), 2);
+                    const bool albedo = gtao && R.bAmbientOcclusionMultiBounce && R.mDiffuseRT && R.mDiffuseRT->mD3DTexture;
+                    effect->SetTexture(h.AlbedoTex2D, albedo ? R.mDiffuseRT->mD3DTexture : nullptr);
+                    effect->SetFloat(h.fMultiBounce, albedo ? 1.0f : 0.0f);
+                }
                 effect->SetFloat(h.fBias, PostFxResources.fAmbientOcclusionBias);
                 effect->SetFloat(h.fIntensity, PostFxResources.fAmbientOcclusionIntensity);
                 effect->SetFloat(h.fProjScale, proj._22 * 0.5f * height);
 
                 effect->CommitChanges();
 
-                effect->BeginPass(2);
+                effect->BeginPass(gtao ? 5 : 2); // 1 SAO, 2 GTAO
                 BindEffectSamplers(pDevice, effect);
                 pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
+
+                // GTAO's accumulation over frames, before the blur: the history is this frame's
+                // raw GTAO blended with last frame's, followed to where each pixel was.
+                IDirect3DTexture9* blurSource = aoTex;
+                if (temporal)
+                {
+                    const int prev = R.nAOAccumIndex, next = prev ^ 1;
+                    const bool history = FrameHistory::CanReproject(R.nAOAccumFrame);
+                    D3DXMATRIX prevViewProj;
+                    if (FrameHistory::Previous().Valid)
+                        prevViewProj = FrameHistory::Previous().ViewProjection;
+                    else
+                        MatrixMultiply(prevViewProj, *(const D3DXMATRIX*)currGrcViewport->mViewMatrix, *(const D3DXMATRIX*)currGrcViewport->mProjectionMatrix);
+                    D3DXVECTOR4 reprojRows[4];
+                    ViewToClipRows(currGrcViewport, prevViewProj, reprojRows);
+                    effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
+                    const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
+                    effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
+                    effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
+                    auto motion = history ? FrameHistory::MotionVectors() : nullptr;
+                    auto jitter = FrameHistory::JitterDeltaUV();
+                    effect->SetTexture(h.MotionTex2D, motion);
+                    effect->SetFloat(h.fUseMotion, motion ? 1.0f : 0.0f);
+                    effect->SetFloatArray(h.vec2MotionJitter, jitter.data(), 2);
+                    effect->SetFloat(h.fTemporalBlend, history ? R.fAmbientOcclusionTemporal : 0.0f);
+                    effect->SetTexture(h.AOTexture2D, aoTex);
+                    effect->SetTexture(h.AOHistoryTex2D, R.AOAccumTex[prev]->mD3DTexture);
+                    effect->CommitChanges();
+
+                    pDevice->SetRenderTarget(0, R.AOAccumSurf[next]);
+                    effect->BeginPass(6);
+                    BindEffectSamplers(pDevice, effect);
+                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                    effect->EndPass();
+
+                    R.nAOAccumIndex = next;
+                    R.nAOAccumFrame = FrameHistory::Frame();
+                    blurSource = R.AOAccumTex[next]->mD3DTexture;
+                }
+                else
+                    R.nAOAccumFrame = 0;
 
                 float hor[2] = { invViewportSize[0] * PostFxResources.fAmbientOcclusionBlurRadius, 0.0 };
                 float ver[2] = { 0.0, invViewportSize[1] * PostFxResources.fAmbientOcclusionBlurRadius };
@@ -3329,7 +3512,7 @@ private:
                 for (auto i = 0; i < PostFxResources.nAmbientOcclusionBlurPasses; ++i)
                 {
                     pDevice->SetRenderTarget(0, aoBlurSurf);
-                    effect->SetTexture(h.AOTexture2D, aoTex); // blur pass 1
+                    effect->SetTexture(h.AOTexture2D, i == 0 ? blurSource : aoTex); // blur pass 1
                     effect->SetFloatArray(h.vec2BlurDirection, hor, 2);
                     effect->CommitChanges();
 
@@ -3348,7 +3531,7 @@ private:
 
                 // final output
                 pDevice->SetRenderTarget(0, SpecularRT);
-                effect->SetTexture(h.AOTexture2D, aoTex);
+                effect->SetTexture(h.AOTexture2D, PostFxResources.nAmbientOcclusionBlurPasses > 0 ? aoTex : blurSource);
 
                 effect->BeginPass(4);
                 BindEffectSamplers(pDevice, effect);
@@ -3928,6 +4111,10 @@ private:
         const bool albedo = R.mDiffuseRT && R.mDiffuseRT->mD3DTexture;
         effect->SetTexture(h.AlbedoTex2D, albedo ? R.mDiffuseRT->mD3DTexture : nullptr);
         effect->SetTexture(h.GIPrevTex2D, prevGI);
+        // The occlusion deferred_lighting already takes off the ambient, so SSGI_PS does not take it off again.
+        const bool specular = R.mSpecularRT && R.mSpecularRT->mD3DTexture;
+        effect->SetTexture(h.SpecularTex2D, specular ? R.mSpecularRT->mD3DTexture : nullptr);
+        effect->SetFloat(h.fGIRespectAO, specular ? 1.0f : 0.0f);
         effect->SetFloat(h.fGIFeedback, (albedo && prevGI) ? (std::max)(1.0f - 1.0f / R.fGIIntensity, 0.0f) : 0.0f);
 
         IDirect3DSurface9* rt0 = nullptr;

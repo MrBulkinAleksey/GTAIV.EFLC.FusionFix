@@ -2084,7 +2084,7 @@ public:
             { 0, "PREF_MOUSEAIMSENSITIVITY",    "MISC",       "MouseAimSensitivity",                "",                           10, nullptr, 0, 20 },
             { 0, "PREF_NOWARDROBEFADING",       "MISC",       "DisableWardrobeTransition",          "",                           0, nullptr, 0, 1 },
             { 0, "PREF_STOPTAXI",               "MISC",       "InstantStopTaxi",                    "",                           0, nullptr, 0, 1 },
-            { 0, "PREF_SAO",                    "MISC",       "AmbientOcclusion",                   "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_SAO",                    "MISC",       "AmbientOcclusion",                   "MENU_DISPLAY_AO",            0, nullptr, 0, 2 },
             { 0, "PREF_AUTOCLIMBLADDERS",       "MISC",       "AutoClimbLadders",                   "",                           0, nullptr, 0, 1 },
             { 0, "PREF_STUNTJUMPCAM",           "MISC",       "StuntJumpCamera",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_ACTIONCAM",              "MISC",       "ActionCamera",                       "",                           1, nullptr, 0, 1 },
@@ -2149,6 +2149,7 @@ public:
         DefineDisplay("MENU_DISPLAY_SHARPENING", { "MO_OFF", "MO_LOW", "MO_MED", "MO_HIGH" });
         DefineDisplay("MENU_DISPLAY_TEXTURE_LOD_BIAS", { "MO_OFF", "LodBias1", "LodBias2", "LodBias3", "LodBias4" });
         DefineDisplay("MENU_DISPLAY_SSR_QUALITY", { "MO_OFF", "SSRHalf", "SSRFull" });
+        DefineDisplay("MENU_DISPLAY_AO", { "MO_OFF", "SAO", "GTAO" });
         DefineDisplay("MENU_DISPLAY_SSR_DEBUG", { "MO_OFF", "SSRDbgColour", "SSRDbgHits", "SSRDbgNormals", "SSRDbgHorizon", "SSRDbgSpecular", "SSRDbgGlass", "SSRDbgContact", "SSRDbgGI", "SSRDbgSkin" });
 
         constexpr auto toggle = "MENU_DISPLAY_ON_OFF";
@@ -2308,7 +2309,7 @@ public:
             AddRow(category, "Sun Shafts", "PREF_SUNSHAFTS", 2, toggle);
             AddRow(category, "UnclampLighting", "PREF_UNCLAMPLIGHTING", 2, toggle);
             AddRow(category, "Tone Mapping", "PREF_TONEMAPPING", 2, toggle);
-            AddRow(category, "AO", "PREF_SAO", 2, toggle);
+            AddRow(category, "AO", "PREF_SAO", 3, "MENU_DISPLAY_AO");
             AddRow(category, "Shadow Filter", "PREF_SHADOWFILTER", 3, "MENU_DISPLAY_SHADOWFILTER");
             // Shown on the game, with a warning below the menu while it's on
             AddRow(category, "ExtraNightShad", "PREF_EXTRANIGHTSHADOWS", 4, "MENU_DISPLAY_EXTRA_NIGHT_SHADOWS");
