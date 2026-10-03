@@ -445,7 +445,8 @@ public:
                         OutputDebugStringW(L"FusionFix experimental shadows: allocation adapter unavailable; original engine selection retained.\n");
                 }
                 // After the allocation adapter, which checks the selection's bytes this hooks.
-                HeadlightEnhancement::InstallShadowOrigin(iniReader.ReadInteger("HEADLIGHTS", "ShadowFromNearLamp", 1) != 0);
+                HeadlightEnhancement::InstallShadowOrigin(
+                    std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowBehindLamps", 0.5f), 0.0f, 2.0f));
             }
             else
             {

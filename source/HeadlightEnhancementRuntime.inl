@@ -286,160 +286,77 @@ namespace HeadlightEnhancement
     }
 
     // Both lit lamps of a car make one beam from the point between them (CE 0xA3FCA5: the two
-    // lamp bones averaged, then 0xA3E070), and its shadow is drawn from there too, so a hand at
-    // the car's edge, right by one lamp, shadowed the far half of the beam with a hard edge down
-    // the middle. Moving the beam itself towards the lamp on the player's side (191e631, dropped)
-    // moved the light on the road and walls about as the player walked and got in or out. Now
-    // only the shadow moves: the shadow selection copies the light's position into its slot
-    // (0x92810D, slots at 0x119F100 + n * 0x110, position at +0xC0), and both the shadow map
+    // lamp bones averaged, then 0xA3E070), and its shadow is drawn from there too, so a hand by
+    // one lamp, a few centimetres from that point, took up half of what it sees and cut away
+    // half of the beam with a hard edge down the middle. Sliding the beam (191e631, dropped) or
+    // only its shadow (c49f045) towards the lamp on the player's side moved the cut to the other
+    // side of the hand: anything right by the point a shadow is drawn from cuts it in half.
+    // The shadow of every car's headlights is now drawn from further back along the beam, inside
+    // the car, so a hand at a lamp is that far from it and casts a shadow of its own size, while
+    // things further out are hardly shadowed differently. The light stays where it is: the shadow
+    // selection copies the light's position into its slot (0x92810D, slots at 0x119F100 +
+    // n * 0x110, position at +0xC0, direction at +0xD0, radius at +0xE0), and both the shadow map
     // (0xD784C6 -> 0x925070 / 0x924E50, the paraboloid matrices at +0x40) and the lighting's
-    // lookup of it are built from that slot, while the light is lit from its own position. For
-    // a car within a few metres of the player on foot, the slot's position slides from between
-    // the lamps towards the lamp on the player's side, as far as the player stands out across the car.
-    using SubmitBeams = void(__cdecl*)(void*, float*, float*, void*, float, float, float, float, int, int,
-                                       uintptr_t, int);
-    static SubmitBeams submitBeams = nullptr;
-    static constexpr float ShadowOriginDistance = 6.0f;
-
-    // How far each car's shadow has moved out of the middle, -1 the lamp at -x to +1 the lamp at
-    // +x, easing towards where the player stands; offset is where that puts it from the beam's
-    // position, for the shadow selection to pick up by the car's key.
-    struct ShadowOrigin
-    {
-        uint64_t token = 0;
-        float t = 0.0f;
-        int32_t timeMs = 0;
-        uint32_t frame = 0;
-        float offset[3]{};
-    };
-    static std::array<ShadowOrigin, 4> shadowOrigins{};
-    static constexpr float ShadowOriginPerSecond = 1.5f;  // lamp to middle in 0.7 s
-    static constexpr int32_t ShadowOriginStaleMs = 1000; // lights off or out of range for longer start anew
-
-    static ShadowOrigin* EaseShadowOrigin(uintptr_t vehicle, float target)
-    {
-        if (!CTimer::m_snTimeInMilliseconds || !CTimer::m_frameCount) return nullptr;
-        const int32_t now = *CTimer::m_snTimeInMilliseconds;
-        ShadowOrigin* origin = nullptr;
-        for (auto& entry : shadowOrigins)
-            if (entry.token && static_cast<uintptr_t>(static_cast<uint32_t>(entry.token)) == vehicle)
-                origin = &entry;
-        const auto token = (origin || target != 0.0f) ? PlayerCar::VehicleToken(vehicle) : 0;
-        if (origin && (origin->token != token || now - origin->timeMs > ShadowOriginStaleMs))
-        {
-            *origin = {};
-            origin = nullptr;
-        }
-        if (!origin)
-        {
-            if (target == 0.0f || !token) return nullptr;
-            origin = &shadowOrigins[0];
-            for (auto& entry : shadowOrigins)
-                if (!entry.token || entry.timeMs - origin->timeMs < 0)
-                    origin = &entry;
-            *origin = { token, 0.0f, now };
-        }
-        const float step = ShadowOriginPerSecond * std::clamp(now - origin->timeMs, 0, 100) / 1000.0f;
-        origin->t += std::clamp(target - origin->t, -step, step);
-        origin->timeMs = now;
-        origin->frame = *CTimer::m_frameCount;
-        if (origin->t == 0.0f && target == 0.0f)
-        {
-            *origin = {};
-            return nullptr;
-        }
-        return origin;
-    }
-
-    static void __cdecl SubmitBeamsNotingLamps(void* matrix, float* position, float* direction, void* colour,
-        float intensity, float radius, float a7, float a8, int a9, int a10, uintptr_t vehicle, int player)
-    {
-        submitBeams(matrix, position, direction, colour, intensity, radius, a7, a8, a9, a10, vehicle, player);
-        const auto m = CEntity::GetMatrix(vehicle);
-        if (!bHeadlightShadows || !m) return;
-
-        // The caller's frame: the world position at position[0..2], the lamps' bones in car space
-        // at position + 0x30 and + 0x40 (x, -, z), and their shared forward offset at position - 0xC.
-        const auto bytes = reinterpret_cast<const uint8_t*>(position);
-        const float y = *reinterpret_cast<const float*>(bytes - 0xC);
-        const auto lampAt = [&](int lamp, float* world)
-        {
-            const auto bone = reinterpret_cast<const float*>(bytes + (lamp ? 0x30 : 0x40));
-            const float x = bone[0], z = bone[2];
-            for (int i = 0; i < 3; ++i)
-                world[i] = m[i] * x + m[4 + i] * y + m[8 + i] * z + m[12 + i];
-            return x;
-        };
-        float lamps[2][3];
-        const float x0 = lampAt(0, lamps[0]), x1 = lampAt(1, lamps[1]);
-        const float halfWidth = std::fabs(x0 - x1) * 0.5f;
-
-        // On foot within ShadowOriginDistance, as far as the player stands across the car (its
-        // matrix's x axis) out of the lamp's own offset, back to the middle over the last 2 m.
-        float target = 0.0f;
-        const auto ped = CPlayer::getLocalPlayerPed ? CPlayer::getLocalPlayerPed() : 0;
-        const auto pedMatrix = CEntity::GetMatrix(ped);
-        if (halfWidth > 0.05f && pedMatrix && CPlayer::findPlayerCar && !CPlayer::findPlayerCar())
-        {
-            const float px = pedMatrix[12] - m[12], py = pedMatrix[13] - m[13], pz = pedMatrix[14] - m[14];
-            const float distance = std::sqrt(px * px + py * py + pz * pz);
-            const float closeness = std::clamp((ShadowOriginDistance - distance) / 2.0f, 0.0f, 1.0f);
-            const float across = px * m[0] + py * m[1] + pz * m[2];
-            target = std::clamp(across / halfWidth, -1.0f, 1.0f) * closeness;
-        }
-        const auto origin = EaseShadowOrigin(vehicle, target);
-        if (!origin) return;
-        const float* lamp = (origin->t >= 0.0f) == (x0 >= x1) ? lamps[0] : lamps[1];
-        for (int i = 0; i < 3; ++i)
-            origin->offset[i] = (lamp[i] - position[i]) * std::fabs(origin->t);
-    }
-
-    // At the end of the shadow selection (CE 0x9280C1, also where it leaves early on the frames
-    // it skips, with the slots as they were): the slots of the beams above take their offset. A
-    // slot moved last time and not filled anew since still holds the moved position, so it moves
-    // from where it was before. The cached map of the static scene a slot may start from was
-    // drawn from the light's own position and would not match, so a moved slot draws without it
-    // (0x925BD0 clears the map instead).
+    // lookup of it are built from the slot, while the light is lit from its own position.
+    static float shadowOriginBack = 0.0f;
     static SafetyHookMid shadowOriginHook;
+
+    // A slot moved last time and not filled anew since (the selection skips frames, leaving its
+    // slots as they were) still holds the moved position and radius, so it moves from those it
+    // had before.
     struct MovedSlot
     {
         uint32_t key = 0;
-        float base[3]{};
-        float moved[3]{};
+        float base[4]{}; // position, radius
+        float moved[4]{};
     };
     static std::array<MovedSlot, 8> movedSlots{};
 
+    static bool IsHeadlightBeam(uint32_t key)
+    {
+        const auto lights = *reinterpret_cast<const rage::CLightSource* const*>(imageBase + 0xC3EED8);
+        const auto count = *reinterpret_cast<const uint32_t*>(imageBase + 0x110E240);
+        if (!lights) return false;
+        constexpr uint32_t beam = rage::LF_VEHICLE | rage::LF_DYNAMIC_SHADOW;
+        for (uint32_t i = 0; i < count && i < 0x280; ++i)
+            if (static_cast<uint32_t>(lights[i].mCastShadows) == key)
+                return lights[i].mType == rage::LT_SPOT && (lights[i].mFlags & beam) == beam;
+        return false;
+    }
+
+    // At the end of the shadow selection (CE 0x9280C1, also where it leaves early on the frames
+    // it skips). The cached map of the static scene a slot may start from was drawn from the
+    // light's own position and would not match, so a moved slot draws without it (0x925BD0
+    // clears the map instead) and draws the static scene itself.
     static void MoveShadowOrigins(SafetyHookContext&)
     {
-        if (!CTimer::m_frameCount) return;
-        const uint32_t frame = *CTimer::m_frameCount;
         for (uint32_t n = 1; n < 8; ++n)
         {
             const auto slot = imageBase + 0xD9F100 + n * 0x110;
             auto position = reinterpret_cast<float*>(slot + 0xC0);
+            auto& radius = *reinterpret_cast<float*>(slot + 0xE0);
+            const auto direction = reinterpret_cast<const float*>(slot + 0xD0);
             const auto key = *reinterpret_cast<const uint32_t*>(slot + 0xF8);
             const bool active = *reinterpret_cast<const uint8_t*>(slot + 0xED) != 0;
             auto& moved = movedSlots[n];
-            float base[3] = { position[0], position[1], position[2] };
-            if (moved.key && moved.key == key && !std::memcmp(position, moved.moved, sizeof(moved.moved)))
+            float base[4] = { position[0], position[1], position[2], radius };
+            const float now[4] = { position[0], position[1], position[2], radius };
+            if (moved.key && moved.key == key && !std::memcmp(now, moved.moved, sizeof(now)))
                 std::copy(std::begin(moved.base), std::end(moved.base), base);
             moved = {};
-            if (!active || !key) continue;
-
-            const ShadowOrigin* origin = nullptr;
-            for (const auto& entry : shadowOrigins)
-                if (entry.token && static_cast<uint32_t>(entry.token) == key && frame - entry.frame <= 2)
-                    origin = &entry;
-            if (!origin)
+            if (!active || !key || !IsHeadlightBeam(key))
             {
-                std::copy(std::begin(base), std::end(base), position);
+                std::copy(base, base + 3, position);
+                radius = base[3];
                 continue;
             }
             for (int i = 0; i < 3; ++i)
-                position[i] = base[i] + origin->offset[i];
+                position[i] = base[i] - direction[i] * shadowOriginBack;
+            radius = base[3] + shadowOriginBack;
             moved.key = key;
             std::copy(std::begin(base), std::end(base), moved.base);
             std::copy(position, position + 3, moved.moved);
+            moved.moved[3] = radius;
             auto& cache = *reinterpret_cast<int32_t*>(slot + 0xF0);
             if (cache != -1)
             {
@@ -450,16 +367,17 @@ namespace HeadlightEnhancement
         }
     }
 
-    static void InstallShadowOrigin(bool enabled)
+    static void InstallShadowOrigin(float back)
     {
-        if (!enabled) return;
-        // push dword ptr [ebp+24] / call 0xA3E070 / add esp, 30
+        if (!(back > 0.0f)) return;
+        shadowOriginBack = back;
         // mov [esi-8], eax (the slot's position from the light's) at 0x92810D, the slots' bounds
-        // at 0x928065 and 0x9280B9, and mov ecx, [esp+BC] where the selection ends
-        const auto check = CodeCheck().Bytes(0x63FE0E, {0xFF,0x75,0x24,0xE8}).Branch(0x63FE12, 0x63E070)
-            .Bytes(0x63FE16, {0x83,0xC4,0x30})
+        // at 0x928065 and 0x9280B9, the light list at 0x92807C, and mov ecx, [esp+BC] where the
+        // selection ends
+        const auto check = CodeCheck()
             .Bytes(0x52810D, {0x89,0x46,0xF8}).Bytes(0x528065, {0xBE}).Address(0x528066, 0xD9F2D8)
             .Bytes(0x5280B9, {0x81,0xFE}).Address(0x5280BB, 0xD9FA48)
+            .Bytes(0x52807C, {0x8B,0x0D}).Address(0x52807E, 0xC3EED8)
             .Bytes(0x5280C1, {0x8B,0x8C,0x24,0xBC,0x00,0x00,0x00});
         if (!check)
         {
@@ -473,8 +391,6 @@ namespace HeadlightEnhancement
             return;
         }
         shadowOriginHook = std::move(*hook);
-        submitBeams = reinterpret_cast<SubmitBeams>(imageBase + 0x63E070);
-        injector::MakeCALL(imageBase + 0x63FE11, SubmitBeamsNotingLamps, true);
         shadowOriginStatus = "installed";
     }
 
