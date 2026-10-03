@@ -1422,9 +1422,21 @@ namespace SSRTrace
             return;
         IDirect3DSurface9* rt = nullptr;
         pDevice->GetRenderTarget(0, &rt);
+        // The texture whose top level the target is, among FusionFix's own; none for another.
         IDirect3DBaseTexture9* rtTexture = nullptr;
-        if (rt)
-            rt->GetContainer(IID_IDirect3DTexture9, reinterpret_cast<void**>(&rtTexture));
+        auto& R = PostFxResources;
+        for (auto* known : { R.SSRTex, R.SSRHalfTex, R.SSRDenoisedTex, R.SSRHalfDenoisedTex, R.SSRAccumTex[0][0], R.SSRAccumTex[0][1],
+                             R.SSRAccumTex[1][0], R.SSRAccumTex[1][1], R.SSRTraceTex[0], R.SSRTraceTex[1], R.SSRFallbackTex[0],
+                             R.SSRFallbackTex[1], R.SSRSpreadTex[0], R.SSRSpreadTex[1] })
+        {
+            IDirect3DSurface9* level = nullptr;
+            if (rt && known && known->mD3DTexture && SUCCEEDED(known->mD3DTexture->GetSurfaceLevel(0, &level)) && level)
+            {
+                if (level == rt)
+                    rtTexture = known->mD3DTexture;
+                level->Release();
+            }
+        }
         D3DVIEWPORT9 view = {};
         pDevice->GetViewport(&view);
         DWORD v[10] = {};
@@ -1452,7 +1464,6 @@ namespace SSRTrace
             unsigned(v[0]), unsigned(v[1]), unsigned(v[2]), unsigned(v[3]), unsigned(v[4]), unsigned(v[5]), int(scissor.left), int(scissor.top),
             int(scissor.right), int(scissor.bottom), unsigned(v[6]), unsigned(v[7]), unsigned(v[8]), unsigned(v[9]), static_cast<void*>(ps), samplers.c_str());
         SAFE_RELEASE(ps);
-        SAFE_RELEASE(rtTexture);
         SAFE_RELEASE(rt);
     }
 
