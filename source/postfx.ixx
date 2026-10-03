@@ -336,8 +336,10 @@ public:
     float fSkinScatteringStrength = 1.0f;
     // The light on skin (c201 and c205; deferred_lighting_sun_on_skin.patch for the sun,
     // local_light_on_skin.patch for lamps and headlights): wraps past the terminator by
-    // SkinLighting times 0.5 in red, 0.2 in green and 0.1 in blue, and in the sun's penumbra red
-    // goes SkinLighting times half way to the square root of the shadow.
+    // SkinLighting times 0.35 in red, 0.25 in green and 0.2 in blue, and in the sun's penumbra red
+    // goes SkinLighting times a fifth of the way to the square root of the shadow. The channels
+    // stay close: past where green and blue end only red is lit, and with 0.5, 0.2 and 0.1 that
+    // band reached a fifth of full light and turned the dark side of faces red.
     float fSkinLighting = 1.0f;
     static constexpr int kSkinDebugMode = 9;
     rage::grcRenderTargetPC* mMaterialIdRT = nullptr;
@@ -4561,14 +4563,14 @@ public:
         // The sun on skin: c201 the scale of the N.L curve less 1, c205 its offset and the red penumbra.
         {
             const float k = R.SkinScatteringEnabled() ? R.fSkinLighting : 0.0f;
-            const float wrap[3] = { 0.5f * k, 0.2f * k, 0.1f * k };
+            const float wrap[3] = { 0.35f * k, 0.25f * k, 0.2f * k };
             float scale[4] = {}, offset[4] = {};
             for (int i = 0; i < 3; ++i)
             {
                 scale[i] = 1.0f / (1.0f + wrap[i]) - 1.0f;
                 offset[i] = wrap[i] / (1.0f + wrap[i]);
             }
-            offset[3] = (std::min)(0.5f * k, 1.0f);
+            offset[3] = (std::min)(0.2f * k, 1.0f);
             pDevice->SetPixelShaderConstantF(201, scale, 1);
             pDevice->SetPixelShaderConstantF(205, offset, 1);
         }
