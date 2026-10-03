@@ -444,6 +444,8 @@ public:
                     if (!PlayerShadowAllocation::Install(allocationMode == 2))
                         OutputDebugStringW(L"FusionFix experimental shadows: allocation adapter unavailable; original engine selection retained.\n");
                 }
+                // After the allocation adapter, which checks the selection's bytes this hooks.
+                HeadlightEnhancement::InstallShadowOrigin(iniReader.ReadInteger("HEADLIGHTS", "ShadowFromNearLamp", 1) != 0);
             }
             else
             {
