@@ -448,14 +448,17 @@ export namespace RenderScale
         bInScene = false;
         ApplyGlobalScreenSize(false);
 
-        // The full size depth buffer only exists once the device hooks made it, and starts the post processing empty
-        if (FullDepth && RealSetDepthStencilSurface && RealClear)
+        // The full size depth buffer only exists once the device hooks made it, and starts the post processing empty.
+        // The hooked functions are the D3D9 runtime's own: they take the real device, not the game's wrapper that
+        // grcDevice hands out.
+        auto realDevice = RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
+        if (FullDepth && RealSetDepthStencilSurface && RealClear && realDevice)
         {
             IDirect3DSurface9* oldDepth = nullptr;
-            device->GetDepthStencilSurface(&oldDepth);
-            RealSetDepthStencilSurface(device, FullDepth);
-            RealClear(device, 0, nullptr, D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL, 0, 1.0f, 0);
-            RealSetDepthStencilSurface(device, oldDepth);
+            realDevice->GetDepthStencilSurface(&oldDepth);
+            RealSetDepthStencilSurface(realDevice, FullDepth);
+            RealClear(realDevice, 0, nullptr, D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL, 0, 1.0f, 0);
+            RealSetDepthStencilSurface(realDevice, oldDepth);
             if (oldDepth)
                 oldDepth->Release();
         }
