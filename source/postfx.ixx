@@ -3,7 +3,11 @@ module;
 #include <common.hxx>
 #include <d3dx9tex.h>
 #include <algorithm>
+#include <cmath>
+#include <cstdarg>
 #include <cstdio>
+#include <cstring>
+#include <mutex>
 
 export module postfx;
 
@@ -1272,6 +1276,188 @@ public:
 
 PostFxResource PostFxResources;
 
+// For now: a trace of SSR's frames, to find why reflections show in the pause menu and not in
+// play. Ctrl+Shift+F11 writes the settings and the next kFrames frames into GTAIV-ssr-trace.log
+// next to the ini: every call of the passes around SSR with its viewport, where it left and what
+// D3D returned, what lighting gets on s3, and for the first frames what the SSR targets hold,
+// read back from the card. The post fx pass arms and flushes it once a frame; the rest only adds
+// lines while it is armed.
+namespace SSRTrace
+{
+    static std::filesystem::path path;
+    static std::mutex mutex;
+    static std::string text;
+    static std::atomic<int> framesLeft{0};
+    static std::atomic<int> readbacksLeft{0};
+    static constexpr int kFrames = 8;
+    static bool keyWasDown = false;
+
+    static bool Active() { return framesLeft.load(std::memory_order_relaxed) > 0; }
+
+    static void Line(const char* format, ...)
+    {
+        if (!Active())
+            return;
+        char line[1024];
+        va_list args;
+        va_start(args, format);
+        vsnprintf(line, sizeof(line), format, args);
+        va_end(args);
+        std::lock_guard lock(mutex);
+        text += std::to_string(GetTickCount64()) + " scene " + std::to_string(FrameHistory::Frame()) + " left " +
+            std::to_string(framesLeft.load(std::memory_order_relaxed)) + " " + line + "\n";
+    }
+
+    static float Half(uint16_t h)
+    {
+        const uint32_t sign = (h & 0x8000u) << 16, exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF;
+        uint32_t bits;
+        if (exponent == 0)
+        {
+            if (!mantissa) bits = sign;
+            else
+            {
+                float f = std::ldexp(float(mantissa), -24);
+                return (h & 0x8000u) ? -f : f;
+            }
+        }
+        else if (exponent == 31)
+            bits = sign | 0x7F800000u | (mantissa << 13);
+        else
+            bits = sign | ((exponent + 112) << 23) | (mantissa << 13);
+        float f;
+        std::memcpy(&f, &bits, 4);
+        return f;
+    }
+
+    // What a render target holds, read back from the card: its size and format, the pixels with
+    // alpha over 0.01, those not finite, the largest colour and alpha and the mean alpha.
+    static void Contents(IDirect3DDevice9* pDevice, const char* name, IDirect3DTexture9* texture)
+    {
+        if (!Active() || readbacksLeft.load(std::memory_order_relaxed) <= 0)
+            return;
+        if (!texture)
+        {
+            Line("  %s: none", name);
+            return;
+        }
+        IDirect3DSurface9* surface = nullptr;
+        if (FAILED(texture->GetSurfaceLevel(0, &surface)) || !surface)
+        {
+            Line("  %s: no surface", name);
+            return;
+        }
+        D3DSURFACE_DESC desc = {};
+        surface->GetDesc(&desc);
+        IDirect3DSurface9* copy = nullptr;
+        HRESULT hr = pDevice->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &copy, nullptr);
+        if (SUCCEEDED(hr))
+            hr = pDevice->GetRenderTargetData(surface, copy);
+        D3DLOCKED_RECT locked = {};
+        if (SUCCEEDED(hr))
+            hr = copy->LockRect(&locked, nullptr, D3DLOCK_READONLY);
+        if (FAILED(hr))
+        {
+            Line("  %s: %ux%u format %u, read back failed %08x", name, desc.Width, desc.Height, unsigned(desc.Format), unsigned(hr));
+            SAFE_RELEASE(copy);
+            surface->Release();
+            return;
+        }
+        uint32_t lit = 0, bad = 0;
+        float maxColour = 0.0f, maxAlpha = 0.0f;
+        double sumAlpha = 0.0;
+        const bool isHalf = desc.Format == D3DFMT_A16B16G16R16F, isFixed = desc.Format == D3DFMT_A16B16G16R16;
+        for (UINT y = 0; y < desc.Height && (isHalf || isFixed); ++y)
+        {
+            auto row = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(locked.pBits) + y * locked.Pitch);
+            for (UINT x = 0; x < desc.Width; ++x)
+            {
+                float v[4];
+                for (int c = 0; c < 4; ++c)
+                    v[c] = isHalf ? Half(row[x * 4 + c]) : row[x * 4 + c] / 65535.0f;
+                if (!std::isfinite(v[0]) || !std::isfinite(v[1]) || !std::isfinite(v[2]) || !std::isfinite(v[3]))
+                {
+                    ++bad;
+                    continue;
+                }
+                maxColour = (std::max)({ maxColour, v[0], v[1], v[2] });
+                maxAlpha = (std::max)(maxAlpha, v[3]);
+                sumAlpha += v[3];
+                if (v[3] > 0.01f)
+                    ++lit;
+            }
+        }
+        copy->UnlockRect();
+        copy->Release();
+        surface->Release();
+        Line("  %s: %ux%u format %u, alpha>0.01 %u, not finite %u, max colour %.3f, max alpha %.3f, mean alpha %.4f%s", name,
+             desc.Width, desc.Height, unsigned(desc.Format), lit, bad, maxColour, maxAlpha,
+             desc.Width * desc.Height ? sumAlpha / (double(desc.Width) * desc.Height) : 0.0, isHalf || isFixed ? "" : " (format not read)");
+    }
+
+    static std::string TextureName(IDirect3DBaseTexture9* texture)
+    {
+        auto& R = PostFxResources;
+        if (!texture) return "none";
+        const std::pair<rage::grcRenderTargetPC*, const char*> known[] = {
+            { R.SSRTex, "SSRTex" }, { R.SSRHalfTex, "SSRHalfTex" }, { R.SSRDenoisedTex, "SSRDenoisedTex" },
+            { R.SSRHalfDenoisedTex, "SSRHalfDenoisedTex" }, { R.SSRAccumTex[0][0], "SSRAccumTex0" }, { R.SSRAccumTex[0][1], "SSRAccumTex1" },
+            { R.SSRAccumTex[1][0], "SSRHalfAccumTex0" }, { R.SSRAccumTex[1][1], "SSRHalfAccumTex1" }, { R.SSRTraceTex[0], "SSRTraceTex" },
+            { R.SSRTraceTex[1], "SSRHalfTraceTex" }, { R.SSRHistoryTex, "SSRHistoryTex" } };
+        for (auto [rt, name] : known)
+            if (rt && rt->mD3DTexture == texture)
+                return name;
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "%p", static_cast<void*>(texture));
+        return buffer;
+    }
+
+    // Once a frame, from the post fx pass, which runs in the pause menu too, where the game does
+    // not tick: Ctrl+Shift+F11 arms the trace with the settings; it is written once the frames
+    // are done.
+    static void Tick()
+    {
+        const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+            (GetAsyncKeyState(VK_F11) & 0x8000);
+        if (down && !keyWasDown && !Active())
+        {
+            auto& R = PostFxResources;
+            auto pref = [](const char* name) { auto p = FusionFixSettings.GetRef(name); return p ? p->get() : -1; };
+            {
+                std::lock_guard lock(mutex);
+                text.clear();
+            }
+            framesLeft = kFrames;
+            readbacksLeft = 2;
+            Line("=== trace: menu SSR %d debug %d AO %d SSGI %d contact %d skin %d; ini intensity %.2f max distance %.1f fallback %.2f "
+                 "temporal %.2f denoise %.1f; active %ux%u",
+                 pref("PREF_SSR"), pref("PREF_SSR_DEBUG"), pref("PREF_SAO"), pref("PREF_SSGI"), pref("PREF_CONTACTSHADOWS"),
+                 pref("PREF_SKIN_SSS"), R.fSSRIntensity, R.fSSRMaxDistance, R.fSSRFallback, R.fSSRTemporalBlend, R.fSSRDenoiseRadius,
+                 unsigned(rage::grcDevice::ms_nActiveWidth ? *rage::grcDevice::ms_nActiveWidth : 0),
+                 unsigned(rage::grcDevice::ms_nActiveHeight ? *rage::grcDevice::ms_nActiveHeight : 0));
+            Line("targets: trace %p/%p fallback %p/%p spread %p/%p ssr %p half %p effect %p history %p depth %p",
+                 static_cast<void*>(R.SSRTraceSurf[0]), static_cast<void*>(R.SSRTraceSurf[1]), static_cast<void*>(R.SSRFallbackSurf[0]),
+                 static_cast<void*>(R.SSRFallbackSurf[1]), static_cast<void*>(R.SSRSpreadSurf[0]), static_cast<void*>(R.SSRSpreadSurf[1]),
+                 static_cast<void*>(R.SSRSurf), static_cast<void*>(R.SSRHalfSurf), static_cast<void*>(R.SSREffect),
+                 static_cast<void*>(R.SSRHistoryTex), static_cast<void*>(R.mDepthRT));
+        }
+        keyWasDown = down;
+        if (!Active())
+            return;
+        if (framesLeft.fetch_sub(1) == 1)
+        {
+            std::lock_guard lock(mutex);
+            try
+            {
+                std::ofstream out(path, std::ios::app);
+                out << text << '\n';
+            }
+            catch (...) {}
+            text.clear();
+        }
+    }
+}
+
 class PostFX
 {
 private:
@@ -1833,6 +2019,7 @@ private:
                         pDevice->StretchRect(PostFxResources.HDRFullScreenSurface, nullptr, PostFxResources.SSRHistorySurf, nullptr, D3DTEXF_NONE);
                         pDevice->SetRenderTarget(0, PostFxResources.HDRFullScreenSurface);
                         PostFxResources.bSSRHistoryThisFrame = true;
+                        SSRTrace::Line("fog pass: history copied");
                         PostFxResources.nSSRHistoryFrame = FrameHistory::Frame();
 
                         pDevice->SetViewport(&vpBeforeCapture);
@@ -2770,7 +2957,10 @@ private:
         R.bSSRDenoised = false;
 
         if (!R.SSRSurf)
+        {
+            SSRTrace::Line("ssr: left, no SSRSurf");
             return;
+        }
 
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
@@ -2791,15 +2981,21 @@ private:
 
         if (!R.SSREnabled())
         {
+            SSRTrace::Line("ssr: left, off in the menu");
             clearSSR();
             R.nSSRAccumFrame = 0;
             return;
         }
 
         rage::grcViewport* vp = rage::GetCurrentViewport();
+        if (vp)
+            SSRTrace::Line("ssr: vp %p %dx%d near %.3f far %.1f", static_cast<void*>(vp), int(vp->mWidth), int(vp->mHeight), vp->mNearClip, vp->mFarClip);
         if (!R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex || !vp || R.fSSRIntensity <= 0.0f ||
             !R.SSRTraceSurf[0] || !R.SSRFallbackSurf[0])
         {
+            SSRTrace::Line("ssr: left, effect %p depth %p history %p vp %p intensity %.2f trace %p fallback %p",
+                static_cast<void*>(R.SSREffect), static_cast<void*>(R.mDepthRT), static_cast<void*>(R.SSRHistoryTex),
+                static_cast<void*>(vp), R.fSSRIntensity, static_cast<void*>(R.SSRTraceSurf[0]), static_cast<void*>(R.SSRFallbackSurf[0]));
             clearSSR();
             R.nSSRAccumFrame = 0;
             return;
@@ -2963,13 +3159,21 @@ private:
             // 0, SSR_PS then does not read it), and the two together.
             auto draw = [&](UINT pass, IDirect3DSurface9* target)
             {
-                pDevice->SetRenderTarget(0, target);
+                const HRESULT rtHr = pDevice->SetRenderTarget(0, target);
                 pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
-                effect->BeginPass(pass);
+                const HRESULT passHr = effect->BeginPass(pass);
                 effect->CommitChanges();
                 BindEffectSamplers(pDevice, effect);
-                pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                const HRESULT drawHr = pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
+                if (SSRTrace::Active())
+                {
+                    D3DVIEWPORT9 view = {};
+                    pDevice->GetViewport(&view);
+                    SSRTrace::Line("ssr: pass %u of %u into %p (%ux%u view) rt %08x pass %08x draw %08x",
+                        pass, passes, static_cast<void*>(target), unsigned(view.Width), unsigned(view.Height),
+                        unsigned(rtHr), unsigned(passHr), unsigned(drawHr));
+                }
             };
             draw(0, R.SSRTraceSurf[half]);
             effect->SetTexture(h.SSRResultTex2D, R.SSRTraceTex[half]->mD3DTexture);
@@ -3048,6 +3252,15 @@ private:
         else
             R.nSSRAccumFrame = 0;
         R.SSRResult = ssrResult;
+        if (SSRTrace::Active())
+        {
+            SSRTrace::Line("ssr: done, half %d denoised %d temporal %d result %s, history this frame %d",
+                int(half), int(R.bSSRDenoised), int(temporal), SSRTrace::TextureName(ssrResult).c_str(), int(R.bSSRHistoryThisFrame));
+            SSRTrace::Contents(pDevice, "trace", R.SSRTraceTex[half] ? R.SSRTraceTex[half]->mD3DTexture : nullptr);
+            SSRTrace::Contents(pDevice, "resolve", ssrTex);
+            SSRTrace::Contents(pDevice, "result", ssrResult);
+            SSRTrace::readbacksLeft.fetch_sub(1);
+        }
 
         const int debugMode = R.SSRDebugMode();
         if (debugMode && debugMode < R.kGlassDebugMode && R.SSRDebugSurf && h.techSSRDebug && hasNormals)
@@ -3637,12 +3850,14 @@ private:
         hbDrawCallPostFX.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitivePostFX = false;
         DrawSSRDebugOverlay();
+        SSRTrace::Tick();
     }
 
     // Replaces the finished frame with the SSR debug view chosen in the graphics menu.
     static void DrawSSRDebugOverlay()
     {
         auto& R = PostFxResources;
+        SSRTrace::Line("debug overlay: valid %d", int(R.bSSRDebugValid));
         if (!R.bSSRDebugValid || !R.SSRDebugTex || !R.SSREffect || !R.SSREffectHandles.techSSRDebugCopy)
             return;
         R.bSSRDebugValid = false;
@@ -3852,6 +4067,8 @@ private:
             const float camera[4] = { fabsf(proj._11), fabsf(proj._22), vp->mNearClip, vp->mFarClip };
             memcpy(PostFxResources.SkinCamera, camera, sizeof(camera));
         }
+        if (auto vp = rage::GetCurrentViewport())
+            SSRTrace::Line("lighting phase: vp %p %dx%d", static_cast<void*>(vp), int(vp->mWidth), int(vp->mHeight));
         ProfilerMark(pDevice, kProfAO, true);
         RenderAmbientOcclusion();
         ProfilerMark(pDevice, kProfAO, false);
@@ -4655,6 +4872,7 @@ public:
         else if (R.SSRTex && R.SSRTex->mD3DTexture)
             tex = R.SSRTex->mD3DTexture; // cleared while SSR is off
         pDevice->SetTexture(3, tex);
+        SSRTrace::Line("bind for lighting: s3 %s, ssr valid this frame %d", SSRTrace::TextureName(tex).c_str(), int(R.bSSRValidThisFrame));
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(3, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
@@ -4772,6 +4990,7 @@ public:
             if (GetD3DX9_43DLL())
             {
                 PostFxResources.Readini();
+                SSRTrace::path = CIniReader("").GetIniPath().parent_path() / "GTAIV-ssr-trace.log";
 
                 auto pattern = find_pattern("E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 5F", "E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 33 C0");
                 hbDrawPrimitivePostFX.fun = injector::MakeCALL(pattern.get_first(0), DrawPrimitivePostFX).get();
