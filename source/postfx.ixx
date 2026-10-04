@@ -359,7 +359,7 @@ public:
     // cloud threshold, bias and thickness, so it follows the weather and the timecycle.
     float fCloudShadows = 0.6f;
     float fCloudShadowsHeight = 1200.0f;
-    float fCloudShadowsScale = 4000.0f;
+    float fCloudShadowsScale = 2500.0f;
     float fCloudShadowsWind = 6.0f;
     float fCloudShadowsSoftness = 1.0f;
     // Added to the deck's coverage before the game's thickness curve: above 0 more of the sky
@@ -1226,7 +1226,7 @@ public:
         fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 1.0f);
         fCloudShadows = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadows", 0.6f), 0.0f, 1.0f);
         fCloudShadowsHeight = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsHeight", 1200.0f), 100.0f, 10000.0f);
-        fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 4000.0f), 100.0f, 50000.0f);
+        fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 2500.0f), 100.0f, 50000.0f);
         fCloudShadowsWind = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsWind", 6.0f), 0.0f, 100.0f);
         fCloudShadowsSoftness = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsSoftness", 1.0f), 0.0f, 6.0f);
         fCloudShadowsCoverage = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsCoverage", 0.0f), -1.0f, 1.0f);
@@ -3843,8 +3843,8 @@ private:
         float litColour[3], shadeColour[3];
         for (int i = 0; i < 3; ++i)
         {
-            litColour[i] = (cloudColour[i] + 0.5f * sunsetColour[i]) * exposure;
-            shadeColour[i] = cloudColour[i] * 0.5f * exposure;
+            litColour[i] = (cloudColour[i] * 1.3f + 0.5f * sunsetColour[i]) * exposure;
+            shadeColour[i] = cloudColour[i] * 0.65f * exposure;
         }
         effect->SetFloatArray("vec3LitColour", litColour, 3);
         effect->SetFloatArray("vec3ShadeColour", shadeColour, 3);
