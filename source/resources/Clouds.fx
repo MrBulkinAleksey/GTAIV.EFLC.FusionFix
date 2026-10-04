@@ -10,8 +10,8 @@
 // light scattered more than once), lit the way gta_atmoscatt_clouds lights its own clouds:
 // CloudColor, brightened by up to CloudInscatteringRange along the sun's axis (cos^2) where the cloud
 // is thin, darkened where the sun does not reach, plus SunsetColor on the side towards the sun. A
-// narrow forward lobe adds the glow of thin cloud right next to the sun, and a soft knee rolls the
-// brightest of it off below a ceiling, so it neither clips to white nor flattens the shading under it.
+// forward lobe some 30 degrees wide adds the glow of thin cloud around the sun, and a soft knee rolls
+// the brightest of it off below a ceiling, so it neither clips to white nor flattens the shading.
 // What the sun lights also takes the hue of the game's sun colour.
 
 // Steps a ray may take in all, coarse and fine.
@@ -22,7 +22,7 @@
 #define COARSE_STEP 4.0
 #define FINE_MISSES 4.0
 #ifndef LIGHT_STEPS
-#define LIGHT_STEPS 3
+#define LIGHT_STEPS 5
 #endif
 // CloudNoiseTex's size.
 #define COVERAGE_SIZE 1024.0
@@ -216,12 +216,6 @@ float Density(float3 p, bool detail, Place place)
     return d * lerp(0.5, 1.0, smoothstep(0.02, 0.2, h));
 }
 
-float HenyeyGreenstein(float cosTheta, float g)
-{
-    float g2 = g * g;
-    return (1.0 - g2) / pow(max(1.0 + g2 - 2.0 * g * cosTheta, 1e-4), 1.5);
-}
-
 float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
 {
     float3 v = ViewRay(vpos);
@@ -245,9 +239,11 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     t1 = min(t1, t0 + vec4Layer.y * 16.0);
 
     float cosTheta = dot(dir, vec3SunDir);
-    // A narrow forward lobe: cloud next to the sun in the sky glows where it is thin enough for its
-    // light to come through, the bright gold rims of clouds against the sun.
-    float forward = HenyeyGreenstein(cosTheta, 0.85);
+    // The forward lobe: cloud around the sun in the sky glows where it is thin enough for its light
+    // to come through, the bright rims of clouds against the sun. A core some 30 degrees wide and a
+    // faint skirt beyond; a Henyey-Greenstein lobe of g 0.85 lit only the cloud within a few degrees
+    // of the sun and left the rims a little way off it dark.
+    float forward = (exp(8.0 * (cosTheta - 1.0)) + 0.3 * exp(2.0 * (cosTheta - 1.0))) * fSilver * 2.0;
     float sigma = vec4Shape.x;
 
     // Empty sky is crossed in coarse steps that test the coverage alone; on finding cloud the ray
@@ -299,9 +295,10 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             if (firstHit < 0.0)
                 firstHit = t;
 
-            // The cloud between the sample and the sun, without the detail.
+            // The cloud between the sample and the sun, without the detail: from a twentieth of the
+            // layer, each step twice the last, out past its whole thickness so the bases darken.
             float lightDepth = 0.0;
-            float stepLength = vec4Layer.y * 0.08;
+            float stepLength = vec4Layer.y * 0.05;
             float3 q = p;
             [loop] [fastopt]
             for (int j = 0; j < LIGHT_STEPS; ++j)
@@ -316,7 +313,10 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // reached the faces seen from below and the clouds came out dark.
             // A share of the extinction (VolumetricCloudsAbsorption): past the sun's direct beam the
             // light inside a cloud is scattered forwards mostly and gets through more cloud than the
-            // eye's view does; a third of it lit the bases nearly as brightly as the tops.
+            // eye's view does. At 0.6 the sun was spent within some 50 metres, about as deep as the
+            // march's first sample of a cloud lies, so even the sides facing the sun came out in
+            // shade and the clouds an even grey; at 0.2 they are lit, and the bases still darken
+            // under the whole thickness the steps now reach.
             float tau = lightDepth * sigma * fLightAbsorption;
             float sun = (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) * (fLightStrength / 1.75);
             // Darker towards the base, where the sky above is hidden by the cloud itself, and
@@ -335,7 +335,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // The sunset colour on the side towards the sun, as the game adds it.
             lit += vec3SunsetColour * sun * (0.35 + 0.25 * cosTheta);
             // The glow of thin cloud next to the sun, its light coming through.
-            lit += sunLit * exp(-tau * 0.5) * thin * min(forward * 0.02 * fSilver, 1.5);
+            lit += sunLit * forward * thin * (0.35 + 0.65 * sun);
             // A soft knee from three quarters of the ceiling up: the glow rises towards it instead of
             // clipping to white.
             float peak = max(max(lit.r, lit.g), lit.b);

@@ -407,7 +407,7 @@ public:
     // The shaded side and the bases against the game's cloud colour, and how much of the view's
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
     float fVolumetricCloudsShade = 0.5f;
-    float fVolumetricCloudsAbsorption = 0.6f;
+    float fVolumetricCloudsAbsorption = 0.2f;
     bool bVolumetricCloudsDebug = false;
     // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
     bool bVolumetricCloudsReflections = true;
@@ -431,6 +431,10 @@ public:
     // than the coverage map, moves the cover by up to this share either way and the heaps' height
     // by a quarter.
     static constexpr float kCloudMorphReach = 250.0f;
+    // The volumetric clouds' sunlit side against the game's CloudColor, which is the middle of its
+    // own clouds' range: the shaded side is VolumetricCloudsShade of it, and most of what the eye
+    // sees of a cloud lies in between.
+    static constexpr float kCloudLitGain = 1.6f;
     static constexpr float kCloudWeatherReach = 0.45f;
     static constexpr float kCloudWeatherScale = 0.08f;
     void UpdateCloudLayer(double seconds);
@@ -1309,7 +1313,7 @@ public:
         fVolumetricCloudsEvolution = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsEvolution", 1.0f), 0.0f, 10.0f);
         fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
         fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.5f), 0.0f, 2.0f);
-        fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.6f), 0.05f, 3.0f);
+        fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.2f), 0.05f, 3.0f);
         bVolumetricCloudsDebug = iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0) != 0;
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
         fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
@@ -4067,7 +4071,7 @@ private:
         float litColour[3], shadeColour[3], sunsetLit[3];
         for (int i = 0; i < 3; ++i)
         {
-            litColour[i] = cloudColour[i] * exposure;
+            litColour[i] = cloudColour[i] * kCloudLitGain * exposure;
             shadeColour[i] = cloudColour[i] * R.fVolumetricCloudsShade * exposure;
             sunsetLit[i] = sunsetColour[i] * exposure;
         }
