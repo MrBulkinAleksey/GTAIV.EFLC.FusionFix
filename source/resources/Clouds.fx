@@ -74,7 +74,8 @@ float fStratus;           // 0 separate heaps of cloud, 1 a sheet: the weather's
 float fEvolution;         // how far the detail has drifted up through itself, so the billows change
 float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
-float fDebug;             // VolumetricCloudsDebug 1: grey by how much sun reaches each sample, white all of it
+float fDebug;             // VolumetricCloudsDebug 1: grey by how much sun reaches each sample, white all of it;
+                          // 2: the sky read behind them, so the clouds vanish where it is read right
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
@@ -375,7 +376,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             float knee = fCeiling * 0.75;
             if (peak > knee)
                 lit *= (knee + fCeiling * 0.25 * (1.0 - exp((knee - peak) / (fCeiling * 0.25)))) / peak;
-            lit = lerp(lit, sun * vec3LitColour.yyy, fDebug);
+            lit = fDebug == 1.0 ? sun * vec3LitColour.yyy : lit;
 
             // Thin cloud lets more of what is behind it through, the wisps at the edges most.
             float stepTransmittance = exp(-d * lerp(1.0 - fTranslucency, 1.0, d) * sigma * fine);
@@ -395,9 +396,12 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     [branch]
     if (fSkyMatch > 0.0)
     {
-        float skyLuma = dot(tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb, float3(0.2126, 0.7152, 0.0722));
+        float3 sky = tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb;
+        float skyLuma = dot(sky, float3(0.2126, 0.7152, 0.0722));
         if (skyLuma > 1e-4)
             colour *= clamp(fSkyMatch * skyLuma / fLitLuma, 0.1, 2.0);
+        if (fDebug == 2.0)
+            colour = sky * (1.0 - transmittance);
     }
 
     // Haze: distant cloud fades into what is behind it.
