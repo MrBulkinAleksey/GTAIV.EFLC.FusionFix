@@ -1,0 +1,60 @@
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS1.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS1.asm
+index 66a2120d..3c09a57f 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS1.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS1.asm
+@@ -192,7 +192,9 @@
+     mul_pp r0.xyz, r3, c81.x
+     min_pp r1.xyz, r0, c83
+     
+-    cmp r1.xyz, -c210_abs.y, r1, r0 // unclamp sun brightness if vol fog is enabled
++    mov r21.x, c210_abs.y
++    max r21.x, r21.x, c210_abs.w // FusionFix: sky_hdr.patch, SkyHDR unclamps the sky without the fog too
++    cmp r1.xyz, -r21.x, r1, r0 // unclamp sun brightness if vol fog is enabled
+     
+     mul r1.w, r20.w, c41.w
+     lrp r0.xyz, r1.w, c43, r1 // mix sky reflection with near fog color
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS7.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS7.asm
+index be437a6d..43d39117 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS7.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS7.asm
+@@ -263,7 +263,9 @@
+     mul_pp r0.xyz, r1, c88.x
+     min_pp r1.xyz, r0, c90
+     
+-    cmp r1.xyz, -c210_abs.y, r1, r0 // unclamp sun brightness if vol fog is enabled
++    mov r21.x, c210_abs.y
++    max r21.x, r21.x, c210_abs.w // FusionFix: sky_hdr.patch, SkyHDR unclamps the sky without the fog too
++    cmp r1.xyz, -r21.x, r1, r0 // unclamp sun brightness if vol fog is enabled
+     
+     mul r1.w, r20.w, c41.w
+     lrp r0.xyz, r1.w, c43, r1 // mix sky reflection with near fog color
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS8.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS8.asm
+index b07bac45..8805df19 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS8.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS8.asm
+@@ -204,7 +204,9 @@
+     mul_pp r0.xyz, r1, c81.x
+     min_pp r1.xyz, r0, c83
+     
+-    cmp r1.xyz, -c210_abs.y, r1, r0 // unclamp sun brightness if vol fog is enabled
++    mov r21.x, c210_abs.y
++    max r21.x, r21.x, c210_abs.w // FusionFix: sky_hdr.patch, SkyHDR unclamps the sky without the fog too
++    cmp r1.xyz, -r21.x, r1, r0 // unclamp sun brightness if vol fog is enabled
+     
+     mul r1.w, r20.w, c41.w
+     lrp r0.xyz, r1.w, c43, r1 // mix sky reflection with near fog color
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS9.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS9.asm
+index 1a79bc90..5f5dfee0 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS9.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS9.asm
+@@ -271,7 +271,9 @@
+     mul_pp r0.xyz, r1, c88.x
+     min_pp r1.xyz, r0, c90
+     
+-    cmp r1.xyz, -c210_abs.y, r1, r0 // unclamp sun brightness if vol fog is enabled
++    mov r21.x, c210_abs.y
++    max r21.x, r21.x, c210_abs.w // FusionFix: sky_hdr.patch, SkyHDR unclamps the sky without the fog too
++    cmp r1.xyz, -r21.x, r1, r0 // unclamp sun brightness if vol fog is enabled
+     
+     mul r1.w, r20.w, c41.w
+     lrp r0.xyz, r1.w, c43, r1 // mix sky reflection with near fog color

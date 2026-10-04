@@ -21,6 +21,10 @@ concept IsAnyOf = (std::same_as<T, U> || ...);
 template<typename T>
 using remove_cvref_t = std::remove_cvref_t<std::remove_pointer_t<std::decay_t<T>>>;
 
+// SkyHDR: the sky and its clouds go past HDRExposureClamp without the volumetric fog too, so the sun
+// and the bright sky around it reach the bloom (c210.w, sky_hdr.patch).
+export inline bool bSkyHDR = true;
+
 export template <typename T> requires IsAnyOf<remove_cvref_t<T>, IDirect3DPixelShader9, IDirect3DVertexShader9>
 int GetFusionShaderID(T pShader)
 {
@@ -184,6 +188,7 @@ public:
             bool bConsoleCarReflectionsAndDirt = iniReader.ReadInteger("MISC", "ConsoleCarReflectionsAndDirt", 1) != 0;
             bSmoothShorelines = iniReader.ReadInteger("MISC", "SmoothShorelines", 1) != 0;
             bSmoothLightVolumes = iniReader.ReadInteger("MISC", "SmoothLightVolumes", 1) != 0;
+            bSkyHDR = iniReader.ReadInteger("POSTFX", "SkyHDR", 1) != 0;
 
             bNoBloomColorShift = iniReader.ReadInteger("MISC", "NoBloomColorShift", 1) != 0;
             fMaxPQValue = std::max(iniReader.ReadFloat("MISC", "MaxPQValue", 100.0f), 0.0000001f);
@@ -572,10 +577,10 @@ public:
                         arr11[0] = 1.0f / fMaxPQValue;
                         arr11[1] = static_cast<float>(fog->get());
                         arr11[2] = bSmoothLightVolumes ? 1.0f : 0.0f;
-                        arr11[3] = 0.0f;
+                        arr11[3] = bSkyHDR ? 1.0f : 0.0f;
 
                         if (bIsQUB3D)
-                            arr11[1] = 0.0f;
+                            arr11[1] = arr11[3] = 0.0f;
 
                         static float arr12[4];
                         arr12[0] = CTimeCycleExt::GetDirLightColorR();

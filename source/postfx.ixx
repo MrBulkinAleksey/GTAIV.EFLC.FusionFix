@@ -4094,9 +4094,9 @@ private:
         }
         // The ceiling the brightest cloud rolls off towards: room above the silver lining's peak for
         // the glow next to the sun. gta_atmoscatt_clouds clamps the sky and its clouds to
-        // HDRExposureClamp unless FusionFix's volumetric fog is on, and past that clamp our clouds
-        // turned white while the sky around them stayed at it, so without the fog the ceiling is
-        // the clamp.
+        // HDRExposureClamp unless FusionFix's volumetric fog or SkyHDR is on, and past that clamp our
+        // clouds turned white while the sky around them stayed at it, so then the ceiling is the
+        // clamp.
         float ceiling = 0.0f;
         {
             static auto volumetricFog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG");
@@ -4104,7 +4104,7 @@ private:
             const float brightest = (std::max)({ litColour[0], litColour[1], litColour[2] });
             ceiling = brightest * (1.0f + inscattering) * 1.5f;
             const float clampMin = (std::min)({ clamp[0], clamp[1], clamp[2] });
-            if (!reflection && !(volumetricFog && volumetricFog->get()) && clampMin > 0.0f)
+            if (!reflection && !(volumetricFog && volumetricFog->get()) && !bSkyHDR && clampMin > 0.0f)
                 ceiling = (std::min)(ceiling, clampMin);
             ceiling = (std::max)(ceiling, 1e-3f);
             if (!reflection)
@@ -4852,10 +4852,10 @@ private:
                 const auto& sky = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
                 const auto& moon = rage::grmShaderInfo::getShaderParamData(R.CloudMoonPositionIdx);
                 const float* k = R.CloudShadowConsts;
-                fprintf(log, "  clouds drawn with lit %.2f %.2f %.2f, shade %.2f %.2f %.2f, ceiling %.2f; lit by the %s at %.2f; sky clamp %.2f %.2f %.2f; volumetric fog %d\n",
+                fprintf(log, "  clouds drawn with lit %.2f %.2f %.2f, shade %.2f %.2f %.2f, ceiling %.2f; lit by the %s at %.2f; sky clamp %.2f %.2f %.2f; volumetric fog %d; sky HDR %d\n",
                         R.CloudLastLit[0], R.CloudLastLit[1], R.CloudLastLit[2], R.CloudLastShade[0], R.CloudLastShade[1], R.CloudLastShade[2],
                         R.CloudLastCeiling, R.bCloudLastMoonlit ? "moon" : "sun", R.CloudLastLightStrength, R.CloudLastClamp[0], R.CloudLastClamp[1], R.CloudLastClamp[2],
-                        [] { static auto fog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG"); return fog ? fog->get() : -1; }());
+                        [] { static auto fog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG"); return fog ? fog->get() : -1; }(), int(bSkyHDR));
                 fprintf(log, "  shadow constants: c197 %.3f %.3f %.1f %.6f  c198 %.3f %.3f %.3f %.3f  c199 %.3f %.3f  noise %s, %s after the lights  debug %d\n",
                         k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], R.CloudNoiseTexture ? "made" : "missing",
                         R.bCloudNoiseSurvived ? "still bound" : "gone", R.nCloudShadowsDebug);
