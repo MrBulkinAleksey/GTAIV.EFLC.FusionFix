@@ -452,7 +452,9 @@ public:
     // registering while drawing would grow the list the shader parameter hook may be reading.
     size_t CloudThresholdIdx = 0, CloudBiasIdx = 0, CloudThicknessIdx = 0;
     size_t CloudColorIdx = 0, CloudExposureIdx = 0, CloudSunDirectionIdx = 0;
-    size_t SunsetColorIdx = 0, CloudInscatteringIdx = 0, CloudSunColorIdx = 0;
+    size_t SunsetColorIdx = 0, CloudInscatteringIdx = 0, CloudSunColorIdx = 0, CloudExposureClampIdx = 0;
+    // The lit and shaded colours the clouds were last drawn with, and the sky's clamp, for the log.
+    float CloudLastLit[3] = {}, CloudLastShade[3] = {}, CloudLastClamp[3] = {};
     bool bCloudParamsRegistered = false;
     void RegisterCloudParams()
     {
@@ -463,6 +465,7 @@ public:
         SunsetColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunsetColor");
         CloudInscatteringIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudInscatteringRange");
         CloudSunColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunColor");
+        CloudExposureClampIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "HDRExposureClamp");
         CloudExposureIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "HDRExposure");
         CloudSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
         bCloudParamsRegistered = true;
@@ -4040,6 +4043,32 @@ private:
             for (int i = 0; i < 3; ++i)
                 colour[i] = (std::max)(luma + (colour[i] - luma) * R.fVolumetricCloudsSaturation, 0.0f);
         }
+        // gta_atmoscatt_clouds clamps the sky and its clouds to HDRExposureClamp unless FusionFix's
+        // volumetric fog is on: unclamped, the clouds' lit side came out several times brighter than
+        // that, and lit and shaded sides alike turned white. Both are scaled down together until the
+        // lit side's luma is at the clamp's, which keeps the contrast between them.
+        {
+            static auto volumetricFog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG");
+            const auto& clamp = rage::grmShaderInfo::getShaderParamData(R.CloudExposureClampIdx);
+            auto luma = [](const float* c) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; };
+            const float clampLuma = luma(clamp.data());
+            const float litLuma = luma(litColour);
+            if (!reflection && !(volumetricFog && volumetricFog->get()) && clampLuma > 0.0f && litLuma > clampLuma)
+            {
+                const float k = clampLuma / litLuma;
+                for (int i = 0; i < 3; ++i)
+                {
+                    litColour[i] *= k;
+                    shadeColour[i] *= k;
+                }
+            }
+            if (!reflection)
+            {
+                std::memcpy(R.CloudLastLit, litColour, sizeof(litColour));
+                std::memcpy(R.CloudLastShade, shadeColour, sizeof(shadeColour));
+                std::memcpy(R.CloudLastClamp, clamp.data(), sizeof(R.CloudLastClamp));
+            }
+        }
         effect->SetFloatArray("vec3LitColour", litColour, 3);
         effect->SetFloatArray("vec3ShadeColour", shadeColour, 3);
         effect->SetFloat("fSilver", inscattering);
@@ -4768,6 +4797,10 @@ private:
                 const auto& sunset = rage::grmShaderInfo::getShaderParamData(R.SunsetColorIdx);
                 const auto& sunDir = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
                 const float* k = R.CloudShadowConsts;
+                fprintf(log, "  clouds drawn with lit %.2f %.2f %.2f, shade %.2f %.2f %.2f; sky clamp %.2f %.2f %.2f; volumetric fog %d\n",
+                        R.CloudLastLit[0], R.CloudLastLit[1], R.CloudLastLit[2], R.CloudLastShade[0], R.CloudLastShade[1], R.CloudLastShade[2],
+                        R.CloudLastClamp[0], R.CloudLastClamp[1], R.CloudLastClamp[2],
+                        [] { static auto fog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG"); return fog ? fog->get() : -1; }());
                 fprintf(log, "  shadow constants: c197 %.3f %.3f %.1f %.6f  c198 %.3f %.3f %.3f %.3f  c199 %.3f %.3f  noise %s, %s after the lights  debug %d\n",
                         k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], R.CloudNoiseTexture ? "made" : "missing",
                         R.bCloudNoiseSurvived ? "still bound" : "gone", R.nCloudShadowsDebug);
