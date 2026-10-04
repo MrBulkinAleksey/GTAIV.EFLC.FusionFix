@@ -351,7 +351,7 @@ public:
     // they write no specular intensity, and the sun left no highlight on buildings and LOD roads.
     // They get this much of one, scaled down by how saturated their colour is.
     float fSpecularSheen = 0.1f;
-    // Cloud shadows on the ground (c197.y-w, c198, c199, s7; deferred_lighting_sun_under_clouds.patch):
+    // Cloud shadows on the ground (c197.y-w, c198, c199, s12; deferred_lighting_sun_under_clouds.patch):
     // the ray from a surface towards the sun meets a cloud deck CloudShadowsHeight up, and the sun is
     // dimmed by up to CloudShadows where the clouds cover it there. The sky's clouds are on a dome
     // at infinity and cannot cast a real shadow, so the deck has its own noise, CloudShadowsScale
@@ -401,6 +401,7 @@ public:
     IDirect3DTexture9* CloudNoiseTexture = nullptr;
     IDirect3DTexture9* CloudNoiseTex();
     bool bCloudNoiseBound = false;
+    bool bCloudNoiseSurvived = false;
     // The game's cloud parameters the cloud shadows take, registered at start (RegisterCloudParams):
     // registering while drawing would grow the list the shader parameter hook may be reading.
     size_t CloudThresholdIdx = 0, CloudBiasIdx = 0, CloudThicknessIdx = 0;
@@ -4495,8 +4496,9 @@ private:
                 const auto& sunset = rage::grmShaderInfo::getShaderParamData(R.SunsetColorIdx);
                 const auto& sunDir = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
                 const float* k = R.CloudShadowConsts;
-                fprintf(log, "  shadow constants: c197 %.3f %.3f %.1f %.6f  c198 %.3f %.3f %.3f %.3f  c199 %.3f %.3f  noise %s  debug %d\n",
-                        k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], R.CloudNoiseTexture ? "made" : "missing", int(R.bCloudShadowsDebug));
+                fprintf(log, "  shadow constants: c197 %.3f %.3f %.1f %.6f  c198 %.3f %.3f %.3f %.3f  c199 %.3f %.3f  noise %s, %s after the lights  debug %d\n",
+                        k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], R.CloudNoiseTexture ? "made" : "missing",
+                        R.bCloudNoiseSurvived ? "still bound" : "gone", int(R.bCloudShadowsDebug));
                 fprintf(log, "  volumetric clouds: %s; effect %s (hr 0x%08lX); shadows follow them %d; HDRExposure %.3f; CloudColor %.3f %.3f %.3f; "
                              "SunsetColor %.3f %.3f %.3f; CloudInscatteringRange %.3f; SunDirection %.3f %.3f %.3f\n",
                         R.szCloudsStatus, R.CloudsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrCloudsEffect), int(R.VolumetricCloudsOn()),
@@ -5539,7 +5541,7 @@ public:
             pDevice->SetPixelShaderConstantF(201, scale, 1);
             pDevice->SetPixelShaderConstantF(205, offset, 1);
         }
-        // The sun on materials with no specular map (x) and the cloud shadows (yzw, c198, c199, s7).
+        // The sun on materials with no specular map (x) and the cloud shadows (yzw, c198, c199, s12).
         {
             float threshold = 0.0f, bias = 0.0f, thickness = 0.0f;
             if (R.bCloudParamsRegistered)
@@ -5605,13 +5607,15 @@ public:
             std::memcpy(R.CloudShadowConsts + 8, c199, sizeof(c199));
             if (noise)
             {
-                // s7 is read by rage_postfx alone, which binds its own.
-                pDevice->SetTexture(7, noise);
-                pDevice->SetSamplerState(7, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
-                pDevice->SetSamplerState(7, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
-                pDevice->SetSamplerState(7, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-                pDevice->SetSamplerState(7, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-                pDevice->SetSamplerState(7, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+                // s12 is read only by G-buffer and particle shaders, none of which draw while the
+                // lights do. On s7, rage_postfx's, the sun read another texture and the shadows
+                // never showed.
+                pDevice->SetTexture(12, noise);
+                pDevice->SetSamplerState(12, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+                pDevice->SetSamplerState(12, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+                pDevice->SetSamplerState(12, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+                pDevice->SetSamplerState(12, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+                pDevice->SetSamplerState(12, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
                 R.bCloudNoiseBound = true;
             }
         }
@@ -5695,7 +5699,12 @@ public:
         }
         if (R.bCloudNoiseBound)
         {
-            pDevice->SetTexture(7, nullptr);
+            // Whether the noise was still there once the lights were drawn, for the log.
+            IDirect3DBaseTexture9* bound = nullptr;
+            pDevice->GetTexture(12, &bound);
+            R.bCloudNoiseSurvived = bound && bound == R.CloudNoiseTexture;
+            SAFE_RELEASE(bound);
+            pDevice->SetTexture(12, nullptr);
             R.bCloudNoiseBound = false;
         }
         // Lights drawn for other views (reflections, mirrors) must not march with this camera,
