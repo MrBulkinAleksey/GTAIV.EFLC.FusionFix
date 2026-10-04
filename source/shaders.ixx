@@ -2,6 +2,7 @@ module;
 
 #include <common.hxx>
 #include <concepts>
+#include <cstdarg>
 
 export module shaders;
 
@@ -13,6 +14,7 @@ import natives;
 import seasonal;
 import settings;
 import shadows;
+import temporal;
 import timecycext;
 
 template<typename T, typename ... U>
@@ -47,6 +49,70 @@ int GetFusionShaderID(T pShader)
 
 class Shaders
 {
+    // The water reflection and mirror phases clip with a plane in world space (CSetClipPlaneDC, index at +8, plane
+    // at +0x10), set after their viewport. With vertex shaders D3D9 takes clip planes in clip space, and what
+    // the game set clipped nothing below the water: the riverbed, quay walls and piers showed in the water as
+    // dark patches. The plane is set again in the clip space of the current viewport, and the enable mask
+    // (CSetClipPlaneEnableDC, at +8) as a render state.
+    static inline SafetyHookInline shSetClipPlaneDC{};
+    static inline SafetyHookInline shSetClipPlaneEnableDC{};
+
+    // GTAIV.EFLC.FusionFix.ClipPlane.log next to the plugin: the first calls, what the game set and what replaced it
+    static void ClipPlaneLog(const char* format, ...)
+    {
+        static int lines = 0;
+        if (lines >= 64)
+            return;
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, (GetThisModulePath() / L"GTAIV.EFLC.FusionFix.ClipPlane.log").c_str(), lines ? L"a" : L"w") || !f)
+            return;
+        ++lines;
+        va_list args;
+        va_start(args, format);
+        vfprintf(f, format, args);
+        va_end(args);
+        fputc('\n', f);
+        fclose(f);
+    }
+
+    static void __fastcall SetClipPlaneDC(uint8_t* dc, void* edx)
+    {
+        shSetClipPlaneDC.unsafe_fastcall(dc, edx);
+
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        auto vp = rage::GetCurrentViewport();
+        if (!pDevice || !vp)
+            return;
+
+        auto index = *(uint32_t*)(dc + 8);
+        auto plane = (const float*)(dc + 0x10);
+        auto worldToClip = (TemporalMath::Matrix::From(vp->mViewMatrix) * TemporalMath::Matrix::From(vp->mProjectionMatrix)).Inverse();
+        float clip[4];
+        for (int i = 0; i < 4; ++i)
+            clip[i] = float(worldToClip.m[i][0] * plane[0] + worldToClip.m[i][1] * plane[1] + worldToClip.m[i][2] * plane[2] + worldToClip.m[i][3] * plane[3]);
+
+        float set[4] = {};
+        pDevice->GetClipPlane(index, set);
+        pDevice->SetClipPlane(index, clip);
+        ClipPlaneLog("plane %u: world (%.3f %.3f %.3f %.3f), game set (%.4f %.4f %.4f %.4f), now (%.4f %.4f %.4f %.4f)", index,
+                     plane[0], plane[1], plane[2], plane[3], set[0], set[1], set[2], set[3], clip[0], clip[1], clip[2], clip[3]);
+    }
+
+    static void __fastcall SetClipPlaneEnableDC(uint8_t* dc, void* edx)
+    {
+        shSetClipPlaneEnableDC.unsafe_fastcall(dc, edx);
+
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+
+        auto mask = *(uint32_t*)(dc + 8);
+        DWORD set = 0;
+        pDevice->GetRenderState(D3DRS_CLIPPLANEENABLE, &set);
+        pDevice->SetRenderState(D3DRS_CLIPPLANEENABLE, mask);
+        ClipPlaneLog("enable: mask %u, game set %u", mask, set);
+    }
+
     static void OnBeforeLighting()
     {
         auto pDevice = rage::grcDevice::GetD3DDevice();
@@ -294,13 +360,21 @@ public:
                 injector::WriteMemory(pattern.get_first(4), &dwMirrorOffset, true);
             }
 
-            // Clip the water reflection at the water level. CRenderPhaseWaterReflection clips half a metre below it, and the
-            // underwater half metre of quay walls, piers and hulls showed in the water as dark patches.
+            // Clip the water reflection at the water level, not half a metre below it (CRenderPhaseWaterReflection), and
+            // in clip space, see SetClipPlaneDC.
             {
                 static float fWaterReflectionClipOffset = 0.0f; // 0.5
                 auto pattern = hook::pattern("D9 5C 24 ? F3 0F 10 05 ? ? ? ? F3 0F 5C 44 24 ? 6A 00 6A 20");
                 if (!pattern.empty())
                     injector::WriteMemory(pattern.get_first(8), &fWaterReflectionClipOffset, true);
+
+                // CSetClipPlaneDC::Execute and CSetClipPlaneEnableDC::Execute, one after the other
+                pattern = hook::pattern("8D 41 10 50 FF 71 08 E8 ? ? ? ? 83 C4 08 C3 FF 71 08 E8 ? ? ? ? 59 C3");
+                if (!pattern.empty())
+                {
+                    shSetClipPlaneDC = safetyhook::create_inline(pattern.get_first(0), SetClipPlaneDC);
+                    shSetClipPlaneEnableDC = safetyhook::create_inline(pattern.get_first(16), SetClipPlaneEnableDC);
+                }
             }
 
             // Contrast slider ticks 0 and 1 are the same visually on the Xbox 360 version. This is not proper behavior, so it's a bug, but it was never fixed for that version,
