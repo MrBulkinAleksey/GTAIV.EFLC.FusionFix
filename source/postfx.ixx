@@ -1589,12 +1589,13 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 // The weathers' cloud layers, in CWeather::eWeatherType order: coverage, base and thickness in
 // metres, density and the share of overcast sheet against the VolumetricClouds* settings' scale,
 // and the wind against CloudShadowsWind. Fair weather has scattered heaps high up; cloudy, rain and
-// storm a low, thick deck that closes into a sheet; fog a low grey one the fog hides.
+// storm a low, thick deck that closes into a sheet; fog a low grey one the fog hides. Fair
+// weather cumulus are wider than they are tall: as thick as the heaps were wide, they rose as spires.
 static constexpr PostFxResource::CloudLayer kWeatherClouds[8] =
 {
-    { 0.25f, 1000.0f,  500.0f, 1.0f, 0.0f, 1.0f }, // EXTRASUNNY
-    { 0.38f,  900.0f,  600.0f, 1.0f, 0.0f, 1.0f }, // SUNNY
-    { 0.45f, 1000.0f,  700.0f, 1.0f, 0.0f, 2.5f }, // SUNNY_WINDY
+    { 0.25f, 1000.0f,  350.0f, 1.0f, 0.0f, 1.0f }, // EXTRASUNNY
+    { 0.38f,  900.0f,  420.0f, 1.0f, 0.0f, 1.0f }, // SUNNY
+    { 0.45f, 1000.0f,  500.0f, 1.0f, 0.0f, 2.5f }, // SUNNY_WINDY
     { 0.70f,  700.0f,  800.0f, 1.2f, 0.3f, 1.2f }, // CLOUDY
     { 0.92f,  500.0f, 1000.0f, 1.6f, 0.7f, 1.5f }, // RAIN
     { 0.85f,  600.0f,  900.0f, 1.4f, 0.6f, 1.2f }, // DRIZZLE
@@ -3953,6 +3954,11 @@ private:
         effect->SetFloat("fStratus", R.Cloud.stratus);
         effect->SetFloat("fEvolution", float(std::fmod(R.fCloudEvolution, 1.0)));
         effect->SetFloat("fTranslucency", R.fVolumetricCloudsTranslucency);
+        // The golden ratio's fraction per frame: each frame's march noise falls between the last
+        // ones', and temporal anti-aliasing averages it away.
+        effect->SetFloat("fFrameJitter", static_cast<float>(std::fmod(FrameHistory::Frame() * 0.6180339887, 1.0)));
+        // The outline wanders by up to 150 metres.
+        effect->SetFloat("fWarp", 150.0f / R.fCloudShadowsScale);
         effect->SetFloat("fMaxDistance", R.fVolumetricCloudsMaxDistance);
 
         IDirect3DSurface9* oldTarget = nullptr;

@@ -52,6 +52,8 @@ float fMaxDistance;
 float fStratus;           // 0 separate heaps of cloud, 1 a sheet: the weather's overcast
 float fEvolution;         // how far the detail has drifted up through itself, so the billows change
 float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
+float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
+float fWarp;              // how far, in coverage texture units, the outline wanders with height
 
 float3 ViewRay(float2 pixel)
 {
@@ -78,7 +80,18 @@ float Density(float3 p, bool detail)
     // The coverage is filtered with a quintic curve between texels instead of linearly: the
     // density ramp stretches it several times over, and the kinks of linear filtering at the
     // texel edges stood out as vertical creases down the clouds' sides.
-    float2 texel = (p.xy * vec4Layer.z + vec4Wind.xy) * COVERAGE_SIZE - 0.5;
+    float2 uv = p.xy * vec4Layer.z + vec4Wind.xy;
+    // The outline wanders with height: the coverage is read a little off, by a coarse octave of the
+    // detail that changes up through the layer. Read straight, every height had the same outline
+    // and the clouds stood as walls drawn up from a map. The steps towards the sun and the coarse
+    // search leave it out; it moves the edge by a few dozen metres.
+    [branch]
+    if (detail)
+    {
+        float3 w = p * (vec4Shape.y * 0.35) + float3(vec4Wind.zw, fEvolution);
+        uv += (float2(tex3Dlod(DetailTex, float4(w, 0)).r, tex3Dlod(DetailTex, float4(w.yzx + 0.41, 0)).r) - 0.5) * fWarp;
+    }
+    float2 texel = uv * COVERAGE_SIZE - 0.5;
     float2 cell = floor(texel);
     float2 f = texel - cell;
     f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
@@ -148,7 +161,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     // clouds came out smeared down the screen.
     // Each pixel starts up to a coarse step later: with the same coarse steps for every pixel,
     // thin cloud between two of them went missing in whole bands across the screen.
-    float jitter = PixelJitter(vpos);
+    float jitter = frac(PixelJitter(vpos) + fFrameJitter);
     float t = t0 + max(vec4Layer.y / 24.0, t0 * 0.01) * COARSE_STEP * jitter;
     float fineLeft = 0.0;
     float transmittance = 1.0;
