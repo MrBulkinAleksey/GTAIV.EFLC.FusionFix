@@ -5610,7 +5610,7 @@ public:
             R.fCloudWindX = windX;
             R.fCloudWindY = windY;
             R.fCloudSeconds = seconds;
-            const float c197[4] = { R.fSpecularSheen, strength, deckHeight, invScale };
+            float c197[4] = { R.fSpecularSheen, strength, deckHeight, invScale };
             float c198[4] = { windX, windY, threshold, bias - coverageShift };
             if (R.nCloudShadowsDebug == 1)
             {
@@ -5620,9 +5620,12 @@ public:
             }
             else if (R.nCloudShadowsDebug == 2)
             {
-                // Coverage 1 * n - 0: the noise itself.
+                // Coverage 1 * n - 0: the noise itself, twenty times finer, so its blotches show
+                // around the player; at the clouds' scale they spanned hundreds of metres and the
+                // ground looked evenly lit.
                 c198[2] = 1.0f;
                 c198[3] = 0.0f;
+                c197[3] *= 20.0f;
             }
             const float c199[4] = { thickness, R.fCloudShadowsSoftness, 0.0f, 0.0f };
             pDevice->SetPixelShaderConstantF(197, c197, 1);
