@@ -343,10 +343,10 @@ index 21cfda2..3f5289d 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS3.asm b/win32_30_nv8/gta_default/gta_defaultPS3.asm
-index 7e32535..fbf2b10 100644
+index 7e32535..1571318 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS3.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS3.asm
-@@ -27,6 +27,9 @@
+@@ -27,13 +27,90 @@
      def c0, 0.176470593, -1, -0, 9.99999975e-006
      def c1, 0.5, 0, 1, 0.25
      def c2, 0.3125, 12, 9, 0
@@ -356,9 +356,10 @@ index 7e32535..fbf2b10 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -34,6 +37,71 @@
+     dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
++    dcl_2d s12 // FusionFix detail texture
      texld r0, v0, s0
 +    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
 +    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
@@ -425,11 +426,19 @@ index 7e32535..fbf2b10 100644
 +        mov r0.xyz, r25
 +      endif
 +    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
++    endif
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v2.w disabled vertex alpha
      add r20.x, r0.w, -c2.x
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS4.asm b/win32_30_nv8/gta_default/gta_defaultPS4.asm
-index d013ec0..509f0e4 100644
+index d013ec0..475e27c 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS4.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS4.asm
 @@ -24,6 +24,9 @@
@@ -442,9 +451,11 @@ index d013ec0..509f0e4 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -32,6 +35,71 @@
+@@ -31,7 +34,81 @@
+     dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s10
++    dcl_2d s12 // FusionFix detail texture
      texld r0, v0, s0
 +    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
 +    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
@@ -510,6 +521,14 @@ index d013ec0..509f0e4 100644
 +        lrp r25.xyz, r30.z, r25, r0
 +        mov r0.xyz, r25
 +      endif
++    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
@@ -600,10 +619,10 @@ index 95ecbc4..0a5ee2f 100644
      mul r0.x, r0.w, v0.w
      mul r0.x, r0.x, c39.x
 diff --git a/win32_30_nv8/gta_emissive/gta_emissivePS3.asm b/win32_30_nv8/gta_emissive/gta_emissivePS3.asm
-index a2411e5..997010a 100644
+index a2411e5..6a1a1c3 100644
 --- a/win32_30_nv8/gta_emissive/gta_emissivePS3.asm
 +++ b/win32_30_nv8/gta_emissive/gta_emissivePS3.asm
-@@ -26,6 +26,9 @@
+@@ -26,13 +26,90 @@
      def c154, 1.6, 0, 0, 0
      def c0, 0.176470593, -1, -0, 9.99999975e-006
      def c1, 0.5, 0, 1, 0.25
@@ -613,9 +632,10 @@ index a2411e5..997010a 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.w
-@@ -33,6 +36,71 @@
+     dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
++    dcl_2d s12 // FusionFix detail texture
      texld r0, v0, s0
 +    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
 +    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
@@ -682,11 +702,19 @@ index a2411e5..997010a 100644
 +        mov r0.xyz, r25
 +      endif
 +    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
++    endif
      mul_sat r0.w, r0.w, c154.x
      mul r0, r0, c51
      // mul r0.w, r0.w, v2.w disabled vertex alpha
 diff --git a/win32_30_nv8/gta_emissive/gta_emissivePS4.asm b/win32_30_nv8/gta_emissive/gta_emissivePS4.asm
-index be2e4db..c8ab2dd 100644
+index be2e4db..4e7844b 100644
 --- a/win32_30_nv8/gta_emissive/gta_emissivePS4.asm
 +++ b/win32_30_nv8/gta_emissive/gta_emissivePS4.asm
 @@ -26,6 +26,9 @@
@@ -699,9 +727,11 @@ index be2e4db..c8ab2dd 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.w
-@@ -34,6 +37,71 @@
+@@ -33,7 +36,81 @@
+     dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s10
++    dcl_2d s12 // FusionFix detail texture
      texld r0, v0, s0
 +    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
 +    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
@@ -768,14 +798,22 @@ index be2e4db..c8ab2dd 100644
 +        mov r0.xyz, r25
 +      endif
 +    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
++    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_emissivenight/gta_emissivenightPS3.asm b/win32_30_nv8/gta_emissivenight/gta_emissivenightPS3.asm
-index 2697cd9..92c8542 100644
+index 2697cd9..f664347 100644
 --- a/win32_30_nv8/gta_emissivenight/gta_emissivenightPS3.asm
 +++ b/win32_30_nv8/gta_emissivenight/gta_emissivenightPS3.asm
-@@ -26,6 +26,9 @@
+@@ -26,13 +26,90 @@
      def c154, 1.6, 0, 0, 0
      def c0, 0.176470593, -1, -0, 9.99999975e-006
      def c1, 0.5, 0, 1, 0.25
@@ -785,9 +823,10 @@ index 2697cd9..92c8542 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.w
-@@ -33,6 +36,71 @@
+     dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
++    dcl_2d s12 // FusionFix detail texture
      texld r0, v0, s0
 +    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
 +    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
@@ -854,11 +893,19 @@ index 2697cd9..92c8542 100644
 +        mov r0.xyz, r25
 +      endif
 +    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
++    endif
      mul_sat r0.w, r0.w, c154.x
      mul r0, r0, c51
      // mul r0.w, r0.w, v2.w disabled vertex alpha
 diff --git a/win32_30_nv8/gta_emissivenight/gta_emissivenightPS4.asm b/win32_30_nv8/gta_emissivenight/gta_emissivenightPS4.asm
-index 651ed16..374b725 100644
+index 651ed16..1bf1c5f 100644
 --- a/win32_30_nv8/gta_emissivenight/gta_emissivenightPS4.asm
 +++ b/win32_30_nv8/gta_emissivenight/gta_emissivenightPS4.asm
 @@ -26,6 +26,9 @@
@@ -871,9 +918,11 @@ index 651ed16..374b725 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.w
-@@ -34,6 +37,71 @@
+@@ -33,7 +36,81 @@
+     dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s10
++    dcl_2d s12 // FusionFix detail texture
      texld r0, v0, s0
 +    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
 +    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
@@ -940,14 +989,22 @@ index 651ed16..374b725 100644
 +        mov r0.xyz, r25
 +      endif
 +    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
++    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS3.asm b/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS3.asm
-index 4b52835..cbfa140 100644
+index 4b52835..364e100 100644
 --- a/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS3.asm
 +++ b/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS3.asm
-@@ -26,6 +26,9 @@
+@@ -26,13 +26,90 @@
      def c154, 1.6, 0, 0, 0
      def c0, 0.176470593, -1, -0, 9.99999975e-006
      def c1, 0.5, 0, 1, 0.25
@@ -957,9 +1014,10 @@ index 4b52835..cbfa140 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.w
-@@ -33,6 +36,71 @@
+     dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
++    dcl_2d s12 // FusionFix detail texture
      texld r0, v0, s0
 +    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
 +    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
@@ -1026,11 +1084,19 @@ index 4b52835..cbfa140 100644
 +        mov r0.xyz, r25
 +      endif
 +    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
++    endif
      mul_sat r0.w, r0.w, c154.x
      mul r0, r0, c51
      // mul r0.w, r0.w, v2.w disabled vertex alpha
 diff --git a/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS4.asm b/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS4.asm
-index 22f74a0..8b1c517 100644
+index 22f74a0..b97f931 100644
 --- a/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS4.asm
 +++ b/win32_30_nv8/gta_emissivestrong/gta_emissivestrongPS4.asm
 @@ -26,6 +26,9 @@
@@ -1043,9 +1109,11 @@ index 22f74a0..8b1c517 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.w
-@@ -34,6 +37,71 @@
+@@ -33,7 +36,81 @@
+     dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s10
++    dcl_2d s12 // FusionFix detail texture
      texld r0, v0, s0
 +    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
 +    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
@@ -1111,6 +1179,14 @@ index 22f74a0..8b1c517 100644
 +        lrp r25.xyz, r30.z, r25, r0
 +        mov r0.xyz, r25
 +      endif
++    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
@@ -3766,6 +3842,570 @@ index e47ee2d..2d6f1d5 100644
      rsq r0.x, r0.x
      rcp oC2.y, r0.x
      mul r0.x, r1.w, c39.x
+diff --git a/win32_30_nv8/gta_normal_spec_reflect_emissive/gta_normal_spec_reflect_emissivePS3.asm b/win32_30_nv8/gta_normal_spec_reflect_emissive/gta_normal_spec_reflect_emissivePS3.asm
+index 760f00c..bfc31ed 100644
+--- a/win32_30_nv8/gta_normal_spec_reflect_emissive/gta_normal_spec_reflect_emissivePS3.asm
++++ b/win32_30_nv8/gta_normal_spec_reflect_emissive/gta_normal_spec_reflect_emissivePS3.asm
+@@ -45,6 +45,9 @@
+     def c0, -0.5, 9.99999975e-006, 0.5, 0.001953125
+     def c1, 3.99600005, 4, 0.125, 0.25
+     def c2, 0, -1, -0, 1
++    def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
++    def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
++    def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord3 v2.xyz
+@@ -58,6 +61,7 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s10
++    dcl_2d s12 // FusionFix detail texture
+     mul r20.xy, vPos.xy, c153.x
+     frc r20.xy, r20.xy
+     mad r20, r20.xxyy, -c153.y, c153.zwzw
+@@ -70,7 +74,84 @@
+     add r0.z, -r0.x, r0.z
+     cmp r0.xy, r0.z, r0.wyzw, r0
+     texld r1, v0, s0
++    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
++    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
++    if b13
++      dsx r24.xy, v0.xyxy
++      dsy r24.zw, v0.xyxy
++      mul r24, r24, c192.xyxy
++      dp2add r30.z, r24, r24, c194.z
++      dp2add r30.w, r24.zwzw, r24.zwzw, c194.z
++      max r30.z, r30.z, r30.w
++      mad_sat r30.z, r30.z, c195.y, c195.z
++      if_gt r30.z, c194.z
++        mul r24.xy, v0.xyxy, c192
++        add r24.zw, r24.xyxy, c196.x
++        frc r25.xy, r24.zwzw
++        add r24.zw, r24, -r25.xyxy
++        mul r26.xy, r25, r25
++        mul r26.zw, r26.xyxy, r25.xyxy
++        mad r27.xy, r25, c196.x, r26
++        mad r27.xy, r26.zwzw, c196.x, r27
++        mul r27.zw, r26, c195.w
++        mad r27.zw, r26.xyxy, c196.x, r27
++        mul r28.xy, r25, c195.w
++        mad r28.xy, r26, c194.w, r28
++        mad r28.xy, r26.zwzw, -c196.y, r28
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
++        mad r28.zw, r26.xyxy, c196.x, r28
++        rcp r29.x, r28.z
++        rcp r29.y, r28.w
++        mad r29.xy, r28, r29, r24.zwzw
++        add r29.xy, r29, c195.w
++        add r29.zw, r24, c196.x
++        add r30.xy, r24.zwzw, -c196.z
++        mul r29, r29, c192.zwzw
++        mul r30.xy, r30, c192.zwzw
++        mul r26.x, r28.z, r27.y
++        mul r26.y, r27.x, r28.w
++        mul r26.z, r28.z, r28.w
++        mul r26.w, r27.z, r28.w
++        mul r24.x, r28.z, r27.w
++        dp4 r24.y, r26, c194.y
++        add r24.y, r24.y, r24.x
++        rcp r24.y, r24.y
++        mov r31.zw, c194.z
++        mov r31.xy, r29.xwzw
++        texldl r25, r31, s0
++        mul r25.xyz, r25, r26.x
++        mov r31.xy, r29.zyzw
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.y, r25
++        mov r31.xy, r29
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.z, r25
++        mov r31.x, r30.x
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.w, r25
++        mov r31.x, r29.x
++        mov r31.y, r30.y
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r24.x, r25
++        mul_sat r25.xyz, r25, r24.y
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
++      endif
++    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r1.xyz, r1, r25.x
++    endif
+     add r0.zw, r0.xyxy, c0.x
++    if b12
++      mad r25.xy, r24, c191.x, c191.y // FusionFix detail texture: its bumps on the normal map's
++      add r0.zw, r0, r25.xxxy
++    endif
+     mul r0.zw, r0, c74.x
+     dp2add r0.x, r0, -r0, c2.w
+     rsq r0.x, r0.x
+@@ -102,9 +183,33 @@
+     mul r1.w, r1.w, v5.w
+     mad oC0.xyz, r2, c75.x, r1
+     mad r0.xyz, r0, r0.w, c2.w
++    // --- FusionFix specular anti-aliasing: how much the normal turns within the pixel (b14),
++    // --- which widens the highlight below instead of letting it sparkle.
++    if b14
++      dsx r28.xyz, r0
++      dsy r29.xyz, r0
++      dp3 r28.x, r28, r28
++      dp3 r28.y, r29, r29
++      add r28.x, r28.x, r28.y
++      mul r28.x, r28.x, c193.x
++      min r28.x, r28.x, c193.y
++    endif
+     mul oC1.xyz, r0, c0.z
+-    mul oC2.x, r3.x, c0.z
++    mul r30.w, r3.x, c0.z // FusionFix specular anti-aliasing: kept, to lower it below
++    mov oC2.x, r30.w
+     mul r0.x, r2.w, c0.w
++    if b14
++      mad r29.y, r0.x, c194.x, c194.w // FusionFix specular anti-aliasing: Blinn-Phong power p
++      rcp r29.y, r29.y
++      add r29.y, r29.y, r29.y // roughness squared, 2 / (p + 2)
++      add r29.z, r29.y, r28.x // and widened by the normal's variance
++      rcp r29.w, r29.z
++      mul r29.x, r29.y, r29.w // the narrower lobe's share, which keeps the highlight's energy
++      mad r29.w, r29.w, c194.w, -c194.w
++      max r29.w, r29.w, c194.z
++      mul r0.x, r29.w, c195.x
++      mul oC2.x, r30.w, r29.x
++    endif
+     rsq r0.x, r0.x
+     rcp oC2.y, r0.x
+     mul r0.x, r1.w, c39.x
+diff --git a/win32_30_nv8/gta_normal_spec_reflect_emissive/gta_normal_spec_reflect_emissivePS4.asm b/win32_30_nv8/gta_normal_spec_reflect_emissive/gta_normal_spec_reflect_emissivePS4.asm
+index ae46171..d5db874 100644
+--- a/win32_30_nv8/gta_normal_spec_reflect_emissive/gta_normal_spec_reflect_emissivePS4.asm
++++ b/win32_30_nv8/gta_normal_spec_reflect_emissive/gta_normal_spec_reflect_emissivePS4.asm
+@@ -42,6 +42,9 @@
+     def c0, -0.5, 9.99999975e-006, 0.5, 0.001953125
+     def c1, 3.99600005, 4, 0.125, 0.25
+     def c2, 0, -1, -0, 1
++    def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
++    def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
++    def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord3 v2.xyz
+@@ -55,12 +58,90 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s10
++    dcl_2d s12 // FusionFix detail texture
+     texld r0, v0, s1
+     add r0.z, -r0.w, c2.w
+     add r0.z, -r0.x, r0.z
+     cmp r0.xy, r0.z, r0.wyzw, r0
+     texld r1, v0, s0
++    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
++    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
++    if b13
++      dsx r24.xy, v0.xyxy
++      dsy r24.zw, v0.xyxy
++      mul r24, r24, c192.xyxy
++      dp2add r30.z, r24, r24, c194.z
++      dp2add r30.w, r24.zwzw, r24.zwzw, c194.z
++      max r30.z, r30.z, r30.w
++      mad_sat r30.z, r30.z, c195.y, c195.z
++      if_gt r30.z, c194.z
++        mul r24.xy, v0.xyxy, c192
++        add r24.zw, r24.xyxy, c196.x
++        frc r25.xy, r24.zwzw
++        add r24.zw, r24, -r25.xyxy
++        mul r26.xy, r25, r25
++        mul r26.zw, r26.xyxy, r25.xyxy
++        mad r27.xy, r25, c196.x, r26
++        mad r27.xy, r26.zwzw, c196.x, r27
++        mul r27.zw, r26, c195.w
++        mad r27.zw, r26.xyxy, c196.x, r27
++        mul r28.xy, r25, c195.w
++        mad r28.xy, r26, c194.w, r28
++        mad r28.xy, r26.zwzw, -c196.y, r28
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
++        mad r28.zw, r26.xyxy, c196.x, r28
++        rcp r29.x, r28.z
++        rcp r29.y, r28.w
++        mad r29.xy, r28, r29, r24.zwzw
++        add r29.xy, r29, c195.w
++        add r29.zw, r24, c196.x
++        add r30.xy, r24.zwzw, -c196.z
++        mul r29, r29, c192.zwzw
++        mul r30.xy, r30, c192.zwzw
++        mul r26.x, r28.z, r27.y
++        mul r26.y, r27.x, r28.w
++        mul r26.z, r28.z, r28.w
++        mul r26.w, r27.z, r28.w
++        mul r24.x, r28.z, r27.w
++        dp4 r24.y, r26, c194.y
++        add r24.y, r24.y, r24.x
++        rcp r24.y, r24.y
++        mov r31.zw, c194.z
++        mov r31.xy, r29.xwzw
++        texldl r25, r31, s0
++        mul r25.xyz, r25, r26.x
++        mov r31.xy, r29.zyzw
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.y, r25
++        mov r31.xy, r29
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.z, r25
++        mov r31.x, r30.x
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.w, r25
++        mov r31.x, r29.x
++        mov r31.y, r30.y
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r24.x, r25
++        mul_sat r25.xyz, r25, r24.y
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
++      endif
++    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r1.xyz, r1, r25.x
++    endif
+     add r0.zw, r0.xyxy, c0.x
++    if b12
++      mad r25.xy, r24, c191.x, c191.y // FusionFix detail texture: its bumps on the normal map's
++      add r0.zw, r0, r25.xxxy
++    endif
+     mul r0.zw, r0, c74.x
+     dp2add r0.x, r0, -r0, c2.w
+     rsq r0.x, r0.x
+@@ -92,9 +173,33 @@
+     mul r1.w, r1.w, v5.w
+     mad oC0.xyz, r2, c75.x, r1
+     mad r0.xyz, r0, r0.w, c2.w
++    // --- FusionFix specular anti-aliasing: how much the normal turns within the pixel (b14),
++    // --- which widens the highlight below instead of letting it sparkle.
++    if b14
++      dsx r28.xyz, r0
++      dsy r29.xyz, r0
++      dp3 r28.x, r28, r28
++      dp3 r28.y, r29, r29
++      add r28.x, r28.x, r28.y
++      mul r28.x, r28.x, c193.x
++      min r28.x, r28.x, c193.y
++    endif
+     mul oC1.xyz, r0, c0.z
+-    mul oC2.x, r3.x, c0.z
++    mul r30.w, r3.x, c0.z // FusionFix specular anti-aliasing: kept, to lower it below
++    mov oC2.x, r30.w
+     mul r0.x, r2.w, c0.w
++    if b14
++      mad r29.y, r0.x, c194.x, c194.w // FusionFix specular anti-aliasing: Blinn-Phong power p
++      rcp r29.y, r29.y
++      add r29.y, r29.y, r29.y // roughness squared, 2 / (p + 2)
++      add r29.z, r29.y, r28.x // and widened by the normal's variance
++      rcp r29.w, r29.z
++      mul r29.x, r29.y, r29.w // the narrower lobe's share, which keeps the highlight's energy
++      mad r29.w, r29.w, c194.w, -c194.w
++      max r29.w, r29.w, c194.z
++      mul r0.x, r29.w, c195.x
++      mul oC2.x, r30.w, r29.x
++    endif
+     rsq r0.x, r0.x
+     rcp oC2.y, r0.x
+     mul r0.x, r1.w, c39.x
+diff --git a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS3.asm b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS3.asm
+index fff7db1..39df00e 100644
+--- a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS3.asm
++++ b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS3.asm
+@@ -45,6 +45,9 @@
+     def c0, -0.5, 9.99999975e-006, 0.5, 0.001953125
+     def c1, 3.99600005, 4, 0.125, 0.25
+     def c2, 0, -1, -0, 1
++    def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
++    def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
++    def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord3 v2.xyz
+@@ -58,6 +61,7 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s10
++    dcl_2d s12 // FusionFix detail texture
+     mul r20.xy, vPos.xy, c153.x
+     frc r20.xy, r20.xy
+     mad r20, r20.xxyy, -c153.y, c153.zwzw
+@@ -70,7 +74,84 @@
+     add r0.z, -r0.x, r0.z
+     cmp r0.xy, r0.z, r0.wyzw, r0
+     texld r1, v0, s0
++    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
++    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
++    if b13
++      dsx r24.xy, v0.xyxy
++      dsy r24.zw, v0.xyxy
++      mul r24, r24, c192.xyxy
++      dp2add r30.z, r24, r24, c194.z
++      dp2add r30.w, r24.zwzw, r24.zwzw, c194.z
++      max r30.z, r30.z, r30.w
++      mad_sat r30.z, r30.z, c195.y, c195.z
++      if_gt r30.z, c194.z
++        mul r24.xy, v0.xyxy, c192
++        add r24.zw, r24.xyxy, c196.x
++        frc r25.xy, r24.zwzw
++        add r24.zw, r24, -r25.xyxy
++        mul r26.xy, r25, r25
++        mul r26.zw, r26.xyxy, r25.xyxy
++        mad r27.xy, r25, c196.x, r26
++        mad r27.xy, r26.zwzw, c196.x, r27
++        mul r27.zw, r26, c195.w
++        mad r27.zw, r26.xyxy, c196.x, r27
++        mul r28.xy, r25, c195.w
++        mad r28.xy, r26, c194.w, r28
++        mad r28.xy, r26.zwzw, -c196.y, r28
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
++        mad r28.zw, r26.xyxy, c196.x, r28
++        rcp r29.x, r28.z
++        rcp r29.y, r28.w
++        mad r29.xy, r28, r29, r24.zwzw
++        add r29.xy, r29, c195.w
++        add r29.zw, r24, c196.x
++        add r30.xy, r24.zwzw, -c196.z
++        mul r29, r29, c192.zwzw
++        mul r30.xy, r30, c192.zwzw
++        mul r26.x, r28.z, r27.y
++        mul r26.y, r27.x, r28.w
++        mul r26.z, r28.z, r28.w
++        mul r26.w, r27.z, r28.w
++        mul r24.x, r28.z, r27.w
++        dp4 r24.y, r26, c194.y
++        add r24.y, r24.y, r24.x
++        rcp r24.y, r24.y
++        mov r31.zw, c194.z
++        mov r31.xy, r29.xwzw
++        texldl r25, r31, s0
++        mul r25.xyz, r25, r26.x
++        mov r31.xy, r29.zyzw
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.y, r25
++        mov r31.xy, r29
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.z, r25
++        mov r31.x, r30.x
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.w, r25
++        mov r31.x, r29.x
++        mov r31.y, r30.y
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r24.x, r25
++        mul_sat r25.xyz, r25, r24.y
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
++      endif
++    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r1.xyz, r1, r25.x
++    endif
+     add r0.zw, r0.xyxy, c0.x
++    if b12
++      mad r25.xy, r24, c191.x, c191.y // FusionFix detail texture: its bumps on the normal map's
++      add r0.zw, r0, r25.xxxy
++    endif
+     mul r0.zw, r0, c74.x
+     dp2add r0.x, r0, -r0, c2.w
+     rsq r0.x, r0.x
+@@ -102,9 +183,33 @@
+     mul r1.w, r1.w, v5.w
+     mad oC0.xyz, r2, c75.x, r1
+     mad r0.xyz, r0, r0.w, c2.w
++    // --- FusionFix specular anti-aliasing: how much the normal turns within the pixel (b14),
++    // --- which widens the highlight below instead of letting it sparkle.
++    if b14
++      dsx r28.xyz, r0
++      dsy r29.xyz, r0
++      dp3 r28.x, r28, r28
++      dp3 r28.y, r29, r29
++      add r28.x, r28.x, r28.y
++      mul r28.x, r28.x, c193.x
++      min r28.x, r28.x, c193.y
++    endif
+     mul oC1.xyz, r0, c0.z
+-    mul oC2.x, r3.x, c0.z
++    mul r30.w, r3.x, c0.z // FusionFix specular anti-aliasing: kept, to lower it below
++    mov oC2.x, r30.w
+     mul r0.x, r2.w, c0.w
++    if b14
++      mad r29.y, r0.x, c194.x, c194.w // FusionFix specular anti-aliasing: Blinn-Phong power p
++      rcp r29.y, r29.y
++      add r29.y, r29.y, r29.y // roughness squared, 2 / (p + 2)
++      add r29.z, r29.y, r28.x // and widened by the normal's variance
++      rcp r29.w, r29.z
++      mul r29.x, r29.y, r29.w // the narrower lobe's share, which keeps the highlight's energy
++      mad r29.w, r29.w, c194.w, -c194.w
++      max r29.w, r29.w, c194.z
++      mul r0.x, r29.w, c195.x
++      mul oC2.x, r30.w, r29.x
++    endif
+     rsq r0.x, r0.x
+     rcp oC2.y, r0.x
+     mul r0.x, r1.w, c39.x
+diff --git a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS4.asm b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS4.asm
+index 850f4fd..960ad74 100644
+--- a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS4.asm
++++ b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS4.asm
+@@ -42,6 +42,9 @@
+     def c0, -0.5, 9.99999975e-006, 0.5, 0.001953125
+     def c1, 3.99600005, 4, 0.125, 0.25
+     def c2, 0, -1, -0, 1
++    def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
++    def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
++    def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord3 v2.xyz
+@@ -55,12 +58,90 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s10
++    dcl_2d s12 // FusionFix detail texture
+     texld r0, v0, s1
+     add r0.z, -r0.w, c2.w
+     add r0.z, -r0.x, r0.z
+     cmp r0.xy, r0.z, r0.wyzw, r0
+     texld r1, v0, s0
++    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
++    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
++    if b13
++      dsx r24.xy, v0.xyxy
++      dsy r24.zw, v0.xyxy
++      mul r24, r24, c192.xyxy
++      dp2add r30.z, r24, r24, c194.z
++      dp2add r30.w, r24.zwzw, r24.zwzw, c194.z
++      max r30.z, r30.z, r30.w
++      mad_sat r30.z, r30.z, c195.y, c195.z
++      if_gt r30.z, c194.z
++        mul r24.xy, v0.xyxy, c192
++        add r24.zw, r24.xyxy, c196.x
++        frc r25.xy, r24.zwzw
++        add r24.zw, r24, -r25.xyxy
++        mul r26.xy, r25, r25
++        mul r26.zw, r26.xyxy, r25.xyxy
++        mad r27.xy, r25, c196.x, r26
++        mad r27.xy, r26.zwzw, c196.x, r27
++        mul r27.zw, r26, c195.w
++        mad r27.zw, r26.xyxy, c196.x, r27
++        mul r28.xy, r25, c195.w
++        mad r28.xy, r26, c194.w, r28
++        mad r28.xy, r26.zwzw, -c196.y, r28
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
++        mad r28.zw, r26.xyxy, c196.x, r28
++        rcp r29.x, r28.z
++        rcp r29.y, r28.w
++        mad r29.xy, r28, r29, r24.zwzw
++        add r29.xy, r29, c195.w
++        add r29.zw, r24, c196.x
++        add r30.xy, r24.zwzw, -c196.z
++        mul r29, r29, c192.zwzw
++        mul r30.xy, r30, c192.zwzw
++        mul r26.x, r28.z, r27.y
++        mul r26.y, r27.x, r28.w
++        mul r26.z, r28.z, r28.w
++        mul r26.w, r27.z, r28.w
++        mul r24.x, r28.z, r27.w
++        dp4 r24.y, r26, c194.y
++        add r24.y, r24.y, r24.x
++        rcp r24.y, r24.y
++        mov r31.zw, c194.z
++        mov r31.xy, r29.xwzw
++        texldl r25, r31, s0
++        mul r25.xyz, r25, r26.x
++        mov r31.xy, r29.zyzw
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.y, r25
++        mov r31.xy, r29
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.z, r25
++        mov r31.x, r30.x
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.w, r25
++        mov r31.x, r29.x
++        mov r31.y, r30.y
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r24.x, r25
++        mul_sat r25.xyz, r25, r24.y
++        lrp r25.xyz, r30.z, r25, r1
++        mov r1.xyz, r25
++      endif
++    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r1.xyz, r1, r25.x
++    endif
+     add r0.zw, r0.xyxy, c0.x
++    if b12
++      mad r25.xy, r24, c191.x, c191.y // FusionFix detail texture: its bumps on the normal map's
++      add r0.zw, r0, r25.xxxy
++    endif
+     mul r0.zw, r0, c74.x
+     dp2add r0.x, r0, -r0, c2.w
+     rsq r0.x, r0.x
+@@ -92,9 +173,33 @@
+     mul r1.w, r1.w, v5.w
+     mad oC0.xyz, r2, c75.x, r1
+     mad r0.xyz, r0, r0.w, c2.w
++    // --- FusionFix specular anti-aliasing: how much the normal turns within the pixel (b14),
++    // --- which widens the highlight below instead of letting it sparkle.
++    if b14
++      dsx r28.xyz, r0
++      dsy r29.xyz, r0
++      dp3 r28.x, r28, r28
++      dp3 r28.y, r29, r29
++      add r28.x, r28.x, r28.y
++      mul r28.x, r28.x, c193.x
++      min r28.x, r28.x, c193.y
++    endif
+     mul oC1.xyz, r0, c0.z
+-    mul oC2.x, r3.x, c0.z
++    mul r30.w, r3.x, c0.z // FusionFix specular anti-aliasing: kept, to lower it below
++    mov oC2.x, r30.w
+     mul r0.x, r2.w, c0.w
++    if b14
++      mad r29.y, r0.x, c194.x, c194.w // FusionFix specular anti-aliasing: Blinn-Phong power p
++      rcp r29.y, r29.y
++      add r29.y, r29.y, r29.y // roughness squared, 2 / (p + 2)
++      add r29.z, r29.y, r28.x // and widened by the normal's variance
++      rcp r29.w, r29.z
++      mul r29.x, r29.y, r29.w // the narrower lobe's share, which keeps the highlight's energy
++      mad r29.w, r29.w, c194.w, -c194.w
++      max r29.w, r29.w, c194.z
++      mul r0.x, r29.w, c195.x
++      mul oC2.x, r30.w, r29.x
++    endif
+     rsq r0.x, r0.x
+     rcp oC2.y, r0.x
+     mul r0.x, r1.w, c39.x
 diff --git a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm b/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
 index 315ca1a..651fe30 100644
 --- a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
@@ -4640,7 +5280,7 @@ index b23193c..7d9644a 100644
      rcp oC2.y, r0.x
      mul r0.x, r0.y, c39.x
 diff --git a/win32_30_nv8/gta_reflect/gta_reflectPS3.asm b/win32_30_nv8/gta_reflect/gta_reflectPS3.asm
-index 4bad075..8e35d75 100644
+index 4bad075..5199025 100644
 --- a/win32_30_nv8/gta_reflect/gta_reflectPS3.asm
 +++ b/win32_30_nv8/gta_reflect/gta_reflectPS3.asm
 @@ -32,6 +32,9 @@
@@ -4653,9 +5293,11 @@ index 4bad075..8e35d75 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -41,6 +44,71 @@
+@@ -40,7 +43,81 @@
+     dcl vPos.xy
      dcl_2d s0
      dcl_2d s1
++    dcl_2d s12 // FusionFix detail texture
      texld r0, v0, s0
 +    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
 +    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
@@ -4722,11 +5364,19 @@ index 4bad075..8e35d75 100644
 +        mov r0.xyz, r25
 +      endif
 +    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
++    endif
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v3.w disabled vertex alpha
      mov r20.x, c39.x
 diff --git a/win32_30_nv8/gta_reflect/gta_reflectPS4.asm b/win32_30_nv8/gta_reflect/gta_reflectPS4.asm
-index f7bb3f6..cdf6279 100644
+index f7bb3f6..3a2efc1 100644
 --- a/win32_30_nv8/gta_reflect/gta_reflectPS4.asm
 +++ b/win32_30_nv8/gta_reflect/gta_reflectPS4.asm
 @@ -29,6 +29,9 @@
@@ -4739,9 +5389,11 @@ index f7bb3f6..cdf6279 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
-@@ -39,6 +42,71 @@
+@@ -38,7 +41,81 @@
+     dcl_2d s0
      dcl_2d s1
      dcl_2d s10
++    dcl_2d s12 // FusionFix detail texture
      texld r0, v0, s0
 +    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
 +    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
@@ -4807,6 +5459,14 @@ index f7bb3f6..cdf6279 100644
 +        lrp r25.xyz, r30.z, r25, r0
 +        mov r0.xyz, r25
 +      endif
++    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
@@ -4984,7 +5644,7 @@ index f74638c..c735f0a 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
 diff --git a/win32_30_nv8/gta_spec/gta_specPS3.asm b/win32_30_nv8/gta_spec/gta_specPS3.asm
-index 8a35846..4e073d2 100644
+index 8a35846..d721e6d 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS3.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS3.asm
 @@ -32,6 +32,9 @@
@@ -4997,9 +5657,11 @@ index 8a35846..4e073d2 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -40,6 +43,71 @@
+@@ -39,7 +42,81 @@
+     dcl vPos.xy
      dcl_2d s0
      dcl_2d s1
++    dcl_2d s12 // FusionFix detail texture
      texld r0, v0, s0
 +    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
 +    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
@@ -5066,11 +5728,19 @@ index 8a35846..4e073d2 100644
 +        mov r0.xyz, r25
 +      endif
 +    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
++    endif
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v2.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
 diff --git a/win32_30_nv8/gta_spec/gta_specPS4.asm b/win32_30_nv8/gta_spec/gta_specPS4.asm
-index 2b9435a..01a7372 100644
+index 2b9435a..3067a70 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS4.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS4.asm
 @@ -32,6 +32,9 @@
@@ -5083,9 +5753,11 @@ index 2b9435a..01a7372 100644
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
-@@ -41,6 +44,71 @@
+@@ -40,7 +43,81 @@
+     dcl_2d s0
      dcl_2d s1
      dcl_2d s10
++    dcl_2d s12 // FusionFix detail texture
      texld r0, v0, s0
 +    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
 +    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
@@ -5151,6 +5823,14 @@ index 2b9435a..01a7372 100644
 +        lrp r25.xyz, r30.z, r25, r0
 +        mov r0.xyz, r25
 +      endif
++    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
 +    endif
      add r1.xyz, c0.w, v1
      dp3 r1.w, r1, r1
@@ -5258,6 +5938,380 @@ index b49e546..83e5762 100644
 @@ -41,6 +44,71 @@
      dcl_2d s1
      dcl_2d s10
+     texld r0, v0, s0
++    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
++    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
++    if b13
++      dsx r24.xy, v0.xyxy
++      dsy r24.zw, v0.xyxy
++      mul r24, r24, c192.xyxy
++      dp2add r30.z, r24, r24, c194.z
++      dp2add r30.w, r24.zwzw, r24.zwzw, c194.z
++      max r30.z, r30.z, r30.w
++      mad_sat r30.z, r30.z, c195.y, c195.z
++      if_gt r30.z, c194.z
++        mul r24.xy, v0.xyxy, c192
++        add r24.zw, r24.xyxy, c196.x
++        frc r25.xy, r24.zwzw
++        add r24.zw, r24, -r25.xyxy
++        mul r26.xy, r25, r25
++        mul r26.zw, r26.xyxy, r25.xyxy
++        mad r27.xy, r25, c196.x, r26
++        mad r27.xy, r26.zwzw, c196.x, r27
++        mul r27.zw, r26, c195.w
++        mad r27.zw, r26.xyxy, c196.x, r27
++        mul r28.xy, r25, c195.w
++        mad r28.xy, r26, c194.w, r28
++        mad r28.xy, r26.zwzw, -c196.y, r28
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
++        mad r28.zw, r26.xyxy, c196.x, r28
++        rcp r29.x, r28.z
++        rcp r29.y, r28.w
++        mad r29.xy, r28, r29, r24.zwzw
++        add r29.xy, r29, c195.w
++        add r29.zw, r24, c196.x
++        add r30.xy, r24.zwzw, -c196.z
++        mul r29, r29, c192.zwzw
++        mul r30.xy, r30, c192.zwzw
++        mul r26.x, r28.z, r27.y
++        mul r26.y, r27.x, r28.w
++        mul r26.z, r28.z, r28.w
++        mul r26.w, r27.z, r28.w
++        mul r24.x, r28.z, r27.w
++        dp4 r24.y, r26, c194.y
++        add r24.y, r24.y, r24.x
++        rcp r24.y, r24.y
++        mov r31.zw, c194.z
++        mov r31.xy, r29.xwzw
++        texldl r25, r31, s0
++        mul r25.xyz, r25, r26.x
++        mov r31.xy, r29.zyzw
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.y, r25
++        mov r31.xy, r29
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.z, r25
++        mov r31.x, r30.x
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.w, r25
++        mov r31.x, r29.x
++        mov r31.y, r30.y
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r24.x, r25
++        mul_sat r25.xyz, r25, r24.y
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
++      endif
++    endif
+     add r1.xyz, c0.w, v1
+     dp3 r1.w, r1, r1
+     rsq r1.w, r1.w
+diff --git a/win32_30_nv8/gta_spec_reflect/gta_spec_reflectPS3.asm b/win32_30_nv8/gta_spec_reflect/gta_spec_reflectPS3.asm
+index 705b3f5..b9c20ca 100644
+--- a/win32_30_nv8/gta_spec_reflect/gta_spec_reflectPS3.asm
++++ b/win32_30_nv8/gta_spec_reflect/gta_spec_reflectPS3.asm
+@@ -36,6 +36,9 @@
+     def c154, 1.6, 0, 0, 0
+     def c0, 0.176470593, -1, -0, 9.99999975e-006
+     def c1, -0.5, 0.5, 0.001953125, 0
++    def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
++    def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
++    def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord3 v2.xyz
+@@ -45,7 +48,81 @@
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
++    dcl_2d s12 // FusionFix detail texture
+     texld r0, v0, s0
++    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
++    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
++    if b13
++      dsx r24.xy, v0.xyxy
++      dsy r24.zw, v0.xyxy
++      mul r24, r24, c192.xyxy
++      dp2add r30.z, r24, r24, c194.z
++      dp2add r30.w, r24.zwzw, r24.zwzw, c194.z
++      max r30.z, r30.z, r30.w
++      mad_sat r30.z, r30.z, c195.y, c195.z
++      if_gt r30.z, c194.z
++        mul r24.xy, v0.xyxy, c192
++        add r24.zw, r24.xyxy, c196.x
++        frc r25.xy, r24.zwzw
++        add r24.zw, r24, -r25.xyxy
++        mul r26.xy, r25, r25
++        mul r26.zw, r26.xyxy, r25.xyxy
++        mad r27.xy, r25, c196.x, r26
++        mad r27.xy, r26.zwzw, c196.x, r27
++        mul r27.zw, r26, c195.w
++        mad r27.zw, r26.xyxy, c196.x, r27
++        mul r28.xy, r25, c195.w
++        mad r28.xy, r26, c194.w, r28
++        mad r28.xy, r26.zwzw, -c196.y, r28
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
++        mad r28.zw, r26.xyxy, c196.x, r28
++        rcp r29.x, r28.z
++        rcp r29.y, r28.w
++        mad r29.xy, r28, r29, r24.zwzw
++        add r29.xy, r29, c195.w
++        add r29.zw, r24, c196.x
++        add r30.xy, r24.zwzw, -c196.z
++        mul r29, r29, c192.zwzw
++        mul r30.xy, r30, c192.zwzw
++        mul r26.x, r28.z, r27.y
++        mul r26.y, r27.x, r28.w
++        mul r26.z, r28.z, r28.w
++        mul r26.w, r27.z, r28.w
++        mul r24.x, r28.z, r27.w
++        dp4 r24.y, r26, c194.y
++        add r24.y, r24.y, r24.x
++        rcp r24.y, r24.y
++        mov r31.zw, c194.z
++        mov r31.xy, r29.xwzw
++        texldl r25, r31, s0
++        mul r25.xyz, r25, r26.x
++        mov r31.xy, r29.zyzw
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.y, r25
++        mov r31.xy, r29
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.z, r25
++        mov r31.x, r30.x
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.w, r25
++        mov r31.x, r29.x
++        mov r31.y, r30.y
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r24.x, r25
++        mul_sat r25.xyz, r25, r24.y
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
++      endif
++    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
++    endif
+     mul_sat r0.w, r0.w, c154.x
+     // mul r0.w, r0.w, v3.w disabled vertex alpha
+     mul r1.x, r0.w, c39.x
+diff --git a/win32_30_nv8/gta_spec_reflect/gta_spec_reflectPS4.asm b/win32_30_nv8/gta_spec_reflect/gta_spec_reflectPS4.asm
+index 69300e5..0363840 100644
+--- a/win32_30_nv8/gta_spec_reflect/gta_spec_reflectPS4.asm
++++ b/win32_30_nv8/gta_spec_reflect/gta_spec_reflectPS4.asm
+@@ -36,6 +36,9 @@
+     def c0, 0, -1, -0, 9.99999975e-006
+     def c1, -0.5, 0.5, 0.001953125, 0
+     def c2, 3.99600005, 4, 0.125, 0.25
++    def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
++    def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
++    def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord3 v2.xyz
+@@ -46,7 +49,81 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s10
++    dcl_2d s12 // FusionFix detail texture
+     texld r0, v0, s0
++    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
++    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
++    if b13
++      dsx r24.xy, v0.xyxy
++      dsy r24.zw, v0.xyxy
++      mul r24, r24, c192.xyxy
++      dp2add r30.z, r24, r24, c194.z
++      dp2add r30.w, r24.zwzw, r24.zwzw, c194.z
++      max r30.z, r30.z, r30.w
++      mad_sat r30.z, r30.z, c195.y, c195.z
++      if_gt r30.z, c194.z
++        mul r24.xy, v0.xyxy, c192
++        add r24.zw, r24.xyxy, c196.x
++        frc r25.xy, r24.zwzw
++        add r24.zw, r24, -r25.xyxy
++        mul r26.xy, r25, r25
++        mul r26.zw, r26.xyxy, r25.xyxy
++        mad r27.xy, r25, c196.x, r26
++        mad r27.xy, r26.zwzw, c196.x, r27
++        mul r27.zw, r26, c195.w
++        mad r27.zw, r26.xyxy, c196.x, r27
++        mul r28.xy, r25, c195.w
++        mad r28.xy, r26, c194.w, r28
++        mad r28.xy, r26.zwzw, -c196.y, r28
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
++        mad r28.zw, r26.xyxy, c196.x, r28
++        rcp r29.x, r28.z
++        rcp r29.y, r28.w
++        mad r29.xy, r28, r29, r24.zwzw
++        add r29.xy, r29, c195.w
++        add r29.zw, r24, c196.x
++        add r30.xy, r24.zwzw, -c196.z
++        mul r29, r29, c192.zwzw
++        mul r30.xy, r30, c192.zwzw
++        mul r26.x, r28.z, r27.y
++        mul r26.y, r27.x, r28.w
++        mul r26.z, r28.z, r28.w
++        mul r26.w, r27.z, r28.w
++        mul r24.x, r28.z, r27.w
++        dp4 r24.y, r26, c194.y
++        add r24.y, r24.y, r24.x
++        rcp r24.y, r24.y
++        mov r31.zw, c194.z
++        mov r31.xy, r29.xwzw
++        texldl r25, r31, s0
++        mul r25.xyz, r25, r26.x
++        mov r31.xy, r29.zyzw
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.y, r25
++        mov r31.xy, r29
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.z, r25
++        mov r31.x, r30.x
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.w, r25
++        mov r31.x, r29.x
++        mov r31.y, r30.y
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r24.x, r25
++        mul_sat r25.xyz, r25, r24.y
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
++      endif
++    endif
++    // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
++    // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
++    if b12
++      mul r24.xy, v0.xyxy, c190.x
++      texld r24, r24, s12
++      mad r25.x, r24.z, c190.y, c190.z
++      mul r0.xyz, r0, r25.x
++    endif
+     add r1.xyz, c0.w, v1
+     dp3 r1.w, r1, r1
+     rsq r1.w, r1.w
+diff --git a/win32_30_nv8/gta_spec_reflect_decal/gta_spec_reflect_decalPS3.asm b/win32_30_nv8/gta_spec_reflect_decal/gta_spec_reflect_decalPS3.asm
+index fcb77c6..5da49e6 100644
+--- a/win32_30_nv8/gta_spec_reflect_decal/gta_spec_reflect_decalPS3.asm
++++ b/win32_30_nv8/gta_spec_reflect_decal/gta_spec_reflect_decalPS3.asm
+@@ -39,6 +39,9 @@
+     def c0, 0, -1, -0, 9.99999975e-006
+     def c1, -0.5, 0.5, 0.001953125, 0
+     def c2, 3.99600005, 4, 0.125, 0.25
++    def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
++    def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
++    def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord3 v2.xyz
+@@ -49,6 +52,7 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s10
++    dcl_2d s12 // FusionFix detail texture
+     mul r20.xy, vPos.xy, c153.x
+     frc r20.xy, r20.xy
+     mad r20, r20.xxyy, -c153.y, c153.zwzw
+@@ -57,6 +61,71 @@
+     add r20, -r20.x, c39.x
+     texkill r20
+     texld r0, v0, s0
++    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
++    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
++    if b13
++      dsx r24.xy, v0.xyxy
++      dsy r24.zw, v0.xyxy
++      mul r24, r24, c192.xyxy
++      dp2add r30.z, r24, r24, c194.z
++      dp2add r30.w, r24.zwzw, r24.zwzw, c194.z
++      max r30.z, r30.z, r30.w
++      mad_sat r30.z, r30.z, c195.y, c195.z
++      if_gt r30.z, c194.z
++        mul r24.xy, v0.xyxy, c192
++        add r24.zw, r24.xyxy, c196.x
++        frc r25.xy, r24.zwzw
++        add r24.zw, r24, -r25.xyxy
++        mul r26.xy, r25, r25
++        mul r26.zw, r26.xyxy, r25.xyxy
++        mad r27.xy, r25, c196.x, r26
++        mad r27.xy, r26.zwzw, c196.x, r27
++        mul r27.zw, r26, c195.w
++        mad r27.zw, r26.xyxy, c196.x, r27
++        mul r28.xy, r25, c195.w
++        mad r28.xy, r26, c194.w, r28
++        mad r28.xy, r26.zwzw, -c196.y, r28
++        mul r28.zw, r25.xyxy, c195.w
++        add r28.zw, r28, c194.y
++        mad r28.zw, r26.xyxy, c196.x, r28
++        rcp r29.x, r28.z
++        rcp r29.y, r28.w
++        mad r29.xy, r28, r29, r24.zwzw
++        add r29.xy, r29, c195.w
++        add r29.zw, r24, c196.x
++        add r30.xy, r24.zwzw, -c196.z
++        mul r29, r29, c192.zwzw
++        mul r30.xy, r30, c192.zwzw
++        mul r26.x, r28.z, r27.y
++        mul r26.y, r27.x, r28.w
++        mul r26.z, r28.z, r28.w
++        mul r26.w, r27.z, r28.w
++        mul r24.x, r28.z, r27.w
++        dp4 r24.y, r26, c194.y
++        add r24.y, r24.y, r24.x
++        rcp r24.y, r24.y
++        mov r31.zw, c194.z
++        mov r31.xy, r29.xwzw
++        texldl r25, r31, s0
++        mul r25.xyz, r25, r26.x
++        mov r31.xy, r29.zyzw
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.y, r25
++        mov r31.xy, r29
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.z, r25
++        mov r31.x, r30.x
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r26.w, r25
++        mov r31.x, r29.x
++        mov r31.y, r30.y
++        texldl r28, r31, s0
++        mad r25.xyz, r28, r24.x, r25
++        mul_sat r25.xyz, r25, r24.y
++        lrp r25.xyz, r30.z, r25, r0
++        mov r0.xyz, r25
++      endif
++    endif
+     add r1.xyz, c0.w, v1
+     dp3 r1.w, r1, r1
+     rsq r1.w, r1.w
+diff --git a/win32_30_nv8/gta_spec_reflect_decal/gta_spec_reflect_decalPS4.asm b/win32_30_nv8/gta_spec_reflect_decal/gta_spec_reflect_decalPS4.asm
+index 57999d8..08bbcd9 100644
+--- a/win32_30_nv8/gta_spec_reflect_decal/gta_spec_reflect_decalPS4.asm
++++ b/win32_30_nv8/gta_spec_reflect_decal/gta_spec_reflect_decalPS4.asm
+@@ -36,6 +36,9 @@
+     def c0, 0, -1, -0, 9.99999975e-006
+     def c1, -0.5, 0.5, 0.001953125, 0
+     def c2, 3.99600005, 4, 0.125, 0.25
++    def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
++    def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
++    def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord3 v2.xyz
+@@ -46,7 +49,73 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s10
++    dcl_2d s12 // FusionFix detail texture
      texld r0, v0, s0
 +    // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
 +    // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
