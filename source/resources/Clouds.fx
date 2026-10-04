@@ -18,6 +18,8 @@
 #ifndef LIGHT_STEPS
 #define LIGHT_STEPS 3
 #endif
+// CloudNoiseTex's size.
+#define COVERAGE_SIZE 256.0
 
 sampler2D DepthTex : register(s0);
 sampler2D CoverageTex : register(s1);
@@ -66,7 +68,14 @@ float PixelJitter(float2 pixel)
 float Density(float3 p, bool detail)
 {
     float h = (p.z - vec4Layer.x) / vec4Layer.y;
-    float c = tex2Dlod(CoverageTex, float4(p.xy * vec4Layer.z + vec4Wind.xy, 0, 0)).r;
+    // The coverage is filtered with a quintic curve between texels instead of linearly: the
+    // density ramp stretches it several times over, and the kinks of linear filtering at the
+    // texel edges stood out as vertical creases down the clouds' sides.
+    float2 texel = (p.xy * vec4Layer.z + vec4Wind.xy) * COVERAGE_SIZE - 0.5;
+    float2 cell = floor(texel);
+    float2 f = texel - cell;
+    f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    float c = tex2Dlod(CoverageTex, float4((cell + f + 0.5) / COVERAGE_SIZE, 0, 0)).r;
     float cover = max(vec4Layer.w, 0.02);
     // Only the lowest fifth, and gently: half the cover there left only the densest middles of the
     // base, which hung down as separate lobes.
@@ -156,7 +165,9 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // which is what keeps real clouds bright: three octaves, each with half the extinction
             // and half the weight of the one before. With the direct beam alone the sun barely
             // reached the faces seen from below and the clouds came out dark.
-            float tau = lightDepth * sigma;
+            // A third of the extinction: past the sun's direct beam the light inside a cloud is
+            // scattered forwards mostly, so it gets through far more cloud than the eye's view does.
+            float tau = lightDepth * sigma * 0.33;
             float sun = (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) / 1.75;
             // Darker towards the base, where the sky above is hidden by the cloud itself.
             float h = saturate((p.z - base) / vec4Layer.y);
@@ -168,7 +179,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             float3 lit = lerp(shade, sunLit, sun * (0.6 + 0.4 * min(phase, 1.0)));
             lit += sunLit * sun * max(phase - 1.0, 0.0) * 0.1 * fSilver;
             // The glow, most where the cloud is thin; past the scene's white point, for the bloom.
-            lit += sunLit * exp(-tau * 0.5) * (1.0 - d) * min(forward * 0.04 * fSilver, 3.0);
+            lit += sunLit * exp(-tau * 0.5) * (1.0 - d) * min(forward * 0.02 * fSilver, 1.5);
 
             float stepTransmittance = exp(-d * sigma * dt);
             colour += transmittance * (1.0 - stepTransmittance) * lit;

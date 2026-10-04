@@ -3849,8 +3849,8 @@ private:
         float litColour[3], shadeColour[3];
         for (int i = 0; i < 3; ++i)
         {
-            litColour[i] = (cloudColour[i] * 1.3f + 0.5f * sunsetColour[i]) * exposure;
-            shadeColour[i] = cloudColour[i] * 0.65f * exposure;
+            litColour[i] = (cloudColour[i] * 1.7f + 0.5f * sunsetColour[i]) * exposure;
+            shadeColour[i] = cloudColour[i] * 0.9f * exposure;
         }
         effect->SetFloatArray("vec3LitColour", litColour, 3);
         effect->SetFloatArray("vec3ShadeColour", shadeColour, 3);
