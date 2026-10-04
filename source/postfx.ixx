@@ -4071,7 +4071,7 @@ private:
         float litColour[3], shadeColour[3], sunsetLit[3];
         for (int i = 0; i < 3; ++i)
         {
-            litColour[i] = cloudColour[i] * kCloudLitGain * exposure;
+            litColour[i] = cloudColour[i] * R.kCloudLitGain * exposure;
             shadeColour[i] = cloudColour[i] * R.fVolumetricCloudsShade * exposure;
             sunsetLit[i] = sunsetColour[i] * exposure;
         }
