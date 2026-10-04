@@ -383,7 +383,7 @@ public:
     float fVolumetricCloudsThickness = 600.0f;
     float fVolumetricCloudsDensity = 0.03f;
     float fVolumetricCloudsDetail = 0.5f;
-    float fVolumetricCloudsDetailScale = 300.0f;
+    float fVolumetricCloudsDetailScale = 1500.0f;
     float fVolumetricCloudsHaze = 25000.0f;
     float fVolumetricCloudsMaxDistance = 40000.0f;
     float fVolumetricCloudsBrightness = 1.0f;
@@ -1231,7 +1231,7 @@ public:
         fVolumetricCloudsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsThickness", 600.0f), 50.0f, 5000.0f);
         fVolumetricCloudsDensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDensity", 0.03f), 0.0005f, 1.0f);
         fVolumetricCloudsDetail = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetail", 0.5f), 0.0f, 1.0f);
-        fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 300.0f), 20.0f, 10000.0f);
+        fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 1500.0f), 20.0f, 10000.0f);
         fVolumetricCloudsHaze = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsHaze", 25000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBrightness", 1.0f), 0.0f, 4.0f);
@@ -1386,8 +1386,9 @@ public:
     }
 };
 
-// The cloud deck's noise for the cloud shadows: 256 x 256, tiling, five octaves of value noise
-// from four cells a tile up, spread over 0..1 like the game's own cloud noise. Managed, so it
+// The cloud deck's noise for the cloud shadows and the volumetric clouds: 256 x 256, tiling, five
+// octaves of value noise from four cells a tile up, each 0.6 of the one before (at 0.5 the largest
+// octave made one huge cloud), spread over 0..1 like the game's own cloud noise. Managed, so it
 // survives device resets.
 IDirect3DTexture9* PostFxResource::CloudNoiseTex()
 {
@@ -1405,7 +1406,7 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
         return static_cast<float>((h ^ (h >> 16)) & 0xffff) / 65535.0f;
     };
     float amplitude = 1.0f;
-    for (int octave = 0, cells = 4; octave < 5; ++octave, cells *= 2, amplitude *= 0.5f)
+    for (int octave = 0, cells = 4; octave < 5; ++octave, cells *= 2, amplitude *= 0.6f)
     {
         const float cell = static_cast<float>(size) / cells;
         for (int y = 0; y < size; ++y)
@@ -5535,11 +5536,12 @@ public:
             float deckHeight = R.fCloudShadowsHeight;
             if (R.VolumetricCloudsOn())
             {
-                // The volumetric clouds' coverage, saturate((n - (1 - cover)) / cover), a third of the
-                // way up their layer.
+                // The volumetric clouds' coverage near their base, saturate((n - (1 - cover)) /
+                // (0.35 cover)) as Clouds.fx's Density has it, a third of the way up their layer.
                 const float cover = (std::max)(R.fVolumetricCloudsCoverage, 0.02f);
-                threshold = 1.0f / cover;
-                bias = (1.0f - cover) / cover;
+                const float ramp = (std::max)(cover * 0.35f, 0.02f);
+                threshold = 1.0f / ramp;
+                bias = (1.0f - cover) / ramp;
                 thickness = 1.0f;
                 coverageShift = 0.0f;
                 deckHeight = R.fVolumetricCloudsBase + R.fVolumetricCloudsThickness * 0.33f;

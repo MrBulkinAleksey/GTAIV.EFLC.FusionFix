@@ -53,22 +53,26 @@ float PixelJitter(float2 pixel)
     return frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
 }
 
-// Density 0 to 1 at p; detail erodes it from the edges inwards. The coverage sets where cloud is;
-// higher up in the layer it takes ever denser coverage to stay cloud, so each cloud narrows towards
-// its top into a dome. With the same coverage at every height the sides stood straight up and the
-// clouds looked like towers. The base is flat, filling in over the lowest tenth.
+// Density 0 to 1 at p. The coverage sets where cloud is; higher up in the layer it takes ever denser
+// coverage to stay cloud, so each cloud narrows towards its top into a dome. With the same coverage
+// at every height the sides stood straight up and the clouds looked like towers. The base is flat,
+// filling in over the lowest tenth. Past its edge a cloud turns dense within a third of the way to
+// full coverage: spread over all of it, the edges were hundreds of metres of haze.
+// The detail then cuts billows into it: where the Worley noise is low, between its cells, the
+// density is lowered and what is left stretched back to 0 to 1, so the billows keep crisp edges.
 float Density(float3 p, bool detail)
 {
     float h = (p.z - vec4Layer.x) / vec4Layer.y;
     float c = tex2Dlod(CoverageTex, float4(p.xy * vec4Layer.z + vec4Wind.xy, 0, 0)).r;
     float cover = max(vec4Layer.w, 0.02);
     float threshold = (1.0 - cover) + cover * 0.8 * h * h;
-    float d = saturate((c - threshold) / max(1.0 - threshold, 0.05)) * saturate(h * 10.0) * saturate((1.0 - h) * 10.0);
+    float d = saturate((c - threshold) / max((1.0 - threshold) * 0.35, 0.02)) * saturate(h * 10.0) * saturate((1.0 - h) * 10.0);
     [branch]
     if (detail && d > 0.0)
     {
         float n = tex3Dlod(DetailTex, float4(p * vec4Shape.y + float3(vec4Wind.zw, 0.0), 0)).r;
-        d = saturate(d - n * vec4Shape.z * (1.0 - d));
+        float erode = (1.0 - n) * vec4Shape.z;
+        d = saturate((d - erode) / max(1.0 - erode, 0.05));
     }
     return d;
 }
@@ -138,7 +142,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             float sun = max(exp(-tau), 0.35 * exp(-0.2 * tau));
             // Darker towards the base, where the sky above is hidden by the cloud itself.
             float h = saturate((p.z - base) / vec4Layer.y);
-            float3 shade = vec3ShadeColour * lerp(0.7, 1.0, h);
+            float3 shade = vec3ShadeColour * lerp(0.5, 1.0, sqrt(h));
             // The sun lights what it reaches, a little more facing it; past that the forward lobe
             // adds the rim, scaled by the game's inscattering range.
             float3 lit = lerp(shade, vec3LitColour, sun * (0.6 + 0.4 * min(phase, 1.0)));
