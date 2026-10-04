@@ -13,6 +13,7 @@ export module texturequality;
 
 import common;
 import comvars;
+import renderscale;
 import settings;
 
 // Texture quality options for the G-buffer pass, each turned on and off on its own in the
@@ -292,10 +293,11 @@ private:
         const bool specularAA = Pref(specularAAPref) != 0;
         bInGBuffer = true;
 
-        // Menu steps of -0.25
-        if (const int lodBias = Pref(lodBiasPref); lodBias > 0)
+        // Menu steps of -0.25, and the render scale's: textures as sharp as they'd be at the screen size, which DLSS
+        // and FSR keep through the upscale
+        const float bias = -0.25f * Pref(lodBiasPref) + std::log2(RenderScale::GetScale());
+        if (bias < 0.0f)
         {
-            const float bias = -0.25f * lodBias;
             for (DWORD i = 0; i < kMaterialStages; ++i)
             {
                 savedLodBias[i] = 0;

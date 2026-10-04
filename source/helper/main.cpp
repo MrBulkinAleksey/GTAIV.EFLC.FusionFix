@@ -136,11 +136,12 @@ namespace
         std::array<SharedTexture, static_cast<size_t>(Protocol::Texture::Count)> textures;
         HANDLE sharedFenceHandle = nullptr;
 
-        // Wine: the game exchanges linear buffers and the GPU work is waited for on the CPU, see the protocol
-        bool sharedBuffers = false;
-        std::array<SharedTexture, static_cast<size_t>(Protocol::Texture::Count)> buffers;
-        uint32_t width = 0;
-        uint32_t height = 0;
+        // Wine (see the protocol): the shared textures have no UAV flag, which keeps them plain for the game's Vulkan
+        // import, the upscaler writes into outputUav, which is copied into the shared output. sharedFence is then the
+        // game's semaphore, or without it (cpuSync) the GPU work is waited for on the CPU.
+        bool wine = false;
+        bool cpuSync = false;
+        ComPtr<ID3D12Resource> outputUav;
 
         bool Create(LUID luid)
         {
@@ -213,7 +214,7 @@ namespace
         // The fence the frames' allocators are tracked with
         ID3D12Fence* FrameFence()
         {
-            return sharedBuffers ? localFence.Get() : sharedFence.Get();
+            return cpuSync ? localFence.Get() : sharedFence.Get();
         }
 
         // Wine: runs the frame and waits for it, the game copies the output once Evaluate is answered
@@ -252,12 +253,7 @@ namespace
                     CloseHandle(texture.handle);
                 texture = {};
             }
-            for (auto& buffer : buffers)
-            {
-                if (buffer.handle)
-                    CloseHandle(buffer.handle);
-                buffer = {};
-            }
+            outputUav.Reset();
             if (sharedFenceHandle)
                 CloseHandle(sharedFenceHandle);
             sharedFenceHandle = nullptr;
@@ -279,90 +275,53 @@ namespace
             desc.Format = format;
             desc.SampleDesc.Count = 1;
             desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            desc.Flags = unorderedAccess ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
+            desc.Flags = unorderedAccess && !wine ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
 
-            // With shared buffers the textures stay in the helper
             auto& texture = textures[static_cast<size_t>(index)];
-            auto heapFlags = sharedBuffers ? D3D12_HEAP_FLAG_NONE : D3D12_HEAP_FLAG_SHARED;
-            if (FAILED(device->CreateCommittedResource(&heap, heapFlags, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&texture.resource))))
+            if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_SHARED, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&texture.resource))))
                 return false;
-            if (sharedBuffers)
-                return CreateBuffer(index, width, height);
-            return SUCCEEDED(device->CreateSharedHandle(texture.resource.Get(), nullptr, GENERIC_ALL, nullptr, &texture.handle));
-        }
-
-        bool CreateBuffer(Protocol::Texture index, uint32_t width, uint32_t height)
-        {
-            D3D12_HEAP_PROPERTIES heap{};
-            heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-            D3D12_RESOURCE_DESC desc{};
-            desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-            desc.Width = Protocol::BufferSize(index, width, height);
-            desc.Height = 1;
-            desc.DepthOrArraySize = 1;
-            desc.MipLevels = 1;
-            desc.Format = DXGI_FORMAT_UNKNOWN;
-            desc.SampleDesc.Count = 1;
-            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-            auto& buffer = buffers[static_cast<size_t>(index)];
-            if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_SHARED, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&buffer.resource))))
+            // vkd3d-proton only makes textures shareable with another process: a buffer gets an empty handle
+            if (FAILED(device->CreateSharedHandle(texture.resource.Get(), nullptr, GENERIC_ALL, nullptr, &texture.handle)) || !texture.handle)
                 return false;
-            return SUCCEEDED(device->CreateSharedHandle(buffer.resource.Get(), nullptr, GENERIC_ALL, nullptr, &buffer.handle));
-        }
 
-        // What the game imports: the shared textures, or the buffers under Wine
-        SharedTexture& Shared(Protocol::Texture index)
-        {
-            return sharedBuffers ? buffers[static_cast<size_t>(index)] : textures[static_cast<size_t>(index)];
+            if (wine && unorderedAccess)
+            {
+                desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+                if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&outputUav))))
+                    return false;
+            }
+            return true;
         }
 
         uint64_t AllocationSize(Protocol::Texture index)
         {
-            auto desc = Shared(index).resource->GetDesc();
+            auto desc = textures[static_cast<size_t>(index)].resource->GetDesc();
             return device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
         }
 
-        // Wine: buffer -> texture for the inputs (toTexture), texture -> buffer for the output. Both are in the
-        // common state before and after, buffers are promoted implicitly.
-        void CopyBuffer(ID3D12GraphicsCommandList* cmd, Protocol::Texture index, bool toTexture)
+        // Wine: the upscaler's output into the shared output, both in the common state before and after
+        void CopyOutput(ID3D12GraphicsCommandList* cmd)
         {
-            auto i = static_cast<size_t>(index);
-            auto texture = textures[i].resource.Get();
-            auto copyState = toTexture ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_COPY_SOURCE;
-
-            D3D12_RESOURCE_BARRIER barrier{};
-            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barrier.Transition.pResource = texture;
-            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-            barrier.Transition.StateAfter = copyState;
-            cmd->ResourceBarrier(1, &barrier);
-
-            D3D12_TEXTURE_COPY_LOCATION textureLocation{};
-            textureLocation.pResource = texture;
-            textureLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-            textureLocation.SubresourceIndex = 0;
-
-            D3D12_TEXTURE_COPY_LOCATION bufferLocation{};
-            bufferLocation.pResource = buffers[i].resource.Get();
-            bufferLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-            bufferLocation.PlacedFootprint.Offset = 0;
-            bufferLocation.PlacedFootprint.Footprint.Format = texture->GetDesc().Format;
-            bufferLocation.PlacedFootprint.Footprint.Width = width;
-            bufferLocation.PlacedFootprint.Footprint.Height = height;
-            bufferLocation.PlacedFootprint.Footprint.Depth = 1;
-            bufferLocation.PlacedFootprint.Footprint.RowPitch = Protocol::RowPitch(index, width);
-
-            if (toTexture)
-                cmd->CopyTextureRegion(&textureLocation, 0, 0, 0, &bufferLocation, nullptr);
-            else
-                cmd->CopyTextureRegion(&bufferLocation, 0, 0, 0, &textureLocation, nullptr);
-
-            barrier.Transition.StateBefore = copyState;
-            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
-            cmd->ResourceBarrier(1, &barrier);
+            auto shared = textures[static_cast<size_t>(Protocol::Texture::Output)].resource.Get();
+            D3D12_RESOURCE_BARRIER barriers[2]{};
+            for (auto& barrier : barriers)
+            {
+                barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+            }
+            barriers[0].Transition.pResource = outputUav.Get();
+            barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            barriers[1].Transition.pResource = shared;
+            barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            cmd->ResourceBarrier(2, barriers);
+            cmd->CopyResource(shared, outputUav.Get());
+            for (auto& barrier : barriers)
+            {
+                barrier.Transition.StateBefore = barrier.Transition.StateAfter;
+                barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+            }
+            cmd->ResourceBarrier(2, barriers);
         }
 
         bool CreateSharedFence()
@@ -372,8 +331,11 @@ namespace
             return SUCCEEDED(device->CreateSharedHandle(sharedFence.Get(), nullptr, GENERIC_ALL, nullptr, &sharedFenceHandle));
         }
 
+        // What the upscaler reads and writes
         ID3D12Resource* Texture(Protocol::Texture index)
         {
+            if (wine && index == Protocol::Texture::Output)
+                return outputUav.Get();
             return textures[static_cast<size_t>(index)].resource.Get();
         }
 
@@ -385,7 +347,7 @@ namespace
                 auto output = i == static_cast<size_t>(Protocol::Texture::Output);
                 auto use = output ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 barriers[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                barriers[i].Transition.pResource = textures[i].resource.Get();
+                barriers[i].Transition.pResource = Texture(static_cast<Protocol::Texture>(i));
                 barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
                 barriers[i].Transition.StateBefore = toUse ? D3D12_RESOURCE_STATE_COMMON : use;
                 barriers[i].Transition.StateAfter = toUse ? use : D3D12_RESOURCE_STATE_COMMON;
@@ -399,8 +361,10 @@ namespace
 
     struct FrameParams
     {
-        uint32_t width = 0;
+        uint32_t width = 0;           // render size
         uint32_t height = 0;
+        uint32_t outputWidth = 0;
+        uint32_t outputHeight = 0;
         float jitterX = 0.0f;
         float jitterY = 0.0f;
         float motionScaleX = 1.0f;
@@ -482,18 +446,37 @@ namespace
             return true;
         }
 
-        bool Create(ID3D12GraphicsCommandList* cmd, uint32_t width, uint32_t height, uint32_t preset)
+        // The quality mode nearest to the render scale; DLAA when nothing is upscaled
+        static NVSDK_NGX_PerfQuality_Value PerfQuality(uint32_t width, uint32_t outputWidth)
+        {
+            if (width >= outputWidth)
+                return NVSDK_NGX_PerfQuality_Value_DLAA;
+            auto scale = static_cast<float>(width) / static_cast<float>(outputWidth);
+            if (scale >= 0.62f)
+                return NVSDK_NGX_PerfQuality_Value_MaxQuality;
+            if (scale >= 0.54f)
+                return NVSDK_NGX_PerfQuality_Value_Balanced;
+            if (scale >= 0.42f)
+                return NVSDK_NGX_PerfQuality_Value_MaxPerf;
+            return NVSDK_NGX_PerfQuality_Value_UltraPerformance;
+        }
+
+        bool Create(ID3D12GraphicsCommandList* cmd, uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, uint32_t preset)
         {
             Release();
 
-            NVSDK_NGX_Parameter_SetUI(parameters, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, preset);
+            // The preset applies to whichever quality mode the scale picks
+            for (auto hint : { NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality,
+                NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance,
+                NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality })
+                NVSDK_NGX_Parameter_SetUI(parameters, hint, preset);
 
             NVSDK_NGX_DLSS_Create_Params create{};
             create.Feature.InWidth = width;
             create.Feature.InHeight = height;
-            create.Feature.InTargetWidth = width;
-            create.Feature.InTargetHeight = height;
-            create.Feature.InPerfQualityValue = NVSDK_NGX_PerfQuality_Value_DLAA;
+            create.Feature.InTargetWidth = outputWidth;
+            create.Feature.InTargetHeight = outputHeight;
+            create.Feature.InPerfQualityValue = PerfQuality(width, outputWidth);
             // HDR scene color, motion vectors at render resolution without jitter, standard depth
             create.InFeatureCreateFlags = NVSDK_NGX_DLSS_Feature_Flags_IsHDR | NVSDK_NGX_DLSS_Feature_Flags_MVLowRes | NVSDK_NGX_DLSS_Feature_Flags_AutoExposure;
             create.InEnableOutputSubrects = false;
@@ -637,7 +620,7 @@ namespace
             return true;
         }
 
-        bool Create(uint32_t width, uint32_t height)
+        bool Create(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight)
         {
             Release();
 
@@ -650,7 +633,7 @@ namespace
             create.header.pNext = &backend.header;
             create.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
             create.maxRenderSize = { width, height };
-            create.maxUpscaleSize = { width, height };
+            create.maxUpscaleSize = { outputWidth, outputHeight };
 
             auto result = functions.CreateContext(&context, &create.header, nullptr);
             if (result != FFX_API_RETURN_OK)
@@ -684,7 +667,7 @@ namespace
             dispatch.jitterOffset = { frame.jitterX, frame.jitterY };
             dispatch.motionVectorScale = { frame.motionScaleX, frame.motionScaleY };
             dispatch.renderSize = { frame.width, frame.height };
-            dispatch.upscaleSize = { frame.width, frame.height };
+            dispatch.upscaleSize = { frame.outputWidth, frame.outputHeight };
             dispatch.enableSharpening = frame.sharpness > 0.0f;
             dispatch.sharpness = frame.sharpness;
             dispatch.frameTimeDelta = frame.frameTimeMs;
@@ -731,15 +714,51 @@ namespace
         Protocol::Backend backend = Protocol::Backend::None;
         uint32_t width = 0;
         uint32_t height = 0;
+        uint32_t outputWidth = 0;
+        uint32_t outputHeight = 0;
         uint32_t flags = 0;
 
         bool Duplicate(HANDLE source, uint64_t& target)
         {
             HANDLE duplicate = nullptr;
-            if (!DuplicateHandle(GetCurrentProcess(), source, connection.game, &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS))
+            if (!source || !DuplicateHandle(GetCurrentProcess(), source, connection.game, &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS))
+            {
+                Log("Handle %p could not be duplicated into the game: error %lu", source, GetLastError());
                 return false;
+            }
             target = reinterpret_cast<uint64_t>(duplicate);
             return true;
+        }
+
+        // Wine: the game's timeline semaphore, duplicated into this process, as the shared fence. Without it GameFence
+        // is cleared in the answer and both sides wait on the CPU.
+        void OpenGameFence()
+        {
+            auto& shared = *connection.shared;
+            auto handle = reinterpret_cast<HANDLE>(shared.FenceHandle);
+            shared.FenceHandle = 0;
+            if (!(flags & Protocol::ConfigureFlags::GameFence))
+            {
+                if (handle)
+                    CloseHandle(handle);
+                return;
+            }
+
+            ComPtr<ID3D12Fence> fence;
+            auto hr = handle ? device.device->OpenSharedHandle(handle, IID_PPV_ARGS(&fence)) : E_INVALIDARG;
+            if (handle)
+                CloseHandle(handle);
+            if (SUCCEEDED(hr) && fence)
+            {
+                device.sharedFence = fence;
+                Log("The game's semaphore is the shared fence");
+            }
+            else
+            {
+                flags &= ~Protocol::ConfigureFlags::GameFence;
+                Log("The game's semaphore could not be opened (0x%08X): waiting on the CPU", static_cast<uint32_t>(hr));
+            }
+            shared.Flags = flags;
         }
 
         bool Configure()
@@ -754,19 +773,23 @@ namespace
             width = shared.Width;
             height = shared.Height;
             flags = shared.Flags;
-            if (width == 0 || height == 0 || width > 16384 || height > 16384)
+            outputWidth = shared.OutputWidth ? shared.OutputWidth : width;
+            outputHeight = shared.OutputHeight ? shared.OutputHeight : height;
+            Log("Configure %s at %ux%u -> %ux%u%s", shared.ConfigureBackend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height,
+                outputWidth, outputHeight, (flags & Protocol::ConfigureFlags::Wine) ? ", Wine" : "");
+            if (width == 0 || height == 0 || outputWidth > 16384 || outputHeight > 16384 || outputWidth < width || outputHeight < height)
                 return false;
-            device.sharedBuffers = (flags & Protocol::ConfigureFlags::SharedBuffers) != 0;
-            device.width = width;
-            device.height = height;
+            device.wine = (flags & Protocol::ConfigureFlags::Wine) != 0;
+            OpenGameFence();
+            device.cpuSync = device.wine && !(flags & Protocol::ConfigureFlags::GameFence);
 
             using T = Protocol::Texture;
             if (!device.CreateTexture(T::Color, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, false) ||
                 !device.CreateTexture(T::Depth, width, height, DXGI_FORMAT_R32_FLOAT, false) ||
                 !device.CreateTexture(T::Motion, width, height, DXGI_FORMAT_R16G16_FLOAT, false) ||
                 !device.CreateTexture(T::Reactive, width, height, DXGI_FORMAT_R16_FLOAT, false) ||
-                !device.CreateTexture(T::Output, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, true) ||
-                (!device.sharedBuffers && !device.CreateSharedFence()))
+                !device.CreateTexture(T::Output, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, true) ||
+                (!device.wine && !device.CreateSharedFence()))
             {
                 connection.Message("Shared textures could not be created");
                 return false;
@@ -776,44 +799,46 @@ namespace
             if (shared.ConfigureBackend == Protocol::Backend::DLSS && dlss.available)
             {
                 auto cmd = device.BeginImmediate();
-                created = dlss.Create(cmd, width, height, shared.DLSSPreset);
+                created = dlss.Create(cmd, width, height, outputWidth, outputHeight, shared.DLSSPreset);
                 created = device.SubmitImmediate() && created;
             }
             else if (shared.ConfigureBackend == Protocol::Backend::FSR && fsr.available)
             {
-                created = fsr.Create(width, height);
+                created = fsr.Create(width, height, outputWidth, outputHeight);
             }
 
             if (!created)
             {
-                connection.Message("The upscaler could not be created at %ux%u", width, height);
+                connection.Message("The upscaler could not be created at %ux%u -> %ux%u", width, height, outputWidth, outputHeight);
                 return false;
             }
 
             for (size_t i = 0; i < static_cast<size_t>(T::Count); ++i)
             {
                 shared.TextureSizes[i] = device.AllocationSize(static_cast<T>(i));
-                if (!Duplicate(device.Shared(static_cast<T>(i)).handle, shared.TextureHandles[i]))
+                if (!Duplicate(device.textures[i].handle, shared.TextureHandles[i]))
                     return false;
             }
             shared.FenceHandle = 0;
-            if (!device.sharedBuffers && !Duplicate(device.sharedFenceHandle, shared.FenceHandle))
+            if (!device.wine && !Duplicate(device.sharedFenceHandle, shared.FenceHandle))
                 return false;
 
             backend = shared.ConfigureBackend;
-            connection.Message("%s ready at %ux%u", backend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height);
+            connection.Message("%s ready at %ux%u -> %ux%u", backend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height, outputWidth, outputHeight);
             return true;
         }
 
         bool Evaluate()
         {
             auto& shared = *connection.shared;
-            if (backend == Protocol::Backend::None || (!device.sharedBuffers && !device.sharedFence))
+            if (backend == Protocol::Backend::None || (!device.cpuSync && !device.sharedFence))
                 return false;
 
             FrameParams frame;
             frame.width = width;
             frame.height = height;
+            frame.outputWidth = outputWidth;
+            frame.outputHeight = outputHeight;
             frame.jitterX = shared.JitterX;
             frame.jitterY = shared.JitterY;
             frame.motionScaleX = shared.MotionScaleX;
@@ -826,24 +851,17 @@ namespace
             frame.reset = shared.Reset != 0;
             frame.reactive = (flags & Protocol::ConfigureFlags::ReactiveMask) != 0;
 
-            using T = Protocol::Texture;
             auto cmd = device.BeginFrame();
-            if (device.sharedBuffers)
-            {
-                for (auto input : { T::Color, T::Depth, T::Motion, T::Reactive })
-                    if (input != T::Reactive || frame.reactive)
-                        device.CopyBuffer(cmd, input, true);
-            }
             device.Transition(cmd, true);
             bool evaluated = backend == Protocol::Backend::DLSS ? dlss.Evaluate(cmd, device, frame) : fsr.Evaluate(cmd, device, frame);
             device.Transition(cmd, false);
 
-            // Answered once the output is in its buffer
-            if (device.sharedBuffers)
-            {
-                device.CopyBuffer(cmd, T::Output, false);
+            if (device.wine)
+                device.CopyOutput(cmd);
+
+            // Answered once the output is in the shared texture
+            if (device.cpuSync)
                 return device.SubmitFrameAndWait() && evaluated;
-            }
 
             // The fence always advances, so the game can rely on the values it waits for
             device.SubmitFrame(shared.WaitValue, shared.SignalValue, evaluated);
@@ -907,8 +925,22 @@ namespace
                 bool ok = false;
                 switch (command)
                 {
-                case Protocol::Command::Configure: ok = Configure(); break;
-                case Protocol::Command::Evaluate: ok = Evaluate(); break;
+                case Protocol::Command::Configure:
+                    ok = Configure();
+                    if (!ok)
+                        Log("Configure failed");
+                    break;
+                case Protocol::Command::Evaluate:
+                {
+                    ok = Evaluate();
+                    // The first frame, and the first failures
+                    static uint32_t evaluated = 0, failed = 0;
+                    if (ok && evaluated++ == 0)
+                        Log("First frame upscaled");
+                    if (!ok && failed++ < 5)
+                        Log("Evaluate failed");
+                    break;
+                }
                 default: break;
                 }
                 connection.Respond(ok ? Protocol::Status::Ok : Protocol::Status::Failed);

@@ -106,6 +106,24 @@ Logitech LightSync RGB
 [Antialiasing]
 Сглаживание
 
+[UpscalerQuality]
+Апскейлинг
+
+[UpscNative]
+Нативное
+
+[UpscQuality]
+Качество
+
+[UpscBalanced]
+Баланс
+
+[UpscPerf]
+Производительность
+
+[UpscUltraPerf]
+Ультрапроизводительность
+
 [FPS Limiter]
 Ограничитель кадров
 

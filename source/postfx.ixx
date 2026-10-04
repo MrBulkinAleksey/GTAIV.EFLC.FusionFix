@@ -19,6 +19,7 @@ import hdr;
 import natives;
 import settings;
 import shaders;
+import renderscale;
 import temporal;
 
 #define IDR_FXAA                                 101
@@ -1914,7 +1915,8 @@ private:
         auto height = *rage::grcDevice::ms_nActiveHeight;
 
         PostFxResources.createTextures(width, height, hm);
-        TemporalAA::CreateResources(width, height);
+        // Motion vectors, depth and the reactive mask at the size the scene renders at
+        TemporalAA::CreateResources(RenderScale::ToRenderWidth(width), RenderScale::ToRenderHeight(height));
 
         D3DVERTEXELEMENT9 vertexDeclElements[] =
         {
@@ -1940,6 +1942,10 @@ private:
         vertexData[5] = { 1.0f - pixelSize.x, -1.0f + pixelSize.y, 0.0f, 1.0f, 1.0f };
 
         mQuadVertexBuffer->Unlock();
+
+        // The screen space effects work on the scene, at the size it renders at
+        width = static_cast<int32_t>(RenderScale::ToRenderWidth(static_cast<uint32_t>(width)));
+        height = static_cast<int32_t>(RenderScale::ToRenderHeight(static_cast<uint32_t>(height)));
 
         if (PostFxResources.AOEffect)
             PostFxResources.AOEffect->OnResetDevice();
@@ -2444,7 +2450,7 @@ private:
 
                     // Temporal anti-aliasing resolves the HDR scene before everything else. Normally ResolveScene did
                     // it before the game computed bloom and exposure.
-                    if (TemporalAA::GetMode() != TemporalAA::Mode::Off && !TemporalAA::IsSceneResolved())
+                    if (TemporalAA::GetMode() != TemporalAA::Mode::Off && !TemporalAA::IsSceneResolved() && !RenderScale::IsActive())
                     {
                         if (TemporalAA::Resolve(pDevice, PostFxResources.textureRead, PostFxResources.renderTargetTex, PostFxResources.renderTargetSurf))
                         {
@@ -3217,8 +3223,8 @@ private:
         pDevice->SetVertexDeclaration(nullptr);
         pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
 
-        float width = float(vp->mWidth);
-        float height = float(vp->mHeight);
+        float width = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
+        float height = float(RenderScale::ToRenderHeight(uint32_t(vp->mHeight)));
 
         // Half: the march and the smoothing run on the half size targets, created as the full
         // size halved; the debug view stays full size.
@@ -3593,8 +3599,8 @@ private:
                           viewInv.m[2][2] * axisSign[2],
                           viewInv.m[3][2] - waterLevel);
 
-        float width = float(vp->mWidth);
-        float height = float(vp->mHeight);
+        float width = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
+        float height = float(RenderScale::ToRenderHeight(uint32_t(vp->mHeight)));
 
         auto& h = R.SSREffectHandles;
         ID3DXEffect* effect = R.SSREffect;
@@ -3782,7 +3788,7 @@ private:
         rt->GetDesc(&desc);
         R.SSRSurf->GetDesc(&screen);
         SAFE_RELEASE(rt);
-        return desc.Width == screen.Width && desc.Height == screen.Height;
+        return desc.Width == RenderScale::ToRenderWidth(screen.Width) && desc.Height == RenderScale::ToRenderHeight(screen.Height);
     }
 
     static void __cdecl WaterRenderHook(int a1)
@@ -3855,8 +3861,8 @@ private:
                 IDirect3DSurface9* aoSurf = PostFxResources.AOSurf;
                 IDirect3DSurface9* aoBlurSurf = PostFxResources.AOBlurSurf;
 
-                float width = float(currGrcViewport->mWidth);
-                float height = float(currGrcViewport->mHeight);
+                float width = float(RenderScale::ToRenderWidth(uint32_t(currGrcViewport->mWidth)));
+                float height = float(RenderScale::ToRenderHeight(uint32_t(currGrcViewport->mHeight)));
 
                 D3DVIEWPORT9 vp = {};
                 vp.MaxZ = 1.0;
@@ -4197,16 +4203,46 @@ private:
     static inline injector::hook_back<void(__fastcall*)(void*, void*, int, int, int)> hbDrawCallDownsample;
     static void __fastcall DrawCallDownsample(void* _this, void* edx, int a2, int a3, int a4)
     {
+        // Before the game binds FullScreenCopy and computes its texel size for the downsample
+        UpscaleScene();
         bInsteadDrawPrimitiveDownsample = true;
         hbDrawCallDownsample.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitiveDownsample = false;
+    }
+
+    // Render scale: from here on FullScreenCopy is a texture of the screen size, with the scene upscaled by DLSS
+    // or FSR, or stretched when neither runs
+    static void UpscaleScene()
+    {
+        if (!RenderScale::IsActive() || !PostFxResources.FullScreenTex_temp1 || !PostFxResources.FullScreenTex_temp1->mD3DTexture)
+            return;
+
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        IDirect3DTexture9* scene = nullptr;
+        IDirect3DSurface9* sceneSurface = nullptr;
+        IDirect3DSurface9* output = nullptr;
+        if (!RenderScale::BeginPost(pDevice, scene, sceneSurface, output))
+            return;
+
+        auto upscaled = PostFxResources.FullScreenTex_temp1->mD3DTexture;
+        IDirect3DSurface9* upscaledSurface = nullptr;
+        upscaled->GetSurfaceLevel(0, &upscaledSurface);
+
+        auto mode = TemporalAA::GetMode();
+        if (upscaledSurface && (mode == TemporalAA::Mode::DLAA || mode == TemporalAA::Mode::FSR) &&
+            TemporalAA::Resolve(pDevice, scene, upscaled, upscaledSurface))
+            pDevice->StretchRect(upscaledSurface, nullptr, output, nullptr, D3DTEXF_POINT);
+        else
+            pDevice->StretchRect(sceneSurface, nullptr, output, nullptr, D3DTEXF_LINEAR);
+        SAFE_RELEASE(upscaledSurface);
     }
 
     // Temporal anti-aliasing resolves the scene before the game computes bloom from it, which would otherwise
     // follow the jitter. The result goes back into the scene copy that the game and PostFx3 read.
     static void ResolveScene()
     {
-        if (TemporalAA::GetMode() == TemporalAA::Mode::Off || TemporalAA::IsSceneResolved())
+        // With the render scale UpscaleScene did it, on the scene at the render size
+        if (TemporalAA::GetMode() == TemporalAA::Mode::Off || TemporalAA::IsSceneResolved() || RenderScale::IsActive())
             return;
         if (!PostFxResources.mFullScreenRT || !PostFxResources.mFullScreenRT->mD3DTexture ||
             !PostFxResources.FullScreenTex_temp1 || !PostFxResources.FullScreenTex_temp1->mD3DTexture)
@@ -4396,8 +4432,8 @@ private:
         if (-light[2] / lightLen <= 0.0f)
             return;
 
-        const float width = float(vp->mWidth);
-        const float height = float(vp->mHeight);
+        const float width = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
+        const float height = float(RenderScale::ToRenderHeight(uint32_t(vp->mHeight)));
         const D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
         D3DXVECTOR4 toView[3];
         WorldToViewRows(vp, toView);
@@ -4590,8 +4626,8 @@ private:
         D3DXVECTOR4 reprojRows[4];
         ViewToClipRows(vp, FrameHistory::Previous().ViewProjection, reprojRows);
 
-        const float fullWidth = float(vp->mWidth);
-        const float fullHeight = float(vp->mHeight);
+        const float fullWidth = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
+        const float fullHeight = float(RenderScale::ToRenderHeight(uint32_t(vp->mHeight)));
         const float width = float(DWORD(fullWidth) / 2);
         const float height = float(DWORD(fullHeight) / 2);
         const D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
