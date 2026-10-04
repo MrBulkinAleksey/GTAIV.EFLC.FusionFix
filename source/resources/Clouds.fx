@@ -68,8 +68,10 @@ float Density(float3 p, bool detail)
     float h = (p.z - vec4Layer.x) / vec4Layer.y;
     float c = tex2Dlod(CoverageTex, float4(p.xy * vec4Layer.z + vec4Wind.xy, 0, 0)).r;
     float cover = max(vec4Layer.w, 0.02);
-    float bottom = saturate(1.0 - h * 4.0);
-    float threshold = (1.0 - cover) + cover * (0.8 * h * h + 0.5 * bottom * bottom);
+    // Only the lowest fifth, and gently: half the cover there left only the densest middles of the
+    // base, which hung down as separate lobes.
+    float bottom = saturate(1.0 - h * 5.0);
+    float threshold = (1.0 - cover) + cover * (0.8 * h * h + 0.15 * bottom * bottom);
     float d = saturate((c - threshold) / max((1.0 - threshold) * 0.35, 0.02)) * saturate(h * 20.0) * saturate((1.0 - h) * 10.0);
     [branch]
     if (detail && d > 0.0)
