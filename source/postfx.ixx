@@ -348,9 +348,10 @@ public:
     // stay close: past where green and blue end only red is lit, and with 0.5, 0.2 and 0.1 that
     // band reached a fifth of full light and turned the dark side of faces red.
     float fSkinLighting = 1.0f;
-    // The sun on materials with no specular map (c197.x; deferred_lighting_sun_sheen.patch):
-    // they write no specular intensity, and the sun left no highlight on buildings and LOD roads.
-    // They get this much of one, scaled down by how saturated their colour is.
+    // Materials with no specular map (c197.x; deferred_lighting_sun_sheen.patch) write no specular
+    // intensity, so buildings and LOD roads got neither the sun's highlight nor the sky's
+    // reflection. The sun pass gives them half this much of one, as if the G-buffer held it,
+    // times the square of one less their colour's saturation and faded out on dark colours.
     float fSpecularSheen = 0.1f;
     // Cloud shadows on the ground (c197.y-w, c198, c199, s12; deferred_lighting_sun_under_clouds.patch):
     // the ray from a surface towards the sun meets a cloud deck CloudShadowsHeight up, and the sun is

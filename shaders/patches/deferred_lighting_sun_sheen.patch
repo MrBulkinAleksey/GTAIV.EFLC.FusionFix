@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-index 3bec465b..b3a0443c 100644
+index 3bec465b..f0c526f5 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 @@ -79,6 +79,7 @@
@@ -10,50 +10,44 @@ index 3bec465b..b3a0443c 100644
      def c111, 0.159154937, 0.5, 6.28318548, -3.14159274
      def c112, 3, 7.13800001, 0, 0
      def c113, 0.75, -0.5, 0.5, 0.0008
-@@ -482,7 +483,9 @@
-       mad r1.yzw, r2.xxyz, -r1.y, r3.xxyz
+@@ -483,6 +484,35 @@
        dp3_sat r2.w, -c17, r1.yzww
        add r2.w, r2.w, c2.y
-+      mov r18.y, r2.w // FusionFix specular sheen: how near the reflected view is to the sun
        texld r4, v0, s2
 +      mov r18.x, r4.y // FusionFix specular sheen: the G-buffer gloss before it is decoded
-       mul r3.w, r4.y, r4.y
-       mad r4.y, r3.w, c2.z, c2.y
-       mul r3.w, r3.w, c0.x
-@@ -527,6 +530,31 @@
-       mad r0.xzw, r7.xyyz, r1.x, r0
-       add r1.x, r4.x, r4.x
-       mul r0.xzw, r0, r1.x
-+      // --- FusionFix specular sheen (c197.x, SpecularSheen in postfx.ixx): materials with no specular
-+      // --- map (gta_default and its kind write specular 0 and gloss 0.25) got no sun highlight at all on
-+      // --- buildings and LOD roads. Those get a broad one of their own, exponent 16, most on grey
-+      // --- surfaces (asphalt, concrete), less on saturated colours. Specular 0 alone also took in black
-+      // --- texels of specular maps and skin, whose own sharp gloss turned it into white glints.
++      // --- FusionFix specular sheen (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
++      // --- (gta_default and its kind write specular 0 and gloss 0.25) got neither the sun's highlight nor
++      // --- the sky's reflection. They take a specular intensity of their own here, before the lighting
++      // --- reads it, as if the G-buffer held one: SpecularSheen / 2 times the square of one
++      // --- less the albedo's saturation, faded out on dark albedo. The game's own sun highlight and sky
++      // --- reflection then follow from it. Specular 0 alone also took in black texels of specular maps
++      // --- and skin.
 +      texld r12, v0, s0
 +      max r13.x, r12.x, r12.y
-+      max r13.x, r13.x, r12.z
++      max r13.x, r13.x, r12.z // the brightest channel
 +      min r13.y, r12.x, r12.y
 +      min r13.y, r13.y, r12.z
 +      add r13.y, r13.x, -r13.y
-+      add r13.x, r13.x, c158.y
-+      rcp r13.x, r13.x
-+      mad_sat r13.x, r13.y, -r13.x, c158.x // 1 less the saturation
++      add r13.z, r13.x, c158.y
++      rcp r13.z, r13.z
++      mad_sat r13.y, r13.y, -r13.z, c158.x // 1 less the saturation
++      mul r13.y, r13.y, r13.y
++      mul_sat r13.x, r13.x, c6.x // smoothstep from black to a tenth
++      mad r13.z, r13.x, -c21.y, c21.x
++      mul r13.x, r13.x, r13.x
++      mul r13.x, r13.x, r13.z
++      mul r13.x, r13.x, r13.y
 +      mul r13.x, r13.x, c197.x
-+      cmp r13.x, -r4.x, r13.x, c158.z // no specular
++      mul r13.x, r13.x, c4.y
 +      add r13.y, r18.x, -c1.x // gloss 0.25
 +      add r13.y, -r13_abs.y, c4.w
-+      cmp r13.x, r13.y, r13.x, c158.z
-+      pow r13.z, r18.y, c156.z
-+      mul r13.x, r13.x, r13.z
-+      mul r13.x, r13.x, r0.y // the sun's shadow
-+      add r13.y, c17.w, c17.w
-+      mul r13.x, r13.x, r13.y
-+      mad r0.xzw, r6.xyyz, r13.x, r0
-       dp3 r1.x, r2, -c17
-       // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin, the sun's light wraps past the terminator further in red than in green and blue, and red keeps on longer into the penumbra of shadows.
-       mad r26.x, r26.x, c156.x, c156.y
++      cmp r13.y, r13.y, r13.x, c158.z
++      cmp r4.x, -r4.x, r13.y, r4.x // specular 0
+       mul r3.w, r4.y, r4.y
+       mad r4.y, r3.w, c2.z, c2.y
+       mul r3.w, r3.w, c0.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-index 6f1cf18c..faaedaf9 100644
+index 6f1cf18c..82aba8a0 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 @@ -80,6 +80,7 @@
@@ -64,51 +58,39 @@ index 6f1cf18c..faaedaf9 100644
      def c111, 0.159154937, 0.5, 6.28318548, -3.14159274
      def c112, 3, 7.13800001, 0, 0
      def c113, 0.75, -0.5, 0.5, 0.0008
-@@ -483,6 +484,7 @@
-       mad r1.yzw, r2.xxyz, -r1.y, r3.xxyz
-       dp3_sat r2.w, -c17, r1.yzww
-       add r2.w, r2.w, c4.y
-+      mov r18.y, r2.w // FusionFix specular sheen: how near the reflected view is to the sun
-       mul r3.w, r2.z, c2.w
-       mov_sat r3.w, r3.w
-       mul r3.w, r3.w, c72.y
-@@ -490,6 +492,7 @@
+@@ -490,6 +491,35 @@
        add r4.x, -r4.x, c2.z
        cmp r3.w, r4.x, r3.w, c0.x
        texld r4, v0, s2
 +      mov r18.x, r4.y // FusionFix specular sheen: the G-buffer gloss before it is decoded
-       mul r4.y, r4.y, r4.y
-       mul r5.xy, r4.y, c0.yzzw
-       min r4.w, r5.y, c2.x
-@@ -544,6 +547,31 @@
-       mad r1.z, r3.w, -c3.y, c3.z
-       max r2.w, r1.x, r1.y
-       mul r0.xzw, r0, r2.w
-+      // --- FusionFix specular sheen (c197.x, SpecularSheen in postfx.ixx): materials with no specular
-+      // --- map (gta_default and its kind write specular 0 and gloss 0.25) got no sun highlight at all on
-+      // --- buildings and LOD roads. Those get a broad one of their own, exponent 16, most on grey
-+      // --- surfaces (asphalt, concrete), less on saturated colours. Specular 0 alone also took in black
-+      // --- texels of specular maps and skin, whose own sharp gloss turned it into white glints.
++      // --- FusionFix specular sheen (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
++      // --- (gta_default and its kind write specular 0 and gloss 0.25) got neither the sun's highlight nor
++      // --- the sky's reflection. They take a specular intensity of their own here, before the lighting
++      // --- reads it, as if the G-buffer held one: SpecularSheen / 2 times the square of one
++      // --- less the albedo's saturation, faded out on dark albedo. The game's own sun highlight and sky
++      // --- reflection then follow from it. Specular 0 alone also took in black texels of specular maps
++      // --- and skin.
 +      texld r12, v0, s0
 +      max r13.x, r12.x, r12.y
-+      max r13.x, r13.x, r12.z
++      max r13.x, r13.x, r12.z // the brightest channel
 +      min r13.y, r12.x, r12.y
 +      min r13.y, r13.y, r12.z
 +      add r13.y, r13.x, -r13.y
-+      add r13.x, r13.x, c158.y
-+      rcp r13.x, r13.x
-+      mad_sat r13.x, r13.y, -r13.x, c158.x // 1 less the saturation
++      add r13.z, r13.x, c158.y
++      rcp r13.z, r13.z
++      mad_sat r13.y, r13.y, -r13.z, c158.x // 1 less the saturation
++      mul r13.y, r13.y, r13.y
++      mul_sat r13.x, r13.x, c8.y // smoothstep from black to a tenth
++      mad r13.z, r13.x, -c21.y, c21.x
++      mul r13.x, r13.x, r13.x
++      mul r13.x, r13.x, r13.z
++      mul r13.x, r13.x, r13.y
 +      mul r13.x, r13.x, c197.x
-+      cmp r13.x, -r2.w, r13.x, c158.z // no specular
++      mul r13.x, r13.x, c3.y
 +      add r13.y, r18.x, -c1.w // gloss 0.25
 +      add r13.y, -r13_abs.y, c7.y
-+      cmp r13.x, r13.y, r13.x, c158.z
-+      pow r13.z, r18.y, c156.z
-+      mul r13.x, r13.x, r13.z
-+      mul r13.x, r13.x, r0.y // the sun's shadow
-+      add r13.y, c17.w, c17.w
-+      mul r13.x, r13.x, r13.y
-+      mad r0.xzw, r5.yyzw, r13.x, r0
-       dp3 r1.x, r2, -c17
-       // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin, the sun's light wraps past the terminator further in red than in green and blue, and red keeps on longer into the penumbra of shadows.
-       mad r26.x, r26.x, c156.x, c156.y
++      cmp r13.y, r13.y, r13.x, c158.z
++      cmp r4.x, -r4.x, r13.y, r4.x // specular 0
+       mul r4.y, r4.y, r4.y
+       mul r5.xy, r4.y, c0.yzzw
+       min r4.w, r5.y, c2.x
