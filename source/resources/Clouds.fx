@@ -9,7 +9,8 @@
 // for the light scattered more than once), a two lobe phase function for the bright rim towards the
 // sun, and the colours the game's own clouds take from the timecycle, the way gta_atmoscatt_clouds
 // mixes them: its cloud colour darkened in the shade, with the sunset colour added where the sun
-// reaches and the cloud's inscattering range for the bright rim towards the sun.
+// reaches and the cloud's inscattering range for the bright rim towards the sun. What the sun lights
+// also takes the hue of the game's sun colour.
 
 #ifndef CLOUD_STEPS
 #define CLOUD_STEPS 32
@@ -37,6 +38,7 @@ float3 vec3SunDir;        // world, towards the sun
 float3 vec3LitColour;     // the game's cloud colour plus its sunset colour, exposed
 float3 vec3ShadeColour;   // the game's cloud colour darkened, exposed
 float fSilver;            // the game's CloudInscatteringRange: the rim towards the sun
+float3 vec3SunTint;       // the hue of the game's SunColor at its brightness 1, mixed towards white by VolumetricCloudsSunTint
 float4 vec4Layer;         // base height, thickness, 1 / coverage scale, coverage
 float4 vec4Wind;          // coverage offset (xy), detail offset (zw)
 float4 vec4Shape;         // extinction per metre at full density, 1 / detail scale, detail strength, haze distance
@@ -154,8 +156,10 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             float3 shade = vec3ShadeColour * lerp(0.7, 1.0, sqrt(h));
             // The sun lights what it reaches, a little more facing it; past that the forward lobe
             // adds the rim, scaled by the game's inscattering range.
-            float3 lit = lerp(shade, vec3LitColour, sun * (0.6 + 0.4 * min(phase, 1.0)));
-            lit += vec3LitColour * sun * max(phase - 1.0, 0.0) * 0.1 * fSilver;
+            // The parts the sun reaches take its hue: warm in the evening, orange at sunset.
+            float3 sunLit = vec3LitColour * vec3SunTint;
+            float3 lit = lerp(shade, sunLit, sun * (0.6 + 0.4 * min(phase, 1.0)));
+            lit += sunLit * sun * max(phase - 1.0, 0.0) * 0.1 * fSilver;
 
             float stepTransmittance = exp(-d * sigma * dt);
             colour += transmittance * (1.0 - stepTransmittance) * lit;

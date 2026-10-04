@@ -391,6 +391,7 @@ public:
     float fVolumetricCloudsHaze = 25000.0f;
     float fVolumetricCloudsMaxDistance = 40000.0f;
     float fVolumetricCloudsBrightness = 1.0f;
+    float fVolumetricCloudsSunTint = 0.6f;
     ID3DXEffect* CloudsEffect = nullptr;
     IDirect3DVolumeTexture9* CloudDetailTexture = nullptr;
     IDirect3DVolumeTexture9* CloudDetailTex();
@@ -406,7 +407,7 @@ public:
     // registering while drawing would grow the list the shader parameter hook may be reading.
     size_t CloudThresholdIdx = 0, CloudBiasIdx = 0, CloudThicknessIdx = 0;
     size_t CloudColorIdx = 0, CloudExposureIdx = 0, CloudSunDirectionIdx = 0;
-    size_t SunsetColorIdx = 0, CloudInscatteringIdx = 0;
+    size_t SunsetColorIdx = 0, CloudInscatteringIdx = 0, CloudSunColorIdx = 0;
     bool bCloudParamsRegistered = false;
     void RegisterCloudParams()
     {
@@ -416,6 +417,7 @@ public:
         CloudColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudColor");
         SunsetColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunsetColor");
         CloudInscatteringIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudInscatteringRange");
+        CloudSunColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunColor");
         CloudExposureIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "HDRExposure");
         CloudSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
         bCloudParamsRegistered = true;
@@ -1241,6 +1243,7 @@ public:
         fVolumetricCloudsHaze = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsHaze", 25000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBrightness", 1.0f), 0.0f, 4.0f);
+        fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.6f), 0.0f, 1.0f);
     }
 
     void Readini()
@@ -3849,6 +3852,17 @@ private:
         effect->SetFloatArray("vec3LitColour", litColour, 3);
         effect->SetFloatArray("vec3ShadeColour", shadeColour, 3);
         effect->SetFloat("fSilver", inscattering);
+        // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
+        // towards white by VolumetricCloudsSunTint.
+        {
+            const auto& sunColour = rage::grmShaderInfo::getShaderParamData(R.CloudSunColorIdx);
+            const float luma = 0.2126f * sunColour[0] + 0.7152f * sunColour[1] + 0.0722f * sunColour[2];
+            float tint[3] = { 1.0f, 1.0f, 1.0f };
+            if (luma > 1e-4f)
+                for (int i = 0; i < 3; ++i)
+                    tint[i] = 1.0f + (std::clamp(sunColour[i] / luma, 0.0f, 2.0f) - 1.0f) * R.fVolumetricCloudsSunTint;
+            effect->SetFloatArray("vec3SunTint", tint, 3);
+        }
         const D3DXVECTOR4 layer(R.fVolumetricCloudsBase, R.fVolumetricCloudsThickness, 1.0f / R.fCloudShadowsScale, R.fVolumetricCloudsCoverage);
         effect->SetVector("vec4Layer", &layer);
         // The detail drifts with the wind too, half as fast, so the billows change as they go.
