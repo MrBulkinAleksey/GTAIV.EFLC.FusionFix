@@ -524,7 +524,8 @@ namespace EmergencyTrafficShadows
                 << " traffic_admitted=" << TrafficSignal::admitted.load() << " traffic_collisions=" << TrafficSignal::collisions.load()
                 << " traffic_stopped=" << TrafficSignal::fatal.load() << " traffic_stop_reason=" << TrafficSignal::fatalReason.load()
                 << " emergency_bound=" << Emergency::bound.load() << " emergency_promoted=" << Emergency::promoted.load()
-                << " emergency_vacancies=" << Emergency::vacancySuppressed.load() << '\n';
+                << " emergency_vacancies=" << Emergency::vacancySuppressed.load()
+                << " cached_lamps=" << NightShadowAdmission::cachedLamps << " cached_lamps_kept=" << NightShadowAdmission::cachedLampsKept.load() << '\n';
         });
     }
 }

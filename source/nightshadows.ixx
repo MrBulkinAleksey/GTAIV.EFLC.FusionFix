@@ -467,6 +467,7 @@ public:
 
             // This official workaround edits a guarded instruction, so it is installed
             // after the adapter checks above rather than from fixes.ixx.
+            NightShadowAdmission::cachedLamps = ceAdapter && iniReader.ReadInteger("SHADOWS", "ExperimentalCachedLampShadows", 0) != 0;
             ShadowDiagnostics::admissionInstalled = NightShadowAdmission::Install();
 
             // Make the night shadow options adjust the night shadow resolution
