@@ -66,54 +66,71 @@ float PixelJitter(float2 pixel)
     return frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
 }
 
-// Density 0 to 1 at p. The coverage sets where cloud is; higher up in the layer it takes ever denser
-// coverage to stay cloud, so each cloud narrows towards its top into a dome. With the same coverage
-// at every height the sides stood straight up and the clouds looked like towers. Towards the base it
-// takes denser coverage again, so the bottoms curve up towards the edges instead of being cut flat.
-// Past its edge a cloud turns dense within a third of the way to full coverage: spread over all of
-// it, the edges were hundreds of metres of haze.
-// The detail then cuts billows into it: where the Worley noise is low, between its cells, the
-// density is lowered and what is left stretched back to 0 to 1, so the billows keep crisp edges.
+// Density 0 to 1 at p.
+// - The coverage map is Perlin-Worley noise: cellular, so clouds come out as round heaps with clear
+//   sky between them; plain value noise gave blurred blots that rose to points on its peaks.
+// - Cloud is where the map is above (1 - cover)^2.
+// - With height the density is lowered by up to a quarter and fades out over the top fifth, so a
+//   heap narrows towards a rounded top; at the base it is half as dense, which softens the bottom.
+// - The detail erodes only near the edges, where the density is low: round Worley billows of about
+//   a sixteenth to a quarter of DetailScale, and a finer octave at about a fifth of that.
+// - Last a soft compressor, d (1 + k) / (1 + k d) with k from 3 at the base to 12 at the top, makes
+//   the inside dense quickly while the edges stay soft; the linear ramp it replaces cut the clouds'
+//   faces like moulded plastic.
+float EdgeWeight(float d)
+{
+    float x = saturate(1.0 - d);
+    return x * (2.0 - x);
+}
+
 float Density(float3 p, bool detail)
 {
     float h = (p.z - vec4Layer.x) / vec4Layer.y;
-    // The coverage is filtered with a quintic curve between texels instead of linearly: the
-    // density ramp stretches it several times over, and the kinks of linear filtering at the
-    // texel edges stood out as vertical creases down the clouds' sides.
+    if (h <= 0.0 || h >= 1.0)
+        return 0.0;
     float2 uv = p.xy * vec4Layer.z + vec4Wind.xy;
     // The outline wanders with height: the coverage is read a little off, by a coarse octave of the
-    // detail that changes up through the layer. Read straight, every height had the same outline
-    // and the clouds stood as walls drawn up from a map. The steps towards the sun and the coarse
-    // search leave it out; it moves the edge by a few dozen metres.
+    // detail that changes up through the layer, so the heaps do not stand as walls drawn up from a
+    // map. The steps towards the sun and the coarse search leave it out.
     [branch]
     if (detail)
     {
         float3 w = p * (vec4Shape.y * 0.35) + float3(vec4Wind.zw, fEvolution);
         uv += (float2(tex3Dlod(DetailTex, float4(w, 0)).r, tex3Dlod(DetailTex, float4(w.yzx + 0.41, 0)).r) - 0.5) * fWarp;
     }
+    // Filtered with a quintic curve between texels: linear filtering's kinks at the texel edges stood
+    // out as creases down the clouds' sides.
     float2 texel = uv * COVERAGE_SIZE - 0.5;
     float2 cell = floor(texel);
     float2 f = texel - cell;
     f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
     float c = tex2Dlod(CoverageTex, float4((cell + f + 0.5) / COVERAGE_SIZE, 0, 0)).r;
+
     float cover = max(vec4Layer.w, 0.02);
-    // Overcast: the coverage evens out towards a sheet, and the tops lose their domes.
+    // Overcast: the map evens out towards a sheet.
     c = lerp(c, max(c, 1.0 - cover * 0.5), fStratus);
-    // Only the lowest fifth, and gently: half the cover there left only the densest middles of the
-    // base, which hung down as separate lobes.
-    float bottom = saturate(1.0 - h * 5.0);
-    float threshold = (1.0 - cover) + cover * (0.8 * (1.0 - fStratus) * h * h + 0.15 * bottom * bottom);
-    float d = saturate((c - threshold) / max((1.0 - threshold) * 0.35, 0.02)) * saturate(h * 20.0) * saturate((1.0 - h) * 10.0);
+    float threshold = (1.0 - cover) * (1.0 - cover);
+    float d = saturate((c - threshold) / max(1.0 - threshold, 0.01));
+    d = d * smoothstep(1.0, 0.8, h) - smoothstep(0.06, 0.95, h) * 0.25 * (1.0 - fStratus);
+    if (d <= 0.0)
+        return 0.0;
+
     [branch]
-    if (detail && d > 0.0)
+    if (detail)
     {
-        // A second octave three times finer frays the billows' edges.
         float3 q = p * vec4Shape.y + float3(vec4Wind.zw, fEvolution);
-        float n = tex3Dlod(DetailTex, float4(q, 0)).r * 0.7 + tex3Dlod(DetailTex, float4(q * 3.1 + 0.37, 0)).r * 0.3;
-        float erode = (1.0 - n) * vec4Shape.z;
-        d = saturate((d - erode) / max(1.0 - erode, 0.05));
+        // Our Worley volume is 1 at the cells' middles: 1 - n is high between the billows.
+        float n = 1.0 - tex3Dlod(DetailTex, float4(q, 0)).r;
+        d -= vec4Shape.z * 0.66 * n * n * EdgeWeight(d);
+        float m = 1.0 - tex3Dlod(DetailTex, float4(q * 5.5 + 0.37, 0)).r;
+        d -= vec4Shape.z * 0.3 * m * (0.6 * m + 0.4) * EdgeWeight(d);
+        if (d <= 0.0)
+            return 0.0;
     }
-    return d;
+
+    float k = lerp(3.0, 12.0, h);
+    d = d * (1.0 + k) / (1.0 + k * d);
+    return d * lerp(0.5, 1.0, smoothstep(0.02, 0.2, h));
 }
 
 float HenyeyGreenstein(float cosTheta, float g)

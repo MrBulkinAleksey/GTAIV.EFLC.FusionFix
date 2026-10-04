@@ -361,7 +361,7 @@ public:
     // cloud threshold, bias and thickness, so it follows the weather and the timecycle.
     float fCloudShadows = 0.6f;
     float fCloudShadowsHeight = 1200.0f;
-    float fCloudShadowsScale = 2500.0f;
+    float fCloudShadowsScale = 8000.0f;
     float fCloudShadowsWind = 6.0f;
     float fCloudShadowsSoftness = 1.0f;
     // Added to the deck's coverage before the game's thickness curve: above 0 more of the sky
@@ -389,7 +389,7 @@ public:
     float fVolumetricCloudsThickness = 600.0f;
     float fVolumetricCloudsDensity = 0.03f;
     float fVolumetricCloudsDetail = 0.5f;
-    float fVolumetricCloudsDetailScale = 1500.0f;
+    float fVolumetricCloudsDetailScale = 1100.0f;
     float fVolumetricCloudsHaze = 25000.0f;
     float fVolumetricCloudsMaxDistance = 40000.0f;
     float fVolumetricCloudsBrightness = 1.0f;
@@ -1249,7 +1249,7 @@ public:
         fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 1.0f);
         fCloudShadows = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadows", 0.6f), 0.0f, 1.0f);
         fCloudShadowsHeight = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsHeight", 1200.0f), 100.0f, 10000.0f);
-        fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 2500.0f), 100.0f, 50000.0f);
+        fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 8000.0f), 100.0f, 50000.0f);
         fCloudShadowsWind = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsWind", 6.0f), 0.0f, 100.0f);
         fCloudShadowsSoftness = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsSoftness", 1.0f), 0.0f, 6.0f);
         fCloudShadowsCoverage = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsCoverage", 0.0f), -1.0f, 1.0f);
@@ -1260,7 +1260,7 @@ public:
         fVolumetricCloudsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsThickness", 600.0f), 50.0f, 5000.0f);
         fVolumetricCloudsDensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDensity", 0.03f), 0.0005f, 1.0f);
         fVolumetricCloudsDetail = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetail", 0.5f), 0.0f, 1.0f);
-        fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 1500.0f), 20.0f, 10000.0f);
+        fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 1100.0f), 20.0f, 10000.0f);
         fVolumetricCloudsHaze = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsHaze", 25000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBrightness", 1.0f), 0.0f, 4.0f);
@@ -1422,8 +1422,8 @@ public:
 };
 
 // The cloud deck's noise for the cloud shadows and the volumetric clouds: 256 x 256, tiling, five
-// octaves of value noise from four cells a tile up, each 0.6 of the one before (at 0.5 the largest
-// octave made one huge cloud), spread over 0..1 like the game's own cloud noise. Managed, so it
+// octaves of value noise from four cells a tile up, each 0.6 of the one before, made Perlin-Worley
+// below and spread over 0..1. Managed, so it
 // survives device resets.
 IDirect3DTexture9* PostFxResource::CloudNoiseTex()
 {
@@ -1460,10 +1460,47 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
             }
         }
     }
-    const auto [lo, hi] = std::minmax_element(value.begin(), value.end());
-    const float minValue = *lo, range = (std::max)(*hi - *lo, 1e-5f);
-    for (auto& v : value)
-        v = (v - minValue) / range;
+    {
+        const auto [lo, hi] = std::minmax_element(value.begin(), value.end());
+        const float minValue = *lo, range = (std::max)(*hi - *lo, 1e-5f);
+        for (auto& v : value)
+            v = (v - minValue) / range;
+    }
+    // Perlin-Worley: the value noise remapped from (worley - 1, 1) to (0, 1), with three octaves of
+    // inverted Worley noise (1 at the cells' feature points) from four cells a tile up. The cells
+    // round the clouds into heaps with clear sky between them.
+    {
+        std::vector<float> worley(size * size, 0.0f);
+        const int cellCounts[3] = { 4, 8, 16 };
+        const float weights[3] = { 0.625f, 0.25f, 0.125f };
+        for (int octave = 0; octave < 3; ++octave)
+        {
+            const int cells = cellCounts[octave];
+            const float cell = static_cast<float>(size) / cells;
+            for (int y = 0; y < size; ++y)
+                for (int x = 0; x < size; ++x)
+                {
+                    const float fx = (x + 0.5f) / cell, fy = (y + 0.5f) / cell;
+                    const int cx = static_cast<int>(fx), cy = static_cast<int>(fy);
+                    float nearest = 2.0f;
+                    for (int dy = -1; dy <= 1; ++dy)
+                        for (int dx = -1; dx <= 1; ++dx)
+                        {
+                            const int nx = cx + dx, ny = cy + dy;
+                            const int wx = (nx + cells) % cells, wy = (ny + cells) % cells;
+                            const float px = nx + lattice(wx, wy, 100 + octave), py = ny + lattice(wy, wx, 200 + octave);
+                            nearest = (std::min)(nearest, (px - fx) * (px - fx) + (py - fy) * (py - fy));
+                        }
+                    worley[y * size + x] += weights[octave] * (1.0f - std::clamp(std::sqrt(nearest), 0.0f, 1.0f));
+                }
+        }
+        for (size_t i = 0; i < value.size(); ++i)
+            value[i] = (value[i] + 1.0f - worley[i]) / (std::max)(2.0f - worley[i], 1e-3f);
+        const auto [lo, hi] = std::minmax_element(value.begin(), value.end());
+        const float minValue = *lo, range = (std::max)(*hi - *lo, 1e-5f);
+        for (auto& v : value)
+            v = (v - minValue) / range;
+    }
 
     // 16 bits: the volumetric clouds stretch the coverage several times over near their edges, and
     // the 8 bit steps showed as terraces and streaks down their sides.
@@ -5687,14 +5724,16 @@ public:
             }
             if (R.VolumetricCloudsOn())
             {
-                // The volumetric clouds' coverage near their base, saturate((n - (1 - cover)) /
-                // (0.35 cover)) as Clouds.fx's Density has it, a third of the way up their layer.
-                // An overcast sheet's evened coverage is left out: under it the sun is weak anyway.
+                // The volumetric clouds' density a third of the way up their layer, as Clouds.fx's
+                // Density has it: saturate((n - t) / (1 - t)) with t = (1 - cover)^2, less 0.05 for
+                // the height there, and its soft compressor taken as a power of 0.4. An overcast
+                // sheet's evened coverage is left out: under it the sun is weak anyway.
                 const float cover = (std::max)(R.Cloud.coverage, 0.02f);
-                const float ramp = (std::max)(cover * 0.35f, 0.02f);
-                threshold = 1.0f / ramp;
-                bias = (1.0f - cover) / ramp;
-                thickness = 1.0f;
+                const float t = (1.0f - cover) * (1.0f - cover);
+                const float span = (std::max)(1.0f - t, 0.01f);
+                threshold = 1.0f / span;
+                bias = t / span + 0.05f;
+                thickness = 0.4f;
                 coverageShift = 0.0f;
                 deckHeight = R.Cloud.base + R.Cloud.thickness * 0.33f;
             }
