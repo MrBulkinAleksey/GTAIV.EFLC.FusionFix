@@ -363,6 +363,17 @@ public:
     IDirect3DTexture9* CloudNoiseTexture = nullptr;
     IDirect3DTexture9* CloudNoiseTex();
     bool bCloudNoiseBound = false;
+    // The game's cloud parameters the cloud shadows take, registered at start (RegisterCloudParams):
+    // registering while drawing would grow the list the shader parameter hook may be reading.
+    size_t CloudThresholdIdx = 0, CloudBiasIdx = 0, CloudThicknessIdx = 0;
+    bool bCloudParamsRegistered = false;
+    void RegisterCloudParams()
+    {
+        CloudThresholdIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudThreshold");
+        CloudBiasIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudBias");
+        CloudThicknessIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudThicknessEdgeSmoothDetailScaleStrength");
+        bCloudParamsRegistered = true;
+    }
     static constexpr int kSkinDebugMode = 9;
     rage::grcRenderTargetPC* mMaterialIdRT = nullptr;
     rage::grcRenderTargetPC* SkinLightTex[2] = {};
@@ -5075,12 +5086,13 @@ public:
         }
         // The sun on materials with no specular map (x) and the cloud shadows (yzw, c198, c199, s7).
         {
-            static auto thresholdIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudThreshold");
-            static auto biasIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudBias");
-            static auto thicknessIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudThicknessEdgeSmoothDetailScaleStrength");
-            float threshold = rage::grmShaderInfo::getShaderParamData(thresholdIdx)[0];
-            float bias = rage::grmShaderInfo::getShaderParamData(biasIdx)[0];
-            float thickness = rage::grmShaderInfo::getShaderParamData(thicknessIdx)[0];
+            float threshold = 0.0f, bias = 0.0f, thickness = 0.0f;
+            if (R.bCloudParamsRegistered)
+            {
+                threshold = rage::grmShaderInfo::getShaderParamData(R.CloudThresholdIdx)[0];
+                bias = rage::grmShaderInfo::getShaderParamData(R.CloudBiasIdx)[0];
+                thickness = rage::grmShaderInfo::getShaderParamData(R.CloudThicknessIdx)[0];
+            }
             // Until the sky has been drawn once its parameters read zero, which is no cloud at all.
             if (threshold == 0.0f && bias == 0.0f)
             {
@@ -5261,6 +5273,7 @@ public:
             if (GetD3DX9_43DLL())
             {
                 PostFxResources.Readini();
+                PostFxResources.RegisterCloudParams();
                 SSRTrace::path = CIniReader("").GetIniPath().parent_path() / "GTAIV-ssr-trace.log";
 
                 auto pattern = find_pattern("E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 5F", "E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 33 C0");
