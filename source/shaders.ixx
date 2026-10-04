@@ -294,6 +294,15 @@ public:
                 injector::WriteMemory(pattern.get_first(4), &dwMirrorOffset, true);
             }
 
+            // Clip the water reflection at the water level. CRenderPhaseWaterReflection clips half a metre below it, and the
+            // underwater half metre of quay walls, piers and hulls showed in the water as dark patches.
+            {
+                static float fWaterReflectionClipOffset = 0.0f; // 0.5
+                auto pattern = hook::pattern("D9 5C 24 ? F3 0F 10 05 ? ? ? ? F3 0F 5C 44 24 ? 6A 00 6A 20");
+                if (!pattern.empty())
+                    injector::WriteMemory(pattern.get_first(8), &fWaterReflectionClipOffset, true);
+            }
+
             // Contrast slider ticks 0 and 1 are the same visually on the Xbox 360 version. This is not proper behavior, so it's a bug, but it was never fixed for that version,
             // so we need to enforce this behavior to have faithful Xbox 360 gamma. On PC and PS3, all ticks on the slider correctly change the contrast/gamma.
             {
