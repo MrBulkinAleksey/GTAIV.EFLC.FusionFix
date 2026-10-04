@@ -1652,20 +1652,20 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 }
 
 // The weathers' cloud layers, in CWeather::eWeatherType order: coverage, base and thickness in
-// metres, density and the share of overcast sheet against the VolumetricClouds* settings' scale,
-// and the wind against CloudShadowsWind. Fair weather has scattered heaps high up; cloudy, rain and
-// storm a low, thick deck that closes into a sheet; fog a low grey one the fog hides. Fair
-// weather cumulus are wider than they are tall: as thick as the heaps were wide, they rose as spires.
+// metres, density against VolumetricCloudsDensity, the share of overcast sheet, and the wind against
+// CloudShadowsWind. Low decks a few hundred metres up, as thick as wide heaps, the cloudier weathers
+// with more cover but less dense, and no clouds in fog; the coverage is the middle of each weather's
+// range, which the weather map spreads either way.
 static constexpr PostFxResource::CloudLayer kWeatherClouds[8] =
 {
-    { 0.25f, 1000.0f,  350.0f, 1.0f, 0.0f, 1.0f }, // EXTRASUNNY
-    { 0.38f,  900.0f,  420.0f, 1.0f, 0.0f, 1.0f }, // SUNNY
-    { 0.45f, 1000.0f,  500.0f, 1.0f, 0.0f, 2.5f }, // SUNNY_WINDY
-    { 0.70f,  700.0f,  800.0f, 1.2f, 0.3f, 1.2f }, // CLOUDY
-    { 0.92f,  500.0f, 1000.0f, 1.6f, 0.7f, 1.5f }, // RAIN
-    { 0.85f,  600.0f,  900.0f, 1.4f, 0.6f, 1.2f }, // DRIZZLE
-    { 0.60f,  400.0f,  600.0f, 1.0f, 0.5f, 0.6f }, // FOGGY
-    { 0.95f,  400.0f, 1300.0f, 2.0f, 0.5f, 2.0f }, // LIGHTNING
+    { 0.250f, 350.0f,  600.0f, 1.67f, 0.0f, 2.00f }, // EXTRASUNNY
+    { 0.275f, 300.0f,  700.0f, 1.33f, 0.0f, 1.00f }, // SUNNY
+    { 0.350f, 600.0f,  900.0f, 0.67f, 0.0f, 1.67f }, // SUNNY_WINDY
+    { 0.375f, 220.0f,  600.0f, 1.00f, 0.0f, 0.67f }, // CLOUDY
+    { 0.415f, 100.0f, 1000.0f, 0.83f, 0.0f, 0.33f }, // RAIN
+    { 0.380f, 300.0f, 1100.0f, 0.67f, 0.0f, 1.67f }, // DRIZZLE
+    { 0.000f, 600.0f, 1000.0f, 0.20f, 0.0f, 1.67f }, // FOGGY
+    { 0.425f, 150.0f,  950.0f, 0.80f, 0.0f, 1.67f }, // LIGHTNING
 };
 
 void PostFxResource::UpdateCloudLayer(double seconds)
