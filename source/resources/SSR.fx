@@ -495,7 +495,7 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
     // One loop, no nested refinement inside it: D3DX compiles this effect while the game
     // loads, and an unrolled refinement inside the march made it take long enough to look
     // like a hang.
-    [loop]
+    [loop] [fastopt]
     for (int i = 0; i < NUM_STEPS; ++i)
     {
         if ((float) i >= steps)
@@ -685,7 +685,7 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
     if (gTracePath > 0.0)
     {
         int past = 0;
-        [loop]
+        [loop] [fastopt]
         for (int k = 1; k <= 24; ++k)
         {
             float2 pathUV = lerp(gTraceUV0, gTraceUVEnd, k / 24.0);
@@ -749,7 +749,7 @@ float3 NeighbourFill(float2 uv, float z, out float weight)
     }; // pixels of this pass's target
     float3 sum = 0.0;
     float sumW = 0.0;
-    [loop]
+    [loop] [fastopt]
     for (int i = 0; i < 12; ++i)
     {
         float2 tapUV = uv + taps[i] * vec2InvViewportSize;
@@ -848,7 +848,7 @@ float4 SSRSpread_PS(float2 uv : TEXCOORD0) : COLOR0
     float z = LinearDepth(uv);
     float3 sum = 0.0;
     float sumW = 0.0, top = 0.0;
-    [loop]
+    [loop] [fastopt]
     for (int i = 0; i < 8; ++i)
     {
         float2 tapUV = uv + taps[i] * fSpreadRadius * vec2InvViewportSize;
@@ -1141,7 +1141,7 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float occlusion = 0.0;
     float prevZ = P0.z;
 
-    [loop]
+    [loop] [fastopt]
     for (int i = 0; i < CS_STEPS; ++i)
     {
         float t = ((float) i + jitter) / (float) CS_STEPS;
@@ -1360,7 +1360,7 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 sum = 0.0;
     float hits = 0.0;
 
-    [loop]
+    [loop] [fastopt]
     for (int r = 0; r < GI_RAYS; ++r)
     {
         float u1 = frac(jitter + (float) r * 0.618034);
@@ -1377,7 +1377,7 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
             continue;
 
         float prevZ = P0.z;
-        [loop]
+        [loop] [fastopt]
         for (int i = 0; i < GI_STEPS; ++i)
         {
             // Steps grow with the distance, denser next to the surface but reaching the ray's
