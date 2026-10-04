@@ -7,8 +7,9 @@
 // the ground, so each shadow lies under its cloud. DetailTex, a tiling Worley volume, erodes the edges.
 // Light: the sun reaching each sample through the cloud above it (Beer's law with a softer second lobe
 // for the light scattered more than once), a two lobe phase function for the bright rim towards the
-// sun, and the colours of the game's own clouds from the timecycle: the cloud colour in the shadowed
-// parts, the top cloud colour where the sun reaches.
+// sun, and the colours the game's own clouds take from the timecycle, the way gta_atmoscatt_clouds
+// mixes them: its cloud colour darkened in the shade, with the sunset colour added where the sun
+// reaches and the cloud's inscattering range for the bright rim towards the sun.
 
 #ifndef CLOUD_STEPS
 #define CLOUD_STEPS 32
@@ -33,8 +34,9 @@ float4 vec4WorldY;
 float4 vec4WorldZ;
 
 float3 vec3SunDir;        // world, towards the sun
-float3 vec3LitColour;     // the game's top cloud colour, exposed
-float3 vec3ShadeColour;   // the game's cloud colour, exposed
+float3 vec3LitColour;     // the game's cloud colour plus its sunset colour, exposed
+float3 vec3ShadeColour;   // the game's cloud colour darkened, exposed
+float fSilver;            // the game's CloudInscatteringRange: the rim towards the sun
 float4 vec4Layer;         // base height, thickness, 1 / coverage scale, coverage
 float4 vec4Wind;          // coverage offset (xy), detail offset (zw)
 float4 vec4Shape;         // extinction per metre at full density, 1 / detail scale, detail strength, haze distance
@@ -51,26 +53,17 @@ float PixelJitter(float2 pixel)
     return frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
 }
 
-// Coverage at the world position p, 0 to 1, before the height profile.
-float Coverage(float3 p)
-{
-    float c = tex2Dlod(CoverageTex, float4(p.xy * vec4Layer.z + vec4Wind.xy, 0, 0)).r;
-    float cover = max(vec4Layer.w, 0.02);
-    return saturate((c - (1.0 - cover)) / cover);
-}
-
-// How much of the layer's height is cloud at h (0 base, 1 top): a flat base that fills in over the
-// lowest tenth, rounded off towards the top.
-float HeightProfile(float h)
-{
-    return saturate(h * 10.0) * saturate((1.0 - h) * 2.5);
-}
-
-// Density 0 to 1 at p; detail erodes it from the edges inwards.
+// Density 0 to 1 at p; detail erodes it from the edges inwards. The coverage sets where cloud is;
+// higher up in the layer it takes ever denser coverage to stay cloud, so each cloud narrows towards
+// its top into a dome. With the same coverage at every height the sides stood straight up and the
+// clouds looked like towers. The base is flat, filling in over the lowest tenth.
 float Density(float3 p, bool detail)
 {
     float h = (p.z - vec4Layer.x) / vec4Layer.y;
-    float d = Coverage(p) * HeightProfile(h);
+    float c = tex2Dlod(CoverageTex, float4(p.xy * vec4Layer.z + vec4Wind.xy, 0, 0)).r;
+    float cover = max(vec4Layer.w, 0.02);
+    float threshold = (1.0 - cover) + cover * 0.8 * h * h;
+    float d = saturate((c - threshold) / max(1.0 - threshold, 0.05)) * saturate(h * 10.0) * saturate((1.0 - h) * 10.0);
     [branch]
     if (detail && d > 0.0)
     {
@@ -145,8 +138,11 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             float sun = max(exp(-tau), 0.35 * exp(-0.2 * tau));
             // Darker towards the base, where the sky above is hidden by the cloud itself.
             float h = saturate((p.z - base) / vec4Layer.y);
-            float3 shade = vec3ShadeColour * lerp(0.6, 1.0, h);
-            float3 lit = lerp(shade, vec3LitColour, saturate(sun * phase));
+            float3 shade = vec3ShadeColour * lerp(0.7, 1.0, h);
+            // The sun lights what it reaches, a little more facing it; past that the forward lobe
+            // adds the rim, scaled by the game's inscattering range.
+            float3 lit = lerp(shade, vec3LitColour, sun * (0.6 + 0.4 * min(phase, 1.0)));
+            lit += vec3LitColour * sun * max(phase - 1.0, 0.0) * 0.1 * fSilver;
 
             float stepTransmittance = exp(-d * sigma * dt);
             colour += transmittance * (1.0 - stepTransmittance) * lit;

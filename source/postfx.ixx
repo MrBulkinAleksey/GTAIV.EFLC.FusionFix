@@ -382,8 +382,8 @@ public:
     float fVolumetricCloudsBase = 800.0f;
     float fVolumetricCloudsThickness = 600.0f;
     float fVolumetricCloudsDensity = 0.03f;
-    float fVolumetricCloudsDetail = 0.4f;
-    float fVolumetricCloudsDetailScale = 600.0f;
+    float fVolumetricCloudsDetail = 0.5f;
+    float fVolumetricCloudsDetailScale = 300.0f;
     float fVolumetricCloudsHaze = 25000.0f;
     float fVolumetricCloudsMaxDistance = 40000.0f;
     float fVolumetricCloudsBrightness = 1.0f;
@@ -400,7 +400,8 @@ public:
     // The game's cloud parameters the cloud shadows take, registered at start (RegisterCloudParams):
     // registering while drawing would grow the list the shader parameter hook may be reading.
     size_t CloudThresholdIdx = 0, CloudBiasIdx = 0, CloudThicknessIdx = 0;
-    size_t CloudColorIdx = 0, TopCloudColorIdx = 0, CloudExposureIdx = 0, CloudSunDirectionIdx = 0;
+    size_t CloudColorIdx = 0, CloudExposureIdx = 0, CloudSunDirectionIdx = 0;
+    size_t SunsetColorIdx = 0, CloudInscatteringIdx = 0;
     bool bCloudParamsRegistered = false;
     void RegisterCloudParams()
     {
@@ -408,7 +409,8 @@ public:
         CloudBiasIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudBias");
         CloudThicknessIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudThicknessEdgeSmoothDetailScaleStrength");
         CloudColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudColor");
-        TopCloudColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "TopCloudColor");
+        SunsetColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunsetColor");
+        CloudInscatteringIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudInscatteringRange");
         CloudExposureIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "HDRExposure");
         CloudSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
         bCloudParamsRegistered = true;
@@ -1228,8 +1230,8 @@ public:
         fVolumetricCloudsBase = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBase", 800.0f), 50.0f, 10000.0f);
         fVolumetricCloudsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsThickness", 600.0f), 50.0f, 5000.0f);
         fVolumetricCloudsDensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDensity", 0.03f), 0.0005f, 1.0f);
-        fVolumetricCloudsDetail = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetail", 0.4f), 0.0f, 1.0f);
-        fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 600.0f), 20.0f, 10000.0f);
+        fVolumetricCloudsDetail = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetail", 0.5f), 0.0f, 1.0f);
+        fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 300.0f), 20.0f, 10000.0f);
         fVolumetricCloudsHaze = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsHaze", 25000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBrightness", 1.0f), 0.0f, 4.0f);
@@ -3757,8 +3759,12 @@ private:
             return skip("no viewport");
 
         // The game's clouds: until the sky has been drawn once these read zero.
-        const auto& shade = rage::grmShaderInfo::getShaderParamData(R.CloudColorIdx);
-        const auto& lit = rage::grmShaderInfo::getShaderParamData(R.TopCloudColorIdx);
+        // gta_atmoscatt_clouds colours its clouds CloudColor, brightened by CloudInscatteringRange
+        // towards the sun, less the cloud's own shadow, plus SunsetColor where the sun lights them.
+        // TopCloudColor belongs to its separate high layer and tinted these clouds cyan.
+        const auto& cloudColour = rage::grmShaderInfo::getShaderParamData(R.CloudColorIdx);
+        const auto& sunsetColour = rage::grmShaderInfo::getShaderParamData(R.SunsetColorIdx);
+        const float inscattering = rage::grmShaderInfo::getShaderParamData(R.CloudInscatteringIdx)[0];
         const auto& sunDirection = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
         const float exposure = rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0] * R.fVolumetricCloudsBrightness;
         if (exposure <= 0.0f)
@@ -3810,10 +3816,15 @@ private:
         effect->SetVector("vec4WorldZ", &worldZ);
 
         effect->SetFloatArray("vec3SunDir", &sun.x, 3);
-        const float litColour[3] = { lit[0] * exposure, lit[1] * exposure, lit[2] * exposure };
-        const float shadeColour[3] = { shade[0] * exposure, shade[1] * exposure, shade[2] * exposure };
+        float litColour[3], shadeColour[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            litColour[i] = (cloudColour[i] + 0.5f * sunsetColour[i]) * exposure;
+            shadeColour[i] = cloudColour[i] * 0.5f * exposure;
+        }
         effect->SetFloatArray("vec3LitColour", litColour, 3);
         effect->SetFloatArray("vec3ShadeColour", shadeColour, 3);
+        effect->SetFloat("fSilver", inscattering);
         const D3DXVECTOR4 layer(R.fVolumetricCloudsBase, R.fVolumetricCloudsThickness, 1.0f / R.fCloudShadowsScale, R.fVolumetricCloudsCoverage);
         effect->SetVector("vec4Layer", &layer);
         // The detail drifts with the wind too, half as fast, so the billows change as they go.
@@ -4457,12 +4468,14 @@ private:
                 fprintf(log, "threshold %.4f  bias %.4f  thickness %.4f  (%s)  coverage %+.3f  strength %.2f\n", R.fCloudLastThreshold,
                         R.fCloudLastBias, R.fCloudLastThickness, R.bCloudLastFromGame ? "the game's" : "fallback, the sky not drawn yet",
                         R.fCloudShadowsCoverage, R.fCloudShadows);
-                const auto& top = rage::grmShaderInfo::getShaderParamData(R.TopCloudColorIdx);
+                const auto& top = rage::grmShaderInfo::getShaderParamData(R.CloudColorIdx);
+                const auto& sunset = rage::grmShaderInfo::getShaderParamData(R.SunsetColorIdx);
                 const auto& sunDir = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
-                fprintf(log, "  volumetric clouds: %s; effect %s (hr 0x%08lX); shadows follow them %d; HDRExposure %.3f; TopCloudColor %.3f %.3f %.3f; "
-                             "SunDirection %.3f %.3f %.3f\n",
+                fprintf(log, "  volumetric clouds: %s; effect %s (hr 0x%08lX); shadows follow them %d; HDRExposure %.3f; CloudColor %.3f %.3f %.3f; "
+                             "SunsetColor %.3f %.3f %.3f; CloudInscatteringRange %.3f; SunDirection %.3f %.3f %.3f\n",
                         R.szCloudsStatus, R.CloudsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrCloudsEffect), int(R.VolumetricCloudsOn()),
-                        rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0], top[0], top[1], top[2], sunDir[0], sunDir[1], sunDir[2]);
+                        rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0], top[0], top[1], top[2], sunset[0], sunset[1], sunset[2],
+                        rage::grmShaderInfo::getShaderParamData(R.CloudInscatteringIdx)[0], sunDir[0], sunDir[1], sunDir[2]);
                 fclose(log);
             }
             MessageBeep(MB_OK);
