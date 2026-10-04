@@ -17,8 +17,8 @@
 #define CLOUD_STEPS 128
 #endif
 // A coarse step in fine steps, and the fine steps in a row that must find no cloud to go coarse again.
-#define COARSE_STEP 6.0
-#define FINE_MISSES 6.0
+#define COARSE_STEP 4.0
+#define FINE_MISSES 4.0
 #ifndef LIGHT_STEPS
 #define LIGHT_STEPS 3
 #endif
@@ -146,8 +146,10 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     // a hundredth of the distance further out, until FINE_MISSES fine steps in a row find none.
     // With even steps over the whole crossing a step near the horizon was 150 m long, and the
     // clouds came out smeared down the screen.
+    // Each pixel starts up to a coarse step later: with the same coarse steps for every pixel,
+    // thin cloud between two of them went missing in whole bands across the screen.
     float jitter = PixelJitter(vpos);
-    float t = t0;
+    float t = t0 + max(vec4Layer.y / 24.0, t0 * 0.01) * COARSE_STEP * jitter;
     float fineLeft = 0.0;
     float transmittance = 1.0;
     float3 colour = 0.0;
@@ -160,7 +162,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
         if (t >= t1 || transmittance < 0.01)
             break;
         float fine = max(vec4Layer.y / 24.0, t * 0.01);
-        float3 p = origin + dir * (t + fine * jitter);
+        float3 p = origin + dir * t;
 
         [branch]
         if (fineLeft <= 0.0)
