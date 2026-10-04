@@ -399,6 +399,9 @@ public:
     float fVolumetricCloudsTranslucency = 0.3f;
     float fVolumetricCloudsEvolution = 1.0f;
     float fVolumetricCloudsSaturation = 1.0f;
+    // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
+    bool bVolumetricCloudsReflections = true;
+    float fVolumetricCloudsReflectionBrightness = 1.0f;
 
     // The cloud layer this frame (UpdateCloudLayer): from the weather's preset, blended through the
     // game's weather change, or from the VolumetricClouds* settings with VolumetricCloudsWeather 0.
@@ -1286,6 +1289,8 @@ public:
         fVolumetricCloudsTranslucency = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsTranslucency", 0.3f), 0.0f, 0.9f);
         fVolumetricCloudsEvolution = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsEvolution", 1.0f), 0.0f, 10.0f);
         fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
+        bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
+        fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
     }
 
     void Readini()
@@ -3891,6 +3896,8 @@ private:
     {
         { D3DRS_ZENABLE,          FALSE },
         { D3DRS_ZWRITEENABLE,     FALSE },
+        // For the reflections, which test against the sky's depth (far) instead.
+        { D3DRS_ZFUNC,            D3DCMP_LESSEQUAL },
         { D3DRS_ALPHATESTENABLE,  FALSE },
         { D3DRS_STENCILENABLE,    FALSE },
         { D3DRS_FOGENABLE,        FALSE },
@@ -3908,8 +3915,10 @@ private:
     };
 
     // Blends the volumetric clouds (Clouds.fx) into the lit scene, from the fog pass before it reads
-    // the scene. Leaves the device as it found it.
-    static void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* sceneBase)
+    // the scene; with reflection, into the reflection map's target right after its sky
+    // (DrawSkyReflection), at full size, on the sky only by the depth test, at the brightness of
+    // that simpler sky. Leaves the device as it found it.
+    static void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* sceneBase, bool reflection = false)
     {
         auto& R = PostFxResources;
         auto skip = [&](const char* why) { R.szCloudsStatus = why; };
@@ -3919,8 +3928,10 @@ private:
             return skip("no effect");
         if (!R.bCloudParamsRegistered)
             return skip("cloud parameters not registered");
-        if (!sceneBase)
+        if (!sceneBase && !reflection)
             return skip("no scene texture");
+        if (reflection && !R.bVolumetricCloudsReflections)
+            return;
         if (!R.mDepthRT || !R.mDepthRT->mD3DTexture)
             return skip("no depth texture");
         rage::grcViewport* vp = rage::GetCurrentViewport();
@@ -3935,9 +3946,12 @@ private:
         const auto& sunsetColour = rage::grmShaderInfo::getShaderParamData(R.SunsetColorIdx);
         const float inscattering = rage::grmShaderInfo::getShaderParamData(R.CloudInscatteringIdx)[0];
         const auto& sunDirection = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
-        const float exposure = rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0] * R.fVolumetricCloudsBrightness;
+        float exposure = rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0] * R.fVolumetricCloudsBrightness;
         if (exposure <= 0.0f)
             return skip("HDRExposure of the sky reads zero");
+        // The reflections' sky takes the timecycle's colours without the HDR exposure.
+        if (reflection)
+            exposure = R.fVolumetricCloudsBrightness * R.fVolumetricCloudsReflectionBrightness;
         // The sky's SunDirection is y up; the world is z up.
         D3DXVECTOR4 sun(sunDirection[0], -sunDirection[2], sunDirection[1], 0.0f);
         const float sunLength = std::sqrt(sun.x * sun.x + sun.y * sun.y + sun.z * sun.z);
@@ -3952,15 +3966,35 @@ private:
         if (!detail)
             return skip("no detail texture");
 
-        IDirect3DTexture9* scene = nullptr;
-        if (FAILED(sceneBase->QueryInterface(__uuidof(IDirect3DTexture9), reinterpret_cast<void**>(&scene))) || !scene)
-            return skip("the scene is no 2D texture");
         IDirect3DSurface9* sceneSurface = nullptr;
-        scene->GetSurfaceLevel(0, &sceneSurface);
-        scene->Release();
+        if (reflection)
+            pDevice->GetRenderTarget(0, &sceneSurface);
+        else
+        {
+            IDirect3DTexture9* scene = nullptr;
+            if (FAILED(sceneBase->QueryInterface(__uuidof(IDirect3DTexture9), reinterpret_cast<void**>(&scene))) || !scene)
+                return skip("the scene is no 2D texture");
+            scene->GetSurfaceLevel(0, &sceneSurface);
+            scene->Release();
+        }
         if (!sceneSurface)
-            return skip("no scene surface");
-        R.szCloudsStatus = "drawn";
+            return reflection ? void() : skip("no scene surface");
+        // Only a reflection drawn over its whole target: the passes set the viewport to the target,
+        // and a map drawn in parts (as two halves of one texture) would take the clouds across all.
+        if (reflection)
+        {
+            D3DSURFACE_DESC targetDesc = {};
+            D3DVIEWPORT9 current = {};
+            sceneSurface->GetDesc(&targetDesc);
+            pDevice->GetViewport(&current);
+            if (current.X != 0 || current.Y != 0 || current.Width != targetDesc.Width || current.Height != targetDesc.Height)
+            {
+                sceneSurface->Release();
+                return;
+            }
+        }
+        if (!reflection)
+            R.szCloudsStatus = "drawn";
         D3DSURFACE_DESC desc = {};
         sceneSurface->GetDesc(&desc);
         const float width = float(desc.Width), height = float(desc.Height);
@@ -4070,14 +4104,20 @@ private:
             pDevice->SetRenderState(kCloudRenderStates[i].state, kCloudRenderStates[i].value);
         }
 
-        pDevice->SetDepthStencilSurface(nullptr);
+        // The reflections keep their depth buffer: the quad at the far plane passes the depth test
+        // only where nothing but sky was drawn, whether before or after the sky.
+        if (reflection)
+            pDevice->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+        else
+            pDevice->SetDepthStencilSurface(nullptr);
         pDevice->SetStreamSource(0, nullptr, 0, 0);
         pDevice->SetVertexDeclaration(nullptr);
         pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        const float quadZ = reflection ? 1.0f : 0.0f;
 
         // Half size, accumulated, laid over the scene at full size; one full size pass straight into
-        // the scene while the half size targets are missing.
-        const bool halfSize = R.CloudSurf[0] && R.CloudSurf[1] && R.CloudSurf[2];
+        // the scene while the half size targets are missing, and for the reflections.
+        const bool halfSize = !reflection && R.CloudSurf[0] && R.CloudSurf[1] && R.CloudSurf[2];
         const int prevAccum = 1 + R.nCloudAccumIndex;
         const int nextAccum = 1 + (R.nCloudAccumIndex ^ 1);
         D3DSURFACE_DESC halfDesc = {};
@@ -4106,7 +4146,8 @@ private:
         {
             // The samplers have fixed registers: s0 depth, s1 coverage, s2 detail, s3 this frame's
             // half size clouds, s4 the history, s5 the accumulated clouds.
-            pDevice->SetTexture(0, R.mDepthRT->mD3DTexture);
+            // The reflections have no depth texture of their own: none reads as sky everywhere.
+            pDevice->SetTexture(0, reflection ? nullptr : R.mDepthRT->mD3DTexture);
             pDevice->SetTexture(1, coverage);
             pDevice->SetTexture(2, detail);
             pDevice->SetTexture(3, halfSize ? R.CloudTex[0]->mD3DTexture : nullptr);
@@ -4135,10 +4176,10 @@ private:
             effect->SetVector("vec4ProjInfo", &info);
             const ScreenVertex screenVertices[4] =
             {
-                { -0.5f,     -0.5f,     0.0f, 1.0f, 0.0f, 0.0f },
-                { -0.5f,      h - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-                { w - 0.5f,  -0.5f,     0.0f, 1.0f, 1.0f, 0.0f },
-                { w - 0.5f,   h - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+                { -0.5f,     -0.5f,     quadZ, 1.0f, 0.0f, 0.0f },
+                { -0.5f,      h - 0.5f, quadZ, 1.0f, 0.0f, 1.0f },
+                { w - 0.5f,  -0.5f,     quadZ, 1.0f, 1.0f, 0.0f },
+                { w - 0.5f,   h - 0.5f, quadZ, 1.0f, 1.0f, 1.0f }
             };
             UINT passes = 0;
             effect->SetTechnique(technique);
@@ -4966,6 +5007,17 @@ private:
             SAFE_RELEASE(pShader);
         }
         return hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+    }
+
+    // The reflection map's sky (CE 0xdbc2ab, the sky draw's branch for render phases with flag
+    // 0x40000): the volumetric clouds go in right after it, through the reflection's viewport.
+    static inline injector::hook_back<int(__fastcall*)(int, void*, int, int, char, char, int, char)> hbDrawSkyReflection;
+    static int __fastcall DrawSkyReflection(int _this, void* edx, int a2, int a3, char a4, char a5, int a6, char a7)
+    {
+        const int result = hbDrawSkyReflection.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+        if (auto pDevice = rage::grcDevice::GetD3DDevice())
+            RenderVolumetricClouds(pDevice, nullptr, true);
+        return result;
     }
 
     static inline SafetyHookInline RenderPedAndVehicleFakeShadowsInlineHook;
@@ -6040,6 +6092,10 @@ public:
 
                 pattern = find_pattern("E8 ? ? ? ? 8D 44 24 ? 50 8B CF E8 ? ? ? ? 8D 84 24", "E8 ? ? ? ? 8D 44 24 ? 50 8B CE E8 ? ? ? ? 8D 8C 24 ? ? ? ? 51 8B CE E8 ? ? ? ? 8D 94 24");
                 hbDrawSkyHook.fun = injector::MakeCALL(pattern.get_first(0), DrawSky).get();
+
+                pattern = hook::pattern("6A 00 6A 00 6A 00 6A 00 6A 03 57 E8 ? ? ? ? 5F 5E 8B E5 5D C3");
+                if (!pattern.empty())
+                    hbDrawSkyReflection.fun = injector::MakeCALL(pattern.get_first(11), DrawSkyReflection).get();
 
                 pattern = find_pattern("E8 ? ? ? ? 6A ? FF B7 ? ? ? ? 8B CF FF 77 ? E8 ? ? ? ? 5F", "E8 ? ? ? ? 8B 8E ? ? ? ? 8B 56 ? 6A ? 51");
                 hbDrawCallPostFX.fun = injector::MakeCALL(pattern.get_first(0), DrawCallPostFX).get();
