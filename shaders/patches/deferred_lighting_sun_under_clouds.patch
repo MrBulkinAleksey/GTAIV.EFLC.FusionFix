@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-index de9f3e53..8a885716 100644
+index b3a0443c..cff01209 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 @@ -80,6 +80,7 @@
@@ -59,7 +59,7 @@ index de9f3e53..8a885716 100644
      mov r2.xyz, r31.xyz
      mad r1.xyz, v1, -r0.x, c1.w
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-index eaf12614..63efa865 100644
+index faaedaf9..f274c70e 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 @@ -81,6 +81,7 @@
