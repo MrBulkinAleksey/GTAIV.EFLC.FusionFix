@@ -395,6 +395,10 @@ public:
     float fVolumetricCloudsMaxDistance = 40000.0f;
     float fVolumetricCloudsBrightness = 1.0f;
     float fVolumetricCloudsSunTint = 0.6f;
+    // The moon's light on the clouds once the sun is down, against the sun's; and how much the
+    // clouds' shaded side takes the hue of the sky above it.
+    float fVolumetricCloudsMoonlight = 0.5f;
+    float fVolumetricCloudsSkyLight = 0.35f;
     bool bVolumetricCloudsWeather = true;
     float fVolumetricCloudsVanilla = 0.0f;
     float fVolumetricCloudsTranslucency = 0.3f;
@@ -454,8 +458,10 @@ public:
     size_t CloudThresholdIdx = 0, CloudBiasIdx = 0, CloudThicknessIdx = 0;
     size_t CloudColorIdx = 0, CloudExposureIdx = 0, CloudSunDirectionIdx = 0;
     size_t SunsetColorIdx = 0, CloudInscatteringIdx = 0, CloudSunColorIdx = 0, CloudExposureClampIdx = 0;
+    size_t CloudMoonPositionIdx = 0, CloudSkyColorIdx = 0;
     // The lit and shaded colours the clouds were last drawn with, and the sky's clamp, for the log.
-    float CloudLastLit[3] = {}, CloudLastShade[3] = {}, CloudLastClamp[3] = {}, CloudLastCeiling = 0.0f;
+    float CloudLastLit[3] = {}, CloudLastShade[3] = {}, CloudLastClamp[3] = {}, CloudLastCeiling = 0.0f, CloudLastLightStrength = 0.0f;
+    bool bCloudLastMoonlit = false;
     bool bCloudParamsRegistered = false;
     void RegisterCloudParams()
     {
@@ -469,6 +475,8 @@ public:
         CloudExposureClampIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "HDRExposureClamp");
         CloudExposureIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "HDRExposure");
         CloudSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
+        CloudMoonPositionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "MoonPosition");
+        CloudSkyColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SkyColor");
         bCloudParamsRegistered = true;
     }
     static constexpr int kSkinDebugMode = 9;
@@ -1293,6 +1301,8 @@ public:
         fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBrightness", 1.0f), 0.0f, 4.0f);
         fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.6f), 0.0f, 1.0f);
+        fVolumetricCloudsMoonlight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMoonlight", 0.5f), 0.0f, 2.0f);
+        fVolumetricCloudsSkyLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyLight", 0.35f), 0.0f, 1.0f);
         bVolumetricCloudsWeather = iniReader.ReadInteger("POSTFX", "VolumetricCloudsWeather", 1) != 0;
         fVolumetricCloudsVanilla = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsVanilla", 0.0f), 0.0f, 1.0f);
         fVolumetricCloudsTranslucency = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsTranslucency", 0.3f), 0.0f, 0.9f);
@@ -3971,6 +3981,28 @@ private:
         if (sunLength <= 0.0f)
             return skip("SunDirection of the sky reads zero");
         sun /= sunLength;
+        // Below the horizon the sun hands the clouds over to the moon. The sun still lights their
+        // bellies a little way below it, at dusk; then its light fades out, and the moon's fades in
+        // from the same zero, so the light never jumps from one to the other at full strength.
+        // MoonPosition is the direction to the moon, y up like SunDirection.
+        float lightStrength = 1.0f;
+        bool moonlit = false;
+        {
+            auto smoothstep = [](float a, float b, float x) { const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
+            const float day = smoothstep(-0.15f, -0.05f, sun.z);
+            const auto& moonPosition = rage::grmShaderInfo::getShaderParamData(R.CloudMoonPositionIdx);
+            D3DXVECTOR4 moon(moonPosition[0], -moonPosition[2], moonPosition[1], 0.0f);
+            const float moonLength = std::sqrt(moon.x * moon.x + moon.y * moon.y + moon.z * moon.z);
+            if (day >= 0.5f || moonLength <= 0.0f)
+                lightStrength = day >= 0.5f ? day * 2.0f - 1.0f : 0.0f;
+            else
+            {
+                moon /= moonLength;
+                sun = moon;
+                moonlit = true;
+                lightStrength = (1.0f - day * 2.0f) * smoothstep(0.0f, 0.1f, moon.z) * R.fVolumetricCloudsMoonlight;
+            }
+        }
 
         auto coverage = R.CloudNoiseTex();
         auto detail = R.CloudDetailTex();
@@ -4039,6 +4071,16 @@ private:
             shadeColour[i] = cloudColour[i] * R.fVolumetricCloudsShade * exposure;
             sunsetLit[i] = sunsetColour[i] * exposure;
         }
+        // The shaded side is lit by the sky above it rather than the sun: it takes the hue of the
+        // game's SkyColor at its own brightness, by VolumetricCloudsSkyLight, bluish by day.
+        {
+            const auto& skyColour = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
+            const float skyLuma = 0.2126f * skyColour[0] + 0.7152f * skyColour[1] + 0.0722f * skyColour[2];
+            const float shadeLuma = 0.2126f * shadeColour[0] + 0.7152f * shadeColour[1] + 0.0722f * shadeColour[2];
+            if (skyLuma > 1e-4f)
+                for (int i = 0; i < 3; ++i)
+                    shadeColour[i] += ((std::max)(skyColour[i], 0.0f) / skyLuma * shadeLuma - shadeColour[i]) * R.fVolumetricCloudsSkyLight;
+        }
         // VolumetricCloudsSaturation, about each colour's luma.
         for (float* colour : { litColour, shadeColour, sunsetLit })
         {
@@ -4067,6 +4109,8 @@ private:
                 std::memcpy(R.CloudLastShade, shadeColour, sizeof(shadeColour));
                 std::memcpy(R.CloudLastClamp, clamp.data(), sizeof(R.CloudLastClamp));
                 R.CloudLastCeiling = ceiling;
+                R.CloudLastLightStrength = lightStrength;
+                R.bCloudLastMoonlit = moonlit;
             }
         }
         effect->SetFloatArray("vec3LitColour", litColour, 3);
@@ -4074,10 +4118,12 @@ private:
         effect->SetFloatArray("vec3SunsetColour", sunsetLit, 3);
         effect->SetFloat("fSilver", inscattering);
         effect->SetFloat("fCeiling", ceiling);
+        effect->SetFloat("fLightStrength", lightStrength);
         // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
-        // towards white by VolumetricCloudsSunTint.
+        // towards white by VolumetricCloudsSunTint. The moon's is a cool white.
         {
-            const auto& sunColour = rage::grmShaderInfo::getShaderParamData(R.CloudSunColorIdx);
+            static const float moonColour[3] = { 0.85f, 0.95f, 1.2f };
+            const float* sunColour = moonlit ? moonColour : rage::grmShaderInfo::getShaderParamData(R.CloudSunColorIdx).data();
             const float luma = 0.2126f * sunColour[0] + 0.7152f * sunColour[1] + 0.0722f * sunColour[2];
             float tint[3] = { 1.0f, 1.0f, 1.0f };
             if (luma > 1e-4f)
@@ -4800,9 +4846,9 @@ private:
                 const auto& sunset = rage::grmShaderInfo::getShaderParamData(R.SunsetColorIdx);
                 const auto& sunDir = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
                 const float* k = R.CloudShadowConsts;
-                fprintf(log, "  clouds drawn with lit %.2f %.2f %.2f, shade %.2f %.2f %.2f, ceiling %.2f; sky clamp %.2f %.2f %.2f; volumetric fog %d\n",
+                fprintf(log, "  clouds drawn with lit %.2f %.2f %.2f, shade %.2f %.2f %.2f, ceiling %.2f; lit by the %s at %.2f; sky clamp %.2f %.2f %.2f; volumetric fog %d\n",
                         R.CloudLastLit[0], R.CloudLastLit[1], R.CloudLastLit[2], R.CloudLastShade[0], R.CloudLastShade[1], R.CloudLastShade[2],
-                        R.CloudLastCeiling, R.CloudLastClamp[0], R.CloudLastClamp[1], R.CloudLastClamp[2],
+                        R.CloudLastCeiling, R.bCloudLastMoonlit ? "moon" : "sun", R.CloudLastLightStrength, R.CloudLastClamp[0], R.CloudLastClamp[1], R.CloudLastClamp[2],
                         [] { static auto fog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG"); return fog ? fog->get() : -1; }());
                 fprintf(log, "  shadow constants: c197 %.3f %.3f %.1f %.6f  c198 %.3f %.3f %.3f %.3f  c199 %.3f %.3f  noise %s, %s after the lights  debug %d\n",
                         k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], R.CloudNoiseTexture ? "made" : "missing",

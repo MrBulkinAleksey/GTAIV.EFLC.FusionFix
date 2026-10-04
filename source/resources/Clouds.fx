@@ -45,11 +45,12 @@ float4 vec4WorldX;
 float4 vec4WorldY;
 float4 vec4WorldZ;
 
-float3 vec3SunDir;        // world, towards the sun
+float3 vec3SunDir;        // world, towards the sun, or the moon at night
 float3 vec3LitColour;     // the game's cloud colour, exposed
 float3 vec3ShadeColour;   // the game's cloud colour darkened by VolumetricCloudsShade, exposed
 float3 vec3SunsetColour;  // the game's sunset colour, exposed
 float fSilver;            // the game's CloudInscatteringRange: the brightening along the sun's axis
+float fLightStrength;     // the sun's light, fading out below the horizon, or the moon's once it has handed over
 float fCeiling;           // the brightest channel the cloud rolls off towards (at most the sky's clamp without HDR)
 float3 vec3SunTint;       // the hue of the game's SunColor at its brightness 1, mixed towards white by VolumetricCloudsSunTint
 float4 vec4Layer;         // base height, thickness, 1 / coverage scale, coverage
@@ -317,7 +318,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // light inside a cloud is scattered forwards mostly and gets through more cloud than the
             // eye's view does; a third of it lit the bases nearly as brightly as the tops.
             float tau = lightDepth * sigma * fLightAbsorption;
-            float sun = (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) / 1.75;
+            float sun = (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) * (fLightStrength / 1.75);
             // Darker towards the base, where the sky above is hidden by the cloud itself, and
             // under more cloud: one sample a quarter of the layer straight up.
             float h = saturate((p.z - base) / vec4Layer.y);
