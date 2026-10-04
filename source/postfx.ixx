@@ -47,6 +47,7 @@ import temporal;
 #define IDR_AO_FX                                133
 #define IDR_SSR_FX                               136
 #define IDR_CAS                                  137
+#define IDR_CLOUDS_FX                            138
 
 #define IDR_SSDraw_PS_compiled                   2127
 #define IDR_SSPrepass_PS_compiled                2128
@@ -367,18 +368,46 @@ public:
     // The game's cloud values the last lighting pass used, for the log Ctrl+Shift+F10 writes.
     float fCloudLastThreshold = 0.0f, fCloudLastBias = 0.0f, fCloudLastThickness = 0.0f;
     bool bCloudLastFromGame = false;
+    // The cloud deck's noise offset the lighting pass drifted it to this frame (c198.xy), which the
+    // volumetric clouds take too, so each shadow lies under its cloud.
+    float fCloudWindX = 0.0f, fCloudWindY = 0.0f;
+    double fCloudSeconds = 0.0;
+
+    // Volumetric clouds (Clouds.fx, RenderVolumetricClouds): one layer, VolumetricCloudsBase metres
+    // up and VolumetricCloudsThickness deep, marched before the fog pass. Its coverage is the cloud
+    // shadows' noise at their scale and wind, so while they are on the shadows follow these clouds
+    // instead of the game's threshold and bias. Colours come from the game's own clouds.
+    bool bVolumetricClouds = true;
+    float fVolumetricCloudsCoverage = 0.4f;
+    float fVolumetricCloudsBase = 800.0f;
+    float fVolumetricCloudsThickness = 600.0f;
+    float fVolumetricCloudsDensity = 0.03f;
+    float fVolumetricCloudsDetail = 0.4f;
+    float fVolumetricCloudsDetailScale = 600.0f;
+    float fVolumetricCloudsHaze = 25000.0f;
+    float fVolumetricCloudsMaxDistance = 40000.0f;
+    float fVolumetricCloudsBrightness = 1.0f;
+    ID3DXEffect* CloudsEffect = nullptr;
+    IDirect3DVolumeTexture9* CloudDetailTexture = nullptr;
+    IDirect3DVolumeTexture9* CloudDetailTex();
+    bool VolumetricCloudsOn() const { return bVolumetricClouds && CloudsEffect != nullptr; }
     IDirect3DTexture9* CloudNoiseTexture = nullptr;
     IDirect3DTexture9* CloudNoiseTex();
     bool bCloudNoiseBound = false;
     // The game's cloud parameters the cloud shadows take, registered at start (RegisterCloudParams):
     // registering while drawing would grow the list the shader parameter hook may be reading.
     size_t CloudThresholdIdx = 0, CloudBiasIdx = 0, CloudThicknessIdx = 0;
+    size_t CloudColorIdx = 0, TopCloudColorIdx = 0, CloudExposureIdx = 0, CloudSunDirectionIdx = 0;
     bool bCloudParamsRegistered = false;
     void RegisterCloudParams()
     {
         CloudThresholdIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudThreshold");
         CloudBiasIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudBias");
         CloudThicknessIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudThicknessEdgeSmoothDetailScaleStrength");
+        CloudColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudColor");
+        TopCloudColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "TopCloudColor");
+        CloudExposureIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "HDRExposure");
+        CloudSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
         bCloudParamsRegistered = true;
     }
     static constexpr int kSkinDebugMode = 9;
@@ -1052,6 +1081,23 @@ public:
             }
         }
 
+        // Not in ShadersFinishedLoading: without it the sky keeps only the game's clouds. Tried once,
+        // so a build error shows one message, not one a frame.
+        static bool cloudsEffectTried = false;
+        if (!CloudsEffect && !cloudsEffectTried)
+        {
+            cloudsEffectTried = true;
+            ID3DXBuffer* errors = nullptr;
+            if (D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
+                hm, MAKEINTRESOURCEW(IDR_CLOUDS_FX), nullptr, nullptr, 0, nullptr, &CloudsEffect, &errors) != S_OK)
+            {
+                CloudsEffect = nullptr;
+                if (errors)
+                    MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
+            }
+            SAFE_RELEASE(errors);
+        }
+
         TemporalAA::LoadShaders(pDevice);
 
         return ShadersFinishedLoading();
@@ -1173,6 +1219,16 @@ public:
         fCloudShadowsWind = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsWind", 6.0f), 0.0f, 100.0f);
         fCloudShadowsSoftness = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsSoftness", 1.0f), 0.0f, 6.0f);
         fCloudShadowsCoverage = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsCoverage", 0.0f), -1.0f, 1.0f);
+        bVolumetricClouds = iniReader.ReadInteger("POSTFX", "VolumetricClouds", 1) != 0;
+        fVolumetricCloudsCoverage = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsCoverage", 0.4f), 0.0f, 1.0f);
+        fVolumetricCloudsBase = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBase", 800.0f), 50.0f, 10000.0f);
+        fVolumetricCloudsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsThickness", 600.0f), 50.0f, 5000.0f);
+        fVolumetricCloudsDensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDensity", 0.03f), 0.0005f, 1.0f);
+        fVolumetricCloudsDetail = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetail", 0.4f), 0.0f, 1.0f);
+        fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 600.0f), 20.0f, 10000.0f);
+        fVolumetricCloudsHaze = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsHaze", 25000.0f), 1000.0f, 200000.0f);
+        fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
+        fVolumetricCloudsBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBrightness", 1.0f), 0.0f, 4.0f);
     }
 
     void Readini()
@@ -1395,6 +1451,80 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
         }
     }
     return CloudNoiseTexture;
+}
+
+// The volumetric clouds' detail: 64 x 64 x 64, tiling, three octaves of inverted Worley noise
+// (4, 8 and 16 cells a tile), which reads as round billows when it erodes a cloud's edge. Managed,
+// so it survives device resets.
+IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
+{
+    if (CloudDetailTexture)
+        return CloudDetailTexture;
+    auto pDevice = rage::grcDevice::GetD3DDevice();
+    if (!pDevice)
+        return nullptr;
+
+    constexpr int size = 64;
+    std::vector<float> value(size * size * size, 0.0f);
+    auto hash = [](int x, int y, int z, int seed) {
+        uint32_t h = static_cast<uint32_t>(x) * 73856093u ^ static_cast<uint32_t>(y) * 19349663u ^ static_cast<uint32_t>(z) * 83492791u ^
+                     static_cast<uint32_t>(seed) * 2654435761u;
+        h = (h ^ (h >> 15)) * 2246822519u;
+        h = (h ^ (h >> 13)) * 3266489917u;
+        return h ^ (h >> 16);
+    };
+    const int cellCounts[3] = { 4, 8, 16 };
+    const float weights[3] = { 0.625f, 0.25f, 0.125f };
+    for (int octave = 0; octave < 3; ++octave)
+    {
+        const int cells = cellCounts[octave];
+        const float cell = static_cast<float>(size) / cells;
+        // One feature point per cell, at a random place inside it.
+        std::vector<float> points(cells * cells * cells * 3);
+        for (int i = 0; i < cells * cells * cells; ++i)
+            for (int k = 0; k < 3; ++k)
+                points[i * 3 + k] = static_cast<float>(hash(i, k, octave, 17) & 0xffff) / 65535.0f;
+        for (int z = 0; z < size; ++z)
+            for (int y = 0; y < size; ++y)
+                for (int x = 0; x < size; ++x)
+                {
+                    const float fx = (x + 0.5f) / cell, fy = (y + 0.5f) / cell, fz = (z + 0.5f) / cell;
+                    const int cx = static_cast<int>(fx), cy = static_cast<int>(fy), cz = static_cast<int>(fz);
+                    float nearest = 3.0f;
+                    for (int dz = -1; dz <= 1; ++dz)
+                        for (int dy = -1; dy <= 1; ++dy)
+                            for (int dx = -1; dx <= 1; ++dx)
+                            {
+                                const int nx = cx + dx, ny = cy + dy, nz = cz + dz;
+                                const int wx = (nx + cells) % cells, wy = (ny + cells) % cells, wz = (nz + cells) % cells;
+                                const float* pt = &points[((wz * cells + wy) * cells + wx) * 3];
+                                const float ex = nx + pt[0] - fx, ey = ny + pt[1] - fy, ez = nz + pt[2] - fz;
+                                nearest = (std::min)(nearest, ex * ex + ey * ey + ez * ez);
+                            }
+                    value[(z * size + y) * size + x] += weights[octave] * (1.0f - std::clamp(std::sqrt(nearest), 0.0f, 1.0f));
+                }
+    }
+    const auto [lo, hi] = std::minmax_element(value.begin(), value.end());
+    const float minValue = *lo, range = (std::max)(*hi - *lo, 1e-5f);
+
+    if (FAILED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_L8, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr)))
+    {
+        CloudDetailTexture = nullptr;
+        return nullptr;
+    }
+    D3DLOCKED_BOX locked = {};
+    if (SUCCEEDED(CloudDetailTexture->LockBox(0, &locked, nullptr, 0)))
+    {
+        for (int z = 0; z < size; ++z)
+            for (int y = 0; y < size; ++y)
+            {
+                auto row = static_cast<uint8_t*>(locked.pBits) + z * locked.SlicePitch + y * locked.RowPitch;
+                for (int x = 0; x < size; ++x)
+                    row[x] = static_cast<uint8_t>((value[(z * size + y) * size + x] - minValue) / range * 255.0f + 0.5f);
+            }
+        CloudDetailTexture->UnlockBox(0);
+    }
+    return CloudDetailTexture;
 }
 
 PostFxResource PostFxResources;
@@ -1877,6 +2007,8 @@ private:
             PostFxResources.AOEffect->OnLostDevice();
         if (PostFxResources.SSREffect)
             PostFxResources.SSREffect->OnLostDevice();
+        if (PostFxResources.CloudsEffect)
+            PostFxResources.CloudsEffect->OnLostDevice();
         ReleaseProfiler();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
@@ -1958,6 +2090,8 @@ private:
             PostFxResources.AOEffect->OnResetDevice();
         if (PostFxResources.SSREffect)
             PostFxResources.SSREffect->OnResetDevice();
+        if (PostFxResources.CloudsEffect)
+            PostFxResources.CloudsEffect->OnResetDevice();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             SAFE_RELEASE(PostFxResources.AOCamDepthSurf[i]);
@@ -2179,6 +2313,7 @@ private:
             IDirect3DBaseTexture9* scene = prevTex[1];
             if (auto skin = RenderSkinScattering(pDevice, prevTex[1]))
                 scene = skin;
+            RenderVolumetricClouds(pDevice, scene);
 
             if (PostFxResources.FullScreenTex_temp1)
             {
@@ -3576,6 +3711,212 @@ private:
         // Additive and RGB only, so a miss adds nothing and the scene alpha is untouched.
         { D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE },
     };
+
+    static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kCloudRenderStates[] =
+    {
+        { D3DRS_ZENABLE,          FALSE },
+        { D3DRS_ZWRITEENABLE,     FALSE },
+        { D3DRS_ALPHATESTENABLE,  FALSE },
+        { D3DRS_STENCILENABLE,    FALSE },
+        { D3DRS_FOGENABLE,        FALSE },
+        { D3DRS_CLIPPING,         FALSE },
+        { D3DRS_SCISSORTESTENABLE, FALSE },
+        { D3DRS_CULLMODE,         D3DCULL_NONE },
+        { D3DRS_SRGBWRITEENABLE,  FALSE },
+        { D3DRS_ALPHABLENDENABLE, TRUE },
+        { D3DRS_SEPARATEALPHABLENDENABLE, FALSE },
+        { D3DRS_BLENDOP,          D3DBLENDOP_ADD },
+        // The cloud's light plus what shows through it; RGB only, the scene alpha stays.
+        { D3DRS_SRCBLEND,         D3DBLEND_ONE },
+        { D3DRS_DESTBLEND,        D3DBLEND_SRCALPHA },
+        { D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE },
+    };
+
+    // Blends the volumetric clouds (Clouds.fx) into the lit scene, from the fog pass before it reads
+    // the scene. Leaves the device as it found it.
+    static void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* sceneBase)
+    {
+        auto& R = PostFxResources;
+        if (!R.VolumetricCloudsOn() || !R.bCloudParamsRegistered || !sceneBase || !R.mDepthRT || !R.mDepthRT->mD3DTexture)
+            return;
+        rage::grcViewport* vp = rage::GetCurrentViewport();
+        if (!vp)
+            return;
+
+        // The game's clouds: until the sky has been drawn once these read zero.
+        const auto& shade = rage::grmShaderInfo::getShaderParamData(R.CloudColorIdx);
+        const auto& lit = rage::grmShaderInfo::getShaderParamData(R.TopCloudColorIdx);
+        const auto& sunDirection = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
+        const float exposure = rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0] * R.fVolumetricCloudsBrightness;
+        if (exposure <= 0.0f)
+            return;
+        // The sky's SunDirection is y up; the world is z up.
+        D3DXVECTOR4 sun(sunDirection[0], -sunDirection[2], sunDirection[1], 0.0f);
+        const float sunLength = std::sqrt(sun.x * sun.x + sun.y * sun.y + sun.z * sun.z);
+        if (sunLength <= 0.0f)
+            return;
+        sun /= sunLength;
+
+        auto coverage = R.CloudNoiseTex();
+        auto detail = R.CloudDetailTex();
+        if (!coverage || !detail)
+            return;
+
+        IDirect3DTexture9* scene = nullptr;
+        if (FAILED(sceneBase->QueryInterface(__uuidof(IDirect3DTexture9), reinterpret_cast<void**>(&scene))) || !scene)
+            return;
+        IDirect3DSurface9* sceneSurface = nullptr;
+        scene->GetSurfaceLevel(0, &sceneSurface);
+        scene->Release();
+        if (!sceneSurface)
+            return;
+        D3DSURFACE_DESC desc = {};
+        sceneSurface->GetDesc(&desc);
+        const float width = float(desc.Width), height = float(desc.Height);
+
+        ID3DXEffect* effect = R.CloudsEffect;
+        const D3DMATRIX& proj = *(const D3DMATRIX*)vp->mProjectionMatrix;
+        const D3DXVECTOR4 projInfo = ProjInfo(proj, width, height);
+        const float invViewportSize[] = { 1.0f / width, 1.0f / height };
+        effect->SetFloatArray("vec2InvViewportSize", invViewportSize, 2);
+        effect->SetVector("vec4ProjInfo", &projInfo);
+        effect->SetFloat("fNearPlane", vp->mNearClip);
+        effect->SetFloat("fFarDivNear", vp->mFarClip / vp->mNearClip);
+
+        const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+        D3DXVECTOR4 toView[3];
+        WorldToViewRows(vp, toView);
+        const D3DXVECTOR4 worldX(toView[0].x, toView[1].x, toView[2].x, viewInv.m[3][0]);
+        const D3DXVECTOR4 worldY(toView[0].y, toView[1].y, toView[2].y, viewInv.m[3][1]);
+        const D3DXVECTOR4 worldZ(toView[0].z, toView[1].z, toView[2].z, viewInv.m[3][2]);
+        effect->SetVector("vec4WorldX", &worldX);
+        effect->SetVector("vec4WorldY", &worldY);
+        effect->SetVector("vec4WorldZ", &worldZ);
+
+        effect->SetFloatArray("vec3SunDir", &sun.x, 3);
+        const float litColour[3] = { lit[0] * exposure, lit[1] * exposure, lit[2] * exposure };
+        const float shadeColour[3] = { shade[0] * exposure, shade[1] * exposure, shade[2] * exposure };
+        effect->SetFloatArray("vec3LitColour", litColour, 3);
+        effect->SetFloatArray("vec3ShadeColour", shadeColour, 3);
+        const D3DXVECTOR4 layer(R.fVolumetricCloudsBase, R.fVolumetricCloudsThickness, 1.0f / R.fCloudShadowsScale, R.fVolumetricCloudsCoverage);
+        effect->SetVector("vec4Layer", &layer);
+        // The detail drifts with the wind too, half as fast, so the billows change as they go.
+        const double detailDrift = R.fCloudSeconds * R.fCloudShadowsWind * 0.5 / R.fVolumetricCloudsDetailScale;
+        const D3DXVECTOR4 wind(R.fCloudWindX, R.fCloudWindY, float(std::fmod(detailDrift * 0.93, 1.0)), float(std::fmod(detailDrift * 0.37, 1.0)));
+        effect->SetVector("vec4Wind", &wind);
+        const D3DXVECTOR4 shape(R.fVolumetricCloudsDensity, 1.0f / R.fVolumetricCloudsDetailScale, R.fVolumetricCloudsDetail, R.fVolumetricCloudsHaze);
+        effect->SetVector("vec4Shape", &shape);
+        effect->SetFloat("fMaxDistance", R.fVolumetricCloudsMaxDistance);
+
+        IDirect3DSurface9* oldTarget = nullptr;
+        IDirect3DSurface9* oldDepth = nullptr;
+        IDirect3DVertexDeclaration9* oldDecl = nullptr;
+        IDirect3DVertexBuffer9* oldVB = nullptr;
+        IDirect3DPixelShader9* oldPS = nullptr;
+        IDirect3DVertexShader9* oldVS = nullptr;
+        IDirect3DBaseTexture9* oldTextures[3] = {};
+        UINT oldOffset = 0, oldStride = 0;
+        DWORD oldFVF = 0;
+        D3DVIEWPORT9 oldViewport = {};
+        DWORD savedRenderStates[std::size(kCloudRenderStates)] = {};
+        static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW,
+                                                                   D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER };
+        DWORD savedSamplerStates[3][std::size(kSamplerStates)] = {};
+
+        pDevice->GetRenderTarget(0, &oldTarget);
+        pDevice->GetDepthStencilSurface(&oldDepth);
+        pDevice->GetViewport(&oldViewport);
+        pDevice->GetFVF(&oldFVF);
+        pDevice->GetVertexDeclaration(&oldDecl);
+        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        pDevice->GetPixelShader(&oldPS);
+        pDevice->GetVertexShader(&oldVS);
+        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+        for (DWORD slot = 0; slot < 3; ++slot)
+        {
+            pDevice->GetTexture(slot, &oldTextures[slot]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                pDevice->GetSamplerState(slot, kSamplerStates[i], &savedSamplerStates[slot][i]);
+        }
+        for (size_t i = 0; i < std::size(kCloudRenderStates); ++i)
+        {
+            pDevice->GetRenderState(kCloudRenderStates[i].state, &savedRenderStates[i]);
+            pDevice->SetRenderState(kCloudRenderStates[i].state, kCloudRenderStates[i].value);
+        }
+
+        pDevice->SetRenderTarget(0, sceneSurface);
+        pDevice->SetDepthStencilSurface(nullptr);
+        D3DVIEWPORT9 viewport = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
+        pDevice->SetViewport(&viewport);
+        pDevice->SetStreamSource(0, nullptr, 0, 0);
+        pDevice->SetVertexDeclaration(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        const ScreenVertex screenVertices[4] =
+        {
+            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
+            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+        };
+
+        UINT passes = 0;
+        effect->SetTechnique("Clouds");
+        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
+        effect->BeginPass(0);
+        effect->CommitChanges();
+        // The samplers have fixed registers (s0 depth, s1 coverage, s2 detail).
+        pDevice->SetTexture(0, R.mDepthRT->mD3DTexture);
+        pDevice->SetTexture(1, coverage);
+        pDevice->SetTexture(2, detail);
+        pDevice->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+        pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+        pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        for (DWORD slot = 1; slot < 3; ++slot)
+        {
+            pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+            pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+            pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSW, D3DTADDRESS_WRAP);
+            pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+            pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+            pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, slot == 1 ? D3DTEXF_LINEAR : D3DTEXF_NONE);
+        }
+        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+        effect->EndPass();
+        effect->End();
+
+        for (size_t i = 0; i < std::size(kCloudRenderStates); ++i)
+            pDevice->SetRenderState(kCloudRenderStates[i].state, savedRenderStates[i]);
+        for (DWORD slot = 0; slot < 3; ++slot)
+        {
+            pDevice->SetTexture(slot, oldTextures[slot]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                pDevice->SetSamplerState(slot, kSamplerStates[i], savedSamplerStates[slot][i]);
+            SAFE_RELEASE(oldTextures[slot]);
+        }
+        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+        pDevice->SetPixelShader(oldPS);
+        pDevice->SetVertexShader(oldVS);
+        pDevice->SetRenderTarget(0, oldTarget);
+        pDevice->SetDepthStencilSurface(oldDepth);
+        pDevice->SetViewport(&oldViewport);
+        pDevice->SetFVF(oldFVF);
+        pDevice->SetVertexDeclaration(oldDecl);
+        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
+
+        SAFE_RELEASE(oldPS);
+        SAFE_RELEASE(oldVS);
+        SAFE_RELEASE(oldDecl);
+        SAFE_RELEASE(oldVB);
+        SAFE_RELEASE(oldDepth);
+        SAFE_RELEASE(oldTarget);
+        SAFE_RELEASE(sceneSurface);
+    }
 
     static void RenderWaterReflections()
     {
@@ -5155,12 +5496,25 @@ public:
             }
             if (thickness <= 0.0f)
                 thickness = 1.0f;
+            float coverageShift = R.fCloudShadowsCoverage;
+            float deckHeight = R.fCloudShadowsHeight;
+            if (R.VolumetricCloudsOn())
+            {
+                // The volumetric clouds' coverage, saturate((n - (1 - cover)) / cover), a third of the
+                // way up their layer.
+                const float cover = (std::max)(R.fVolumetricCloudsCoverage, 0.02f);
+                threshold = 1.0f / cover;
+                bias = (1.0f - cover) / cover;
+                thickness = 1.0f;
+                coverageShift = 0.0f;
+                deckHeight = R.fVolumetricCloudsBase + R.fVolumetricCloudsThickness * 0.33f;
+            }
             R.fCloudLastThreshold = threshold;
             R.fCloudLastBias = bias;
             R.fCloudLastThickness = thickness;
 
-            auto noise = R.fCloudShadows > 0.0f ? R.CloudNoiseTex() : nullptr;
-            const float strength = noise ? R.fCloudShadows : 0.0f;
+            auto noise = (R.fCloudShadows > 0.0f || R.VolumetricCloudsOn()) ? R.CloudNoiseTex() : nullptr;
+            const float strength = noise ? R.fCloudShadows : 0.0f; // 0 leaves the shadows out
             const float invScale = 1.0f / R.fCloudShadowsScale;
             // The wind blows the same way all the time; only how far it has carried the noise
             // changes, wrapped to one tile so the offset keeps its precision.
@@ -5169,8 +5523,11 @@ public:
             const float windX = static_cast<float>(std::fmod(drift * 0.93, 1.0));
             const float windY = static_cast<float>(std::fmod(drift * 0.37, 1.0));
 
-            const float c197[4] = { R.fSpecularSheen, strength, R.fCloudShadowsHeight, invScale };
-            const float c198[4] = { windX, windY, threshold, bias - R.fCloudShadowsCoverage };
+            R.fCloudWindX = windX;
+            R.fCloudWindY = windY;
+            R.fCloudSeconds = seconds;
+            const float c197[4] = { R.fSpecularSheen, strength, deckHeight, invScale };
+            const float c198[4] = { windX, windY, threshold, bias - coverageShift };
             const float c199[4] = { thickness, R.fCloudShadowsSoftness, 0.0f, 0.0f };
             pDevice->SetPixelShaderConstantF(197, c197, 1);
             pDevice->SetPixelShaderConstantF(198, c198, 1);
