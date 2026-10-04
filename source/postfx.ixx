@@ -361,6 +361,12 @@ public:
     float fCloudShadowsScale = 4000.0f;
     float fCloudShadowsWind = 6.0f;
     float fCloudShadowsSoftness = 1.0f;
+    // Added to the deck's coverage before the game's thickness curve: above 0 more of the sky
+    // casts a shadow, below 0 less.
+    float fCloudShadowsCoverage = 0.0f;
+    // The game's cloud values the last lighting pass used, for the log Ctrl+Shift+F10 writes.
+    float fCloudLastThreshold = 0.0f, fCloudLastBias = 0.0f, fCloudLastThickness = 0.0f;
+    bool bCloudLastFromGame = false;
     IDirect3DTexture9* CloudNoiseTexture = nullptr;
     IDirect3DTexture9* CloudNoiseTex();
     bool bCloudNoiseBound = false;
@@ -1166,6 +1172,7 @@ public:
         fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 4000.0f), 100.0f, 50000.0f);
         fCloudShadowsWind = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsWind", 6.0f), 0.0f, 100.0f);
         fCloudShadowsSoftness = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsSoftness", 1.0f), 0.0f, 6.0f);
+        fCloudShadowsCoverage = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsCoverage", 0.0f), -1.0f, 1.0f);
     }
 
     void Readini()
@@ -4075,7 +4082,8 @@ private:
     }
 
     // Once a frame, from the post fx pass, which runs in the pause menu too: Ctrl+Shift+F10 reads
-    // the live settings (ReadLiveIni) again from the ini, with a beep to say it did.
+    // the live settings (ReadLiveIni) again from the ini, with a beep to say it did, and adds the
+    // cloud values the shadows use to FusionFix.CloudShadows.log next to the game.
     static void TickIniReload()
     {
         static bool keyWasDown = false;
@@ -4084,7 +4092,16 @@ private:
         if (down && !keyWasDown)
         {
             CIniReader iniReader("");
-            PostFxResources.ReadLiveIni(iniReader);
+            auto& R = PostFxResources;
+            R.ReadLiveIni(iniReader);
+            // The cloud values the shadows were cast with, to tune CloudShadowsCoverage by.
+            if (FILE* log = _wfopen((GetExeModulePath() / L"FusionFix.CloudShadows.log").c_str(), L"a"))
+            {
+                fprintf(log, "threshold %.4f  bias %.4f  thickness %.4f  (%s)  coverage %+.3f  strength %.2f\n", R.fCloudLastThreshold,
+                        R.fCloudLastBias, R.fCloudLastThickness, R.bCloudLastFromGame ? "the game's" : "fallback, the sky not drawn yet",
+                        R.fCloudShadowsCoverage, R.fCloudShadows);
+                fclose(log);
+            }
             MessageBeep(MB_OK);
         }
         keyWasDown = down;
@@ -5130,6 +5147,7 @@ public:
                 thickness = rage::grmShaderInfo::getShaderParamData(R.CloudThicknessIdx)[0];
             }
             // Until the sky has been drawn once its parameters read zero, which is no cloud at all.
+            R.bCloudLastFromGame = !(threshold == 0.0f && bias == 0.0f);
             if (threshold == 0.0f && bias == 0.0f)
             {
                 threshold = 1.6f;
@@ -5137,6 +5155,9 @@ public:
             }
             if (thickness <= 0.0f)
                 thickness = 1.0f;
+            R.fCloudLastThreshold = threshold;
+            R.fCloudLastBias = bias;
+            R.fCloudLastThickness = thickness;
 
             auto noise = R.fCloudShadows > 0.0f ? R.CloudNoiseTex() : nullptr;
             const float strength = noise ? R.fCloudShadows : 0.0f;
@@ -5149,7 +5170,7 @@ public:
             const float windY = static_cast<float>(std::fmod(drift * 0.37, 1.0));
 
             const float c197[4] = { R.fSpecularSheen, strength, R.fCloudShadowsHeight, invScale };
-            const float c198[4] = { windX, windY, threshold, bias };
+            const float c198[4] = { windX, windY, threshold, bias - R.fCloudShadowsCoverage };
             const float c199[4] = { thickness, R.fCloudShadowsSoftness, 0.0f, 0.0f };
             pDevice->SetPixelShaderConstantF(197, c197, 1);
             pDevice->SetPixelShaderConstantF(198, c198, 1);
