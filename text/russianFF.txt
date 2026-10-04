@@ -202,6 +202,9 @@ Logitech LightSync RGB
 [SSRDbgSkin]
 Рассеяние в коже
 
+[SSRDbgWater]
+Отражение воды
+
 [Contact Shadows]
 Контактные тени
 

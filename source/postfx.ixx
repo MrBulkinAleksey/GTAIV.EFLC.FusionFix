@@ -347,6 +347,9 @@ public:
     // band reached a fifth of full light and turned the dark side of faces red.
     float fSkinLighting = 1.0f;
     static constexpr int kSkinDebugMode = 9;
+    // SSR Debug 10: the water reflection map (WATER_REFLECTION_COLOUR) stretched over the finished frame. The
+    // water shader reads it mirrored left to right.
+    static constexpr int kWaterReflectionDebugMode = 10;
     rage::grcRenderTargetPC* mMaterialIdRT = nullptr;
     rage::grcRenderTargetPC* SkinLightTex[2] = {};
     IDirect3DSurface9* SkinLightSurf[2] = {};
@@ -3955,7 +3958,24 @@ private:
         hbDrawCallPostFX.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitivePostFX = false;
         DrawSSRDebugOverlay();
+        DrawWaterReflectionDebug();
         SSRTrace::Tick();
+    }
+
+    static void DrawWaterReflectionDebug()
+    {
+        if (PostFxResources.SSRDebugMode() != PostFxResources.kWaterReflectionDebugMode)
+            return;
+        auto rt = rage::grcTextureFactoryPC::GetRTByName("WATER_REFLECTION_COLOUR");
+        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice || !rt || !rt->mD3DTexture)
+            return;
+        IDirect3DSurface9* src = nullptr;
+        IDirect3DSurface9* dst = nullptr;
+        if (SUCCEEDED(rt->mD3DTexture->GetSurfaceLevel(0, &src)) && SUCCEEDED(pDevice->GetRenderTarget(0, &dst)))
+            pDevice->StretchRect(src, nullptr, dst, nullptr, D3DTEXF_LINEAR);
+        SAFE_RELEASE(src);
+        SAFE_RELEASE(dst);
     }
 
     // Replaces the finished frame with the SSR debug view chosen in the graphics menu.

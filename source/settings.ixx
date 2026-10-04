@@ -2089,7 +2089,7 @@ public:
             { 0, "PREF_STUNTJUMPCAM",           "MISC",       "StuntJumpCamera",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_ACTIONCAM",              "MISC",       "ActionCamera",                       "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSR",                    "POSTFX",     "ScreenSpaceReflections",             "MENU_DISPLAY_SSR_QUALITY",   0, nullptr, 0, 2 },
-            { 0, "PREF_SSR_DEBUG",              "POSTFX",     "ScreenSpaceReflectionsDebug",        "MENU_DISPLAY_SSR_DEBUG",     0, nullptr, 0, 9 },
+            { 0, "PREF_SSR_DEBUG",              "POSTFX",     "ScreenSpaceReflectionsDebug",        "MENU_DISPLAY_SSR_DEBUG",     0, nullptr, 0, 10 },
             { 0, "PREF_VOLUMETRIC_LIGHT",       "POSTFX",     "VolumetricLight",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_CONTACTSHADOWS",         "POSTFX",     "ContactShadows",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSGI",                   "POSTFX",     "ScreenSpaceIndirectLight",           "",                           1, nullptr, 0, 1 },
@@ -2152,7 +2152,7 @@ public:
         DefineDisplay("MENU_DISPLAY_TEXTURE_LOD_BIAS", { "MO_OFF", "LodBias1", "LodBias2", "LodBias3", "LodBias4" });
         DefineDisplay("MENU_DISPLAY_SSR_QUALITY", { "MO_OFF", "SSRHalf", "SSRFull" });
         DefineDisplay("MENU_DISPLAY_AO", { "MO_OFF", "SAO", "GTAO" });
-        DefineDisplay("MENU_DISPLAY_SSR_DEBUG", { "MO_OFF", "SSRDbgColour", "SSRDbgHits", "SSRDbgNormals", "SSRDbgHorizon", "SSRDbgSpecular", "SSRDbgGlass", "SSRDbgContact", "SSRDbgGI", "SSRDbgSkin" });
+        DefineDisplay("MENU_DISPLAY_SSR_DEBUG", { "MO_OFF", "SSRDbgColour", "SSRDbgHits", "SSRDbgNormals", "SSRDbgHorizon", "SSRDbgSpecular", "SSRDbgGlass", "SSRDbgContact", "SSRDbgGI", "SSRDbgSkin", "SSRDbgWater" });
 
         constexpr auto toggle = "MENU_DISPLAY_ON_OFF";
         constexpr auto slider = "MENU_DISPLAY_SLIDERBAR";
@@ -2341,7 +2341,7 @@ public:
                 AddRow(category, label, preference, 41, valueTextHook ? "MENU_DISPLAY_VALUE_SLIDERBAR" : slider);
             }
             AddEmptyLine(category);
-            AddRow(category, "SSR Debug", "PREF_SSR_DEBUG", 10, "MENU_DISPLAY_SSR_DEBUG");
+            AddRow(category, "SSR Debug", "PREF_SSR_DEBUG", 11, "MENU_DISPLAY_SSR_DEBUG");
         }
 
         // Graphics: a Textures category for the sharpness and filtering of surfaces (texturequality.ixx)
