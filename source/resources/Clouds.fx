@@ -74,7 +74,9 @@ float Density(float3 p, bool detail)
     [branch]
     if (detail && d > 0.0)
     {
-        float n = tex3Dlod(DetailTex, float4(p * vec4Shape.y + float3(vec4Wind.zw, 0.0), 0)).r;
+        // A second octave three times finer frays the billows' edges.
+        float3 q = p * vec4Shape.y + float3(vec4Wind.zw, 0.0);
+        float n = tex3Dlod(DetailTex, float4(q, 0)).r * 0.7 + tex3Dlod(DetailTex, float4(q * 3.1 + 0.37, 0)).r * 0.3;
         float erode = (1.0 - n) * vec4Shape.z;
         d = saturate((d - erode) / max(1.0 - erode, 0.05));
     }
@@ -117,6 +119,9 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     float t = t0 + dt * PixelJitter(vpos);
     float cosTheta = dot(dir, vec3SunDir);
     float phase = lerp(HenyeyGreenstein(cosTheta, -0.25), HenyeyGreenstein(cosTheta, 0.6), 0.7);
+    // A narrow forward lobe: cloud next to the sun in the sky glows where it is thin enough for its
+    // light to come through, the bright gold rims of clouds against the sun.
+    float forward = HenyeyGreenstein(cosTheta, 0.85);
     float sigma = vec4Shape.x;
 
     float transmittance = 1.0;
@@ -160,6 +165,8 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             float3 sunLit = vec3LitColour * vec3SunTint;
             float3 lit = lerp(shade, sunLit, sun * (0.6 + 0.4 * min(phase, 1.0)));
             lit += sunLit * sun * max(phase - 1.0, 0.0) * 0.1 * fSilver;
+            // The glow, most where the cloud is thin; past the scene's white point, for the bloom.
+            lit += sunLit * exp(-tau * 0.5) * (1.0 - d) * min(forward * 0.04 * fSilver, 3.0);
 
             float stepTransmittance = exp(-d * sigma * dt);
             colour += transmittance * (1.0 - stepTransmittance) * lit;
