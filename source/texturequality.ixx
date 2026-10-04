@@ -295,7 +295,8 @@ private:
 
         // Menu steps of -0.25, and the render scale's: textures as sharp as they'd be at the screen size, which DLSS
         // and FSR keep through the upscale
-        const float bias = -0.25f * Pref(lodBiasPref) + std::log2(RenderScale::GetScale());
+        const float scaleBias = std::log2(RenderScale::GetScale());
+        const float bias = -0.25f * Pref(lodBiasPref) + scaleBias;
         if (bias < 0.0f)
         {
             for (DWORD i = 0; i < kMaterialStages; ++i)
@@ -316,7 +317,8 @@ private:
             pDevice->SetSamplerState(kDetailStage, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
             pDevice->SetSamplerState(kDetailStage, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
             pDevice->SetSamplerState(kDetailStage, D3DSAMP_MAXANISOTROPY, 4);
-            pDevice->SetSamplerState(kDetailStage, D3DSAMP_MIPMAPLODBIAS, 0);
+            // Its mips fade to grey, so below the screen size it would fade out nearer without the render scale's bias
+            pDevice->SetSamplerState(kDetailStage, D3DSAMP_MIPMAPLODBIAS, std::bit_cast<DWORD>(scaleBias));
             // c190: tiling, the albedo grain as 1 + (height - 0.5) * 2 * strength; c191: the bumps
             const float params[8] = { fDetailTiling, 2.0f * fDetailAlbedo, 1.0f - fDetailAlbedo, 0.0f,
                                       fDetailNormal, -0.5f * fDetailNormal, 0.0f, 0.0f };
