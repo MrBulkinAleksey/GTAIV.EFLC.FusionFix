@@ -393,6 +393,23 @@ public:
     float fVolumetricCloudsMaxDistance = 40000.0f;
     float fVolumetricCloudsBrightness = 1.0f;
     float fVolumetricCloudsSunTint = 0.6f;
+    bool bVolumetricCloudsWeather = true;
+    float fVolumetricCloudsVanilla = 0.0f;
+    float fVolumetricCloudsTranslucency = 0.3f;
+    float fVolumetricCloudsEvolution = 1.0f;
+    float fVolumetricCloudsSaturation = 1.0f;
+
+    // The cloud layer this frame (UpdateCloudLayer): from the weather's preset, blended through the
+    // game's weather change, or from the VolumetricClouds* settings with VolumetricCloudsWeather 0.
+    struct CloudLayer
+    {
+        float coverage, base, thickness, density, stratus, wind;
+    };
+    CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f };
+    // How far the wind has carried the coverage and the detail, in tiles, and how far the detail
+    // has drifted up through itself; summed frame by frame, as the wind changes with the weather.
+    double fCloudDrift = 0.0, fCloudDetailDrift = 0.0, fCloudEvolution = 0.0, fCloudLastSeconds = -1.0;
+    void UpdateCloudLayer(double seconds);
     ID3DXEffect* CloudsEffect = nullptr;
     IDirect3DVolumeTexture9* CloudDetailTexture = nullptr;
     IDirect3DVolumeTexture9* CloudDetailTex();
@@ -1247,6 +1264,11 @@ public:
         fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBrightness", 1.0f), 0.0f, 4.0f);
         fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.6f), 0.0f, 1.0f);
+        bVolumetricCloudsWeather = iniReader.ReadInteger("POSTFX", "VolumetricCloudsWeather", 1) != 0;
+        fVolumetricCloudsVanilla = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsVanilla", 0.0f), 0.0f, 1.0f);
+        fVolumetricCloudsTranslucency = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsTranslucency", 0.3f), 0.0f, 0.9f);
+        fVolumetricCloudsEvolution = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsEvolution", 1.0f), 0.0f, 10.0f);
+        fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
     }
 
     void Readini()
@@ -1561,6 +1583,51 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
         CloudDetailTexture->UnlockBox(0);
     }
     return CloudDetailTexture;
+}
+
+// The weathers' cloud layers, in CWeather::eWeatherType order: coverage, base and thickness in
+// metres, density and the share of overcast sheet against the VolumetricClouds* settings' scale,
+// and the wind against CloudShadowsWind. Fair weather has scattered heaps high up; cloudy, rain and
+// storm a low, thick deck that closes into a sheet; fog a low grey one the fog hides.
+static constexpr PostFxResource::CloudLayer kWeatherClouds[8] =
+{
+    { 0.25f, 1000.0f,  500.0f, 1.0f, 0.0f, 1.0f }, // EXTRASUNNY
+    { 0.38f,  900.0f,  600.0f, 1.0f, 0.0f, 1.0f }, // SUNNY
+    { 0.45f, 1000.0f,  700.0f, 1.0f, 0.0f, 2.5f }, // SUNNY_WINDY
+    { 0.70f,  700.0f,  800.0f, 1.2f, 0.3f, 1.2f }, // CLOUDY
+    { 0.92f,  500.0f, 1000.0f, 1.6f, 0.7f, 1.5f }, // RAIN
+    { 0.85f,  600.0f,  900.0f, 1.4f, 0.6f, 1.2f }, // DRIZZLE
+    { 0.60f,  400.0f,  600.0f, 1.0f, 0.5f, 0.6f }, // FOGGY
+    { 0.95f,  400.0f, 1300.0f, 2.0f, 0.5f, 2.0f }, // LIGHTNING
+};
+
+void PostFxResource::UpdateCloudLayer(double seconds)
+{
+    if (bVolumetricCloudsWeather && CWeather::OldWeatherType && CWeather::NewWeatherType && CWeather::InterpolationValue)
+    {
+        const auto from = static_cast<uint32_t>(*CWeather::OldWeatherType);
+        const auto to = static_cast<uint32_t>(*CWeather::NewWeatherType);
+        const float k = std::clamp(*CWeather::InterpolationValue, 0.0f, 1.0f);
+        const auto& a = kWeatherClouds[from < 8 ? from : 1];
+        const auto& b = kWeatherClouds[to < 8 ? to : 1];
+        auto mix = [k](float x, float y) { return x + (y - x) * k; };
+        Cloud = { mix(a.coverage, b.coverage), mix(a.base, b.base), mix(a.thickness, b.thickness),
+                  mix(a.density, b.density), mix(a.stratus, b.stratus), mix(a.wind, b.wind) };
+    }
+    else
+        Cloud = { fVolumetricCloudsCoverage, fVolumetricCloudsBase, fVolumetricCloudsThickness, 1.0f, 0.0f, 1.0f };
+
+    // The drift moves on by this frame's time at this frame's wind; across a jump of the clock (a
+    // load, a cutscene) it stays where it was.
+    double dt = fCloudLastSeconds >= 0.0 ? seconds - fCloudLastSeconds : 0.0;
+    if (dt < 0.0 || dt > 0.25)
+        dt = 0.0;
+    fCloudLastSeconds = seconds;
+    const double wind = fCloudShadowsWind * Cloud.wind;
+    fCloudDrift = std::fmod(fCloudDrift + dt * wind / fCloudShadowsScale, 1000.0);
+    fCloudDetailDrift = std::fmod(fCloudDetailDrift + dt * wind * 0.5 / fVolumetricCloudsDetailScale, 1000.0);
+    // About a metre a second up through the detail at 1: the billows turn over in a few minutes.
+    fCloudEvolution = std::fmod(fCloudEvolution + dt * fVolumetricCloudsEvolution / fVolumetricCloudsDetailScale, 1000.0);
 }
 
 PostFxResource PostFxResources;
@@ -3852,6 +3919,13 @@ private:
             litColour[i] = (cloudColour[i] * 1.7f + 0.5f * sunsetColour[i]) * exposure;
             shadeColour[i] = cloudColour[i] * 0.9f * exposure;
         }
+        // VolumetricCloudsSaturation, about each colour's luma.
+        for (float* colour : { litColour, shadeColour })
+        {
+            const float luma = 0.2126f * colour[0] + 0.7152f * colour[1] + 0.0722f * colour[2];
+            for (int i = 0; i < 3; ++i)
+                colour[i] = (std::max)(luma + (colour[i] - luma) * R.fVolumetricCloudsSaturation, 0.0f);
+        }
         effect->SetFloatArray("vec3LitColour", litColour, 3);
         effect->SetFloatArray("vec3ShadeColour", shadeColour, 3);
         effect->SetFloat("fSilver", inscattering);
@@ -3866,14 +3940,18 @@ private:
                     tint[i] = 1.0f + (std::clamp(sunColour[i] / luma, 0.0f, 2.0f) - 1.0f) * R.fVolumetricCloudsSunTint;
             effect->SetFloatArray("vec3SunTint", tint, 3);
         }
-        const D3DXVECTOR4 layer(R.fVolumetricCloudsBase, R.fVolumetricCloudsThickness, 1.0f / R.fCloudShadowsScale, R.fVolumetricCloudsCoverage);
+        const D3DXVECTOR4 layer(R.Cloud.base, R.Cloud.thickness, 1.0f / R.fCloudShadowsScale, R.Cloud.coverage);
         effect->SetVector("vec4Layer", &layer);
         // The detail drifts with the wind too, half as fast, so the billows change as they go.
-        const double detailDrift = R.fCloudSeconds * R.fCloudShadowsWind * 0.5 / R.fVolumetricCloudsDetailScale;
-        const D3DXVECTOR4 wind(R.fCloudWindX, R.fCloudWindY, float(std::fmod(detailDrift * 0.93, 1.0)), float(std::fmod(detailDrift * 0.37, 1.0)));
+        const D3DXVECTOR4 wind(R.fCloudWindX, R.fCloudWindY, float(std::fmod(R.fCloudDetailDrift * 0.93, 1.0)),
+                               float(std::fmod(R.fCloudDetailDrift * 0.37, 1.0)));
         effect->SetVector("vec4Wind", &wind);
-        const D3DXVECTOR4 shape(R.fVolumetricCloudsDensity, 1.0f / R.fVolumetricCloudsDetailScale, R.fVolumetricCloudsDetail, R.fVolumetricCloudsHaze);
+        const D3DXVECTOR4 shape(R.fVolumetricCloudsDensity * R.Cloud.density, 1.0f / R.fVolumetricCloudsDetailScale, R.fVolumetricCloudsDetail,
+                                R.fVolumetricCloudsHaze);
         effect->SetVector("vec4Shape", &shape);
+        effect->SetFloat("fStratus", R.Cloud.stratus);
+        effect->SetFloat("fEvolution", float(std::fmod(R.fCloudEvolution, 1.0)));
+        effect->SetFloat("fTranslucency", R.fVolumetricCloudsTranslucency);
         effect->SetFloat("fMaxDistance", R.fVolumetricCloudsMaxDistance);
 
         IDirect3DSurface9* oldTarget = nullptr;
@@ -5581,17 +5659,37 @@ public:
                 thickness = 1.0f;
             float coverageShift = R.fCloudShadowsCoverage;
             float deckHeight = R.fCloudShadowsHeight;
+            const double seconds = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds * 0.001 : 0.0;
+            R.UpdateCloudLayer(seconds);
+            // The game's flat clouds under the volumetric ones, by VolumetricCloudsVanilla:
+            // gta_atmoscatt_clouds draws them where CloudThreshold * noise - CloudBias is above
+            // 0, so threshold * v and bias towards 1 by 1 - v fade them out at 0. Its high layer
+            // stays.
+            if (R.bCloudParamsRegistered)
+            {
+                const bool fade = R.VolumetricCloudsOn() && R.fVolumetricCloudsVanilla < 1.0f;
+                const float v = R.fVolumetricCloudsVanilla;
+                auto& thresholdOverride = rage::grmShaderInfo::getShaderParamOverride(R.CloudThresholdIdx);
+                auto& biasOverride = rage::grmShaderInfo::getShaderParamOverride(R.CloudBiasIdx);
+                thresholdOverride.mul = { v, 1.0f, 1.0f, 1.0f };
+                thresholdOverride.add = {};
+                biasOverride.mul = { v, 1.0f, 1.0f, 1.0f };
+                biasOverride.add = { 1.0f - v, 0.0f, 0.0f, 0.0f };
+                thresholdOverride.on = fade;
+                biasOverride.on = fade;
+            }
             if (R.VolumetricCloudsOn())
             {
                 // The volumetric clouds' coverage near their base, saturate((n - (1 - cover)) /
                 // (0.35 cover)) as Clouds.fx's Density has it, a third of the way up their layer.
-                const float cover = (std::max)(R.fVolumetricCloudsCoverage, 0.02f);
+                // An overcast sheet's evened coverage is left out: under it the sun is weak anyway.
+                const float cover = (std::max)(R.Cloud.coverage, 0.02f);
                 const float ramp = (std::max)(cover * 0.35f, 0.02f);
                 threshold = 1.0f / ramp;
                 bias = (1.0f - cover) / ramp;
                 thickness = 1.0f;
                 coverageShift = 0.0f;
-                deckHeight = R.fVolumetricCloudsBase + R.fVolumetricCloudsThickness * 0.33f;
+                deckHeight = R.Cloud.base + R.Cloud.thickness * 0.33f;
             }
             R.fCloudLastThreshold = threshold;
             R.fCloudLastBias = bias;
@@ -5602,10 +5700,8 @@ public:
             const float invScale = 1.0f / R.fCloudShadowsScale;
             // The wind blows the same way all the time; only how far it has carried the noise
             // changes, wrapped to one tile so the offset keeps its precision.
-            const double seconds = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds * 0.001 : 0.0;
-            const double drift = seconds * R.fCloudShadowsWind * invScale;
-            const float windX = static_cast<float>(std::fmod(drift * 0.93, 1.0));
-            const float windY = static_cast<float>(std::fmod(drift * 0.37, 1.0));
+            const float windX = static_cast<float>(std::fmod(R.fCloudDrift * 0.93, 1.0));
+            const float windY = static_cast<float>(std::fmod(R.fCloudDrift * 0.37, 1.0));
 
             R.fCloudWindX = windX;
             R.fCloudWindY = windY;

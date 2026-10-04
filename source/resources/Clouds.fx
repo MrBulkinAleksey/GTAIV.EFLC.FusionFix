@@ -49,6 +49,9 @@ float4 vec4Layer;         // base height, thickness, 1 / coverage scale, coverag
 float4 vec4Wind;          // coverage offset (xy), detail offset (zw)
 float4 vec4Shape;         // extinction per metre at full density, 1 / detail scale, detail strength, haze distance
 float fMaxDistance;
+float fStratus;           // 0 separate heaps of cloud, 1 a sheet: the weather's overcast
+float fEvolution;         // how far the detail has drifted up through itself, so the billows change
+float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
 
 float3 ViewRay(float2 pixel)
 {
@@ -81,16 +84,18 @@ float Density(float3 p, bool detail)
     f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
     float c = tex2Dlod(CoverageTex, float4((cell + f + 0.5) / COVERAGE_SIZE, 0, 0)).r;
     float cover = max(vec4Layer.w, 0.02);
+    // Overcast: the coverage evens out towards a sheet, and the tops lose their domes.
+    c = lerp(c, max(c, 1.0 - cover * 0.5), fStratus);
     // Only the lowest fifth, and gently: half the cover there left only the densest middles of the
     // base, which hung down as separate lobes.
     float bottom = saturate(1.0 - h * 5.0);
-    float threshold = (1.0 - cover) + cover * (0.8 * h * h + 0.15 * bottom * bottom);
+    float threshold = (1.0 - cover) + cover * (0.8 * (1.0 - fStratus) * h * h + 0.15 * bottom * bottom);
     float d = saturate((c - threshold) / max((1.0 - threshold) * 0.35, 0.02)) * saturate(h * 20.0) * saturate((1.0 - h) * 10.0);
     [branch]
     if (detail && d > 0.0)
     {
         // A second octave three times finer frays the billows' edges.
-        float3 q = p * vec4Shape.y + float3(vec4Wind.zw, 0.0);
+        float3 q = p * vec4Shape.y + float3(vec4Wind.zw, fEvolution);
         float n = tex3Dlod(DetailTex, float4(q, 0)).r * 0.7 + tex3Dlod(DetailTex, float4(q * 3.1 + 0.37, 0)).r * 0.3;
         float erode = (1.0 - n) * vec4Shape.z;
         d = saturate((d - erode) / max(1.0 - erode, 0.05));
@@ -200,9 +205,11 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // scattered forwards mostly, so it gets through far more cloud than the eye's view does.
             float tau = lightDepth * sigma * 0.33;
             float sun = (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) / 1.75;
-            // Darker towards the base, where the sky above is hidden by the cloud itself.
+            // Darker towards the base, where the sky above is hidden by the cloud itself, and
+            // under more cloud: one sample a quarter of the layer straight up.
             float h = saturate((p.z - base) / vec4Layer.y);
-            float3 shade = vec3ShadeColour * lerp(0.7, 1.0, sqrt(h));
+            float skyAbove = exp(-2.0 * Density(p + float3(0.0, 0.0, vec4Layer.y * 0.25), false));
+            float3 shade = vec3ShadeColour * lerp(0.7, 1.0, sqrt(h)) * lerp(0.75, 1.0, skyAbove);
             // The sun lights what it reaches, a little more facing it; past that the forward lobe
             // adds the rim, scaled by the game's inscattering range.
             // The parts the sun reaches take its hue: warm in the evening, orange at sunset.
@@ -212,7 +219,8 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // The glow, most where the cloud is thin; past the scene's white point, for the bloom.
             lit += sunLit * exp(-tau * 0.5) * (1.0 - d) * min(forward * 0.02 * fSilver, 1.5);
 
-            float stepTransmittance = exp(-d * sigma * fine);
+            // Thin cloud lets more of what is behind it through, the wisps at the edges most.
+            float stepTransmittance = exp(-d * lerp(1.0 - fTranslucency, 1.0, d) * sigma * fine);
             colour += transmittance * (1.0 - stepTransmittance) * lit;
             transmittance *= stepTransmittance;
         }
