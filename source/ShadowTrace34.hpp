@@ -10,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <chrono>
 
 namespace ShadowTrace34 {
 struct Event {
@@ -55,7 +56,28 @@ inline std::atomic<unsigned> nextTracked{0};
 inline std::filesystem::path outputPath;
 inline std::uint64_t written=0;
 inline std::atomic_flag flushLock=ATOMIC_FLAG_INIT;
-inline constexpr std::uint64_t MaximumBytes=64ull*1024*1024;
+#ifndef SHADOW_TRACE_SEGMENT_BYTES
+#define SHADOW_TRACE_SEGMENT_BYTES (64ull*1024*1024)
+#endif
+inline constexpr std::uint64_t MaximumBytes=SHADOW_TRACE_SEGMENT_BYTES;
+inline std::filesystem::path basePath;
+inline unsigned segment=0, traceMode=0, tracePid=0;
+inline std::uint64_t rotations=0;
+inline constexpr unsigned SegmentCount=16;
+inline bool OpenSegment() {
+ outputPath=segment==0?basePath:std::filesystem::path(basePath.string()+".part"+std::to_string(segment));
+ const std::uint32_t header[]{0x34335453,1,32,1,traceMode,tracePid,sizeof(Event),0};
+ std::ofstream out(outputPath,std::ios::binary|std::ios::trunc);
+ out.write(reinterpret_cast<const char*>(header),sizeof(header));out.flush();
+ written=sizeof(header);return out.good();
+}
+inline void Status(unsigned count) {
+ const auto utc=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+ std::ofstream out(basePath.string()+".status",std::ios::trunc);
+ out<<"utc_epoch_ms="<<utc<<" tick64="<<GetTickCount64()<<" segment="<<segment
+    <<" rotations="<<rotations<<" bytes="<<written<<" drained="<<count
+    <<" dropped="<<recorder.dropped.load()<<" enabled="<<enabled.load()<<'\n';
+}
 inline void Track(std::uint32_t key) noexcept {
  if(!key||!enabled.load(std::memory_order_relaxed))return;
  for(auto& v:tracked)if(v.load(std::memory_order_relaxed)==key)return;
@@ -69,23 +91,21 @@ inline bool Tracked(std::uint32_t key) noexcept {
 inline void Emit(Event e) noexcept {if(enabled.load(std::memory_order_relaxed))recorder.Push(e);}
 inline bool Start(const std::filesystem::path& path,unsigned mode,unsigned pid) noexcept {
  try {
-  outputPath=path;
-  const std::uint32_t header[]{0x34335453,1,32,1,mode,pid,sizeof(Event),0};
-  std::ofstream out(path,std::ios::binary|std::ios::trunc);
-  out.write(reinterpret_cast<const char*>(header),sizeof(header));out.flush();
-  written=sizeof(header);enabled.store(out.good(),std::memory_order_release);return out.good();
+  basePath=path;segment=0;rotations=0;traceMode=mode;tracePid=pid;
+  const bool ok=OpenSegment();enabled.store(ok,std::memory_order_release);Status(0);return ok;
  }catch(...){return false;}
 }
 // Called only from the existing low-frequency diagnostic writer, never from
-// a light-selection/lookup/render hook. The file is capped at64MiB per launch.
+// a light-selection/lookup/render hook. Sixteen rotating segments keep recent history.
 inline void Flush() noexcept {
  if(!enabled.load(std::memory_order_acquire)||flushLock.test_and_set(std::memory_order_acquire))return;
  const auto count=recorder.Drain(drainBuffer.data(),drainBuffer.size());
  try {
   const auto bytes=std::uint64_t(count)*sizeof(Event);
-  if(written+bytes>MaximumBytes)enabled=false;
-  else if(count){std::ofstream out(outputPath,std::ios::binary|std::ios::app);out.write(reinterpret_cast<const char*>(drainBuffer.data()),bytes);out.flush();
+  if(written+bytes>MaximumBytes){segment=(segment+1)%SegmentCount;++rotations;if(!OpenSegment())enabled=false;}
+  if(enabled.load()&&count){std::ofstream out(outputPath,std::ios::binary|std::ios::app);out.write(reinterpret_cast<const char*>(drainBuffer.data()),bytes);out.flush();
    if(out.good())written+=bytes;else enabled=false;}
+  Status(count);
  }catch(...){enabled=false;}
  flushLock.clear(std::memory_order_release);
 }
