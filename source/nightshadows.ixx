@@ -457,7 +457,7 @@ public:
                     std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowBehindLamps", 0.7f), 0.0f, 2.0f));
                 // CE 1.8: shadows from traffic signals and emergency vehicle lights.
                 EmergencyTrafficShadows::log.path = iniReader.GetIniPath().parent_path() / "GTAIV-emergency-traffic-shadows.log";
-                EmergencyTrafficShadows::Install(iniReader.ReadInteger("SHADOWS", "TrafficSignalShadows", 1) != 0,
+                EmergencyTrafficShadows::Install(static_cast<unsigned>(std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalShadows", 2), 0, 7)),
                     iniReader.ReadInteger("SHADOWS", "EmergencyLightShadows", 1) != 0);
             }
             else

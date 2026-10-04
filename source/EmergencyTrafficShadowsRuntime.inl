@@ -72,8 +72,44 @@ namespace EmergencyTrafficShadows
         // 0 alive, 1 admitted, 2 retired; pool and owner for frees seen off the observer thread.
         struct Snapshot { std::atomic<uint32_t> state{0}, pool{0}, owner{0}; };
         std::array<Snapshot, KeyCapacity> snapshots;
-        std::atomic<uint32_t> admitted{0}, collisions{0};
+        std::atomic<uint32_t> admitted{0}, collisions{0}, capped{0};
         uint32_t validationCursor{};
+
+        // Only the maxShadows signals nearest the player in the previous frame cast shadows; the
+        // others stay as the game draws them, so they never push more lamps out of the seven slots.
+        unsigned maxShadows = 2;
+        struct Nearest { uint32_t owner = 0; float distanceSquared = std::numeric_limits<float>::infinity(); };
+        std::array<Nearest, 7> nearest{}, allowed{};
+        uint32_t nearestFrame = UINT32_MAX;
+        static void RankNearest(uint32_t frame, uint32_t owner, float distanceSquared) noexcept
+        {
+            if (frame != nearestFrame)
+            {
+                if (frame == nearestFrame + 1) allowed = nearest; else allowed.fill({});
+                nearest.fill({}); nearestFrame = frame;
+            }
+            if (!owner || !std::isfinite(distanceSquared)) return;
+            for (unsigned i = 0; i < maxShadows; ++i)
+                if (nearest[i].owner == owner)
+                {
+                    if (distanceSquared >= nearest[i].distanceSquared) return;
+                    for (unsigned j = i; j + 1 < maxShadows; ++j) nearest[j] = nearest[j + 1];
+                    nearest[maxShadows - 1] = {};
+                    break;
+                }
+            for (unsigned i = 0; i < maxShadows; ++i)
+                if (distanceSquared < nearest[i].distanceSquared)
+                {
+                    for (unsigned j = maxShadows - 1; j > i; --j) nearest[j] = nearest[j - 1];
+                    nearest[i] = {owner, distanceSquared};
+                    return;
+                }
+        }
+        static bool Allowed(uint32_t owner) noexcept
+        {
+            for (unsigned i = 0; i < maxShadows; ++i) if (allowed[i].owner == owner) return true;
+            return false;
+        }
 
         struct Match { traffic_signal::Identity identity; uint32_t kind; };
         static bool PoolMatch(uintptr_t owner, uint32_t pointerRva, uint32_t stride, uint32_t kind, Match& result) noexcept
@@ -172,6 +208,8 @@ namespace EmergencyTrafficShadows
             Match value{}; if (!MatchOwner(regs.esi, value)) return;
             float player[3]{};
             const bool relevant = PlayerPosition(frame, player) && traffic_signal::Nearby(pos, player, reach);
+            const float dx = pos[0] - player[0], dy = pos[1] - player[1], dz = pos[2] - player[2];
+            RankNearest(frame, value.identity.owner, relevant ? dx * dx + dy * dy + dz * dz : std::numeric_limits<float>::infinity());
             const auto result = registry.Observe(value.identity, frame, regs.edi, relevant);
             if (result.replaced != UINT32_MAX) snapshots[result.replaced].state = 2;
             if (result.visit == traffic_signal::Visit::Capacity || result.index == UINT32_MAX) return;
@@ -183,6 +221,7 @@ namespace EmergencyTrafficShadows
             }
             else if (result.visit == traffic_signal::Visit::Retired) { snapshots[index].state = 2; return; }
             if (!entry.leased) { snapshots[index].state = 0; return; }
+            if (!Allowed(value.identity.owner)) { ++capped; return; }
             if (entry.submitted && entry.lastAdmission == frame) return;
             const auto collision = KeyCollision(entry.key);
             if (registry.Apply(index, value.identity, frame, TrafficSiteRva, args[2], regs.edi, collision != 0, args[3], args[16]))
@@ -466,9 +505,11 @@ namespace EmergencyTrafficShadows
     }
 
     // After the allocation adapter and only with its publication on; every site is checked first.
-    static void Install(bool traffic, bool emergency) noexcept
+    static void Install(unsigned trafficMax, bool emergency) noexcept
     {
         game = GameBase();
+        TrafficSignal::maxShadows = (std::min)(trafficMax, 7u);
+        bool traffic = trafficMax != 0;
         if (!traffic && !emergency) return;
         if (!ready.load(std::memory_order_acquire) || !publicationEnabled) { installStatus = "allocation_unavailable"; return; }
         const char* failed = nullptr;
@@ -522,6 +563,7 @@ namespace EmergencyTrafficShadows
             out << "tick=" << now << ' ' << installStatus
                 << " traffic_registered=" << TrafficSignal::registry.Used() << " traffic_alive=" << alive << " traffic_leased=" << leased
                 << " traffic_admitted=" << TrafficSignal::admitted.load() << " traffic_collisions=" << TrafficSignal::collisions.load()
+                << " traffic_max=" << TrafficSignal::maxShadows << " traffic_capped=" << TrafficSignal::capped.load()
                 << " traffic_stopped=" << TrafficSignal::fatal.load() << " traffic_stop_reason=" << TrafficSignal::fatalReason.load()
                 << " emergency_bound=" << Emergency::bound.load() << " emergency_promoted=" << Emergency::promoted.load()
                 << " emergency_vacancies=" << Emergency::vacancySuppressed.load() << '\n';
