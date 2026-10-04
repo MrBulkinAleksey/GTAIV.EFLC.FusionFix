@@ -54,6 +54,7 @@ float fEvolution;         // how far the detail has drifted up through itself, s
 float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
+float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
 
 float3 ViewRay(float2 pixel)
 {
@@ -83,12 +84,60 @@ float EdgeWeight(float d)
     return x * (2.0 - x);
 }
 
-float Density(float3 p, bool detail)
+// The large weather map at p, 0 to 1: where the sky is cloudier and the heaps taller. It is the
+// coverage map read 1 / vec4Morph.z times larger, from a blurred mip.
+float Weather(float2 uv)
+{
+    return tex2Dlod(CoverageTex, float4(uv * vec4Morph.z + 0.31, 0, 4)).r;
+}
+
+// The map's slow morph: the coordinates swing by up to vec4Morph.y in waves a fifth and a quarter of
+// the map across, their phase moving on with time, so the heaps change shape as they drift.
+float2 Morph(float2 uv)
+{
+    return uv + float2(sin(uv.y * 31.4159 + vec4Morph.x), cos(uv.x * 25.1327 - vec4Morph.x * 1.2)) * vec4Morph.y;
+}
+
+// The weather (-1 to 1) and the morph's offset at p, worked out once for a sample of the march and
+// taken for its steps towards the sun as well: within those few hundred metres neither changes much.
+struct Place
+{
+    float weather;
+    float2 morph;
+};
+
+Place PlaceAt(float3 p)
+{
+    Place place;
+    float2 uv0 = p.xy * vec4Layer.z + vec4Wind.xy;
+    place.weather = Weather(uv0) * 2.0 - 1.0;
+    place.morph = Morph(uv0) - uv0;
+    return place;
+}
+
+// The coarse search's test, cheap and on the safe side: whether there may be cloud near p, from a
+// blurred mip of the map (its 8 texels span the morph's reach) against the cover of the cloudiest
+// weather.
+bool MayBeCloud(float3 p)
 {
     float h = (p.z - vec4Layer.x) / vec4Layer.y;
+    if (h <= 0.0 || h >= 1.25)
+        return false;
+    float c = tex2Dlod(CoverageTex, float4(p.xy * vec4Layer.z + vec4Wind.xy, 0, 3)).r;
+    float cover = saturate(max(vec4Layer.w, 0.02) * (1.0 + abs(vec4Morph.w)));
+    return c > (1.0 - cover) * (1.0 - cover) - 0.1;
+}
+
+float Density(float3 p, bool detail, Place place)
+{
+    float2 uv0 = p.xy * vec4Layer.z + vec4Wind.xy;
+    // Cloudier parts of the sky have more cover and taller heaps, by vec4Morph.w either way.
+    float weather = place.weather;
+    float thickness = vec4Layer.y * (1.0 + 0.25 * weather);
+    float h = (p.z - vec4Layer.x) / thickness;
     if (h <= 0.0 || h >= 1.0)
         return 0.0;
-    float2 uv = p.xy * vec4Layer.z + vec4Wind.xy;
+    float2 uv = uv0 + place.morph;
     // The outline wanders with height: the coverage is read a little off, by a coarse octave of the
     // detail that changes up through the layer, so the heaps do not stand as walls drawn up from a
     // map. The steps towards the sun and the coarse search leave it out.
@@ -106,7 +155,7 @@ float Density(float3 p, bool detail)
     f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
     float c = tex2Dlod(CoverageTex, float4((cell + f + 0.5) / COVERAGE_SIZE, 0, 0)).r;
 
-    float cover = max(vec4Layer.w, 0.02);
+    float cover = saturate(max(vec4Layer.w, 0.02) * (1.0 + vec4Morph.w * weather));
     // Overcast: the map evens out towards a sheet.
     c = lerp(c, max(c, 1.0 - cover * 0.5), fStratus);
     float threshold = (1.0 - cover) * (1.0 - cover);
@@ -149,7 +198,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
 
     // Where the ray is inside the layer, cut short by the scene in front.
     float base = vec4Layer.x;
-    float top = vec4Layer.x + vec4Layer.y;
+    float top = vec4Layer.x + vec4Layer.y * 1.25;
     float dz = abs(dir.z) > 1e-4 ? dir.z : 1e-4;
     float tBase = (base - origin.z) / dz;
     float tTop = (top - origin.z) / dz;
@@ -197,7 +246,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
         [branch]
         if (fineLeft <= 0.0)
         {
-            if (Density(p, false) > 0.0)
+            if (MayBeCloud(p))
             {
                 // Back by one coarse step, to march into the cloud from outside it. The fine steps
                 // then run at least past where the cloud was found and FINE_MISSES more: stopping
@@ -211,7 +260,8 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             continue;
         }
 
-        float d = Density(p, true);
+        Place place = PlaceAt(p);
+        float d = Density(p, true, place);
         [branch]
         if (d > 0.01)
         {
@@ -227,7 +277,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             for (int j = 0; j < LIGHT_STEPS; ++j)
             {
                 q += vec3SunDir * stepLength;
-                lightDepth += Density(q, false) * stepLength;
+                lightDepth += Density(q, false, place) * stepLength;
                 stepLength *= 2.0;
             }
             // Light scattered many times inside a cloud gets far deeper than the sun's direct beam,
@@ -241,7 +291,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // Darker towards the base, where the sky above is hidden by the cloud itself, and
             // under more cloud: one sample a quarter of the layer straight up.
             float h = saturate((p.z - base) / vec4Layer.y);
-            float skyAbove = exp(-2.0 * Density(p + float3(0.0, 0.0, vec4Layer.y * 0.25), false));
+            float skyAbove = exp(-2.0 * Density(p + float3(0.0, 0.0, vec4Layer.y * 0.25), false, place));
             float3 shade = vec3ShadeColour * lerp(0.7, 1.0, sqrt(h)) * lerp(0.75, 1.0, skyAbove);
             // The sun lights what it reaches, a little more facing it; past that the forward lobe
             // adds the rim, scaled by the game's inscattering range.

@@ -410,6 +410,16 @@ public:
     // How far the wind has carried the coverage and the detail, in tiles, and how far the detail
     // has drifted up through itself; summed frame by frame, as the wind changes with the weather.
     double fCloudDrift = 0.0, fCloudDetailDrift = 0.0, fCloudEvolution = 0.0, fCloudLastSeconds = -1.0;
+    // The coverage map's slow morph (Clouds.fx's Morph): its phase in radians, which moves on by
+    // VolumetricCloudsEvolution at 0.03 a second, kept within 10 pi, where both its waves repeat.
+    double fCloudMorph = 0.0;
+    float CloudMorphPhase() const { return static_cast<float>(fCloudMorph); }
+    // The morph swings the map by up to this many metres; the weather map, read 12.5 times larger
+    // than the coverage map, moves the cover by up to this share either way and the heaps' height
+    // by a quarter.
+    static constexpr float kCloudMorphReach = 250.0f;
+    static constexpr float kCloudWeatherReach = 0.45f;
+    static constexpr float kCloudWeatherScale = 0.08f;
     void UpdateCloudLayer(double seconds);
     ID3DXEffect* CloudsEffect = nullptr;
     IDirect3DVolumeTexture9* CloudDetailTexture = nullptr;
@@ -1667,6 +1677,7 @@ void PostFxResource::UpdateCloudLayer(double seconds)
     fCloudDetailDrift = std::fmod(fCloudDetailDrift + dt * wind * 0.5 / fVolumetricCloudsDetailScale, 1000.0);
     // About a metre a second up through the detail at 1: the billows turn over in a few minutes.
     fCloudEvolution = std::fmod(fCloudEvolution + dt * fVolumetricCloudsEvolution / fVolumetricCloudsDetailScale, 1000.0);
+    fCloudMorph = std::fmod(fCloudMorph + dt * 0.03 * fVolumetricCloudsEvolution, 31.415926535897932);
 }
 
 PostFxResource PostFxResources;
@@ -3996,6 +4007,8 @@ private:
         effect->SetFloat("fFrameJitter", static_cast<float>(std::fmod(FrameHistory::Frame() * 0.6180339887, 1.0)));
         // The outline wanders by up to 150 metres.
         effect->SetFloat("fWarp", 150.0f / R.fCloudShadowsScale);
+        const D3DXVECTOR4 morph(R.CloudMorphPhase(), R.kCloudMorphReach / R.fCloudShadowsScale, R.kCloudWeatherScale, R.kCloudWeatherReach);
+        effect->SetVector("vec4Morph", &morph);
         effect->SetFloat("fMaxDistance", R.fVolumetricCloudsMaxDistance);
 
         IDirect3DSurface9* oldTarget = nullptr;
@@ -5722,19 +5735,15 @@ public:
                 thresholdOverride.on = fade;
                 biasOverride.on = fade;
             }
+            // The shadows work out the clouds' coverage as Clouds.fx does (deferred_lighting_sun_under_clouds
+            // patch): from the volumetric clouds' layer while they are on, otherwise from CloudShadowsCoverage
+            // about a cover of 0.4 at CloudShadowsHeight. The game's threshold, bias and thickness are only
+            // logged.
+            float cover = std::clamp(0.4f + coverageShift, 0.02f, 1.0f);
             if (R.VolumetricCloudsOn())
             {
-                // The volumetric clouds' density a third of the way up their layer, as Clouds.fx's
-                // Density has it: saturate((n - t) / (1 - t)) with t = (1 - cover)^2, less 0.05 for
-                // the height there, and its soft compressor taken as a power of 0.4. An overcast
-                // sheet's evened coverage is left out: under it the sun is weak anyway.
-                const float cover = (std::max)(R.Cloud.coverage, 0.02f);
-                const float t = (1.0f - cover) * (1.0f - cover);
-                const float span = (std::max)(1.0f - t, 0.01f);
-                threshold = 1.0f / span;
-                bias = t / span + 0.05f;
-                thickness = 0.4f;
-                coverageShift = 0.0f;
+                // An overcast sheet's evened coverage is left out: under it the sun is weak anyway.
+                cover = (std::max)(R.Cloud.coverage, 0.02f);
                 deckHeight = R.Cloud.base + R.Cloud.thickness * 0.33f;
             }
             R.fCloudLastThreshold = threshold;
@@ -5753,23 +5762,22 @@ public:
             R.fCloudWindY = windY;
             R.fCloudSeconds = seconds;
             float c197[4] = { R.fSpecularSheen, strength, deckHeight, invScale };
-            float c198[4] = { windX, windY, threshold, bias - coverageShift };
+            float c198[4] = { windX, windY, cover, kCloudWeatherReach };
+            float c199[4] = { 0.0f, R.fCloudShadowsSoftness, R.CloudMorphPhase(), kCloudMorphReach / R.fCloudShadowsScale };
             if (R.nCloudShadowsDebug == 1)
             {
-                // Coverage 0 * n + 1: cloud everywhere.
-                c198[2] = 0.0f;
-                c198[3] = -1.0f;
+                // Full cover everywhere.
+                c199[0] = 1.0f;
             }
             else if (R.nCloudShadowsDebug == 2)
             {
-                // Coverage 1 * n - 0: the noise itself, twenty times finer, so its blotches show
-                // around the player; at the clouds' scale they spanned hundreds of metres and the
-                // ground looked evenly lit.
+                // Cover 1, so the coverage is close to the map itself, twenty times finer, so its
+                // blotches show around the player; at the clouds' scale they spanned hundreds of
+                // metres and the ground looked evenly lit.
                 c198[2] = 1.0f;
                 c198[3] = 0.0f;
                 c197[3] *= 20.0f;
             }
-            const float c199[4] = { thickness, R.fCloudShadowsSoftness, 0.0f, 0.0f };
             pDevice->SetPixelShaderConstantF(197, c197, 1);
             pDevice->SetPixelShaderConstantF(198, c198, 1);
             pDevice->SetPixelShaderConstantF(199, c199, 1);
