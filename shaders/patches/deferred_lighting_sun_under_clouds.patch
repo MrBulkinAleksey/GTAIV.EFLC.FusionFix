@@ -1,10 +1,10 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-index f0c526f5..61ac1763 100644
+index 97b5dab2..c144e05f 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-@@ -80,6 +80,10 @@
-     def c110, -0.25, 1, -1, 0
+@@ -81,6 +81,10 @@
      def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
+     def c163, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
 +    def c157, 0.05, 0, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at
 +    def c160, 0.08, 0.31, 6, 0.05 // FusionFix cloud shadows: the weather map's scale, offset and mip; the height's lowering
@@ -13,7 +13,7 @@ index f0c526f5..61ac1763 100644
      def c111, 0.159154937, 0.5, 6.28318548, -3.14159274
      def c112, 3, 7.13800001, 0, 0
      def c113, 0.75, -0.5, 0.5, 0.0008
-@@ -112,6 +116,7 @@
+@@ -113,6 +117,7 @@
      dcl_2d s3	// FusionFix SSR
      dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
      dcl_2d s8	// FusionFix screen space indirect light (black when off)
@@ -21,7 +21,7 @@ index f0c526f5..61ac1763 100644
      texld r1, v0, s1
      mul r2.xyz, r1.w, c0.yzww
      frc r2.xyz, r2
-@@ -126,6 +131,7 @@
+@@ -127,6 +132,7 @@
      mul r0.x, r19.x, c209.w
      
      mad r0.yzw, v1.xxyz, -r0.x, c15.xxyz
@@ -29,7 +29,7 @@ index f0c526f5..61ac1763 100644
      dp3 r1.x, c14, r0.yzww
      add r1.xyz, -r1.x, -c54
      cmp r1.yzw, r1.xxyz, c3.x, c3.y
-@@ -460,6 +466,68 @@
+@@ -461,6 +467,68 @@
      add r28.w, c110.y, -r28.w // FusionFix: how much of the ambient indirect light leaves in place
      add r29.x, c110.y, -r29.x
      mul r0.y, r0.y, r29.x
@@ -99,12 +99,12 @@ index f0c526f5..61ac1763 100644
      mov r2.xyz, r31.xyz
      mad r1.xyz, v1, -r0.x, c1.w
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-index 82aba8a0..ee9beb20 100644
+index 4f2b2eb4..e2f6743c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-@@ -81,6 +81,10 @@
-     def c110, -0.25, 1, -1, 0
+@@ -82,6 +82,10 @@
      def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
+     def c163, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
 +    def c157, 0.05, 0, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at
 +    def c160, 0.08, 0.31, 6, 0.05 // FusionFix cloud shadows: the weather map's scale, offset and mip; the height's lowering
@@ -113,7 +113,7 @@ index 82aba8a0..ee9beb20 100644
      def c111, 0.159154937, 0.5, 6.28318548, -3.14159274
      def c112, 3, 7.13800001, 0, 0
      def c113, 0.75, -0.5, 0.5, 0.0008
-@@ -113,6 +117,7 @@
+@@ -114,6 +118,7 @@
      dcl_2d s3	// FusionFix SSR
      dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
      dcl_2d s8	// FusionFix screen space indirect light (black when off)
@@ -121,7 +121,7 @@ index 82aba8a0..ee9beb20 100644
      texld r1, v0, s1
      mul r2.xyz, r1.w, c1
      frc r2.xyz, r2
-@@ -127,6 +132,7 @@
+@@ -128,6 +133,7 @@
      mul r0.x, r19.x, c209.w
      
      mad r0.yzw, v1.xxyz, -r0.x, c15.xxyz
@@ -129,7 +129,7 @@ index 82aba8a0..ee9beb20 100644
      dp3 r1.x, c14, r0.yzww
      add r1.xyz, -r1.x, -c54
      cmp r1.yzw, r1.xxyz, c4.z, c4.w
-@@ -461,6 +467,68 @@
+@@ -462,6 +468,68 @@
      add r28.w, c110.y, -r28.w // FusionFix: how much of the ambient indirect light leaves in place
      add r29.x, c110.y, -r29.x
      mul r0.y, r0.y, r29.x

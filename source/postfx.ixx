@@ -352,6 +352,7 @@ public:
     // intensity, so buildings and LOD roads got neither the sun's highlight nor the sky's
     // reflection. The sun pass gives them half this much of one, as if the G-buffer held it,
     // times the square of one less their colour's saturation and faded out on dark colours.
+    // They are told apart by the gloss 258 / 1023 they write (world_no_specular_mark.patch).
     float fSpecularSheen = 0.1f;
     // Cloud shadows on the ground (c197.y-w, c198, c199, s12; deferred_lighting_sun_under_clouds.patch):
     // the ray from a surface towards the sun meets a cloud deck CloudShadowsHeight up, and the sun is
