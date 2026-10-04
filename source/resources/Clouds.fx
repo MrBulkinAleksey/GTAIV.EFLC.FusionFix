@@ -153,7 +153,8 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     float3 colour = 0.0;
     float firstHit = -1.0;
 
-    [loop]
+    // [fastopt]: without it D3DX spent close to a minute on this loop while the game loaded.
+    [loop] [fastopt]
     for (int i = 0; i < CLOUD_STEPS; ++i)
     {
         if (t >= t1 || transmittance < 0.01)
@@ -190,7 +191,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             float lightDepth = 0.0;
             float stepLength = vec4Layer.y * 0.08;
             float3 q = p;
-            [loop]
+            [loop] [fastopt]
             for (int j = 0; j < LIGHT_STEPS; ++j)
             {
                 q += vec3SunDir * stepLength;
