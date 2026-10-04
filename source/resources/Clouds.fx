@@ -276,7 +276,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     // to come through, the bright rims of clouds against the sun. A core some 30 degrees wide and a
     // faint skirt beyond; a Henyey-Greenstein lobe of g 0.85 lit only the cloud within a few degrees
     // of the sun and left the rims a little way off it dark.
-    float forward = (exp(8.0 * (cosTheta - 1.0)) + 0.3 * exp(2.0 * (cosTheta - 1.0))) * fSilver * 2.0;
+    float forward = (exp(8.0 * (cosTheta - 1.0)) + 0.3 * exp(2.0 * (cosTheta - 1.0))) * fSilver * 6.0;
     float sigma = vec4Shape.x;
 
     // Empty sky is crossed in coarse steps that test the coverage alone; on finding cloud the ray
@@ -369,7 +369,10 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // The sunset colour on the side towards the sun, as the game adds it.
             lit += vec3SunsetColour * sun * (0.35 + 0.25 * cosTheta);
             // The glow of thin cloud next to the sun, its light coming through.
-            lit += sunLit * forward * thin * (0.35 + 0.65 * sun);
+            // By the sun's light left after the cloud towards it, so the edges glow and the middle,
+            // with the whole cloud between it and the sun, stays dark: weighted by the light
+            // scattered many times instead, the whole cloud around the sun brightened evenly.
+            lit += sunLit * forward * thin * exp(-tau);
             // A soft knee from three quarters of the ceiling up: the glow rises towards it instead of
             // clipping to white.
             float peak = max(max(lit.r, lit.g), lit.b);

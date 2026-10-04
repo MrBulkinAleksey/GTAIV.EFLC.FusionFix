@@ -400,7 +400,7 @@ public:
     float fVolumetricCloudsMoonlight = 0.5f;
     float fVolumetricCloudsSkyLight = 0.35f;
     // The clouds' sunlit side against the sky behind them, in times its brightness.
-    float fVolumetricCloudsSkyMatch = 1.3f;
+    float fVolumetricCloudsSkyMatch = 0.9f;
     bool bVolumetricCloudsWeather = true;
     float fVolumetricCloudsVanilla = 0.0f;
     float fVolumetricCloudsTranslucency = 0.3f;
@@ -408,7 +408,7 @@ public:
     float fVolumetricCloudsSaturation = 1.0f;
     // The shaded side and the bases against the game's cloud colour, and how much of the view's
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
-    float fVolumetricCloudsShade = 0.5f;
+    float fVolumetricCloudsShade = 0.35f;
     float fVolumetricCloudsAbsorption = 0.2f;
     int nVolumetricCloudsDebug = 0;
     // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
@@ -1309,13 +1309,13 @@ public:
         fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.6f), 0.0f, 1.0f);
         fVolumetricCloudsMoonlight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMoonlight", 0.5f), 0.0f, 2.0f);
         fVolumetricCloudsSkyLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyLight", 0.35f), 0.0f, 1.0f);
-        fVolumetricCloudsSkyMatch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyMatch", 1.3f), 0.0f, 20.0f);
+        fVolumetricCloudsSkyMatch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyMatch", 0.9f), 0.0f, 20.0f);
         bVolumetricCloudsWeather = iniReader.ReadInteger("POSTFX", "VolumetricCloudsWeather", 1) != 0;
         fVolumetricCloudsVanilla = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsVanilla", 0.0f), 0.0f, 1.0f);
         fVolumetricCloudsTranslucency = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsTranslucency", 0.3f), 0.0f, 0.9f);
         fVolumetricCloudsEvolution = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsEvolution", 1.0f), 0.0f, 10.0f);
         fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
-        fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.5f), 0.0f, 2.0f);
+        fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.35f), 0.0f, 2.0f);
         fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.2f), 0.05f, 3.0f);
         nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 2);
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
@@ -4106,9 +4106,8 @@ private:
             const auto& clamp = rage::grmShaderInfo::getShaderParamData(R.CloudExposureClampIdx);
             const float brightest = (std::max)({ litColour[0], litColour[1], litColour[2] });
             // Matched to the sky the lit side is VolumetricCloudsSkyMatch times its brightness, and the
-            // rims and the glow stay under 1.8 times that: at the 2.5 times there was room for, they
-            // lit the whole sky's exposure down.
-            ceiling = brightest * (R.fVolumetricCloudsSkyMatch > 0.0f ? 1.8f : (1.0f + inscattering) * 1.5f);
+            // rims and the glow next to the sun roll off below three times that.
+            ceiling = brightest * (R.fVolumetricCloudsSkyMatch > 0.0f ? 3.0f : (1.0f + inscattering) * 1.5f);
             const float clampMin = (std::min)({ clamp[0], clamp[1], clamp[2] });
             if (!reflection && !(volumetricFog && volumetricFog->get()) && !bSkyHDR && clampMin > 0.0f)
                 ceiling = (std::min)(ceiling, clampMin);
