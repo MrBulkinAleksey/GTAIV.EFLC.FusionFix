@@ -294,13 +294,34 @@ public:
                 injector::WriteMemory(pattern.get_first(4), &dwMirrorOffset, true);
             }
 
-            // Clip the water reflection at the water level. CRenderPhaseWaterReflection clips half a metre below it, and the
-            // underwater half metre of quay walls, piers and hulls showed in the water as dark patches.
+            // CRenderPhaseWaterReflection: dark patches in the water, with what looks like the riverbed in them, flickering
+            // in the open and steady seen from under a fence. Settings to tell where they come from, see [WATERREFLECTION]
+            // in the ini.
             {
-                static float fWaterReflectionClipOffset = 0.0f; // 0.5
+                CIniReader iniReader("");
+
+                // The clip plane sits this far under the water level, the game's is 0.5
+                static float fClipOffset = iniReader.ReadFloat("WATERREFLECTION", "ClipOffset", 0.0f);
                 auto pattern = hook::pattern("D9 5C 24 ? F3 0F 10 05 ? ? ? ? F3 0F 5C 44 24 ? 6A 00 6A 20");
                 if (!pattern.empty())
-                    injector::WriteMemory(pattern.get_first(8), &fWaterReflectionClipOffset, true);
+                    injector::WriteMemory(pattern.get_first(8), &fClipOffset, true);
+
+                // Whether the phase sets the clip plane at all
+                pattern = hook::pattern("80 3D ? ? ? ? 00 0F 84 ? ? ? ? E8 ? ? ? ? D9 5C 24 ? F3 0F 10 05");
+                if (!pattern.empty())
+                    injector::WriteMemory<uint8_t>(*pattern.get_first<uint8_t*>(2), iniReader.ReadInteger("WATERREFLECTION", "Clip", 1) != 0, true);
+
+                // The colour the reflection map is cleared to (D3DCOLOR, 0x00000080 in the game): where the phase draws
+                // nothing, the water shows it
+                static uint32_t nClearColour = iniReader.ReadInteger("WATERREFLECTION", "ClearColour", 0x00000080);
+                pattern = hook::pattern("FF 35 ? ? ? ? F3 0F 10 44 24 ? 6A 01 51 8B C8 F3 0F 11 04 24");
+                if (!pattern.empty())
+                    injector::WriteMemory(pattern.get_first(2), &nClearColour, true);
+
+                // What the phase adds to its draw list from its scan (0x90d in the game; the reflection map's is 0x131d)
+                pattern = hook::pattern("6A 02 68 0D 09 00 00 FF B6 ? ? ? ? E8");
+                if (!pattern.empty())
+                    injector::WriteMemory<uint32_t>(pattern.get_first(3), iniReader.ReadInteger("WATERREFLECTION", "DrawListFlags", 0x90d), true);
             }
 
             // Contrast slider ticks 0 and 1 are the same visually on the Xbox 360 version. This is not proper behavior, so it's a bug, but it was never fixed for that version,
