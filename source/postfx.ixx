@@ -1430,7 +1430,10 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
     for (auto& v : value)
         v = (v - minValue) / range;
 
-    if (FAILED(pDevice->CreateTexture(size, size, 0, 0, D3DFMT_L8, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr)))
+    // 16 bits: the volumetric clouds stretch the coverage several times over near their edges, and
+    // the 8 bit steps showed as terraces and streaks down their sides.
+    bool wide = SUCCEEDED(pDevice->CreateTexture(size, size, 0, 0, D3DFMT_L16, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr));
+    if (!wide && FAILED(pDevice->CreateTexture(size, size, 0, 0, D3DFMT_L8, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr)))
     {
         CloudNoiseTexture = nullptr;
         return nullptr;
@@ -1445,7 +1448,13 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
         {
             auto row = static_cast<uint8_t*>(locked.pBits) + y * locked.Pitch;
             for (DWORD x = 0; x < n; ++x)
-                row[x] = static_cast<uint8_t>(std::clamp(value[y * n + x], 0.0f, 1.0f) * 255.0f + 0.5f);
+            {
+                const float v = std::clamp(value[y * n + x], 0.0f, 1.0f);
+                if (wide)
+                    reinterpret_cast<uint16_t*>(row)[x] = static_cast<uint16_t>(v * 65535.0f + 0.5f);
+                else
+                    row[x] = static_cast<uint8_t>(v * 255.0f + 0.5f);
+            }
         }
         CloudNoiseTexture->UnlockRect(level);
         if (n > 1)
@@ -1514,7 +1523,9 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
     const auto [lo, hi] = std::minmax_element(value.begin(), value.end());
     const float minValue = *lo, range = (std::max)(*hi - *lo, 1e-5f);
 
-    if (FAILED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_L8, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr)))
+    // 16 bits for the same reason as the coverage.
+    bool wide = SUCCEEDED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_L16, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr));
+    if (!wide && FAILED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_L8, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr)))
     {
         CloudDetailTexture = nullptr;
         return nullptr;
@@ -1527,7 +1538,13 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
             {
                 auto row = static_cast<uint8_t*>(locked.pBits) + z * locked.SlicePitch + y * locked.RowPitch;
                 for (int x = 0; x < size; ++x)
-                    row[x] = static_cast<uint8_t>((value[(z * size + y) * size + x] - minValue) / range * 255.0f + 0.5f);
+                {
+                    const float v = (value[(z * size + y) * size + x] - minValue) / range;
+                    if (wide)
+                        reinterpret_cast<uint16_t*>(row)[x] = static_cast<uint16_t>(v * 65535.0f + 0.5f);
+                    else
+                        row[x] = static_cast<uint8_t>(v * 255.0f + 0.5f);
+                }
             }
         CloudDetailTexture->UnlockBox(0);
     }

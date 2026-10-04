@@ -105,6 +105,9 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
         t1 = min(t1, pow(fFarDivNear, rawDepth) * fNearPlane * rayScale);
     if (t1 <= t0)
         return float4(0.0, 0.0, 0.0, 1.0);
+    // Near the horizon a ray crosses tens of kilometres of the layer, which the steps sampled as
+    // stripes. It marches no further than eight thicknesses into it; beyond, the haze hides it.
+    t1 = min(t1, t0 + vec4Layer.y * 8.0);
 
     float dt = (t1 - t0) / CLOUD_STEPS;
     float t = t0 + dt * PixelJitter(vpos);
