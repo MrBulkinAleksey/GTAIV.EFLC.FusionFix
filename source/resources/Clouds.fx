@@ -216,6 +216,36 @@ float Density(float3 p, bool detail, Place place)
     return d * lerp(0.5, 1.0, smoothstep(0.02, 0.2, h));
 }
 
+// The Earth's curvature: the layer's shells are spheres about its centre, so at a horizontal distance
+// r from the camera a point stands r^2 / 2R higher above them than above a flat layer, and the
+// layer sinks towards the horizon. Along a ray that is a t^2 more, a = (1 - dir.z^2) / 2R.
+#define EARTH_RADIUS 6371000.0
+
+// The distances along the ray where it crosses the shell at height h: the roots of
+// a t^2 + dz t + (z - h) = 0, in order; (1e9, -1e9), an empty span, when it never does.
+float2 ShellCross(float a, float dz, float c)
+{
+    float disc = dz * dz - 4.0 * a * c;
+    if (disc < 0.0)
+        return float2(1e9, -1e9);
+    float q = -0.5 * (dz + (dz >= 0.0 ? 1.0 : -1.0) * sqrt(disc));
+    float r1 = q / a;
+    float r2 = c / (abs(q) > 1e-9 ? q : 1e-9);
+    return float2(min(r1, r2), max(r1, r2));
+}
+
+// The first span of the ray, from the camera on, inside the layer: below the top shell and above the
+// base one. Looking down from above, the ray can leave through the base and come back up far off;
+// only the first span counts.
+float2 LayerSpan(float3 dir, float z, float a)
+{
+    float2 top = ShellCross(a, dir.z, z - (vec4Layer.x + vec4Layer.y * 1.25));
+    float2 base = ShellCross(a, dir.z, z - vec4Layer.x);
+    float2 first = float2(max(top.x, 0.0), min(top.y, base.x));
+    float2 second = float2(max(max(top.x, base.y), 0.0), top.y);
+    return first.y > first.x ? first : second;
+}
+
 float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
 {
     float3 v = ViewRay(vpos);
@@ -226,13 +256,10 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
 
     // Where the ray is inside the layer, cut short by the scene in front.
     float base = vec4Layer.x;
-    float top = vec4Layer.x + vec4Layer.y * 1.25;
-    float dz = abs(dir.z) > 1e-4 ? dir.z : 1e-4;
-    float tBase = (base - origin.z) / dz;
-    float tTop = (top - origin.z) / dz;
-    float t0 = max(min(tBase, tTop), 0.0);
-    float t1 = min(max(tBase, tTop), fMaxDistance);
-    t1 = min(t1, SceneDistance(uv, rayScale));
+    float curve = max(1.0 - dir.z * dir.z, 1e-6) / (2.0 * EARTH_RADIUS);
+    float2 span = LayerSpan(dir, origin.z, curve);
+    float t0 = span.x;
+    float t1 = min(min(span.y, fMaxDistance), SceneDistance(uv, rayScale));
     if (t1 <= t0)
         return float4(0.0, 0.0, 0.0, 1.0);
     // Beyond sixteen thicknesses into the layer the haze hides the cloud anyway.
@@ -268,6 +295,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             break;
         float fine = max(vec4Layer.y / 24.0, t * 0.01);
         float3 p = origin + dir * t;
+        p.z += curve * t * t;
 
         [branch]
         if (fineLeft <= 0.0)
@@ -319,11 +347,11 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // under the whole thickness the steps now reach.
             float tau = lightDepth * sigma * fLightAbsorption;
             float sun = (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) * (fLightStrength / 1.75);
-            // Darker towards the base, where the sky above is hidden by the cloud itself, and
-            // under more cloud: one sample a quarter of the layer straight up.
+            // Darker towards the base, where the sky above is hidden by the cloud itself. By height
+            // alone: a sample of the cloud straight up cost a whole density lookup, the slots the
+            // Earth's curvature needed.
             float h = saturate((p.z - base) / vec4Layer.y);
-            float skyAbove = exp(-2.0 * Density(p + float3(0.0, 0.0, vec4Layer.y * 0.25), false, place));
-            float3 shade = vec3ShadeColour * lerp(0.7, 1.0, sqrt(h)) * lerp(0.75, 1.0, skyAbove);
+            float3 shade = vec3ShadeColour * lerp(0.55, 1.0, sqrt(h));
             // The parts the sun reaches take its hue: warm in the evening, orange at sunset.
             float3 sunLit = vec3LitColour * vec3SunTint;
             float3 lit = lerp(shade, sunLit, sun);
@@ -413,10 +441,7 @@ float4 CloudsComposite_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
         float3 dir = float3(dot(v, vec4WorldX.xyz), dot(v, vec4WorldY.xyz), dot(v, vec4WorldZ.xyz));
         float rayScale = length(dir);
         dir /= rayScale;
-        float dz = abs(dir.z) > 1e-4 ? dir.z : 1e-4;
-        float tBase = (vec4Layer.x - vec4WorldZ.w) / dz;
-        float tTop = (vec4Layer.x + vec4Layer.y * 1.25 - vec4WorldZ.w) / dz;
-        float tEnter = max(min(tBase, tTop), 0.0);
+        float tEnter = LayerSpan(dir, vec4WorldZ.w, max(1.0 - dir.z * dir.z, 1e-6) / (2.0 * EARTH_RADIUS)).x;
         if (pow(fFarDivNear, raw) * fNearPlane * rayScale < tEnter)
             return float4(0.0, 0.0, 0.0, 1.0);
     }

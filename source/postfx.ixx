@@ -4849,6 +4849,8 @@ private:
                 const auto& top = rage::grmShaderInfo::getShaderParamData(R.CloudColorIdx);
                 const auto& sunset = rage::grmShaderInfo::getShaderParamData(R.SunsetColorIdx);
                 const auto& sunDir = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
+                const auto& sky = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
+                const auto& moon = rage::grmShaderInfo::getShaderParamData(R.CloudMoonPositionIdx);
                 const float* k = R.CloudShadowConsts;
                 fprintf(log, "  clouds drawn with lit %.2f %.2f %.2f, shade %.2f %.2f %.2f, ceiling %.2f; lit by the %s at %.2f; sky clamp %.2f %.2f %.2f; volumetric fog %d\n",
                         R.CloudLastLit[0], R.CloudLastLit[1], R.CloudLastLit[2], R.CloudLastShade[0], R.CloudLastShade[1], R.CloudLastShade[2],
@@ -4861,10 +4863,11 @@ private:
                         static_cast<unsigned long>(R.CloudSamplerBefore[0]), static_cast<unsigned long>(R.CloudSamplerBefore[1]),
                         static_cast<unsigned long>(R.CloudSamplerBefore[2]), std::bit_cast<float>(R.CloudSamplerBefore[3]));
                 fprintf(log, "  volumetric clouds: %s; effect %s (hr 0x%08lX); shadows follow them %d; HDRExposure %.3f; CloudColor %.3f %.3f %.3f; "
-                             "SunsetColor %.3f %.3f %.3f; CloudInscatteringRange %.3f; SunDirection %.3f %.3f %.3f\n",
+                             "SunsetColor %.3f %.3f %.3f; CloudInscatteringRange %.3f; SunDirection %.3f %.3f %.3f; SkyColor %.3f %.3f %.3f; MoonPosition %.3f %.3f %.3f\n",
                         R.szCloudsStatus, R.CloudsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrCloudsEffect), int(R.VolumetricCloudsOn()),
                         rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0], top[0], top[1], top[2], sunset[0], sunset[1], sunset[2],
-                        rage::grmShaderInfo::getShaderParamData(R.CloudInscatteringIdx)[0], sunDir[0], sunDir[1], sunDir[2]);
+                        rage::grmShaderInfo::getShaderParamData(R.CloudInscatteringIdx)[0], sunDir[0], sunDir[1], sunDir[2],
+                        sky[0], sky[1], sky[2], moon[0], moon[1], moon[2]);
                 fclose(log);
             }
             MessageBeep(MB_OK);
