@@ -404,6 +404,7 @@ public:
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
     float fVolumetricCloudsShade = 0.5f;
     float fVolumetricCloudsAbsorption = 0.6f;
+    bool bVolumetricCloudsDebug = false;
     // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
     bool bVolumetricCloudsReflections = true;
     float fVolumetricCloudsReflectionBrightness = 1.0f;
@@ -454,7 +455,7 @@ public:
     size_t CloudColorIdx = 0, CloudExposureIdx = 0, CloudSunDirectionIdx = 0;
     size_t SunsetColorIdx = 0, CloudInscatteringIdx = 0, CloudSunColorIdx = 0, CloudExposureClampIdx = 0;
     // The lit and shaded colours the clouds were last drawn with, and the sky's clamp, for the log.
-    float CloudLastLit[3] = {}, CloudLastShade[3] = {}, CloudLastClamp[3] = {};
+    float CloudLastLit[3] = {}, CloudLastShade[3] = {}, CloudLastClamp[3] = {}, CloudLastCeiling = 0.0f;
     bool bCloudParamsRegistered = false;
     void RegisterCloudParams()
     {
@@ -1299,6 +1300,7 @@ public:
         fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
         fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.5f), 0.0f, 2.0f);
         fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.6f), 0.05f, 3.0f);
+        bVolumetricCloudsDebug = iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0) != 0;
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
         fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
     }
@@ -4030,48 +4032,48 @@ private:
         effect->SetVector("vec4WorldZ", &worldZ);
 
         effect->SetFloatArray("vec3SunDir", &sun.x, 3);
-        float litColour[3], shadeColour[3];
+        float litColour[3], shadeColour[3], sunsetLit[3];
         for (int i = 0; i < 3; ++i)
         {
-            litColour[i] = (cloudColour[i] * 1.7f + 0.5f * sunsetColour[i]) * exposure;
+            litColour[i] = cloudColour[i] * exposure;
             shadeColour[i] = cloudColour[i] * R.fVolumetricCloudsShade * exposure;
+            sunsetLit[i] = sunsetColour[i] * exposure;
         }
         // VolumetricCloudsSaturation, about each colour's luma.
-        for (float* colour : { litColour, shadeColour })
+        for (float* colour : { litColour, shadeColour, sunsetLit })
         {
             const float luma = 0.2126f * colour[0] + 0.7152f * colour[1] + 0.0722f * colour[2];
             for (int i = 0; i < 3; ++i)
                 colour[i] = (std::max)(luma + (colour[i] - luma) * R.fVolumetricCloudsSaturation, 0.0f);
         }
-        // gta_atmoscatt_clouds clamps the sky and its clouds to HDRExposureClamp unless FusionFix's
-        // volumetric fog is on: unclamped, the clouds' lit side came out several times brighter than
-        // that, and lit and shaded sides alike turned white. Both are scaled down together until the
-        // lit side's luma is at the clamp's, which keeps the contrast between them.
+        // The ceiling the brightest cloud rolls off towards: room above the silver lining's peak for
+        // the glow next to the sun. gta_atmoscatt_clouds clamps the sky and its clouds to
+        // HDRExposureClamp unless FusionFix's volumetric fog is on, and past that clamp our clouds
+        // turned white while the sky around them stayed at it, so without the fog the ceiling is
+        // the clamp.
+        float ceiling = 0.0f;
         {
             static auto volumetricFog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG");
             const auto& clamp = rage::grmShaderInfo::getShaderParamData(R.CloudExposureClampIdx);
-            auto luma = [](const float* c) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; };
-            const float clampLuma = luma(clamp.data());
-            const float litLuma = luma(litColour);
-            if (!reflection && !(volumetricFog && volumetricFog->get()) && clampLuma > 0.0f && litLuma > clampLuma)
-            {
-                const float k = clampLuma / litLuma;
-                for (int i = 0; i < 3; ++i)
-                {
-                    litColour[i] *= k;
-                    shadeColour[i] *= k;
-                }
-            }
+            const float brightest = (std::max)({ litColour[0], litColour[1], litColour[2] });
+            ceiling = brightest * (1.0f + inscattering) * 1.5f;
+            const float clampMin = (std::min)({ clamp[0], clamp[1], clamp[2] });
+            if (!reflection && !(volumetricFog && volumetricFog->get()) && clampMin > 0.0f)
+                ceiling = (std::min)(ceiling, clampMin);
+            ceiling = (std::max)(ceiling, 1e-3f);
             if (!reflection)
             {
                 std::memcpy(R.CloudLastLit, litColour, sizeof(litColour));
                 std::memcpy(R.CloudLastShade, shadeColour, sizeof(shadeColour));
                 std::memcpy(R.CloudLastClamp, clamp.data(), sizeof(R.CloudLastClamp));
+                R.CloudLastCeiling = ceiling;
             }
         }
         effect->SetFloatArray("vec3LitColour", litColour, 3);
         effect->SetFloatArray("vec3ShadeColour", shadeColour, 3);
+        effect->SetFloatArray("vec3SunsetColour", sunsetLit, 3);
         effect->SetFloat("fSilver", inscattering);
+        effect->SetFloat("fCeiling", ceiling);
         // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
         // towards white by VolumetricCloudsSunTint.
         {
@@ -4096,6 +4098,7 @@ private:
         effect->SetFloat("fEvolution", float(std::fmod(R.fCloudEvolution, 1.0)));
         effect->SetFloat("fTranslucency", R.fVolumetricCloudsTranslucency);
         effect->SetFloat("fLightAbsorption", R.fVolumetricCloudsAbsorption);
+        effect->SetFloat("fDebug", R.bVolumetricCloudsDebug ? 1.0f : 0.0f);
         // The golden ratio's fraction per frame: each frame's march noise falls between the last
         // ones', and temporal anti-aliasing averages it away.
         effect->SetFloat("fFrameJitter", static_cast<float>(std::fmod(FrameHistory::Frame() * 0.6180339887, 1.0)));
@@ -4797,9 +4800,9 @@ private:
                 const auto& sunset = rage::grmShaderInfo::getShaderParamData(R.SunsetColorIdx);
                 const auto& sunDir = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
                 const float* k = R.CloudShadowConsts;
-                fprintf(log, "  clouds drawn with lit %.2f %.2f %.2f, shade %.2f %.2f %.2f; sky clamp %.2f %.2f %.2f; volumetric fog %d\n",
+                fprintf(log, "  clouds drawn with lit %.2f %.2f %.2f, shade %.2f %.2f %.2f, ceiling %.2f; sky clamp %.2f %.2f %.2f; volumetric fog %d\n",
                         R.CloudLastLit[0], R.CloudLastLit[1], R.CloudLastLit[2], R.CloudLastShade[0], R.CloudLastShade[1], R.CloudLastShade[2],
-                        R.CloudLastClamp[0], R.CloudLastClamp[1], R.CloudLastClamp[2],
+                        R.CloudLastCeiling, R.CloudLastClamp[0], R.CloudLastClamp[1], R.CloudLastClamp[2],
                         [] { static auto fog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG"); return fog ? fog->get() : -1; }());
                 fprintf(log, "  shadow constants: c197 %.3f %.3f %.1f %.6f  c198 %.3f %.3f %.3f %.3f  c199 %.3f %.3f  noise %s, %s after the lights  debug %d\n",
                         k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], R.CloudNoiseTexture ? "made" : "missing",

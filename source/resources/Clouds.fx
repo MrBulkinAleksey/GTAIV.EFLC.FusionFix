@@ -6,12 +6,13 @@
 //
 // The layer's coverage is CoverageTex, the same tiling noise, scale and wind as the cloud shadows on
 // the ground, so each shadow lies under its cloud. DetailTex, a tiling Worley volume, erodes the edges.
-// Light: the sun reaching each sample through the cloud above it (Beer's law with a softer second lobe
-// for the light scattered more than once), a two lobe phase function for the bright rim towards the
-// sun, and the colours the game's own clouds take from the timecycle, the way gta_atmoscatt_clouds
-// mixes them: its cloud colour darkened in the shade, with the sunset colour added where the sun
-// reaches and the cloud's inscattering range for the bright rim towards the sun. What the sun lights
-// also takes the hue of the game's sun colour.
+// Light: the sun reaching each sample through the cloud above it (Beer's law with softer lobes for the
+// light scattered more than once), lit the way gta_atmoscatt_clouds lights its own clouds:
+// CloudColor, brightened by up to CloudInscatteringRange along the sun's axis (cos^2) where the cloud
+// is thin, darkened where the sun does not reach, plus SunsetColor on the side towards the sun. A
+// narrow forward lobe adds the glow of thin cloud right next to the sun, and a soft knee rolls the
+// brightest of it off below a ceiling, so it neither clips to white nor flattens the shading under it.
+// What the sun lights also takes the hue of the game's sun colour.
 
 // Steps a ray may take in all, coarse and fine.
 #ifndef CLOUD_STEPS
@@ -45,9 +46,11 @@ float4 vec4WorldY;
 float4 vec4WorldZ;
 
 float3 vec3SunDir;        // world, towards the sun
-float3 vec3LitColour;     // the game's cloud colour plus its sunset colour, exposed
-float3 vec3ShadeColour;   // the game's cloud colour darkened, exposed
-float fSilver;            // the game's CloudInscatteringRange: the rim towards the sun
+float3 vec3LitColour;     // the game's cloud colour, exposed
+float3 vec3ShadeColour;   // the game's cloud colour darkened by VolumetricCloudsShade, exposed
+float3 vec3SunsetColour;  // the game's sunset colour, exposed
+float fSilver;            // the game's CloudInscatteringRange: the brightening along the sun's axis
+float fCeiling;           // the brightest channel the cloud rolls off towards (at most the sky's clamp without HDR)
 float3 vec3SunTint;       // the hue of the game's SunColor at its brightness 1, mixed towards white by VolumetricCloudsSunTint
 float4 vec4Layer;         // base height, thickness, 1 / coverage scale, coverage
 float4 vec4Wind;          // coverage offset (xy), detail offset (zw)
@@ -65,6 +68,7 @@ float fStratus;           // 0 separate heaps of cloud, 1 a sheet: the weather's
 float fEvolution;         // how far the detail has drifted up through itself, so the billows change
 float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
+float fDebug;             // VolumetricCloudsDebug 1: grey by how much sun reaches each sample, white all of it
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
@@ -240,7 +244,6 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     t1 = min(t1, t0 + vec4Layer.y * 16.0);
 
     float cosTheta = dot(dir, vec3SunDir);
-    float phase = lerp(HenyeyGreenstein(cosTheta, -0.25), HenyeyGreenstein(cosTheta, 0.6), 0.7);
     // A narrow forward lobe: cloud next to the sun in the sky glows where it is thin enough for its
     // light to come through, the bright gold rims of clouds against the sun.
     float forward = HenyeyGreenstein(cosTheta, 0.85);
@@ -320,14 +323,25 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             float h = saturate((p.z - base) / vec4Layer.y);
             float skyAbove = exp(-2.0 * Density(p + float3(0.0, 0.0, vec4Layer.y * 0.25), false, place));
             float3 shade = vec3ShadeColour * lerp(0.7, 1.0, sqrt(h)) * lerp(0.75, 1.0, skyAbove);
-            // The sun lights what it reaches, a little more facing it; past that the forward lobe
-            // adds the rim, scaled by the game's inscattering range.
             // The parts the sun reaches take its hue: warm in the evening, orange at sunset.
             float3 sunLit = vec3LitColour * vec3SunTint;
-            float3 lit = lerp(shade, sunLit, sun * (0.6 + 0.4 * min(phase, 1.0)));
-            lit += sunLit * sun * max(phase - 1.0, 0.0) * 0.1 * fSilver;
-            // The glow, most where the cloud is thin; past the scene's white point, for the bloom.
-            lit += sunLit * exp(-tau * 0.5) * (1.0 - d) * min(forward * 0.02 * fSilver, 1.5);
+            float3 lit = lerp(shade, sunLit, sun);
+            // The game's silver lining: up to CloudInscatteringRange brighter along the sun's axis,
+            // in the thin cloud the sun reaches. A constant 1.7 times the cloud colour in its place
+            // left the clouds at that peak from every side, with nothing for the rim to rise above.
+            float thin = saturate(1.0 - d);
+            lit += sunLit * fSilver * cosTheta * cosTheta * lerp(0.35, 1.0, thin) * sun;
+            // The sunset colour on the side towards the sun, as the game adds it.
+            lit += vec3SunsetColour * sun * (0.35 + 0.25 * cosTheta);
+            // The glow of thin cloud next to the sun, its light coming through.
+            lit += sunLit * exp(-tau * 0.5) * thin * min(forward * 0.02 * fSilver, 1.5);
+            // A soft knee from three quarters of the ceiling up: the glow rises towards it instead of
+            // clipping to white.
+            float peak = max(max(lit.r, lit.g), lit.b);
+            float knee = fCeiling * 0.75;
+            if (peak > knee)
+                lit *= (knee + fCeiling * 0.25 * (1.0 - exp((knee - peak) / (fCeiling * 0.25)))) / peak;
+            lit = lerp(lit, sun * vec3LitColour.yyy, fDebug);
 
             // Thin cloud lets more of what is behind it through, the wisps at the edges most.
             float stepTransmittance = exp(-d * lerp(1.0 - fTranslucency, 1.0, d) * sigma * fine);
