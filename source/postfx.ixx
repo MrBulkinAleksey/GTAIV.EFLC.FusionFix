@@ -422,6 +422,12 @@ public:
     static constexpr float kCloudWeatherScale = 0.08f;
     void UpdateCloudLayer(double seconds);
     ID3DXEffect* CloudsEffect = nullptr;
+    // The clouds at half the render size: [0] this frame's march, [1] and [2] the accumulation,
+    // which swap every frame; nCloudAccumIndex picks last frame's ([1 + index]).
+    rage::grcRenderTargetPC* CloudTex[3] = {};
+    IDirect3DSurface9* CloudSurf[3] = {};
+    int nCloudAccumIndex = 0;
+    uint32_t nCloudAccumFrame = 0; // FrameHistory::Frame() of the accumulation, 0 if none
     IDirect3DVolumeTexture9* CloudDetailTexture = nullptr;
     IDirect3DVolumeTexture9* CloudDetailTex();
     bool VolumetricCloudsOn() const { return bVolumetricClouds && CloudsEffect != nullptr; }
@@ -2106,6 +2112,16 @@ private:
         SAFE_RELEASE(PostFxResources.GIAccumSurf[1]);
         SAFE_RELEASE(PostFxResources.GIFullSurf);
         PostFxResources.GIResult = nullptr;
+        for (int i = 0; i < 3; ++i)
+        {
+            SAFE_RELEASE(PostFxResources.CloudSurf[i]);
+            if (PostFxResources.CloudTex[i])
+            {
+                PostFxResources.CloudTex[i]->Destroy();
+                PostFxResources.CloudTex[i] = nullptr;
+            }
+        }
+        PostFxResources.nCloudAccumFrame = 0;
         for (int i = 0; i < 2; ++i)
         {
             SAFE_RELEASE(PostFxResources.SkinLightSurf[i]);
@@ -2299,6 +2315,12 @@ private:
             PostFxResources.SSRDenoisedTex = rage::CreateEmptyRenderTarget("SSRDenoisedTex", width, height, 64, aoDesc, PostFxResources.SSRDenoisedSurf);
 
             PostFxResources.SSRHalfTex = rage::CreateEmptyRenderTarget("SSRHalfTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfSurf);
+            {
+                static const char* cloudNames[3] = { "CloudTex", "CloudAccumTex0", "CloudAccumTex1" };
+                for (int i = 0; i < 3; ++i)
+                    PostFxResources.CloudTex[i] = rage::CreateEmptyRenderTarget(cloudNames[i], width / 2, height / 2, 64, aoDesc, PostFxResources.CloudSurf[i]);
+                PostFxResources.nCloudAccumFrame = 0;
+            }
             PostFxResources.SSRHalfDenoisedTex = rage::CreateEmptyRenderTarget("SSRHalfDenoisedTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfDenoisedSurf);
             {
                 static const char* fallbackNames[2] = { "SSRFallbackTex", "SSRHalfFallbackTex" };
@@ -4017,14 +4039,14 @@ private:
         IDirect3DVertexBuffer9* oldVB = nullptr;
         IDirect3DPixelShader9* oldPS = nullptr;
         IDirect3DVertexShader9* oldVS = nullptr;
-        IDirect3DBaseTexture9* oldTextures[3] = {};
+        IDirect3DBaseTexture9* oldTextures[6] = {};
         UINT oldOffset = 0, oldStride = 0;
         DWORD oldFVF = 0;
         D3DVIEWPORT9 oldViewport = {};
         DWORD savedRenderStates[std::size(kCloudRenderStates)] = {};
         static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW,
                                                                    D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER };
-        DWORD savedSamplerStates[3][std::size(kSamplerStates)] = {};
+        DWORD savedSamplerStates[6][std::size(kSamplerStates)] = {};
 
         pDevice->GetRenderTarget(0, &oldTarget);
         pDevice->GetDepthStencilSurface(&oldDepth);
@@ -4036,7 +4058,7 @@ private:
         pDevice->GetVertexShader(&oldVS);
         pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
         pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-        for (DWORD slot = 0; slot < 3; ++slot)
+        for (DWORD slot = 0; slot < 6; ++slot)
         {
             pDevice->GetTexture(slot, &oldTextures[slot]);
             for (size_t i = 0; i < std::size(kSamplerStates); ++i)
@@ -4048,53 +4070,101 @@ private:
             pDevice->SetRenderState(kCloudRenderStates[i].state, kCloudRenderStates[i].value);
         }
 
-        pDevice->SetRenderTarget(0, sceneSurface);
         pDevice->SetDepthStencilSurface(nullptr);
-        D3DVIEWPORT9 viewport = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
-        pDevice->SetViewport(&viewport);
         pDevice->SetStreamSource(0, nullptr, 0, 0);
         pDevice->SetVertexDeclaration(nullptr);
         pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
 
-        struct ScreenVertex { float x, y, z, rhw; float u, v; };
-        const ScreenVertex screenVertices[4] =
+        // Half size, accumulated, laid over the scene at full size; one full size pass straight into
+        // the scene while the half size targets are missing.
+        const bool halfSize = R.CloudSurf[0] && R.CloudSurf[1] && R.CloudSurf[2];
+        const int prevAccum = 1 + R.nCloudAccumIndex;
+        const int nextAccum = 1 + (R.nCloudAccumIndex ^ 1);
+        D3DSURFACE_DESC halfDesc = {};
+        if (halfSize)
+            R.CloudSurf[0]->GetDesc(&halfDesc);
+        const float halfWidth = halfSize ? float(halfDesc.Width) : width, halfHeight = halfSize ? float(halfDesc.Height) : height;
+        const float depthTexel[2] = { 1.0f / width, 1.0f / height };
+        effect->SetFloatArray("vec2DepthTexel", depthTexel, 2);
+
+        // Last frame's view projection by columns: a direction (w 0) leaves its translation out.
+        const bool history = halfSize && FrameHistory::CanReproject(R.nCloudAccumFrame);
         {
-            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
-            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+            const D3DXMATRIX& m = FrameHistory::Previous().ViewProjectionNoJitter;
+            const D3DXVECTOR4 prevX(m._11, m._21, m._31, 0.0f), prevY(m._12, m._22, m._32, 0.0f), prevW(m._14, m._24, m._34, 0.0f);
+            effect->SetVector("vec4PrevX", &prevX);
+            effect->SetVector("vec4PrevY", &prevY);
+            effect->SetVector("vec4PrevW", &prevW);
+            // A sixth of each frame: with the march's offset moving on every frame, its noise
+            // averages out over about a dozen frames.
+            const D3DXVECTOR4 historyInfo(history ? 1.0f : 0.0f, 0.15f, 1.0f / halfWidth, 1.0f / halfHeight);
+            effect->SetVector("vec4History", &historyInfo);
+        }
+
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        auto bindTextures = [&]()
+        {
+            // The samplers have fixed registers: s0 depth, s1 coverage, s2 detail, s3 this frame's
+            // half size clouds, s4 the history, s5 the accumulated clouds.
+            pDevice->SetTexture(0, R.mDepthRT->mD3DTexture);
+            pDevice->SetTexture(1, coverage);
+            pDevice->SetTexture(2, detail);
+            pDevice->SetTexture(3, halfSize ? R.CloudTex[0]->mD3DTexture : nullptr);
+            pDevice->SetTexture(4, halfSize ? R.CloudTex[prevAccum]->mD3DTexture : nullptr);
+            pDevice->SetTexture(5, halfSize ? R.CloudTex[nextAccum]->mD3DTexture : nullptr);
+            for (DWORD slot = 0; slot < 6; ++slot)
+            {
+                const bool wrap = slot == 1 || slot == 2;
+                const bool linear = slot != 0 && slot != 3;
+                pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+                pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+                pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSW, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+                pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+                pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+                pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, slot == 1 ? D3DTEXF_LINEAR : D3DTEXF_NONE);
+            }
+        };
+        auto drawPass = [&](const char* technique, IDirect3DSurface9* target, float w, float h, bool blend)
+        {
+            pDevice->SetRenderTarget(0, target);
+            D3DVIEWPORT9 viewport = { 0, 0, DWORD(w), DWORD(h), 0.0f, 1.0f };
+            pDevice->SetViewport(&viewport);
+            pDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, blend ? TRUE : FALSE);
+            pDevice->SetRenderState(D3DRS_COLORWRITEENABLE, blend ? (D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE) : 0xF);
+            const D3DXVECTOR4 info = ProjInfo(proj, w, h);
+            effect->SetVector("vec4ProjInfo", &info);
+            const ScreenVertex screenVertices[4] =
+            {
+                { -0.5f,     -0.5f,     0.0f, 1.0f, 0.0f, 0.0f },
+                { -0.5f,      h - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+                { w - 0.5f,  -0.5f,     0.0f, 1.0f, 1.0f, 0.0f },
+                { w - 0.5f,   h - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+            };
+            UINT passes = 0;
+            effect->SetTechnique(technique);
+            effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
+            effect->BeginPass(0);
+            effect->CommitChanges();
+            bindTextures();
+            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            effect->EndPass();
+            effect->End();
         };
 
-        UINT passes = 0;
-        effect->SetTechnique("Clouds");
-        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
-        effect->BeginPass(0);
-        effect->CommitChanges();
-        // The samplers have fixed registers (s0 depth, s1 coverage, s2 detail).
-        pDevice->SetTexture(0, R.mDepthRT->mD3DTexture);
-        pDevice->SetTexture(1, coverage);
-        pDevice->SetTexture(2, detail);
-        pDevice->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-        pDevice->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-        pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
-        pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
-        pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
-        for (DWORD slot = 1; slot < 3; ++slot)
+        if (halfSize)
         {
-            pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
-            pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
-            pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSW, D3DTADDRESS_WRAP);
-            pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-            pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-            pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, slot == 1 ? D3DTEXF_LINEAR : D3DTEXF_NONE);
+            drawPass("Clouds", R.CloudSurf[0], halfWidth, halfHeight, false);
+            drawPass("CloudsResolve", R.CloudSurf[nextAccum], halfWidth, halfHeight, false);
+            drawPass("CloudsComposite", sceneSurface, width, height, true);
+            R.nCloudAccumIndex ^= 1;
+            R.nCloudAccumFrame = FrameHistory::Frame();
         }
-        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
-        effect->EndPass();
-        effect->End();
+        else
+            drawPass("Clouds", sceneSurface, width, height, true);
 
         for (size_t i = 0; i < std::size(kCloudRenderStates); ++i)
             pDevice->SetRenderState(kCloudRenderStates[i].state, savedRenderStates[i]);
-        for (DWORD slot = 0; slot < 3; ++slot)
+        for (DWORD slot = 0; slot < 6; ++slot)
         {
             pDevice->SetTexture(slot, oldTextures[slot]);
             for (size_t i = 0; i < std::size(kSamplerStates); ++i)

@@ -1,6 +1,7 @@
-// Volumetric clouds (RenderVolumetricClouds in postfx.ixx): one layer of cloud marched from the camera
-// and blended into the lit scene right before the fog pass, so the fog, SSR's history and everything
-// after see them. Wherever the scene is nearer than the cloud the ray stops at it, so clouds show over
+// Volumetric clouds (RenderVolumetricClouds in postfx.ixx): one layer of cloud marched from the camera at
+// half size (Clouds), accumulated over frames (CloudsResolve) and blended into the lit scene at full
+// size right before the fog pass (CloudsComposite), so the fog, SSR's history and everything after see
+// them. Wherever the scene is nearer than the cloud the ray stops at it, so clouds show over
 // the sky and over anything far enough behind them alike.
 //
 // The layer's coverage is CoverageTex, the same tiling noise, scale and wind as the cloud shadows on
@@ -28,6 +29,9 @@
 sampler2D DepthTex : register(s0);
 sampler2D CoverageTex : register(s1);
 sampler3D DetailTex : register(s2);
+sampler2D CurrentTex : register(s3);   // this frame's clouds at half size (CloudsResolve)
+sampler2D HistoryTex : register(s4);   // the clouds accumulated up to last frame (CloudsResolve)
+sampler2D CloudTex : register(s5);     // the accumulated clouds (CloudsComposite)
 
 float2 vec2InvViewportSize;
 float4 vec4ProjInfo;
@@ -49,12 +53,36 @@ float4 vec4Layer;         // base height, thickness, 1 / coverage scale, coverag
 float4 vec4Wind;          // coverage offset (xy), detail offset (zw)
 float4 vec4Shape;         // extinction per metre at full density, 1 / detail scale, detail strength, haze distance
 float fMaxDistance;
+float2 vec2DepthTexel;    // one texel of the full size depth target, in texture coordinates
+// Last frame's view projection without translation or jitter, by columns (xyz) of its x, y and w, to
+// find where a direction stood then; vec4History.x is 1 when there is a history to use, .y the share
+// of this frame, .zw one texel of the half size targets.
+float4 vec4PrevX;
+float4 vec4PrevY;
+float4 vec4PrevW;
+float4 vec4History;
 float fStratus;           // 0 separate heaps of cloud, 1 a sheet: the weather's overcast
 float fEvolution;         // how far the detail has drifted up through itself, so the billows change
 float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
+
+// How far the scene is along the view ray at uv, the nearest of the full size pixels around it (a
+// half size pixel covers four): with the farthest, the clouds behind a roof spilled onto its edge.
+// The sky leaves the depth target as it was cleared, at one end or the other, and counts as far.
+float RawToFar(float raw)
+{
+    return (raw > 0.0 && raw < 0.99999) ? raw : 1.0;
+}
+
+float SceneDistance(float2 uv, float rayScale)
+{
+    // Two diagonal texels of the four: the other two would take the march past its slots.
+    float2 o = vec2DepthTexel * 0.5;
+    float raw = min(RawToFar(tex2Dlod(DepthTex, float4(uv - o, 0, 0)).r), RawToFar(tex2Dlod(DepthTex, float4(uv + o, 0, 0)).r));
+    return raw < 1.0 ? pow(fFarDivNear, raw) * fNearPlane * rayScale : 1e9;
+}
 
 float3 ViewRay(float2 pixel)
 {
@@ -204,10 +232,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     float tTop = (top - origin.z) / dz;
     float t0 = max(min(tBase, tTop), 0.0);
     float t1 = min(max(tBase, tTop), fMaxDistance);
-    // The sky leaves the depth target as it was cleared, at one end or the other.
-    float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
-    if (rawDepth > 0.0 && rawDepth < 0.99999)
-        t1 = min(t1, pow(fFarDivNear, rawDepth) * fNearPlane * rayScale);
+    t1 = min(t1, SceneDistance(uv, rayScale));
     if (t1 <= t0)
         return float4(0.0, 0.0, 0.0, 1.0);
     // Beyond sixteen thicknesses into the layer the haze hides the cloud anyway.
@@ -318,6 +343,69 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     return float4(colour * haze, 1.0 - cover);
 }
 
+// The world direction of the view ray through the half or full size pixel vpos.
+float3 WorldRay(float2 vpos)
+{
+    float3 v = ViewRay(vpos);
+    return normalize(float3(dot(v, vec4WorldX.xyz), dot(v, vec4WorldY.xyz), dot(v, vec4WorldZ.xyz)));
+}
+
+// Accumulates the half size clouds over frames. The clouds are kilometres away, so last frame's
+// pixel is found by the camera's turn alone, as a direction; its colour is held within the range
+// of this frame's 3x3 neighbourhood, so drifting clouds and a moving camera leave no trails.
+float4 CloudsResolve_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
+{
+    float4 current = tex2Dlod(CurrentTex, float4(uv, 0, 0));
+    [branch]
+    if (vec4History.x <= 0.0)
+        return current;
+
+    float3 dir = WorldRay(vpos);
+    float3 clip = float3(dot(dir, vec4PrevX.xyz), dot(dir, vec4PrevY.xyz), dot(dir, vec4PrevW.xyz));
+    if (clip.z <= 0.0)
+        return current;
+    float2 prev = clip.xy / clip.z * float2(0.5, -0.5) + 0.5;
+    if (any(prev < 0.0) || any(prev > 1.0))
+        return current;
+
+    float4 lo = current, hi = current;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            float4 s = tex2Dlod(CurrentTex, float4(uv + float2(x, y) * vec4History.zw, 0, 0));
+            lo = min(lo, s);
+            hi = max(hi, s);
+        }
+    }
+    float4 history = clamp(tex2Dlod(HistoryTex, float4(prev, 0, 0)), lo, hi);
+    return lerp(history, current, vec4History.y);
+}
+
+// Lays the accumulated clouds over the scene at full size. Where the pixel is something nearer than
+// the cloud layer, the upscale must not spill cloud onto it from a sky pixel beside it.
+float4 CloudsComposite_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
+{
+    float raw = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
+    [branch]
+    if (raw > 0.0 && raw < 0.99999)
+    {
+        float3 v = ViewRay(vpos);
+        float3 dir = float3(dot(v, vec4WorldX.xyz), dot(v, vec4WorldY.xyz), dot(v, vec4WorldZ.xyz));
+        float rayScale = length(dir);
+        dir /= rayScale;
+        float dz = abs(dir.z) > 1e-4 ? dir.z : 1e-4;
+        float tBase = (vec4Layer.x - vec4WorldZ.w) / dz;
+        float tTop = (vec4Layer.x + vec4Layer.y * 1.25 - vec4WorldZ.w) / dz;
+        float tEnter = max(min(tBase, tTop), 0.0);
+        if (pow(fFarDivNear, raw) * fNearPlane * rayScale < tEnter)
+            return float4(0.0, 0.0, 0.0, 1.0);
+    }
+    return tex2Dlod(CloudTex, float4(uv, 0, 0));
+}
+
 void FullscreenQuadVS(in float4 iPos : POSITION, in float2 iUV : TEXCOORD0,
                       out float4 oPos : POSITION, out float2 oUV : TEXCOORD0)
 {
@@ -331,5 +419,23 @@ technique Clouds
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 Clouds_PS();
+    }
+}
+
+technique CloudsResolve
+{
+    pass Resolve
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 CloudsResolve_PS();
+    }
+}
+
+technique CloudsComposite
+{
+    pass Composite
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 CloudsComposite_PS();
     }
 }
