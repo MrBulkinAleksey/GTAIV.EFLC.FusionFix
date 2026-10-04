@@ -365,6 +365,10 @@ public:
     // Added to the deck's coverage before the game's thickness curve: above 0 more of the sky
     // casts a shadow, below 0 less.
     float fCloudShadowsCoverage = 0.0f;
+    // CloudShadowsDebug: the whole ground in cloud shadow, to see whether the shadows reach the sun
+    // light at all.
+    bool bCloudShadowsDebug = false;
+    float CloudShadowConsts[12] = {};
     // The game's cloud values the last lighting pass used, for the log Ctrl+Shift+F10 writes.
     float fCloudLastThreshold = 0.0f, fCloudLastBias = 0.0f, fCloudLastThickness = 0.0f;
     bool bCloudLastFromGame = false;
@@ -1225,6 +1229,7 @@ public:
         fCloudShadowsWind = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsWind", 6.0f), 0.0f, 100.0f);
         fCloudShadowsSoftness = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsSoftness", 1.0f), 0.0f, 6.0f);
         fCloudShadowsCoverage = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsCoverage", 0.0f), -1.0f, 1.0f);
+        bCloudShadowsDebug = iniReader.ReadInteger("POSTFX", "CloudShadowsDebug", 0) != 0;
         bVolumetricClouds = iniReader.ReadInteger("POSTFX", "VolumetricClouds", 1) != 0;
         fVolumetricCloudsCoverage = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsCoverage", 0.4f), 0.0f, 1.0f);
         fVolumetricCloudsBase = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBase", 800.0f), 50.0f, 10000.0f);
@@ -4489,6 +4494,9 @@ private:
                 const auto& top = rage::grmShaderInfo::getShaderParamData(R.CloudColorIdx);
                 const auto& sunset = rage::grmShaderInfo::getShaderParamData(R.SunsetColorIdx);
                 const auto& sunDir = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
+                const float* k = R.CloudShadowConsts;
+                fprintf(log, "  shadow constants: c197 %.3f %.3f %.1f %.6f  c198 %.3f %.3f %.3f %.3f  c199 %.3f %.3f  noise %s  debug %d\n",
+                        k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], R.CloudNoiseTexture ? "made" : "missing", int(R.bCloudShadowsDebug));
                 fprintf(log, "  volumetric clouds: %s; effect %s (hr 0x%08lX); shadows follow them %d; HDRExposure %.3f; CloudColor %.3f %.3f %.3f; "
                              "SunsetColor %.3f %.3f %.3f; CloudInscatteringRange %.3f; SunDirection %.3f %.3f %.3f\n",
                         R.szCloudsStatus, R.CloudsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrCloudsEffect), int(R.VolumetricCloudsOn()),
@@ -5581,11 +5589,20 @@ public:
             R.fCloudWindY = windY;
             R.fCloudSeconds = seconds;
             const float c197[4] = { R.fSpecularSheen, strength, deckHeight, invScale };
-            const float c198[4] = { windX, windY, threshold, bias - coverageShift };
+            float c198[4] = { windX, windY, threshold, bias - coverageShift };
+            if (R.bCloudShadowsDebug)
+            {
+                // Coverage 0 * n + 1: cloud everywhere.
+                c198[2] = 0.0f;
+                c198[3] = -1.0f;
+            }
             const float c199[4] = { thickness, R.fCloudShadowsSoftness, 0.0f, 0.0f };
             pDevice->SetPixelShaderConstantF(197, c197, 1);
             pDevice->SetPixelShaderConstantF(198, c198, 1);
             pDevice->SetPixelShaderConstantF(199, c199, 1);
+            std::memcpy(R.CloudShadowConsts, c197, sizeof(c197));
+            std::memcpy(R.CloudShadowConsts + 4, c198, sizeof(c198));
+            std::memcpy(R.CloudShadowConsts + 8, c199, sizeof(c199));
             if (noise)
             {
                 // s7 is read by rage_postfx alone, which binds its own.
