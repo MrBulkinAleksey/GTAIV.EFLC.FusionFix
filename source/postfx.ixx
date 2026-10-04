@@ -3,6 +3,7 @@ module;
 #include <common.hxx>
 #include <d3dx9tex.h>
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -403,6 +404,8 @@ public:
     IDirect3DTexture9* CloudNoiseTex();
     bool bCloudNoiseBound = false;
     bool bCloudNoiseSurvived = false;
+    // s12's SRGBTEXTURE, MAXMIPLEVEL, MINFILTER and MIPMAPLODBIAS before the shadows set theirs, for the log.
+    DWORD CloudSamplerBefore[4] = {};
     // The game's cloud parameters the cloud shadows take, registered at start (RegisterCloudParams):
     // registering while drawing would grow the list the shader parameter hook may be reading.
     size_t CloudThresholdIdx = 0, CloudBiasIdx = 0, CloudThicknessIdx = 0;
@@ -4513,6 +4516,9 @@ private:
                 fprintf(log, "  shadow constants: c197 %.3f %.3f %.1f %.6f  c198 %.3f %.3f %.3f %.3f  c199 %.3f %.3f  noise %s, %s after the lights  debug %d\n",
                         k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], R.CloudNoiseTexture ? "made" : "missing",
                         R.bCloudNoiseSurvived ? "still bound" : "gone", R.nCloudShadowsDebug);
+                fprintf(log, "  s12 before the shadows: srgb %lu  max mip %lu  min filter %lu  lod bias %.3f\n",
+                        static_cast<unsigned long>(R.CloudSamplerBefore[0]), static_cast<unsigned long>(R.CloudSamplerBefore[1]),
+                        static_cast<unsigned long>(R.CloudSamplerBefore[2]), std::bit_cast<float>(R.CloudSamplerBefore[3]));
                 fprintf(log, "  volumetric clouds: %s; effect %s (hr 0x%08lX); shadows follow them %d; HDRExposure %.3f; CloudColor %.3f %.3f %.3f; "
                              "SunsetColor %.3f %.3f %.3f; CloudInscatteringRange %.3f; SunDirection %.3f %.3f %.3f\n",
                         R.szCloudsStatus, R.CloudsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrCloudsEffect), int(R.VolumetricCloudsOn()),
@@ -5630,12 +5636,28 @@ public:
                 // s12 is read only by G-buffer and particle shaders, none of which draw while the
                 // lights do. On s7, rage_postfx's, the sun read another texture and the shadows
                 // never showed.
+                // Every state: the G-buffer pass leaves texturequality's detail texture states on s12
+                // (kDetailStage), and the sun read zero from the noise although it was bound.
+                DWORD srgb = 0, maxMip = 0, minFilter = 0, lodBias = 0;
+                pDevice->GetSamplerState(12, D3DSAMP_SRGBTEXTURE, &srgb);
+                pDevice->GetSamplerState(12, D3DSAMP_MAXMIPLEVEL, &maxMip);
+                pDevice->GetSamplerState(12, D3DSAMP_MINFILTER, &minFilter);
+                pDevice->GetSamplerState(12, D3DSAMP_MIPMAPLODBIAS, &lodBias);
+                R.CloudSamplerBefore[0] = srgb;
+                R.CloudSamplerBefore[1] = maxMip;
+                R.CloudSamplerBefore[2] = minFilter;
+                R.CloudSamplerBefore[3] = lodBias;
                 pDevice->SetTexture(12, noise);
                 pDevice->SetSamplerState(12, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
                 pDevice->SetSamplerState(12, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+                pDevice->SetSamplerState(12, D3DSAMP_ADDRESSW, D3DTADDRESS_WRAP);
                 pDevice->SetSamplerState(12, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
                 pDevice->SetSamplerState(12, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
                 pDevice->SetSamplerState(12, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+                pDevice->SetSamplerState(12, D3DSAMP_MAXMIPLEVEL, 0);
+                pDevice->SetSamplerState(12, D3DSAMP_MIPMAPLODBIAS, 0);
+                pDevice->SetSamplerState(12, D3DSAMP_MAXANISOTROPY, 1);
+                pDevice->SetSamplerState(12, D3DSAMP_SRGBTEXTURE, FALSE);
                 R.bCloudNoiseBound = true;
             }
         }
