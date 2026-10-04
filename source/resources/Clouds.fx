@@ -12,9 +12,13 @@
 // reaches and the cloud's inscattering range for the bright rim towards the sun. What the sun lights
 // also takes the hue of the game's sun colour.
 
+// Steps a ray may take in all, coarse and fine.
 #ifndef CLOUD_STEPS
-#define CLOUD_STEPS 32
+#define CLOUD_STEPS 128
 #endif
+// A coarse step in fine steps, and the fine steps in a row that must find no cloud to go coarse again.
+#define COARSE_STEP 6.0
+#define FINE_MISSES 6.0
 #ifndef LIGHT_STEPS
 #define LIGHT_STEPS 3
 #endif
@@ -122,12 +126,9 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
         t1 = min(t1, pow(fFarDivNear, rawDepth) * fNearPlane * rayScale);
     if (t1 <= t0)
         return float4(0.0, 0.0, 0.0, 1.0);
-    // Near the horizon a ray crosses tens of kilometres of the layer, which the steps sampled as
-    // stripes. It marches no further than eight thicknesses into it; beyond, the haze hides it.
-    t1 = min(t1, t0 + vec4Layer.y * 8.0);
+    // Beyond sixteen thicknesses into the layer the haze hides the cloud anyway.
+    t1 = min(t1, t0 + vec4Layer.y * 16.0);
 
-    float dt = (t1 - t0) / CLOUD_STEPS;
-    float t = t0 + dt * PixelJitter(vpos);
     float cosTheta = dot(dir, vec3SunDir);
     float phase = lerp(HenyeyGreenstein(cosTheta, -0.25), HenyeyGreenstein(cosTheta, 0.6), 0.7);
     // A narrow forward lobe: cloud next to the sun in the sky glows where it is thin enough for its
@@ -135,6 +136,14 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     float forward = HenyeyGreenstein(cosTheta, 0.85);
     float sigma = vec4Shape.x;
 
+    // Empty sky is crossed in coarse steps that test the coverage alone; on finding cloud the ray
+    // steps back and marches it in fine steps, a 24th of the layer's thickness near the camera and
+    // a hundredth of the distance further out, until FINE_MISSES fine steps in a row find none.
+    // With even steps over the whole crossing a step near the horizon was 150 m long, and the
+    // clouds came out smeared down the screen.
+    float jitter = PixelJitter(vpos);
+    float t = t0;
+    float fineLeft = 0.0;
     float transmittance = 1.0;
     float3 colour = 0.0;
     float firstHit = -1.0;
@@ -142,11 +151,33 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     [loop]
     for (int i = 0; i < CLOUD_STEPS; ++i)
     {
-        float3 p = origin + dir * t;
+        if (t >= t1 || transmittance < 0.01)
+            break;
+        float fine = max(vec4Layer.y / 24.0, t * 0.01);
+        float3 p = origin + dir * (t + fine * jitter);
+
+        [branch]
+        if (fineLeft <= 0.0)
+        {
+            if (Density(p, false) > 0.0)
+            {
+                // Back by one coarse step, to march into the cloud from outside it. The fine steps
+                // then run at least past where the cloud was found and FINE_MISSES more: stopping
+                // as soon as they missed, where the detail had eaten the cloud at that point, the
+                // coarse step found it again, stepped back again and spent the ray going in circles.
+                t = max(t - fine * COARSE_STEP, t0);
+                fineLeft = COARSE_STEP + FINE_MISSES;
+            }
+            else
+                t += fine * COARSE_STEP;
+            continue;
+        }
+
         float d = Density(p, true);
         [branch]
         if (d > 0.01)
         {
+            fineLeft = FINE_MISSES;
             if (firstHit < 0.0)
                 firstHit = t;
 
@@ -181,13 +212,13 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // The glow, most where the cloud is thin; past the scene's white point, for the bloom.
             lit += sunLit * exp(-tau * 0.5) * (1.0 - d) * min(forward * 0.02 * fSilver, 1.5);
 
-            float stepTransmittance = exp(-d * sigma * dt);
+            float stepTransmittance = exp(-d * sigma * fine);
             colour += transmittance * (1.0 - stepTransmittance) * lit;
             transmittance *= stepTransmittance;
-            if (transmittance < 0.01)
-                break;
         }
-        t += dt;
+        else
+            fineLeft -= 1.0;
+        t += fine;
     }
 
     // Haze: distant cloud fades into what is behind it.
