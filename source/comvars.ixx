@@ -2012,9 +2012,13 @@ export namespace rage
 
                 auto it = std::find_if(ShaderParamNames.begin(), ShaderParamNames.end(), [&](auto& pair)
                 {
+                    // The index is looked up in the registered shader itself: a parameter of the same
+                    // name in another shader (SunDirection in the water, for one) sits at another index.
+                    if (shader_name != pair.first)
+                        return false;
                     int& cachedIdx = pair.second.second;
                     if (cachedIdx <= 0) cachedIdx = getParamIndex(_this, edx, pair.second.first.c_str(), 1);
-                    return index == cachedIdx && shader_name == pair.first;
+                    return index == cachedIdx;
                 });
 
                 if (it != ShaderParamNames.end())
