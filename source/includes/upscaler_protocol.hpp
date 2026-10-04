@@ -13,17 +13,19 @@
 // back. The helper answers Evaluate after its GPU work is submitted, so the game never waits on the GPU
 // for a value that nobody will signal.
 //
-// Under Wine (ConfigureFlags::SharedBuffers) neither the textures nor the fence are shared: Wine can't import
-// a D3D12 fence of another process (it crashes the importer) and older Proton can't import D3D12 resources.
-// The helper shares linear buffers instead, the game copies its textures into them and waits for that on the
-// CPU before Evaluate, and the helper answers Evaluate once its GPU work has finished.
+// Under Wine (ConfigureFlags::Wine) the shared textures have no UAV flag, and the game imports them as opaque
+// Win32 handles, which every Wine supports. Only textures can be shared: vkd3d-proton gives a buffer an empty
+// handle. Wine can't import a D3D12 fence of another process (it crashes the importer), so the game shares a
+// Vulkan timeline semaphore of its own instead (ConfigureFlags::GameFence), which the helper opens as its fence.
+// Where the helper can't open it (older Proton), it clears GameFence in Flags, and then both sides wait for their
+// GPU work on the CPU: the game for its copies before Evaluate, the helper before it answers Evaluate.
 
 #include <cstdint>
 #include <cstddef>
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 3;
+    constexpr uint32_t Version = 6;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -31,7 +33,7 @@ namespace UpscalerProtocol
     enum class Command : uint32_t
     {
         None,
-        Configure,      // (re)create the shared textures and the upscaler for Backend at Width x Height
+        Configure,      // (re)create the shared textures and the upscaler for Backend, Width x Height to OutputWidth x OutputHeight
         Evaluate,       // upscale one frame
         Shutdown,
     };
@@ -50,7 +52,7 @@ namespace UpscalerProtocol
         Failed,
     };
 
-    // Shared textures, all of them at the render size:
+    // Shared textures, the inputs at the render size (Width x Height), the output at OutputWidth x OutputHeight:
     // Color     DXGI_FORMAT_R16G16B16A16_FLOAT  HDR scene
     // Depth     DXGI_FORMAT_R32_FLOAT           standard [0, 1] depth
     // Motion    DXGI_FORMAT_R16G16_FLOAT        previous - current position in texture coordinates, no jitter
@@ -67,30 +69,8 @@ namespace UpscalerProtocol
     namespace ConfigureFlags
     {
         constexpr uint32_t ReactiveMask = 1 << 0;   // Reactive is written every frame and used by FSR
-        constexpr uint32_t SharedBuffers = 1 << 1;  // Wine: linear buffers instead of textures, no shared fence
-    }
-
-    // Layout of a texture in its shared buffer: rows of RowPitch bytes from offset 0
-    constexpr uint32_t BytesPerPixel(Texture texture)
-    {
-        switch (texture)
-        {
-        case Texture::Color: case Texture::Output: return 8;
-        case Texture::Reactive: return 2;
-        default: return 4;
-        }
-    }
-
-    // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT, a whole number of pixels for every format above
-    constexpr uint32_t RowPitch(Texture texture, uint32_t width)
-    {
-        return (width * BytesPerPixel(texture) + 255u) & ~255u;
-    }
-
-    // Rounded to 64 KiB, D3D12's buffer placement alignment, so both sides agree on the allocation size
-    constexpr uint64_t BufferSize(Texture texture, uint32_t width, uint32_t height)
-    {
-        return (static_cast<uint64_t>(RowPitch(texture, width)) * height + 0xFFFFu) & ~static_cast<uint64_t>(0xFFFFu);
+        constexpr uint32_t Wine = 1 << 1;           // textures without the UAV flag, for opaque handles
+        constexpr uint32_t GameFence = 1 << 2;      // FenceHandle is the game's semaphore; cleared by the helper if it can't open it
     }
 
 #pragma pack(push, 8)
@@ -120,7 +100,9 @@ namespace UpscalerProtocol
         uint32_t Width;
         uint32_t Height;
         uint32_t DLSSPreset;          // NVSDK_NGX_DLSS_Hint_Render_Preset, 0 is the default
-        uint32_t Flags;               // ConfigureFlags
+        uint32_t Flags;               // ConfigureFlags, GameFence cleared by the helper when it falls back to the CPU
+        uint32_t OutputWidth;         // upscaled size, Width x Height or larger
+        uint32_t OutputHeight;
         uint32_t Reserved;
 
         // Evaluate
@@ -141,17 +123,17 @@ namespace UpscalerProtocol
         uint32_t ResponseSerial;
         Status ResponseStatus;
 
-        // Configure results, handles already duplicated into the game process (buffers with SharedBuffers)
+        // Configure results, handles already duplicated into the game process
         uint64_t TextureHandles[static_cast<size_t>(Texture::Count)];
         uint64_t TextureSizes[static_cast<size_t>(Texture::Count)];
-        uint64_t FenceHandle;         // 0 with SharedBuffers
+        uint64_t FenceHandle;         // the helper's fence; with GameFence, the game's semaphore duplicated into the helper
     };
 #pragma pack(pop)
 
     static_assert(sizeof(wchar_t) == 2);
     static_assert(offsetof(Shared, WaitValue) % 8 == 0);
     static_assert(offsetof(Shared, TextureHandles) % 8 == 0);
-    static_assert(sizeof(Shared) == 3840, "The layout must be identical in the x86 and x64 builds");
+    static_assert(sizeof(Shared) == 3848, "The layout must be identical in the x86 and x64 builds");
 
     inline const wchar_t* MappingSuffix = L".Mapping";
     inline const wchar_t* RequestSuffix = L".Request";

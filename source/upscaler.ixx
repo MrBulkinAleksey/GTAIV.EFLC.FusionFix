@@ -1,6 +1,8 @@
 module;
 
 #include <common.hxx>
+#include <cstdarg>
+#include <cstdio>
 #include <d3d12.h>
 #include <d3d9on12.h>
 #include <dxvk_interop.hpp>
@@ -20,9 +22,9 @@ namespace Protocol = UpscalerProtocol;
 // upscaler and signals the fence, and the plugin copies the result back, all without the CPU waiting for
 // the GPU. The copies run where the game renders:
 // - DXVK: the shared textures and the fence are imported into DXVK's Vulkan device, the copies are
-//   submitted to DXVK's queue. Under Wine (Proton) the helper shares linear buffers instead and both sides
-//   wait for their copies on the CPU: Wine crashes importing a D3D12 fence of another process, and older
-//   Proton can't import D3D12 resources at all.
+//   submitted to DXVK's queue. Under Wine (Proton) the textures are imported as opaque handles and both
+//   sides wait for their GPU work on the CPU: Wine crashes importing a D3D12 fence of another process, and
+//   older Proton can't import D3D12 resource handles.
 // - D3D9on12 (Graphics API "DirectX 12"): the shared textures and the fence are opened on the D3D12 device
 //   of D3D9on12, the game's textures are unwrapped to their D3D12 resources and copied on a queue of the
 //   plugin.
@@ -45,6 +47,29 @@ namespace
         if (shared.FenceHandle)
             CloseHandle(reinterpret_cast<HANDLE>(shared.FenceHandle));
         shared.FenceHandle = 0;
+    }
+
+    // GTAIV.EFLC.FusionFix.UpscalerGame.log next to the plugin: what the game side did with the helper, the
+    // first time each thing fails (the helper writes GTAIV.EFLC.FusionFix.Upscaler.log)
+    void Log(const char* format, ...)
+    {
+        static bool started = false;
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, (GetThisModulePath() / L"GTAIV.EFLC.FusionFix.UpscalerGame.log").c_str(), started ? L"a" : L"w") || !f)
+            return;
+        started = true;
+        va_list args;
+        va_start(args, format);
+        vfprintf(f, format, args);
+        va_end(args);
+        fputc('\n', f);
+        fclose(f);
+    }
+
+    // Logs a failure the first few times it happens
+    bool Report(uint32_t& count)
+    {
+        return count++ < 3;
     }
 
     bool IsWine()
@@ -74,18 +99,26 @@ namespace
     public:
         LUID luid{};
         uint32_t vendorId = 0;
-        uint32_t width = 0;
+        uint32_t width = 0;           // render size of the inputs
         uint32_t height = 0;
-        bool sharedBuffers = false;   // ConfigureFlags::SharedBuffers
+        uint32_t outputWidth = 0;
+        uint32_t outputHeight = 0;
+        bool wine = false;            // ConfigureFlags::Wine
+        bool gameFence = false;       // Wine: the helper opened the game's semaphore, else both sides wait on the CPU
 
         virtual ~Bridge() = default;
+        // Wine: a semaphore of the game for the helper's fence, its handle duplicated into the helper. Before Configure.
+        virtual bool PrepareGameFence(Protocol::Shared& shared, HANDLE helperProcess) { return false; }
         // Opens the shared textures and the fence of a configuration, and closes their handles
-        virtual bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h) = 0;
+        virtual bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) = 0;
+        bool WaitOnCpu() const { return wine && !gameFence; }
         virtual void ReleaseImports() = 0;
         // Game textures -> shared textures, then the fence reaches signalValue. Null inputs are skipped.
         virtual bool SubmitInputs(IDirect3DTexture9* const (&inputs)[InputCount], uint64_t signalValue) = 0;
         // Once the fence reaches waitValue: shared output -> game texture
         virtual bool SubmitOutput(IDirect3DTexture9* target, uint64_t waitValue) = 0;
+        // The helper won't signal value any more: the GPU work that waits for it is let go from the CPU
+        virtual void SignalFromCpu(uint64_t value) = 0;
     };
     struct Vulkan
     {
@@ -103,6 +136,9 @@ namespace
         PFN_vkCreateSemaphore vkCreateSemaphore = nullptr;
         PFN_vkDestroySemaphore vkDestroySemaphore = nullptr;
         PFN_vkImportSemaphoreWin32HandleKHR vkImportSemaphoreWin32HandleKHR = nullptr;
+        PFN_vkGetSemaphoreWin32HandleKHR vkGetSemaphoreWin32HandleKHR = nullptr;   // optional, for the game's semaphore under Wine
+        PFN_vkSignalSemaphore vkSignalSemaphore = nullptr;                         // optional, when the helper is gone
+        PFN_vkGetSemaphoreCounterValue vkGetSemaphoreCounterValue = nullptr;
         PFN_vkCreateCommandPool vkCreateCommandPool = nullptr;
         PFN_vkAllocateCommandBuffers vkAllocateCommandBuffers = nullptr;
         PFN_vkBeginCommandBuffer vkBeginCommandBuffer = nullptr;
@@ -114,13 +150,6 @@ namespace
         PFN_vkCreateFence vkCreateFence = nullptr;
         PFN_vkWaitForFences vkWaitForFences = nullptr;
         PFN_vkResetFences vkResetFences = nullptr;
-        // Shared buffers under Wine
-        PFN_vkCreateBuffer vkCreateBuffer = nullptr;
-        PFN_vkDestroyBuffer vkDestroyBuffer = nullptr;
-        PFN_vkGetBufferMemoryRequirements vkGetBufferMemoryRequirements = nullptr;
-        PFN_vkBindBufferMemory vkBindBufferMemory = nullptr;
-        PFN_vkCmdCopyImageToBuffer vkCmdCopyImageToBuffer = nullptr;
-        PFN_vkCmdCopyBufferToImage vkCmdCopyBufferToImage = nullptr;
 
         bool Load(VkInstance instance, VkDevice device)
         {
@@ -152,6 +181,9 @@ namespace
             LOAD_DEVICE(vkCreateSemaphore);
             LOAD_DEVICE(vkDestroySemaphore);
             LOAD_DEVICE(vkImportSemaphoreWin32HandleKHR);
+            LOAD_DEVICE(vkGetSemaphoreWin32HandleKHR);
+            LOAD_DEVICE(vkSignalSemaphore);
+            LOAD_DEVICE(vkGetSemaphoreCounterValue);
             LOAD_DEVICE(vkCreateCommandPool);
             LOAD_DEVICE(vkAllocateCommandBuffers);
             LOAD_DEVICE(vkBeginCommandBuffer);
@@ -163,12 +195,6 @@ namespace
             LOAD_DEVICE(vkCreateFence);
             LOAD_DEVICE(vkWaitForFences);
             LOAD_DEVICE(vkResetFences);
-            LOAD_DEVICE(vkCreateBuffer);
-            LOAD_DEVICE(vkDestroyBuffer);
-            LOAD_DEVICE(vkGetBufferMemoryRequirements);
-            LOAD_DEVICE(vkBindBufferMemory);
-            LOAD_DEVICE(vkCmdCopyImageToBuffer);
-            LOAD_DEVICE(vkCmdCopyBufferToImage);
 #undef LOAD_INSTANCE
 #undef LOAD_DEVICE
 
@@ -176,8 +202,7 @@ namespace
             return vkCreateImage && vkDestroyImage && vkGetImageMemoryRequirements && vkAllocateMemory && vkFreeMemory && vkBindImageMemory &&
                 vkGetMemoryWin32HandlePropertiesKHR && vkCreateSemaphore && vkDestroySemaphore && vkImportSemaphoreWin32HandleKHR &&
                 vkCreateCommandPool && vkAllocateCommandBuffers && vkBeginCommandBuffer && vkEndCommandBuffer && vkResetCommandBuffer &&
-                vkCmdPipelineBarrier && vkCmdCopyImage && vkQueueSubmit && vkCreateFence && vkWaitForFences && vkResetFences &&
-                vkCreateBuffer && vkDestroyBuffer && vkGetBufferMemoryRequirements && vkBindBufferMemory && vkCmdCopyImageToBuffer && vkCmdCopyBufferToImage;
+                vkCmdPipelineBarrier && vkCmdCopyImage && vkQueueSubmit && vkCreateFence && vkWaitForFences && vkResetFences;
         }
     };
 
@@ -221,28 +246,6 @@ namespace
         return barrier;
     }
 
-    VkBufferMemoryBarrier BufferBarrier(VkBuffer buffer, VkAccessFlags srcAccess, VkAccessFlags dstAccess, uint32_t srcQueueFamily, uint32_t dstQueueFamily)
-    {
-        VkBufferMemoryBarrier barrier{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
-        barrier.srcAccessMask = srcAccess;
-        barrier.dstAccessMask = dstAccess;
-        barrier.srcQueueFamilyIndex = srcQueueFamily;
-        barrier.dstQueueFamilyIndex = dstQueueFamily;
-        barrier.buffer = buffer;
-        barrier.size = VK_WHOLE_SIZE;
-        return barrier;
-    }
-
-    // The texture's rows in its shared buffer, see UpscalerProtocol::RowPitch
-    VkBufferImageCopy BufferCopy(Protocol::Texture texture, uint32_t width, uint32_t height)
-    {
-        VkBufferImageCopy copy{};
-        copy.bufferRowLength = Protocol::RowPitch(texture, width) / Protocol::BytesPerPixel(texture);
-        copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-        copy.imageExtent = { width, height, 1 };
-        return copy;
-    }
-
     VkImageCopy FullCopy(uint32_t width, uint32_t height)
     {
         VkImageCopy copy{};
@@ -280,7 +283,6 @@ namespace
         struct SharedImage
         {
             VkImage image = VK_NULL_HANDLE;
-            VkBuffer buffer = VK_NULL_HANDLE;     // in place of the image with shared buffers
             VkDeviceMemory memory = VK_NULL_HANDLE;
             VkFormat format = VK_FORMAT_UNDEFINED;
         };
@@ -312,7 +314,7 @@ namespace
                 return false;
             std::memcpy(&luid, id.deviceLUID, sizeof(luid));
             vendorId = properties.properties.vendorID;
-            sharedBuffers = IsWine();
+            wine = IsWine();
 
             VkCommandPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
             poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -355,8 +357,6 @@ namespace
             {
                 if (image.image)
                     vk.vkDestroyImage(device, image.image, nullptr);
-                if (image.buffer)
-                    vk.vkDestroyBuffer(device, image.buffer, nullptr);
                 if (image.memory)
                     vk.vkFreeMemory(device, image.memory, nullptr);
                 image = {};
@@ -364,13 +364,16 @@ namespace
             if (semaphore)
                 vk.vkDestroySemaphore(device, semaphore, nullptr);
             semaphore = VK_NULL_HANDLE;
-            width = height = 0;
+            width = height = outputWidth = outputHeight = 0;
         }
 
+        // Windows: a D3D12 resource handle. Wine: the same as an opaque handle, which is what vkd3d-proton exports
+        // and every winevulkan imports; the image then has the usage vkd3d-proton gives a texture without flags.
         bool ImportImage(SharedImage& target, HANDLE handle, VkFormat format, uint32_t w, uint32_t h)
         {
+            auto handleType = wine ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT : VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
             VkExternalMemoryImageCreateInfo external{ VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO };
-            external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
+            external.handleTypes = handleType;
 
             VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
             info.pNext = &external;
@@ -381,78 +384,39 @@ namespace
             info.arrayLayers = 1;
             info.samples = VK_SAMPLE_COUNT_1_BIT;
             info.tiling = VK_IMAGE_TILING_OPTIMAL;
-            info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | (wine ? VK_IMAGE_USAGE_SAMPLED_BIT : 0);
             info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            if (vk.vkCreateImage(device, &info, nullptr, &target.image) != VK_SUCCESS)
+            if (auto vr = vk.vkCreateImage(device, &info, nullptr, &target.image); vr != VK_SUCCESS)
+            {
+                Log("import: vkCreateImage %d", vr);
                 return false;
+            }
             target.format = format;
 
             VkMemoryRequirements requirements{};
             vk.vkGetImageMemoryRequirements(device, target.image, &requirements);
 
-            VkMemoryWin32HandlePropertiesKHR handleProperties{ VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR };
-            if (vk.vkGetMemoryWin32HandlePropertiesKHR(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT, handle, &handleProperties) != VK_SUCCESS)
-                return false;
-
-            VkPhysicalDeviceMemoryProperties memoryProperties{};
-            vk.vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
-            uint32_t typeIndex = UINT32_MAX;
-            auto types = requirements.memoryTypeBits & handleProperties.memoryTypeBits;
-            for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; ++i)
+            // Opaque handles have no handle properties: the exporter's memory is plain device local memory
+            auto types = requirements.memoryTypeBits;
+            if (!wine)
             {
-                if ((types & (1u << i)) && (memoryProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
+                VkMemoryWin32HandlePropertiesKHR handleProperties{ VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR };
+                if (auto vr = vk.vkGetMemoryWin32HandlePropertiesKHR(device, handleType, handle, &handleProperties); vr != VK_SUCCESS)
                 {
-                    typeIndex = i;
-                    break;
+                    Log("import: vkGetMemoryWin32HandlePropertiesKHR %d", vr);
+                    return false;
                 }
+                types &= handleProperties.memoryTypeBits;
             }
-            if (typeIndex == UINT32_MAX)
-                return false;
 
-            VkMemoryDedicatedAllocateInfo dedicated{ VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO };
-            dedicated.image = target.image;
-
-            VkImportMemoryWin32HandleInfoKHR import{ VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR };
-            import.pNext = &dedicated;
-            import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
-            import.handle = handle;
-
-            VkMemoryAllocateInfo allocate{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
-            allocate.pNext = &import;
-            allocate.allocationSize = requirements.size;
-            allocate.memoryTypeIndex = typeIndex;
-            if (vk.vkAllocateMemory(device, &allocate, nullptr, &target.memory) != VK_SUCCESS)
-                return false;
-
-            return vk.vkBindImageMemory(device, target.image, target.memory, 0) == VK_SUCCESS;
-        }
-
-        // Wine: a D3D12 buffer of the helper, as an opaque handle (what vkd3d-proton exports)
-        bool ImportBuffer(SharedImage& target, HANDLE handle, VkDeviceSize size)
-        {
-            VkExternalMemoryBufferCreateInfo external{ VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO };
-            external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-
-            VkBufferCreateInfo info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-            info.pNext = &external;
-            info.size = size;
-            info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-            info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            if (vk.vkCreateBuffer(device, &info, nullptr, &target.buffer) != VK_SUCCESS)
-                return false;
-
-            VkMemoryRequirements requirements{};
-            vk.vkGetBufferMemoryRequirements(device, target.buffer, &requirements);
-
-            // Opaque handles have no handle properties, the memory is the exporter's plain device local memory
             VkPhysicalDeviceMemoryProperties memoryProperties{};
             vk.vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
             uint32_t typeIndex = UINT32_MAX;
             for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; ++i)
             {
                 auto flags = memoryProperties.memoryTypes[i].propertyFlags;
-                if (!(requirements.memoryTypeBits & (1u << i)) || !(flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
+                if (!(types & (1u << i)) || !(flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
                     continue;
                 if (typeIndex == UINT32_MAX || flags == VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
                     typeIndex = i;
@@ -460,43 +424,99 @@ namespace
                     break;
             }
             if (typeIndex == UINT32_MAX)
+            {
+                Log("import: no device local memory type in %08x", requirements.memoryTypeBits);
                 return false;
+            }
 
             VkMemoryDedicatedAllocateInfo dedicated{ VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO };
-            dedicated.buffer = target.buffer;
+            dedicated.image = target.image;
 
             VkImportMemoryWin32HandleInfoKHR import{ VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR };
             import.pNext = &dedicated;
-            import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+            import.handleType = handleType;
             import.handle = handle;
 
             VkMemoryAllocateInfo allocate{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
             allocate.pNext = &import;
-            allocate.allocationSize = std::max(requirements.size, size);
+            allocate.allocationSize = requirements.size;
             allocate.memoryTypeIndex = typeIndex;
-            if (vk.vkAllocateMemory(device, &allocate, nullptr, &target.memory) != VK_SUCCESS)
+            if (auto vr = vk.vkAllocateMemory(device, &allocate, nullptr, &target.memory); vr != VK_SUCCESS)
+            {
+                Log("import: vkAllocateMemory %d (size %llu, type %u)", vr, static_cast<unsigned long long>(allocate.allocationSize), allocate.memoryTypeIndex);
                 return false;
+            }
 
-            return vk.vkBindBufferMemory(device, target.buffer, target.memory, 0) == VK_SUCCESS;
+            if (auto vr = vk.vkBindImageMemory(device, target.image, target.memory, 0); vr != VK_SUCCESS)
+            {
+                Log("import: vkBindImageMemory %d", vr);
+                return false;
+            }
+            return true;
         }
 
-        bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h) override
+        bool PrepareGameFence(Protocol::Shared& shared, HANDLE helperProcess) override
         {
-            ReleaseImports();
+            if (!wine || !vk.vkGetSemaphoreWin32HandleKHR || !helperProcess)
+                return false;
 
+            VkExportSemaphoreCreateInfo exportInfo{ VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO };
+            exportInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+            VkSemaphoreTypeCreateInfo type{ VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
+            type.pNext = &exportInfo;
+            type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+            VkSemaphoreCreateInfo info{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+            info.pNext = &type;
+            if (auto vr = vk.vkCreateSemaphore(device, &info, nullptr, &semaphore); vr != VK_SUCCESS)
+            {
+                Log("game fence: vkCreateSemaphore %d", vr);
+                semaphore = VK_NULL_HANDLE;
+                return false;
+            }
+
+            HANDLE handle = nullptr;
+            VkSemaphoreGetWin32HandleInfoKHR get{ VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR };
+            get.semaphore = semaphore;
+            get.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+            HANDLE duplicate = nullptr;
+            if (auto vr = vk.vkGetSemaphoreWin32HandleKHR(device, &get, &handle); vr != VK_SUCCESS || !handle ||
+                !DuplicateHandle(GetCurrentProcess(), handle, helperProcess, &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE))
+            {
+                Log("game fence: the semaphore could not be shared (%d, handle %p)", vr, handle);
+                vk.vkDestroySemaphore(device, semaphore, nullptr);
+                semaphore = VK_NULL_HANDLE;
+                return false;
+            }
+            shared.FenceHandle = reinterpret_cast<uint64_t>(duplicate);
+            return true;
+        }
+
+        // Evaluate released the previous imports before the helper's Configure
+        bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
+        {
             bool ok = true;
             for (size_t i = 0; i < images.size(); ++i)
             {
                 auto handle = reinterpret_cast<HANDLE>(shared.TextureHandles[i]);
-                auto texture = static_cast<Protocol::Texture>(i);
-                ok = ok && handle && (sharedBuffers ? ImportBuffer(images[i], handle, Protocol::BufferSize(texture, w, h)) :
-                    ImportImage(images[i], handle, Formats[i], w, h));
+                auto iw = i == OutputIndex ? ow : w;
+                auto ih = i == OutputIndex ? oh : h;
+                ok = handle && ImportImage(images[i], handle, Formats[i], iw, ih);
+                if (!ok)
+                {
+                    Log("import: shared texture %zu (%ux%u) failed, handle %p", i, iw, ih, handle);
+                    break;
+                }
             }
 
             auto fenceHandle = reinterpret_cast<HANDLE>(shared.FenceHandle);
-            if (ok && sharedBuffers)
+            if (ok && wine)
             {
-                // Synchronized on the CPU
+                // The game's own semaphore, or without it the CPU waits
+                if (!gameFence && semaphore)
+                {
+                    vk.vkDestroySemaphore(device, semaphore, nullptr);
+                    semaphore = VK_NULL_HANDLE;
+                }
             }
             else if (ok && fenceHandle)
             {
@@ -529,6 +549,8 @@ namespace
 
             width = w;
             height = h;
+            outputWidth = ow;
+            outputHeight = oh;
             return true;
         }
 
@@ -584,12 +606,16 @@ namespace
                 if (!inputs[i])
                     continue;
                 if (!GetGameImage(inputs[i], sources[i]) || sources[i].format != Formats[i] || sources[i].extent.width != width || sources[i].extent.height != height)
+                {
+                    static uint32_t reported = 0;
+                    if (Report(reported))
+                        Log("inputs: texture %zu is format %d %ux%u, expected %d %ux%u", i, sources[i].format, sources[i].extent.width,
+                            sources[i].extent.height, Formats[i], width, height);
                     return false;
+                }
             }
 
             auto& s = NextSlot();
-            if (sharedBuffers)
-                return SubmitInputBuffers(s, inputs, sources);
 
             auto cmd = s.inputs;
             vk.vkResetCommandBuffer(cmd, 0);
@@ -625,44 +651,10 @@ namespace
 
             // Everything the game rendered so far must reach the queue first
             interop->FlushRenderingCommands();
-            return Submit(cmd, VK_NULL_HANDLE, 0, signalValue, VK_NULL_HANDLE);
-        }
+            if (!WaitOnCpu())
+                return Submit(cmd, VK_NULL_HANDLE, 0, signalValue, VK_NULL_HANDLE);
 
-        // Wine: game textures -> shared buffers, waited for before the helper is asked to read them
-        bool SubmitInputBuffers(Slot& s, IDirect3DTexture9* const (&inputs)[InputCount], const GameImage (&sources)[InputCount])
-        {
-            auto cmd = s.inputs;
-            vk.vkResetCommandBuffer(cmd, 0);
-            VkCommandBufferBeginInfo begin{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-            begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            vk.vkBeginCommandBuffer(cmd, &begin);
-
-            VkImageMemoryBarrier before[InputCount];
-            VkImageMemoryBarrier after[InputCount];
-            VkBufferMemoryBarrier released[InputCount];
-            uint32_t barriers = 0;
-            for (size_t i = 0; i < InputCount; ++i)
-            {
-                if (!inputs[i])
-                    continue;
-                before[barriers] = ImageBarrier(sources[i].image, sources[i].layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-                after[barriers] = ImageBarrier(sources[i].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sources[i].layout, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
-                // Handed over to D3D12
-                released[barriers++] = BufferBarrier(images[i].buffer, VK_ACCESS_TRANSFER_WRITE_BIT, 0, queueFamily, VK_QUEUE_FAMILY_EXTERNAL);
-            }
-
-            vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, barriers, before);
-            for (size_t i = 0; i < InputCount; ++i)
-            {
-                if (!inputs[i])
-                    continue;
-                auto copy = BufferCopy(static_cast<Protocol::Texture>(i), width, height);
-                vk.vkCmdCopyImageToBuffer(cmd, sources[i].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, images[i].buffer, 1, &copy);
-            }
-            vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, barriers, released, barriers, after);
-            vk.vkEndCommandBuffer(cmd);
-
-            interop->FlushRenderingCommands();
+            // Wine: done before the helper is asked to read them
             if (!Submit(cmd, VK_NULL_HANDLE, 0, 0, s.fence))
                 return false;
             auto done = vk.vkWaitForFences(device, 1, &s.fence, VK_TRUE, 2000000000ull) == VK_SUCCESS;
@@ -670,42 +662,18 @@ namespace
             return done;
         }
 
-        // Wine: the helper answered Evaluate once the output was in its buffer
-        bool SubmitOutputBuffer(const GameImage& destination)
-        {
-            auto& s = slots[slot];
-            auto output = images[OutputIndex].buffer;
-            auto cmd = s.output;
-            vk.vkResetCommandBuffer(cmd, 0);
-            VkCommandBufferBeginInfo begin{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-            begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            vk.vkBeginCommandBuffer(cmd, &begin);
-
-            auto acquire = BufferBarrier(output, 0, VK_ACCESS_TRANSFER_READ_BIT, VK_QUEUE_FAMILY_EXTERNAL, queueFamily);
-            auto release = BufferBarrier(output, VK_ACCESS_TRANSFER_READ_BIT, 0, queueFamily, VK_QUEUE_FAMILY_EXTERNAL);
-            auto before = ImageBarrier(destination.image, destination.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-            auto after = ImageBarrier(destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, destination.layout, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
-
-            vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &acquire, 1, &before);
-            auto copy = BufferCopy(Protocol::Texture::Output, width, height);
-            vk.vkCmdCopyBufferToImage(cmd, output, destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-            vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 1, &release, 1, &after);
-            vk.vkEndCommandBuffer(cmd);
-
-            if (!Submit(cmd, VK_NULL_HANDLE, 0, 0, s.fence))
-                return false;
-            s.submitted = true;
-            return true;
-        }
-
         bool SubmitOutput(IDirect3DTexture9* target, uint64_t waitValue) override
         {
             GameImage destination;
             if (!GetGameImage(target, destination) || destination.format != Formats[OutputIndex] ||
-                destination.extent.width != width || destination.extent.height != height)
+                destination.extent.width != outputWidth || destination.extent.height != outputHeight)
+            {
+                static uint32_t reported = 0;
+                if (Report(reported))
+                    Log("output: target is format %d %ux%u, expected %d %ux%u", destination.format, destination.extent.width,
+                        destination.extent.height, Formats[OutputIndex], outputWidth, outputHeight);
                 return false;
-            if (sharedBuffers)
-                return SubmitOutputBuffer(destination);
+            }
 
             auto& s = slots[slot];
             auto output = images[OutputIndex].image;
@@ -727,15 +695,29 @@ namespace
             };
 
             vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, before);
-            auto copy = FullCopy(width, height);
+            auto copy = FullCopy(outputWidth, outputHeight);
             vk.vkCmdCopyImage(cmd, output, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
             vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 2, after);
             vk.vkEndCommandBuffer(cmd);
 
-            if (!Submit(cmd, semaphore, waitValue, 0, s.fence))
+            // Wine: the helper answered Evaluate once the output was ready
+            if (!Submit(cmd, WaitOnCpu() ? VK_NULL_HANDLE : semaphore, WaitOnCpu() ? 0 : waitValue, 0, s.fence))
                 return false;
             s.submitted = true;
             return true;
+        }
+
+        void SignalFromCpu(uint64_t value) override
+        {
+            if (!semaphore || !vk.vkSignalSemaphore || !vk.vkGetSemaphoreCounterValue)
+                return;
+            uint64_t current = 0;
+            if (vk.vkGetSemaphoreCounterValue(device, semaphore, &current) != VK_SUCCESS || current >= value)
+                return;
+            VkSemaphoreSignalInfo signal{ VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO };
+            signal.semaphore = semaphore;
+            signal.value = value;
+            vk.vkSignalSemaphore(device, &signal);
         }
     };
 
@@ -878,8 +860,16 @@ namespace
             from.pResource = source;
             from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
             from.SubresourceIndex = 0;
-            D3D12_BOX box{ 0, 0, 0, width, height, 1 };
+            // Matches() made sure both have the source's size
+            auto desc = source->GetDesc();
+            D3D12_BOX box{ 0, 0, 0, static_cast<UINT>(desc.Width), desc.Height, 1 };
             list->CopyTextureRegion(&to, 0, 0, 0, &from, &box);
+        }
+
+        void SignalFromCpu(uint64_t value) override
+        {
+            if (sharedFence && sharedFence->GetCompletedValue() < value)
+                sharedFence->Signal(value);
         }
 
         void ReleaseImports() override
@@ -894,13 +884,11 @@ namespace
             if (sharedFence)
                 sharedFence->Release();
             sharedFence = nullptr;
-            width = height = 0;
+            width = height = outputWidth = outputHeight = 0;
         }
 
-        bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h) override
+        bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
         {
-            ReleaseImports();
-
             bool ok = true;
             for (size_t i = 0; i < images.size(); ++i)
             {
@@ -919,6 +907,8 @@ namespace
 
             width = w;
             height = h;
+            outputWidth = ow;
+            outputHeight = oh;
             return true;
         }
 
@@ -1107,30 +1097,50 @@ namespace
             return true;
         }
 
-        bool Request(Protocol::Command command, DWORD timeout)
+        // A request posted without waiting for its answer, which comes before the next one is written
+        bool pending = false;
+
+        void Post(Protocol::Command command)
         {
             shared->RequestCommand = command;
             shared->RequestSerial = ++serial;
             MemoryBarrier();
             SetEvent(request);
+            pending = true;
+        }
 
+        enum class Answer { Ok, Failed, None };
+
+        // The answer to the last request, None when the helper didn't give it in time or exited
+        Answer Collect(DWORD timeout)
+        {
+            pending = false;
             auto start = GetTickCount64();
             while (true)
             {
                 auto elapsed = static_cast<DWORD>(GetTickCount64() - start);
                 if (elapsed >= timeout)
-                    return false;
+                    return Answer::None;
 
                 HANDLE handles[] = { response, process };
                 auto wait = WaitForMultipleObjects(2, handles, FALSE, timeout - elapsed);
                 if (wait != WAIT_OBJECT_0)
-                    return false;
+                    return Answer::None;
 
                 MemoryBarrier();
                 // A late answer to an earlier request is skipped
                 if (shared->ResponseSerial == serial)
-                    return shared->ResponseStatus == Protocol::Status::Ok;
+                    return shared->ResponseStatus == Protocol::Status::Ok ? Answer::Ok : Answer::Failed;
             }
+        }
+
+        bool Request(Protocol::Command command, DWORD timeout)
+        {
+            // The helper reads a request's parameters before it answers: they can be written once it did
+            if (pending && Collect(timeout) == Answer::None)
+                return false;
+            Post(command);
+            return Collect(timeout) == Answer::Ok;
         }
 
         // graceful: ask the helper to release everything first, not while the game is being unloaded
@@ -1165,10 +1175,13 @@ namespace
     uint32_t configuredBackend = 0;
     uint32_t configuredWidth = 0;
     uint32_t configuredHeight = 0;
+    uint32_t configuredOutputWidth = 0;
+    uint32_t configuredOutputHeight = 0;
     uint32_t configuredPreset = 0;
     uint32_t configuredFlags = 0;
     bool configureFailed = false;
     uint64_t fenceValue = 0;
+    uint64_t pendingOutputValue = 0;   // signalled by the helper for the Evaluate posted last frame
 
     std::filesystem::path HelperPath()
     {
@@ -1209,8 +1222,10 @@ export namespace Upscaler
         IDirect3DTexture9* Motion = nullptr;  // G16R16F, previous - current in texture coordinates
         IDirect3DTexture9* Reactive = nullptr; // R16F, optional
         IDirect3DTexture9* Output = nullptr;  // A16B16G16R16F
-        uint32_t Width = 0;
+        uint32_t Width = 0;           // render size of the inputs
         uint32_t Height = 0;
+        uint32_t OutputWidth = 0;     // size of Output, 0 for the render size
+        uint32_t OutputHeight = 0;
         float JitterX = 0.0f;
         float JitterY = 0.0f;
         float CameraNear = 0.1f;
@@ -1225,6 +1240,12 @@ export namespace Upscaler
     bool IsAvailable(Backend backend)
     {
         return backend == Backend::DLSS ? dlssAvailable.load() : fsrAvailable.load();
+    }
+
+    // The helper has started or failed to: IsAvailable won't change on its own any more
+    bool IsSettled()
+    {
+        return state == State::Ready || state == State::Failed;
     }
 
     // Changes whenever the availability does
@@ -1252,7 +1273,11 @@ export namespace Upscaler
             else if (d3d12Bridge.Init(device))
                 bridge = &d3d12Bridge;
             else
+            {
+                Log("Neither DXVK nor D3D9on12 could share textures with the helper");
                 return;
+            }
+            Log("%s, GPU vendor %04x%s", bridge == &dxvkBridge ? "DXVK" : "D3D9on12", bridge->vendorId, bridge->wine ? ", Wine" : "");
 
             // Nothing to offer: neither an NVIDIA GPU nor AMD's FidelityFX runtime
             if (bridge->vendorId != 0x10DE && !FidelityFXPresent())
@@ -1260,6 +1285,7 @@ export namespace Upscaler
 
             if (!helper.Start(HelperPath(), bridge->luid))
             {
+                Log("The helper could not be started: error %lu", GetLastError());
                 helper.Stop(false);
                 return;
             }
@@ -1273,9 +1299,11 @@ export namespace Upscaler
                 return;
             if (!ok)
             {
+                Log("The helper failed to start: %s", helper.shared ? helper.shared->Message : "");
                 Fail();
                 return;
             }
+            Log("Helper: %s", helper.shared->Message);
             dlssAvailable = helper.shared->DLSSAvailable != 0;
             fsrAvailable = helper.shared->FSRAvailable != 0;
             state = State::Ready;
@@ -1289,11 +1317,39 @@ export namespace Upscaler
         if (state != State::Ready || !IsAvailable(backend) || !frame.Color || !frame.Depth || !frame.Motion || !frame.Output)
             return false;
 
+        // Last frame's Evaluate was posted without waiting: its answer comes before anything else is written. It
+        // came long ago, the helper answers once its GPU work is submitted.
+        if (helper.pending)
+        {
+            auto answer = helper.Collect(500);
+            if (answer != HelperProcess::Answer::Ok)
+            {
+                static uint32_t reported = 0;
+                bool exited = WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0;
+                if (Report(reported))
+                    Log("Evaluate %s%s", answer == HelperProcess::Answer::None ? "got no answer" : "failed", exited ? ", the helper exited" : "");
+                // The copy of the output waits on the GPU for a value nobody will signal now
+                if (answer == HelperProcess::Answer::None)
+                    bridge->SignalFromCpu(pendingOutputValue);
+                if (exited)
+                {
+                    Fail();
+                    return false;
+                }
+                configureFailed = true;
+                if (answer == HelperProcess::Answer::None)
+                    return false;
+            }
+        }
+
         auto backendId = static_cast<uint32_t>(backend);
         auto flags = frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u;
-        if (bridge->sharedBuffers)
-            flags |= Protocol::ConfigureFlags::SharedBuffers;
+        if (bridge->wine)
+            flags |= Protocol::ConfigureFlags::Wine;
+        auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
+        auto outputHeight = frame.OutputHeight ? frame.OutputHeight : frame.Height;
         bool reconfigure = configuredBackend != backendId || configuredWidth != frame.Width || configuredHeight != frame.Height ||
+            configuredOutputWidth != outputWidth || configuredOutputHeight != outputHeight ||
             configuredPreset != frame.DLSSPreset || configuredFlags != flags;
         if (reconfigure)
         {
@@ -1301,6 +1357,8 @@ export namespace Upscaler
             configuredBackend = backendId;
             configuredWidth = frame.Width;
             configuredHeight = frame.Height;
+            configuredOutputWidth = outputWidth;
+            configuredOutputHeight = outputHeight;
             configuredPreset = frame.DLSSPreset;
             configuredFlags = flags;
             configureFailed = true;
@@ -1309,16 +1367,31 @@ export namespace Upscaler
             shared.ConfigureBackend = static_cast<Protocol::Backend>(backendId);
             shared.Width = frame.Width;
             shared.Height = frame.Height;
+            shared.OutputWidth = outputWidth;
+            shared.OutputHeight = outputHeight;
             shared.DLSSPreset = frame.DLSSPreset;
             shared.Flags = flags;
+            shared.FenceHandle = 0;
+            if (bridge->PrepareGameFence(shared, helper.process))
+                shared.Flags |= Protocol::ConfigureFlags::GameFence;
             if (!helper.Request(Protocol::Command::Configure, 15000))
             {
-                if (WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0)
+                bool exited = WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0;
+                Log("Configure %ux%u -> %ux%u failed%s: %s", frame.Width, frame.Height, outputWidth, outputHeight,
+                    exited ? ", the helper exited" : "", shared.Message);
+                if (exited)
                     Fail();
                 return false;
             }
-            if (!bridge->Import(shared, frame.Width, frame.Height))
+            bridge->gameFence = (shared.Flags & Protocol::ConfigureFlags::GameFence) != 0;
+            if (bridge->wine)
+                Log("Synchronization: %s", bridge->gameFence ? "the game's semaphore, on the GPU" : "on the CPU");
+            if (!bridge->Import(shared, frame.Width, frame.Height, outputWidth, outputHeight))
+            {
+                Log("Configure %ux%u -> %ux%u: the shared resources could not be imported", frame.Width, frame.Height, outputWidth, outputHeight);
                 return false;
+            }
+            Log("Configured: %s", shared.Message);
 
             configureFailed = false;
             fenceValue = 0;
@@ -1336,6 +1409,9 @@ export namespace Upscaler
         if (!bridge->SubmitInputs(inputs, inputValue))
         {
             // Nothing was submitted, the helper was not asked for this frame. Retried when the mode or size changes.
+            static uint32_t reported = 0;
+            if (Report(reported))
+                Log("The inputs could not be submitted");
             configureFailed = true;
             return false;
         }
@@ -1354,10 +1430,23 @@ export namespace Upscaler
         shared.Sharpness = frame.Sharpness;
         shared.Reset = frame.Reset ? 1 : 0;
 
-        // The helper answers once its GPU work, which signals outputValue, has been submitted
+        // Synchronized on the GPU: the copy of the output waits there for outputValue, and the answer is collected
+        // next frame
+        if (!bridge->WaitOnCpu())
+        {
+            helper.Post(Protocol::Command::Evaluate);
+            pendingOutputValue = outputValue;
+            return bridge->SubmitOutput(frame.Output, outputValue);
+        }
+
+        // On the CPU: the helper answers once its GPU work, which signals outputValue, has finished
         if (!helper.Request(Protocol::Command::Evaluate, 500))
         {
-            if (WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0)
+            static uint32_t reported = 0;
+            bool exited = WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0;
+            if (Report(reported))
+                Log("Evaluate failed%s", exited ? ", the helper exited" : "");
+            if (exited)
                 Fail();
             else
                 configureFailed = true;

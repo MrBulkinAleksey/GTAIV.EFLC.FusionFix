@@ -1720,8 +1720,13 @@ export namespace rage
         }
 
         static inline SafetyHookInline shCreateRT{};
+        // Lets the render scale size the scene's targets (renderscale.ixx)
+        static inline void(*CreateRTSize)(const char* name, uint32_t& width, uint32_t& height) = nullptr;
         static grcRenderTargetPC* __stdcall CreateRT(const char* name, int32_t a2, uint32_t width, uint32_t height, uint32_t bitsPerPixel, grcRenderTargetDesc* desc)
         {
+            if (CreateRTSize && name)
+                CreateRTSize(name, width, height);
+
             // Scale phone screen/phone camera rendertarget resolution with game resolution.
             if (std::string_view(name) == "PHONE_SCREEN" || std::string_view(name) == "PHOTO" || std::string_view(name) == "FullScreenCopy2")
             {

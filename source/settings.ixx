@@ -2102,6 +2102,7 @@ public:
             { 0, "PREF_DETAIL_TEXTURES",        "TEXTURES",   "DetailTextures",                     "",                           0, nullptr, 0, 1 },
             { 0, "PREF_BICUBIC_TEXTURES",       "TEXTURES",   "BicubicFiltering",                   "",                           0, nullptr, 0, 1 },
             { 0, "PREF_SPECULAR_AA",            "TEXTURES",   "SpecularAntiAliasing",               "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_UPSCALER_QUALITY",       "TEMPORAL",   "UpscalerQuality",                    "MENU_DISPLAY_UPSCALER_QUALITY", 0, nullptr, 0, 4 },
         };
 
         for (auto& setting : arr)
@@ -2139,6 +2140,7 @@ public:
         DefineDisplay("MENU_DISPLAY_TREE_LIGHTING", { "PC", "PC+", "Console" });
         DefineDisplay("MENU_DISPLAY_BUTTONS", { "Xbox 360", "Xbox One", "PlayStation 3", "PlayStation 4", "PlayStation 5", "Nintendo Switch", "Steam Deck", "FE_STEAMPAD" });
         DefineDisplay("MENU_DISPLAY_ANTIALIASING", { "MO_OFF", "FXAA", "SMAA", "TAA", "DLAA", "FSR" });
+        DefineDisplay("MENU_DISPLAY_UPSCALER_QUALITY", { "UpscNative", "UpscQuality", "UpscBalanced", "UpscPerf", "UpscUltraPerf" });
         DefineDisplay("MENU_DISPLAY_CONSOLE_GAMMA", { "MO_OFF", "Xbox 360", "PlayStation 3" });
         DefineDisplay("MENU_DISPLAY_AUDIO_SYNC", { "MO_OFF", "MO_ALT", "MO_ON" });
         DefineDisplay("MENU_DISPLAY_EXTRA_NIGHT_SHADOWS", { "MO_OFF", "Lampposts", "LampostsHeadl", "LampHeadlVNS" });
@@ -2304,6 +2306,8 @@ public:
             advancedGraphics.push_back(category);
             AddRow(category, "FPS Limiter", "PREF_FPS_LIMIT_PRESET", 13, "MENU_DISPLAY_FRAMELIMIT");
             AddRow(category, "Antialiasing", "PREF_ANTIALIASING", 6, "MENU_DISPLAY_ANTIALIASING");
+            // DLAA and FSR: the scene below the screen size, applied with a device reset
+            AddRow(category, "UpscalerQuality", "PREF_UPSCALER_QUALITY", 5, "MENU_DISPLAY_UPSCALER_QUALITY");
             AddEmptyLine(category);
             AddRow(category, "Volumetric Fog", "PREF_VOLUMETRICFOG", 2, toggle);
             AddRow(category, "Sun Shafts", "PREF_SUNSHAFTS", 2, toggle);

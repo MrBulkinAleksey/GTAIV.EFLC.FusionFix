@@ -85,14 +85,24 @@ public:
         return supported;
     }
 
-    // The back buffer format only changes with a device reset: the game resets the device in the current mode
+    // The back buffer format only changes with a device reset: the game resets the device in the current mode.
+    // Without DXVK the present parameters are unknown, the game's screen size stands in for them.
     static void RequestReset()
     {
-        if (!pRequestedWidth || !pPresentParams || *pRequestedWidth != 0 || !pPresentParams->BackBufferWidth || !pPresentParams->BackBufferHeight)
+        if (!pRequestedWidth || *pRequestedWidth != 0)
             return;
-        *pRequestedHeight = static_cast<int32_t>(pPresentParams->BackBufferHeight);
+        int32_t width = pPresentParams ? static_cast<int32_t>(pPresentParams->BackBufferWidth) : 0;
+        int32_t height = pPresentParams ? static_cast<int32_t>(pPresentParams->BackBufferHeight) : 0;
+        if ((!width || !height) && rage::grcDevice::ms_nActiveWidth && rage::grcDevice::ms_nActiveHeight)
+        {
+            width = *rage::grcDevice::ms_nActiveWidth;
+            height = *rage::grcDevice::ms_nActiveHeight;
+        }
+        if (width <= 0 || height <= 0)
+            return;
+        *pRequestedHeight = height;
         *pRequestedRefreshRate = *pRefreshRate;
-        *pRequestedWidth = static_cast<int32_t>(pPresentParams->BackBufferWidth);
+        *pRequestedWidth = width;
     }
 
     static void OnOutputChanged(int32_t)
@@ -492,6 +502,15 @@ public:
         };
     }
 } HDR;
+
+export namespace DisplayMode
+{
+    // A device reset in the current display mode before a coming frame: the render targets are created again
+    void RequestReset()
+    {
+        HDR::RequestReset();
+    }
+}
 
 export namespace HDROutput
 {
