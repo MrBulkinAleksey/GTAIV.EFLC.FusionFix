@@ -1265,7 +1265,7 @@ public:
     void ReadLiveIni(CIniReader& iniReader)
     {
         fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
-        fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 1.0f);
+        fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 50.0f);
         fCloudShadows = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadows", 0.6f), 0.0f, 1.0f);
         fCloudShadowsHeight = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsHeight", 1200.0f), 100.0f, 10000.0f);
         fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 8000.0f), 100.0f, 50000.0f);
@@ -5884,8 +5884,8 @@ public:
             R.fCloudWindY = windY;
             R.fCloudSeconds = seconds;
             float c197[4] = { R.fSpecularSheen, strength, deckHeight, invScale };
-            float c198[4] = { windX, windY, cover, kCloudWeatherReach };
-            float c199[4] = { 0.0f, R.fCloudShadowsSoftness, R.CloudMorphPhase(), kCloudMorphReach / R.fCloudShadowsScale };
+            float c198[4] = { windX, windY, cover, R.kCloudWeatherReach };
+            float c199[4] = { 0.0f, R.fCloudShadowsSoftness, R.CloudMorphPhase(), R.kCloudMorphReach / R.fCloudShadowsScale };
             if (R.nCloudShadowsDebug == 1)
             {
                 // Full cover everywhere.
