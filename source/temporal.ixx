@@ -48,7 +48,7 @@ import upscaler;
 //   DLAA and FSR replace it when they are available (see upscaler.ixx), with the same jitter and motion
 //   vectors.
 
-export namespace TemporalMath
+namespace TemporalMath
 {
     struct Matrix
     {
