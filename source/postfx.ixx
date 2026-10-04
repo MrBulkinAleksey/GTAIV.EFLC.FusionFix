@@ -391,6 +391,9 @@ public:
     IDirect3DVolumeTexture9* CloudDetailTexture = nullptr;
     IDirect3DVolumeTexture9* CloudDetailTex();
     bool VolumetricCloudsOn() const { return bVolumetricClouds && CloudsEffect != nullptr; }
+    // Why the last frame drew no volumetric clouds, or that it did, for the Ctrl+Shift+F10 log.
+    const char* szCloudsStatus = "not run yet";
+    HRESULT hrCloudsEffect = S_OK;
     IDirect3DTexture9* CloudNoiseTexture = nullptr;
     IDirect3DTexture9* CloudNoiseTex();
     bool bCloudNoiseBound = false;
@@ -1088,8 +1091,9 @@ public:
         {
             cloudsEffectTried = true;
             ID3DXBuffer* errors = nullptr;
-            if (D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
-                hm, MAKEINTRESOURCEW(IDR_CLOUDS_FX), nullptr, nullptr, 0, nullptr, &CloudsEffect, &errors) != S_OK)
+            hrCloudsEffect = D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
+                hm, MAKEINTRESOURCEW(IDR_CLOUDS_FX), nullptr, nullptr, 0, nullptr, &CloudsEffect, &errors);
+            if (hrCloudsEffect != S_OK)
             {
                 CloudsEffect = nullptr;
                 if (errors)
@@ -3737,11 +3741,20 @@ private:
     static void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* sceneBase)
     {
         auto& R = PostFxResources;
-        if (!R.VolumetricCloudsOn() || !R.bCloudParamsRegistered || !sceneBase || !R.mDepthRT || !R.mDepthRT->mD3DTexture)
-            return;
+        auto skip = [&](const char* why) { R.szCloudsStatus = why; };
+        if (!R.bVolumetricClouds)
+            return skip("off in the ini");
+        if (!R.CloudsEffect)
+            return skip("no effect");
+        if (!R.bCloudParamsRegistered)
+            return skip("cloud parameters not registered");
+        if (!sceneBase)
+            return skip("no scene texture");
+        if (!R.mDepthRT || !R.mDepthRT->mD3DTexture)
+            return skip("no depth texture");
         rage::grcViewport* vp = rage::GetCurrentViewport();
         if (!vp)
-            return;
+            return skip("no viewport");
 
         // The game's clouds: until the sky has been drawn once these read zero.
         const auto& shade = rage::grmShaderInfo::getShaderParamData(R.CloudColorIdx);
@@ -3749,27 +3762,30 @@ private:
         const auto& sunDirection = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
         const float exposure = rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0] * R.fVolumetricCloudsBrightness;
         if (exposure <= 0.0f)
-            return;
+            return skip("HDRExposure of the sky reads zero");
         // The sky's SunDirection is y up; the world is z up.
         D3DXVECTOR4 sun(sunDirection[0], -sunDirection[2], sunDirection[1], 0.0f);
         const float sunLength = std::sqrt(sun.x * sun.x + sun.y * sun.y + sun.z * sun.z);
         if (sunLength <= 0.0f)
-            return;
+            return skip("SunDirection of the sky reads zero");
         sun /= sunLength;
 
         auto coverage = R.CloudNoiseTex();
         auto detail = R.CloudDetailTex();
-        if (!coverage || !detail)
-            return;
+        if (!coverage)
+            return skip("no coverage texture");
+        if (!detail)
+            return skip("no detail texture");
 
         IDirect3DTexture9* scene = nullptr;
         if (FAILED(sceneBase->QueryInterface(__uuidof(IDirect3DTexture9), reinterpret_cast<void**>(&scene))) || !scene)
-            return;
+            return skip("the scene is no 2D texture");
         IDirect3DSurface9* sceneSurface = nullptr;
         scene->GetSurfaceLevel(0, &sceneSurface);
         scene->Release();
         if (!sceneSurface)
-            return;
+            return skip("no scene surface");
+        R.szCloudsStatus = "drawn";
         D3DSURFACE_DESC desc = {};
         sceneSurface->GetDesc(&desc);
         const float width = float(desc.Width), height = float(desc.Height);
@@ -4441,6 +4457,12 @@ private:
                 fprintf(log, "threshold %.4f  bias %.4f  thickness %.4f  (%s)  coverage %+.3f  strength %.2f\n", R.fCloudLastThreshold,
                         R.fCloudLastBias, R.fCloudLastThickness, R.bCloudLastFromGame ? "the game's" : "fallback, the sky not drawn yet",
                         R.fCloudShadowsCoverage, R.fCloudShadows);
+                const auto& top = rage::grmShaderInfo::getShaderParamData(R.TopCloudColorIdx);
+                const auto& sunDir = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
+                fprintf(log, "  volumetric clouds: %s; effect %s (hr 0x%08lX); shadows follow them %d; HDRExposure %.3f; TopCloudColor %.3f %.3f %.3f; "
+                             "SunDirection %.3f %.3f %.3f\n",
+                        R.szCloudsStatus, R.CloudsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrCloudsEffect), int(R.VolumetricCloudsOn()),
+                        rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0], top[0], top[1], top[2], sunDir[0], sunDir[1], sunDir[2]);
                 fclose(log);
             }
             MessageBeep(MB_OK);

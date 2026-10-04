@@ -1978,6 +1978,11 @@ export namespace rage
 
         static inline size_t registerShaderParam(const char* shader, const char* param)
         {
+            // setShaderParam fills only the first entry that matches, so a second registration of
+            // the same parameter would stay zero: hand out the first one's index instead.
+            for (size_t i = 0; i < ShaderParamNames.size(); ++i)
+                if (ShaderParamNames[i].first == shader && ShaderParamNames[i].second.first == param)
+                    return i;
             ShaderParamNames.emplace_back(shader, std::make_pair(param, -1));
             ShaderParamData.emplace_back(); // zero-initialized
             return ShaderParamNames.size() - 1;
