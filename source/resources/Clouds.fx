@@ -33,6 +33,7 @@ sampler3D DetailTex : register(s2);
 sampler2D CurrentTex : register(s3);   // this frame's clouds at half size (CloudsResolve)
 sampler2D HistoryTex : register(s4);   // the clouds accumulated up to last frame (CloudsResolve)
 sampler2D CloudTex : register(s5);     // the accumulated clouds (CloudsComposite)
+sampler2D SceneTex : register(s6);     // the lit scene, the sky in it, behind the clouds (Clouds at half size)
 
 float2 vec2InvViewportSize;
 float4 vec4ProjInfo;
@@ -51,7 +52,11 @@ float3 vec3ShadeColour;   // the game's cloud colour darkened by VolumetricCloud
 float3 vec3SunsetColour;  // the game's sunset colour, exposed
 float fSilver;            // the game's CloudInscatteringRange: the brightening along the sun's axis
 float fLightStrength;     // the sun's light, fading out below the horizon, or the moon's once it has handed over
-float fCeiling;           // the brightest channel the cloud rolls off towards (at most the sky's clamp without HDR)
+float fCeiling;
+// VolumetricCloudsSkyMatch: how many times brighter than the sky behind them the clouds' sunlit side
+// is; 0 leaves them at the game's cloud colour. fLitLuma is that sunlit side's luma.
+float fSkyMatch;
+float fLitLuma;           // the brightest channel the cloud rolls off towards (at most the sky's clamp without HDR)
 float3 vec3SunTint;       // the hue of the game's SunColor at its brightness 1, mixed towards white by VolumetricCloudsSunTint
 float4 vec4Layer;         // base height, thickness, 1 / coverage scale, coverage
 float4 vec4Wind;          // coverage offset (xy), detail offset (zw)
@@ -380,6 +385,19 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
         else
             fineLeft -= 1.0;
         t += fine;
+    }
+
+    // The clouds against the sky behind them. The game's CloudColor at its HDR exposure came out
+    // several times brighter than the sky it draws, past the tone mapping's white point: the whole
+    // cloud, lit side, bases and rims, turned one flat white. Scaled as a whole, so its shading
+    // stays, until its sunlit side is fSkyMatch times the sky's luma here; the sky around the sun is
+    // brighter, and so are the clouds before it.
+    [branch]
+    if (fSkyMatch > 0.0)
+    {
+        float skyLuma = dot(tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb, float3(0.2126, 0.7152, 0.0722));
+        if (skyLuma > 1e-4)
+            colour *= clamp(fSkyMatch * skyLuma / fLitLuma, 0.1, 2.0);
     }
 
     // Haze: distant cloud fades into what is behind it.

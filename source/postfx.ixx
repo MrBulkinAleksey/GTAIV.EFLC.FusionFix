@@ -399,6 +399,8 @@ public:
     // clouds' shaded side takes the hue of the sky above it.
     float fVolumetricCloudsMoonlight = 0.5f;
     float fVolumetricCloudsSkyLight = 0.35f;
+    // The clouds' sunlit side against the sky behind them, in times its brightness.
+    float fVolumetricCloudsSkyMatch = 3.5f;
     bool bVolumetricCloudsWeather = true;
     float fVolumetricCloudsVanilla = 0.0f;
     float fVolumetricCloudsTranslucency = 0.3f;
@@ -1307,6 +1309,7 @@ public:
         fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.6f), 0.0f, 1.0f);
         fVolumetricCloudsMoonlight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMoonlight", 0.5f), 0.0f, 2.0f);
         fVolumetricCloudsSkyLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyLight", 0.35f), 0.0f, 1.0f);
+        fVolumetricCloudsSkyMatch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyMatch", 3.5f), 0.0f, 20.0f);
         bVolumetricCloudsWeather = iniReader.ReadInteger("POSTFX", "VolumetricCloudsWeather", 1) != 0;
         fVolumetricCloudsVanilla = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsVanilla", 0.0f), 0.0f, 1.0f);
         fVolumetricCloudsTranslucency = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsTranslucency", 0.3f), 0.0f, 0.9f);
@@ -4122,6 +4125,14 @@ private:
         effect->SetFloatArray("vec3SunsetColour", sunsetLit, 3);
         effect->SetFloat("fSilver", inscattering);
         effect->SetFloat("fCeiling", ceiling);
+        // Matched to the sky in the scene behind them, while the march has targets of its own to draw
+        // into and can read the scene; the reflections keep the game's cloud colour.
+        {
+            const bool canReadScene = !reflection && R.CloudSurf[0] && R.CloudSurf[1] && R.CloudSurf[2];
+            const float litLuma = 0.2126f * litColour[0] + 0.7152f * litColour[1] + 0.0722f * litColour[2];
+            effect->SetFloat("fSkyMatch", canReadScene && litLuma > 1e-4f ? R.fVolumetricCloudsSkyMatch : 0.0f);
+            effect->SetFloat("fLitLuma", (std::max)(litLuma, 1e-4f));
+        }
         effect->SetFloat("fLightStrength", lightStrength);
         // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
         // towards white by VolumetricCloudsSunTint. The moon's is a cool white.
@@ -4164,14 +4175,14 @@ private:
         IDirect3DVertexBuffer9* oldVB = nullptr;
         IDirect3DPixelShader9* oldPS = nullptr;
         IDirect3DVertexShader9* oldVS = nullptr;
-        IDirect3DBaseTexture9* oldTextures[6] = {};
+        IDirect3DBaseTexture9* oldTextures[7] = {};
         UINT oldOffset = 0, oldStride = 0;
         DWORD oldFVF = 0;
         D3DVIEWPORT9 oldViewport = {};
         DWORD savedRenderStates[std::size(kCloudRenderStates)] = {};
         static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW,
                                                                    D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER };
-        DWORD savedSamplerStates[6][std::size(kSamplerStates)] = {};
+        DWORD savedSamplerStates[7][std::size(kSamplerStates)] = {};
 
         pDevice->GetRenderTarget(0, &oldTarget);
         pDevice->GetDepthStencilSurface(&oldDepth);
@@ -4183,7 +4194,7 @@ private:
         pDevice->GetVertexShader(&oldVS);
         pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
         pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-        for (DWORD slot = 0; slot < 6; ++slot)
+        for (DWORD slot = 0; slot < 7; ++slot)
         {
             pDevice->GetTexture(slot, &oldTextures[slot]);
             for (size_t i = 0; i < std::size(kSamplerStates); ++i)
@@ -4233,10 +4244,11 @@ private:
         }
 
         struct ScreenVertex { float x, y, z, rhw; float u, v; };
-        auto bindTextures = [&]()
+        auto bindTextures = [&](bool readScene)
         {
             // The samplers have fixed registers: s0 depth, s1 coverage, s2 detail, s3 this frame's
-            // half size clouds, s4 the history, s5 the accumulated clouds.
+            // half size clouds, s4 the history, s5 the accumulated clouds, s6 the scene with the sky
+            // the clouds are matched to, only while the march draws into targets of its own.
             // The reflections have no depth texture of their own: none reads as sky everywhere.
             pDevice->SetTexture(0, reflection ? nullptr : R.mDepthRT->mD3DTexture);
             pDevice->SetTexture(1, coverage);
@@ -4244,7 +4256,8 @@ private:
             pDevice->SetTexture(3, halfSize ? R.CloudTex[0]->mD3DTexture : nullptr);
             pDevice->SetTexture(4, halfSize ? R.CloudTex[prevAccum]->mD3DTexture : nullptr);
             pDevice->SetTexture(5, halfSize ? R.CloudTex[nextAccum]->mD3DTexture : nullptr);
-            for (DWORD slot = 0; slot < 6; ++slot)
+            pDevice->SetTexture(6, readScene ? sceneBase : nullptr);
+            for (DWORD slot = 0; slot < 7; ++slot)
             {
                 const bool wrap = slot == 1 || slot == 2;
                 const bool linear = slot != 0 && slot != 3;
@@ -4277,7 +4290,8 @@ private:
             effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
             effect->BeginPass(0);
             effect->CommitChanges();
-            bindTextures();
+            // Never the scene while drawing into it.
+            bindTextures(halfSize && target != sceneSurface);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
@@ -4296,7 +4310,7 @@ private:
 
         for (size_t i = 0; i < std::size(kCloudRenderStates); ++i)
             pDevice->SetRenderState(kCloudRenderStates[i].state, savedRenderStates[i]);
-        for (DWORD slot = 0; slot < 6; ++slot)
+        for (DWORD slot = 0; slot < 7; ++slot)
         {
             pDevice->SetTexture(slot, oldTextures[slot]);
             for (size_t i = 0; i < std::size(kSamplerStates); ++i)
