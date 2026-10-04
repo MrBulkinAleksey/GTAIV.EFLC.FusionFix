@@ -1597,6 +1597,19 @@ float4 SSRDebugCopy_PS(float2 uv : TEXCOORD0) : COLOR0
     return float4(tex2Dlod(DebugTex, float4(uv, 0, 0)).rgb, 1.0);
 }
 
+// SSR Debug 10: the water reflection map. The water shader reads it mirrored left to right, so it is mirrored
+// back to where it lands on the water; HDR, so brought into range as c / (1 + c). NaN and infinity show cyan
+// (fxc drops c != c, but NaN fails the comparison below too), negative values red.
+float4 WaterReflectionDebug_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float4 c = tex2Dlod(DebugTex, float4(1.0 - uv.x, uv.y, 0, 0));
+    if (!all(abs(c) <= 60000.0))
+        return float4(0.0, 1.0, 1.0, 1.0);
+    if (any(c.rgb < 0.0))
+        return float4(1.0, 0.0, 0.0, 1.0);
+    return float4(c.rgb / (1.0 + c.rgb), 1.0);
+}
+
 void FullscreenQuadVS(in float4 iPos : POSITION, in float2 iUV : TEXCOORD0,
                       out float4 oPos : POSITION, out float2 oUV : TEXCOORD0)
 {
@@ -1751,5 +1764,14 @@ technique SSRDebugCopy
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSRDebugCopy_PS();
+    }
+}
+
+technique WaterReflectionDebug
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 WaterReflectionDebug_PS();
     }
 }

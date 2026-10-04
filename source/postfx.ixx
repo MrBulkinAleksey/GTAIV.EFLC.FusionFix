@@ -259,7 +259,7 @@ public:
     struct
     {
         D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
-        D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
+        D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy, techWaterReflectionDebug;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fSpreadRadius;
@@ -347,8 +347,8 @@ public:
     // band reached a fifth of full light and turned the dark side of faces red.
     float fSkinLighting = 1.0f;
     static constexpr int kSkinDebugMode = 9;
-    // SSR Debug 10: the water reflection map (WATER_REFLECTION_COLOUR) stretched over the finished frame. The
-    // water shader reads it mirrored left to right.
+    // SSR Debug 10: the water reflection map (WATER_REFLECTION_COLOUR) over the finished frame, see
+    // WaterReflectionDebug_PS in SSR.fx.
     static constexpr int kWaterReflectionDebugMode = 10;
     rage::grcRenderTargetPC* mMaterialIdRT = nullptr;
     rage::grcRenderTargetPC* SkinLightTex[2] = {};
@@ -988,6 +988,7 @@ public:
                 h.techSSRDenoise = SSREffect->GetTechniqueByName("SSRDenoise");
                 h.techSSRDebug = SSREffect->GetTechniqueByName("SSRDebug");
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
+                h.techWaterReflectionDebug = SSREffect->GetTechniqueByName("WaterReflectionDebug");
                 h.SSRAccumTex2D = SSREffect->GetParameterByName(nullptr, "SSRAccumTex2D");
                 h.SSRFallbackTex2D = SSREffect->GetParameterByName(nullptr, "SSRFallbackTex2D");
                 h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
@@ -3967,15 +3968,8 @@ private:
         if (PostFxResources.SSRDebugMode() != PostFxResources.kWaterReflectionDebugMode)
             return;
         auto rt = rage::grcTextureFactoryPC::GetRTByName("WATER_REFLECTION_COLOUR");
-        IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
-        if (!pDevice || !rt || !rt->mD3DTexture)
-            return;
-        IDirect3DSurface9* src = nullptr;
-        IDirect3DSurface9* dst = nullptr;
-        if (SUCCEEDED(rt->mD3DTexture->GetSurfaceLevel(0, &src)) && SUCCEEDED(pDevice->GetRenderTarget(0, &dst)))
-            pDevice->StretchRect(src, nullptr, dst, nullptr, D3DTEXF_LINEAR);
-        SAFE_RELEASE(src);
-        SAFE_RELEASE(dst);
+        if (rt)
+            DrawDebugTexture(rt->mD3DTexture, PostFxResources.SSREffectHandles.techWaterReflectionDebug);
     }
 
     // Replaces the finished frame with the SSR debug view chosen in the graphics menu.
@@ -3986,9 +3980,15 @@ private:
         if (!R.bSSRDebugValid || !R.SSRDebugTex || !R.SSREffect || !R.SSREffectHandles.techSSRDebugCopy)
             return;
         R.bSSRDebugValid = false;
+        DrawDebugTexture(R.SSRDebugTex->mD3DTexture, R.SSREffectHandles.techSSRDebugCopy);
+    }
 
+    // Draws texture over the finished frame with technique, which reads it as DebugTex.
+    static void DrawDebugTexture(IDirect3DTexture9* texture, D3DXHANDLE technique)
+    {
+        auto& R = PostFxResources;
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
-        if (!pDevice)
+        if (!pDevice || !texture || !R.SSREffect || !technique)
             return;
 
         IDirect3DSurface9* rt0 = nullptr;
@@ -4051,9 +4051,9 @@ private:
 
         auto& h = R.SSREffectHandles;
         ID3DXEffect* effect = R.SSREffect;
-        effect->SetTexture(h.DebugTex2D, R.SSRDebugTex->mD3DTexture);
+        effect->SetTexture(h.DebugTex2D, texture);
         UINT passes = 0;
-        effect->SetTechnique(h.techSSRDebugCopy);
+        effect->SetTechnique(technique);
         effect->Begin(&passes, 0);
         effect->BeginPass(0);
         effect->CommitChanges();
