@@ -24,7 +24,7 @@
 #define LIGHT_STEPS 3
 #endif
 // CloudNoiseTex's size.
-#define COVERAGE_SIZE 256.0
+#define COVERAGE_SIZE 1024.0
 
 sampler2D DepthTex : register(s0);
 sampler2D CoverageTex : register(s1);
@@ -64,6 +64,7 @@ float4 vec4History;
 float fStratus;           // 0 separate heaps of cloud, 1 a sheet: the weather's overcast
 float fEvolution;         // how far the detail has drifted up through itself, so the billows change
 float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
+float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
@@ -116,7 +117,7 @@ float EdgeWeight(float d)
 // coverage map read 1 / vec4Morph.z times larger, from a blurred mip.
 float Weather(float2 uv)
 {
-    return tex2Dlod(CoverageTex, float4(uv * vec4Morph.z + 0.31, 0, 4)).r;
+    return tex2Dlod(CoverageTex, float4(uv * vec4Morph.z + 0.31, 0, 6)).r;
 }
 
 // The map's slow morph: the coordinates swing by up to vec4Morph.y in waves a fifth and a quarter of
@@ -144,14 +145,14 @@ Place PlaceAt(float3 p)
 }
 
 // The coarse search's test, cheap and on the safe side: whether there may be cloud near p, from a
-// blurred mip of the map (its 8 texels span the morph's reach) against the cover of the cloudiest
+// blurred mip of the map (its texels, 32 to the map, span the morph's reach) against the cover of the cloudiest
 // weather.
 bool MayBeCloud(float3 p)
 {
     float h = (p.z - vec4Layer.x) / vec4Layer.y;
     if (h <= 0.0 || h >= 1.25)
         return false;
-    float c = tex2Dlod(CoverageTex, float4(p.xy * vec4Layer.z + vec4Wind.xy, 0, 3)).r;
+    float c = tex2Dlod(CoverageTex, float4(p.xy * vec4Layer.z + vec4Wind.xy, 0, 5)).r;
     float cover = saturate(max(vec4Layer.w, 0.02) * (1.0 + abs(vec4Morph.w)));
     return c > (1.0 - cover) * (1.0 - cover) - 0.1;
 }
@@ -309,9 +310,10 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // which is what keeps real clouds bright: three octaves, each with half the extinction
             // and half the weight of the one before. With the direct beam alone the sun barely
             // reached the faces seen from below and the clouds came out dark.
-            // A third of the extinction: past the sun's direct beam the light inside a cloud is
-            // scattered forwards mostly, so it gets through far more cloud than the eye's view does.
-            float tau = lightDepth * sigma * 0.33;
+            // A share of the extinction (VolumetricCloudsAbsorption): past the sun's direct beam the
+            // light inside a cloud is scattered forwards mostly and gets through more cloud than the
+            // eye's view does; a third of it lit the bases nearly as brightly as the tops.
+            float tau = lightDepth * sigma * fLightAbsorption;
             float sun = (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) / 1.75;
             // Darker towards the base, where the sky above is hidden by the cloud itself, and
             // under more cloud: one sample a quarter of the layer straight up.

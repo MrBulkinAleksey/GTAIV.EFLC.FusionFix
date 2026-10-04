@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-index f0c526f5..460a0430 100644
+index f0c526f5..61ac1763 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 @@ -80,6 +80,10 @@
@@ -7,7 +7,7 @@ index f0c526f5..460a0430 100644
      def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
      def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
 +    def c157, 0.05, 0, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at
-+    def c160, 0.08, 0.31, 4, 0.05 // FusionFix cloud shadows: the weather map's scale, offset and mip; the height's lowering
++    def c160, 0.08, 0.31, 6, 0.05 // FusionFix cloud shadows: the weather map's scale, offset and mip; the height's lowering
 +    def c161, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix cloud shadows: angles into -pi..pi for sincos
 +    def c162, 31.4159265, 25.1327412, 1.2, 0.4 // FusionFix cloud shadows: the morph's waves and phase rate; the compressor's power
      def c111, 0.159154937, 0.5, 6.28318548, -3.14159274
@@ -99,7 +99,7 @@ index f0c526f5..460a0430 100644
      mov r2.xyz, r31.xyz
      mad r1.xyz, v1, -r0.x, c1.w
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-index 82aba8a0..7514193e 100644
+index 82aba8a0..ee9beb20 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 @@ -81,6 +81,10 @@
@@ -107,7 +107,7 @@ index 82aba8a0..7514193e 100644
      def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
      def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
 +    def c157, 0.05, 0, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at
-+    def c160, 0.08, 0.31, 4, 0.05 // FusionFix cloud shadows: the weather map's scale, offset and mip; the height's lowering
++    def c160, 0.08, 0.31, 6, 0.05 // FusionFix cloud shadows: the weather map's scale, offset and mip; the height's lowering
 +    def c161, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix cloud shadows: angles into -pi..pi for sincos
 +    def c162, 31.4159265, 25.1327412, 1.2, 0.4 // FusionFix cloud shadows: the morph's waves and phase rate; the compressor's power
      def c111, 0.159154937, 0.5, 6.28318548, -3.14159274

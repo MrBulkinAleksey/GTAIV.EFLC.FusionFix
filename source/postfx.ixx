@@ -363,7 +363,7 @@ public:
     float fCloudShadowsHeight = 1200.0f;
     float fCloudShadowsScale = 8000.0f;
     float fCloudShadowsWind = 6.0f;
-    float fCloudShadowsSoftness = 1.0f;
+    float fCloudShadowsSoftness = 3.0f;
     // Added to the deck's coverage before the game's thickness curve: above 0 more of the sky
     // casts a shadow, below 0 less.
     float fCloudShadowsCoverage = 0.0f;
@@ -399,6 +399,10 @@ public:
     float fVolumetricCloudsTranslucency = 0.3f;
     float fVolumetricCloudsEvolution = 1.0f;
     float fVolumetricCloudsSaturation = 1.0f;
+    // The shaded side and the bases against the game's cloud colour, and how much of the view's
+    // extinction the sun's light takes inside a cloud: the clouds' contrast.
+    float fVolumetricCloudsShade = 0.5f;
+    float fVolumetricCloudsAbsorption = 0.6f;
     // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
     bool bVolumetricCloudsReflections = true;
     float fVolumetricCloudsReflectionBrightness = 1.0f;
@@ -1270,7 +1274,7 @@ public:
         fCloudShadowsHeight = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsHeight", 1200.0f), 100.0f, 10000.0f);
         fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 8000.0f), 100.0f, 50000.0f);
         fCloudShadowsWind = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsWind", 6.0f), 0.0f, 100.0f);
-        fCloudShadowsSoftness = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsSoftness", 1.0f), 0.0f, 6.0f);
+        fCloudShadowsSoftness = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsSoftness", 3.0f), 0.0f, 8.0f);
         fCloudShadowsCoverage = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsCoverage", 0.0f), -1.0f, 1.0f);
         nCloudShadowsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "CloudShadowsDebug", 0), 0, 2);
         bVolumetricClouds = iniReader.ReadInteger("POSTFX", "VolumetricClouds", 1) != 0;
@@ -1289,6 +1293,8 @@ public:
         fVolumetricCloudsTranslucency = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsTranslucency", 0.3f), 0.0f, 0.9f);
         fVolumetricCloudsEvolution = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsEvolution", 1.0f), 0.0f, 10.0f);
         fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
+        fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.5f), 0.0f, 2.0f);
+        fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.6f), 0.05f, 3.0f);
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
         fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
     }
@@ -1442,9 +1448,10 @@ public:
     }
 };
 
-// The cloud deck's noise for the cloud shadows and the volumetric clouds: 256 x 256, tiling, five
+// The cloud deck's noise for the cloud shadows and the volumetric clouds: 1024 x 1024, tiling, six
 // octaves of value noise from four cells a tile up, each 0.6 of the one before, made Perlin-Worley
-// below and spread over 0..1. Managed, so it
+// below and spread over 0..1. At 256 x 256 a texel of an 8 km tile spanned 31 m, and the quintic
+// filtering's flat texel middles showed as steps along the clouds' edges. Managed, so it
 // survives device resets.
 IDirect3DTexture9* PostFxResource::CloudNoiseTex()
 {
@@ -1454,7 +1461,7 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
     if (!pDevice)
         return nullptr;
 
-    constexpr int size = 256;
+    constexpr int size = 1024;
     std::vector<float> value(size * size, 0.0f);
     auto lattice = [](int x, int y, int seed) {
         uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u + static_cast<uint32_t>(seed) * 2246822519u;
@@ -1462,7 +1469,7 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
         return static_cast<float>((h ^ (h >> 16)) & 0xffff) / 65535.0f;
     };
     float amplitude = 1.0f;
-    for (int octave = 0, cells = 4; octave < 5; ++octave, cells *= 2, amplitude *= 0.6f)
+    for (int octave = 0, cells = 4; octave < 6; ++octave, cells *= 2, amplitude *= 0.6f)
     {
         const float cell = static_cast<float>(size) / cells;
         for (int y = 0; y < size; ++y)
@@ -4023,7 +4030,7 @@ private:
         for (int i = 0; i < 3; ++i)
         {
             litColour[i] = (cloudColour[i] * 1.7f + 0.5f * sunsetColour[i]) * exposure;
-            shadeColour[i] = cloudColour[i] * 0.9f * exposure;
+            shadeColour[i] = cloudColour[i] * R.fVolumetricCloudsShade * exposure;
         }
         // VolumetricCloudsSaturation, about each colour's luma.
         for (float* colour : { litColour, shadeColour })
@@ -4058,6 +4065,7 @@ private:
         effect->SetFloat("fStratus", R.Cloud.stratus);
         effect->SetFloat("fEvolution", float(std::fmod(R.fCloudEvolution, 1.0)));
         effect->SetFloat("fTranslucency", R.fVolumetricCloudsTranslucency);
+        effect->SetFloat("fLightAbsorption", R.fVolumetricCloudsAbsorption);
         // The golden ratio's fraction per frame: each frame's march noise falls between the last
         // ones', and temporal anti-aliasing averages it away.
         effect->SetFloat("fFrameJitter", static_cast<float>(std::fmod(FrameHistory::Frame() * 0.6180339887, 1.0)));
