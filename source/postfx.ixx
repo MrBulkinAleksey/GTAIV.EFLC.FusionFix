@@ -424,8 +424,10 @@ public:
         // Against VolumetricCloudsAbsorption, VolumetricCloudsTranslucency and VolumetricCloudsDetail;
         // and the glow's strength around the sun.
         float absorption, translucency, detail, glow;
+        // How much brighter the cloud near the sun in the sky is, all of it (RealityIV's Sun Power).
+        float sunPower;
     };
-    CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f };
+    CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f };
     // How far the wind has carried the coverage and the detail, in tiles, and how far the detail
     // has drifted up through itself; summed frame by frame, as the wind changes with the weather.
     double fCloudDrift = 0.0, fCloudDetailDrift = 0.0, fCloudEvolution = 0.0, fCloudLastSeconds = -1.0;
@@ -1727,15 +1729,15 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 // overcast weathers came out half clear.
 static constexpr PostFxResource::CloudLayer kWeatherClouds[8] =
 {
-    //  cover   base   thick   dens  strat  wind   abs   transl detail glow
-    { 0.15f, 1100.0f,  350.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f, 7.0f }, // EXTRASUNNY
-    { 0.30f,  900.0f,  450.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f, 6.0f }, // SUNNY
-    { 0.40f, 1000.0f,  500.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 1.3f, 6.0f }, // SUNNY_WINDY
-    { 0.70f,  700.0f,  700.0f, 1.00f, 0.2f, 0.67f, 1.3f, 1.0f, 1.0f, 4.0f }, // CLOUDY
-    { 0.95f,  300.0f, 1000.0f, 0.83f, 0.6f, 0.33f, 2.0f, 0.5f, 0.6f, 2.0f }, // RAIN
-    { 0.85f,  400.0f,  900.0f, 0.67f, 0.4f, 1.67f, 1.6f, 0.7f, 0.8f, 3.0f }, // DRIZZLE
-    { 0.50f,  600.0f,  600.0f, 0.20f, 0.3f, 1.67f, 1.0f, 1.0f, 0.8f, 3.0f }, // FOGGY
-    { 0.95f,  300.0f, 1200.0f, 0.80f, 0.5f, 1.67f, 2.2f, 0.5f, 0.7f, 2.0f }, // LIGHTNING
+    //  cover   base   thick   dens  strat  wind   abs   transl detail glow  sun power
+    { 0.15f, 1100.0f,  350.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f, 7.0f, 0.70f }, // EXTRASUNNY
+    { 0.30f,  900.0f,  450.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f, 6.0f, 0.55f }, // SUNNY
+    { 0.40f, 1000.0f,  500.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 1.3f, 6.0f, 0.50f }, // SUNNY_WINDY
+    { 0.70f,  700.0f,  700.0f, 1.00f, 0.2f, 0.67f, 1.3f, 1.0f, 1.0f, 4.0f, 0.20f }, // CLOUDY
+    { 0.95f,  300.0f, 1000.0f, 0.83f, 0.6f, 0.33f, 2.0f, 0.5f, 0.6f, 2.0f, 0.25f }, // RAIN
+    { 0.85f,  400.0f,  900.0f, 0.67f, 0.4f, 1.67f, 1.6f, 0.7f, 0.8f, 3.0f, 0.40f }, // DRIZZLE
+    { 0.50f,  600.0f,  600.0f, 0.20f, 0.3f, 1.67f, 1.0f, 1.0f, 0.8f, 3.0f, 0.30f }, // FOGGY
+    { 0.95f,  300.0f, 1200.0f, 0.80f, 0.5f, 1.67f, 2.2f, 0.5f, 0.7f, 2.0f, 0.25f }, // LIGHTNING
 };
 
 void PostFxResource::UpdateCloudLayer(double seconds)
@@ -1763,10 +1765,11 @@ void PostFxResource::UpdateCloudLayer(double seconds)
         auto mix = [k](float x, float y) { return x + (y - x) * k; };
         Cloud = { mix(a.coverage, b.coverage), mix(a.base, b.base), mix(a.thickness, b.thickness),
                   mix(a.density, b.density), mix(a.stratus, b.stratus), mix(a.wind, b.wind),
-                  mix(a.absorption, b.absorption), mix(a.translucency, b.translucency), mix(a.detail, b.detail), mix(a.glow, b.glow) };
+                  mix(a.absorption, b.absorption), mix(a.translucency, b.translucency), mix(a.detail, b.detail), mix(a.glow, b.glow),
+                  mix(a.sunPower, b.sunPower) };
     }
     else
-        Cloud = { fVolumetricCloudsCoverage, fVolumetricCloudsBase, fVolumetricCloudsThickness, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f };
+        Cloud = { fVolumetricCloudsCoverage, fVolumetricCloudsBase, fVolumetricCloudsThickness, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f };
 
     // The drift moves on by this frame's time at this frame's wind; across a jump of the clock (a
     // load, a cutscene) it stays where it was.
@@ -4257,6 +4260,7 @@ private:
         effect->SetFloat("fTranslucency", (std::min)(R.fVolumetricCloudsTranslucency * R.Cloud.translucency, 0.9f));
         effect->SetFloat("fLightAbsorption", R.fVolumetricCloudsAbsorption * R.Cloud.absorption);
         effect->SetFloat("fGlow", R.Cloud.glow);
+        effect->SetFloat("fSunPower", R.Cloud.sunPower);
         // How far the billows are swept along the coarse noise at the tops, in their own size: more
         // in the wind.
         effect->SetFloat("fCurl", std::clamp(1.5f + 0.5f * R.Cloud.wind, 1.5f, 3.0f));

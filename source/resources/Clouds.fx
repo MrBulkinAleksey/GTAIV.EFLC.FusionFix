@@ -80,6 +80,7 @@ float fStratus;           // 0 separate heaps of cloud, 1 a sheet: the weather's
 float fEvolution;         // how far the detail has drifted up through itself, so the billows change
 float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
 float fGlow;
+float fSunPower;          // how much brighter the cloud near the sun in the sky is, all of it, by the weather
 float2 vec2Shear;
 float fCurl;              // how far the billows are swept along the coarse noise at the tops, in their own size         // the coverage's offset at the layer's top: the tops lean downwind, drawn out by the wind              // the glow's strength around the sun, by the weather
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
@@ -426,7 +427,9 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale)
             // The glow by the sun's light left after the cloud towards it, so the edges glow and the
             // middle, with the whole cloud between it and the sun, stays dark: weighted by the light
             // scattered many times instead, the whole cloud around the sun brightened evenly.
-            sums.glow += weight * thin * exp(-tau);
+            // At the light's strength: past dusk, before the moon takes over, the edges glowed as if
+            // the sun were still up; by night the glow follows the moon.
+            sums.glow += weight * thin * exp(-tau) * fLightStrength;
             sums.top += weight * sun * smoothstep(0.5, 1.0, h);
             sums.height += weight * h;
             sums.transmittance *= stepTransmittance;
@@ -440,8 +443,8 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale)
 
 // The clouds' colour from what the march gathered, premultiplied, with the share of the scene
 // behind that shows through in alpha. full is a constant: the one pass variant leaves the matching
-// to the sky (and its debug view), which the reflections do not use, the tops' light and the
-// undersides' darkening out, for the slots.
+// to the sky (and its debug view), which the reflections do not use, the sun power, the tops'
+// light and the undersides' darkening out, for the slots.
 float4 Light(CloudSums sums, float3 dir, bool full)
 {
     float cover = 1.0 - sums.transmittance;
@@ -475,6 +478,9 @@ float4 Light(CloudSums sums, float3 dir, bool full)
     [branch]
     if (full)
     {
+        // The cloud near the sun in the sky catches more of its light, all of it, the thick middle
+        // too, in a softer lobe than the glow's (RealityIV's Sun Power).
+        colour += sunLit * (fSunPower * (0.45 * lobe4 * lobe4 + 0.2 * lobe2) * (0.35 * sums.sun + 0.65 * sqrt(sums.sun * cover)));
         // The sunlit tops brighter still, as RealityIV lights them, at four tenths more.
         colour += sunLit * (0.4 * sums.top);
         // The undersides darkened by the sky the cloud above them hides, by the cloud's height in the
