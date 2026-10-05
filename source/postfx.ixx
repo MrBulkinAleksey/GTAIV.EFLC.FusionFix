@@ -3689,8 +3689,10 @@ private:
             {
                 D3DXPARAMETER_DESC desc = {};
                 effect->GetParameterDesc(param, &desc);
+                DWORD minFilter = 0;
+                pDevice->GetSamplerState(reg, D3DSAMP_MINFILTER, &minFilter);
                 traced += " s" + std::to_string(reg) + "=" + (desc.Name ? desc.Name : "?") + ":" + SSRTrace::TextureName(want) +
-                    (want != have ? "(was " + SSRTrace::TextureName(have) + ")" : "");
+                    (want != have ? "(was " + SSRTrace::TextureName(have) + ")" : "") + (minFilter == D3DTEXF_LINEAR ? "/lin" : "/pt");
             }
             SAFE_RELEASE(want);
             SAFE_RELEASE(have);
