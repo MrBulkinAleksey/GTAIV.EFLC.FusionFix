@@ -449,7 +449,10 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             if (full)
             {
                 float3 towards = (p + vec3SunDir * 120.0) * vec4Shape.y + float3(vec4Wind.zw, fEvolution);
-                sun *= exp(-3.0 * d * tex3Dlod(DetailTex, float4(towards, 0)).r);
+                // About the noise's middle, 0.5: by the noise itself every cloud took a third less sun
+                // on average, and the sides facing away from the sun came out grey. Never brighter
+                // than without it.
+                sun *= min(1.0, exp(-3.0 * d * (tex3Dlod(DetailTex, float4(towards, 0)).r - 0.5)));
             }
             // The powder effect: light scattered many times builds up inside a cloud, so its thin
             // edges, seen from the sun's side, are darker than its depth, and the folds between its
