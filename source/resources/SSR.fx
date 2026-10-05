@@ -4,7 +4,7 @@ texture PrevDepthTex2D;
 texture SSRAccumTex2D;
 texture SSRFallbackTex2D;
 texture MotionTex2D;
-texture AlbedoTex2D, GIPrevTex2D;
+texture AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D;
 texture SceneTex2D, SkinIDTex2D, SkinLightTex2D;
 
 sampler2D DepthTex
@@ -94,10 +94,11 @@ sampler2D AlbedoTex
     MagFilter = POINT;
     MipFilter = NONE;
 };
-// The same, filtered, for GIHitBox.
+// The same, filtered, for GIHitBox. Its own parameter: BindEffectSamplers finds a sampler's texture
+// by the sampler's name, and one sharing AlbedoTex2D was left with whatever the game had bound.
 sampler2D AlbedoLinearTex
 {
-    Texture = <AlbedoTex2D>;
+    Texture = <AlbedoLinearTex2D>;
     AddressU = Clamp;
     AddressV = Clamp;
     MinFilter = LINEAR;

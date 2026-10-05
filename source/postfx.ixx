@@ -277,7 +277,7 @@ public:
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
-        D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
+        D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
         D3DXHANDLE SceneTex2D, SkinIDTex2D, SkinLightTex2D, vec4SkinStep, fSkinStrength;
         D3DXHANDLE techSkinLight, techSkinScatter, techSkinScatterFinal, techSkinDebug;
     } SSREffectHandles = {};
@@ -1183,6 +1183,7 @@ public:
                 h.fGIMaxBrightness = SSREffect->GetParameterByName(nullptr, "fGIMaxBrightness");
                 h.techGIUpsample = SSREffect->GetTechniqueByName("GIUpsample");
                 h.AlbedoTex2D = SSREffect->GetParameterByName(nullptr, "AlbedoTex2D");
+                h.AlbedoLinearTex2D = SSREffect->GetParameterByName(nullptr, "AlbedoLinearTex2D");
                 h.GIPrevTex2D = SSREffect->GetParameterByName(nullptr, "GIPrevTex2D");
                 h.fGIFeedback = SSREffect->GetParameterByName(nullptr, "fGIFeedback");
                 h.fGIOcclusion = SSREffect->GetParameterByName(nullptr, "fGIOcclusion");
@@ -5711,6 +5712,7 @@ private:
         // the rays take all but an intensity 1 share of it back out, see SSGI_PS.
         const bool albedo = R.mDiffuseRT && R.mDiffuseRT->mD3DTexture;
         effect->SetTexture(h.AlbedoTex2D, albedo ? R.mDiffuseRT->mD3DTexture : nullptr);
+        effect->SetTexture(h.AlbedoLinearTex2D, albedo ? R.mDiffuseRT->mD3DTexture : nullptr);
         effect->SetTexture(h.GIPrevTex2D, prevGI);
         // The occlusion deferred_lighting already takes off the ambient, so SSGI_PS does not take it off again.
         const bool specular = R.mSpecularRT && R.mSpecularRT->mD3DTexture;
