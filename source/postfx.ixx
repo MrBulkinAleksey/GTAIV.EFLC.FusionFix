@@ -264,7 +264,7 @@ public:
         D3DXHANDLE DepthTex2D, HistoryTex2D, SpecularTex2D, SurfaceTex2D;
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
-        D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth;
+        D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth, vec2PrevDepthRange;
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fSpreadRadius;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
@@ -750,7 +750,7 @@ public:
     {
         D3DXHANDLE AOTexture2D, AOCamDepthTexture2D, DepthTex2D, NormalTex2D;
         D3DXHANDLE vec4WorldToView, fUseNormals, fGTAOStrength, fThinOccluders, vec2NoiseOffset, fMultiBounce, AlbedoTex2D;
-        D3DXHANDLE AOHistoryTex2D, PrevDepthTex2D, MotionTex2D, vec4ViewToPrevClip, fUseMotion, vec2MotionJitter, fUsePrevDepth, fTemporalBlend;
+        D3DXHANDLE AOHistoryTex2D, PrevDepthTex2D, MotionTex2D, vec4ViewToPrevClip, fUseMotion, vec2MotionJitter, fUsePrevDepth, vec2PrevDepthRange, fTemporalBlend;
 
         D3DXHANDLE vec2InvViewportSize;
         D3DXHANDLE fNearPlane;
@@ -1066,7 +1066,8 @@ public:
                          { &AOEffectHandles.AOHistoryTex2D, "AOHistoryTex2D" }, { &AOEffectHandles.PrevDepthTex2D, "PrevDepthTex2D" },
                          { &AOEffectHandles.MotionTex2D, "MotionTex2D" }, { &AOEffectHandles.vec4ViewToPrevClip, "vec4ViewToPrevClip" },
                          { &AOEffectHandles.fUseMotion, "fUseMotion" }, { &AOEffectHandles.vec2MotionJitter, "vec2MotionJitter" },
-                         { &AOEffectHandles.fUsePrevDepth, "fUsePrevDepth" }, { &AOEffectHandles.fTemporalBlend, "fTemporalBlend" } })
+                         { &AOEffectHandles.fUsePrevDepth, "fUsePrevDepth" }, { &AOEffectHandles.vec2PrevDepthRange, "vec2PrevDepthRange" },
+                         { &AOEffectHandles.fTemporalBlend, "fTemporalBlend" } })
                     *handle = AOEffect->GetParameterByName(nullptr, name);
                 AOEffectHandles.vec2InvViewportSize = AOEffect->GetParameterByName(nullptr, "vec2InvViewportSize");
                 AOEffectHandles.fNearPlane = AOEffect->GetParameterByName(nullptr, "fNearPlane");
@@ -1111,6 +1112,7 @@ public:
                 h.HistoryTex2D = SSREffect->GetParameterByName(nullptr, "HistoryTex2D");
                 h.PrevDepthTex2D = SSREffect->GetParameterByName(nullptr, "PrevDepthTex2D");
                 h.fUsePrevDepth = SSREffect->GetParameterByName(nullptr, "fUsePrevDepth");
+                h.vec2PrevDepthRange = SSREffect->GetParameterByName(nullptr, "vec2PrevDepthRange");
                 h.SpecularTex2D = SSREffect->GetParameterByName(nullptr, "SpecularTex2D");
                 h.SurfaceTex2D = SSREffect->GetParameterByName(nullptr, "SurfaceTex2D");
                 h.vec2InvViewportSize = SSREffect->GetParameterByName(nullptr, "vec2InvViewportSize");
@@ -3591,6 +3593,18 @@ private:
         effect->SetFloat(h.fFarDivNear, farClip / nearClip);
     }
 
+    // vec2PrevDepthRange: fNearPlane and fFarDivNear of the scene PrevDepthTex was drawn in, the one
+    // before this. The game moves the near plane as the camera closes in on a wall, and last frame's
+    // depth decoded with this frame's planes failed every history's depth test.
+    template <typename Handles>
+    static void SetPrevDepthRange(ID3DXEffect* effect, const Handles& h)
+    {
+        const auto& prev = FrameHistory::Previous();
+        const auto& camera = prev.Valid ? prev : FrameHistory::Current();
+        const float range[] = { camera.Near, camera.Near > 0.0f ? camera.Far / camera.Near : 1.0f };
+        effect->SetFloatArray(h.vec2PrevDepthRange, range, 2);
+    }
+
     // World to reconstruction space rotation rows: the view's axes with x (and z, when _34 is
     // negative) flipped, as ViewToClipRows below.
     static void WorldToViewRows(const rage::grcViewport* vp, D3DXVECTOR4 rows[3])
@@ -3738,6 +3752,7 @@ private:
         const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
         effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
         effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
+        SetPrevDepthRange(effect, h);
 
         // _DEFERRED_GBUFFER_2_ is (specular intensity, gloss, AO). Gloss decides what reflects:
         // car paint sits around 0.8, roads and walls around 0.2-0.35. Car paint stores almost no
@@ -4579,6 +4594,7 @@ private:
         effect->SetVector(h.vec4WaterPlane, &plane);
         effect->SetTexture(h.PrevDepthTex2D, R.PreAlphaDepthCopyRT ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
         effect->SetFloat(h.fUsePrevDepth, R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture ? 1.0f : 0.0f);
+        SetPrevDepthRange(effect, h);
 
         // Without both copies the pass falls back to the whole water plane.
         const bool waterMask = R.bWaterMaskCaptured && CopyRenderTargetToWaterMask(1);
@@ -4934,6 +4950,7 @@ private:
                     const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
                     effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
                     effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
+                    SetPrevDepthRange(effect, h);
                     auto motion = history ? FrameHistory::MotionVectors() : nullptr;
                     auto jitter = FrameHistory::JitterDeltaUV();
                     effect->SetTexture(h.MotionTex2D, motion);
@@ -5585,6 +5602,7 @@ private:
             effect->SetTexture(h.SSRAccumTex2D, R.ContactAccumTex[prev]->mD3DTexture);
             effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
             effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
+            SetPrevDepthRange(effect, h);
             effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
             BindMotionVectors(effect, accumWasValid);
             effect->SetFloat(h.fTemporalBlend, accumWasValid ? R.fContactTemporalBlend : 0.0f);
@@ -5675,6 +5693,7 @@ private:
         effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
         effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
         effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
+        SetPrevDepthRange(effect, h);
         if (hasNormals)
             effect->SetTexture(h.NormalTex2D, R.mNormalRT->mD3DTexture);
         effect->SetFloat(h.fUseGBufferNormals, (hasNormals && R.bSSRGBufferNormals) ? 1.0f : 0.0f);

@@ -189,6 +189,7 @@ uniform float4 vec4ViewToPrevClip[4];
 uniform float fUseMotion;
 uniform float2 vec2MotionJitter;
 uniform float fUsePrevDepth; // 1 when PrevDepthTex holds the depth HistoryTex was taken with
+uniform float2 vec2PrevDepthRange; // fNearPlane and fFarDivNear of the scene PrevDepthTex was drawn in, see PrevLinearDepth
 
 uniform float fMaxDistance;     // world units to march before giving up
 uniform float fThickness;       // how deep behind a surface still counts as a hit
@@ -290,6 +291,14 @@ float3 SampleHistoryBlurred(float2 uv, float radiusPixels)
 float LinearDepth(float2 uv)
 {
     return pow(fFarDivNear, tex2Dlod(DepthTex, float4(uv, 0, 0)).r) * fNearPlane;
+}
+
+// Last frame's view depth at uv. Its log depth goes back to view depth with last frame's near and
+// far planes: the game moves the near plane as the camera closes in on a wall, and decoded with this
+// frame's, the depth of every surface differed from last frame's, which dropped every history.
+float PrevLinearDepth(float2 uv)
+{
+    return pow(vec2PrevDepthRange.y, tex2Dlod(PrevDepthTex, float4(uv, 0, 0)).r) * vec2PrevDepthRange.x;
 }
 
 float3 ReconstructViewPos(float2 S, float z)
@@ -617,7 +626,7 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
     {
         float prevSurfZ = dot(float4(surfP, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
                                                          vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
-        float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(histUV, 0, 0)).r) * fNearPlane;
+        float prevZ = PrevLinearDepth(histUV);
         float tolerance = 0.05 * prevSurfZ + 0.1;
         confidence *= 1.0 - smoothstep(tolerance * 0.5, tolerance, abs(prevZ - prevSurfZ));
     }
@@ -720,7 +729,7 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
             {
                 float prevPathZ = dot(float4(pathP, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
                                                                  vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
-                float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(pathHist, 0, 0)).r) * fNearPlane;
+                float prevZ = PrevLinearDepth(pathHist);
                 if (abs(prevZ - prevPathZ) > 0.05 * prevPathZ + 0.1)
                     continue;
             }
@@ -1249,7 +1258,7 @@ float4 ContactTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     {
         float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]
                     + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
-        float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * fNearPlane;
+        float prevZ = PrevLinearDepth(prevUV);
         if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
             keep = 0.0;
     }
@@ -1321,7 +1330,7 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         // Last frame's surface where the history is taken must be about as far as this one.
         float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]
                     + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
-        float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * fNearPlane;
+        float prevZ = PrevLinearDepth(prevUV);
         if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
             keep = 0.0;
     }

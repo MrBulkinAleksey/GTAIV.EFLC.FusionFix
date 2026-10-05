@@ -121,6 +121,7 @@ uniform float4 vec4ViewToPrevClip[4];
 uniform float fUseMotion;
 uniform float2 vec2MotionJitter;
 uniform float fUsePrevDepth;
+uniform float2 vec2PrevDepthRange; // fNearPlane and fFarDivNear of the scene PrevDepthTex was drawn in
 uniform float fTemporalBlend;      // share of last frame's GTAO kept, 0 while there is none to keep
 
 #ifndef NUM_SAMPLES
@@ -490,7 +491,7 @@ float4 TemporalAO_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         keep = 0.0;
     else if (fUsePrevDepth > 0.0 && checkDepth)
     {
-        float prevZ = pow(fFarDivNear, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * fNearPlane;
+        float prevZ = pow(vec2PrevDepthRange.y, tex2Dlod(PrevDepthTex, float4(prevUV, 0, 0)).r) * vec2PrevDepthRange.x;
         if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
             keep = 0.0;
     }
