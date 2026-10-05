@@ -34,7 +34,8 @@ sampler3D DetailTex : register(s2);
 sampler2D CurrentTex : register(s3);   // this frame's clouds at half size (CloudsResolve)
 sampler2D HistoryTex : register(s4);   // the clouds accumulated up to last frame (CloudsResolve)
 sampler2D CloudTex : register(s5);     // the accumulated clouds (CloudsComposite)
-sampler2D SceneTex : register(s6);     // the lit scene, the sky in it, behind the clouds (Clouds at half size)
+sampler2D SceneTex : register(s6);     // the lit scene, the sky in it (CloudsSkyRef)
+sampler2D SkyRefTex : register(s7);    // the sky's brightness this frame, in red (CloudsSkyRef's target)
 
 float2 vec2InvViewportSize;
 float4 vec4ProjInfo;
@@ -422,20 +423,21 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
         t += fine;
     }
 
-    // The clouds against the sky behind them. The game's CloudColor at its HDR exposure came out
-    // several times brighter than the sky it draws, past the tone mapping's white point: the whole
-    // cloud, lit side, bases and rims, turned one flat white. Scaled as a whole, so its shading
-    // stays, until its sunlit side is fSkyMatch times the sky's luma here; the sky around the sun is
-    // brighter, and so are the clouds before it.
+    // The clouds against the sky. The game's CloudColor at its HDR exposure came out several times
+    // brighter than the sky it draws, past the tone mapping's white point: the whole cloud, lit
+    // side, bases and rims, turned one flat white. Scaled as a whole, so its shading stays, until
+    // its sunlit side is fSkyMatch times the sky's brightness this frame (CloudsSkyRef), the same for
+    // every cloud. Matched to the sky right behind each one instead, the clouds round the sun took
+    // its halo and shone cream while those across the sky, whose sunlit sides face the eye and
+    // should be the brightest, sank to the grey of the sky there.
     [branch]
     if (fSkyMatch > 0.0)
     {
-        float3 sky = tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb;
-        float skyLuma = dot(sky, float3(0.2126, 0.7152, 0.0722));
+        float skyLuma = tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).r;
         if (skyLuma > 1e-4)
             colour *= clamp(fSkyMatch * skyLuma, 0.1, 2.0);
         if (fDebug == 2.0)
-            colour = sky * (1.0 - transmittance);
+            colour = skyLuma * (1.0 - transmittance);
     }
 
     // Haze: distant cloud fades into what is behind it.
@@ -526,6 +528,44 @@ technique CloudsResolve
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 CloudsResolve_PS();
+    }
+}
+
+// The sky's brightness this frame, for every cloud alike: the mean luma of the sky on an 8 x 6 grid
+// over the screen, where the depth is clear and more than 25 degrees from the sun, so its halo
+// stays out. Blended into a 1 x 1 target a tenth a frame, so turning the camera does not flicker
+// the clouds; a frame with no sky in it leaves the target as it was.
+float4 vec4SkyRefProj;    // ProjInfo for a 1 x 1 viewport: the view ray of a point in texture coordinates
+float4 CloudsSkyRef_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float sum = 0.0;
+    float count = 0.0;
+    [loop]
+    for (int y = 0; y < 6; ++y)
+    {
+        [loop]
+        for (int x = 0; x < 8; ++x)
+        {
+            float2 s = (float2(x, y) + 0.5) / float2(8.0, 6.0);
+            if (RawToFar(tex2Dlod(DepthTex, float4(s, 0, 0)).r) < 1.0)
+                continue;
+            float3 v = float3(s * vec4SkyRefProj.xy + vec4SkyRefProj.zw, 1.0);
+            float3 dir = normalize(float3(dot(v, vec4WorldX.xyz), dot(v, vec4WorldY.xyz), dot(v, vec4WorldZ.xyz)));
+            if (dot(dir, vec3SunDir) > 0.906)
+                continue;
+            sum += dot(tex2Dlod(SceneTex, float4(s, 0, 0)).rgb, float3(0.2126, 0.7152, 0.0722));
+            count += 1.0;
+        }
+    }
+    return count > 0.0 ? float4(0.1 * sum / count, 0.0, 0.0, 0.9) : float4(0.0, 0.0, 0.0, 1.0);
+}
+
+technique CloudsSkyRef
+{
+    pass SkyRef
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 CloudsSkyRef_PS();
     }
 }
 

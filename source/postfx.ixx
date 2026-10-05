@@ -448,6 +448,9 @@ public:
     // which swap every frame; nCloudAccumIndex picks last frame's ([1 + index]).
     rage::grcRenderTargetPC* CloudTex[3] = {};
     IDirect3DSurface9* CloudSurf[3] = {};
+    // The sky's brightness this frame, 1 x 1, which the clouds are matched to (CloudsSkyRef).
+    rage::grcRenderTargetPC* CloudSkyRefTex = nullptr;
+    IDirect3DSurface9* CloudSkyRefSurf = nullptr;
     int nCloudAccumIndex = 0;
     uint32_t nCloudAccumFrame = 0; // FrameHistory::Frame() of the accumulation, 0 if none
     IDirect3DVolumeTexture9* CloudDetailTexture = nullptr;
@@ -2196,6 +2199,12 @@ private:
             }
         }
         PostFxResources.nCloudAccumFrame = 0;
+        SAFE_RELEASE(PostFxResources.CloudSkyRefSurf);
+        if (PostFxResources.CloudSkyRefTex)
+        {
+            PostFxResources.CloudSkyRefTex->Destroy();
+            PostFxResources.CloudSkyRefTex = nullptr;
+        }
         for (int i = 0; i < 2; ++i)
         {
             SAFE_RELEASE(PostFxResources.SkinLightSurf[i]);
@@ -2394,6 +2403,10 @@ private:
                 for (int i = 0; i < 3; ++i)
                     PostFxResources.CloudTex[i] = rage::CreateEmptyRenderTarget(cloudNames[i], width / 2, height / 2, 64, aoDesc, PostFxResources.CloudSurf[i]);
                 PostFxResources.nCloudAccumFrame = 0;
+                PostFxResources.CloudSkyRefTex = rage::CreateEmptyRenderTarget("CloudSkyRefTex", 1, 1, 64, aoDesc, PostFxResources.CloudSkyRefSurf);
+                // Cleared: it is only ever blended into, and a NaN left in it would stay for good.
+                if (PostFxResources.CloudSkyRefSurf && pDevice)
+                    pDevice->ColorFill(PostFxResources.CloudSkyRefSurf, nullptr, D3DCOLOR_ARGB(0, 0, 0, 0));
             }
             PostFxResources.SSRHalfDenoisedTex = rage::CreateEmptyRenderTarget("SSRHalfDenoisedTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfDenoisedSurf);
             {
@@ -4178,7 +4191,7 @@ private:
         // Matched to the sky in the scene behind them, while the march has targets of its own to draw
         // into and can read the scene; the reflections keep the game's cloud colour.
         {
-            const bool canReadScene = !reflection && R.CloudSurf[0] && R.CloudSurf[1] && R.CloudSurf[2];
+            const bool canReadScene = !reflection && R.CloudSurf[0] && R.CloudSurf[1] && R.CloudSurf[2] && R.CloudSkyRefSurf;
             const float litLuma = 0.2126f * litColour[0] + 0.7152f * litColour[1] + 0.0722f * litColour[2];
             effect->SetFloat("fSkyMatch", canReadScene && litLuma > 1e-4f ? R.fVolumetricCloudsSkyMatch / litLuma : 0.0f);
         }
@@ -4237,14 +4250,14 @@ private:
         IDirect3DVertexBuffer9* oldVB = nullptr;
         IDirect3DPixelShader9* oldPS = nullptr;
         IDirect3DVertexShader9* oldVS = nullptr;
-        IDirect3DBaseTexture9* oldTextures[7] = {};
+        IDirect3DBaseTexture9* oldTextures[8] = {};
         UINT oldOffset = 0, oldStride = 0;
         DWORD oldFVF = 0;
         D3DVIEWPORT9 oldViewport = {};
         DWORD savedRenderStates[std::size(kCloudRenderStates)] = {};
         static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW,
                                                                    D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER };
-        DWORD savedSamplerStates[7][std::size(kSamplerStates)] = {};
+        DWORD savedSamplerStates[8][std::size(kSamplerStates)] = {};
 
         pDevice->GetRenderTarget(0, &oldTarget);
         pDevice->GetDepthStencilSurface(&oldDepth);
@@ -4256,7 +4269,7 @@ private:
         pDevice->GetVertexShader(&oldVS);
         pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
         pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-        for (DWORD slot = 0; slot < 7; ++slot)
+        for (DWORD slot = 0; slot < 8; ++slot)
         {
             pDevice->GetTexture(slot, &oldTextures[slot]);
             for (size_t i = 0; i < std::size(kSamplerStates); ++i)
@@ -4306,11 +4319,11 @@ private:
         }
 
         struct ScreenVertex { float x, y, z, rhw; float u, v; };
-        auto bindTextures = [&](bool readScene)
+        auto bindTextures = [&](bool readScene, bool readSkyRef)
         {
             // The samplers have fixed registers: s0 depth, s1 coverage, s2 detail, s3 this frame's
-            // half size clouds, s4 the history, s5 the accumulated clouds, s6 the scene with the sky
-            // the clouds are matched to, only while the march draws into targets of its own.
+            // half size clouds, s4 the history, s5 the accumulated clouds, s6 the scene, for the sky's
+            // brightness, never while drawing into it, s7 that brightness.
             // The reflections have no depth texture of their own: none reads as sky everywhere.
             pDevice->SetTexture(0, reflection ? nullptr : R.mDepthRT->mD3DTexture);
             pDevice->SetTexture(1, coverage);
@@ -4319,7 +4332,8 @@ private:
             pDevice->SetTexture(4, halfSize ? R.CloudTex[prevAccum]->mD3DTexture : nullptr);
             pDevice->SetTexture(5, halfSize ? R.CloudTex[nextAccum]->mD3DTexture : nullptr);
             pDevice->SetTexture(6, readScene ? sceneBase : nullptr);
-            for (DWORD slot = 0; slot < 7; ++slot)
+            pDevice->SetTexture(7, readSkyRef && R.CloudSkyRefTex ? R.CloudSkyRefTex->mD3DTexture : nullptr);
+            for (DWORD slot = 0; slot < 8; ++slot)
             {
                 const bool wrap = slot == 1 || slot == 2;
                 const bool linear = slot != 0 && slot != 3;
@@ -4353,7 +4367,7 @@ private:
             effect->BeginPass(0);
             effect->CommitChanges();
             // Never the scene while drawing into it.
-            bindTextures(halfSize && target != sceneSurface);
+            bindTextures(halfSize && target != sceneSurface, halfSize && target != R.CloudSkyRefSurf);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
@@ -4361,6 +4375,13 @@ private:
 
         if (halfSize)
         {
+            // The sky's brightness first, blended into its 1 x 1 target; the march reads it.
+            if (R.CloudSkyRefSurf)
+            {
+                const D3DXVECTOR4 skyRefProj = ProjInfo(proj, 1.0f, 1.0f);
+                effect->SetVector("vec4SkyRefProj", &skyRefProj);
+                drawPass("CloudsSkyRef", R.CloudSkyRefSurf, 1.0f, 1.0f, true);
+            }
             drawPass("Clouds", R.CloudSurf[0], halfWidth, halfHeight, false);
             drawPass("CloudsResolve", R.CloudSurf[nextAccum], halfWidth, halfHeight, false);
             drawPass("CloudsComposite", sceneSurface, width, height, true);
@@ -4372,7 +4393,7 @@ private:
 
         for (size_t i = 0; i < std::size(kCloudRenderStates); ++i)
             pDevice->SetRenderState(kCloudRenderStates[i].state, savedRenderStates[i]);
-        for (DWORD slot = 0; slot < 7; ++slot)
+        for (DWORD slot = 0; slot < 8; ++slot)
         {
             pDevice->SetTexture(slot, oldTextures[slot]);
             for (size_t i = 0; i < std::size(kSamplerStates); ++i)
