@@ -5,7 +5,8 @@
 // the sky and over anything far enough behind them alike.
 //
 // The layer's coverage is CoverageTex, the same tiling noise, scale and wind as the cloud shadows on
-// the ground, so each shadow lies under its cloud. DetailTex, a tiling Worley volume, erodes the edges.
+// the ground, so each shadow lies under its cloud. DetailTex, a tiling Worley volume in two channels,
+// erodes the edges.
 // Light: the sun reaching each sample through the cloud above it (Beer's law with softer lobes for the
 // light scattered more than once), lit the way gta_atmoscatt_clouds lights its own clouds:
 // CloudColor, brightened by up to CloudInscatteringRange along the sun's axis (cos^2) where the cloud
@@ -73,10 +74,10 @@ float4 vec4History;
 float fStratus;           // 0 separate heaps of cloud, 1 a sheet: the weather's overcast
 float fEvolution;         // how far the detail has drifted up through itself, so the billows change
 float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
-float fGlow;              // the glow's strength around the sun, by the weather
+float fGlow;
+float2 vec2Shear;         // the coverage's offset at the layer's top: the tops lean downwind, drawn out by the wind              // the glow's strength around the sun, by the weather
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
-float fDebug;             // VolumetricCloudsDebug 1: grey by how much sun reaches each sample, white all of it;
-                          // 2: the sky read behind them, so the clouds vanish where it is read right
+float fDebug;             // VolumetricCloudsDebug 2: the sky read behind them, so the clouds vanish where it is read right
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
@@ -189,7 +190,8 @@ float Density(float3 p, bool detail, Place place)
     float h = (p.z - place.base) / place.thickness;
     if (h <= 0.0 || h >= 1.0)
         return 0.0;
-    float2 uv = uv0 + place.morph;
+    // The wind's shear leans the heaps' tops downwind and draws them out.
+    float2 uv = uv0 + place.morph + vec2Shear * h;
     // The outline wanders with height: the coverage is read a little off, by a coarse octave of the
     // detail that changes up through the layer, so the heaps do not stand as walls drawn up from a
     // map. The steps towards the sun and the coarse search leave it out.
@@ -197,7 +199,7 @@ float Density(float3 p, bool detail, Place place)
     if (detail)
     {
         float3 w = p * (vec4Shape.y * 0.35) + float3(vec4Wind.zw, fEvolution);
-        uv += (float2(tex3Dlod(DetailTex, float4(w, 0)).r, tex3Dlod(DetailTex, float4(w.yzx + 0.41, 0)).r) - 0.5) * fWarp;
+        uv += (tex3Dlod(DetailTex, float4(w, 0)).rg - 0.5) * fWarp;
     }
     // Filtered with a quintic curve between texels: linear filtering's kinks at the texel edges stood
     // out as creases down the clouds' sides.
@@ -223,9 +225,12 @@ float Density(float3 p, bool detail, Place place)
     {
         float3 q = p * vec4Shape.y + float3(vec4Wind.zw, fEvolution);
         // Our Worley volume is 1 at the cells' middles: 1 - n is high between the billows.
-        float n = 1.0 - tex3Dlod(DetailTex, float4(q, 0)).r;
+        float2 billow = tex3Dlod(DetailTex, float4(q, 0)).rg;
+        float n = 1.0 - billow.r;
         d -= vec4Shape.z * 0.66 * n * n * EdgeWeight(d);
-        float m = 1.0 - tex3Dlod(DetailTex, float4(q * 5.5 + 0.37, 0)).r;
+        // The fine billows are read through the coarse ones' two channels, so they swirl around
+        // them instead of sitting on an even grid: about their own size either way.
+        float m = 1.0 - tex3Dlod(DetailTex, float4(q * 5.5 + 0.37 + (billow.rgr - 0.5), 0)).r;
         d -= vec4Shape.z * 0.3 * m * (0.6 * m + 0.4) * EdgeWeight(d);
         // A ragged fringe under the base: the coarse billows eat the bottom eighth harder.
         d -= vec4Shape.z * 0.7 * n * saturate(1.0 - h * 8.0);
@@ -395,7 +400,6 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             float knee = fCeiling * 0.75;
             if (peak > knee)
                 lit *= (knee + fCeiling * 0.25 * (1.0 - exp((knee - peak) / (fCeiling * 0.25)))) / peak;
-            lit = fDebug == 1.0 ? sun * vec3LitColour.yyy : lit;
 
             // Thin cloud lets more of what is behind it through, the wisps at the edges most.
             float stepTransmittance = exp(-d * lerp(1.0 - fTranslucency, 1.0, d) * sigma * fine);

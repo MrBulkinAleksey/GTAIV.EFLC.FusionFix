@@ -1600,8 +1600,8 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
 }
 
 // The volumetric clouds' detail: 64 x 64 x 64, tiling, three octaves of inverted Worley noise
-// (4, 8 and 16 cells a tile), which reads as round billows when it erodes a cloud's edge. Managed,
-// so it survives device resets.
+// (4, 8 and 16 cells a tile), which reads as round billows when it erodes a cloud's edge, in two
+// channels from different points. Managed, so it survives device resets.
 IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 {
     if (CloudDetailTexture)
@@ -1611,7 +1611,6 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
         return nullptr;
 
     constexpr int size = 64;
-    std::vector<float> value(size * size * size, 0.0f);
     auto hash = [](int x, int y, int z, int seed) {
         uint32_t h = static_cast<uint32_t>(x) * 73856093u ^ static_cast<uint32_t>(y) * 19349663u ^ static_cast<uint32_t>(z) * 83492791u ^
                      static_cast<uint32_t>(seed) * 2654435761u;
@@ -1619,43 +1618,52 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
         h = (h ^ (h >> 13)) * 3266489917u;
         return h ^ (h >> 16);
     };
+    // Two channels of the same Worley noise from different points: the outline's wander reads both
+    // at once where it took two reads of one, and the fine billows swirl by both.
+    std::vector<float> value[2] = { std::vector<float>(size * size * size, 0.0f), std::vector<float>(size * size * size, 0.0f) };
+    const int seeds[2] = { 17, 29 };
     const int cellCounts[3] = { 4, 8, 16 };
     const float weights[3] = { 0.625f, 0.25f, 0.125f };
-    for (int octave = 0; octave < 3; ++octave)
+    for (int channel = 0; channel < 2; ++channel)
     {
-        const int cells = cellCounts[octave];
-        const float cell = static_cast<float>(size) / cells;
-        // One feature point per cell, at a random place inside it.
-        std::vector<float> points(cells * cells * cells * 3);
-        for (int i = 0; i < cells * cells * cells; ++i)
-            for (int k = 0; k < 3; ++k)
-                points[i * 3 + k] = static_cast<float>(hash(i, k, octave, 17) & 0xffff) / 65535.0f;
-        for (int z = 0; z < size; ++z)
-            for (int y = 0; y < size; ++y)
-                for (int x = 0; x < size; ++x)
-                {
-                    const float fx = (x + 0.5f) / cell, fy = (y + 0.5f) / cell, fz = (z + 0.5f) / cell;
-                    const int cx = static_cast<int>(fx), cy = static_cast<int>(fy), cz = static_cast<int>(fz);
-                    float nearest = 3.0f;
-                    for (int dz = -1; dz <= 1; ++dz)
-                        for (int dy = -1; dy <= 1; ++dy)
-                            for (int dx = -1; dx <= 1; ++dx)
-                            {
-                                const int nx = cx + dx, ny = cy + dy, nz = cz + dz;
-                                const int wx = (nx + cells) % cells, wy = (ny + cells) % cells, wz = (nz + cells) % cells;
-                                const float* pt = &points[((wz * cells + wy) * cells + wx) * 3];
-                                const float ex = nx + pt[0] - fx, ey = ny + pt[1] - fy, ez = nz + pt[2] - fz;
-                                nearest = (std::min)(nearest, ex * ex + ey * ey + ez * ez);
-                            }
-                    value[(z * size + y) * size + x] += weights[octave] * (1.0f - std::clamp(std::sqrt(nearest), 0.0f, 1.0f));
-                }
+        for (int octave = 0; octave < 3; ++octave)
+        {
+            const int cells = cellCounts[octave];
+            const float cell = static_cast<float>(size) / cells;
+            // One feature point per cell, at a random place inside it.
+            std::vector<float> points(cells * cells * cells * 3);
+            for (int i = 0; i < cells * cells * cells; ++i)
+                for (int k = 0; k < 3; ++k)
+                    points[i * 3 + k] = static_cast<float>(hash(i, k, octave, seeds[channel]) & 0xffff) / 65535.0f;
+            for (int z = 0; z < size; ++z)
+                for (int y = 0; y < size; ++y)
+                    for (int x = 0; x < size; ++x)
+                    {
+                        const float fx = (x + 0.5f) / cell, fy = (y + 0.5f) / cell, fz = (z + 0.5f) / cell;
+                        const int cx = static_cast<int>(fx), cy = static_cast<int>(fy), cz = static_cast<int>(fz);
+                        float nearest = 3.0f;
+                        for (int dz = -1; dz <= 1; ++dz)
+                            for (int dy = -1; dy <= 1; ++dy)
+                                for (int dx = -1; dx <= 1; ++dx)
+                                {
+                                    const int nx = cx + dx, ny = cy + dy, nz = cz + dz;
+                                    const int wx = (nx + cells) % cells, wy = (ny + cells) % cells, wz = (nz + cells) % cells;
+                                    const float* pt = &points[((wz * cells + wy) * cells + wx) * 3];
+                                    const float ex = nx + pt[0] - fx, ey = ny + pt[1] - fy, ez = nz + pt[2] - fz;
+                                    nearest = (std::min)(nearest, ex * ex + ey * ey + ez * ez);
+                                }
+                        value[channel][(z * size + y) * size + x] += weights[octave] * (1.0f - std::clamp(std::sqrt(nearest), 0.0f, 1.0f));
+                    }
+        }
+        const auto [lo, hi] = std::minmax_element(value[channel].begin(), value[channel].end());
+        const float minValue = *lo, range = (std::max)(*hi - *lo, 1e-5f);
+        for (auto& v : value[channel])
+            v = (v - minValue) / range;
     }
-    const auto [lo, hi] = std::minmax_element(value.begin(), value.end());
-    const float minValue = *lo, range = (std::max)(*hi - *lo, 1e-5f);
 
-    // 16 bits for the same reason as the coverage.
-    bool wide = SUCCEEDED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_L16, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr));
-    if (!wide && FAILED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_L8, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr)))
+    // 16 bits a channel for the same reason as the coverage; 8 where G16R16 volumes are missing.
+    bool wide = SUCCEEDED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_G16R16, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr));
+    if (!wide && FAILED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr)))
     {
         CloudDetailTexture = nullptr;
         return nullptr;
@@ -1669,11 +1677,22 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
                 auto row = static_cast<uint8_t*>(locked.pBits) + z * locked.SlicePitch + y * locked.RowPitch;
                 for (int x = 0; x < size; ++x)
                 {
-                    const float v = (value[(z * size + y) * size + x] - minValue) / range;
+                    const size_t i = (z * size + y) * size + x;
+                    const float r = value[0][i], g = value[1][i];
                     if (wide)
-                        reinterpret_cast<uint16_t*>(row)[x] = static_cast<uint16_t>(v * 65535.0f + 0.5f);
+                    {
+                        // G16R16: red in the low word.
+                        reinterpret_cast<uint16_t*>(row)[x * 2] = static_cast<uint16_t>(r * 65535.0f + 0.5f);
+                        reinterpret_cast<uint16_t*>(row)[x * 2 + 1] = static_cast<uint16_t>(g * 65535.0f + 0.5f);
+                    }
                     else
-                        row[x] = static_cast<uint8_t>(v * 255.0f + 0.5f);
+                    {
+                        // A8R8G8B8: blue, green, red, alpha in memory.
+                        row[x * 4 + 0] = 0;
+                        row[x * 4 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
+                        row[x * 4 + 2] = static_cast<uint8_t>(r * 255.0f + 0.5f);
+                        row[x * 4 + 3] = 255;
+                    }
                 }
             }
         CloudDetailTexture->UnlockBox(0);
@@ -4179,6 +4198,14 @@ private:
         effect->SetFloat("fTranslucency", (std::min)(R.fVolumetricCloudsTranslucency * R.Cloud.translucency, 0.9f));
         effect->SetFloat("fLightAbsorption", R.fVolumetricCloudsAbsorption * R.Cloud.absorption);
         effect->SetFloat("fGlow", R.Cloud.glow);
+        // The wind's shear: a heap's top lies up to 200 m downwind of its base at the weather's
+        // wind, at most 300 m. The wind carries the map along (0.93, 0.37), so the clouds drift the
+        // other way and their tops lean that way.
+        {
+            const float lean = (std::min)(200.0f * R.Cloud.wind, 300.0f) / R.fCloudShadowsScale;
+            const float shear[2] = { 0.9293f * lean, 0.3697f * lean };
+            effect->SetFloatArray("vec2Shear", shear, 2);
+        }
         effect->SetFloat("fDebug", float(R.nVolumetricCloudsDebug));
         // The golden ratio's fraction per frame: each frame's march noise falls between the last
         // ones', and temporal anti-aliasing averages it away.
