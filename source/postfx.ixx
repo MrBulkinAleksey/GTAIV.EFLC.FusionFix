@@ -401,7 +401,7 @@ public:
     float fVolumetricCloudsMoonlight = 0.2f;
     float fVolumetricCloudsSkyLight = 0.35f;
     // The clouds' sunlit side against the sky behind them, in times its brightness.
-    float fVolumetricCloudsSkyMatch = 0.9f;
+    float fVolumetricCloudsSkyMatch = 1.8f;
     bool bVolumetricCloudsWeather = true;
     float fVolumetricCloudsVanilla = 0.0f;
     float fVolumetricCloudsTranslucency = 0.3f;
@@ -409,7 +409,7 @@ public:
     float fVolumetricCloudsSaturation = 1.0f;
     // The shaded side and the bases against the game's cloud colour, and how much of the view's
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
-    float fVolumetricCloudsShade = 0.35f;
+    float fVolumetricCloudsShade = 0.25f;
     float fVolumetricCloudsAbsorption = 0.4f;
     int nVolumetricCloudsDebug = 0;
     // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
@@ -1333,13 +1333,13 @@ public:
         fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.6f), 0.0f, 1.0f);
         fVolumetricCloudsMoonlight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMoonlight", 0.2f), 0.0f, 2.0f);
         fVolumetricCloudsSkyLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyLight", 0.35f), 0.0f, 1.0f);
-        fVolumetricCloudsSkyMatch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyMatch", 0.9f), 0.0f, 20.0f);
+        fVolumetricCloudsSkyMatch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyMatch", 1.8f), 0.0f, 20.0f);
         bVolumetricCloudsWeather = iniReader.ReadInteger("POSTFX", "VolumetricCloudsWeather", 1) != 0;
         fVolumetricCloudsVanilla = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsVanilla", 0.0f), 0.0f, 1.0f);
         fVolumetricCloudsTranslucency = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsTranslucency", 0.3f), 0.0f, 0.9f);
         fVolumetricCloudsEvolution = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsEvolution", 1.0f), 0.0f, 10.0f);
         fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
-        fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.35f), 0.0f, 2.0f);
+        fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.25f), 0.0f, 2.0f);
         fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.4f), 0.05f, 3.0f);
         nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 2);
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
@@ -1496,9 +1496,10 @@ public:
 };
 
 // The cloud deck's noise for the cloud shadows and the volumetric clouds: 1024 x 1024, tiling.
-// - Heaps: each of 8 x 8 cells a tile holds one heap at a random point, of a random radius, falling
-//   off from its middle; smaller heaps from 16 x 16 cells add to them. A 16 km tile of them, where
-//   8 km held 4 x 4, repeats a quarter as often, and the heaps came out rounder and more varied. Perlin-Worley noise in its place
+// - Heaps: each of 4 x 4 cells a tile holds one heap at a random point, of a random radius, falling
+//   off from its middle; smaller heaps from 8 x 8 cells add to them. On a 16 km tile a heap is one
+//   and a half to three kilometres across, as wide fair weather cumulus are; at 8 x 8 the heaps,
+//   under a kilometre, came out small and sparse. Perlin-Worley noise in its place
 //   joined the clouds into one network over half the sky, where real fair weather cumulus stand
 //   apart, spread evenly.
 // - The heaps are read through a warp of value noise, so their outlines wander, and a fine value
@@ -1565,7 +1566,7 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
         return best;
     };
 
-    constexpr int heapCells = 8;
+    constexpr int heapCells = 4;
     const float warpReach = static_cast<float>(size) / heapCells * 0.6f;
     std::vector<float> value(size * size, 0.0f);
     for (int y = 0; y < size; ++y)
@@ -1730,22 +1731,20 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 //   weather map spreads either way), base and thickness in metres, density against
 //   VolumetricCloudsDensity, the share of overcast sheet, and the wind against CloudShadowsWind;
 // - the light's absorption inside them, how much more their thin parts let through and how much the
-//   billows eat their edges, each against its VolumetricClouds* setting, and the glow around the sun.
-// - how fast they reshape against VolumetricCloudsEvolution, and how round their bases' edges are.
-// Fair weather barely reshapes, rain's deck churns (held to 3); fog has no clouds.
-// Fair weather: scattered heaps around a kilometre up, two to three times as wide as they are tall,
-// ragged and see-through at the edges, with bright rims. Rain and storms: a low, thick, closed deck,
-// an overcast sheet over most of it, smooth, dense, with dark bases and little glow. Fair weather
-// bases of 300 to 350 m under 600 to 700 m of cloud stood every heap as a tower over the city. The cover was a quarter to two fifths in every weather while the coverage map put
-// cloud over far more of the sky than its cover said; since it takes exactly that share, the
-// overcast weathers came out half clear.
+//   billows eat their edges, each against its VolumetricClouds* setting, and the glow around the sun;
+// - how much brighter the cloud near the sun is, how fast they reshape against
+//   VolumetricCloudsEvolution, and how round their bases' edges are.
+// Fair weather: broad heaps from 600 to 700 m up, wider than they are tall, ragged and see-through
+// at the edges, with bright rims, barely reshaping. Rain and storms: a low, thick, closed deck, an
+// overcast sheet over most of it, smooth, dense, with dark bases and little glow, churning (held
+// to 3). Fog has no clouds.
 static constexpr PostFxResource::CloudLayer kWeatherClouds[8] =
 {
     //  cover   base   thick   dens  strat  wind   abs   transl detail glow  sun   evol  base round
-    { 0.15f, 1100.0f,  350.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f, 7.0f, 0.70f, 0.4f, 0.35f }, // EXTRASUNNY
-    { 0.30f,  900.0f,  450.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f, 6.0f, 0.55f, 0.7f, 0.50f }, // SUNNY
-    { 0.40f, 1000.0f,  500.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 1.3f, 6.0f, 0.50f, 0.9f, 0.40f }, // SUNNY_WINDY
-    { 0.70f,  700.0f,  700.0f, 1.00f, 0.2f, 0.67f, 1.3f, 1.0f, 1.0f, 4.0f, 0.20f, 1.3f, 0.50f }, // CLOUDY
+    { 0.25f,  700.0f,  550.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f, 7.0f, 0.70f, 0.4f, 0.35f }, // EXTRASUNNY
+    { 0.40f,  600.0f,  700.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f, 6.0f, 0.55f, 0.7f, 0.50f }, // SUNNY
+    { 0.45f,  700.0f,  650.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 1.3f, 6.0f, 0.50f, 0.9f, 0.40f }, // SUNNY_WINDY
+    { 0.70f,  500.0f,  900.0f, 1.00f, 0.2f, 0.67f, 1.3f, 1.0f, 1.0f, 4.0f, 0.20f, 1.3f, 0.50f }, // CLOUDY
     { 0.95f,  300.0f, 1000.0f, 0.83f, 0.6f, 0.33f, 2.0f, 0.5f, 0.6f, 2.0f, 0.25f, 3.0f, 0.50f }, // RAIN
     { 0.85f,  400.0f,  900.0f, 0.67f, 0.4f, 1.67f, 1.6f, 0.7f, 0.8f, 3.0f, 0.40f, 0.8f, 0.50f }, // DRIZZLE
     { 0.00f,  600.0f,  600.0f, 0.20f, 0.3f, 1.67f, 1.0f, 1.0f, 0.8f, 3.0f, 0.30f, 0.4f, 0.50f }, // FOGGY
