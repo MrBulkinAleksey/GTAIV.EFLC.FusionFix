@@ -149,6 +149,8 @@ struct Place
 {
     float weather;
     float2 morph;
+    float base;       // the base's height there
+    float thickness;  // and the layer's thickness
 };
 
 Place PlaceAt(float3 p)
@@ -157,6 +159,12 @@ Place PlaceAt(float3 p)
     float2 uv0 = p.xy * vec4Layer.z + vec4Wind.xy;
     place.weather = Weather(uv0) * 2.0 - 1.0;
     place.morph = Morph(uv0) - uv0;
+    // Cloudier parts of the sky have taller heaps, by a quarter either way. Real cumulus share a
+    // base, where the rising air cools to its dew point, but it is not drawn with a ruler: up to a
+    // tenth of the layer higher where the weather map is weaker, and level under an overcast sheet,
+    // whose deck would open a strip of sky at the horizon.
+    place.thickness = vec4Layer.y * (1.0 + 0.25 * place.weather);
+    place.base = vec4Layer.x + vec4Layer.y * 0.1 * (0.5 - 0.5 * place.weather) * (1.0 - fStratus);
     return place;
 }
 
@@ -178,8 +186,7 @@ float Density(float3 p, bool detail, Place place)
     float2 uv0 = p.xy * vec4Layer.z + vec4Wind.xy;
     // Cloudier parts of the sky have more cover and taller heaps, by vec4Morph.w either way.
     float weather = place.weather;
-    float thickness = vec4Layer.y * (1.0 + 0.25 * weather);
-    float h = (p.z - vec4Layer.x) / thickness;
+    float h = (p.z - place.base) / place.thickness;
     if (h <= 0.0 || h >= 1.0)
         return 0.0;
     float2 uv = uv0 + place.morph;
@@ -220,6 +227,8 @@ float Density(float3 p, bool detail, Place place)
         d -= vec4Shape.z * 0.66 * n * n * EdgeWeight(d);
         float m = 1.0 - tex3Dlod(DetailTex, float4(q * 5.5 + 0.37, 0)).r;
         d -= vec4Shape.z * 0.3 * m * (0.6 * m + 0.4) * EdgeWeight(d);
+        // A ragged fringe under the base: the coarse billows eat the bottom eighth harder.
+        d -= vec4Shape.z * 0.7 * n * saturate(1.0 - h * 8.0);
         if (d <= 0.0)
             return 0.0;
     }
