@@ -41,7 +41,7 @@ sampler3D DetailTex : register(s2);
 sampler2D CurrentTex : register(s3);   // this frame's clouds at half size (CloudsResolve)
 sampler2D HistoryTex : register(s4);   // the clouds accumulated up to last frame (CloudsResolve)
 sampler2D CloudTex : register(s5);     // the accumulated clouds (CloudsComposite)
-sampler2D SceneTex : register(s6);     // the lit scene, the sky in it (CloudsSkyRef)
+sampler2D SceneTex : register(s6);     // the lit scene, the sky in it (CloudsSkyRef, and the halo behind the clouds in CloudsLight)
 sampler2D SkyRefTex : register(s7);    // the sky's brightness this frame, in red (CloudsSkyRef's target)
 sampler2D MarchTex0 : register(s8);    // the march's sums: transmittance, sun, shade, silver (CloudsLight)
 sampler2D MarchTex1 : register(s9);    // and glow, first hit
@@ -470,7 +470,7 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
 // behind that shows through in alpha. full is a constant: the one pass variant leaves the matching
 // to the sky (and its debug view), which the reflections do not use, the sun power, the tops'
 // light and the undersides' darkening out, for the slots.
-float4 Light(CloudSums sums, float3 dir, bool full)
+float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
 {
     float cover = 1.0 - sums.transmittance;
     [branch]
@@ -537,6 +537,16 @@ float4 Light(CloudSums sums, float3 dir, bool full)
         float skyLuma = tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).r;
         if (skyLuma > 1e-4)
             colour *= clamp(fSkyMatch * skyLuma, 0.1, 2.0);
+        // The silver lining against the sun: the half lit band at a cloud's edge, where it is there
+        // but still lets the sky through, takes the glow the sky has right behind it past the sky's
+        // brightness away from the sun, the halo, which is the same sunlight scattered forwards. Held
+        // within eight times the sky's brightness, so the sun's disc through thin cloud does not
+        // flare. By the weather's glow, so rain's deck shows little of it. Matched to the frame's sky
+        // alone, the edges round the sun came out darker than the halo behind them.
+        float3 sky = tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb;
+        float behind = dot(sky, float3(0.2126, 0.7152, 0.0722));
+        float3 halo = sky * (min(behind, 8.0 * skyLuma) - skyLuma) / max(behind, 1e-4);
+        colour += max(halo, 0.0) * (4.0 * cover * (1.0 - cover) * fGlow / 6.0);
         if (fDebug == 2.0)
             colour = skyLuma * cover;
     }
@@ -551,7 +561,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
 {
     float rayScale;
     float3 dir = RayDirection(vpos, rayScale);
-    return Light(March(uv, vpos, dir, rayScale, false), dir, false);
+    return Light(March(uv, vpos, dir, rayScale, false), dir, false, uv);
 }
 
 // The march at half size, its sums in two targets: (transmittance, sun, shade, silver) and (glow,
@@ -579,7 +589,7 @@ float4 CloudsLight_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     sums.firstHit = sums1.y;
     sums.top = sums1.z;
     sums.height = sums1.w;
-    return Light(sums, WorldRay(vpos), true);
+    return Light(sums, WorldRay(vpos), true, uv);
 }
 
 // The history read with a Catmull-Rom filter in five bilinear reads: read bilinearly each frame as the
