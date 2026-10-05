@@ -305,6 +305,8 @@ public:
     // shows the lighting whatever another shader left there.
     static bool SSGIEnabled() { static auto p = FusionFixSettings.GetRef("PREF_SSGI"); return p && p->get() != 0; }
     static constexpr int kGIDebugMode = 8;
+    // What the accumulation of indirect light does with each pixel, see GIHistoryDebug in SSR.fx.
+    static constexpr int kGIHistoryDebugMode = 10;
     float fGIIntensity = 1.5f;
     float fGIMaxBrightness = 4.0f;
     // How much of the ambient the indirect light takes the place of where its rays hit (alpha of
@@ -5799,7 +5801,19 @@ private:
         BindMotionVectors(effect, history);
         effect->SetFloat(h.fTemporalBlend, history ? R.fGITemporalBlend : 0.0f);
         effect->SetFloat(h.fTemporalAnySurface, 1.0f);
+        // The SSR pass left the menu's debug view in fDebugMode; view 10 would turn this pass into its own.
+        effect->SetFloat(h.fDebugMode, 0.0f);
         DrawEffectPass(pDevice, effect, h.techSSRTemporal, R.GIAccumSurf[next], width, height);
+        // View 10 runs the accumulation again into whichever half size target it does not read.
+        IDirect3DTexture9* historyDebug = nullptr;
+        if (R.SSRDebugMode() == R.kGIHistoryDebugMode && R.SSRDebugSurf && h.techSSRDebug)
+        {
+            const bool rawFree = gathered != R.GIRawTex->mD3DTexture;
+            effect->SetFloat(h.fDebugMode, float(R.kGIHistoryDebugMode));
+            DrawEffectPass(pDevice, effect, h.techSSRTemporal, rawFree ? R.GIRawSurf : R.GIDenoisedSurf, width, height);
+            effect->SetFloat(h.fDebugMode, 0.0f);
+            historyDebug = rawFree ? R.GIRawTex->mD3DTexture : R.GIDenoisedTex->mD3DTexture;
+        }
         effect->SetFloat(h.fTemporalAnySurface, 0.0f);
         R.nGIAccumIndex = next;
         R.nGIAccumFrame = FrameHistory::Frame();
@@ -5816,10 +5830,10 @@ private:
             R.GIResult = R.GIFullTex->mD3DTexture;
         }
 
-        if (R.SSRDebugMode() == R.kGIDebugMode && R.SSRDebugSurf && h.techSSRDebug)
+        if ((R.SSRDebugMode() == R.kGIDebugMode || historyDebug) && R.SSRDebugSurf && h.techSSRDebug)
         {
-            effect->SetTexture(h.SSRResultTex2D, R.GIResult);
-            effect->SetFloat(h.fDebugMode, float(R.kGIDebugMode));
+            effect->SetTexture(h.SSRResultTex2D, historyDebug ? historyDebug : R.GIResult);
+            effect->SetFloat(h.fDebugMode, float(historyDebug ? R.kGIHistoryDebugMode : R.kGIDebugMode));
             DrawEffectPass(pDevice, effect, h.techSSRDebug, R.SSRDebugSurf, fullWidth, fullHeight);
             R.bSSRDebugValid = true;
         }
