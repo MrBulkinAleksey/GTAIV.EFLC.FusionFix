@@ -28,7 +28,8 @@ import upscaler;
 //   render thread check the time. The first one after the half (FrameGenerationDelay of the smoothed frame time)
 //   presents the rendered frame and leaves the back buffer as it found it. A frame that ends before that presents
 //   the waiting one first.
-// - FrameGeneration = 2 shows the generated frames in place of the rendered ones, to check the generation itself.
+// - FrameGeneration = 2 shows the generated frames in place of the rendered ones, to check the generation itself;
+//   3 paces as 1 with the rendered frame in place of the generated one, to check the pacing alone.
 
 namespace
 {
@@ -37,6 +38,7 @@ namespace
         Off = 0,
         On = 1,
         ShowGenerated = 2,  // the generated frame replaces the rendered one
+        PaceRendered = 3,   // as On, with the rendered frame where the generated one would go: tells the pacing apart
     };
 
     Mode mode = Mode::Off;
@@ -304,8 +306,23 @@ namespace
 
         if (!Upscaler::IsFrameGenerationReady())
             return;
-        if (mode == Mode::On)
+        bool pacing = mode == Mode::On || mode == Mode::PaceRendered;
+        if (pacing)
+        {
             InstallHooks(device);
+
+            static bool logged = false;
+            IDirect3DSwapChain9* swapChain = nullptr;
+            D3DPRESENT_PARAMETERS pp{};
+            if (!logged && SUCCEEDED(device->GetSwapChain(0, &swapChain)) && swapChain && SUCCEEDED(swapChain->GetPresentParameters(&pp)))
+            {
+                Log("Swap chain: %ux%u format %d, %u back buffers, swap effect %d, flags %08x, interval %08x, windowed %d, auto depth %d (format %d)",
+                    pp.BackBufferWidth, pp.BackBufferHeight, pp.BackBufferFormat, pp.BackBufferCount, pp.SwapEffect, pp.Flags,
+                    pp.PresentationInterval, pp.Windowed, pp.EnableAutoDepthStencil, pp.AutoDepthStencilFormat);
+                logged = true;
+            }
+            SAFE_RELEASE(swapChain);
+        }
 
         IDirect3DSurface9* backBuffer = nullptr;
         if (FAILED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) || !backBuffer)
@@ -341,8 +358,8 @@ namespace
 
                 // The game presents the generated frame, the rendered one waits in PresentRT. Not a frame generated
                 // without a previous one, nor before the frame time is known.
-                bool paced = mode == Mode::On && !Upscaler::WasGenerateReset() && FrameMs > 0.0;
-                if (mode == Mode::ShowGenerated || paced)
+                bool paced = pacing && !Upscaler::WasGenerateReset() && FrameMs > 0.0;
+                if (mode == Mode::ShowGenerated || (paced && mode == Mode::On))
                     device->StretchRect(generatedSurface, nullptr, backBuffer, nullptr, D3DTEXF_POINT);
                 if (paced)
                 {
@@ -405,11 +422,12 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
-            mode = static_cast<Mode>(std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGeneration", 0), 0, 2));
+            mode = static_cast<Mode>(std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGeneration", 0), 0, 3));
             fDelay = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
             QueryPerformanceFrequency(&Frequency);
             if (mode != Mode::Off)
-                Log("Frame generation: %s", mode == Mode::ShowGenerated ? "showing the generated frames" : "on");
+                Log("Frame generation: %s", mode == Mode::ShowGenerated ? "showing the generated frames" :
+                    mode == Mode::PaceRendered ? "pacing the rendered frames only" : "on");
 
             FusionFix::onBeforePresent() += []()
             {
