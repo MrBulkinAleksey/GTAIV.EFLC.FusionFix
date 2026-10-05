@@ -537,10 +537,14 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     // every cloud. Matched to the sky right behind each one instead, the clouds round the sun took
     // its halo and shone cream while those across the sky, whose sunlit sides face the eye and
     // should be the brightest, sank to the grey of the sky there.
+    // Haze: distant cloud fades into the sky.
+    float haze = sums.firstHit >= 0.0 ? exp(-sums.firstHit / vec4Shape.w) : 0.0;
     [branch]
     if (full && fSkyMatch > 0.0)
     {
         float skyLuma = tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).r;
+        float3 sky = tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb;
+        float behind = dot(sky, float3(0.2126, 0.7152, 0.0722));
         if (skyLuma > 1e-4)
             colour *= clamp(fSkyMatch * skyLuma, 0.1, 2.0);
         // The silver lining against the sun: the half lit band at a cloud's edge, where it is there
@@ -551,17 +555,18 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         // alone, the edges round the sun came out darker than the halo behind them. Within three
         // times the sky and on the narrow band (4 cover (1 - cover))^2: at eight times on the broad
         // band, with the game's bright halo and the bloom, whole clouds near the sun washed out white.
-        float3 sky = tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb;
-        float behind = dot(sky, float3(0.2126, 0.7152, 0.0722));
         float3 halo = sky * (min(behind, 3.0 * skyLuma) - skyLuma) / max(behind, 1e-4);
         float band = 4.0 * cover * (1.0 - cover);
         colour += max(halo, 0.0) * (band * band * fGlow / 6.0);
         if (fDebug == 2.0)
             colour = skyLuma * cover;
+        // The haze mixes in the sky behind the cloud held within twice the frame's sky, where it used
+        // to let the sky through: a cloud 3 km off let a tenth of it through, and with the sun's
+        // halo behind it, many times the sky in the game's HDR, whole clouds near the sun came out
+        // a flat cream. The horizon, near the frame's sky, fades as before.
+        float3 hazeSky = sky * min(1.0, 2.0 * skyLuma / max(behind, 1e-4));
+        return float4(colour * haze + hazeSky * (cover * (1.0 - haze)), 1.0 - cover);
     }
-
-    // Haze: distant cloud fades into what is behind it.
-    float haze = sums.firstHit >= 0.0 ? exp(-sums.firstHit / vec4Shape.w) : 0.0;
     return float4(colour * haze, 1.0 - cover * haze);
 }
 
