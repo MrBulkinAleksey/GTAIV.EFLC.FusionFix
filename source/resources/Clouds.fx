@@ -548,11 +548,14 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         // brightness away from the sun, the halo, which is the same sunlight scattered forwards. Held
         // within eight times the sky's brightness, so the sun's disc through thin cloud does not
         // flare. By the weather's glow, so rain's deck shows little of it. Matched to the frame's sky
-        // alone, the edges round the sun came out darker than the halo behind them.
+        // alone, the edges round the sun came out darker than the halo behind them. Within three
+        // times the sky and on the narrow band (4 cover (1 - cover))^2: at eight times on the broad
+        // band, with the game's bright halo and the bloom, whole clouds near the sun washed out white.
         float3 sky = tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb;
         float behind = dot(sky, float3(0.2126, 0.7152, 0.0722));
-        float3 halo = sky * (min(behind, 8.0 * skyLuma) - skyLuma) / max(behind, 1e-4);
-        colour += max(halo, 0.0) * (4.0 * cover * (1.0 - cover) * fGlow / 6.0);
+        float3 halo = sky * (min(behind, 3.0 * skyLuma) - skyLuma) / max(behind, 1e-4);
+        float band = 4.0 * cover * (1.0 - cover);
+        colour += max(halo, 0.0) * (band * band * fGlow / 6.0);
         if (fDebug == 2.0)
             colour = skyLuma * cover;
     }
