@@ -12,7 +12,7 @@
 // erodes the edges.
 // Light: the sun reaching each sample through the cloud above it (Beer's law with softer lobes for the
 // light scattered more than once), lit the way gta_atmoscatt_clouds lights its own clouds:
-// CloudColor, brightened by up to CloudInscatteringRange along the sun's axis (cos^2) where the cloud
+// CloudColor, brightened by up to CloudInscatteringRange towards the sun (cos^2, that side only) where the cloud
 // is thin, darkened where the sun does not reach, plus SunsetColor on the side towards the sun. A
 // forward lobe some 30 degrees wide adds the glow of thin cloud around the sun, and a soft knee rolls
 // the brightest of it off below a ceiling, so it neither clips to white nor flattens the shading.
@@ -203,9 +203,11 @@ bool MayBeCloud(float3 p)
 }
 
 // crease: the coarse billows' noise at p, high in the folds between them (0 without the detail).
-float Density(float3 p, bool detail, Place place, bool full, out float crease)
+// soft: the density before the compressor below, which rises gently from the edge inwards.
+float Density(float3 p, bool detail, Place place, bool full, out float crease, out float soft)
 {
     crease = 0.0;
+    soft = 0.0;
     float2 uv0 = p.xy * vec4Layer.z + vec4Wind.xy;
     // Cloudier parts of the sky have more cover and taller heaps, by vec4Morph.w either way.
     float weather = place.weather;
@@ -270,6 +272,7 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease)
             return 0.0;
     }
 
+    soft = d;
     float k = lerp(3.0, 12.0, h);
     d = d * (1.0 + k) / (1.0 + k * d);
     return d * lerp(0.5, 1.0, smoothstep(0.02, 0.2, h));
@@ -404,8 +407,8 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
         }
 
         Place place = PlaceAt(p);
-        float crease;
-        float d = Density(p, true, place, full, crease);
+        float crease, soft;
+        float d = Density(p, true, place, full, crease, soft);
         [branch]
         if (d > 0.01)
         {
@@ -425,8 +428,8 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             for (float j = 0.0; j < LIGHT_STEPS - 0.5; j += 1.0)
             {
                 q += vec3SunDir * stepLength;
-                float unused;
-                lightDepth += Density(q, false, place, full, unused) * stepLength;
+                float unused, unusedSoft;
+                lightDepth += Density(q, false, place, full, unused, unusedSoft) * stepLength;
                 stepLength *= 2.0;
             }
             // Light scattered many times inside a cloud gets far deeper than the sun's direct beam,
@@ -467,7 +470,10 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             sun *= full ? 1.0 - 0.9 * crease * crease : 1.0;
             // Darker towards the base, where the sky above is hidden by the cloud itself, by height.
             float h = saturate((p.z - base) / vec4Layer.y);
-            float thin = saturate(1.0 - d);
+            // Thin by the density before the compressor: past it the density is near 1 a few metres
+            // in, so the silver lining and the glow lit a band a pixel or two wide at the very edge,
+            // and every cloud came out with a white outline drawn round it.
+            float thin = saturate(1.0 - soft);
 
             // Thin cloud lets more of what is behind it through, the wisps at the edges most.
             float stepTransmittance = exp(-d * lerp(1.0 - fTranslucency, 1.0, d) * sigma * fine);
@@ -541,7 +547,10 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     float3 sunLit = vec3LitColour * vec3SunTint;
     // Each term apart, so VolumetricCloudsDebug 3 to 11 can show it alone.
     float3 termBase = vec3ShadeColour * sums.shade + sunLit * sums.sun;
-    float3 termSilver = sunLit * (fSilver * cosTheta * cosTheta * sums.silver);
+    // Towards the sun only: the game's cos^2 lit the clouds' edges as brightly with the sun behind the
+    // eye, and every cloud across the sky had a white outline.
+    float towardsSun = max(cosTheta, 0.0);
+    float3 termSilver = sunLit * (fSilver * towardsSun * towardsSun * sums.silver);
     float3 termSunset = vec3SunsetColour * (sunsetLobe * sums.sun);
     float3 termGlow = sunLit * (forward * sums.glow);
     float3 termSunPower = 0.0;
