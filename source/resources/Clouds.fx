@@ -302,6 +302,8 @@ struct CloudSums
     float silver;         // the silver lining's: sun, more where the cloud is thin
     float glow;           // the glow's: thin cloud with little of it towards the sun
     float firstHit;       // how far the ray met its first cloud, or -1
+    float top;            // the sun reaching the upper half of the cloud
+    float height;         // the samples' height in the layer, 0 at the base
 };
 
 // The world direction of the view ray through the half or full size pixel vpos, and its length in
@@ -323,6 +325,8 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale)
     sums.silver = 0.0;
     sums.glow = 0.0;
     sums.firstHit = -1.0;
+    sums.top = 0.0;
+    sums.height = 0.0;
     float3 origin = float3(vec4WorldX.w, vec4WorldY.w, vec4WorldZ.w);
 
     // Where the ray is inside the layer, cut short by the scene in front.
@@ -423,6 +427,8 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale)
             // middle, with the whole cloud between it and the sun, stays dark: weighted by the light
             // scattered many times instead, the whole cloud around the sun brightened evenly.
             sums.glow += weight * thin * exp(-tau);
+            sums.top += weight * sun * smoothstep(0.5, 1.0, h);
+            sums.height += weight * h;
             sums.transmittance *= stepTransmittance;
         }
         else
@@ -433,9 +439,10 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale)
 }
 
 // The clouds' colour from what the march gathered, premultiplied, with the share of the scene
-// behind that shows through in alpha. matchSky is a constant: the one pass variant leaves the
-// matching to the sky (and its debug view) out, which the reflections do not use, for the slots.
-float4 Light(CloudSums sums, float3 dir, bool matchSky)
+// behind that shows through in alpha. full is a constant: the one pass variant leaves the matching
+// to the sky (and its debug view), which the reflections do not use, the tops' light and the
+// undersides' darkening out, for the slots.
+float4 Light(CloudSums sums, float3 dir, bool full)
 {
     float cover = 1.0 - sums.transmittance;
     [branch]
@@ -465,6 +472,15 @@ float4 Light(CloudSums sums, float3 dir, bool matchSky)
                   + sunLit * (fSilver * cosTheta * cosTheta * sums.silver)
                   + vec3SunsetColour * (sunsetLobe * sums.sun)
                   + sunLit * (forward * sums.glow);
+    [branch]
+    if (full)
+    {
+        // The sunlit tops brighter still, as RealityIV lights them, at four tenths more.
+        colour += sunLit * (0.4 * sums.top);
+        // The undersides darkened by the sky the cloud above them hides, by the cloud's height in the
+        // layer alone, whatever the sun does: up to 15% at the base, none from two thirds up.
+        colour *= 1.0 - 0.15 * (1.0 - smoothstep(0.0, 0.65, sums.height / cover));
+    }
 
     // A soft knee from three quarters of the ceiling up, on the cloud's mean colour: the glow rises
     // towards it instead of clipping to white.
@@ -482,7 +498,7 @@ float4 Light(CloudSums sums, float3 dir, bool matchSky)
     // its halo and shone cream while those across the sky, whose sunlit sides face the eye and
     // should be the brightest, sank to the grey of the sky there.
     [branch]
-    if (matchSky && fSkyMatch > 0.0)
+    if (full && fSkyMatch > 0.0)
     {
         float skyLuma = tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).r;
         if (skyLuma > 1e-4)
@@ -505,14 +521,14 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
 }
 
 // The march at half size, its sums in two targets: (transmittance, sun, shade, silver) and (glow,
-// first hit).
+// first hit, top, height).
 void CloudsMarch_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS, out float4 sums0 : COLOR0, out float4 sums1 : COLOR1)
 {
     float rayScale;
     float3 dir = RayDirection(vpos, rayScale);
     CloudSums sums = March(uv, vpos, dir, rayScale);
     sums0 = float4(sums.transmittance, sums.sun, sums.shade, sums.silver);
-    sums1 = float4(sums.glow, sums.firstHit, 0.0, 1.0);
+    sums1 = float4(sums.glow, sums.firstHit, sums.top, sums.height);
 }
 
 // The light from the march's sums, at half size, for the accumulation.
@@ -527,6 +543,8 @@ float4 CloudsLight_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     sums.silver = sums0.w;
     sums.glow = sums1.x;
     sums.firstHit = sums1.y;
+    sums.top = sums1.z;
+    sums.height = sums1.w;
     return Light(sums, WorldRay(vpos), true);
 }
 

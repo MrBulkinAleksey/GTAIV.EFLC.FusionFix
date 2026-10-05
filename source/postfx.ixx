@@ -9,6 +9,7 @@ module;
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <random>
 
 export module postfx;
 
@@ -431,6 +432,7 @@ public:
     // The coverage map's slow morph (Clouds.fx's Morph): its phase in radians, which moves on by
     // VolumetricCloudsEvolution at 0.03 a second, kept within 10 pi, where both its waves repeat.
     double fCloudMorph = 0.0;
+    bool bCloudDriftSeeded = false;
     float CloudMorphPhase() const { return static_cast<float>(fCloudMorph); }
     // The morph swings the map by up to this many metres; the weather map, read 12.5 times larger
     // than the coverage map, moves the cover by up to this share either way and the heaps' height
@@ -1738,6 +1740,19 @@ static constexpr PostFxResource::CloudLayer kWeatherClouds[8] =
 
 void PostFxResource::UpdateCloudLayer(double seconds)
 {
+    // Each game starts the clouds somewhere else: how far the wind has carried them, how far the
+    // map has morphed and the billows have turned over. From zero, every session opened on the same
+    // sky.
+    if (!bCloudDriftSeeded)
+    {
+        std::mt19937_64 random(std::random_device{}());
+        std::uniform_real_distribution<double> unit(0.0, 1.0);
+        fCloudDrift = unit(random) * 1000.0;
+        fCloudDetailDrift = unit(random) * 1000.0;
+        fCloudEvolution = unit(random) * 1000.0;
+        fCloudMorph = unit(random) * 31.415926535897932;
+        bCloudDriftSeeded = true;
+    }
     if (bVolumetricCloudsWeather && CWeather::OldWeatherType && CWeather::NewWeatherType && CWeather::InterpolationValue)
     {
         const auto from = static_cast<uint32_t>(*CWeather::OldWeatherType);
@@ -4235,7 +4250,7 @@ private:
         effect->SetVector("vec4Wind", &wind);
         const D3DXVECTOR4 shape(R.fVolumetricCloudsDensity * R.Cloud.density, 1.0f / R.fVolumetricCloudsDetailScale,
                                 (std::min)(R.fVolumetricCloudsDetail * R.Cloud.detail, 1.5f),
-                                R.fVolumetricCloudsHaze);
+                                R.fVolumetricCloudsHaze * (1.0f - 0.6f * R.Cloud.stratus));
         effect->SetVector("vec4Shape", &shape);
         effect->SetFloat("fStratus", R.Cloud.stratus);
         effect->SetFloat("fEvolution", float(std::fmod(R.fCloudEvolution, 1.0)));
