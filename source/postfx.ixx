@@ -2660,6 +2660,51 @@ private:
         initialized = true;
     }
 
+    // Copies the texture on s0 over all of the bound target 0 through Blit_PS, with a quad of its own. The fog pass's
+    // own quad was drawn by the game's vertex shader, which RenderScale feeds the render size (globalScreenSize): on a
+    // target of the screen size it covered the copy otherwise than the texture, and with FSR's render scale last
+    // frame's depth sat elsewhere than this frame's, so every accumulation dropped its history on every pixel.
+    static void BlitToTarget(IDirect3DDevice9* pDevice, IDirect3DSurface9* target)
+    {
+        D3DSURFACE_DESC desc = {};
+        if (!target || FAILED(target->GetDesc(&desc)))
+            return;
+        // DrawPrimitiveUP leaves stream 0 unbound, and the fog pass draws from it after the copies.
+        IDirect3DVertexShader9* oldVS = nullptr;
+        IDirect3DVertexDeclaration9* oldDecl = nullptr;
+        IDirect3DVertexBuffer9* oldVB = nullptr;
+        UINT oldOffset = 0, oldStride = 0;
+        DWORD oldFVF = 0;
+        pDevice->GetVertexShader(&oldVS);
+        pDevice->GetVertexDeclaration(&oldDecl);
+        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        pDevice->GetFVF(&oldFVF);
+
+        D3DVIEWPORT9 vp = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
+        pDevice->SetViewport(&vp);
+        pDevice->SetVertexShader(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        const float w = float(desc.Width), h = float(desc.Height);
+        struct Vertex { float x, y, z, rhw, u, v; };
+        const Vertex quad[4] =
+        {
+            { -0.5f,     -0.5f,     0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,     h - 0.5f,  0.0f, 1.0f, 0.0f, 1.0f },
+            { w - 0.5f,  -0.5f,     0.0f, 1.0f, 1.0f, 0.0f },
+            { w - 0.5f,  h - 0.5f,  0.0f, 1.0f, 1.0f, 1.0f },
+        };
+        pDevice->SetPixelShader(PostFxResources.Blit_PS);
+        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(Vertex));
+
+        pDevice->SetVertexShader(oldVS);
+        pDevice->SetFVF(oldFVF);
+        pDevice->SetVertexDeclaration(oldDecl);
+        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
+        SAFE_RELEASE(oldVS);
+        SAFE_RELEASE(oldDecl);
+        SAFE_RELEASE(oldVB);
+    }
+
     static void NewFog()
     {
         RefreshGBufferTargets();
@@ -2730,9 +2775,7 @@ private:
                             pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
                         }
 
-                        pDevice->SetPixelShader(PostFxResources.Blit_PS);
-
-                        pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
+                        BlitToTarget(pDevice, PostFxResources.PreAlphaDepthSurface);
 
                         if (SSRTrace::Active())
                         {
@@ -2775,9 +2818,9 @@ private:
 
                     pDevice->SetTexture(0, scene);
 
-                    pDevice->SetPixelShader(PostFxResources.Blit_PS);
-
-                    pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
+                    // Its own quad, as for the depth copy above: SSR's and SSGI's history is taken from this copy and
+                    // read where last frame's depth copy is.
+                    BlitToTarget(pDevice, PostFxResources.HDRFullScreenSurface);
 
                     pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, prevMinFilter[0]);
                     pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, prevMagFilter[0]);
