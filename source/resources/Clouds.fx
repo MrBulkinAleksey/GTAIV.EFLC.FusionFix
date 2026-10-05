@@ -80,7 +80,8 @@ float fStratus;           // 0 separate heaps of cloud, 1 a sheet: the weather's
 float fEvolution;         // how far the detail has drifted up through itself, so the billows change
 float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
 float fGlow;
-float fSunPower;          // how much brighter the cloud near the sun in the sky is, all of it, by the weather
+float fSunPower;
+float fBaseRound;         // how far the base's edges curl in, by the weather          // how much brighter the cloud near the sun in the sky is, all of it, by the weather
 float2 vec2Shear;
 float fCurl;              // how far the billows are swept along the coarse noise at the tops, in their own size         // the coverage's offset at the layer's top: the tops lean downwind, drawn out by the wind              // the glow's strength around the sun, by the weather
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
@@ -190,7 +191,7 @@ bool MayBeCloud(float3 p)
     return c > 0.9 - cover;
 }
 
-float Density(float3 p, bool detail, Place place)
+float Density(float3 p, bool detail, Place place, bool full)
 {
     float2 uv0 = p.xy * vec4Layer.z + vec4Wind.xy;
     // Cloudier parts of the sky have more cover and taller heaps, by vec4Morph.w either way.
@@ -225,7 +226,11 @@ float Density(float3 p, bool detail, Place place)
     float threshold = 1.0 - cover;
     float d = saturate((c - threshold) / max(cover, 0.01));
     d *= d;
-    float dome = h * 1.15 * (1.0 - fStratus) * (1.0 - fStratus);
+    // The base's edges curl in by fBaseRound over its bottom quarter, so a heap sits on a rounded
+    // base rather than a sheared off one.
+    // The one pass variant for the reflections (full false) leaves it out, for the slots.
+    float curl = full ? max(1.0 - 4.0 * h, 0.0) : 0.0;
+    float dome = (h * 1.15 + fBaseRound * curl * curl) * (1.0 - fStratus) * (1.0 - fStratus);
     d = saturate((d - dome) / max(1.0 - dome, 0.05)) * smoothstep(1.0, 0.85, h);
     if (d <= 0.0)
         return 0.0;
@@ -317,7 +322,7 @@ float3 RayDirection(float2 vpos, out float rayScale)
     return dir / rayScale;
 }
 
-CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale)
+CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
 {
     CloudSums sums;
     sums.transmittance = 1.0;
@@ -382,7 +387,7 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale)
         }
 
         Place place = PlaceAt(p);
-        float d = Density(p, true, place);
+        float d = Density(p, true, place, full);
         [branch]
         if (d > 0.01)
         {
@@ -399,7 +404,7 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale)
             for (int j = 0; j < LIGHT_STEPS; ++j)
             {
                 q += vec3SunDir * stepLength;
-                lightDepth += Density(q, false, place) * stepLength;
+                lightDepth += Density(q, false, place, full) * stepLength;
                 stepLength *= 2.0;
             }
             // Light scattered many times inside a cloud gets far deeper than the sun's direct beam,
@@ -523,7 +528,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
 {
     float rayScale;
     float3 dir = RayDirection(vpos, rayScale);
-    return Light(March(uv, vpos, dir, rayScale), dir, false);
+    return Light(March(uv, vpos, dir, rayScale, false), dir, false);
 }
 
 // The march at half size, its sums in two targets: (transmittance, sun, shade, silver) and (glow,
@@ -532,7 +537,7 @@ void CloudsMarch_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS, out float4 sums0 
 {
     float rayScale;
     float3 dir = RayDirection(vpos, rayScale);
-    CloudSums sums = March(uv, vpos, dir, rayScale);
+    CloudSums sums = March(uv, vpos, dir, rayScale, true);
     sums0 = float4(sums.transmittance, sums.sun, sums.shade, sums.silver);
     sums1 = float4(sums.glow, sums.firstHit, sums.top, sums.height);
 }
