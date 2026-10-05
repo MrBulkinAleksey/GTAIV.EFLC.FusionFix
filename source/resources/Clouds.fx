@@ -81,6 +81,7 @@ float fCeiling;
 // is, over that sunlit side's luma; 0 leaves them at the game's cloud colour.
 float fSkyMatch;           // the brightest channel the cloud rolls off towards (at most the sky's clamp without HDR)
 float3 vec3SunTint;       // the hue of the game's SunColor at its brightness 1, mixed towards white by VolumetricCloudsSunTint
+float3 vec3GlowColour;    // the game's cloud colour, exposed, in the sun's own hue: the sunlight straight through
 float4 vec4Layer;         // base height, thickness, 1 / coverage scale, coverage
 float4 vec4Wind;          // coverage offset (xy), detail offset (zw)
 float4 vec4Shape;         // extinction per metre at full density, 1 / detail scale, detail strength, haze distance
@@ -500,8 +501,11 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             // middle, with the whole cloud between it and the sun, stays dark: weighted by the light
             // scattered many times instead, the whole cloud around the sun brightened evenly.
             // At the light's strength: past dusk, before the moon takes over, the edges glowed as if
-            // the sun were still up; by night the glow follows the moon.
-            sums.glow += weight * thin * exp(-tau) * fLightStrength;
+            // the sun were still up; by night the glow follows the moon. However dense: weighted by
+            // how thin the cloud was too, it lit only a pixel or two at the very edge, and none at all
+            // once the billows ate through the clouds and left them dense right behind their outline;
+            // the sun's light left is what makes the band, wide where the sun gets in.
+            sums.glow += weight * exp(-tau) * fLightStrength;
             // VolumetricCloudsDebug 12 takes the tops' sum for the cloud the light's march found towards
             // the sun, in thicknesses of the layer at full density.
             sums.top += weight * (full && fDebug == 12.0 ? saturate(lightDepth / vec4Layer.y) : sun * smoothstep(0.5, 1.0, h));
@@ -563,7 +567,7 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     float towardsSun = max(cosTheta, 0.0);
     float3 termSilver = sunLit * (fSilver * towardsSun * towardsSun * sums.silver);
     float3 termSunset = vec3SunsetColour * (sunsetLobe * sums.sun);
-    float3 termGlow = sunLit * (forward * sums.glow * (full ? fGlowBoost : 1.0));
+    float3 termGlow = vec3GlowColour * (forward * sums.glow * (full ? fGlowBoost : 1.0));
     float3 termSunPower = 0.0;
     float3 termTop = 0.0;
     float shadeMul = 1.0;

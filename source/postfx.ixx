@@ -397,7 +397,7 @@ public:
     float fVolumetricCloudsHaze = 25000.0f;
     float fVolumetricCloudsMaxDistance = 40000.0f;
     float fVolumetricCloudsBrightness = 1.0f;
-    float fVolumetricCloudsSunTint = 0.3f;
+    float fVolumetricCloudsSunTint = 0.6f;
     // The moon's light on the clouds once the sun is down, against the sun's; and how much the
     // clouds' shaded side takes the hue of the sky above it.
     float fVolumetricCloudsMoonlight = 0.2f;
@@ -416,7 +416,7 @@ public:
     // The shaded side and the bases against the game's cloud colour, and how much of the view's
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
     float fVolumetricCloudsShade = 0.65f;
-    float fVolumetricCloudsAbsorption = 0.7f;
+    float fVolumetricCloudsAbsorption = 0.35f;
     int nVolumetricCloudsDebug = 0;
     // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
     bool bVolumetricCloudsReflections = true;
@@ -1355,7 +1355,7 @@ public:
         fVolumetricCloudsHaze = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsHaze", 25000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBrightness", 1.0f), 0.0f, 4.0f);
-        fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.3f), 0.0f, 1.0f);
+        fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.6f), 0.0f, 1.0f);
         fVolumetricCloudsMoonlight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMoonlight", 0.2f), 0.0f, 2.0f);
         fVolumetricCloudsSkyLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyLight", 0.5f), 0.0f, 1.0f);
         fVolumetricCloudsMinLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMinLight", 0.25f), 0.0f, 0.9f);
@@ -1367,7 +1367,7 @@ public:
         fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
         fVolumetricCloudsMottle = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMottle", 0.4f), 0.0f, 1.0f);
         fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.65f), 0.0f, 2.0f);
-        fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.7f), 0.05f, 3.0f);
+        fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.35f), 0.05f, 3.0f);
         nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 15);
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
         fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
@@ -4405,13 +4405,14 @@ private:
         effect->SetFloat("fLightStrength", lightStrength);
         // How high the sun (or the moon) stands: 0 up to 5 degrees, 1 from 35 up. With it low, the clouds
         // towards it are lit from behind: their bodies darker than the sky, down to 0.3 of their light
-        // straight towards it, the least of the light inside them down to 0.4 of VolumetricCloudsMinLight,
-        // and the glow of their thin edges three times as strong. Through the day nothing changes; nor
-        // across the sky from a low sun, where the clouds face its light.
+        // straight towards it, and the glow of their edges three times as strong. Through the day
+        // nothing changes; nor across the sky from a low sun, where the clouds face its light. The
+        // least of the light inside them stays: lowered with the sun, it darkened the sides the sun
+        // lights too, grey where they should take its colour.
+        effect->SetFloat("fMinLight", R.fVolumetricCloudsMinLight);
         {
             const float lowSun = std::clamp((sun.z - 0.0872f) / (0.5736f - 0.0872f), 0.0f, 1.0f);
             const float day = lowSun * lowSun * (3.0f - 2.0f * lowSun);
-            effect->SetFloat("fMinLight", R.fVolumetricCloudsMinLight * (0.4f + 0.6f * day));
             effect->SetFloat("fBacklight", 0.3f + 0.7f * day);
             effect->SetFloat("fGlowBoost", 1.0f + 2.0f * (1.0f - day));
         }
@@ -4427,6 +4428,12 @@ private:
                 for (int i = 0; i < 3; ++i)
                     tint[i] = 1.0f + (std::clamp(sunColour[i] / luma, 0.0f, 2.0f) - 1.0f) * R.fVolumetricCloudsSunTint;
             effect->SetFloatArray("vec3SunTint", tint, 3);
+            // The glow is the sunlight straight through the cloud's edges: it takes the sun's hue
+            // whole, gold in the evening, whatever VolumetricCloudsSunTint does to the lit sides.
+            float glow[3];
+            for (int i = 0; i < 3; ++i)
+                glow[i] = litColour[i] * (luma > 1e-4f ? std::clamp(sunColour[i] / luma, 0.0f, 2.0f) : 1.0f);
+            effect->SetFloatArray("vec3GlowColour", glow, 3);
         }
         const D3DXVECTOR4 layer(R.Cloud.base, R.Cloud.thickness, 1.0f / R.fCloudShadowsScale, R.Cloud.coverage);
         effect->SetVector("vec4Layer", &layer);
