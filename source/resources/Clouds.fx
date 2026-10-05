@@ -440,6 +440,17 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             // metres thick, let the sun through nearly whole and came out flat; 0.4 keeps both.
             float tau = lightDepth * sigma * fLightAbsorption;
             float sun = (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) * (fLightStrength / 1.75);
+            // The billows shade each other: where a coarse billow stands a billow's size, 120 m,
+            // towards the sun, the sample takes less of it, by its own density. The march above
+            // leaves the detail out, and its first steps are too short for a billow to shade the
+            // next: the clouds' faces showed the large shadows only, smooth over their billows. A
+            // whole density sample there cost the march past its slots, for much the same look.
+            [branch]
+            if (full)
+            {
+                float3 towards = (p + vec3SunDir * 120.0) * vec4Shape.y + float3(vec4Wind.zw, fEvolution);
+                sun *= exp(-3.0 * d * tex3Dlod(DetailTex, float4(towards, 0)).r);
+            }
             // The powder effect: light scattered many times builds up inside a cloud, so its thin
             // edges, seen from the sun's side, are darker than its depth, and the folds between its
             // billows read. Without it the clouds facing away from the sun came out as flat white.
