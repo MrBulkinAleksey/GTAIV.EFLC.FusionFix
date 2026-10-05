@@ -340,6 +340,8 @@ public:
     // Jitter, main thread
 
     static inline std::atomic<uint32_t> ResolveFrame = 0;   // SceneFrame of the last resolve
+    static inline std::atomic<uint32_t> PresentFrame = 1;   // every frame, a scene drawn or not; 0 is "never"
+    static inline std::atomic<uint32_t> ResolvePresent = 0; // PresentFrame of the last resolve
     static inline uint32_t JitterCounter = 0;
 
     static float Halton(uint32_t index, uint32_t base)
@@ -360,10 +362,14 @@ public:
         if (TemporalAA::GetMode() == TemporalAA::Mode::Off)
             return false;
 
-        // Never jitter an image that is not resolved: e.g. post processing is off or failed to start
-        auto frame = TemporalAA::SceneFrame;
-        auto resolved = ResolveFrame.load();
-        return resolved != 0 && frame - resolved < 10;
+        // Nothing in the menus is resolved, the camera's projection would only shake whatever draws with it
+        if (CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive)
+            return false;
+
+        // Never jitter an image that is not resolved: e.g. post processing is off or failed to start. Counted in
+        // frames, not scenes: frames without a scene would keep the last resolve recent forever.
+        auto resolved = ResolvePresent.load();
+        return resolved != 0 && PresentFrame.load() - resolved < 10;
     }
 
     static inline rage::grcViewport* CameraViewport = nullptr;
@@ -1393,6 +1399,7 @@ public:
                 // The TAA history did not follow these frames
                 HistoryFrame = 0;
                 ResolveFrame = SceneFrame;
+                ResolvePresent = PresentFrame.load();
                 return true;
             }
         }
@@ -1483,6 +1490,7 @@ public:
         HistoryIndex = currentIndex;
         HistoryFrame = SceneFrame;
         ResolveFrame = SceneFrame;
+        ResolvePresent = PresentFrame.load();
         return true;
     }
 
@@ -1595,6 +1603,11 @@ public:
             FusionFix::onShutdownEvent() += []()
             {
                 Upscaler::Shutdown();
+            };
+
+            FusionFix::onAfterEndScene() += []()
+            {
+                ++PresentFrame;
             };
 
             CRenderPhaseDeferredLighting_SceneToGBuffer::OnBuildRenderList() += []()
