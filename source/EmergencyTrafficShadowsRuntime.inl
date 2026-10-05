@@ -1,9 +1,9 @@
 // OnyxOak modification project: Liberty's Shadows - Extra Night Shadows Fix and Enhancements.
 // Project direction, integration and visual testing by OnyxOak; Codex-assisted development.
-// Modification notice: 2026-10-04 (CE 1.8). See ATTRIBUTION.md for upstream credits and GPL-3.0.
+// Modification notice: 2026-10-05 (CE 1.9). See ATTRIBUTION.md for upstream credits and GPL-3.0.
 // Official release: https://www.nexusmods.com/gta4/mods/1459
 
-// CE 1.8's traffic signal and emergency light shadows, from the standalone adapter's
+// CE 1.8/1.9's traffic signal and emergency light shadows, from the standalone adapter's
 // traffic-signal-observer.inc and police-nearby.inc. Both give an existing native light the
 // shadow flag and a reserved key as it is submitted; no light is added, and the native seven
 // shadow slots stay as they are. Audited for CE 1.2.0.59 only, behind the CE adapter.
@@ -111,6 +111,12 @@ namespace EmergencyTrafficShadows
             return false;
         }
 
+        // CE 1.9: a page the working set reports valid needs no VirtualQuery; the rest still use it.
+        static bool Readable(uintptr_t address, size_t size) noexcept
+        {
+            return traffic_signal::fresh_page::Readable(address, size, EmergencyTrafficShadows::Readable);
+        }
+
         struct Match { traffic_signal::Identity identity; uint32_t kind; };
         static bool PoolMatch(uintptr_t owner, uint32_t pointerRva, uint32_t stride, uint32_t kind, Match& result) noexcept
         {
@@ -133,12 +139,53 @@ namespace EmergencyTrafficShadows
             result.identity = {uint32_t(reinterpret_cast<uintptr_t>(pool)), uint32_t(storage), uint32_t(flags), uint32_t(owner), slot, reference, model};
             result.kind = kind; return true;
         }
-        static bool MatchOwner(uintptr_t owner, Match& value) noexcept
+        static bool MatchOwnerFull(uintptr_t owner, Match& value) noexcept
         {
             Match b{}, o{};
             const bool building = PoolMatch(owner, BuildingPoolRva, 0x70, 0, b), object = PoolMatch(owner, ObjectPoolRva, 0x320, 1, o);
             if (building == object) return false;
             value = building ? b : o; return true;
+        }
+        // CE 1.9: an owner outside the building pool is matched against one fresh snapshot of the
+        // object pool's header; anything the snapshot cannot decide goes through the full check.
+        enum class SnapshotOutcome { Rejected, Matched, Restart };
+        static SnapshotOutcome ObjectMatchSnapshot(uintptr_t owner, const traffic_signal::pool_descriptors::Header& header, Match& result) noexcept
+        {
+            constexpr uint32_t stride = 0x320;
+            if (!header.valid) return SnapshotOutcome::Rejected;
+            const auto pool = reinterpret_cast<rage::fwBasePool*>(header.pool);
+            const auto storage = header.storage, flags = header.flags;
+            const uint64_t bytes = uint64_t(header.size) * stride;
+            if (owner < storage || uint64_t(owner - storage) >= bytes || (owner - storage) % stride || !Readable(owner, 0x30)) return SnapshotOutcome::Rejected;
+            const auto slot = uint32_t((owner - storage) / stride);
+            if (!Readable(flags + slot, 1)) return SnapshotOutcome::Rejected;
+            const auto reference = reinterpret_cast<const uint8_t*>(flags)[slot]; if (reference & 0x80) return SnapshotOutcome::Rejected; // free
+            const auto index = *reinterpret_cast<const int16_t*>(owner + 0x2e); if (index < 0 || index >= 31000) return SnapshotOutcome::Rejected;
+            const auto info = *reinterpret_cast<const uintptr_t*>(game + ModelInfoTableRva + index * 4);
+            if (!Readable(info, 0x40)) return SnapshotOutcome::Rejected;
+            const auto model = *reinterpret_cast<const uint32_t*>(info + 0x3c); if (!model) return SnapshotOutcome::Rejected;
+            const auto matrix = *reinterpret_cast<const uintptr_t*>(owner + 0x20); if (!Readable(matrix, 64)) return SnapshotOutcome::Rejected;
+            for (unsigned i = 0; i < 3; ++i) if (!std::isfinite(reinterpret_cast<const float*>(matrix)[12 + i])) return SnapshotOutcome::Rejected;
+            const auto liveFlags = pool->m_aFlags;
+            if (reinterpret_cast<uintptr_t>(liveFlags) != flags) return SnapshotOutcome::Restart;
+            if (liveFlags[slot] != reference) return SnapshotOutcome::Rejected;
+            result.identity = {uint32_t(header.pool), uint32_t(storage), uint32_t(flags), uint32_t(owner), slot, reference, model};
+            result.kind = 1; return SnapshotOutcome::Matched;
+        }
+        static bool MatchOwner(uintptr_t owner, Match& value) noexcept
+        {
+            namespace pd = traffic_signal::pool_descriptors;
+            const auto buildingPool = *reinterpret_cast<const uintptr_t*>(game + BuildingPoolRva);
+            const auto objectPool = *reinterpret_cast<const uintptr_t*>(game + ObjectPoolRva);
+            pd::Header objectHeader{};
+            const auto attempt = pd::FreshRejectedBuilding(buildingPool, objectPool, owner, game + ObjectPoolRva, Readable, objectHeader);
+            if (attempt == pd::Attempt::Fallback) return MatchOwnerFull(owner, value);
+            if (attempt == pd::Attempt::Fault) return false;
+            Match current{};
+            const auto outcome = ObjectMatchSnapshot(owner, objectHeader, current);
+            if (outcome == SnapshotOutcome::Restart) return MatchOwnerFull(owner, value);
+            if (outcome != SnapshotOutcome::Matched) return false;
+            value = current; return true;
         }
         static uint32_t PrivateKey() noexcept { return uint32_t(reinterpret_cast<uintptr_t>(reservedIdentities)); }
         static uint32_t KeyIndex(uint32_t key) noexcept
@@ -260,7 +307,8 @@ namespace EmergencyTrafficShadows
             if (*reinterpret_cast<const uint8_t*>(game + TimerBackupActiveRva) != 1 || frame != saved) return;
             for (uint32_t i = 0; i < registry.Used(); ++i)
             {
-                auto& entry = registry.entries[i]; if (entry.retired || !entry.leased) continue;
+                // CE 1.9: unleased entries are rebased too, so a lapsed lease is not left on the old clock.
+                auto& entry = registry.entries[i]; if (entry.retired) continue;
                 Match current{};
                 if (!MatchOwner(entry.id.owner, current) || !(current.identity == entry.id)) { Retire(i, traffic_signal::End::Identity); continue; }
                 if (registry.Rebase(i, current.identity, frame, saved, true)) snapshots[i].state = 0;

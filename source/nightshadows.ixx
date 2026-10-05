@@ -35,6 +35,8 @@ module;
 #include "TrafficSignalRegistry.hpp"
 #include "TrafficSignalDistanceGate.hpp"
 #include "TrafficSignalNativeQueue.hpp"
+#include "FreshPageReadable.hpp"
+#include "PoolDescriptorSnapshots.hpp"
 #include <fstream>
 #include <atomic>
 #include <intrin.h>
