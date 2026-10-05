@@ -402,7 +402,7 @@ public:
     float fVolumetricCloudsSkyLight = 0.5f;
     // The least of the sun's light any part of a cloud keeps, however deep in its shadow: lighter,
     // airier bases than the light's march alone gives.
-    float fVolumetricCloudsMinLight = 0.35f;
+    float fVolumetricCloudsMinLight = 0.25f;
     // The clouds' sunlit side against the sky behind them, in times its brightness.
     float fVolumetricCloudsSkyMatch = 2.0f;
     bool bVolumetricCloudsWeather = true;
@@ -412,8 +412,8 @@ public:
     float fVolumetricCloudsSaturation = 1.0f;
     // The shaded side and the bases against the game's cloud colour, and how much of the view's
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
-    float fVolumetricCloudsShade = 0.75f;
-    float fVolumetricCloudsAbsorption = 0.5f;
+    float fVolumetricCloudsShade = 0.65f;
+    float fVolumetricCloudsAbsorption = 0.7f;
     int nVolumetricCloudsDebug = 0;
     // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
     bool bVolumetricCloudsReflections = true;
@@ -1352,15 +1352,15 @@ public:
         fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.3f), 0.0f, 1.0f);
         fVolumetricCloudsMoonlight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMoonlight", 0.2f), 0.0f, 2.0f);
         fVolumetricCloudsSkyLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyLight", 0.5f), 0.0f, 1.0f);
-        fVolumetricCloudsMinLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMinLight", 0.35f), 0.0f, 0.9f);
+        fVolumetricCloudsMinLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMinLight", 0.25f), 0.0f, 0.9f);
         fVolumetricCloudsSkyMatch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyMatch", 2.0f), 0.0f, 20.0f);
         bVolumetricCloudsWeather = iniReader.ReadInteger("POSTFX", "VolumetricCloudsWeather", 1) != 0;
         fVolumetricCloudsVanilla = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsVanilla", 0.0f), 0.0f, 1.0f);
         fVolumetricCloudsTranslucency = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsTranslucency", 0.25f), 0.0f, 0.9f);
         fVolumetricCloudsEvolution = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsEvolution", 1.0f), 0.0f, 10.0f);
         fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
-        fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.75f), 0.0f, 2.0f);
-        fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.5f), 0.05f, 3.0f);
+        fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.65f), 0.0f, 2.0f);
+        fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.7f), 0.05f, 3.0f);
         nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 15);
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
         fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
@@ -1757,16 +1757,17 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 //   VolumetricCloudsEvolution, how round their bases' edges are (a threshold on the density, so a
 //   few tenths at most: at a half they took a fifth of the clouds away), and their brightness
 //   against VolumetricCloudsSkyMatch (in CLOUDY at 1 the clouds came out white on a dark sky).
-// Fair weather: broad heaps from 600 to 700 m up, wider than they are tall, ragged and see-through
-// at the edges, with bright rims, barely reshaping. Rain and storms: a low, thick, closed deck, an
+// Fair weather: heaps from 600 to 700 m up, ragged and see-through at the edges, with bright rims,
+// barely reshaping; their layer 900 to 1200 m thick, so they build up in towers of rounded lobes
+// (at 550 to 700 m they came out as broad flat loaves). Rain and storms: a low, thick, closed deck, an
 // overcast sheet over most of it, smooth, dense, with dark bases and little glow, churning (held
 // to 3). Fog has no clouds.
 static constexpr PostFxResource::CloudLayer kWeatherClouds[8] =
 {
     //  cover   base   thick   dens  strat  wind   abs   transl detail glow  sun   evol  round  match
-    { 0.25f,  700.0f,  550.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f, 7.0f, 0.70f, 0.4f, 0.10f, 1.00f }, // EXTRASUNNY
-    { 0.40f,  600.0f,  700.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f, 6.0f, 0.55f, 0.7f, 0.15f, 1.00f }, // SUNNY
-    { 0.45f,  700.0f,  650.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 1.3f, 6.0f, 0.50f, 0.9f, 0.12f, 1.00f }, // SUNNY_WINDY
+    { 0.25f,  700.0f,  900.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f, 7.0f, 0.70f, 0.4f, 0.10f, 1.00f }, // EXTRASUNNY
+    { 0.40f,  600.0f, 1200.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f, 6.0f, 0.55f, 0.7f, 0.15f, 1.00f }, // SUNNY
+    { 0.45f,  700.0f, 1100.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 1.3f, 6.0f, 0.50f, 0.9f, 0.12f, 1.00f }, // SUNNY_WINDY
     { 0.70f,  500.0f,  900.0f, 1.00f, 0.2f, 0.67f, 1.3f, 1.0f, 1.0f, 4.0f, 0.20f, 1.3f, 0.15f, 0.65f }, // CLOUDY
     { 0.95f,  300.0f, 1000.0f, 0.83f, 0.6f, 0.33f, 2.0f, 0.5f, 0.6f, 2.0f, 0.25f, 3.0f, 0.15f, 1.00f }, // RAIN
     { 0.85f,  400.0f,  900.0f, 0.67f, 0.4f, 1.67f, 1.6f, 0.7f, 0.8f, 3.0f, 0.40f, 0.8f, 0.15f, 0.80f }, // DRIZZLE
