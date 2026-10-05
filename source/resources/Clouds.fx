@@ -69,6 +69,7 @@ float3 vec3ShadeColour;   // the game's cloud colour darkened by VolumetricCloud
 float3 vec3SunsetColour;  // the game's sunset colour, exposed
 float fSilver;            // the game's CloudInscatteringRange: the brightening along the sun's axis
 float fMinLight;          // VolumetricCloudsMinLight: the least of the sun's light any part of a cloud keeps
+float fMottle;            // VolumetricCloudsMottle: how much the small billows at the surface fleck the light
 float fLightStrength;     // the sun's light, fading out below the horizon, or the moon's once it has handed over
 float fCeiling;
 // VolumetricCloudsSkyMatch, how many times brighter than the sky behind them the clouds' sunlit side
@@ -571,6 +572,17 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         // The undersides darkened by the sky the cloud above them hides, by the cloud's height in the
         // layer alone, whatever the sun does: up to 15% at the base, none from two thirds up.
         shadeMul = 1.0 - 0.15 * (1.0 - smoothstep(0.0, 0.65, sums.height / cover));
+        // Flecks: the small billows where the ray met the cloud catch a little more or less light,
+        // so a grey body is not one even grey but mottled with lighter specks. Two octaves of the
+        // detail, of some 60 to 250 metres and a third of that, about their middle, so the cloud
+        // keeps its brightness on average. Faded out with distance, where they would only shimmer.
+        // The march's light leaves them out: its sums are the cloud's whole depth, and the billows
+        // it reads change the outline, not the light on the surface.
+        float3 hit = float3(vec4WorldX.w, vec4WorldY.w, vec4WorldZ.w) + dir * sums.firstHit;
+        hit.z += max(1.0 - dir.z * dir.z, 1e-6) / (2.0 * EARTH_RADIUS) * sums.firstHit * sums.firstHit;
+        float3 q = hit * (vec4Shape.y * 1.5) + float3(vec4Wind.zw, fEvolution) + 0.53;
+        float fleck = 0.65 * tex3Dlod(DetailTex, float4(q, 0)).r + 0.35 * tex3Dlod(DetailTex, float4(q * 2.7 + 0.21, 0)).g - 0.5;
+        shadeMul *= 1.0 + 2.0 * fMottle * fleck * exp(-sums.firstHit / 12000.0);
     }
     float3 colour = (termBase + termSilver + termSunset + termGlow + termSunPower + termTop) * shadeMul;
 

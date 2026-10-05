@@ -410,6 +410,7 @@ public:
     float fVolumetricCloudsTranslucency = 0.25f;
     float fVolumetricCloudsEvolution = 1.0f;
     float fVolumetricCloudsSaturation = 1.0f;
+    float fVolumetricCloudsMottle = 0.4f;
     // The shaded side and the bases against the game's cloud colour, and how much of the view's
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
     float fVolumetricCloudsShade = 0.65f;
@@ -1359,6 +1360,7 @@ public:
         fVolumetricCloudsTranslucency = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsTranslucency", 0.25f), 0.0f, 0.9f);
         fVolumetricCloudsEvolution = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsEvolution", 1.0f), 0.0f, 10.0f);
         fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
+        fVolumetricCloudsMottle = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMottle", 0.4f), 0.0f, 1.0f);
         fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.65f), 0.0f, 2.0f);
         fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.7f), 0.05f, 3.0f);
         nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 15);
@@ -4305,6 +4307,7 @@ private:
         }
         effect->SetFloat("fLightStrength", lightStrength);
         effect->SetFloat("fMinLight", R.fVolumetricCloudsMinLight);
+        effect->SetFloat("fMottle", R.fVolumetricCloudsMottle);
         // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
         // towards white by VolumetricCloudsSunTint. The moon's is a cool white.
         {
