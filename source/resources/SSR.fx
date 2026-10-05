@@ -1329,6 +1329,13 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     [branch]
     if (all(spread <= 0.0))
         return GIHistoryDebug() ? float4(1.0, 1.0, 0.0, 1.0) : TemporalResult(current);
+    // Indirect light arrives smoothed, so its 3x3 neighbourhood barely spreads even where it is
+    // noisy at a larger scale, and 1.5 times that spread held the history to this frame's blotches
+    // (debug view 10 showed them black). The depth test already drops the history of another
+    // surface; the window only has to catch light that changed, so it is at least a quarter of
+    // the light either way.
+    if (fTemporalAnySurface > 0.0)
+        spread = max(spread, 0.25 * abs(m1));
     float4 lo = m1 - 1.5 * spread, hi = m1 + 1.5 * spread;
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
