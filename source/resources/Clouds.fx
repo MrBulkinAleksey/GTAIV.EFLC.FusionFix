@@ -54,10 +54,9 @@ float3 vec3SunsetColour;  // the game's sunset colour, exposed
 float fSilver;            // the game's CloudInscatteringRange: the brightening along the sun's axis
 float fLightStrength;     // the sun's light, fading out below the horizon, or the moon's once it has handed over
 float fCeiling;
-// VolumetricCloudsSkyMatch: how many times brighter than the sky behind them the clouds' sunlit side
-// is; 0 leaves them at the game's cloud colour. fLitLuma is that sunlit side's luma.
-float fSkyMatch;
-float fLitLuma;           // the brightest channel the cloud rolls off towards (at most the sky's clamp without HDR)
+// VolumetricCloudsSkyMatch, how many times brighter than the sky behind them the clouds' sunlit side
+// is, over that sunlit side's luma; 0 leaves them at the game's cloud colour.
+float fSkyMatch;           // the brightest channel the cloud rolls off towards (at most the sky's clamp without HDR)
 float3 vec3SunTint;       // the hue of the game's SunColor at its brightness 1, mixed towards white by VolumetricCloudsSunTint
 float4 vec4Layer;         // base height, thickness, 1 / coverage scale, coverage
 float4 vec4Wind;          // coverage offset (xy), detail offset (zw)
@@ -75,7 +74,8 @@ float fStratus;           // 0 separate heaps of cloud, 1 a sheet: the weather's
 float fEvolution;         // how far the detail has drifted up through itself, so the billows change
 float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
 float fGlow;
-float2 vec2Shear;         // the coverage's offset at the layer's top: the tops lean downwind, drawn out by the wind              // the glow's strength around the sun, by the weather
+float2 vec2Shear;
+float fCurl;              // how far the billows are swept along the coarse noise at the tops, in their own size         // the coverage's offset at the layer's top: the tops lean downwind, drawn out by the wind              // the glow's strength around the sun, by the weather
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
 float fDebug;             // VolumetricCloudsDebug 2: the sky read behind them, so the clouds vanish where it is read right
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
@@ -192,6 +192,7 @@ float Density(float3 p, bool detail, Place place)
         return 0.0;
     // The wind's shear leans the heaps' tops downwind and draws them out.
     float2 uv = uv0 + place.morph + vec2Shear * h;
+    float2 wander = 0.0;
     // The outline wanders with height: the coverage is read a little off, by a coarse octave of the
     // detail that changes up through the layer, so the heaps do not stand as walls drawn up from a
     // map. The steps towards the sun and the coarse search leave it out.
@@ -199,7 +200,8 @@ float Density(float3 p, bool detail, Place place)
     if (detail)
     {
         float3 w = p * (vec4Shape.y * 0.35) + float3(vec4Wind.zw, fEvolution);
-        uv += (tex3Dlod(DetailTex, float4(w, 0)).rg - 0.5) * fWarp;
+        wander = tex3Dlod(DetailTex, float4(w, 0)).rg - 0.5;
+        uv += wander * fWarp;
     }
     // Filtered with a quintic curve between texels: linear filtering's kinks at the texel edges stood
     // out as creases down the clouds' sides.
@@ -223,7 +225,9 @@ float Density(float3 p, bool detail, Place place)
     [branch]
     if (detail)
     {
-        float3 q = p * vec4Shape.y + float3(vec4Wind.zw, fEvolution);
+        // The billows are swept along the coarse noise, more towards the tops, so they trail into
+        // wisps there instead of sitting as round bubbles.
+        float3 q = p * vec4Shape.y + float3(vec4Wind.zw, fEvolution) + wander.xyx * (fCurl * h);
         // Our Worley volume is 1 at the cells' middles: 1 - n is high between the billows.
         float2 billow = tex3Dlod(DetailTex, float4(q, 0)).rg;
         float n = 1.0 - billow.r;
@@ -293,11 +297,17 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     t1 = min(t1, t0 + vec4Layer.y * 16.0);
 
     float cosTheta = dot(dir, vec3SunDir);
+    // The sunset colour where the sun reaches, as the game adds it, and more towards the sun in a
+    // lobe some 30 degrees wide: the clouds before a low sun take its glow.
+    // Both lobes are powers of one exponential: exp(4x) is exp(2x) squared, exp(8x) that squared.
+    float lobe2 = exp(2.0 * (cosTheta - 1.0));
+    float lobe4 = lobe2 * lobe2;
+    float sunsetLobe = 0.35 + 0.25 * cosTheta + 0.65 * lobe4;
     // The forward lobe: cloud around the sun in the sky glows where it is thin enough for its light
     // to come through, the bright rims of clouds against the sun. A core some 30 degrees wide and a
     // faint skirt beyond; a Henyey-Greenstein lobe of g 0.85 lit only the cloud within a few degrees
     // of the sun and left the rims a little way off it dark.
-    float forward = (exp(8.0 * (cosTheta - 1.0)) + 0.3 * exp(2.0 * (cosTheta - 1.0))) * fSilver * fGlow;
+    float forward = (lobe4 * lobe4 + 0.3 * lobe2) * fSilver * fGlow;
     float sigma = vec4Shape.x;
 
     // Empty sky is crossed in coarse steps that test the coverage alone; on finding cloud the ray
@@ -387,8 +397,8 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // left the clouds at that peak from every side, with nothing for the rim to rise above.
             float thin = saturate(1.0 - d);
             lit += sunLit * fSilver * cosTheta * cosTheta * lerp(0.35, 1.0, thin) * sun;
-            // The sunset colour on the side towards the sun, as the game adds it.
-            lit += vec3SunsetColour * sun * (0.35 + 0.25 * cosTheta);
+            // The sunset colour towards the sun.
+            lit += vec3SunsetColour * (sun * sunsetLobe);
             // The glow of thin cloud next to the sun, its light coming through.
             // By the sun's light left after the cloud towards it, so the edges glow and the middle,
             // with the whole cloud between it and the sun, stays dark: weighted by the light
@@ -422,7 +432,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
         float3 sky = tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb;
         float skyLuma = dot(sky, float3(0.2126, 0.7152, 0.0722));
         if (skyLuma > 1e-4)
-            colour *= clamp(fSkyMatch * skyLuma / fLitLuma, 0.1, 2.0);
+            colour *= clamp(fSkyMatch * skyLuma, 0.1, 2.0);
         if (fDebug == 2.0)
             colour = sky * (1.0 - transmittance);
     }

@@ -362,7 +362,7 @@ public:
     // cloud threshold, bias and thickness, so it follows the weather and the timecycle.
     float fCloudShadows = 0.6f;
     float fCloudShadowsHeight = 1200.0f;
-    float fCloudShadowsScale = 8000.0f;
+    float fCloudShadowsScale = 16000.0f;
     float fCloudShadowsWind = 6.0f;
     float fCloudShadowsSoftness = 3.0f;
     // Added to the deck's coverage before the game's thickness curve: above 0 more of the sky
@@ -1294,7 +1294,7 @@ public:
         fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 50.0f);
         fCloudShadows = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadows", 0.6f), 0.0f, 1.0f);
         fCloudShadowsHeight = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsHeight", 1200.0f), 100.0f, 10000.0f);
-        fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 8000.0f), 100.0f, 50000.0f);
+        fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 16000.0f), 100.0f, 50000.0f);
         fCloudShadowsWind = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsWind", 6.0f), 0.0f, 100.0f);
         fCloudShadowsSoftness = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsSoftness", 3.0f), 0.0f, 8.0f);
         fCloudShadowsCoverage = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsCoverage", 0.0f), -1.0f, 1.0f);
@@ -1475,8 +1475,9 @@ public:
 };
 
 // The cloud deck's noise for the cloud shadows and the volumetric clouds: 1024 x 1024, tiling.
-// - Heaps: each of 4 x 4 cells a tile holds one heap at a random point, of a random radius, falling
-//   off from its middle; smaller heaps from 8 x 8 cells add to them. Perlin-Worley noise in its place
+// - Heaps: each of 8 x 8 cells a tile holds one heap at a random point, of a random radius, falling
+//   off from its middle; smaller heaps from 16 x 16 cells add to them. A 16 km tile of them, where
+//   8 km held 4 x 4, repeats a quarter as often, and the heaps came out rounder and more varied. Perlin-Worley noise in its place
 //   joined the clouds into one network over half the sky, where real fair weather cumulus stand
 //   apart, spread evenly.
 // - The heaps are read through a warp of value noise, so their outlines wander, and a fine value
@@ -1540,15 +1541,15 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
         return best;
     };
 
-    constexpr int heapCells = 4;
+    constexpr int heapCells = 8;
     const float warpReach = static_cast<float>(size) / heapCells * 0.6f;
     std::vector<float> value(size * size, 0.0f);
     for (int y = 0; y < size; ++y)
         for (int x = 0; x < size; ++x)
         {
-            const float wx = x + (valueNoise(x, y, 8, 3, 300) - 0.5f) * warpReach;
-            const float wy = y + (valueNoise(x, y, 8, 3, 310) - 0.5f) * warpReach;
-            value[y * size + x] = heaps(wx, wy, heapCells, 50) + 0.35f * heaps(wx, wy, heapCells * 2, 60) + 0.3f * valueNoise(x, y, 32, 4, 400);
+            const float wx = x + (valueNoise(x, y, heapCells * 2, 3, 300) - 0.5f) * warpReach;
+            const float wy = y + (valueNoise(x, y, heapCells * 2, 3, 310) - 0.5f) * warpReach;
+            value[y * size + x] = heaps(wx, wy, heapCells, 50) + 0.35f * heaps(wx, wy, heapCells * 2, 60) + 0.3f * valueNoise(x, y, heapCells * 8, 4, 400);
         }
     {
         std::vector<int> order(value.size());
@@ -4123,6 +4124,15 @@ private:
                 for (int i = 0; i < 3; ++i)
                     shadeColour[i] += ((std::max)(skyColour[i], 0.0f) / skyLuma * shadeLuma - shadeColour[i]) * R.fVolumetricCloudsSkyLight;
         }
+        // The sky lights the sunlit side too: it takes a fifth of the sky's hue, at its own brightness.
+        {
+            const auto& skyColour = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
+            const float skyLuma = 0.2126f * skyColour[0] + 0.7152f * skyColour[1] + 0.0722f * skyColour[2];
+            const float litLuma = 0.2126f * litColour[0] + 0.7152f * litColour[1] + 0.0722f * litColour[2];
+            if (skyLuma > 1e-4f)
+                for (int i = 0; i < 3; ++i)
+                    litColour[i] += ((std::max)(skyColour[i], 0.0f) / skyLuma * litLuma - litColour[i]) * 0.2f;
+        }
         // VolumetricCloudsSaturation, about each colour's luma.
         for (float* colour : { litColour, shadeColour, sunsetLit })
         {
@@ -4167,8 +4177,7 @@ private:
         {
             const bool canReadScene = !reflection && R.CloudSurf[0] && R.CloudSurf[1] && R.CloudSurf[2];
             const float litLuma = 0.2126f * litColour[0] + 0.7152f * litColour[1] + 0.0722f * litColour[2];
-            effect->SetFloat("fSkyMatch", canReadScene && litLuma > 1e-4f ? R.fVolumetricCloudsSkyMatch : 0.0f);
-            effect->SetFloat("fLitLuma", (std::max)(litLuma, 1e-4f));
+            effect->SetFloat("fSkyMatch", canReadScene && litLuma > 1e-4f ? R.fVolumetricCloudsSkyMatch / litLuma : 0.0f);
         }
         effect->SetFloat("fLightStrength", lightStrength);
         // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
@@ -4198,6 +4207,9 @@ private:
         effect->SetFloat("fTranslucency", (std::min)(R.fVolumetricCloudsTranslucency * R.Cloud.translucency, 0.9f));
         effect->SetFloat("fLightAbsorption", R.fVolumetricCloudsAbsorption * R.Cloud.absorption);
         effect->SetFloat("fGlow", R.Cloud.glow);
+        // How far the billows are swept along the coarse noise at the tops, in their own size: more
+        // in the wind.
+        effect->SetFloat("fCurl", std::clamp(1.5f + 0.5f * R.Cloud.wind, 1.5f, 3.0f));
         // The wind's shear: a heap's top lies up to 200 m downwind of its base at the weather's
         // wind, at most 300 m. The wind carries the map along (0.93, 0.37), so the clouds drift the
         // other way and their tops lean that way.
