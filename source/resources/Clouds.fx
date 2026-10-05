@@ -358,6 +358,8 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
     float jitter = frac(PixelJitter(vpos) + fFrameJitter);
     float t = t0 + max(vec4Layer.y / 24.0, t0 * 0.01) * COARSE_STEP * jitter;
     float fineLeft = 0.0;
+    // Looking away from the sun, how much the powder effect darkens the sun's light (below).
+    float powderView = full ? 0.35 - 0.35 * dot(dir, vec3SunDir) : 0.0;
 
     // [fastopt]: without it D3DX spent close to a minute on this loop while the game loaded.
     [loop] [fastopt]
@@ -419,6 +421,10 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             // metres thick, let the sun through nearly whole and came out flat; 0.4 keeps both.
             float tau = lightDepth * sigma * fLightAbsorption;
             float sun = (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) * (fLightStrength / 1.75);
+            // The powder effect: light scattered many times builds up inside a cloud, so its thin
+            // edges, seen from the sun's side, are darker than its depth, and the folds between its
+            // billows read. Without it the clouds facing away from the sun came out as flat white.
+            sun *= 1.0 - powderView * exp(-120.0 * d * sigma);
             // Darker towards the base, where the sky above is hidden by the cloud itself, by height.
             float h = saturate((p.z - base) / vec4Layer.y);
             float thin = saturate(1.0 - d);
