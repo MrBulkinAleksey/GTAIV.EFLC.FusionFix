@@ -95,7 +95,7 @@ float fBaseRound;         // how far the base's edges curl in, by the weather   
 float2 vec2Shear;
 float fCurl;              // how far the billows are swept along the coarse noise at the tops, in their own size         // the coverage's offset at the layer's top: the tops lean downwind, drawn out by the wind              // the glow's strength around the sun, by the weather
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
-float fDebug;             // VolumetricCloudsDebug 2: the sky read behind them, so the clouds vanish where it is read right
+float fDebug;             // VolumetricCloudsDebug: 2 the sky brightness matched to, 3 to 11 one term of the light alone (Light)
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
@@ -502,33 +502,38 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     // constant 1.7 times the cloud colour in its place left the clouds at that peak from every side,
     // with nothing for the rim to rise above.
     float3 sunLit = vec3LitColour * vec3SunTint;
-    float3 colour = vec3ShadeColour * sums.shade + sunLit * sums.sun
-                  + sunLit * (fSilver * cosTheta * cosTheta * sums.silver)
-                  + vec3SunsetColour * (sunsetLobe * sums.sun)
-                  + sunLit * (forward * sums.glow);
+    // Each term apart, so VolumetricCloudsDebug 3 to 11 can show it alone.
+    float3 termBase = vec3ShadeColour * sums.shade + sunLit * sums.sun;
+    float3 termSilver = sunLit * (fSilver * cosTheta * cosTheta * sums.silver);
+    float3 termSunset = vec3SunsetColour * (sunsetLobe * sums.sun);
+    float3 termGlow = sunLit * (forward * sums.glow);
+    float3 termSunPower = 0.0;
+    float3 termTop = 0.0;
+    float shadeMul = 1.0;
     [branch]
     if (full)
     {
         // The cloud near the sun in the sky catches more of its light, all of it, the thick middle
         // too, in a softer lobe than the glow's, by the weather.
-        colour += sunLit * (fSunPower * (0.45 * lobe4 * lobe4 + 0.2 * lobe2) * (0.35 * sums.sun + 0.65 * sqrt(sums.sun * cover)));
+        termSunPower = sunLit * (fSunPower * (0.45 * lobe4 * lobe4 + 0.2 * lobe2) * (0.35 * sums.sun + 0.65 * sqrt(sums.sun * cover)));
         // The sunlit tops brighter still, at four tenths more.
-        colour += sunLit * (0.4 * sums.top);
+        termTop = sunLit * (0.4 * sums.top);
         // The undersides darkened by the sky the cloud above them hides, by the cloud's height in the
         // layer alone, whatever the sun does: up to 15% at the base, none from two thirds up.
-        colour *= 1.0 - 0.15 * (1.0 - smoothstep(0.0, 0.65, sums.height / cover));
+        shadeMul = 1.0 - 0.15 * (1.0 - smoothstep(0.0, 0.65, sums.height / cover));
         // Seen from below, a cloud's base is darker still: up to 30% more looking straight up at the
         // bottom third of it. The bases overhead came out as light as the sides.
-        colour *= 1.0 - 0.3 * saturate(dir.z * 2.0) * (1.0 - smoothstep(0.0, 0.35, sums.height / cover));
+        shadeMul *= 1.0 - 0.3 * saturate(dir.z * 2.0) * (1.0 - smoothstep(0.0, 0.35, sums.height / cover));
     }
+    float3 colour = (termBase + termSilver + termSunset + termGlow + termSunPower + termTop) * shadeMul;
 
     // A soft knee from three quarters of the ceiling up, on the cloud's mean colour: the glow rises
     // towards it instead of clipping to white.
     float3 mean = colour / cover;
     float peak = max(max(mean.r, mean.g), mean.b);
     float knee = fCeiling * 0.75;
-    if (peak > knee)
-        colour *= (knee + fCeiling * 0.25 * (1.0 - exp((knee - peak) / (fCeiling * 0.25)))) / peak;
+    float kneeMul = peak > knee ? (knee + fCeiling * 0.25 * (1.0 - exp((knee - peak) / (fCeiling * 0.25)))) / peak : 1.0;
+    colour *= kneeMul;
 
     // The clouds against the sky. The game's CloudColor at its HDR exposure came out several times
     // brighter than the sky it draws, past the tone mapping's white point: the whole cloud, lit
@@ -545,27 +550,46 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         float skyLuma = tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).r;
         float3 sky = tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb;
         float behind = dot(sky, float3(0.2126, 0.7152, 0.0722));
-        if (skyLuma > 1e-4)
-            colour *= clamp(fSkyMatch * skyLuma, 0.1, 2.0);
+        float skyMul = skyLuma > 1e-4 ? clamp(fSkyMatch * skyLuma, 0.1, 2.0) : 1.0;
+        colour *= skyMul;
         // The silver lining against the sun: the half lit band at a cloud's edge, where it is there
         // but still lets the sky through, takes the glow the sky has right behind it past the sky's
-        // brightness away from the sun, the halo, which is the same sunlight scattered forwards. Held
-        // within eight times the sky's brightness, so the sun's disc through thin cloud does not
-        // flare. By the weather's glow, so rain's deck shows little of it. Matched to the frame's sky
-        // alone, the edges round the sun came out darker than the halo behind them. Within three
-        // times the sky and on the narrow band (4 cover (1 - cover))^2: at eight times on the broad
-        // band, with the game's bright halo and the bloom, whole clouds near the sun washed out white.
+        // brightness away from the sun, the halo, which is the same sunlight scattered forwards.
+        // Within three times the sky and on the narrow band (4 cover (1 - cover))^2: at eight times
+        // on the broad band, with the game's bright halo and the bloom, whole clouds near the sun
+        // washed out white. By the weather's glow, so rain's deck shows little of it.
         float3 halo = sky * (min(behind, 3.0 * skyLuma) - skyLuma) / max(behind, 1e-4);
         float band = 4.0 * cover * (1.0 - cover);
-        colour += max(halo, 0.0) * (band * band * fGlow / 6.0);
-        if (fDebug == 2.0)
-            colour = skyLuma * cover;
+        float3 termRim = max(halo, 0.0) * (band * band * fGlow / 6.0);
+        colour += termRim;
         // The haze mixes in the sky behind the cloud held within twice the frame's sky, where it used
         // to let the sky through: a cloud 3 km off let a tenth of it through, and with the sun's
         // halo behind it, many times the sky in the game's HDR, whole clouds near the sun came out
         // a flat cream. The horizon, near the frame's sky, fades as before.
         float3 hazeSky = sky * min(1.0, 2.0 * skyLuma / max(behind, 1e-4));
-        return float4(colour * haze + hazeSky * (cover * (1.0 - haze)), 1.0 - cover);
+        float3 termHaze = hazeSky * (cover * (1.0 - haze));
+
+        // VolumetricCloudsDebug: 2 the clouds grey at the sky they are matched to; 3 to 11 one term of
+        // their light alone, at the brightness it adds (3 shade and sun, 4 silver lining, 5 sunset
+        // colour, 6 glow, 7 sun power, 8 tops, 9 rim against the sun, 10 haze, 11 the sun reaching
+        // inside, grey).
+        [branch]
+        if (fDebug >= 2.0)
+        {
+            float3 lightMul = shadeMul * kneeMul * skyMul;
+            float3 shown = fDebug == 2.0 ? skyLuma * cover
+                         : fDebug == 3.0 ? termBase * lightMul * haze
+                         : fDebug == 4.0 ? termSilver * lightMul * haze
+                         : fDebug == 5.0 ? termSunset * lightMul * haze
+                         : fDebug == 6.0 ? termGlow * lightMul * haze
+                         : fDebug == 7.0 ? termSunPower * lightMul * haze
+                         : fDebug == 8.0 ? termTop * lightMul * haze
+                         : fDebug == 9.0 ? termRim * haze
+                         : fDebug == 10.0 ? termHaze
+                         : (sums.sun / cover) * skyLuma * cover;
+            return float4(shown, 1.0 - cover);
+        }
+        return float4(colour * haze + termHaze, 1.0 - cover);
     }
     return float4(colour * haze, 1.0 - cover * haze);
 }

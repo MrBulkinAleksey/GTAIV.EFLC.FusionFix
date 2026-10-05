@@ -1344,7 +1344,7 @@ public:
         fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
         fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.25f), 0.0f, 2.0f);
         fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.4f), 0.05f, 3.0f);
-        nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 2);
+        nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 11);
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
         fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
     }
