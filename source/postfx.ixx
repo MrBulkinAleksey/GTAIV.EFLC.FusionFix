@@ -2422,7 +2422,12 @@ private:
         }
     }
 
-    static void __fastcall OnDeviceReset()
+    // The G-buffer targets, looked up by name once a frame (lighting phase, fog pass) and not only at a
+    // device reset: the game creates them anew when the render scale changes, as turning FSR on or off
+    // does, and the ones kept from before were another texture by then. SSR and SSGI read a depth that
+    // was not this frame's, and the accumulations, testing it against last frame's copy, dropped their
+    // history on every pixel.
+    static void RefreshGBufferTargets()
     {
         PostFxResources.mNormalRT = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_1_");
         PostFxResources.mDiffuseRT = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_0_");
@@ -2431,6 +2436,11 @@ private:
         // Not the stencil buffer: the G-buffer pass writes each material's ID (whole steps of 1/255)
         // to it, as R32F or R16F, for the lighting and fog shaders.
         PostFxResources.mMaterialIdRT = rage::grcTextureFactoryPC::GetRTByName("_STENCIL_BUFFER_");
+    }
+
+    static void __fastcall OnDeviceReset()
+    {
+        RefreshGBufferTargets();
         // PostFxResources.mCascadeAtlasRT = rage::grcTextureFactoryPC::GetRTByName( "CASCADE_ATLAS"         );
         PostFxResources.mFullScreenRT = rage::grcTextureFactoryPC::GetRTByName("FullScreenCopy");
         // PostFxResources.mFullScreenRT2  = rage::grcTextureFactoryPC::GetRTByName( "FullScreenCopy2"       );
@@ -2652,6 +2662,7 @@ private:
 
     static void NewFog()
     {
+        RefreshGBufferTargets();
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
 
         IDirect3DSurface9* prevSurface = nullptr;
@@ -5503,6 +5514,7 @@ private:
     static DWORD __cdecl RenderPedAndVehicleFakeShadows(DWORD a1)
     {
         DWORD result = RenderPedAndVehicleFakeShadowsInlineHook.unsafe_ccall<DWORD>(a1);
+        RefreshGBufferTargets();
 
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (auto vp = rage::GetCurrentViewport())
