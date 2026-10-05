@@ -191,8 +191,10 @@ bool MayBeCloud(float3 p)
     return c > 0.9 - cover;
 }
 
-float Density(float3 p, bool detail, Place place, bool full)
+// crease: the coarse billows' noise at p, high in the folds between them (0 without the detail).
+float Density(float3 p, bool detail, Place place, bool full, out float crease)
 {
+    crease = 0.0;
     float2 uv0 = p.xy * vec4Layer.z + vec4Wind.xy;
     // Cloudier parts of the sky have more cover and taller heaps, by vec4Morph.w either way.
     float weather = place.weather;
@@ -244,6 +246,7 @@ float Density(float3 p, bool detail, Place place, bool full)
         // Our Worley volume is 1 at the cells' middles: 1 - n is high between the billows.
         float2 billow = tex3Dlod(DetailTex, float4(q, 0)).rg;
         float n = 1.0 - billow.r;
+        crease = n;
         d -= vec4Shape.z * 0.66 * n * n * EdgeWeight(d);
         // The fine billows are read through the coarse ones' two channels, so they swirl around
         // them instead of sitting on an even grid: about their own size either way.
@@ -389,7 +392,8 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
         }
 
         Place place = PlaceAt(p);
-        float d = Density(p, true, place, full);
+        float crease;
+        float d = Density(p, true, place, full, crease);
         [branch]
         if (d > 0.01)
         {
@@ -406,7 +410,8 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             for (int j = 0; j < LIGHT_STEPS; ++j)
             {
                 q += vec3SunDir * stepLength;
-                lightDepth += Density(q, false, place, full) * stepLength;
+                float unused;
+                lightDepth += Density(q, false, place, full, unused) * stepLength;
                 stepLength *= 2.0;
             }
             // Light scattered many times inside a cloud gets far deeper than the sun's direct beam,
@@ -425,6 +430,10 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             // edges, seen from the sun's side, are darker than its depth, and the folds between its
             // billows read. Without it the clouds facing away from the sun came out as flat white.
             sun *= 1.0 - powderView * exp(-120.0 * d * sigma);
+            // The folds between the billows take less light, as the billows round them shade them:
+            // the light's march leaves the detail out, and without this the clouds' faces came out
+            // as smooth gradients whatever their outline did.
+            sun *= full ? 1.0 - 0.9 * crease * crease : 1.0;
             // Darker towards the base, where the sky above is hidden by the cloud itself, by height.
             float h = saturate((p.z - base) / vec4Layer.y);
             float thin = saturate(1.0 - d);
