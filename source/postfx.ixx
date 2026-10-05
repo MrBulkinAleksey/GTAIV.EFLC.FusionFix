@@ -393,7 +393,7 @@ public:
     float fVolumetricCloudsThickness = 600.0f;
     float fVolumetricCloudsDensity = 0.03f;
     float fVolumetricCloudsDetail = 0.6f;
-    float fVolumetricCloudsDetailScale = 1500.0f;
+    float fVolumetricCloudsDetailScale = 1300.0f;
     float fVolumetricCloudsHaze = 25000.0f;
     float fVolumetricCloudsMaxDistance = 40000.0f;
     float fVolumetricCloudsBrightness = 1.0f;
@@ -438,8 +438,11 @@ public:
         // The clouds' brightness against VolumetricCloudsSkyMatch: overcast clouds are grey, not
         // brighter than the sky.
         float skyMatch;
+        // How softly the density rises inside a cloud, 0 to 1: at 1 the edges thin out into smoke
+        // over a deeper band (the density's compressor from 1 to 3 instead of 3 to 12).
+        float softness;
     };
-    CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f };
+    CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f, 0.0f };
     // How far the wind has carried the coverage and the detail, in tiles, and how far the detail
     // has drifted up through itself; summed frame by frame, as the wind changes with the weather.
     double fCloudDrift = 0.0, fCloudDetailDrift = 0.0, fCloudEvolution = 0.0, fCloudLastSeconds = -1.0;
@@ -1348,7 +1351,7 @@ public:
         fVolumetricCloudsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsThickness", 600.0f), 50.0f, 5000.0f);
         fVolumetricCloudsDensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDensity", 0.03f), 0.0005f, 1.0f);
         fVolumetricCloudsDetail = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetail", 0.6f), 0.0f, 1.0f);
-        fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 1500.0f), 20.0f, 10000.0f);
+        fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 1300.0f), 20.0f, 10000.0f);
         fVolumetricCloudsHaze = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsHaze", 25000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBrightness", 1.0f), 0.0f, 4.0f);
@@ -1760,7 +1763,11 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 // - how much brighter the cloud near the sun is, how fast they reshape against
 //   VolumetricCloudsEvolution, how round their bases' edges are (a threshold on the density, so a
 //   few tenths at most: at a half they took a fifth of the clouds away), and their brightness
-//   against VolumetricCloudsSkyMatch (in CLOUDY at 1 the clouds came out white on a dark sky).
+//   against VolumetricCloudsSkyMatch (in CLOUDY at 1 the clouds came out white on a dark sky), and
+//   how softly their density rises from the edges in (smoky edges in cloudy and windy weather).
+// The billows eat through the whole cloud, not only its edges, so it breaks into ragged pieces with
+// gaps; the wet and cloudy weathers' detail is half what it was before that, or their decks lost up
+// to a third of their cover and the rain's opened up.
 // Fair weather: heaps from 600 to 700 m up, ragged and see-through at the edges, with bright rims,
 // barely reshaping; their layer 900 to 1200 m thick, so they build up in towers of rounded lobes
 // (at 550 to 700 m they came out as broad flat loaves). Rain and storms: a low, thick, closed deck, an
@@ -1768,15 +1775,15 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 // to 3). Fog has no clouds.
 static constexpr PostFxResource::CloudLayer kWeatherClouds[8] =
 {
-    //  cover   base   thick   dens  strat  wind   abs   transl detail glow  sun   evol  round  match
-    { 0.25f,  700.0f,  900.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f, 7.0f, 0.70f, 0.4f, 0.10f, 1.00f }, // EXTRASUNNY
-    { 0.40f,  600.0f, 1200.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f, 6.0f, 0.55f, 0.7f, 0.15f, 1.00f }, // SUNNY
-    { 0.45f,  700.0f, 1100.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 1.3f, 6.0f, 0.50f, 0.9f, 0.12f, 1.00f }, // SUNNY_WINDY
-    { 0.70f,  500.0f,  900.0f, 1.00f, 0.2f, 0.67f, 1.3f, 1.0f, 1.0f, 4.0f, 0.20f, 1.3f, 0.15f, 0.65f }, // CLOUDY
-    { 0.95f,  300.0f, 1000.0f, 0.83f, 0.6f, 0.33f, 2.0f, 0.5f, 0.6f, 2.0f, 0.25f, 3.0f, 0.15f, 1.00f }, // RAIN
-    { 0.85f,  400.0f,  900.0f, 0.67f, 0.4f, 1.67f, 1.6f, 0.7f, 0.8f, 3.0f, 0.40f, 0.8f, 0.15f, 0.80f }, // DRIZZLE
-    { 0.00f,  600.0f,  600.0f, 0.20f, 0.3f, 1.67f, 1.0f, 1.0f, 0.8f, 3.0f, 0.30f, 0.4f, 0.15f, 1.00f }, // FOGGY
-    { 0.95f,  300.0f, 1200.0f, 0.80f, 0.5f, 1.67f, 2.2f, 0.5f, 0.7f, 2.0f, 0.25f, 1.4f, 0.08f, 1.00f }, // LIGHTNING
+    //  cover   base   thick   dens  strat  wind   abs   transl detail glow  sun   evol  round  match  soft
+    { 0.25f,  700.0f,  900.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f,  7.0f, 0.70f, 0.4f, 0.10f, 1.00f, 0.0f }, // EXTRASUNNY
+    { 0.40f,  600.0f, 1200.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f,  6.0f, 0.55f, 0.7f, 0.15f, 1.00f, 0.0f }, // SUNNY
+    { 0.45f,  700.0f, 1100.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 0.87f, 6.0f, 0.50f, 0.9f, 0.12f, 1.00f, 1.0f }, // SUNNY_WINDY
+    { 0.70f,  500.0f,  900.0f, 1.00f, 0.2f, 0.67f, 1.3f, 1.0f, 0.5f,  4.0f, 0.20f, 1.3f, 0.15f, 0.65f, 1.0f }, // CLOUDY
+    { 0.95f,  300.0f, 1000.0f, 0.83f, 0.6f, 0.33f, 2.0f, 0.5f, 0.3f,  2.0f, 0.25f, 3.0f, 0.15f, 1.00f, 0.0f }, // RAIN
+    { 0.85f,  400.0f,  900.0f, 0.67f, 0.4f, 1.67f, 1.6f, 0.7f, 0.4f,  3.0f, 0.40f, 0.8f, 0.15f, 0.80f, 1.0f }, // DRIZZLE
+    { 0.00f,  600.0f,  600.0f, 0.20f, 0.3f, 1.67f, 1.0f, 1.0f, 0.8f,  3.0f, 0.30f, 0.4f, 0.15f, 1.00f, 0.0f }, // FOGGY
+    { 0.95f,  300.0f, 1200.0f, 0.80f, 0.5f, 1.67f, 2.2f, 0.5f, 0.35f, 2.0f, 0.25f, 1.4f, 0.08f, 1.00f, 0.0f }, // LIGHTNING
 };
 
 void PostFxResource::UpdateCloudLayer(double seconds)
@@ -1805,10 +1812,11 @@ void PostFxResource::UpdateCloudLayer(double seconds)
         Cloud = { mix(a.coverage, b.coverage), mix(a.base, b.base), mix(a.thickness, b.thickness),
                   mix(a.density, b.density), mix(a.stratus, b.stratus), mix(a.wind, b.wind),
                   mix(a.absorption, b.absorption), mix(a.translucency, b.translucency), mix(a.detail, b.detail), mix(a.glow, b.glow),
-                  mix(a.sunPower, b.sunPower), mix(a.evolution, b.evolution), mix(a.baseRound, b.baseRound), mix(a.skyMatch, b.skyMatch) };
+                  mix(a.sunPower, b.sunPower), mix(a.evolution, b.evolution), mix(a.baseRound, b.baseRound), mix(a.skyMatch, b.skyMatch),
+                  mix(a.softness, b.softness) };
     }
     else
-        Cloud = { fVolumetricCloudsCoverage, fVolumetricCloudsBase, fVolumetricCloudsThickness, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f };
+        Cloud = { fVolumetricCloudsCoverage, fVolumetricCloudsBase, fVolumetricCloudsThickness, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f, 0.0f };
 
     // The drift moves on by this frame's time at this frame's wind; across a jump of the clock (a
     // load, a cutscene) it stays where it was.
@@ -4395,7 +4403,18 @@ private:
             effect->SetFloat("fSkyMatch", canReadScene && litLuma > 1e-4f ? R.fVolumetricCloudsSkyMatch * R.Cloud.skyMatch / litLuma : 0.0f);
         }
         effect->SetFloat("fLightStrength", lightStrength);
-        effect->SetFloat("fMinLight", R.fVolumetricCloudsMinLight);
+        // How high the sun (or the moon) stands: 0 up to 5 degrees, 1 from 35 up. With it low, the clouds
+        // towards it are lit from behind: their bodies darker than the sky, down to 0.3 of their light
+        // straight towards it, the least of the light inside them down to 0.4 of VolumetricCloudsMinLight,
+        // and the glow of their thin edges three times as strong. Through the day nothing changes; nor
+        // across the sky from a low sun, where the clouds face its light.
+        {
+            const float lowSun = std::clamp((sun.z - 0.0872f) / (0.5736f - 0.0872f), 0.0f, 1.0f);
+            const float day = lowSun * lowSun * (3.0f - 2.0f * lowSun);
+            effect->SetFloat("fMinLight", R.fVolumetricCloudsMinLight * (0.4f + 0.6f * day));
+            effect->SetFloat("fBacklight", 0.3f + 0.7f * day);
+            effect->SetFloat("fGlowBoost", 1.0f + 2.0f * (1.0f - day));
+        }
         effect->SetFloat("fMottle", R.fVolumetricCloudsMottle);
         // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
         // towards white by VolumetricCloudsSunTint. The moon's is a cool white.
@@ -4420,6 +4439,12 @@ private:
                                 R.fVolumetricCloudsHaze * (1.0f - 0.6f * R.Cloud.stratus));
         effect->SetVector("vec4Shape", &shape);
         effect->SetFloat("fStratus", R.Cloud.stratus);
+        // The density's soft compressor, d (1 + k) / (1 + k d), its k from the base to the top: 3 to 12,
+        // or 1 to 3 where the weather wants smoky edges.
+        {
+            const float compress[2] = { 3.0f - 2.0f * R.Cloud.softness, 12.0f - 9.0f * R.Cloud.softness };
+            effect->SetFloatArray("vec2Compress", compress, 2);
+        }
         effect->SetFloat("fEvolution", float(std::fmod(R.fCloudEvolution, 1.0)));
         effect->SetFloat("fTranslucency", (std::min)(R.fVolumetricCloudsTranslucency * R.Cloud.translucency, 0.9f));
         effect->SetFloat("fLightAbsorption", R.fVolumetricCloudsAbsorption * R.Cloud.absorption);

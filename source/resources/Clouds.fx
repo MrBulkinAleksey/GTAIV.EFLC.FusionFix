@@ -37,9 +37,11 @@
 #define COVERAGE_SIZE 1024.0
 // The dome and the rounded base take part of every heap's footprint, the more the smaller the heaps:
 // on the 6 x 6 map a cover of 0.4 left 31% of the sky under cloud. Measured over the map, 1.75 times
-// the cover brings the share back to the cover from 0.25 to 0.45 (0.26, 0.40, 0.46); at 0.7 it stops
-// at 0.57, the rest left to the overcast sheet. The shadows, on a flat deck, take the cover as it is.
-#define COVER_GAIN 1.75
+// the cover brought the share back to the cover from 0.25 to 0.45; at 0.7 it stopped at 0.57, the
+// rest left to the overcast sheet. Since the billows eat through the whole cloud, 2.75 keeps the
+// fair weathers' share as it was (the cloudy and wet ones, held at the top of the range, take less
+// detail instead). The shadows, on a flat deck, take the cover as it is.
+#define COVER_GAIN 2.75
 
 sampler2D DepthTex : register(s0);
 sampler2D CoverageTex : register(s1);
@@ -70,6 +72,9 @@ float3 vec3SunsetColour;  // the game's sunset colour, exposed
 float fSilver;            // the game's CloudInscatteringRange: the brightening along the sun's axis
 float fMinLight;          // VolumetricCloudsMinLight: the least of the sun's light any part of a cloud keeps
 float fMottle;            // VolumetricCloudsMottle: how much the small billows at the surface fleck the light
+float fBacklight;         // with the sun low, the share of their light the clouds straight towards it keep
+float fGlowBoost;         // and how much stronger the glow of their thin edges is
+float2 vec2Compress;      // the density's compressor at the layer's base and top
 float fLightStrength;     // the sun's light, fading out below the horizon, or the moon's once it has handed over
 float fCeiling;
 // VolumetricCloudsSkyMatch, how many times brighter than the sky behind them the clouds' sunlit side
@@ -140,10 +145,13 @@ float PixelJitter(float2 pixel)
 //   one up the layer's whole thickness with flat sides. An overcast sheet, (1 - stratus)^2, keeps
 //   most of its depth. It fades out over the top seventh, and at the base it is half as dense,
 //   which softens the bottom.
-// - The detail erodes only near the edges, where the density is low: round Worley billows of about
-//   a sixteenth to a quarter of DetailScale, and a finer octave at about a fifth of that.
-// - Last a soft compressor, d (1 + k) / (1 + k d) with k from 3 at the base to 12 at the top, makes
-//   the inside dense quickly while the edges stay soft; the linear ramp it replaces cut the clouds'
+// - The detail eats through the whole cloud: round Worley billows of about a sixteenth to a quarter
+//   of DetailScale break it into ragged pieces with gaps, and a finer octave at about a fifth of that
+//   frays the edges, more where the density is low. Eroded near the edges alone, the clouds had soft
+//   marshmallow outlines and no holes.
+// - Last a soft compressor, d (1 + k) / (1 + k d) with k from 3 at the base to 12 at the top (1 to 3
+//   in cloudy and windy weather, whose edges thin out into smoke), makes the inside dense quickly
+//   while the edges stay soft; the linear ramp it replaces cut the clouds'
 //   faces like moulded plastic.
 float EdgeWeight(float d)
 {
@@ -262,11 +270,11 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
         float2 billow = tex3Dlod(DetailTex, float4(q, 0)).rg;
         float n = 1.0 - billow.r;
         crease = n;
-        d -= vec4Shape.z * 0.66 * n * n * EdgeWeight(d);
+        d -= vec4Shape.z * 1.5 * n * n;
         // The fine billows are read through the coarse ones' two channels, so they swirl around
         // them instead of sitting on an even grid: about their own size either way.
         float m = 1.0 - tex3Dlod(DetailTex, float4(q * 5.5 + 0.37 + (billow.rgr - 0.5), 0)).r;
-        d -= vec4Shape.z * 0.3 * m * (0.6 * m + 0.4) * EdgeWeight(d);
+        d -= vec4Shape.z * 0.8 * m * (0.6 * m + 0.4) * sqrt(EdgeWeight(d));
         // A ragged fringe under the base: the coarse billows eat the bottom eighth harder.
         d -= vec4Shape.z * 0.7 * n * saturate(1.0 - h * 8.0);
         if (d <= 0.0)
@@ -274,7 +282,7 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
     }
 
     soft = d;
-    float k = lerp(3.0, 12.0, h);
+    float k = lerp(vec2Compress.x, vec2Compress.y, h);
     d = d * (1.0 + k) / (1.0 + k * d);
     return d * lerp(0.5, 1.0, smoothstep(0.02, 0.2, h));
 }
@@ -555,7 +563,7 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     float towardsSun = max(cosTheta, 0.0);
     float3 termSilver = sunLit * (fSilver * towardsSun * towardsSun * sums.silver);
     float3 termSunset = vec3SunsetColour * (sunsetLobe * sums.sun);
-    float3 termGlow = sunLit * (forward * sums.glow);
+    float3 termGlow = sunLit * (forward * sums.glow * (full ? fGlowBoost : 1.0));
     float3 termSunPower = 0.0;
     float3 termTop = 0.0;
     float shadeMul = 1.0;
@@ -584,7 +592,8 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         float fleck = 0.65 * tex3Dlod(DetailTex, float4(q, 0)).r + 0.35 * tex3Dlod(DetailTex, float4(q * 2.7 + 0.21, 0)).g - 0.5;
         shadeMul *= 1.0 + 2.0 * fMottle * fleck * exp(-sums.firstHit / 12000.0);
     }
-    float3 colour = (termBase + termSilver + termSunset + termGlow + termSunPower + termTop) * shadeMul;
+    float3 body = (termBase + termSilver + termSunset + termSunPower + termTop) * shadeMul;
+    float3 colour = body + termGlow;
 
     // A soft knee from three quarters of the ceiling up, on the cloud's mean colour: the glow rises
     // towards it instead of clipping to white.
@@ -592,7 +601,11 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     float peak = max(max(mean.r, mean.g), mean.b);
     float knee = fCeiling * 0.75;
     float kneeMul = peak > knee ? (knee + fCeiling * 0.25 * (1.0 - exp((knee - peak) / (fCeiling * 0.25)))) / peak : 1.0;
-    colour *= kneeMul;
+    // With the sun low, the clouds towards it are lit from behind: their bodies darker than the sky
+    // behind them, the glow of their thin edges kept (fBacklight, fGlowBoost); across the sky from it
+    // they face its light and keep theirs.
+    float backlit = full ? lerp(1.0, fBacklight, smoothstep(-0.2, 0.8, cosTheta)) : 1.0;
+    colour = (body * backlit + termGlow) * kneeMul;
 
     // The clouds against the sky. The game's CloudColor at its HDR exposure came out several times
     // brighter than the sky it draws, past the tone mapping's white point: the whole cloud, lit
