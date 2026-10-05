@@ -25,8 +25,8 @@ sampler2D PrevDepthTex
     Texture = <PrevDepthTex2D>;
     AddressU = Clamp;
     AddressV = Clamp;
-    MinFilter = POINT;
-    MagFilter = POINT;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
     MipFilter = NONE;
 };
 
@@ -92,6 +92,16 @@ sampler2D AlbedoTex
     AddressV = Clamp;
     MinFilter = POINT;
     MagFilter = POINT;
+    MipFilter = NONE;
+};
+// The same, filtered, for GIHitBox.
+sampler2D AlbedoLinearTex
+{
+    Texture = <AlbedoTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
     MipFilter = NONE;
 };
 
@@ -1320,6 +1330,19 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return TemporalResult(lerp(current, history, keep));
 }
 
+// The average of the 4x4 full size pixels around uv, in four bilinear reads (vec2InvViewportSize
+// is the half size pixel here). A ray's hit reads last frame's scene where the surface was and this
+// frame's diffuse colour where it is; with the camera moving these are a fraction of a pixel apart,
+// and on wallpaper stripes or cracked plaster the colour taken back out missed its own stripe, which
+// showed as noise wherever temporal AA did not smooth it. Indirect light needs no finer detail.
+float3 GIHitBox(sampler2D tex, float2 uv)
+{
+    float2 r = 0.5 * vec2InvViewportSize;
+    return 0.25 * (tex2Dlod(tex, float4(uv + r, 0, 0)).rgb + tex2Dlod(tex, float4(uv - r, 0, 0)).rgb +
+                   tex2Dlod(tex, float4(uv + float2(r.x, -r.y), 0, 0)).rgb +
+                   tex2Dlod(tex, float4(uv + float2(-r.x, r.y), 0, 0)).rgb);
+}
+
 // One bounce of indirect light: rays spread over the hemisphere around the G-buffer normal,
 // denser towards the normal (cosine weighted, so each ray counts the same), pick up last
 // frame's lit scene where they hit. deferred_lighting adds the result to its ambient term
@@ -1415,8 +1438,8 @@ float4 SSGI_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
                         // light it got. All of that but an intensity 1 share comes back out:
                         // otherwise fGIIntensity multiplied every bounce again, and at 3 surfaces
                         // next to each other lit each other brighter every frame, up to the caps.
-                        float3 L = tex2Dlod(HistoryTex, float4(histUV, 0, 0)).rgb;
-                        L -= tex2Dlod(AlbedoTex, float4(sampleUV, 0, 0)).rgb *
+                        float3 L = GIHitBox(HistoryTex, histUV);
+                        L -= GIHitBox(AlbedoLinearTex, sampleUV) *
                              tex2Dlod(GIPrevTex, float4(histUV, 0, 0)).rgb * fGIFeedback;
                         L = clamp(L, 0.0, HISTORY_CLAMP);
                         float lum = dot(L, float3(0.2126, 0.7152, 0.0722));
