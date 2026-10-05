@@ -417,8 +417,11 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             float lightDepth = 0.0;
             float stepLength = vec4Layer.y * 0.05;
             float3 q = p;
-            [loop] [fastopt]
-            for (int j = 0; j < LIGHT_STEPS; ++j)
+            // A float counter, and no [fastopt]: with an int counter under [fastopt] the compiler
+            // negated the loop's bound, and the loop broke before its first step. The light's march
+            // found no cloud at all, every cloud took the sun whole, and the absorption did nothing.
+            [loop]
+            for (float j = 0.0; j < LIGHT_STEPS - 0.5; j += 1.0)
             {
                 q += vec3SunDir * stepLength;
                 float unused;
