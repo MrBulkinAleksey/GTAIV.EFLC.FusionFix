@@ -424,10 +424,10 @@ public:
         // Against VolumetricCloudsAbsorption, VolumetricCloudsTranslucency and VolumetricCloudsDetail;
         // and the glow's strength around the sun.
         float absorption, translucency, detail, glow;
-        // How much brighter the cloud near the sun in the sky is, all of it (RealityIV's Sun Power).
+        // How much brighter the cloud near the sun in the sky is, all of it, the thick middle too.
         float sunPower;
         // How fast the clouds reshape, against VolumetricCloudsEvolution, and how round their bases'
-        // edges are (RealityIV's evolution and base roundness).
+        // edges are.
         float evolution, baseRound;
     };
     CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f };
@@ -1732,8 +1732,7 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 // - the light's absorption inside them, how much more their thin parts let through and how much the
 //   billows eat their edges, each against its VolumetricClouds* setting, and the glow around the sun.
 // - how fast they reshape against VolumetricCloudsEvolution, and how round their bases' edges are.
-// RealityIV's presets set the sun power, the reshaping (its EVO over 0.5, rain held to 3) and the
-// base roundness; like theirs, fog has no clouds.
+// Fair weather barely reshapes, rain's deck churns (held to 3); fog has no clouds.
 // Fair weather: scattered heaps around a kilometre up, two to three times as wide as they are tall,
 // ragged and see-through at the edges, with bright rims. Rain and storms: a low, thick, closed deck,
 // an overcast sheet over most of it, smooth, dense, with dark bases and little glow. Fair weather

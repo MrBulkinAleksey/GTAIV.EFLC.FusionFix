@@ -484,9 +484,9 @@ float4 Light(CloudSums sums, float3 dir, bool full)
     if (full)
     {
         // The cloud near the sun in the sky catches more of its light, all of it, the thick middle
-        // too, in a softer lobe than the glow's (RealityIV's Sun Power).
+        // too, in a softer lobe than the glow's, by the weather.
         colour += sunLit * (fSunPower * (0.45 * lobe4 * lobe4 + 0.2 * lobe2) * (0.35 * sums.sun + 0.65 * sqrt(sums.sun * cover)));
-        // The sunlit tops brighter still, as RealityIV lights them, at four tenths more.
+        // The sunlit tops brighter still, at four tenths more.
         colour += sunLit * (0.4 * sums.top);
         // The undersides darkened by the sky the cloud above them hides, by the cloud's height in the
         // layer alone, whatever the sun does: up to 15% at the base, none from two thirds up.
