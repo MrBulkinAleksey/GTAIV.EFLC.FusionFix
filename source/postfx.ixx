@@ -503,6 +503,10 @@ public:
     float CloudLightDir[3] = {};
     uint32_t nCloudLightFrame = 0;
     float CloudLastSkySun[3] = {}, CloudLastUsedSun[3] = {};
+    // Which horizontal axes of the sky's directions run opposite to the world's, learnt by day from
+    // the sun against the game's light, and put on the moon at night: the sky's MoonPosition goes
+    // through the same remap as its SunDirection, which came out mirrored.
+    float CloudSkyAxisSign[2] = { 1.0f, 1.0f };
     bool bCloudLastMoonlit = false;
     bool bCloudParamsRegistered = false;
     void RegisterCloudParams()
@@ -4115,6 +4119,8 @@ private:
             const auto& moonPosition = rage::grmShaderInfo::getShaderParamData(R.CloudMoonPositionIdx);
             D3DXVECTOR4 moon(moonPosition[0], -moonPosition[2], moonPosition[1], 0.0f);
             const float moonLength = std::sqrt(moon.x * moon.x + moon.y * moon.y + moon.z * moon.z);
+            moon.x *= R.CloudSkyAxisSign[0];
+            moon.y *= R.CloudSkyAxisSign[1];
             if (day >= 0.5f || moonLength <= 0.0f)
                 lightStrength = day >= 0.5f ? day * 2.0f - 1.0f : 0.0f;
             else
@@ -4191,7 +4197,16 @@ private:
         // last: the sky's SunDirection, remapped from its y up space, lit the clouds from the
         // mirror image of the sun across the sky, their far sides lit and the near ones dark.
         if (!moonlit && R.nCloudLightFrame && FrameHistory::Frame() - R.nCloudLightFrame <= 2 && R.CloudLightDir[2] > 0.0f)
+        {
+            // Learn the sky's axis signs while both directions are clear of the zenith.
+            for (int axis = 0; axis < 2; ++axis)
+            {
+                const float skyAxis = (&sun.x)[axis], gameAxis = R.CloudLightDir[axis];
+                if (std::fabs(skyAxis) > 0.2f && std::fabs(gameAxis) > 0.2f)
+                    R.CloudSkyAxisSign[axis] = (skyAxis > 0.0f) == (gameAxis > 0.0f) ? 1.0f : -1.0f;
+            }
             sun = D3DXVECTOR4(R.CloudLightDir[0], R.CloudLightDir[1], R.CloudLightDir[2], 0.0f);
+        }
         if (!reflection)
             std::memcpy(R.CloudLastUsedSun, &sun.x, sizeof(R.CloudLastUsedSun));
         // VolumetricCloudsDebug 15: the sun straight overhead, to test the sun's direction.
@@ -5039,9 +5054,10 @@ private:
                 const auto& sky = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
                 const auto& moon = rage::grmShaderInfo::getShaderParamData(R.CloudMoonPositionIdx);
                 const float* k = R.CloudShadowConsts;
-                fprintf(log, "  clouds lit from %.3f %.3f %.3f; the sky's sun %.3f %.3f %.3f; the game's light %.3f %.3f %.3f (frame %u, now %u)\n",
+                fprintf(log, "  clouds lit from %.3f %.3f %.3f; the sky's sun %.3f %.3f %.3f; the game's light %.3f %.3f %.3f (frame %u, now %u); sky axis signs %+.0f %+.0f\n",
                         R.CloudLastUsedSun[0], R.CloudLastUsedSun[1], R.CloudLastUsedSun[2], R.CloudLastSkySun[0], R.CloudLastSkySun[1],
-                        R.CloudLastSkySun[2], R.CloudLightDir[0], R.CloudLightDir[1], R.CloudLightDir[2], R.nCloudLightFrame, FrameHistory::Frame());
+                        R.CloudLastSkySun[2], R.CloudLightDir[0], R.CloudLightDir[1], R.CloudLightDir[2], R.nCloudLightFrame, FrameHistory::Frame(),
+                        R.CloudSkyAxisSign[0], R.CloudSkyAxisSign[1]);
                 fprintf(log, "  clouds: density %.4f, absorption %.2f x %.2f, translucency %.2f, detail %.2f, shade %.2f, sky match %.2f x %.2f\n",
                         R.fVolumetricCloudsDensity * R.Cloud.density, R.fVolumetricCloudsAbsorption, R.Cloud.absorption,
                         R.fVolumetricCloudsTranslucency * R.Cloud.translucency, R.fVolumetricCloudsDetail * R.Cloud.detail,
