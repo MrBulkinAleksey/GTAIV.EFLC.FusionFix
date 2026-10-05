@@ -30,10 +30,11 @@
 #endif
 // CloudNoiseTex's size.
 #define COVERAGE_SIZE 1024.0
-// The dome and the rounded base take part of every heap's footprint: at a cover of 0.4 the clouds
-// covered 22% of the sky. Measured over the map, 1.35 times the cover brings the share of the sky
-// under cloud back to the cover, from 0.25 to 0.7. The shadows, on a flat deck, take the cover as it is.
-#define COVER_GAIN 1.35
+// The dome and the rounded base take part of every heap's footprint, the more the smaller the heaps:
+// on the 6 x 6 map a cover of 0.4 left 31% of the sky under cloud. Measured over the map, 1.75 times
+// the cover brings the share back to the cover from 0.25 to 0.45 (0.26, 0.40, 0.46); at 0.7 it stops
+// at 0.57, the rest left to the overcast sheet. The shadows, on a flat deck, take the cover as it is.
+#define COVER_GAIN 1.75
 
 sampler2D DepthTex : register(s0);
 sampler2D CoverageTex : register(s1);

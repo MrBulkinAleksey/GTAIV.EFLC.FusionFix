@@ -1496,10 +1496,11 @@ public:
 };
 
 // The cloud deck's noise for the cloud shadows and the volumetric clouds: 1024 x 1024, tiling.
-// - Heaps: each of 4 x 4 cells a tile holds one heap at a random point, of a random radius, falling
-//   off from its middle; smaller heaps from 8 x 8 cells add to them. On a 16 km tile a heap is one
-//   and a half to three kilometres across, as wide fair weather cumulus are; at 8 x 8 the heaps,
-//   under a kilometre, came out small and sparse. Perlin-Worley noise in its place
+// - Heaps: each of 6 x 6 cells a tile holds one heap at a random point, of a random radius, falling
+//   off from its middle; smaller heaps from 12 x 12 cells add to them. On a 16 km tile a heap is one
+//   to two kilometres across, about one every two and a half kilometres: at 8 x 8 the heaps, under a
+//   kilometre, came out small, and at 4 x 4, one every four kilometres, the sky stayed mostly empty
+//   however much each heap grew with the cover. Perlin-Worley noise in its place
 //   joined the clouds into one network over half the sky, where real fair weather cumulus stand
 //   apart, spread evenly.
 // - The heaps are read through a warp of value noise, so their outlines wander, and a fine value
@@ -1566,15 +1567,15 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
         return best;
     };
 
-    constexpr int heapCells = 4;
+    constexpr int heapCells = 6;
     const float warpReach = static_cast<float>(size) / heapCells * 0.6f;
     std::vector<float> value(size * size, 0.0f);
     for (int y = 0; y < size; ++y)
         for (int x = 0; x < size; ++x)
         {
-            const float wx = x + (valueNoise(x, y, heapCells * 2, 3, 300) - 0.5f) * warpReach;
-            const float wy = y + (valueNoise(x, y, heapCells * 2, 3, 310) - 0.5f) * warpReach;
-            value[y * size + x] = heaps(wx, wy, heapCells, 50) + 0.35f * heaps(wx, wy, heapCells * 2, 60) + 0.3f * valueNoise(x, y, heapCells * 8, 4, 400);
+            const float wx = x + (valueNoise(x, y, 16, 3, 300) - 0.5f) * warpReach;
+            const float wy = y + (valueNoise(x, y, 16, 3, 310) - 0.5f) * warpReach;
+            value[y * size + x] = heaps(wx, wy, heapCells, 50) + 0.35f * heaps(wx, wy, heapCells * 2, 60) + 0.3f * valueNoise(x, y, 64, 4, 400);
         }
     {
         std::vector<int> order(value.size());
