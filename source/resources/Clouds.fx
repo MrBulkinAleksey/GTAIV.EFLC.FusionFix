@@ -511,6 +511,9 @@ float4 Light(CloudSums sums, float3 dir, bool full)
         // The undersides darkened by the sky the cloud above them hides, by the cloud's height in the
         // layer alone, whatever the sun does: up to 15% at the base, none from two thirds up.
         colour *= 1.0 - 0.15 * (1.0 - smoothstep(0.0, 0.65, sums.height / cover));
+        // Seen from below, a cloud's base is darker still: up to 30% more looking straight up at the
+        // bottom third of it. The bases overhead came out as light as the sides.
+        colour *= 1.0 - 0.3 * saturate(dir.z * 2.0) * (1.0 - smoothstep(0.0, 0.35, sums.height / cover));
     }
 
     // A soft knee from three quarters of the ceiling up, on the cloud's mean colour: the glow rises

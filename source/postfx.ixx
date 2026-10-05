@@ -395,7 +395,7 @@ public:
     float fVolumetricCloudsHaze = 25000.0f;
     float fVolumetricCloudsMaxDistance = 40000.0f;
     float fVolumetricCloudsBrightness = 1.0f;
-    float fVolumetricCloudsSunTint = 0.6f;
+    float fVolumetricCloudsSunTint = 0.3f;
     // The moon's light on the clouds once the sun is down, against the sun's; and how much the
     // clouds' shaded side takes the hue of the sky above it.
     float fVolumetricCloudsMoonlight = 0.2f;
@@ -1330,7 +1330,7 @@ public:
         fVolumetricCloudsHaze = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsHaze", 25000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBrightness", 1.0f), 0.0f, 4.0f);
-        fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.6f), 0.0f, 1.0f);
+        fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.3f), 0.0f, 1.0f);
         fVolumetricCloudsMoonlight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMoonlight", 0.2f), 0.0f, 2.0f);
         fVolumetricCloudsSkyLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyLight", 0.35f), 0.0f, 1.0f);
         fVolumetricCloudsSkyMatch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyMatch", 1.8f), 0.0f, 20.0f);
@@ -4275,13 +4275,13 @@ private:
         effect->SetFloat("fSunPower", R.Cloud.sunPower);
         effect->SetFloat("fBaseRound", R.Cloud.baseRound);
         // How far the billows are swept along the coarse noise at the tops, in their own size: more
-        // in the wind.
-        effect->SetFloat("fCurl", std::clamp(1.5f + 0.5f * R.Cloud.wind, 1.5f, 3.0f));
-        // The wind's shear: a heap's top lies up to 200 m downwind of its base at the weather's
-        // wind, at most 300 m. The wind carries the map along (0.93, 0.37), so the clouds drift the
+        // in the wind. Up to 3 in a strong wind they drew out into parallel brush strokes.
+        effect->SetFloat("fCurl", std::clamp(0.8f + 0.4f * R.Cloud.wind, 1.0f, 1.8f));
+        // The wind's shear: a heap's top lies up to 120 m downwind of its base at the weather's
+        // wind, at most 200 m; at 200 m, up to 300, the tops trailed off in streaks. The wind carries the map along (0.93, 0.37), so the clouds drift the
         // other way and their tops lean that way.
         {
-            const float lean = (std::min)(200.0f * R.Cloud.wind, 300.0f) / R.fCloudShadowsScale;
+            const float lean = (std::min)(120.0f * R.Cloud.wind, 200.0f) / R.fCloudShadowsScale;
             const float shear[2] = { 0.9293f * lean, 0.3697f * lean };
             effect->SetFloatArray("vec2Shear", shear, 2);
         }
