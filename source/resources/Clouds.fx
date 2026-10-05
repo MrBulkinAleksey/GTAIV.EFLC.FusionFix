@@ -474,6 +474,17 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
     return sums;
 }
 
+// VolumetricCloudsDebug 11: a share 0 to 1 as a colour the eye's adaptation does not change: blue
+// under 0.15, green to 0.3, yellow to 0.5, orange to 0.7, red above.
+float3 SunScale(float share)
+{
+    return share < 0.15 ? float3(0.1, 0.2, 1.0)
+         : share < 0.3 ? float3(0.1, 1.0, 0.1)
+         : share < 0.5 ? float3(1.0, 1.0, 0.1)
+         : share < 0.7 ? float3(1.0, 0.5, 0.0)
+         : float3(1.0, 0.05, 0.05);
+}
+
 // The clouds' colour from what the march gathered, premultiplied, with the share of the scene
 // behind that shows through in alpha. full is a constant: the one pass variant leaves the matching
 // to the sky (and its debug view), which the reflections do not use, the sun power, the tops'
@@ -573,10 +584,10 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         float3 hazeSky = sky * min(1.0, 2.0 * skyLuma / max(behind, 1e-4));
         float3 termHaze = hazeSky * (cover * (1.0 - haze));
 
-        // VolumetricCloudsDebug: 2 the clouds grey at the sky they are matched to; 3 to 11 one term of
+        // VolumetricCloudsDebug: 2 the clouds grey at the sky they are matched to; 3 to 10 one term of
         // their light alone, at the brightness it adds (3 shade and sun, 4 silver lining, 5 sunset
-        // colour, 6 glow, 7 sun power, 8 tops, 9 rim against the sun, 10 haze, 11 the sun reaching
-        // inside, grey).
+        // colour, 6 glow, 7 sun power, 8 tops, 9 rim against the sun, 10 haze); 11 the share of the
+        // sun reaching inside, in colours (SunScale).
         [branch]
         if (fDebug >= 2.0)
         {
@@ -590,7 +601,7 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
                          : fDebug == 8.0 ? termTop * lightMul * haze
                          : fDebug == 9.0 ? termRim * haze
                          : fDebug == 10.0 ? termHaze
-                         : (sums.sun / cover) * skyLuma * cover;
+                         : SunScale(sums.sun / cover) * skyLuma * cover;
             return float4(shown, 1.0 - cover);
         }
         return float4(colour * haze + termHaze, 1.0 - cover);
