@@ -29,7 +29,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 7;
+    constexpr uint32_t Version = 8;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -66,9 +66,10 @@ namespace UpscalerProtocol
     // Frame generation only, at the output size, otherwise their handles are 0:
     // Present   DXGI_FORMAT_R16G16B16A16_FLOAT  the finished frame, sRGB encoded or scRGB with HDR output
     // Generated DXGI_FORMAT_R16G16B16A16_FLOAT  written by the frame generation
+    // HudLess   DXGI_FORMAT_R16G16B16A16_FLOAT  Present before the HUD was drawn, which tells the HUD apart
     enum class Texture : uint32_t
     {
-        Color, Depth, Motion, Reactive, Output, Present, Generated, Count
+        Color, Depth, Motion, Reactive, Output, Present, Generated, HudLess, Count
     };
 
     // The inputs the game copies every frame
@@ -77,7 +78,7 @@ namespace UpscalerProtocol
     // The textures of the frame generation, the last ones
     constexpr bool IsFrameGenerationTexture(Texture texture)
     {
-        return texture == Texture::Present || texture == Texture::Generated;
+        return texture == Texture::Present || texture == Texture::Generated || texture == Texture::HudLess;
     }
 
     // At the output size, the others at the render size
@@ -148,6 +149,8 @@ namespace UpscalerProtocol
         float CameraRight[3];
         float CameraForward[3];
         uint64_t FrameId;             // +1 every frame, anything else resets the frame generation
+        uint32_t HudLess;             // Generate of this frame comes with HudLess
+        uint32_t Reserved1;
 
         // Generate (WaitValue and SignalValue as for Evaluate)
         float MaxLuminance;           // nits, HDR output
@@ -167,7 +170,7 @@ namespace UpscalerProtocol
     static_assert(sizeof(wchar_t) == 2);
     static_assert(offsetof(Shared, WaitValue) % 8 == 0);
     static_assert(offsetof(Shared, TextureHandles) % 8 == 0);
-    static_assert(sizeof(Shared) == 3952, "The layout must be identical in the x86 and x64 builds");
+    static_assert(sizeof(Shared) == 3976, "The layout must be identical in the x86 and x64 builds");
 
     inline const wchar_t* MappingSuffix = L".Mapping";
     inline const wchar_t* RequestSuffix = L".Request";

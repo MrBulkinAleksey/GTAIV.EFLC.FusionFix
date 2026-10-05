@@ -406,6 +406,7 @@ namespace
         float cameraRight[3]{};
         float cameraForward[3]{};
         uint64_t frameId = 0;
+        bool hudLess = false;
     };
 
     // -----------------------------------------------------------------------------------------------
@@ -805,6 +806,9 @@ namespace
             configure.flags = FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY;
             configure.generationRect = { 0, 0, static_cast<int32_t>(displayWidth), static_cast<int32_t>(displayHeight) };
             configure.frameID = frame.frameId;
+            // Written by Generate of this frame, read by its dispatch: the HUD is what differs from Present
+            if (frame.hudLess)
+                configure.HUDLessColor = ffxApiGetResourceDX12(d.Texture(Protocol::Texture::HudLess), FFX_API_RESOURCE_STATE_COMPUTE_READ);
             auto result = functions.Configure(&frameGeneration, &configure.header);
             if (result != FFX_API_RETURN_OK)
             {
@@ -1013,13 +1017,15 @@ namespace
                 bool hdr = (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0;
                 bool generation = fsr.CreateFrameGeneration(width, height, outputWidth, outputHeight, hdr) &&
                     device.CreateTexture(T::Present, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, false) &&
-                    device.CreateTexture(T::Generated, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, true);
+                    device.CreateTexture(T::Generated, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, true) &&
+                    device.CreateTexture(T::HudLess, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, false);
                 if (!generation)
                 {
                     Log("Frame generation could not be set up at %ux%u -> %ux%u", width, height, outputWidth, outputHeight);
                     fsr.ReleaseFrameGeneration();
                     device.ReleaseTexture(T::Present);
                     device.ReleaseTexture(T::Generated);
+                    device.ReleaseTexture(T::HudLess);
                     flags &= ~Protocol::ConfigureFlags::FrameGeneration;
                     shared.Flags = flags;
                 }
@@ -1074,6 +1080,7 @@ namespace
                 frame.cameraForward[i] = shared.CameraForward[i];
             }
             frame.frameId = shared.FrameId;
+            frame.hudLess = shared.HudLess != 0;
 
             using T = Protocol::Texture;
             auto cmd = device.BeginFrame();
@@ -1114,10 +1121,10 @@ namespace
             bool generated = false;
             if (prepared)
             {
-                device.Transition(cmd, true, { T::Present, T::Generated });
+                device.Transition(cmd, true, { T::Present, T::Generated, T::HudLess });
                 generated = fsr.GenerateFrame(cmd, device, shared.FrameId, shared.GenerateReset != 0,
                     (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0, shared.MaxLuminance);
-                device.Transition(cmd, false, { T::Present, T::Generated });
+                device.Transition(cmd, false, { T::Present, T::Generated, T::HudLess });
                 if (device.wine)
                     device.CopyFromUav(cmd, T::Generated);
             }

@@ -16,6 +16,7 @@ export module postfx;
 import common;
 import comvars;
 import d3dx9_43;
+import framegeneration;
 import framehistory;
 import hdr;
 import natives;
@@ -3192,6 +3193,7 @@ private:
                     }
 
                     ApplySharpening(pDevice, pShader, vShader);
+                    FrameGeneration::CaptureHudLess(pDevice, PostFxResources.backBuffer);
 
                     for (int i = 0; i < PostfxTextureCount; i++)
                     {

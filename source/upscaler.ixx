@@ -299,7 +299,7 @@ namespace
         static constexpr VkFormat Formats[TextureCount] =
         {
             VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16_SFLOAT, VK_FORMAT_R16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
-            VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT
+            VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT
         };
 
         bool Init(IDirect3DDevice9* realDevice)
@@ -1211,6 +1211,7 @@ namespace
     uint64_t preparedFrameId = 0;      // 0: this frame was not prepared
     uint64_t generatedFrameId = 0;
     bool preparedReset = false;
+    bool preparedHudLess = false;
 
     std::filesystem::path HelperPath()
     {
@@ -1316,6 +1317,7 @@ export namespace Upscaler
         // Frame generation: prepared with this frame's depth and motion vectors, Generate follows
         bool FrameGeneration = false;
         bool HighDynamicRange = false;    // the frame given to Generate is scRGB
+        bool HudLess = false;             // Generate of this frame comes with the frame before the HUD
         float CameraPosition[3]{};        // world space
         float CameraUp[3]{};
         float CameraRight[3]{};
@@ -1507,6 +1509,7 @@ export namespace Upscaler
             shared.CameraForward[i] = frame.CameraForward[i];
         }
         shared.FrameId = ++frameId;
+        shared.HudLess = frame.HudLess ? 1 : 0;
 
         // The helper prepares the frame generation with this frame
         bool prepared = bridge->frameGeneration && !generationFailed;
@@ -1516,6 +1519,7 @@ export namespace Upscaler
                 return;
             preparedFrameId = frameId;
             preparedReset = frame.Reset;
+            preparedHudLess = frame.HudLess;
         };
 
         // Synchronized on the GPU: the copy of the output waits there for outputValue, and the answer is collected
@@ -1557,8 +1561,9 @@ export namespace Upscaler
     }
 
     // Render thread, after the frame is finished: present is the frame at the output size (A16B16G16R16F, sRGB encoded
-    // or scRGB), generated receives the frame between the previous one and it. False leaves generated untouched.
-    bool Generate(IDirect3DTexture9* present, IDirect3DTexture9* generated, float maxLuminance)
+    // or scRGB), hudLess the same before the HUD, when Evaluate was told it comes; generated receives the frame between
+    // the previous one and it. False leaves generated untouched.
+    bool Generate(IDirect3DTexture9* present, IDirect3DTexture9* hudLess, IDirect3DTexture9* generated, float maxLuminance)
     {
         if (!IsFrameGenerationReady() || !present || !generated)
             return false;
@@ -1573,6 +1578,8 @@ export namespace Upscaler
 
         Textures inputs{};
         inputs[static_cast<size_t>(Protocol::Texture::Present)] = present;
+        // What Evaluate was told: without the frame before the HUD, the HUD can't be told apart and is interpolated
+        inputs[static_cast<size_t>(Protocol::Texture::HudLess)] = preparedHudLess ? (hudLess ? hudLess : present) : nullptr;
         if (!bridge->SubmitInputs(inputs, inputValue))
         {
             static uint32_t reported = 0;

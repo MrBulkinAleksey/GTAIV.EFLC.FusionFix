@@ -1376,6 +1376,7 @@ public:
         // The camera in world space: rows of the inverse view, which looks along -z
         frame.FrameGeneration = FrameGeneration::IsEnabled();
         frame.HighDynamicRange = HDROutput::IsActive();
+        frame.HudLess = FrameGeneration::UsesHudLess();
         auto world = CurrentCamera.View.Inverse();
         auto normalized = [&](int row, float sign, float (&out)[3])
         {

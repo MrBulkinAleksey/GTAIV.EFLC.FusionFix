@@ -18,6 +18,9 @@ import upscaler;
 // AMD FSR frame generation, run by the helper next to DLSS and FSR (see upscaler.ixx).
 //
 // - The upscaler's Evaluate prepares the frame generation with the frame's depth and motion vectors.
+// - The finished scene before the HUD is copied into HudLess, right after the post processing. The HUD is what
+//   differs from it, and the frame generation keeps it from the current frame instead of interpolating it. Not
+//   with HDR output yet: the HDR pass converts the whole frame only afterwards.
 // - Once the frame is finished, HUD and HDR output included, the back buffer is copied into Present and the helper
 //   generates the frame between it and the previous one into Generated.
 // - First stage: FrameGeneration = 2 in [TEMPORAL] shows the generated frames in place of the rendered ones, to
@@ -36,6 +39,8 @@ namespace
 
     rage::grcRenderTargetPC* PresentRT = nullptr;
     rage::grcRenderTargetPC* GeneratedRT = nullptr;
+    rage::grcRenderTargetPC* HudLessRT = nullptr;
+    bool bHudLessCaptured = false;  // this frame
     uint32_t TargetWidth = 0;
     uint32_t TargetHeight = 0;
 
@@ -66,7 +71,7 @@ namespace
 
     void ReleaseTargets()
     {
-        for (auto rt : { &PresentRT, &GeneratedRT })
+        for (auto rt : { &PresentRT, &GeneratedRT, &HudLessRT })
         {
             if (*rt)
             {
@@ -80,14 +85,15 @@ namespace
     // Both at the back buffer's size, 16-bit float as the helper's textures
     bool CreateTargets(uint32_t width, uint32_t height)
     {
-        if (PresentRT && GeneratedRT && TargetWidth == width && TargetHeight == height)
+        if (PresentRT && GeneratedRT && HudLessRT && TargetWidth == width && TargetHeight == height)
             return true;
         ReleaseTargets();
 
         auto desc = rage::OwnRenderTargetDesc(rage::GRCFMT_A16B16G16R16F);
         PresentRT = rage::CreateEmptyRenderTarget("FrameGenerationPresent", width, height, 64, desc);
         GeneratedRT = rage::CreateEmptyRenderTarget("FrameGenerationGenerated", width, height, 64, desc);
-        if (!PresentRT || !PresentRT->mD3DTexture || !GeneratedRT || !GeneratedRT->mD3DTexture)
+        HudLessRT = rage::CreateEmptyRenderTarget("FrameGenerationHudLess", width, height, 64, desc);
+        if (!PresentRT || !PresentRT->mD3DTexture || !GeneratedRT || !GeneratedRT->mD3DTexture || !HudLessRT || !HudLessRT->mD3DTexture)
         {
             ReleaseTargets();
             return false;
@@ -98,9 +104,21 @@ namespace
         return true;
     }
 
+    // Copies a surface into a target of the same size
+    bool CopyInto(IDirect3DDevice9* device, IDirect3DSurface9* source, rage::grcRenderTargetPC* target)
+    {
+        IDirect3DSurface9* surface = nullptr;
+        target->mD3DTexture->GetSurfaceLevel(0, &surface);
+        bool ok = surface && SUCCEEDED(device->StretchRect(source, nullptr, surface, nullptr, D3DTEXF_POINT));
+        SAFE_RELEASE(surface);
+        return ok;
+    }
+
     // Render thread, after the frame is finished
     void OnBeforePresent()
     {
+        bool hudLess = bHudLessCaptured;
+        bHudLessCaptured = false;
         if (mode == Mode::Off || !Upscaler::IsFrameGenerationReady())
             return;
 
@@ -133,7 +151,7 @@ namespace
         if (presentSurface && generatedSurface && SUCCEEDED(device->StretchRect(backBuffer, nullptr, presentSurface, nullptr, D3DTEXF_POINT)))
         {
             auto hdr = HDROutput::IsActive();
-            if (Upscaler::Generate(PresentRT->mD3DTexture, GeneratedRT->mD3DTexture, hdr ? HDROutput::GetPeakNits() : 0.0f))
+            if (Upscaler::Generate(PresentRT->mD3DTexture, hudLess ? HudLessRT->mD3DTexture : nullptr, GeneratedRT->mD3DTexture, hdr ? HDROutput::GetPeakNits() : 0.0f))
             {
                 static bool first = true;
                 if (first)
@@ -165,6 +183,27 @@ export namespace FrameGeneration
     bool IsEnabled()
     {
         return mode != Mode::Off;
+    }
+
+    // The frame before the HUD will be captured: tells Evaluate, which comes earlier in the frame
+    bool UsesHudLess()
+    {
+        return mode != Mode::Off && !HDROutput::IsActive();
+    }
+
+    // Render thread, right after the post processing: the back buffer holds the scene without the HUD
+    void CaptureHudLess(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer)
+    {
+        if (!UsesHudLess() || !Upscaler::IsFrameGenerationReady() || !device || !backBuffer)
+            return;
+
+        D3DSURFACE_DESC desc{};
+        backBuffer->GetDesc(&desc);
+        if (!CreateTargets(desc.Width, desc.Height))
+            return;
+        bHudLessCaptured = CopyInto(device, backBuffer, HudLessRT);
+        if (!bHudLessCaptured)
+            LogOnce(4, "The frame before the HUD could not be copied");
     }
 }
 
