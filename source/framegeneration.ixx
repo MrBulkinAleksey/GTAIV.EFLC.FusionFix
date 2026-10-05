@@ -199,13 +199,45 @@ namespace
         bInPresent = true;
         if (CopyInto(device, backBuffer, SavedRT) && CopyFrom(device, PresentRT, backBuffer))
         {
+            // Present moves the images of the two back buffers around: what is bound to the device is bound again
+            // afterwards, so that the rest of the frame draws into the back buffer it had
+            IDirect3DSurface9* targets[4]{};
+            IDirect3DSurface9* depth = nullptr;
+            D3DVIEWPORT9 viewport{};
+            RECT scissor{};
+            for (DWORD i = 0; i < 4; ++i)
+                device->GetRenderTarget(i, &targets[i]);
+            device->GetDepthStencilSurface(&depth);
+            device->GetViewport(&viewport);
+            device->GetScissorRect(&scissor);
+
             // The game is inside its scene
             auto presentedAt = Now();
             device->EndScene();
             if (FAILED(device->Present(nullptr, nullptr, nullptr, nullptr)))
                 LogOnce(6, "Present of the rendered frame failed");
             device->BeginScene();
-            CopyFrom(device, SavedRT, backBuffer);
+
+            // The game's back buffer as it was, in whichever surface is the back buffer now
+            IDirect3DSurface9* current = nullptr;
+            if (SUCCEEDED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &current)) && current)
+            {
+                if (current != backBuffer)
+                    LogOnce(7, "Present changed the back buffer surface");
+                CopyFrom(device, SavedRT, current);
+                current->Release();
+            }
+
+            for (DWORD i = 0; i < 4; ++i)
+                if (targets[i] || i > 0)
+                    device->SetRenderTarget(i, targets[i]);
+            device->SetDepthStencilSurface(depth);
+            device->SetViewport(&viewport);
+            device->SetScissorRect(&scissor);
+            for (auto& target : targets)
+                SAFE_RELEASE(target);
+            SAFE_RELEASE(depth);
+
             Stats.Add(Ms(GeneratedAt, presentedAt), Ms(GeneratedAt, PendingDue), late);
         }
         else
