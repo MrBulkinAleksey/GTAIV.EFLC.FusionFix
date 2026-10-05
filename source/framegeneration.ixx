@@ -23,11 +23,11 @@ import upscaler;
 //   with HDR output yet: the HDR pass converts the whole frame only afterwards.
 // - Once the frame is finished, HUD and HDR output included, the back buffer is copied into Present and the helper
 //   generates the frame between it and the previous one into Generated.
-// - FrameGeneration = 1 in [TEMPORAL]: the generated frame is presented first, from the render thread, and the
-//   rendered one after a wait of half a frame. The wait is half the frame's own time, from the last presented
-//   rendered frame to the generated one, so that it doesn't feed on itself; FrameGenerationDelay scales it. While
-//   the GPU is the limit the render thread waits for it anyway, so the wait costs little; while the CPU is, it
-//   lowers the rendered frame rate.
+// - FrameGeneration = 1 in [TEMPORAL]: the game presents the generated frame in place of its own, which waits in
+//   PresentRT for half a frame. Nothing waits for it: the game goes on with the next frame, and the draw calls of the
+//   render thread check the time. The first one after the half (FrameGenerationDelay of the smoothed frame time)
+//   presents the rendered frame and leaves the back buffer as it found it. A frame that ends before that presents
+//   the waiting one first.
 // - FrameGeneration = 2 shows the generated frames in place of the rendered ones, to check the generation itself.
 
 namespace
@@ -45,6 +45,7 @@ namespace
     rage::grcRenderTargetPC* PresentRT = nullptr;
     rage::grcRenderTargetPC* GeneratedRT = nullptr;
     rage::grcRenderTargetPC* HudLessRT = nullptr;
+    rage::grcRenderTargetPC* SavedRT = nullptr;     // the back buffer while the rendered frame is presented
     bool bHudLessCaptured = false;  // this frame
     uint32_t TargetWidth = 0;
     uint32_t TargetHeight = 0;
@@ -76,8 +77,15 @@ namespace
 
     // Pacing, render thread
     LARGE_INTEGER Frequency{};
-    LARGE_INTEGER RealPresented{};  // when the last rendered frame went to Present, 0 before the first
-    double FrameMs = 0.0;           // smoothed time of a frame, without the wait
+    LARGE_INTEGER LastFrameEnd{};   // the previous frame's OnBeforePresent, 0 before the first
+    double FrameMs = 0.0;           // smoothed time between two rendered frames
+    DWORD RenderThread = 0;
+
+    // The rendered frame waiting in PresentRT for its Present, after the generated one went
+    bool bPending = false;
+    bool bInPresent = false;
+    LARGE_INTEGER PendingDue{};
+    LARGE_INTEGER GeneratedAt{};
 
     double Ms(LARGE_INTEGER from, LARGE_INTEGER to)
     {
@@ -91,47 +99,39 @@ namespace
         return now;
     }
 
-    // Until ms after from: sleeps while there is time, spins the last 2 ms
-    void WaitUntil(LARGE_INTEGER from, double ms)
+    LARGE_INTEGER After(LARGE_INTEGER from, double ms)
     {
-        while (true)
-        {
-            auto left = ms - Ms(from, Now());
-            if (left <= 0.0)
-                return;
-            if (left > 2.0)
-                Sleep(1);
-            else
-                YieldProcessor();
-        }
+        from.QuadPart += static_cast<LONGLONG>(ms * static_cast<double>(Frequency.QuadPart) / 1000.0);
+        return from;
     }
 
     // Statistics of the pacing, logged every few seconds
     struct PacingStats
     {
-        uint32_t frames = 0;
-        double frameMs = 0.0, waitMs = 0.0, generatedPresentMs = 0.0, realGapMs = 0.0, realGapMin = 1e9, realGapMax = 0.0;
+        uint32_t frames = 0, late = 0;
+        double frameMs = 0.0, gapMs = 0.0, gapMin = 1e9, gapMax = 0.0, delayMs = 0.0;
 
-        void Add(double frame, double wait, double generatedPresent, double realGap)
+        void Add(double gap, double delay, bool wasLate)
         {
             ++frames;
-            frameMs += frame;
-            waitMs += wait;
-            generatedPresentMs += generatedPresent;
-            realGapMs += realGap;
-            realGapMin = std::min(realGapMin, realGap);
-            realGapMax = std::max(realGapMax, realGap);
+            late += wasLate;
+            frameMs += FrameMs;
+            gapMs += gap;
+            delayMs += delay;
+            gapMin = std::min(gapMin, gap);
+            gapMax = std::max(gapMax, gap);
             if (frames < 300)
                 return;
-            Log("Pacing over %u frames: frame %.2f ms, wait %.2f ms, generated Present call %.2f ms, rendered frames %.2f ms apart (%.2f..%.2f)",
-                frames, frameMs / frames, waitMs / frames, generatedPresentMs / frames, realGapMs / frames, realGapMin, realGapMax);
+            Log("Pacing over %u frames: frame %.2f ms, rendered frame %.2f ms after the generated one (%.2f..%.2f, aimed at %.2f), %u late",
+                frames, frameMs / frames, gapMs / frames, gapMin, gapMax, delayMs / frames, late);
             *this = {};
         }
     } Stats;
 
     void ReleaseTargets()
     {
-        for (auto rt : { &PresentRT, &GeneratedRT, &HudLessRT })
+        bPending = false;
+        for (auto rt : { &PresentRT, &GeneratedRT, &HudLessRT, &SavedRT })
         {
             if (*rt)
             {
@@ -145,7 +145,7 @@ namespace
     // Both at the back buffer's size, 16-bit float as the helper's textures
     bool CreateTargets(uint32_t width, uint32_t height)
     {
-        if (PresentRT && GeneratedRT && HudLessRT && TargetWidth == width && TargetHeight == height)
+        if (PresentRT && GeneratedRT && HudLessRT && SavedRT && TargetWidth == width && TargetHeight == height)
             return true;
         ReleaseTargets();
 
@@ -153,7 +153,9 @@ namespace
         PresentRT = rage::CreateEmptyRenderTarget("FrameGenerationPresent", width, height, 64, desc);
         GeneratedRT = rage::CreateEmptyRenderTarget("FrameGenerationGenerated", width, height, 64, desc);
         HudLessRT = rage::CreateEmptyRenderTarget("FrameGenerationHudLess", width, height, 64, desc);
-        if (!PresentRT || !PresentRT->mD3DTexture || !GeneratedRT || !GeneratedRT->mD3DTexture || !HudLessRT || !HudLessRT->mD3DTexture)
+        SavedRT = rage::CreateEmptyRenderTarget("FrameGenerationSaved", width, height, 64, desc);
+        if (!PresentRT || !PresentRT->mD3DTexture || !GeneratedRT || !GeneratedRT->mD3DTexture || !HudLessRT || !HudLessRT->mD3DTexture ||
+            !SavedRT || !SavedRT->mD3DTexture)
         {
             ReleaseTargets();
             return false;
@@ -174,42 +176,104 @@ namespace
         return ok;
     }
 
-    // The generated frame goes to Present now, the rendered one, back in the back buffer, once the game presents it
-    // after the wait
-    void PresentGenerated(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer, IDirect3DSurface9* generated, IDirect3DSurface9* rendered,
-        LARGE_INTEGER lastRendered)
+    // Copies a target into a surface of the same size
+    bool CopyFrom(IDirect3DDevice9* device, rage::grcRenderTargetPC* source, IDirect3DSurface9* target)
     {
-        auto realDevice = RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
-        if (!realDevice || FAILED(device->StretchRect(generated, nullptr, backBuffer, nullptr, D3DTEXF_POINT)))
-        {
-            LogOnce(5, "The generated frame could not be copied into the back buffer");
+        IDirect3DSurface9* surface = nullptr;
+        source->mD3DTexture->GetSurfaceLevel(0, &surface);
+        bool ok = surface && SUCCEEDED(device->StretchRect(surface, nullptr, target, nullptr, D3DTEXF_POINT));
+        SAFE_RELEASE(surface);
+        return ok;
+    }
+
+    // Presents the waiting rendered frame, the game's back buffer kept as it was. late: the next frame ended first.
+    void PresentPending(IDirect3DDevice9* device, bool late)
+    {
+        bPending = false;
+        IDirect3DSurface9* backBuffer = nullptr;
+        if (FAILED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) || !backBuffer)
             return;
+
+        bInPresent = true;
+        if (CopyInto(device, backBuffer, SavedRT) && CopyFrom(device, PresentRT, backBuffer))
+        {
+            // The game is inside its scene
+            auto presentedAt = Now();
+            device->EndScene();
+            if (FAILED(device->Present(nullptr, nullptr, nullptr, nullptr)))
+                LogOnce(6, "Present of the rendered frame failed");
+            device->BeginScene();
+            CopyFrom(device, SavedRT, backBuffer);
+            Stats.Add(Ms(GeneratedAt, presentedAt), Ms(GeneratedAt, PendingDue), late);
         }
+        else
+        {
+            LogOnce(5, "The rendered frame could not be put back into the back buffer");
+        }
+        bInPresent = false;
+        backBuffer->Release();
+    }
 
-        // The game is inside its scene until it calls EndScene after this
-        auto before = Now();
-        realDevice->EndScene();
-        auto hr = realDevice->Present(nullptr, nullptr, nullptr, nullptr);
-        realDevice->BeginScene();
-        auto generatedAt = Now();
-        if (FAILED(hr))
-            LogOnce(6, "Present of the generated frame failed");
+    // Draw calls of the render thread: the rendered frame goes once its time has come
+    void CheckPending(IDirect3DDevice9* device)
+    {
+        if (!bPending || bInPresent || GetCurrentThreadId() != RenderThread || Now().QuadPart < PendingDue.QuadPart)
+            return;
+        PresentPending(device, false);
+    }
 
-        device->StretchRect(rendered, nullptr, backBuffer, nullptr, D3DTEXF_POINT);
+    HRESULT(__stdcall* RealDrawPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT) = nullptr;
+    HRESULT(__stdcall* RealDrawIndexedPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT) = nullptr;
+    HRESULT(__stdcall* RealDrawPrimitiveUP)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, const void*, UINT) = nullptr;
+    HRESULT(__stdcall* RealDrawIndexedPrimitiveUP)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT, UINT, const void*, D3DFORMAT, const void*, UINT) = nullptr;
 
-        // The frame's own time: from the last rendered frame to this generated one, without the wait
-        double frame = lastRendered.QuadPart ? Ms(lastRendered, generatedAt) : 0.0;
-        bool steady = frame > 0.0 && frame < 250.0;
-        if (steady)
-            FrameMs = FrameMs > 0.0 ? FrameMs + (frame - FrameMs) * 0.1 : frame;
+    HRESULT __stdcall DrawPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT start, UINT count)
+    {
+        CheckPending(device);
+        return RealDrawPrimitive(device, type, start, count);
+    }
 
-        double wait = steady ? std::clamp(FrameMs * fDelay, 0.0, 50.0) : 0.0;
-        WaitUntil(generatedAt, wait);
+    HRESULT __stdcall DrawIndexedPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count)
+    {
+        CheckPending(device);
+        return RealDrawIndexedPrimitive(device, type, base, minIndex, vertices, start, count);
+    }
 
-        auto realAt = Now();
-        if (steady)
-            Stats.Add(frame, Ms(generatedAt, realAt), Ms(before, generatedAt), Ms(lastRendered, realAt));
-        RealPresented = realAt;
+    HRESULT __stdcall DrawPrimitiveUP(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT count, const void* data, UINT stride)
+    {
+        CheckPending(device);
+        return RealDrawPrimitiveUP(device, type, count, data, stride);
+    }
+
+    HRESULT __stdcall DrawIndexedPrimitiveUP(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT minIndex, UINT vertices, UINT count, const void* indices,
+        D3DFORMAT format, const void* data, UINT stride)
+    {
+        CheckPending(device);
+        return RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
+    }
+
+    template <class F>
+    void Patch(void** vtable, int index, F& real, F hook)
+    {
+        if (vtable[index] == reinterpret_cast<void*>(hook))
+            return;
+        real = reinterpret_cast<F>(vtable[index]);
+        injector::WriteMemory(&vtable[index], reinterpret_cast<void*>(hook), true);
+    }
+
+    // On the D3D9 runtime's own device, as the render scale's hooks
+    void InstallHooks(IDirect3DDevice9* device)
+    {
+        static void** hooked = nullptr;
+        auto vtable = *reinterpret_cast<void***>(device);
+        if (vtable == hooked)
+            return;
+        Patch(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
+        Patch(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
+        Patch(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
+        Patch(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
+        hooked = vtable;
+        Log("Draw call hooks installed");
     }
 
     // Render thread, after the frame is finished
@@ -217,15 +281,31 @@ namespace
     {
         bool hudLess = bHudLessCaptured;
         bHudLessCaptured = false;
-        // Set again by a paced frame: after one that isn't, the time of a frame is not known
-        auto lastRendered = RealPresented;
-        RealPresented.QuadPart = 0;
-        if (mode == Mode::Off || !Upscaler::IsFrameGenerationReady())
+        if (mode == Mode::Off)
             return;
 
-        auto device = rage::grcDevice::GetD3DDevice();
+        auto device = RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
         if (!device)
             return;
+
+        RenderThread = GetCurrentThreadId();
+        auto now = Now();
+        if (LastFrameEnd.QuadPart)
+        {
+            auto frame = Ms(LastFrameEnd, now);
+            if (frame > 0.0 && frame < 250.0)
+                FrameMs = FrameMs > 0.0 ? FrameMs + (frame - FrameMs) * 0.1 : frame;
+        }
+        LastFrameEnd = now;
+
+        // This frame ended before the last one went: it goes first
+        if (bPending)
+            PresentPending(device, true);
+
+        if (!Upscaler::IsFrameGenerationReady())
+            return;
+        if (mode == Mode::On)
+            InstallHooks(device);
 
         IDirect3DSurface9* backBuffer = nullptr;
         if (FAILED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) || !backBuffer)
@@ -259,10 +339,17 @@ namespace
                     Log("First frame generated at %ux%u%s", desc.Width, desc.Height, hdr ? ", HDR" : "");
                 first = false;
 
-                if (mode == Mode::ShowGenerated)
+                // The game presents the generated frame, the rendered one waits in PresentRT. Not a frame generated
+                // without a previous one, nor before the frame time is known.
+                bool paced = mode == Mode::On && !Upscaler::WasGenerateReset() && FrameMs > 0.0;
+                if (mode == Mode::ShowGenerated || paced)
                     device->StretchRect(generatedSurface, nullptr, backBuffer, nullptr, D3DTEXF_POINT);
-                else if (!Upscaler::WasGenerateReset())
-                    PresentGenerated(device, backBuffer, generatedSurface, presentSurface, lastRendered);
+                if (paced)
+                {
+                    GeneratedAt = Now();
+                    PendingDue = After(GeneratedAt, std::clamp(FrameMs * fDelay, 0.0, 50.0));
+                    bPending = true;
+                }
             }
             else
             {
