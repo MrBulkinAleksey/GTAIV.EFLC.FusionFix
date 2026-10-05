@@ -1945,6 +1945,65 @@ namespace SSRTrace
              desc.Width * desc.Height ? sumAlpha / (double(desc.Width) * desc.Height) : 0.0, isHalf || isFixed ? "" : " (format not read)");
     }
 
+    // The first channel of a texture at five points (the centre and halfway to each corner), as stored and as metres
+    // through near and far the way SSR.fx decodes the log depth, to compare this frame's depth with last frame's copy.
+    static void DepthProbe(IDirect3DDevice9* pDevice, const char* name, IDirect3DTexture9* texture, float nearClip, float farClip)
+    {
+        if (!Active())
+            return;
+        IDirect3DSurface9* surface = nullptr;
+        if (!texture || FAILED(texture->GetSurfaceLevel(0, &surface)) || !surface)
+        {
+            Line("  %s probe: no surface", name);
+            return;
+        }
+        D3DSURFACE_DESC desc = {};
+        surface->GetDesc(&desc);
+        IDirect3DSurface9* copy = nullptr;
+        HRESULT hr = pDevice->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &copy, nullptr);
+        if (SUCCEEDED(hr))
+            hr = pDevice->GetRenderTargetData(surface, copy);
+        D3DLOCKED_RECT locked = {};
+        if (SUCCEEDED(hr))
+            hr = copy->LockRect(&locked, nullptr, D3DLOCK_READONLY);
+        if (FAILED(hr))
+        {
+            Line("  %s probe: %ux%u format %u, read back failed %08x", name, desc.Width, desc.Height, unsigned(desc.Format), unsigned(hr));
+            SAFE_RELEASE(copy);
+            surface->Release();
+            return;
+        }
+        auto read = [&](UINT x, UINT y) -> float
+        {
+            auto row = static_cast<const uint8_t*>(locked.pBits) + y * locked.Pitch;
+            switch (desc.Format)
+            {
+            case D3DFMT_R32F: return reinterpret_cast<const float*>(row)[x];
+            case D3DFMT_G32R32F: return reinterpret_cast<const float*>(row)[x * 2];
+            case D3DFMT_A32B32G32R32F: return reinterpret_cast<const float*>(row)[x * 4];
+            case D3DFMT_R16F: return Half(reinterpret_cast<const uint16_t*>(row)[x]);
+            case D3DFMT_G16R16F: return Half(reinterpret_cast<const uint16_t*>(row)[x * 2]);
+            case D3DFMT_A16B16G16R16F: return Half(reinterpret_cast<const uint16_t*>(row)[x * 4]);
+            case D3DFMT_A8R8G8B8: case D3DFMT_X8R8G8B8: return row[x * 4 + 2] / 255.0f;
+            default: return -1.0f;
+            }
+        };
+        std::string text;
+        const float at[5][2] = { { 0.5f, 0.5f }, { 0.25f, 0.25f }, { 0.75f, 0.25f }, { 0.25f, 0.75f }, { 0.75f, 0.75f } };
+        for (auto& p : at)
+        {
+            const float raw = read(UINT(p[0] * desc.Width), UINT(p[1] * desc.Height));
+            const float metres = nearClip > 0.0f ? nearClip * std::pow(farClip / nearClip, raw) : 0.0f;
+            char item[64];
+            snprintf(item, sizeof(item), " (%.2f,%.2f) %.6f = %.2f m", p[0], p[1], raw, metres);
+            text += item;
+        }
+        copy->UnlockRect();
+        copy->Release();
+        surface->Release();
+        Line("  %s probe: %ux%u format %u:%s", name, desc.Width, desc.Height, unsigned(desc.Format), text.c_str());
+    }
+
     static std::string TextureName(IDirect3DBaseTexture9* texture)
     {
         auto& R = PostFxResources;
@@ -2656,6 +2715,13 @@ private:
 
                         pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
+                        if (SSRTrace::Active())
+                        {
+                            const auto& camera = FrameHistory::Current();
+                            SSRTrace::DepthProbe(pDevice, "fog depth", PostFxResources.mDepthRT ? PostFxResources.mDepthRT->mD3DTexture : nullptr,
+                                                 camera.Near, camera.Far);
+                            SSRTrace::DepthProbe(pDevice, "fog depth copy", PostFxResources.PreAlphaDepthCopyRT->mD3DTexture, camera.Near, camera.Far);
+                        }
                         pDevice->SetTexture(0, prevTex[0]);
                         pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, prevMinFilter[0]);
                         pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, prevMagFilter[0]);
@@ -5706,6 +5772,9 @@ private:
                            vp->mNearClip, vp->mFarClip, cur.Frame, int(cur.Valid), cur.Near, cur.Far, prv.Frame, int(prv.Valid), prv.Near, prv.Far,
                            int(FrameHistory::IsCameraCut()), R.nSSRHistoryFrame, int(FrameHistory::CanReproject(R.nSSRHistoryFrame)),
                            R.nGIAccumFrame, int(FrameHistory::CanReproject(R.nGIAccumFrame)));
+            SSRTrace::DepthProbe(pDevice, "gi depth", R.mDepthRT ? R.mDepthRT->mD3DTexture : nullptr, vp->mNearClip, vp->mFarClip);
+            SSRTrace::DepthProbe(pDevice, "gi previous depth", R.PreAlphaDepthCopyRT ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr,
+                                 prv.Near, prv.Far);
         }
 
         // The rays read last frame's scene: none on the first frame on, after a cut of the camera it shows another shot
