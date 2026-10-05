@@ -375,7 +375,9 @@ public:
     static inline rage::grcViewport* CameraViewport = nullptr;
 
     // The G-buffer phase of the game viewport, not of the phone camera or of front end scenes: its viewport
-    // is a copy of the camera viewport
+    // is a copy of the camera viewport. The near plane is left out: the game moves it as the camera closes in
+    // on a wall, and the copy can hold the one before, so those scenes went uncounted and every history
+    // (temporal AA's, the accumulations of SSR, SSGI and AO) was dropped while walking along a wall.
     static bool IsCameraScene()
     {
         if (!CRenderPhase::sm_pCurrent || !*CRenderPhase::sm_pCurrent)
@@ -389,7 +391,7 @@ public:
             return true;
 
         return phaseViewport->mWidth == CameraViewport->mWidth && phaseViewport->mHeight == CameraViewport->mHeight &&
-            phaseViewport->mFov == CameraViewport->mFov && phaseViewport->mNearClip == CameraViewport->mNearClip;
+            phaseViewport->mFov == CameraViewport->mFov;
     }
 
     static inline injector::hook_back<void(__fastcall*)(void*, void*, rage::grcViewport*, float, float, float, float)> hbSetCameraPerspective;
