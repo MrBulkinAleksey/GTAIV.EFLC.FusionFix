@@ -5674,6 +5674,17 @@ private:
             return;
         }
 
+        if (SSRTrace::Active())
+        {
+            const auto& cur = FrameHistory::Current();
+            const auto& prv = FrameHistory::Previous();
+            SSRTrace::Line("gi: vp near %.4f far %.1f; camera frame %u valid %d near %.4f far %.1f; previous frame %u valid %d near %.4f far %.1f; "
+                           "cut %d; scene history of %u reprojects %d; accumulation of %u reprojects %d",
+                           vp->mNearClip, vp->mFarClip, cur.Frame, int(cur.Valid), cur.Near, cur.Far, prv.Frame, int(prv.Valid), prv.Near, prv.Far,
+                           int(FrameHistory::IsCameraCut()), R.nSSRHistoryFrame, int(FrameHistory::CanReproject(R.nSSRHistoryFrame)),
+                           R.nGIAccumFrame, int(FrameHistory::CanReproject(R.nGIAccumFrame)));
+        }
+
         // The rays read last frame's scene: none on the first frame on, after a cut of the camera it shows another shot
         if (!FrameHistory::CanReproject(R.nSSRHistoryFrame))
         {
@@ -5927,6 +5938,7 @@ private:
             DrawEffectPass(pDevice, effect, h.techSkinScatterFinal, R.SkinLightSurf[0], width, height);
             result = R.SkinLightTex[0]->mD3DTexture;
         }
+        SSRTrace::Line("skin: scatter %d, near %.4f far %.1f", int(scatter), R.SkinCamera[2], R.SkinCamera[3]);
 
         if (debug)
         {
