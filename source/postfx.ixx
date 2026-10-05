@@ -466,7 +466,14 @@ public:
     uint32_t nCloudAccumFrame = 0; // FrameHistory::Frame() of the accumulation, 0 if none
     IDirect3DVolumeTexture9* CloudDetailTexture = nullptr;
     IDirect3DVolumeTexture9* CloudDetailTex();
-    bool VolumetricCloudsOn() const { return bVolumetricClouds && CloudsEffect != nullptr; }
+    // Volumetric Clouds in the graphics menu (PREF_VOLUMETRIC_CLOUDS, the same VolumetricClouds key)
+    // turns them on and off at once; the game's flat clouds and the cloud shadows follow.
+    bool VolumetricCloudsEnabled() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_VOLUMETRIC_CLOUDS");
+        return p ? p->get() != 0 : bVolumetricClouds;
+    }
+    bool VolumetricCloudsOn() const { return VolumetricCloudsEnabled() && CloudsEffect != nullptr; }
     // Why the last frame drew no volumetric clouds, or that it did, for the Ctrl+Shift+F10 log.
     const char* szCloudsStatus = "not run yet";
     HRESULT hrCloudsEffect = S_OK;
@@ -4046,7 +4053,7 @@ private:
     {
         auto& R = PostFxResources;
         auto skip = [&](const char* why) { R.szCloudsStatus = why; };
-        if (!R.bVolumetricClouds)
+        if (!R.VolumetricCloudsEnabled())
             return skip("off in the ini");
         if (!R.CloudsEffect)
             return skip("no effect");

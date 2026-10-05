@@ -244,6 +244,9 @@ Logitech LightSync RGB
 [VolumetricLight]
 Объёмный свет
 
+[VolumeClouds]
+Объёмные облака
+
 [Zoomed Movement]
 Разрешить движение при прицеливании
 

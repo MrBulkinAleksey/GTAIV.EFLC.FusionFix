@@ -244,6 +244,9 @@ Specular Anti-Aliasing
 [VolumetricLight]
 Volumetric Light
 
+[VolumeClouds]
+Volumetric Clouds
+
 [Zoomed Movement]
 Permitir movimiento al acercar la mirilla
 

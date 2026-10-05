@@ -2103,6 +2103,7 @@ public:
             { 0, "PREF_BICUBIC_TEXTURES",       "TEXTURES",   "BicubicFiltering",                   "",                           0, nullptr, 0, 1 },
             { 0, "PREF_SPECULAR_AA",            "TEXTURES",   "SpecularAntiAliasing",               "",                           0, nullptr, 0, 1 },
             { 0, "PREF_UPSCALER_QUALITY",       "TEMPORAL",   "UpscalerQuality",                    "MENU_DISPLAY_UPSCALER_QUALITY", 0, nullptr, 0, 4 },
+            { 0, "PREF_VOLUMETRIC_CLOUDS",      "POSTFX",     "VolumetricClouds",                   "",                           1, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2331,6 +2332,7 @@ public:
             AddRow(category, "Contact Shadows", "PREF_CONTACTSHADOWS", 2, toggle);
             AddRow(category, "SkinSSS", "PREF_SKIN_SSS", 2, toggle);
             AddRow(category, "VolumetricLight", "PREF_VOLUMETRIC_LIGHT", 2, toggle);
+            AddRow(category, "VolumeClouds", "PREF_VOLUMETRIC_CLOUDS", 2, toggle);
             AddEmptyLine(category);
             // The number next to the slider is the reach in feet, 0 keeps the game's own
             for (auto [label, preference] : { std::pair{ "FF_HREACH", "PREF_HEADLIGHT_REACH" }, std::pair{ "FF_LREACH", "PREF_LAMP_REACH" } })
