@@ -113,8 +113,9 @@ float PixelJitter(float2 pixel)
 // - The coverage map holds separate heaps spread evenly over the sky (CloudNoiseTex), equalised so
 //   that cloud, where the map is above 1 - cover, takes that share of the sky.
 // - The density across a heap is squared, soft at its edges, and at height h only what is above
-//   0.9 h of it stays: the heap narrows from its flat base up to a dome, and a weaker heap stops
-//   lower, so heaps differ in height as they do in size. Lowering the density by a quarter with
+//   1.15 h of it stays: the heap narrows from its flat base up to a dome, and a weaker heap stops
+//   lower, so heaps differ in height as they do in size. At 0.9 h a heap's dense core still stood
+//   at the layer's top and was cut flat there: seen from the side, a slab. Lowering the density by a quarter with
 //   height left the evenly spread heaps standing as pillars with walls, and 0.8 h^2 still ran each
 //   one up the layer's whole thickness with flat sides. An overcast sheet, (1 - stratus)^2, keeps
 //   most of its depth. It fades out over the top seventh, and at the base it is half as dense,
@@ -217,7 +218,7 @@ float Density(float3 p, bool detail, Place place)
     float threshold = 1.0 - cover;
     float d = saturate((c - threshold) / max(cover, 0.01));
     d *= d;
-    float dome = h * 0.9 * (1.0 - fStratus) * (1.0 - fStratus);
+    float dome = h * 1.15 * (1.0 - fStratus) * (1.0 - fStratus);
     d = saturate((d - dome) / max(1.0 - dome, 0.05)) * smoothstep(1.0, 0.85, h);
     if (d <= 0.0)
         return 0.0;
@@ -380,8 +381,8 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // light inside a cloud is scattered forwards mostly and gets through more cloud than the
             // eye's view does. At 0.6 the sun was spent within some 50 metres, about as deep as the
             // march's first sample of a cloud lies, so even the sides facing the sun came out in
-            // shade and the clouds an even grey; at 0.2 they are lit, and the bases still darken
-            // under the whole thickness the steps now reach.
+            // shade and the clouds an even grey; at 0.2 the thin fair weather clouds, a few hundred
+            // metres thick, let the sun through nearly whole and came out flat; 0.4 keeps both.
             float tau = lightDepth * sigma * fLightAbsorption;
             float sun = (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) * (fLightStrength / 1.75);
             // Darker towards the base, where the sky above is hidden by the cloud itself. By height

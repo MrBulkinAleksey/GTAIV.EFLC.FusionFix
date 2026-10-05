@@ -409,7 +409,7 @@ public:
     // The shaded side and the bases against the game's cloud colour, and how much of the view's
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
     float fVolumetricCloudsShade = 0.35f;
-    float fVolumetricCloudsAbsorption = 0.2f;
+    float fVolumetricCloudsAbsorption = 0.4f;
     int nVolumetricCloudsDebug = 0;
     // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
     bool bVolumetricCloudsReflections = true;
@@ -1319,7 +1319,7 @@ public:
         fVolumetricCloudsEvolution = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsEvolution", 1.0f), 0.0f, 10.0f);
         fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
         fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.35f), 0.0f, 2.0f);
-        fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.2f), 0.05f, 3.0f);
+        fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.4f), 0.05f, 3.0f);
         nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 2);
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
         fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
@@ -1522,14 +1522,17 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
         }
         return sum / total;
     };
-    // The highest heap over the cells around (x, y): 1 at a heap's middle, 0 at its radius.
+    // The highest heap over the cells around (x, y): 1 at a heap's middle, 0 at its radius. A heap
+    // reaches up to 1.6 cells from its cell's corner (its middle within 0.15 to 0.85, its radius up
+    // to 0.75), so the search takes two cells either way; one either way cut heaps off along the
+    // cells' straight edges.
     auto heaps = [&](float x, float y, int cells, int seed) {
         const float cell = static_cast<float>(size) / cells;
         const float fx = x / cell, fy = y / cell;
         const int cx = static_cast<int>(std::floor(fx)), cy = static_cast<int>(std::floor(fy));
         float best = 0.0f;
-        for (int dy = -1; dy <= 1; ++dy)
-            for (int dx = -1; dx <= 1; ++dx)
+        for (int dy = -2; dy <= 2; ++dy)
+            for (int dx = -2; dx <= 2; ++dx)
             {
                 const int nx = cx + dx, ny = cy + dy;
                 const int wx = wrap(nx, cells), wy = wrap(ny, cells);
