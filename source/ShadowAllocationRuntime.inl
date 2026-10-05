@@ -13,7 +13,13 @@ namespace PlayerShadowAllocation
     using fusionfix::shadows::Vec3;
     using fusionfix::shadows::FloatingPointState;
 
-    static SafetyHookInline selectionHook;
+    static SafetyHookInline selectionHook; static thread_local std::array<uint8_t,4096> labRelevant{};
+    // CE 1.8 extension points, set by EmergencyTrafficShadowsRuntime.inl when its features are on.
+    static int (*labCompareGrace)(int,int,int,int) noexcept=nullptr;
+    static bool (*labPointSource)(const rage::CLightSource&) noexcept=nullptr;
+    static uint64_t (*labLampGeneration)(const rage::CLightSource&) noexcept=nullptr;
+    static void (*observeShadowResult)() noexcept=nullptr;
+    static void (*observeSubmittedLights)(const rage::CLightSource*,uint32_t) noexcept = nullptr;
     static SafetyHookMid collectHook, finalizeHook, lampDistanceHook, compareResultHook, cacheResultHook;
     static bool nativeLampPriority=false;
     static std::atomic<uint32_t> lampDistanceAdjusted{0};
@@ -172,7 +178,7 @@ namespace PlayerShadowAllocation
         state.frame = *CTimer::m_frameCount;
         state.lampContinuity.Begin(ped,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
         state.continuity.Begin(ped,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
-        state.nativeCandidates.fill({});
+        state.nativeCandidates.fill({}); labRelevant.fill(0);
         state.continuityActive=false;
         state.tracedComparison=false;
         state.stackAnchor = 0;
@@ -209,7 +215,7 @@ namespace PlayerShadowAllocation
     {
         const Vec3 position{light.mPosition.x,light.mPosition.y,light.mPosition.z};
         const Vec3 direction{light.mDirection.x,light.mDirection.y,light.mDirection.z};
-        if (light.mFlags & rage::LF_VEHICLE) {
+        if ((light.mFlags & rage::LF_VEHICLE) && !(labPointSource && labPointSource(light))) {
             if (fusionfix::shadows::BeamTouchesReceiver(state.player, state.occupiedCar ? 3.0f : 1.5f,
                 position, direction, light.mOuterConeAngle, light.mRadius)) return true;
             return !state.occupiedCar && NearbyVehicleLighting36::Relevant(state.ped,state.frame,
@@ -224,6 +230,7 @@ namespace PlayerShadowAllocation
 
     static uint64_t LampGeometry(const rage::CLightSource& light) noexcept
     {
+        if(labLampGeneration){const auto generation=labLampGeneration(light);if(generation)return generation;}
         // A stationary lamp key reused at a new position must not inherit its
         // old slot's hold interval. Vehicle keys lack a verified generation
         // field; the adapter does not claim to detect every pool-pointer reuse.
@@ -234,7 +241,7 @@ namespace PlayerShadowAllocation
         words[5] = static_cast<uint32_t>(light.mRoomIndex);
         uint64_t hash = 14695981039346656037ull;
         for (auto word : words) { hash ^= word; hash *= 1099511628211ull; }
-        return hash;
+        return lab_siren::Generation(labPointSource && labPointSource(light),hash);
     }
 
     // Audited boundary BEFORE distance is consumed by either cache refresh or
@@ -303,11 +310,12 @@ namespace PlayerShadowAllocation
         auto geometry = fusionfix::shadows::EvaluateGeometry(state.player,
             {light.mPosition.x, light.mPosition.y, light.mPosition.z});
         auto kind = budget::Kind::Lamp;
-        if (flags & rage::LF_VEHICLE)
+        const bool vehicleBeam = (flags & rage::LF_VEHICLE) && !(labPointSource && labPointSource(light));
+        if (vehicleBeam)
             kind = fusionfix::shadows::ce::IsVehicleBeam(key, state.occupiedCar ? state.occupiedCar : PlayerCar::Last())
                 ? budget::Kind::PlayerBeam : budget::Kind::OtherBeam;
         if (kind == budget::Kind::PlayerBeam) BeamTrace::Mark(BeamTrace::Candidate);
-        if (flags & rage::LF_VEHICLE)
+        if (vehicleBeam)
             geometry.distanceSquared = fusionfix::shadows::ReceiverDistanceSquared(state.player,
                 {light.mPosition.x,light.mPosition.y,light.mPosition.z},state.occupiedCar ? 3.0f : 1.5f);
         const int feet = fusionfix::shadows::ShadowReachFeet(ShadowReachStep(kind != budget::Kind::Lamp));
@@ -316,7 +324,7 @@ namespace PlayerShadowAllocation
             ? (std::max)(configuredReach,light.mRadius) : configuredReach;
         const auto viewWeight=fusionfix::shadows::ShadowViewWeight(state.view,
             {light.mPosition.x,light.mPosition.y,light.mPosition.z},
-            {light.mDirection.x,light.mDirection.y,light.mDirection.z},light.mRadius,(flags&rage::LF_VEHICLE)!=0);
+            {light.mDirection.x,light.mDirection.y,light.mDirection.z},light.mRadius,vehicleBeam);
         const float priorityDistance=state.occupiedCar && kind==budget::Kind::Lamp && viewWeight>1.0f
             ? fusionfix::shadows::DrivingLampPriorityDistance(state.player,state.drivingFocus,
                 {light.mPosition.x,light.mPosition.y,light.mPosition.z},geometry.distanceSquared,viewWeight)
@@ -332,7 +340,7 @@ namespace PlayerShadowAllocation
                 {light.mPosition.x,light.mPosition.y,light.mPosition.z},light.mRadius);
             const bool relevant=std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=reach*reach &&
                 (volumeVisible || kind==budget::Kind::PlayerBeam);
-            state.nativeCandidates[index]=state.continuity.Observe(
+            labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(
                 {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam);
             // Record why a prior choice loses its claim, independently of
             // whether native sorting eventually drops it. Bounded to 7/pass.
@@ -367,7 +375,8 @@ namespace PlayerShadowAllocation
            b.flags!=*reinterpret_cast<const uint32_t*>(regs.esp+0x9C+regs.esi)) {++continuityRejected;return;}
         ++continuityComparisons;
         const int original=static_cast<int>(regs.eax);
-        const int result=fusionfix::shadows::NativeShadowContinuity42::Compare(original,a,b);
+        int result=fusionfix::shadows::NativeShadowContinuity42::Compare(original,a,b);
+        if(labCompareGrace)result=labCompareGrace(original,result,challenger,incumbent);
         if(result!=original) {
             regs.eax=static_cast<uint32_t>(result); ++continuityOverrides;
             // Decisions only, not render completion. No allocations/file I/O.
@@ -460,10 +469,12 @@ namespace PlayerShadowAllocation
             if (ownerThread.load(std::memory_order_relaxed) != current)
                 unsupportedThread.store(true, std::memory_order_relaxed);
             if (state.depth != 1 || !Prepare()) RejectPass();
+            else if(observeSubmittedLights && !unsupportedThread.load(std::memory_order_relaxed)) observeSubmittedLights(CurrentLights(),CurrentCount());
         }
         // Hooks are immutable once published. The unsafe call avoids the
         // hook-object mutex around native execution (including recursion).
         selectionHook.unsafe_ccall<void>();
+        if(observeShadowResult && state.depth==1)observeShadowResult();
         // Native copying marks holes inactive but leaves their previous keys.
         // Clear only those dead identities before native frame-buffer copying.
         // This prevents lighting lookup from finding a stale, unrendered map.

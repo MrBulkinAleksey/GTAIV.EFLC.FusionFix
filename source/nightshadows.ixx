@@ -28,6 +28,15 @@ module;
 #include "ShadowLookupLayout.hpp"
 #include "ShadowCrashTrace30.hpp"
 #include "DiagnosticsLog.hpp"
+#include "LabSirenLifetime.hpp"
+#include "LabSirenVacancy.hpp"
+#include "LabPoliceClaim.hpp"
+#include "NearbyPoliceShadows.hpp"
+#include "TrafficSignalRegistry.hpp"
+#include "TrafficSignalDistanceGate.hpp"
+#include "TrafficSignalNativeQueue.hpp"
+#include "FreshPageReadable.hpp"
+#include "PoolDescriptorSnapshots.hpp"
 #include <fstream>
 #include <atomic>
 #include <intrin.h>
@@ -290,6 +299,7 @@ namespace CShadows
 #include "ShadowLookupRuntime.inl"
 #include "ShadowCasterRuntime.inl"
 #include "NightShadowAdmissionRuntime.inl"
+#include "EmergencyTrafficShadowsRuntime.inl"
 
 static inline SafetyHookInline shsub_925DB0{};
 static inline SafetyHookInline shsub_D77A00{};
@@ -384,7 +394,7 @@ public:
         }
 
         // Registered before game callbacks start, independent of async init.
-        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
+        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); EmergencyTrafficShadows::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
@@ -447,6 +457,10 @@ public:
                 // After the allocation adapter, which checks the selection's bytes this hooks.
                 HeadlightEnhancement::InstallShadowOrigin(
                     std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowBehindLamps", 0.7f), 0.0f, 2.0f));
+                // CE 1.8: shadows from traffic signals and emergency vehicle lights.
+                EmergencyTrafficShadows::log.path = iniReader.GetIniPath().parent_path() / "GTAIV-emergency-traffic-shadows.log";
+                EmergencyTrafficShadows::Install(static_cast<unsigned>(std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalShadows", 2), 0, 7)),
+                    iniReader.ReadInteger("SHADOWS", "EmergencyLightShadows", 1) != 0);
             }
             else
             {
@@ -683,6 +697,7 @@ public:
             OwnHeadlightCaster::enabled.store(ceAdapter && casterGuard && casterMode == 1 &&
                 static_cast<bool>(shsub_D77A00), std::memory_order_release);
             HeadlightEnhancement::log.ready.store(ceAdapter && shadowDiagnostics, std::memory_order_release);
+            EmergencyTrafficShadows::log.ready.store(ceAdapter && shadowDiagnostics, std::memory_order_release);
             // Written on every executable, so a missing adapter shows up with its reason.
             ShadowDiagnostics::log.ready.store(shadowDiagnostics, std::memory_order_release);
         };
