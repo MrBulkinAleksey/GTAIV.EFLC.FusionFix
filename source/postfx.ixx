@@ -4992,7 +4992,8 @@ private:
 
     // Once a frame, from the post fx pass, which runs in the pause menu too: Ctrl+Shift+F10 reads
     // the live settings (ReadLiveIni) again from the ini, with a beep to say it did, and adds the
-    // cloud values the shadows use to FusionFix.CloudShadows.log next to the game.
+    // cloud values the shadows use to FusionFix.CloudShadows.log next to the game; Ctrl+Shift+F9
+    // moves the clouds somewhere else.
     static void TickIniReload()
     {
         static bool keyWasDown = false;
@@ -5049,6 +5050,21 @@ private:
             MessageBeep(MB_OK);
         }
         keyWasDown = down;
+
+        // Ctrl+Shift+F9: the clouds start somewhere else, as at a new game (a new place on the
+        // map, a new phase of its morph and of the billows), to look at other skies without
+        // restarting. The accumulation starts over, so the old clouds do not linger.
+        static bool reseedWasDown = false;
+        const bool reseed = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+            (GetAsyncKeyState(VK_F9) & 0x8000);
+        if (reseed && !reseedWasDown)
+        {
+            auto& R = PostFxResources;
+            R.bCloudDriftSeeded = false;
+            R.nCloudAccumFrame = 0;
+            MessageBeep(MB_OK);
+        }
+        reseedWasDown = reseed;
     }
 
     // Replaces the finished frame with the SSR debug view chosen in the graphics menu.
