@@ -1290,7 +1290,7 @@ float4 TemporalResult(float4 c)
 
 // Debug view 10 (fDebugMode 10, indirect light only): what the accumulation does with each pixel,
 // drawn by a second run of SSRTemporal_PS that leaves the real one alone. Red: last frame's light
-// dropped (off screen or another surface there), green: kept, darker as the clamp to this frame's
+// dropped because last frame's depth there shows another surface, white: it was off screen; green: kept, darker as the clamp to this frame's
 // neighbourhood pulls it further; blue: how noisy this frame's light is around the pixel, its
 // spread over its mean. Magenta: no history at all; yellow: a
 // neighbourhood all alike, which takes this frame's value as it is.
@@ -1335,7 +1335,8 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     bool checkDepth;
     float2 prevUV = TemporalHistoryUV(uv, C, checkDepth);
     float keep = fTemporalBlend;
-    if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
+    bool offScreen = any(prevUV <= 0.0) || any(prevUV >= 1.0);
+    if (offScreen)
         keep = 0.0;
     else if (fUsePrevDepth > 0.0 && checkDepth)
     {
@@ -1354,6 +1355,8 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         float noise = saturate(dot(spread.rgb, kLum) / max(dot(m1.rgb, kLum), 1e-3));
         float3 h = tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0)).rgb;
         float clamped = saturate(dot(abs(h - clamp(h, lo.rgb, hi.rgb)), kLum) / max(dot(h, kLum), 1e-3));
+        if (offScreen)
+            return float4(1.0, 1.0, 1.0, 1.0);
         return float4(keep > 0.0 ? 0.0 : 1.0, keep > 0.0 ? 1.0 - clamped : 0.0, noise, 1.0);
     }
 

@@ -2634,11 +2634,32 @@ private:
                         pDevice->SetRenderTarget(0, PostFxResources.PreAlphaDepthSurface);
                         pDevice->SetDepthStencilSurface(nullptr);
 
-                        // No need to set texture here as the desired depth texture already set (GBufferTextureSampler3)
+                        // _DEFERRED_GBUFFER_3_, bound here and not taken from what the game left on s0: whatever that
+                        // was, last frame's depth disagreed with this one's everywhere and every accumulation (SSR, SSGI,
+                        // contact shadows, GTAO) dropped its history on every pixel.
+                        if (SSRTrace::Active())
+                        {
+                            IDirect3DBaseTexture9* bound = nullptr;
+                            pDevice->GetTexture(0, &bound);
+                            SSRTrace::Line("fog pass: depth copy, s0 held %s", SSRTrace::TextureName(bound).c_str());
+                            SAFE_RELEASE(bound);
+                        }
+                        if (PostFxResources.mDepthRT && PostFxResources.mDepthRT->mD3DTexture)
+                        {
+                            pDevice->SetTexture(0, PostFxResources.mDepthRT->mD3DTexture);
+                            pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+                            pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+                            pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+                        }
 
                         pDevice->SetPixelShader(PostFxResources.Blit_PS);
 
                         pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
+
+                        pDevice->SetTexture(0, prevTex[0]);
+                        pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, prevMinFilter[0]);
+                        pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, prevMagFilter[0]);
+                        pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, prevMipFilter[0]);
                     }
                 }
             }
