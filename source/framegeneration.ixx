@@ -44,6 +44,15 @@ namespace
     Mode mode = Mode::Off;
     float fDelay = 0.5f;            // of the frame's own time, between the generated and the rendered frame
 
+    // FrameGenerationDebug in [TEMPORAL], to find what breaks the Present within a frame
+    namespace Debug
+    {
+        constexpr int32_t NoPresent = 1;        // the copies around it, without the Present
+        constexpr int32_t NoCopies = 2;         // the Present of whatever the back buffer holds, without the copies
+        constexpr int32_t EndOfFrame = 4;       // never within a frame: the waiting frame goes when the next one ends
+    }
+    int32_t nDebug = 0;
+
     rage::grcRenderTargetPC* PresentRT = nullptr;
     rage::grcRenderTargetPC* GeneratedRT = nullptr;
     rage::grcRenderTargetPC* HudLessRT = nullptr;
@@ -197,7 +206,8 @@ namespace
             return;
 
         bInPresent = true;
-        if (CopyInto(device, backBuffer, SavedRT) && CopyFrom(device, PresentRT, backBuffer))
+        bool copies = !(nDebug & Debug::NoCopies);
+        if (!copies || (CopyInto(device, backBuffer, SavedRT) && CopyFrom(device, PresentRT, backBuffer)))
         {
             // Present moves the images of the two back buffers around: what is bound to the device is bound again
             // afterwards, so that the rest of the frame draws into the back buffer it had
@@ -213,10 +223,13 @@ namespace
 
             // The game is inside its scene
             auto presentedAt = Now();
-            device->EndScene();
-            if (FAILED(device->Present(nullptr, nullptr, nullptr, nullptr)))
-                LogOnce(6, "Present of the rendered frame failed");
-            device->BeginScene();
+            if (!(nDebug & Debug::NoPresent))
+            {
+                device->EndScene();
+                if (FAILED(device->Present(nullptr, nullptr, nullptr, nullptr)))
+                    LogOnce(6, "Present of the rendered frame failed");
+                device->BeginScene();
+            }
 
             // The game's back buffer as it was, in whichever surface is the back buffer now
             IDirect3DSurface9* current = nullptr;
@@ -224,7 +237,8 @@ namespace
             {
                 if (current != backBuffer)
                     LogOnce(7, "Present changed the back buffer surface");
-                CopyFrom(device, SavedRT, current);
+                if (copies)
+                    CopyFrom(device, SavedRT, current);
                 current->Release();
             }
 
@@ -251,7 +265,7 @@ namespace
     // Draw calls of the render thread: the rendered frame goes once its time has come
     void CheckPending(IDirect3DDevice9* device)
     {
-        if (!bPending || bInPresent || GetCurrentThreadId() != RenderThread || Now().QuadPart < PendingDue.QuadPart)
+        if (!bPending || bInPresent || (nDebug & Debug::EndOfFrame) || GetCurrentThreadId() != RenderThread || Now().QuadPart < PendingDue.QuadPart)
             return;
         PresentPending(device, false);
     }
@@ -456,6 +470,9 @@ public:
             CIniReader iniReader("");
             mode = static_cast<Mode>(std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGeneration", 0), 0, 3));
             fDelay = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
+            nDebug = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDebug", 0);
+            if (nDebug)
+                Log("Debug: %d", nDebug);
             QueryPerformanceFrequency(&Frequency);
             if (mode != Mode::Off)
                 Log("Frame generation: %s", mode == Mode::ShowGenerated ? "showing the generated frames" :
