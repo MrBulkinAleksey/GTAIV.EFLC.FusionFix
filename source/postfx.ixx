@@ -5025,6 +5025,19 @@ private:
                         rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0], top[0], top[1], top[2], sunset[0], sunset[1], sunset[2],
                         rage::grmShaderInfo::getShaderParamData(R.CloudInscatteringIdx)[0], sunDir[0], sunDir[1], sunDir[2],
                         sky[0], sky[1], sky[2], moon[0], moon[1], moon[2]);
+                // The game's weather by name, and the cloud layer it gives, so a screenshot can be
+                // matched to its weather.
+                {
+                    static const char* kWeatherNames[8] = { "EXTRASUNNY", "SUNNY", "SUNNY_WINDY", "CLOUDY", "RAIN", "DRIZZLE", "FOGGY", "LIGHTNING" };
+                    auto name = [](const auto* type) {
+                        const auto value = type ? static_cast<uint32_t>(*type) : 99u;
+                        return value < 8 ? kWeatherNames[value] : "?";
+                    };
+                    const float k = CWeather::InterpolationValue ? *CWeather::InterpolationValue : 0.0f;
+                    const auto& c = R.Cloud;
+                    fprintf(log, "  weather %s -> %s at %.2f; cloud layer: cover %.2f, base %.0f m, thickness %.0f m, sheet %.2f, wind %.2f\n",
+                            name(CWeather::OldWeatherType), name(CWeather::NewWeatherType), k, c.coverage, c.base, c.thickness, c.stratus, c.wind);
+                }
                 fclose(log);
             }
             MessageBeep(MB_OK);
