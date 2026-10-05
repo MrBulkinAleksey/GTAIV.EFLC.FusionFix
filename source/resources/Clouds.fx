@@ -1,7 +1,10 @@
 // Volumetric clouds (RenderVolumetricClouds in postfx.ixx): one layer of cloud marched from the camera at
-// half size (Clouds), accumulated over frames (CloudsResolve) and blended into the lit scene at full
-// size right before the fog pass (CloudsComposite), so the fog, SSR's history and everything after see
-// them. Wherever the scene is nearer than the cloud the ray stops at it, so clouds show over
+// half size (CloudsMarch, which keeps sums of what the light needs), lit from those sums
+// (CloudsLight, matched to the sky's brightness from CloudsSkyRef), accumulated over frames
+// (CloudsResolve) and blended into the lit scene at full size right before the fog pass
+// (CloudsComposite), so the fog, SSR's history and everything after see them. The march and the
+// light are apart so each has ps_3_0's 512 slots to itself; the reflections take both in one pass
+// (Clouds). Wherever the scene is nearer than the cloud the ray stops at it, so clouds show over
 // the sky and over anything far enough behind them alike.
 //
 // The layer's coverage is CoverageTex, the same tiling noise, scale and wind as the cloud shadows on
@@ -36,6 +39,8 @@ sampler2D HistoryTex : register(s4);   // the clouds accumulated up to last fram
 sampler2D CloudTex : register(s5);     // the accumulated clouds (CloudsComposite)
 sampler2D SceneTex : register(s6);     // the lit scene, the sky in it (CloudsSkyRef)
 sampler2D SkyRefTex : register(s7);    // the sky's brightness this frame, in red (CloudsSkyRef's target)
+sampler2D MarchTex0 : register(s8);    // the march's sums: transmittance, sun, shade, silver (CloudsLight)
+sampler2D MarchTex1 : register(s9);    // and glow, first hit
 
 float2 vec2InvViewportSize;
 float4 vec4ProjInfo;
@@ -279,12 +284,45 @@ float2 LayerSpan(float3 dir, float z, float a)
     return first.y > first.x ? first : second;
 }
 
-float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
+// The world direction of the view ray through the half or full size pixel vpos.
+float3 WorldRay(float2 vpos)
+{
+    float3 v = ViewRay(vpos);
+    return normalize(float3(dot(v, vec4WorldX.xyz), dot(v, vec4WorldY.xyz), dot(v, vec4WorldZ.xyz)));
+}
+
+// What the march gathers along a ray for the light to be worked out from: the light is linear in
+// these, so lighting the sums once gives what lighting each sample did. Each is a sum over the
+// samples weighted by how much of the ray's view each one takes, T (1 - step transmittance).
+struct CloudSums
+{
+    float transmittance;  // what is left of the view behind the cloud
+    float sun;            // the sun's light reaching the samples
+    float shade;          // the shaded colour's share: (1 - sun), darker towards the base
+    float silver;         // the silver lining's: sun, more where the cloud is thin
+    float glow;           // the glow's: thin cloud with little of it towards the sun
+    float firstHit;       // how far the ray met its first cloud, or -1
+};
+
+// The world direction of the view ray through the half or full size pixel vpos, and its length in
+// view space units of depth.
+float3 RayDirection(float2 vpos, out float rayScale)
 {
     float3 v = ViewRay(vpos);
     float3 dir = float3(dot(v, vec4WorldX.xyz), dot(v, vec4WorldY.xyz), dot(v, vec4WorldZ.xyz));
-    float rayScale = length(dir);
-    dir /= rayScale;
+    rayScale = length(dir);
+    return dir / rayScale;
+}
+
+CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale)
+{
+    CloudSums sums;
+    sums.transmittance = 1.0;
+    sums.sun = 0.0;
+    sums.shade = 0.0;
+    sums.silver = 0.0;
+    sums.glow = 0.0;
+    sums.firstHit = -1.0;
     float3 origin = float3(vec4WorldX.w, vec4WorldY.w, vec4WorldZ.w);
 
     // Where the ray is inside the layer, cut short by the scene in front.
@@ -293,23 +331,11 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     float2 span = LayerSpan(dir, origin.z, curve);
     float t0 = span.x;
     float t1 = min(min(span.y, fMaxDistance), SceneDistance(uv, rayScale));
+    [branch]
     if (t1 <= t0)
-        return float4(0.0, 0.0, 0.0, 1.0);
+        return sums;
     // Beyond sixteen thicknesses into the layer the haze hides the cloud anyway.
     t1 = min(t1, t0 + vec4Layer.y * 16.0);
-
-    float cosTheta = dot(dir, vec3SunDir);
-    // The sunset colour where the sun reaches, as the game adds it, and more towards the sun in a
-    // lobe some 30 degrees wide: the clouds before a low sun take its glow.
-    // Both lobes are powers of one exponential: exp(4x) is exp(2x) squared, exp(8x) that squared.
-    float lobe2 = exp(2.0 * (cosTheta - 1.0));
-    float lobe4 = lobe2 * lobe2;
-    float sunsetLobe = 0.35 + 0.25 * cosTheta + 0.65 * lobe4;
-    // The forward lobe: cloud around the sun in the sky glows where it is thin enough for its light
-    // to come through, the bright rims of clouds against the sun. A core some 30 degrees wide and a
-    // faint skirt beyond; a Henyey-Greenstein lobe of g 0.85 lit only the cloud within a few degrees
-    // of the sun and left the rims a little way off it dark.
-    float forward = (lobe4 * lobe4 + 0.3 * lobe2) * fSilver * fGlow;
     float sigma = vec4Shape.x;
 
     // Empty sky is crossed in coarse steps that test the coverage alone; on finding cloud the ray
@@ -322,15 +348,12 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     float jitter = frac(PixelJitter(vpos) + fFrameJitter);
     float t = t0 + max(vec4Layer.y / 24.0, t0 * 0.01) * COARSE_STEP * jitter;
     float fineLeft = 0.0;
-    float transmittance = 1.0;
-    float3 colour = 0.0;
-    float firstHit = -1.0;
 
     // [fastopt]: without it D3DX spent close to a minute on this loop while the game loaded.
     [loop] [fastopt]
     for (int i = 0; i < CLOUD_STEPS; ++i)
     {
-        if (t >= t1 || transmittance < 0.01)
+        if (t >= t1 || sums.transmittance < 0.01)
             break;
         float fine = max(vec4Layer.y / 24.0, t * 0.01);
         float3 p = origin + dir * t;
@@ -359,8 +382,8 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
         if (d > 0.01)
         {
             fineLeft = FINE_MISSES;
-            if (firstHit < 0.0)
-                firstHit = t;
+            if (sums.firstHit < 0.0)
+                sums.firstHit = t;
 
             // The cloud between the sample and the sun, without the detail: from a twentieth of the
             // layer, each step twice the last, out past its whole thickness so the bases darken.
@@ -386,42 +409,70 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             // metres thick, let the sun through nearly whole and came out flat; 0.4 keeps both.
             float tau = lightDepth * sigma * fLightAbsorption;
             float sun = (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) * (fLightStrength / 1.75);
-            // Darker towards the base, where the sky above is hidden by the cloud itself. By height
-            // alone: a sample of the cloud straight up cost a whole density lookup, the slots the
-            // Earth's curvature needed.
+            // Darker towards the base, where the sky above is hidden by the cloud itself, by height.
             float h = saturate((p.z - base) / vec4Layer.y);
-            float3 shade = vec3ShadeColour * lerp(0.55, 1.0, sqrt(h));
-            // The parts the sun reaches take its hue: warm in the evening, orange at sunset.
-            float3 sunLit = vec3LitColour * vec3SunTint;
-            float3 lit = lerp(shade, sunLit, sun);
-            // The game's silver lining: up to CloudInscatteringRange brighter along the sun's axis,
-            // in the thin cloud the sun reaches. A constant 1.7 times the cloud colour in its place
-            // left the clouds at that peak from every side, with nothing for the rim to rise above.
             float thin = saturate(1.0 - d);
-            lit += sunLit * fSilver * cosTheta * cosTheta * lerp(0.35, 1.0, thin) * sun;
-            // The sunset colour towards the sun.
-            lit += vec3SunsetColour * (sun * sunsetLobe);
-            // The glow of thin cloud next to the sun, its light coming through.
-            // By the sun's light left after the cloud towards it, so the edges glow and the middle,
-            // with the whole cloud between it and the sun, stays dark: weighted by the light
-            // scattered many times instead, the whole cloud around the sun brightened evenly.
-            lit += sunLit * forward * thin * exp(-tau);
-            // A soft knee from three quarters of the ceiling up: the glow rises towards it instead of
-            // clipping to white.
-            float peak = max(max(lit.r, lit.g), lit.b);
-            float knee = fCeiling * 0.75;
-            if (peak > knee)
-                lit *= (knee + fCeiling * 0.25 * (1.0 - exp((knee - peak) / (fCeiling * 0.25)))) / peak;
 
             // Thin cloud lets more of what is behind it through, the wisps at the edges most.
             float stepTransmittance = exp(-d * lerp(1.0 - fTranslucency, 1.0, d) * sigma * fine);
-            colour += transmittance * (1.0 - stepTransmittance) * lit;
-            transmittance *= stepTransmittance;
+            float weight = sums.transmittance * (1.0 - stepTransmittance);
+            sums.sun += weight * sun;
+            sums.shade += weight * (1.0 - sun) * lerp(0.55, 1.0, sqrt(h));
+            sums.silver += weight * sun * lerp(0.35, 1.0, thin);
+            // The glow by the sun's light left after the cloud towards it, so the edges glow and the
+            // middle, with the whole cloud between it and the sun, stays dark: weighted by the light
+            // scattered many times instead, the whole cloud around the sun brightened evenly.
+            sums.glow += weight * thin * exp(-tau);
+            sums.transmittance *= stepTransmittance;
         }
         else
             fineLeft -= 1.0;
         t += fine;
     }
+    return sums;
+}
+
+// The clouds' colour from what the march gathered, premultiplied, with the share of the scene
+// behind that shows through in alpha. matchSky is a constant: the one pass variant leaves the
+// matching to the sky (and its debug view) out, which the reflections do not use, for the slots.
+float4 Light(CloudSums sums, float3 dir, bool matchSky)
+{
+    float cover = 1.0 - sums.transmittance;
+    [branch]
+    if (cover < 1e-3)
+        return float4(0.0, 0.0, 0.0, 1.0);
+
+    float cosTheta = dot(dir, vec3SunDir);
+    // The sunset colour where the sun reaches, as the game adds it, and more towards the sun in a
+    // lobe some 30 degrees wide: the clouds before a low sun take its glow.
+    // Both lobes are powers of one exponential: exp(4x) is exp(2x) squared, exp(8x) that squared.
+    float lobe2 = exp(2.0 * (cosTheta - 1.0));
+    float lobe4 = lobe2 * lobe2;
+    float sunsetLobe = 0.35 + 0.25 * cosTheta + 0.65 * lobe4;
+    // The forward lobe: cloud around the sun in the sky glows where it is thin enough for its light
+    // to come through, the bright rims of clouds against the sun. A core some 30 degrees wide and a
+    // faint skirt beyond; a Henyey-Greenstein lobe of g 0.85 lit only the cloud within a few degrees
+    // of the sun and left the rims a little way off it dark.
+    float forward = (lobe4 * lobe4 + 0.3 * lobe2) * fSilver * fGlow;
+
+    // The parts the sun reaches take its hue: warm in the evening, orange at sunset. The shaded
+    // ones the cloud colour darkened and the sky's hue. The game's silver lining: up to
+    // CloudInscatteringRange brighter along the sun's axis, in the thin cloud the sun reaches; a
+    // constant 1.7 times the cloud colour in its place left the clouds at that peak from every side,
+    // with nothing for the rim to rise above.
+    float3 sunLit = vec3LitColour * vec3SunTint;
+    float3 colour = vec3ShadeColour * sums.shade + sunLit * sums.sun
+                  + sunLit * (fSilver * cosTheta * cosTheta * sums.silver)
+                  + vec3SunsetColour * (sunsetLobe * sums.sun)
+                  + sunLit * (forward * sums.glow);
+
+    // A soft knee from three quarters of the ceiling up, on the cloud's mean colour: the glow rises
+    // towards it instead of clipping to white.
+    float3 mean = colour / cover;
+    float peak = max(max(mean.r, mean.g), mean.b);
+    float knee = fCeiling * 0.75;
+    if (peak > knee)
+        colour *= (knee + fCeiling * 0.25 * (1.0 - exp((knee - peak) / (fCeiling * 0.25)))) / peak;
 
     // The clouds against the sky. The game's CloudColor at its HDR exposure came out several times
     // brighter than the sky it draws, past the tone mapping's white point: the whole cloud, lit
@@ -431,26 +482,52 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     // its halo and shone cream while those across the sky, whose sunlit sides face the eye and
     // should be the brightest, sank to the grey of the sky there.
     [branch]
-    if (fSkyMatch > 0.0)
+    if (matchSky && fSkyMatch > 0.0)
     {
         float skyLuma = tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).r;
         if (skyLuma > 1e-4)
             colour *= clamp(fSkyMatch * skyLuma, 0.1, 2.0);
         if (fDebug == 2.0)
-            colour = skyLuma * (1.0 - transmittance);
+            colour = skyLuma * cover;
     }
 
     // Haze: distant cloud fades into what is behind it.
-    float haze = firstHit >= 0.0 ? exp(-firstHit / vec4Shape.w) : 0.0;
-    float cover = (1.0 - transmittance) * haze;
-    return float4(colour * haze, 1.0 - cover);
+    float haze = sums.firstHit >= 0.0 ? exp(-sums.firstHit / vec4Shape.w) : 0.0;
+    return float4(colour * haze, 1.0 - cover * haze);
 }
 
-// The world direction of the view ray through the half or full size pixel vpos.
-float3 WorldRay(float2 vpos)
+// In one pass: the reflections, and the full size fallback while the half size targets are missing.
+float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
 {
-    float3 v = ViewRay(vpos);
-    return normalize(float3(dot(v, vec4WorldX.xyz), dot(v, vec4WorldY.xyz), dot(v, vec4WorldZ.xyz)));
+    float rayScale;
+    float3 dir = RayDirection(vpos, rayScale);
+    return Light(March(uv, vpos, dir, rayScale), dir, false);
+}
+
+// The march at half size, its sums in two targets: (transmittance, sun, shade, silver) and (glow,
+// first hit).
+void CloudsMarch_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS, out float4 sums0 : COLOR0, out float4 sums1 : COLOR1)
+{
+    float rayScale;
+    float3 dir = RayDirection(vpos, rayScale);
+    CloudSums sums = March(uv, vpos, dir, rayScale);
+    sums0 = float4(sums.transmittance, sums.sun, sums.shade, sums.silver);
+    sums1 = float4(sums.glow, sums.firstHit, 0.0, 1.0);
+}
+
+// The light from the march's sums, at half size, for the accumulation.
+float4 CloudsLight_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
+{
+    float4 sums0 = tex2Dlod(MarchTex0, float4(uv, 0, 0));
+    float4 sums1 = tex2Dlod(MarchTex1, float4(uv, 0, 0));
+    CloudSums sums;
+    sums.transmittance = sums0.x;
+    sums.sun = sums0.y;
+    sums.shade = sums0.z;
+    sums.silver = sums0.w;
+    sums.glow = sums1.x;
+    sums.firstHit = sums1.y;
+    return Light(sums, WorldRay(vpos), true);
 }
 
 // Accumulates the half size clouds over frames. The clouds are kilometres away, so last frame's
@@ -519,6 +596,24 @@ technique Clouds
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 Clouds_PS();
+    }
+}
+
+technique CloudsMarch
+{
+    pass March
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 CloudsMarch_PS();
+    }
+}
+
+technique CloudsLight
+{
+    pass Light
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 CloudsLight_PS();
     }
 }
 
