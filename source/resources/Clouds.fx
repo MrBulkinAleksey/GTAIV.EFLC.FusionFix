@@ -20,10 +20,15 @@
 
 // Steps a ray may take in all, coarse and fine.
 #ifndef CLOUD_STEPS
-#define CLOUD_STEPS 128
+#define CLOUD_STEPS 192
 #endif
 // A coarse step in fine steps, and the fine steps in a row that must find no cloud to go coarse again.
 #define COARSE_STEP 4.0
+// A fine step's share of the distance further out. At a hundredth a cloud 15 km off was crossed in
+// 150 m steps: its light changed sharply from one to the next, the rows of pixels took their steps
+// at the same heights, and thin cloud came out in horizontal stripes. Half that needs CLOUD_STEPS 192
+// for the far clouds to be crossed at all.
+#define FAR_STEP 0.005
 #define FINE_MISSES 4.0
 #ifndef LIGHT_STEPS
 #define LIGHT_STEPS 5
@@ -359,13 +364,13 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
 
     // Empty sky is crossed in coarse steps that test the coverage alone; on finding cloud the ray
     // steps back and marches it in fine steps, a 24th of the layer's thickness near the camera and
-    // a hundredth of the distance further out, until FINE_MISSES fine steps in a row find none.
+    // a two hundredth of the distance further out, until FINE_MISSES fine steps in a row find none.
     // With even steps over the whole crossing a step near the horizon was 150 m long, and the
     // clouds came out smeared down the screen.
     // Each pixel starts up to a coarse step later: with the same coarse steps for every pixel,
     // thin cloud between two of them went missing in whole bands across the screen.
     float jitter = frac(PixelJitter(vpos) + fFrameJitter);
-    float t = t0 + max(vec4Layer.y / 24.0, t0 * 0.01) * COARSE_STEP * jitter;
+    float t = t0 + max(vec4Layer.y / 24.0, t0 * FAR_STEP) * COARSE_STEP * jitter;
     float fineLeft = 0.0;
     // Looking away from the sun, how much the powder effect darkens the sun's light (below).
     float powderView = full ? 0.35 - 0.35 * dot(dir, vec3SunDir) : 0.0;
@@ -376,7 +381,7 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
     {
         if (t >= t1 || sums.transmittance < 0.01)
             break;
-        float fine = max(vec4Layer.y / 24.0, t * 0.01);
+        float fine = max(vec4Layer.y / 24.0, t * FAR_STEP);
         float3 p = origin + dir * t;
         p.z += curve * t * t;
 
