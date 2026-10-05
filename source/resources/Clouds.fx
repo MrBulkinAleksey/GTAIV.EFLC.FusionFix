@@ -108,11 +108,12 @@ float PixelJitter(float2 pixel)
 }
 
 // Density 0 to 1 at p.
-// - The coverage map is Perlin-Worley noise: cellular, so clouds come out as round heaps with clear
-//   sky between them; plain value noise gave blurred blots that rose to points on its peaks.
-// - Cloud is where the map is above (1 - cover)^2.
-// - With height the density is lowered by up to a quarter and fades out over the top fifth, so a
-//   heap narrows towards a rounded top; at the base it is half as dense, which softens the bottom.
+// - The coverage map holds separate heaps spread evenly over the sky (CloudNoiseTex), equalised so
+//   that cloud, where the map is above 1 - cover, takes that share of the sky.
+// - The density across a heap is squared, soft at its edges, and at height h only what is above
+//   0.8 h^2 of it stays: the heap narrows to a dome over a flat base. Lowering the density by a
+//   quarter with height left the evenly spread heaps standing as pillars with walls. It fades out
+//   over the top seventh, and at the base it is half as dense, which softens the bottom.
 // - The detail erodes only near the edges, where the density is low: round Worley billows of about
 //   a sixteenth to a quarter of DetailScale, and a finer octave at about a fifth of that.
 // - Last a soft compressor, d (1 + k) / (1 + k d) with k from 3 at the base to 12 at the top, makes
@@ -165,7 +166,7 @@ bool MayBeCloud(float3 p)
         return false;
     float c = tex2Dlod(CoverageTex, float4(p.xy * vec4Layer.z + vec4Wind.xy, 0, 5)).r;
     float cover = saturate(max(vec4Layer.w, 0.02) * (1.0 + abs(vec4Morph.w)));
-    return c > (1.0 - cover) * (1.0 - cover) - 0.1;
+    return c > 0.9 - cover;
 }
 
 float Density(float3 p, bool detail, Place place)
@@ -198,9 +199,11 @@ float Density(float3 p, bool detail, Place place)
     float cover = saturate(max(vec4Layer.w, 0.02) * (1.0 + vec4Morph.w * weather));
     // Overcast: the map evens out towards a sheet.
     c = lerp(c, max(c, 1.0 - cover * 0.5), fStratus);
-    float threshold = (1.0 - cover) * (1.0 - cover);
-    float d = saturate((c - threshold) / max(1.0 - threshold, 0.01));
-    d = d * smoothstep(1.0, 0.8, h) - smoothstep(0.06, 0.95, h) * 0.25 * (1.0 - fStratus);
+    float threshold = 1.0 - cover;
+    float d = saturate((c - threshold) / max(cover, 0.01));
+    d *= d;
+    float dome = h * h * 0.8 * (1.0 - fStratus);
+    d = saturate((d - dome) / max(1.0 - dome, 0.05)) * smoothstep(1.0, 0.85, h);
     if (d <= 0.0)
         return 0.0;
 

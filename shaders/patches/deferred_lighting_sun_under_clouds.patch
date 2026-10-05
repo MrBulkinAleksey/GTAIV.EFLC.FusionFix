@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-index 97b5dab2..c144e05f 100644
+index 97b5dab2..7a8a6fe0 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 @@ -81,6 +81,10 @@
@@ -29,7 +29,7 @@ index 97b5dab2..c144e05f 100644
      dp3 r1.x, c14, r0.yzww
      add r1.xyz, -r1.x, -c54
      cmp r1.yzw, r1.xxyz, c3.x, c3.y
-@@ -461,6 +467,68 @@
+@@ -461,6 +467,67 @@
      add r28.w, c110.y, -r28.w // FusionFix: how much of the ambient indirect light leaves in place
      add r29.x, c110.y, -r29.x
      mul r0.y, r0.y, r29.x
@@ -37,7 +37,7 @@ index 97b5dab2..c144e05f 100644
 +    // --- the surface towards the sun meets the cloud deck, CloudShadowsHeight up or a third of the way up
 +    // --- the volumetric clouds' layer, and the sun's light is dimmed by the clouds' coverage there, worked
 +    // --- out as Clouds.fx's Density has it: the weather map's cover (c198.zw), the map read through the
-+    // --- slow morph (c199.zw), saturate((n - t) / (1 - t)) with t = (1 - cover)^2, less 0.05 for the
++    // --- slow morph (c199.zw), saturate((n - t) / (1 - t)) with t = 1 - cover, less 0.05 for the
 +    // --- height, its soft compressor taken as a power of 0.4; c199.x forces full cover (debug).
 +    mov r15.x, c197.y
 +    if_lt c158.z, r15.x
@@ -60,8 +60,7 @@ index 97b5dab2..c144e05f 100644
 +      mul r12.x, r12.x, c198.w
 +      add r12.x, r12.x, c158.x
 +      mul_sat r12.x, r12.x, c198.z
-+      add r12.x, -r12.x, c158.x
-+      mul r12.x, r12.x, r12.x // t
++      add r12.x, -r12.x, c158.x // t
 +      add r12.y, -r12.x, c158.x
 +      max r12.y, r12.y, c158.y
 +      rcp r12.y, r12.y
@@ -99,7 +98,7 @@ index 97b5dab2..c144e05f 100644
      mov r2.xyz, r31.xyz
      mad r1.xyz, v1, -r0.x, c1.w
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-index 4f2b2eb4..e2f6743c 100644
+index 4f2b2eb4..c05c5756 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 @@ -82,6 +82,10 @@
@@ -129,7 +128,7 @@ index 4f2b2eb4..e2f6743c 100644
      dp3 r1.x, c14, r0.yzww
      add r1.xyz, -r1.x, -c54
      cmp r1.yzw, r1.xxyz, c4.z, c4.w
-@@ -462,6 +468,68 @@
+@@ -462,6 +468,67 @@
      add r28.w, c110.y, -r28.w // FusionFix: how much of the ambient indirect light leaves in place
      add r29.x, c110.y, -r29.x
      mul r0.y, r0.y, r29.x
@@ -137,7 +136,7 @@ index 4f2b2eb4..e2f6743c 100644
 +    // --- the surface towards the sun meets the cloud deck, CloudShadowsHeight up or a third of the way up
 +    // --- the volumetric clouds' layer, and the sun's light is dimmed by the clouds' coverage there, worked
 +    // --- out as Clouds.fx's Density has it: the weather map's cover (c198.zw), the map read through the
-+    // --- slow morph (c199.zw), saturate((n - t) / (1 - t)) with t = (1 - cover)^2, less 0.05 for the
++    // --- slow morph (c199.zw), saturate((n - t) / (1 - t)) with t = 1 - cover, less 0.05 for the
 +    // --- height, its soft compressor taken as a power of 0.4; c199.x forces full cover (debug).
 +    mov r15.x, c197.y
 +    if_lt c158.z, r15.x
@@ -160,8 +159,7 @@ index 4f2b2eb4..e2f6743c 100644
 +      mul r12.x, r12.x, c198.w
 +      add r12.x, r12.x, c158.x
 +      mul_sat r12.x, r12.x, c198.z
-+      add r12.x, -r12.x, c158.x
-+      mul r12.x, r12.x, r12.x // t
++      add r12.x, -r12.x, c158.x // t
 +      add r12.y, -r12.x, c158.x
 +      max r12.y, r12.y, c158.y
 +      rcp r12.y, r12.y

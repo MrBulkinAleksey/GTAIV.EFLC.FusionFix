@@ -1471,11 +1471,17 @@ public:
     }
 };
 
-// The cloud deck's noise for the cloud shadows and the volumetric clouds: 1024 x 1024, tiling, six
-// octaves of value noise from four cells a tile up, each 0.6 of the one before, made Perlin-Worley
-// below and spread over 0..1. At 256 x 256 a texel of an 8 km tile spanned 31 m, and the quintic
-// filtering's flat texel middles showed as steps along the clouds' edges. Managed, so it
-// survives device resets.
+// The cloud deck's noise for the cloud shadows and the volumetric clouds: 1024 x 1024, tiling.
+// - Heaps: each of 4 x 4 cells a tile holds one heap at a random point, of a random radius, falling
+//   off from its middle; smaller heaps from 8 x 8 cells add to them. Perlin-Worley noise in its place
+//   joined the clouds into one network over half the sky, where real fair weather cumulus stand
+//   apart, spread evenly.
+// - The heaps are read through a warp of value noise, so their outlines wander, and a fine value
+//   noise roughens their edges.
+// - Equalised: each texel is its value's rank, so a share c of the map lies above 1 - c, and the
+//   clouds' and the shadows' cover is the share of the sky they take.
+// At 256 x 256 a texel of an 8 km tile spanned 31 m, and the quintic filtering's flat texel middles
+// showed as steps along the clouds' edges. Managed, so it survives device resets.
 IDirect3DTexture9* PostFxResource::CloudNoiseTex()
 {
     if (CloudNoiseTexture)
@@ -1485,72 +1491,70 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
         return nullptr;
 
     constexpr int size = 1024;
-    std::vector<float> value(size * size, 0.0f);
     auto lattice = [](int x, int y, int seed) {
         uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u + static_cast<uint32_t>(seed) * 2246822519u;
         h = (h ^ (h >> 13)) * 1274126177u;
         return static_cast<float>((h ^ (h >> 16)) & 0xffff) / 65535.0f;
     };
-    float amplitude = 1.0f;
-    for (int octave = 0, cells = 4; octave < 6; ++octave, cells *= 2, amplitude *= 0.6f)
-    {
-        const float cell = static_cast<float>(size) / cells;
-        for (int y = 0; y < size; ++y)
+    auto wrap = [](int i, int n) { return ((i % n) + n) % n; };
+    // Value noise of the given octaves from cells0 cells a tile, each half the one before, 0 to 1.
+    auto valueNoise = [&](int x, int y, int cells0, int octaves, int seed0) {
+        float sum = 0.0f, total = 0.0f, amplitude = 1.0f;
+        for (int octave = 0, cells = cells0; octave < octaves; ++octave, cells *= 2, amplitude *= 0.5f)
         {
-            for (int x = 0; x < size; ++x)
-            {
-                const float fx = x / cell, fy = y / cell;
-                const int x0 = static_cast<int>(fx), y0 = static_cast<int>(fy);
-                float tx = fx - x0, ty = fy - y0;
-                tx = tx * tx * (3.0f - 2.0f * tx);
-                ty = ty * ty * (3.0f - 2.0f * ty);
-                const int x1 = (x0 + 1) % cells, y1 = (y0 + 1) % cells;
-                const float a = lattice(x0, y0, octave), b = lattice(x1, y0, octave);
-                const float c = lattice(x0, y1, octave), d = lattice(x1, y1, octave);
-                value[y * size + x] += amplitude * ((a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * ty);
-            }
-        }
-    }
-    {
-        const auto [lo, hi] = std::minmax_element(value.begin(), value.end());
-        const float minValue = *lo, range = (std::max)(*hi - *lo, 1e-5f);
-        for (auto& v : value)
-            v = (v - minValue) / range;
-    }
-    // Perlin-Worley: the value noise remapped from (worley - 1, 1) to (0, 1), with three octaves of
-    // inverted Worley noise (1 at the cells' feature points) from four cells a tile up. The cells
-    // round the clouds into heaps with clear sky between them.
-    {
-        std::vector<float> worley(size * size, 0.0f);
-        const int cellCounts[3] = { 4, 8, 16 };
-        const float weights[3] = { 0.625f, 0.25f, 0.125f };
-        for (int octave = 0; octave < 3; ++octave)
-        {
-            const int cells = cellCounts[octave];
             const float cell = static_cast<float>(size) / cells;
-            for (int y = 0; y < size; ++y)
-                for (int x = 0; x < size; ++x)
-                {
-                    const float fx = (x + 0.5f) / cell, fy = (y + 0.5f) / cell;
-                    const int cx = static_cast<int>(fx), cy = static_cast<int>(fy);
-                    float nearest = 2.0f;
-                    for (int dy = -1; dy <= 1; ++dy)
-                        for (int dx = -1; dx <= 1; ++dx)
-                        {
-                            const int nx = cx + dx, ny = cy + dy;
-                            const int wx = (nx + cells) % cells, wy = (ny + cells) % cells;
-                            const float px = nx + lattice(wx, wy, 100 + octave), py = ny + lattice(wy, wx, 200 + octave);
-                            nearest = (std::min)(nearest, (px - fx) * (px - fx) + (py - fy) * (py - fy));
-                        }
-                    worley[y * size + x] += weights[octave] * (1.0f - std::clamp(std::sqrt(nearest), 0.0f, 1.0f));
-                }
+            const float fx = x / cell, fy = y / cell;
+            const int x0 = static_cast<int>(fx), y0 = static_cast<int>(fy);
+            float tx = fx - x0, ty = fy - y0;
+            tx = tx * tx * (3.0f - 2.0f * tx);
+            ty = ty * ty * (3.0f - 2.0f * ty);
+            const int x1 = (x0 + 1) % cells, y1 = (y0 + 1) % cells;
+            const int seed = seed0 + octave;
+            const float a = lattice(x0, y0, seed), b = lattice(x1, y0, seed);
+            const float c = lattice(x0, y1, seed), d = lattice(x1, y1, seed);
+            const float ab = a + (b - a) * tx, cd = c + (d - c) * tx;
+            sum += amplitude * (ab + (cd - ab) * ty);
+            total += amplitude;
         }
-        for (size_t i = 0; i < value.size(); ++i)
-            value[i] = (value[i] + 1.0f - worley[i]) / (std::max)(2.0f - worley[i], 1e-3f);
-        const auto [lo, hi] = std::minmax_element(value.begin(), value.end());
-        const float minValue = *lo, range = (std::max)(*hi - *lo, 1e-5f);
-        for (auto& v : value)
-            v = (v - minValue) / range;
+        return sum / total;
+    };
+    // The highest heap over the cells around (x, y): 1 at a heap's middle, 0 at its radius.
+    auto heaps = [&](float x, float y, int cells, int seed) {
+        const float cell = static_cast<float>(size) / cells;
+        const float fx = x / cell, fy = y / cell;
+        const int cx = static_cast<int>(std::floor(fx)), cy = static_cast<int>(std::floor(fy));
+        float best = 0.0f;
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx)
+            {
+                const int nx = cx + dx, ny = cy + dy;
+                const int wx = wrap(nx, cells), wy = wrap(ny, cells);
+                const float px = nx + 0.15f + 0.7f * lattice(wx, wy, seed), py = ny + 0.15f + 0.7f * lattice(wy, wx, seed + 1);
+                const float radius = 0.35f + 0.4f * lattice(wx, wy, seed + 2);
+                const float distance = std::sqrt((px - fx) * (px - fx) + (py - fy) * (py - fy));
+                best = (std::max)(best, std::clamp(1.0f - distance / radius, 0.0f, 1.0f));
+            }
+        return best;
+    };
+
+    constexpr int heapCells = 4;
+    const float warpReach = static_cast<float>(size) / heapCells * 0.6f;
+    std::vector<float> value(size * size, 0.0f);
+    for (int y = 0; y < size; ++y)
+        for (int x = 0; x < size; ++x)
+        {
+            const float wx = x + (valueNoise(x, y, 8, 3, 300) - 0.5f) * warpReach;
+            const float wy = y + (valueNoise(x, y, 8, 3, 310) - 0.5f) * warpReach;
+            value[y * size + x] = heaps(wx, wy, heapCells, 50) + 0.35f * heaps(wx, wy, heapCells * 2, 60) + 0.3f * valueNoise(x, y, 32, 4, 400);
+        }
+    {
+        std::vector<int> order(value.size());
+        for (size_t i = 0; i < order.size(); ++i)
+            order[i] = static_cast<int>(i);
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return value[a] < value[b]; });
+        const float last = static_cast<float>(order.size() - 1);
+        for (size_t rank = 0; rank < order.size(); ++rank)
+            value[order[rank]] = rank / last;
     }
 
     // 16 bits: the volumetric clouds stretch the coverage several times over near their edges, and
