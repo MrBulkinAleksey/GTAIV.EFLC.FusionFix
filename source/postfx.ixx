@@ -494,6 +494,12 @@ public:
     size_t CloudMoonPositionIdx = 0, CloudSkyColorIdx = 0;
     // The lit and shaded colours the clouds were last drawn with, and the sky's clamp, for the log.
     float CloudLastLit[3] = {}, CloudLastShade[3] = {}, CloudLastClamp[3] = {}, CloudLastCeiling = 0.0f, CloudLastLightStrength = 0.0f;
+    // The direction towards the game's own directional light (-c17, gDirectionalLight), taken in
+    // the lighting phase, and the frame it was taken; the sky's SunDirection the clouds used to be
+    // lit by came out mirrored across the sky. And the directions the clouds were last lit from.
+    float CloudLightDir[3] = {};
+    uint32_t nCloudLightFrame = 0;
+    float CloudLastSkySun[3] = {}, CloudLastUsedSun[3] = {};
     bool bCloudLastMoonlit = false;
     bool bCloudParamsRegistered = false;
     void RegisterCloudParams()
@@ -4175,6 +4181,15 @@ private:
         effect->SetVector("vec4WorldY", &worldY);
         effect->SetVector("vec4WorldZ", &worldZ);
 
+        if (!reflection)
+            std::memcpy(R.CloudLastSkySun, &sun.x, sizeof(R.CloudLastSkySun));
+        // By day the game's own directional light, taken in the lighting phase of this frame or the
+        // last: the sky's SunDirection, remapped from its y up space, lit the clouds from the
+        // mirror image of the sun across the sky, their far sides lit and the near ones dark.
+        if (!moonlit && R.nCloudLightFrame && FrameHistory::Frame() - R.nCloudLightFrame <= 2 && R.CloudLightDir[2] > 0.0f)
+            sun = D3DXVECTOR4(R.CloudLightDir[0], R.CloudLightDir[1], R.CloudLightDir[2], 0.0f);
+        if (!reflection)
+            std::memcpy(R.CloudLastUsedSun, &sun.x, sizeof(R.CloudLastUsedSun));
         // VolumetricCloudsDebug 15: the sun straight overhead, to test the sun's direction.
         if (R.nVolumetricCloudsDebug == 15)
             sun = D3DXVECTOR4(0.0f, 0.0f, 1.0f, 0.0f);
@@ -5019,6 +5034,9 @@ private:
                 const auto& sky = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
                 const auto& moon = rage::grmShaderInfo::getShaderParamData(R.CloudMoonPositionIdx);
                 const float* k = R.CloudShadowConsts;
+                fprintf(log, "  clouds lit from %.3f %.3f %.3f; the sky's sun %.3f %.3f %.3f; the game's light %.3f %.3f %.3f (frame %u, now %u)\n",
+                        R.CloudLastUsedSun[0], R.CloudLastUsedSun[1], R.CloudLastUsedSun[2], R.CloudLastSkySun[0], R.CloudLastSkySun[1],
+                        R.CloudLastSkySun[2], R.CloudLightDir[0], R.CloudLightDir[1], R.CloudLightDir[2], R.nCloudLightFrame, FrameHistory::Frame());
                 fprintf(log, "  clouds: density %.4f, absorption %.2f x %.2f, translucency %.2f, detail %.2f, shade %.2f, sky match %.2f x %.2f\n",
                         R.fVolumetricCloudsDensity * R.Cloud.density, R.fVolumetricCloudsAbsorption, R.Cloud.absorption,
                         R.fVolumetricCloudsTranslucency * R.Cloud.translucency, R.fVolumetricCloudsDetail * R.Cloud.detail,
@@ -6086,6 +6104,21 @@ public:
     static void BindLightingInputs(IDirect3DDevice9* pDevice)
     {
         auto& R = PostFxResources;
+        // gDirectionalLight is a RAGE global, the same register in every shader: the direction the
+        // sun's (or moon's) light travels. The clouds take the reverse of it.
+        {
+            float light[4] = {};
+            if (SUCCEEDED(pDevice->GetPixelShaderConstantF(17, light, 1)))
+            {
+                const float len = std::sqrt(light[0] * light[0] + light[1] * light[1] + light[2] * light[2]);
+                if (len > 0.9f && len < 1.1f)
+                {
+                    for (int i = 0; i < 3; ++i)
+                        R.CloudLightDir[i] = -light[i] / len;
+                    R.nCloudLightFrame = FrameHistory::Frame();
+                }
+            }
+        }
         // s9 is read by no game shader, and the car glass takes it over right after lighting.
         if (R.bContactValid && R.ContactResult)
         {
