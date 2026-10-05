@@ -1344,7 +1344,7 @@ public:
         fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
         fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.25f), 0.0f, 2.0f);
         fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.4f), 0.05f, 3.0f);
-        nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 11);
+        nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 15);
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
         fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
     }
@@ -4175,6 +4175,9 @@ private:
         effect->SetVector("vec4WorldY", &worldY);
         effect->SetVector("vec4WorldZ", &worldZ);
 
+        // VolumetricCloudsDebug 15: the sun straight overhead, to test the sun's direction.
+        if (R.nVolumetricCloudsDebug == 15)
+            sun = D3DXVECTOR4(0.0f, 0.0f, 1.0f, 0.0f);
         effect->SetFloatArray("vec3SunDir", &sun.x, 3);
         float litColour[3], shadeColour[3], sunsetLit[3];
         for (int i = 0; i < 3; ++i)

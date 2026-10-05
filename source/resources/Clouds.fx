@@ -463,7 +463,9 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             // At the light's strength: past dusk, before the moon takes over, the edges glowed as if
             // the sun were still up; by night the glow follows the moon.
             sums.glow += weight * thin * exp(-tau) * fLightStrength;
-            sums.top += weight * sun * smoothstep(0.5, 1.0, h);
+            // VolumetricCloudsDebug 12 takes the tops' sum for the cloud the light's march found towards
+            // the sun, in thicknesses of the layer at full density.
+            sums.top += weight * (full && fDebug == 12.0 ? saturate(lightDepth / vec4Layer.y) : sun * smoothstep(0.5, 1.0, h));
             sums.height += weight * h;
             sums.transmittance *= stepTransmittance;
         }
@@ -586,8 +588,10 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
 
         // VolumetricCloudsDebug: 2 the clouds grey at the sky they are matched to; 3 to 10 one term of
         // their light alone, at the brightness it adds (3 shade and sun, 4 silver lining, 5 sunset
-        // colour, 6 glow, 7 sun power, 8 tops, 9 rim against the sun, 10 haze); 11 the share of the
-        // sun reaching inside, in colours (SunScale).
+        // colour, 6 glow, 7 sun power, 8 tops, 9 rim against the sun, 10 haze); in colours
+        // (SunScale): 11 the share of the sun reaching inside, 12 the cloud the light's march found
+        // towards the sun in layer thicknesses, 13 the extinction per metre times 10, 14 the
+        // absorption; 15 as 11 with the sun straight overhead.
         [branch]
         if (fDebug >= 2.0)
         {
@@ -601,7 +605,10 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
                          : fDebug == 8.0 ? termTop * lightMul * haze
                          : fDebug == 9.0 ? termRim * haze
                          : fDebug == 10.0 ? termHaze
-                         : SunScale(sums.sun / cover) * skyLuma * cover;
+                         : fDebug == 11.0 || fDebug == 15.0 ? SunScale(sums.sun / cover) * skyLuma * cover
+                         : fDebug == 12.0 ? SunScale(sums.top / cover) * skyLuma * cover
+                         : fDebug == 13.0 ? SunScale(vec4Shape.x * 10.0) * skyLuma * cover
+                         : SunScale(fLightAbsorption) * skyLuma * cover;
             return float4(shown, 1.0 - cover);
         }
         return float4(colour * haze + termHaze, 1.0 - cover);
