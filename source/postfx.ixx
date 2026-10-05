@@ -400,6 +400,9 @@ public:
     // clouds' shaded side takes the hue of the sky above it.
     float fVolumetricCloudsMoonlight = 0.2f;
     float fVolumetricCloudsSkyLight = 0.35f;
+    // The least of the sun's light any part of a cloud keeps, however deep in its shadow: lighter,
+    // airier bases than the light's march alone gives.
+    float fVolumetricCloudsMinLight = 0.3f;
     // The clouds' sunlit side against the sky behind them, in times its brightness.
     float fVolumetricCloudsSkyMatch = 1.8f;
     bool bVolumetricCloudsWeather = true;
@@ -1342,6 +1345,7 @@ public:
         fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.3f), 0.0f, 1.0f);
         fVolumetricCloudsMoonlight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMoonlight", 0.2f), 0.0f, 2.0f);
         fVolumetricCloudsSkyLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyLight", 0.35f), 0.0f, 1.0f);
+        fVolumetricCloudsMinLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMinLight", 0.3f), 0.0f, 0.9f);
         fVolumetricCloudsSkyMatch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyMatch", 1.8f), 0.0f, 20.0f);
         bVolumetricCloudsWeather = iniReader.ReadInteger("POSTFX", "VolumetricCloudsWeather", 1) != 0;
         fVolumetricCloudsVanilla = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsVanilla", 0.0f), 0.0f, 1.0f);
@@ -4268,6 +4272,7 @@ private:
             effect->SetFloat("fSkyMatch", canReadScene && litLuma > 1e-4f ? R.fVolumetricCloudsSkyMatch * R.Cloud.skyMatch / litLuma : 0.0f);
         }
         effect->SetFloat("fLightStrength", lightStrength);
+        effect->SetFloat("fMinLight", R.fVolumetricCloudsMinLight);
         // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
         // towards white by VolumetricCloudsSunTint. The moon's is a cool white.
         {

@@ -68,6 +68,7 @@ float3 vec3LitColour;     // the game's cloud colour, exposed
 float3 vec3ShadeColour;   // the game's cloud colour darkened by VolumetricCloudsShade, exposed
 float3 vec3SunsetColour;  // the game's sunset colour, exposed
 float fSilver;            // the game's CloudInscatteringRange: the brightening along the sun's axis
+float fMinLight;          // VolumetricCloudsMinLight: the least of the sun's light any part of a cloud keeps
 float fLightStrength;     // the sun's light, fading out below the horizon, or the moon's once it has handed over
 float fCeiling;
 // VolumetricCloudsSkyMatch, how many times brighter than the sky behind them the clouds' sunlit side
@@ -439,7 +440,9 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             // shade and the clouds an even grey; at 0.2 the thin fair weather clouds, a few hundred
             // metres thick, let the sun through nearly whole and came out flat; 0.4 keeps both.
             float tau = lightDepth * sigma * fLightAbsorption;
-            float sun = (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) * (fLightStrength / 1.75);
+            // Never below VolumetricCloudsMinLight of the sun, however deep in the cloud: for looks, the
+            // bases and the shaded sides stay light and airy rather than heavy.
+            float sun = lerp(fMinLight, 1.0, (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) / 1.75) * fLightStrength;
             // The billows shade each other: where a coarse billow stands a billow's size, 120 m,
             // towards the sun, the sample takes less of it, by its own density. The march above
             // leaves the detail out, and its first steps are too short for a billow to shade the
