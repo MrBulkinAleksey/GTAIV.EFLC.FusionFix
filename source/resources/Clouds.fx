@@ -112,9 +112,12 @@ float PixelJitter(float2 pixel)
 // - The coverage map holds separate heaps spread evenly over the sky (CloudNoiseTex), equalised so
 //   that cloud, where the map is above 1 - cover, takes that share of the sky.
 // - The density across a heap is squared, soft at its edges, and at height h only what is above
-//   0.8 h^2 of it stays: the heap narrows to a dome over a flat base. Lowering the density by a
-//   quarter with height left the evenly spread heaps standing as pillars with walls. It fades out
-//   over the top seventh, and at the base it is half as dense, which softens the bottom.
+//   0.9 h of it stays: the heap narrows from its flat base up to a dome, and a weaker heap stops
+//   lower, so heaps differ in height as they do in size. Lowering the density by a quarter with
+//   height left the evenly spread heaps standing as pillars with walls, and 0.8 h^2 still ran each
+//   one up the layer's whole thickness with flat sides. An overcast sheet, (1 - stratus)^2, keeps
+//   most of its depth. It fades out over the top seventh, and at the base it is half as dense,
+//   which softens the bottom.
 // - The detail erodes only near the edges, where the density is low: round Worley billows of about
 //   a sixteenth to a quarter of DetailScale, and a finer octave at about a fifth of that.
 // - Last a soft compressor, d (1 + k) / (1 + k d) with k from 3 at the base to 12 at the top, makes
@@ -203,7 +206,7 @@ float Density(float3 p, bool detail, Place place)
     float threshold = 1.0 - cover;
     float d = saturate((c - threshold) / max(cover, 0.01));
     d *= d;
-    float dome = h * h * 0.8 * (1.0 - fStratus);
+    float dome = h * 0.9 * (1.0 - fStratus) * (1.0 - fStratus);
     d = saturate((d - dome) / max(1.0 - dome, 0.05)) * smoothstep(1.0, 0.85, h);
     if (d <= 0.0)
         return 0.0;

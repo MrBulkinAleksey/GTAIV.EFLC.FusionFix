@@ -389,7 +389,7 @@ public:
     float fVolumetricCloudsBase = 800.0f;
     float fVolumetricCloudsThickness = 600.0f;
     float fVolumetricCloudsDensity = 0.03f;
-    float fVolumetricCloudsDetail = 0.5f;
+    float fVolumetricCloudsDetail = 0.8f;
     float fVolumetricCloudsDetailScale = 1100.0f;
     float fVolumetricCloudsHaze = 25000.0f;
     float fVolumetricCloudsMaxDistance = 40000.0f;
@@ -1304,7 +1304,7 @@ public:
         fVolumetricCloudsBase = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBase", 800.0f), 50.0f, 10000.0f);
         fVolumetricCloudsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsThickness", 600.0f), 50.0f, 5000.0f);
         fVolumetricCloudsDensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDensity", 0.03f), 0.0005f, 1.0f);
-        fVolumetricCloudsDetail = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetail", 0.5f), 0.0f, 1.0f);
+        fVolumetricCloudsDetail = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetail", 0.8f), 0.0f, 1.0f);
         fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 1100.0f), 20.0f, 10000.0f);
         fVolumetricCloudsHaze = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsHaze", 25000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
