@@ -456,7 +456,9 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             float stepTransmittance = exp(-d * lerp(1.0 - fTranslucency, 1.0, d) * sigma * fine);
             float weight = sums.transmittance * (1.0 - stepTransmittance);
             sums.sun += weight * sun;
-            sums.shade += weight * (1.0 - sun) * lerp(0.55, 1.0, sqrt(h));
+            // A fifth darker at the base: at nearly half darker, on top of the real shadow the light's
+            // march gives since it works, the bases overhead came out near black.
+            sums.shade += weight * (1.0 - sun) * lerp(0.8, 1.0, sqrt(h));
             // The silver lining is the thin edges' alone: with a third of it on the thick body, a cloud
             // before the sun in game came out half again as bright as its own light.
             sums.silver += weight * sun * thin * thin;
@@ -541,9 +543,6 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         // The undersides darkened by the sky the cloud above them hides, by the cloud's height in the
         // layer alone, whatever the sun does: up to 15% at the base, none from two thirds up.
         shadeMul = 1.0 - 0.15 * (1.0 - smoothstep(0.0, 0.65, sums.height / cover));
-        // Seen from below, a cloud's base is darker still: up to 30% more looking straight up at the
-        // bottom third of it. The bases overhead came out as light as the sides.
-        shadeMul *= 1.0 - 0.3 * saturate(dir.z * 2.0) * (1.0 - smoothstep(0.0, 0.35, sums.height / cover));
     }
     float3 colour = (termBase + termSilver + termSunset + termGlow + termSunPower + termTop) * shadeMul;
 
