@@ -244,6 +244,9 @@ Specular Anti-Aliasing
 [VolumetricLight]
 Volumetric Light
 
+[VolumeClouds]
+Volumetric Clouds
+
 [Zoomed Movement]
 ズーム中の移動を許可
 

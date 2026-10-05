@@ -1975,11 +1975,27 @@ export namespace rage
     public:
         static inline std::vector<std::pair<std::string, std::pair<std::string, int>>> ShaderParamNames;
         static inline std::vector<std::array<float, 4>> ShaderParamData;
+        // What setShaderParam passes on instead of the game's value, value * mul + add per component,
+        // for registered parameters whose override is on; the game's value is still what
+        // getShaderParamData returns.
+        struct ShaderParamOverride
+        {
+            bool on = false;
+            std::array<float, 4> mul = { 1.0f, 1.0f, 1.0f, 1.0f };
+            std::array<float, 4> add = {};
+        };
+        static inline std::vector<ShaderParamOverride> ShaderParamOverrides;
 
         static inline size_t registerShaderParam(const char* shader, const char* param)
         {
+            // setShaderParam fills only the first entry that matches, so a second registration of
+            // the same parameter would stay zero: hand out the first one's index instead.
+            for (size_t i = 0; i < ShaderParamNames.size(); ++i)
+                if (ShaderParamNames[i].first == shader && ShaderParamNames[i].second.first == param)
+                    return i;
             ShaderParamNames.emplace_back(shader, std::make_pair(param, -1));
             ShaderParamData.emplace_back(); // zero-initialized
+            ShaderParamOverrides.emplace_back();
             return ShaderParamNames.size() - 1;
         }
 
@@ -1991,6 +2007,11 @@ export namespace rage
         static inline decltype(ShaderParamData)::value_type& getShaderParamData(size_t idx)
         {
             return ShaderParamData[idx];
+        }
+
+        static inline ShaderParamOverride& getShaderParamOverride(size_t idx)
+        {
+            return ShaderParamOverrides[idx];
         }
 
         static inline int(__cdecl* getGlobalParameterIndexByName)(const char* a1) = nullptr;
@@ -2007,15 +2028,28 @@ export namespace rage
 
                 auto it = std::find_if(ShaderParamNames.begin(), ShaderParamNames.end(), [&](auto& pair)
                 {
+                    // The index is looked up in the registered shader itself: a parameter of the same
+                    // name in another shader (SunDirection in the water, for one) sits at another index.
+                    if (shader_name != pair.first)
+                        return false;
                     int& cachedIdx = pair.second.second;
                     if (cachedIdx <= 0) cachedIdx = getParamIndex(_this, edx, pair.second.first.c_str(), 1);
-                    return index == cachedIdx && shader_name == pair.first;
+                    return index == cachedIdx;
                 });
 
                 if (it != ShaderParamNames.end())
                 {
                     size_t idx = std::distance(ShaderParamNames.begin(), it);
                     setShaderParamData(idx, pDataArr, nArrSize);
+                    const auto& over = ShaderParamOverrides[idx];
+                    if (over.on)
+                    {
+                        std::array<float, 4> value = ShaderParamData[idx];
+                        for (size_t i = 0; i < value.size(); ++i)
+                            value[i] = value[i] * over.mul[i] + over.add[i];
+                        shsub_436D70.unsafe_fastcall(_this, edx, a2, index, value.data(), nArrSize, a6, a7);
+                        return;
+                    }
                 }
             }
             shsub_436D70.unsafe_fastcall(_this, edx, a2, index, pDataArr, nArrSize, a6, a7);

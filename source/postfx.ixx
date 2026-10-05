@@ -3,11 +3,13 @@ module;
 #include <common.hxx>
 #include <d3dx9tex.h>
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <random>
 
 export module postfx;
 
@@ -47,6 +49,7 @@ import temporal;
 #define IDR_AO_FX                                133
 #define IDR_SSR_FX                               136
 #define IDR_CAS                                  137
+#define IDR_CLOUDS_FX                            138
 
 #define IDR_SSDraw_PS_compiled                   2127
 #define IDR_SSPrepass_PS_compiled                2128
@@ -346,6 +349,182 @@ public:
     // stay close: past where green and blue end only red is lit, and with 0.5, 0.2 and 0.1 that
     // band reached a fifth of full light and turned the dark side of faces red.
     float fSkinLighting = 1.0f;
+    // Materials with no specular map (c197.x; deferred_lighting_sun_sheen.patch) write no specular
+    // intensity, so buildings and LOD roads got neither the sun's highlight nor the sky's
+    // reflection. The sun pass gives them half this much of one, as if the G-buffer held it,
+    // times the square of one less their colour's saturation and faded out on dark colours.
+    // They are told apart by the gloss 258 / 1023 they write (world_no_specular_mark.patch).
+    float fSpecularSheen = 0.1f;
+    // Cloud shadows on the ground (c197.y-w, c198, c199, s12; deferred_lighting_sun_under_clouds.patch):
+    // the ray from a surface towards the sun meets a cloud deck CloudShadowsHeight up, and the sun is
+    // dimmed by up to CloudShadows where the clouds cover it there. The sky's clouds are on a dome
+    // at infinity and cannot cast a real shadow, so the deck has its own noise, CloudShadowsScale
+    // metres a tile, drifting CloudShadowsWind metres a second; its coverage is the game's own
+    // cloud threshold, bias and thickness, so it follows the weather and the timecycle.
+    float fCloudShadows = 0.6f;
+    float fCloudShadowsHeight = 1200.0f;
+    float fCloudShadowsScale = 16000.0f;
+    float fCloudShadowsWind = 6.0f;
+    float fCloudShadowsSoftness = 3.0f;
+    // Added to the deck's coverage before the game's thickness curve: above 0 more of the sky
+    // casts a shadow, below 0 less.
+    float fCloudShadowsCoverage = 0.0f;
+    // CloudShadowsDebug: 1 the whole ground in cloud shadow, to see whether the shadows reach the
+    // sun light at all; 2 the raw noise as the coverage, to see whether the sun reads the noise.
+    int nCloudShadowsDebug = 0;
+    float CloudShadowConsts[12] = {};
+    // The game's cloud values the last lighting pass used, for the log Ctrl+Shift+F10 writes.
+    float fCloudLastThreshold = 0.0f, fCloudLastBias = 0.0f, fCloudLastThickness = 0.0f;
+    bool bCloudLastFromGame = false;
+    // The cloud deck's noise offset the lighting pass drifted it to this frame (c198.xy), which the
+    // volumetric clouds take too, so each shadow lies under its cloud.
+    float fCloudWindX = 0.0f, fCloudWindY = 0.0f;
+    double fCloudSeconds = 0.0;
+
+    // Volumetric clouds (Clouds.fx, RenderVolumetricClouds): one layer, VolumetricCloudsBase metres
+    // up and VolumetricCloudsThickness deep, marched before the fog pass. Its coverage is the cloud
+    // shadows' noise at their scale and wind, so while they are on the shadows follow these clouds
+    // instead of the game's threshold and bias. Colours come from the game's own clouds.
+    bool bVolumetricClouds = true;
+    float fVolumetricCloudsCoverage = 0.4f;
+    float fVolumetricCloudsBase = 800.0f;
+    float fVolumetricCloudsThickness = 600.0f;
+    float fVolumetricCloudsDensity = 0.03f;
+    float fVolumetricCloudsDetail = 0.8f;
+    float fVolumetricCloudsDetailScale = 1100.0f;
+    float fVolumetricCloudsHaze = 25000.0f;
+    float fVolumetricCloudsMaxDistance = 40000.0f;
+    float fVolumetricCloudsBrightness = 1.0f;
+    float fVolumetricCloudsSunTint = 0.3f;
+    // The moon's light on the clouds once the sun is down, against the sun's; and how much the
+    // clouds' shaded side takes the hue of the sky above it.
+    float fVolumetricCloudsMoonlight = 0.2f;
+    float fVolumetricCloudsSkyLight = 0.35f;
+    // The least of the sun's light any part of a cloud keeps, however deep in its shadow: lighter,
+    // airier bases than the light's march alone gives.
+    float fVolumetricCloudsMinLight = 0.3f;
+    // The clouds' sunlit side against the sky behind them, in times its brightness.
+    float fVolumetricCloudsSkyMatch = 1.8f;
+    bool bVolumetricCloudsWeather = true;
+    float fVolumetricCloudsVanilla = 0.0f;
+    float fVolumetricCloudsTranslucency = 0.3f;
+    float fVolumetricCloudsEvolution = 1.0f;
+    float fVolumetricCloudsSaturation = 1.0f;
+    // The shaded side and the bases against the game's cloud colour, and how much of the view's
+    // extinction the sun's light takes inside a cloud: the clouds' contrast.
+    float fVolumetricCloudsShade = 0.6f;
+    float fVolumetricCloudsAbsorption = 0.4f;
+    int nVolumetricCloudsDebug = 0;
+    // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
+    bool bVolumetricCloudsReflections = true;
+    float fVolumetricCloudsReflectionBrightness = 1.0f;
+
+    // The cloud layer this frame (UpdateCloudLayer): from the weather's preset, blended through the
+    // game's weather change, or from the VolumetricClouds* settings with VolumetricCloudsWeather 0.
+    struct CloudLayer
+    {
+        float coverage, base, thickness, density, stratus, wind;
+        // Against VolumetricCloudsAbsorption, VolumetricCloudsTranslucency and VolumetricCloudsDetail;
+        // and the glow's strength around the sun.
+        float absorption, translucency, detail, glow;
+        // How much brighter the cloud near the sun in the sky is, all of it, the thick middle too.
+        float sunPower;
+        // How fast the clouds reshape, against VolumetricCloudsEvolution, and how round their bases'
+        // edges are.
+        float evolution, baseRound;
+        // The clouds' brightness against VolumetricCloudsSkyMatch: overcast clouds are grey, not
+        // brighter than the sky.
+        float skyMatch;
+    };
+    CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f };
+    // How far the wind has carried the coverage and the detail, in tiles, and how far the detail
+    // has drifted up through itself; summed frame by frame, as the wind changes with the weather.
+    double fCloudDrift = 0.0, fCloudDetailDrift = 0.0, fCloudEvolution = 0.0, fCloudLastSeconds = -1.0;
+    // The coverage map's slow morph (Clouds.fx's Morph): its phase in radians, which moves on by
+    // VolumetricCloudsEvolution at 0.03 a second, kept within 10 pi, where both its waves repeat.
+    double fCloudMorph = 0.0;
+    bool bCloudDriftSeeded = false;
+    float CloudMorphPhase() const { return static_cast<float>(fCloudMorph); }
+    // The morph swings the map by up to this many metres; the weather map, read 12.5 times larger
+    // than the coverage map, moves the cover by up to this share either way and the heaps' height
+    // by a quarter.
+    static constexpr float kCloudMorphReach = 250.0f;
+    // The volumetric clouds' sunlit side against the game's CloudColor, which is the middle of its
+    // own clouds' range: the shaded side is VolumetricCloudsShade of it, and most of what the eye
+    // sees of a cloud lies in between.
+    static constexpr float kCloudLitGain = 1.6f;
+    static constexpr float kCloudWeatherReach = 0.45f;
+    static constexpr float kCloudWeatherScale = 0.08f;
+    void UpdateCloudLayer(double seconds);
+    ID3DXEffect* CloudsEffect = nullptr;
+    // The clouds at half the render size: [0] this frame's march, [1] and [2] the accumulation,
+    // which swap every frame; nCloudAccumIndex picks last frame's ([1 + index]).
+    rage::grcRenderTargetPC* CloudTex[3] = {};
+    IDirect3DSurface9* CloudSurf[3] = {};
+    // The sky's brightness this frame, 1 x 1, which the clouds are matched to (CloudsSkyRef).
+    rage::grcRenderTargetPC* CloudSkyRefTex = nullptr;
+    IDirect3DSurface9* CloudSkyRefSurf = nullptr;
+    // The march's sums at half size, which CloudsLight lights: (transmittance, sun, shade, silver)
+    // and (glow, first hit).
+    rage::grcRenderTargetPC* CloudMarchTex[2] = {};
+    IDirect3DSurface9* CloudMarchSurf[2] = {};
+    int nCloudAccumIndex = 0;
+    uint32_t nCloudAccumFrame = 0; // FrameHistory::Frame() of the accumulation, 0 if none
+    IDirect3DVolumeTexture9* CloudDetailTexture = nullptr;
+    IDirect3DVolumeTexture9* CloudDetailTex();
+    // Volumetric Clouds in the graphics menu (PREF_VOLUMETRIC_CLOUDS, the same VolumetricClouds key)
+    // turns them on and off at once; the game's flat clouds and the cloud shadows follow.
+    bool VolumetricCloudsEnabled() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_VOLUMETRIC_CLOUDS");
+        return p ? p->get() != 0 : bVolumetricClouds;
+    }
+    bool VolumetricCloudsOn() const { return VolumetricCloudsEnabled() && CloudsEffect != nullptr; }
+    // Why the last frame drew no volumetric clouds, or that it did, for the Ctrl+Shift+F10 log.
+    const char* szCloudsStatus = "not run yet";
+    HRESULT hrCloudsEffect = S_OK;
+    IDirect3DTexture9* CloudNoiseTexture = nullptr;
+    IDirect3DTexture9* CloudNoiseTex();
+    bool bCloudNoiseBound = false;
+    bool bCloudNoiseSurvived = false;
+    // s12's SRGBTEXTURE, MAXMIPLEVEL, MINFILTER and MIPMAPLODBIAS before the shadows set theirs, for the log.
+    DWORD CloudSamplerBefore[4] = {};
+    // The game's cloud parameters the cloud shadows take, registered at start (RegisterCloudParams):
+    // registering while drawing would grow the list the shader parameter hook may be reading.
+    size_t CloudThresholdIdx = 0, CloudBiasIdx = 0, CloudThicknessIdx = 0;
+    size_t CloudColorIdx = 0, CloudExposureIdx = 0, CloudSunDirectionIdx = 0;
+    size_t SunsetColorIdx = 0, CloudInscatteringIdx = 0, CloudSunColorIdx = 0, CloudExposureClampIdx = 0;
+    size_t CloudMoonPositionIdx = 0, CloudSkyColorIdx = 0;
+    // The lit and shaded colours the clouds were last drawn with, and the sky's clamp, for the log.
+    float CloudLastLit[3] = {}, CloudLastShade[3] = {}, CloudLastClamp[3] = {}, CloudLastCeiling = 0.0f, CloudLastLightStrength = 0.0f;
+    // The direction towards the game's own directional light (-c17, gDirectionalLight), taken in
+    // the lighting phase, and the frame it was taken; the sky's SunDirection the clouds used to be
+    // lit by came out mirrored across the sky. And the directions the clouds were last lit from.
+    float CloudLightDir[3] = {};
+    uint32_t nCloudLightFrame = 0;
+    float CloudLastSkySun[3] = {}, CloudLastUsedSun[3] = {};
+    // Which horizontal axes of the sky's directions run opposite to the world's, learnt by day from
+    // the sun against the game's light, and put on the moon at night: the sky's MoonPosition goes
+    // through the same remap as its SunDirection, which came out mirrored.
+    float CloudSkyAxisSign[2] = { 1.0f, 1.0f };
+    bool bCloudLastMoonlit = false;
+    bool bCloudParamsRegistered = false;
+    void RegisterCloudParams()
+    {
+        CloudThresholdIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudThreshold");
+        CloudBiasIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudBias");
+        CloudThicknessIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudThicknessEdgeSmoothDetailScaleStrength");
+        CloudColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudColor");
+        SunsetColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunsetColor");
+        CloudInscatteringIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "CloudInscatteringRange");
+        CloudSunColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunColor");
+        CloudExposureClampIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "HDRExposureClamp");
+        CloudExposureIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "HDRExposure");
+        CloudSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
+        CloudMoonPositionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "MoonPosition");
+        CloudSkyColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SkyColor");
+        bCloudParamsRegistered = true;
+    }
     static constexpr int kSkinDebugMode = 9;
     rage::grcRenderTargetPC* mMaterialIdRT = nullptr;
     rage::grcRenderTargetPC* SkinLightTex[2] = {};
@@ -1017,6 +1196,24 @@ public:
             }
         }
 
+        // Not in ShadersFinishedLoading: without it the sky keeps only the game's clouds. Tried once,
+        // so a build error shows one message, not one a frame.
+        static bool cloudsEffectTried = false;
+        if (!CloudsEffect && !cloudsEffectTried)
+        {
+            cloudsEffectTried = true;
+            ID3DXBuffer* errors = nullptr;
+            hrCloudsEffect = D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
+                hm, MAKEINTRESOURCEW(IDR_CLOUDS_FX), nullptr, nullptr, 0, nullptr, &CloudsEffect, &errors);
+            if (hrCloudsEffect != S_OK)
+            {
+                CloudsEffect = nullptr;
+                if (errors)
+                    MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
+            }
+            SAFE_RELEASE(errors);
+        }
+
         TemporalAA::LoadShaders(pDevice);
 
         return ShadersFinishedLoading();
@@ -1126,6 +1323,46 @@ public:
         return false;
     }
 
+    // The settings used afresh every frame, which Ctrl+Shift+F10 reads again from the ini while the
+    // game runs (TickIniReload). Anything that sizes targets or builds shaders stays in Readini.
+    void ReadLiveIni(CIniReader& iniReader)
+    {
+        fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
+        fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 50.0f);
+        fCloudShadows = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadows", 0.6f), 0.0f, 1.0f);
+        fCloudShadowsHeight = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsHeight", 1200.0f), 100.0f, 10000.0f);
+        fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 16000.0f), 100.0f, 50000.0f);
+        fCloudShadowsWind = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsWind", 6.0f), 0.0f, 100.0f);
+        fCloudShadowsSoftness = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsSoftness", 3.0f), 0.0f, 8.0f);
+        fCloudShadowsCoverage = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsCoverage", 0.0f), -1.0f, 1.0f);
+        nCloudShadowsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "CloudShadowsDebug", 0), 0, 2);
+        bVolumetricClouds = iniReader.ReadInteger("POSTFX", "VolumetricClouds", 1) != 0;
+        fVolumetricCloudsCoverage = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsCoverage", 0.4f), 0.0f, 1.0f);
+        fVolumetricCloudsBase = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBase", 800.0f), 50.0f, 10000.0f);
+        fVolumetricCloudsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsThickness", 600.0f), 50.0f, 5000.0f);
+        fVolumetricCloudsDensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDensity", 0.03f), 0.0005f, 1.0f);
+        fVolumetricCloudsDetail = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetail", 0.8f), 0.0f, 1.0f);
+        fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 1100.0f), 20.0f, 10000.0f);
+        fVolumetricCloudsHaze = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsHaze", 25000.0f), 1000.0f, 200000.0f);
+        fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
+        fVolumetricCloudsBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBrightness", 1.0f), 0.0f, 4.0f);
+        fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.3f), 0.0f, 1.0f);
+        fVolumetricCloudsMoonlight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMoonlight", 0.2f), 0.0f, 2.0f);
+        fVolumetricCloudsSkyLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyLight", 0.35f), 0.0f, 1.0f);
+        fVolumetricCloudsMinLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMinLight", 0.3f), 0.0f, 0.9f);
+        fVolumetricCloudsSkyMatch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyMatch", 1.8f), 0.0f, 20.0f);
+        bVolumetricCloudsWeather = iniReader.ReadInteger("POSTFX", "VolumetricCloudsWeather", 1) != 0;
+        fVolumetricCloudsVanilla = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsVanilla", 0.0f), 0.0f, 1.0f);
+        fVolumetricCloudsTranslucency = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsTranslucency", 0.3f), 0.0f, 0.9f);
+        fVolumetricCloudsEvolution = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsEvolution", 1.0f), 0.0f, 10.0f);
+        fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
+        fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.6f), 0.0f, 2.0f);
+        fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.4f), 0.05f, 3.0f);
+        nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 15);
+        bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
+        fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
+    }
+
     void Readini()
     {
         CIniReader iniReader("");
@@ -1171,7 +1408,7 @@ public:
         fGIOcclusion = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightOcclusion", 1.0f), 0.0f, 1.0f);
         fSkinScatteringWidth = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringWidth", 0.03f), 0.001f, 0.1f);
         fSkinScatteringStrength = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringStrength", 1.0f), 0.0f, 2.0f);
-        fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
+        ReadLiveIni(iniReader);
         fGIRayLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", 4.0f), 0.1f, 20.0f);
         fGIThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightThickness", 0.5f), 0.01f, 10.0f);
         fGIMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxDistance", 60.0f), 1.0f, 1000.0f);
@@ -1274,6 +1511,310 @@ public:
             D3DXCreateTextureFromResourceExW(pDevice, hm, MAKEINTRESOURCEW(IDR_SearchTex), 64, 16, 1, 0, D3DFMT_UNKNOWN, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_LINEAR, 0, NULL, NULL, &SMAA_searchTex);
     }
 };
+
+// The cloud deck's noise for the cloud shadows and the volumetric clouds: 1024 x 1024, tiling.
+// - Heaps: each of 6 x 6 cells a tile holds one heap at a random point, of a random radius, falling
+//   off from its middle; smaller heaps from 12 x 12 cells add to them. On a 16 km tile a heap is one
+//   to two kilometres across, about one every two and a half kilometres: at 8 x 8 the heaps, under a
+//   kilometre, came out small, and at 4 x 4, one every four kilometres, the sky stayed mostly empty
+//   however much each heap grew with the cover. Perlin-Worley noise in its place
+//   joined the clouds into one network over half the sky, where real fair weather cumulus stand
+//   apart, spread evenly.
+// - The heaps are read through a warp of value noise, so their outlines wander, and a fine value
+//   noise roughens their edges.
+// - Equalised: each texel is its value's rank, so a share c of the map lies above 1 - c, and the
+//   clouds' and the shadows' cover is the share of the sky they take.
+// At 256 x 256 a texel of an 8 km tile spanned 31 m, and the quintic filtering's flat texel middles
+// showed as steps along the clouds' edges. Managed, so it survives device resets.
+IDirect3DTexture9* PostFxResource::CloudNoiseTex()
+{
+    if (CloudNoiseTexture)
+        return CloudNoiseTexture;
+    auto pDevice = rage::grcDevice::GetD3DDevice();
+    if (!pDevice)
+        return nullptr;
+
+    constexpr int size = 1024;
+    auto lattice = [](int x, int y, int seed) {
+        uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u + static_cast<uint32_t>(seed) * 2246822519u;
+        h = (h ^ (h >> 13)) * 1274126177u;
+        return static_cast<float>((h ^ (h >> 16)) & 0xffff) / 65535.0f;
+    };
+    auto wrap = [](int i, int n) { return ((i % n) + n) % n; };
+    // Value noise of the given octaves from cells0 cells a tile, each half the one before, 0 to 1.
+    auto valueNoise = [&](int x, int y, int cells0, int octaves, int seed0) {
+        float sum = 0.0f, total = 0.0f, amplitude = 1.0f;
+        for (int octave = 0, cells = cells0; octave < octaves; ++octave, cells *= 2, amplitude *= 0.5f)
+        {
+            const float cell = static_cast<float>(size) / cells;
+            const float fx = x / cell, fy = y / cell;
+            const int x0 = static_cast<int>(fx), y0 = static_cast<int>(fy);
+            float tx = fx - x0, ty = fy - y0;
+            tx = tx * tx * (3.0f - 2.0f * tx);
+            ty = ty * ty * (3.0f - 2.0f * ty);
+            const int x1 = (x0 + 1) % cells, y1 = (y0 + 1) % cells;
+            const int seed = seed0 + octave;
+            const float a = lattice(x0, y0, seed), b = lattice(x1, y0, seed);
+            const float c = lattice(x0, y1, seed), d = lattice(x1, y1, seed);
+            const float ab = a + (b - a) * tx, cd = c + (d - c) * tx;
+            sum += amplitude * (ab + (cd - ab) * ty);
+            total += amplitude;
+        }
+        return sum / total;
+    };
+    // The highest heap over the cells around (x, y): 1 at a heap's middle, 0 at its radius. A heap
+    // reaches up to 1.6 cells from its cell's corner (its middle within 0.15 to 0.85, its radius up
+    // to 0.75), so the search takes two cells either way; one either way cut heaps off along the
+    // cells' straight edges.
+    auto heaps = [&](float x, float y, int cells, int seed) {
+        const float cell = static_cast<float>(size) / cells;
+        const float fx = x / cell, fy = y / cell;
+        const int cx = static_cast<int>(std::floor(fx)), cy = static_cast<int>(std::floor(fy));
+        float best = 0.0f;
+        for (int dy = -2; dy <= 2; ++dy)
+            for (int dx = -2; dx <= 2; ++dx)
+            {
+                const int nx = cx + dx, ny = cy + dy;
+                const int wx = wrap(nx, cells), wy = wrap(ny, cells);
+                const float px = nx + 0.15f + 0.7f * lattice(wx, wy, seed), py = ny + 0.15f + 0.7f * lattice(wy, wx, seed + 1);
+                const float radius = 0.35f + 0.4f * lattice(wx, wy, seed + 2);
+                const float distance = std::sqrt((px - fx) * (px - fx) + (py - fy) * (py - fy));
+                best = (std::max)(best, std::clamp(1.0f - distance / radius, 0.0f, 1.0f));
+            }
+        return best;
+    };
+
+    constexpr int heapCells = 6;
+    const float warpReach = static_cast<float>(size) / heapCells * 0.6f;
+    std::vector<float> value(size * size, 0.0f);
+    for (int y = 0; y < size; ++y)
+        for (int x = 0; x < size; ++x)
+        {
+            const float wx = x + (valueNoise(x, y, 16, 3, 300) - 0.5f) * warpReach;
+            const float wy = y + (valueNoise(x, y, 16, 3, 310) - 0.5f) * warpReach;
+            value[y * size + x] = heaps(wx, wy, heapCells, 50) + 0.35f * heaps(wx, wy, heapCells * 2, 60) + 0.3f * valueNoise(x, y, 64, 4, 400);
+        }
+    {
+        std::vector<int> order(value.size());
+        for (size_t i = 0; i < order.size(); ++i)
+            order[i] = static_cast<int>(i);
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return value[a] < value[b]; });
+        const float last = static_cast<float>(order.size() - 1);
+        for (size_t rank = 0; rank < order.size(); ++rank)
+            value[order[rank]] = rank / last;
+    }
+
+    // 16 bits: the volumetric clouds stretch the coverage several times over near their edges, and
+    // the 8 bit steps showed as terraces and streaks down their sides.
+    bool wide = SUCCEEDED(pDevice->CreateTexture(size, size, 0, 0, D3DFMT_L16, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr));
+    if (!wide && FAILED(pDevice->CreateTexture(size, size, 0, 0, D3DFMT_L8, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr)))
+    {
+        CloudNoiseTexture = nullptr;
+        return nullptr;
+    }
+    // Each mip a box filter of the one above, so a wider mip gives the shadow a softer edge.
+    for (DWORD level = 0, n = size; level < CloudNoiseTexture->GetLevelCount(); ++level, n /= 2)
+    {
+        D3DLOCKED_RECT locked = {};
+        if (FAILED(CloudNoiseTexture->LockRect(level, &locked, nullptr, 0)))
+            continue;
+        for (DWORD y = 0; y < n; ++y)
+        {
+            auto row = static_cast<uint8_t*>(locked.pBits) + y * locked.Pitch;
+            for (DWORD x = 0; x < n; ++x)
+            {
+                const float v = std::clamp(value[y * n + x], 0.0f, 1.0f);
+                if (wide)
+                    reinterpret_cast<uint16_t*>(row)[x] = static_cast<uint16_t>(v * 65535.0f + 0.5f);
+                else
+                    row[x] = static_cast<uint8_t>(v * 255.0f + 0.5f);
+            }
+        }
+        CloudNoiseTexture->UnlockRect(level);
+        if (n > 1)
+        {
+            const DWORD half = n / 2;
+            for (DWORD y = 0; y < half; ++y)
+                for (DWORD x = 0; x < half; ++x)
+                    value[y * half + x] = 0.25f * (value[2 * y * n + 2 * x] + value[2 * y * n + 2 * x + 1] +
+                                                   value[(2 * y + 1) * n + 2 * x] + value[(2 * y + 1) * n + 2 * x + 1]);
+        }
+    }
+    return CloudNoiseTexture;
+}
+
+// The volumetric clouds' detail: 64 x 64 x 64, tiling, three octaves of inverted Worley noise
+// (4, 8 and 16 cells a tile), which reads as round billows when it erodes a cloud's edge, in two
+// channels from different points. Managed, so it survives device resets.
+IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
+{
+    if (CloudDetailTexture)
+        return CloudDetailTexture;
+    auto pDevice = rage::grcDevice::GetD3DDevice();
+    if (!pDevice)
+        return nullptr;
+
+    constexpr int size = 64;
+    auto hash = [](int x, int y, int z, int seed) {
+        uint32_t h = static_cast<uint32_t>(x) * 73856093u ^ static_cast<uint32_t>(y) * 19349663u ^ static_cast<uint32_t>(z) * 83492791u ^
+                     static_cast<uint32_t>(seed) * 2654435761u;
+        h = (h ^ (h >> 15)) * 2246822519u;
+        h = (h ^ (h >> 13)) * 3266489917u;
+        return h ^ (h >> 16);
+    };
+    // Two channels of the same Worley noise from different points: the outline's wander reads both
+    // at once where it took two reads of one, and the fine billows swirl by both.
+    std::vector<float> value[2] = { std::vector<float>(size * size * size, 0.0f), std::vector<float>(size * size * size, 0.0f) };
+    const int seeds[2] = { 17, 29 };
+    const int cellCounts[3] = { 4, 8, 16 };
+    const float weights[3] = { 0.625f, 0.25f, 0.125f };
+    for (int channel = 0; channel < 2; ++channel)
+    {
+        for (int octave = 0; octave < 3; ++octave)
+        {
+            const int cells = cellCounts[octave];
+            const float cell = static_cast<float>(size) / cells;
+            // One feature point per cell, at a random place inside it.
+            std::vector<float> points(cells * cells * cells * 3);
+            for (int i = 0; i < cells * cells * cells; ++i)
+                for (int k = 0; k < 3; ++k)
+                    points[i * 3 + k] = static_cast<float>(hash(i, k, octave, seeds[channel]) & 0xffff) / 65535.0f;
+            for (int z = 0; z < size; ++z)
+                for (int y = 0; y < size; ++y)
+                    for (int x = 0; x < size; ++x)
+                    {
+                        const float fx = (x + 0.5f) / cell, fy = (y + 0.5f) / cell, fz = (z + 0.5f) / cell;
+                        const int cx = static_cast<int>(fx), cy = static_cast<int>(fy), cz = static_cast<int>(fz);
+                        float nearest = 3.0f;
+                        for (int dz = -1; dz <= 1; ++dz)
+                            for (int dy = -1; dy <= 1; ++dy)
+                                for (int dx = -1; dx <= 1; ++dx)
+                                {
+                                    const int nx = cx + dx, ny = cy + dy, nz = cz + dz;
+                                    const int wx = (nx + cells) % cells, wy = (ny + cells) % cells, wz = (nz + cells) % cells;
+                                    const float* pt = &points[((wz * cells + wy) * cells + wx) * 3];
+                                    const float ex = nx + pt[0] - fx, ey = ny + pt[1] - fy, ez = nz + pt[2] - fz;
+                                    nearest = (std::min)(nearest, ex * ex + ey * ey + ez * ez);
+                                }
+                        value[channel][(z * size + y) * size + x] += weights[octave] * (1.0f - std::clamp(std::sqrt(nearest), 0.0f, 1.0f));
+                    }
+        }
+        const auto [lo, hi] = std::minmax_element(value[channel].begin(), value[channel].end());
+        const float minValue = *lo, range = (std::max)(*hi - *lo, 1e-5f);
+        for (auto& v : value[channel])
+            v = (v - minValue) / range;
+    }
+
+    // 16 bits a channel for the same reason as the coverage; 8 where G16R16 volumes are missing.
+    bool wide = SUCCEEDED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_G16R16, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr));
+    if (!wide && FAILED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr)))
+    {
+        CloudDetailTexture = nullptr;
+        return nullptr;
+    }
+    D3DLOCKED_BOX locked = {};
+    if (SUCCEEDED(CloudDetailTexture->LockBox(0, &locked, nullptr, 0)))
+    {
+        for (int z = 0; z < size; ++z)
+            for (int y = 0; y < size; ++y)
+            {
+                auto row = static_cast<uint8_t*>(locked.pBits) + z * locked.SlicePitch + y * locked.RowPitch;
+                for (int x = 0; x < size; ++x)
+                {
+                    const size_t i = (z * size + y) * size + x;
+                    const float r = value[0][i], g = value[1][i];
+                    if (wide)
+                    {
+                        // G16R16: red in the low word.
+                        reinterpret_cast<uint16_t*>(row)[x * 2] = static_cast<uint16_t>(r * 65535.0f + 0.5f);
+                        reinterpret_cast<uint16_t*>(row)[x * 2 + 1] = static_cast<uint16_t>(g * 65535.0f + 0.5f);
+                    }
+                    else
+                    {
+                        // A8R8G8B8: blue, green, red, alpha in memory.
+                        row[x * 4 + 0] = 0;
+                        row[x * 4 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
+                        row[x * 4 + 2] = static_cast<uint8_t>(r * 255.0f + 0.5f);
+                        row[x * 4 + 3] = 255;
+                    }
+                }
+            }
+        CloudDetailTexture->UnlockBox(0);
+    }
+    return CloudDetailTexture;
+}
+
+// The weathers' cloud layers, in CWeather::eWeatherType order:
+// - coverage, the share of the sky the clouds take (the middle of the weather's range, which the
+//   weather map spreads either way), base and thickness in metres, density against
+//   VolumetricCloudsDensity, the share of overcast sheet, and the wind against CloudShadowsWind;
+// - the light's absorption inside them, how much more their thin parts let through and how much the
+//   billows eat their edges, each against its VolumetricClouds* setting, and the glow around the sun;
+// - how much brighter the cloud near the sun is, how fast they reshape against
+//   VolumetricCloudsEvolution, how round their bases' edges are (a threshold on the density, so a
+//   few tenths at most: at a half they took a fifth of the clouds away), and their brightness
+//   against VolumetricCloudsSkyMatch (in CLOUDY at 1 the clouds came out white on a dark sky).
+// Fair weather: broad heaps from 600 to 700 m up, wider than they are tall, ragged and see-through
+// at the edges, with bright rims, barely reshaping. Rain and storms: a low, thick, closed deck, an
+// overcast sheet over most of it, smooth, dense, with dark bases and little glow, churning (held
+// to 3). Fog has no clouds.
+static constexpr PostFxResource::CloudLayer kWeatherClouds[8] =
+{
+    //  cover   base   thick   dens  strat  wind   abs   transl detail glow  sun   evol  round  match
+    { 0.25f,  700.0f,  550.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f, 7.0f, 0.70f, 0.4f, 0.10f, 1.00f }, // EXTRASUNNY
+    { 0.40f,  600.0f,  700.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f, 6.0f, 0.55f, 0.7f, 0.15f, 1.00f }, // SUNNY
+    { 0.45f,  700.0f,  650.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 1.3f, 6.0f, 0.50f, 0.9f, 0.12f, 1.00f }, // SUNNY_WINDY
+    { 0.70f,  500.0f,  900.0f, 1.00f, 0.2f, 0.67f, 1.3f, 1.0f, 1.0f, 4.0f, 0.20f, 1.3f, 0.15f, 0.65f }, // CLOUDY
+    { 0.95f,  300.0f, 1000.0f, 0.83f, 0.6f, 0.33f, 2.0f, 0.5f, 0.6f, 2.0f, 0.25f, 3.0f, 0.15f, 1.00f }, // RAIN
+    { 0.85f,  400.0f,  900.0f, 0.67f, 0.4f, 1.67f, 1.6f, 0.7f, 0.8f, 3.0f, 0.40f, 0.8f, 0.15f, 0.80f }, // DRIZZLE
+    { 0.00f,  600.0f,  600.0f, 0.20f, 0.3f, 1.67f, 1.0f, 1.0f, 0.8f, 3.0f, 0.30f, 0.4f, 0.15f, 1.00f }, // FOGGY
+    { 0.95f,  300.0f, 1200.0f, 0.80f, 0.5f, 1.67f, 2.2f, 0.5f, 0.7f, 2.0f, 0.25f, 1.4f, 0.08f, 1.00f }, // LIGHTNING
+};
+
+void PostFxResource::UpdateCloudLayer(double seconds)
+{
+    // Each game starts the clouds somewhere else: how far the wind has carried them, how far the
+    // map has morphed and the billows have turned over. From zero, every session opened on the same
+    // sky.
+    if (!bCloudDriftSeeded)
+    {
+        std::mt19937_64 random(std::random_device{}());
+        std::uniform_real_distribution<double> unit(0.0, 1.0);
+        fCloudDrift = unit(random) * 1000.0;
+        fCloudDetailDrift = unit(random) * 1000.0;
+        fCloudEvolution = unit(random) * 1000.0;
+        fCloudMorph = unit(random) * 31.415926535897932;
+        bCloudDriftSeeded = true;
+    }
+    if (bVolumetricCloudsWeather && CWeather::OldWeatherType && CWeather::NewWeatherType && CWeather::InterpolationValue)
+    {
+        const auto from = static_cast<uint32_t>(*CWeather::OldWeatherType);
+        const auto to = static_cast<uint32_t>(*CWeather::NewWeatherType);
+        const float k = std::clamp(*CWeather::InterpolationValue, 0.0f, 1.0f);
+        const auto& a = kWeatherClouds[from < 8 ? from : 1];
+        const auto& b = kWeatherClouds[to < 8 ? to : 1];
+        auto mix = [k](float x, float y) { return x + (y - x) * k; };
+        Cloud = { mix(a.coverage, b.coverage), mix(a.base, b.base), mix(a.thickness, b.thickness),
+                  mix(a.density, b.density), mix(a.stratus, b.stratus), mix(a.wind, b.wind),
+                  mix(a.absorption, b.absorption), mix(a.translucency, b.translucency), mix(a.detail, b.detail), mix(a.glow, b.glow),
+                  mix(a.sunPower, b.sunPower), mix(a.evolution, b.evolution), mix(a.baseRound, b.baseRound), mix(a.skyMatch, b.skyMatch) };
+    }
+    else
+        Cloud = { fVolumetricCloudsCoverage, fVolumetricCloudsBase, fVolumetricCloudsThickness, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f };
+
+    // The drift moves on by this frame's time at this frame's wind; across a jump of the clock (a
+    // load, a cutscene) it stays where it was.
+    double dt = fCloudLastSeconds >= 0.0 ? seconds - fCloudLastSeconds : 0.0;
+    if (dt < 0.0 || dt > 0.25)
+        dt = 0.0;
+    fCloudLastSeconds = seconds;
+    const double wind = fCloudShadowsWind * Cloud.wind;
+    fCloudDrift = std::fmod(fCloudDrift + dt * wind / fCloudShadowsScale, 1000.0);
+    fCloudDetailDrift = std::fmod(fCloudDetailDrift + dt * wind * 0.5 / fVolumetricCloudsDetailScale, 1000.0);
+    // About a metre a second up through the detail at 1: the billows turn over in a few minutes.
+    fCloudEvolution = std::fmod(fCloudEvolution + dt * fVolumetricCloudsEvolution * Cloud.evolution / fVolumetricCloudsDetailScale, 1000.0);
+    fCloudMorph = std::fmod(fCloudMorph + dt * 0.03 * fVolumetricCloudsEvolution * Cloud.evolution, 31.415926535897932);
+}
 
 PostFxResource PostFxResources;
 
@@ -1701,6 +2242,31 @@ private:
         SAFE_RELEASE(PostFxResources.GIAccumSurf[1]);
         SAFE_RELEASE(PostFxResources.GIFullSurf);
         PostFxResources.GIResult = nullptr;
+        for (int i = 0; i < 3; ++i)
+        {
+            SAFE_RELEASE(PostFxResources.CloudSurf[i]);
+            if (PostFxResources.CloudTex[i])
+            {
+                PostFxResources.CloudTex[i]->Destroy();
+                PostFxResources.CloudTex[i] = nullptr;
+            }
+        }
+        PostFxResources.nCloudAccumFrame = 0;
+        SAFE_RELEASE(PostFxResources.CloudSkyRefSurf);
+        if (PostFxResources.CloudSkyRefTex)
+        {
+            PostFxResources.CloudSkyRefTex->Destroy();
+            PostFxResources.CloudSkyRefTex = nullptr;
+        }
+        for (int i = 0; i < 2; ++i)
+        {
+            SAFE_RELEASE(PostFxResources.CloudMarchSurf[i]);
+            if (PostFxResources.CloudMarchTex[i])
+            {
+                PostFxResources.CloudMarchTex[i]->Destroy();
+                PostFxResources.CloudMarchTex[i] = nullptr;
+            }
+        }
         for (int i = 0; i < 2; ++i)
         {
             SAFE_RELEASE(PostFxResources.SkinLightSurf[i]);
@@ -1755,6 +2321,8 @@ private:
             PostFxResources.AOEffect->OnLostDevice();
         if (PostFxResources.SSREffect)
             PostFxResources.SSREffect->OnLostDevice();
+        if (PostFxResources.CloudsEffect)
+            PostFxResources.CloudsEffect->OnLostDevice();
         ReleaseProfiler();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
@@ -1836,6 +2404,8 @@ private:
             PostFxResources.AOEffect->OnResetDevice();
         if (PostFxResources.SSREffect)
             PostFxResources.SSREffect->OnResetDevice();
+        if (PostFxResources.CloudsEffect)
+            PostFxResources.CloudsEffect->OnResetDevice();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             SAFE_RELEASE(PostFxResources.AOCamDepthSurf[i]);
@@ -1890,6 +2460,19 @@ private:
             PostFxResources.SSRDenoisedTex = rage::CreateEmptyRenderTarget("SSRDenoisedTex", width, height, 64, aoDesc, PostFxResources.SSRDenoisedSurf);
 
             PostFxResources.SSRHalfTex = rage::CreateEmptyRenderTarget("SSRHalfTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfSurf);
+            {
+                static const char* cloudNames[3] = { "CloudTex", "CloudAccumTex0", "CloudAccumTex1" };
+                for (int i = 0; i < 3; ++i)
+                    PostFxResources.CloudTex[i] = rage::CreateEmptyRenderTarget(cloudNames[i], width / 2, height / 2, 64, aoDesc, PostFxResources.CloudSurf[i]);
+                PostFxResources.nCloudAccumFrame = 0;
+                PostFxResources.CloudSkyRefTex = rage::CreateEmptyRenderTarget("CloudSkyRefTex", 1, 1, 64, aoDesc, PostFxResources.CloudSkyRefSurf);
+                static const char* marchNames[2] = { "CloudMarchTex0", "CloudMarchTex1" };
+                for (int i = 0; i < 2; ++i)
+                    PostFxResources.CloudMarchTex[i] = rage::CreateEmptyRenderTarget(marchNames[i], width / 2, height / 2, 64, aoDesc, PostFxResources.CloudMarchSurf[i]);
+                // Cleared: it is only ever blended into, and a NaN left in it would stay for good.
+                if (PostFxResources.CloudSkyRefSurf && pDevice)
+                    pDevice->ColorFill(PostFxResources.CloudSkyRefSurf, nullptr, D3DCOLOR_ARGB(0, 0, 0, 0));
+            }
             PostFxResources.SSRHalfDenoisedTex = rage::CreateEmptyRenderTarget("SSRHalfDenoisedTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfDenoisedSurf);
             {
                 static const char* fallbackNames[2] = { "SSRFallbackTex", "SSRHalfFallbackTex" };
@@ -2057,6 +2640,7 @@ private:
             IDirect3DBaseTexture9* scene = prevTex[1];
             if (auto skin = RenderSkinScattering(pDevice, prevTex[1]))
                 scene = skin;
+            RenderVolumetricClouds(pDevice, scene);
 
             if (PostFxResources.FullScreenTex_temp1)
             {
@@ -3455,6 +4039,491 @@ private:
         { D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE },
     };
 
+    static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kCloudRenderStates[] =
+    {
+        { D3DRS_ZENABLE,          FALSE },
+        { D3DRS_ZWRITEENABLE,     FALSE },
+        // For the reflections, which test against the sky's depth (far) instead.
+        { D3DRS_ZFUNC,            D3DCMP_LESSEQUAL },
+        { D3DRS_ALPHATESTENABLE,  FALSE },
+        { D3DRS_STENCILENABLE,    FALSE },
+        { D3DRS_FOGENABLE,        FALSE },
+        { D3DRS_CLIPPING,         FALSE },
+        { D3DRS_SCISSORTESTENABLE, FALSE },
+        { D3DRS_CULLMODE,         D3DCULL_NONE },
+        { D3DRS_SRGBWRITEENABLE,  FALSE },
+        { D3DRS_ALPHABLENDENABLE, TRUE },
+        { D3DRS_SEPARATEALPHABLENDENABLE, FALSE },
+        { D3DRS_BLENDOP,          D3DBLENDOP_ADD },
+        // The cloud's light plus what shows through it; RGB only, the scene alpha stays.
+        { D3DRS_SRCBLEND,         D3DBLEND_ONE },
+        { D3DRS_DESTBLEND,        D3DBLEND_SRCALPHA },
+        { D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE },
+        // The march's second target.
+        { D3DRS_COLORWRITEENABLE1, 0xF },
+    };
+
+    // Blends the volumetric clouds (Clouds.fx) into the lit scene, from the fog pass before it reads
+    // the scene; with reflection, into the reflection map's target right after its sky
+    // (DrawSkyReflection), at full size, on the sky only by the depth test, at the brightness of
+    // that simpler sky. Leaves the device as it found it.
+    static void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* sceneBase, bool reflection = false)
+    {
+        auto& R = PostFxResources;
+        auto skip = [&](const char* why) { R.szCloudsStatus = why; };
+        if (!R.VolumetricCloudsEnabled())
+            return skip("off in the ini");
+        if (!R.CloudsEffect)
+            return skip("no effect");
+        if (!R.bCloudParamsRegistered)
+            return skip("cloud parameters not registered");
+        if (!sceneBase && !reflection)
+            return skip("no scene texture");
+        if (reflection && !R.bVolumetricCloudsReflections)
+            return;
+        if (!R.mDepthRT || !R.mDepthRT->mD3DTexture)
+            return skip("no depth texture");
+        rage::grcViewport* vp = rage::GetCurrentViewport();
+        if (!vp)
+            return skip("no viewport");
+
+        // The game's clouds: until the sky has been drawn once these read zero.
+        // gta_atmoscatt_clouds colours its clouds CloudColor, brightened by CloudInscatteringRange
+        // towards the sun, less the cloud's own shadow, plus SunsetColor where the sun lights them.
+        // TopCloudColor belongs to its separate high layer and tinted these clouds cyan.
+        const auto& cloudColour = rage::grmShaderInfo::getShaderParamData(R.CloudColorIdx);
+        const auto& sunsetColour = rage::grmShaderInfo::getShaderParamData(R.SunsetColorIdx);
+        const float inscattering = rage::grmShaderInfo::getShaderParamData(R.CloudInscatteringIdx)[0];
+        const auto& sunDirection = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
+        float exposure = rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0] * R.fVolumetricCloudsBrightness;
+        if (exposure <= 0.0f)
+            return skip("HDRExposure of the sky reads zero");
+        // The reflections' sky takes the timecycle's colours without the HDR exposure.
+        if (reflection)
+            exposure = R.fVolumetricCloudsBrightness * R.fVolumetricCloudsReflectionBrightness;
+        // The sky's SunDirection is y up; the world is z up.
+        D3DXVECTOR4 sun(sunDirection[0], -sunDirection[2], sunDirection[1], 0.0f);
+        const float sunLength = std::sqrt(sun.x * sun.x + sun.y * sun.y + sun.z * sun.z);
+        if (sunLength <= 0.0f)
+            return skip("SunDirection of the sky reads zero");
+        sun /= sunLength;
+        // Below the horizon the sun hands the clouds over to the moon. The sun still lights their
+        // bellies a little way below it, at dusk; then its light fades out, and the moon's fades in
+        // from the same zero, so the light never jumps from one to the other at full strength.
+        // MoonPosition is the direction to the moon, y up like SunDirection.
+        float lightStrength = 1.0f;
+        bool moonlit = false;
+        {
+            auto smoothstep = [](float a, float b, float x) { const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
+            const float day = smoothstep(-0.15f, -0.05f, sun.z);
+            const auto& moonPosition = rage::grmShaderInfo::getShaderParamData(R.CloudMoonPositionIdx);
+            D3DXVECTOR4 moon(moonPosition[0], -moonPosition[2], moonPosition[1], 0.0f);
+            const float moonLength = std::sqrt(moon.x * moon.x + moon.y * moon.y + moon.z * moon.z);
+            moon.x *= R.CloudSkyAxisSign[0];
+            moon.y *= R.CloudSkyAxisSign[1];
+            if (day >= 0.5f || moonLength <= 0.0f)
+                lightStrength = day >= 0.5f ? day * 2.0f - 1.0f : 0.0f;
+            else
+            {
+                moon /= moonLength;
+                sun = moon;
+                moonlit = true;
+                lightStrength = (1.0f - day * 2.0f) * smoothstep(0.0f, 0.1f, moon.z) * R.fVolumetricCloudsMoonlight;
+            }
+        }
+
+        auto coverage = R.CloudNoiseTex();
+        auto detail = R.CloudDetailTex();
+        if (!coverage)
+            return skip("no coverage texture");
+        if (!detail)
+            return skip("no detail texture");
+
+        IDirect3DSurface9* sceneSurface = nullptr;
+        if (reflection)
+            pDevice->GetRenderTarget(0, &sceneSurface);
+        else
+        {
+            IDirect3DTexture9* scene = nullptr;
+            if (FAILED(sceneBase->QueryInterface(__uuidof(IDirect3DTexture9), reinterpret_cast<void**>(&scene))) || !scene)
+                return skip("the scene is no 2D texture");
+            scene->GetSurfaceLevel(0, &sceneSurface);
+            scene->Release();
+        }
+        if (!sceneSurface)
+            return reflection ? void() : skip("no scene surface");
+        // Only a reflection drawn over its whole target: the passes set the viewport to the target,
+        // and a map drawn in parts (as two halves of one texture) would take the clouds across all.
+        if (reflection)
+        {
+            D3DSURFACE_DESC targetDesc = {};
+            D3DVIEWPORT9 current = {};
+            sceneSurface->GetDesc(&targetDesc);
+            pDevice->GetViewport(&current);
+            if (current.X != 0 || current.Y != 0 || current.Width != targetDesc.Width || current.Height != targetDesc.Height)
+            {
+                sceneSurface->Release();
+                return;
+            }
+        }
+        if (!reflection)
+            R.szCloudsStatus = "drawn";
+        D3DSURFACE_DESC desc = {};
+        sceneSurface->GetDesc(&desc);
+        const float width = float(desc.Width), height = float(desc.Height);
+
+        ID3DXEffect* effect = R.CloudsEffect;
+        const D3DMATRIX& proj = *(const D3DMATRIX*)vp->mProjectionMatrix;
+        const D3DXVECTOR4 projInfo = ProjInfo(proj, width, height);
+        const float invViewportSize[] = { 1.0f / width, 1.0f / height };
+        effect->SetFloatArray("vec2InvViewportSize", invViewportSize, 2);
+        effect->SetVector("vec4ProjInfo", &projInfo);
+        effect->SetFloat("fNearPlane", vp->mNearClip);
+        effect->SetFloat("fFarDivNear", vp->mFarClip / vp->mNearClip);
+
+        const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+        D3DXVECTOR4 toView[3];
+        WorldToViewRows(vp, toView);
+        const D3DXVECTOR4 worldX(toView[0].x, toView[1].x, toView[2].x, viewInv.m[3][0]);
+        const D3DXVECTOR4 worldY(toView[0].y, toView[1].y, toView[2].y, viewInv.m[3][1]);
+        const D3DXVECTOR4 worldZ(toView[0].z, toView[1].z, toView[2].z, viewInv.m[3][2]);
+        effect->SetVector("vec4WorldX", &worldX);
+        effect->SetVector("vec4WorldY", &worldY);
+        effect->SetVector("vec4WorldZ", &worldZ);
+
+        if (!reflection)
+            std::memcpy(R.CloudLastSkySun, &sun.x, sizeof(R.CloudLastSkySun));
+        // By day the game's own directional light, taken in the lighting phase of this frame or the
+        // last: the sky's SunDirection, remapped from its y up space, lit the clouds from the
+        // mirror image of the sun across the sky, their far sides lit and the near ones dark.
+        if (!moonlit && R.nCloudLightFrame && FrameHistory::Frame() - R.nCloudLightFrame <= 2 && R.CloudLightDir[2] > 0.0f)
+        {
+            // Learn the sky's axis signs while both directions are clear of the zenith.
+            for (int axis = 0; axis < 2; ++axis)
+            {
+                const float skyAxis = (&sun.x)[axis], gameAxis = R.CloudLightDir[axis];
+                if (std::fabs(skyAxis) > 0.2f && std::fabs(gameAxis) > 0.2f)
+                    R.CloudSkyAxisSign[axis] = (skyAxis > 0.0f) == (gameAxis > 0.0f) ? 1.0f : -1.0f;
+            }
+            sun = D3DXVECTOR4(R.CloudLightDir[0], R.CloudLightDir[1], R.CloudLightDir[2], 0.0f);
+        }
+        if (!reflection)
+            std::memcpy(R.CloudLastUsedSun, &sun.x, sizeof(R.CloudLastUsedSun));
+        // VolumetricCloudsDebug 15: the sun straight overhead, to test the sun's direction.
+        if (R.nVolumetricCloudsDebug == 15)
+            sun = D3DXVECTOR4(0.0f, 0.0f, 1.0f, 0.0f);
+        effect->SetFloatArray("vec3SunDir", &sun.x, 3);
+        float litColour[3], shadeColour[3], sunsetLit[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            litColour[i] = cloudColour[i] * R.kCloudLitGain * exposure;
+            shadeColour[i] = cloudColour[i] * R.fVolumetricCloudsShade * exposure;
+            sunsetLit[i] = sunsetColour[i] * exposure;
+        }
+        // The shaded side is lit by the sky above it rather than the sun: it takes the hue of the
+        // game's SkyColor at its own brightness, by VolumetricCloudsSkyLight, bluish by day.
+        {
+            const auto& skyColour = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
+            const float skyLuma = 0.2126f * skyColour[0] + 0.7152f * skyColour[1] + 0.0722f * skyColour[2];
+            const float shadeLuma = 0.2126f * shadeColour[0] + 0.7152f * shadeColour[1] + 0.0722f * shadeColour[2];
+            if (skyLuma > 1e-4f)
+                for (int i = 0; i < 3; ++i)
+                    shadeColour[i] += ((std::max)(skyColour[i], 0.0f) / skyLuma * shadeLuma - shadeColour[i]) * R.fVolumetricCloudsSkyLight;
+        }
+        // The sky lights the sunlit side too: it takes a fifth of the sky's hue, at its own brightness.
+        {
+            const auto& skyColour = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
+            const float skyLuma = 0.2126f * skyColour[0] + 0.7152f * skyColour[1] + 0.0722f * skyColour[2];
+            const float litLuma = 0.2126f * litColour[0] + 0.7152f * litColour[1] + 0.0722f * litColour[2];
+            if (skyLuma > 1e-4f)
+                for (int i = 0; i < 3; ++i)
+                    litColour[i] += ((std::max)(skyColour[i], 0.0f) / skyLuma * litLuma - litColour[i]) * 0.2f;
+        }
+        // VolumetricCloudsSaturation, about each colour's luma.
+        for (float* colour : { litColour, shadeColour, sunsetLit })
+        {
+            const float luma = 0.2126f * colour[0] + 0.7152f * colour[1] + 0.0722f * colour[2];
+            for (int i = 0; i < 3; ++i)
+                colour[i] = (std::max)(luma + (colour[i] - luma) * R.fVolumetricCloudsSaturation, 0.0f);
+        }
+        // The ceiling the brightest cloud rolls off towards: room above the silver lining's peak for
+        // the glow next to the sun. gta_atmoscatt_clouds clamps the sky and its clouds to
+        // HDRExposureClamp unless FusionFix's volumetric fog or SkyHDR is on, and past that clamp our
+        // clouds turned white while the sky around them stayed at it, so then the ceiling is the
+        // clamp.
+        float ceiling = 0.0f;
+        {
+            static auto volumetricFog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG");
+            const auto& clamp = rage::grmShaderInfo::getShaderParamData(R.CloudExposureClampIdx);
+            const float brightest = (std::max)({ litColour[0], litColour[1], litColour[2] });
+            // Matched to the sky the lit side is VolumetricCloudsSkyMatch times its brightness, and the
+            // rims and the glow next to the sun roll off below three times that.
+            ceiling = brightest * (R.fVolumetricCloudsSkyMatch > 0.0f ? 3.0f : (1.0f + inscattering) * 1.5f);
+            const float clampMin = (std::min)({ clamp[0], clamp[1], clamp[2] });
+            if (!reflection && !(volumetricFog && volumetricFog->get()) && !bSkyHDR && clampMin > 0.0f)
+                ceiling = (std::min)(ceiling, clampMin);
+            ceiling = (std::max)(ceiling, 1e-3f);
+            if (!reflection)
+            {
+                std::memcpy(R.CloudLastLit, litColour, sizeof(litColour));
+                std::memcpy(R.CloudLastShade, shadeColour, sizeof(shadeColour));
+                std::memcpy(R.CloudLastClamp, clamp.data(), sizeof(R.CloudLastClamp));
+                R.CloudLastCeiling = ceiling;
+                R.CloudLastLightStrength = lightStrength;
+                R.bCloudLastMoonlit = moonlit;
+            }
+        }
+        effect->SetFloatArray("vec3LitColour", litColour, 3);
+        effect->SetFloatArray("vec3ShadeColour", shadeColour, 3);
+        effect->SetFloatArray("vec3SunsetColour", sunsetLit, 3);
+        effect->SetFloat("fSilver", inscattering);
+        effect->SetFloat("fCeiling", ceiling);
+        // Matched to the sky in the scene behind them, while the march has targets of its own to draw
+        // into and can read the scene; the reflections keep the game's cloud colour.
+        {
+            const bool canReadScene = !reflection && R.CloudSurf[0] && R.CloudSurf[1] && R.CloudSurf[2] && R.CloudSkyRefSurf &&
+                                      R.CloudMarchSurf[0] && R.CloudMarchSurf[1];
+            const float litLuma = 0.2126f * litColour[0] + 0.7152f * litColour[1] + 0.0722f * litColour[2];
+            effect->SetFloat("fSkyMatch", canReadScene && litLuma > 1e-4f ? R.fVolumetricCloudsSkyMatch * R.Cloud.skyMatch / litLuma : 0.0f);
+        }
+        effect->SetFloat("fLightStrength", lightStrength);
+        effect->SetFloat("fMinLight", R.fVolumetricCloudsMinLight);
+        // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
+        // towards white by VolumetricCloudsSunTint. The moon's is a cool white.
+        {
+            static const float moonColour[3] = { 0.85f, 0.95f, 1.2f };
+            const float* sunColour = moonlit ? moonColour : rage::grmShaderInfo::getShaderParamData(R.CloudSunColorIdx).data();
+            const float luma = 0.2126f * sunColour[0] + 0.7152f * sunColour[1] + 0.0722f * sunColour[2];
+            float tint[3] = { 1.0f, 1.0f, 1.0f };
+            if (luma > 1e-4f)
+                for (int i = 0; i < 3; ++i)
+                    tint[i] = 1.0f + (std::clamp(sunColour[i] / luma, 0.0f, 2.0f) - 1.0f) * R.fVolumetricCloudsSunTint;
+            effect->SetFloatArray("vec3SunTint", tint, 3);
+        }
+        const D3DXVECTOR4 layer(R.Cloud.base, R.Cloud.thickness, 1.0f / R.fCloudShadowsScale, R.Cloud.coverage);
+        effect->SetVector("vec4Layer", &layer);
+        // The detail drifts with the wind too, half as fast, so the billows change as they go.
+        const D3DXVECTOR4 wind(R.fCloudWindX, R.fCloudWindY, float(std::fmod(R.fCloudDetailDrift * 0.93, 1.0)),
+                               float(std::fmod(R.fCloudDetailDrift * 0.37, 1.0)));
+        effect->SetVector("vec4Wind", &wind);
+        const D3DXVECTOR4 shape(R.fVolumetricCloudsDensity * R.Cloud.density, 1.0f / R.fVolumetricCloudsDetailScale,
+                                (std::min)(R.fVolumetricCloudsDetail * R.Cloud.detail, 1.5f),
+                                R.fVolumetricCloudsHaze * (1.0f - 0.6f * R.Cloud.stratus));
+        effect->SetVector("vec4Shape", &shape);
+        effect->SetFloat("fStratus", R.Cloud.stratus);
+        effect->SetFloat("fEvolution", float(std::fmod(R.fCloudEvolution, 1.0)));
+        effect->SetFloat("fTranslucency", (std::min)(R.fVolumetricCloudsTranslucency * R.Cloud.translucency, 0.9f));
+        effect->SetFloat("fLightAbsorption", R.fVolumetricCloudsAbsorption * R.Cloud.absorption);
+        effect->SetFloat("fGlow", R.Cloud.glow);
+        effect->SetFloat("fSunPower", R.Cloud.sunPower);
+        effect->SetFloat("fBaseRound", R.Cloud.baseRound);
+        // How far the billows are swept along the coarse noise at the tops, in their own size: more
+        // in the wind. Up to 3 in a strong wind they drew out into parallel brush strokes.
+        effect->SetFloat("fCurl", std::clamp(0.8f + 0.4f * R.Cloud.wind, 1.0f, 1.8f));
+        // The wind's shear: a heap's top lies up to 120 m downwind of its base at the weather's
+        // wind, at most 200 m; at 200 m, up to 300, the tops trailed off in streaks. The wind carries the map along (0.93, 0.37), so the clouds drift the
+        // other way and their tops lean that way.
+        {
+            const float lean = (std::min)(120.0f * R.Cloud.wind, 200.0f) / R.fCloudShadowsScale;
+            const float shear[2] = { 0.9293f * lean, 0.3697f * lean };
+            effect->SetFloatArray("vec2Shear", shear, 2);
+        }
+        effect->SetFloat("fDebug", float(R.nVolumetricCloudsDebug));
+        // The golden ratio's fraction per frame: each frame's march noise falls between the last
+        // ones', and temporal anti-aliasing averages it away.
+        effect->SetFloat("fFrameJitter", static_cast<float>(std::fmod(FrameHistory::Frame() * 0.6180339887, 1.0)));
+        // The outline wanders by up to 150 metres.
+        effect->SetFloat("fWarp", 150.0f / R.fCloudShadowsScale);
+        const D3DXVECTOR4 morph(R.CloudMorphPhase(), R.kCloudMorphReach / R.fCloudShadowsScale, R.kCloudWeatherScale, R.kCloudWeatherReach);
+        effect->SetVector("vec4Morph", &morph);
+        effect->SetFloat("fMaxDistance", R.fVolumetricCloudsMaxDistance);
+
+        IDirect3DSurface9* oldTarget = nullptr;
+        IDirect3DSurface9* oldTarget1 = nullptr;
+        IDirect3DSurface9* oldDepth = nullptr;
+        IDirect3DVertexDeclaration9* oldDecl = nullptr;
+        IDirect3DVertexBuffer9* oldVB = nullptr;
+        IDirect3DPixelShader9* oldPS = nullptr;
+        IDirect3DVertexShader9* oldVS = nullptr;
+        IDirect3DBaseTexture9* oldTextures[10] = {};
+        UINT oldOffset = 0, oldStride = 0;
+        DWORD oldFVF = 0;
+        D3DVIEWPORT9 oldViewport = {};
+        DWORD savedRenderStates[std::size(kCloudRenderStates)] = {};
+        static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW,
+                                                                   D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER };
+        DWORD savedSamplerStates[10][std::size(kSamplerStates)] = {};
+
+        pDevice->GetRenderTarget(0, &oldTarget);
+        pDevice->GetRenderTarget(1, &oldTarget1);
+        pDevice->GetDepthStencilSurface(&oldDepth);
+        pDevice->GetViewport(&oldViewport);
+        pDevice->GetFVF(&oldFVF);
+        pDevice->GetVertexDeclaration(&oldDecl);
+        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        pDevice->GetPixelShader(&oldPS);
+        pDevice->GetVertexShader(&oldVS);
+        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+        for (DWORD slot = 0; slot < 10; ++slot)
+        {
+            pDevice->GetTexture(slot, &oldTextures[slot]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                pDevice->GetSamplerState(slot, kSamplerStates[i], &savedSamplerStates[slot][i]);
+        }
+        for (size_t i = 0; i < std::size(kCloudRenderStates); ++i)
+        {
+            pDevice->GetRenderState(kCloudRenderStates[i].state, &savedRenderStates[i]);
+            pDevice->SetRenderState(kCloudRenderStates[i].state, kCloudRenderStates[i].value);
+        }
+
+        // The reflections keep their depth buffer: the quad at the far plane passes the depth test
+        // only where nothing but sky was drawn, whether before or after the sky.
+        if (reflection)
+            pDevice->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+        else
+            pDevice->SetDepthStencilSurface(nullptr);
+        pDevice->SetStreamSource(0, nullptr, 0, 0);
+        pDevice->SetVertexDeclaration(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        const float quadZ = reflection ? 1.0f : 0.0f;
+
+        // Half size, accumulated, laid over the scene at full size; one full size pass straight into
+        // the scene while the half size targets are missing, and for the reflections.
+        const bool halfSize = !reflection && R.CloudSurf[0] && R.CloudSurf[1] && R.CloudSurf[2] && R.CloudMarchSurf[0] && R.CloudMarchSurf[1];
+        const int prevAccum = 1 + R.nCloudAccumIndex;
+        const int nextAccum = 1 + (R.nCloudAccumIndex ^ 1);
+        D3DSURFACE_DESC halfDesc = {};
+        if (halfSize)
+            R.CloudSurf[0]->GetDesc(&halfDesc);
+        const float halfWidth = halfSize ? float(halfDesc.Width) : width, halfHeight = halfSize ? float(halfDesc.Height) : height;
+        const float depthTexel[2] = { 1.0f / width, 1.0f / height };
+        effect->SetFloatArray("vec2DepthTexel", depthTexel, 2);
+
+        // Last frame's view projection by columns: a direction (w 0) leaves its translation out.
+        const bool history = halfSize && FrameHistory::CanReproject(R.nCloudAccumFrame);
+        {
+            const D3DXMATRIX& m = FrameHistory::Previous().ViewProjectionNoJitter;
+            const D3DXVECTOR4 prevX(m._11, m._21, m._31, 0.0f), prevY(m._12, m._22, m._32, 0.0f), prevW(m._14, m._24, m._34, 0.0f);
+            effect->SetVector("vec4PrevX", &prevX);
+            effect->SetVector("vec4PrevY", &prevY);
+            effect->SetVector("vec4PrevW", &prevW);
+            // A sixth of each frame: with the march's offset moving on every frame, its noise
+            // averages out over about a dozen frames.
+            const D3DXVECTOR4 historyInfo(history ? 1.0f : 0.0f, 0.15f, 1.0f / halfWidth, 1.0f / halfHeight);
+            effect->SetVector("vec4History", &historyInfo);
+        }
+
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        auto bindTextures = [&](bool readScene, bool readSkyRef, bool readMarch)
+        {
+            // The samplers have fixed registers: s0 depth, s1 coverage, s2 detail, s3 this frame's
+            // half size clouds, s4 the history, s5 the accumulated clouds, s6 the scene, for the sky's
+            // brightness, never while drawing into it, s7 that brightness, s8 and s9 the march's sums.
+            // The reflections have no depth texture of their own: none reads as sky everywhere.
+            pDevice->SetTexture(0, reflection ? nullptr : R.mDepthRT->mD3DTexture);
+            pDevice->SetTexture(1, coverage);
+            pDevice->SetTexture(2, detail);
+            pDevice->SetTexture(3, halfSize && !readMarch ? R.CloudTex[0]->mD3DTexture : nullptr);
+            pDevice->SetTexture(4, halfSize ? R.CloudTex[prevAccum]->mD3DTexture : nullptr);
+            pDevice->SetTexture(5, halfSize ? R.CloudTex[nextAccum]->mD3DTexture : nullptr);
+            pDevice->SetTexture(6, readScene ? sceneBase : nullptr);
+            pDevice->SetTexture(7, readSkyRef && R.CloudSkyRefTex ? R.CloudSkyRefTex->mD3DTexture : nullptr);
+            pDevice->SetTexture(8, readMarch ? R.CloudMarchTex[0]->mD3DTexture : nullptr);
+            pDevice->SetTexture(9, readMarch ? R.CloudMarchTex[1]->mD3DTexture : nullptr);
+            for (DWORD slot = 0; slot < 10; ++slot)
+            {
+                const bool wrap = slot == 1 || slot == 2;
+                const bool linear = slot != 0 && slot != 3 && slot != 8 && slot != 9;
+                pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+                pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+                pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSW, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+                pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+                pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+                pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, slot == 1 ? D3DTEXF_LINEAR : D3DTEXF_NONE);
+            }
+        };
+        auto drawPass = [&](const char* technique, IDirect3DSurface9* target, float w, float h, bool blend)
+        {
+            pDevice->SetRenderTarget(0, target);
+            D3DVIEWPORT9 viewport = { 0, 0, DWORD(w), DWORD(h), 0.0f, 1.0f };
+            pDevice->SetViewport(&viewport);
+            pDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, blend ? TRUE : FALSE);
+            pDevice->SetRenderState(D3DRS_COLORWRITEENABLE, blend ? (D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE) : 0xF);
+            const D3DXVECTOR4 info = ProjInfo(proj, w, h);
+            effect->SetVector("vec4ProjInfo", &info);
+            const ScreenVertex screenVertices[4] =
+            {
+                { -0.5f,     -0.5f,     quadZ, 1.0f, 0.0f, 0.0f },
+                { -0.5f,      h - 0.5f, quadZ, 1.0f, 0.0f, 1.0f },
+                { w - 0.5f,  -0.5f,     quadZ, 1.0f, 1.0f, 0.0f },
+                { w - 0.5f,   h - 0.5f, quadZ, 1.0f, 1.0f, 1.0f }
+            };
+            UINT passes = 0;
+            effect->SetTechnique(technique);
+            effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
+            effect->BeginPass(0);
+            effect->CommitChanges();
+            // Never the scene while drawing into it.
+            bindTextures(halfSize && target != sceneSurface, halfSize && target != R.CloudSkyRefSurf, halfSize && target == R.CloudSurf[0]);
+            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            effect->EndPass();
+            effect->End();
+        };
+
+        if (halfSize)
+        {
+            // The sky's brightness first, blended into its 1 x 1 target; the march reads it.
+            if (R.CloudSkyRefSurf)
+            {
+                const D3DXVECTOR4 skyRefProj = ProjInfo(proj, 1.0f, 1.0f);
+                effect->SetVector("vec4SkyRefProj", &skyRefProj);
+                drawPass("CloudsSkyRef", R.CloudSkyRefSurf, 1.0f, 1.0f, true);
+            }
+            // The march into its two targets, then its light into the half size clouds.
+            pDevice->SetRenderTarget(1, R.CloudMarchSurf[1]);
+            drawPass("CloudsMarch", R.CloudMarchSurf[0], halfWidth, halfHeight, false);
+            pDevice->SetRenderTarget(1, nullptr);
+            drawPass("CloudsLight", R.CloudSurf[0], halfWidth, halfHeight, false);
+            drawPass("CloudsResolve", R.CloudSurf[nextAccum], halfWidth, halfHeight, false);
+            drawPass("CloudsComposite", sceneSurface, width, height, true);
+            R.nCloudAccumIndex ^= 1;
+            R.nCloudAccumFrame = FrameHistory::Frame();
+        }
+        else
+            drawPass("Clouds", sceneSurface, width, height, true);
+
+        for (size_t i = 0; i < std::size(kCloudRenderStates); ++i)
+            pDevice->SetRenderState(kCloudRenderStates[i].state, savedRenderStates[i]);
+        for (DWORD slot = 0; slot < 10; ++slot)
+        {
+            pDevice->SetTexture(slot, oldTextures[slot]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                pDevice->SetSamplerState(slot, kSamplerStates[i], savedSamplerStates[slot][i]);
+            SAFE_RELEASE(oldTextures[slot]);
+        }
+        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
+        pDevice->SetPixelShader(oldPS);
+        pDevice->SetVertexShader(oldVS);
+        pDevice->SetRenderTarget(0, oldTarget);
+        pDevice->SetRenderTarget(1, oldTarget1);
+        pDevice->SetDepthStencilSurface(oldDepth);
+        pDevice->SetViewport(&oldViewport);
+        pDevice->SetFVF(oldFVF);
+        pDevice->SetVertexDeclaration(oldDecl);
+        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
+
+        SAFE_RELEASE(oldPS);
+        SAFE_RELEASE(oldVS);
+        SAFE_RELEASE(oldDecl);
+        SAFE_RELEASE(oldVB);
+        SAFE_RELEASE(oldDepth);
+        SAFE_RELEASE(oldTarget);
+        SAFE_RELEASE(oldTarget1);
+        SAFE_RELEASE(sceneSurface);
+    }
+
     static void RenderWaterReflections()
     {
         auto& R = PostFxResources;
@@ -3956,6 +5025,92 @@ private:
         bInsteadDrawPrimitivePostFX = false;
         DrawSSRDebugOverlay();
         SSRTrace::Tick();
+        TickIniReload();
+    }
+
+    // Once a frame, from the post fx pass, which runs in the pause menu too: Ctrl+Shift+F10 reads
+    // the live settings (ReadLiveIni) again from the ini, with a beep to say it did, and adds the
+    // cloud values the shadows use to FusionFix.CloudShadows.log next to the game; Ctrl+Shift+F9
+    // moves the clouds somewhere else.
+    static void TickIniReload()
+    {
+        static bool keyWasDown = false;
+        const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+            (GetAsyncKeyState(VK_F10) & 0x8000);
+        if (down && !keyWasDown)
+        {
+            CIniReader iniReader("");
+            auto& R = PostFxResources;
+            R.ReadLiveIni(iniReader);
+            // The cloud values the shadows were cast with, to tune CloudShadowsCoverage by.
+            if (FILE* log = _wfopen((GetExeModulePath() / L"FusionFix.CloudShadows.log").c_str(), L"a"))
+            {
+                fprintf(log, "threshold %.4f  bias %.4f  thickness %.4f  (%s)  coverage %+.3f  strength %.2f\n", R.fCloudLastThreshold,
+                        R.fCloudLastBias, R.fCloudLastThickness, R.bCloudLastFromGame ? "the game's" : "fallback, the sky not drawn yet",
+                        R.fCloudShadowsCoverage, R.fCloudShadows);
+                const auto& top = rage::grmShaderInfo::getShaderParamData(R.CloudColorIdx);
+                const auto& sunset = rage::grmShaderInfo::getShaderParamData(R.SunsetColorIdx);
+                const auto& sunDir = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx);
+                const auto& sky = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
+                const auto& moon = rage::grmShaderInfo::getShaderParamData(R.CloudMoonPositionIdx);
+                const float* k = R.CloudShadowConsts;
+                fprintf(log, "  clouds lit from %.3f %.3f %.3f; the sky's sun %.3f %.3f %.3f; the game's light %.3f %.3f %.3f (frame %u, now %u); sky axis signs %+.0f %+.0f\n",
+                        R.CloudLastUsedSun[0], R.CloudLastUsedSun[1], R.CloudLastUsedSun[2], R.CloudLastSkySun[0], R.CloudLastSkySun[1],
+                        R.CloudLastSkySun[2], R.CloudLightDir[0], R.CloudLightDir[1], R.CloudLightDir[2], R.nCloudLightFrame, FrameHistory::Frame(),
+                        R.CloudSkyAxisSign[0], R.CloudSkyAxisSign[1]);
+                fprintf(log, "  clouds: density %.4f, absorption %.2f x %.2f, translucency %.2f, detail %.2f, shade %.2f, sky match %.2f x %.2f\n",
+                        R.fVolumetricCloudsDensity * R.Cloud.density, R.fVolumetricCloudsAbsorption, R.Cloud.absorption,
+                        R.fVolumetricCloudsTranslucency * R.Cloud.translucency, R.fVolumetricCloudsDetail * R.Cloud.detail,
+                        R.fVolumetricCloudsShade, R.fVolumetricCloudsSkyMatch, R.Cloud.skyMatch);
+                fprintf(log, "  clouds drawn with lit %.2f %.2f %.2f, shade %.2f %.2f %.2f, ceiling %.2f; lit by the %s at %.2f; sky clamp %.2f %.2f %.2f; volumetric fog %d; sky HDR %d; sky match %.2f; debug %d\n",
+                        R.CloudLastLit[0], R.CloudLastLit[1], R.CloudLastLit[2], R.CloudLastShade[0], R.CloudLastShade[1], R.CloudLastShade[2],
+                        R.CloudLastCeiling, R.bCloudLastMoonlit ? "moon" : "sun", R.CloudLastLightStrength, R.CloudLastClamp[0], R.CloudLastClamp[1], R.CloudLastClamp[2],
+                        [] { static auto fog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG"); return fog ? fog->get() : -1; }(), int(bSkyHDR), R.fVolumetricCloudsSkyMatch, R.nVolumetricCloudsDebug);
+                fprintf(log, "  shadow constants: c197 %.3f %.3f %.1f %.6f  c198 %.3f %.3f %.3f %.3f  c199 %.3f %.3f  noise %s, %s after the lights  debug %d\n",
+                        k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], R.CloudNoiseTexture ? "made" : "missing",
+                        R.bCloudNoiseSurvived ? "still bound" : "gone", R.nCloudShadowsDebug);
+                fprintf(log, "  s12 before the shadows: srgb %lu  max mip %lu  min filter %lu  lod bias %.3f\n",
+                        static_cast<unsigned long>(R.CloudSamplerBefore[0]), static_cast<unsigned long>(R.CloudSamplerBefore[1]),
+                        static_cast<unsigned long>(R.CloudSamplerBefore[2]), std::bit_cast<float>(R.CloudSamplerBefore[3]));
+                fprintf(log, "  volumetric clouds: %s; effect %s (hr 0x%08lX); shadows follow them %d; HDRExposure %.3f; CloudColor %.3f %.3f %.3f; "
+                             "SunsetColor %.3f %.3f %.3f; CloudInscatteringRange %.3f; SunDirection %.3f %.3f %.3f; SkyColor %.3f %.3f %.3f; MoonPosition %.3f %.3f %.3f\n",
+                        R.szCloudsStatus, R.CloudsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrCloudsEffect), int(R.VolumetricCloudsOn()),
+                        rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0], top[0], top[1], top[2], sunset[0], sunset[1], sunset[2],
+                        rage::grmShaderInfo::getShaderParamData(R.CloudInscatteringIdx)[0], sunDir[0], sunDir[1], sunDir[2],
+                        sky[0], sky[1], sky[2], moon[0], moon[1], moon[2]);
+                // The game's weather by name, and the cloud layer it gives, so a screenshot can be
+                // matched to its weather.
+                {
+                    static const char* kWeatherNames[8] = { "EXTRASUNNY", "SUNNY", "SUNNY_WINDY", "CLOUDY", "RAIN", "DRIZZLE", "FOGGY", "LIGHTNING" };
+                    auto name = [](const auto* type) {
+                        const auto value = type ? static_cast<uint32_t>(*type) : 99u;
+                        return value < 8 ? kWeatherNames[value] : "?";
+                    };
+                    const float k = CWeather::InterpolationValue ? *CWeather::InterpolationValue : 0.0f;
+                    const auto& c = R.Cloud;
+                    fprintf(log, "  weather %s -> %s at %.2f; cloud layer: cover %.2f, base %.0f m, thickness %.0f m, sheet %.2f, wind %.2f\n",
+                            name(CWeather::OldWeatherType), name(CWeather::NewWeatherType), k, c.coverage, c.base, c.thickness, c.stratus, c.wind);
+                }
+                fclose(log);
+            }
+            MessageBeep(MB_OK);
+        }
+        keyWasDown = down;
+
+        // Ctrl+Shift+F9: the clouds start somewhere else, as at a new game (a new place on the
+        // map, a new phase of its morph and of the billows), to look at other skies without
+        // restarting. The accumulation starts over, so the old clouds do not linger.
+        static bool reseedWasDown = false;
+        const bool reseed = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+            (GetAsyncKeyState(VK_F9) & 0x8000);
+        if (reseed && !reseedWasDown)
+        {
+            auto& R = PostFxResources;
+            R.bCloudDriftSeeded = false;
+            R.nCloudAccumFrame = 0;
+            MessageBeep(MB_OK);
+        }
+        reseedWasDown = reseed;
     }
 
     // Replaces the finished frame with the SSR debug view chosen in the graphics menu.
@@ -4188,6 +5343,17 @@ private:
             SAFE_RELEASE(pShader);
         }
         return hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+    }
+
+    // The reflection map's sky (CE 0xdbc2ab, the sky draw's branch for render phases with flag
+    // 0x40000): the volumetric clouds go in right after it, through the reflection's viewport.
+    static inline injector::hook_back<int(__fastcall*)(int, void*, int, int, char, char, int, char)> hbDrawSkyReflection;
+    static int __fastcall DrawSkyReflection(int _this, void* edx, int a2, int a3, char a4, char a5, int a6, char a7)
+    {
+        const int result = hbDrawSkyReflection.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+        if (auto pDevice = rage::grcDevice::GetD3DDevice())
+            RenderVolumetricClouds(pDevice, nullptr, true);
+        return result;
     }
 
     static inline SafetyHookInline RenderPedAndVehicleFakeShadowsInlineHook;
@@ -4959,6 +6125,21 @@ public:
     static void BindLightingInputs(IDirect3DDevice9* pDevice)
     {
         auto& R = PostFxResources;
+        // gDirectionalLight is a RAGE global, the same register in every shader: the direction the
+        // sun's (or moon's) light travels. The clouds take the reverse of it.
+        {
+            float light[4] = {};
+            if (SUCCEEDED(pDevice->GetPixelShaderConstantF(17, light, 1)))
+            {
+                const float len = std::sqrt(light[0] * light[0] + light[1] * light[1] + light[2] * light[2]);
+                if (len > 0.9f && len < 1.1f)
+                {
+                    for (int i = 0; i < 3; ++i)
+                        R.CloudLightDir[i] = -light[i] / len;
+                    R.nCloudLightFrame = FrameHistory::Frame();
+                }
+            }
+        }
         // s9 is read by no game shader, and the car glass takes it over right after lighting.
         if (R.bContactValid && R.ContactResult)
         {
@@ -4987,6 +6168,124 @@ public:
             offset[3] = (std::min)(0.2f * k, 1.0f);
             pDevice->SetPixelShaderConstantF(201, scale, 1);
             pDevice->SetPixelShaderConstantF(205, offset, 1);
+        }
+        // The sun on materials with no specular map (x) and the cloud shadows (yzw, c198, c199, s12).
+        {
+            float threshold = 0.0f, bias = 0.0f, thickness = 0.0f;
+            if (R.bCloudParamsRegistered)
+            {
+                threshold = rage::grmShaderInfo::getShaderParamData(R.CloudThresholdIdx)[0];
+                bias = rage::grmShaderInfo::getShaderParamData(R.CloudBiasIdx)[0];
+                thickness = rage::grmShaderInfo::getShaderParamData(R.CloudThicknessIdx)[0];
+            }
+            // Until the sky has been drawn once its parameters read zero, which is no cloud at all.
+            R.bCloudLastFromGame = !(threshold == 0.0f && bias == 0.0f);
+            if (threshold == 0.0f && bias == 0.0f)
+            {
+                threshold = 1.6f;
+                bias = 0.6f;
+            }
+            if (thickness <= 0.0f)
+                thickness = 1.0f;
+            float coverageShift = R.fCloudShadowsCoverage;
+            float deckHeight = R.fCloudShadowsHeight;
+            const double seconds = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds * 0.001 : 0.0;
+            R.UpdateCloudLayer(seconds);
+            // The game's flat clouds under the volumetric ones, by VolumetricCloudsVanilla:
+            // gta_atmoscatt_clouds draws them where CloudThreshold * noise - CloudBias is above
+            // 0, so threshold * v and bias towards 1 by 1 - v fade them out at 0. Its high layer
+            // stays.
+            if (R.bCloudParamsRegistered)
+            {
+                const bool fade = R.VolumetricCloudsOn() && R.fVolumetricCloudsVanilla < 1.0f;
+                const float v = R.fVolumetricCloudsVanilla;
+                auto& thresholdOverride = rage::grmShaderInfo::getShaderParamOverride(R.CloudThresholdIdx);
+                auto& biasOverride = rage::grmShaderInfo::getShaderParamOverride(R.CloudBiasIdx);
+                thresholdOverride.mul = { v, 1.0f, 1.0f, 1.0f };
+                thresholdOverride.add = {};
+                biasOverride.mul = { v, 1.0f, 1.0f, 1.0f };
+                biasOverride.add = { 1.0f - v, 0.0f, 0.0f, 0.0f };
+                thresholdOverride.on = fade;
+                biasOverride.on = fade;
+            }
+            // The shadows work out the clouds' coverage as Clouds.fx does (deferred_lighting_sun_under_clouds
+            // patch): from the volumetric clouds' layer while they are on, otherwise from CloudShadowsCoverage
+            // about a cover of 0.4 at CloudShadowsHeight. The game's threshold, bias and thickness are only
+            // logged.
+            float cover = std::clamp(0.4f + coverageShift, 0.02f, 1.0f);
+            if (R.VolumetricCloudsOn())
+            {
+                // An overcast sheet's evened coverage is left out: under it the sun is weak anyway.
+                cover = (std::max)(R.Cloud.coverage, 0.02f);
+                deckHeight = R.Cloud.base + R.Cloud.thickness * 0.33f;
+            }
+            R.fCloudLastThreshold = threshold;
+            R.fCloudLastBias = bias;
+            R.fCloudLastThickness = thickness;
+
+            auto noise = (R.fCloudShadows > 0.0f || R.VolumetricCloudsOn()) ? R.CloudNoiseTex() : nullptr;
+            const float strength = noise ? R.fCloudShadows : 0.0f; // 0 leaves the shadows out
+            const float invScale = 1.0f / R.fCloudShadowsScale;
+            // The wind blows the same way all the time; only how far it has carried the noise
+            // changes, wrapped to one tile so the offset keeps its precision.
+            const float windX = static_cast<float>(std::fmod(R.fCloudDrift * 0.93, 1.0));
+            const float windY = static_cast<float>(std::fmod(R.fCloudDrift * 0.37, 1.0));
+
+            R.fCloudWindX = windX;
+            R.fCloudWindY = windY;
+            R.fCloudSeconds = seconds;
+            float c197[4] = { R.fSpecularSheen, strength, deckHeight, invScale };
+            float c198[4] = { windX, windY, cover, R.kCloudWeatherReach };
+            float c199[4] = { 0.0f, R.fCloudShadowsSoftness, R.CloudMorphPhase(), R.kCloudMorphReach / R.fCloudShadowsScale };
+            if (R.nCloudShadowsDebug == 1)
+            {
+                // Full cover everywhere.
+                c199[0] = 1.0f;
+            }
+            else if (R.nCloudShadowsDebug == 2)
+            {
+                // Cover 1, so the coverage is close to the map itself, twenty times finer, so its
+                // blotches show around the player; at the clouds' scale they spanned hundreds of
+                // metres and the ground looked evenly lit.
+                c198[2] = 1.0f;
+                c198[3] = 0.0f;
+                c197[3] *= 20.0f;
+            }
+            pDevice->SetPixelShaderConstantF(197, c197, 1);
+            pDevice->SetPixelShaderConstantF(198, c198, 1);
+            pDevice->SetPixelShaderConstantF(199, c199, 1);
+            std::memcpy(R.CloudShadowConsts, c197, sizeof(c197));
+            std::memcpy(R.CloudShadowConsts + 4, c198, sizeof(c198));
+            std::memcpy(R.CloudShadowConsts + 8, c199, sizeof(c199));
+            if (noise)
+            {
+                // s12 is read only by G-buffer and particle shaders, none of which draw while the
+                // lights do. On s7, rage_postfx's, the sun read another texture and the shadows
+                // never showed.
+                // Every state: the G-buffer pass leaves texturequality's detail texture states on s12
+                // (kDetailStage), and the sun read zero from the noise although it was bound.
+                DWORD srgb = 0, maxMip = 0, minFilter = 0, lodBias = 0;
+                pDevice->GetSamplerState(12, D3DSAMP_SRGBTEXTURE, &srgb);
+                pDevice->GetSamplerState(12, D3DSAMP_MAXMIPLEVEL, &maxMip);
+                pDevice->GetSamplerState(12, D3DSAMP_MINFILTER, &minFilter);
+                pDevice->GetSamplerState(12, D3DSAMP_MIPMAPLODBIAS, &lodBias);
+                R.CloudSamplerBefore[0] = srgb;
+                R.CloudSamplerBefore[1] = maxMip;
+                R.CloudSamplerBefore[2] = minFilter;
+                R.CloudSamplerBefore[3] = lodBias;
+                pDevice->SetTexture(12, noise);
+                pDevice->SetSamplerState(12, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+                pDevice->SetSamplerState(12, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+                pDevice->SetSamplerState(12, D3DSAMP_ADDRESSW, D3DTADDRESS_WRAP);
+                pDevice->SetSamplerState(12, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+                pDevice->SetSamplerState(12, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+                pDevice->SetSamplerState(12, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+                pDevice->SetSamplerState(12, D3DSAMP_MAXMIPLEVEL, 0);
+                pDevice->SetSamplerState(12, D3DSAMP_MIPMAPLODBIAS, 0);
+                pDevice->SetSamplerState(12, D3DSAMP_MAXANISOTROPY, 1);
+                pDevice->SetSamplerState(12, D3DSAMP_SRGBTEXTURE, FALSE);
+                R.bCloudNoiseBound = true;
+            }
         }
         // The light volumes do not read the material IDs themselves (local_light_on_skin.patch).
         // s11 is read by no game shader, and the car glass takes it over right after lighting;
@@ -5066,6 +6365,16 @@ public:
             pDevice->SetTexture(11, nullptr);
             R.bMaterialIdBound = false;
         }
+        if (R.bCloudNoiseBound)
+        {
+            // Whether the noise was still there once the lights were drawn, for the log.
+            IDirect3DBaseTexture9* bound = nullptr;
+            pDevice->GetTexture(12, &bound);
+            R.bCloudNoiseSurvived = bound && bound == R.CloudNoiseTexture;
+            SAFE_RELEASE(bound);
+            pDevice->SetTexture(12, nullptr);
+            R.bCloudNoiseBound = false;
+        }
         // Lights drawn for other views (reflections, mirrors) must not march with this camera,
         // nor light skin by this view's material IDs.
         const float noLocalContactShadows[4] = {};
@@ -5073,6 +6382,7 @@ public:
         R.bLocalContactPass = false;
         pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
+        pDevice->SetPixelShaderConstantF(197, noLocalContactShadows, 1);
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
@@ -5125,6 +6435,7 @@ public:
             if (GetD3DX9_43DLL())
             {
                 PostFxResources.Readini();
+                PostFxResources.RegisterCloudParams();
                 SSRTrace::path = CIniReader("").GetIniPath().parent_path() / "GTAIV-ssr-trace.log";
 
                 auto pattern = find_pattern("E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 5F", "E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 33 C0");
@@ -5132,6 +6443,10 @@ public:
 
                 pattern = find_pattern("E8 ? ? ? ? 8D 44 24 ? 50 8B CF E8 ? ? ? ? 8D 84 24", "E8 ? ? ? ? 8D 44 24 ? 50 8B CE E8 ? ? ? ? 8D 8C 24 ? ? ? ? 51 8B CE E8 ? ? ? ? 8D 94 24");
                 hbDrawSkyHook.fun = injector::MakeCALL(pattern.get_first(0), DrawSky).get();
+
+                pattern = hook::pattern("6A 00 6A 00 6A 00 6A 00 6A 03 57 E8 ? ? ? ? 5F 5E 8B E5 5D C3");
+                if (!pattern.empty())
+                    hbDrawSkyReflection.fun = injector::MakeCALL(pattern.get_first(11), DrawSkyReflection).get();
 
                 pattern = find_pattern("E8 ? ? ? ? 6A ? FF B7 ? ? ? ? 8B CF FF 77 ? E8 ? ? ? ? 5F", "E8 ? ? ? ? 8B 8E ? ? ? ? 8B 56 ? 6A ? 51");
                 hbDrawCallPostFX.fun = injector::MakeCALL(pattern.get_first(0), DrawCallPostFX).get();
