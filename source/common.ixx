@@ -144,6 +144,12 @@ public:
         static Event<> AfterEndScene;
         return AfterEndScene;
     }
+    // After every onAfterEndScene handler: the back buffer holds the frame as it will be presented
+    static Event<>& onBeforePresent()
+    {
+        static Event<> BeforePresent;
+        return BeforePresent;
+    }
     static Event<>& onReadGameConfig()
     {
         static Event<> ReadGameConfig;

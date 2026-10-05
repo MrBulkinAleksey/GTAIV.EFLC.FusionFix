@@ -281,6 +281,7 @@ project "GTAIV.EFLC.FusionFix.Helper"
    includedirs { "external/dlss/include" }
    includedirs { "external/fidelityfx/api/include" }
    includedirs { "external/fidelityfx/upscalers/include" }
+   includedirs { "external/fidelityfx/framegeneration/include" }
    libdirs { "external/dlss/lib/Windows_x86_64/x64" }
    links { "d3d12", "dxgi", "shell32", "nvsdk_ngx_s" }
 

@@ -7,6 +7,8 @@ export module temporal;
 import common;
 import comvars;
 import d3dx9_43;
+import framegeneration;
+import hdr;
 import renderscale;
 import settings;
 import upscaler;
@@ -1370,6 +1372,22 @@ public:
         frame.Sharpness = backend == Upscaler::Backend::FSR ? fFSRSharpness : 0.0f;
         frame.DLSSPreset = static_cast<uint32_t>(nDLSSPreset);
         frame.Reset = !(UpscalerFrame != 0 && UpscalerFrame + 1 == SceneFrame && PreviousCamera.Valid && !IsCameraCut());
+
+        // The camera in world space: rows of the inverse view, which looks along -z
+        frame.FrameGeneration = FrameGeneration::IsEnabled();
+        frame.HighDynamicRange = HDROutput::IsActive();
+        auto world = CurrentCamera.View.Inverse();
+        auto normalized = [&](int row, float sign, float (&out)[3])
+        {
+            auto length = std::sqrt(world.m[row][0] * world.m[row][0] + world.m[row][1] * world.m[row][1] + world.m[row][2] * world.m[row][2]);
+            for (int i = 0; i < 3; ++i)
+                out[i] = length > 0.0 ? static_cast<float>(sign * world.m[row][i] / length) : 0.0f;
+        };
+        normalized(0, 1.0f, frame.CameraRight);
+        normalized(1, 1.0f, frame.CameraUp);
+        normalized(2, -1.0f, frame.CameraForward);
+        for (int i = 0; i < 3; ++i)
+            frame.CameraPosition[i] = static_cast<float>(world.m[3][i]);
 
         if (!Upscaler::Evaluate(backend, frame))
             return false;

@@ -29,6 +29,7 @@
 #include <ffx_api.h>
 #include <ffx_api_loader.h>
 #include <ffx_upscale.h>
+#include <ffx_framegeneration.h>
 #include <dx12/ffx_api_dx12.h>
 
 #include "upscaler_protocol.hpp"
@@ -127,7 +128,8 @@ namespace
         uint64_t localValue = 0;
         HANDLE fenceEvent = nullptr;
 
-        static constexpr uint32_t Frames = 3;
+        // Evaluate and Generate each take one
+        static constexpr uint32_t Frames = 6;
         std::array<ComPtr<ID3D12CommandAllocator>, Frames> allocators;
         std::array<uint64_t, Frames> allocatorValues{};
         ComPtr<ID3D12GraphicsCommandList> list;
@@ -137,11 +139,11 @@ namespace
         HANDLE sharedFenceHandle = nullptr;
 
         // Wine (see the protocol): the shared textures have no UAV flag, which keeps them plain for the game's Vulkan
-        // import, the upscaler writes into outputUav, which is copied into the shared output. sharedFence is then the
-        // game's semaphore, or without it (cpuSync) the GPU work is waited for on the CPU.
+        // import, the upscaler and the frame generation write into uavs, which are copied into the shared textures.
+        // sharedFence is then the game's semaphore, or without it (cpuSync) the GPU work is waited for on the CPU.
         bool wine = false;
         bool cpuSync = false;
-        ComPtr<ID3D12Resource> outputUav;
+        std::array<ComPtr<ID3D12Resource>, static_cast<size_t>(Protocol::Texture::Count)> uavs;
 
         bool Create(LUID luid)
         {
@@ -253,7 +255,8 @@ namespace
                     CloseHandle(texture.handle);
                 texture = {};
             }
-            outputUav.Reset();
+            for (auto& uav : uavs)
+                uav.Reset();
             if (sharedFenceHandle)
                 CloseHandle(sharedFenceHandle);
             sharedFenceHandle = nullptr;
@@ -287,22 +290,36 @@ namespace
             if (wine && unorderedAccess)
             {
                 desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-                if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&outputUav))))
+                if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&uavs[static_cast<size_t>(index)]))))
                     return false;
             }
             return true;
         }
 
+        void ReleaseTexture(Protocol::Texture index)
+        {
+            auto& texture = textures[static_cast<size_t>(index)];
+            if (texture.handle)
+                CloseHandle(texture.handle);
+            texture = {};
+            uavs[static_cast<size_t>(index)].Reset();
+        }
+
         uint64_t AllocationSize(Protocol::Texture index)
         {
-            auto desc = textures[static_cast<size_t>(index)].resource->GetDesc();
+            auto& resource = textures[static_cast<size_t>(index)].resource;
+            if (!resource)
+                return 0;
+            auto desc = resource->GetDesc();
             return device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
         }
 
-        // Wine: the upscaler's output into the shared output, both in the common state before and after
-        void CopyOutput(ID3D12GraphicsCommandList* cmd)
+        // Wine: what the upscaler or the frame generation wrote into the shared texture, both in the common state
+        // before and after
+        void CopyFromUav(ID3D12GraphicsCommandList* cmd, Protocol::Texture index)
         {
-            auto shared = textures[static_cast<size_t>(Protocol::Texture::Output)].resource.Get();
+            auto shared = textures[static_cast<size_t>(index)].resource.Get();
+            auto uav = uavs[static_cast<size_t>(index)].Get();
             D3D12_RESOURCE_BARRIER barriers[2]{};
             for (auto& barrier : barriers)
             {
@@ -310,12 +327,12 @@ namespace
                 barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
                 barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
             }
-            barriers[0].Transition.pResource = outputUav.Get();
+            barriers[0].Transition.pResource = uav;
             barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
             barriers[1].Transition.pResource = shared;
             barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
             cmd->ResourceBarrier(2, barriers);
-            cmd->CopyResource(shared, outputUav.Get());
+            cmd->CopyResource(shared, uav);
             for (auto& barrier : barriers)
             {
                 barrier.Transition.StateBefore = barrier.Transition.StateAfter;
@@ -331,28 +348,35 @@ namespace
             return SUCCEEDED(device->CreateSharedHandle(sharedFence.Get(), nullptr, GENERIC_ALL, nullptr, &sharedFenceHandle));
         }
 
-        // What the upscaler reads and writes
+        // What the upscaler and the frame generation read and write
         ID3D12Resource* Texture(Protocol::Texture index)
         {
-            if (wine && index == Protocol::Texture::Output)
-                return outputUav.Get();
+            if (auto& uav = uavs[static_cast<size_t>(index)])
+                return uav.Get();
             return textures[static_cast<size_t>(index)].resource.Get();
         }
 
-        void Transition(ID3D12GraphicsCommandList* cmd, bool toUse)
+        // The textures of one pass from the common state to their use, or back
+        void Transition(ID3D12GraphicsCommandList* cmd, bool toUse, std::initializer_list<Protocol::Texture> indices)
         {
             D3D12_RESOURCE_BARRIER barriers[static_cast<size_t>(Protocol::Texture::Count)]{};
-            for (size_t i = 0; i < std::size(barriers); ++i)
+            UINT count = 0;
+            for (auto index : indices)
             {
-                auto output = i == static_cast<size_t>(Protocol::Texture::Output);
-                auto use = output ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-                barriers[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                barriers[i].Transition.pResource = Texture(static_cast<Protocol::Texture>(i));
-                barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                barriers[i].Transition.StateBefore = toUse ? D3D12_RESOURCE_STATE_COMMON : use;
-                barriers[i].Transition.StateAfter = toUse ? use : D3D12_RESOURCE_STATE_COMMON;
+                auto resource = Texture(index);
+                if (!resource)
+                    continue;
+                auto written = index == Protocol::Texture::Output || index == Protocol::Texture::Generated;
+                auto use = written ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                auto& barrier = barriers[count++];
+                barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                barrier.Transition.pResource = resource;
+                barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                barrier.Transition.StateBefore = toUse ? D3D12_RESOURCE_STATE_COMMON : use;
+                barrier.Transition.StateAfter = toUse ? use : D3D12_RESOURCE_STATE_COMMON;
             }
-            cmd->ResourceBarrier(static_cast<UINT>(std::size(barriers)), barriers);
+            if (count)
+                cmd->ResourceBarrier(count, barriers);
         }
     };
 
@@ -376,6 +400,12 @@ namespace
         float sharpness = 0.0f;
         bool reset = false;
         bool reactive = false;
+        // Frame generation
+        float cameraPosition[3]{};
+        float cameraUp[3]{};
+        float cameraRight[3]{};
+        float cameraForward[3]{};
+        uint64_t frameId = 0;
     };
 
     // -----------------------------------------------------------------------------------------------
@@ -550,10 +580,36 @@ namespace
         HMODULE module = nullptr;
         ffxFunctions functions{};
         ffxContext context = nullptr;
+        ffxContext frameGeneration = nullptr;
         ID3D12Device* device = nullptr;
+        uint32_t displayWidth = 0;
+        uint32_t displayHeight = 0;
+
+        // The versions of an effect the runtime has for this GPU, logged
+        uint64_t LogVersions(uint64_t createDescType, const char* effect)
+        {
+            uint64_t count = 0;
+            ffxQueryDescGetVersions versions{};
+            versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+            versions.createDescType = createDescType;
+            versions.device = device;
+            versions.outputCount = &count;
+            if (functions.Query(nullptr, &versions.header) != FFX_API_RETURN_OK || count == 0)
+                return 0;
+
+            std::vector<uint64_t> ids(count);
+            std::vector<const char*> names(count);
+            versions.versionIds = ids.data();
+            versions.versionNames = names.data();
+            if (functions.Query(nullptr, &versions.header) == FFX_API_RETURN_OK)
+                for (uint64_t i = 0; i < count; ++i)
+                    Log("%s version available: %s", effect, names[i] ? names[i] : "?");
+            return count;
+        }
 
     public:
         bool available = false;
+        bool frameGenerationAvailable = false;
 
         bool Init(ID3D12Device* d3d, const std::vector<std::wstring>& searchPaths, std::string& message)
         {
@@ -595,25 +651,16 @@ namespace
                 return false;
             }
 
-            uint64_t count = 0;
-            ffxQueryDescGetVersions versions{};
-            versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
-            versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-            versions.device = device;
-            versions.outputCount = &count;
-            if (functions.Query(nullptr, &versions.header) != FFX_API_RETURN_OK || count == 0)
+            if (LogVersions(FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE, "FSR") == 0)
             {
                 message = "FSR is not available: the FidelityFX runtime has no upscaler for this GPU";
                 return false;
             }
 
-            std::vector<uint64_t> ids(count);
-            std::vector<const char*> names(count);
-            versions.versionIds = ids.data();
-            versions.versionNames = names.data();
-            if (functions.Query(nullptr, &versions.header) == FFX_API_RETURN_OK)
-                for (uint64_t i = 0; i < count; ++i)
-                    Log("FSR version available: %s", names[i] ? names[i] : "?");
+            // amd_fidelityfx_framegeneration_dx12.dll next to the loader
+            frameGenerationAvailable = LogVersions(FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION, "Frame generation") != 0;
+            if (!frameGenerationAvailable)
+                Log("Frame generation is not available: no frame generation in the FidelityFX runtime");
 
             available = true;
             message = "FSR available";
@@ -694,8 +741,154 @@ namespace
             context = nullptr;
         }
 
+        // -------------------------------------------------------------------------------------------
+        // Frame generation, without AMD's swap chain: the game presents the frames itself
+
+        bool CreateFrameGeneration(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, bool hdr)
+        {
+            ReleaseFrameGeneration();
+            if (!frameGenerationAvailable)
+                return false;
+
+            ffxCreateBackendDX12Desc backend{};
+            backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
+            backend.device = device;
+
+            ffxCreateContextDescFrameGenerationVersion version{};
+            version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_VERSION;
+            version.header.pNext = &backend.header;
+            version.version = FFX_FRAMEGENERATION_VERSION;
+
+            // Standard depth, motion vectors at the render size without jitter
+            ffxCreateContextDescFrameGeneration create{};
+            create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
+            create.header.pNext = &version.header;
+            create.flags = hdr ? FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE : 0;
+            create.displaySize = { outputWidth, outputHeight };
+            create.maxRenderSize = { width, height };
+            create.backBufferFormat = FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
+
+            auto result = functions.CreateContext(&frameGeneration, &create.header, nullptr);
+            if (result != FFX_API_RETURN_OK)
+            {
+                Log("Frame generation context creation failed: %u", result);
+                frameGeneration = nullptr;
+                return false;
+            }
+            displayWidth = outputWidth;
+            displayHeight = outputHeight;
+
+            ffxQueryGetProviderVersion provider{};
+            provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
+            if (functions.Query(&frameGeneration, &provider.header) == FFX_API_RETURN_OK && provider.versionName)
+                Log("Frame generation provider: %s", provider.versionName);
+            return true;
+        }
+
+        bool HasFrameGeneration() const
+        {
+            return frameGeneration != nullptr;
+        }
+
+        // The configuration and the preparation of one frame, with its depth and motion vectors. Must come before
+        // GenerateFrame of the same frame.
+        bool PrepareFrame(ID3D12GraphicsCommandList* cmd, Device& d, const FrameParams& frame)
+        {
+            if (!frameGeneration)
+                return false;
+
+            ffxConfigureDescFrameGeneration configure{};
+            configure.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
+            configure.swapChain = nullptr;
+            configure.frameGenerationEnabled = true;
+            configure.allowAsyncWorkloads = false;
+            configure.flags = FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY;
+            configure.generationRect = { 0, 0, static_cast<int32_t>(displayWidth), static_cast<int32_t>(displayHeight) };
+            configure.frameID = frame.frameId;
+            auto result = functions.Configure(&frameGeneration, &configure.header);
+            if (result != FFX_API_RETURN_OK)
+            {
+                static uint32_t reported = 0;
+                if (reported++ < 5)
+                    Log("Frame generation configure failed: %u", result);
+                return false;
+            }
+
+            ffxDispatchDescFrameGenerationPrepareV2 prepare{};
+            prepare.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2;
+            prepare.frameID = frame.frameId;
+            prepare.flags = FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY;
+            prepare.commandList = cmd;
+            prepare.renderSize = { frame.width, frame.height };
+            prepare.jitterOffset = { frame.jitterX, frame.jitterY };
+            prepare.motionVectorScale = { frame.motionScaleX, frame.motionScaleY };
+            prepare.frameTimeDelta = frame.frameTimeMs;
+            prepare.reset = frame.reset;
+            prepare.cameraNear = frame.cameraNear;
+            prepare.cameraFar = frame.cameraFar;
+            prepare.cameraFovAngleVertical = frame.cameraFovY;
+            prepare.viewSpaceToMetersFactor = 1.0f;
+            prepare.depth = ffxApiGetResourceDX12(d.Texture(Protocol::Texture::Depth), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+            prepare.motionVectors = ffxApiGetResourceDX12(d.Texture(Protocol::Texture::Motion), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+            for (int i = 0; i < 3; ++i)
+            {
+                prepare.cameraPosition[i] = frame.cameraPosition[i];
+                prepare.cameraUp[i] = frame.cameraUp[i];
+                prepare.cameraRight[i] = frame.cameraRight[i];
+                prepare.cameraForward[i] = frame.cameraForward[i];
+            }
+
+            result = functions.Dispatch(&frameGeneration, &prepare.header);
+            if (result != FFX_API_RETURN_OK)
+            {
+                static uint32_t reported = 0;
+                if (reported++ < 5)
+                    Log("Frame generation prepare failed: %u", result);
+                return false;
+            }
+            return true;
+        }
+
+        // The frame between the previous Present and this one into Generated
+        bool GenerateFrame(ID3D12GraphicsCommandList* cmd, Device& d, uint64_t frameId, bool reset, bool hdr, float maxLuminance)
+        {
+            if (!frameGeneration)
+                return false;
+
+            ffxDispatchDescFrameGeneration dispatch{};
+            dispatch.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION;
+            dispatch.commandList = cmd;
+            dispatch.presentColor = ffxApiGetResourceDX12(d.Texture(Protocol::Texture::Present), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+            dispatch.outputs[0] = ffxApiGetResourceDX12(d.Texture(Protocol::Texture::Generated), FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
+            dispatch.numGeneratedFrames = 1;
+            dispatch.reset = reset;
+            dispatch.backbufferTransferFunction = hdr ? FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SCRGB : FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
+            dispatch.minMaxLuminance[0] = 0.0f;
+            dispatch.minMaxLuminance[1] = maxLuminance;
+            dispatch.generationRect = { 0, 0, static_cast<int32_t>(displayWidth), static_cast<int32_t>(displayHeight) };
+            dispatch.frameID = frameId;
+
+            auto result = functions.Dispatch(&frameGeneration, &dispatch.header);
+            if (result != FFX_API_RETURN_OK)
+            {
+                static uint32_t reported = 0;
+                if (reported++ < 5)
+                    Log("Frame generation dispatch failed: %u", result);
+                return false;
+            }
+            return true;
+        }
+
+        void ReleaseFrameGeneration()
+        {
+            if (frameGeneration)
+                functions.DestroyContext(&frameGeneration, nullptr);
+            frameGeneration = nullptr;
+        }
+
         void Shutdown()
         {
+            ReleaseFrameGeneration();
             Release();
             if (module)
                 FreeLibrary(module);
@@ -767,6 +960,7 @@ namespace
 
             dlss.Release();
             fsr.Release();
+            fsr.ReleaseFrameGeneration();
             device.ReleaseTextures();
             backend = Protocol::Backend::None;
 
@@ -813,9 +1007,30 @@ namespace
                 return false;
             }
 
+            // Frame generation, with either upscaler. Without it the upscaler works on, and the flag is cleared.
+            if (flags & Protocol::ConfigureFlags::FrameGeneration)
+            {
+                bool hdr = (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0;
+                bool generation = fsr.CreateFrameGeneration(width, height, outputWidth, outputHeight, hdr) &&
+                    device.CreateTexture(T::Present, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, false) &&
+                    device.CreateTexture(T::Generated, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, true);
+                if (!generation)
+                {
+                    Log("Frame generation could not be set up at %ux%u -> %ux%u", width, height, outputWidth, outputHeight);
+                    fsr.ReleaseFrameGeneration();
+                    device.ReleaseTexture(T::Present);
+                    device.ReleaseTexture(T::Generated);
+                    flags &= ~Protocol::ConfigureFlags::FrameGeneration;
+                    shared.Flags = flags;
+                }
+            }
+
             for (size_t i = 0; i < static_cast<size_t>(T::Count); ++i)
             {
                 shared.TextureSizes[i] = device.AllocationSize(static_cast<T>(i));
+                shared.TextureHandles[i] = 0;
+                if (!device.textures[i].handle)
+                    continue;
                 if (!Duplicate(device.textures[i].handle, shared.TextureHandles[i]))
                     return false;
             }
@@ -824,7 +1039,8 @@ namespace
                 return false;
 
             backend = shared.ConfigureBackend;
-            connection.Message("%s ready at %ux%u -> %ux%u", backend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height, outputWidth, outputHeight);
+            connection.Message("%s ready at %ux%u -> %ux%u%s", backend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height, outputWidth, outputHeight,
+                fsr.HasFrameGeneration() ? ", with frame generation" : "");
             return true;
         }
 
@@ -850,14 +1066,26 @@ namespace
             frame.sharpness = shared.Sharpness;
             frame.reset = shared.Reset != 0;
             frame.reactive = (flags & Protocol::ConfigureFlags::ReactiveMask) != 0;
+            for (int i = 0; i < 3; ++i)
+            {
+                frame.cameraPosition[i] = shared.CameraPosition[i];
+                frame.cameraUp[i] = shared.CameraUp[i];
+                frame.cameraRight[i] = shared.CameraRight[i];
+                frame.cameraForward[i] = shared.CameraForward[i];
+            }
+            frame.frameId = shared.FrameId;
 
+            using T = Protocol::Texture;
             auto cmd = device.BeginFrame();
-            device.Transition(cmd, true);
+            device.Transition(cmd, true, { T::Color, T::Depth, T::Motion, T::Reactive, T::Output });
             bool evaluated = backend == Protocol::Backend::DLSS ? dlss.Evaluate(cmd, device, frame) : fsr.Evaluate(cmd, device, frame);
-            device.Transition(cmd, false);
+            // A failed preparation leaves the upscaled frame: Generate of this frame fails instead
+            preparedFrame = fsr.HasFrameGeneration() && fsr.PrepareFrame(cmd, device, frame);
+            preparedFrameId = frame.frameId;
+            device.Transition(cmd, false, { T::Color, T::Depth, T::Motion, T::Reactive, T::Output });
 
             if (device.wine)
-                device.CopyOutput(cmd);
+                device.CopyFromUav(cmd, T::Output);
 
             // Answered once the output is in the shared texture
             if (device.cpuSync)
@@ -866,6 +1094,39 @@ namespace
             // The fence always advances, so the game can rely on the values it waits for
             device.SubmitFrame(shared.WaitValue, shared.SignalValue, evaluated);
             return evaluated;
+        }
+
+        bool preparedFrame = false;
+        uint64_t preparedFrameId = 0;
+
+        bool Generate()
+        {
+            auto& shared = *connection.shared;
+            if (!fsr.HasFrameGeneration() || (!device.cpuSync && !device.sharedFence))
+                return false;
+
+            // Only after the preparation of the same frame
+            bool prepared = preparedFrame && preparedFrameId == shared.FrameId;
+            preparedFrame = false;
+
+            using T = Protocol::Texture;
+            auto cmd = device.BeginFrame();
+            bool generated = false;
+            if (prepared)
+            {
+                device.Transition(cmd, true, { T::Present, T::Generated });
+                generated = fsr.GenerateFrame(cmd, device, shared.FrameId, shared.GenerateReset != 0,
+                    (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0, shared.MaxLuminance);
+                device.Transition(cmd, false, { T::Present, T::Generated });
+                if (device.wine)
+                    device.CopyFromUav(cmd, T::Generated);
+            }
+
+            if (device.cpuSync)
+                return device.SubmitFrameAndWait() && generated;
+
+            device.SubmitFrame(shared.WaitValue, shared.SignalValue, generated);
+            return generated;
         }
 
     public:
@@ -904,6 +1165,7 @@ namespace
             Log("%s", fsrMessage.c_str());
             shared.DLSSAvailable = dlss.available;
             shared.FSRAvailable = fsr.available;
+            shared.FrameGenerationAvailable = fsr.available && fsr.frameGenerationAvailable;
             connection.Message("%s; %s", dlssMessage.c_str(), fsrMessage.c_str());
             connection.Respond(Protocol::Status::Ok);
 
@@ -939,6 +1201,16 @@ namespace
                         Log("First frame upscaled");
                     if (!ok && failed++ < 5)
                         Log("Evaluate failed");
+                    break;
+                }
+                case Protocol::Command::Generate:
+                {
+                    ok = Generate();
+                    static uint32_t generated = 0, failed = 0;
+                    if (ok && generated++ == 0)
+                        Log("First frame generated");
+                    if (!ok && failed++ < 5)
+                        Log("Generate failed");
                     break;
                 }
                 default: break;

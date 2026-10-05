@@ -525,4 +525,10 @@ export namespace HDROutput
     {
         return HDR::bBackBufferFloat;
     }
+
+    // Peak brightness of the HDR output, in nits
+    float GetPeakNits()
+    {
+        return HDR::GetPeak();
+    }
 }
