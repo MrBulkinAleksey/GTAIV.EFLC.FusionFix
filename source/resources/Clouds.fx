@@ -73,6 +73,7 @@ float4 vec4History;
 float fStratus;           // 0 separate heaps of cloud, 1 a sheet: the weather's overcast
 float fEvolution;         // how far the detail has drifted up through itself, so the billows change
 float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
+float fGlow;              // the glow's strength around the sun, by the weather
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
 float fDebug;             // VolumetricCloudsDebug 1: grey by how much sun reaches each sample, white all of it;
                           // 2: the sky read behind them, so the clouds vanish where it is read right
@@ -279,7 +280,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     // to come through, the bright rims of clouds against the sun. A core some 30 degrees wide and a
     // faint skirt beyond; a Henyey-Greenstein lobe of g 0.85 lit only the cloud within a few degrees
     // of the sun and left the rims a little way off it dark.
-    float forward = (exp(8.0 * (cosTheta - 1.0)) + 0.3 * exp(2.0 * (cosTheta - 1.0))) * fSilver * 6.0;
+    float forward = (exp(8.0 * (cosTheta - 1.0)) + 0.3 * exp(2.0 * (cosTheta - 1.0))) * fSilver * fGlow;
     float sigma = vec4Shape.x;
 
     // Empty sky is crossed in coarse steps that test the coverage alone; on finding cloud the ray

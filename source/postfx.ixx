@@ -420,8 +420,11 @@ public:
     struct CloudLayer
     {
         float coverage, base, thickness, density, stratus, wind;
+        // Against VolumetricCloudsAbsorption, VolumetricCloudsTranslucency and VolumetricCloudsDetail;
+        // and the glow's strength around the sun.
+        float absorption, translucency, detail, glow;
     };
-    CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f };
+    CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f };
     // How far the wind has carried the coverage and the detail, in tiles, and how far the detail
     // has drifted up through itself; summed frame by frame, as the wind changes with the weather.
     double fCloudDrift = 0.0, fCloudDetailDrift = 0.0, fCloudEvolution = 0.0, fCloudLastSeconds = -1.0;
@@ -1678,21 +1681,28 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
     return CloudDetailTexture;
 }
 
-// The weathers' cloud layers, in CWeather::eWeatherType order: coverage, base and thickness in
-// metres, density against VolumetricCloudsDensity, the share of overcast sheet, and the wind against
-// CloudShadowsWind. Low decks a few hundred metres up, as thick as wide heaps, the cloudier weathers
-// with more cover but less dense, and no clouds in fog; the coverage is the middle of each weather's
-// range, which the weather map spreads either way.
+// The weathers' cloud layers, in CWeather::eWeatherType order:
+// - coverage, the share of the sky the clouds take (the middle of the weather's range, which the
+//   weather map spreads either way), base and thickness in metres, density against
+//   VolumetricCloudsDensity, the share of overcast sheet, and the wind against CloudShadowsWind;
+// - the light's absorption inside them, how much more their thin parts let through and how much the
+//   billows eat their edges, each against its VolumetricClouds* setting, and the glow around the sun.
+// Fair weather: scattered heaps, ragged and see-through at the edges, with bright rims. Rain and
+// storms: a low closed deck, an overcast sheet over most of it, smooth, dense, with dark bases and
+// little glow. The cover was a quarter to two fifths in every weather while the coverage map put
+// cloud over far more of the sky than its cover said; since it takes exactly that share, the
+// overcast weathers came out half clear.
 static constexpr PostFxResource::CloudLayer kWeatherClouds[8] =
 {
-    { 0.250f, 350.0f,  600.0f, 1.67f, 0.0f, 2.00f }, // EXTRASUNNY
-    { 0.275f, 300.0f,  700.0f, 1.33f, 0.0f, 1.00f }, // SUNNY
-    { 0.350f, 600.0f,  900.0f, 0.67f, 0.0f, 1.67f }, // SUNNY_WINDY
-    { 0.375f, 220.0f,  600.0f, 1.00f, 0.0f, 0.67f }, // CLOUDY
-    { 0.415f, 100.0f, 1000.0f, 0.83f, 0.0f, 0.33f }, // RAIN
-    { 0.380f, 300.0f, 1100.0f, 0.67f, 0.0f, 1.67f }, // DRIZZLE
-    { 0.000f, 600.0f, 1000.0f, 0.20f, 0.0f, 1.67f }, // FOGGY
-    { 0.425f, 150.0f,  950.0f, 0.80f, 0.0f, 1.67f }, // LIGHTNING
+    //  cover   base   thick   dens  strat  wind   abs   transl detail glow
+    { 0.15f, 350.0f,  600.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f, 7.0f }, // EXTRASUNNY
+    { 0.30f, 300.0f,  700.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f, 6.0f }, // SUNNY
+    { 0.40f, 600.0f,  900.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 1.3f, 6.0f }, // SUNNY_WINDY
+    { 0.70f, 220.0f,  600.0f, 1.00f, 0.2f, 0.67f, 1.3f, 1.0f, 1.0f, 4.0f }, // CLOUDY
+    { 0.95f, 100.0f, 1000.0f, 0.83f, 0.6f, 0.33f, 2.0f, 0.5f, 0.6f, 2.0f }, // RAIN
+    { 0.85f, 300.0f, 1100.0f, 0.67f, 0.4f, 1.67f, 1.6f, 0.7f, 0.8f, 3.0f }, // DRIZZLE
+    { 0.50f, 600.0f, 1000.0f, 0.20f, 0.3f, 1.67f, 1.0f, 1.0f, 0.8f, 3.0f }, // FOGGY
+    { 0.95f, 150.0f,  950.0f, 0.80f, 0.5f, 1.67f, 2.2f, 0.5f, 0.7f, 2.0f }, // LIGHTNING
 };
 
 void PostFxResource::UpdateCloudLayer(double seconds)
@@ -1706,10 +1716,11 @@ void PostFxResource::UpdateCloudLayer(double seconds)
         const auto& b = kWeatherClouds[to < 8 ? to : 1];
         auto mix = [k](float x, float y) { return x + (y - x) * k; };
         Cloud = { mix(a.coverage, b.coverage), mix(a.base, b.base), mix(a.thickness, b.thickness),
-                  mix(a.density, b.density), mix(a.stratus, b.stratus), mix(a.wind, b.wind) };
+                  mix(a.density, b.density), mix(a.stratus, b.stratus), mix(a.wind, b.wind),
+                  mix(a.absorption, b.absorption), mix(a.translucency, b.translucency), mix(a.detail, b.detail), mix(a.glow, b.glow) };
     }
     else
-        Cloud = { fVolumetricCloudsCoverage, fVolumetricCloudsBase, fVolumetricCloudsThickness, 1.0f, 0.0f, 1.0f };
+        Cloud = { fVolumetricCloudsCoverage, fVolumetricCloudsBase, fVolumetricCloudsThickness, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f };
 
     // The drift moves on by this frame's time at this frame's wind; across a jump of the clock (a
     // load, a cutscene) it stays where it was.
@@ -4158,13 +4169,15 @@ private:
         const D3DXVECTOR4 wind(R.fCloudWindX, R.fCloudWindY, float(std::fmod(R.fCloudDetailDrift * 0.93, 1.0)),
                                float(std::fmod(R.fCloudDetailDrift * 0.37, 1.0)));
         effect->SetVector("vec4Wind", &wind);
-        const D3DXVECTOR4 shape(R.fVolumetricCloudsDensity * R.Cloud.density, 1.0f / R.fVolumetricCloudsDetailScale, R.fVolumetricCloudsDetail,
+        const D3DXVECTOR4 shape(R.fVolumetricCloudsDensity * R.Cloud.density, 1.0f / R.fVolumetricCloudsDetailScale,
+                                (std::min)(R.fVolumetricCloudsDetail * R.Cloud.detail, 1.5f),
                                 R.fVolumetricCloudsHaze);
         effect->SetVector("vec4Shape", &shape);
         effect->SetFloat("fStratus", R.Cloud.stratus);
         effect->SetFloat("fEvolution", float(std::fmod(R.fCloudEvolution, 1.0)));
-        effect->SetFloat("fTranslucency", R.fVolumetricCloudsTranslucency);
-        effect->SetFloat("fLightAbsorption", R.fVolumetricCloudsAbsorption);
+        effect->SetFloat("fTranslucency", (std::min)(R.fVolumetricCloudsTranslucency * R.Cloud.translucency, 0.9f));
+        effect->SetFloat("fLightAbsorption", R.fVolumetricCloudsAbsorption * R.Cloud.absorption);
+        effect->SetFloat("fGlow", R.Cloud.glow);
         effect->SetFloat("fDebug", float(R.nVolumetricCloudsDebug));
         // The golden ratio's fraction per frame: each frame's march noise falls between the last
         // ones', and temporal anti-aliasing averages it away.
