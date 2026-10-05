@@ -30,6 +30,10 @@
 #endif
 // CloudNoiseTex's size.
 #define COVERAGE_SIZE 1024.0
+// The dome and the rounded base take part of every heap's footprint: at a cover of 0.4 the clouds
+// covered 22% of the sky. Measured over the map, 1.35 times the cover brings the share of the sky
+// under cloud back to the cover, from 0.25 to 0.7. The shadows, on a flat deck, take the cover as it is.
+#define COVER_GAIN 1.35
 
 sampler2D DepthTex : register(s0);
 sampler2D CoverageTex : register(s1);
@@ -121,7 +125,7 @@ float PixelJitter(float2 pixel)
 // - The coverage map holds separate heaps spread evenly over the sky (CloudNoiseTex), equalised so
 //   that cloud, where the map is above 1 - cover, takes that share of the sky.
 // - The density across a heap is squared, soft at its edges, and at height h only what is above
-//   1.15 h of it stays: the heap narrows from its flat base up to a dome, and a weaker heap stops
+//   1.15 h^1.5 of it stays: the heap narrows from its flat base up to a dome, and a weaker heap stops
 //   lower, so heaps differ in height as they do in size. At 0.9 h a heap's dense core still stood
 //   at the layer's top and was cut flat there: seen from the side, a slab. Lowering the density by a quarter with
 //   height left the evenly spread heaps standing as pillars with walls, and 0.8 h^2 still ran each
@@ -187,7 +191,7 @@ bool MayBeCloud(float3 p)
     if (h <= 0.0 || h >= 1.25)
         return false;
     float c = tex2Dlod(CoverageTex, float4(p.xy * vec4Layer.z + vec4Wind.xy, 0, 5)).r;
-    float cover = saturate(max(vec4Layer.w, 0.02) * (1.0 + abs(vec4Morph.w)));
+    float cover = saturate(max(vec4Layer.w, 0.02) * COVER_GAIN * (1.0 + abs(vec4Morph.w)));
     return c > 0.9 - cover;
 }
 
@@ -222,7 +226,7 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease)
     f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
     float c = tex2Dlod(CoverageTex, float4((cell + f + 0.5) / COVERAGE_SIZE, 0, 0)).r;
 
-    float cover = saturate(max(vec4Layer.w, 0.02) * (1.0 + vec4Morph.w * weather));
+    float cover = saturate(max(vec4Layer.w, 0.02) * COVER_GAIN * (1.0 + vec4Morph.w * weather));
     // Overcast: the map evens out towards a sheet.
     c = lerp(c, max(c, 1.0 - cover * 0.5), fStratus);
     float threshold = 1.0 - cover;
@@ -230,9 +234,10 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease)
     d *= d;
     // The base's edges curl in by fBaseRound over its bottom quarter, so a heap sits on a rounded
     // base rather than a sheared off one.
-    // The one pass variant for the reflections (full false) leaves it out, for the slots.
+    // The one pass variant for the reflections (full false) leaves it out, and keeps a linear dome,
+    // for the slots.
     float curl = full ? max(1.0 - 4.0 * h, 0.0) : 0.0;
-    float dome = (h * 1.15 + fBaseRound * curl * curl) * (1.0 - fStratus) * (1.0 - fStratus);
+    float dome = ((full ? h * sqrt(h) : h) * 1.15 + fBaseRound * curl * curl) * (1.0 - fStratus) * (1.0 - fStratus);
     d = saturate((d - dome) / max(1.0 - dome, 0.05)) * smoothstep(1.0, 0.85, h);
     if (d <= 0.0)
         return 0.0;
@@ -574,6 +579,30 @@ float4 CloudsLight_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     return Light(sums, WorldRay(vpos), true);
 }
 
+// The history read with a Catmull-Rom filter in five bilinear reads: read bilinearly each frame as the
+// camera moved, the clouds blurred a little more every frame and came out soft.
+float4 SampleCatmullRom(sampler2D tex, float2 uv, float2 texel)
+{
+    float2 position = uv / texel;
+    float2 centre = floor(position - 0.5) + 0.5;
+    float2 f = position - centre;
+    float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    float2 w3 = f * f * (-0.5 + 0.5 * f);
+    float2 w12 = w1 + w2;
+    float2 p0 = (centre - 1.0) * texel;
+    float2 p3 = (centre + 2.0) * texel;
+    float2 p12 = (centre + w2 / w12) * texel;
+    float4 sum = tex2Dlod(tex, float4(p12.x, p0.y, 0, 0)) * (w12.x * w0.y)
+               + tex2Dlod(tex, float4(p0.x, p12.y, 0, 0)) * (w0.x * w12.y)
+               + tex2Dlod(tex, float4(p12, 0, 0)) * (w12.x * w12.y)
+               + tex2Dlod(tex, float4(p3.x, p12.y, 0, 0)) * (w3.x * w12.y)
+               + tex2Dlod(tex, float4(p12.x, p3.y, 0, 0)) * (w12.x * w3.y);
+    float weight = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+    return sum / weight;
+}
+
 // Accumulates the half size clouds over frames. The clouds are kilometres away, so last frame's
 // pixel is found by the camera's turn alone, as a direction; its colour is held within the range
 // of this frame's 3x3 neighbourhood, so drifting clouds and a moving camera leave no trails.
@@ -604,7 +633,7 @@ float4 CloudsResolve_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             hi = max(hi, s);
         }
     }
-    float4 history = clamp(tex2Dlod(HistoryTex, float4(prev, 0, 0)), lo, hi);
+    float4 history = clamp(SampleCatmullRom(HistoryTex, prev, vec4History.zw), lo, hi);
     return lerp(history, current, vec4History.y);
 }
 

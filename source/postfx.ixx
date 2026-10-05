@@ -1733,7 +1733,8 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 // - the light's absorption inside them, how much more their thin parts let through and how much the
 //   billows eat their edges, each against its VolumetricClouds* setting, and the glow around the sun;
 // - how much brighter the cloud near the sun is, how fast they reshape against
-//   VolumetricCloudsEvolution, and how round their bases' edges are.
+//   VolumetricCloudsEvolution, and how round their bases' edges are (a threshold on the density,
+//   so a few tenths at most: at a half they took a fifth of the clouds away).
 // Fair weather: broad heaps from 600 to 700 m up, wider than they are tall, ragged and see-through
 // at the edges, with bright rims, barely reshaping. Rain and storms: a low, thick, closed deck, an
 // overcast sheet over most of it, smooth, dense, with dark bases and little glow, churning (held
@@ -1741,14 +1742,14 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 static constexpr PostFxResource::CloudLayer kWeatherClouds[8] =
 {
     //  cover   base   thick   dens  strat  wind   abs   transl detail glow  sun   evol  base round
-    { 0.25f,  700.0f,  550.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f, 7.0f, 0.70f, 0.4f, 0.35f }, // EXTRASUNNY
-    { 0.40f,  600.0f,  700.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f, 6.0f, 0.55f, 0.7f, 0.50f }, // SUNNY
-    { 0.45f,  700.0f,  650.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 1.3f, 6.0f, 0.50f, 0.9f, 0.40f }, // SUNNY_WINDY
-    { 0.70f,  500.0f,  900.0f, 1.00f, 0.2f, 0.67f, 1.3f, 1.0f, 1.0f, 4.0f, 0.20f, 1.3f, 0.50f }, // CLOUDY
-    { 0.95f,  300.0f, 1000.0f, 0.83f, 0.6f, 0.33f, 2.0f, 0.5f, 0.6f, 2.0f, 0.25f, 3.0f, 0.50f }, // RAIN
-    { 0.85f,  400.0f,  900.0f, 0.67f, 0.4f, 1.67f, 1.6f, 0.7f, 0.8f, 3.0f, 0.40f, 0.8f, 0.50f }, // DRIZZLE
-    { 0.00f,  600.0f,  600.0f, 0.20f, 0.3f, 1.67f, 1.0f, 1.0f, 0.8f, 3.0f, 0.30f, 0.4f, 0.50f }, // FOGGY
-    { 0.95f,  300.0f, 1200.0f, 0.80f, 0.5f, 1.67f, 2.2f, 0.5f, 0.7f, 2.0f, 0.25f, 1.4f, 0.25f }, // LIGHTNING
+    { 0.25f,  700.0f,  550.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f, 7.0f, 0.70f, 0.4f, 0.10f }, // EXTRASUNNY
+    { 0.40f,  600.0f,  700.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f, 6.0f, 0.55f, 0.7f, 0.15f }, // SUNNY
+    { 0.45f,  700.0f,  650.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 1.3f, 6.0f, 0.50f, 0.9f, 0.12f }, // SUNNY_WINDY
+    { 0.70f,  500.0f,  900.0f, 1.00f, 0.2f, 0.67f, 1.3f, 1.0f, 1.0f, 4.0f, 0.20f, 1.3f, 0.15f }, // CLOUDY
+    { 0.95f,  300.0f, 1000.0f, 0.83f, 0.6f, 0.33f, 2.0f, 0.5f, 0.6f, 2.0f, 0.25f, 3.0f, 0.15f }, // RAIN
+    { 0.85f,  400.0f,  900.0f, 0.67f, 0.4f, 1.67f, 1.6f, 0.7f, 0.8f, 3.0f, 0.40f, 0.8f, 0.15f }, // DRIZZLE
+    { 0.00f,  600.0f,  600.0f, 0.20f, 0.3f, 1.67f, 1.0f, 1.0f, 0.8f, 3.0f, 0.30f, 0.4f, 0.15f }, // FOGGY
+    { 0.95f,  300.0f, 1200.0f, 0.80f, 0.5f, 1.67f, 2.2f, 0.5f, 0.7f, 2.0f, 0.25f, 1.4f, 0.08f }, // LIGHTNING
 };
 
 void PostFxResource::UpdateCloudLayer(double seconds)
