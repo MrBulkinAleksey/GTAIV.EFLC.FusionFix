@@ -454,7 +454,9 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             float weight = sums.transmittance * (1.0 - stepTransmittance);
             sums.sun += weight * sun;
             sums.shade += weight * (1.0 - sun) * lerp(0.55, 1.0, sqrt(h));
-            sums.silver += weight * sun * lerp(0.35, 1.0, thin);
+            // The silver lining is the thin edges' alone: with a third of it on the thick body, a cloud
+            // before the sun in game came out half again as bright as its own light.
+            sums.silver += weight * sun * thin * thin;
             // The glow by the sun's light left after the cloud towards it, so the edges glow and the
             // middle, with the whole cloud between it and the sun, stays dark: weighted by the light
             // scattered many times instead, the whole cloud around the sun brightened evenly.
@@ -515,7 +517,9 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     {
         // The cloud near the sun in the sky catches more of its light, all of it, the thick middle
         // too, in a softer lobe than the glow's, by the weather.
-        termSunPower = sunLit * (fSunPower * (0.45 * lobe4 * lobe4 + 0.2 * lobe2) * (0.35 * sums.sun + 0.65 * sqrt(sums.sun * cover)));
+        // By the sun that reaches the cloud alone: the square root of it, which lifted the dark
+        // bodies of clouds before the sun as much as their lit sides, washed them out in game.
+        termSunPower = sunLit * (fSunPower * (0.45 * lobe4 * lobe4 + 0.2 * lobe2) * sums.sun);
         // The sunlit tops brighter still, at four tenths more.
         termTop = sunLit * (0.4 * sums.top);
         // The undersides darkened by the sky the cloud above them hides, by the cloud's height in the
