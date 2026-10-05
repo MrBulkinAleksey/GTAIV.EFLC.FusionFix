@@ -1212,6 +1212,7 @@ namespace
     uint64_t generatedFrameId = 0;
     bool preparedReset = false;
     bool preparedHudLess = false;
+    bool generatedReset = false;       // the last Generate had nothing to interpolate from
 
     std::filesystem::path HelperPath()
     {
@@ -1555,6 +1556,12 @@ export namespace Upscaler
         return state == State::Ready && preparedFrameId != 0 && bridge && bridge->frameGeneration && !generationFailed;
     }
 
+    // The last generated frame has nothing of the previous one: not worth showing
+    bool WasGenerateReset()
+    {
+        return generatedReset;
+    }
+
     bool IsFrameGenerationAvailable()
     {
         return frameGenerationAvailable.load();
@@ -1596,6 +1603,7 @@ export namespace Upscaler
         shared.MaxLuminance = maxLuminance;
         // The frame before this one was not generated from: there is nothing to interpolate from
         shared.GenerateReset = preparedReset || generatedFrameId + 1 != id ? 1 : 0;
+        generatedReset = shared.GenerateReset != 0;
         generatedFrameId = id;
 
         if (!bridge->WaitOnCpu())
