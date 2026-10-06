@@ -5973,9 +5973,20 @@ private:
             { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
         };
         pDevice->SetRenderTarget(0, target);
+
+        // No state saving by D3DX: its state blocks go through the game's device wrapper, and restores that the
+        // wrapper takes for no change never reach the device (SSR had textures that didn't take, see
+        // RenderScreenSpaceReflections). The callers save and restore textures, samplers, render states and constants
+        // themselves; the shaders, which the effect sets, are put back here, the device's own on both.
+        auto real = RageDirect3DDevice9::RealDevice(pDevice);
+        IDirect3DPixelShader9* oldPS = nullptr;
+        IDirect3DVertexShader9* oldVS = nullptr;
+        real->GetPixelShader(&oldPS);
+        real->GetVertexShader(&oldVS);
+
         UINT passes = 0;
         effect->SetTechnique(technique);
-        effect->Begin(&passes, 0);
+        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
         effect->BeginPass(0);
         effect->CommitChanges();
         BindEffectSamplers(pDevice, effect);
@@ -5996,6 +6007,16 @@ private:
         pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
         effect->EndPass();
         effect->End();
+
+        pDevice->SetPixelShader(oldPS);
+        pDevice->SetVertexShader(oldVS);
+        if (real != pDevice)
+        {
+            real->SetPixelShader(oldPS);
+            real->SetVertexShader(oldVS);
+        }
+        SAFE_RELEASE(oldPS);
+        SAFE_RELEASE(oldVS);
     }
 
     // Before deferred lighting, next to SSR: contact shadows towards the sun, smoothed into
