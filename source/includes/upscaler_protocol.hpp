@@ -29,7 +29,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 9;
+    constexpr uint32_t Version = 10;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -94,7 +94,6 @@ namespace UpscalerProtocol
         constexpr uint32_t GameFence = 1 << 2;      // FenceHandle is the game's semaphore; cleared by the helper if it can't open it
         constexpr uint32_t FrameGeneration = 1 << 3; // FSR frame generation; cleared by the helper if it can't create it
         constexpr uint32_t HighDynamicRange = 1 << 4; // Present is scRGB
-        constexpr uint32_t CpuSync = 1 << 5;         // both sides wait for their GPU work on the CPU, as under Wine without GameFence
     }
 
 #pragma pack(push, 8)
@@ -151,8 +150,7 @@ namespace UpscalerProtocol
         float CameraForward[3];
         uint64_t FrameId;             // +1 every frame, anything else resets the frame generation
         uint32_t HudLess;             // Generate of this frame comes with HudLess
-        uint32_t DebugFlags;          // FfxApiDispatchFramegenerationFlags to add, for the frame generation's own debug drawing,
-                                      // and DebugCheckStamps
+        uint32_t Reserved1;
 
         // Generate (WaitValue and SignalValue as for Evaluate)
         float MaxLuminance;           // nits, HDR output
@@ -168,17 +166,6 @@ namespace UpscalerProtocol
         uint64_t FenceHandle;         // the helper's fence; with GameFence, the game's semaphore duplicated into the helper
     };
 #pragma pack(pop)
-
-    // DebugFlags: the game wrote FrameId into a corner of Present and HudLess (StampColour), the helper reads it back
-    // from the shared textures once its queue has waited for them, and logs whether it got this frame's
-    constexpr uint32_t DebugCheckStamps = 1u << 31;
-    constexpr uint32_t StampSize = 4;           // a square of this size in the bottom right corner
-
-    // The stamp of a frame: its number's low 16 bits in red and green, 0x5A in blue, each as n / 255
-    inline uint32_t StampColour(uint64_t frameId)
-    {
-        return 0xFF000000u | (static_cast<uint32_t>(frameId & 0xFF) << 16) | (static_cast<uint32_t>((frameId >> 8) & 0xFF) << 8) | 0x5Au;
-    }
 
     static_assert(sizeof(wchar_t) == 2);
     static_assert(offsetof(Shared, WaitValue) % 8 == 0);

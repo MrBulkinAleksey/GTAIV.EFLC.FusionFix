@@ -6,10 +6,7 @@ module;
 #include <cstdlib>
 #include <array>
 #include <filesystem>
-#include <map>
 #include <vector>
-#include <string>
-#include <upscaler_protocol.hpp>
 
 export module framegeneration;
 
@@ -17,10 +14,7 @@ import common;
 import comvars;
 import consolegamma;
 import hdr;
-import renderscale;
 import upscaler;
-
-namespace Protocol = UpscalerProtocol;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -39,8 +33,9 @@ namespace Protocol = UpscalerProtocol;
 //   halfway through it (FrameGenerationDelay, see FrameGenerationPacing below) presents the rendered frame, inside
 //   the game's scene, and leaves the back buffer as it found it. A frame that ends before that presents the waiting
 //   one first.
-// - FrameGeneration = 2 shows the generated frames in place of the rendered ones, to check the generation itself;
-//   3 paces as 1 with the rendered frame in place of the generated one, to check the pacing alone.
+// - FrameGeneration = 2 shows the generated frames in place of the rendered ones, to check the generation itself.
+// - FrameGenerationDebug: 1 marks which frames reach the screen, 2 logs how far between its neighbours a generated
+//   frame is (reads frames back, slow).
 
 namespace
 {
@@ -49,38 +44,16 @@ namespace
         Off = 0,
         On = 1,
         ShowGenerated = 2,  // the generated frame replaces the rendered one
-        PaceRendered = 3,   // as On, with the rendered frame where the generated one would go: tells the pacing apart
     };
 
     Mode mode = Mode::Off;
     float fDelay = 0.5f;            // of the frame's own time, between the generated and the rendered frame
 
-    // FrameGenerationDebug in [TEMPORAL], to find what breaks the Present within a frame
+    // FrameGenerationDebug in [TEMPORAL]
     namespace Debug
     {
-        constexpr int32_t NoPresent = 1;        // the copies around it, without the Present
-        constexpr int32_t NoCopies = 2;         // the Present of whatever the back buffer holds, without the copies
-        constexpr int32_t EndOfFrame = 4;       // never within a frame: the waiting frame goes when the next one ends
-        constexpr int32_t Brightness = 8;       // reads every finished frame back and counts the dark ones
-        // Where and how the rendered frame may be presented within a frame
-        constexpr int32_t NotOnBackBuffer = 16; // not while render target 0 is the back buffer
-        constexpr int32_t BeforePost = 32;      // only before the upscaler's Evaluate, which starts the post processing
-        constexpr int32_t AfterPost = 64;       // only once the frame before the HUD was captured
-        constexpr int32_t InScene = 128;        // EndScene and BeginScene around it also within a frame, which breaks it
-        constexpr int32_t NoRebind = 256;       // the targets are not set again after it
-        constexpr int32_t Marker = 512;         // a square in the corner: magenta on generated frames, green on rendered ones
-        constexpr int32_t Similarity = 1024;    // how much the generated frame differs from the rendered ones around it
-        constexpr int32_t NoHudLess = 2048;     // the frame generation gets no frame before the HUD
-        constexpr int32_t FsrDebugView = 4096;  // FSR draws its own debug view into the generated frames (3.1, see with 2)
-        constexpr int32_t FsrIndicators = 8192; // FSR marks its resets and draws tear lines on the generated frames
-        constexpr int32_t PeriodicReset = 16384; // a reset of the frame generation every 120 frames, which also clears
-                                                 // the scene change detection of FSR's optical flow
-        constexpr int32_t CpuSync = 32768;      // the upscaler and the frame generation sync with the helper on the CPU,
-                                                // also with the frame generation off
-        constexpr int32_t LegacyInterop = 65536; // DXVK images asked for before its command thread caught up, as
-                                                 // before 841aa99, also with the frame generation off
-        constexpr int32_t Stamps = 131072;      // the frame's number in a corner of what the frame generation gets, which
-                                                // the helper reads back and checks (its log)
+        constexpr int32_t Marker = 1;       // a square in the corner: magenta on generated frames, green on rendered ones
+        constexpr int32_t Similarity = 2;   // how much the generated frame differs from the rendered ones around it
     }
     int32_t nDebug = 0;
 
@@ -88,10 +61,6 @@ namespace
     rage::grcRenderTargetPC* GeneratedRT = nullptr;
     rage::grcRenderTargetPC* HudLessRT = nullptr;
     rage::grcRenderTargetPC* SavedRT = nullptr;     // the back buffer while the rendered frame is presented
-    // The finished frame for the frame generation alone. PresentRT is read for the Present within the next frame and
-    // overwritten whole at its end, which is when DXVK gives a texture new storage, and the frame generation got the
-    // frame before from it after a few hundred frames; HudLessRT, which only the frame generation reads, never did.
-    rage::grcRenderTargetPC* InputRT = nullptr;
     bool bHudLessCaptured = false;  // this frame
     uint32_t TargetWidth = 0;
     uint32_t TargetHeight = 0;
@@ -175,52 +144,7 @@ namespace
         }
     } Stats;
 
-    // Debug::Brightness: each finished frame, as the game left it, is read back at 8x8 and compared with the frames
-    // before it. Frames that had the rendered frame presented within them are counted apart.
-    IDirect3DSurface9* ProbeRT = nullptr;
-    IDirect3DSurface9* ProbeMemory = nullptr;
-    bool bPresentedWithin = false;
-
-    // What was bound when the rendered frame was presented within a frame, by kind, against the dark frames
     uint32_t DrawsThisFrame = 0;
-    struct PresentPoint
-    {
-        uint32_t draws = 0;
-        double ms = 0.0;        // since the previous frame ended
-        std::string phase;      // the render phase of rage, by its class
-        std::string target;     // "back buffer" or the size of render target 0
-        std::string depth;      // the size of the depth buffer, or "none"
-        bool afterEvaluate = false;
-        bool inPost = false;
-        bool afterHudLess = false;
-    } LastPoint;
-
-    // The class name of a polymorphic object of the game, from its RTTI
-    const char* ClassName(const void* object)
-    {
-        __try
-        {
-            auto vtable = *reinterpret_cast<const uintptr_t* const*>(object);
-            auto locator = reinterpret_cast<const uint32_t*>(vtable[-1]);
-            auto name = reinterpret_cast<const char*>(locator[3]) + 8;
-            return name[0] == '.' && name[1] == '?' ? name + 4 : "?";
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            return "?";
-        }
-    }
-
-    std::string CurrentPhase()
-    {
-        if (!CRenderPhase::sm_pCurrent || !*CRenderPhase::sm_pCurrent)
-            return "none";
-        std::string name = ClassName(reinterpret_cast<const void*>(*CRenderPhase::sm_pCurrent));
-        if (auto at = name.find("@@"); at != std::string::npos)
-            name.resize(at);
-        return name;
-    }
-    std::map<std::string, std::pair<uint32_t, uint32_t>> PointsByKind;   // presents, dark frames
 
     // ---------------------------------------------------------------------------------------------
     // Where in the next frame the rendered frame goes (FrameGenerationPacing)
@@ -380,88 +304,6 @@ namespace
         CheckpointEvery = std::max(16u, static_cast<uint32_t>(DrawsEma / 32.0));
         bGpuRecording = true;
     }
-    uint32_t DarkLogged = 0;
-
-    std::string SurfaceKind(IDirect3DSurface9* surface, IDirect3DSurface9* backBuffer)
-    {
-        if (!surface)
-            return "none";
-        if (surface == backBuffer)
-            return "back buffer";
-        D3DSURFACE_DESC desc{};
-        surface->GetDesc(&desc);
-        char text[48];
-        snprintf(text, sizeof(text), "%ux%u fmt %d", desc.Width, desc.Height, desc.Format);
-        return text;
-    }
-
-    struct BrightnessStats
-    {
-        uint32_t frames = 0, dark = 0, dim = 0, within = 0, darkWithin = 0;
-        double average = 0.0;
-    } Brightness;
-
-    void ProbeBrightness(IDirect3DDevice9* device)
-    {
-        bool within = bPresentedWithin;
-        bPresentedWithin = false;
-        if (!ProbeRT && FAILED(device->CreateRenderTarget(8, 8, D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &ProbeRT, nullptr)))
-            return;
-        if (!ProbeMemory && FAILED(device->CreateOffscreenPlainSurface(8, 8, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &ProbeMemory, nullptr)))
-            return;
-
-        IDirect3DSurface9* backBuffer = nullptr;
-        if (FAILED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) || !backBuffer)
-            return;
-        bool read = SUCCEEDED(device->StretchRect(backBuffer, nullptr, ProbeRT, nullptr, D3DTEXF_LINEAR)) &&
-            SUCCEEDED(device->GetRenderTargetData(ProbeRT, ProbeMemory));
-        backBuffer->Release();
-
-        D3DLOCKED_RECT locked{};
-        if (!read || FAILED(ProbeMemory->LockRect(&locked, nullptr, D3DLOCK_READONLY)))
-            return;
-        double sum = 0.0;
-        for (int y = 0; y < 8; ++y)
-        {
-            auto row = reinterpret_cast<const uint8_t*>(locked.pBits) + y * locked.Pitch;
-            for (int x = 0; x < 8; ++x)
-                sum += row[x * 4] + row[x * 4 + 1] + row[x * 4 + 2];
-        }
-        ProbeMemory->UnlockRect();
-        auto value = sum / (64.0 * 3.0);
-
-        auto& b = Brightness;
-        bool dark = b.average > 8.0 && value < b.average * 0.25;
-        bool dim = b.average > 8.0 && value < b.average * 0.6;
-        b.dim += dim;
-        if (within)
-        {
-            auto& kind = PointsByKind[LastPoint.phase + ", target " + LastPoint.target];
-            ++kind.first;
-            kind.second += dim;
-            if (dim && DarkLogged++ < 40)
-                Log("%s frame %.1f against %.1f: presented %.1f ms into it after %u draw calls, phase %s, target %s, depth %s, %s, %s, %s",
-                    dark ? "Dark" : "Dim", value, b.average, LastPoint.ms, LastPoint.draws, LastPoint.phase.c_str(), LastPoint.target.c_str(),
-                    LastPoint.depth.c_str(), LastPoint.afterEvaluate ? "after Evaluate" : "before Evaluate",
-                    LastPoint.inPost ? "in post" : "not in post", LastPoint.afterHudLess ? "after the HUD-less copy" : "before the HUD-less copy");
-        }
-        b.average = b.average > 0.0 ? b.average + (value - b.average) * 0.05 : value;
-        ++b.frames;
-        b.dark += dark;
-        b.within += within;
-        b.darkWithin += dark && within;
-        if (b.frames < 300)
-            return;
-        Log("Brightness over %u frames: average %.1f, %u dark, %u dim; %u had the rendered frame presented within them, %u of those dark",
-            b.frames, b.average, b.dark, b.dim, b.within, b.darkWithin);
-        for (auto& [kind, counts] : PointsByKind)
-            Log("  presented in %s: %u times, %u dim or dark", kind.c_str(), counts.first, counts.second);
-        PointsByKind.clear();
-        auto average = b.average;
-        b = {};
-        b.average = average;
-    }
-
     // Debug::Similarity: the generated frame and the rendered ones before and after it, read back small. A frame
     // between them differs from both; a copy of one of them doesn't differ from it.
     constexpr UINT SmallWidth = 64, SmallHeight = 40;
@@ -575,9 +417,7 @@ namespace
         PreviousSmall.clear();
         OlderSmall.clear();
         GeneratedSmall.clear();
-        SAFE_RELEASE(ProbeRT);
-        SAFE_RELEASE(ProbeMemory);
-        for (auto rt : { &PresentRT, &GeneratedRT, &HudLessRT, &SavedRT, &InputRT })
+        for (auto rt : { &PresentRT, &GeneratedRT, &HudLessRT, &SavedRT })
         {
             if (*rt)
             {
@@ -591,7 +431,7 @@ namespace
     // Both at the back buffer's size, 16-bit float as the helper's textures
     bool CreateTargets(uint32_t width, uint32_t height)
     {
-        if (PresentRT && GeneratedRT && HudLessRT && SavedRT && InputRT && TargetWidth == width && TargetHeight == height)
+        if (PresentRT && GeneratedRT && HudLessRT && SavedRT && TargetWidth == width && TargetHeight == height)
             return true;
         ReleaseTargets();
 
@@ -600,9 +440,8 @@ namespace
         GeneratedRT = rage::CreateEmptyRenderTarget("FrameGenerationGenerated", width, height, 64, desc);
         HudLessRT = rage::CreateEmptyRenderTarget("FrameGenerationHudLess", width, height, 64, desc);
         SavedRT = rage::CreateEmptyRenderTarget("FrameGenerationSaved", width, height, 64, desc);
-        InputRT = rage::CreateEmptyRenderTarget("FrameGenerationInput", width, height, 64, desc);
         if (!PresentRT || !PresentRT->mD3DTexture || !GeneratedRT || !GeneratedRT->mD3DTexture || !HudLessRT || !HudLessRT->mD3DTexture ||
-            !SavedRT || !SavedRT->mD3DTexture || !InputRT || !InputRT->mD3DTexture)
+            !SavedRT || !SavedRT->mD3DTexture)
         {
             ReleaseTargets();
             return false;
@@ -652,8 +491,7 @@ namespace
             return;
 
         bInPresent = true;
-        bool copies = !(nDebug & Debug::NoCopies);
-        if (!copies || (CopyInto(device, backBuffer, SavedRT) && CopyFrom(device, PresentRT, backBuffer)))
+        if (CopyInto(device, backBuffer, SavedRT) && CopyFrom(device, PresentRT, backBuffer))
         {
             Mark(device, backBuffer, false);
             // Present moves the images of the two back buffers around: what is bound to the device is bound again
@@ -667,9 +505,6 @@ namespace
             device->GetDepthStencilSurface(&depth);
             device->GetViewport(&viewport);
             device->GetScissorRect(&scissor);
-            if (nDebug & Debug::Brightness)
-                LastPoint = { DrawsThisFrame, Ms(LastFrameEnd, Now()), CurrentPhase(), SurfaceKind(targets[0], backBuffer), SurfaceKind(depth, nullptr),
-                    Upscaler::IsFrameGenerationReady(), RenderScale::IsInPost(), bHudLessCaptured };
 
             // The game is inside its scene. Within a frame it stays so: D3D9, and DXVK as it, only lets go of the vertex
             // and index buffers the game unbound at EndScene, and the game goes on drawing with ones it unbound, which
@@ -681,45 +516,35 @@ namespace
                 f.presented->Issue(D3DISSUE_END);
                 f.hadPresent = true;
             }
-            if (!(nDebug & Debug::NoPresent))
+            if (late)
+                device->EndScene();
+            auto hr = device->Present(nullptr, nullptr, nullptr, nullptr);
+            if (late)
+                device->BeginScene();
+            if (hr == D3DERR_INVALIDCALL && !late)
             {
-                bool scene = late || (nDebug & Debug::InScene);
-                if (scene)
-                    device->EndScene();
-                auto hr = device->Present(nullptr, nullptr, nullptr, nullptr);
-                if (scene)
-                    device->BeginScene();
-                if (hr == D3DERR_INVALIDCALL && !scene)
-                {
-                    // Not inside a scene with this runtime: from now on when the next frame ends
-                    Log("Present inside the game's scene was refused: the rendered frames go when the next frame ends");
-                    bEndOfFrameOnly = true;
-                    retry = true;
-                }
-                else if (FAILED(hr))
-                    LogOnce(6, "Present of the rendered frame failed");
+                // Not inside a scene with this runtime: from now on when the next frame ends
+                Log("Present inside the game's scene was refused: the rendered frames go when the next frame ends");
+                bEndOfFrameOnly = true;
+                retry = true;
             }
+            else if (FAILED(hr))
+                LogOnce(6, "Present of the rendered frame failed");
 
             // The game's back buffer as it was, in whichever surface is the back buffer now
             IDirect3DSurface9* current = nullptr;
             if (SUCCEEDED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &current)) && current)
             {
-                if (current != backBuffer)
-                    LogOnce(7, "Present changed the back buffer surface");
-                if (copies)
-                    CopyFrom(device, SavedRT, current);
+                CopyFrom(device, SavedRT, current);
                 current->Release();
             }
 
-            if (!(nDebug & Debug::NoRebind))
-            {
-                for (DWORD i = 0; i < 4; ++i)
-                    if (targets[i] || i > 0)
-                        device->SetRenderTarget(i, targets[i]);
-                device->SetDepthStencilSurface(depth);
-                device->SetViewport(&viewport);
-                device->SetScissorRect(&scissor);
-            }
+            for (DWORD i = 0; i < 4; ++i)
+                if (targets[i] || i > 0)
+                    device->SetRenderTarget(i, targets[i]);
+            device->SetDepthStencilSurface(depth);
+            device->SetViewport(&viewport);
+            device->SetScissorRect(&scissor);
             for (auto& target : targets)
                 SAFE_RELEASE(target);
             SAFE_RELEASE(depth);
@@ -727,10 +552,7 @@ namespace
             if (retry)
                 bPending = true;
             else
-            {
                 Stats.Add(Ms(GeneratedAt, presentedAt), Ms(GeneratedAt, PendingDue), late);
-                bPresentedWithin = !late;
-            }
         }
         else
         {
@@ -748,7 +570,7 @@ namespace
         ++DrawsThisFrame;
         if (bGpuRecording && !bInPresent && DrawsThisFrame % CheckpointEvery == 0)
             Checkpoint(device);
-        if (!bPending || bInPresent || bEndOfFrameOnly || (nDebug & Debug::EndOfFrame))
+        if (!bPending || bInPresent || bEndOfFrameOnly)
             return;
 
         bool due = false;
@@ -761,23 +583,6 @@ namespace
         if (!due)
             return;
 
-        // Experiments: only in some parts of the frame
-        if ((nDebug & Debug::BeforePost) && Upscaler::IsFrameGenerationReady())
-            return;
-        if ((nDebug & Debug::AfterPost) && !bHudLessCaptured)
-            return;
-        if (nDebug & Debug::NotOnBackBuffer)
-        {
-            IDirect3DSurface9* target = nullptr;
-            IDirect3DSurface9* backBuffer = nullptr;
-            device->GetRenderTarget(0, &target);
-            device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer);
-            bool onBackBuffer = target && target == backBuffer;
-            SAFE_RELEASE(target);
-            SAFE_RELEASE(backBuffer);
-            if (onBackBuffer)
-                return;
-        }
         PresentPending(device, false);
     }
 
@@ -847,15 +652,15 @@ namespace
         IniTime = std::filesystem::last_write_time(IniPath, error);
 
         auto previous = mode;
-        mode = static_cast<Mode>(std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGeneration", 0), 0, 3));
+        mode = static_cast<Mode>(std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGeneration", 0), 0, 2));
         fDelay = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
         nDebug = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDebug", 0);
         auto previousPacing = nPacing;
         nPacing = std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGenerationPacing", 2), 0, 2);
         if (nPacing != previousPacing)
             TargetDraw = 0.0;
-        Log("Frame generation: %s, delay %.2f, pacing %d, debug %d", mode == Mode::Off ? "off" : mode == Mode::ShowGenerated ? "showing the generated frames" :
-            mode == Mode::PaceRendered ? "pacing the rendered frames only" : "on", fDelay, nPacing, nDebug);
+        Log("Frame generation: %s, delay %.2f, pacing %d, debug %d", mode == Mode::Off ? "off" : mode == Mode::ShowGenerated ? "showing the generated frames" : "on",
+            fDelay, nPacing, nDebug);
 
         // A fresh start for the pacing and the statistics
         if (mode != previous)
@@ -865,9 +670,6 @@ namespace
         }
         Stats = {};
         GpuStats = {};
-        Brightness = {};
-        PointsByKind.clear();
-        DarkLogged = 0;
     }
 
     void CheckSettings()
@@ -932,8 +734,6 @@ namespace
         }
         LastFrameEnd = now;
 
-        if (nDebug & Debug::Brightness)
-            ProbeBrightness(device);
         if (DrawsThisFrame > 100)
             DrawsEma = DrawsEma > 0.0 ? DrawsEma + (DrawsThisFrame - DrawsEma) * 0.1 : DrawsThisFrame;
         NextGpuFrame(device);
@@ -945,7 +745,7 @@ namespace
 
         if (!Upscaler::IsFrameGenerationReady())
             return;
-        bool pacing = mode == Mode::On || mode == Mode::PaceRendered;
+        bool pacing = mode == Mode::On;
         if (pacing)
         {
             InstallHooks(device);
@@ -985,30 +785,12 @@ namespace
         PresentRT->mD3DTexture->GetSurfaceLevel(0, &presentSurface);
         GeneratedRT->mD3DTexture->GetSurfaceLevel(0, &generatedSurface);
 
-        if (presentSurface && generatedSurface && SUCCEEDED(device->StretchRect(backBuffer, nullptr, presentSurface, nullptr, D3DTEXF_POINT)) &&
-            CopyInto(device, backBuffer, InputRT))
+        if (presentSurface && generatedSurface && SUCCEEDED(device->StretchRect(backBuffer, nullptr, presentSurface, nullptr, D3DTEXF_POINT)))
         {
             auto hdr = HDROutput::IsActive();
             if (hudLess)
                 ApplyFinishingPasses();
-            // The frame's number in the bottom right corner of both, for the helper to check what it got
-            if (nDebug & Debug::Stamps)
-            {
-                const DWORD stamp = Protocol::StampColour(Upscaler::PreparedFrameId());
-                RECT corner{ LONG(desc.Width - Protocol::StampSize), LONG(desc.Height - Protocol::StampSize), LONG(desc.Width), LONG(desc.Height) };
-                for (auto rt : { InputRT, hudLess ? HudLessRT : nullptr })
-                {
-                    IDirect3DSurface9* surface = nullptr;
-                    if (rt && SUCCEEDED(rt->mD3DTexture->GetSurfaceLevel(0, &surface)) && surface)
-                    {
-                        device->ColorFill(surface, &corner, stamp);
-                        surface->Release();
-                    }
-                }
-            }
-            static uint32_t generations = 0;
-            bool reset = (nDebug & Debug::PeriodicReset) && ++generations % 120 == 0;
-            if (Upscaler::Generate(InputRT->mD3DTexture, hudLess ? HudLessRT->mD3DTexture : nullptr, GeneratedRT->mD3DTexture, hdr ? HDROutput::GetPeakNits() : 0.0f, reset))
+            if (Upscaler::Generate(PresentRT->mD3DTexture, hudLess ? HudLessRT->mD3DTexture : nullptr, GeneratedRT->mD3DTexture, hdr ? HDROutput::GetPeakNits() : 0.0f))
             {
                 static bool first = true;
                 if (first)
@@ -1033,7 +815,7 @@ namespace
                 // The game presents the generated frame, the rendered one waits in PresentRT. Not a frame generated
                 // without a previous one, nor before the frame time is known.
                 bool paced = pacing && !Upscaler::WasGenerateReset() && FrameMs > 0.0;
-                if (mode == Mode::ShowGenerated || (paced && mode == Mode::On))
+                if (mode == Mode::ShowGenerated || paced)
                 {
                     device->StretchRect(generatedSurface, nullptr, backBuffer, nullptr, D3DTEXF_POINT);
                     Mark(device, backBuffer, true);
@@ -1069,32 +851,10 @@ export namespace FrameGeneration
         return mode != Mode::Off;
     }
 
-    // FfxApiDispatchFramegenerationFlags for FSR's own debug drawing: tear lines 1, reset indicators 2, debug view 4
-    uint32_t DebugFlags()
-    {
-        uint32_t flags = (nDebug & Debug::Stamps) ? Protocol::DebugCheckStamps : 0u;
-        if (nDebug & Debug::FsrIndicators)
-            flags |= 1u | 2u;
-        if (nDebug & Debug::FsrDebugView)
-            flags |= 4u;
-        return mode != Mode::Off ? flags : 0u;
-    }
-
-    bool LegacyInteropOrder()
-    {
-        return (nDebug & Debug::LegacyInterop) != 0;
-    }
-
-    // The game and the helper wait for each other's GPU work on the CPU (Debug::CpuSync)
-    bool ForceCpuSync()
-    {
-        return (nDebug & Debug::CpuSync) != 0;
-    }
-
     // The frame before the HUD will be captured: tells Evaluate, which comes earlier in the frame
     bool UsesHudLess()
     {
-        return mode != Mode::Off && !HDROutput::IsActive() && !(nDebug & Debug::NoHudLess);
+        return mode != Mode::Off && !HDROutput::IsActive();
     }
 
     // Render thread, right after the post processing: the back buffer holds the scene without the HUD
