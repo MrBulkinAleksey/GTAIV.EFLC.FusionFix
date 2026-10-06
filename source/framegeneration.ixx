@@ -79,6 +79,10 @@ namespace
     rage::grcRenderTargetPC* GeneratedRT = nullptr;
     rage::grcRenderTargetPC* HudLessRT = nullptr;
     rage::grcRenderTargetPC* SavedRT = nullptr;     // the back buffer while the rendered frame is presented
+    // The finished frame for the frame generation alone. PresentRT is read for the Present within the next frame and
+    // overwritten whole at its end, which is when DXVK gives a texture new storage, and the frame generation got the
+    // frame before from it after a few hundred frames; HudLessRT, which only the frame generation reads, never did.
+    rage::grcRenderTargetPC* InputRT = nullptr;
     bool bHudLessCaptured = false;  // this frame
     uint32_t TargetWidth = 0;
     uint32_t TargetHeight = 0;
@@ -564,7 +568,7 @@ namespace
         GeneratedSmall.clear();
         SAFE_RELEASE(ProbeRT);
         SAFE_RELEASE(ProbeMemory);
-        for (auto rt : { &PresentRT, &GeneratedRT, &HudLessRT, &SavedRT })
+        for (auto rt : { &PresentRT, &GeneratedRT, &HudLessRT, &SavedRT, &InputRT })
         {
             if (*rt)
             {
@@ -578,7 +582,7 @@ namespace
     // Both at the back buffer's size, 16-bit float as the helper's textures
     bool CreateTargets(uint32_t width, uint32_t height)
     {
-        if (PresentRT && GeneratedRT && HudLessRT && SavedRT && TargetWidth == width && TargetHeight == height)
+        if (PresentRT && GeneratedRT && HudLessRT && SavedRT && InputRT && TargetWidth == width && TargetHeight == height)
             return true;
         ReleaseTargets();
 
@@ -587,8 +591,9 @@ namespace
         GeneratedRT = rage::CreateEmptyRenderTarget("FrameGenerationGenerated", width, height, 64, desc);
         HudLessRT = rage::CreateEmptyRenderTarget("FrameGenerationHudLess", width, height, 64, desc);
         SavedRT = rage::CreateEmptyRenderTarget("FrameGenerationSaved", width, height, 64, desc);
+        InputRT = rage::CreateEmptyRenderTarget("FrameGenerationInput", width, height, 64, desc);
         if (!PresentRT || !PresentRT->mD3DTexture || !GeneratedRT || !GeneratedRT->mD3DTexture || !HudLessRT || !HudLessRT->mD3DTexture ||
-            !SavedRT || !SavedRT->mD3DTexture)
+            !SavedRT || !SavedRT->mD3DTexture || !InputRT || !InputRT->mD3DTexture)
         {
             ReleaseTargets();
             return false;
@@ -945,12 +950,13 @@ namespace
         PresentRT->mD3DTexture->GetSurfaceLevel(0, &presentSurface);
         GeneratedRT->mD3DTexture->GetSurfaceLevel(0, &generatedSurface);
 
-        if (presentSurface && generatedSurface && SUCCEEDED(device->StretchRect(backBuffer, nullptr, presentSurface, nullptr, D3DTEXF_POINT)))
+        if (presentSurface && generatedSurface && SUCCEEDED(device->StretchRect(backBuffer, nullptr, presentSurface, nullptr, D3DTEXF_POINT)) &&
+            CopyInto(device, backBuffer, InputRT))
         {
             auto hdr = HDROutput::IsActive();
             static uint32_t generations = 0;
             bool reset = (nDebug & Debug::PeriodicReset) && ++generations % 120 == 0;
-            if (Upscaler::Generate(PresentRT->mD3DTexture, hudLess ? HudLessRT->mD3DTexture : nullptr, GeneratedRT->mD3DTexture, hdr ? HDROutput::GetPeakNits() : 0.0f, reset))
+            if (Upscaler::Generate(InputRT->mD3DTexture, hudLess ? HudLessRT->mD3DTexture : nullptr, GeneratedRT->mD3DTexture, hdr ? HDROutput::GetPeakNits() : 0.0f, reset))
             {
                 static bool first = true;
                 if (first)
