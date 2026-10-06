@@ -3,6 +3,7 @@ module;
 #include <common.hxx>
 #include <cstdarg>
 #include <cstdio>
+#include <filesystem>
 #include <map>
 #include <string>
 
@@ -493,9 +494,53 @@ namespace
         Log("Draw call hooks installed");
     }
 
+    // The settings of [TEMPORAL], read again whenever the ini changes while the game runs
+    std::filesystem::path IniPath;
+    std::filesystem::file_time_type IniTime{};
+
+    void ReadSettings()
+    {
+        CIniReader iniReader("");
+        IniPath = iniReader.GetIniPath();
+        std::error_code error;
+        IniTime = std::filesystem::last_write_time(IniPath, error);
+
+        auto previous = mode;
+        mode = static_cast<Mode>(std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGeneration", 0), 0, 3));
+        fDelay = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
+        nDebug = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDebug", 0);
+        Log("Frame generation: %s, delay %.2f, debug %d", mode == Mode::Off ? "off" : mode == Mode::ShowGenerated ? "showing the generated frames" :
+            mode == Mode::PaceRendered ? "pacing the rendered frames only" : "on", fDelay, nDebug);
+
+        // A fresh start for the pacing and the statistics
+        if (mode != previous)
+        {
+            LastFrameEnd.QuadPart = 0;
+            bPending = false;
+        }
+        Stats = {};
+        Brightness = {};
+        PointsByKind.clear();
+        DarkLogged = 0;
+    }
+
+    void CheckSettings()
+    {
+        static ULONGLONG checked = 0;
+        auto now = GetTickCount64();
+        if (now - checked < 1000)
+            return;
+        checked = now;
+        std::error_code error;
+        auto time = std::filesystem::last_write_time(IniPath, error);
+        if (!error && time != IniTime)
+            ReadSettings();
+    }
+
     // Render thread, after the frame is finished
     void OnBeforePresent()
     {
+        CheckSettings();
         bool hudLess = bHudLessCaptured;
         bHudLessCaptured = false;
         if (mode == Mode::Off)
@@ -640,16 +685,8 @@ public:
     {
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
-            mode = static_cast<Mode>(std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGeneration", 0), 0, 3));
-            fDelay = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
-            nDebug = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDebug", 0);
-            if (nDebug)
-                Log("Debug: %d", nDebug);
             QueryPerformanceFrequency(&Frequency);
-            if (mode != Mode::Off)
-                Log("Frame generation: %s", mode == Mode::ShowGenerated ? "showing the generated frames" :
-                    mode == Mode::PaceRendered ? "pacing the rendered frames only" : "on");
+            ReadSettings();
 
             FusionFix::onBeforePresent() += []()
             {
