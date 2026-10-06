@@ -5710,7 +5710,8 @@ private:
     // The rain's rings on open water (water_rain_rings.patch, c178), set right before the water is
     // drawn, through the game's device wrapper and the real device alike: set on the real device
     // alone at the end of the G-buffer pass, the water never saw them. x their strength while it
-    // rains, y the clock, zw their fade from 6 to 15 m.
+    // rains (WetGroundDebug 2: full, rain or not), y the clock, zw their fade from 25 to 40 m: the
+    // water is mostly seen from a quay, further off than puddles.
     static void SetWaterRainRings()
     {
         auto& R = PostFxResources;
@@ -5719,8 +5720,10 @@ private:
             return;
         const double seconds = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds * 0.001 : 0.0;
         const float rain = CWeather::Rain ? std::clamp(*CWeather::Rain / 0.7f, 0.0f, 1.0f) : 0.0f;
-        const float rings = R.fWetGround > 0.0f ? rain * R.fWetGroundRipples : 0.0f;
-        const float c178[4] = { rings, float(std::fmod(seconds, 1000.0)), -1.0f / 9.0f, 15.0f / 9.0f };
+        float rings = R.fWetGround > 0.0f ? rain * R.fWetGroundRipples : 0.0f;
+        if (R.nWetGroundDebug == 2)
+            rings = (std::max)(R.fWetGroundRipples, 1.0f);
+        const float c178[4] = { rings, float(std::fmod(seconds, 1000.0)), -1.0f / 15.0f, 40.0f / 15.0f };
         pDevice->SetPixelShaderConstantF(178, c178, 1);
         if (auto real = RealDevice(pDevice); real != pDevice)
             real->SetPixelShaderConstantF(178, c178, 1);
