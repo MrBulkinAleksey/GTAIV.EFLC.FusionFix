@@ -11,6 +11,7 @@ export module framegeneration;
 import common;
 import comvars;
 import hdr;
+import renderscale;
 import upscaler;
 
 #ifndef SAFE_RELEASE
@@ -53,6 +54,12 @@ namespace
         constexpr int32_t NoCopies = 2;         // the Present of whatever the back buffer holds, without the copies
         constexpr int32_t EndOfFrame = 4;       // never within a frame: the waiting frame goes when the next one ends
         constexpr int32_t Brightness = 8;       // reads every finished frame back and counts the dark ones
+        // Where and how the rendered frame may be presented within a frame
+        constexpr int32_t NotOnBackBuffer = 16; // not while render target 0 is the back buffer
+        constexpr int32_t BeforePost = 32;      // only before the upscaler's Evaluate, which starts the post processing
+        constexpr int32_t AfterPost = 64;       // only once the frame before the HUD was captured
+        constexpr int32_t NoScene = 128;        // no EndScene and BeginScene around it
+        constexpr int32_t NoRebind = 256;       // the targets are not set again after it
     }
     int32_t nDebug = 0;
 
@@ -153,9 +160,40 @@ namespace
     struct PresentPoint
     {
         uint32_t draws = 0;
+        double ms = 0.0;        // since the previous frame ended
+        std::string phase;      // the render phase of rage, by its class
         std::string target;     // "back buffer" or the size of render target 0
         std::string depth;      // the size of the depth buffer, or "none"
+        bool afterEvaluate = false;
+        bool inPost = false;
+        bool afterHudLess = false;
     } LastPoint;
+
+    // The class name of a polymorphic object of the game, from its RTTI
+    const char* ClassName(const void* object)
+    {
+        __try
+        {
+            auto vtable = *reinterpret_cast<const uintptr_t* const*>(object);
+            auto locator = reinterpret_cast<const uint32_t*>(vtable[-1]);
+            auto name = reinterpret_cast<const char*>(locator[3]) + 8;
+            return name[0] == '.' && name[1] == '?' ? name + 4 : "?";
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return "?";
+        }
+    }
+
+    std::string CurrentPhase()
+    {
+        if (!CRenderPhase::sm_pCurrent || !*CRenderPhase::sm_pCurrent)
+            return "none";
+        std::string name = ClassName(reinterpret_cast<const void*>(*CRenderPhase::sm_pCurrent));
+        if (auto at = name.find("@@"); at != std::string::npos)
+            name.resize(at);
+        return name;
+    }
     std::map<std::string, std::pair<uint32_t, uint32_t>> PointsByKind;   // presents, dark frames
     uint32_t DarkLogged = 0;
 
@@ -174,7 +212,7 @@ namespace
 
     struct BrightnessStats
     {
-        uint32_t frames = 0, dark = 0, within = 0, darkWithin = 0;
+        uint32_t frames = 0, dark = 0, dim = 0, within = 0, darkWithin = 0;
         double average = 0.0;
     } Brightness;
 
@@ -209,14 +247,18 @@ namespace
 
         auto& b = Brightness;
         bool dark = b.average > 8.0 && value < b.average * 0.25;
+        bool dim = b.average > 8.0 && value < b.average * 0.6;
+        b.dim += dim;
         if (within)
         {
-            auto& kind = PointsByKind[LastPoint.target + ", depth " + LastPoint.depth];
+            auto& kind = PointsByKind[LastPoint.phase + ", target " + LastPoint.target];
             ++kind.first;
-            kind.second += dark;
-            if (dark && DarkLogged++ < 30)
-                Log("Dark frame %.1f against %.1f: presented after %u draw calls, target %s, depth %s",
-                    value, b.average, LastPoint.draws, LastPoint.target.c_str(), LastPoint.depth.c_str());
+            kind.second += dim;
+            if (dim && DarkLogged++ < 40)
+                Log("%s frame %.1f against %.1f: presented %.1f ms into it after %u draw calls, phase %s, target %s, depth %s, %s, %s, %s",
+                    dark ? "Dark" : "Dim", value, b.average, LastPoint.ms, LastPoint.draws, LastPoint.phase.c_str(), LastPoint.target.c_str(),
+                    LastPoint.depth.c_str(), LastPoint.afterEvaluate ? "after Evaluate" : "before Evaluate",
+                    LastPoint.inPost ? "in post" : "not in post", LastPoint.afterHudLess ? "after the HUD-less copy" : "before the HUD-less copy");
         }
         b.average = b.average > 0.0 ? b.average + (value - b.average) * 0.05 : value;
         ++b.frames;
@@ -225,10 +267,10 @@ namespace
         b.darkWithin += dark && within;
         if (b.frames < 300)
             return;
-        Log("Brightness over %u frames: average %.1f, %u dark; %u had the rendered frame presented within them, %u of those dark",
-            b.frames, b.average, b.dark, b.within, b.darkWithin);
+        Log("Brightness over %u frames: average %.1f, %u dark, %u dim; %u had the rendered frame presented within them, %u of those dark",
+            b.frames, b.average, b.dark, b.dim, b.within, b.darkWithin);
         for (auto& [kind, counts] : PointsByKind)
-            Log("  presented with %s bound: %u times, %u dark", kind.c_str(), counts.first, counts.second);
+            Log("  presented in %s: %u times, %u dim or dark", kind.c_str(), counts.first, counts.second);
         PointsByKind.clear();
         auto average = b.average;
         b = {};
@@ -319,16 +361,19 @@ namespace
             device->GetViewport(&viewport);
             device->GetScissorRect(&scissor);
             if (nDebug & Debug::Brightness)
-                LastPoint = { DrawsThisFrame, SurfaceKind(targets[0], backBuffer), SurfaceKind(depth, nullptr) };
+                LastPoint = { DrawsThisFrame, Ms(LastFrameEnd, Now()), CurrentPhase(), SurfaceKind(targets[0], backBuffer), SurfaceKind(depth, nullptr),
+                    Upscaler::IsFrameGenerationReady(), RenderScale::IsInPost(), bHudLessCaptured };
 
             // The game is inside its scene
             auto presentedAt = Now();
             if (!(nDebug & Debug::NoPresent))
             {
-                device->EndScene();
+                if (!(nDebug & Debug::NoScene))
+                    device->EndScene();
                 if (FAILED(device->Present(nullptr, nullptr, nullptr, nullptr)))
                     LogOnce(6, "Present of the rendered frame failed");
-                device->BeginScene();
+                if (!(nDebug & Debug::NoScene))
+                    device->BeginScene();
             }
 
             // The game's back buffer as it was, in whichever surface is the back buffer now
@@ -342,12 +387,15 @@ namespace
                 current->Release();
             }
 
-            for (DWORD i = 0; i < 4; ++i)
-                if (targets[i] || i > 0)
-                    device->SetRenderTarget(i, targets[i]);
-            device->SetDepthStencilSurface(depth);
-            device->SetViewport(&viewport);
-            device->SetScissorRect(&scissor);
+            if (!(nDebug & Debug::NoRebind))
+            {
+                for (DWORD i = 0; i < 4; ++i)
+                    if (targets[i] || i > 0)
+                        device->SetRenderTarget(i, targets[i]);
+                device->SetDepthStencilSurface(depth);
+                device->SetViewport(&viewport);
+                device->SetScissorRect(&scissor);
+            }
             for (auto& target : targets)
                 SAFE_RELEASE(target);
             SAFE_RELEASE(depth);
@@ -370,6 +418,24 @@ namespace
             ++DrawsThisFrame;
         if (!bPending || bInPresent || (nDebug & Debug::EndOfFrame) || GetCurrentThreadId() != RenderThread || Now().QuadPart < PendingDue.QuadPart)
             return;
+
+        // Experiments: only in some parts of the frame
+        if ((nDebug & Debug::BeforePost) && Upscaler::IsFrameGenerationReady())
+            return;
+        if ((nDebug & Debug::AfterPost) && !bHudLessCaptured)
+            return;
+        if (nDebug & Debug::NotOnBackBuffer)
+        {
+            IDirect3DSurface9* target = nullptr;
+            IDirect3DSurface9* backBuffer = nullptr;
+            device->GetRenderTarget(0, &target);
+            device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer);
+            bool onBackBuffer = target && target == backBuffer;
+            SAFE_RELEASE(target);
+            SAFE_RELEASE(backBuffer);
+            if (onBackBuffer)
+                return;
+        }
         PresentPending(device, false);
     }
 
