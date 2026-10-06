@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-index 7a8a6fe0..d8df4ede 100644
+index 7a8a6fe0..5c46291d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 @@ -104,6 +104,14 @@
@@ -70,8 +70,8 @@ index 7a8a6fe0..d8df4ede 100644
 +      mul r12.z, r12.z, r12.z
 +      mul r12.z, r12.z, r12.w // only on rough surfaces: smoothstep over roughness 0.36 to 0.45, gloss 0.25 to 0.15
 +      mul r12.z, r12.z, c165.z
-+      lrp r12.w, r12.z, r12.y, r1.x
-+      mov r1.x, r12.w
++      lrp r13.w, r12.z, r12.y, r1.x
++      mov r1.x, r13.w
        mul r0.xzw, r1.x, r0
        mul r0.xzw, r0, c6.x
        add r1.x, c17.w, c17.w
@@ -1205,7 +1205,7 @@ index 91955bce..28ce1589 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-index c05c5756..dd6aa7d9 100644
+index c05c5756..5aef1487 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 @@ -105,6 +105,14 @@
@@ -1276,8 +1276,8 @@ index c05c5756..dd6aa7d9 100644
 +      mul r12.z, r12.z, r12.z
 +      mul r12.z, r12.z, r12.w // only on rough surfaces: smoothstep over roughness 0.36 to 0.45, gloss 0.25 to 0.15
 +      mul r12.z, r12.z, c165.z
-+      lrp r12.w, r12.z, r12.y, r1.x
-+      mov r1.x, r12.w
++      lrp r13.w, r12.z, r12.y, r1.x
++      mov r1.x, r13.w
        mul r0.xzw, r1.x, r0
        mul r0.xzw, r0, c8.y
        add r1.x, c17.w, c17.w
@@ -1348,7 +1348,7 @@ index c05c5756..dd6aa7d9 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
-index a4de2c5b..fca85c05 100644
+index a4de2c5b..65eff52b 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
 @@ -50,6 +50,11 @@
@@ -1409,13 +1409,13 @@ index a4de2c5b..fca85c05 100644
 +      mul r12.z, r12.z, r12.z
 +      mul r12.z, r12.z, r12.w // only on rough surfaces: smoothstep over roughness 0.36 to 0.45, gloss 0.25 to 0.15
 +      mul r12.z, r12.z, c165.z
-+      lrp r12.w, r12.z, r12.y, r0.x
-+      mov r0.x, r12.w
++      lrp r13.w, r12.z, r12.y, r0.x
++      mov r0.x, r13.w
        mul r0.xyz, r0.x, r0.yzww
        add r0.w, r3.x, r3.x
        mul r0.xyz, r0, r0.w
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
-index 92d6423d..acfcd4b5 100644
+index 92d6423d..f8570f01 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
 @@ -51,6 +51,11 @@
@@ -1474,8 +1474,8 @@ index 92d6423d..acfcd4b5 100644
 +      mul r12.z, r12.z, r12.z
 +      mul r12.z, r12.z, r12.w // only on rough surfaces: smoothstep over roughness 0.36 to 0.45, gloss 0.25 to 0.15
 +      mul r12.z, r12.z, c165.z
-+      lrp r12.w, r12.z, r12.y, r0.x
-+      mov r0.x, r12.w
++      lrp r13.w, r12.z, r12.y, r0.x
++      mov r0.x, r13.w
        mul r0.xzw, r0.x, r2.xyyz
        add r1.w, r3.x, r3.x
        mad r2.x, r0.y, r3.y, r1.w

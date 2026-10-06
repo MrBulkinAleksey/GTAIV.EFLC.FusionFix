@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/water/waterPS2.asm b/win32_30_nv8/water/waterPS2.asm
-index 3eadd6cf..13782644 100644
+index 3eadd6cf..e2b6fbe7 100644
 --- a/win32_30_nv8/water/waterPS2.asm
 +++ b/win32_30_nv8/water/waterPS2.asm
 @@ -103,6 +103,13 @@
@@ -16,7 +16,7 @@ index 3eadd6cf..13782644 100644
      dcl_texcoord v0
      dcl_texcoord1 v1
      dcl_texcoord2 v2
-@@ -164,6 +171,125 @@
+@@ -164,6 +171,126 @@
      mul r0.z, r0.z, v1.w
      cmp r0.z, r1.y, r0.z, c1.w
      lrp r1.xy, r0.z, v4, r3.zwzw
@@ -131,7 +131,8 @@ index 3eadd6cf..13782644 100644
 +      mul r14.xy, r14.xy, r14.w
 +      mad r16.xy, r14.xy, r15.z, r16.xy
 +      mul r16.xy, r16.xy, c186.x
-+      add r17.xyz, v2, -v3
++      mov r17.xyz, v3
++      add r17.xyz, v2, -r17 // one input register per instruction (X5583)
 +      dp3 r17.x, r17, r17
 +      rsq r17.x, r17.x
 +      rcp r17.x, r17.x // the distance from the camera
