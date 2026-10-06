@@ -39,7 +39,7 @@ import upscaler;
 //   its own and so runs ahead of what the helper is handed.
 // - [TEMPORAL] in the ini: FrameGenerationDelay, FrameGenerationPacing, and FrameGenerationDebug: 1 marks which frames
 //   reach the screen, 2 logs how far between its neighbours a generated frame is (reads frames back, slow), 4 shows
-//   the generated frames in place of the rendered ones.
+//   the generated frames in place of the rendered ones, 8 logs the pacing.
 
 namespace
 {
@@ -59,6 +59,7 @@ namespace
         constexpr int32_t Marker = 1;       // a square in the corner: magenta on generated frames, green on rendered ones
         constexpr int32_t Similarity = 2;   // how much the generated frame differs from the rendered ones around it
         constexpr int32_t ShowGenerated = 4; // only the generated frames are shown, to check the generation itself
+        constexpr int32_t PacingLog = 8;    // the pacing on the CPU and the GPU, every 300 frames
     }
     int32_t nDebug = 0;
 
@@ -143,7 +144,8 @@ namespace
             gapMax = std::max(gapMax, gap);
             if (frames < 300)
                 return;
-            Log("Pacing over %u frames: frame %.2f ms, rendered frame %.2f ms after the generated one (%.2f..%.2f, aimed at %.2f), %u late",
+            if (nDebug & Debug::PacingLog)
+                Log("Pacing over %u frames: frame %.2f ms, rendered frame %.2f ms after the generated one (%.2f..%.2f, aimed at %.2f), %u late",
                 frames, frameMs / frames, gapMs / frames, gapMin, gapMax, delayMs / frames, late);
             *this = {};
         }
@@ -268,7 +270,8 @@ namespace
             }
             if (g.frames >= 300)
             {
-                Log("GPU pacing (FrameGenerationPacing %d) over %u frames: %.2f ms of GPU work a frame, rendered frame presented at %.2f of it (%.2f..%.2f, aimed at %.2f, %u measured), draw call %.0f of %.0f",
+                if (nDebug & Debug::PacingLog)
+                    Log("GPU pacing (FrameGenerationPacing %d) over %u frames: %.2f ms of GPU work a frame, rendered frame presented at %.2f of it (%.2f..%.2f, aimed at %.2f, %u measured), draw call %.0f of %.0f",
                     nPacing, g.frames, g.frameMs / g.frames, g.presents ? g.at / g.presents : 0.0, g.presents ? g.atMin : 0.0, g.presents ? g.atMax : 0.0,
                     fDelay, g.presents, g.target / g.frames, DrawsEma);
                 g = {};

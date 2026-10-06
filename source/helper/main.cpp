@@ -1155,7 +1155,9 @@ namespace
 
             if (g.generates >= 300)
             {
-                Log("Frame generation over %u Generate: %u not prepared, %u reset, %u failed, %u with a gap in the frame numbers; "
+                // Only when something was off: a reset now and then is a camera cut
+                if (g.unprepared || g.failed || g.gaps || g.prepareFailed || g.prepareGaps || g.resets > 2)
+                    Log("Frame generation over %u Generate: %u not prepared, %u reset, %u failed, %u with a gap in the frame numbers; "
                     "%u Prepare: %u failed, %u reset, %u with a gap, %u with the frame before the HUD",
                     g.generates, g.unprepared, g.resets, g.failed, g.gaps, g.prepares, g.prepareFailed, g.prepareResets, g.prepareGaps, g.hudLess);
                 auto lastId = g.lastId;
