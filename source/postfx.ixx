@@ -3799,8 +3799,11 @@ private:
     // averages in milliseconds per frame are written to FusionFix.PostFx.log next to GTAIV.exe.
     // Lights is the lighting phase less the AO, SSR, contact shadow and indirect light passes that
     // run inside it: the game's lights with their local contact shadows, and the light shafts.
+    // SSR is also broken down into its passes, which its time includes: the march, the fill of
+    // its misses (fallback and spread), putting the two together, smoothing and accumulation.
     // Off, no query is made.
-    enum ProfilerSection { kProfAO, kProfSSR, kProfContact, kProfGI, kProfWater, kProfLighting, kProfSections };
+    enum ProfilerSection { kProfAO, kProfSSR, kProfContact, kProfGI, kProfWater, kProfLighting,
+                           kProfSSRTrace, kProfSSRFill, kProfSSRResolve, kProfSSRDenoise, kProfSSRTemporal, kProfSections };
     static constexpr int kProfilerFrames = 4;
     static constexpr int kProfilerAverage = 120;
     struct ProfilerFrame
@@ -3866,8 +3869,11 @@ private:
                 fprintf(log, "GPU milliseconds per frame, averaged over %d frames. lights: the game's lights with their "
                              "local contact shadows, and the light shafts\n", kProfilerAverage);
             const double n = double(nProfilerSamples);
-            fprintf(log, "frame %6.2f   AO %5.2f   SSR %5.2f   contact shadows %5.2f   indirect light %5.2f   water SSR %5.2f   lights %6.2f\n",
+            fprintf(log, "frame %6.2f   AO %5.2f   SSR %5.2f (march %5.2f fill %5.2f resolve %5.2f smoothing %5.2f accumulation %5.2f)"
+                         "   contact shadows %5.2f   indirect light %5.2f   water SSR %5.2f   lights %6.2f\n",
                     profilerSums[kProfSections] / n, profilerSums[kProfAO] / n, profilerSums[kProfSSR] / n,
+                    profilerSums[kProfSSRTrace] / n, profilerSums[kProfSSRFill] / n, profilerSums[kProfSSRResolve] / n,
+                    profilerSums[kProfSSRDenoise] / n, profilerSums[kProfSSRTemporal] / n,
                     profilerSums[kProfContact] / n, profilerSums[kProfGI] / n, profilerSums[kProfWater] / n,
                     profilerSums[kProfLighting] / n);
             fclose(log);
@@ -4480,7 +4486,9 @@ private:
                 pDevice->GetRenderTarget(1, &oldTarget1);
                 pDevice->SetRenderTarget(1, R.SSRHitDistSurf[half]);
             }
+            ProfilerMark(pDevice, kProfSSRTrace, true);
             draw(0, R.SSRTraceSurf[half]);
+            ProfilerMark(pDevice, kProfSSRTrace, false);
             if (temporal)
             {
                 pDevice->SetRenderTarget(1, oldTarget1);
@@ -4488,6 +4496,7 @@ private:
             }
             effect->SetTexture(h.SSRResultTex2D, R.SSRTraceTex[half]->mD3DTexture);
             IDirect3DTexture9* fill = R.SSRFallbackTex[half]->mD3DTexture;
+            ProfilerMark(pDevice, kProfSSRFill, true);
             if (R.fSSRFallback > 0.0f)
             {
                 draw(1, R.SSRFallbackSurf[half]);
@@ -4506,8 +4515,11 @@ private:
                     }
                 }
             }
+            ProfilerMark(pDevice, kProfSSRFill, false);
             effect->SetTexture(h.SSRFallbackTex2D, fill);
+            ProfilerMark(pDevice, kProfSSRResolve, true);
             draw(3, ssrSurf);
+            ProfilerMark(pDevice, kProfSSRResolve, false);
         }
         effect->End();
 
@@ -4528,7 +4540,9 @@ private:
             BindEffectSamplers(pDevice, effect);
             SSRTrace::State(pDevice, "ssr denoise");
             SSRTrace::Contents(pDevice, "denoise input", ssrTex);
+            ProfilerMark(pDevice, kProfSSRDenoise, true);
             const HRESULT drawHr = pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            ProfilerMark(pDevice, kProfSSRDenoise, false);
             effect->EndPass();
             effect->End();
             SSRTrace::Line("ssr denoise: begin %08x pass %08x draw %08x passes %u", unsigned(beginHr), unsigned(passHr), unsigned(drawHr), passes);
@@ -4567,7 +4581,9 @@ private:
             effect->CommitChanges();
             BindEffectSamplers(pDevice, effect);
             SSRTrace::State(pDevice, "ssr temporal");
+            ProfilerMark(pDevice, kProfSSRTemporal, true);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            ProfilerMark(pDevice, kProfSSRTemporal, false);
             effect->EndPass();
             effect->End();
             ssrResult = R.SSRAccumTex[sizeIndex][next]->mD3DTexture;
