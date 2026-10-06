@@ -88,32 +88,11 @@ bool IsPostFxAA()
     return aa == FusionFixSettings.AntialiasingText.eFXAA || (aa == FusionFixSettings.AntialiasingText.eSMAA && IsSMAASupported());
 }
 
-// rage::grcDevice::GetD3DDevice() is the game's wrapper of the D3D9 device, not the device: it keeps the textures it
-// bound per sampler (RageDirect3DDevice9::g_TexturesBySampler) and passes on only what it takes for a change. Temporal
-// AA, RenderScale and the device hooks bind on the real device behind its back, so a texture set through the wrapper
-// could be dropped as already bound while the device held another: SSGI's accumulation read the G-buffer normals as
-// its depth (whole steps of 1/255) with the right depth "bound", and D3DX, binding through the wrapper too, seemed to
-// put textures and states on the wrong registers. These set through both: the wrapper, so its record stays true and
-// what restores the game's state later is passed on, and the real device, so it takes now.
-static IDirect3DDevice9* RealDevice(IDirect3DDevice9* wrapper)
-{
-    auto real = RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
-    return real ? real : wrapper;
-}
-
-static void SetTextureBoth(IDirect3DDevice9* device, DWORD stage, IDirect3DBaseTexture9* texture)
-{
-    device->SetTexture(stage, texture);
-    if (auto real = RealDevice(device); real != device)
-        real->SetTexture(stage, texture);
-}
-
-static void SetSamplerStateBoth(IDirect3DDevice9* device, DWORD sampler, D3DSAMPLERSTATETYPE type, DWORD value)
-{
-    device->SetSamplerState(sampler, type, value);
-    if (auto real = RealDevice(device); real != device)
-        real->SetSamplerState(sampler, type, value);
-}
+// Binding through both the game's device wrapper and the real device: see RageDirect3DDevice9::SetTextureBoth. SSGI's
+// accumulation read the G-buffer normals as its depth while the right depth was "bound" through the wrapper alone.
+using RageDirect3DDevice9::RealDevice;
+using RageDirect3DDevice9::SetTextureBoth;
+using RageDirect3DDevice9::SetSamplerStateBoth;
 
 // The sampler states SSR.fx declares (MinFilter, MagFilter, MipFilter, AddressU, AddressV), read from its source once
 // it is created: D3DX put them on its own registers too, and the trace showed samplers declared without a filter

@@ -2614,6 +2614,31 @@ export namespace RageDirect3DDevice9
             return g_TexturesBySampler[index];
         return nullptr;
     }
+
+    // rage::grcDevice::GetD3DDevice() is the game's wrapper of the device, which keeps the texture of each sampler on
+    // record and passes on only what it takes for a change; temporal AA, RenderScale and the device hooks bind on the
+    // real device behind it, so a texture set through the wrapper alone could be dropped while the device held
+    // another. These set through the wrapper, so its record stays true and later restores are passed on, and through
+    // the real device, so it takes now.
+    IDirect3DDevice9* RealDevice(IDirect3DDevice9* wrapper)
+    {
+        auto real = m_pRealDevice ? *m_pRealDevice : nullptr;
+        return real ? real : wrapper;
+    }
+
+    void SetTextureBoth(IDirect3DDevice9* device, DWORD stage, IDirect3DBaseTexture9* texture)
+    {
+        device->SetTexture(stage, texture);
+        if (auto real = RealDevice(device); real != device)
+            real->SetTexture(stage, texture);
+    }
+
+    void SetSamplerStateBoth(IDirect3DDevice9* device, DWORD sampler, D3DSAMPLERSTATETYPE type, DWORD value)
+    {
+        device->SetSamplerState(sampler, type, value);
+        if (auto real = RealDevice(device); real != device)
+            real->SetSamplerState(sampler, type, value);
+    }
 }
 
 export class CRenderPhaseDeferredLighting_SceneToGBuffer

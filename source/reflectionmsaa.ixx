@@ -240,7 +240,7 @@ private:
                         pDevice->SetVertexShaderConstantF(238, &PixelOffset.x, 1);
                         pDevice->SetPixelShaderConstantF(206, &RefMipBlurParams.x, 1);
 
-                        pDevice->SetTexture(0, ReflectionMapColourRT->mD3DTexture);
+                        RageDirect3DDevice9::SetTextureBoth(pDevice, 0, ReflectionMapColourRT->mD3DTexture);
 
                         pDevice->SetPixelShader(RefMipBlurBlend_PS);
 
@@ -257,7 +257,7 @@ private:
                     pDevice->SetVertexShaderConstantF(238, &PixelOffset.x, 1);
                     pDevice->SetPixelShaderConstantF(206, &RefMipBlurParams.x, 1);
 
-                    pDevice->SetTexture(0, ReflectionMapColourRT->mD3DTexture);
+                    RageDirect3DDevice9::SetTextureBoth(pDevice, 0, ReflectionMapColourRT->mD3DTexture);
 
                     pDevice->SetPixelShader(RefMipBlur_PS);
 
@@ -290,7 +290,7 @@ private:
         pDevice->SetVertexDeclaration(prevVertexDecl);
         pDevice->SetStreamSource(0, prevVertexBuffer, prevOffset, prevStride);
 
-        pDevice->SetTexture(0, prevTex);
+        RageDirect3DDevice9::SetTextureBoth(pDevice, 0, prevTex);
 
         pDevice->SetVertexShader(prevVS);
         pDevice->SetPixelShader(prevPS);

@@ -378,7 +378,7 @@ public:
 
         D3DVIEWPORT9 viewport = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
         device->SetViewport(&viewport);
-        device->SetTexture(0, CompositeRT->mD3DTexture);
+        RageDirect3DDevice9::SetTextureBoth(device, 0, CompositeRT->mD3DTexture);
         device->SetPixelShader(OutputPS);
         device->SetPixelShaderConstantF(0, constants, 1);
         device->SetVertexShader(nullptr);
@@ -402,7 +402,7 @@ public:
         for (size_t i = 0; i < std::size(samplerStates); ++i)
             device->SetSamplerState(0, samplerStates[i], oldSamplerStates[i]);
         device->SetPixelShaderConstantF(0, oldConstant, 1);
-        device->SetTexture(0, oldTexture);
+        RageDirect3DDevice9::SetTextureBoth(device, 0, oldTexture);
         device->SetViewport(&oldViewport);
         device->SetPixelShader(oldPS);
         device->SetVertexShader(oldVS);
