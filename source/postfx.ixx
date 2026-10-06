@@ -604,6 +604,12 @@ public:
     bool VolumetricCloudsOn() const { return VolumetricCloudsEnabled() && CloudsEffect != nullptr; }
     // Why the last frame drew no volumetric clouds, or that it did, for the Ctrl+Shift+F10 log.
     const char* szCloudsStatus = "not run yet";
+    // The same for the reflection map (DrawSkyReflection): what the last call did, how many calls
+    // since the last log, and the viewport and target it drew into.
+    const char* szCloudsReflectionStatus = "never called";
+    uint32_t nCloudReflectionCalls = 0;
+    D3DVIEWPORT9 CloudReflectionViewport = {};
+    UINT CloudReflectionTarget[2] = {};
     HRESULT hrCloudsEffect = S_OK;
     IDirect3DTexture9* CloudNoiseTexture = nullptr;
     IDirect3DTexture9* CloudNoiseTex();
@@ -4909,7 +4915,7 @@ private:
     static void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* sceneBase, bool reflection = false)
     {
         auto& R = PostFxResources;
-        auto skip = [&](const char* why) { R.szCloudsStatus = why; };
+        auto skip = [&](const char* why) { (reflection ? R.szCloudsReflectionStatus : R.szCloudsStatus) = why; };
         if (!R.VolumetricCloudsEnabled())
             return skip("off in the ini");
         if (!R.CloudsEffect)
@@ -4919,7 +4925,7 @@ private:
         if (!sceneBase && !reflection)
             return skip("no scene texture");
         if (reflection && !R.bVolumetricCloudsReflections)
-            return;
+            return skip("VolumetricCloudsReflections 0");
         if (!R.mDepthRT || !R.mDepthRT->mD3DTexture)
             return skip("no depth texture");
         rage::grcViewport* vp = rage::GetCurrentViewport();
@@ -4990,26 +4996,32 @@ private:
             scene->Release();
         }
         if (!sceneSurface)
-            return reflection ? void() : skip("no scene surface");
-        // Only a reflection drawn over its whole target: the passes set the viewport to the target,
-        // and a map drawn in parts (as two halves of one texture) would take the clouds across all.
-        if (reflection)
-        {
-            D3DSURFACE_DESC targetDesc = {};
-            D3DVIEWPORT9 current = {};
-            sceneSurface->GetDesc(&targetDesc);
-            pDevice->GetViewport(&current);
-            if (current.X != 0 || current.Y != 0 || current.Width != targetDesc.Width || current.Height != targetDesc.Height)
-            {
-                sceneSurface->Release();
-                return;
-            }
-        }
-        if (!reflection)
-            R.szCloudsStatus = "drawn";
+            return skip("no scene surface");
         D3DSURFACE_DESC desc = {};
         sceneSurface->GetDesc(&desc);
-        const float width = float(desc.Width), height = float(desc.Height);
+        float width = float(desc.Width), height = float(desc.Height);
+        // A reflection is drawn through its own viewport, which may be a part of its target (a map
+        // drawn in parts, as two halves of one texture): the clouds go into that part only, the
+        // rays from its own corner. Insisting on the whole target left the water with no clouds.
+        float originX = 0.0f, originY = 0.0f;
+        if (reflection)
+        {
+            D3DVIEWPORT9 current = {};
+            pDevice->GetViewport(&current);
+            R.CloudReflectionViewport = current;
+            R.CloudReflectionTarget[0] = desc.Width;
+            R.CloudReflectionTarget[1] = desc.Height;
+            if (current.Width == 0 || current.Height == 0 || current.X + current.Width > desc.Width || current.Y + current.Height > desc.Height)
+            {
+                sceneSurface->Release();
+                return skip("viewport outside its target");
+            }
+            originX = float(current.X);
+            originY = float(current.Y);
+            width = float(current.Width);
+            height = float(current.Height);
+        }
+        skip("drawn");
 
         ID3DXEffect* effect = R.CloudsEffect;
         const D3DMATRIX& proj = *(const D3DMATRIX*)vp->mProjectionMatrix;
@@ -5309,19 +5321,24 @@ private:
         };
         auto drawPass = [&](const char* technique, IDirect3DSurface9* target, float w, float h, bool blend)
         {
+            // Only the reflection's own viewport starts away from the target's corner.
+            const float x0 = target == sceneSurface ? originX : 0.0f, y0 = target == sceneSurface ? originY : 0.0f;
             pDevice->SetRenderTarget(0, target);
-            D3DVIEWPORT9 viewport = { 0, 0, DWORD(w), DWORD(h), 0.0f, 1.0f };
+            D3DVIEWPORT9 viewport = { DWORD(x0), DWORD(y0), DWORD(w), DWORD(h), 0.0f, 1.0f };
             pDevice->SetViewport(&viewport);
             pDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, blend ? TRUE : FALSE);
             pDevice->SetRenderState(D3DRS_COLORWRITEENABLE, blend ? (D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE) : 0xF);
-            const D3DXVECTOR4 info = ProjInfo(proj, w, h);
+            // VPOS counts from the target's corner: the rays start from the viewport's.
+            D3DXVECTOR4 info = ProjInfo(proj, w, h);
+            info.z -= x0 * info.x;
+            info.w -= y0 * info.y;
             effect->SetVector("vec4ProjInfo", &info);
             const ScreenVertex screenVertices[4] =
             {
-                { -0.5f,     -0.5f,     quadZ, 1.0f, 0.0f, 0.0f },
-                { -0.5f,      h - 0.5f, quadZ, 1.0f, 0.0f, 1.0f },
-                { w - 0.5f,  -0.5f,     quadZ, 1.0f, 1.0f, 0.0f },
-                { w - 0.5f,   h - 0.5f, quadZ, 1.0f, 1.0f, 1.0f }
+                { x0 - 0.5f,      y0 - 0.5f,     quadZ, 1.0f, 0.0f, 0.0f },
+                { x0 - 0.5f,      y0 + h - 0.5f, quadZ, 1.0f, 0.0f, 1.0f },
+                { x0 + w - 0.5f,  y0 - 0.5f,     quadZ, 1.0f, 1.0f, 0.0f },
+                { x0 + w - 0.5f,  y0 + h - 0.5f, quadZ, 1.0f, 1.0f, 1.0f }
             };
             UINT passes = 0;
             effect->SetTechnique(technique);
@@ -5939,6 +5956,10 @@ private:
                 fprintf(log, "  s12 before the shadows: srgb %lu  max mip %lu  min filter %lu  lod bias %.3f\n",
                         static_cast<unsigned long>(R.CloudSamplerBefore[0]), static_cast<unsigned long>(R.CloudSamplerBefore[1]),
                         static_cast<unsigned long>(R.CloudSamplerBefore[2]), std::bit_cast<float>(R.CloudSamplerBefore[3]));
+                fprintf(log, "  clouds in reflections: %s; %u calls since the last log; viewport %lu,%lu %lux%lu of a %ux%u target\n",
+                        R.szCloudsReflectionStatus, R.nCloudReflectionCalls, R.CloudReflectionViewport.X, R.CloudReflectionViewport.Y,
+                        R.CloudReflectionViewport.Width, R.CloudReflectionViewport.Height, R.CloudReflectionTarget[0], R.CloudReflectionTarget[1]);
+                R.nCloudReflectionCalls = 0;
                 fprintf(log, "  wet ground: %s; effect %s (hr 0x%08lX); wetness %.3f, rain %.3f, materials 0x%02X, debug %d\n",
                         R.szWetGroundStatus, R.WetGroundEffect ? "built" : "missing", static_cast<unsigned long>(R.hrWetGroundEffect), R.fWetness,
                         CWeather::Rain ? *CWeather::Rain : -1.0f, unsigned(R.nWetGroundMaterials), R.nWetGroundDebug);
@@ -6221,6 +6242,7 @@ private:
     static int __fastcall DrawSkyReflection(int _this, void* edx, int a2, int a3, char a4, char a5, int a6, char a7)
     {
         const int result = hbDrawSkyReflection.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+        ++PostFxResources.nCloudReflectionCalls;
         if (auto pDevice = rage::grcDevice::GetD3DDevice())
             RenderVolumetricClouds(pDevice, nullptr, true);
         return result;
