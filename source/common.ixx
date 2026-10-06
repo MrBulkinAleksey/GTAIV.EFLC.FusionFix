@@ -144,6 +144,14 @@ public:
         static Event<> AfterEndScene;
         return AfterEndScene;
     }
+    // After every onAfterEndScene handler: the back buffer holds the frame as it will be presented
+    static Event<>& onBeforePresent()
+    {
+        static Event<> BeforePresent;
+        return BeforePresent;
+    }
+    // Frame generation presents a generated frame for each rendered one (render thread, for the FPS counter)
+    static inline bool bFrameGenerationPresenting = false;
     static Event<>& onReadGameConfig()
     {
         static Event<> ReadGameConfig;

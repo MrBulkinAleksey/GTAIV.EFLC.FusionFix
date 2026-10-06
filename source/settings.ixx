@@ -233,6 +233,8 @@ private:
             else
                 WriteToIni();
             if (callback) callback(value);
+            // Rows shown on a condition may come or go with it
+            menuConditionsDirty = true;
         }
 
         // Values that are not available on this system are skipped, in the direction the value was changed
@@ -286,8 +288,11 @@ private:
         int32_t beforePreference = -1;  // or the preference of that row
         uint8_t episodes = 0xFF;        // shown in these episodes: 1 IV, 2 TLAD, 4 TBoGT
         bool gap = false;               // an empty line
+        std::function<bool()> shown;    // shown while this holds (SetRowCondition), else always
     };
     static inline std::vector<DynamicOption> dynamicOptions;
+    // A value changed in the menu: rows shown on a condition are put in or taken out (ProcessMenu)
+    static inline bool menuConditionsDirty = false;
     // Text of the number next to code-defined sliders (MENU_DISPLAY_VALUE_SLIDERBAR), by preference
     static inline std::unordered_map<int32_t, std::function<std::wstring()>> valueTexts;
     static inline SafetyHookMid valueTextHook;
@@ -557,6 +562,17 @@ private:
                 return option.action == added.option.action && option.preference == added.option.preference &&
                     std::strcmp(option.label, added.option.label) == 0;
             });
+            // A row whose condition doesn't hold: taken out if it was put in before
+            if (added.shown && !added.shown())
+            {
+                if (found != options.data + options.count)
+                {
+                    auto row = static_cast<int32_t>(found - options.data);
+                    std::memmove(&options.data[row], &options.data[row + 1], (options.count - row - 1) * sizeof(SettingsTables::Option));
+                    --options.count;
+                }
+                continue;
+            }
             if (found != options.data + options.count)
                 continue;
             // The frontend instance has visibility/layout storage for 50 rows,
@@ -980,6 +996,13 @@ private:
         auto previousMenu = std::exchange(inputMenu, menu);
         auto previousSubmenu = std::exchange(openSubmenu, -1);
         auto result = processMenu.ccall<uint8_t>(menu);
+        // A value changed: rows shown on a condition come or go, the selection stays on its row
+        if (std::exchange(menuConditionsDirty, false) && menu == 0 &&
+            std::any_of(dynamicOptions.begin(), dynamicOptions.end(), [](const auto& added) { return static_cast<bool>(added.shown); }))
+        {
+            FillMenu(0);
+            FixSelection(0, false);
+        }
         auto submenu = openSubmenu;
         selectedButton = previous;
         inputMenu = previousMenu;
@@ -2103,6 +2126,7 @@ public:
             { 0, "PREF_BICUBIC_TEXTURES",       "TEXTURES",   "BicubicFiltering",                   "",                           0, nullptr, 0, 1 },
             { 0, "PREF_SPECULAR_AA",            "TEXTURES",   "SpecularAntiAliasing",               "",                           0, nullptr, 0, 1 },
             { 0, "PREF_UPSCALER_QUALITY",       "TEMPORAL",   "UpscalerQuality",                    "MENU_DISPLAY_UPSCALER_QUALITY", 0, nullptr, 0, 4 },
+            { 0, "PREF_FRAME_GENERATION",       "TEMPORAL",   "FrameGeneration",                    "",                           0, nullptr, 0, 1 },
             { 0, "PREF_VOLUMETRIC_CLOUDS",      "POSTFX",     "VolumetricClouds",                   "",                           1, nullptr, 0, 1 },
         };
 
@@ -2309,6 +2333,8 @@ public:
             AddRow(category, "Antialiasing", "PREF_ANTIALIASING", 6, "MENU_DISPLAY_ANTIALIASING");
             // DLAA and FSR: the scene below the screen size, applied with a device reset
             AddRow(category, "UpscalerQuality", "PREF_UPSCALER_QUALITY", 5, "MENU_DISPLAY_UPSCALER_QUALITY");
+            // AMD frame generation, with DLAA or FSR and AMD's frame generation library
+            AddRow(category, "FrameGeneration", "PREF_FRAME_GENERATION", 2, toggle);
             AddEmptyLine(category);
             AddRow(category, "Volumetric Fog", "PREF_VOLUMETRICFOG", 2, toggle);
             AddRow(category, "Sun Shafts", "PREF_SUNSHAFTS", 2, toggle);
@@ -2320,6 +2346,15 @@ public:
             AddRow(category, "ExtraNightShad", "PREF_EXTRANIGHTSHADOWS", 4, "MENU_DISPLAY_EXTRA_NIGHT_SHADOWS");
             AddRow(category, "Graphics API", "PREF_GRAPHICSAPI", 3, "MENU_DISPLAY_GRAPHICS_API");
         }
+
+        // Upscaling and frame generation work with DLAA and FSR only: their rows are shown with those
+        auto upscalerAntialiasing = []() -> bool
+        {
+            static auto aa = FusionFixSettings.GetRef("PREF_ANTIALIASING");
+            return aa && (aa->get() == FusionFixSettings.AntialiasingText.eDLAA || aa->get() == FusionFixSettings.AntialiasingText.eFSR);
+        };
+        SetRowCondition("PREF_UPSCALER_QUALITY", upscalerAntialiasing);
+        SetRowCondition("PREF_FRAME_GENERATION", upscalerAntialiasing);
 
         // Graphics: a Lighting category for the screen space effects and the reach of the night shadows
         for (auto screen : { MenuScreen::Graphics, MenuScreen::TitleGraphics })
@@ -2984,6 +3019,18 @@ public:
         if (prefID && mFusionPrefs.contains(*prefID)) mFusionPrefs.at(*prefID).callback = nullptr;
     }
     // Values the predicate rejects are skipped when the setting is changed in the menu
+    // The rows of a preference added through AddRow are shown only while 'shown' holds; the menu is filled again
+    // after a value changes in it
+    void SetRowCondition(std::string_view name, std::function<bool()> shown)
+    {
+        const auto prefID = GetPrefIDByName(name);
+        if (!prefID)
+            return;
+        for (auto& added : dynamicOptions)
+            if (added.option.preference == *prefID)
+                added.shown = shown;
+    }
+
     void SetAvailability(std::string_view name, std::function<bool(int32_t)>&& available)
     {
         const auto prefID = GetPrefIDByName(name);
@@ -3710,11 +3757,16 @@ public:
                         };
                         auto curEp = _dwCurrentEpisode ? *_dwCurrentEpisode : 0;
                         static char str_format_fps[] = "%02d";
+                        // With frame generation, the frames shown too: one generated for each rendered one
+                        static char str_format_fps_generated[] = "%02d (%02d)";
                         static const D3DXCOLOR TBOGT(D3DCOLOR_XRGB(0xD7, 0x11, 0x6E));
                         static const D3DXCOLOR TLAD(D3DCOLOR_XRGB(0x6F, 0x0D, 0x0F));
                         static const D3DXCOLOR IV(CText::hasViceCityStrings() ? D3DCOLOR_XRGB(0xF5, 0x8F, 0xBE) : D3DCOLOR_XRGB(0xF0, 0xA0, 0x00));
 
-                        DrawTextOutline(pFPSFont, 10, 10, (curEp == 2) ? TBOGT : ((curEp == 1) ? TLAD : IV), str_format_fps, fps);
+                        if (FusionFix::bFrameGenerationPresenting)
+                            DrawTextOutline(pFPSFont, 10, 10, (curEp == 2) ? TBOGT : ((curEp == 1) ? TLAD : IV), str_format_fps_generated, fps, fps * 2);
+                        else
+                            DrawTextOutline(pFPSFont, 10, 10, (curEp == 2) ? TBOGT : ((curEp == 1) ? TLAD : IV), str_format_fps, fps);
 
                         if (bExtendedTimecycEditing)
                         {

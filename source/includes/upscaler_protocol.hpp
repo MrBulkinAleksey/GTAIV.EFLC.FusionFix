@@ -19,13 +19,17 @@
 // Vulkan timeline semaphore of its own instead (ConfigureFlags::GameFence), which the helper opens as its fence.
 // Where the helper can't open it (older Proton), it clears GameFence in Flags, and then both sides wait for their
 // GPU work on the CPU: the game for its copies before Evaluate, the helper before it answers Evaluate.
+//
+// Frame generation (ConfigureFlags::FrameGeneration, FSR only): Evaluate also prepares the frame generation with
+// the depth and motion vectors of the frame. Generate then takes the finished frame (Present, the size of the
+// output) and writes the frame between it and the previous one into Generated, synchronized like Evaluate.
 
 #include <cstdint>
 #include <cstddef>
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 6;
+    constexpr uint32_t Version = 10;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -35,6 +39,7 @@ namespace UpscalerProtocol
         None,
         Configure,      // (re)create the shared textures and the upscaler for Backend, Width x Height to OutputWidth x OutputHeight
         Evaluate,       // upscale one frame
+        Generate,       // the frame between the last Present and the one before, after an Evaluate of the same frame
         Shutdown,
     };
 
@@ -58,19 +63,37 @@ namespace UpscalerProtocol
     // Motion    DXGI_FORMAT_R16G16_FLOAT        previous - current position in texture coordinates, no jitter
     // Reactive  DXGI_FORMAT_R16_FLOAT           0 to 1, how much a pixel should follow the current frame
     // Output    DXGI_FORMAT_R16G16B16A16_FLOAT  written by the upscaler
+    // Frame generation only, at the output size, otherwise their handles are 0:
+    // Present   DXGI_FORMAT_R16G16B16A16_FLOAT  the finished frame, sRGB encoded or scRGB with HDR output
+    // Generated DXGI_FORMAT_R16G16B16A16_FLOAT  written by the frame generation
+    // HudLess   DXGI_FORMAT_R16G16B16A16_FLOAT  Present before the HUD was drawn, which tells the HUD apart
     enum class Texture : uint32_t
     {
-        Color, Depth, Motion, Reactive, Output, Count
+        Color, Depth, Motion, Reactive, Output, Present, Generated, HudLess, Count
     };
 
     // The inputs the game copies every frame
     constexpr uint32_t InputCount = static_cast<uint32_t>(Texture::Output);
+
+    // The textures of the frame generation, the last ones
+    constexpr bool IsFrameGenerationTexture(Texture texture)
+    {
+        return texture == Texture::Present || texture == Texture::Generated || texture == Texture::HudLess;
+    }
+
+    // At the output size, the others at the render size
+    constexpr bool IsOutputSize(Texture texture)
+    {
+        return texture == Texture::Output || IsFrameGenerationTexture(texture);
+    }
 
     namespace ConfigureFlags
     {
         constexpr uint32_t ReactiveMask = 1 << 0;   // Reactive is written every frame and used by FSR
         constexpr uint32_t Wine = 1 << 1;           // textures without the UAV flag, for opaque handles
         constexpr uint32_t GameFence = 1 << 2;      // FenceHandle is the game's semaphore; cleared by the helper if it can't open it
+        constexpr uint32_t FrameGeneration = 1 << 3; // FSR frame generation; cleared by the helper if it can't create it
+        constexpr uint32_t HighDynamicRange = 1 << 4; // Present is scRGB
     }
 
 #pragma pack(push, 8)
@@ -89,6 +112,8 @@ namespace UpscalerProtocol
         // Written by the helper, answering the implicit start request
         uint32_t DLSSAvailable;
         uint32_t FSRAvailable;
+        uint32_t FrameGenerationAvailable;
+        uint32_t Reserved0;
         char Message[512];
 
         // Request
@@ -118,6 +143,18 @@ namespace UpscalerProtocol
         float FrameTimeMs;
         float Sharpness;
         uint32_t Reset;
+        // World space, for the frame generation
+        float CameraPosition[3];
+        float CameraUp[3];
+        float CameraRight[3];
+        float CameraForward[3];
+        uint64_t FrameId;             // +1 every frame, anything else resets the frame generation
+        uint32_t HudLess;             // Generate of this frame comes with HudLess
+        uint32_t Reserved1;
+
+        // Generate (WaitValue and SignalValue as for Evaluate)
+        float MaxLuminance;           // nits, HDR output
+        uint32_t GenerateReset;
 
         // Response
         uint32_t ResponseSerial;
@@ -133,7 +170,7 @@ namespace UpscalerProtocol
     static_assert(sizeof(wchar_t) == 2);
     static_assert(offsetof(Shared, WaitValue) % 8 == 0);
     static_assert(offsetof(Shared, TextureHandles) % 8 == 0);
-    static_assert(sizeof(Shared) == 3848, "The layout must be identical in the x86 and x64 builds");
+    static_assert(sizeof(Shared) == 3976, "The layout must be identical in the x86 and x64 builds");
 
     inline const wchar_t* MappingSuffix = L".Mapping";
     inline const wchar_t* RequestSuffix = L".Request";

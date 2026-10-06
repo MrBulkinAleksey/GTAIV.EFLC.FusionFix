@@ -43,8 +43,8 @@ curl -fsSL -o data\nvngx_dlss.dll https://raw.githubusercontent.com/NVIDIA/DLSS/
   echo Failed to download DLSS & exit /b 1
 )
 
-rem AMD FidelityFX: the loader and the upscaler it loads from its own folder
-for %%F in (amd_fidelityfx_loader_dx12.dll amd_fidelityfx_upscaler_dx12.dll) do (
+rem AMD FidelityFX: the loader and the upscaler and frame generation it loads from its own folder
+for %%F in (amd_fidelityfx_loader_dx12.dll amd_fidelityfx_upscaler_dx12.dll amd_fidelityfx_framegeneration_dx12.dll) do (
   del "data\%%F" 2>nul
   curl -fsSL -o "data\%%F" https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/%FIDELITYFX_VERSION%/Kits/FidelityFX/signedbin/%%F || (
     del "data\%%F" 2>nul

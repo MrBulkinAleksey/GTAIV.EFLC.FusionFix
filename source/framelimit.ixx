@@ -185,9 +185,36 @@ void __cdecl sub_C64CB0(void* a1)
 
 class Framelimit
 {
+    // With the Vulkan graphics API, DXVK lets the game get as many frames ahead of the screen as d3d9.maxFrameLatency
+    // allows, 3 unless set. Fewer is less input latency, at some cost to the frame rate. DXVK reads DXVK_CONFIG once the
+    // game creates its Direct3D, so it's set while the plugin loads; a maxFrameLatency the player set there is kept.
+    static void SetMaxFrameLatency()
+    {
+        CIniReader iniReader("");
+        auto latency = iniReader.ReadInteger("FRAMELIMIT", "MaxFrameLatency", 0);
+        if (latency <= 0)
+            return;
+
+        char current[260]{};
+        auto length = GetEnvironmentVariableA("DXVK_CONFIG", current, sizeof(current));
+        if (length >= sizeof(current))
+            return;
+        std::string config(current, length);
+        if (config.find("maxFrameLatency") != std::string::npos)
+            return;
+        if (!config.empty())
+            config += "; ";
+        config += "d3d9.maxFrameLatency = " + std::to_string(std::min(latency, 16));
+        // DXVK reads no more than a path's length of it
+        if (config.size() < MAX_PATH)
+            SetEnvironmentVariableA("DXVK_CONFIG", config.c_str());
+    }
+
 public:
     Framelimit()
     {
+        SetMaxFrameLatency();
+
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");

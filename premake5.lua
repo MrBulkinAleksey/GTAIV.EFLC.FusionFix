@@ -161,6 +161,9 @@ workspace "GTAIV.EFLC.FusionFix"
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_UpscalerDepth /Fo \"../source/resources/temporal/UpscalerDepth.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_OpaqueLuma /Fo \"../source/resources/temporal/OpaqueLuma.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_Reactive /Fo \"../source/resources/temporal/Reactive.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
+      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_RainLayer /Fo \"../source/resources/temporal/RainLayer.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
+      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_RainComposite /Fo \"../source/resources/temporal/RainComposite.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
+      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_SteadyDepth /Fo \"../source/resources/temporal/SteadyDepth.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
 
       -- HDR output
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_HDROutput /Fo \"../source/resources/hdr/HDROutput.pso\" \"../source/resources/hdr/HDR.hlsl\"",
@@ -281,6 +284,7 @@ project "GTAIV.EFLC.FusionFix.Helper"
    includedirs { "external/dlss/include" }
    includedirs { "external/fidelityfx/api/include" }
    includedirs { "external/fidelityfx/upscalers/include" }
+   includedirs { "external/fidelityfx/framegeneration/include" }
    libdirs { "external/dlss/lib/Windows_x86_64/x64" }
    links { "d3d12", "dxgi", "shell32", "nvsdk_ngx_s" }
 

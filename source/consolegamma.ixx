@@ -285,6 +285,19 @@ private:
         currentRenderTarget->Release();
     }
 
+public:
+    // The gamma of the consoles on render target 0, when it's on: also for copies of the frame that have to match it
+    static void Apply(IDirect3DDevice9* device)
+    {
+        Render(device);
+    }
+
+    static bool IsActive()
+    {
+        return nConsoleGammaMode != 0;
+    }
+
+private:
     static void Shutdown()
     {
         SafeRelease(pEffect);
