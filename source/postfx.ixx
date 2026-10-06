@@ -404,6 +404,15 @@ public:
     // stay close: past where green and blue end only red is lit, and with 0.5, 0.2 and 0.1 that
     // band reached a fifth of full light and turned the dark side of faces red.
     float fSkinLighting = 1.0f;
+    // Headlight shadows near the lamps (c165; local_light_shadow_near_lamps.patch): both lamps
+    // light as one beam, so whatever stands right by one of them shadowed its whole side of the
+    // beam, where the other lamp would still light. Within ShadowNearLampsReach metres of the
+    // lamps an occluder keeps ShadowNearLamps of the light, fading to a full shadow over the next
+    // ShadowNearLampsFade metres. Only headlights, whose shadow is drawn from behind the lamps
+    // ([HEADLIGHTS] ShadowBehindLamps), are told apart in the shader.
+    float fShadowNearLamps = 0.5f;
+    float fShadowNearLampsReach = 1.0f;
+    float fShadowNearLampsFade = 2.0f;
     // Materials with no specular map (c197.x; deferred_lighting_sun_sheen.patch) write no specular
     // intensity, so buildings and LOD roads got neither the sun's highlight nor the sky's
     // reflection. The sun pass gives them half this much of one, as if the G-buffer held it,
@@ -1391,6 +1400,9 @@ public:
     void ReadLiveIni(CIniReader& iniReader)
     {
         fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
+        fShadowNearLamps = std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowNearLamps", 0.5f), 0.0f, 1.0f);
+        fShadowNearLampsReach = std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowNearLampsReach", 1.0f), 0.0f, 10.0f);
+        fShadowNearLampsFade = std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowNearLampsFade", 2.0f), 0.1f, 20.0f);
         fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 50.0f);
         fCloudShadows = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadows", 0.6f), 0.0f, 1.0f);
         fCloudShadowsHeight = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsHeight", 1200.0f), 100.0f, 10000.0f);
@@ -6801,6 +6813,13 @@ public:
             pDevice->SetPixelShaderConstantF(201, scale, 1);
             pDevice->SetPixelShaderConstantF(205, offset, 1);
         }
+        // Headlight shadows near the lamps: x the light kept, z one over the fade, w where the fade
+        // starts beyond the lamps, as 1 + reach * z.
+        {
+            const float invFade = 1.0f / R.fShadowNearLampsFade;
+            const float nearLamps[4] = { R.fShadowNearLamps, 0.0f, invFade, 1.0f + R.fShadowNearLampsReach * invFade };
+            pDevice->SetPixelShaderConstantF(165, nearLamps, 1);
+        }
         // The sun on materials with no specular map (x) and the cloud shadows (yzw, c198, c199, s12).
         {
             float threshold = 0.0f, bias = 0.0f, thickness = 0.0f;
@@ -7015,6 +7034,7 @@ public:
         pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(197, noLocalContactShadows, 1);
+        pDevice->SetPixelShaderConstantF(165, noLocalContactShadows, 1);
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
