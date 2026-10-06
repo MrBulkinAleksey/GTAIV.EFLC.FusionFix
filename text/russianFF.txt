@@ -235,6 +235,9 @@ Logitech LightSync RGB
 [SpecularAA]
 Сглаживание бликов
 
+[GroundSurf]
+Поверхности земли
+
 [LodBias1]
 -0.25
 

@@ -2130,6 +2130,7 @@ public:
             { 0, "PREF_VOLUMETRIC_CLOUDS",      "POSTFX",     "VolumetricClouds",                   "",                           1, nullptr, 0, 1 },
             { 0, "PREF_GGX_LIGHTING",           "POSTFX",     "GGXLighting",                        "",                           1, nullptr, 0, 1 },
             { 0, "PREF_WET_WEATHER",            "POSTFX",     "WetWeather",                         "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_GROUND_SURFACES",        "TEXTURES",   "GroundSurfaces",                     "",                           1, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2399,6 +2400,7 @@ public:
             AddEmptyLine(category);
             AddRow(category, "DetailTex", "PREF_DETAIL_TEXTURES", 2, toggle);
             AddRow(category, "SpecularAA", "PREF_SPECULAR_AA", 2, toggle);
+            AddRow(category, "GroundSurf", "PREF_GROUND_SURFACES", 2, toggle);
         }
     }
 
