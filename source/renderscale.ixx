@@ -7,6 +7,8 @@ module;
 #include <cstdio>
 #include <string_view>
 
+#include "FusionLog.hpp"
+
 export module renderscale;
 
 import common;
@@ -63,21 +65,14 @@ namespace
     IDirect3DSurface9* SceneSurface = nullptr;      // mD3DSurface as the game had it
     IDirect3DSurface9* SceneLevel = nullptr;        // level 0 of SceneTexture, referenced
 
-    // GTAIV.EFLC.FusionFix.RenderScale.log next to the plugin: the sizes, the hooks, and why the post
+    // GTAIV.EFLC.FusionFix.RenderScale.log next to the plugin (FusionLog): the sizes, the hooks, and why the post
     // processing could not start at the screen size, each reason once
     void Log(const char* format, ...)
     {
-        static bool started = false;
-        FILE* f = nullptr;
-        if (_wfopen_s(&f, (GetThisModulePath() / L"GTAIV.EFLC.FusionFix.RenderScale.log").c_str(), started ? L"a" : L"w") || !f)
-            return;
-        started = true;
         va_list args;
         va_start(args, format);
-        vfprintf(f, format, args);
+        FusionLog::WriteV("RenderScale", "", format, args);
         va_end(args);
-        fputc('\n', f);
-        fclose(f);
     }
 
     void LogOnce(int reason, const char* message)

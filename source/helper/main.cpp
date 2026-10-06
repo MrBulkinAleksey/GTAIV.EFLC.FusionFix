@@ -51,7 +51,8 @@ namespace
 
         SYSTEMTIME time;
         GetLocalTime(&time);
-        fprintf(gLog, "%02d:%02d:%02d.%03d ", time.wHour, time.wMinute, time.wSecond, time.wMilliseconds);
+        // The format of FusionFix's own logs (FusionLog.hpp): "[hh:mm:ss.mmm] [Feature.Component] text".
+        fprintf(gLog, "[%02d:%02d:%02d.%03d] [UpscalerHelper] ", time.wHour, time.wMinute, time.wSecond, time.wMilliseconds);
 
         va_list args;
         va_start(args, format);

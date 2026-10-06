@@ -13,6 +13,7 @@ module;
 #include <regex>
 #include <array>
 #include <unordered_map>
+#include "FusionLog.hpp"
 
 export module postfx;
 
@@ -774,7 +775,7 @@ public:
     // ScreenSpaceReflectionsTemporalJitter: while SSR accumulates, the step offsets move on every
     // frame (vec2NoiseOffset in SSR.fx), so the accumulation averages them.
     bool bSSRTemporalJitter = true;
-    // PostFxProfiler: GPU time of FusionFix's passes to FusionFix.PostFx.log, see ProfilerNextFrame.
+    // PostFxProfiler: GPU time of FusionFix's passes to GTAIV.EFLC.FusionFix.PostFx.log, see ProfilerNextFrame.
     bool bPostFxProfiler = false;
     float fSSRTowardCamera = 0.0f;
     float fSSRReflectionBlur = 0.0f;
@@ -2033,14 +2034,13 @@ void PostFxResource::UpdateCloudLayer(double seconds)
 PostFxResource PostFxResources;
 
 // For now: a trace of SSR's frames, to find why reflections show in the pause menu and not in
-// play. Ctrl+Shift+F11 writes the settings and the next kFrames frames into GTAIV-ssr-trace.log
-// next to the ini: every call of the passes around SSR with its viewport, where it left and what
+// play. Ctrl+Shift+F11 writes the settings and the next kFrames frames into
+// GTAIV.EFLC.FusionFix.PostFx.log (PostFx.SSRTrace) next to the plugin: every call of the passes around SSR with its viewport, where it left and what
 // D3D returned, what lighting gets on s3, and for the first frames what the SSR targets hold,
 // read back from the card. The post fx pass arms and flushes it once a frame; the rest only adds
 // lines while it is armed.
 namespace SSRTrace
 {
-    static std::filesystem::path path;
     static std::mutex mutex;
     static std::string text;
     static std::atomic<int> framesLeft{0};
@@ -2409,12 +2409,8 @@ namespace SSRTrace
         if (framesLeft.fetch_sub(1) == 1)
         {
             std::lock_guard lock(mutex);
-            try
-            {
-                std::ofstream out(path, std::ios::app);
-                out << text << '\n';
-            }
-            catch (...) {}
+            // Written at once when the trace ends; each line keeps the tick it was taken at.
+            FusionLog::WriteText("PostFx", "SSRTrace", text);
             text.clear();
         }
     }
@@ -4153,7 +4149,7 @@ private:
 
     // PostFxProfiler: GPU time of FusionFix's passes, from timestamp queries. Each frame's queries
     // are read kProfilerFrames frames later, without waiting on the GPU, and every 120 frames the
-    // averages in milliseconds per frame are written to FusionFix.PostFx.log next to GTAIV.exe.
+    // averages in milliseconds per frame are written to GTAIV.EFLC.FusionFix.PostFx.log next to the plugin.
     // The sections form a tree: an effect and the passes it is made of, each pass inside its
     // effect's time. What of a section its passes leave is shown as "other": in the lighting phase
     // that is the game's lights with their local contact shadows, and the light shafts. A section
@@ -4240,7 +4236,6 @@ private:
     static inline double profilerSums[kProfSections] = {};
     static inline double profilerFrameSum = 0.0;
     static inline int nProfilerSamples = 0;
-    static inline bool bProfilerLogStarted = false;
 
     static void ReleaseProfilerFrame(ProfilerFrame& f)
     {
@@ -4275,9 +4270,9 @@ private:
     }
 
     // A section, its passes below it, then what they leave of it.
-    static void WriteProfilerSection(FILE* log, int section, int depth, double n)
+    static void WriteProfilerSection(FusionLog::Block& log, int section, int depth, double n)
     {
-        fprintf(log, "%*s%-*s %6.2f\n", 2 + depth * 2, "", 34 - depth * 2, kProfilerSectionInfo[section].name, profilerSums[section] / n);
+        log.Printf("%*s%-*s %6.2f\n", 2 + depth * 2, "", 34 - depth * 2, kProfilerSectionInfo[section].name, profilerSums[section] / n);
         double children = 0.0;
         bool any = false;
         for (int i = 0; i < kProfSections; ++i)
@@ -4289,17 +4284,16 @@ private:
             any = true;
         }
         if (any)
-            fprintf(log, "%*s%-*s %6.2f\n", 4 + depth * 2, "", 32 - depth * 2, "other", (std::max)(profilerSums[section] - children, 0.0) / n);
+            log.Printf("%*s%-*s %6.2f\n", 4 + depth * 2, "", 32 - depth * 2, "other", (std::max)(profilerSums[section] - children, 0.0) / n);
     }
 
     static void WriteProfilerBlock()
     {
-        FILE* log = _wfopen((GetExeModulePath() / L"FusionFix.PostFx.log").c_str(), bProfilerLogStarted ? L"a" : L"w");
-        if (log)
         {
+            FusionLog::Block log("PostFx", "Profiler");
             const double n = double(nProfilerSamples);
-            fprintf(log, "GPU milliseconds per frame, averaged over %d frames\n", nProfilerSamples);
-            fprintf(log, "%-36s %6.2f\n", "frame", profilerFrameSum / n);
+            log.Printf("GPU milliseconds per frame, averaged over %d frames\n", nProfilerSamples);
+            log.Printf("%-36s %6.2f\n", "frame", profilerFrameSum / n);
             double sections = 0.0;
             for (int i = 0; i < kProfSections; ++i)
             {
@@ -4308,9 +4302,7 @@ private:
                 WriteProfilerSection(log, i, 0, n);
                 sections += profilerSums[i];
             }
-            fprintf(log, "  %-34s %6.2f\n\n", "the game's other passes", (std::max)(profilerFrameSum - sections, 0.0) / n);
-            fclose(log);
-            bProfilerLogStarted = true;
+            log.Printf("  %-34s %6.2f\n", "the game's other passes", (std::max)(profilerFrameSum - sections, 0.0) / n);
         }
         std::fill(std::begin(profilerSums), std::end(profilerSums), 0.0);
         profilerFrameSum = 0.0;
@@ -6264,7 +6256,7 @@ private:
 
     // Once a frame, from the post fx pass, which runs in the pause menu too: Ctrl+Shift+F10 reads
     // the live settings (ReadLiveIni) again from the ini, with a beep to say it did, and adds the
-    // cloud values the shadows use to FusionFix.CloudShadows.log next to the game; Ctrl+Shift+F9
+    // cloud values the shadows use to GTAIV.EFLC.FusionFix.PostFx.log next to the plugin; Ctrl+Shift+F9
     // moves the clouds somewhere else.
     static void TickIniReload()
     {
@@ -6277,9 +6269,9 @@ private:
             auto& R = PostFxResources;
             R.ReadLiveIni(iniReader);
             // The cloud values the shadows were cast with, to tune CloudShadowsCoverage by.
-            if (FILE* log = _wfopen((GetExeModulePath() / L"FusionFix.CloudShadows.log").c_str(), L"a"))
+            if (FusionLog::Block log("PostFx", "CloudShadows"); true)
             {
-                fprintf(log, "threshold %.4f  bias %.4f  thickness %.4f  (%s)  coverage %+.3f  strength %.2f\n", R.fCloudLastThreshold,
+                log.Printf("threshold %.4f  bias %.4f  thickness %.4f  (%s)  coverage %+.3f  strength %.2f\n", R.fCloudLastThreshold,
                         R.fCloudLastBias, R.fCloudLastThickness, R.bCloudLastFromGame ? "the game's" : "fallback, the sky not drawn yet",
                         R.fCloudShadowsCoverage, R.fCloudShadows);
                 const auto& top = rage::grmShaderInfo::getShaderParamData(R.CloudColorIdx);
@@ -6288,40 +6280,47 @@ private:
                 const auto& sky = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
                 const auto& moon = rage::grmShaderInfo::getShaderParamData(R.CloudMoonPositionIdx);
                 const float* k = R.CloudShadowConsts;
-                fprintf(log, "  clouds lit from %.3f %.3f %.3f; the sky's sun %.3f %.3f %.3f; the game's light %.3f %.3f %.3f (frame %u, now %u); sky axis signs %+.0f %+.0f\n",
+                log.Component("Clouds");
+                log.Printf("clouds lit from %.3f %.3f %.3f; the sky's sun %.3f %.3f %.3f; the game's light %.3f %.3f %.3f (frame %u, now %u); sky axis signs %+.0f %+.0f\n",
                         R.CloudLastUsedSun[0], R.CloudLastUsedSun[1], R.CloudLastUsedSun[2], R.CloudLastSkySun[0], R.CloudLastSkySun[1],
                         R.CloudLastSkySun[2], R.CloudLightDir[0], R.CloudLightDir[1], R.CloudLightDir[2], R.nCloudLightFrame, FrameHistory::Frame(),
                         R.CloudSkyAxisSign[0], R.CloudSkyAxisSign[1]);
-                fprintf(log, "  clouds: density %.4f, absorption %.2f x %.2f, translucency %.2f, detail %.2f, shade %.2f, sky match %.2f x %.2f\n",
+                log.Printf("clouds: density %.4f, absorption %.2f x %.2f, translucency %.2f, detail %.2f, shade %.2f, sky match %.2f x %.2f\n",
                         R.fVolumetricCloudsDensity * R.Cloud.density, R.fVolumetricCloudsAbsorption, R.Cloud.absorption,
                         R.fVolumetricCloudsTranslucency * R.Cloud.translucency, R.fVolumetricCloudsDetail * R.Cloud.detail,
                         R.fVolumetricCloudsShade, R.fVolumetricCloudsSkyMatch, R.Cloud.skyMatch);
-                fprintf(log, "  clouds drawn with lit %.2f %.2f %.2f, shade %.2f %.2f %.2f, ceiling %.2f; lit by the %s at %.2f; sky clamp %.2f %.2f %.2f; volumetric fog %d; sky HDR %d; sky match %.2f; debug %d\n",
+                log.Printf("clouds drawn with lit %.2f %.2f %.2f, shade %.2f %.2f %.2f, ceiling %.2f; lit by the %s at %.2f; sky clamp %.2f %.2f %.2f; volumetric fog %d; sky HDR %d; sky match %.2f; debug %d\n",
                         R.CloudLastLit[0], R.CloudLastLit[1], R.CloudLastLit[2], R.CloudLastShade[0], R.CloudLastShade[1], R.CloudLastShade[2],
                         R.CloudLastCeiling, R.bCloudLastMoonlit ? "moon" : "sun", R.CloudLastLightStrength, R.CloudLastClamp[0], R.CloudLastClamp[1], R.CloudLastClamp[2],
                         [] { static auto fog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG"); return fog ? fog->get() : -1; }(), int(bSkyHDR), R.fVolumetricCloudsSkyMatch, R.nVolumetricCloudsDebug);
-                fprintf(log, "  shadow constants: c197 %.3f %.3f %.1f %.6f  c198 %.3f %.3f %.3f %.3f  c199 %.3f %.3f  noise %s, %s after the lights  debug %d\n",
+                log.Component("CloudShadows");
+                log.Printf("shadow constants: c197 %.3f %.3f %.1f %.6f  c198 %.3f %.3f %.3f %.3f  c199 %.3f %.3f  noise %s, %s after the lights  debug %d\n",
                         k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], R.CloudNoiseTexture ? "made" : "missing",
                         R.bCloudNoiseSurvived ? "still bound" : "gone", R.nCloudShadowsDebug);
-                fprintf(log, "  s12 before the shadows: srgb %lu  max mip %lu  min filter %lu  lod bias %.3f\n",
+                log.Printf("s12 before the shadows: srgb %lu  max mip %lu  min filter %lu  lod bias %.3f\n",
                         static_cast<unsigned long>(R.CloudSamplerBefore[0]), static_cast<unsigned long>(R.CloudSamplerBefore[1]),
                         static_cast<unsigned long>(R.CloudSamplerBefore[2]), std::bit_cast<float>(R.CloudSamplerBefore[3]));
-                fprintf(log, "  GGX lights: %u headlights among %u lights drawn since the last log\n", R.nLightGGXHeadlights, R.nLightGGXLights);
+                log.Component("GGX");
+                log.Printf("GGX lights: %u headlights among %u lights drawn since the last log\n", R.nLightGGXHeadlights, R.nLightGGXLights);
                 R.nLightGGXHeadlights = 0;
                 R.nLightGGXLights = 0;
-                fprintf(log, "  clouds in reflections: %s; %u reflection map and %u water reflection skies since the last log; viewport %lu,%lu %lux%lu of a %ux%u target\n",
+                log.Component("CloudReflections");
+                log.Printf("clouds in reflections: %s; %u reflection map and %u water reflection skies since the last log; viewport %lu,%lu %lux%lu of a %ux%u target\n",
                         R.szCloudsReflectionStatus, R.nCloudReflectionCalls, R.nCloudWaterReflectionCalls, R.CloudReflectionViewport.X, R.CloudReflectionViewport.Y,
                         R.CloudReflectionViewport.Width, R.CloudReflectionViewport.Height, R.CloudReflectionTarget[0], R.CloudReflectionTarget[1]);
                 R.nCloudReflectionCalls = 0;
                 R.nCloudWaterReflectionCalls = 0;
-                fprintf(log, "  water rings: c178 %.2f %.1f %.3f %.3f; %u water draws since the last log; SSR on the water %s\n",
+                log.Component("WaterRings");
+                log.Printf("water rings: c178 %.2f %.1f %.3f %.3f; %u water draws since the last log; SSR on the water %s\n",
                         R.WaterRingsLast[0], R.WaterRingsLast[1], R.WaterRingsLast[2], R.WaterRingsLast[3], R.nWaterRingDraws,
                         R.nWaterSsrSurface < 0 ? "not drawn" : R.nWaterSsrSurface ? "had the wave texture" : "had no wave texture (flat, no rings)");
                 R.nWaterRingDraws = 0;
-                fprintf(log, "  wet ground: %s; effect %s (hr 0x%08lX); wetness %.3f, rain %.3f, materials 0x%02X, debug %d\n",
+                log.Component("WetGround");
+                log.Printf("wet ground: %s; effect %s (hr 0x%08lX); wetness %.3f, rain %.3f, materials 0x%02X, debug %d\n",
                         R.szWetGroundStatus, R.WetGroundEffect ? "built" : "missing", static_cast<unsigned long>(R.hrWetGroundEffect), R.fWetness,
                         CWeather::Rain ? *CWeather::Rain : -1.0f, unsigned(R.nWetGroundMaterials), R.nWetGroundDebug);
-                fprintf(log, "  volumetric clouds: %s; effect %s (hr 0x%08lX); shadows follow them %d; HDRExposure %.3f; CloudColor %.3f %.3f %.3f; "
+                log.Component("Clouds");
+                log.Printf("volumetric clouds: %s; effect %s (hr 0x%08lX); shadows follow them %d; HDRExposure %.3f; CloudColor %.3f %.3f %.3f; "
                              "SunsetColor %.3f %.3f %.3f; CloudInscatteringRange %.3f; SunDirection %.3f %.3f %.3f; SkyColor %.3f %.3f %.3f; MoonPosition %.3f %.3f %.3f\n",
                         R.szCloudsStatus, R.CloudsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrCloudsEffect), int(R.VolumetricCloudsOn()),
                         rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0], top[0], top[1], top[2], sunset[0], sunset[1], sunset[2],
@@ -6337,10 +6336,9 @@ private:
                     };
                     const float k = CWeather::InterpolationValue ? *CWeather::InterpolationValue : 0.0f;
                     const auto& c = R.Cloud;
-                    fprintf(log, "  weather %s -> %s at %.2f; cloud layer: cover %.2f, base %.0f m, thickness %.0f m, sheet %.2f, wind %.2f\n",
+                    log.Printf("weather %s -> %s at %.2f; cloud layer: cover %.2f, base %.0f m, thickness %.0f m, sheet %.2f, wind %.2f\n",
                             name(CWeather::OldWeatherType), name(CWeather::NewWeatherType), k, c.coverage, c.base, c.thickness, c.stratus, c.wind);
                 }
-                fclose(log);
             }
             MessageBeep(MB_OK);
         }
@@ -7896,7 +7894,6 @@ public:
             {
                 PostFxResources.Readini();
                 PostFxResources.RegisterCloudParams();
-                SSRTrace::path = CIniReader("").GetIniPath().parent_path() / "GTAIV-ssr-trace.log";
 
                 auto pattern = find_pattern("E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 5F", "E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 33 C0");
                 hbDrawPrimitivePostFX.fun = injector::MakeCALL(pattern.get_first(0), DrawPrimitivePostFX).get();

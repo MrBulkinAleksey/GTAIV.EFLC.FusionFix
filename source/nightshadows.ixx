@@ -414,13 +414,13 @@ public:
 
             // The experimental adapter has only been audited for CE 1.2.0.59. Any other
             // layout skips it and keeps the official FusionFix night shadow behaviour.
-            ShadowDiagnostics::log.path = iniReader.GetIniPath().parent_path() / "GTAIV-shadows.log";
+            ShadowDiagnostics::log.Name("NightShadows", "Diagnostics");
             int casterMode = 0;
             if (ceAdapter)
             {
                 PlayerCar::driverOffset = 0xF50;
-                BeamTrace::path = iniReader.GetIniPath().parent_path() / "GTAIV-beam-trace.log";
-                HeadlightEnhancement::log.path = iniReader.GetIniPath().parent_path() / "GTAIV-headlights.log";
+                BeamTrace::enabled = true;
+                HeadlightEnhancement::log.Name("Headlights", "Status");
                 HeadlightEnhancement::brightnessInstalled = HeadlightEnhancement::InstallBrightness(
                     iniReader.ReadInteger("HEADLIGHTS", "ConsistentBrightness", 0) != 0);
                 HeadlightEnhancement::InstallLightModes(iniReader.ReadInteger("HEADLIGHTS", "LightModes", 0) != 0);
@@ -445,8 +445,8 @@ public:
                 const int allocationMode = iniReader.ReadInteger("SHADOWS", "ExperimentalPlayerShadowAllocation", 0);
                 ShadowDiagnostics::allocationMode = allocationMode;
                 if (shadowDiagnostics)
-                    ShadowTrace34::Start(iniReader.GetIniPath().parent_path() /
-                        ("GTAIV-light-trace-mode" + std::to_string(allocationMode) + "-" + std::to_string(GetCurrentProcessId()) + ".bin"),
+                    ShadowTrace34::Start(FusionLog::PathFor("NightShadows.LightTrace-mode" + std::to_string(allocationMode) + "-" +
+                        std::to_string(GetCurrentProcessId()), L".bin"),
                         allocationMode, GetCurrentProcessId());
                 // 0=off, 1=observe private output only, 2=experimental publication.
                 if (allocationMode == 1 || allocationMode == 2)
@@ -458,7 +458,7 @@ public:
                 HeadlightEnhancement::InstallShadowOrigin(
                     std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowBehindLamps", 0.7f), 0.0f, 2.0f));
                 // CE 1.8: shadows from traffic signals and emergency vehicle lights.
-                EmergencyTrafficShadows::log.path = iniReader.GetIniPath().parent_path() / "GTAIV-emergency-traffic-shadows.log";
+                EmergencyTrafficShadows::log.Name("NightShadows", "EmergencyTraffic");
                 EmergencyTrafficShadows::Install(static_cast<unsigned>(std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalShadows", 2), 0, 7)),
                     iniReader.ReadInteger("SHADOWS", "EmergencyLightShadows", 1) != 0);
             }

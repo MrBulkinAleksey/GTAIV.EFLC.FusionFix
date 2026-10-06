@@ -600,7 +600,7 @@ namespace EmergencyTrafficShadows
     {
         TrafficSignal::Poll();
         Emergency::Update();
-        log.Write(std::ios::app, [](std::ofstream& out, uint64_t now)
+        log.Write(std::ios::app, [](std::ostream& out, uint64_t now)
         {
             uint32_t alive = 0, leased = 0;
             for (uint32_t i = 0; i < TrafficSignal::registry.Used(); ++i)

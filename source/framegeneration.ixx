@@ -8,6 +8,8 @@ module;
 #include <filesystem>
 #include <vector>
 
+#include "FusionLog.hpp"
+
 export module framegeneration;
 
 import common;
@@ -71,20 +73,13 @@ namespace
     uint32_t TargetWidth = 0;
     uint32_t TargetHeight = 0;
 
-    // GTAIV.EFLC.FusionFix.FrameGeneration.log next to the plugin, each kind of failure once
+    // GTAIV.EFLC.FusionFix.FrameGeneration.log next to the plugin (FusionLog), each kind of failure once
     void Log(const char* format, ...)
     {
-        static bool started = false;
-        FILE* f = nullptr;
-        if (_wfopen_s(&f, (GetThisModulePath() / L"GTAIV.EFLC.FusionFix.FrameGeneration.log").c_str(), started ? L"a" : L"w") || !f)
-            return;
-        started = true;
         va_list args;
         va_start(args, format);
-        vfprintf(f, format, args);
+        FusionLog::WriteV("FrameGeneration", "", format, args);
         va_end(args);
-        fputc('\n', f);
-        fclose(f);
     }
 
     void LogOnce(int reason, const char* message)
@@ -876,7 +871,7 @@ namespace
             }
             else
             {
-                LogOnce(2, "Generate failed, see GTAIV.EFLC.FusionFix.UpscalerGame.log and GTAIV.EFLC.FusionFix.Upscaler.log");
+                LogOnce(2, "Generate failed, see GTAIV.EFLC.FusionFix.Upscaler.log and GTAIV.EFLC.FusionFix.UpscalerHelper.log");
             }
         }
         else

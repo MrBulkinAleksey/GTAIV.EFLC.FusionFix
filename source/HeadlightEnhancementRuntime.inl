@@ -116,7 +116,7 @@ namespace HeadlightEnhancement
 
     static void WriteDiagnostics()
     {
-        log.Write(std::ios::trunc, [](std::ofstream& out, uint64_t) {
+        log.Write(std::ios::trunc, [](std::ostream& out, uint64_t) {
             out << "brightnessInstalled=" << brightnessInstalled
                 << "\nbrightnessStatus=" << brightnessStatus
                 << "\nretainedSubmissions=" << retainedSubmissions.load()
@@ -420,7 +420,7 @@ namespace HeadlightEnhancement
     {
         const bool seen = (*reinterpret_cast<const uint32_t*>(vehicle + 8) & *pPhaseMask) != 0;
         const bool made = seen || OffscreenLightsReach(vehicle);
-        if (!BeamTrace::path.empty() && PlayerCar::IsLast(vehicle))
+        if (BeamTrace::enabled && PlayerCar::IsLast(vehicle))
         {
             if (seen) BeamTrace::Mark(BeamTrace::CarSeen);
             if (made) BeamTrace::Mark(BeamTrace::LightsMade);

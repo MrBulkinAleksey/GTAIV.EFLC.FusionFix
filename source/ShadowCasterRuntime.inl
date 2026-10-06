@@ -82,7 +82,7 @@ namespace ShadowDiagnostics
     static void Write() noexcept
     {
         // Low-frequency game-event I/O, never inside submission/caster hooks.
-        log.Write(std::ios::app, [](std::ofstream& log, uint64_t now)
+        log.Write(std::ios::app, [](std::ostream& log, uint64_t now)
         {
             ShadowTrace34::Flush();
             if (!startupWritten)

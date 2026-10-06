@@ -1,5 +1,6 @@
 // Temporary: the step at which the shadow of the player's car's beam is lost, written to
-// GTAIV-beam-trace.log next to the ini whenever the set of steps it got through changes.
+// GTAIV.EFLC.FusionFix.NightShadows.log (NightShadows.BeamTrace) whenever the set of steps it got
+// through changes.
 namespace BeamTrace
 {
     enum Stage : unsigned
@@ -14,20 +15,20 @@ namespace BeamTrace
     };
     static constexpr const char* StageNames[StageCount]{ "seen", "lights", "offered", "kept", "candidate", "selected" };
     static std::array<std::atomic<uint32_t>, StageCount> lastFrame{};
-    static std::filesystem::path path;
+    static bool enabled = false;
     static uint32_t lastBits = ~0u;
     static int lines = 0;
 
     static void Mark(Stage stage) noexcept
     {
-        if (!path.empty() && CTimer::m_frameCount)
+        if (enabled && CTimer::m_frameCount)
             lastFrame[stage].store(*CTimer::m_frameCount, std::memory_order_relaxed);
     }
 
     // Once a game frame, from the process callback.
     static void Update() noexcept
     {
-        if (path.empty() || !CTimer::m_frameCount || lines >= 5000) return;
+        if (!enabled || !CTimer::m_frameCount || lines >= 5000) return;
         const uint32_t frame = *CTimer::m_frameCount;
         uint32_t bits = 0;
         for (unsigned stage = 0; stage < StageCount; ++stage)
@@ -45,14 +46,15 @@ namespace BeamTrace
             { return std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2])); };
         try
         {
-            std::ofstream out(path, lines ? std::ios::app : std::ios::trunc);
+            std::ostringstream out;
             out << "frame=" << frame << " tick=" << GetTickCount() << " car=" << (car != 0);
             for (unsigned stage = 0; stage < StageCount; ++stage)
                 out << ' ' << StageNames[stage] << '=' << ((bits >> stage) & 1);
             const auto matrix = CEntity::GetMatrix(car);
             out << " car_camera=" << distance(carPos, camera) << " car_player=" << distance(carPos, ped)
                 << " in_car=" << (CPlayer::findPlayerCar && CPlayer::findPlayerCar() != 0)
-                << " lights_on=" << (car ? int(*reinterpret_cast<const uint8_t*>(car + 0xF15)) : -1) << '\n';
+                << " lights_on=" << (car ? int(*reinterpret_cast<const uint8_t*>(car + 0xF15)) : -1);
+            FusionLog::WriteText("NightShadows", "BeamTrace", out.str());
             ++lines;
         }
         catch (...) {}

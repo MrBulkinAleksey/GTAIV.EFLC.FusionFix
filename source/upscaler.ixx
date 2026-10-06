@@ -8,6 +8,8 @@ module;
 #include <dxvk_interop.hpp>
 #include <upscaler_protocol.hpp>
 
+#include "FusionLog.hpp"
+
 export module upscaler;
 
 import common;
@@ -50,21 +52,15 @@ namespace
         shared.FenceHandle = 0;
     }
 
-    // GTAIV.EFLC.FusionFix.UpscalerGame.log next to the plugin: what the game side did with the helper, the
-    // first time each thing fails (the helper writes GTAIV.EFLC.FusionFix.Upscaler.log)
+    // GTAIV.EFLC.FusionFix.Upscaler.log next to the plugin (FusionLog, Upscaler.Game): what the game side did
+    // with the helper, the first time each thing fails (the helper, another process, writes
+    // GTAIV.EFLC.FusionFix.UpscalerHelper.log in the same format)
     void Log(const char* format, ...)
     {
-        static bool started = false;
-        FILE* f = nullptr;
-        if (_wfopen_s(&f, (GetThisModulePath() / L"GTAIV.EFLC.FusionFix.UpscalerGame.log").c_str(), started ? L"a" : L"w") || !f)
-            return;
-        started = true;
         va_list args;
         va_start(args, format);
-        vfprintf(f, format, args);
+        FusionLog::WriteV("Upscaler", "Game", format, args);
         va_end(args);
-        fputc('\n', f);
-        fclose(f);
     }
 
     // Logs a failure the first few times it happens
@@ -1079,7 +1075,7 @@ namespace
             shared->AdapterLuidHigh = luid.HighPart;
             wcsncpy_s(shared->GameDirectory, GetExeModulePath().wstring().c_str(), _TRUNCATE);
             wcsncpy_s(shared->PluginsDirectory, exe.parent_path().wstring().c_str(), _TRUNCATE);
-            wcsncpy_s(shared->LogPath, (exe.parent_path() / L"GTAIV.EFLC.FusionFix.Upscaler.log").wstring().c_str(), _TRUNCATE);
+            wcsncpy_s(shared->LogPath, FusionLog::PathFor("UpscalerHelper").wstring().c_str(), _TRUNCATE);
 
             // The helper ends with the game
             job = CreateJobObjectW(nullptr, nullptr);
