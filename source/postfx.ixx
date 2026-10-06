@@ -2989,7 +2989,9 @@ private:
         if (!vp)
             return skip("no viewport");
 
+        ProfilerScope timed(pDevice, kProfWetGround);
         // The G-buffer's surfaces, and copies of them at their size and format.
+        ProfilerMark(pDevice, kProfWetGroundCopies, true);
         IDirect3DTexture9* gbuffer[3] = { R.mDiffuseRT->mD3DTexture, R.mNormalRT->mD3DTexture, R.mSpecularRT->mD3DTexture };
         IDirect3DSurface9* gbufferSurf[3] = {};
         D3DSURFACE_DESC desc[3] = {};
@@ -3012,6 +3014,7 @@ private:
             if (ok)
                 ok = SUCCEEDED(pDevice->StretchRect(gbufferSurf[i], nullptr, R.WetCopySurf[i], nullptr, D3DTEXF_NONE));
         }
+        ProfilerMark(pDevice, kProfWetGroundCopies, false);
         if (!ok)
         {
             for (auto& surf : gbufferSurf)
@@ -3088,6 +3091,7 @@ private:
         pDevice->SetVertexShader(nullptr);
         pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
 
+        ProfilerScope timedPass(pDevice, kProfWetGroundPass);
         UINT passes = 0;
         effect->SetTechnique("Wet");
         effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
@@ -4129,7 +4133,10 @@ private:
     // The sections form a tree: an effect and the passes it is made of, each pass inside its
     // effect's time. What of a section its passes leave is shown as "other": in the lighting phase
     // that is the game's lights with their local contact shadows, and the light shafts. A section
-    // can be entered more than once a frame, as the water is, and its times add up.
+    // can be entered more than once a frame, as the water is, and its times add up. The GGX
+    // highlights, the sky reflection's BRDF and the rain's rings on the water are a few
+    // instructions more in the game's own lighting and water shaders: they show in the lighting
+    // phase's "other" and in the water's time, not as sections of their own.
     // A frame runs from one post processing to the next. Off, no query is made.
     enum ProfilerSection
     {
@@ -4138,8 +4145,9 @@ private:
             kProfSSR, kProfSSRTrace, kProfSSRFill, kProfSSRResolve, kProfSSRDenoise, kProfSSRTemporal, kProfSSRDebug,
             kProfContact, kProfContactMarch, kProfContactUpsample, kProfContactDenoise, kProfContactTemporal,
             kProfGI, kProfGIMarch, kProfGIDenoise, kProfGITemporal, kProfGIUpsample,
+        kProfWetGround, kProfWetGroundCopies, kProfWetGroundPass,
         kProfWater,
-        kProfCloudReflection,
+        kProfCloudReflection, kProfCloudReflectionMap, kProfCloudReflectionWater,
         kProfFogPass,
             kProfClouds, kProfCloudsSkyRef, kProfCloudsMarch, kProfCloudsLight, kProfCloudsResolve, kProfCloudsComposite,
             kProfSkin, kProfSkinLight, kProfSkinScatter, kProfSkinFinal,
@@ -4161,8 +4169,9 @@ private:
             { "smoothing", kProfContact }, { "accumulation", kProfContact },
             { "indirect light", kProfLighting }, { "march", kProfGI }, { "smoothing", kProfGI },
             { "accumulation", kProfGI }, { "upsample", kProfGI },
+        { "wet ground", -1 }, { "copies of the G-buffer", kProfWetGround }, { "wet pass", kProfWetGround },
         { "water SSR", -1 },
-        { "clouds in the reflection map", -1 },
+        { "clouds in reflections", -1 }, { "the reflection map", kProfCloudReflection }, { "the water's reflection", kProfCloudReflection },
         { "fog pass", -1 },
             { "volumetric clouds", kProfFogPass }, { "sky brightness", kProfClouds }, { "march", kProfClouds },
             { "light", kProfClouds }, { "accumulation", kProfClouds }, { "into the scene", kProfClouds },
@@ -5135,9 +5144,11 @@ private:
     // the scene; with reflection, into the reflection map's target right after its sky
     // (DrawSkyReflection), at full size, on the sky only by the depth test, at the brightness of
     // that simpler sky. Leaves the device as it found it.
-    static void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* sceneBase, bool reflection = false)
+    static void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* sceneBase, bool reflection = false,
+                                       int reflectionSection = kProfCloudReflectionMap)
     {
-        ProfilerScope timed(pDevice, reflection ? kProfCloudReflection : kProfClouds);
+        ProfilerScope timedAll(pDevice, reflection ? kProfCloudReflection : -1);
+        ProfilerScope timed(pDevice, reflection ? reflectionSection : kProfClouds);
         auto& R = PostFxResources;
         auto skip = [&](const char* why) { (reflection ? R.szCloudsReflectionStatus : R.szCloudsStatus) = why; };
         if (!R.VolumetricCloudsEnabled())
@@ -6534,7 +6545,7 @@ private:
         if (pDevice && IsWaterReflectionTarget(pDevice))
         {
             ++PostFxResources.nCloudWaterReflectionCalls;
-            RenderVolumetricClouds(pDevice, nullptr, true);
+            RenderVolumetricClouds(pDevice, nullptr, true, kProfCloudReflectionWater);
         }
         return result;
     }
