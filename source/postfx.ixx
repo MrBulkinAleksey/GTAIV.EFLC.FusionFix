@@ -432,7 +432,7 @@ public:
     //   angles; 0 keeps the game's, values between blend.
     float fLightsGGX = 1.0f;
     float fLightsGGXFresnel = 0.5f;
-    float fLightsGGXSize = 0.1f;
+    float fLightsGGXSize = 0.05f;
     float fLightsGGXStretch = 0.5f;
     float fLightsGGXHeadlights = 0.65f;
     float fLightsGGXFillLights = 0.5f;
@@ -1487,7 +1487,7 @@ public:
         fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 50.0f);
         fLightsGGX = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGX", 1.0f), 0.0f, 4.0f);
         fLightsGGXFresnel = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXFresnel", 0.5f), 0.0f, 1.0f);
-        fLightsGGXSize = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSize", 0.1f), 0.0f, 2.0f);
+        fLightsGGXSize = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSize", 0.05f), 0.0f, 2.0f);
         fLightsGGXStretch = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXStretch", 0.5f), 0.0f, 4.0f);
         fLightsGGXHeadlights = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXHeadlights", 0.65f), 0.0f, 2.0f);
         fLightsGGXFillLights = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXFillLights", 0.5f), 0.0f, 2.0f);

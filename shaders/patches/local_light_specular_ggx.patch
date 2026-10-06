@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-index 7a8a6fe0..b97d3034 100644
+index 7a8a6fe0..b1ec8151 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 @@ -104,6 +104,13 @@
@@ -37,9 +37,9 @@ index 7a8a6fe0..b97d3034 100644
        mad r1.yz, r3.xxyw, r0.w, c4.y
        add r5.xy, -r1.yzzw, c2.w
        mov r5.z, c3.y
-+      add r12.x, r4.y, c177.x
++      mad r12.x, r4.y, c177.w, c177.x
 +      rcp r12.x, r12.x
-+      add r12.x, r12.x, r12.x // alpha squared
++      add r12.x, r12.x, r12.x // alpha squared, from the Phong exponent as for the lights
 +      rsq r12.x, r12.x
 +      rsq r12.x, r12.x // roughness, the square root of alpha
 +      // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): the parabolic
@@ -73,7 +73,7 @@ index 7a8a6fe0..b97d3034 100644
        mul r0.xzw, r1.x, r0
        mul r0.xzw, r0, c6.x
        add r1.x, c17.w, c17.w
-@@ -735,3 +778,62 @@
+@@ -735,3 +778,64 @@
      // ----------------------------------------------------------------------------------------------------------------------------------------------
  
  // approximately 167 instruction slots used (18 texture, 149 arithmetic)
@@ -87,9 +87,11 @@ index 7a8a6fe0..b97d3034 100644
 +    dp3_sat r15.y, r9, -r12 // N.V
 +    dp3_sat r15.z, r9, r19 // N.L
 +    dp3_sat r15.w, r19, r14 // L.H
-+    add r16.x, r9.w, c171.y
++    add r16.x, r9.w, r9.w
++    add r16.x, r16.x, r16.x
++    add r16.x, r16.x, c171.y
 +    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
@@ -138,7 +140,7 @@ index 7a8a6fe0..b97d3034 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index afca255b..bf80a48d 100644
+index afca255b..5ae04668 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 @@ -46,6 +46,9 @@
@@ -195,7 +197,7 @@ index afca255b..bf80a48d 100644
      mul r0.xyw, r3.xyzz, r0
      cmp r26.xyz, r0.z, r0.xyww, c2.y
      mov r26.w, c1.x
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n) (a Phong lobe, as a Blinn one of 4n),
 +    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
 +    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
 +    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
@@ -238,7 +240,7 @@ index afca255b..bf80a48d 100644
      // --- FusionFix local contact shadows: a short ray from this pixel towards the light
      // --- through the opaque depth catches small occluders, also for lights without a shadow
      // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
-@@ -231,3 +282,62 @@
+@@ -231,3 +282,64 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 36 instruction slots used (3 texture, 33 arithmetic)
@@ -252,9 +254,11 @@ index afca255b..bf80a48d 100644
 +    dp3_sat r15.y, r9, -r12 // N.V
 +    dp3_sat r15.z, r9, r19 // N.L
 +    dp3_sat r15.w, r19, r14 // L.H
-+    add r16.x, r9.w, c171.y
++    add r16.x, r9.w, r9.w
++    add r16.x, r16.x, r16.x
++    add r16.x, r16.x, c171.y
 +    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
@@ -303,7 +307,7 @@ index afca255b..bf80a48d 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index fb737859..e2299414 100644
+index fb737859..567e293d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 @@ -49,6 +49,9 @@
@@ -360,7 +364,7 @@ index fb737859..e2299414 100644
 +    texld r10, r0, s13
      mul r0.xyw, r1.xyzz, r2.xyzz
      cmp r0.xyz, r0.z, r0.xyww, -c1.z
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n) (a Phong lobe, as a Blinn one of 4n),
 +    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
 +    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
 +    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
@@ -403,7 +407,7 @@ index fb737859..e2299414 100644
      mad r1.x, r3.x, c1.x, c1.y
      cmp r1.x, r1.x, c1.y, c1.z
      mad r1.x, r3.x, c0.w, r1.x
-@@ -241,3 +292,62 @@
+@@ -241,3 +292,64 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 42 instruction slots used (4 texture, 38 arithmetic)
@@ -417,9 +421,11 @@ index fb737859..e2299414 100644
 +    dp3_sat r15.y, r9, -r12 // N.V
 +    dp3_sat r15.z, r9, r19 // N.L
 +    dp3_sat r15.w, r19, r14 // L.H
-+    add r16.x, r9.w, c171.y
++    add r16.x, r9.w, r9.w
++    add r16.x, r16.x, r16.x
++    add r16.x, r16.x, c171.y
 +    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
@@ -468,7 +474,7 @@ index fb737859..e2299414 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 4e9d1955..7f30784b 100644
+index 4e9d1955..168147a5 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 @@ -49,6 +49,9 @@
@@ -525,7 +531,7 @@ index 4e9d1955..7f30784b 100644
 +    texld r10, r0, s13
      mul r0.xyw, r1.xyzz, r2.xyzz
      cmp r0.xyz, r0.z, r0.xyww, -c1.z
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n) (a Phong lobe, as a Blinn one of 4n),
 +    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
 +    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
 +    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
@@ -568,7 +574,7 @@ index 4e9d1955..7f30784b 100644
      mad r1.x, r3.x, c1.x, c1.y
      cmp r1.x, r1.x, c1.y, c1.z
      mad r1.x, r3.x, c0.w, r1.x
-@@ -241,3 +292,62 @@
+@@ -241,3 +292,64 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 42 instruction slots used (4 texture, 38 arithmetic)
@@ -582,9 +588,11 @@ index 4e9d1955..7f30784b 100644
 +    dp3_sat r15.y, r9, -r12 // N.V
 +    dp3_sat r15.z, r9, r19 // N.L
 +    dp3_sat r15.w, r19, r14 // L.H
-+    add r16.x, r9.w, c171.y
++    add r16.x, r9.w, r9.w
++    add r16.x, r16.x, r16.x
++    add r16.x, r16.x, c171.y
 +    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
@@ -633,7 +641,7 @@ index 4e9d1955..7f30784b 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index dee4384c..2e9c3866 100644
+index dee4384c..7e38d8f7 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -84,6 +84,9 @@
@@ -666,7 +674,7 @@ index dee4384c..2e9c3866 100644
      add r0.x, r3.x, r3.x
      mul r1.w, r3.y, c0.y
      pow r2.w, r0.y, r1.w
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n) (a Phong lobe, as a Blinn one of 4n),
 +    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
 +    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
 +    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
@@ -699,7 +707,7 @@ index dee4384c..2e9c3866 100644
      mul r1.xyz, r1, r2.w
      mul r1.xyz, r0.x, r1
      texld r4, r0.zwzw, s0
-@@ -467,3 +502,62 @@
+@@ -467,3 +502,64 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 122 instruction slots used (9 texture, 113 arithmetic)
@@ -713,9 +721,11 @@ index dee4384c..2e9c3866 100644
 +    dp3_sat r15.y, r9, -r12 // N.V
 +    dp3_sat r15.z, r9, r19 // N.L
 +    dp3_sat r15.w, r19, r14 // L.H
-+    add r16.x, r9.w, c171.y
++    add r16.x, r9.w, r9.w
++    add r16.x, r16.x, r16.x
++    add r16.x, r16.x, c171.y
 +    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
@@ -764,7 +774,7 @@ index dee4384c..2e9c3866 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index 4ffde2ff..ab3ae0dd 100644
+index 4ffde2ff..3c3a1a91 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 @@ -77,6 +77,9 @@
@@ -827,7 +837,7 @@ index 4ffde2ff..ab3ae0dd 100644
      mul r0.xyz, r0, r1.yzww
      cmp r26.xyz, r1.x, r0, c2.y
      mov r26.w, c1.x
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n) (a Phong lobe, as a Blinn one of 4n),
 +    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
 +    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
 +    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
@@ -870,7 +880,7 @@ index 4ffde2ff..ab3ae0dd 100644
      // --- FusionFix local contact shadows: a short ray from this pixel towards the light
      // --- through the opaque depth catches small occluders, also for lights without a shadow
      // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
-@@ -419,3 +471,62 @@
+@@ -419,3 +471,64 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 92 instruction slots used (7 texture, 85 arithmetic)
@@ -884,9 +894,11 @@ index 4ffde2ff..ab3ae0dd 100644
 +    dp3_sat r15.y, r9, -r12 // N.V
 +    dp3_sat r15.z, r9, r19 // N.L
 +    dp3_sat r15.w, r19, r14 // L.H
-+    add r16.x, r9.w, c171.y
++    add r16.x, r9.w, r9.w
++    add r16.x, r16.x, r16.x
++    add r16.x, r16.x, c171.y
 +    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
@@ -935,7 +947,7 @@ index 4ffde2ff..ab3ae0dd 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 31cfc0a5..bedeaa48 100644
+index 31cfc0a5..16705d4d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -55,6 +55,9 @@
@@ -963,7 +975,7 @@ index 31cfc0a5..bedeaa48 100644
      mul r0.xyz, r0, r1.x
      cmp r0.xyz, r0.w, r0, c1.z
      pow r0.w, r1.y, r1.w
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n) (a Phong lobe, as a Blinn one of 4n),
 +    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
 +    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
 +    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
@@ -996,7 +1008,7 @@ index 31cfc0a5..bedeaa48 100644
      mul r1.xyw, r0.xyzz, r0.w
      mul r0.xyz, r21, r0 // FusionFix skin lighting: the wrapped N.L per channel
      mul r2.xyz, r3, r6
-@@ -299,3 +334,62 @@
+@@ -299,3 +334,64 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 90 instruction slots used (8 texture, 82 arithmetic)
@@ -1010,9 +1022,11 @@ index 31cfc0a5..bedeaa48 100644
 +    dp3_sat r15.y, r9, -r12 // N.V
 +    dp3_sat r15.z, r9, r19 // N.L
 +    dp3_sat r15.w, r19, r14 // L.H
-+    add r16.x, r9.w, c171.y
++    add r16.x, r9.w, r9.w
++    add r16.x, r16.x, r16.x
++    add r16.x, r16.x, c171.y
 +    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
@@ -1061,7 +1075,7 @@ index 31cfc0a5..bedeaa48 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 91955bce..73483a47 100644
+index 91955bce..28ce1589 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -86,6 +86,9 @@
@@ -1089,7 +1103,7 @@ index 91955bce..73483a47 100644
      mad r2.xyz, r5, -r0.w, r7
      dp3_sat r0.w, r8, r2
      pow r2.x, r0.w, r1.w
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n) (a Phong lobe, as a Blinn one of 4n),
 +    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
 +    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
 +    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
@@ -1122,7 +1136,7 @@ index 91955bce..73483a47 100644
      dp3_sat r0.w, r8, r5
      dp3 r21.w, r8, r5 // FusionFix skin lighting: N.L, unclamped
      mul r21.xyz, c201, r20.w // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
-@@ -485,3 +520,62 @@
+@@ -485,3 +520,64 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 144 instruction slots used (12 texture, 132 arithmetic)
@@ -1136,9 +1150,11 @@ index 91955bce..73483a47 100644
 +    dp3_sat r15.y, r9, -r12 // N.V
 +    dp3_sat r15.z, r9, r19 // N.L
 +    dp3_sat r15.w, r19, r14 // L.H
-+    add r16.x, r9.w, c171.y
++    add r16.x, r9.w, r9.w
++    add r16.x, r16.x, r16.x
++    add r16.x, r16.x, c171.y
 +    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
@@ -1187,7 +1203,7 @@ index 91955bce..73483a47 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-index c05c5756..627b5463 100644
+index c05c5756..d97b5d77 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 @@ -105,6 +105,13 @@
@@ -1225,9 +1241,9 @@ index c05c5756..627b5463 100644
        mad r1.y, r4.x, -c3.x, r2.w
        mad r7.w, r0.w, -c2.w, c2.w
        mov r7.z, c0.x
-+      add r12.x, r4.y, c177.x
++      mad r12.x, r4.y, c177.w, c177.x
 +      rcp r12.x, r12.x
-+      add r12.x, r12.x, r12.x // alpha squared
++      add r12.x, r12.x, r12.x // alpha squared, from the Phong exponent as for the lights
 +      rsq r12.x, r12.x
 +      rsq r12.x, r12.x // roughness, the square root of alpha
 +      // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): the parabolic
@@ -1261,7 +1277,7 @@ index c05c5756..627b5463 100644
        mul r0.xzw, r1.x, r0
        mul r0.xzw, r0, c8.y
        add r1.x, c17.w, c17.w
-@@ -753,3 +796,62 @@
+@@ -753,3 +796,64 @@
      // ----------------------------------------------------------------------------------------------------------------------------------------------
  
  // approximately 184 instruction slots used (19 texture, 165 arithmetic)
@@ -1275,9 +1291,11 @@ index c05c5756..627b5463 100644
 +    dp3_sat r15.y, r9, -r12 // N.V
 +    dp3_sat r15.z, r9, r19 // N.L
 +    dp3_sat r15.w, r19, r14 // L.H
-+    add r16.x, r9.w, c171.y
++    add r16.x, r9.w, r9.w
++    add r16.x, r16.x, r16.x
++    add r16.x, r16.x, c171.y
 +    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
@@ -1326,7 +1344,7 @@ index c05c5756..627b5463 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
-index a4de2c5b..68a8f9df 100644
+index a4de2c5b..44cc6dab 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
 @@ -50,6 +50,10 @@
@@ -1354,9 +1372,9 @@ index a4de2c5b..68a8f9df 100644
        texld r3, v0, s2
 +      mul r12.w, r3.y, r3.y
 +      mul r12.w, r12.w, c177.y
-+      add r12.x, r12.w, c177.x
++      mad r12.x, r12.w, c177.w, c177.x
 +      rcp r12.x, r12.x
-+      add r12.x, r12.x, r12.x // alpha squared
++      add r12.x, r12.x, r12.x // alpha squared, from the Phong exponent as for the lights
 +      rsq r12.x, r12.x
 +      rsq r12.x, r12.x // roughness, the square root of alpha
        mul r0.y, r3.y, r3.y
@@ -1395,7 +1413,7 @@ index a4de2c5b..68a8f9df 100644
        add r0.w, r3.x, r3.x
        mul r0.xyz, r0, r0.w
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
-index 92d6423d..e0bb4692 100644
+index 92d6423d..90802ccd 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
 @@ -51,6 +51,10 @@
@@ -1421,9 +1439,9 @@ index 92d6423d..e0bb4692 100644
        mad r0.z, r0.z, -c0.y, r4.x
        mad r0.z, r0.y, r0.z, r3.y
        max r4.x, r3.y, r0.z
-+      add r12.x, r4.x, c177.x
++      mad r12.x, r4.x, c177.w, c177.x
 +      rcp r12.x, r12.x
-+      add r12.x, r12.x, r12.x // alpha squared
++      add r12.x, r12.x, r12.x // alpha squared, from the Phong exponent as for the lights
 +      rsq r12.x, r12.x
 +      rsq r12.x, r12.x // roughness, the square root of alpha
        mul_sat r0.z, r4.x, c72.x
@@ -1464,7 +1482,7 @@ index 92d6423d..e0bb4692 100644
        add r1.w, r3.x, r3.x
        mad r2.x, r0.y, r3.y, r1.w
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 311b0a49..cfcb3c2d 100644
+index 311b0a49..9f76c4f4 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -50,6 +50,9 @@
@@ -1495,7 +1513,7 @@ index 311b0a49..cfcb3c2d 100644
      mul r0.x, r1.y, r1.y
      mul r0.x, r0.x, c0.y
      pow r1.y, r0.w, r0.x
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n) (a Phong lobe, as a Blinn one of 4n),
 +    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
 +    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
 +    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
@@ -1528,7 +1546,7 @@ index 311b0a49..cfcb3c2d 100644
      mul r0.x, r0.z, c3.x
      dp3 r0.y, r3, -c72
      dp3_sat r0.w, r3, r2
-@@ -265,3 +300,62 @@
+@@ -265,3 +300,64 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 59 instruction slots used (4 texture, 55 arithmetic)
@@ -1542,9 +1560,11 @@ index 311b0a49..cfcb3c2d 100644
 +    dp3_sat r15.y, r9, -r12 // N.V
 +    dp3_sat r15.z, r9, r19 // N.L
 +    dp3_sat r15.w, r19, r14 // L.H
-+    add r16.x, r9.w, c171.y
++    add r16.x, r9.w, r9.w
++    add r16.x, r16.x, r16.x
++    add r16.x, r16.x, c171.y
 +    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
@@ -1593,7 +1613,7 @@ index 311b0a49..cfcb3c2d 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index ffaab0be..3d12673e 100644
+index ffaab0be..27cf8724 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -53,6 +53,9 @@
@@ -1624,7 +1644,7 @@ index ffaab0be..3d12673e 100644
      add r1.x, r1.x, r1.x
      mul r1.y, r1.y, c0.y
      pow r2.w, r0.w, r1.y
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n) (a Phong lobe, as a Blinn one of 4n),
 +    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
 +    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
 +    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
@@ -1657,7 +1677,7 @@ index ffaab0be..3d12673e 100644
      mul r0.w, r0.z, c4.x
      dp3 r1.y, r3, -c72
      dp3_sat r1.z, r3, r2
-@@ -274,3 +309,62 @@
+@@ -274,3 +309,64 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 64 instruction slots used (5 texture, 59 arithmetic)
@@ -1671,9 +1691,11 @@ index ffaab0be..3d12673e 100644
 +    dp3_sat r15.y, r9, -r12 // N.V
 +    dp3_sat r15.z, r9, r19 // N.L
 +    dp3_sat r15.w, r19, r14 // L.H
-+    add r16.x, r9.w, c171.y
++    add r16.x, r9.w, r9.w
++    add r16.x, r16.x, r16.x
++    add r16.x, r16.x, c171.y
 +    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
@@ -1722,7 +1744,7 @@ index ffaab0be..3d12673e 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index b7a116d3..2ddfba8b 100644
+index b7a116d3..de8390bf 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -53,6 +53,9 @@
@@ -1753,7 +1775,7 @@ index b7a116d3..2ddfba8b 100644
      mul r1.y, r1.y, r1.y
      mul r1.y, r1.y, c1.y
      pow r2.w, r0.w, r1.y
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n) (a Phong lobe, as a Blinn one of 4n),
 +    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
 +    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
 +    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
@@ -1786,7 +1808,7 @@ index b7a116d3..2ddfba8b 100644
      mul r0.w, r0.z, c4.y
      dp3 r1.y, r3, -c72
      dp3_sat r1.w, r3, r2
-@@ -276,3 +311,62 @@
+@@ -276,3 +311,64 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 66 instruction slots used (5 texture, 61 arithmetic)
@@ -1800,9 +1822,11 @@ index b7a116d3..2ddfba8b 100644
 +    dp3_sat r15.y, r9, -r12 // N.V
 +    dp3_sat r15.z, r9, r19 // N.L
 +    dp3_sat r15.w, r19, r14 // L.H
-+    add r16.x, r9.w, c171.y
++    add r16.x, r9.w, r9.w
++    add r16.x, r16.x, r16.x
++    add r16.x, r16.x, c171.y
 +    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
@@ -1851,7 +1875,7 @@ index b7a116d3..2ddfba8b 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index b32e9e9b..42cc8f15 100644
+index b32e9e9b..7f586b6a 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -53,6 +53,9 @@
@@ -1882,7 +1906,7 @@ index b32e9e9b..42cc8f15 100644
      add r1.x, r1.x, r1.x
      mul r1.y, r1.y, c0.y
      pow r2.w, r0.w, r1.y
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n) (a Phong lobe, as a Blinn one of 4n),
 +    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
 +    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
 +    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
@@ -1915,7 +1939,7 @@ index b32e9e9b..42cc8f15 100644
      mul r0.w, r0.z, c4.y
      dp3 r1.y, r3, -c72
      dp3_sat r1.z, r3, r2
-@@ -278,3 +313,62 @@
+@@ -278,3 +313,64 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 68 instruction slots used (5 texture, 63 arithmetic)
@@ -1929,9 +1953,11 @@ index b32e9e9b..42cc8f15 100644
 +    dp3_sat r15.y, r9, -r12 // N.V
 +    dp3_sat r15.z, r9, r19 // N.L
 +    dp3_sat r15.w, r19, r14 // L.H
-+    add r16.x, r9.w, c171.y
++    add r16.x, r9.w, r9.w
++    add r16.x, r16.x, r16.x
++    add r16.x, r16.x, c171.y
 +    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
