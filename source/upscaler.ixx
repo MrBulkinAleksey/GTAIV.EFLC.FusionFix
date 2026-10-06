@@ -612,6 +612,12 @@ namespace
 
         bool SubmitInputs(const Textures& inputs, uint64_t signalValue) override
         {
+            // Everything the game rendered so far must reach the queue first. Before the images are asked for, too: DXVK
+            // gives a texture new storage when it's overwritten while the GPU still reads the old one, which happens once
+            // the GPU falls behind, and only its command thread knows the new one. Asked earlier, the image was the old
+            // storage, the frame before.
+            interop->FlushRenderingCommands();
+
             GameImage sources[TextureCount];
             for (size_t i = 0; i < TextureCount; ++i)
             {
@@ -662,8 +668,6 @@ namespace
             vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, barriers, after);
             vk.vkEndCommandBuffer(cmd);
 
-            // Everything the game rendered so far must reach the queue first
-            interop->FlushRenderingCommands();
             if (!WaitOnCpu())
                 return Submit(cmd, VK_NULL_HANDLE, 0, signalValue, VK_NULL_HANDLE);
 
@@ -677,6 +681,9 @@ namespace
 
         bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue) override
         {
+            // The target's current storage, as for the inputs
+            interop->FlushRenderingCommands();
+
             auto i = static_cast<size_t>(index);
             GameImage destination;
             if (!images[i].image || !GetGameImage(target, destination) || destination.format != Formats[i] ||
