@@ -574,6 +574,9 @@ public:
     // WetGroundDrying once it stops; the time it was last brought up to date, in game seconds.
     float fWetness = 0.0f;
     double fWetnessTime = -1.0;
+    // Whether the camera is in an interior, taken on the main thread as the frame's draw list is built:
+    // there the G-buffer's vertex colour says nothing of the sky, and tunnels and rooms got puddles.
+    bool bInteriorScene = false;
     const char* szWetGroundStatus = "not run yet";
     void ReleaseWetCopies()
     {
@@ -2962,6 +2965,8 @@ private:
             return skip("no effect");
         if (R.fWetness <= 0.0f && R.nWetGroundDebug != 1)
             return skip("dry");
+        if (R.bInteriorScene && R.nWetGroundDebug != 1)
+            return skip("interior");
         if (!pDevice || !R.mDiffuseRT || !R.mNormalRT || !R.mSpecularRT || !R.mMaterialIdRT || !R.mDiffuseRT->mD3DTexture ||
             !R.mNormalRT->mD3DTexture || !R.mSpecularRT->mD3DTexture || !R.mMaterialIdRT->mD3DTexture)
             return skip("no G-buffer");
@@ -7503,6 +7508,7 @@ public:
                     InstallPedSkinHooks();
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
+                        PostFxResources.bInteriorScene = Natives::IsInteriorScene();
                         auto cb = new T_CB_Generic_NoArgs(BindSSRTexture);
                         if (cb)
                             cb->Append();
