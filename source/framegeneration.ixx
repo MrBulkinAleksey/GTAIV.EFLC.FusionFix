@@ -70,6 +70,8 @@ namespace
         constexpr int32_t NoHudLess = 2048;     // the frame generation gets no frame before the HUD
         constexpr int32_t FsrDebugView = 4096;  // FSR draws its own debug view into the generated frames (3.1, see with 2)
         constexpr int32_t FsrIndicators = 8192; // FSR marks its resets and draws tear lines on the generated frames
+        constexpr int32_t PeriodicReset = 16384; // a reset of the frame generation every 120 frames, which also clears
+                                                 // the scene change detection of FSR's optical flow
     }
     int32_t nDebug = 0;
 
@@ -928,7 +930,9 @@ namespace
         if (presentSurface && generatedSurface && SUCCEEDED(device->StretchRect(backBuffer, nullptr, presentSurface, nullptr, D3DTEXF_POINT)))
         {
             auto hdr = HDROutput::IsActive();
-            if (Upscaler::Generate(PresentRT->mD3DTexture, hudLess ? HudLessRT->mD3DTexture : nullptr, GeneratedRT->mD3DTexture, hdr ? HDROutput::GetPeakNits() : 0.0f))
+            static uint32_t generations = 0;
+            bool reset = (nDebug & Debug::PeriodicReset) && ++generations % 120 == 0;
+            if (Upscaler::Generate(PresentRT->mD3DTexture, hudLess ? HudLessRT->mD3DTexture : nullptr, GeneratedRT->mD3DTexture, hdr ? HDROutput::GetPeakNits() : 0.0f, reset))
             {
                 static bool first = true;
                 if (first)

@@ -1578,8 +1578,8 @@ export namespace Upscaler
 
     // Render thread, after the frame is finished: present is the frame at the output size (A16B16G16R16F, sRGB encoded
     // or scRGB), hudLess the same before the HUD, when Evaluate was told it comes; generated receives the frame between
-    // the previous one and it. False leaves generated untouched.
-    bool Generate(IDirect3DTexture9* present, IDirect3DTexture9* hudLess, IDirect3DTexture9* generated, float maxLuminance)
+    // the previous one and it. False leaves generated untouched. reset starts the frame generation over.
+    bool Generate(IDirect3DTexture9* present, IDirect3DTexture9* hudLess, IDirect3DTexture9* generated, float maxLuminance, bool reset = false)
     {
         if (!IsFrameGenerationReady() || !present || !generated)
             return false;
@@ -1611,7 +1611,7 @@ export namespace Upscaler
         shared.FrameId = id;
         shared.MaxLuminance = maxLuminance;
         // The frame before this one was not generated from: there is nothing to interpolate from
-        shared.GenerateReset = preparedReset || generatedFrameId + 1 != id ? 1 : 0;
+        shared.GenerateReset = reset || preparedReset || generatedFrameId + 1 != id ? 1 : 0;
         generatedReset = shared.GenerateReset != 0;
         generatedFrameId = id;
 
