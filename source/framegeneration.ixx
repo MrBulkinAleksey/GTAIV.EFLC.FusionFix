@@ -3,8 +3,10 @@ module;
 #include <common.hxx>
 #include <cstdarg>
 #include <cstdio>
+#include <array>
 #include <filesystem>
 #include <map>
+#include <vector>
 #include <string>
 
 export module framegeneration;
@@ -28,10 +30,10 @@ import upscaler;
 // - Once the frame is finished, HUD and HDR output included, the back buffer is copied into Present and the helper
 //   generates the frame between it and the previous one into Generated.
 // - FrameGeneration = 1 in [TEMPORAL]: the game presents the generated frame in place of its own, which waits in
-//   PresentRT for half a frame. Nothing waits for it: the game goes on with the next frame, and the draw calls of the
-//   render thread check the time. The first one after the half (FrameGenerationDelay of the smoothed frame time)
-//   presents the rendered frame and leaves the back buffer as it found it, inside the game's scene. A frame that
-//   ends before that presents the waiting one first.
+//   PresentRT. Nothing waits for it: the game goes on with the next frame, and a draw call of the render thread
+//   halfway through it (FrameGenerationDelay, see FrameGenerationPacing below) presents the rendered frame, inside
+//   the game's scene, and leaves the back buffer as it found it. A frame that ends before that presents the waiting
+//   one first.
 // - FrameGeneration = 2 shows the generated frames in place of the rendered ones, to check the generation itself;
 //   3 paces as 1 with the rendered frame in place of the generated one, to check the pacing alone.
 
@@ -197,6 +199,166 @@ namespace
         return name;
     }
     std::map<std::string, std::pair<uint32_t, uint32_t>> PointsByKind;   // presents, dark frames
+
+    // ---------------------------------------------------------------------------------------------
+    // Where in the next frame the rendered frame goes (FrameGenerationPacing)
+    //
+    // The frames reach the screen when the GPU gets to their Present in its commands, which it runs in order, and the
+    // render thread usually runs ahead of it: the time on the CPU says little about the time on the GPU.
+    // 0: the time on the CPU, FrameGenerationDelay of the smoothed frame time after the generated frame.
+    // 1: the draw calls, FrameGenerationDelay of the previous frames' draw calls.
+    // 2: the GPU: timestamps through the frame tell the draw call the GPU passes FrameGenerationDelay of its frame at,
+    //    read back a few frames later without waiting; until there is one, as 1.
+    int32_t nPacing = 2;
+    double DrawsEma = 0.0;          // draw calls of a frame, smoothed
+    double TargetDraw = 0.0;        // the draw call for 2, smoothed; 0 while unknown
+
+    struct GpuFrame
+    {
+        IDirect3DQuery9* disjoint = nullptr;
+        IDirect3DQuery9* frequency = nullptr;
+        IDirect3DQuery9* presented = nullptr;       // right before the rendered frame's Present within the frame
+        std::vector<IDirect3DQuery9*> queries;      // timestamps, reused
+        std::vector<uint32_t> draws;                // the draw call of each one used, the first at 0, the last the frame's end
+        bool hadPresent = false;
+        bool issued = false;                        // the frame is over, its results are awaited
+    };
+    std::array<GpuFrame, 4> GpuFrames;
+    uint32_t GpuSlot = 0;
+    bool bGpuRecording = false;
+    uint32_t CheckpointEvery = 64;
+
+    struct GpuPacingStats
+    {
+        uint32_t frames = 0, presents = 0;
+        double frameMs = 0.0, at = 0.0, atMin = 1e9, atMax = 0.0, target = 0.0;
+    } GpuStats;
+
+    void ReleaseGpuTiming()
+    {
+        for (auto& f : GpuFrames)
+        {
+            SAFE_RELEASE(f.disjoint);
+            SAFE_RELEASE(f.frequency);
+            SAFE_RELEASE(f.presented);
+            for (auto& q : f.queries)
+                SAFE_RELEASE(q);
+            f = {};
+        }
+        bGpuRecording = false;
+    }
+
+    // A timestamp at this point of the frame's commands
+    void Checkpoint(IDirect3DDevice9* device)
+    {
+        auto& f = GpuFrames[GpuSlot];
+        if (f.draws.size() == f.queries.size())
+        {
+            IDirect3DQuery9* query = nullptr;
+            if (FAILED(device->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &query)) || !query)
+                return;
+            f.queries.push_back(query);
+        }
+        f.queries[f.draws.size()]->Issue(D3DISSUE_END);
+        f.draws.push_back(DrawsThisFrame);
+    }
+
+    // The results of the frames that are over, once the GPU has them
+    void ReadGpuFrames()
+    {
+        for (auto& f : GpuFrames)
+        {
+            if (!f.issued)
+                continue;
+            BOOL disjoint = TRUE;
+            UINT64 frequency = 0;
+            if (f.disjoint->GetData(&disjoint, sizeof(disjoint), 0) != S_OK || f.frequency->GetData(&frequency, sizeof(frequency), 0) != S_OK)
+                continue;
+            std::vector<UINT64> times(f.draws.size());
+            bool ready = true;
+            for (size_t i = 0; i < times.size() && ready; ++i)
+                ready = f.queries[i]->GetData(&times[i], sizeof(UINT64), 0) == S_OK;
+            UINT64 presented = 0;
+            if (ready && f.hadPresent)
+                ready = f.presented->GetData(&presented, sizeof(presented), 0) == S_OK;
+            if (!ready)
+                continue;
+            f.issued = false;
+            if (disjoint || !frequency || times.size() < 3 || times.back() <= times.front())
+                continue;
+
+            // The first draw call the GPU reaches FrameGenerationDelay of the frame at, between two timestamps
+            double total = static_cast<double>(times.back() - times.front());
+            double aim = fDelay * total;
+            double draw = f.draws.back();
+            for (size_t i = 1; i < times.size(); ++i)
+            {
+                double t = static_cast<double>(times[i] - times.front());
+                if (t < aim)
+                    continue;
+                double t0 = static_cast<double>(times[i - 1] - times.front());
+                double part = t > t0 ? (aim - t0) / (t - t0) : 0.0;
+                draw = f.draws[i - 1] + part * (static_cast<double>(f.draws[i]) - f.draws[i - 1]);
+                break;
+            }
+            TargetDraw = TargetDraw > 0.0 ? TargetDraw + (draw - TargetDraw) * 0.25 : draw;
+
+            auto& g = GpuStats;
+            ++g.frames;
+            g.frameMs += total * 1000.0 / static_cast<double>(frequency);
+            g.target += draw;
+            if (f.hadPresent && presented >= times.front())
+            {
+                double at = static_cast<double>(presented - times.front()) / total;
+                ++g.presents;
+                g.at += at;
+                g.atMin = std::min(g.atMin, at);
+                g.atMax = std::max(g.atMax, at);
+            }
+            if (g.frames >= 300)
+            {
+                Log("GPU pacing (FrameGenerationPacing %d) over %u frames: %.2f ms of GPU work a frame, rendered frame presented at %.2f of it (%.2f..%.2f, aimed at %.2f, %u measured), draw call %.0f of %.0f",
+                    nPacing, g.frames, g.frameMs / g.frames, g.presents ? g.at / g.presents : 0.0, g.presents ? g.atMin : 0.0, g.presents ? g.atMax : 0.0,
+                    fDelay, g.presents, g.target / g.frames, DrawsEma);
+                g = {};
+            }
+        }
+    }
+
+    // Render thread, where one frame ends and the next begins: closes the frame's timestamps, opens the next one's
+    void NextGpuFrame(IDirect3DDevice9* device)
+    {
+        if (bGpuRecording)
+        {
+            auto& f = GpuFrames[GpuSlot];
+            Checkpoint(device);
+            f.disjoint->Issue(D3DISSUE_END);
+            f.frequency->Issue(D3DISSUE_END);
+            f.issued = true;
+            bGpuRecording = false;
+        }
+        ReadGpuFrames();
+        if (nPacing != 2)
+            return;
+
+        GpuSlot = (GpuSlot + 1) % GpuFrames.size();
+        auto& f = GpuFrames[GpuSlot];
+        // Results that never came in four frames are dropped
+        f.issued = false;
+        f.draws.clear();
+        f.hadPresent = false;
+        if ((!f.disjoint && FAILED(device->CreateQuery(D3DQUERYTYPE_TIMESTAMPDISJOINT, &f.disjoint))) ||
+            (!f.frequency && FAILED(device->CreateQuery(D3DQUERYTYPE_TIMESTAMPFREQ, &f.frequency))) ||
+            (!f.presented && FAILED(device->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.presented))))
+        {
+            LogOnce(8, "GPU timestamps are not available: pacing by the draw calls");
+            return;
+        }
+        f.disjoint->Issue(D3DISSUE_BEGIN);
+        Checkpoint(device);
+        CheckpointEvery = std::max(16u, static_cast<uint32_t>(DrawsEma / 32.0));
+        bGpuRecording = true;
+    }
     uint32_t DarkLogged = 0;
 
     std::string SurfaceKind(IDirect3DSurface9* surface, IDirect3DSurface9* backBuffer)
@@ -282,6 +444,7 @@ namespace
     void ReleaseTargets()
     {
         bPending = false;
+        ReleaseGpuTiming();
         SAFE_RELEASE(ProbeRT);
         SAFE_RELEASE(ProbeMemory);
         for (auto rt : { &PresentRT, &GeneratedRT, &HudLessRT, &SavedRT })
@@ -371,6 +534,12 @@ namespace
             // and index buffers the game unbound at EndScene, and the game goes on drawing with ones it unbound, which
             // came out black after an EndScene of ours. At the end of the frame nothing is drawn after it.
             auto presentedAt = Now();
+            if (bGpuRecording && !late)
+            {
+                auto& f = GpuFrames[GpuSlot];
+                f.presented->Issue(D3DISSUE_END);
+                f.hadPresent = true;
+            }
             if (!(nDebug & Debug::NoPresent))
             {
                 bool scene = late || (nDebug & Debug::InScene);
@@ -433,9 +602,22 @@ namespace
     // Draw calls of the render thread: the rendered frame goes once its time has come
     void CheckPending(IDirect3DDevice9* device)
     {
-        if (GetCurrentThreadId() == RenderThread)
-            ++DrawsThisFrame;
-        if (!bPending || bInPresent || bEndOfFrameOnly || (nDebug & Debug::EndOfFrame) || GetCurrentThreadId() != RenderThread || Now().QuadPart < PendingDue.QuadPart)
+        if (GetCurrentThreadId() != RenderThread)
+            return;
+        ++DrawsThisFrame;
+        if (bGpuRecording && !bInPresent && DrawsThisFrame % CheckpointEvery == 0)
+            Checkpoint(device);
+        if (!bPending || bInPresent || bEndOfFrameOnly || (nDebug & Debug::EndOfFrame))
+            return;
+
+        bool due = false;
+        if (nPacing == 2 && TargetDraw > 0.0)
+            due = DrawsThisFrame >= TargetDraw;
+        else if (nPacing >= 1 && DrawsEma > 0.0)
+            due = DrawsThisFrame >= fDelay * DrawsEma;
+        else
+            due = Now().QuadPart >= PendingDue.QuadPart;
+        if (!due)
             return;
 
         // Experiments: only in some parts of the frame
@@ -527,8 +709,12 @@ namespace
         mode = static_cast<Mode>(std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGeneration", 0), 0, 3));
         fDelay = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
         nDebug = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDebug", 0);
-        Log("Frame generation: %s, delay %.2f, debug %d", mode == Mode::Off ? "off" : mode == Mode::ShowGenerated ? "showing the generated frames" :
-            mode == Mode::PaceRendered ? "pacing the rendered frames only" : "on", fDelay, nDebug);
+        auto previousPacing = nPacing;
+        nPacing = std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGenerationPacing", 2), 0, 2);
+        if (nPacing != previousPacing)
+            TargetDraw = 0.0;
+        Log("Frame generation: %s, delay %.2f, pacing %d, debug %d", mode == Mode::Off ? "off" : mode == Mode::ShowGenerated ? "showing the generated frames" :
+            mode == Mode::PaceRendered ? "pacing the rendered frames only" : "on", fDelay, nPacing, nDebug);
 
         // A fresh start for the pacing and the statistics
         if (mode != previous)
@@ -537,6 +723,7 @@ namespace
             bPending = false;
         }
         Stats = {};
+        GpuStats = {};
         Brightness = {};
         PointsByKind.clear();
         DarkLogged = 0;
@@ -580,6 +767,9 @@ namespace
 
         if (nDebug & Debug::Brightness)
             ProbeBrightness(device);
+        if (DrawsThisFrame > 100)
+            DrawsEma = DrawsEma > 0.0 ? DrawsEma + (DrawsThisFrame - DrawsEma) * 0.1 : DrawsThisFrame;
+        NextGpuFrame(device);
         DrawsThisFrame = 0;
 
         // This frame ended before the last one went: it goes first
