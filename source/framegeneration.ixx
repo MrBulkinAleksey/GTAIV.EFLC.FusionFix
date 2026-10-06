@@ -63,6 +63,7 @@ namespace
         constexpr int32_t AfterPost = 64;       // only once the frame before the HUD was captured
         constexpr int32_t InScene = 128;        // EndScene and BeginScene around it also within a frame, which breaks it
         constexpr int32_t NoRebind = 256;       // the targets are not set again after it
+        constexpr int32_t Marker = 512;         // a square in the corner: magenta on generated frames, green on rendered ones
     }
     int32_t nDebug = 0;
 
@@ -501,6 +502,15 @@ namespace
         return ok;
     }
 
+    // Debug::Marker: which of the frames reach the screen
+    void Mark(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer, bool generated)
+    {
+        if (!(nDebug & Debug::Marker))
+            return;
+        RECT square{ 0, 0, 64, 64 };
+        device->ColorFill(backBuffer, &square, generated ? D3DCOLOR_XRGB(255, 0, 255) : D3DCOLOR_XRGB(0, 255, 0));
+    }
+
     // Presents the waiting rendered frame, the game's back buffer kept as it was. late: the next frame ended first.
     void PresentPending(IDirect3DDevice9* device, bool late)
     {
@@ -514,6 +524,7 @@ namespace
         bool copies = !(nDebug & Debug::NoCopies);
         if (!copies || (CopyInto(device, backBuffer, SavedRT) && CopyFrom(device, PresentRT, backBuffer)))
         {
+            Mark(device, backBuffer, false);
             // Present moves the images of the two back buffers around: what is bound to the device is bound again
             // afterwards, so that the rest of the frame draws into the back buffer it had
             IDirect3DSurface9* targets[4]{};
@@ -831,7 +842,10 @@ namespace
                 // without a previous one, nor before the frame time is known.
                 bool paced = pacing && !Upscaler::WasGenerateReset() && FrameMs > 0.0;
                 if (mode == Mode::ShowGenerated || (paced && mode == Mode::On))
+                {
                     device->StretchRect(generatedSurface, nullptr, backBuffer, nullptr, D3DTEXF_POINT);
+                    Mark(device, backBuffer, true);
+                }
                 if (paced)
                 {
                     GeneratedAt = Now();
