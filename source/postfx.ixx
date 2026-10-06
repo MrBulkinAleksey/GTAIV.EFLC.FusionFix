@@ -5649,6 +5649,20 @@ private:
         effect->BeginPass(0);
         effect->CommitChanges();
         BindEffectSamplers(pDevice, effect);
+        if (SSRTrace::Active())
+        {
+            // The viewport the device holds against the target's size and the quad's: a quad or viewport of another
+            // size than the target draws part of it, and the passes rebuild positions on the wrong grid.
+            D3DXTECHNIQUE_DESC tech = {};
+            effect->GetTechniqueDesc(technique, &tech);
+            D3DSURFACE_DESC desc = {};
+            if (target)
+                target->GetDesc(&desc);
+            D3DVIEWPORT9 view = {};
+            pDevice->GetViewport(&view);
+            SSRTrace::Line("  draw %s: target %ux%u, viewport %ux%u at %u,%u, quad %.0fx%.0f", tech.Name ? tech.Name : "?",
+                desc.Width, desc.Height, unsigned(view.Width), unsigned(view.Height), unsigned(view.X), unsigned(view.Y), width, height);
+        }
         pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
         effect->EndPass();
         effect->End();
@@ -5902,6 +5916,22 @@ private:
                            vp->mNearClip, vp->mFarClip, cur.Frame, int(cur.Valid), cur.Near, cur.Far, prv.Frame, int(prv.Valid), prv.Near, prv.Far,
                            int(FrameHistory::IsCameraCut()), R.nSSRHistoryFrame, int(FrameHistory::CanReproject(R.nSSRHistoryFrame)),
                            R.nGIAccumFrame, int(FrameHistory::CanReproject(R.nGIAccumFrame)));
+            auto size = [](rage::grcRenderTargetPC* rt) -> std::string
+            {
+                D3DSURFACE_DESC d = {};
+                if (!rt || !rt->mD3DTexture || FAILED(rt->mD3DTexture->GetLevelDesc(0, &d)))
+                    return "none";
+                return std::to_string(d.Width) + "x" + std::to_string(d.Height);
+            };
+            SSRTrace::Line("gi sizes: render scale active %d scale %.3f; game viewport %dx%d, screen %dx%d, ToRender %ux%u; depth %s, "
+                           "depth copy %s, scene copy %s, history %s; GI raw %s denoised %s accum %s/%s full %s; SSR %s",
+                           int(RenderScale::IsActive()), RenderScale::GetScale(), int(vp->mWidth), int(vp->mHeight),
+                           rage::grcDevice::ms_nActiveWidth ? int(*rage::grcDevice::ms_nActiveWidth) : 0,
+                           rage::grcDevice::ms_nActiveHeight ? int(*rage::grcDevice::ms_nActiveHeight) : 0,
+                           RenderScale::ToRenderWidth(uint32_t(vp->mWidth)), RenderScale::ToRenderHeight(uint32_t(vp->mHeight)),
+                           size(R.mDepthRT).c_str(), size(R.PreAlphaDepthCopyRT).c_str(), size(R.FullScreenTex_temp1).c_str(),
+                           size(R.SSRHistoryTex).c_str(), size(R.GIRawTex).c_str(), size(R.GIDenoisedTex).c_str(),
+                           size(R.GIAccumTex[0]).c_str(), size(R.GIAccumTex[1]).c_str(), size(R.GIFullTex).c_str(), size(R.SSRTex).c_str());
             SSRTrace::DepthProbe(pDevice, "gi depth", R.mDepthRT ? R.mDepthRT->mD3DTexture : nullptr, vp->mNearClip, vp->mFarClip);
             SSRTrace::DepthProbe(pDevice, "gi previous depth", R.PreAlphaDepthCopyRT ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr,
                                  prv.Near, prv.Far);
