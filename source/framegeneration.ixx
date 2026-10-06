@@ -455,11 +455,14 @@ namespace
     IDirect3DSurface9* SmallRT = nullptr;
     IDirect3DSurface9* SmallMemory = nullptr;
     std::vector<uint8_t> PreviousSmall;     // the rendered frame before, 0 bytes while there is none
+    std::vector<uint8_t> OlderSmall;        // the one before that
+    std::vector<uint8_t> GeneratedSmall;    // the generated frame before
 
     struct SimilarityStats
     {
-        uint32_t frames = 0, hudLessFrames = 0;
+        uint32_t frames = 0, hudLessFrames = 0, olderFrames = 0;
         double toPrevious = 0.0, toCurrent = 0.0, toBlend = 0.0, between = 0.0, hudLessDiffers = 0.0;
+        double toOlder = 0.0, olderToPrevious = 0.0, toGenerated = 0.0;
     } Similar;
 
     bool ReadSmall(IDirect3DDevice9* device, IDirect3DSurface9* source, std::vector<uint8_t>& pixels)
@@ -524,16 +527,29 @@ namespace
                 for (size_t i = 0; i < blend.size(); ++i)
                     blend[i] = static_cast<uint8_t>((now[i] + PreviousSmall[i] + 1) / 2);
                 m.toBlend += Difference(between, blend) / frames;
+                // A generated frame a frame late lies between the two rendered frames before
+                if (!OlderSmall.empty() && !GeneratedSmall.empty())
+                {
+                    ++m.olderFrames;
+                    m.toOlder += Difference(between, OlderSmall) / frames;
+                    m.olderToPrevious += Difference(OlderSmall, PreviousSmall) / frames;
+                    m.toGenerated += Difference(between, GeneratedSmall) / frames;
+                }
                 m.between += frames;
                 if (m.frames >= 100)
                 {
                     Log("Generated frames over %u moving frames: they differ from the rendered frame before by %.2f, from the one after by %.2f and from the average of the two by %.2f of what those two differ by (%.1f on average); the frame before the HUD differs from the finished one over %.0f%% of the screen (%u frames)",
                         m.frames, m.toPrevious / m.frames, m.toCurrent / m.frames, m.toBlend / m.frames, m.between / m.frames,
                         m.hudLessFrames ? 100.0 * m.hudLessDiffers / m.hudLessFrames : 0.0, m.hudLessFrames);
+                    if (m.olderFrames)
+                        Log("  the same frames against the ones before: %.2f from the rendered frame two back, which is %.2f from the one before; %.2f from the generated frame before (%u frames)",
+                            m.toOlder / m.olderFrames, m.olderToPrevious / m.olderFrames, m.toGenerated / m.olderFrames, m.olderFrames);
                     m = {};
                 }
             }
         }
+        GeneratedSmall = compared ? std::move(between) : std::vector<uint8_t>{};
+        OlderSmall = std::move(PreviousSmall);
         PreviousSmall = std::move(now);
     }
 
@@ -544,6 +560,8 @@ namespace
         SAFE_RELEASE(SmallRT);
         SAFE_RELEASE(SmallMemory);
         PreviousSmall.clear();
+        OlderSmall.clear();
+        GeneratedSmall.clear();
         SAFE_RELEASE(ProbeRT);
         SAFE_RELEASE(ProbeMemory);
         for (auto rt : { &PresentRT, &GeneratedRT, &HudLessRT, &SavedRT })
@@ -942,7 +960,11 @@ namespace
                 if (nDebug & Debug::Similarity)
                 {
                     if (Upscaler::WasGenerateReset())
+                    {
                         PreviousSmall.clear();
+                        OlderSmall.clear();
+                        GeneratedSmall.clear();
+                    }
                     IDirect3DSurface9* hudLessSurface = nullptr;
                     if (hudLess)
                         HudLessRT->mD3DTexture->GetSurfaceLevel(0, &hudLessSurface);
