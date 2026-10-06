@@ -2012,6 +2012,47 @@ namespace SSRTrace
         Line("  %s probe: %ux%u format %u:%s", name, desc.Width, desc.Height, unsigned(desc.Format), text.c_str());
     }
 
+    // All four channels of a half float target at five points (the centre and halfway to each corner).
+    static void PixelProbe(IDirect3DDevice9* pDevice, const char* name, IDirect3DTexture9* texture)
+    {
+        if (!Active())
+            return;
+        IDirect3DSurface9* surface = nullptr;
+        if (!texture || FAILED(texture->GetSurfaceLevel(0, &surface)) || !surface)
+            return;
+        D3DSURFACE_DESC desc = {};
+        surface->GetDesc(&desc);
+        IDirect3DSurface9* copy = nullptr;
+        HRESULT hr = desc.Format == D3DFMT_A16B16G16R16F
+            ? pDevice->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &copy, nullptr) : E_FAIL;
+        if (SUCCEEDED(hr))
+            hr = pDevice->GetRenderTargetData(surface, copy);
+        D3DLOCKED_RECT locked = {};
+        if (SUCCEEDED(hr))
+            hr = copy->LockRect(&locked, nullptr, D3DLOCK_READONLY);
+        if (FAILED(hr))
+        {
+            Line("  %s probe: %ux%u format %u, read back failed %08x", name, desc.Width, desc.Height, unsigned(desc.Format), unsigned(hr));
+            SAFE_RELEASE(copy);
+            surface->Release();
+            return;
+        }
+        std::string text;
+        const float at[5][2] = { { 0.5f, 0.5f }, { 0.25f, 0.25f }, { 0.75f, 0.25f }, { 0.25f, 0.75f }, { 0.75f, 0.75f } };
+        for (auto& p : at)
+        {
+            auto row = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(locked.pBits) + UINT(p[1] * desc.Height) * locked.Pitch);
+            auto px = row + UINT(p[0] * desc.Width) * 4;
+            char item[96];
+            snprintf(item, sizeof(item), " (%.2f,%.2f) %.3f %.3f %.3f %.0f", p[0], p[1], Half(px[0]), Half(px[1]), Half(px[2]), Half(px[3]));
+            text += item;
+        }
+        copy->UnlockRect();
+        copy->Release();
+        surface->Release();
+        Line("  %s probe: %ux%u:%s", name, desc.Width, desc.Height, text.c_str());
+    }
+
     static std::string TextureName(IDirect3DBaseTexture9* texture)
     {
         auto& R = PostFxResources;
@@ -5988,10 +6029,13 @@ private:
         if (R.SSRDebugMode() == R.kGIHistoryDebugMode && R.SSRDebugSurf && h.techSSRDebug)
         {
             const bool rawFree = gathered != R.GIRawTex->mD3DTexture;
-            effect->SetFloat(h.fDebugMode, float(R.kGIHistoryDebugMode));
+            // While the trace runs, the numbers behind the colours (see GIHistoryDebug in SSR.fx), read back here.
+            effect->SetFloat(h.fDebugMode, SSRTrace::Active() ? float(R.kGIHistoryDebugMode) + 0.75f : float(R.kGIHistoryDebugMode));
             DrawEffectPass(pDevice, effect, h.techSSRTemporal, rawFree ? R.GIRawSurf : R.GIDenoisedSurf, width, height);
             effect->SetFloat(h.fDebugMode, 0.0f);
             historyDebug = rawFree ? R.GIRawTex->mD3DTexture : R.GIDenoisedTex->mD3DTexture;
+            SSRTrace::Line("gi history debug: %.0fx%.0f, z now / last frame's copy / expected through last frame's camera / flags", width, height);
+            SSRTrace::PixelProbe(pDevice, "gi history", historyDebug);
         }
         effect->SetFloat(h.fTemporalAnySurface, 0.0f);
         R.nGIAccumIndex = next;

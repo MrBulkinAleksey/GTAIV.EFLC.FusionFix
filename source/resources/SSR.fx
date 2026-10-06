@@ -1358,6 +1358,17 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     [branch]
     if (GIHistoryDebug())
     {
+        // While the SSR trace runs (fDebugMode 10.75) the numbers instead, for it to read back: this
+        // frame's view depth, last frame's where the history is taken, what last frame's should be
+        // through last frame's camera, and in alpha 1 for a depth test, 2 off screen, 4 with motion.
+        [branch]
+        if (fDebugMode > 10.5)
+        {
+            float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]
+                        + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
+            return float4(C.z, PrevLinearDepth(prevUV), clip.w,
+                          (checkDepth ? 1.0 : 0.0) + (offScreen ? 2.0 : 0.0) + (fUseMotion > 0.0 ? 4.0 : 0.0));
+        }
         static const float3 kLum = float3(0.2126, 0.7152, 0.0722);
         float noise = saturate(dot(spread.rgb, kLum) / max(dot(m1.rgb, kLum), 1e-3));
         float3 h = tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0)).rgb;
