@@ -3027,12 +3027,14 @@ private:
                 }
             }
 
-            // The lit scene, sampler 1 of the fog pass, with the light scattered under the skin
-            // if that runs; the fog, the copy below and SSR's history all take it.
+            // The lit scene, sampler 1 of the fog pass: the volumetric clouds drawn into the game's own scene first, then
+            // the light scattered under the skin if that runs, from a copy that has the clouds; the fog, the copy below
+            // and SSR's history all take it. The other way round the clouds drew into the skin passes' own target, and
+            // without temporal anti-aliasing the whole picture shook.
+            RenderVolumetricClouds(pDevice, prevTex[1]);
             IDirect3DBaseTexture9* scene = prevTex[1];
             if (auto skin = RenderSkinScattering(pDevice, prevTex[1]))
                 scene = skin;
-            RenderVolumetricClouds(pDevice, scene);
 
             if (PostFxResources.FullScreenTex_temp1)
             {
@@ -3671,6 +3673,72 @@ private:
 
         SavedSamplerSlots(const SavedSamplerSlots&) = delete;
         SavedSamplerSlots& operator=(const SavedSamplerSlots&) = delete;
+    };
+
+    // For effects begun with D3DXFX_DONOTSAVESTATE. D3DX's own state saving goes through state blocks on the game's
+    // device wrapper, which drops a restore it takes for no change while the device behind it holds another value (see
+    // SetTextureBoth): textures and shaders an effect had set stayed on the device. These take what the device itself
+    // holds and put it back through the wrapper and on the device.
+    struct SavedShaders
+    {
+        IDirect3DDevice9* device;
+        IDirect3DDevice9* real;
+        IDirect3DPixelShader9* ps = nullptr;
+        IDirect3DVertexShader9* vs = nullptr;
+
+        explicit SavedShaders(IDirect3DDevice9* pDevice) : device(pDevice), real(RealDevice(pDevice))
+        {
+            real->GetPixelShader(&ps);
+            real->GetVertexShader(&vs);
+        }
+
+        ~SavedShaders()
+        {
+            device->SetPixelShader(ps);
+            device->SetVertexShader(vs);
+            if (real != device)
+            {
+                real->SetPixelShader(ps);
+                real->SetVertexShader(vs);
+            }
+            SAFE_RELEASE(ps);
+            SAFE_RELEASE(vs);
+        }
+
+        SavedShaders(const SavedShaders&) = delete;
+        SavedShaders& operator=(const SavedShaders&) = delete;
+    };
+
+    // The render states the passes of FusionFix's effects set (AO.fx's are the most)
+    struct SavedEffectPassStates
+    {
+        static constexpr D3DRENDERSTATETYPE kStates[] =
+        {
+            D3DRS_ZENABLE, D3DRS_ZWRITEENABLE, D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_ALPHATESTENABLE,
+            D3DRS_STENCILENABLE, D3DRS_CULLMODE, D3DRS_FOGENABLE, D3DRS_CLIPPING, D3DRS_COLORWRITEENABLE,
+        };
+        IDirect3DDevice9* device;
+        IDirect3DDevice9* real;
+        DWORD values[std::size(kStates)] = {};
+
+        explicit SavedEffectPassStates(IDirect3DDevice9* pDevice) : device(pDevice), real(RealDevice(pDevice))
+        {
+            for (size_t i = 0; i < std::size(kStates); ++i)
+                real->GetRenderState(kStates[i], &values[i]);
+        }
+
+        ~SavedEffectPassStates()
+        {
+            for (size_t i = 0; i < std::size(kStates); ++i)
+            {
+                device->SetRenderState(kStates[i], values[i]);
+                if (real != device)
+                    real->SetRenderState(kStates[i], values[i]);
+            }
+        }
+
+        SavedEffectPassStates(const SavedEffectPassStates&) = delete;
+        SavedEffectPassStates& operator=(const SavedEffectPassStates&) = delete;
     };
     static constexpr UINT kPSConstCount = 224;
     static constexpr UINT kVSConstCount = 256;
@@ -5222,8 +5290,10 @@ private:
                 pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
             }
 
+        // The shaders back on both devices, D3DX saves nothing (see SavedShaders); the rest is saved above
+        SavedShaders shaders(pDevice);
         effect->SetTechnique(h.techSSRWater);
-        effect->Begin(&passes, 0);
+        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
         effect->BeginPass(0);
         effect->CommitChanges();
         BindEffectSamplers(pDevice, effect);
@@ -5341,8 +5411,12 @@ private:
         if (PostFxResources.AOEffect && PostFxResources.AOEnabled && AO->get())
         { // AO
             IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+            // Nothing saved by D3DX (see SavedShaders): textures, samplers, constants, the passes' render states and the
+            // shaders are saved here
             SavedSamplerSlots savedSamplers(pDevice);
             SavedShaderConstants savedConstants(pDevice);
+            SavedEffectPassStates savedStates(pDevice);
+            SavedShaders savedShaders(pDevice);
 
             IDirect3DSurface9* rt0 = nullptr;
             IDirect3DSurface9* ds = nullptr;
@@ -5372,7 +5446,7 @@ private:
 
             UINT passes = 0;
             ID3DXEffect* effect = PostFxResources.AOEffect;
-            effect->Begin(&passes, 0); assert(passes == 7);
+            effect->Begin(&passes, D3DXFX_DONOTSAVESTATE); assert(passes == 7);
             {
                 rage::grcViewport* currGrcViewport = rage::GetCurrentViewport();
 
@@ -5973,9 +6047,14 @@ private:
             { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
         };
         pDevice->SetRenderTarget(0, target);
+
+        // No state saving by D3DX (see SavedShaders): the callers save and restore textures, samplers, render states
+        // and constants themselves, the shaders, which the effect sets, are put back here.
+        SavedShaders shaders(pDevice);
+
         UINT passes = 0;
         effect->SetTechnique(technique);
-        effect->Begin(&passes, 0);
+        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
         effect->BeginPass(0);
         effect->CommitChanges();
         BindEffectSamplers(pDevice, effect);
