@@ -3315,6 +3315,7 @@ private:
                     // it before the game computed bloom and exposure.
                     if (TemporalAA::GetMode() != TemporalAA::Mode::Off && !TemporalAA::IsSceneResolved() && !RenderScale::IsActive())
                     {
+                        FilterStippleBeforeResolve(PostFxResources.textureRead);
                         if (TemporalAA::Resolve(pDevice, PostFxResources.textureRead, PostFxResources.renderTargetTex, PostFxResources.renderTargetSurf))
                         {
                             PostFxResources.swapbuffers();
@@ -3322,7 +3323,7 @@ private:
                         }
                     }
 
-                    if (PostFxResources.useStippleFilter && PostFxResources.stipple_filter_ps)
+                    if (PostFxResources.useStippleFilter && PostFxResources.stipple_filter_ps && !TemporalAA::IsStippleFiltered())
                     {
                         pDevice->SetPixelShader(PostFxResources.stipple_filter_ps);
                         pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
@@ -5876,6 +5877,14 @@ private:
         bInsteadDrawPrimitiveDownsample = false;
     }
 
+    // With temporal anti-aliasing, DLAA or FSR the stipple filter runs before them, on the scene at the render size,
+    // instead of in the post processing after them
+    static void FilterStippleBeforeResolve(IDirect3DTexture9* scene)
+    {
+        if (TemporalAA::GetMode() != TemporalAA::Mode::Off && PostFxResources.useStippleFilter && PostFxResources.stipple_filter_ps)
+            TemporalAA::FilterStipple(scene, PostFxResources.stipple_filter_ps);
+    }
+
     // Render scale: from here on FullScreenCopy is a texture of the screen size, with the scene upscaled by DLSS
     // or FSR, or stretched when neither runs
     static void UpscaleScene()
@@ -5889,6 +5898,7 @@ private:
         IDirect3DSurface9* output = nullptr;
         if (!RenderScale::BeginPost(pDevice, scene, sceneSurface, output))
             return;
+        FilterStippleBeforeResolve(scene);
 
         auto upscaled = PostFxResources.FullScreenTex_temp1->mD3DTexture;
         IDirect3DSurface9* upscaledSurface = nullptr;
@@ -5921,6 +5931,7 @@ private:
         IDirect3DSurface9* resolvedSurface = nullptr;
         scene->GetSurfaceLevel(0, &sceneSurface);
         resolved->GetSurfaceLevel(0, &resolvedSurface);
+        FilterStippleBeforeResolve(scene);
         if (sceneSurface && resolvedSurface && TemporalAA::Resolve(pDevice, scene, resolved, resolvedSurface))
             pDevice->StretchRect(resolvedSurface, nullptr, sceneSurface, nullptr, D3DTEXF_POINT);
         SAFE_RELEASE(resolvedSurface);

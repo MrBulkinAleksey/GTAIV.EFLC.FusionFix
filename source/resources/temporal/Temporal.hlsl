@@ -371,3 +371,28 @@ ResolveOut PS_TemporalResolve(float2 uv : TEXCOORD0)
     o.History = o.Color;
     return o;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Rain after the resolve: the rain has no motion vectors, so it's drawn into a copy of the scene and what it
+// changed there is added to the picture once the resolve, DLAA or FSR made it. Added rather than blended, the
+// layer works for any blend mode the rain draws with.
+
+sampler2D RainTex      : register(s0); // the copy of the scene with the rain
+sampler2D RainSceneTex : register(s1); // the scene without it
+
+float4 PS_RainLayer(float2 uv : TEXCOORD0) : COLOR0
+{
+    // Clamped first: an infinite pixel of the scene would leave infinity minus infinity
+    float3 rain = clamp(tex2Dlod(RainTex, float4(uv, 0.0, 0.0)).rgb, -65504.0, 65504.0);
+    float3 scene = clamp(tex2Dlod(RainSceneTex, float4(uv, 0.0, 0.0)).rgb, -65504.0, 65504.0);
+    return float4(rain - scene, 0.0);
+}
+
+sampler2D RainLayerTex : register(s0);
+
+float4 gRainOffset : register(c0); // xy: where the jitter moved the layer, in its texture coordinates
+
+float4 PS_RainComposite(float2 uv : TEXCOORD0) : COLOR0
+{
+    return float4(tex2Dlod(RainLayerTex, float4(uv + gRainOffset.xy, 0.0, 0.0)).rgb, 0.0);
+}

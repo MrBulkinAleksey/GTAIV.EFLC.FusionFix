@@ -23,6 +23,8 @@ import upscaler;
 #define IDR_TEMPORAL_PS_UPSCALER_DEPTH  3008
 #define IDR_TEMPORAL_PS_OPAQUE_LUMA     3009
 #define IDR_TEMPORAL_PS_REACTIVE        3010
+#define IDR_TEMPORAL_PS_RAIN_LAYER      3011
+#define IDR_TEMPORAL_PS_RAIN_COMPOSITE  3012
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -49,6 +51,9 @@ import upscaler;
 //   exposure (bloom from the jittered scene would jitter), and so before depth of field and tone mapping.
 //   DLAA and FSR replace it when they are available (see upscaler.ixx), with the same jitter and motion
 //   vectors.
+// - The rain has no motion vectors either, and the streaks of a whole screen of it smeared or vanished. It's drawn
+//   into a copy of the scene instead, and what it changed there is added to the picture after the resolve, DLAA or
+//   FSR (see RenderRain).
 
 namespace TemporalMath
 {
@@ -189,6 +194,7 @@ public:
     static inline bool bReactiveMask = true;
     static inline float fReactiveScale = 2.0f;
     static inline float fReactiveMax = 0.75f;
+    static inline bool bRainLayer = true;
 
     static inline HMODULE hm = NULL;
 
@@ -221,6 +227,8 @@ public:
     static inline IDirect3DPixelShader9* DepthPS = nullptr;
     static inline IDirect3DPixelShader9* OpaqueLumaPS = nullptr;
     static inline IDirect3DPixelShader9* ReactivePS = nullptr;
+    static inline IDirect3DPixelShader9* RainLayerPS = nullptr;
+    static inline IDirect3DPixelShader9* RainCompositePS = nullptr;
     static inline IDirect3DVertexDeclaration9* BoneWriteDecl = nullptr;
 
     static bool ShadersLoaded()
@@ -258,6 +266,8 @@ public:
         loadCompiledShader(IDR_TEMPORAL_PS_UPSCALER_DEPTH, DepthPS);
         loadCompiledShader(IDR_TEMPORAL_PS_OPAQUE_LUMA, OpaqueLumaPS);
         loadCompiledShader(IDR_TEMPORAL_PS_REACTIVE, ReactivePS);
+        loadCompiledShader(IDR_TEMPORAL_PS_RAIN_LAYER, RainLayerPS);
+        loadCompiledShader(IDR_TEMPORAL_PS_RAIN_COMPOSITE, RainCompositePS);
 
         if (!BoneWriteDecl)
         {
@@ -331,6 +341,7 @@ public:
         destroy(DepthRT);
         destroy(OpaqueRT);
         destroy(ReactiveRT);
+        ReleaseSceneTargets();
         HistoryFrame = 0;
         UpscalerFrame = 0;
         OpaqueFrame = 0;
@@ -847,6 +858,7 @@ public:
             D3DRS_SCISSORTESTENABLE, D3DRS_SRGBWRITEENABLE, D3DRS_FILLMODE, D3DRS_CLIPPLANEENABLE,
             D3DRS_POINTSIZE, D3DRS_POINTSCALEENABLE, D3DRS_POINTSPRITEENABLE, D3DRS_DEPTHBIAS,
             D3DRS_SLOPESCALEDEPTHBIAS, D3DRS_FOGENABLE, D3DRS_MULTISAMPLEANTIALIAS, D3DRS_SEPARATEALPHABLENDENABLE,
+            D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP,
         };
         DWORD renderStates[std::size(RenderStates)]{};
 
@@ -925,6 +937,41 @@ public:
             SAFE_RELEASE(vertexTexture0);
         }
     };
+
+    // A sampler's texture and states, put back when it goes out of scope (StateBackup keeps sampler 0 only)
+    struct SamplerBackup
+    {
+        IDirect3DDevice9* device = nullptr;
+        DWORD sampler = 0;
+        IDirect3DBaseTexture9* texture = nullptr;
+        DWORD states[std::size(StateBackup::SamplerStates)]{};
+
+        SamplerBackup(IDirect3DDevice9* dev, DWORD s) : device(dev), sampler(s)
+        {
+            device->GetTexture(sampler, &texture);
+            for (size_t i = 0; i < std::size(states); ++i)
+                device->GetSamplerState(sampler, StateBackup::SamplerStates[i], &states[i]);
+        }
+
+        ~SamplerBackup()
+        {
+            device->SetTexture(sampler, texture);
+            for (size_t i = 0; i < std::size(states); ++i)
+                device->SetSamplerState(sampler, StateBackup::SamplerStates[i], states[i]);
+            SAFE_RELEASE(texture);
+        }
+    };
+
+    static void BindSampler(IDirect3DDevice9* device, DWORD sampler, IDirect3DBaseTexture9* texture, D3DTEXTUREFILTERTYPE filter)
+    {
+        device->SetTexture(sampler, texture);
+        device->SetSamplerState(sampler, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        device->SetSamplerState(sampler, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        device->SetSamplerState(sampler, D3DSAMP_MINFILTER, filter);
+        device->SetSamplerState(sampler, D3DSAMP_MAGFILTER, filter);
+        device->SetSamplerState(sampler, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        device->SetSamplerState(sampler, D3DSAMP_SRGBTEXTURE, FALSE);
+    }
 
     struct ScreenVertex
     {
@@ -1353,6 +1400,264 @@ public:
     }
 
     // ---------------------------------------------------------------------------------------------
+    // Targets of the scene's size, render thread: made on first use, given back at a device reset
+
+    static inline IDirect3DTexture9* SceneCopyTexture = nullptr;  // the scene's format: the rain draws into it, the stipple filter writes it
+    static inline IDirect3DSurface9* SceneCopySurface = nullptr;
+    static inline IDirect3DTexture9* RainLayerTexture = nullptr;  // what the rain changed
+    static inline IDirect3DSurface9* RainLayerSurface = nullptr;
+    static inline bool bSceneTargetsFailed = false;               // not tried again until the next reset
+
+    static IDirect3DDevice9* RealDevice()
+    {
+        return RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
+    }
+
+    static void ReleaseSceneTargets()
+    {
+        SAFE_RELEASE(SceneCopySurface);
+        SAFE_RELEASE(SceneCopyTexture);
+        SAFE_RELEASE(RainLayerSurface);
+        SAFE_RELEASE(RainLayerTexture);
+        bSceneTargetsFailed = false;
+        RainFrame = 0;
+    }
+
+    static IDirect3DSurface9* GetSceneTarget(IDirect3DDevice9* device, IDirect3DTexture9*& texture, IDirect3DSurface9*& surface, UINT width, UINT height, D3DFORMAT format)
+    {
+        if (texture)
+        {
+            D3DSURFACE_DESC desc{};
+            texture->GetLevelDesc(0, &desc);
+            if (desc.Width == width && desc.Height == height && desc.Format == format)
+                return surface;
+            SAFE_RELEASE(surface);
+            SAFE_RELEASE(texture);
+        }
+        if (bSceneTargetsFailed)
+            return nullptr;
+        if (FAILED(device->CreateTexture(width, height, 1, D3DUSAGE_RENDERTARGET, format, D3DPOOL_DEFAULT, &texture, nullptr)) || !texture ||
+            FAILED(texture->GetSurfaceLevel(0, &surface)) || !surface)
+        {
+            SAFE_RELEASE(texture);
+            bSceneTargetsFailed = true;
+            return nullptr;
+        }
+        return surface;
+    }
+
+    static IDirect3DSurface9* GetSceneCopy(IDirect3DDevice9* device, const D3DSURFACE_DESC& scene)
+    {
+        return GetSceneTarget(device, SceneCopyTexture, SceneCopySurface, scene.Width, scene.Height, scene.Format);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Rain after the resolve, render thread
+    //
+    // CRain::Render draws the rain, the last of the visual effects. While the resolve runs, the scene is copied and the
+    // rain drawn into the copy; the difference to the scene becomes the layer, at the render size, and the scene goes
+    // on without the rain. The resolve adds the layer to its result, moved back by the jitter the rain was drawn with,
+    // or to the scene when it did not resolve.
+
+    static inline SafetyHookInline shRenderRain{};
+    static inline IDirect3DSurface9* RainScene = nullptr;   // the scene's target while the rain draws into the copy
+    static inline D3DVIEWPORT9 RainViewport{};
+    static inline uint32_t RainFrame = 0;                    // SceneFrame of the layer, 0 once it was added
+
+    static void __fastcall RenderRain(float* rain, void* edx)
+    {
+        // The amount of rain comes first, nothing is drawn without it
+        bool layer = rain && *rain > 0.0f && BeginRain();
+        shRenderRain.unsafe_thiscall(rain);
+        if (layer)
+            EndRain();
+    }
+
+    static bool BeginRain()
+    {
+        using namespace TemporalAA;
+
+        // Only where the resolve adds it back, once a scene
+        if (!bRainLayer || !RainLayerPS || !RainCompositePS || !IsJitterActive() || MotionFrame != SceneFrame || RainFrame == SceneFrame)
+            return false;
+        auto device = RealDevice();
+        if (!device)
+            return false;
+
+        // The camera's scene: the other phases draw into smaller targets
+        IDirect3DSurface9* scene = nullptr;
+        D3DSURFACE_DESC desc{};
+        device->GetRenderTarget(0, &scene);
+        if (!scene || FAILED(scene->GetDesc(&desc)) || desc.Width != static_cast<UINT>(HistoryWidth) || desc.Height != static_cast<UINT>(HistoryHeight))
+        {
+            SAFE_RELEASE(scene);
+            return false;
+        }
+
+        auto copy = GetSceneCopy(device, desc);
+        auto layer = GetSceneTarget(device, RainLayerTexture, RainLayerSurface, desc.Width, desc.Height, D3DFMT_A16B16G16R16F);
+        if (!copy || !layer || FAILED(device->StretchRect(scene, nullptr, copy, nullptr, D3DTEXF_POINT)))
+        {
+            scene->Release();
+            return false;
+        }
+
+        device->GetViewport(&RainViewport);
+        device->SetRenderTarget(0, copy);
+        device->SetViewport(&RainViewport);
+        RainScene = scene;
+        return true;
+    }
+
+    static void EndRain()
+    {
+        using namespace TemporalAA;
+
+        auto device = RealDevice();
+        auto scene = RainScene;
+        RainScene = nullptr;
+        device->SetRenderTarget(0, scene);
+        device->SetViewport(&RainViewport);
+
+        IDirect3DTexture9* sceneTexture = nullptr;
+        scene->GetContainer(__uuidof(IDirect3DTexture9), reinterpret_cast<void**>(&sceneTexture));
+        if (sceneTexture)
+        {
+            bInternalDraw = true;
+            {
+                StateBackup backup(device);
+                SamplerBackup sampler1(device, 1);
+                device->SetRenderTarget(0, RainLayerSurface);
+                for (DWORD i = 1; i < 4; ++i)
+                    device->SetRenderTarget(i, nullptr);
+                device->SetDepthStencilSurface(nullptr);
+                SetFullscreenStates(device);
+                BindSampler(device, 0, SceneCopyTexture, D3DTEXF_POINT);
+                BindSampler(device, 1, sceneTexture, D3DTEXF_POINT);
+                device->SetPixelShader(RainLayerPS);
+                DrawFullscreen(device, static_cast<float>(HistoryWidth), static_cast<float>(HistoryHeight));
+            }
+            bInternalDraw = false;
+            sceneTexture->Release();
+            RainFrame = SceneFrame;
+        }
+        else
+        {
+            // Nothing to take the difference to: the rain goes into the scene as the game drew it
+            device->StretchRect(SceneCopySurface, nullptr, scene, nullptr, D3DTEXF_POINT);
+        }
+        scene->Release();
+    }
+
+    // Adds the layer to target: the resolved picture, at any size, or the scene that was not resolved
+    static void AddRain(IDirect3DSurface9* target, bool resolved)
+    {
+        using namespace TemporalAA;
+
+        if (RainFrame != SceneFrame || !RainLayerTexture || !target)
+            return;
+        RainFrame = 0;
+        auto device = RealDevice();
+        D3DSURFACE_DESC desc{};
+        if (!device || FAILED(target->GetDesc(&desc)))
+            return;
+
+        // The rain was drawn with the jitter, which the resolved picture no longer has
+        float offset[4] =
+        {
+            resolved ? CurrentCamera.JitterPixels[0] / static_cast<float>(HistoryWidth) : 0.0f,
+            resolved ? CurrentCamera.JitterPixels[1] / static_cast<float>(HistoryHeight) : 0.0f,
+            0.0f, 0.0f,
+        };
+
+        bInternalDraw = true;
+        {
+            StateBackup backup(device);
+            device->SetRenderTarget(0, target);
+            for (DWORD i = 1; i < 4; ++i)
+                device->SetRenderTarget(i, nullptr);
+            device->SetDepthStencilSurface(nullptr);
+            SetFullscreenStates(device, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
+            device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+            device->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
+            device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+            device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+            device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+            BindSampler(device, 0, RainLayerTexture, resolved ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+            device->SetPixelShader(RainCompositePS);
+            device->SetPixelShaderConstantF(0, offset, 1);
+            DrawFullscreen(device, static_cast<float>(desc.Width), static_cast<float>(desc.Height));
+        }
+        bInternalDraw = false;
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Stipple before the resolve, render thread
+    //
+    // Fading objects are drawn stippled, a pattern of pixels, and PostFX's stipple filter smooths it. The resolve, DLAA
+    // and FSR used to come first and kept the pattern, or blurred it into a shimmer that left the filter nothing to find.
+    // With them the filter runs on the scene at the render size, before they do.
+
+    static inline uint32_t StippleFrame = 0;    // SceneFrame the scene was filtered in
+
+    static bool FilterStipple(IDirect3DTexture9* scene, IDirect3DPixelShader9* filter)
+    {
+        using namespace TemporalAA;
+
+        if (!scene || !filter || StippleFrame == SceneFrame)
+            return false;
+        auto device = RealDevice();
+        // GBUFFER_2.w marks the stippled pixels, which the filter keeps to with Definition on (c223.z)
+        auto gbuffer2 = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_2_");
+        if (!device || !gbuffer2 || !gbuffer2->mD3DTexture)
+            return false;
+
+        IDirect3DSurface9* sceneSurface = nullptr;
+        D3DSURFACE_DESC desc{};
+        if (FAILED(scene->GetSurfaceLevel(0, &sceneSurface)) || !sceneSurface || FAILED(sceneSurface->GetDesc(&desc)))
+        {
+            SAFE_RELEASE(sceneSurface);
+            return false;
+        }
+        auto copy = GetSceneCopy(device, desc);
+        if (!copy)
+        {
+            sceneSurface->Release();
+            return false;
+        }
+
+        auto width = static_cast<float>(desc.Width);
+        auto height = static_cast<float>(desc.Height);
+        float texelSize[4] = { 1.0f / width, 1.0f / height, width, height };   // TexelSize, c76
+        float oldTexelSize[4]{};
+        device->GetPixelShaderConstantF(76, oldTexelSize, 1);
+
+        bInternalDraw = true;
+        {
+            StateBackup backup(device);
+            SamplerBackup sampler2(device, 2);
+            device->SetRenderTarget(0, copy);
+            for (DWORD i = 1; i < 4; ++i)
+                device->SetRenderTarget(i, nullptr);
+            device->SetDepthStencilSurface(nullptr);
+            SetFullscreenStates(device);
+            BindSampler(device, 0, gbuffer2->mD3DTexture, D3DTEXF_POINT);
+            // The filter reads its neighbours half a texel off, two texels at once
+            BindSampler(device, 2, scene, D3DTEXF_LINEAR);
+            device->SetPixelShader(filter);
+            device->SetPixelShaderConstantF(76, texelSize, 1);
+            DrawFullscreen(device, width, height);
+            device->SetPixelShaderConstantF(76, oldTexelSize, 1);
+        }
+        bInternalDraw = false;
+
+        device->StretchRect(copy, nullptr, sceneSurface, nullptr, D3DTEXF_POINT);
+        sceneSurface->Release();
+        StippleFrame = SceneFrame;
+        return true;
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // DLAA and FSR
 
     static inline uint32_t UpscalerFrame = 0;             // SceneFrame of the last upscaled frame
@@ -1416,9 +1721,26 @@ public:
 public:
     // ---------------------------------------------------------------------------------------------
     // Resolve, called by PostFX on the HDR scene before any other post processing. Writes the result
-    // into output (texture and its surface) and returns true, or leaves it untouched.
+    // into output (texture and its surface) and returns true, or leaves it untouched. The rain goes into whichever
+    // the caller shows.
 
     static bool Resolve(IDirect3DDevice9* device, IDirect3DTexture9* scene, IDirect3DTexture9* outputTexture, IDirect3DSurface9* output)
+    {
+        if (ResolveScene(device, scene, outputTexture, output))
+        {
+            AddRain(output, true);
+            return true;
+        }
+
+        IDirect3DSurface9* sceneSurface = nullptr;
+        if (RainFrame == TemporalAA::SceneFrame && scene && SUCCEEDED(scene->GetSurfaceLevel(0, &sceneSurface)))
+            AddRain(sceneSurface, false);
+        SAFE_RELEASE(sceneSurface);
+        return false;
+    }
+
+private:
+    static bool ResolveScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, IDirect3DTexture9* outputTexture, IDirect3DSurface9* output)
     {
         using namespace TemporalAA;
 
@@ -1529,6 +1851,7 @@ public:
         return true;
     }
 
+public:
     static bool IsCameraCut()
     {
         using namespace TemporalAA;
@@ -1566,6 +1889,7 @@ public:
             bReactiveMask = iniReader.ReadInteger("TEMPORAL", "ReactiveMask", 1) != 0;
             fReactiveScale = std::clamp(iniReader.ReadFloat("TEMPORAL", "ReactiveMaskScale", 2.0f), 0.0f, 64.0f);
             fReactiveMax = std::clamp(iniReader.ReadFloat("TEMPORAL", "ReactiveMaskMaximum", 0.75f), 0.0f, 1.0f);
+            bRainLayer = iniReader.ReadInteger("TEMPORAL", "RainAfterAntialiasing", 1) != 0;
 
             GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&Resolve, &hm);
 
@@ -1600,6 +1924,11 @@ public:
             pattern = hook::pattern("51 56 8B F1 83 7E 34 00");
             if (!pattern.empty())
                 AddToDrawListHook<4>::hook = safetyhook::create_inline(pattern.get_first(0), AddToDrawListHook<4>::AddToDrawList);
+
+            // CRain::Render, called by the visual effects' draw list callback
+            pattern = hook::pattern("55 8B EC 83 E4 F0 83 EC 6C B9 ? ? ? ? 56 FF 35");
+            if (!pattern.empty())
+                shRenderRain = safetyhook::create_inline(pattern.get_first(0), RenderRain);
 
             FusionFixSettings.SetAvailability("PREF_ANTIALIASING", [](int32_t value) -> bool
             {
@@ -1643,6 +1972,11 @@ public:
             FusionFix::onAfterEndScene() += []()
             {
                 ++PresentFrame;
+            };
+
+            FusionFix::onBeforeReset() += []()
+            {
+                ReleaseSceneTargets();
             };
 
             CRenderPhaseDeferredLighting_SceneToGBuffer::OnBuildRenderList() += []()
@@ -1726,6 +2060,18 @@ export namespace TemporalAA
     bool IsSceneResolved()
     {
         return SceneFrame != 0 && Temporal::ResolveFrame == SceneFrame;
+    }
+
+    // PostFX's stipple filter on the scene at the render size, right before the resolve; false if it did not run
+    bool FilterStipple(IDirect3DTexture9* scene, IDirect3DPixelShader9* filter)
+    {
+        return Temporal::FilterStipple(scene, filter);
+    }
+
+    // The scene of this frame was filtered before the resolve
+    bool IsStippleFiltered()
+    {
+        return SceneFrame != 0 && Temporal::StippleFrame == SceneFrame;
     }
 
     // Called by PostFX right after the fog pass of the scene
