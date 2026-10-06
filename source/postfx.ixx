@@ -5208,9 +5208,13 @@ private:
         float exposure = rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0] * R.fVolumetricCloudsBrightness;
         if (exposure <= 0.0f)
             return skip("HDRExposure of the sky reads zero");
-        // The reflections' sky takes the timecycle's colours without the HDR exposure.
-        if (reflection)
+        // The reflection map's sky (the sky's 0x40000 branch) takes the timecycle's colours without the
+        // HDR exposure. The water's reflection draws its sky through the main branch, exposed as the
+        // scene's: with the reflection map's exposure its clouds came out some 30 times too dark, black.
+        if (reflection && reflectionSection != kProfCloudReflectionWater)
             exposure = R.fVolumetricCloudsBrightness * R.fVolumetricCloudsReflectionBrightness;
+        else if (reflection)
+            exposure *= R.fVolumetricCloudsReflectionBrightness;
         // The sky's SunDirection is y up; the world is z up.
         D3DXVECTOR4 sun(sunDirection[0], -sunDirection[2], sunDirection[1], 0.0f);
         const float sunLength = std::sqrt(sun.x * sun.x + sun.y * sun.y + sun.z * sun.z);
