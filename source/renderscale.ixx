@@ -34,6 +34,13 @@ import upscaler;
 // - Post processing starts with the scene upscaled into a texture of the screen size, which then stands in for
 //   FullScreenCopy until the frame ends (see BeginPost in postfx.ixx).
 
+export namespace RenderScale
+{
+    // For a trace (PostFX's SSR trace sets it): every depth buffer the hooks put in the game's place and every clear
+    // of a depth buffer, with the depth buffer, the bound target 0 and the clear flags (0 for a swap).
+    inline void (*TraceDepth)(const char* what, IDirect3DSurface9* depth, IDirect3DSurface9* target, DWORD flags) = nullptr;
+}
+
 namespace
 {
     float fScale = 1.0f;             // of the targets the game creates, decided at their first one
@@ -254,11 +261,15 @@ namespace
             {
                 SceneDepth = ds.surface;
                 BindDepth(device, FullDepth);
+                if (RenderScale::TraceDepth)
+                    RenderScale::TraceDepth("full size depth in for the scene's", SceneDepth, BoundTarget.surface, 0);
             }
         }
         else if (ds.surface == FullDepth && IsRenderSize(rtWidth, rtHeight) && SceneDepth)
         {
             BindDepth(device, SceneDepth);
+            if (RenderScale::TraceDepth)
+                RenderScale::TraceDepth("scene's depth back in for the full size one", SceneDepth, BoundTarget.surface, 0);
         }
     }
 
@@ -292,10 +303,14 @@ namespace
     {
         auto hr = RealClear(device, count, rects, flags, color, z, stencil);
         auto depthFlags = flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL);
+        if (depthFlags && RenderScale::TraceDepth)
+            RenderScale::TraceDepth(count ? "clear of part of" : "clear of", DepthBound(device).surface, BoundTarget.surface, flags);
         if (bActive && depthFlags && count == 0 && FullDepth && SceneDepth && DepthBound(device).surface == FullDepth)
         {
             RealSetDepthStencilSurface(device, SceneDepth);
             RealClear(device, 0, nullptr, depthFlags, 0, z, stencil);
+            if (RenderScale::TraceDepth)
+                RenderScale::TraceDepth("clear passed on to the scene's depth", SceneDepth, BoundTarget.surface, depthFlags);
             RealSetDepthStencilSurface(device, FullDepth);
         }
         return hr;
