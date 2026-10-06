@@ -980,7 +980,7 @@ namespace
                 return false;
             device.wine = (flags & Protocol::ConfigureFlags::Wine) != 0;
             OpenGameFence();
-            device.cpuSync = device.wine && !(flags & Protocol::ConfigureFlags::GameFence);
+            device.cpuSync = (device.wine && !(flags & Protocol::ConfigureFlags::GameFence)) || (flags & Protocol::ConfigureFlags::CpuSync);
 
             using T = Protocol::Texture;
             if (!device.CreateTexture(T::Color, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, false) ||

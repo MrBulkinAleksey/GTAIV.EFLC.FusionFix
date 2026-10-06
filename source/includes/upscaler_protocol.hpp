@@ -94,6 +94,7 @@ namespace UpscalerProtocol
         constexpr uint32_t GameFence = 1 << 2;      // FenceHandle is the game's semaphore; cleared by the helper if it can't open it
         constexpr uint32_t FrameGeneration = 1 << 3; // FSR frame generation; cleared by the helper if it can't create it
         constexpr uint32_t HighDynamicRange = 1 << 4; // Present is scRGB
+        constexpr uint32_t CpuSync = 1 << 5;         // both sides wait for their GPU work on the CPU, as under Wine without GameFence
     }
 
 #pragma pack(push, 8)

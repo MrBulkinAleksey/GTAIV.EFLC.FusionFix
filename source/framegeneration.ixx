@@ -72,6 +72,8 @@ namespace
         constexpr int32_t FsrIndicators = 8192; // FSR marks its resets and draws tear lines on the generated frames
         constexpr int32_t PeriodicReset = 16384; // a reset of the frame generation every 120 frames, which also clears
                                                  // the scene change detection of FSR's optical flow
+        constexpr int32_t CpuSync = 32768;      // the upscaler and the frame generation sync with the helper on the CPU,
+                                                // also with the frame generation off
     }
     int32_t nDebug = 0;
 
@@ -1026,6 +1028,12 @@ export namespace FrameGeneration
         if (nDebug & Debug::FsrDebugView)
             flags |= 4u;
         return mode != Mode::Off ? flags : 0u;
+    }
+
+    // The game and the helper wait for each other's GPU work on the CPU (Debug::CpuSync)
+    bool ForceCpuSync()
+    {
+        return (nDebug & Debug::CpuSync) != 0;
     }
 
     // The frame before the HUD will be captured: tells Evaluate, which comes earlier in the frame

@@ -113,7 +113,8 @@ namespace
         virtual bool PrepareGameFence(Protocol::Shared& shared, HANDLE helperProcess) { return false; }
         // Opens the shared textures and the fence of a configuration, and closes their handles
         virtual bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) = 0;
-        bool WaitOnCpu() const { return wine && !gameFence; }
+        bool cpuSync = false;         // ConfigureFlags::CpuSync: waited for on the CPU whatever the fence
+        bool WaitOnCpu() const { return (wine && !gameFence) || cpuSync; }
         virtual void ReleaseImports() = 0;
         // Game textures -> shared textures, then the fence reaches signalValue. Null inputs are skipped.
         virtual bool SubmitInputs(const Textures& inputs, uint64_t signalValue) = 0;
@@ -1327,6 +1328,7 @@ export namespace Upscaler
         bool HighDynamicRange = false;    // the frame given to Generate is scRGB
         bool HudLess = false;             // Generate of this frame comes with the frame before the HUD
         uint32_t DebugFlags = 0;          // FfxApiDispatchFramegenerationFlags for the frame generation's own debug drawing
+        bool CpuSync = false;             // wait for the GPU work of both sides on the CPU instead of on the GPU
         float CameraPosition[3]{};        // world space
         float CameraUp[3]{};
         float CameraRight[3]{};
@@ -1422,6 +1424,9 @@ export namespace Upscaler
         auto flags = frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u;
         if (bridge->wine)
             flags |= Protocol::ConfigureFlags::Wine;
+        // D3D9on12 always waits on the GPU
+        if (frame.CpuSync && bridge == &dxvkBridge)
+            flags |= Protocol::ConfigureFlags::CpuSync;
         if (frame.FrameGeneration && frameGenerationAvailable)
             flags |= Protocol::ConfigureFlags::FrameGeneration | (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : 0u);
         auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
@@ -1462,6 +1467,9 @@ export namespace Upscaler
                 return false;
             }
             bridge->gameFence = (shared.Flags & Protocol::ConfigureFlags::GameFence) != 0;
+            bridge->cpuSync = (flags & Protocol::ConfigureFlags::CpuSync) != 0;
+            if (bridge->cpuSync)
+                Log("Synchronization: on the CPU, as asked");
             if (bridge->wine)
                 Log("Synchronization: %s", bridge->gameFence ? "the game's semaphore, on the GPU" : "on the CPU");
             if ((flags & Protocol::ConfigureFlags::FrameGeneration) && !(shared.Flags & Protocol::ConfigureFlags::FrameGeneration))
