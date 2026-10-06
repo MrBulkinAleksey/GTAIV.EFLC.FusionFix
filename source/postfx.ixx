@@ -53,6 +53,7 @@ import temporal;
 #define IDR_SSR_FX                               136
 #define IDR_CAS                                  137
 #define IDR_CLOUDS_FX                            138
+#define IDR_WETGROUND_FX                         139
 
 #define IDR_SSDraw_PS_compiled                   2127
 #define IDR_SSPrepass_PS_compiled                2128
@@ -436,6 +437,20 @@ public:
     float fLightsGGXFillLights = 0.5f;
     float fLightsGGXSun = 1.0f;
     float fLightsGGXEnvironment = 1.0f;
+    // Wet ground (WetGround.fx): WetGround the strength, 0 off. WetGroundPuddles the share of flat
+    // ground under water at full wetness, WetGroundPuddleSize the metres one tile of the puddle map
+    // takes, WetGroundRipples the rain's rings in them, WetGroundDarkening how much darker wet
+    // surfaces turn. WetGroundMaterials a bit per material category (the material ID less its 128 and
+    // 8 bits) that gets wet; WetGroundDebug 1 shows the categories, 2 wetness, puddles and rings.
+    float fWetGround = 1.0f;
+    float fWetGroundPuddles = 0.35f;
+    float fWetGroundPuddleSize = 24.0f;
+    float fWetGroundRipples = 1.0f;
+    float fWetGroundDarkening = 1.0f;
+    float fWetGroundWetting = 30.0f;
+    float fWetGroundDrying = 240.0f;
+    int nWetGroundMaterials = 1;
+    int nWetGroundDebug = 0;
     // c206 as last set for a light, so lights of the same shape set nothing.
     float LightGGXShape[4] = {};
     // Cloud shadows on the ground (c197.y-w, c198, c199, s12; deferred_lighting_sun_under_clouds.patch):
@@ -544,6 +559,26 @@ public:
     static constexpr float kCloudWeatherScale = 0.08f;
     void UpdateCloudLayer(double seconds);
     ID3DXEffect* CloudsEffect = nullptr;
+    // Wet ground in the rain (WetGround.fx, RenderWetGround): copies of _DEFERRED_GBUFFER_0_ to _2_,
+    // made afresh at the G-buffer's size and format whenever those change, which the pass reads
+    // while it writes the G-buffer.
+    ID3DXEffect* WetGroundEffect = nullptr;
+    HRESULT hrWetGroundEffect = S_OK;
+    IDirect3DTexture9* WetCopyTex[3] = {};
+    IDirect3DSurface9* WetCopySurf[3] = {};
+    // How wet the world is, 0..1: rises with the rain over WetGroundWetting seconds and dries over
+    // WetGroundDrying once it stops; the time it was last brought up to date, in game seconds.
+    float fWetness = 0.0f;
+    double fWetnessTime = -1.0;
+    const char* szWetGroundStatus = "not run yet";
+    void ReleaseWetCopies()
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            SAFE_RELEASE(WetCopySurf[i]);
+            SAFE_RELEASE(WetCopyTex[i]);
+        }
+    }
     // The clouds at half the render size: [0] this frame's march, [1] and [2] the accumulation,
     // which swap every frame; nCloudAccumIndex picks last frame's ([1 + index]).
     rage::grcRenderTargetPC* CloudTex[3] = {};
@@ -1287,6 +1322,23 @@ public:
             }
         }
 
+        // Like the clouds: without it the ground stays dry.
+        static bool wetGroundEffectTried = false;
+        if (!WetGroundEffect && !wetGroundEffectTried)
+        {
+            wetGroundEffectTried = true;
+            ID3DXBuffer* errors = nullptr;
+            hrWetGroundEffect = D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
+                hm, MAKEINTRESOURCEW(IDR_WETGROUND_FX), nullptr, nullptr, 0, nullptr, &WetGroundEffect, &errors);
+            if (hrWetGroundEffect != S_OK)
+            {
+                WetGroundEffect = nullptr;
+                if (errors)
+                    MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
+            }
+            SAFE_RELEASE(errors);
+        }
+
         // Not in ShadersFinishedLoading: without it the sky keeps only the game's clouds. Tried once,
         // so a build error shows one message, not one a frame.
         static bool cloudsEffectTried = false;
@@ -1428,6 +1480,15 @@ public:
         fLightsGGXFillLights = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXFillLights", 0.5f), 0.0f, 2.0f);
         fLightsGGXSun = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSun", 1.0f), 0.0f, 4.0f);
         fLightsGGXEnvironment = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXEnvironment", 1.0f), 0.0f, 1.0f);
+        fWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "WetGround", 1.0f), 0.0f, 1.0f);
+        fWetGroundPuddles = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddles", 0.35f), 0.0f, 1.0f);
+        fWetGroundPuddleSize = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddleSize", 24.0f), 2.0f, 500.0f);
+        fWetGroundRipples = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundRipples", 1.0f), 0.0f, 3.0f);
+        fWetGroundDarkening = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundDarkening", 1.0f), 0.0f, 2.0f);
+        fWetGroundWetting = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundWetting", 30.0f), 0.0f, 3600.0f);
+        fWetGroundDrying = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundDrying", 240.0f), 0.0f, 3600.0f);
+        nWetGroundMaterials = iniReader.ReadInteger("POSTFX", "WetGroundMaterials", 1) & 0xFF;
+        nWetGroundDebug = std::clamp(iniReader.ReadInteger("POSTFX", "WetGroundDebug", 0), 0, 2);
         fCloudShadows = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadows", 0.6f), 0.0f, 1.0f);
         fCloudShadowsHeight = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsHeight", 1200.0f), 100.0f, 10000.0f);
         fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 16000.0f), 100.0f, 50000.0f);
@@ -2568,6 +2629,9 @@ private:
             PostFxResources.SSREffect->OnLostDevice();
         if (PostFxResources.CloudsEffect)
             PostFxResources.CloudsEffect->OnLostDevice();
+        if (PostFxResources.WetGroundEffect)
+            PostFxResources.WetGroundEffect->OnLostDevice();
+        PostFxResources.ReleaseWetCopies();
         ReleaseProfiler();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
@@ -2661,6 +2725,8 @@ private:
             PostFxResources.SSREffect->OnResetDevice();
         if (PostFxResources.CloudsEffect)
             PostFxResources.CloudsEffect->OnResetDevice();
+        if (PostFxResources.WetGroundEffect)
+            PostFxResources.WetGroundEffect->OnResetDevice();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             SAFE_RELEASE(PostFxResources.AOCamDepthSurf[i]);
@@ -2831,7 +2897,11 @@ private:
 
         OnDeviceReset();
 
-        TemporalAA::OnGBufferEnd = [](IDirect3DDevice9* device) { CopySceneDepth(device); };
+        TemporalAA::OnGBufferEnd = [](IDirect3DDevice9* device)
+        {
+            CopySceneDepth(device);
+            RenderWetGround(device);
+        };
         RenderScale::TraceDepth = [](const char* what, IDirect3DSurface9* depth, IDirect3DSurface9* target, DWORD flags)
         {
             if (SSRTrace::Active())
@@ -2840,6 +2910,191 @@ private:
         };
 
         initialized = true;
+    }
+
+    // Wet ground (WetGround.fx), right after CopySceneDepth at the end of the G-buffer pass: copies
+    // _DEFERRED_GBUFFER_0_ to _2_ and draws them back wet, darker and glossier, with puddles and the
+    // rain's rings, before any light reads them. Only while anything is wet; the wetness follows
+    // CWeather::Rain (0.3 drizzle, 0.7 rain, 1.0 a storm) up over WetGroundWetting seconds and down
+    // over WetGroundDrying. Leaves the device as it found it.
+    static void RenderWetGround(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        auto skip = [&](const char* why) { R.szWetGroundStatus = why; };
+
+        // The wetness, in game time, so it stands still while the game is paused.
+        const double seconds = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds * 0.001 : 0.0;
+        const float rain = CWeather::Rain ? std::clamp(*CWeather::Rain / 0.7f, 0.0f, 1.0f) : 0.0f;
+        {
+            const bool first = R.fWetnessTime < 0.0;
+            const double dt = first ? 0.0 : std::clamp(seconds - R.fWetnessTime, 0.0, 1.0);
+            R.fWetnessTime = seconds;
+            if (first)
+                R.fWetness = rain; // a game started or loaded in the rain starts wet
+            else if (rain > R.fWetness)
+                R.fWetness = R.fWetGroundWetting > 0.0f ? (std::min)(rain, R.fWetness + float(dt) / R.fWetGroundWetting) : rain;
+            else
+                R.fWetness = R.fWetGroundDrying > 0.0f ? (std::max)(rain, R.fWetness - float(dt) / R.fWetGroundDrying) : rain;
+        }
+
+        if (R.fWetGround <= 0.0f)
+            return skip("off in the ini");
+        if (!R.WetGroundEffect)
+            return skip("no effect");
+        if (R.fWetness <= 0.0f && R.nWetGroundDebug != 1)
+            return skip("dry");
+        if (!pDevice || !R.mDiffuseRT || !R.mNormalRT || !R.mSpecularRT || !R.mMaterialIdRT || !R.mDiffuseRT->mD3DTexture ||
+            !R.mNormalRT->mD3DTexture || !R.mSpecularRT->mD3DTexture || !R.mMaterialIdRT->mD3DTexture)
+            return skip("no G-buffer");
+        auto noise = R.CloudNoiseTex();
+        if (!noise)
+            return skip("no noise texture");
+        rage::grcViewport* vp = rage::GetCurrentViewport();
+        if (!vp)
+            return skip("no viewport");
+
+        // The G-buffer's surfaces, and copies of them at their size and format.
+        IDirect3DTexture9* gbuffer[3] = { R.mDiffuseRT->mD3DTexture, R.mNormalRT->mD3DTexture, R.mSpecularRT->mD3DTexture };
+        IDirect3DSurface9* gbufferSurf[3] = {};
+        D3DSURFACE_DESC desc[3] = {};
+        bool ok = true;
+        for (int i = 0; i < 3 && ok; ++i)
+            ok = SUCCEEDED(gbuffer[i]->GetSurfaceLevel(0, &gbufferSurf[i])) && SUCCEEDED(gbufferSurf[i]->GetDesc(&desc[i]));
+        for (int i = 0; i < 3 && ok; ++i)
+        {
+            D3DSURFACE_DESC copyDesc = {};
+            if (R.WetCopySurf[i] && SUCCEEDED(R.WetCopySurf[i]->GetDesc(&copyDesc)) &&
+                (copyDesc.Width != desc[i].Width || copyDesc.Height != desc[i].Height || copyDesc.Format != desc[i].Format))
+            {
+                SAFE_RELEASE(R.WetCopySurf[i]);
+                SAFE_RELEASE(R.WetCopyTex[i]);
+            }
+            if (!R.WetCopyTex[i])
+                ok = SUCCEEDED(pDevice->CreateTexture(desc[i].Width, desc[i].Height, 1, D3DUSAGE_RENDERTARGET, desc[i].Format,
+                                                      D3DPOOL_DEFAULT, &R.WetCopyTex[i], nullptr)) &&
+                     SUCCEEDED(R.WetCopyTex[i]->GetSurfaceLevel(0, &R.WetCopySurf[i]));
+            if (ok)
+                ok = SUCCEEDED(pDevice->StretchRect(gbufferSurf[i], nullptr, R.WetCopySurf[i], nullptr, D3DTEXF_NONE));
+        }
+        if (!ok)
+        {
+            for (auto& surf : gbufferSurf)
+                SAFE_RELEASE(surf);
+            return skip("could not copy the G-buffer");
+        }
+        R.szWetGroundStatus = "drawn";
+
+        ID3DXEffect* effect = R.WetGroundEffect;
+        const float width = float(desc[0].Width), height = float(desc[0].Height);
+        const D3DMATRIX& proj = *(const D3DMATRIX*)vp->mProjectionMatrix;
+        const D3DXVECTOR4 projInfo = ProjInfo(proj, width, height);
+        effect->SetVector("vec4ProjInfo", &projInfo);
+        effect->SetFloat("fNearPlane", vp->mNearClip);
+        effect->SetFloat("fFarDivNear", vp->mFarClip / vp->mNearClip);
+        {
+            const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+            D3DXVECTOR4 toView[3];
+            WorldToViewRows(vp, toView);
+            const D3DXVECTOR4 worldX(toView[0].x, toView[1].x, toView[2].x, viewInv.m[3][0]);
+            const D3DXVECTOR4 worldY(toView[0].y, toView[1].y, toView[2].y, viewInv.m[3][1]);
+            const D3DXVECTOR4 worldZ(toView[0].z, toView[1].z, toView[2].z, viewInv.m[3][2]);
+            effect->SetVector("vec4WorldX", &worldX);
+            effect->SetVector("vec4WorldY", &worldY);
+            effect->SetVector("vec4WorldZ", &worldZ);
+        }
+        // The rings' clock wraps every 1000 s, where a frame's jump goes unseen among the rings.
+        const D3DXVECTOR4 wet(R.fWetness * R.fWetGround, R.fWetGroundPuddles, rain, float(std::fmod(seconds, 1000.0)));
+        effect->SetVector("vec4Wet", &wet);
+        const D3DXVECTOR4 shape(1.0f / R.fWetGroundPuddleSize, R.fWetGroundRipples, 25.0f, R.fWetGroundDarkening);
+        effect->SetVector("vec4Shape", &shape);
+        const int mask = R.nWetGroundMaterials;
+        const D3DXVECTOR4 allow0(float(mask & 1), float((mask >> 1) & 1), float((mask >> 2) & 1), float((mask >> 3) & 1));
+        const D3DXVECTOR4 allow1(float((mask >> 4) & 1), float((mask >> 5) & 1), float((mask >> 6) & 1), float((mask >> 7) & 1));
+        effect->SetVector("vec4Allow0", &allow0);
+        effect->SetVector("vec4Allow1", &allow1);
+        effect->SetFloat("fDebug", float(R.nWetGroundDebug));
+
+        // Saved besides what StateBackup keeps around OnGBufferEnd: the textures, sampler states and
+        // constants the pass sets.
+        static constexpr DWORD kSlots = 6;
+        static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER,
+                                                                   D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
+        IDirect3DBaseTexture9* oldTextures[kSlots] = {};
+        DWORD savedSamplerStates[kSlots][std::size(kSamplerStates)] = {};
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+        {
+            pDevice->GetTexture(slot, &oldTextures[slot]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                pDevice->GetSamplerState(slot, kSamplerStates[i], &savedSamplerStates[slot][i]);
+        }
+        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        DWORD colorWrite[3] = {};
+        pDevice->GetRenderState(D3DRS_COLORWRITEENABLE1, &colorWrite[1]);
+        pDevice->GetRenderState(D3DRS_COLORWRITEENABLE2, &colorWrite[2]);
+
+        static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kStates[] =
+        {
+            { D3DRS_ZENABLE, FALSE }, { D3DRS_ZWRITEENABLE, FALSE }, { D3DRS_ALPHABLENDENABLE, FALSE }, { D3DRS_ALPHATESTENABLE, FALSE },
+            { D3DRS_STENCILENABLE, FALSE }, { D3DRS_CULLMODE, D3DCULL_NONE }, { D3DRS_COLORWRITEENABLE, 0x0F },
+            { D3DRS_SCISSORTESTENABLE, FALSE }, { D3DRS_SRGBWRITEENABLE, FALSE }, { D3DRS_FILLMODE, D3DFILL_SOLID },
+            { D3DRS_CLIPPLANEENABLE, 0 }, { D3DRS_FOGENABLE, FALSE },
+        };
+        for (auto [state, value] : kStates)
+            pDevice->SetRenderState(state, value);
+        pDevice->SetRenderState(D3DRS_COLORWRITEENABLE1, 0x0F);
+        pDevice->SetRenderState(D3DRS_COLORWRITEENABLE2, 0x0F);
+        for (DWORD i = 0; i < 3; ++i)
+            pDevice->SetRenderTarget(i, gbufferSurf[i]);
+        pDevice->SetRenderTarget(3, nullptr);
+        pDevice->SetDepthStencilSurface(nullptr);
+        D3DVIEWPORT9 viewport = { 0, 0, desc[0].Width, desc[0].Height, 0.0f, 1.0f };
+        pDevice->SetViewport(&viewport);
+        pDevice->SetVertexShader(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+
+        UINT passes = 0;
+        effect->SetTechnique("Wet");
+        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
+        effect->BeginPass(0);
+        effect->CommitChanges();
+        IDirect3DBaseTexture9* textures[kSlots] = { LightingDepth(), R.WetCopyTex[0], R.WetCopyTex[1], R.WetCopyTex[2],
+                                                    R.mMaterialIdRT->mD3DTexture, noise };
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+        {
+            const bool wrap = slot == 5;
+            SetTextureBoth(pDevice, slot, textures[slot]);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSU, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSV, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_MAGFILTER, wrap ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_MINFILTER, wrap ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_MIPFILTER, wrap ? D3DTEXF_LINEAR : D3DTEXF_NONE);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_SRGBTEXTURE, FALSE);
+        }
+        BindEffectConstantsOnly(pDevice, effect);
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        const ScreenVertex quad[4] =
+        {
+            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,         height - 0.5f,  0.0f, 1.0f, 0.0f, 1.0f },
+            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
+            { width - 0.5f,  height - 0.5f,  0.0f, 1.0f, 1.0f, 1.0f },
+        };
+        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(ScreenVertex));
+        effect->EndPass();
+        effect->End();
+
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+        {
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
+            SAFE_RELEASE(oldTextures[slot]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                SetSamplerStateBoth(pDevice, slot, kSamplerStates[i], savedSamplerStates[slot][i]);
+        }
+        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->SetRenderState(D3DRS_COLORWRITEENABLE1, colorWrite[1]);
+        pDevice->SetRenderState(D3DRS_COLORWRITEENABLE2, colorWrite[2]);
+        for (auto& surf : gbufferSurf)
+            SAFE_RELEASE(surf);
     }
 
     // At the end of the G-buffer pass (TemporalAA::OnGBufferEnd, the device state saved around it): this frame's
@@ -5675,6 +5930,9 @@ private:
                 fprintf(log, "  s12 before the shadows: srgb %lu  max mip %lu  min filter %lu  lod bias %.3f\n",
                         static_cast<unsigned long>(R.CloudSamplerBefore[0]), static_cast<unsigned long>(R.CloudSamplerBefore[1]),
                         static_cast<unsigned long>(R.CloudSamplerBefore[2]), std::bit_cast<float>(R.CloudSamplerBefore[3]));
+                fprintf(log, "  wet ground: %s; effect %s (hr 0x%08lX); wetness %.3f, rain %.3f, materials 0x%02X, debug %d\n",
+                        R.szWetGroundStatus, R.WetGroundEffect ? "built" : "missing", static_cast<unsigned long>(R.hrWetGroundEffect), R.fWetness,
+                        CWeather::Rain ? *CWeather::Rain : -1.0f, unsigned(R.nWetGroundMaterials), R.nWetGroundDebug);
                 fprintf(log, "  volumetric clouds: %s; effect %s (hr 0x%08lX); shadows follow them %d; HDRExposure %.3f; CloudColor %.3f %.3f %.3f; "
                              "SunsetColor %.3f %.3f %.3f; CloudInscatteringRange %.3f; SunDirection %.3f %.3f %.3f; SkyColor %.3f %.3f %.3f; MoonPosition %.3f %.3f %.3f\n",
                         R.szCloudsStatus, R.CloudsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrCloudsEffect), int(R.VolumetricCloudsOn()),
