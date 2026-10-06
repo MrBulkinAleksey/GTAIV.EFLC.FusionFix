@@ -10,6 +10,9 @@ module;
 #include <cstring>
 #include <mutex>
 #include <random>
+#include <regex>
+#include <array>
+#include <unordered_map>
 
 export module postfx;
 
@@ -86,6 +89,51 @@ bool IsPostFxAA()
     return aa == FusionFixSettings.AntialiasingText.eFXAA || (aa == FusionFixSettings.AntialiasingText.eSMAA && IsSMAASupported());
 }
 
+// Binding through both the game's device wrapper and the real device: see RageDirect3DDevice9::SetTextureBoth. SSGI's
+// accumulation read the G-buffer normals as its depth while the right depth was "bound" through the wrapper alone.
+using RageDirect3DDevice9::RealDevice;
+using RageDirect3DDevice9::SetTextureBoth;
+using RageDirect3DDevice9::SetSamplerStateBoth;
+
+// The sampler states SSR.fx declares (MinFilter, MagFilter, MipFilter, AddressU, AddressV), read from its source once
+// it is created: D3DX put them on its own registers too, and the trace showed samplers declared without a filter
+// (SpecularTex, NormalTex) filtered linearly in some passes. Undeclared states are point and clamp, as
+// kSSRSamplerStates leaves them.
+using SamplerStates = std::array<DWORD, 5>;
+static std::unordered_map<std::string, SamplerStates> SSRSamplerStates;
+
+static void ReadSamplerStates(HMODULE hm, int resource, std::unordered_map<std::string, SamplerStates>& out)
+{
+    out.clear();
+    HRSRC info = FindResourceW(hm, MAKEINTRESOURCEW(resource), RT_RCDATA);
+    HGLOBAL data = info ? LoadResource(hm, info) : nullptr;
+    const char* text = data ? static_cast<const char*>(LockResource(data)) : nullptr;
+    if (!text)
+        return;
+    const std::string source(text, SizeofResource(hm, info));
+    auto lower = [](std::string v) { for (auto& ch : v) ch = char(std::tolower(static_cast<unsigned char>(ch))); return v; };
+    static const std::regex block(R"(sampler2D\s+(\w+)\s*\{([^}]*)\})");
+    static const std::regex assign(R"((\w+)\s*=\s*(\w+)\s*;)");
+    for (std::sregex_iterator it(source.begin(), source.end(), block), end; it != end; ++it)
+    {
+        SamplerStates st = { D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP };
+        const std::string body = (*it)[2];
+        for (std::sregex_iterator a(body.begin(), body.end(), assign); a != end; ++a)
+        {
+            const std::string key = lower((*a)[1]), value = lower((*a)[2]);
+            const DWORD filter = value == "linear" ? D3DTEXF_LINEAR : value == "none" ? D3DTEXF_NONE : D3DTEXF_POINT;
+            const DWORD address = value == "wrap" ? D3DTADDRESS_WRAP : value == "mirror" ? D3DTADDRESS_MIRROR : value == "border" ? D3DTADDRESS_BORDER : D3DTADDRESS_CLAMP;
+            if (key == "minfilter") st[0] = filter;
+            else if (key == "magfilter") st[1] = filter;
+            else if (key == "mipfilter") st[2] = filter;
+            else if (key == "addressu") st[3] = address;
+            else if (key == "addressv") st[4] = address;
+        }
+        out[(*it)[1]] = st;
+    }
+}
+
+
 class PostFxResource
 {
 public:
@@ -146,6 +194,11 @@ public:
 
     // Pre alpha pass depth texture copy
     rage::grcRenderTargetPC* PreAlphaDepthCopyRT = nullptr;
+    // This frame's depth at the render size, copied at the end of the G-buffer pass (CopySceneDepth) for the passes
+    // of the lighting phase, see LightingDepth; the frame it was copied in.
+    rage::grcRenderTargetPC* SceneDepthTex = nullptr;
+    IDirect3DSurface9* SceneDepthSurf = nullptr;
+    uint32_t nSceneDepthFrame = 0;
 
     //-------- half resolution screen --------------
     rage::grcRenderTargetPC* FullScreenDownsampleTex = nullptr; // main downsampled texture
@@ -278,7 +331,7 @@ public:
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
-        D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
+        D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
         D3DXHANDLE SceneTex2D, SkinIDTex2D, SkinLightTex2D, vec4SkinStep, fSkinStrength;
         D3DXHANDLE techSkinLight, techSkinScatter, techSkinScatterFinal, techSkinDebug;
     } SSREffectHandles = {};
@@ -306,6 +359,8 @@ public:
     // shows the lighting whatever another shader left there.
     static bool SSGIEnabled() { static auto p = FusionFixSettings.GetRef("PREF_SSGI"); return p && p->get() != 0; }
     static constexpr int kGIDebugMode = 8;
+    // What the accumulation of indirect light does with each pixel, see GIHistoryDebug in SSR.fx.
+    static constexpr int kGIHistoryDebugMode = 10;
     float fGIIntensity = 1.5f;
     float fGIMaxBrightness = 4.0f;
     // How much of the ambient the indirect light takes the place of where its rays hit (alpha of
@@ -392,18 +447,18 @@ public:
     float fVolumetricCloudsThickness = 600.0f;
     float fVolumetricCloudsDensity = 0.03f;
     float fVolumetricCloudsDetail = 0.6f;
-    float fVolumetricCloudsDetailScale = 2000.0f;
+    float fVolumetricCloudsDetailScale = 1300.0f;
     float fVolumetricCloudsHaze = 25000.0f;
     float fVolumetricCloudsMaxDistance = 40000.0f;
     float fVolumetricCloudsBrightness = 1.0f;
-    float fVolumetricCloudsSunTint = 0.3f;
+    float fVolumetricCloudsSunTint = 0.6f;
     // The moon's light on the clouds once the sun is down, against the sun's; and how much the
     // clouds' shaded side takes the hue of the sky above it.
     float fVolumetricCloudsMoonlight = 0.2f;
     float fVolumetricCloudsSkyLight = 0.5f;
     // The least of the sun's light any part of a cloud keeps, however deep in its shadow: lighter,
     // airier bases than the light's march alone gives.
-    float fVolumetricCloudsMinLight = 0.35f;
+    float fVolumetricCloudsMinLight = 0.25f;
     // The clouds' sunlit side against the sky behind them, in times its brightness.
     float fVolumetricCloudsSkyMatch = 2.0f;
     bool bVolumetricCloudsWeather = true;
@@ -411,10 +466,11 @@ public:
     float fVolumetricCloudsTranslucency = 0.25f;
     float fVolumetricCloudsEvolution = 1.0f;
     float fVolumetricCloudsSaturation = 1.0f;
+    float fVolumetricCloudsMottle = 0.4f;
     // The shaded side and the bases against the game's cloud colour, and how much of the view's
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
-    float fVolumetricCloudsShade = 0.75f;
-    float fVolumetricCloudsAbsorption = 0.5f;
+    float fVolumetricCloudsShade = 0.65f;
+    float fVolumetricCloudsAbsorption = 0.35f;
     int nVolumetricCloudsDebug = 0;
     // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
     bool bVolumetricCloudsReflections = true;
@@ -436,8 +492,11 @@ public:
         // The clouds' brightness against VolumetricCloudsSkyMatch: overcast clouds are grey, not
         // brighter than the sky.
         float skyMatch;
+        // How softly the density rises inside a cloud, 0 to 1: at 1 the edges thin out into smoke
+        // over a deeper band (the density's compressor from 1 to 3 instead of 3 to 12).
+        float softness;
     };
-    CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f };
+    CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f, 0.0f };
     // How far the wind has carried the coverage and the detail, in tiles, and how far the detail
     // has drifted up through itself; summed frame by frame, as the wind changes with the weather.
     double fCloudDrift = 0.0, fCloudDetailDrift = 0.0, fCloudEvolution = 0.0, fCloudLastSeconds = -1.0;
@@ -1108,6 +1167,7 @@ public:
             }
             else
             {
+                ReadSamplerStates(hm, IDR_SSR_FX, SSRSamplerStates);
                 auto& h = SSREffectHandles;
                 h.DepthTex2D = SSREffect->GetParameterByName(nullptr, "DepthTex2D");
                 h.HistoryTex2D = SSREffect->GetParameterByName(nullptr, "HistoryTex2D");
@@ -1184,6 +1244,7 @@ public:
                 h.fGIMaxBrightness = SSREffect->GetParameterByName(nullptr, "fGIMaxBrightness");
                 h.techGIUpsample = SSREffect->GetTechniqueByName("GIUpsample");
                 h.AlbedoTex2D = SSREffect->GetParameterByName(nullptr, "AlbedoTex2D");
+                h.AlbedoLinearTex2D = SSREffect->GetParameterByName(nullptr, "AlbedoLinearTex2D");
                 h.GIPrevTex2D = SSREffect->GetParameterByName(nullptr, "GIPrevTex2D");
                 h.fGIFeedback = SSREffect->GetParameterByName(nullptr, "fGIFeedback");
                 h.fGIOcclusion = SSREffect->GetParameterByName(nullptr, "fGIOcclusion");
@@ -1345,22 +1406,23 @@ public:
         fVolumetricCloudsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsThickness", 600.0f), 50.0f, 5000.0f);
         fVolumetricCloudsDensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDensity", 0.03f), 0.0005f, 1.0f);
         fVolumetricCloudsDetail = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetail", 0.6f), 0.0f, 1.0f);
-        fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 2000.0f), 20.0f, 10000.0f);
+        fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 1300.0f), 20.0f, 10000.0f);
         fVolumetricCloudsHaze = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsHaze", 25000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
         fVolumetricCloudsBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBrightness", 1.0f), 0.0f, 4.0f);
-        fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.3f), 0.0f, 1.0f);
+        fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.6f), 0.0f, 1.0f);
         fVolumetricCloudsMoonlight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMoonlight", 0.2f), 0.0f, 2.0f);
         fVolumetricCloudsSkyLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyLight", 0.5f), 0.0f, 1.0f);
-        fVolumetricCloudsMinLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMinLight", 0.35f), 0.0f, 0.9f);
+        fVolumetricCloudsMinLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMinLight", 0.25f), 0.0f, 0.9f);
         fVolumetricCloudsSkyMatch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyMatch", 2.0f), 0.0f, 20.0f);
         bVolumetricCloudsWeather = iniReader.ReadInteger("POSTFX", "VolumetricCloudsWeather", 1) != 0;
         fVolumetricCloudsVanilla = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsVanilla", 0.0f), 0.0f, 1.0f);
         fVolumetricCloudsTranslucency = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsTranslucency", 0.25f), 0.0f, 0.9f);
         fVolumetricCloudsEvolution = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsEvolution", 1.0f), 0.0f, 10.0f);
         fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
-        fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.75f), 0.0f, 2.0f);
-        fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.5f), 0.05f, 3.0f);
+        fVolumetricCloudsMottle = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMottle", 0.4f), 0.0f, 1.0f);
+        fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.65f), 0.0f, 2.0f);
+        fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.35f), 0.05f, 3.0f);
         nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 15);
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
         fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
@@ -1756,22 +1818,27 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 // - how much brighter the cloud near the sun is, how fast they reshape against
 //   VolumetricCloudsEvolution, how round their bases' edges are (a threshold on the density, so a
 //   few tenths at most: at a half they took a fifth of the clouds away), and their brightness
-//   against VolumetricCloudsSkyMatch (in CLOUDY at 1 the clouds came out white on a dark sky).
-// Fair weather: broad heaps from 600 to 700 m up, wider than they are tall, ragged and see-through
-// at the edges, with bright rims, barely reshaping. Rain and storms: a low, thick, closed deck, an
+//   against VolumetricCloudsSkyMatch (in CLOUDY at 1 the clouds came out white on a dark sky), and
+//   how softly their density rises from the edges in (smoky edges in cloudy and windy weather).
+// The billows eat through the whole cloud, not only its edges, so it breaks into ragged pieces with
+// gaps; the wet and cloudy weathers' detail is half what it was before that, or their decks lost up
+// to a third of their cover and the rain's opened up.
+// Fair weather: heaps from 600 to 700 m up, ragged and see-through at the edges, with bright rims,
+// barely reshaping; their layer 900 to 1200 m thick, so they build up in towers of rounded lobes
+// (at 550 to 700 m they came out as broad flat loaves). Rain and storms: a low, thick, closed deck, an
 // overcast sheet over most of it, smooth, dense, with dark bases and little glow, churning (held
 // to 3). Fog has no clouds.
 static constexpr PostFxResource::CloudLayer kWeatherClouds[8] =
 {
-    //  cover   base   thick   dens  strat  wind   abs   transl detail glow  sun   evol  round  match
-    { 0.25f,  700.0f,  550.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f, 7.0f, 0.70f, 0.4f, 0.10f, 1.00f }, // EXTRASUNNY
-    { 0.40f,  600.0f,  700.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f, 6.0f, 0.55f, 0.7f, 0.15f, 1.00f }, // SUNNY
-    { 0.45f,  700.0f,  650.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 1.3f, 6.0f, 0.50f, 0.9f, 0.12f, 1.00f }, // SUNNY_WINDY
-    { 0.70f,  500.0f,  900.0f, 1.00f, 0.2f, 0.67f, 1.3f, 1.0f, 1.0f, 4.0f, 0.20f, 1.3f, 0.15f, 0.65f }, // CLOUDY
-    { 0.95f,  300.0f, 1000.0f, 0.83f, 0.6f, 0.33f, 2.0f, 0.5f, 0.6f, 2.0f, 0.25f, 3.0f, 0.15f, 1.00f }, // RAIN
-    { 0.85f,  400.0f,  900.0f, 0.67f, 0.4f, 1.67f, 1.6f, 0.7f, 0.8f, 3.0f, 0.40f, 0.8f, 0.15f, 0.80f }, // DRIZZLE
-    { 0.00f,  600.0f,  600.0f, 0.20f, 0.3f, 1.67f, 1.0f, 1.0f, 0.8f, 3.0f, 0.30f, 0.4f, 0.15f, 1.00f }, // FOGGY
-    { 0.95f,  300.0f, 1200.0f, 0.80f, 0.5f, 1.67f, 2.2f, 0.5f, 0.7f, 2.0f, 0.25f, 1.4f, 0.08f, 1.00f }, // LIGHTNING
+    //  cover   base   thick   dens  strat  wind   abs   transl detail glow  sun   evol  round  match  soft
+    { 0.25f,  700.0f,  900.0f, 1.67f, 0.0f, 2.00f, 0.8f, 1.3f, 1.2f,  7.0f, 0.70f, 0.4f, 0.10f, 1.00f, 0.0f }, // EXTRASUNNY
+    { 0.40f,  600.0f, 1200.0f, 1.33f, 0.0f, 1.00f, 0.9f, 1.2f, 1.1f,  6.0f, 0.55f, 0.7f, 0.15f, 1.00f, 0.0f }, // SUNNY
+    { 0.45f,  700.0f, 1100.0f, 0.67f, 0.0f, 1.67f, 1.0f, 1.2f, 0.87f, 6.0f, 0.50f, 0.9f, 0.12f, 1.00f, 1.0f }, // SUNNY_WINDY
+    { 0.70f,  500.0f,  900.0f, 1.00f, 0.2f, 0.67f, 1.3f, 1.0f, 0.5f,  4.0f, 0.20f, 1.3f, 0.15f, 0.65f, 1.0f }, // CLOUDY
+    { 0.95f,  300.0f, 1000.0f, 0.83f, 0.6f, 0.33f, 2.0f, 0.5f, 0.3f,  2.0f, 0.25f, 3.0f, 0.15f, 1.00f, 0.0f }, // RAIN
+    { 0.85f,  400.0f,  900.0f, 0.67f, 0.4f, 1.67f, 1.6f, 0.7f, 0.4f,  3.0f, 0.40f, 0.8f, 0.15f, 0.80f, 1.0f }, // DRIZZLE
+    { 0.00f,  600.0f,  600.0f, 0.20f, 0.3f, 1.67f, 1.0f, 1.0f, 0.8f,  3.0f, 0.30f, 0.4f, 0.15f, 1.00f, 0.0f }, // FOGGY
+    { 0.95f,  300.0f, 1200.0f, 0.80f, 0.5f, 1.67f, 2.2f, 0.5f, 0.35f, 2.0f, 0.25f, 1.4f, 0.08f, 1.00f, 0.0f }, // LIGHTNING
 };
 
 void PostFxResource::UpdateCloudLayer(double seconds)
@@ -1800,10 +1867,11 @@ void PostFxResource::UpdateCloudLayer(double seconds)
         Cloud = { mix(a.coverage, b.coverage), mix(a.base, b.base), mix(a.thickness, b.thickness),
                   mix(a.density, b.density), mix(a.stratus, b.stratus), mix(a.wind, b.wind),
                   mix(a.absorption, b.absorption), mix(a.translucency, b.translucency), mix(a.detail, b.detail), mix(a.glow, b.glow),
-                  mix(a.sunPower, b.sunPower), mix(a.evolution, b.evolution), mix(a.baseRound, b.baseRound), mix(a.skyMatch, b.skyMatch) };
+                  mix(a.sunPower, b.sunPower), mix(a.evolution, b.evolution), mix(a.baseRound, b.baseRound), mix(a.skyMatch, b.skyMatch),
+                  mix(a.softness, b.softness) };
     }
     else
-        Cloud = { fVolumetricCloudsCoverage, fVolumetricCloudsBase, fVolumetricCloudsThickness, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f };
+        Cloud = { fVolumetricCloudsCoverage, fVolumetricCloudsBase, fVolumetricCloudsThickness, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f, 0.0f };
 
     // The drift moves on by this frame's time at this frame's wind; across a jump of the clock (a
     // load, a cutscene) it stays where it was.
@@ -1940,6 +2008,134 @@ namespace SSRTrace
              desc.Width * desc.Height ? sumAlpha / (double(desc.Width) * desc.Height) : 0.0, isHalf || isFixed ? "" : " (format not read)");
     }
 
+    // The first channel of a texture at five points (the centre and halfway to each corner), as stored and as metres
+    // through near and far the way SSR.fx decodes the log depth, to compare this frame's depth with last frame's copy.
+    static void DepthProbe(IDirect3DDevice9* pDevice, const char* name, IDirect3DTexture9* texture, float nearClip, float farClip)
+    {
+        if (!Active())
+            return;
+        IDirect3DSurface9* surface = nullptr;
+        if (!texture || FAILED(texture->GetSurfaceLevel(0, &surface)) || !surface)
+        {
+            Line("  %s probe: no surface", name);
+            return;
+        }
+        D3DSURFACE_DESC desc = {};
+        surface->GetDesc(&desc);
+        IDirect3DSurface9* copy = nullptr;
+        HRESULT hr = pDevice->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &copy, nullptr);
+        if (SUCCEEDED(hr))
+            hr = pDevice->GetRenderTargetData(surface, copy);
+        D3DLOCKED_RECT locked = {};
+        if (SUCCEEDED(hr))
+            hr = copy->LockRect(&locked, nullptr, D3DLOCK_READONLY);
+        if (FAILED(hr))
+        {
+            Line("  %s probe: %ux%u format %u, read back failed %08x", name, desc.Width, desc.Height, unsigned(desc.Format), unsigned(hr));
+            SAFE_RELEASE(copy);
+            surface->Release();
+            return;
+        }
+        auto read = [&](UINT x, UINT y) -> float
+        {
+            auto row = static_cast<const uint8_t*>(locked.pBits) + y * locked.Pitch;
+            switch (desc.Format)
+            {
+            case D3DFMT_R32F: return reinterpret_cast<const float*>(row)[x];
+            case D3DFMT_G32R32F: return reinterpret_cast<const float*>(row)[x * 2];
+            case D3DFMT_A32B32G32R32F: return reinterpret_cast<const float*>(row)[x * 4];
+            case D3DFMT_R16F: return Half(reinterpret_cast<const uint16_t*>(row)[x]);
+            case D3DFMT_G16R16F: return Half(reinterpret_cast<const uint16_t*>(row)[x * 2]);
+            case D3DFMT_A16B16G16R16F: return Half(reinterpret_cast<const uint16_t*>(row)[x * 4]);
+            case D3DFMT_A8R8G8B8: case D3DFMT_X8R8G8B8: return row[x * 4 + 2] / 255.0f;
+            default: return -1.0f;
+            }
+        };
+        std::string text;
+        const float at[5][2] = { { 0.5f, 0.5f }, { 0.25f, 0.25f }, { 0.75f, 0.25f }, { 0.25f, 0.75f }, { 0.75f, 0.75f } };
+        for (auto& p : at)
+        {
+            const float raw = read(UINT(p[0] * desc.Width), UINT(p[1] * desc.Height));
+            const float metres = nearClip > 0.0f ? nearClip * std::pow(farClip / nearClip, raw) : 0.0f;
+            char item[64];
+            snprintf(item, sizeof(item), " (%.2f,%.2f) %.6f = %.2f m", p[0], p[1], raw, metres);
+            text += item;
+        }
+        copy->UnlockRect();
+        copy->Release();
+        surface->Release();
+        Line("  %s probe: %ux%u format %u:%s", name, desc.Width, desc.Height, unsigned(desc.Format), text.c_str());
+    }
+
+    // All four channels of a half float target at five points (the centre and halfway to each corner).
+    static void PixelProbe(IDirect3DDevice9* pDevice, const char* name, IDirect3DTexture9* texture)
+    {
+        if (!Active())
+            return;
+        IDirect3DSurface9* surface = nullptr;
+        if (!texture || FAILED(texture->GetSurfaceLevel(0, &surface)) || !surface)
+            return;
+        D3DSURFACE_DESC desc = {};
+        surface->GetDesc(&desc);
+        IDirect3DSurface9* copy = nullptr;
+        HRESULT hr = desc.Format == D3DFMT_A16B16G16R16F
+            ? pDevice->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &copy, nullptr) : E_FAIL;
+        if (SUCCEEDED(hr))
+            hr = pDevice->GetRenderTargetData(surface, copy);
+        D3DLOCKED_RECT locked = {};
+        if (SUCCEEDED(hr))
+            hr = copy->LockRect(&locked, nullptr, D3DLOCK_READONLY);
+        if (FAILED(hr))
+        {
+            Line("  %s probe: %ux%u format %u, read back failed %08x", name, desc.Width, desc.Height, unsigned(desc.Format), unsigned(hr));
+            SAFE_RELEASE(copy);
+            surface->Release();
+            return;
+        }
+        std::string text;
+        const float at[5][2] = { { 0.5f, 0.5f }, { 0.25f, 0.25f }, { 0.75f, 0.25f }, { 0.25f, 0.75f }, { 0.75f, 0.75f } };
+        for (auto& p : at)
+        {
+            auto row = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(locked.pBits) + UINT(p[1] * desc.Height) * locked.Pitch);
+            auto px = row + UINT(p[0] * desc.Width) * 4;
+            char item[96];
+            snprintf(item, sizeof(item), " (%.2f,%.2f) %.3f %.3f %.3f %.0f", p[0], p[1], Half(px[0]), Half(px[1]), Half(px[2]), Half(px[3]));
+            text += item;
+        }
+        copy->UnlockRect();
+        copy->Release();
+        surface->Release();
+        Line("  %s probe: %ux%u:%s", name, desc.Width, desc.Height, text.c_str());
+    }
+
+    // A surface by the render target it belongs to, FusionFix's or the game's, or the full size depth buffer RenderScale
+    // stands in with.
+    static std::string SurfaceName(IDirect3DSurface9* surface)
+    {
+        if (!surface)
+            return "none";
+        for (auto& [name, rt] : rage::grcTextureFactoryPC::RTCache)
+        {
+            if (!rt)
+                continue;
+            if (rt->mD3DSurface == surface)
+                return name;
+            IDirect3DSurface9* level = nullptr;
+            if (rt->mD3DTexture && SUCCEEDED(rt->mD3DTexture->GetSurfaceLevel(0, &level)) && level)
+            {
+                const bool same = level == surface;
+                level->Release();
+                if (same)
+                    return name;
+            }
+        }
+        D3DSURFACE_DESC desc = {};
+        surface->GetDesc(&desc);
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "%p %ux%u format %u", static_cast<void*>(surface), desc.Width, desc.Height, unsigned(desc.Format));
+        return buffer;
+    }
+
     static std::string TextureName(IDirect3DBaseTexture9* texture)
     {
         auto& R = PostFxResources;
@@ -1954,6 +2150,10 @@ namespace SSRTrace
         for (auto [rt, name] : known)
             if (rt && rt->mD3DTexture == texture)
                 return name;
+        // The game's own targets by the name they were created with
+        for (auto& [name, rt] : rage::grcTextureFactoryPC::RTCache)
+            if (rt && rt->mD3DTexture == texture)
+                return "game:" + name;
         char buffer[32];
         snprintf(buffer, sizeof(buffer), "%p", static_cast<void*>(texture));
         return buffer;
@@ -2011,12 +2211,12 @@ namespace SSRTrace
             IDirect3DBaseTexture9* probe = R.SSRHistoryTex ? R.SSRHistoryTex->mD3DTexture : rtTexture;
             if (probe == old15)
                 probe = nullptr;
-            pDevice->SetTexture(15, probe);
+            SetTextureBoth(pDevice, 15, probe);
             IDirect3DBaseTexture9* now15 = nullptr;
             pDevice->GetTexture(15, &now15);
             takes = now15 == probe ? "yes" : "NO";
             SAFE_RELEASE(now15);
-            pDevice->SetTexture(15, old15);
+            SetTextureBoth(pDevice, 15, old15);
             SAFE_RELEASE(old15);
         }
         IDirect3DPixelShader9* ps = nullptr;
@@ -2113,7 +2313,7 @@ private:
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
         for (int i = 0; i < PostfxTextureCount; i++)
         {
-            pDevice->SetTexture(i, prePostFx[i]);
+            SetTextureBoth(pDevice, i, prePostFx[i]);
             pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, Samplers[i]);
             SAFE_RELEASE(prePostFx[i]);
         }
@@ -2141,10 +2341,10 @@ private:
         }
         if (auto pDevice = rage::grcDevice::GetD3DDevice())
         {
-            pDevice->SetTexture(3, nullptr);
-            pDevice->SetTexture(8, nullptr);
-            pDevice->SetTexture(9, nullptr);
-            pDevice->SetTexture(11, nullptr);
+            SetTextureBoth(pDevice, 3, nullptr);
+            SetTextureBoth(pDevice, 8, nullptr);
+            SetTextureBoth(pDevice, 9, nullptr);
+            SetTextureBoth(pDevice, 11, nullptr);
         }
         PostFxResources.bGIBound = false;
         PostFxResources.bMaterialIdBound = false;
@@ -2245,6 +2445,13 @@ private:
         SAFE_RELEASE(PostFxResources.GIAccumSurf[1]);
         SAFE_RELEASE(PostFxResources.GIFullSurf);
         PostFxResources.GIResult = nullptr;
+        SAFE_RELEASE(PostFxResources.SceneDepthSurf);
+        if (PostFxResources.SceneDepthTex)
+        {
+            PostFxResources.SceneDepthTex->Destroy();
+            PostFxResources.SceneDepthTex = nullptr;
+        }
+        PostFxResources.nSceneDepthFrame = 0;
         for (int i = 0; i < 3; ++i)
         {
             SAFE_RELEASE(PostFxResources.CloudSurf[i]);
@@ -2350,7 +2557,12 @@ private:
         }
     }
 
-    static void __fastcall OnDeviceReset()
+    // The G-buffer targets, looked up by name once a frame (lighting phase, fog pass) and not only at a
+    // device reset: the game creates them anew when the render scale changes, as turning FSR on or off
+    // does, and the ones kept from before were another texture by then. SSR and SSGI read a depth that
+    // was not this frame's, and the accumulations, testing it against last frame's copy, dropped their
+    // history on every pixel.
+    static void RefreshGBufferTargets()
     {
         PostFxResources.mNormalRT = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_1_");
         PostFxResources.mDiffuseRT = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_0_");
@@ -2359,6 +2571,11 @@ private:
         // Not the stencil buffer: the G-buffer pass writes each material's ID (whole steps of 1/255)
         // to it, as R32F or R16F, for the lighting and fog shaders.
         PostFxResources.mMaterialIdRT = rage::grcTextureFactoryPC::GetRTByName("_STENCIL_BUFFER_");
+    }
+
+    static void __fastcall OnDeviceReset()
+    {
+        RefreshGBufferTargets();
         // PostFxResources.mCascadeAtlasRT = rage::grcTextureFactoryPC::GetRTByName( "CASCADE_ATLAS"         );
         PostFxResources.mFullScreenRT = rage::grcTextureFactoryPC::GetRTByName("FullScreenCopy");
         // PostFxResources.mFullScreenRT2  = rage::grcTextureFactoryPC::GetRTByName( "FullScreenCopy2"       );
@@ -2439,6 +2656,10 @@ private:
         aoDesc.mFormat = rage::GRCFMT_R32F;
         aoDesc.mLevels = PostFxResources.nAmbientOcclusionMaxMipLevel;
         PostFxResources.AOCamDepthTex = rage::CreateEmptyRenderTarget("AOCamDepthTex", width, height, 32, aoDesc);
+
+        aoDesc.mLevels = 1;
+        PostFxResources.SceneDepthTex = rage::CreateEmptyRenderTarget("SceneDepthCopy", width, height, 32, aoDesc, PostFxResources.SceneDepthSurf);
+        PostFxResources.nSceneDepthFrame = 0;
 
         aoDesc.mFormat = rage::GRCFMT_L8;
         aoDesc.mLevels = 1;
@@ -2575,11 +2796,153 @@ private:
 
         OnDeviceReset();
 
+        TemporalAA::OnGBufferEnd = [](IDirect3DDevice9* device) { CopySceneDepth(device); };
+        RenderScale::TraceDepth = [](const char* what, IDirect3DSurface9* depth, IDirect3DSurface9* target, DWORD flags)
+        {
+            if (SSRTrace::Active())
+                SSRTrace::Line("render scale: %s %s, target %s%s", what, SSRTrace::SurfaceName(depth).c_str(), SSRTrace::SurfaceName(target).c_str(),
+                               flags ? (std::string(", flags ") + std::to_string(flags)).c_str() : "");
+        };
+
         initialized = true;
+    }
+
+    // At the end of the G-buffer pass (TemporalAA::OnGBufferEnd, the device state saved around it): this frame's
+    // depth into SceneDepthTex. With FSR's render scale, _DEFERRED_GBUFFER_3_ read in the lighting phase, where the
+    // game keeps it bound as its depth buffer, came out in whole steps of 1/255 or as another depth altogether (15 m,
+    // 983 m and 0.35 m in a room 3 to 6 m deep), while temporal AA's motion vectors, read from it here, and the fog
+    // pass's copy, made after lighting, held the right depths. SSR, SSGI, contact shadows and SSAO marched and tested
+    // their histories against that.
+    static void CopySceneDepth(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        RefreshGBufferTargets();
+        if (!pDevice || !R.SceneDepthSurf || !R.Blit_PS || !R.mDepthRT || !R.mDepthRT->mD3DTexture)
+            return;
+        pDevice->SetRenderTarget(0, R.SceneDepthSurf);
+        for (DWORD i = 1; i < 4; ++i)
+            pDevice->SetRenderTarget(i, nullptr);
+        pDevice->SetDepthStencilSurface(nullptr);
+        static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kStates[] =
+        {
+            { D3DRS_ZENABLE, FALSE }, { D3DRS_ZWRITEENABLE, FALSE }, { D3DRS_ALPHABLENDENABLE, FALSE }, { D3DRS_ALPHATESTENABLE, FALSE },
+            { D3DRS_STENCILENABLE, FALSE }, { D3DRS_CULLMODE, D3DCULL_NONE }, { D3DRS_COLORWRITEENABLE, 0x0F },
+            { D3DRS_SCISSORTESTENABLE, FALSE }, { D3DRS_SRGBWRITEENABLE, FALSE }, { D3DRS_FILLMODE, D3DFILL_SOLID },
+            { D3DRS_CLIPPLANEENABLE, 0 }, { D3DRS_FOGENABLE, FALSE },
+        };
+        for (auto [state, value] : kStates)
+            pDevice->SetRenderState(state, value);
+        SetTextureBoth(pDevice, 0, R.mDepthRT->mD3DTexture);
+        pDevice->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+        pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+        pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        pDevice->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
+        BlitToTarget(pDevice, R.SceneDepthSurf);
+        R.nSceneDepthFrame = FrameHistory::Frame();
+        if (SSRTrace::Active())
+        {
+            const auto& camera = FrameHistory::Current();
+            SSRTrace::DepthProbe(pDevice, "G-buffer end depth copy", R.SceneDepthTex->mD3DTexture, camera.Near, camera.Far);
+        }
+    }
+
+    // The depth the passes of the lighting phase read: the copy from the end of this frame's G-buffer pass, or
+    // _DEFERRED_GBUFFER_3_ where there is none.
+    static IDirect3DTexture9* LightingDepth()
+    {
+        auto& R = PostFxResources;
+        if (R.SceneDepthTex && R.SceneDepthTex->mD3DTexture && R.nSceneDepthFrame && R.nSceneDepthFrame == FrameHistory::Frame())
+            return R.SceneDepthTex->mD3DTexture;
+        return R.mDepthRT ? R.mDepthRT->mD3DTexture : nullptr;
+    }
+
+    // For the SSR trace, at the start of the lighting phase, before any FusionFix pass: what the game has on each
+    // sampler and as its depth buffer.
+    static void TraceLightingInputs(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        if (!SSRTrace::Active() || !pDevice)
+            return;
+        std::string bound;
+        for (DWORD slot = 0; slot < 16; ++slot)
+        {
+            IDirect3DBaseTexture9* tex = nullptr;
+            pDevice->GetTexture(slot, &tex);
+            if (tex)
+                bound += " s" + std::to_string(slot) + "=" + SSRTrace::TextureName(tex);
+            SAFE_RELEASE(tex);
+        }
+        IDirect3DSurface9* ds = nullptr;
+        IDirect3DSurface9* rt0 = nullptr;
+        pDevice->GetDepthStencilSurface(&ds);
+        pDevice->GetRenderTarget(0, &rt0);
+        IDirect3DSurface9* depthSurface = nullptr;
+        if (R.mDepthRT && R.mDepthRT->mD3DTexture)
+            R.mDepthRT->mD3DTexture->GetSurfaceLevel(0, &depthSurface);
+        D3DSURFACE_DESC dsDesc = {}, rtDesc = {};
+        if (ds)
+            ds->GetDesc(&dsDesc);
+        if (rt0)
+            rt0->GetDesc(&rtDesc);
+        SSRTrace::Line("lighting inputs: depth buffer %p %ux%u format %u%s, target %ux%u format %u;%s", static_cast<void*>(ds),
+            dsDesc.Width, dsDesc.Height, unsigned(dsDesc.Format), ds && ds == depthSurface ? " (is _DEFERRED_GBUFFER_3_)" : "",
+            rtDesc.Width, rtDesc.Height, unsigned(rtDesc.Format), bound.c_str());
+
+        SAFE_RELEASE(depthSurface);
+        SAFE_RELEASE(ds);
+        SAFE_RELEASE(rt0);
+    }
+
+    // Copies the texture on s0 over all of the bound target 0 through Blit_PS, with a quad of its own. The fog pass's
+    // own quad was drawn by the game's vertex shader, which RenderScale feeds the render size (globalScreenSize): on a
+    // target of the screen size it covered the copy otherwise than the texture, and with FSR's render scale last
+    // frame's depth sat elsewhere than this frame's, so every accumulation dropped its history on every pixel.
+    static void BlitToTarget(IDirect3DDevice9* pDevice, IDirect3DSurface9* target)
+    {
+        D3DSURFACE_DESC desc = {};
+        if (!target || FAILED(target->GetDesc(&desc)))
+            return;
+        // DrawPrimitiveUP leaves stream 0 unbound, and the fog pass draws from it after the copies.
+        IDirect3DVertexShader9* oldVS = nullptr;
+        IDirect3DVertexDeclaration9* oldDecl = nullptr;
+        IDirect3DVertexBuffer9* oldVB = nullptr;
+        UINT oldOffset = 0, oldStride = 0;
+        DWORD oldFVF = 0;
+        pDevice->GetVertexShader(&oldVS);
+        pDevice->GetVertexDeclaration(&oldDecl);
+        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        pDevice->GetFVF(&oldFVF);
+
+        D3DVIEWPORT9 vp = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
+        pDevice->SetViewport(&vp);
+        pDevice->SetVertexShader(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        const float w = float(desc.Width), h = float(desc.Height);
+        struct Vertex { float x, y, z, rhw, u, v; };
+        const Vertex quad[4] =
+        {
+            { -0.5f,     -0.5f,     0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,     h - 0.5f,  0.0f, 1.0f, 0.0f, 1.0f },
+            { w - 0.5f,  -0.5f,     0.0f, 1.0f, 1.0f, 0.0f },
+            { w - 0.5f,  h - 0.5f,  0.0f, 1.0f, 1.0f, 1.0f },
+        };
+        pDevice->SetPixelShader(PostFxResources.Blit_PS);
+        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(Vertex));
+
+        pDevice->SetVertexShader(oldVS);
+        pDevice->SetFVF(oldFVF);
+        pDevice->SetVertexDeclaration(oldDecl);
+        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
+        SAFE_RELEASE(oldVS);
+        SAFE_RELEASE(oldDecl);
+        SAFE_RELEASE(oldVB);
     }
 
     static void NewFog()
     {
+        RefreshGBufferTargets();
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
 
         IDirect3DSurface9* prevSurface = nullptr;
@@ -2629,11 +2992,37 @@ private:
                         pDevice->SetRenderTarget(0, PostFxResources.PreAlphaDepthSurface);
                         pDevice->SetDepthStencilSurface(nullptr);
 
-                        // No need to set texture here as the desired depth texture already set (GBufferTextureSampler3)
+                        // _DEFERRED_GBUFFER_3_, bound here and not taken from what the game left on s0: whatever that
+                        // was, last frame's depth disagreed with this one's everywhere and every accumulation (SSR, SSGI,
+                        // contact shadows, GTAO) dropped its history on every pixel.
+                        if (SSRTrace::Active())
+                        {
+                            IDirect3DBaseTexture9* bound = nullptr;
+                            pDevice->GetTexture(0, &bound);
+                            SSRTrace::Line("fog pass: depth copy, s0 held %s", SSRTrace::TextureName(bound).c_str());
+                            SAFE_RELEASE(bound);
+                        }
+                        if (PostFxResources.mDepthRT && PostFxResources.mDepthRT->mD3DTexture)
+                        {
+                            SetTextureBoth(pDevice, 0, PostFxResources.mDepthRT->mD3DTexture);
+                            SetSamplerStateBoth(pDevice, 0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+                            SetSamplerStateBoth(pDevice, 0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+                            SetSamplerStateBoth(pDevice, 0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+                        }
 
-                        pDevice->SetPixelShader(PostFxResources.Blit_PS);
+                        BlitToTarget(pDevice, PostFxResources.PreAlphaDepthSurface);
 
-                        pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
+                        if (SSRTrace::Active())
+                        {
+                            const auto& camera = FrameHistory::Current();
+                            SSRTrace::DepthProbe(pDevice, "fog depth", PostFxResources.mDepthRT ? PostFxResources.mDepthRT->mD3DTexture : nullptr,
+                                                 camera.Near, camera.Far);
+                            SSRTrace::DepthProbe(pDevice, "fog depth copy", PostFxResources.PreAlphaDepthCopyRT->mD3DTexture, camera.Near, camera.Far);
+                        }
+                        SetTextureBoth(pDevice, 0, prevTex[0]);
+                        SetSamplerStateBoth(pDevice, 0, D3DSAMP_MINFILTER, prevMinFilter[0]);
+                        SetSamplerStateBoth(pDevice, 0, D3DSAMP_MAGFILTER, prevMagFilter[0]);
+                        SetSamplerStateBoth(pDevice, 0, D3DSAMP_MIPFILTER, prevMipFilter[0]);
                     }
                 }
             }
@@ -2662,18 +3051,18 @@ private:
                     pDevice->SetRenderTarget(0, PostFxResources.HDRFullScreenSurface);
                     pDevice->SetDepthStencilSurface(nullptr);
 
-                    pDevice->SetTexture(0, scene);
+                    SetTextureBoth(pDevice, 0, scene);
 
-                    pDevice->SetPixelShader(PostFxResources.Blit_PS);
-
-                    pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
+                    // Its own quad, as for the depth copy above: SSR's and SSGI's history is taken from this copy and
+                    // read where last frame's depth copy is.
+                    BlitToTarget(pDevice, PostFxResources.HDRFullScreenSurface);
 
                     pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, prevMinFilter[0]);
                     pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, prevMagFilter[0]);
                     pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, prevMipFilter[0]);
                     pDevice->SetSamplerState(0, D3DSAMP_ADDRESSU, prevAddressU[0]);
                     pDevice->SetSamplerState(0, D3DSAMP_ADDRESSV, prevAddressV[0]);
-                    pDevice->SetTexture(0, prevTex[0]);
+                    SetTextureBoth(pDevice, 0, prevTex[0]);
 
                     if ((PostFxResources.SSREnabled() || PostFxResources.SSGIEnabled()) && PostFxResources.SSRHistorySurf && PostFxResources.SSRSurf)
                     {
@@ -2702,9 +3091,9 @@ private:
 
                     pDevice->SetPixelShader(prevPS);
 
-                    pDevice->SetTexture(1, scene);
+                    SetTextureBoth(pDevice, 1, scene);
                     hbDrawPrimitivePostFX.fun();
-                    pDevice->SetTexture(1, prevTex[1]);
+                    SetTextureBoth(pDevice, 1, prevTex[1]);
                 }
             }
         }
@@ -2845,7 +3234,7 @@ private:
         pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
 
         pDevice->SetRenderTarget(0, R.backBuffer);
-        pDevice->SetTexture(2, R.FullScreenTex_temp2->mD3DTexture);
+        SetTextureBoth(pDevice, 2, R.FullScreenTex_temp2->mD3DTexture);
         pDevice->SetPixelShaderConstantF(200, params, 1);
         pDevice->SetPixelShader(R.CAS_PS);
         pDevice->SetVertexShader(vShader);
@@ -2896,27 +3285,27 @@ private:
                     //    pDevice->SetPixelShader(PostFxResources.SSAO_gen_ps);
                     //    vec4[1] = PostFxResources.AoDistance;
                     //
-                    //    //pDevice->SetTexture(2, 0);
+                    //    //SetTextureBoth(pDevice, 2, 0);
                     //    pDevice->SetRenderTarget(0, PostFxResources.pShadowBlurSurf1);
-                    //    //pDevice->SetTexture(2, PostFxResources.textureRead);
+                    //    //SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
                     //    pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
-                    //    pDevice->SetTexture(3, 0);
+                    //    SetTextureBoth(pDevice, 3, 0);
                     //
                     //    pDevice->SetPixelShader(PostFxResources.DeferredShadowBlurCircle_ps);
                     //    pDevice->SetRenderTarget(0, PostFxResources.pShadowBlurSurf2);
-                    //    pDevice->SetTexture(11, PostFxResources.pShadowBlurTex1->mD3DTexture);
+                    //    SetTextureBoth(pDevice, 11, PostFxResources.pShadowBlurTex1->mD3DTexture);
                     //    pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
                     //
-                    //    pDevice->SetTexture(11, 0);
+                    //    SetTextureBoth(pDevice, 11, 0);
                     //
                     //    pDevice->SetPixelShader(PostFxResources.SSAO_blend_ps);
                     //    pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
-                    //    pDevice->SetTexture(2, PostFxResources.textureRead);
-                    //    pDevice->SetTexture(3, PostFxResources.pShadowBlurTex2->mD3DTexture);
+                    //    SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
+                    //    SetTextureBoth(pDevice, 3, PostFxResources.pShadowBlurTex2->mD3DTexture);
                     //    pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
                     //    PostFxResources.swapbuffers();
-                    //    pDevice->SetTexture(2, PostFxResources.textureRead);
-                    //    pDevice->SetTexture(3, PostFxResources.prePostFx[3]);
+                    //    SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
+                    //    SetTextureBoth(pDevice, 3, PostFxResources.prePostFx[3]);
                     //    pDevice->SetPixelShader(pShader);
                     //}
 
@@ -2935,7 +3324,7 @@ private:
                     {
                         pDevice->SetPixelShader(PostFxResources.stipple_filter_ps);
                         pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
-                        pDevice->SetTexture(2, PostFxResources.textureRead);
+                        SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
                         pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
                         PostFxResources.swapbuffers();
                         pDevice->SetPixelShader(pShader);
@@ -2955,20 +3344,20 @@ private:
 
                                 pDevice->SetPixelShader(PostFxResources.dof_blur_ps);
                                 pDevice->SetRenderTarget(0, PostFxResources.FullScreenDownsampleSurf);
-                                pDevice->SetTexture(8, PostFxResources.HalfScreenTex);
+                                SetTextureBoth(pDevice, 8, PostFxResources.HalfScreenTex);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
                                 pDevice->SetPixelShader(PostFxResources.depth_of_field_tent_ps);
                                 pDevice->SetRenderTarget(0, PostFxResources.FullScreenDownsampleSurf2);
-                                pDevice->SetTexture(8, PostFxResources.FullScreenDownsampleTex->mD3DTexture);
+                                SetTextureBoth(pDevice, 8, PostFxResources.FullScreenDownsampleTex->mD3DTexture);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
                                 pDevice->SetPixelShader(PostFxResources.dof_coc_ps);
                                 pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
                                 if (PostFxResources.bEnablePreAlphaDepth)
-                                    pDevice->SetTexture(1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
-                                pDevice->SetTexture(2, PostFxResources.textureRead);
-                                pDevice->SetTexture(8, PostFxResources.FullScreenDownsampleTex2->mD3DTexture);
+                                    SetTextureBoth(pDevice, 1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
+                                SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
+                                SetTextureBoth(pDevice, 8, PostFxResources.FullScreenDownsampleTex2->mD3DTexture);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
                                 PostFxResources.swapbuffers();
 
@@ -3000,28 +3389,28 @@ private:
                                 pDevice->SetPixelShader(PostFxResources.SSPrepass_PS);
                                 pDevice->SetRenderTarget(0, PostFxResources.FullScreenDownsampleSurf);
                                 if (PostFxResources.bEnablePreAlphaDepth)
-                                    pDevice->SetTexture(1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
-                                pDevice->SetTexture(2, PostFxResources.textureRead);
-                                pDevice->SetTexture(13, PostFxResources.DiffuseTex);
+                                    SetTextureBoth(pDevice, 1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
+                                SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
+                                SetTextureBoth(pDevice, 13, PostFxResources.DiffuseTex);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
                                 // sample sunshafts from a cropped texture
                                 pDevice->SetPixelShader(PostFxResources.SSDraw_PS);
                                 pDevice->SetRenderTarget(0, PostFxResources.FullScreenDownsampleSurf2);
-                                pDevice->SetTexture(11, PostFxResources.FullScreenDownsampleTex->mD3DTexture);
+                                SetTextureBoth(pDevice, 11, PostFxResources.FullScreenDownsampleTex->mD3DTexture);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
                                 // second sunshafts pass
                                 pDevice->SetPixelShader(PostFxResources.SSDraw_PS);
                                 pDevice->SetRenderTarget(0, PostFxResources.FullScreenDownsampleSurf);
-                                pDevice->SetTexture(11, PostFxResources.FullScreenDownsampleTex2->mD3DTexture);
+                                SetTextureBoth(pDevice, 11, PostFxResources.FullScreenDownsampleTex2->mD3DTexture);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
                                 // add sunshafts to screen
                                 pDevice->SetPixelShader(PostFxResources.SSAdd_PS);
                                 pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
-                                pDevice->SetTexture(2, PostFxResources.textureRead);
-                                pDevice->SetTexture(11, PostFxResources.FullScreenDownsampleTex->mD3DTexture);
+                                SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
+                                SetTextureBoth(pDevice, 11, PostFxResources.FullScreenDownsampleTex->mD3DTexture);
 
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
                                 PostFxResources.swapbuffers();
@@ -3035,7 +3424,7 @@ private:
                     {
                         for (int i = 0; i < 4; i++)
                         {
-                            pDevice->SetTexture(i, PostFxResources.prePostFx[i]);
+                            SetTextureBoth(pDevice, i, PostFxResources.prePostFx[i]);
                             pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, PostFxResources.Samplers[i]);
                         }
 
@@ -3045,8 +3434,8 @@ private:
                             pDevice->SetRenderTarget(0, PostFxResources.backBuffer);
 
                         if (PostFxResources.bEnablePreAlphaDepth)
-                            pDevice->SetTexture(1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
-                        pDevice->SetTexture(2, PostFxResources.textureRead);
+                            SetTextureBoth(pDevice, 1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
+                        SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
                         pDevice->Clear(0, 0, D3DCLEAR_TARGET, 0, 0, 0);
 
                         pDevice->SetPixelShader(pShader);
@@ -3068,8 +3457,8 @@ private:
                             // pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
                             pDevice->SetRenderTarget(0, PostFxResources.backBuffer);
 
-                            pDevice->SetTexture(2, PostFxResources.FullScreenTex_temp2->mD3DTexture);
-                            // pDevice->SetTexture(2, PostFxResources.textureRead);
+                            SetTextureBoth(pDevice, 2, PostFxResources.FullScreenTex_temp2->mD3DTexture);
+                            // SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
 
                             hr = pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
                             pDevice->SetPixelShader(pShader);
@@ -3138,7 +3527,7 @@ private:
                             pDevice->SetPixelShader(PostFxResources.SMAA_EdgeDetection);
                             pDevice->SetVertexShader(PostFxResources.SMAA_EdgeDetectionVS);
                             pDevice->SetRenderTarget(0, PostFxResources.edgesSurf);
-                            pDevice->SetTexture(0, PostFxResources.FullScreenTex_temp2->mD3DTexture);
+                            SetTextureBoth(pDevice, 0, PostFxResources.FullScreenTex_temp2->mD3DTexture);
                             pDevice->Clear(0, 0, D3DCLEAR_TARGET, 0, 0, 0);
                             pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
@@ -3146,9 +3535,9 @@ private:
                             pDevice->SetPixelShader(PostFxResources.SMAA_BlendingWeightsCalculation);
                             pDevice->SetVertexShader(PostFxResources.SMAA_BlendingWeightsCalculationVS);
                             pDevice->SetRenderTarget(0, PostFxResources.blendSurf);
-                            pDevice->SetTexture(1, PostFxResources.edgesTex->mD3DTexture);
-                            pDevice->SetTexture(2, PostFxResources.SMAA_areaTex);
-                            pDevice->SetTexture(3, PostFxResources.SMAA_searchTex);
+                            SetTextureBoth(pDevice, 1, PostFxResources.edgesTex->mD3DTexture);
+                            SetTextureBoth(pDevice, 2, PostFxResources.SMAA_areaTex);
+                            SetTextureBoth(pDevice, 3, PostFxResources.SMAA_searchTex);
                             pDevice->Clear(0, 0, D3DCLEAR_TARGET, 0, 0, 0);
                             pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
@@ -3159,8 +3548,8 @@ private:
                             // pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
                             pDevice->SetRenderTarget(0, PostFxResources.backBuffer);
 
-                            pDevice->SetTexture(0, PostFxResources.FullScreenTex_temp2->mD3DTexture);
-                            pDevice->SetTexture(4, PostFxResources.blendTex->mD3DTexture);
+                            SetTextureBoth(pDevice, 0, PostFxResources.FullScreenTex_temp2->mD3DTexture);
+                            SetTextureBoth(pDevice, 4, PostFxResources.blendTex->mD3DTexture);
 
                             pDevice->GetSamplerState(0, D3DSAMP_SRGBTEXTURE, &oldSample);
                             pDevice->GetRenderState(D3DRS_SRGBWRITEENABLE, &OldSRGB); // save srgb state
@@ -3182,11 +3571,11 @@ private:
                                 pDevice->SetSamplerState(i, D3DSAMP_ADDRESSW, oldSample);
                             }
 
-                            pDevice->SetTexture(0, PostFxResources.prePostFx[0]);
-                            pDevice->SetTexture(1, PostFxResources.prePostFx[1]);
-                            pDevice->SetTexture(2, PostFxResources.FullScreenTex_temp2->mD3DTexture);
-                            pDevice->SetTexture(3, PostFxResources.prePostFx[3]);
-                            pDevice->SetTexture(4, PostFxResources.prePostFx[4]);
+                            SetTextureBoth(pDevice, 0, PostFxResources.prePostFx[0]);
+                            SetTextureBoth(pDevice, 1, PostFxResources.prePostFx[1]);
+                            SetTextureBoth(pDevice, 2, PostFxResources.FullScreenTex_temp2->mD3DTexture);
+                            SetTextureBoth(pDevice, 3, PostFxResources.prePostFx[3]);
+                            SetTextureBoth(pDevice, 4, PostFxResources.prePostFx[4]);
                             pDevice->SetPixelShader(pShader);
                             pDevice->SetVertexShader(vShader);
                         }
@@ -3197,7 +3586,7 @@ private:
 
                     for (int i = 0; i < PostfxTextureCount; i++)
                     {
-                        pDevice->SetTexture(i, PostFxResources.prePostFx[i]);
+                        SetTextureBoth(pDevice, i, PostFxResources.prePostFx[i]);
                         pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, PostFxResources.Samplers[i]);
                         SAFE_RELEASE(PostFxResources.prePostFx[i]);
                     }
@@ -3206,7 +3595,7 @@ private:
 
                 for (int i = 0; i < PostfxTextureCount; i++)
                 {
-                    pDevice->SetTexture(i, PostFxResources.prePostFx[i]);
+                    SetTextureBoth(pDevice, i, PostFxResources.prePostFx[i]);
                     pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, PostFxResources.Samplers[i]);
                     SAFE_RELEASE(PostFxResources.prePostFx[i]);
                 }
@@ -3216,7 +3605,7 @@ private:
 
         for (int i = 0; i < PostfxTextureCount; i++)
         {
-            pDevice->SetTexture(i, PostFxResources.prePostFx[i]);
+            SetTextureBoth(pDevice, i, PostFxResources.prePostFx[i]);
             pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, PostFxResources.Samplers[i]);
             SAFE_RELEASE(PostFxResources.prePostFx[i]);
         }
@@ -3243,6 +3632,8 @@ private:
         { D3DSAMP_MAGFILTER, D3DTEXF_POINT },
         { D3DSAMP_MINFILTER, D3DTEXF_POINT },
         { D3DSAMP_MIPFILTER, D3DTEXF_NONE },
+        // Depths, normals and light: never sRGB, whatever the game's last draw left on the register
+        { D3DSAMP_SRGBTEXTURE, FALSE },
     };
     static constexpr DWORD kSSRSamplerSlots = 8;
     static constexpr DWORD kSSRTextureSlots = 8;
@@ -3273,7 +3664,7 @@ private:
                     device->SetSamplerState(slot, kSSRSamplerStates[i].state, states[slot][i]);
             for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
             {
-                device->SetTexture(slot, textures[slot]);
+                SetTextureBoth(device, slot, textures[slot]);
                 SAFE_RELEASE(textures[slot]);
             }
         }
@@ -3483,9 +3874,17 @@ private:
     // where they sampled the specular one, and SSR came out empty, while it worked in the pause
     // menu, where the game had bound others.
 
-    static std::vector<std::pair<UINT, D3DXHANDLE>> FindEffectSamplers(ID3DXEffect* effect, IDirect3DPixelShader9* ps)
+    // The same holds for the float constants: with the ones D3DX left, SSGI's accumulation decoded the right depth
+    // (6.1 m) as 15.3 m through fNearPlane and fFarDivNear while vec2PrevDepthRange, in another register, came through.
+    // Each float constant of the shader is written from its parameter, a register per vector or array element.
+    struct EffectConstant { UINT reg; UINT count; D3DXHANDLE param; std::string name; D3DXREGISTER_SET set; };
+
+    struct EffectSampler { UINT reg; D3DXHANDLE param; std::string name; };
+
+    static std::vector<EffectSampler> FindEffectSamplers(ID3DXEffect* effect, IDirect3DPixelShader9* ps,
+                                                         std::vector<EffectConstant>* constants = nullptr)
     {
-        std::vector<std::pair<UINT, D3DXHANDLE>> samplers;
+        std::vector<EffectSampler> samplers;
         std::vector<DWORD> function;
         UINT size = 0;
         if (SUCCEEDED(ps->GetFunction(nullptr, &size)) && size)
@@ -3504,14 +3903,121 @@ private:
         {
             D3DXCONSTANT_DESC desc = {};
             UINT count = 1;
-            if (FAILED(table->GetConstantDesc(table->GetConstant(nullptr, i), &desc, &count)) ||
-                desc.RegisterSet != D3DXRS_SAMPLER || !desc.Name)
+            if (FAILED(table->GetConstantDesc(table->GetConstant(nullptr, i), &desc, &count)) || !desc.Name)
+                continue;
+            if (desc.RegisterSet != D3DXRS_SAMPLER && constants)
+            {
+                if (D3DXHANDLE param = effect->GetParameterByName(nullptr, desc.Name))
+                    constants->push_back({ desc.RegisterIndex, desc.RegisterCount, param, desc.Name, desc.RegisterSet });
+                continue;
+            }
+            if (desc.RegisterSet != D3DXRS_SAMPLER)
                 continue;
             if (D3DXHANDLE param = effect->GetParameterByName(nullptr, (std::string(desc.Name) + "2D").c_str()))
-                samplers.emplace_back(desc.RegisterIndex, param);
+                samplers.push_back({ desc.RegisterIndex, param, desc.Name });
         }
         table->Release();
         return samplers;
+    }
+
+    static void BindEffectConstants(IDirect3DDevice9* pDevice, ID3DXEffect* effect, const std::vector<EffectConstant>& constants)
+    {
+        std::string traced;
+        for (const auto& c : constants)
+        {
+            D3DXPARAMETER_DESC pd = {};
+            if (FAILED(effect->GetParameterDesc(c.param, &pd)) ||
+                (pd.Type != D3DXPT_FLOAT && pd.Type != D3DXPT_INT && pd.Type != D3DXPT_BOOL) ||
+                (pd.Class != D3DXPC_SCALAR && pd.Class != D3DXPC_VECTOR) || c.count == 0 || c.count > 16)
+                continue;
+            const UINT elements = pd.Elements ? (std::min)(pd.Elements, c.count) : 1;
+            const UINT columns = (std::min)(pd.Columns, 4u);
+            // Integers and booleans in their own register sets (loop counters, static branches)
+            if (c.set == D3DXRS_INT4 || c.set == D3DXRS_BOOL)
+            {
+                int values[16 * 4] = {};
+                for (UINT e = 0; e < elements; ++e)
+                {
+                    D3DXHANDLE h = pd.Elements ? effect->GetParameterElement(c.param, e) : c.param;
+                    if (pd.Type == D3DXPT_FLOAT)
+                    {
+                        float f[4] = {};
+                        effect->GetFloatArray(h, f, columns);
+                        for (UINT k = 0; k < columns; ++k)
+                            values[e * 4 + k] = int(f[k]);
+                    }
+                    else
+                        effect->GetIntArray(h, &values[e * 4], columns);
+                }
+                if (c.set == D3DXRS_INT4)
+                    pDevice->SetPixelShaderConstantI(c.reg, values, c.count);
+                    if (auto real = RealDevice(pDevice); real != pDevice)
+                        real->SetPixelShaderConstantI(c.reg, values, c.count);
+                else
+                {
+                    BOOL b[16] = {};
+                    for (UINT e = 0; e < (std::min)(c.count, 16u); ++e)
+                        b[e] = values[e * 4] != 0;
+                    pDevice->SetPixelShaderConstantB(c.reg, b, c.count);
+                    if (auto real = RealDevice(pDevice); real != pDevice)
+                        real->SetPixelShaderConstantB(c.reg, b, c.count);
+                }
+                continue;
+            }
+            if (c.set != D3DXRS_FLOAT4)
+                continue;
+            float want[16 * 4] = {};
+            for (UINT e = 0; e < elements; ++e)
+            {
+                D3DXHANDLE h = pd.Elements ? effect->GetParameterElement(c.param, e) : c.param;
+                if (pd.Type == D3DXPT_FLOAT)
+                    effect->GetFloatArray(h, &want[e * 4], columns);
+                else
+                {
+                    int v[4] = {};
+                    effect->GetIntArray(h, v, columns);
+                    for (UINT k = 0; k < columns; ++k)
+                        want[e * 4 + k] = float(v[k]);
+                }
+            }
+            float have[16 * 4] = {};
+            RealDevice(pDevice)->GetPixelShaderConstantF(c.reg, have, c.count);
+            bool differs = false;
+            for (UINT e = 0; e < elements; ++e)
+                for (UINT k = 0; k < (std::min)(pd.Columns, 4u); ++k)
+                    differs |= want[e * 4 + k] != have[e * 4 + k];
+            if (differs)
+            {
+                // The components the shader does not read keep what the register held
+                for (UINT e = 0; e < c.count; ++e)
+                    for (UINT k = (e < elements ? (std::min)(pd.Columns, 4u) : 0u); k < 4; ++k)
+                        want[e * 4 + k] = have[e * 4 + k];
+                pDevice->SetPixelShaderConstantF(c.reg, want, c.count);
+                if (auto real = RealDevice(pDevice); real != pDevice)
+                    real->SetPixelShaderConstantF(c.reg, want, c.count);
+                if (SSRTrace::Active())
+                {
+                    char item[160];
+                    snprintf(item, sizeof(item), " c%u %s=%g (was %g)", c.reg, c.name.c_str(), want[0], have[0]);
+                    traced += item;
+                }
+            }
+        }
+        if (SSRTrace::Active() && !traced.empty())
+            SSRTrace::Line("  constants set:%s", traced.c_str());
+    }
+
+    // Writes the textures (and the float, int and bool constants) of the bound pixel shader from the effect's parameters,
+    // and for SSR.fx, whose callers save samplers 0 to kSSRSamplerSlots - 1 around their passes, the sampler states.
+    static void BindEffectConstantsOnly(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
+    {
+        IDirect3DPixelShader9* ps = nullptr;
+        if (FAILED(pDevice->GetPixelShader(&ps)) || !ps)
+            return;
+        std::vector<EffectConstant> constants;
+        FindEffectSamplers(effect, ps, &constants);
+        ps->Release();
+        BindEffectConstants(pDevice, effect, constants);
     }
 
     static void BindEffectSamplers(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
@@ -3519,25 +4025,43 @@ private:
         IDirect3DPixelShader9* ps = nullptr;
         if (FAILED(pDevice->GetPixelShader(&ps)) || !ps)
             return;
-        const auto samplers = FindEffectSamplers(effect, ps);
+        std::vector<EffectConstant> constants;
+        const auto samplers = FindEffectSamplers(effect, ps, &constants);
+        BindEffectConstants(pDevice, effect, constants);
         const void* shader = ps;
         ps->Release();
 
         std::string traced;
-        for (const auto& [reg, param] : samplers)
+        const bool states = effect == PostFxResources.SSREffect;
+        for (const auto& [reg, param, name] : samplers)
         {
+            if (states && reg < kSSRSamplerSlots)
+            {
+                auto found = SSRSamplerStates.find(name);
+                const SamplerStates st = found != SSRSamplerStates.end() ? found->second
+                    : SamplerStates{ D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP };
+                SetSamplerStateBoth(pDevice, reg, D3DSAMP_MINFILTER, st[0]);
+                SetSamplerStateBoth(pDevice, reg, D3DSAMP_MAGFILTER, st[1]);
+                SetSamplerStateBoth(pDevice, reg, D3DSAMP_MIPFILTER, st[2]);
+                SetSamplerStateBoth(pDevice, reg, D3DSAMP_ADDRESSU, st[3]);
+                SetSamplerStateBoth(pDevice, reg, D3DSAMP_ADDRESSV, st[4]);
+                SetSamplerStateBoth(pDevice, reg, D3DSAMP_SRGBTEXTURE, FALSE);
+            }
             IDirect3DBaseTexture9* want = nullptr;
             IDirect3DBaseTexture9* have = nullptr;
             effect->GetTexture(param, &want);
-            pDevice->GetTexture(reg, &have);
-            if (want != have)
-                pDevice->SetTexture(reg, want);
+            RealDevice(pDevice)->GetTexture(reg, &have);
+            // Always, through both: the wrapper may hold want on record while the device has another
+            SetTextureBoth(pDevice, reg, want);
             if (SSRTrace::Active())
             {
                 D3DXPARAMETER_DESC desc = {};
                 effect->GetParameterDesc(param, &desc);
+                DWORD minFilter = 0, srgb = 0;
+                RealDevice(pDevice)->GetSamplerState(reg, D3DSAMP_MINFILTER, &minFilter);
+                RealDevice(pDevice)->GetSamplerState(reg, D3DSAMP_SRGBTEXTURE, &srgb);
                 traced += " s" + std::to_string(reg) + "=" + (desc.Name ? desc.Name : "?") + ":" + SSRTrace::TextureName(want) +
-                    (want != have ? "(was " + SSRTrace::TextureName(have) + ")" : "");
+                    (want != have ? "(was " + SSRTrace::TextureName(have) + ")" : "") + (minFilter == D3DTEXF_LINEAR ? "/lin" : "/pt") + (srgb ? "/SRGB" : "");
             }
             SAFE_RELEASE(want);
             SAFE_RELEASE(have);
@@ -3747,7 +4271,7 @@ private:
         };
         setPassSize(half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height);
 
-        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        effect->SetTexture(h.DepthTex2D, LightingDepth());
         effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
         // Last frame's fog pass copied this depth along with the history; this frame's has not
         // run yet.
@@ -3821,7 +4345,7 @@ private:
         {
             for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
                 pDevice->GetTexture(slot, &oldTextures[slot]);
-            pDevice->SetTexture(3, nullptr);
+            SetTextureBoth(pDevice, 3, nullptr);
 
             pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
             pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
@@ -4018,7 +4542,7 @@ private:
 
             for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
             {
-                pDevice->SetTexture(slot, oldTextures[slot]);
+                SetTextureBoth(pDevice, slot, oldTextures[slot]);
                 SAFE_RELEASE(oldTextures[slot]);
             }
         }
@@ -4304,7 +4828,20 @@ private:
             effect->SetFloat("fSkyMatch", canReadScene && litLuma > 1e-4f ? R.fVolumetricCloudsSkyMatch * R.Cloud.skyMatch / litLuma : 0.0f);
         }
         effect->SetFloat("fLightStrength", lightStrength);
+        // How high the sun (or the moon) stands: 0 up to 5 degrees, 1 from 35 up. With it low, the clouds
+        // towards it are lit from behind: their bodies darker than the sky, down to 0.3 of their light
+        // straight towards it, and the glow of their edges three times as strong. Through the day
+        // nothing changes; nor across the sky from a low sun, where the clouds face its light. The
+        // least of the light inside them stays: lowered with the sun, it darkened the sides the sun
+        // lights too, grey where they should take its colour.
         effect->SetFloat("fMinLight", R.fVolumetricCloudsMinLight);
+        {
+            const float lowSun = std::clamp((sun.z - 0.0872f) / (0.5736f - 0.0872f), 0.0f, 1.0f);
+            const float day = lowSun * lowSun * (3.0f - 2.0f * lowSun);
+            effect->SetFloat("fBacklight", 0.3f + 0.7f * day);
+            effect->SetFloat("fGlowBoost", 1.0f + 2.0f * (1.0f - day));
+        }
+        effect->SetFloat("fMottle", R.fVolumetricCloudsMottle);
         // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
         // towards white by VolumetricCloudsSunTint. The moon's is a cool white.
         {
@@ -4316,6 +4853,12 @@ private:
                 for (int i = 0; i < 3; ++i)
                     tint[i] = 1.0f + (std::clamp(sunColour[i] / luma, 0.0f, 2.0f) - 1.0f) * R.fVolumetricCloudsSunTint;
             effect->SetFloatArray("vec3SunTint", tint, 3);
+            // The glow is the sunlight straight through the cloud's edges: it takes the sun's hue
+            // whole, gold in the evening, whatever VolumetricCloudsSunTint does to the lit sides.
+            float glow[3];
+            for (int i = 0; i < 3; ++i)
+                glow[i] = litColour[i] * (luma > 1e-4f ? std::clamp(sunColour[i] / luma, 0.0f, 2.0f) : 1.0f);
+            effect->SetFloatArray("vec3GlowColour", glow, 3);
         }
         const D3DXVECTOR4 layer(R.Cloud.base, R.Cloud.thickness, 1.0f / R.fCloudShadowsScale, R.Cloud.coverage);
         effect->SetVector("vec4Layer", &layer);
@@ -4328,6 +4871,12 @@ private:
                                 R.fVolumetricCloudsHaze * (1.0f - 0.6f * R.Cloud.stratus));
         effect->SetVector("vec4Shape", &shape);
         effect->SetFloat("fStratus", R.Cloud.stratus);
+        // The density's soft compressor, d (1 + k) / (1 + k d), its k from the base to the top: 3 to 12,
+        // or 1 to 3 where the weather wants smoky edges.
+        {
+            const float compress[2] = { 3.0f - 2.0f * R.Cloud.softness, 12.0f - 9.0f * R.Cloud.softness };
+            effect->SetFloatArray("vec2Compress", compress, 2);
+        }
         effect->SetFloat("fEvolution", float(std::fmod(R.fCloudEvolution, 1.0)));
         effect->SetFloat("fTranslucency", (std::min)(R.fVolumetricCloudsTranslucency * R.Cloud.translucency, 0.9f));
         effect->SetFloat("fLightAbsorption", R.fVolumetricCloudsAbsorption * R.Cloud.absorption);
@@ -4438,26 +4987,26 @@ private:
             // half size clouds, s4 the history, s5 the accumulated clouds, s6 the scene, for the sky's
             // brightness, never while drawing into it, s7 that brightness, s8 and s9 the march's sums.
             // The reflections have no depth texture of their own: none reads as sky everywhere.
-            pDevice->SetTexture(0, reflection ? nullptr : R.mDepthRT->mD3DTexture);
-            pDevice->SetTexture(1, coverage);
-            pDevice->SetTexture(2, detail);
-            pDevice->SetTexture(3, halfSize && !readMarch ? R.CloudTex[0]->mD3DTexture : nullptr);
-            pDevice->SetTexture(4, halfSize ? R.CloudTex[prevAccum]->mD3DTexture : nullptr);
-            pDevice->SetTexture(5, halfSize ? R.CloudTex[nextAccum]->mD3DTexture : nullptr);
-            pDevice->SetTexture(6, readScene ? sceneBase : nullptr);
-            pDevice->SetTexture(7, readSkyRef && R.CloudSkyRefTex ? R.CloudSkyRefTex->mD3DTexture : nullptr);
-            pDevice->SetTexture(8, readMarch ? R.CloudMarchTex[0]->mD3DTexture : nullptr);
-            pDevice->SetTexture(9, readMarch ? R.CloudMarchTex[1]->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 0, reflection ? nullptr : R.mDepthRT->mD3DTexture);
+            SetTextureBoth(pDevice, 1, coverage);
+            SetTextureBoth(pDevice, 2, detail);
+            SetTextureBoth(pDevice, 3, halfSize && !readMarch ? R.CloudTex[0]->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 4, halfSize ? R.CloudTex[prevAccum]->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 5, halfSize ? R.CloudTex[nextAccum]->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 6, readScene ? sceneBase : nullptr);
+            SetTextureBoth(pDevice, 7, readSkyRef && R.CloudSkyRefTex ? R.CloudSkyRefTex->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 8, readMarch ? R.CloudMarchTex[0]->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 9, readMarch ? R.CloudMarchTex[1]->mD3DTexture : nullptr);
             for (DWORD slot = 0; slot < 10; ++slot)
             {
                 const bool wrap = slot == 1 || slot == 2;
                 const bool linear = slot != 0 && slot != 3 && slot != 8 && slot != 9;
-                pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
-                pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
-                pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSW, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
-                pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
-                pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
-                pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, slot == 1 ? D3DTEXF_LINEAR : D3DTEXF_NONE);
+                SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSU, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+                SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSV, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+                SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSW, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+                SetSamplerStateBoth(pDevice, slot, D3DSAMP_MAGFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+                SetSamplerStateBoth(pDevice, slot, D3DSAMP_MINFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+                SetSamplerStateBoth(pDevice, slot, D3DSAMP_MIPFILTER, slot == 1 ? D3DTEXF_LINEAR : D3DTEXF_NONE);
             }
         };
         auto drawPass = [&](const char* technique, IDirect3DSurface9* target, float w, float h, bool blend)
@@ -4483,6 +5032,7 @@ private:
             effect->CommitChanges();
             // Never the scene while drawing into it.
             bindTextures(halfSize && target != sceneSurface, halfSize && target != R.CloudSkyRefSurf, halfSize && target == R.CloudSurf[0]);
+            BindEffectConstantsOnly(pDevice, effect);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
@@ -4514,7 +5064,7 @@ private:
             pDevice->SetRenderState(kCloudRenderStates[i].state, savedRenderStates[i]);
         for (DWORD slot = 0; slot < 10; ++slot)
         {
-            pDevice->SetTexture(slot, oldTextures[slot]);
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
             for (size_t i = 0; i < std::size(kSamplerStates); ++i)
                 pDevice->SetSamplerState(slot, kSamplerStates[i], savedSamplerStates[slot][i]);
             SAFE_RELEASE(oldTextures[slot]);
@@ -4576,7 +5126,7 @@ private:
         auto& h = R.SSREffectHandles;
         ID3DXEffect* effect = R.SSREffect;
 
-        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        effect->SetTexture(h.DepthTex2D, LightingDepth());
         effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
 
         SetTargetSize(effect, h, proj, width, height);
@@ -4651,7 +5201,7 @@ private:
 
         for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
             pDevice->GetTexture(slot, &oldTextures[slot]);
-        pDevice->SetTexture(3, nullptr);
+        SetTextureBoth(pDevice, 3, nullptr);
 
         effect->SetTexture(h.SurfaceTex2D, oldTextures[0]);
         effect->SetFloat(h.fWaterNormalStrength, oldTextures[0] ? R.fSSRWaterNormalStrength : 0.0f);
@@ -4693,7 +5243,7 @@ private:
 
         for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
         {
-            pDevice->SetTexture(slot, oldTextures[slot]);
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
             SAFE_RELEASE(oldTextures[slot]);
         }
 
@@ -4816,7 +5366,7 @@ private:
             pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1); // fullscreen fvf
 
             PostFxResources.SpecularTex = PostFxResources.mSpecularRT->mD3DTexture;
-            PostFxResources.DepthTex = PostFxResources.mDepthRT->mD3DTexture;
+            PostFxResources.DepthTex = LightingDepth();
             IDirect3DSurface9* SpecularRT;
             PostFxResources.SpecularTex->GetSurfaceLevel(0, &SpecularRT);
 
@@ -5225,7 +5775,7 @@ private:
         pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
         for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
         {
-            pDevice->SetTexture(slot, oldTextures[slot]);
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
             SAFE_RELEASE(oldTextures[slot]);
         }
 
@@ -5379,6 +5929,8 @@ private:
     static DWORD __cdecl RenderPedAndVehicleFakeShadows(DWORD a1)
     {
         DWORD result = RenderPedAndVehicleFakeShadowsInlineHook.unsafe_ccall<DWORD>(a1);
+        RefreshGBufferTargets();
+        TraceLightingInputs(rage::grcDevice::GetD3DDevice());
 
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (auto vp = rage::GetCurrentViewport())
@@ -5427,6 +5979,20 @@ private:
         effect->BeginPass(0);
         effect->CommitChanges();
         BindEffectSamplers(pDevice, effect);
+        if (SSRTrace::Active())
+        {
+            // The viewport the device holds against the target's size and the quad's: a quad or viewport of another
+            // size than the target draws part of it, and the passes rebuild positions on the wrong grid.
+            D3DXTECHNIQUE_DESC tech = {};
+            effect->GetTechniqueDesc(technique, &tech);
+            D3DSURFACE_DESC desc = {};
+            if (target)
+                target->GetDesc(&desc);
+            D3DVIEWPORT9 view = {};
+            pDevice->GetViewport(&view);
+            SSRTrace::Line("  draw %s: target %ux%u, viewport %ux%u at %u,%u, quad %.0fx%.0f", tech.Name ? tech.Name : "?",
+                desc.Width, desc.Height, unsigned(view.Width), unsigned(view.Height), unsigned(view.X), unsigned(view.Y), width, height);
+        }
         pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
         effect->EndPass();
         effect->End();
@@ -5495,7 +6061,7 @@ private:
             (&sun.x)[row] = -(toView[row].x * light[0] + toView[row].y * light[1] + toView[row].z * light[2]) / lightLen;
 
         const bool hasNormals = R.mNormalRT && R.mNormalRT->mD3DTexture;
-        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        effect->SetTexture(h.DepthTex2D, LightingDepth());
         if (hasNormals)
             effect->SetTexture(h.NormalTex2D, R.mNormalRT->mD3DTexture);
         effect->SetFloat(h.fUseGBufferNormals, (hasNormals && R.bSSRGBufferNormals) ? 1.0f : 0.0f);
@@ -5633,7 +6199,7 @@ private:
         pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
         for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
         {
-            pDevice->SetTexture(slot, oldTextures[slot]);
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
             SAFE_RELEASE(oldTextures[slot]);
         }
         pDevice->SetRenderTarget(0, rt0);
@@ -5671,6 +6237,36 @@ private:
             return;
         }
 
+        if (SSRTrace::Active())
+        {
+            const auto& cur = FrameHistory::Current();
+            const auto& prv = FrameHistory::Previous();
+            SSRTrace::Line("gi: vp near %.4f far %.1f; camera frame %u valid %d near %.4f far %.1f; previous frame %u valid %d near %.4f far %.1f; "
+                           "cut %d; scene history of %u reprojects %d; accumulation of %u reprojects %d",
+                           vp->mNearClip, vp->mFarClip, cur.Frame, int(cur.Valid), cur.Near, cur.Far, prv.Frame, int(prv.Valid), prv.Near, prv.Far,
+                           int(FrameHistory::IsCameraCut()), R.nSSRHistoryFrame, int(FrameHistory::CanReproject(R.nSSRHistoryFrame)),
+                           R.nGIAccumFrame, int(FrameHistory::CanReproject(R.nGIAccumFrame)));
+            auto size = [](rage::grcRenderTargetPC* rt) -> std::string
+            {
+                D3DSURFACE_DESC d = {};
+                if (!rt || !rt->mD3DTexture || FAILED(rt->mD3DTexture->GetLevelDesc(0, &d)))
+                    return "none";
+                return std::to_string(d.Width) + "x" + std::to_string(d.Height);
+            };
+            SSRTrace::Line("gi sizes: render scale active %d scale %.3f; game viewport %dx%d, screen %dx%d, ToRender %ux%u; depth %s, "
+                           "depth copy %s, scene copy %s, history %s; GI raw %s denoised %s accum %s/%s full %s; SSR %s",
+                           int(RenderScale::IsActive()), RenderScale::GetScale(), int(vp->mWidth), int(vp->mHeight),
+                           rage::grcDevice::ms_nActiveWidth ? int(*rage::grcDevice::ms_nActiveWidth) : 0,
+                           rage::grcDevice::ms_nActiveHeight ? int(*rage::grcDevice::ms_nActiveHeight) : 0,
+                           RenderScale::ToRenderWidth(uint32_t(vp->mWidth)), RenderScale::ToRenderHeight(uint32_t(vp->mHeight)),
+                           size(R.mDepthRT).c_str(), size(R.PreAlphaDepthCopyRT).c_str(), size(R.FullScreenTex_temp1).c_str(),
+                           size(R.SSRHistoryTex).c_str(), size(R.GIRawTex).c_str(), size(R.GIDenoisedTex).c_str(),
+                           size(R.GIAccumTex[0]).c_str(), size(R.GIAccumTex[1]).c_str(), size(R.GIFullTex).c_str(), size(R.SSRTex).c_str());
+            SSRTrace::DepthProbe(pDevice, "gi depth", LightingDepth(), vp->mNearClip, vp->mFarClip);
+            SSRTrace::DepthProbe(pDevice, "gi previous depth", R.PreAlphaDepthCopyRT ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr,
+                                 prv.Near, prv.Far);
+        }
+
         // The rays read last frame's scene: none on the first frame on, after a cut of the camera it shows another shot
         if (!FrameHistory::CanReproject(R.nSSRHistoryFrame))
         {
@@ -5691,7 +6287,7 @@ private:
 
         const bool hasNormals = R.mNormalRT && R.mNormalRT->mD3DTexture;
         const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
-        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        effect->SetTexture(h.DepthTex2D, LightingDepth());
         effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
         effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
         effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
@@ -5713,6 +6309,7 @@ private:
         // the rays take all but an intensity 1 share of it back out, see SSGI_PS.
         const bool albedo = R.mDiffuseRT && R.mDiffuseRT->mD3DTexture;
         effect->SetTexture(h.AlbedoTex2D, albedo ? R.mDiffuseRT->mD3DTexture : nullptr);
+        effect->SetTexture(h.AlbedoLinearTex2D, albedo ? R.mDiffuseRT->mD3DTexture : nullptr);
         effect->SetTexture(h.GIPrevTex2D, prevGI);
         // The occlusion deferred_lighting already takes off the ambient, so SSGI_PS does not take it off again.
         const bool specular = R.mSpecularRT && R.mSpecularRT->mD3DTexture;
@@ -5784,7 +6381,22 @@ private:
         BindMotionVectors(effect, history);
         effect->SetFloat(h.fTemporalBlend, history ? R.fGITemporalBlend : 0.0f);
         effect->SetFloat(h.fTemporalAnySurface, 1.0f);
+        // The SSR pass left the menu's debug view in fDebugMode; view 10 would turn this pass into its own.
+        effect->SetFloat(h.fDebugMode, 0.0f);
         DrawEffectPass(pDevice, effect, h.techSSRTemporal, R.GIAccumSurf[next], width, height);
+        // View 10 runs the accumulation again into whichever half size target it does not read.
+        IDirect3DTexture9* historyDebug = nullptr;
+        if (R.SSRDebugMode() == R.kGIHistoryDebugMode && R.SSRDebugSurf && h.techSSRDebug)
+        {
+            const bool rawFree = gathered != R.GIRawTex->mD3DTexture;
+            // While the trace runs, the numbers behind the colours (see GIHistoryDebug in SSR.fx), read back here.
+            effect->SetFloat(h.fDebugMode, SSRTrace::Active() ? float(R.kGIHistoryDebugMode) + 0.75f : float(R.kGIHistoryDebugMode));
+            DrawEffectPass(pDevice, effect, h.techSSRTemporal, rawFree ? R.GIRawSurf : R.GIDenoisedSurf, width, height);
+            effect->SetFloat(h.fDebugMode, 0.0f);
+            historyDebug = rawFree ? R.GIRawTex->mD3DTexture : R.GIDenoisedTex->mD3DTexture;
+            SSRTrace::Line("gi history debug: %.0fx%.0f, z now / last frame's copy / expected through last frame's camera / flags", width, height);
+            SSRTrace::PixelProbe(pDevice, "gi history", historyDebug);
+        }
         effect->SetFloat(h.fTemporalAnySurface, 0.0f);
         R.nGIAccumIndex = next;
         R.nGIAccumFrame = FrameHistory::Frame();
@@ -5801,10 +6413,10 @@ private:
             R.GIResult = R.GIFullTex->mD3DTexture;
         }
 
-        if (R.SSRDebugMode() == R.kGIDebugMode && R.SSRDebugSurf && h.techSSRDebug)
+        if ((R.SSRDebugMode() == R.kGIDebugMode || historyDebug) && R.SSRDebugSurf && h.techSSRDebug)
         {
-            effect->SetTexture(h.SSRResultTex2D, R.GIResult);
-            effect->SetFloat(h.fDebugMode, float(R.kGIDebugMode));
+            effect->SetTexture(h.SSRResultTex2D, historyDebug ? historyDebug : R.GIResult);
+            effect->SetFloat(h.fDebugMode, float(historyDebug ? R.kGIHistoryDebugMode : R.kGIDebugMode));
             DrawEffectPass(pDevice, effect, h.techSSRDebug, R.SSRDebugSurf, fullWidth, fullHeight);
             R.bSSRDebugValid = true;
         }
@@ -5818,7 +6430,7 @@ private:
         pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
         for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
         {
-            pDevice->SetTexture(slot, oldTextures[slot]);
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
             SAFE_RELEASE(oldTextures[slot]);
         }
         pDevice->SetRenderTarget(0, rt0);
@@ -5859,7 +6471,7 @@ private:
         effect->SetTexture(h.SceneTex2D, scene);
         effect->SetTexture(h.SkinIDTex2D, R.mMaterialIdRT->mD3DTexture);
         effect->SetTexture(h.AlbedoTex2D, R.mDiffuseRT->mD3DTexture);
-        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        effect->SetTexture(h.DepthTex2D, LightingDepth());
         SetDepthRange(effect, h, R.SkinCamera[2], R.SkinCamera[3]);
         effect->SetFloat(h.fSkinStrength, R.fSkinScatteringStrength);
 
@@ -5923,6 +6535,7 @@ private:
             DrawEffectPass(pDevice, effect, h.techSkinScatterFinal, R.SkinLightSurf[0], width, height);
             result = R.SkinLightTex[0]->mD3DTexture;
         }
+        SSRTrace::Line("skin: scatter %d, near %.4f far %.1f", int(scatter), R.SkinCamera[2], R.SkinCamera[3]);
 
         if (debug)
         {
@@ -5940,7 +6553,7 @@ private:
         pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
         for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
         {
-            pDevice->SetTexture(slot, oldTextures[slot]);
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
             SAFE_RELEASE(oldTextures[slot]);
         }
         pDevice->SetRenderTarget(0, rt0);
@@ -6169,7 +6782,7 @@ public:
         }
         else if (R.bContactBound)
         {
-            pDevice->SetTexture(9, nullptr);
+            SetTextureBoth(pDevice, 9, nullptr);
             R.bContactBound = false;
         }
         pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
@@ -6294,7 +6907,7 @@ public:
                 R.CloudSamplerBefore[1] = maxMip;
                 R.CloudSamplerBefore[2] = minFilter;
                 R.CloudSamplerBefore[3] = lodBias;
-                pDevice->SetTexture(12, noise);
+                SetTextureBoth(pDevice, 12, noise);
                 pDevice->SetSamplerState(12, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
                 pDevice->SetSamplerState(12, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
                 pDevice->SetSamplerState(12, D3DSAMP_ADDRESSW, D3DTADDRESS_WRAP);
@@ -6326,7 +6939,7 @@ public:
             tex = R.SSRResult;
         else if (R.SSRTex && R.SSRTex->mD3DTexture)
             tex = R.SSRTex->mD3DTexture; // cleared while SSR is off
-        pDevice->SetTexture(3, tex);
+        SetTextureBoth(pDevice, 3, tex);
         SSRTrace::Line("bind for lighting: s3 %s, ssr valid this frame %d", SSRTrace::TextureName(tex).c_str(), int(R.bSSRValidThisFrame));
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
@@ -6352,12 +6965,12 @@ public:
 
     static void BindSampler(IDirect3DDevice9* pDevice, DWORD slot, IDirect3DBaseTexture9* tex, DWORD filter)
     {
-        pDevice->SetTexture(slot, tex);
-        pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-        pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-        pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, filter);
-        pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, filter);
-        pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        SetTextureBoth(pDevice, slot, tex);
+        SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        SetSamplerStateBoth(pDevice, slot, D3DSAMP_MAGFILTER, filter);
+        SetSamplerStateBoth(pDevice, slot, D3DSAMP_MINFILTER, filter);
+        SetSamplerStateBoth(pDevice, slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
     }
 
     // Right after deferred lighting: binds this frame's camera, and the textures the fog pass
@@ -6373,17 +6986,17 @@ public:
 
         if (R.bContactBound)
         {
-            pDevice->SetTexture(9, nullptr);
+            SetTextureBoth(pDevice, 9, nullptr);
             R.bContactBound = false;
         }
         if (R.bGIBound)
         {
-            pDevice->SetTexture(8, nullptr);
+            SetTextureBoth(pDevice, 8, nullptr);
             R.bGIBound = false;
         }
         if (R.bMaterialIdBound)
         {
-            pDevice->SetTexture(11, nullptr);
+            SetTextureBoth(pDevice, 11, nullptr);
             R.bMaterialIdBound = false;
         }
         if (R.bCloudNoiseBound)
@@ -6393,7 +7006,7 @@ public:
             pDevice->GetTexture(12, &bound);
             R.bCloudNoiseSurvived = bound && bound == R.CloudNoiseTexture;
             SAFE_RELEASE(bound);
-            pDevice->SetTexture(12, nullptr);
+            SetTextureBoth(pDevice, 12, nullptr);
             R.bCloudNoiseBound = false;
         }
         // Lights drawn for other views (reflections, mirrors) must not march with this camera,
@@ -6443,9 +7056,9 @@ public:
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice || !R.bGlassBound)
             return;
-        pDevice->SetTexture(9, nullptr);
-        pDevice->SetTexture(11, nullptr);
-        pDevice->SetTexture(13, nullptr);
+        SetTextureBoth(pDevice, 9, nullptr);
+        SetTextureBoth(pDevice, 11, nullptr);
+        SetTextureBoth(pDevice, 13, nullptr);
         R.bGlassBound = false;
     }
 

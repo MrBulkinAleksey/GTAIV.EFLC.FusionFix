@@ -4,7 +4,7 @@ texture PrevDepthTex2D;
 texture SSRAccumTex2D;
 texture SSRFallbackTex2D;
 texture MotionTex2D;
-texture AlbedoTex2D, GIPrevTex2D;
+texture AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D;
 texture SceneTex2D, SkinIDTex2D, SkinLightTex2D;
 
 sampler2D DepthTex
@@ -94,10 +94,11 @@ sampler2D AlbedoTex
     MagFilter = POINT;
     MipFilter = NONE;
 };
-// The same, filtered, for GIHitBox.
+// The same, filtered, for GIHitBox. Its own parameter: BindEffectSamplers finds a sampler's texture
+// by the sampler's name, and one sharing AlbedoTex2D was left with whatever the game had bound.
 sampler2D AlbedoLinearTex
 {
-    Texture = <AlbedoTex2D>;
+    Texture = <AlbedoLinearTex2D>;
     AddressU = Clamp;
     AddressV = Clamp;
     MinFilter = LINEAR;
@@ -1287,6 +1288,17 @@ float4 TemporalResult(float4 c)
     return fTemporalAnySurface > 0.0 ? c : float4(c.a > 1e-4 ? c.rgb / c.a : 0.0, c.a);
 }
 
+// Debug view 10 (fDebugMode 10, indirect light only): what the accumulation does with each pixel,
+// drawn by a second run of SSRTemporal_PS that leaves the real one alone. Red: last frame's light
+// dropped because last frame's depth there shows another surface, white: it was off screen; green: kept, darker as the clamp to this frame's
+// neighbourhood pulls it further; blue: how noisy this frame's light is around the pixel, its
+// spread over its mean. Magenta: no history at all; yellow: a
+// neighbourhood all alike, which takes this frame's value as it is.
+bool GIHistoryDebug()
+{
+    return fTemporalAnySurface > 0.0 && fDebugMode > 9.5;
+}
+
 float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     if (fTemporalAnySurface > 0.0 ? tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999 : SSRSurfaceWeight(uv) <= 0.0)
@@ -1294,7 +1306,7 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 
     float4 current = TemporalPremultiply(tex2Dlod(SSRResultTex, float4(uv, 0, 0)));
     if (fTemporalBlend <= 0.0)
-        return TemporalResult(current);
+        return GIHistoryDebug() ? float4(1.0, 0.0, 1.0, 1.0) : TemporalResult(current);
 
     float4 m1 = current, m2 = current * current;
     [unroll]
@@ -1316,14 +1328,22 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     // surface reflects nothing this frame.
     [branch]
     if (all(spread <= 0.0))
-        return TemporalResult(current);
+        return GIHistoryDebug() ? float4(1.0, 1.0, 0.0, 1.0) : TemporalResult(current);
+    // Indirect light arrives smoothed, so its 3x3 neighbourhood barely spreads even where it is
+    // noisy at a larger scale, and 1.5 times that spread held the history to this frame's blotches
+    // (debug view 10 showed them black). The depth test already drops the history of another
+    // surface; the window only has to catch light that changed, so it is at least a quarter of
+    // the light either way.
+    if (fTemporalAnySurface > 0.0)
+        spread = max(spread, 0.25 * abs(m1));
     float4 lo = m1 - 1.5 * spread, hi = m1 + 1.5 * spread;
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
     bool checkDepth;
     float2 prevUV = TemporalHistoryUV(uv, C, checkDepth);
     float keep = fTemporalBlend;
-    if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
+    bool offScreen = any(prevUV <= 0.0) || any(prevUV >= 1.0);
+    if (offScreen)
         keep = 0.0;
     else if (fUsePrevDepth > 0.0 && checkDepth)
     {
@@ -1333,6 +1353,29 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         float prevZ = PrevLinearDepth(prevUV);
         if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
             keep = 0.0;
+    }
+
+    [branch]
+    if (GIHistoryDebug())
+    {
+        // While the SSR trace runs (fDebugMode 10.75) the numbers instead, for it to read back: this
+        // frame's view depth, last frame's where the history is taken, what last frame's should be
+        // through last frame's camera, and in alpha 1 for a depth test, 2 off screen, 4 with motion.
+        [branch]
+        if (fDebugMode > 10.5)
+        {
+            float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]
+                        + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
+            return float4(C.z, PrevLinearDepth(prevUV), clip.w,
+                          (checkDepth ? 1.0 : 0.0) + (offScreen ? 2.0 : 0.0) + (fUseMotion > 0.0 ? 4.0 : 0.0));
+        }
+        static const float3 kLum = float3(0.2126, 0.7152, 0.0722);
+        float noise = saturate(dot(spread.rgb, kLum) / max(dot(m1.rgb, kLum), 1e-3));
+        float3 h = tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0)).rgb;
+        float clamped = saturate(dot(abs(h - clamp(h, lo.rgb, hi.rgb)), kLum) / max(dot(h, kLum), 1e-3));
+        if (offScreen)
+            return float4(1.0, 1.0, 1.0, 1.0);
+        return float4(keep > 0.0 ? 0.0 : 1.0, keep > 0.0 ? 1.0 - clamped : 0.0, noise, 1.0);
     }
 
     float4 history = clamp(TemporalPremultiply(tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0))), lo, hi);

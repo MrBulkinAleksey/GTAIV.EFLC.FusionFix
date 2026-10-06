@@ -265,6 +265,8 @@ private:
         {
             if (SUCCEEDED(pEffect->BeginPass(0)))
             {
+                // Its only sampler, s0, bound past the game's device wrapper too (RageDirect3DDevice9::SetTextureBoth)
+                RageDirect3DDevice9::SetTextureBoth(device, 0, pSceneTex);
                 DrawScreenQuad(device);
 
                 pEffect->EndPass();

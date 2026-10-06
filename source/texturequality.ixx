@@ -310,7 +310,7 @@ private:
 
         if (detail)
         {
-            pDevice->SetTexture(kDetailStage, pDetailTex);
+            RageDirect3DDevice9::SetTextureBoth(pDevice, kDetailStage, pDetailTex);
             pDevice->SetSamplerState(kDetailStage, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
             pDevice->SetSamplerState(kDetailStage, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
             pDevice->SetSamplerState(kDetailStage, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
@@ -371,7 +371,7 @@ private:
                 bRaisedMinFilter[i] = false;
             }
         }
-        pDevice->SetTexture(kDetailStage, nullptr);
+        RageDirect3DDevice9::SetTextureBoth(pDevice, kDetailStage, nullptr);
         const BOOL flags[3] = {};
         pDevice->SetPixelShaderConstantB(12, flags, 3);
     }
