@@ -3,6 +3,7 @@ module;
 #include <common.hxx>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <array>
 #include <filesystem>
 #include <map>
@@ -64,6 +65,7 @@ namespace
         constexpr int32_t InScene = 128;        // EndScene and BeginScene around it also within a frame, which breaks it
         constexpr int32_t NoRebind = 256;       // the targets are not set again after it
         constexpr int32_t Marker = 512;         // a square in the corner: magenta on generated frames, green on rendered ones
+        constexpr int32_t Similarity = 1024;    // how much the generated frame differs from the rendered ones around it
     }
     int32_t nDebug = 0;
 
@@ -441,10 +443,86 @@ namespace
         b.average = average;
     }
 
+    // Debug::Similarity: the generated frame and the rendered ones before and after it, read back small. A frame
+    // between them differs from both; a copy of one of them doesn't differ from it.
+    constexpr UINT SmallWidth = 64, SmallHeight = 40;
+    IDirect3DSurface9* SmallRT = nullptr;
+    IDirect3DSurface9* SmallMemory = nullptr;
+    std::vector<uint8_t> PreviousSmall;     // the rendered frame before, 0 bytes while there is none
+
+    struct SimilarityStats
+    {
+        uint32_t frames = 0;
+        double toPrevious = 0.0, toCurrent = 0.0, between = 0.0;
+    } Similar;
+
+    bool ReadSmall(IDirect3DDevice9* device, IDirect3DSurface9* source, std::vector<uint8_t>& pixels)
+    {
+        if (!SmallRT && FAILED(device->CreateRenderTarget(SmallWidth, SmallHeight, D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &SmallRT, nullptr)))
+            return false;
+        if (!SmallMemory && FAILED(device->CreateOffscreenPlainSurface(SmallWidth, SmallHeight, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &SmallMemory, nullptr)))
+            return false;
+        if (FAILED(device->StretchRect(source, nullptr, SmallRT, nullptr, D3DTEXF_LINEAR)) || FAILED(device->GetRenderTargetData(SmallRT, SmallMemory)))
+            return false;
+        D3DLOCKED_RECT locked{};
+        if (FAILED(SmallMemory->LockRect(&locked, nullptr, D3DLOCK_READONLY)))
+            return false;
+        pixels.resize(SmallWidth * SmallHeight * 3);
+        for (UINT y = 0; y < SmallHeight; ++y)
+        {
+            auto row = reinterpret_cast<const uint8_t*>(locked.pBits) + y * locked.Pitch;
+            for (UINT x = 0; x < SmallWidth; ++x)
+                for (int c = 0; c < 3; ++c)
+                    pixels[(y * SmallWidth + x) * 3 + c] = row[x * 4 + c];
+        }
+        SmallMemory->UnlockRect();
+        return true;
+    }
+
+    double Difference(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b)
+    {
+        double sum = 0.0;
+        for (size_t i = 0; i < a.size() && i < b.size(); ++i)
+            sum += std::abs(static_cast<int>(a[i]) - static_cast<int>(b[i]));
+        return a.empty() ? 0.0 : sum / static_cast<double>(a.size());
+    }
+
+    // After Generate: the generated frame, between the last rendered frame and this one
+    void CompareGenerated(IDirect3DDevice9* device, IDirect3DSurface9* current, IDirect3DSurface9* generated)
+    {
+        std::vector<uint8_t> now, between;
+        if (!ReadSmall(device, current, now))
+            return;
+        bool compared = !PreviousSmall.empty() && ReadSmall(device, generated, between);
+        if (compared)
+        {
+            auto& m = Similar;
+            auto frames = Difference(PreviousSmall, now);
+            // Frames that hardly change tell nothing
+            if (frames > 0.5)
+            {
+                ++m.frames;
+                m.toPrevious += Difference(between, PreviousSmall) / frames;
+                m.toCurrent += Difference(between, now) / frames;
+                m.between += frames;
+                if (m.frames >= 100)
+                {
+                    Log("Generated frames over %u moving frames: they differ from the rendered frame before by %.2f and from the one after by %.2f of what those two differ by (%.1f on average)",
+                        m.frames, m.toPrevious / m.frames, m.toCurrent / m.frames, m.between / m.frames);
+                    m = {};
+                }
+            }
+        }
+        PreviousSmall = std::move(now);
+    }
+
     void ReleaseTargets()
     {
         bPending = false;
         ReleaseGpuTiming();
+        SAFE_RELEASE(SmallRT);
+        SAFE_RELEASE(SmallMemory);
+        PreviousSmall.clear();
         SAFE_RELEASE(ProbeRT);
         SAFE_RELEASE(ProbeMemory);
         for (auto rt : { &PresentRT, &GeneratedRT, &HudLessRT, &SavedRT })
@@ -837,6 +915,13 @@ namespace
                 if (first)
                     Log("First frame generated at %ux%u%s", desc.Width, desc.Height, hdr ? ", HDR" : "");
                 first = false;
+
+                if (nDebug & Debug::Similarity)
+                {
+                    if (Upscaler::WasGenerateReset())
+                        PreviousSmall.clear();
+                    CompareGenerated(device, presentSurface, generatedSurface);
+                }
 
                 // The game presents the generated frame, the rendered one waits in PresentRT. Not a frame generated
                 // without a previous one, nor before the frame time is known.
