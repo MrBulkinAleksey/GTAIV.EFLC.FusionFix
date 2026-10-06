@@ -2067,6 +2067,10 @@ namespace SSRTrace
         for (auto [rt, name] : known)
             if (rt && rt->mD3DTexture == texture)
                 return name;
+        // The game's own targets by the name they were created with
+        for (auto& [name, rt] : rage::grcTextureFactoryPC::RTCache)
+            if (rt && rt->mD3DTexture == texture)
+                return "game:" + name;
         char buffer[32];
         snprintf(buffer, sizeof(buffer), "%p", static_cast<void*>(texture));
         return buffer;
@@ -2699,6 +2703,88 @@ private:
         OnDeviceReset();
 
         initialized = true;
+    }
+
+    // For the SSR trace, at the start of the lighting phase, before any FusionFix pass: what the game has on each
+    // sampler and as its depth buffer, and _DEFERRED_GBUFFER_3_ copied to an R32F texture of its size and probed.
+    // At this point the passes read it in whole steps of 1/255 (15 m, 983 m in a room 3 to 6 m deep), while the
+    // copy the fog pass makes of it later in the frame holds plausible depths.
+    static void TraceLightingInputs(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        if (!SSRTrace::Active() || !pDevice)
+            return;
+        std::string bound;
+        for (DWORD slot = 0; slot < 16; ++slot)
+        {
+            IDirect3DBaseTexture9* tex = nullptr;
+            pDevice->GetTexture(slot, &tex);
+            if (tex)
+                bound += " s" + std::to_string(slot) + "=" + SSRTrace::TextureName(tex);
+            SAFE_RELEASE(tex);
+        }
+        IDirect3DSurface9* ds = nullptr;
+        IDirect3DSurface9* rt0 = nullptr;
+        pDevice->GetDepthStencilSurface(&ds);
+        pDevice->GetRenderTarget(0, &rt0);
+        IDirect3DSurface9* depthSurface = nullptr;
+        if (R.mDepthRT && R.mDepthRT->mD3DTexture)
+            R.mDepthRT->mD3DTexture->GetSurfaceLevel(0, &depthSurface);
+        D3DSURFACE_DESC dsDesc = {}, rtDesc = {};
+        if (ds)
+            ds->GetDesc(&dsDesc);
+        if (rt0)
+            rt0->GetDesc(&rtDesc);
+        SSRTrace::Line("lighting inputs: depth buffer %p %ux%u format %u%s, target %ux%u format %u;%s", static_cast<void*>(ds),
+            dsDesc.Width, dsDesc.Height, unsigned(dsDesc.Format), ds && ds == depthSurface ? " (is _DEFERRED_GBUFFER_3_)" : "",
+            rtDesc.Width, rtDesc.Height, unsigned(rtDesc.Format), bound.c_str());
+
+        D3DSURFACE_DESC depthDesc = {};
+        IDirect3DTexture9* scratch = nullptr;
+        IDirect3DSurface9* scratchSurface = nullptr;
+        if (depthSurface && SUCCEEDED(depthSurface->GetDesc(&depthDesc)) &&
+            SUCCEEDED(pDevice->CreateTexture(depthDesc.Width, depthDesc.Height, 1, D3DUSAGE_RENDERTARGET, D3DFMT_R32F, D3DPOOL_DEFAULT, &scratch, nullptr)) &&
+            SUCCEEDED(scratch->GetSurfaceLevel(0, &scratchSurface)) && R.Blit_PS)
+        {
+            IDirect3DBaseTexture9* old0 = nullptr;
+            IDirect3DPixelShader9* oldPS = nullptr;
+            D3DVIEWPORT9 oldView = {};
+            DWORD minF = 0, magF = 0, mipF = 0;
+            pDevice->GetTexture(0, &old0);
+            pDevice->GetPixelShader(&oldPS);
+            pDevice->GetViewport(&oldView);
+            pDevice->GetSamplerState(0, D3DSAMP_MINFILTER, &minF);
+            pDevice->GetSamplerState(0, D3DSAMP_MAGFILTER, &magF);
+            pDevice->GetSamplerState(0, D3DSAMP_MIPFILTER, &mipF);
+
+            pDevice->SetRenderTarget(0, scratchSurface);
+            pDevice->SetDepthStencilSurface(nullptr);
+            pDevice->SetTexture(0, R.mDepthRT->mD3DTexture);
+            pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+            pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+            pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+            BlitToTarget(pDevice, scratchSurface);
+            const auto& camera = FrameHistory::Current();
+            SSRTrace::DepthProbe(pDevice, "lighting depth (as bound by FusionFix)", scratch, camera.Near, camera.Far);
+
+            pDevice->SetRenderTarget(0, rt0);
+            pDevice->SetDepthStencilSurface(ds);
+            pDevice->SetViewport(&oldView);
+            pDevice->SetTexture(0, old0);
+            pDevice->SetPixelShader(oldPS);
+            pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, minF);
+            pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, magF);
+            pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, mipF);
+            SAFE_RELEASE(old0);
+            SAFE_RELEASE(oldPS);
+        }
+        else
+            SSRTrace::Line("lighting inputs: no scratch copy of the depth");
+        SAFE_RELEASE(scratchSurface);
+        SAFE_RELEASE(scratch);
+        SAFE_RELEASE(depthSurface);
+        SAFE_RELEASE(ds);
+        SAFE_RELEASE(rt0);
     }
 
     // Copies the texture on s0 over all of the bound target 0 through Blit_PS, with a quad of its own. The fog pass's
@@ -5601,6 +5687,7 @@ private:
     {
         DWORD result = RenderPedAndVehicleFakeShadowsInlineHook.unsafe_ccall<DWORD>(a1);
         RefreshGBufferTargets();
+        TraceLightingInputs(rage::grcDevice::GetD3DDevice());
 
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (auto vp = rage::GetCurrentViewport())
