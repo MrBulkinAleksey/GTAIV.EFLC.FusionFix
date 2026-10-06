@@ -427,9 +427,10 @@ public:
     // - LightsGGXFillLights: lights the game draws with no highlight at all (fillerVolumePoint) get
     //   this much of one, from the G-buffer's specular on s13.
     // - LightsGGXSun: the sun's highlight the same way, 0 keeps the game's.
-    // - LightsGGXEnvironment: the sky's reflection takes its blur from the GGX roughness and its
-    //   Fresnel from the split sum environment BRDF, so rough surfaces stop shining at grazing
-    //   angles; 0 keeps the game's, values between blend.
+    // - LightsGGXEnvironment: on rough surfaces (gloss under about 0.25: concrete, plaster) the sky's
+    //   reflection takes its Fresnel from the split sum environment BRDF, so they stop shining at
+    //   grazing angles; asphalt and anything glossier, and the reflection's blur, stay the game's.
+    //   0 keeps the game's, values between blend.
     float fLightsGGX = 1.0f;
     float fLightsGGXFresnel = 0.5f;
     float fLightsGGXSize = 0.05f;

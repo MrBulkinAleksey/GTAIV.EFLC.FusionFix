@@ -1,22 +1,23 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-index 7a8a6fe0..b1ec8151 100644
+index 7a8a6fe0..d8df4ede 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-@@ -104,6 +104,13 @@
+@@ -104,6 +104,14 @@
      def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
      
      def c139, 0.0005, 0.5, 0, 0
 +    def c174, -1, -0.0275, -0.572, 0.022 // FusionFix GGX lights: the environment BRDF fit, roughness scale
 +    def c175, 1, 0.0425, 1.04, -0.04 // FusionFix GGX lights: the environment BRDF fit, offset
 +    def c176, -9.28, -1.04, 1.04, 0.25 // FusionFix GGX lights: the environment BRDF fit; the game's reflectance head on
-+    def c177, 2, 512, 5, 4 // FusionFix GGX lights: the gloss scale, the mip per roughness, the last mip
++    def c177, 2, 512, 5, 4 // FusionFix GGX lights: the gloss scale, unused, four
++    def c179, 0.360000014, 11.1111107, -2, 3 // FusionFix GGX lights: where rough begins, over how much, the smoothstep's terms
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
 +    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
-@@ -587,6 +594,16 @@
+@@ -587,6 +595,16 @@
        mul_sat r3.w, r3.w, c72.x
        mad r5.w, r3.w, -c5.x, c5.x
        pow r3.w, r2.w, r4.y
@@ -33,7 +34,7 @@ index 7a8a6fe0..b1ec8151 100644
        mul r6.xyz, c18.w, c18
        mul r7.xyz, r3.w, r6
        mul r7.xyz, r0.y, r7
-@@ -604,6 +621,19 @@
+@@ -604,6 +622,11 @@
        mad r1.yz, r3.xxyw, r0.w, c4.y
        add r5.xy, -r1.yzzw, c2.w
        mov r5.z, c3.y
@@ -42,22 +43,17 @@ index 7a8a6fe0..b1ec8151 100644
 +      add r12.x, r12.x, r12.x // alpha squared, from the Phong exponent as for the lights
 +      rsq r12.x, r12.x
 +      rsq r12.x, r12.x // roughness, the square root of alpha
-+      // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): the parabolic
-+      // --- map's mip follows the GGX roughness (5 mips per unit, as the highlight's width) and its Fresnel is the
-+      // --- split sum environment BRDF, fitted, at the game's 0.25 head on, so rough surfaces stop shining at
-+      // --- grazing angles; c165.z blends from the game's.
-+      mul r12.y, r12.x, c177.z
-+      min r12.y, r12.y, c177.w
-+      lrp r12.z, c165.z, r12.y, r5.w
-+      mov r5.w, r12.z
        texldl r3, r5, s5
        // --- FusionFix SSR: blend the screen-space reflection over the parabolic one.
        mov r10.xy, v0
-@@ -619,6 +649,19 @@
+@@ -619,6 +642,28 @@
        mul r0.xzw, r0.x, r1.yyzw
        mul r0.xzw, r4.z, r0
        mul r0.xzw, r0, c39.w
-+      // --- FusionFix GGX lights: the environment BRDF (r12.x the roughness, r15.y N.V)
++      // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): on rough surfaces
++      // --- (concrete, plaster) the Fresnel is the split sum environment BRDF, fitted, at the game's 0.25 head on, so
++      // --- they stop shining at grazing angles; asphalt and anything glossier keep the game's. c165.z scales it.
++      // --- r12.x the GGX roughness, from the Phong exponent.
 +      mov r13, c175
 +      mad r13, r12.x, c174, r13
 +      mul r12.y, r15.y, c176.x
@@ -67,13 +63,19 @@ index 7a8a6fe0..b1ec8151 100644
 +      mad r12.z, r12.z, r13.x, r13.y
 +      mad r12.y, r12.z, c176.y, r13.z
 +      mad r12.z, r12.z, c176.z, r13.w
-+      mad r12.y, r12.y, c176.w, r12.z
-+      lrp r12.w, c165.z, r12.y, r1.x
++      mad r12.y, r12.y, c176.w, r12.z // the fitted BRDF
++      add r12.z, r12.x, -c179.x
++      mul_sat r12.z, r12.z, c179.y
++      mad r12.w, r12.z, c179.z, c179.w
++      mul r12.z, r12.z, r12.z
++      mul r12.z, r12.z, r12.w // only on rough surfaces: smoothstep over roughness 0.36 to 0.45, gloss 0.25 to 0.15
++      mul r12.z, r12.z, c165.z
++      lrp r12.w, r12.z, r12.y, r1.x
 +      mov r1.x, r12.w
        mul r0.xzw, r1.x, r0
        mul r0.xzw, r0, c6.x
        add r1.x, c17.w, c17.w
-@@ -735,3 +778,64 @@
+@@ -735,3 +780,64 @@
      // ----------------------------------------------------------------------------------------------------------------------------------------------
  
  // approximately 167 instruction slots used (18 texture, 149 arithmetic)
@@ -1203,24 +1205,25 @@ index 91955bce..28ce1589 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-index c05c5756..d97b5d77 100644
+index c05c5756..dd6aa7d9 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-@@ -105,6 +105,13 @@
+@@ -105,6 +105,14 @@
      def c137, -0.5343471434373126, 0.8058593459499529, -0.1133270115046468, -0.9490025827627441
      
      def c139, 0.0005, 0.5, 0, 0
 +    def c174, -1, -0.0275, -0.572, 0.022 // FusionFix GGX lights: the environment BRDF fit, roughness scale
 +    def c175, 1, 0.0425, 1.04, -0.04 // FusionFix GGX lights: the environment BRDF fit, offset
 +    def c176, -9.28, -1.04, 1.04, 0.25 // FusionFix GGX lights: the environment BRDF fit; the game's reflectance head on
-+    def c177, 2, 512, 5, 4 // FusionFix GGX lights: the gloss scale, the mip per roughness, the last mip
++    def c177, 2, 512, 5, 4 // FusionFix GGX lights: the gloss scale, unused, four
++    def c179, 0.360000014, 11.1111107, -2, 3 // FusionFix GGX lights: where rough begins, over how much, the smoothstep's terms
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
 +    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
-@@ -596,6 +603,16 @@
+@@ -596,6 +604,16 @@
        max r6.x, r5.x, r4.y
        add r4.y, r6.x, c4.y
        pow r5.x, r2.w, r4.y
@@ -1237,7 +1240,7 @@ index c05c5756..d97b5d77 100644
        mul r5.yzw, c18.w, c18.xxyz
        mul r6.yzw, r5.x, r5
        mul r6.yzw, r0.y, r6
-@@ -618,6 +635,19 @@
+@@ -618,6 +636,11 @@
        mad r1.y, r4.x, -c3.x, r2.w
        mad r7.w, r0.w, -c2.w, c2.w
        mov r7.z, c0.x
@@ -1246,22 +1249,17 @@ index c05c5756..d97b5d77 100644
 +      add r12.x, r12.x, r12.x // alpha squared, from the Phong exponent as for the lights
 +      rsq r12.x, r12.x
 +      rsq r12.x, r12.x // roughness, the square root of alpha
-+      // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): the parabolic
-+      // --- map's mip follows the GGX roughness (5 mips per unit, as the highlight's width) and its Fresnel is the
-+      // --- split sum environment BRDF, fitted, at the game's 0.25 head on, so rough surfaces stop shining at
-+      // --- grazing angles; c165.z blends from the game's.
-+      mul r12.y, r12.x, c177.z
-+      min r12.y, r12.y, c177.w
-+      lrp r12.z, c165.z, r12.y, r7.w
-+      mov r7.w, r12.z
        texldl r7, r7, s6
        // --- FusionFix SSR: blend the screen-space reflection over the parabolic one.
        mov r10.xy, v0
-@@ -633,6 +663,19 @@
+@@ -633,6 +656,28 @@
        mul r0.xzw, r0.z, r3.xyyz
        mul r0.xzw, r4.z, r0
        mul r0.xzw, r0, c39.w
-+      // --- FusionFix GGX lights: the environment BRDF (r12.x the roughness, r15.y N.V)
++      // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): on rough surfaces
++      // --- (concrete, plaster) the Fresnel is the split sum environment BRDF, fitted, at the game's 0.25 head on, so
++      // --- they stop shining at grazing angles; asphalt and anything glossier keep the game's. c165.z scales it.
++      // --- r12.x the GGX roughness, from the Phong exponent.
 +      mov r13, c175
 +      mad r13, r12.x, c174, r13
 +      mul r12.y, r15.y, c176.x
@@ -1271,13 +1269,19 @@ index c05c5756..d97b5d77 100644
 +      mad r12.z, r12.z, r13.x, r13.y
 +      mad r12.y, r12.z, c176.y, r13.z
 +      mad r12.z, r12.z, c176.z, r13.w
-+      mad r12.y, r12.y, c176.w, r12.z
-+      lrp r12.w, c165.z, r12.y, r1.x
++      mad r12.y, r12.y, c176.w, r12.z // the fitted BRDF
++      add r12.z, r12.x, -c179.x
++      mul_sat r12.z, r12.z, c179.y
++      mad r12.w, r12.z, c179.z, c179.w
++      mul r12.z, r12.z, r12.z
++      mul r12.z, r12.z, r12.w // only on rough surfaces: smoothstep over roughness 0.36 to 0.45, gloss 0.25 to 0.15
++      mul r12.z, r12.z, c165.z
++      lrp r12.w, r12.z, r12.y, r1.x
 +      mov r1.x, r12.w
        mul r0.xzw, r1.x, r0
        mul r0.xzw, r0, c8.y
        add r1.x, c17.w, c17.w
-@@ -753,3 +796,64 @@
+@@ -753,3 +798,64 @@
      // ----------------------------------------------------------------------------------------------------------------------------------------------
  
  // approximately 184 instruction slots used (19 texture, 165 arithmetic)
@@ -1344,21 +1348,22 @@ index c05c5756..d97b5d77 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
-index a4de2c5b..44cc6dab 100644
+index a4de2c5b..fca85c05 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
-@@ -50,6 +50,10 @@
+@@ -50,6 +50,11 @@
      def c24, 0.212500006, 0.715399981, 0.0720999986, 0.5
      def c159, 0, 1, 0, 0 // FusionFix: zero, one
      def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
 +    def c174, -1, -0.0275, -0.572, 0.022 // FusionFix GGX lights: the environment BRDF fit, roughness scale
 +    def c175, 1, 0.0425, 1.04, -0.04 // FusionFix GGX lights: the environment BRDF fit, offset
 +    def c176, -9.28, -1.04, 1.04, 0.25 // FusionFix GGX lights: the environment BRDF fit; the game's reflectance head on
-+    def c177, 2, 512, 5, 4 // FusionFix GGX lights: the gloss scale, the mip per roughness, the last mip
++    def c177, 2, 512, 5, 4 // FusionFix GGX lights: the gloss scale, unused, four
++    def c179, 0.360000014, 11.1111107, -2, 3 // FusionFix GGX lights: where rough begins, over how much, the smoothstep's terms
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_2d s0
-@@ -93,6 +97,7 @@
+@@ -93,6 +98,7 @@
      cmp r21.y, -r21_abs.y, r21.x, c0.w // Console tree lighting toggle
      if_eq r21.y, c0.w
        dp3 r0.x, r3, r1
@@ -1366,7 +1371,7 @@ index a4de2c5b..44cc6dab 100644
        add r0.y, r0.x, r0.x
        add r0.x, -r0_abs.x, c0.z
        mul r0.x, r0.x, r0.x
-@@ -114,10 +119,25 @@
+@@ -114,6 +120,13 @@
        add r2.xy, -r0.yzzw, c0.z
        mov r2.z, c0.w
        texld r3, v0, s2
@@ -1380,23 +1385,14 @@ index a4de2c5b..44cc6dab 100644
        mul r0.y, r3.y, r3.y
        mul r0.y, r0.y, c72.x
        mul_sat r0.y, r0.y, c0.x
-       mad r2.w, r0.y, -c0.y, c0.y
-+      // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): the parabolic
-+      // --- map's mip follows the GGX roughness (5 mips per unit, as the highlight's width) and its Fresnel is the
-+      // --- split sum environment BRDF, fitted, at the game's 0.25 head on, so rough surfaces stop shining at
-+      // --- grazing angles; c165.z blends from the game's.
-+      mul r12.y, r12.x, c177.z
-+      min r12.y, r12.y, c177.w
-+      lrp r12.z, c165.z, r12.y, r2.w
-+      mov r2.w, r12.z
-       texldl r2, r2, s5
-       // --- FusionFix SSR: blend the screen-space reflection over the parabolic one.
-       mov r10.xy, v0
-@@ -133,6 +153,19 @@
+@@ -133,6 +146,28 @@
        mul r0.yzw, r1.w, r0
        mul r0.yzw, r3.z, r0
        mul r0.yzw, r0, c39.w
-+      // --- FusionFix GGX lights: the environment BRDF (r12.x the roughness, r15.y N.V)
++      // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): on rough surfaces
++      // --- (concrete, plaster) the Fresnel is the split sum environment BRDF, fitted, at the game's 0.25 head on, so
++      // --- they stop shining at grazing angles; asphalt and anything glossier keep the game's. c165.z scales it.
++      // --- r12.x the GGX roughness, from the Phong exponent.
 +      mov r13, c175
 +      mad r13, r12.x, c174, r13
 +      mul r12.y, r15.y, c176.x
@@ -1406,28 +1402,35 @@ index a4de2c5b..44cc6dab 100644
 +      mad r12.z, r12.z, r13.x, r13.y
 +      mad r12.y, r12.z, c176.y, r13.z
 +      mad r12.z, r12.z, c176.z, r13.w
-+      mad r12.y, r12.y, c176.w, r12.z
-+      lrp r12.w, c165.z, r12.y, r0.x
++      mad r12.y, r12.y, c176.w, r12.z // the fitted BRDF
++      add r12.z, r12.x, -c179.x
++      mul_sat r12.z, r12.z, c179.y
++      mad r12.w, r12.z, c179.z, c179.w
++      mul r12.z, r12.z, r12.z
++      mul r12.z, r12.z, r12.w // only on rough surfaces: smoothstep over roughness 0.36 to 0.45, gloss 0.25 to 0.15
++      mul r12.z, r12.z, c165.z
++      lrp r12.w, r12.z, r12.y, r0.x
 +      mov r0.x, r12.w
        mul r0.xyz, r0.x, r0.yzww
        add r0.w, r3.x, r3.x
        mul r0.xyz, r0, r0.w
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
-index 92d6423d..90802ccd 100644
+index 92d6423d..acfcd4b5 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
-@@ -51,6 +51,10 @@
+@@ -51,6 +51,11 @@
      def c24, 0.212500006, 0.715399981, 0.0720999986, 0.5
      def c159, 0, 1, 0, 0 // FusionFix: zero, one
      def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
 +    def c174, -1, -0.0275, -0.572, 0.022 // FusionFix GGX lights: the environment BRDF fit, roughness scale
 +    def c175, 1, 0.0425, 1.04, -0.04 // FusionFix GGX lights: the environment BRDF fit, offset
 +    def c176, -9.28, -1.04, 1.04, 0.25 // FusionFix GGX lights: the environment BRDF fit; the game's reflectance head on
-+    def c177, 2, 512, 5, 4 // FusionFix GGX lights: the gloss scale, the mip per roughness, the last mip
++    def c177, 2, 512, 5, 4 // FusionFix GGX lights: the gloss scale, unused, four
++    def c179, 0.360000014, 11.1111107, -2, 3 // FusionFix GGX lights: where rough begins, over how much, the smoothstep's terms
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
      dcl_2d s0
-@@ -94,6 +98,7 @@
+@@ -94,6 +99,7 @@
      cmp r21.y, -r21_abs.y, r21.x, c0.x // Console tree lighting toggle
      if_eq r21.y, c0.x
        dp3 r0.x, r3, r1
@@ -1435,7 +1438,7 @@ index 92d6423d..90802ccd 100644
        add r0.y, r0.x, r0.x
        add r0.x, -r0_abs.x, c3.z
        mul r0.x, r0.x, r0.x
-@@ -127,12 +132,25 @@
+@@ -127,6 +133,11 @@
        mad r0.z, r0.z, -c0.y, r4.x
        mad r0.z, r0.y, r0.z, r3.y
        max r4.x, r3.y, r0.z
@@ -1447,25 +1450,14 @@ index 92d6423d..90802ccd 100644
        mul_sat r0.z, r4.x, c72.x
        mul r3.y, r4.x, c0.w
        min r4.x, r3.y, c1.w
-       mad r3.y, r3.x, -c3.x, r4.x
-       mad r2.w, r0.z, -c2.w, c2.w
-       mov r2.z, c0.x
-+      // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): the parabolic
-+      // --- map's mip follows the GGX roughness (5 mips per unit, as the highlight's width) and its Fresnel is the
-+      // --- split sum environment BRDF, fitted, at the game's 0.25 head on, so rough surfaces stop shining at
-+      // --- grazing angles; c165.z blends from the game's.
-+      mul r12.y, r12.x, c177.z
-+      min r12.y, r12.y, c177.w
-+      lrp r12.z, c165.z, r12.y, r2.w
-+      mov r2.w, r12.z
-       texldl r2, r2, s6
-       // --- FusionFix SSR: blend the screen-space reflection over the parabolic one.
-       mov r10.xy, v0
-@@ -148,6 +166,19 @@
+@@ -148,6 +159,28 @@
        mul r2.xyz, r1.w, r2
        mul r2.xyz, r3.z, r2
        mul r2.xyz, r2, c39.w
-+      // --- FusionFix GGX lights: the environment BRDF (r12.x the roughness, r15.y N.V)
++      // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): on rough surfaces
++      // --- (concrete, plaster) the Fresnel is the split sum environment BRDF, fitted, at the game's 0.25 head on, so
++      // --- they stop shining at grazing angles; asphalt and anything glossier keep the game's. c165.z scales it.
++      // --- r12.x the GGX roughness, from the Phong exponent.
 +      mov r13, c175
 +      mad r13, r12.x, c174, r13
 +      mul r12.y, r15.y, c176.x
@@ -1475,8 +1467,14 @@ index 92d6423d..90802ccd 100644
 +      mad r12.z, r12.z, r13.x, r13.y
 +      mad r12.y, r12.z, c176.y, r13.z
 +      mad r12.z, r12.z, c176.z, r13.w
-+      mad r12.y, r12.y, c176.w, r12.z
-+      lrp r12.w, c165.z, r12.y, r0.x
++      mad r12.y, r12.y, c176.w, r12.z // the fitted BRDF
++      add r12.z, r12.x, -c179.x
++      mul_sat r12.z, r12.z, c179.y
++      mad r12.w, r12.z, c179.z, c179.w
++      mul r12.z, r12.z, r12.z
++      mul r12.z, r12.z, r12.w // only on rough surfaces: smoothstep over roughness 0.36 to 0.45, gloss 0.25 to 0.15
++      mul r12.z, r12.z, c165.z
++      lrp r12.w, r12.z, r12.y, r0.x
 +      mov r0.x, r12.w
        mul r0.xzw, r0.x, r2.xyyz
        add r1.w, r3.x, r3.x
