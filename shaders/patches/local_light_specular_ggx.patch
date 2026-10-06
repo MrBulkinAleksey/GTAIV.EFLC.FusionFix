@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-index 7a8a6fe0..5c46291d 100644
+index 7a8a6fe0..aac2c16f 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 @@ -104,6 +104,14 @@
@@ -75,7 +75,7 @@ index 7a8a6fe0..5c46291d 100644
        mul r0.xzw, r1.x, r0
        mul r0.xzw, r0, c6.x
        add r1.x, c17.w, c17.w
-@@ -735,3 +780,64 @@
+@@ -735,3 +780,66 @@
      // ----------------------------------------------------------------------------------------------------------------------------------------------
  
  // approximately 167 instruction slots used (18 texture, 149 arithmetic)
@@ -83,6 +83,7 @@ index 7a8a6fe0..5c46291d 100644
 +    ret
 +    // --- FusionFix GGX lights: the lobe (see above)
 +    label l1
++    min r9.w, r9.w, c172.y // no gloss past the G-buffer's 512: the peds' shaders write it through rcp
 +    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
@@ -138,11 +139,12 @@ index 7a8a6fe0..5c46291d 100644
 +    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
++    // highlight, and normal mapped cloth or skin and grazing edges burnt white
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index afca255b..5ae04668 100644
+index afca255b..9f761b04 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 @@ -46,6 +46,9 @@
@@ -242,7 +244,7 @@ index afca255b..5ae04668 100644
      // --- FusionFix local contact shadows: a short ray from this pixel towards the light
      // --- through the opaque depth catches small occluders, also for lights without a shadow
      // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
-@@ -231,3 +282,64 @@
+@@ -231,3 +282,66 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 36 instruction slots used (3 texture, 33 arithmetic)
@@ -250,6 +252,7 @@ index afca255b..5ae04668 100644
 +    ret
 +    // --- FusionFix GGX lights: the lobe (see above)
 +    label l1
++    min r9.w, r9.w, c172.y // no gloss past the G-buffer's 512: the peds' shaders write it through rcp
 +    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
@@ -305,11 +308,12 @@ index afca255b..5ae04668 100644
 +    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
++    // highlight, and normal mapped cloth or skin and grazing edges burnt white
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index fb737859..567e293d 100644
+index fb737859..dbfb625c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 @@ -49,6 +49,9 @@
@@ -409,7 +413,7 @@ index fb737859..567e293d 100644
      mad r1.x, r3.x, c1.x, c1.y
      cmp r1.x, r1.x, c1.y, c1.z
      mad r1.x, r3.x, c0.w, r1.x
-@@ -241,3 +292,64 @@
+@@ -241,3 +292,66 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 42 instruction slots used (4 texture, 38 arithmetic)
@@ -417,6 +421,7 @@ index fb737859..567e293d 100644
 +    ret
 +    // --- FusionFix GGX lights: the lobe (see above)
 +    label l1
++    min r9.w, r9.w, c172.y // no gloss past the G-buffer's 512: the peds' shaders write it through rcp
 +    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
@@ -472,11 +477,12 @@ index fb737859..567e293d 100644
 +    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
++    // highlight, and normal mapped cloth or skin and grazing edges burnt white
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 4e9d1955..168147a5 100644
+index 4e9d1955..af2aa9d4 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 @@ -49,6 +49,9 @@
@@ -576,7 +582,7 @@ index 4e9d1955..168147a5 100644
      mad r1.x, r3.x, c1.x, c1.y
      cmp r1.x, r1.x, c1.y, c1.z
      mad r1.x, r3.x, c0.w, r1.x
-@@ -241,3 +292,64 @@
+@@ -241,3 +292,66 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 42 instruction slots used (4 texture, 38 arithmetic)
@@ -584,6 +590,7 @@ index 4e9d1955..168147a5 100644
 +    ret
 +    // --- FusionFix GGX lights: the lobe (see above)
 +    label l1
++    min r9.w, r9.w, c172.y // no gloss past the G-buffer's 512: the peds' shaders write it through rcp
 +    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
@@ -639,11 +646,12 @@ index 4e9d1955..168147a5 100644
 +    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
++    // highlight, and normal mapped cloth or skin and grazing edges burnt white
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index dee4384c..7e38d8f7 100644
+index dee4384c..22f8047f 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -84,6 +84,9 @@
@@ -709,7 +717,7 @@ index dee4384c..7e38d8f7 100644
      mul r1.xyz, r1, r2.w
      mul r1.xyz, r0.x, r1
      texld r4, r0.zwzw, s0
-@@ -467,3 +502,64 @@
+@@ -467,3 +502,66 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 122 instruction slots used (9 texture, 113 arithmetic)
@@ -717,6 +725,7 @@ index dee4384c..7e38d8f7 100644
 +    ret
 +    // --- FusionFix GGX lights: the lobe (see above)
 +    label l1
++    min r9.w, r9.w, c172.y // no gloss past the G-buffer's 512: the peds' shaders write it through rcp
 +    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
@@ -772,11 +781,12 @@ index dee4384c..7e38d8f7 100644
 +    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
++    // highlight, and normal mapped cloth or skin and grazing edges burnt white
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index 4ffde2ff..3c3a1a91 100644
+index 4ffde2ff..0365fc97 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 @@ -77,6 +77,9 @@
@@ -882,7 +892,7 @@ index 4ffde2ff..3c3a1a91 100644
      // --- FusionFix local contact shadows: a short ray from this pixel towards the light
      // --- through the opaque depth catches small occluders, also for lights without a shadow
      // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
-@@ -419,3 +471,64 @@
+@@ -419,3 +471,66 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 92 instruction slots used (7 texture, 85 arithmetic)
@@ -890,6 +900,7 @@ index 4ffde2ff..3c3a1a91 100644
 +    ret
 +    // --- FusionFix GGX lights: the lobe (see above)
 +    label l1
++    min r9.w, r9.w, c172.y // no gloss past the G-buffer's 512: the peds' shaders write it through rcp
 +    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
@@ -945,11 +956,12 @@ index 4ffde2ff..3c3a1a91 100644
 +    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
++    // highlight, and normal mapped cloth or skin and grazing edges burnt white
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 31cfc0a5..16705d4d 100644
+index 31cfc0a5..b69a7bfc 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -55,6 +55,9 @@
@@ -1010,7 +1022,7 @@ index 31cfc0a5..16705d4d 100644
      mul r1.xyw, r0.xyzz, r0.w
      mul r0.xyz, r21, r0 // FusionFix skin lighting: the wrapped N.L per channel
      mul r2.xyz, r3, r6
-@@ -299,3 +334,64 @@
+@@ -299,3 +334,66 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 90 instruction slots used (8 texture, 82 arithmetic)
@@ -1018,6 +1030,7 @@ index 31cfc0a5..16705d4d 100644
 +    ret
 +    // --- FusionFix GGX lights: the lobe (see above)
 +    label l1
++    min r9.w, r9.w, c172.y // no gloss past the G-buffer's 512: the peds' shaders write it through rcp
 +    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
@@ -1073,11 +1086,12 @@ index 31cfc0a5..16705d4d 100644
 +    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
++    // highlight, and normal mapped cloth or skin and grazing edges burnt white
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 91955bce..28ce1589 100644
+index 91955bce..fbbfe871 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -86,6 +86,9 @@
@@ -1138,7 +1152,7 @@ index 91955bce..28ce1589 100644
      dp3_sat r0.w, r8, r5
      dp3 r21.w, r8, r5 // FusionFix skin lighting: N.L, unclamped
      mul r21.xyz, c201, r20.w // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
-@@ -485,3 +520,64 @@
+@@ -485,3 +520,66 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 144 instruction slots used (12 texture, 132 arithmetic)
@@ -1146,6 +1160,7 @@ index 91955bce..28ce1589 100644
 +    ret
 +    // --- FusionFix GGX lights: the lobe (see above)
 +    label l1
++    min r9.w, r9.w, c172.y // no gloss past the G-buffer's 512: the peds' shaders write it through rcp
 +    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
@@ -1201,11 +1216,12 @@ index 91955bce..28ce1589 100644
 +    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
++    // highlight, and normal mapped cloth or skin and grazing edges burnt white
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-index c05c5756..5aef1487 100644
+index c05c5756..9604ed0b 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 @@ -105,6 +105,14 @@
@@ -1281,7 +1297,7 @@ index c05c5756..5aef1487 100644
        mul r0.xzw, r1.x, r0
        mul r0.xzw, r0, c8.y
        add r1.x, c17.w, c17.w
-@@ -753,3 +798,64 @@
+@@ -753,3 +798,66 @@
      // ----------------------------------------------------------------------------------------------------------------------------------------------
  
  // approximately 184 instruction slots used (19 texture, 165 arithmetic)
@@ -1289,6 +1305,7 @@ index c05c5756..5aef1487 100644
 +    ret
 +    // --- FusionFix GGX lights: the lobe (see above)
 +    label l1
++    min r9.w, r9.w, c172.y // no gloss past the G-buffer's 512: the peds' shaders write it through rcp
 +    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
@@ -1344,7 +1361,8 @@ index c05c5756..5aef1487 100644
 +    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
++    // highlight, and normal mapped cloth or skin and grazing edges burnt white
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
@@ -1480,7 +1498,7 @@ index 92d6423d..f8570f01 100644
        add r1.w, r3.x, r3.x
        mad r2.x, r0.y, r3.y, r1.w
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 311b0a49..9f76c4f4 100644
+index 311b0a49..229f6e98 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -50,6 +50,9 @@
@@ -1544,7 +1562,7 @@ index 311b0a49..9f76c4f4 100644
      mul r0.x, r0.z, c3.x
      dp3 r0.y, r3, -c72
      dp3_sat r0.w, r3, r2
-@@ -265,3 +300,64 @@
+@@ -265,3 +300,66 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 59 instruction slots used (4 texture, 55 arithmetic)
@@ -1552,6 +1570,7 @@ index 311b0a49..9f76c4f4 100644
 +    ret
 +    // --- FusionFix GGX lights: the lobe (see above)
 +    label l1
++    min r9.w, r9.w, c172.y // no gloss past the G-buffer's 512: the peds' shaders write it through rcp
 +    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
@@ -1607,11 +1626,12 @@ index 311b0a49..9f76c4f4 100644
 +    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
++    // highlight, and normal mapped cloth or skin and grazing edges burnt white
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index ffaab0be..27cf8724 100644
+index ffaab0be..0fa87c96 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -53,6 +53,9 @@
@@ -1675,7 +1695,7 @@ index ffaab0be..27cf8724 100644
      mul r0.w, r0.z, c4.x
      dp3 r1.y, r3, -c72
      dp3_sat r1.z, r3, r2
-@@ -274,3 +309,64 @@
+@@ -274,3 +309,66 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 64 instruction slots used (5 texture, 59 arithmetic)
@@ -1683,6 +1703,7 @@ index ffaab0be..27cf8724 100644
 +    ret
 +    // --- FusionFix GGX lights: the lobe (see above)
 +    label l1
++    min r9.w, r9.w, c172.y // no gloss past the G-buffer's 512: the peds' shaders write it through rcp
 +    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
@@ -1738,11 +1759,12 @@ index ffaab0be..27cf8724 100644
 +    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
++    // highlight, and normal mapped cloth or skin and grazing edges burnt white
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index b7a116d3..de8390bf 100644
+index b7a116d3..96077cd8 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -53,6 +53,9 @@
@@ -1806,7 +1828,7 @@ index b7a116d3..de8390bf 100644
      mul r0.w, r0.z, c4.y
      dp3 r1.y, r3, -c72
      dp3_sat r1.w, r3, r2
-@@ -276,3 +311,64 @@
+@@ -276,3 +311,66 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 66 instruction slots used (5 texture, 61 arithmetic)
@@ -1814,6 +1836,7 @@ index b7a116d3..de8390bf 100644
 +    ret
 +    // --- FusionFix GGX lights: the lobe (see above)
 +    label l1
++    min r9.w, r9.w, c172.y // no gloss past the G-buffer's 512: the peds' shaders write it through rcp
 +    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
@@ -1869,11 +1892,12 @@ index b7a116d3..de8390bf 100644
 +    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
++    // highlight, and normal mapped cloth or skin and grazing edges burnt white
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index b32e9e9b..7f586b6a 100644
+index b32e9e9b..994b2ad8 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -53,6 +53,9 @@
@@ -1937,7 +1961,7 @@ index b32e9e9b..7f586b6a 100644
      mul r0.w, r0.z, c4.y
      dp3 r1.y, r3, -c72
      dp3_sat r1.z, r3, r2
-@@ -278,3 +313,64 @@
+@@ -278,3 +313,66 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 68 instruction slots used (5 texture, 63 arithmetic)
@@ -1945,6 +1969,7 @@ index b32e9e9b..7f586b6a 100644
 +    ret
 +    // --- FusionFix GGX lights: the lobe (see above)
 +    label l1
++    min r9.w, r9.w, c172.y // no gloss past the G-buffer's 512: the peds' shaders write it through rcp
 +    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
@@ -2000,6 +2025,7 @@ index b32e9e9b..7f586b6a 100644
 +    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
++    // highlight, and normal mapped cloth or skin and grazing edges burnt white
 +    ret
 \ No newline at end of file

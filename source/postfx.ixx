@@ -440,6 +440,10 @@ public:
     float fLightsGGXFillLights = 0.5f;
     float fLightsGGXSun = 1.0f;
     float fLightsGGXEnvironment = 1.0f;
+    // - LightsGGXMax: the most a GGX highlight may reach, in the game's own peak (its pow(R.L, n) at 1).
+    //   GGX keeps the energy, so a narrow lobe peaks far above it: at 8, normal mapped clothes, skin and
+    //   wood burnt into white patches and grazing edges into white strips.
+    float fLightsGGXMax = 2.0f;
     // Wet ground (WetGround.fx): WetGround the strength, 0 off. WetGroundPuddles the share of flat
     // ground under water at full wetness, WetGroundPuddleSize the metres one tile of the puddle map
     // takes, WetGroundRipples the rain's rings in them, WetGroundDarkening how much darker wet
@@ -1495,6 +1499,7 @@ public:
         fLightsGGXFillLights = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXFillLights", 0.5f), 0.0f, 2.0f);
         fLightsGGXSun = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSun", 1.0f), 0.0f, 4.0f);
         fLightsGGXEnvironment = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXEnvironment", 1.0f), 0.0f, 1.0f);
+        fLightsGGXMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXMax", 2.0f), 0.1f, 16.0f);
         fWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "WetGround", 1.0f), 0.0f, 1.0f);
         fWetGroundPuddles = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddles", 0.35f), 0.0f, 1.0f);
         fWetGroundPuddleSize = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddleSize", 24.0f), 2.0f, 500.0f);
@@ -7277,14 +7282,14 @@ public:
         // The GGX highlights. c200: x the strength (0 the game's own), halved since the shaders
         // divide by twice the visibility's denominator, y the Fresnel rise, z the lights' radius
         // squared, w the lobe's stretch along the light, squared. c165: the fill lights' share,
-        // the sun's (0 its own highlight), the environment BRDF's blend. c206, the headlights'
+        // the sun's (0 its own highlight), the environment BRDF's blend, the highlight's ceiling. c206, the headlights'
         // spacing, is set per light (InstallLocalContactLightHook); s13 the G-buffer's specular for
         // the fill lights, read by no game shader while the lights are drawn.
         {
             const bool on = R.fLightsGGX > 0.0f;
             const float stretch = 1.0f + R.fLightsGGXStretch;
             const float c200[4] = { R.fLightsGGX * 0.5f, R.fLightsGGXFresnel, R.fLightsGGXSize * R.fLightsGGXSize, stretch * stretch };
-            const float c165[4] = { on ? R.fLightsGGXFillLights : 0.0f, on ? R.fLightsGGXSun : 0.0f, R.fLightsGGXEnvironment, 0.0f };
+            const float c165[4] = { on ? R.fLightsGGXFillLights : 0.0f, on ? R.fLightsGGXSun : 0.0f, R.fLightsGGXEnvironment, R.fLightsGGXMax };
             pDevice->SetPixelShaderConstantF(200, c200, 1);
             pDevice->SetPixelShaderConstantF(165, c165, 1);
             std::memset(R.LightGGXShape, 0, sizeof(R.LightGGXShape));
