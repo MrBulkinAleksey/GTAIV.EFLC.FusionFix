@@ -14,6 +14,7 @@ export module framegeneration;
 
 import common;
 import comvars;
+import consolegamma;
 import hdr;
 import renderscale;
 import upscaler;
@@ -66,6 +67,7 @@ namespace
         constexpr int32_t NoRebind = 256;       // the targets are not set again after it
         constexpr int32_t Marker = 512;         // a square in the corner: magenta on generated frames, green on rendered ones
         constexpr int32_t Similarity = 1024;    // how much the generated frame differs from the rendered ones around it
+        constexpr int32_t NoHudLess = 2048;     // the frame generation gets no frame before the HUD
     }
     int32_t nDebug = 0;
 
@@ -452,8 +454,8 @@ namespace
 
     struct SimilarityStats
     {
-        uint32_t frames = 0;
-        double toPrevious = 0.0, toCurrent = 0.0, between = 0.0;
+        uint32_t frames = 0, hudLessFrames = 0;
+        double toPrevious = 0.0, toCurrent = 0.0, between = 0.0, hudLessDiffers = 0.0;
     } Similar;
 
     bool ReadSmall(IDirect3DDevice9* device, IDirect3DSurface9* source, std::vector<uint8_t>& pixels)
@@ -487,12 +489,21 @@ namespace
         return a.empty() ? 0.0 : sum / static_cast<double>(a.size());
     }
 
-    // After Generate: the generated frame, between the last rendered frame and this one
-    void CompareGenerated(IDirect3DDevice9* device, IDirect3DSurface9* current, IDirect3DSurface9* generated)
+    // After Generate: the generated frame, between the last rendered frame and this one. hudLess: the frame before the
+    // HUD the frame generation got, which should differ from the finished frame only where the HUD is.
+    void CompareGenerated(IDirect3DDevice9* device, IDirect3DSurface9* current, IDirect3DSurface9* generated, IDirect3DSurface9* hudLess)
     {
-        std::vector<uint8_t> now, between;
+        std::vector<uint8_t> now, between, beforeHud;
         if (!ReadSmall(device, current, now))
             return;
+        if (hudLess && ReadSmall(device, hudLess, beforeHud))
+        {
+            uint32_t differs = 0;
+            for (size_t i = 0; i + 2 < now.size(); i += 3)
+                differs += std::abs(now[i] - beforeHud[i]) + std::abs(now[i + 1] - beforeHud[i + 1]) + std::abs(now[i + 2] - beforeHud[i + 2]) > 12;
+            ++Similar.hudLessFrames;
+            Similar.hudLessDiffers += static_cast<double>(differs) / (now.size() / 3);
+        }
         bool compared = !PreviousSmall.empty() && ReadSmall(device, generated, between);
         if (compared)
         {
@@ -507,8 +518,9 @@ namespace
                 m.between += frames;
                 if (m.frames >= 100)
                 {
-                    Log("Generated frames over %u moving frames: they differ from the rendered frame before by %.2f and from the one after by %.2f of what those two differ by (%.1f on average)",
-                        m.frames, m.toPrevious / m.frames, m.toCurrent / m.frames, m.between / m.frames);
+                    Log("Generated frames over %u moving frames: they differ from the rendered frame before by %.2f and from the one after by %.2f of what those two differ by (%.1f on average); the frame before the HUD differs from the finished one over %.0f%% of the screen (%u frames)",
+                        m.frames, m.toPrevious / m.frames, m.toCurrent / m.frames, m.between / m.frames,
+                        m.hudLessFrames ? 100.0 * m.hudLessDiffers / m.hudLessFrames : 0.0, m.hudLessFrames);
                     m = {};
                 }
             }
@@ -920,7 +932,11 @@ namespace
                 {
                     if (Upscaler::WasGenerateReset())
                         PreviousSmall.clear();
-                    CompareGenerated(device, presentSurface, generatedSurface);
+                    IDirect3DSurface9* hudLessSurface = nullptr;
+                    if (hudLess)
+                        HudLessRT->mD3DTexture->GetSurfaceLevel(0, &hudLessSurface);
+                    CompareGenerated(device, presentSurface, generatedSurface, hudLessSurface);
+                    SAFE_RELEASE(hudLessSurface);
                 }
 
                 // The game presents the generated frame, the rendered one waits in PresentRT. Not a frame generated
@@ -965,7 +981,7 @@ export namespace FrameGeneration
     // The frame before the HUD will be captured: tells Evaluate, which comes earlier in the frame
     bool UsesHudLess()
     {
-        return mode != Mode::Off && !HDROutput::IsActive();
+        return mode != Mode::Off && !HDROutput::IsActive() && !(nDebug & Debug::NoHudLess);
     }
 
     // Render thread, right after the post processing: the back buffer holds the scene without the HUD
@@ -980,7 +996,29 @@ export namespace FrameGeneration
             return;
         bHudLessCaptured = CopyInto(device, backBuffer, HudLessRT);
         if (!bHudLessCaptured)
+        {
             LogOnce(4, "The frame before the HUD could not be copied");
+            return;
+        }
+
+        // Whatever is drawn over the whole frame after the HUD is part of the finished frame, and so has to be of this
+        // one too: the frame generation takes what differs for the HUD, the whole frame otherwise
+        if (ConsoleGamma::IsActive())
+        {
+            IDirect3DSurface9* oldTarget = nullptr;
+            IDirect3DSurface9* hudLessSurface = nullptr;
+            D3DVIEWPORT9 oldViewport{};
+            device->GetRenderTarget(0, &oldTarget);
+            device->GetViewport(&oldViewport);
+            HudLessRT->mD3DTexture->GetSurfaceLevel(0, &hudLessSurface);
+            if (hudLessSurface && SUCCEEDED(device->SetRenderTarget(0, hudLessSurface)))
+                ConsoleGamma::Apply(device);
+            if (oldTarget)
+                device->SetRenderTarget(0, oldTarget);
+            device->SetViewport(&oldViewport);
+            SAFE_RELEASE(hudLessSurface);
+            SAFE_RELEASE(oldTarget);
+        }
     }
 }
 
