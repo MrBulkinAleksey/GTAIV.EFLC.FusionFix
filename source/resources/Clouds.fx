@@ -350,7 +350,11 @@ float3 RayDirection(float2 vpos, out float rayScale)
     return dir / rayScale;
 }
 
-CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
+// steps, stepScale, lightSteps and lightStart: the march's budget. The scene's clouds take CLOUD_STEPS,
+// 1, LIGHT_STEPS and 0.05; the reflections (Clouds_PS) a quarter of the steps, each four times as long,
+// and two steps towards the sun from a quarter of the layer: drawn at the full size of a 1024 x 1024
+// map every frame with the scene's budget, they cost five times the scene's clouds.
+CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, int steps, float stepScale, float lightSteps, float lightStart)
 {
     CloudSums sums;
     sums.transmittance = 1.0;
@@ -384,18 +388,18 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
     // Each pixel starts up to a coarse step later: with the same coarse steps for every pixel,
     // thin cloud between two of them went missing in whole bands across the screen.
     float jitter = frac(PixelJitter(vpos) + fFrameJitter);
-    float t = t0 + max(vec4Layer.y / 24.0, t0 * FAR_STEP) * COARSE_STEP * jitter;
+    float t = t0 + max(vec4Layer.y / 24.0, t0 * FAR_STEP) * stepScale * COARSE_STEP * jitter;
     float fineLeft = 0.0;
     // Looking away from the sun, how much the powder effect darkens the sun's light (below).
     float powderView = full ? 0.35 - 0.35 * dot(dir, vec3SunDir) : 0.0;
 
     // [fastopt]: without it D3DX spent close to a minute on this loop while the game loaded.
     [loop] [fastopt]
-    for (int i = 0; i < CLOUD_STEPS; ++i)
+    for (int i = 0; i < steps; ++i)
     {
         if (t >= t1 || sums.transmittance < 0.01)
             break;
-        float fine = max(vec4Layer.y / 24.0, t * FAR_STEP);
+        float fine = max(vec4Layer.y / 24.0, t * FAR_STEP) * stepScale;
         float3 p = origin + dir * t;
         p.z += curve * t * t;
 
@@ -429,13 +433,13 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full)
             // The cloud between the sample and the sun, without the detail: from a twentieth of the
             // layer, each step twice the last, out past its whole thickness so the bases darken.
             float lightDepth = 0.0;
-            float stepLength = vec4Layer.y * 0.05;
+            float stepLength = vec4Layer.y * lightStart;
             float3 q = p;
             // A float counter, and no [fastopt]: with an int counter under [fastopt] the compiler
             // negated the loop's bound, and the loop broke before its first step. The light's march
             // found no cloud at all, every cloud took the sun whole, and the absorption did nothing.
             [loop]
-            for (float j = 0.0; j < LIGHT_STEPS - 0.5; j += 1.0)
+            for (float j = 0.0; j < lightSteps - 0.5; j += 1.0)
             {
                 q += vec3SunDir * stepLength;
                 float unused, unusedSoft;
@@ -680,7 +684,7 @@ float4 Clouds_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
 {
     float rayScale;
     float3 dir = RayDirection(vpos, rayScale);
-    return Light(March(uv, vpos, dir, rayScale, false), dir, false, uv);
+    return Light(March(uv, vpos, dir, rayScale, false, CLOUD_STEPS / 4, 4.0, 2.0, 0.25), dir, false, uv);
 }
 
 // The march at half size, its sums in two targets: (transmittance, sun, shade, silver) and (glow,
@@ -689,7 +693,7 @@ void CloudsMarch_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS, out float4 sums0 
 {
     float rayScale;
     float3 dir = RayDirection(vpos, rayScale);
-    CloudSums sums = March(uv, vpos, dir, rayScale, true);
+    CloudSums sums = March(uv, vpos, dir, rayScale, true, CLOUD_STEPS, 1.0, LIGHT_STEPS, 0.05);
     sums0 = float4(sums.transmittance, sums.sun, sums.shade, sums.silver);
     sums1 = float4(sums.glow, sums.firstHit, sums.top, sums.height);
 }
