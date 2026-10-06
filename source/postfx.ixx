@@ -3026,12 +3026,14 @@ private:
                 }
             }
 
-            // The lit scene, sampler 1 of the fog pass, with the light scattered under the skin
-            // if that runs; the fog, the copy below and SSR's history all take it.
+            // The lit scene, sampler 1 of the fog pass: the volumetric clouds drawn into the game's own scene first, then
+            // the light scattered under the skin if that runs, from a copy that has the clouds; the fog, the copy below
+            // and SSR's history all take it. The other way round the clouds drew into the skin passes' own target, and
+            // without temporal anti-aliasing the whole picture shook.
+            RenderVolumetricClouds(pDevice, prevTex[1]);
             IDirect3DBaseTexture9* scene = prevTex[1];
             if (auto skin = RenderSkinScattering(pDevice, prevTex[1]))
                 scene = skin;
-            RenderVolumetricClouds(pDevice, scene);
 
             if (PostFxResources.FullScreenTex_temp1)
             {
