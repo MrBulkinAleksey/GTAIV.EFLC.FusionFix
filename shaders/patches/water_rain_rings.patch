@@ -1,5 +1,150 @@
+diff --git a/win32_30_nv8/water/waterPS1.asm b/win32_30_nv8/water/waterPS1.asm
+index 6601c7c2..a46e4c91 100644
+--- a/win32_30_nv8/water/waterPS1.asm
++++ b/win32_30_nv8/water/waterPS1.asm
+@@ -35,6 +35,13 @@
+     def c3, 0.0299999993, 1, -1, 0.125
+     def c4, 0.600000024, 0.200000003, 0, 0
+     def c5, 1.00001001, 1, 0, 9.99999975e-006
++    def c180, 2.85714293, 2.08550596, 3.44234157, 0 // FusionFix rain rings: one over each grid's cell, metres
++    def c181, 0.349999994, 0.479499996, 0.290499985, 0 // FusionFix rain rings: the cells
++    def c182, 1, 0.810000002, 1.23000002, 0 // FusionFix rain rings: drops per cell a second
++    def c183, 0, 5.30000019, 11.6999998, 0 // FusionFix rain rings: the grids' offsets
++    def c184, 0.0671105608, 0.00583714992, 0, 52.9829178 // FusionFix rain rings: the cell hash
++    def c185, 0.5, 0.300000012, 0.400000006, -1298.41162 // FusionFix rain rings: the drop's place, how far the ring runs, its width (-900 / ln 2)
++    def c186, 20, 17, 0.00100000005, 1 // FusionFix rain rings: the tilt, the second hash's offset, a small number, one
+     dcl_texcoord v0.xyz
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord2 v2.xyz
+@@ -63,6 +70,126 @@
+     texld r1, r0.zwzw, s0
+     add r0.zw, r1, c0.x
+     mad r0.xy, r0.zwzw, c2.w, r0
++    // --- FusionFix rain rings (c178: WetGroundRipples, set in WaterRenderHook in postfx.ixx; x the strength by the rain, y seconds, zw the
++    // --- fade with distance): raindrops ring the water as they ring the puddles on the ground. Three hashed grids
++    // --- of cells, a drop in each at its own time; its ring runs out to most of the cell and fades, tilting the
++    // --- waves' slope (r0.xy) away from the drop on its outer side and towards it on the inner.
++    mov r17.w, c178.x
++    mov r18.x, c184.z
++    if_lt r18.x, r17.w
++      mov r16.xy, c184.z
++      mul r12.xy, v2.xy, c180.x
++      add r12.xy, r12.xy, c183.x
++      frc r12.zw, r12.xyxy
++      add r13.xy, r12.xy, -r12.zw // the cell
++      dp2add r13.z, r13, c184, c184.z
++      frc r13.z, r13.z
++      mul r13.z, r13.z, c184.w
++      frc r13.z, r13.z // its hash
++      add r14.xy, r13.xy, c186.y
++      dp2add r13.w, r14, c184, c184.z
++      frc r13.w, r13.w
++      mul r13.w, r13.w, c184.w
++      frc r13.w, r13.w // and a second
++      add r14.xy, r13.zw, -c185.x
++      mad r14.xy, r14.xy, c185.y, c185.x // where the drop fell
++      add r14.xy, r12.zw, -r14.xy
++      dp2add r14.z, r14, r14, c184.z
++      max r14.z, r14.z, c186.z
++      rsq r14.w, r14.z
++      rcp r14.z, r14.w // how far from the drop
++      mov r15.x, c182.x
++      mad r15.x, c178.y, r15.x, r13.z
++      frc r15.x, r15.x // the ring's age
++      mad r15.y, r15.x, -c185.z, r14.z
++      mul r15.y, r15.y, c181.x // metres out of the ring
++      mul r15.z, r15.y, r15.y
++      mul r15.z, r15.z, c185.w
++      exp r15.z, r15.z
++      mul r15.z, r15.z, r15.y
++      add r15.w, -r15.x, c186.w
++      mul r15.w, r15.w, r15.w
++      mul r15.z, r15.z, r15.w // fading as it grows
++      mul r14.xy, r14.xy, r14.w
++      mad r16.xy, r14.xy, r15.z, r16.xy
++      mul r12.xy, v2.xy, c180.y
++      add r12.xy, r12.xy, c183.y
++      frc r12.zw, r12.xyxy
++      add r13.xy, r12.xy, -r12.zw // the cell
++      dp2add r13.z, r13, c184, c184.z
++      frc r13.z, r13.z
++      mul r13.z, r13.z, c184.w
++      frc r13.z, r13.z // its hash
++      add r14.xy, r13.xy, c186.y
++      dp2add r13.w, r14, c184, c184.z
++      frc r13.w, r13.w
++      mul r13.w, r13.w, c184.w
++      frc r13.w, r13.w // and a second
++      add r14.xy, r13.zw, -c185.x
++      mad r14.xy, r14.xy, c185.y, c185.x // where the drop fell
++      add r14.xy, r12.zw, -r14.xy
++      dp2add r14.z, r14, r14, c184.z
++      max r14.z, r14.z, c186.z
++      rsq r14.w, r14.z
++      rcp r14.z, r14.w // how far from the drop
++      mov r15.x, c182.y
++      mad r15.x, c178.y, r15.x, r13.z
++      frc r15.x, r15.x // the ring's age
++      mad r15.y, r15.x, -c185.z, r14.z
++      mul r15.y, r15.y, c181.y // metres out of the ring
++      mul r15.z, r15.y, r15.y
++      mul r15.z, r15.z, c185.w
++      exp r15.z, r15.z
++      mul r15.z, r15.z, r15.y
++      add r15.w, -r15.x, c186.w
++      mul r15.w, r15.w, r15.w
++      mul r15.z, r15.z, r15.w // fading as it grows
++      mul r14.xy, r14.xy, r14.w
++      mad r16.xy, r14.xy, r15.z, r16.xy
++      mul r12.xy, v2.xy, c180.z
++      add r12.xy, r12.xy, c183.z
++      frc r12.zw, r12.xyxy
++      add r13.xy, r12.xy, -r12.zw // the cell
++      dp2add r13.z, r13, c184, c184.z
++      frc r13.z, r13.z
++      mul r13.z, r13.z, c184.w
++      frc r13.z, r13.z // its hash
++      add r14.xy, r13.xy, c186.y
++      dp2add r13.w, r14, c184, c184.z
++      frc r13.w, r13.w
++      mul r13.w, r13.w, c184.w
++      frc r13.w, r13.w // and a second
++      add r14.xy, r13.zw, -c185.x
++      mad r14.xy, r14.xy, c185.y, c185.x // where the drop fell
++      add r14.xy, r12.zw, -r14.xy
++      dp2add r14.z, r14, r14, c184.z
++      max r14.z, r14.z, c186.z
++      rsq r14.w, r14.z
++      rcp r14.z, r14.w // how far from the drop
++      mov r15.x, c182.z
++      mad r15.x, c178.y, r15.x, r13.z
++      frc r15.x, r15.x // the ring's age
++      mad r15.y, r15.x, -c185.z, r14.z
++      mul r15.y, r15.y, c181.z // metres out of the ring
++      mul r15.z, r15.y, r15.y
++      mul r15.z, r15.z, c185.w
++      exp r15.z, r15.z
++      mul r15.z, r15.z, r15.y
++      add r15.w, -r15.x, c186.w
++      mul r15.w, r15.w, r15.w
++      mul r15.z, r15.z, r15.w // fading as it grows
++      mul r14.xy, r14.xy, r14.w
++      mad r16.xy, r14.xy, r15.z, r16.xy
++      mul r16.xy, r16.xy, c186.x
++      mov r17.xyz, v3
++      add r17.xyz, v2, -r17 // one input register per instruction (X5583)
++      dp3 r17.x, r17, r17
++      rsq r17.x, r17.x
++      rcp r17.x, r17.x // the distance from the camera
++      mad_sat r17.x, r17.x, c178.z, c178.w
++      mul r17.x, r17.x, c178.x
++      mad r0.xy, r16.xy, r17.x, r0.xy
++    endif
+     add r0.xy, r0, c1.z
+     mov r0.z, c5.x
+     nrm r1.xyz, r0
 diff --git a/win32_30_nv8/water/waterPS2.asm b/win32_30_nv8/water/waterPS2.asm
-index 3eadd6cf..e2b6fbe7 100644
+index 3eadd6cf..04992387 100644
 --- a/win32_30_nv8/water/waterPS2.asm
 +++ b/win32_30_nv8/water/waterPS2.asm
 @@ -103,6 +103,13 @@
@@ -20,7 +165,7 @@ index 3eadd6cf..e2b6fbe7 100644
      mul r0.z, r0.z, v1.w
      cmp r0.z, r1.y, r0.z, c1.w
      lrp r1.xy, r0.z, v4, r3.zwzw
-+    // --- FusionFix rain rings (c178: WetGroundRipples in postfx.ixx, RenderWetGround; x the strength by the rain, y seconds, zw the
++    // --- FusionFix rain rings (c178: WetGroundRipples, set in WaterRenderHook in postfx.ixx; x the strength by the rain, y seconds, zw the
 +    // --- fade with distance): raindrops ring the water as they ring the puddles on the ground. Three hashed grids
 +    // --- of cells, a drop in each at its own time; its ring runs out to most of the cell and fades, tilting the
 +    // --- waves' slope (r1.xy) away from the drop on its outer side and towards it on the inner.
