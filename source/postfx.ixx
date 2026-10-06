@@ -387,6 +387,7 @@ public:
     bool bGIBound = false;
     // mMaterialIdRT on s11 during lighting, for skin in the light volume shaders.
     bool bMaterialIdBound = false;
+    bool bSpecularBound = false;
 
     // Light scattering under the skin (SkinScatter_PS in SSR.fx), as the fog pass begins: the
     // light on skin with its view depth into SkinLightTex[0], blurred along x into [1], and along
@@ -410,19 +411,33 @@ public:
     // times the square of one less their colour's saturation and faded out on dark colours.
     // They are told apart by the gloss 258 / 1023 they write (world_no_specular_mark.patch).
     float fSpecularSheen = 0.1f;
-    // Street lamps' and headlights' highlights (c200; local_light_specular_ggx.patch): the game's
-    // are pow(R.L, n), the same peak at every gloss and nothing past the lobe. LightsGGX swaps in a
-    // GGX lobe of the same width with a height correlated Smith term, so glossy surfaces get a
-    // bright core with a long soft tail and wet roads long streaks towards the lamps, times that
-    // strength; 0 keeps the game's. LightsGGXFresnel is how far the reflectance rises from
-    // kLightsGGXReflectance head on towards 1 at grazing angles, and LightsGGXSize the lights'
-    // radius in metres, which widens the lobe by its angle so small lamps leave no tiny specks.
+    // Highlights of lamps, headlights and the sun (c165, c200, c206; local_light_specular_ggx.patch):
+    // the game's are pow(R.L, n), the same peak at every gloss and nothing past the lobe. LightsGGX
+    // swaps in a GGX lobe of the same width with a height correlated Smith term, so glossy surfaces
+    // get a bright core with a long soft tail, times that strength; 0 keeps the game's everywhere.
+    // - LightsGGXFresnel: how far the reflectance rises from 0.125 head on towards 1 at grazing angles.
+    // - LightsGGXSize: the lights' radius in metres, which widens the lobe by its angle, so small
+    //   lamps leave no tiny specks.
+    // - LightsGGXStretch: the lobe is that much wider along the light projected onto the surface,
+    //   so wet roads streak towards lamps.
+    // - LightsGGXHeadlights: half the spacing of a car's lamps. The game lights both with one light
+    //   between them; its lobe widens by that along the car's right, so the highlight covers both.
+    // - LightsGGXFillLights: lights the game draws with no highlight at all (fillerVolumePoint) get
+    //   this much of one, from the G-buffer's specular on s13.
+    // - LightsGGXSun: the sun's highlight the same way, 0 keeps the game's.
+    // - LightsGGXEnvironment: the sky's reflection takes its blur from the GGX roughness and its
+    //   Fresnel from the split sum environment BRDF, so rough surfaces stop shining at grazing
+    //   angles; 0 keeps the game's, values between blend.
     float fLightsGGX = 1.0f;
     float fLightsGGXFresnel = 0.5f;
     float fLightsGGXSize = 0.1f;
-    // The reflectance head on, chosen so a gloss of 32, the game's default, keeps about the
-    // energy of its old highlight seen from above.
-    static constexpr float kLightsGGXReflectance = 0.125f;
+    float fLightsGGXStretch = 0.5f;
+    float fLightsGGXHeadlights = 0.65f;
+    float fLightsGGXFillLights = 0.5f;
+    float fLightsGGXSun = 1.0f;
+    float fLightsGGXEnvironment = 1.0f;
+    // c206 as last set for a light, so lights of the same shape set nothing.
+    float LightGGXShape[4] = {};
     // Cloud shadows on the ground (c197.y-w, c198, c199, s12; deferred_lighting_sun_under_clouds.patch):
     // the ray from a surface towards the sun meets a cloud deck CloudShadowsHeight up, and the sun is
     // dimmed by up to CloudShadows where the clouds cover it there. The sky's clouds are on a dome
@@ -1408,6 +1423,11 @@ public:
         fLightsGGX = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGX", 1.0f), 0.0f, 4.0f);
         fLightsGGXFresnel = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXFresnel", 0.5f), 0.0f, 1.0f);
         fLightsGGXSize = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSize", 0.1f), 0.0f, 2.0f);
+        fLightsGGXStretch = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXStretch", 0.5f), 0.0f, 4.0f);
+        fLightsGGXHeadlights = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXHeadlights", 0.65f), 0.0f, 2.0f);
+        fLightsGGXFillLights = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXFillLights", 0.5f), 0.0f, 2.0f);
+        fLightsGGXSun = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSun", 1.0f), 0.0f, 4.0f);
+        fLightsGGXEnvironment = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXEnvironment", 1.0f), 0.0f, 1.0f);
         fCloudShadows = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadows", 0.6f), 0.0f, 1.0f);
         fCloudShadowsHeight = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsHeight", 1200.0f), 100.0f, 10000.0f);
         fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 16000.0f), 100.0f, 50000.0f);
@@ -6602,6 +6622,35 @@ private:
     // + 0x28, its flags at edi + 0x20), contact shadows go off for those lights and back on after.
     static inline SafetyHookMid shLocalContactLight{};
 
+    // c206 for the light about to be drawn: a headlight's (a spot light of 8 m or more with the
+    // vehicle flag, as InstallShaftHooks tells them) the car's level right and half its lamps'
+    // spacing squared, which widens its GGX highlight across both lamps; other lights none.
+    static void SetLightGGXShape(const rage::CLightSource& light)
+    {
+        auto& R = PostFxResources;
+        float shape[4] = {};
+        if (R.fLightsGGX > 0.0f && R.fLightsGGXHeadlights > 0.0f && light.mType == rage::LT_SPOT &&
+            (light.mFlags & rage::LF_VEHICLE) && light.mRadius >= 8.0f)
+        {
+            // dir x up, level
+            const float kx = light.mDirection.y, ky = -light.mDirection.x;
+            const float len = std::sqrt(kx * kx + ky * ky);
+            if (len > 1e-3f)
+            {
+                shape[0] = kx / len;
+                shape[1] = ky / len;
+                shape[3] = R.fLightsGGXHeadlights * R.fLightsGGXHeadlights;
+            }
+        }
+        if (std::memcmp(shape, R.LightGGXShape, sizeof(shape)) == 0)
+            return;
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+        std::memcpy(R.LightGGXShape, shape, sizeof(shape));
+        pDevice->SetPixelShaderConstantF(206, shape, 1);
+    }
+
     static void InstallLocalContactLightHook()
     {
         auto pattern = hook::pattern("83 C7 28 89 7C 24 1C 8B 47 1C 85 C0");
@@ -6610,7 +6659,10 @@ private:
         shLocalContactLight = safetyhook::create_mid(pattern.get_first(7), [](SafetyHookContext& regs)
         {
             auto& R = PostFxResources;
-            if (!R.bLocalContactPass || R.LocalContactShadowConsts[7] == 0.0f)
+            if (!R.bLocalContactPass)
+                return;
+            SetLightGGXShape(*reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28));
+            if (R.LocalContactShadowConsts[7] == 0.0f)
                 return;
             const bool off = (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x200) != 0;
             if (off == R.bLocalContactLightOff)
@@ -6817,12 +6869,26 @@ public:
             pDevice->SetPixelShaderConstantF(201, scale, 1);
             pDevice->SetPixelShaderConstantF(205, offset, 1);
         }
-        // The lights' GGX highlights: x the strength (0 the game's own), halved since the shaders
+        // The GGX highlights. c200: x the strength (0 the game's own), halved since the shaders
         // divide by twice the visibility's denominator, y the Fresnel rise, z the lights' radius
-        // squared, w the reflectance head on.
+        // squared, w the lobe's stretch along the light, squared. c165: the fill lights' share,
+        // the sun's (0 its own highlight), the environment BRDF's blend. c206, the headlights'
+        // spacing, is set per light (InstallLocalContactLightHook); s13 the G-buffer's specular for
+        // the fill lights, read by no game shader while the lights are drawn.
         {
-            const float c200[4] = { R.fLightsGGX * 0.5f, R.fLightsGGXFresnel, R.fLightsGGXSize * R.fLightsGGXSize, R.kLightsGGXReflectance };
+            const bool on = R.fLightsGGX > 0.0f;
+            const float stretch = 1.0f + R.fLightsGGXStretch;
+            const float c200[4] = { R.fLightsGGX * 0.5f, R.fLightsGGXFresnel, R.fLightsGGXSize * R.fLightsGGXSize, stretch * stretch };
+            const float c165[4] = { on ? R.fLightsGGXFillLights : 0.0f, on ? R.fLightsGGXSun : 0.0f, R.fLightsGGXEnvironment, 0.0f };
             pDevice->SetPixelShaderConstantF(200, c200, 1);
+            pDevice->SetPixelShaderConstantF(165, c165, 1);
+            std::memset(R.LightGGXShape, 0, sizeof(R.LightGGXShape));
+            pDevice->SetPixelShaderConstantF(206, R.LightGGXShape, 1);
+            if (R.mSpecularRT && R.mSpecularRT->mD3DTexture)
+            {
+                BindSampler(pDevice, 13, R.mSpecularRT->mD3DTexture, D3DTEXF_POINT);
+                R.bSpecularBound = true;
+            }
         }
         // The sun on materials with no specular map (x) and the cloud shadows (yzw, c198, c199, s12).
         {
@@ -7020,6 +7086,11 @@ public:
             SetTextureBoth(pDevice, 11, nullptr);
             R.bMaterialIdBound = false;
         }
+        if (R.bSpecularBound)
+        {
+            SetTextureBoth(pDevice, 13, nullptr);
+            R.bSpecularBound = false;
+        }
         if (R.bCloudNoiseBound)
         {
             // Whether the noise was still there once the lights were drawn, for the log.
@@ -7039,6 +7110,7 @@ public:
         pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(197, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(200, noLocalContactShadows, 1);
+        pDevice->SetPixelShaderConstantF(165, noLocalContactShadows, 1);
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
