@@ -1,12 +1,14 @@
 module;
 
 #include <common.hxx>
+#include "FusionLog.hpp"
 #include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstring>
 #include <functional>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 export module texturequality;
@@ -37,6 +39,7 @@ class TextureQuality
     // IDirect3DDevice9 methods
     static constexpr int kSetTexture = 65;
     static constexpr int kSetSamplerState = 69;
+    static constexpr int kSetPixelShader = 107;
 
     static inline float fDetailTiling = 8.0f;
     static inline float fDetailAlbedo = 0.15f;
@@ -56,6 +59,16 @@ class TextureQuality
     static inline float fParallaxMinSteps = 8.0f;
     static inline float fParallaxMaxSteps = 32.0f;
     static inline float fParallaxDepth = 1.0f;
+    static inline int nGroundDebug = 0;
+
+    // GroundSurfacesDebug: how often the G-buffer pass binds the ground's shaders, which
+    // world_terrain_and_parallax.patch marks with a constant (c186: 0.37, 0.61, 1e-12, kind).
+    static inline SafetyHookInline shSetPixelShader{};
+    static inline bool bPixelShaderHookTried = false;
+    static inline std::unordered_map<IDirect3DPixelShader9*, int> shaderKinds;
+    static inline uint64_t groundBinds[3] = {};
+    static inline uint32_t groundFrames = 0;
+    static inline bool bLastGround = false;
 
     // Made during the asynchronous init, which is over before the G-buffer hooks are added.
     static inline std::vector<std::vector<uint32_t>> detailLevels;
@@ -304,10 +317,48 @@ private:
         fParallaxMinSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMinSteps", 8.0f), 2.0f, 32.0f);
         fParallaxMaxSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMaxSteps", 32.0f), fParallaxMinSteps, 32.0f);
         fParallaxDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionDepth", 1.0f), 0.0f, 4.0f);
+        nGroundDebug = std::clamp(iniReader.ReadInteger("TEXTURES", "GroundSurfacesDebug", 0), 0, 1);
     }
 
-    // Ctrl+Shift+F10, which reads the post fx's live settings again, reads the ground's too.
-    static void TickGroundIniReload()
+    // 0 for any other shader, 1 for the terrain, 2 for gta_parallax*.
+    static int GroundShaderKind(IDirect3DPixelShader9* shader)
+    {
+        if (!shader)
+            return 0;
+        if (auto it = shaderKinds.find(shader); it != shaderKinds.end())
+            return it->second;
+        int kind = 0;
+        UINT size = 0;
+        if (SUCCEEDED(shader->GetFunction(nullptr, &size)) && size >= 16 && size < (1u << 20))
+        {
+            std::vector<uint32_t> code(size / 4);
+            if (SUCCEEDED(shader->GetFunction(code.data(), &size)))
+            {
+                const uint32_t mark[3] = { std::bit_cast<uint32_t>(0.37f), std::bit_cast<uint32_t>(0.61f), std::bit_cast<uint32_t>(1e-12f) };
+                for (size_t i = 0; i + 3 < code.size(); ++i)
+                {
+                    if (code[i] == mark[0] && code[i + 1] == mark[1] && code[i + 2] == mark[2])
+                    {
+                        kind = std::clamp(static_cast<int>(std::bit_cast<float>(code[i + 3])), 0, 2);
+                        break;
+                    }
+                }
+            }
+        }
+        shaderKinds.emplace(shader, kind);
+        return kind;
+    }
+
+    static HRESULT WINAPI SetPixelShaderHook(IDirect3DDevice9* pDevice, IDirect3DPixelShader9* shader)
+    {
+        if (bInGBuffer && nGroundDebug)
+            ++groundBinds[GroundShaderKind(shader)];
+        return shSetPixelShader.unsafe_stdcall<HRESULT>(pDevice, shader);
+    }
+
+    // Ctrl+Shift+F10, which reads the post fx's live settings again, reads the ground's too, and
+    // with GroundSurfacesDebug on writes what the G-buffer pass drew with to GTAIV.EFLC.FusionFix.Ground.log.
+    static void TickGroundIniReload(IDirect3DDevice9* pDevice)
     {
         static bool keyWasDown = false;
         const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
@@ -316,8 +367,25 @@ private:
         {
             CIniReader iniReader("");
             ReadGroundIni(iniReader);
+            const double frames = groundFrames ? double(groundFrames) : 1.0;
+            FusionLog::Write("Ground", "Draws", "Ground Surfaces %s, detail texture %s, debug %d, set-pixel-shader hook %s; per frame over %u frames: "
+                    "terrain shaders %.1f, parallax shaders %.1f, other shaders %.1f; %zu shaders seen\n",
+                    bLastGround ? "on" : "off", pDetailTex ? "made" : (bDetailTexFailed ? "failed" : "not made"), nGroundDebug,
+                    shSetPixelShader ? "on" : (bPixelShaderHookTried ? "failed" : "not tried"), groundFrames,
+                    groundBinds[1] / frames, groundBinds[2] / frames, groundBinds[0] / frames, shaderKinds.size());
+            memset(groundBinds, 0, sizeof(groundBinds));
+            groundFrames = 0;
         }
         keyWasDown = down;
+
+        if (nGroundDebug && !bPixelShaderHookTried)
+        {
+            bPixelShaderHookTried = true;
+            auto vtbl = *reinterpret_cast<void***>(pDevice);
+            shSetPixelShader = safetyhook::create_inline(vtbl[kSetPixelShader], SetPixelShaderHook);
+        }
+        if (nGroundDebug)
+            ++groundFrames;
     }
 
     // First command of the G-buffer pass.
@@ -326,7 +394,7 @@ private:
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
-        TickGroundIniReload();
+        TickGroundIniReload(pDevice);
 
         static auto lodBiasPref = FusionFixSettings.GetRef("PREF_TEXTURE_LOD_BIAS");
         static auto anisoPref = FusionFixSettings.GetRef("PREF_ANISO_ALL_MAPS");
@@ -343,6 +411,7 @@ private:
         const bool specularAA = Pref(specularAAPref) != 0;
         // The ground's noise is the detail texture read at the scale of metres.
         const bool ground = Pref(groundPref) != 0 && GetDetailTexture(pDevice);
+        bLastGround = ground;
         bInGBuffer = true;
 
         // Menu steps of -0.25, and the render scale's: textures as sharp as they'd be at the screen size, which DLSS
@@ -415,7 +484,8 @@ private:
                 // c169: bump height in metres, its fade with the distance as a * depth + b, the detail grain's height
                 fGroundBumps, -1.0f / fadeRange, fGroundBumpsFadeEnd / fadeRange, fGroundDetailBumps,
                 // c170: parallax steps looking straight down, the more added flat along the surface, depth
-                fParallaxMinSteps, fParallaxMaxSteps - fParallaxMinSteps, fParallaxDepth, 0.0f,
+                // and GroundSurfacesDebug: the terrain drawn half magenta, gta_parallax* half cyan
+                fParallaxMinSteps, fParallaxMaxSteps - fParallaxMinSteps, fParallaxDepth, float(nGroundDebug),
             };
             pDevice->SetPixelShaderConstantF(166, params, 5);
         }
@@ -492,6 +562,8 @@ public:
             bLodBiasSet = false;
             memset(bRaisedMinFilter, 0, sizeof(bRaisedMinFilter));
             memset(lastDiffuseSize, 0, sizeof(lastDiffuseSize));
+            // Shaders made after the reset may reuse the old ones' addresses.
+            shaderKinds.clear();
         };
     }
 } TextureQuality;
