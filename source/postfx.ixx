@@ -93,9 +93,9 @@ bool IsPostFxAA()
 // (SpecularTex, NormalTex) filtered linearly in some passes. Undeclared states are point and clamp, as
 // kSSRSamplerStates leaves them.
 using SamplerStates = std::array<DWORD, 5>;
-inline std::unordered_map<std::string, SamplerStates> SSRSamplerStates;
+static std::unordered_map<std::string, SamplerStates> SSRSamplerStates;
 
-inline void ReadSamplerStates(HMODULE hm, int resource, std::unordered_map<std::string, SamplerStates>& out)
+static void ReadSamplerStates(HMODULE hm, int resource, std::unordered_map<std::string, SamplerStates>& out)
 {
     out.clear();
     HRSRC info = FindResourceW(hm, MAKEINTRESOURCEW(resource), RT_RCDATA);
