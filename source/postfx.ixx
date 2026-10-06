@@ -3270,6 +3270,7 @@ private:
     {
         RefreshGBufferTargets();
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        ProfilerScope timed(pDevice, kProfFogPass);
 
         IDirect3DSurface9* prevSurface = nullptr;
         IDirect3DSurface9* prevDepthStencilSurface = nullptr;
@@ -3359,8 +3360,10 @@ private:
             // without temporal anti-aliasing the whole picture shook.
             RenderVolumetricClouds(pDevice, prevTex[1]);
             IDirect3DBaseTexture9* scene = prevTex[1];
+            ProfilerMark(pDevice, kProfSkin, true);
             if (auto skin = RenderSkinScattering(pDevice, prevTex[1]))
                 scene = skin;
+            ProfilerMark(pDevice, kProfSkin, false);
 
             if (PostFxResources.FullScreenTex_temp1)
             {
@@ -3420,7 +3423,9 @@ private:
                     pDevice->SetPixelShader(prevPS);
 
                     SetTextureBoth(pDevice, 1, scene);
+                    ProfilerMark(pDevice, kProfFog, true);
                     hbDrawPrimitivePostFX.fun();
+                    ProfilerMark(pDevice, kProfFog, false);
                     SetTextureBoth(pDevice, 1, prevTex[1]);
                 }
             }
@@ -3496,7 +3501,10 @@ private:
         pDevice->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
 
         // new 
-        PostFx3(pDevice, oldps, oldvs);
+        {
+            ProfilerScope timed(pDevice, kProfPost);
+            PostFx3(pDevice, oldps, oldvs);
+        }
 
         restoreRenderState();
 
@@ -3541,6 +3549,7 @@ private:
         auto& R = PostFxResources;
         if (!sharpening || sharpening->get() <= 0 || !R.CAS_PS || !R.backBuffer || !R.FullScreenTex_temp2 || !R.FullScreenSurface_temp2)
             return;
+        ProfilerScope timed(pDevice, kProfPostSharpen);
         if (FAILED(pDevice->StretchRect(R.backBuffer, nullptr, R.FullScreenSurface_temp2, nullptr, D3DTEXF_NONE)))
             return;
 
@@ -3641,6 +3650,7 @@ private:
                     // it before the game computed bloom and exposure.
                     if (TemporalAA::GetMode() != TemporalAA::Mode::Off && !TemporalAA::IsSceneResolved() && !RenderScale::IsActive())
                     {
+                        ProfilerScope timed(pDevice, kProfPostTAA);
                         FilterStippleBeforeResolve(PostFxResources.textureRead);
                         if (TemporalAA::Resolve(pDevice, PostFxResources.textureRead, PostFxResources.renderTargetTex, PostFxResources.renderTargetSurf))
                         {
@@ -3651,6 +3661,7 @@ private:
 
                     if (PostFxResources.useStippleFilter && PostFxResources.stipple_filter_ps && !TemporalAA::IsStippleFiltered())
                     {
+                        ProfilerScope timed(pDevice, kProfPostStipple);
                         pDevice->SetPixelShader(PostFxResources.stipple_filter_ps);
                         pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
                         SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
@@ -3666,6 +3677,7 @@ private:
                         {
                             if (PostFxResources.FullScreenDownsampleSurf && PostFxResources.FullScreenDownsampleSurf2)
                             {
+                                ProfilerScope timed(pDevice, kProfPostDOF);
                                 pDevice->SetSamplerState(8, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
                                 pDevice->SetSamplerState(8, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
                                 pDevice->SetSamplerState(8, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
@@ -3703,6 +3715,7 @@ private:
                         {
                             if (PostFxResources.FullScreenDownsampleSurf && PostFxResources.FullScreenDownsampleSurf2)
                             {
+                                ProfilerScope timed(pDevice, kProfPostSunShafts);
                                 pDevice->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
                                 pDevice->SetSamplerState(8, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
                                 pDevice->SetSamplerState(8, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
@@ -3751,6 +3764,7 @@ private:
 
                     // game postfx
                     {
+                        ProfilerScope timed(pDevice, kProfPostGame);
                         for (int i = 0; i < 4; i++)
                         {
                             SetTextureBoth(pDevice, i, PostFxResources.prePostFx[i]);
@@ -3778,6 +3792,7 @@ private:
                     // Anti aliasing
                     if (IsPostFxAA())
                     {
+                        ProfilerScope timed(pDevice, kProfPostAA);
                         // FXAA
                         if ((UsePostFxAA->get() == FusionFixSettings.AntialiasingText.eFXAA) && PostFxResources.FxaaPS)
                         {
@@ -4111,26 +4126,75 @@ private:
     // PostFxProfiler: GPU time of FusionFix's passes, from timestamp queries. Each frame's queries
     // are read kProfilerFrames frames later, without waiting on the GPU, and every 120 frames the
     // averages in milliseconds per frame are written to FusionFix.PostFx.log next to GTAIV.exe.
-    // Lights is the lighting phase less the AO, SSR, contact shadow and indirect light passes that
-    // run inside it: the game's lights with their local contact shadows, and the light shafts.
-    // Off, no query is made.
-    enum ProfilerSection { kProfAO, kProfSSR, kProfContact, kProfGI, kProfWater, kProfLighting, kProfSections };
+    // The sections form a tree: an effect and the passes it is made of, each pass inside its
+    // effect's time. What of a section its passes leave is shown as "other": in the lighting phase
+    // that is the game's lights with their local contact shadows, and the light shafts. A section
+    // can be entered more than once a frame, as the water is, and its times add up.
+    // A frame runs from one post processing to the next. Off, no query is made.
+    enum ProfilerSection
+    {
+        kProfLighting,
+            kProfAO, kProfAODepth, kProfAOMain, kProfAOTemporal, kProfAOBlur, kProfAOApply,
+            kProfSSR, kProfSSRTrace, kProfSSRFill, kProfSSRResolve, kProfSSRDenoise, kProfSSRTemporal, kProfSSRDebug,
+            kProfContact, kProfContactMarch, kProfContactUpsample, kProfContactDenoise, kProfContactTemporal,
+            kProfGI, kProfGIMarch, kProfGIDenoise, kProfGITemporal, kProfGIUpsample,
+        kProfWater,
+        kProfCloudReflection,
+        kProfFogPass,
+            kProfClouds, kProfCloudsSkyRef, kProfCloudsMarch, kProfCloudsLight, kProfCloudsResolve, kProfCloudsComposite,
+            kProfSkin, kProfSkinLight, kProfSkinScatter, kProfSkinFinal,
+            kProfFog,
+        kProfResolve,
+        kProfPost,
+            kProfPostTAA, kProfPostStipple, kProfPostDOF, kProfPostSunShafts, kProfPostGame, kProfPostAA, kProfPostSharpen,
+        kProfSections
+    };
+    struct ProfilerSectionInfo { const char* name; int parent; };
+    static constexpr ProfilerSectionInfo kProfilerSectionInfo[] =
+    {
+        { "lighting phase", -1 },
+            { "ambient occlusion", kProfLighting }, { "depth and its mips", kProfAO }, { "occlusion", kProfAO },
+            { "accumulation", kProfAO }, { "blur", kProfAO }, { "into the G-buffer", kProfAO },
+            { "SSR", kProfLighting }, { "march", kProfSSR }, { "fill of misses", kProfSSR }, { "resolve", kProfSSR },
+            { "smoothing", kProfSSR }, { "accumulation", kProfSSR }, { "debug view", kProfSSR },
+            { "contact shadows", kProfLighting }, { "march", kProfContact }, { "upsample", kProfContact },
+            { "smoothing", kProfContact }, { "accumulation", kProfContact },
+            { "indirect light", kProfLighting }, { "march", kProfGI }, { "smoothing", kProfGI },
+            { "accumulation", kProfGI }, { "upsample", kProfGI },
+        { "water SSR", -1 },
+        { "clouds in the reflection map", -1 },
+        { "fog pass", -1 },
+            { "volumetric clouds", kProfFogPass }, { "sky brightness", kProfClouds }, { "march", kProfClouds },
+            { "light", kProfClouds }, { "accumulation", kProfClouds }, { "into the scene", kProfClouds },
+            { "skin scattering", kProfFogPass }, { "light on skin", kProfSkin }, { "scatter", kProfSkin },
+            { "final", kProfSkin },
+            { "the game's fog", kProfFogPass },
+        { "temporal AA / upscaling", -1 },
+        { "post processing", -1 },
+            { "temporal AA", kProfPost }, { "stipple filter", kProfPost }, { "depth of field", kProfPost },
+            { "sun shafts", kProfPost }, { "the game's post processing", kProfPost }, { "FXAA / SMAA", kProfPost },
+            { "sharpening", kProfPost },
+    };
+    static_assert(std::size(kProfilerSectionInfo) == kProfSections);
     static constexpr int kProfilerFrames = 4;
     static constexpr int kProfilerAverage = 120;
+    static constexpr int kProfilerStamps = 192; // timestamps a frame, two per section entered
     struct ProfilerFrame
     {
         IDirect3DQuery9* disjoint = nullptr;
         IDirect3DQuery9* freq = nullptr;
         IDirect3DQuery9* start = nullptr;
         IDirect3DQuery9* stop = nullptr;
-        IDirect3DQuery9* begin[kProfSections] = {};
-        IDirect3DQuery9* end[kProfSections] = {};
+        // Made as they are first needed, and kept for the frames after
+        IDirect3DQuery9* stamps[kProfilerStamps] = {};
+        struct { int section; bool begin; } marks[kProfilerStamps] = {};
+        int count = 0;
         bool issued = false;
-        bool used[kProfSections] = {};
     };
     static inline ProfilerFrame profilerFrames[kProfilerFrames];
     static inline int nProfilerFrame = -1;
-    static inline double profilerSums[kProfSections + 1] = {}; // the last is the whole frame
+    static inline double profilerSums[kProfSections] = {};
+    static inline double profilerFrameSum = 0.0;
     static inline int nProfilerSamples = 0;
     static inline bool bProfilerLogStarted = false;
 
@@ -4140,11 +4204,9 @@ private:
         SAFE_RELEASE(f.freq);
         SAFE_RELEASE(f.start);
         SAFE_RELEASE(f.stop);
-        for (int i = 0; i < kProfSections; ++i)
-        {
-            SAFE_RELEASE(f.begin[i]);
-            SAFE_RELEASE(f.end[i]);
-        }
+        for (auto& q : f.stamps)
+            SAFE_RELEASE(q);
+        f.count = 0;
         f.issued = false;
     }
 
@@ -4163,31 +4225,51 @@ private:
                   SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMPFREQ, &f.freq)) &&
                   SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.start)) &&
                   SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.stop));
-        for (int i = 0; ok && i < kProfSections; ++i)
-            ok = SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.begin[i])) &&
-                 SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.end[i]));
         if (!ok)
             ReleaseProfilerFrame(f);
         return ok;
     }
 
-    static void WriteProfilerLine()
+    // A section, its passes below it, then what they leave of it.
+    static void WriteProfilerSection(FILE* log, int section, int depth, double n)
+    {
+        fprintf(log, "%*s%-*s %6.2f\n", 2 + depth * 2, "", 34 - depth * 2, kProfilerSectionInfo[section].name, profilerSums[section] / n);
+        double children = 0.0;
+        bool any = false;
+        for (int i = 0; i < kProfSections; ++i)
+        {
+            if (kProfilerSectionInfo[i].parent != section || profilerSums[i] <= 0.0)
+                continue;
+            WriteProfilerSection(log, i, depth + 1, n);
+            children += profilerSums[i];
+            any = true;
+        }
+        if (any)
+            fprintf(log, "%*s%-*s %6.2f\n", 4 + depth * 2, "", 32 - depth * 2, "other", (std::max)(profilerSums[section] - children, 0.0) / n);
+    }
+
+    static void WriteProfilerBlock()
     {
         FILE* log = _wfopen((GetExeModulePath() / L"FusionFix.PostFx.log").c_str(), bProfilerLogStarted ? L"a" : L"w");
         if (log)
         {
-            if (!bProfilerLogStarted)
-                fprintf(log, "GPU milliseconds per frame, averaged over %d frames. lights: the game's lights with their "
-                             "local contact shadows, and the light shafts\n", kProfilerAverage);
             const double n = double(nProfilerSamples);
-            fprintf(log, "frame %6.2f   AO %5.2f   SSR %5.2f   contact shadows %5.2f   indirect light %5.2f   water SSR %5.2f   lights %6.2f\n",
-                    profilerSums[kProfSections] / n, profilerSums[kProfAO] / n, profilerSums[kProfSSR] / n,
-                    profilerSums[kProfContact] / n, profilerSums[kProfGI] / n, profilerSums[kProfWater] / n,
-                    profilerSums[kProfLighting] / n);
+            fprintf(log, "GPU milliseconds per frame, averaged over %d frames\n", nProfilerSamples);
+            fprintf(log, "%-36s %6.2f\n", "frame", profilerFrameSum / n);
+            double sections = 0.0;
+            for (int i = 0; i < kProfSections; ++i)
+            {
+                if (kProfilerSectionInfo[i].parent >= 0 || profilerSums[i] <= 0.0)
+                    continue;
+                WriteProfilerSection(log, i, 0, n);
+                sections += profilerSums[i];
+            }
+            fprintf(log, "  %-34s %6.2f\n\n", "the game's other passes", (std::max)(profilerFrameSum - sections, 0.0) / n);
             fclose(log);
             bProfilerLogStarted = true;
         }
         std::fill(std::begin(profilerSums), std::end(profilerSums), 0.0);
+        profilerFrameSum = 0.0;
         nProfilerSamples = 0;
     }
 
@@ -4201,18 +4283,30 @@ private:
             f.start->GetData(&start, sizeof(start), 0) != S_OK || f.stop->GetData(&stop, sizeof(stop), 0) != S_OK)
             return;
         double ms[kProfSections] = {};
-        for (int i = 0; i < kProfSections; ++i)
+        UINT64 open[kProfSections] = {};
+        bool opened[kProfSections] = {};
+        for (int i = 0; i < f.count; ++i)
         {
-            UINT64 b = 0, e = 0;
-            if (f.used[i] && f.begin[i]->GetData(&b, sizeof(b), 0) == S_OK && f.end[i]->GetData(&e, sizeof(e), 0) == S_OK && e >= b)
-                ms[i] = double(e - b) * 1000.0 / double(freq);
+            UINT64 t = 0;
+            if (f.stamps[i]->GetData(&t, sizeof(t), 0) != S_OK)
+                return;
+            const int section = f.marks[i].section;
+            if (f.marks[i].begin)
+            {
+                open[section] = t;
+                opened[section] = true;
+            }
+            else if (opened[section] && t >= open[section])
+            {
+                ms[section] += double(t - open[section]) * 1000.0 / double(freq);
+                opened[section] = false;
+            }
         }
-        ms[kProfLighting] = (std::max)(ms[kProfLighting] - ms[kProfAO] - ms[kProfSSR] - ms[kProfContact] - ms[kProfGI], 0.0);
         for (int i = 0; i < kProfSections; ++i)
             profilerSums[i] += ms[i];
-        profilerSums[kProfSections] += double(stop - start) * 1000.0 / double(freq);
+        profilerFrameSum += double(stop - start) * 1000.0 / double(freq);
         if (++nProfilerSamples >= kProfilerAverage)
-            WriteProfilerLine();
+            WriteProfilerBlock();
     }
 
     // Once a frame, as post processing begins: closes this frame's queries and opens the next.
@@ -4241,7 +4335,7 @@ private:
             ReleaseProfiler();
             return;
         }
-        std::fill(std::begin(f.used), std::end(f.used), false);
+        f.count = 0;
         f.disjoint->Issue(D3DISSUE_BEGIN);
         f.start->Issue(D3DISSUE_END);
         f.issued = true;
@@ -4249,15 +4343,28 @@ private:
 
     static void ProfilerMark(IDirect3DDevice9* pDevice, int section, bool begin)
     {
-        if (!PostFxResources.bPostFxProfiler || !pDevice || nProfilerFrame < 0)
+        if (!PostFxResources.bPostFxProfiler || !pDevice || nProfilerFrame < 0 || section < 0)
             return;
         auto& f = profilerFrames[nProfilerFrame];
-        if (!f.issued)
+        if (!f.issued || f.count >= kProfilerStamps)
             return;
-        (begin ? f.begin : f.end)[section]->Issue(D3DISSUE_END);
-        if (!begin)
-            f.used[section] = true;
+        auto& q = f.stamps[f.count];
+        if (!q && FAILED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &q)))
+            return;
+        q->Issue(D3DISSUE_END);
+        f.marks[f.count++] = { section, begin };
     }
+
+    // Times what runs from here to the end of the scope; a section below 0 times nothing.
+    struct ProfilerScope
+    {
+        IDirect3DDevice9* device;
+        int section;
+        ProfilerScope(IDirect3DDevice9* pDevice, int s) : device(pDevice), section(s) { ProfilerMark(device, section, true); }
+        ~ProfilerScope() { ProfilerMark(device, section, false); }
+        ProfilerScope(const ProfilerScope&) = delete;
+        ProfilerScope& operator=(const ProfilerScope&) = delete;
+    };
 
     // Binds every sampler of the pixel shader of the pass just begun to the texture its effect
     // parameter holds, found through the shader's constant table (sampler X reads X2D in SSR.fx
@@ -4794,7 +4901,9 @@ private:
                 pDevice->GetRenderTarget(1, &oldTarget1);
                 pDevice->SetRenderTarget(1, R.SSRHitDistSurf[half]);
             }
+            ProfilerMark(pDevice, kProfSSRTrace, true);
             draw(0, R.SSRTraceSurf[half]);
+            ProfilerMark(pDevice, kProfSSRTrace, false);
             if (temporal)
             {
                 pDevice->SetRenderTarget(1, oldTarget1);
@@ -4802,6 +4911,7 @@ private:
             }
             effect->SetTexture(h.SSRResultTex2D, R.SSRTraceTex[half]->mD3DTexture);
             IDirect3DTexture9* fill = R.SSRFallbackTex[half]->mD3DTexture;
+            ProfilerMark(pDevice, kProfSSRFill, true);
             if (R.fSSRFallback > 0.0f)
             {
                 draw(1, R.SSRFallbackSurf[half]);
@@ -4820,8 +4930,11 @@ private:
                     }
                 }
             }
+            ProfilerMark(pDevice, kProfSSRFill, false);
             effect->SetTexture(h.SSRFallbackTex2D, fill);
+            ProfilerMark(pDevice, kProfSSRResolve, true);
             draw(3, ssrSurf);
+            ProfilerMark(pDevice, kProfSSRResolve, false);
         }
         effect->End();
 
@@ -4842,7 +4955,9 @@ private:
             BindEffectSamplers(pDevice, effect);
             SSRTrace::State(pDevice, "ssr denoise");
             SSRTrace::Contents(pDevice, "denoise input", ssrTex);
+            ProfilerMark(pDevice, kProfSSRDenoise, true);
             const HRESULT drawHr = pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            ProfilerMark(pDevice, kProfSSRDenoise, false);
             effect->EndPass();
             effect->End();
             SSRTrace::Line("ssr denoise: begin %08x pass %08x draw %08x passes %u", unsigned(beginHr), unsigned(passHr), unsigned(drawHr), passes);
@@ -4881,7 +4996,9 @@ private:
             effect->CommitChanges();
             BindEffectSamplers(pDevice, effect);
             SSRTrace::State(pDevice, "ssr temporal");
+            ProfilerMark(pDevice, kProfSSRTemporal, true);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            ProfilerMark(pDevice, kProfSSRTemporal, false);
             effect->EndPass();
             effect->End();
             ssrResult = R.SSRAccumTex[sizeIndex][next]->mD3DTexture;
@@ -4917,6 +5034,7 @@ private:
             effect->BeginPass(0);
             effect->CommitChanges();
             BindEffectSamplers(pDevice, effect);
+            ProfilerScope timed(pDevice, kProfSSRDebug);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
@@ -5019,6 +5137,7 @@ private:
     // that simpler sky. Leaves the device as it found it.
     static void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* sceneBase, bool reflection = false)
     {
+        ProfilerScope timed(pDevice, reflection ? kProfCloudReflection : kProfClouds);
         auto& R = PostFxResources;
         auto skip = [&](const char* why) { (reflection ? R.szCloudsReflectionStatus : R.szCloudsStatus) = why; };
         if (!R.VolumetricCloudsEnabled())
@@ -5424,7 +5543,8 @@ private:
                 SetSamplerStateBoth(pDevice, slot, D3DSAMP_MIPFILTER, slot == 1 ? D3DTEXF_LINEAR : D3DTEXF_NONE);
             }
         };
-        auto drawPass = [&](const char* technique, IDirect3DSurface9* target, float w, float h, bool blend)
+        // The passes are timed apart only in the scene's clouds, not in the reflection map's.
+        auto drawPass = [&](const char* technique, IDirect3DSurface9* target, float w, float h, bool blend, int profile)
         {
             // Only the reflection's own viewport starts away from the target's corner.
             const float x0 = target == sceneSurface ? originX : 0.0f, y0 = target == sceneSurface ? originY : 0.0f;
@@ -5453,6 +5573,7 @@ private:
             // Never the scene while drawing into it.
             bindTextures(halfSize && target != sceneSurface, halfSize && target != R.CloudSkyRefSurf, halfSize && target == R.CloudSurf[0]);
             BindEffectConstantsOnly(pDevice, effect);
+            ProfilerScope timedPass(pDevice, reflection ? -1 : profile);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
@@ -5465,20 +5586,20 @@ private:
             {
                 const D3DXVECTOR4 skyRefProj = ProjInfo(proj, 1.0f, 1.0f);
                 effect->SetVector("vec4SkyRefProj", &skyRefProj);
-                drawPass("CloudsSkyRef", R.CloudSkyRefSurf, 1.0f, 1.0f, true);
+                drawPass("CloudsSkyRef", R.CloudSkyRefSurf, 1.0f, 1.0f, true, kProfCloudsSkyRef);
             }
             // The march into its two targets, then its light into the half size clouds.
             pDevice->SetRenderTarget(1, R.CloudMarchSurf[1]);
-            drawPass("CloudsMarch", R.CloudMarchSurf[0], halfWidth, halfHeight, false);
+            drawPass("CloudsMarch", R.CloudMarchSurf[0], halfWidth, halfHeight, false, kProfCloudsMarch);
             pDevice->SetRenderTarget(1, nullptr);
-            drawPass("CloudsLight", R.CloudSurf[0], halfWidth, halfHeight, false);
-            drawPass("CloudsResolve", R.CloudSurf[nextAccum], halfWidth, halfHeight, false);
-            drawPass("CloudsComposite", sceneSurface, width, height, true);
+            drawPass("CloudsLight", R.CloudSurf[0], halfWidth, halfHeight, false, kProfCloudsLight);
+            drawPass("CloudsResolve", R.CloudSurf[nextAccum], halfWidth, halfHeight, false, kProfCloudsResolve);
+            drawPass("CloudsComposite", sceneSurface, width, height, true, kProfCloudsComposite);
             R.nCloudAccumIndex ^= 1;
             R.nCloudAccumFrame = FrameHistory::Frame();
         }
         else
-            drawPass("Clouds", sceneSurface, width, height, true);
+            drawPass("Clouds", sceneSurface, width, height, true, kProfCloudsMarch);
 
         for (size_t i = 0; i < std::size(kCloudRenderStates); ++i)
             pDevice->SetRenderState(kCloudRenderStates[i].state, savedRenderStates[i]);
@@ -5871,6 +5992,7 @@ private:
                 SetDepthRange(effect, h, currGrcViewport->mNearClip, currGrcViewport->mFarClip);
                 effect->SetFloat(h.fFarPlane, currGrcViewport->mFarClip);
 
+                ProfilerMark(pDevice, kProfAODepth, true);
                 pDevice->SetRenderTarget(0, camDepthSurf[0]);
                 effect->BeginPass(0);
                 BindEffectSamplers(pDevice, effect);
@@ -5905,6 +6027,7 @@ private:
                     pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, mipVertices, sizeof(ScreenVertex));
                 }
                 effect->EndPass();
+                ProfilerMark(pDevice, kProfAODepth, false);
 
                 pDevice->SetRenderTarget(0, aoSurf);
                 pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_COLORVALUE(1.0, 0.0, 0, 1.0), 1.0f, 0);
@@ -5940,10 +6063,12 @@ private:
 
                 effect->CommitChanges();
 
+                ProfilerMark(pDevice, kProfAOMain, true);
                 effect->BeginPass(gtao ? 5 : 2); // 1 SAO, 2 GTAO
                 BindEffectSamplers(pDevice, effect);
                 pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
+                ProfilerMark(pDevice, kProfAOMain, false);
 
                 // GTAO's accumulation over frames, before the blur: the history is this frame's
                 // raw GTAO blended with last frame's, followed to where each pixel was.
@@ -5975,10 +6100,12 @@ private:
                     effect->CommitChanges();
 
                     pDevice->SetRenderTarget(0, R.AOAccumSurf[next]);
+                    ProfilerMark(pDevice, kProfAOTemporal, true);
                     effect->BeginPass(6);
                     BindEffectSamplers(pDevice, effect);
                     pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                     effect->EndPass();
+                    ProfilerMark(pDevice, kProfAOTemporal, false);
 
                     R.nAOAccumIndex = next;
                     R.nAOAccumFrame = FrameHistory::Frame();
@@ -5989,6 +6116,7 @@ private:
 
                 float hor[2] = { invViewportSize[0] * PostFxResources.fAmbientOcclusionBlurRadius, 0.0 };
                 float ver[2] = { 0.0, invViewportSize[1] * PostFxResources.fAmbientOcclusionBlurRadius };
+                ProfilerMark(pDevice, kProfAOBlur, true);
                 effect->BeginPass(3);
                 for (auto i = 0; i < PostFxResources.nAmbientOcclusionBlurPasses; ++i)
                 {
@@ -6009,15 +6137,18 @@ private:
                     pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 }
                 effect->EndPass();
+                ProfilerMark(pDevice, kProfAOBlur, false);
 
                 // final output
                 pDevice->SetRenderTarget(0, SpecularRT);
                 effect->SetTexture(h.AOTexture2D, PostFxResources.nAmbientOcclusionBlurPasses > 0 ? aoTex : blurSource);
 
+                ProfilerMark(pDevice, kProfAOApply, true);
                 effect->BeginPass(4);
                 BindEffectSamplers(pDevice, effect);
                 pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
+                ProfilerMark(pDevice, kProfAOApply, false);
             }
             effect->End();
 
@@ -6299,6 +6430,7 @@ private:
             return;
 
         auto pDevice = rage::grcDevice::GetD3DDevice();
+        ProfilerScope timed(pDevice, kProfResolve);
         IDirect3DTexture9* scene = nullptr;
         IDirect3DSurface9* sceneSurface = nullptr;
         IDirect3DSurface9* output = nullptr;
@@ -6331,6 +6463,7 @@ private:
             return;
 
         auto pDevice = rage::grcDevice::GetD3DDevice();
+        ProfilerScope timed(pDevice, kProfResolve);
         auto scene = PostFxResources.mFullScreenRT->mD3DTexture;
         auto resolved = PostFxResources.FullScreenTex_temp1->mD3DTexture;
         IDirect3DSurface9* sceneSurface = nullptr;
@@ -6485,8 +6618,9 @@ private:
     }
 
     // Draws one full screen quad of the SSR effect's technique into target, then restores the
-    // device state it touched.
-    static void DrawEffectPass(IDirect3DDevice9* pDevice, ID3DXEffect* effect, D3DXHANDLE technique, IDirect3DSurface9* target, float width, float height)
+    // device state it touched. The draw is timed as profile, see ProfilerSection.
+    static void DrawEffectPass(IDirect3DDevice9* pDevice, ID3DXEffect* effect, D3DXHANDLE technique, IDirect3DSurface9* target, float width, float height,
+                               int profile = -1)
     {
         struct ScreenVertex { float x, y, z, rhw; float u, v; };
         const ScreenVertex screenVertices[4] =
@@ -6522,6 +6656,7 @@ private:
             SSRTrace::Line("  draw %s: target %ux%u, viewport %ux%u at %u,%u, quad %.0fx%.0f", tech.Name ? tech.Name : "?",
                 desc.Width, desc.Height, unsigned(view.Width), unsigned(view.Height), unsigned(view.X), unsigned(view.Y), width, height);
         }
+        ProfilerScope timed(pDevice, profile);
         pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
         effect->EndPass();
         effect->End();
@@ -6656,13 +6791,13 @@ private:
             // then back to full size for the rest.
             const float halfWidth = float(DWORD(width) / 2), halfHeight = float(DWORD(height) / 2);
             SetTargetSize(effect, h, proj, halfWidth, halfHeight);
-            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawHalfSurf, halfWidth, halfHeight);
+            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawHalfSurf, halfWidth, halfHeight, kProfContactMarch);
             SetTargetSize(effect, h, proj, width, height);
             effect->SetTexture(h.SSRResultTex2D, R.ContactRawHalfTex->mD3DTexture);
-            DrawEffectPass(pDevice, effect, h.techContactUpsample, R.ContactRawSurf, width, height);
+            DrawEffectPass(pDevice, effect, h.techContactUpsample, R.ContactRawSurf, width, height, kProfContactUpsample);
         }
         else
-            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawSurf, width, height);
+            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawSurf, width, height, kProfContactMarch);
 
         // The same depth aware smoothing SSR uses; the raw result has alpha 1 everywhere, so
         // it is a plain weighted blur.
@@ -6672,7 +6807,7 @@ private:
             effect->SetTexture(h.SSRResultTex2D, R.ContactRawTex->mD3DTexture);
             effect->SetFloat(h.fDenoiseRadius, R.fSSRDenoiseRadius);
             effect->SetFloat(h.fDenoiseSSROnly, 0.0f);
-            DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.ContactSurf, width, height);
+            DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.ContactSurf, width, height, kProfContactDenoise);
             result = R.ContactTex->mD3DTexture;
         }
         else
@@ -6703,7 +6838,7 @@ private:
             effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
             BindMotionVectors(effect, accumWasValid);
             effect->SetFloat(h.fTemporalBlend, accumWasValid ? R.fContactTemporalBlend : 0.0f);
-            DrawEffectPass(pDevice, effect, h.techContactTemporal, R.ContactAccumSurf[next], width, height);
+            DrawEffectPass(pDevice, effect, h.techContactTemporal, R.ContactAccumSurf[next], width, height, kProfContactTemporal);
 
             result = R.ContactAccumTex[next]->mD3DTexture;
             R.ContactResult = result;
@@ -6889,7 +7024,7 @@ private:
         vpDesc.MaxZ = 1.0f;
         pDevice->SetViewport(&vpDesc);
 
-        DrawEffectPass(pDevice, effect, h.techSSGI, R.GIRawSurf, width, height);
+        DrawEffectPass(pDevice, effect, h.techSSGI, R.GIRawSurf, width, height, kProfGIMarch);
 
         // The same depth aware smoothing SSR uses; the gather has alpha 1 everywhere, so it is a
         // plain weighted blur. The radius is in full size pixels.
@@ -6899,7 +7034,7 @@ private:
             effect->SetTexture(h.SSRResultTex2D, gathered);
             effect->SetFloat(h.fDenoiseRadius, R.fSSRDenoiseRadius * 0.5f);
             effect->SetFloat(h.fDenoiseSSROnly, 0.0f);
-            DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.GIDenoisedSurf, width, height);
+            DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.GIDenoisedSurf, width, height, kProfGIDenoise);
             gathered = R.GIDenoisedTex->mD3DTexture;
         }
 
@@ -6912,7 +7047,7 @@ private:
         effect->SetFloat(h.fTemporalAnySurface, 1.0f);
         // The SSR pass left the menu's debug view in fDebugMode; view 10 would turn this pass into its own.
         effect->SetFloat(h.fDebugMode, 0.0f);
-        DrawEffectPass(pDevice, effect, h.techSSRTemporal, R.GIAccumSurf[next], width, height);
+        DrawEffectPass(pDevice, effect, h.techSSRTemporal, R.GIAccumSurf[next], width, height, kProfGITemporal);
         // View 10 runs the accumulation again into whichever half size target it does not read.
         IDirect3DTexture9* historyDebug = nullptr;
         if (R.SSRDebugMode() == R.kGIHistoryDebugMode && R.SSRDebugSurf && h.techSSRDebug)
@@ -6938,7 +7073,7 @@ private:
         if (h.techGIUpsample && R.GIFullSurf)
         {
             effect->SetTexture(h.SSRResultTex2D, R.GIResult);
-            DrawEffectPass(pDevice, effect, h.techGIUpsample, R.GIFullSurf, fullWidth, fullHeight);
+            DrawEffectPass(pDevice, effect, h.techGIUpsample, R.GIFullSurf, fullWidth, fullHeight, kProfGIUpsample);
             R.GIResult = R.GIFullTex->mD3DTexture;
         }
 
@@ -7050,18 +7185,18 @@ private:
         IDirect3DBaseTexture9* result = nullptr;
         if (scatter)
         {
-            DrawEffectPass(pDevice, effect, h.techSkinLight, R.SkinLightSurf[0], width, height);
+            DrawEffectPass(pDevice, effect, h.techSkinLight, R.SkinLightSurf[0], width, height, kProfSkinLight);
             // A kernel unit is half SkinScatteringWidth, and a metre at view depth 1 spans _11 / 2
             // of the screen across and _22 / 2 down.
             const float unit = R.fSkinScatteringWidth * 0.25f;
             D3DXVECTOR4 step(R.SkinCamera[0] * unit, 0.0f, 0.0f, R.fSkinScatteringWidth * 0.5f);
             effect->SetVector(h.vec4SkinStep, &step);
             effect->SetTexture(h.SkinLightTex2D, R.SkinLightTex[0]->mD3DTexture);
-            DrawEffectPass(pDevice, effect, h.techSkinScatter, R.SkinLightSurf[1], width, height);
+            DrawEffectPass(pDevice, effect, h.techSkinScatter, R.SkinLightSurf[1], width, height, kProfSkinScatter);
             step = D3DXVECTOR4(0.0f, R.SkinCamera[1] * unit, 0.0f, R.fSkinScatteringWidth * 0.5f);
             effect->SetVector(h.vec4SkinStep, &step);
             effect->SetTexture(h.SkinLightTex2D, R.SkinLightTex[1]->mD3DTexture);
-            DrawEffectPass(pDevice, effect, h.techSkinScatterFinal, R.SkinLightSurf[0], width, height);
+            DrawEffectPass(pDevice, effect, h.techSkinScatterFinal, R.SkinLightSurf[0], width, height, kProfSkinFinal);
             result = R.SkinLightTex[0]->mD3DTexture;
         }
         SSRTrace::Line("skin: scatter %d, near %.4f far %.1f", int(scatter), R.SkinCamera[2], R.SkinCamera[3]);
