@@ -4504,9 +4504,11 @@ private:
                         effect->GetIntArray(h, &values[e * 4], columns);
                 }
                 if (c.set == D3DXRS_INT4)
+                {
                     pDevice->SetPixelShaderConstantI(c.reg, values, c.count);
                     if (auto real = RealDevice(pDevice); real != pDevice)
                         real->SetPixelShaderConstantI(c.reg, values, c.count);
+                }
                 else
                 {
                     BOOL b[16] = {};
