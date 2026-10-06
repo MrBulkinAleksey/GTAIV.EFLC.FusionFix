@@ -145,6 +145,11 @@ public:
 
     // Pre alpha pass depth texture copy
     rage::grcRenderTargetPC* PreAlphaDepthCopyRT = nullptr;
+    // This frame's depth at the render size, copied at the end of the G-buffer pass (CopySceneDepth) for the passes
+    // of the lighting phase, see LightingDepth; the frame it was copied in.
+    rage::grcRenderTargetPC* SceneDepthTex = nullptr;
+    IDirect3DSurface9* SceneDepthSurf = nullptr;
+    uint32_t nSceneDepthFrame = 0;
 
     //-------- half resolution screen --------------
     rage::grcRenderTargetPC* FullScreenDownsampleTex = nullptr; // main downsampled texture
@@ -2362,6 +2367,13 @@ private:
         SAFE_RELEASE(PostFxResources.GIAccumSurf[1]);
         SAFE_RELEASE(PostFxResources.GIFullSurf);
         PostFxResources.GIResult = nullptr;
+        SAFE_RELEASE(PostFxResources.SceneDepthSurf);
+        if (PostFxResources.SceneDepthTex)
+        {
+            PostFxResources.SceneDepthTex->Destroy();
+            PostFxResources.SceneDepthTex = nullptr;
+        }
+        PostFxResources.nSceneDepthFrame = 0;
         for (int i = 0; i < 3; ++i)
         {
             SAFE_RELEASE(PostFxResources.CloudSurf[i]);
@@ -2567,6 +2579,10 @@ private:
         aoDesc.mLevels = PostFxResources.nAmbientOcclusionMaxMipLevel;
         PostFxResources.AOCamDepthTex = rage::CreateEmptyRenderTarget("AOCamDepthTex", width, height, 32, aoDesc);
 
+        aoDesc.mLevels = 1;
+        PostFxResources.SceneDepthTex = rage::CreateEmptyRenderTarget("SceneDepthCopy", width, height, 32, aoDesc, PostFxResources.SceneDepthSurf);
+        PostFxResources.nSceneDepthFrame = 0;
+
         aoDesc.mFormat = rage::GRCFMT_L8;
         aoDesc.mLevels = 1;
         PostFxResources.AOTex = rage::CreateEmptyRenderTarget("AOTex", width, height, 8, aoDesc);
@@ -2702,7 +2718,60 @@ private:
 
         OnDeviceReset();
 
+        TemporalAA::OnGBufferEnd = [](IDirect3DDevice9* device) { CopySceneDepth(device); };
+
         initialized = true;
+    }
+
+    // At the end of the G-buffer pass (TemporalAA::OnGBufferEnd, the device state saved around it): this frame's
+    // depth into SceneDepthTex. With FSR's render scale, _DEFERRED_GBUFFER_3_ read in the lighting phase, where the
+    // game keeps it bound as its depth buffer, came out in whole steps of 1/255 or as another depth altogether (15 m,
+    // 983 m and 0.35 m in a room 3 to 6 m deep), while temporal AA's motion vectors, read from it here, and the fog
+    // pass's copy, made after lighting, held the right depths. SSR, SSGI, contact shadows and SSAO marched and tested
+    // their histories against that.
+    static void CopySceneDepth(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        RefreshGBufferTargets();
+        if (!pDevice || !R.SceneDepthSurf || !R.Blit_PS || !R.mDepthRT || !R.mDepthRT->mD3DTexture)
+            return;
+        pDevice->SetRenderTarget(0, R.SceneDepthSurf);
+        for (DWORD i = 1; i < 4; ++i)
+            pDevice->SetRenderTarget(i, nullptr);
+        pDevice->SetDepthStencilSurface(nullptr);
+        static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kStates[] =
+        {
+            { D3DRS_ZENABLE, FALSE }, { D3DRS_ZWRITEENABLE, FALSE }, { D3DRS_ALPHABLENDENABLE, FALSE }, { D3DRS_ALPHATESTENABLE, FALSE },
+            { D3DRS_STENCILENABLE, FALSE }, { D3DRS_CULLMODE, D3DCULL_NONE }, { D3DRS_COLORWRITEENABLE, 0x0F },
+            { D3DRS_SCISSORTESTENABLE, FALSE }, { D3DRS_SRGBWRITEENABLE, FALSE }, { D3DRS_FILLMODE, D3DFILL_SOLID },
+            { D3DRS_CLIPPLANEENABLE, 0 }, { D3DRS_FOGENABLE, FALSE },
+        };
+        for (auto [state, value] : kStates)
+            pDevice->SetRenderState(state, value);
+        pDevice->SetTexture(0, R.mDepthRT->mD3DTexture);
+        pDevice->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+        pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+        pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        pDevice->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
+        BlitToTarget(pDevice, R.SceneDepthSurf);
+        R.nSceneDepthFrame = FrameHistory::Frame();
+        if (SSRTrace::Active())
+        {
+            const auto& camera = FrameHistory::Current();
+            SSRTrace::DepthProbe(pDevice, "G-buffer end depth copy", R.SceneDepthTex->mD3DTexture, camera.Near, camera.Far);
+        }
+    }
+
+    // The depth the passes of the lighting phase read: the copy from the end of this frame's G-buffer pass, or
+    // _DEFERRED_GBUFFER_3_ where there is none.
+    static IDirect3DTexture9* LightingDepth()
+    {
+        auto& R = PostFxResources;
+        if (R.SceneDepthTex && R.SceneDepthTex->mD3DTexture && R.nSceneDepthFrame && R.nSceneDepthFrame == FrameHistory::Frame())
+            return R.SceneDepthTex->mD3DTexture;
+        return R.mDepthRT ? R.mDepthRT->mD3DTexture : nullptr;
     }
 
     // For the SSR trace, at the start of the lighting phase, before any FusionFix pass: what the game has on each
@@ -4032,7 +4101,7 @@ private:
         };
         setPassSize(half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height);
 
-        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        effect->SetTexture(h.DepthTex2D, LightingDepth());
         effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
         // Last frame's fog pass copied this depth along with the history; this frame's has not
         // run yet.
@@ -4886,7 +4955,7 @@ private:
         auto& h = R.SSREffectHandles;
         ID3DXEffect* effect = R.SSREffect;
 
-        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        effect->SetTexture(h.DepthTex2D, LightingDepth());
         effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
 
         SetTargetSize(effect, h, proj, width, height);
@@ -5126,7 +5195,7 @@ private:
             pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1); // fullscreen fvf
 
             PostFxResources.SpecularTex = PostFxResources.mSpecularRT->mD3DTexture;
-            PostFxResources.DepthTex = PostFxResources.mDepthRT->mD3DTexture;
+            PostFxResources.DepthTex = LightingDepth();
             IDirect3DSurface9* SpecularRT;
             PostFxResources.SpecularTex->GetSurfaceLevel(0, &SpecularRT);
 
@@ -5821,7 +5890,7 @@ private:
             (&sun.x)[row] = -(toView[row].x * light[0] + toView[row].y * light[1] + toView[row].z * light[2]) / lightLen;
 
         const bool hasNormals = R.mNormalRT && R.mNormalRT->mD3DTexture;
-        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        effect->SetTexture(h.DepthTex2D, LightingDepth());
         if (hasNormals)
             effect->SetTexture(h.NormalTex2D, R.mNormalRT->mD3DTexture);
         effect->SetFloat(h.fUseGBufferNormals, (hasNormals && R.bSSRGBufferNormals) ? 1.0f : 0.0f);
@@ -6022,7 +6091,7 @@ private:
                            size(R.mDepthRT).c_str(), size(R.PreAlphaDepthCopyRT).c_str(), size(R.FullScreenTex_temp1).c_str(),
                            size(R.SSRHistoryTex).c_str(), size(R.GIRawTex).c_str(), size(R.GIDenoisedTex).c_str(),
                            size(R.GIAccumTex[0]).c_str(), size(R.GIAccumTex[1]).c_str(), size(R.GIFullTex).c_str(), size(R.SSRTex).c_str());
-            SSRTrace::DepthProbe(pDevice, "gi depth", R.mDepthRT ? R.mDepthRT->mD3DTexture : nullptr, vp->mNearClip, vp->mFarClip);
+            SSRTrace::DepthProbe(pDevice, "gi depth", LightingDepth(), vp->mNearClip, vp->mFarClip);
             SSRTrace::DepthProbe(pDevice, "gi previous depth", R.PreAlphaDepthCopyRT ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr,
                                  prv.Near, prv.Far);
         }
@@ -6047,7 +6116,7 @@ private:
 
         const bool hasNormals = R.mNormalRT && R.mNormalRT->mD3DTexture;
         const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
-        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        effect->SetTexture(h.DepthTex2D, LightingDepth());
         effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
         effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
         effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
@@ -6231,7 +6300,7 @@ private:
         effect->SetTexture(h.SceneTex2D, scene);
         effect->SetTexture(h.SkinIDTex2D, R.mMaterialIdRT->mD3DTexture);
         effect->SetTexture(h.AlbedoTex2D, R.mDiffuseRT->mD3DTexture);
-        effect->SetTexture(h.DepthTex2D, R.mDepthRT->mD3DTexture);
+        effect->SetTexture(h.DepthTex2D, LightingDepth());
         SetDepthRange(effect, h, R.SkinCamera[2], R.SkinCamera[3]);
         effect->SetFloat(h.fSkinStrength, R.fSkinScatteringStrength);
 

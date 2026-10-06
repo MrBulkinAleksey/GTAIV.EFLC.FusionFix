@@ -132,6 +132,10 @@ export namespace TemporalAA
         Off, TAA, DLAA, FSR
     };
 
+    // Called at the end of the camera scene's G-buffer pass, whatever the antialiasing, with the device state saved
+    // around it: the depth there reads as the G-buffer pass wrote it, which it does not in the lighting phase.
+    inline void (*OnGBufferEnd)(IDirect3DDevice9* device) = nullptr;
+
     struct FrameCamera
     {
         TemporalMath::Matrix View;
@@ -975,6 +979,16 @@ public:
             }
             bInternalDraw = false;
             MotionFrame = SceneFrame;
+        }
+
+        if (device && OnGBufferEnd)
+        {
+            bInternalDraw = true;
+            {
+                StateBackup backup(device);
+                OnGBufferEnd(device);
+            }
+            bInternalDraw = false;
         }
 
         EndCaptureCleanup();
