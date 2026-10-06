@@ -3,6 +3,7 @@ texture PreWaterTex2D, PostWaterTex2D;
 texture PrevDepthTex2D;
 texture SSRAccumTex2D;
 texture SSRFallbackTex2D;
+texture SSRHitDistTex2D;
 texture MotionTex2D;
 texture AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D;
 texture SceneTex2D, SkinIDTex2D, SkinLightTex2D;
@@ -49,6 +50,18 @@ sampler2D SSRResultTex
 sampler2D SSRFallbackTex
 {
     Texture = <SSRFallbackTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
+};
+
+// How far SSRTrace_PS's ray went to its hit, over fMaxDistance, 0 for a miss; the same size as
+// SSRResultTex. SSRTemporal_PS takes the history where the reflected image was by it.
+sampler2D SSRHitDistTex
+{
+    Texture = <SSRHitDistTex2D>;
     AddressU = Clamp;
     AddressV = Clamp;
     MinFilter = POINT;
@@ -806,10 +819,18 @@ float3 SSRSurface(float2 uv, float2 vPos, out float3 n)
 // SSRFallback_PS and SSRSpread_PS work out what fills in where the rays found next to nothing
 // into another, and SSR_PS puts the two together into the reflection. The march once handed
 // on where it hit, for SSR_PS to read the history there; the reflections came out dull.
-float4 SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
+// The second target gets how far the ray went (SSRHitDistTex), for the accumulation.
+struct TraceOutput
 {
+    float4 colour : COLOR0;
+    float4 distance : COLOR1;
+};
+
+TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
+{
+    TraceOutput o = (TraceOutput)0;
     if (SSRSurfaceWeight(uv) <= 0.0)
-        return 0.0;
+        return o;
     float3 n;
     float3 C = SSRSurface(uv, vPos, n);
 
@@ -817,14 +838,17 @@ float4 SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     // accumulation averages the steps out and fewer of them do.
     float jitter = fStepJitter > 0.0 ? PixelJitter(vPos + vec2NoiseOffset) : 1.0;
     float4 hit = TraceHit(C, n, jitter, fDistanceFade);
+    o.distance = hit.z > 0.0 ? hit.w : 0.0;
     // Debug view 3 (for now): what the ray hit in place of the hit, which SSR_PS passes on, see
     // SSRDebug_PS.
     if (fDebugMode > 2.5 && fDebugMode < 3.5)
     {
         float nearer = gTraceHitZ < C.z - 0.25 ? 1.0 : 0.0;
-        return float4(nearer, 1.0 - nearer, gTraceRayZ < 0.0 ? 1.0 : 0.0, hit.z);
+        o.colour = float4(nearer, 1.0 - nearer, gTraceRayZ < 0.0 ? 1.0 : 0.0, hit.z);
+        return o;
     }
-    return HitColour(hit, fReflectionBlur);
+    o.colour = HitColour(hit, fReflectionBlur);
+    return o;
 }
 
 // Only rays that found next to nothing are filled in, fully at confidence 0 and not at all from
@@ -1296,9 +1320,12 @@ float4 ContactTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 }
 
 // Blends this frame's SSR (SSRResultTex, after smoothing) with last frame's accumulation
-// (SSRAccumTex), taken where the surface was last frame. Taking it where the reflected image
-// was, which is right for a flat mirror, looked no different on car paint or van sides and
-// cost a second render target the SSR pass wrote at full size. The history is clamped to the
+// (SSRAccumTex), taken where the reflected image was last frame: a reflection moves over its
+// surface as the camera does, the further its hit the more, and taken where the surface was
+// the history left a second, shifted copy of a car or a lamp beside this frame's, which the
+// neighbourhood clamp let through on paint reflecting much the same around it. Its image lies
+// behind the surface along the view ray, as far as the ray went (SSRHitDistTex); a miss, and
+// a surface that moved by itself, keep the surface's own place. The history is clamped to the
 // mean of this frame's 3x3 neighbourhood give or take 1.5 times its spread, so it cannot
 // bring back what is no longer there, and is dropped where last frame's depth shows another
 // surface.
@@ -1368,6 +1395,15 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
     bool checkDepth;
     float2 prevUV = TemporalHistoryUV(uv, C, checkDepth);
+    [branch]
+    if (fTemporalAnySurface <= 0.0 && checkDepth)
+    {
+        float hitDist = tex2Dlod(SSRHitDistTex, float4(uv, 0, 0)).r * fMaxDistance;
+        // Last frame's depth there is the reflecting surface's again, which the test below
+        // compares with this one's: off the surface, as past a car's outline, the history goes.
+        if (hitDist > 0.0)
+            prevUV = HistoryUV(C + normalize(C) * hitDist);
+    }
     float keep = fTemporalBlend;
     bool offScreen = any(prevUV <= 0.0) || any(prevUV >= 1.0);
     if (offScreen)

@@ -329,7 +329,7 @@ public:
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY, vec4WaterRings;
         D3DXHANDLE techSSR, techSSRWater;
-        D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D;
+        D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D, SSRHitDistTex2D;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
         D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
@@ -779,10 +779,15 @@ public:
     // The other target of the fill's cascade (SSRSpread_PS), which takes turns with SSRFallbackTex.
     rage::grcRenderTargetPC* SSRSpreadTex[2] = {};
     IDirect3DSurface9* SSRSpreadSurf[2] = {};
+    // How far the march's rays went (SSRTrace_PS's second target), for the accumulation to take
+    // the history where the reflected image was; only while accumulating. 64 bits like the trace
+    // target it is drawn with.
+    rage::grcRenderTargetPC* SSRHitDistTex[2] = {};
+    IDirect3DSurface9* SSRHitDistSurf[2] = {};
     // Accumulation over frames (SSRTemporal_PS in SSR.fx): each frame blends the smoothed
     // result with the previous accumulation into the other target of a pair, one pair per
     // resolution. ScreenSpaceReflectionsTemporal is the share of the history kept, 0 turns
-    // it off. The history is taken where the surface was last frame.
+    // it off. The history is taken where the reflected image was last frame.
     // The pair is why lighting must get the result only once SSR is done, see BindSSRTexture.
     rage::grcRenderTargetPC* SSRAccumTex[2][2] = {}; // [half][ping-pong]
     IDirect3DSurface9* SSRAccumSurf[2][2] = {};
@@ -1311,6 +1316,7 @@ public:
                 h.techSSRDebugCopy = SSREffect->GetTechniqueByName("SSRDebugCopy");
                 h.SSRAccumTex2D = SSREffect->GetParameterByName(nullptr, "SSRAccumTex2D");
                 h.SSRFallbackTex2D = SSREffect->GetParameterByName(nullptr, "SSRFallbackTex2D");
+                h.SSRHitDistTex2D = SSREffect->GetParameterByName(nullptr, "SSRHitDistTex2D");
                 h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
                 h.techSSRTemporal = SSREffect->GetTechniqueByName("SSRTemporal");
                 h.MotionTex2D = SSREffect->GetParameterByName(nullptr, "MotionTex2D");
@@ -2263,6 +2269,7 @@ namespace SSRTrace
             { R.SSRAccumTex[1][0], "SSRHalfAccumTex0" }, { R.SSRAccumTex[1][1], "SSRHalfAccumTex1" }, { R.SSRTraceTex[0], "SSRTraceTex" },
             { R.SSRTraceTex[1], "SSRHalfTraceTex" }, { R.SSRHistoryTex, "SSRHistoryTex" }, { R.SSRFallbackTex[0], "SSRFallbackTex" },
             { R.SSRFallbackTex[1], "SSRHalfFallbackTex" }, { R.SSRSpreadTex[0], "SSRSpreadTex" }, { R.SSRSpreadTex[1], "SSRHalfSpreadTex" },
+            { R.SSRHitDistTex[0], "SSRHitDistTex" }, { R.SSRHitDistTex[1], "SSRHalfHitDistTex" },
             { R.mDepthRT, "depth" }, { R.mSpecularRT, "specular" }, { R.mNormalRT, "normal" }, { R.PreAlphaDepthCopyRT, "prevDepth" } };
         for (auto [rt, name] : known)
             if (rt && rt->mD3DTexture == texture)
@@ -2491,10 +2498,12 @@ private:
             SAFE_RELEASE(PostFxResources.SSRTraceSurf[i]);
             SAFE_RELEASE(PostFxResources.SSRFallbackSurf[i]);
             SAFE_RELEASE(PostFxResources.SSRSpreadSurf[i]);
+            SAFE_RELEASE(PostFxResources.SSRHitDistSurf[i]);
         }
         for (auto* rt : { &PostFxResources.SSRHalfTex, &PostFxResources.SSRHalfDenoisedTex, &PostFxResources.SSRTraceTex[0],
                           &PostFxResources.SSRTraceTex[1], &PostFxResources.SSRFallbackTex[0], &PostFxResources.SSRFallbackTex[1],
-                          &PostFxResources.SSRSpreadTex[0], &PostFxResources.SSRSpreadTex[1] })
+                          &PostFxResources.SSRSpreadTex[0], &PostFxResources.SSRSpreadTex[1], &PostFxResources.SSRHitDistTex[0],
+                          &PostFxResources.SSRHitDistTex[1] })
         {
             if (*rt)
             {
@@ -2832,6 +2841,9 @@ private:
                         64, aoDesc, PostFxResources.SSRSpreadSurf[half]);
                     PostFxResources.SSRTraceTex[half] = rage::CreateEmptyRenderTarget(traceNames[half], w, hgt, 64, aoDesc,
                         PostFxResources.SSRTraceSurf[half]);
+                    if (PostFxResources.fSSRTemporalBlend > 0.0f)
+                        PostFxResources.SSRHitDistTex[half] = rage::CreateEmptyRenderTarget(half ? "SSRHalfHitDistTex" : "SSRHitDistTex",
+                            w, hgt, 64, aoDesc, PostFxResources.SSRHitDistSurf[half]);
                 }
             }
 
@@ -4692,7 +4704,8 @@ private:
         effect->SetFloat(h.fIntensity, R.fSSRIntensity);
         effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);
         effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
-        const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1];
+        const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1] &&
+                              R.SSRHitDistSurf[half];
         SetNoiseOffset(effect, temporal && R.bSSRTemporalJitter);
         effect->SetFloat(h.fTowardCamera, R.fSSRTowardCamera);
         effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
@@ -4773,7 +4786,19 @@ private:
                         unsigned(rtHr), unsigned(passHr), unsigned(drawHr));
                 }
             };
+            // The march also writes how far its rays went, for the accumulation; Clear clears both.
+            IDirect3DSurface9* oldTarget1 = nullptr;
+            if (temporal)
+            {
+                pDevice->GetRenderTarget(1, &oldTarget1);
+                pDevice->SetRenderTarget(1, R.SSRHitDistSurf[half]);
+            }
             draw(0, R.SSRTraceSurf[half]);
+            if (temporal)
+            {
+                pDevice->SetRenderTarget(1, oldTarget1);
+                SAFE_RELEASE(oldTarget1);
+            }
             effect->SetTexture(h.SSRResultTex2D, R.SSRTraceTex[half]->mD3DTexture);
             IDirect3DTexture9* fill = R.SSRFallbackTex[half]->mD3DTexture;
             if (R.fSSRFallback > 0.0f)
@@ -4834,6 +4859,7 @@ private:
             const int prev = R.nSSRAccumIndex, next = prev ^ 1;
             effect->SetTexture(h.SSRResultTex2D, ssrResult);
             effect->SetTexture(h.SSRAccumTex2D, R.SSRAccumTex[sizeIndex][prev]->mD3DTexture);
+            effect->SetTexture(h.SSRHitDistTex2D, R.SSRHitDistTex[sizeIndex]->mD3DTexture);
             const bool history = FrameHistory::CanReproject(R.nSSRAccumFrame);
             BindMotionVectors(effect, history);
             effect->SetFloat(h.fTemporalBlend, history ? R.fSSRTemporalBlend : 0.0f);
