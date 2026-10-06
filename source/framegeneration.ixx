@@ -30,8 +30,8 @@ import upscaler;
 // - FrameGeneration = 1 in [TEMPORAL]: the game presents the generated frame in place of its own, which waits in
 //   PresentRT for half a frame. Nothing waits for it: the game goes on with the next frame, and the draw calls of the
 //   render thread check the time. The first one after the half (FrameGenerationDelay of the smoothed frame time)
-//   presents the rendered frame and leaves the back buffer as it found it. A frame that ends before that presents
-//   the waiting one first.
+//   presents the rendered frame and leaves the back buffer as it found it, inside the game's scene. A frame that
+//   ends before that presents the waiting one first.
 // - FrameGeneration = 2 shows the generated frames in place of the rendered ones, to check the generation itself;
 //   3 paces as 1 with the rendered frame in place of the generated one, to check the pacing alone.
 
@@ -59,7 +59,7 @@ namespace
         constexpr int32_t NotOnBackBuffer = 16; // not while render target 0 is the back buffer
         constexpr int32_t BeforePost = 32;      // only before the upscaler's Evaluate, which starts the post processing
         constexpr int32_t AfterPost = 64;       // only once the frame before the HUD was captured
-        constexpr int32_t NoScene = 128;        // no EndScene and BeginScene around it
+        constexpr int32_t InScene = 128;        // EndScene and BeginScene around it also within a frame, which breaks it
         constexpr int32_t NoRebind = 256;       // the targets are not set again after it
     }
     int32_t nDebug = 0;
@@ -106,6 +106,7 @@ namespace
     // The rendered frame waiting in PresentRT for its Present, after the generated one went
     bool bPending = false;
     bool bInPresent = false;
+    bool bEndOfFrameOnly = false;   // the runtime refused a Present inside the game's scene
     LARGE_INTEGER PendingDue{};
     LARGE_INTEGER GeneratedAt{};
 
@@ -342,6 +343,7 @@ namespace
     void PresentPending(IDirect3DDevice9* device, bool late)
     {
         bPending = false;
+        bool retry = false;
         IDirect3DSurface9* backBuffer = nullptr;
         if (FAILED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) || !backBuffer)
             return;
@@ -365,16 +367,27 @@ namespace
                 LastPoint = { DrawsThisFrame, Ms(LastFrameEnd, Now()), CurrentPhase(), SurfaceKind(targets[0], backBuffer), SurfaceKind(depth, nullptr),
                     Upscaler::IsFrameGenerationReady(), RenderScale::IsInPost(), bHudLessCaptured };
 
-            // The game is inside its scene
+            // The game is inside its scene. Within a frame it stays so: D3D9, and DXVK as it, only lets go of the vertex
+            // and index buffers the game unbound at EndScene, and the game goes on drawing with ones it unbound, which
+            // came out black after an EndScene of ours. At the end of the frame nothing is drawn after it.
             auto presentedAt = Now();
             if (!(nDebug & Debug::NoPresent))
             {
-                if (!(nDebug & Debug::NoScene))
+                bool scene = late || (nDebug & Debug::InScene);
+                if (scene)
                     device->EndScene();
-                if (FAILED(device->Present(nullptr, nullptr, nullptr, nullptr)))
-                    LogOnce(6, "Present of the rendered frame failed");
-                if (!(nDebug & Debug::NoScene))
+                auto hr = device->Present(nullptr, nullptr, nullptr, nullptr);
+                if (scene)
                     device->BeginScene();
+                if (hr == D3DERR_INVALIDCALL && !scene)
+                {
+                    // Not inside a scene with this runtime: from now on when the next frame ends
+                    Log("Present inside the game's scene was refused: the rendered frames go when the next frame ends");
+                    bEndOfFrameOnly = true;
+                    retry = true;
+                }
+                else if (FAILED(hr))
+                    LogOnce(6, "Present of the rendered frame failed");
             }
 
             // The game's back buffer as it was, in whichever surface is the back buffer now
@@ -401,8 +414,13 @@ namespace
                 SAFE_RELEASE(target);
             SAFE_RELEASE(depth);
 
-            Stats.Add(Ms(GeneratedAt, presentedAt), Ms(GeneratedAt, PendingDue), late);
-            bPresentedWithin = !late;
+            if (retry)
+                bPending = true;
+            else
+            {
+                Stats.Add(Ms(GeneratedAt, presentedAt), Ms(GeneratedAt, PendingDue), late);
+                bPresentedWithin = !late;
+            }
         }
         else
         {
@@ -417,7 +435,7 @@ namespace
     {
         if (GetCurrentThreadId() == RenderThread)
             ++DrawsThisFrame;
-        if (!bPending || bInPresent || (nDebug & Debug::EndOfFrame) || GetCurrentThreadId() != RenderThread || Now().QuadPart < PendingDue.QuadPart)
+        if (!bPending || bInPresent || bEndOfFrameOnly || (nDebug & Debug::EndOfFrame) || GetCurrentThreadId() != RenderThread || Now().QuadPart < PendingDue.QuadPart)
             return;
 
         // Experiments: only in some parts of the frame
