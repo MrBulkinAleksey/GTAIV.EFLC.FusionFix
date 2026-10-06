@@ -146,6 +146,8 @@ export namespace TemporalAA
     // Called at the end of the camera scene's G-buffer pass, whatever the antialiasing, with the device state saved
     // around it: the depth there reads as the G-buffer pass wrote it, which it does not in the lighting phase.
     inline void (*OnGBufferEnd)(IDirect3DDevice9* device) = nullptr;
+    // Marks the motion vectors' passes for the PostFx profiler (begin, then end), when it is set.
+    inline void (*ProfileMotion)(IDirect3DDevice9* device, bool begin) = nullptr;
 
     struct FrameCamera
     {
@@ -1039,9 +1041,13 @@ public:
             bInternalDraw = true;
             {
                 StateBackup backup(device);
+                if (ProfileMotion)
+                    ProfileMotion(device, true);
                 RenderCameraMotion(device);
                 if (capturing && !Captures.empty())
                     RenderObjectMotion(device);
+                if (ProfileMotion)
+                    ProfileMotion(device, false);
             }
             bInternalDraw = false;
             MotionFrame = SceneFrame;

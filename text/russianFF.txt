@@ -250,6 +250,12 @@ Logitech LightSync RGB
 [VolumetricLight]
 Объёмный свет
 
+[GGXLighting]
+Освещение GGX
+
+[WetWeather]
+Мокрая погода
+
 [VolumeClouds]
 Объёмные облака
 

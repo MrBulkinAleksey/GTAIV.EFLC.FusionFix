@@ -54,6 +54,7 @@ import temporal;
 #define IDR_SSR_FX                               136
 #define IDR_CAS                                  137
 #define IDR_CLOUDS_FX                            138
+#define IDR_WETGROUND_FX                         139
 
 #define IDR_SSDraw_PS_compiled                   2127
 #define IDR_SSPrepass_PS_compiled                2128
@@ -326,7 +327,7 @@ public:
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff, fWetness, fWetGroundBoost;
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
-        D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY;
+        D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY, vec4WaterRings;
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D, SSRHitDistTex2D;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
@@ -388,6 +389,7 @@ public:
     bool bGIBound = false;
     // mMaterialIdRT on s11 during lighting, for skin in the light volume shaders.
     bool bMaterialIdBound = false;
+    bool bSpecularBound = false;
 
     // Light scattering under the skin (SkinScatter_PS in SSR.fx), as the fog pass begins: the
     // light on skin with its view depth into SkinLightTex[0], blurred along x into [1], and along
@@ -411,6 +413,70 @@ public:
     // times the square of one less their colour's saturation and faded out on dark colours.
     // They are told apart by the gloss 258 / 1023 they write (world_no_specular_mark.patch).
     float fSpecularSheen = 0.1f;
+    // Highlights of lamps, headlights and the sun (c165, c200, c206; local_light_specular_ggx.patch):
+    // the game's are pow(R.L, n), the same peak at every gloss and nothing past the lobe. LightsGGX
+    // swaps in a GGX lobe of the same width with a height correlated Smith term, so glossy surfaces
+    // get a bright core with a long soft tail, times that strength; 0 keeps the game's everywhere.
+    // - LightsGGXFresnel: how far the reflectance rises from 0.125 head on towards 1 at grazing angles.
+    // - LightsGGXSize: the lights' radius in metres, which widens the lobe by its angle, so small
+    //   lamps leave no tiny specks.
+    // - LightsGGXStretch: the lobe is that much wider along the light projected onto the surface,
+    //   so wet roads streak towards lamps.
+    // - LightsGGXHeadlights: half the spacing of a car's lamps. The game lights both with one light
+    //   between them; its highlight is taken as two, that far either way along the car's right, so
+    //   a wet road shows a streak from each lamp.
+    // - LightsGGXFillLights: lights the game draws with no highlight at all (fillerVolumePoint) get
+    //   this much of one, from the G-buffer's specular on s13.
+    // - LightsGGXSun: the sun's highlight the same way, 0 keeps the game's.
+    // - LightsGGXEnvironment: on rough surfaces (gloss under about 0.25: concrete, plaster) the sky's
+    //   reflection takes its Fresnel from the split sum environment BRDF, so they stop shining at
+    //   grazing angles; asphalt and anything glossier, and the reflection's blur, stay the game's.
+    //   0 keeps the game's, values between blend.
+    float fLightsGGX = 1.0f;
+    // GGX Lighting in the graphics menu (PREF_GGX_LIGHTING, [POSTFX] GGXLighting): off keeps the game's
+    // highlights everywhere, the lamps', the sun's and the sky reflection's alike.
+    bool GGXLightingEnabled() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_GGX_LIGHTING");
+        return !p || p->get() != 0;
+    }
+    float fLightsGGXFresnel = 0.5f;
+    float fLightsGGXSize = 0.05f;
+    float fLightsGGXStretch = 0.5f;
+    float fLightsGGXHeadlights = 0.65f;
+    float fLightsGGXFillLights = 0.5f;
+    float fLightsGGXSun = 1.0f;
+    float fLightsGGXEnvironment = 1.0f;
+    // - LightsGGXMax: the most a GGX highlight may reach, in the game's own peak (its pow(R.L, n) at 1).
+    //   GGX keeps the energy, so a narrow lobe peaks far above it: at 8, normal mapped clothes, skin and
+    //   wood burnt into white patches and grazing edges into white strips.
+    float fLightsGGXMax = 2.0f;
+    // Wet ground (WetGround.fx): WetGround the strength, 0 off. WetGroundPuddles the share of flat
+    // ground under water at full wetness, WetGroundPuddleSize the metres one tile of the puddle map
+    // takes, WetGroundRipples the rain's rings in them, WetGroundDarkening how much darker wet
+    // surfaces turn. WetGroundMaterials a bit per material category (the material ID less its 128 and
+    // 8 bits) that gets wet; WetGroundDebug 1 shows the categories, 2 wetness, puddles and rings.
+    float fWetGround = 1.0f;
+    // Wet Weather in the graphics menu (PREF_WET_WEATHER, [POSTFX] WetWeather): off leaves the ground
+    // dry and the water without the rain's rings.
+    bool WetWeatherEnabled() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_WET_WEATHER");
+        return !p || p->get() != 0;
+    }
+    float fWetGroundPuddles = 0.35f;
+    float fWetGroundPuddleSize = 24.0f;
+    float fWetGroundRipples = 1.0f;
+    float fWetGroundDarkening = 1.0f;
+    float fWetGroundWetting = 30.0f;
+    float fWetGroundDrying = 240.0f;
+    int nWetGroundMaterials = 1;
+    int nWetGroundDebug = 0;
+    // c206 as last set for a light, so lights of the same shape set nothing; the headlights found
+    // since the last Ctrl+Shift+F10 log, and the lights looked at.
+    float LightGGXShape[4] = {};
+    uint32_t nLightGGXHeadlights = 0;
+    uint32_t nLightGGXLights = 0;
     // Cloud shadows on the ground (c197.y-w, c198, c199, s12; deferred_lighting_sun_under_clouds.patch):
     // the ray from a surface towards the sun meets a cloud deck CloudShadowsHeight up, and the sun is
     // dimmed by up to CloudShadows where the clouds cover it there. The sky's clouds are on a dome
@@ -517,6 +583,29 @@ public:
     static constexpr float kCloudWeatherScale = 0.08f;
     void UpdateCloudLayer(double seconds);
     ID3DXEffect* CloudsEffect = nullptr;
+    // Wet ground in the rain (WetGround.fx, RenderWetGround): copies of _DEFERRED_GBUFFER_0_ to _2_,
+    // made afresh at the G-buffer's size and format whenever those change, which the pass reads
+    // while it writes the G-buffer.
+    ID3DXEffect* WetGroundEffect = nullptr;
+    HRESULT hrWetGroundEffect = S_OK;
+    IDirect3DTexture9* WetCopyTex[3] = {};
+    IDirect3DSurface9* WetCopySurf[3] = {};
+    // How wet the world is, 0..1: rises with the rain over WetGroundWetting seconds and dries over
+    // WetGroundDrying once it stops; the time it was last brought up to date, in game seconds.
+    float fWetness = 0.0f;
+    double fWetnessTime = -1.0;
+    // Whether the camera is in an interior, taken on the main thread as the frame's draw list is built:
+    // there the G-buffer's vertex colour says nothing of the sky, and tunnels and rooms got puddles.
+    bool bInteriorScene = false;
+    const char* szWetGroundStatus = "not run yet";
+    void ReleaseWetCopies()
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            SAFE_RELEASE(WetCopySurf[i]);
+            SAFE_RELEASE(WetCopyTex[i]);
+        }
+    }
     // The clouds at half the render size: [0] this frame's march, [1] and [2] the accumulation,
     // which swap every frame; nCloudAccumIndex picks last frame's ([1 + index]).
     rage::grcRenderTargetPC* CloudTex[3] = {};
@@ -542,6 +631,18 @@ public:
     bool VolumetricCloudsOn() const { return VolumetricCloudsEnabled() && CloudsEffect != nullptr; }
     // Why the last frame drew no volumetric clouds, or that it did, for the Ctrl+Shift+F10 log.
     const char* szCloudsStatus = "not run yet";
+    // The same for the reflection map (DrawSkyReflection): what the last call did, how many calls
+    // since the last log, and the viewport and target it drew into.
+    const char* szCloudsReflectionStatus = "never called";
+    uint32_t nCloudReflectionCalls = 0;
+    uint32_t nCloudWaterReflectionCalls = 0;
+    // The water's rings, for the log: c178 as last set, the water draws since the last log, and
+    // whether SSR's water pass last had the game's wave texture (none: a flat mirror, no rings).
+    float WaterRingsLast[4] = {};
+    uint32_t nWaterRingDraws = 0;
+    int nWaterSsrSurface = -1;
+    D3DVIEWPORT9 CloudReflectionViewport = {};
+    UINT CloudReflectionTarget[2] = {};
     HRESULT hrCloudsEffect = S_OK;
     IDirect3DTexture9* CloudNoiseTexture = nullptr;
     IDirect3DTexture9* CloudNoiseTex();
@@ -1198,6 +1299,7 @@ public:
                 h.fWaterIntensity = SSREffect->GetParameterByName(nullptr, "fWaterIntensity");
                 h.fWaterBlur = SSREffect->GetParameterByName(nullptr, "fWaterBlur");
                 h.fWaterNormalStrength = SSREffect->GetParameterByName(nullptr, "fWaterNormalStrength");
+                h.vec4WaterRings = SSREffect->GetParameterByName(nullptr, "vec4WaterRings");
                 h.vec4WaterToView = SSREffect->GetParameterByName(nullptr, "vec4WaterToView");
                 h.vec4WaterWorldX = SSREffect->GetParameterByName(nullptr, "vec4WaterWorldX");
                 h.vec4WaterWorldY = SSREffect->GetParameterByName(nullptr, "vec4WaterWorldY");
@@ -1264,6 +1366,23 @@ public:
                 h.techSkinScatterFinal = SSREffect->GetTechniqueByName("SkinScatterFinal");
                 h.techSkinDebug = SSREffect->GetTechniqueByName("SkinDebug");
             }
+        }
+
+        // Like the clouds: without it the ground stays dry.
+        static bool wetGroundEffectTried = false;
+        if (!WetGroundEffect && !wetGroundEffectTried)
+        {
+            wetGroundEffectTried = true;
+            ID3DXBuffer* errors = nullptr;
+            hrWetGroundEffect = D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
+                hm, MAKEINTRESOURCEW(IDR_WETGROUND_FX), nullptr, nullptr, 0, nullptr, &WetGroundEffect, &errors);
+            if (hrWetGroundEffect != S_OK)
+            {
+                WetGroundEffect = nullptr;
+                if (errors)
+                    MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
+            }
+            SAFE_RELEASE(errors);
         }
 
         // Not in ShadersFinishedLoading: without it the sky keeps only the game's clouds. Tried once,
@@ -1399,6 +1518,24 @@ public:
     {
         fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
         fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 50.0f);
+        fLightsGGX = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGX", 1.0f), 0.0f, 4.0f);
+        fLightsGGXFresnel = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXFresnel", 0.5f), 0.0f, 1.0f);
+        fLightsGGXSize = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSize", 0.05f), 0.0f, 2.0f);
+        fLightsGGXStretch = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXStretch", 0.5f), 0.0f, 4.0f);
+        fLightsGGXHeadlights = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXHeadlights", 0.65f), 0.0f, 2.0f);
+        fLightsGGXFillLights = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXFillLights", 0.5f), 0.0f, 2.0f);
+        fLightsGGXSun = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSun", 1.0f), 0.0f, 4.0f);
+        fLightsGGXEnvironment = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXEnvironment", 1.0f), 0.0f, 1.0f);
+        fLightsGGXMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXMax", 2.0f), 0.1f, 16.0f);
+        fWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "WetGround", 1.0f), 0.0f, 1.0f);
+        fWetGroundPuddles = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddles", 0.35f), 0.0f, 1.0f);
+        fWetGroundPuddleSize = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddleSize", 24.0f), 2.0f, 500.0f);
+        fWetGroundRipples = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundRipples", 1.0f), 0.0f, 3.0f);
+        fWetGroundDarkening = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundDarkening", 1.0f), 0.0f, 2.0f);
+        fWetGroundWetting = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundWetting", 30.0f), 0.0f, 3600.0f);
+        fWetGroundDrying = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundDrying", 240.0f), 0.0f, 3600.0f);
+        nWetGroundMaterials = iniReader.ReadInteger("POSTFX", "WetGroundMaterials", 1) & 0xFF;
+        nWetGroundDebug = std::clamp(iniReader.ReadInteger("POSTFX", "WetGroundDebug", 0), 0, 2);
         fCloudShadows = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadows", 0.6f), 0.0f, 1.0f);
         fCloudShadowsHeight = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsHeight", 1200.0f), 100.0f, 10000.0f);
         fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 16000.0f), 100.0f, 50000.0f);
@@ -2542,6 +2679,9 @@ private:
             PostFxResources.SSREffect->OnLostDevice();
         if (PostFxResources.CloudsEffect)
             PostFxResources.CloudsEffect->OnLostDevice();
+        if (PostFxResources.WetGroundEffect)
+            PostFxResources.WetGroundEffect->OnLostDevice();
+        PostFxResources.ReleaseWetCopies();
         ReleaseProfiler();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
@@ -2635,6 +2775,8 @@ private:
             PostFxResources.SSREffect->OnResetDevice();
         if (PostFxResources.CloudsEffect)
             PostFxResources.CloudsEffect->OnResetDevice();
+        if (PostFxResources.WetGroundEffect)
+            PostFxResources.WetGroundEffect->OnResetDevice();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             SAFE_RELEASE(PostFxResources.AOCamDepthSurf[i]);
@@ -2808,7 +2950,13 @@ private:
 
         OnDeviceReset();
 
-        TemporalAA::OnGBufferEnd = [](IDirect3DDevice9* device) { CopySceneDepth(device); };
+        TemporalAA::ProfileMotion = [](IDirect3DDevice9* device, bool begin) { ProfilerMark(device, kProfMotion, begin); };
+        HDROutput::ProfileOutput = [](IDirect3DDevice9* device, bool begin) { ProfilerMark(device, kProfHDROutput, begin); };
+        TemporalAA::OnGBufferEnd = [](IDirect3DDevice9* device)
+        {
+            CopySceneDepth(device);
+            RenderWetGround(device);
+        };
         RenderScale::TraceDepth = [](const char* what, IDirect3DSurface9* depth, IDirect3DSurface9* target, DWORD flags)
         {
             if (SSRTrace::Active())
@@ -2817,6 +2965,199 @@ private:
         };
 
         initialized = true;
+    }
+
+    // Wet ground (WetGround.fx), right after CopySceneDepth at the end of the G-buffer pass: copies
+    // _DEFERRED_GBUFFER_0_ to _2_ and draws them back wet, darker and glossier, with puddles and the
+    // rain's rings, before any light reads them. Only while anything is wet; the wetness follows
+    // CWeather::Rain (0.3 drizzle, 0.7 rain, 1.0 a storm) up over WetGroundWetting seconds and down
+    // over WetGroundDrying. Leaves the device as it found it.
+    static void RenderWetGround(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        auto skip = [&](const char* why) { R.szWetGroundStatus = why; };
+
+        // The wetness, in game time, so it stands still while the game is paused.
+        const double seconds = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds * 0.001 : 0.0;
+        const float rain = CWeather::Rain ? std::clamp(*CWeather::Rain / 0.7f, 0.0f, 1.0f) : 0.0f;
+        {
+            const bool first = R.fWetnessTime < 0.0;
+            const double dt = first ? 0.0 : std::clamp(seconds - R.fWetnessTime, 0.0, 1.0);
+            R.fWetnessTime = seconds;
+            if (first)
+                R.fWetness = rain; // a game started or loaded in the rain starts wet
+            else if (rain > R.fWetness)
+                R.fWetness = R.fWetGroundWetting > 0.0f ? (std::min)(rain, R.fWetness + float(dt) / R.fWetGroundWetting) : rain;
+            else
+                R.fWetness = R.fWetGroundDrying > 0.0f ? (std::max)(rain, R.fWetness - float(dt) / R.fWetGroundDrying) : rain;
+        }
+
+        if (R.fWetGround <= 0.0f)
+            return skip("off in the ini");
+        if (!R.WetWeatherEnabled())
+            return skip("off in the menu");
+        if (!R.WetGroundEffect)
+            return skip("no effect");
+        if (R.fWetness <= 0.0f && R.nWetGroundDebug != 1)
+            return skip("dry");
+        if (R.bInteriorScene && R.nWetGroundDebug != 1)
+            return skip("interior");
+        if (!pDevice || !R.mDiffuseRT || !R.mNormalRT || !R.mSpecularRT || !R.mMaterialIdRT || !R.mDiffuseRT->mD3DTexture ||
+            !R.mNormalRT->mD3DTexture || !R.mSpecularRT->mD3DTexture || !R.mMaterialIdRT->mD3DTexture)
+            return skip("no G-buffer");
+        auto noise = R.CloudNoiseTex();
+        if (!noise)
+            return skip("no noise texture");
+        rage::grcViewport* vp = rage::GetCurrentViewport();
+        if (!vp)
+            return skip("no viewport");
+
+        ProfilerScope timed(pDevice, kProfWetGround);
+        // The G-buffer's surfaces, and copies of them at their size and format.
+        ProfilerMark(pDevice, kProfWetGroundCopies, true);
+        IDirect3DTexture9* gbuffer[3] = { R.mDiffuseRT->mD3DTexture, R.mNormalRT->mD3DTexture, R.mSpecularRT->mD3DTexture };
+        IDirect3DSurface9* gbufferSurf[3] = {};
+        D3DSURFACE_DESC desc[3] = {};
+        bool ok = true;
+        for (int i = 0; i < 3 && ok; ++i)
+            ok = SUCCEEDED(gbuffer[i]->GetSurfaceLevel(0, &gbufferSurf[i])) && SUCCEEDED(gbufferSurf[i]->GetDesc(&desc[i]));
+        for (int i = 0; i < 3 && ok; ++i)
+        {
+            D3DSURFACE_DESC copyDesc = {};
+            if (R.WetCopySurf[i] && SUCCEEDED(R.WetCopySurf[i]->GetDesc(&copyDesc)) &&
+                (copyDesc.Width != desc[i].Width || copyDesc.Height != desc[i].Height || copyDesc.Format != desc[i].Format))
+            {
+                SAFE_RELEASE(R.WetCopySurf[i]);
+                SAFE_RELEASE(R.WetCopyTex[i]);
+            }
+            if (!R.WetCopyTex[i])
+                ok = SUCCEEDED(pDevice->CreateTexture(desc[i].Width, desc[i].Height, 1, D3DUSAGE_RENDERTARGET, desc[i].Format,
+                                                      D3DPOOL_DEFAULT, &R.WetCopyTex[i], nullptr)) &&
+                     SUCCEEDED(R.WetCopyTex[i]->GetSurfaceLevel(0, &R.WetCopySurf[i]));
+            if (ok)
+                ok = SUCCEEDED(pDevice->StretchRect(gbufferSurf[i], nullptr, R.WetCopySurf[i], nullptr, D3DTEXF_NONE));
+        }
+        ProfilerMark(pDevice, kProfWetGroundCopies, false);
+        if (!ok)
+        {
+            for (auto& surf : gbufferSurf)
+                SAFE_RELEASE(surf);
+            return skip("could not copy the G-buffer");
+        }
+        R.szWetGroundStatus = "drawn";
+
+        ID3DXEffect* effect = R.WetGroundEffect;
+        const float width = float(desc[0].Width), height = float(desc[0].Height);
+        const D3DMATRIX& proj = *(const D3DMATRIX*)vp->mProjectionMatrix;
+        const D3DXVECTOR4 projInfo = ProjInfo(proj, width, height);
+        effect->SetVector("vec4ProjInfo", &projInfo);
+        effect->SetFloat("fNearPlane", vp->mNearClip);
+        effect->SetFloat("fFarDivNear", vp->mFarClip / vp->mNearClip);
+        {
+            const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+            D3DXVECTOR4 toView[3];
+            WorldToViewRows(vp, toView);
+            const D3DXVECTOR4 worldX(toView[0].x, toView[1].x, toView[2].x, viewInv.m[3][0]);
+            const D3DXVECTOR4 worldY(toView[0].y, toView[1].y, toView[2].y, viewInv.m[3][1]);
+            const D3DXVECTOR4 worldZ(toView[0].z, toView[1].z, toView[2].z, viewInv.m[3][2]);
+            effect->SetVector("vec4WorldX", &worldX);
+            effect->SetVector("vec4WorldY", &worldY);
+            effect->SetVector("vec4WorldZ", &worldZ);
+        }
+        // The rings' clock wraps every 1000 s, where a frame's jump goes unseen among the rings.
+        const D3DXVECTOR4 wet(R.fWetness * R.fWetGround, R.fWetGroundPuddles, rain, float(std::fmod(seconds, 1000.0)));
+        effect->SetVector("vec4Wet", &wet);
+        const D3DXVECTOR4 shape(1.0f / R.fWetGroundPuddleSize, R.fWetGroundRipples, 15.0f, R.fWetGroundDarkening);
+        effect->SetVector("vec4Shape", &shape);
+        const int mask = R.nWetGroundMaterials;
+        const D3DXVECTOR4 allow0(float(mask & 1), float((mask >> 1) & 1), float((mask >> 2) & 1), float((mask >> 3) & 1));
+        const D3DXVECTOR4 allow1(float((mask >> 4) & 1), float((mask >> 5) & 1), float((mask >> 6) & 1), float((mask >> 7) & 1));
+        effect->SetVector("vec4Allow0", &allow0);
+        effect->SetVector("vec4Allow1", &allow1);
+        effect->SetFloat("fDebug", float(R.nWetGroundDebug));
+
+        // Saved besides what StateBackup keeps around OnGBufferEnd: the textures, sampler states and
+        // constants the pass sets.
+        static constexpr DWORD kSlots = 6;
+        static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER,
+                                                                   D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
+        IDirect3DBaseTexture9* oldTextures[kSlots] = {};
+        DWORD savedSamplerStates[kSlots][std::size(kSamplerStates)] = {};
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+        {
+            pDevice->GetTexture(slot, &oldTextures[slot]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                pDevice->GetSamplerState(slot, kSamplerStates[i], &savedSamplerStates[slot][i]);
+        }
+        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        DWORD colorWrite[3] = {};
+        pDevice->GetRenderState(D3DRS_COLORWRITEENABLE1, &colorWrite[1]);
+        pDevice->GetRenderState(D3DRS_COLORWRITEENABLE2, &colorWrite[2]);
+
+        static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kStates[] =
+        {
+            { D3DRS_ZENABLE, FALSE }, { D3DRS_ZWRITEENABLE, FALSE }, { D3DRS_ALPHABLENDENABLE, FALSE }, { D3DRS_ALPHATESTENABLE, FALSE },
+            { D3DRS_STENCILENABLE, FALSE }, { D3DRS_CULLMODE, D3DCULL_NONE }, { D3DRS_COLORWRITEENABLE, 0x0F },
+            { D3DRS_SCISSORTESTENABLE, FALSE }, { D3DRS_SRGBWRITEENABLE, FALSE }, { D3DRS_FILLMODE, D3DFILL_SOLID },
+            { D3DRS_CLIPPLANEENABLE, 0 }, { D3DRS_FOGENABLE, FALSE },
+        };
+        for (auto [state, value] : kStates)
+            pDevice->SetRenderState(state, value);
+        pDevice->SetRenderState(D3DRS_COLORWRITEENABLE1, 0x0F);
+        pDevice->SetRenderState(D3DRS_COLORWRITEENABLE2, 0x0F);
+        for (DWORD i = 0; i < 3; ++i)
+            pDevice->SetRenderTarget(i, gbufferSurf[i]);
+        pDevice->SetRenderTarget(3, nullptr);
+        pDevice->SetDepthStencilSurface(nullptr);
+        D3DVIEWPORT9 viewport = { 0, 0, desc[0].Width, desc[0].Height, 0.0f, 1.0f };
+        pDevice->SetViewport(&viewport);
+        pDevice->SetVertexShader(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+
+        ProfilerScope timedPass(pDevice, kProfWetGroundPass);
+        UINT passes = 0;
+        effect->SetTechnique("Wet");
+        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
+        effect->BeginPass(0);
+        effect->CommitChanges();
+        IDirect3DBaseTexture9* textures[kSlots] = { LightingDepth(), R.WetCopyTex[0], R.WetCopyTex[1], R.WetCopyTex[2],
+                                                    R.mMaterialIdRT->mD3DTexture, noise };
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+        {
+            const bool wrap = slot == 5;
+            SetTextureBoth(pDevice, slot, textures[slot]);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSU, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSV, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_MAGFILTER, wrap ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_MINFILTER, wrap ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_MIPFILTER, wrap ? D3DTEXF_LINEAR : D3DTEXF_NONE);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_SRGBTEXTURE, FALSE);
+        }
+        BindEffectConstantsOnly(pDevice, effect);
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        const ScreenVertex quad[4] =
+        {
+            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,         height - 0.5f,  0.0f, 1.0f, 0.0f, 1.0f },
+            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
+            { width - 0.5f,  height - 0.5f,  0.0f, 1.0f, 1.0f, 1.0f },
+        };
+        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(ScreenVertex));
+        effect->EndPass();
+        effect->End();
+
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+        {
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
+            SAFE_RELEASE(oldTextures[slot]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                SetSamplerStateBoth(pDevice, slot, kSamplerStates[i], savedSamplerStates[slot][i]);
+        }
+        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->SetRenderState(D3DRS_COLORWRITEENABLE1, colorWrite[1]);
+        pDevice->SetRenderState(D3DRS_COLORWRITEENABLE2, colorWrite[2]);
+        for (auto& surf : gbufferSurf)
+            SAFE_RELEASE(surf);
     }
 
     // At the end of the G-buffer pass (TemporalAA::OnGBufferEnd, the device state saved around it): this frame's
@@ -2831,6 +3172,7 @@ private:
         RefreshGBufferTargets();
         if (!pDevice || !R.SceneDepthSurf || !R.Blit_PS || !R.mDepthRT || !R.mDepthRT->mD3DTexture)
             return;
+        ProfilerScope timed(pDevice, kProfDepthCopy);
         pDevice->SetRenderTarget(0, R.SceneDepthSurf);
         for (DWORD i = 1; i < 4; ++i)
             pDevice->SetRenderTarget(i, nullptr);
@@ -2956,6 +3298,7 @@ private:
     {
         RefreshGBufferTargets();
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+        ProfilerScope timed(pDevice, kProfFogPass);
 
         IDirect3DSurface9* prevSurface = nullptr;
         IDirect3DSurface9* prevDepthStencilSurface = nullptr;
@@ -3045,8 +3388,10 @@ private:
             // without temporal anti-aliasing the whole picture shook.
             RenderVolumetricClouds(pDevice, prevTex[1]);
             IDirect3DBaseTexture9* scene = prevTex[1];
+            ProfilerMark(pDevice, kProfSkin, true);
             if (auto skin = RenderSkinScattering(pDevice, prevTex[1]))
                 scene = skin;
+            ProfilerMark(pDevice, kProfSkin, false);
 
             if (PostFxResources.FullScreenTex_temp1)
             {
@@ -3106,7 +3451,9 @@ private:
                     pDevice->SetPixelShader(prevPS);
 
                     SetTextureBoth(pDevice, 1, scene);
+                    ProfilerMark(pDevice, kProfFog, true);
                     hbDrawPrimitivePostFX.fun();
+                    ProfilerMark(pDevice, kProfFog, false);
                     SetTextureBoth(pDevice, 1, prevTex[1]);
                 }
             }
@@ -3182,7 +3529,10 @@ private:
         pDevice->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
 
         // new 
-        PostFx3(pDevice, oldps, oldvs);
+        {
+            ProfilerScope timed(pDevice, kProfPost);
+            PostFx3(pDevice, oldps, oldvs);
+        }
 
         restoreRenderState();
 
@@ -3227,6 +3577,7 @@ private:
         auto& R = PostFxResources;
         if (!sharpening || sharpening->get() <= 0 || !R.CAS_PS || !R.backBuffer || !R.FullScreenTex_temp2 || !R.FullScreenSurface_temp2)
             return;
+        ProfilerScope timed(pDevice, kProfPostSharpen);
         if (FAILED(pDevice->StretchRect(R.backBuffer, nullptr, R.FullScreenSurface_temp2, nullptr, D3DTEXF_NONE)))
             return;
 
@@ -3327,6 +3678,7 @@ private:
                     // it before the game computed bloom and exposure.
                     if (TemporalAA::GetMode() != TemporalAA::Mode::Off && !TemporalAA::IsSceneResolved() && !RenderScale::IsActive())
                     {
+                        ProfilerScope timed(pDevice, kProfPostTAA);
                         FilterStippleBeforeResolve(PostFxResources.textureRead);
                         if (TemporalAA::Resolve(pDevice, PostFxResources.textureRead, PostFxResources.renderTargetTex, PostFxResources.renderTargetSurf))
                         {
@@ -3337,6 +3689,7 @@ private:
 
                     if (PostFxResources.useStippleFilter && PostFxResources.stipple_filter_ps && !TemporalAA::IsStippleFiltered())
                     {
+                        ProfilerScope timed(pDevice, kProfPostStipple);
                         pDevice->SetPixelShader(PostFxResources.stipple_filter_ps);
                         pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
                         SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
@@ -3352,6 +3705,7 @@ private:
                         {
                             if (PostFxResources.FullScreenDownsampleSurf && PostFxResources.FullScreenDownsampleSurf2)
                             {
+                                ProfilerScope timed(pDevice, kProfPostDOF);
                                 pDevice->SetSamplerState(8, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
                                 pDevice->SetSamplerState(8, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
                                 pDevice->SetSamplerState(8, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
@@ -3389,6 +3743,7 @@ private:
                         {
                             if (PostFxResources.FullScreenDownsampleSurf && PostFxResources.FullScreenDownsampleSurf2)
                             {
+                                ProfilerScope timed(pDevice, kProfPostSunShafts);
                                 pDevice->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
                                 pDevice->SetSamplerState(8, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
                                 pDevice->SetSamplerState(8, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
@@ -3437,6 +3792,7 @@ private:
 
                     // game postfx
                     {
+                        ProfilerScope timed(pDevice, kProfPostGame);
                         for (int i = 0; i < 4; i++)
                         {
                             SetTextureBoth(pDevice, i, PostFxResources.prePostFx[i]);
@@ -3464,6 +3820,7 @@ private:
                     // Anti aliasing
                     if (IsPostFxAA())
                     {
+                        ProfilerScope timed(pDevice, kProfPostAA);
                         // FXAA
                         if ((UsePostFxAA->get() == FusionFixSettings.AntialiasingText.eFXAA) && PostFxResources.FxaaPS)
                         {
@@ -3797,26 +4154,91 @@ private:
     // PostFxProfiler: GPU time of FusionFix's passes, from timestamp queries. Each frame's queries
     // are read kProfilerFrames frames later, without waiting on the GPU, and every 120 frames the
     // averages in milliseconds per frame are written to FusionFix.PostFx.log next to GTAIV.exe.
-    // Lights is the lighting phase less the AO, SSR, contact shadow and indirect light passes that
-    // run inside it: the game's lights with their local contact shadows, and the light shafts.
-    // Off, no query is made.
-    enum ProfilerSection { kProfAO, kProfSSR, kProfContact, kProfGI, kProfWater, kProfLighting, kProfSections };
+    // The sections form a tree: an effect and the passes it is made of, each pass inside its
+    // effect's time. What of a section its passes leave is shown as "other": in the lighting phase
+    // that is the game's lights with their local contact shadows, and the light shafts. A section
+    // can be entered more than once a frame, as the water is, and its times add up. The GGX
+    // highlights, the sky reflection's BRDF and the rain's rings on the water are a few
+    // instructions more in the game's own lighting and water shaders: they show in the lighting
+    // phase's lamps, sun and water, not as sections of their own. The lighting phase's game part is
+    // split by where the game is (SetLightingStage): its sun and ambient once FusionFix's passes are
+    // done, its lamps from the first light of the light loop, its shafts from the shaft loop.
+    // A frame runs from one post processing to the next. Off, no query is made.
+    enum ProfilerSection
+    {
+        kProfLighting,
+            kProfAO, kProfAODepth, kProfAOMain, kProfAOTemporal, kProfAOBlur, kProfAOApply,
+            kProfSSR, kProfSSRTrace, kProfSSRFill, kProfSSRResolve, kProfSSRDenoise, kProfSSRTemporal, kProfSSRDebug,
+            kProfContact, kProfContactMarch, kProfContactUpsample, kProfContactDenoise, kProfContactTemporal,
+            kProfGI, kProfGIMarch, kProfGIDenoise, kProfGITemporal, kProfGIUpsample,
+            kProfLightSun, kProfLightLocal, kProfLightShafts,
+        kProfDepthCopy,
+        kProfMotion,
+        kProfWetGround, kProfWetGroundCopies, kProfWetGroundPass,
+        kProfWaterAll, kProfWaterGame, kProfWater,
+        kProfCloudReflection, kProfCloudReflectionMap, kProfCloudReflectionWater,
+        kProfFogPass,
+            kProfClouds, kProfCloudsSkyRef, kProfCloudsMarch, kProfCloudsLight, kProfCloudsResolve, kProfCloudsComposite,
+            kProfSkin, kProfSkinLight, kProfSkinScatter, kProfSkinFinal,
+            kProfFog,
+        kProfResolve,
+        kProfPost,
+            kProfPostTAA, kProfPostStipple, kProfPostDOF, kProfPostSunShafts, kProfPostGame, kProfPostAA, kProfPostSharpen,
+        kProfHDROutput,
+        kProfSections
+    };
+    struct ProfilerSectionInfo { const char* name; int parent; };
+    static constexpr ProfilerSectionInfo kProfilerSectionInfo[] =
+    {
+        { "lighting phase", -1 },
+            { "ambient occlusion", kProfLighting }, { "depth and its mips", kProfAO }, { "occlusion", kProfAO },
+            { "accumulation", kProfAO }, { "blur", kProfAO }, { "into the G-buffer", kProfAO },
+            { "SSR", kProfLighting }, { "march", kProfSSR }, { "fill of misses", kProfSSR }, { "resolve", kProfSSR },
+            { "smoothing", kProfSSR }, { "accumulation", kProfSSR }, { "debug view", kProfSSR },
+            { "contact shadows", kProfLighting }, { "march", kProfContact }, { "upsample", kProfContact },
+            { "smoothing", kProfContact }, { "accumulation", kProfContact },
+            { "indirect light", kProfLighting }, { "march", kProfGI }, { "smoothing", kProfGI },
+            { "accumulation", kProfGI }, { "upsample", kProfGI },
+            { "the game's sun and ambient", kProfLighting }, { "the game's lamps and headlights", kProfLighting },
+            { "the game's light shafts", kProfLighting },
+        { "depth copy at the G-buffer's end", -1 },
+        { "motion vectors (temporal AA, upscaling)", -1 },
+        { "wet ground", -1 }, { "copies of the G-buffer", kProfWetGround }, { "wet pass", kProfWetGround },
+        { "water", -1 }, { "the game's water", kProfWaterAll }, { "SSR on the water", kProfWaterAll },
+        { "clouds in reflections", -1 }, { "the reflection map", kProfCloudReflection }, { "the water's reflection", kProfCloudReflection },
+        { "fog pass", -1 },
+            { "volumetric clouds", kProfFogPass }, { "sky brightness", kProfClouds }, { "march", kProfClouds },
+            { "light", kProfClouds }, { "accumulation", kProfClouds }, { "into the scene", kProfClouds },
+            { "skin scattering", kProfFogPass }, { "light on skin", kProfSkin }, { "scatter", kProfSkin },
+            { "final", kProfSkin },
+            { "the game's fog", kProfFogPass },
+        { "temporal AA / upscaling", -1 },
+        { "post processing", -1 },
+            { "temporal AA", kProfPost }, { "stipple filter", kProfPost }, { "depth of field", kProfPost },
+            { "sun shafts", kProfPost }, { "the game's post processing", kProfPost }, { "FXAA / SMAA", kProfPost },
+            { "sharpening", kProfPost },
+        { "HDR output", -1 },
+    };
+    static_assert(std::size(kProfilerSectionInfo) == kProfSections);
     static constexpr int kProfilerFrames = 4;
     static constexpr int kProfilerAverage = 120;
+    static constexpr int kProfilerStamps = 192; // timestamps a frame, two per section entered
     struct ProfilerFrame
     {
         IDirect3DQuery9* disjoint = nullptr;
         IDirect3DQuery9* freq = nullptr;
         IDirect3DQuery9* start = nullptr;
         IDirect3DQuery9* stop = nullptr;
-        IDirect3DQuery9* begin[kProfSections] = {};
-        IDirect3DQuery9* end[kProfSections] = {};
+        // Made as they are first needed, and kept for the frames after
+        IDirect3DQuery9* stamps[kProfilerStamps] = {};
+        struct { int section; bool begin; } marks[kProfilerStamps] = {};
+        int count = 0;
         bool issued = false;
-        bool used[kProfSections] = {};
     };
     static inline ProfilerFrame profilerFrames[kProfilerFrames];
     static inline int nProfilerFrame = -1;
-    static inline double profilerSums[kProfSections + 1] = {}; // the last is the whole frame
+    static inline double profilerSums[kProfSections] = {};
+    static inline double profilerFrameSum = 0.0;
     static inline int nProfilerSamples = 0;
     static inline bool bProfilerLogStarted = false;
 
@@ -3826,11 +4248,9 @@ private:
         SAFE_RELEASE(f.freq);
         SAFE_RELEASE(f.start);
         SAFE_RELEASE(f.stop);
-        for (int i = 0; i < kProfSections; ++i)
-        {
-            SAFE_RELEASE(f.begin[i]);
-            SAFE_RELEASE(f.end[i]);
-        }
+        for (auto& q : f.stamps)
+            SAFE_RELEASE(q);
+        f.count = 0;
         f.issued = false;
     }
 
@@ -3849,31 +4269,51 @@ private:
                   SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMPFREQ, &f.freq)) &&
                   SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.start)) &&
                   SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.stop));
-        for (int i = 0; ok && i < kProfSections; ++i)
-            ok = SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.begin[i])) &&
-                 SUCCEEDED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.end[i]));
         if (!ok)
             ReleaseProfilerFrame(f);
         return ok;
     }
 
-    static void WriteProfilerLine()
+    // A section, its passes below it, then what they leave of it.
+    static void WriteProfilerSection(FILE* log, int section, int depth, double n)
+    {
+        fprintf(log, "%*s%-*s %6.2f\n", 2 + depth * 2, "", 34 - depth * 2, kProfilerSectionInfo[section].name, profilerSums[section] / n);
+        double children = 0.0;
+        bool any = false;
+        for (int i = 0; i < kProfSections; ++i)
+        {
+            if (kProfilerSectionInfo[i].parent != section || profilerSums[i] <= 0.0)
+                continue;
+            WriteProfilerSection(log, i, depth + 1, n);
+            children += profilerSums[i];
+            any = true;
+        }
+        if (any)
+            fprintf(log, "%*s%-*s %6.2f\n", 4 + depth * 2, "", 32 - depth * 2, "other", (std::max)(profilerSums[section] - children, 0.0) / n);
+    }
+
+    static void WriteProfilerBlock()
     {
         FILE* log = _wfopen((GetExeModulePath() / L"FusionFix.PostFx.log").c_str(), bProfilerLogStarted ? L"a" : L"w");
         if (log)
         {
-            if (!bProfilerLogStarted)
-                fprintf(log, "GPU milliseconds per frame, averaged over %d frames. lights: the game's lights with their "
-                             "local contact shadows, and the light shafts\n", kProfilerAverage);
             const double n = double(nProfilerSamples);
-            fprintf(log, "frame %6.2f   AO %5.2f   SSR %5.2f   contact shadows %5.2f   indirect light %5.2f   water SSR %5.2f   lights %6.2f\n",
-                    profilerSums[kProfSections] / n, profilerSums[kProfAO] / n, profilerSums[kProfSSR] / n,
-                    profilerSums[kProfContact] / n, profilerSums[kProfGI] / n, profilerSums[kProfWater] / n,
-                    profilerSums[kProfLighting] / n);
+            fprintf(log, "GPU milliseconds per frame, averaged over %d frames\n", nProfilerSamples);
+            fprintf(log, "%-36s %6.2f\n", "frame", profilerFrameSum / n);
+            double sections = 0.0;
+            for (int i = 0; i < kProfSections; ++i)
+            {
+                if (kProfilerSectionInfo[i].parent >= 0 || profilerSums[i] <= 0.0)
+                    continue;
+                WriteProfilerSection(log, i, 0, n);
+                sections += profilerSums[i];
+            }
+            fprintf(log, "  %-34s %6.2f\n\n", "the game's other passes", (std::max)(profilerFrameSum - sections, 0.0) / n);
             fclose(log);
             bProfilerLogStarted = true;
         }
         std::fill(std::begin(profilerSums), std::end(profilerSums), 0.0);
+        profilerFrameSum = 0.0;
         nProfilerSamples = 0;
     }
 
@@ -3887,18 +4327,30 @@ private:
             f.start->GetData(&start, sizeof(start), 0) != S_OK || f.stop->GetData(&stop, sizeof(stop), 0) != S_OK)
             return;
         double ms[kProfSections] = {};
-        for (int i = 0; i < kProfSections; ++i)
+        UINT64 open[kProfSections] = {};
+        bool opened[kProfSections] = {};
+        for (int i = 0; i < f.count; ++i)
         {
-            UINT64 b = 0, e = 0;
-            if (f.used[i] && f.begin[i]->GetData(&b, sizeof(b), 0) == S_OK && f.end[i]->GetData(&e, sizeof(e), 0) == S_OK && e >= b)
-                ms[i] = double(e - b) * 1000.0 / double(freq);
+            UINT64 t = 0;
+            if (f.stamps[i]->GetData(&t, sizeof(t), 0) != S_OK)
+                return;
+            const int section = f.marks[i].section;
+            if (f.marks[i].begin)
+            {
+                open[section] = t;
+                opened[section] = true;
+            }
+            else if (opened[section] && t >= open[section])
+            {
+                ms[section] += double(t - open[section]) * 1000.0 / double(freq);
+                opened[section] = false;
+            }
         }
-        ms[kProfLighting] = (std::max)(ms[kProfLighting] - ms[kProfAO] - ms[kProfSSR] - ms[kProfContact] - ms[kProfGI], 0.0);
         for (int i = 0; i < kProfSections; ++i)
             profilerSums[i] += ms[i];
-        profilerSums[kProfSections] += double(stop - start) * 1000.0 / double(freq);
+        profilerFrameSum += double(stop - start) * 1000.0 / double(freq);
         if (++nProfilerSamples >= kProfilerAverage)
-            WriteProfilerLine();
+            WriteProfilerBlock();
     }
 
     // Once a frame, as post processing begins: closes this frame's queries and opens the next.
@@ -3927,7 +4379,7 @@ private:
             ReleaseProfiler();
             return;
         }
-        std::fill(std::begin(f.used), std::end(f.used), false);
+        f.count = 0;
         f.disjoint->Issue(D3DISSUE_BEGIN);
         f.start->Issue(D3DISSUE_END);
         f.issued = true;
@@ -3935,15 +4387,44 @@ private:
 
     static void ProfilerMark(IDirect3DDevice9* pDevice, int section, bool begin)
     {
-        if (!PostFxResources.bPostFxProfiler || !pDevice || nProfilerFrame < 0)
+        if (!PostFxResources.bPostFxProfiler || !pDevice || nProfilerFrame < 0 || section < 0)
             return;
         auto& f = profilerFrames[nProfilerFrame];
-        if (!f.issued)
+        if (!f.issued || f.count >= kProfilerStamps)
             return;
-        (begin ? f.begin : f.end)[section]->Issue(D3DISSUE_END);
-        if (!begin)
-            f.used[section] = true;
+        auto& q = f.stamps[f.count];
+        if (!q && FAILED(pDevice->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &q)))
+            return;
+        q->Issue(D3DISSUE_END);
+        f.marks[f.count++] = { section, begin };
     }
+
+    // Which part of the game's lighting is being drawn, for the profiler: 0 none, 1 the sun and
+    // ambient, 2 the lamps, 3 the light shafts. It only moves on, so a part the game skips leaves
+    // the one before running, and 0 closes whatever is open.
+    static inline int nLightingStage = 0;
+    static void SetLightingStage(IDirect3DDevice9* pDevice, int stage)
+    {
+        static constexpr int kSections[] = { -1, kProfLightSun, kProfLightLocal, kProfLightShafts };
+        if (stage != 0 && stage <= nLightingStage)
+            return;
+        if (nLightingStage > 0)
+            ProfilerMark(pDevice, kSections[nLightingStage], false);
+        nLightingStage = stage;
+        if (stage > 0)
+            ProfilerMark(pDevice, kSections[stage], true);
+    }
+
+    // Times what runs from here to the end of the scope; a section below 0 times nothing.
+    struct ProfilerScope
+    {
+        IDirect3DDevice9* device;
+        int section;
+        ProfilerScope(IDirect3DDevice9* pDevice, int s) : device(pDevice), section(s) { ProfilerMark(device, section, true); }
+        ~ProfilerScope() { ProfilerMark(device, section, false); }
+        ProfilerScope(const ProfilerScope&) = delete;
+        ProfilerScope& operator=(const ProfilerScope&) = delete;
+    };
 
     // Binds every sampler of the pixel shader of the pass just begun to the texture its effect
     // parameter holds, found through the shader's constant table (sampler X reads X2D in SSR.fx
@@ -4480,7 +4961,9 @@ private:
                 pDevice->GetRenderTarget(1, &oldTarget1);
                 pDevice->SetRenderTarget(1, R.SSRHitDistSurf[half]);
             }
+            ProfilerMark(pDevice, kProfSSRTrace, true);
             draw(0, R.SSRTraceSurf[half]);
+            ProfilerMark(pDevice, kProfSSRTrace, false);
             if (temporal)
             {
                 pDevice->SetRenderTarget(1, oldTarget1);
@@ -4488,6 +4971,7 @@ private:
             }
             effect->SetTexture(h.SSRResultTex2D, R.SSRTraceTex[half]->mD3DTexture);
             IDirect3DTexture9* fill = R.SSRFallbackTex[half]->mD3DTexture;
+            ProfilerMark(pDevice, kProfSSRFill, true);
             if (R.fSSRFallback > 0.0f)
             {
                 draw(1, R.SSRFallbackSurf[half]);
@@ -4506,8 +4990,11 @@ private:
                     }
                 }
             }
+            ProfilerMark(pDevice, kProfSSRFill, false);
             effect->SetTexture(h.SSRFallbackTex2D, fill);
+            ProfilerMark(pDevice, kProfSSRResolve, true);
             draw(3, ssrSurf);
+            ProfilerMark(pDevice, kProfSSRResolve, false);
         }
         effect->End();
 
@@ -4528,7 +5015,9 @@ private:
             BindEffectSamplers(pDevice, effect);
             SSRTrace::State(pDevice, "ssr denoise");
             SSRTrace::Contents(pDevice, "denoise input", ssrTex);
+            ProfilerMark(pDevice, kProfSSRDenoise, true);
             const HRESULT drawHr = pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            ProfilerMark(pDevice, kProfSSRDenoise, false);
             effect->EndPass();
             effect->End();
             SSRTrace::Line("ssr denoise: begin %08x pass %08x draw %08x passes %u", unsigned(beginHr), unsigned(passHr), unsigned(drawHr), passes);
@@ -4567,7 +5056,9 @@ private:
             effect->CommitChanges();
             BindEffectSamplers(pDevice, effect);
             SSRTrace::State(pDevice, "ssr temporal");
+            ProfilerMark(pDevice, kProfSSRTemporal, true);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            ProfilerMark(pDevice, kProfSSRTemporal, false);
             effect->EndPass();
             effect->End();
             ssrResult = R.SSRAccumTex[sizeIndex][next]->mD3DTexture;
@@ -4603,6 +5094,7 @@ private:
             effect->BeginPass(0);
             effect->CommitChanges();
             BindEffectSamplers(pDevice, effect);
+            ProfilerScope timed(pDevice, kProfSSRDebug);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
@@ -4703,10 +5195,13 @@ private:
     // the scene; with reflection, into the reflection map's target right after its sky
     // (DrawSkyReflection), at full size, on the sky only by the depth test, at the brightness of
     // that simpler sky. Leaves the device as it found it.
-    static void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* sceneBase, bool reflection = false)
+    static void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* sceneBase, bool reflection = false,
+                                       int reflectionSection = kProfCloudReflectionMap)
     {
+        ProfilerScope timedAll(pDevice, reflection ? kProfCloudReflection : -1);
+        ProfilerScope timed(pDevice, reflection ? reflectionSection : kProfClouds);
         auto& R = PostFxResources;
-        auto skip = [&](const char* why) { R.szCloudsStatus = why; };
+        auto skip = [&](const char* why) { (reflection ? R.szCloudsReflectionStatus : R.szCloudsStatus) = why; };
         if (!R.VolumetricCloudsEnabled())
             return skip("off in the ini");
         if (!R.CloudsEffect)
@@ -4716,7 +5211,7 @@ private:
         if (!sceneBase && !reflection)
             return skip("no scene texture");
         if (reflection && !R.bVolumetricCloudsReflections)
-            return;
+            return skip("VolumetricCloudsReflections 0");
         if (!R.mDepthRT || !R.mDepthRT->mD3DTexture)
             return skip("no depth texture");
         rage::grcViewport* vp = rage::GetCurrentViewport();
@@ -4734,9 +5229,13 @@ private:
         float exposure = rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0] * R.fVolumetricCloudsBrightness;
         if (exposure <= 0.0f)
             return skip("HDRExposure of the sky reads zero");
-        // The reflections' sky takes the timecycle's colours without the HDR exposure.
-        if (reflection)
+        // The reflection map's sky (the sky's 0x40000 branch) takes the timecycle's colours without the
+        // HDR exposure. The water's reflection draws its sky through the main branch, exposed as the
+        // scene's: with the reflection map's exposure its clouds came out some 30 times too dark, black.
+        if (reflection && reflectionSection != kProfCloudReflectionWater)
             exposure = R.fVolumetricCloudsBrightness * R.fVolumetricCloudsReflectionBrightness;
+        else if (reflection)
+            exposure *= R.fVolumetricCloudsReflectionBrightness;
         // The sky's SunDirection is y up; the world is z up.
         D3DXVECTOR4 sun(sunDirection[0], -sunDirection[2], sunDirection[1], 0.0f);
         const float sunLength = std::sqrt(sun.x * sun.x + sun.y * sun.y + sun.z * sun.z);
@@ -4787,26 +5286,32 @@ private:
             scene->Release();
         }
         if (!sceneSurface)
-            return reflection ? void() : skip("no scene surface");
-        // Only a reflection drawn over its whole target: the passes set the viewport to the target,
-        // and a map drawn in parts (as two halves of one texture) would take the clouds across all.
-        if (reflection)
-        {
-            D3DSURFACE_DESC targetDesc = {};
-            D3DVIEWPORT9 current = {};
-            sceneSurface->GetDesc(&targetDesc);
-            pDevice->GetViewport(&current);
-            if (current.X != 0 || current.Y != 0 || current.Width != targetDesc.Width || current.Height != targetDesc.Height)
-            {
-                sceneSurface->Release();
-                return;
-            }
-        }
-        if (!reflection)
-            R.szCloudsStatus = "drawn";
+            return skip("no scene surface");
         D3DSURFACE_DESC desc = {};
         sceneSurface->GetDesc(&desc);
-        const float width = float(desc.Width), height = float(desc.Height);
+        float width = float(desc.Width), height = float(desc.Height);
+        // A reflection is drawn through its own viewport, which may be a part of its target (a map
+        // drawn in parts, as two halves of one texture): the clouds go into that part only, the
+        // rays from its own corner. Insisting on the whole target left the water with no clouds.
+        float originX = 0.0f, originY = 0.0f;
+        if (reflection)
+        {
+            D3DVIEWPORT9 current = {};
+            pDevice->GetViewport(&current);
+            R.CloudReflectionViewport = current;
+            R.CloudReflectionTarget[0] = desc.Width;
+            R.CloudReflectionTarget[1] = desc.Height;
+            if (current.Width == 0 || current.Height == 0 || current.X + current.Width > desc.Width || current.Y + current.Height > desc.Height)
+            {
+                sceneSurface->Release();
+                return skip("viewport outside its target");
+            }
+            originX = float(current.X);
+            originY = float(current.Y);
+            width = float(current.Width);
+            height = float(current.Height);
+        }
+        skip("drawn");
 
         ID3DXEffect* effect = R.CloudsEffect;
         const D3DMATRIX& proj = *(const D3DMATRIX*)vp->mProjectionMatrix;
@@ -5104,21 +5609,27 @@ private:
                 SetSamplerStateBoth(pDevice, slot, D3DSAMP_MIPFILTER, slot == 1 ? D3DTEXF_LINEAR : D3DTEXF_NONE);
             }
         };
-        auto drawPass = [&](const char* technique, IDirect3DSurface9* target, float w, float h, bool blend)
+        // The passes are timed apart only in the scene's clouds, not in the reflection map's.
+        auto drawPass = [&](const char* technique, IDirect3DSurface9* target, float w, float h, bool blend, int profile)
         {
+            // Only the reflection's own viewport starts away from the target's corner.
+            const float x0 = target == sceneSurface ? originX : 0.0f, y0 = target == sceneSurface ? originY : 0.0f;
             pDevice->SetRenderTarget(0, target);
-            D3DVIEWPORT9 viewport = { 0, 0, DWORD(w), DWORD(h), 0.0f, 1.0f };
+            D3DVIEWPORT9 viewport = { DWORD(x0), DWORD(y0), DWORD(w), DWORD(h), 0.0f, 1.0f };
             pDevice->SetViewport(&viewport);
             pDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, blend ? TRUE : FALSE);
             pDevice->SetRenderState(D3DRS_COLORWRITEENABLE, blend ? (D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE) : 0xF);
-            const D3DXVECTOR4 info = ProjInfo(proj, w, h);
+            // VPOS counts from the target's corner: the rays start from the viewport's.
+            D3DXVECTOR4 info = ProjInfo(proj, w, h);
+            info.z -= x0 * info.x;
+            info.w -= y0 * info.y;
             effect->SetVector("vec4ProjInfo", &info);
             const ScreenVertex screenVertices[4] =
             {
-                { -0.5f,     -0.5f,     quadZ, 1.0f, 0.0f, 0.0f },
-                { -0.5f,      h - 0.5f, quadZ, 1.0f, 0.0f, 1.0f },
-                { w - 0.5f,  -0.5f,     quadZ, 1.0f, 1.0f, 0.0f },
-                { w - 0.5f,   h - 0.5f, quadZ, 1.0f, 1.0f, 1.0f }
+                { x0 - 0.5f,      y0 - 0.5f,     quadZ, 1.0f, 0.0f, 0.0f },
+                { x0 - 0.5f,      y0 + h - 0.5f, quadZ, 1.0f, 0.0f, 1.0f },
+                { x0 + w - 0.5f,  y0 - 0.5f,     quadZ, 1.0f, 1.0f, 0.0f },
+                { x0 + w - 0.5f,  y0 + h - 0.5f, quadZ, 1.0f, 1.0f, 1.0f }
             };
             UINT passes = 0;
             effect->SetTechnique(technique);
@@ -5128,6 +5639,7 @@ private:
             // Never the scene while drawing into it.
             bindTextures(halfSize && target != sceneSurface, halfSize && target != R.CloudSkyRefSurf, halfSize && target == R.CloudSurf[0]);
             BindEffectConstantsOnly(pDevice, effect);
+            ProfilerScope timedPass(pDevice, reflection ? -1 : profile);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
@@ -5140,20 +5652,20 @@ private:
             {
                 const D3DXVECTOR4 skyRefProj = ProjInfo(proj, 1.0f, 1.0f);
                 effect->SetVector("vec4SkyRefProj", &skyRefProj);
-                drawPass("CloudsSkyRef", R.CloudSkyRefSurf, 1.0f, 1.0f, true);
+                drawPass("CloudsSkyRef", R.CloudSkyRefSurf, 1.0f, 1.0f, true, kProfCloudsSkyRef);
             }
             // The march into its two targets, then its light into the half size clouds.
             pDevice->SetRenderTarget(1, R.CloudMarchSurf[1]);
-            drawPass("CloudsMarch", R.CloudMarchSurf[0], halfWidth, halfHeight, false);
+            drawPass("CloudsMarch", R.CloudMarchSurf[0], halfWidth, halfHeight, false, kProfCloudsMarch);
             pDevice->SetRenderTarget(1, nullptr);
-            drawPass("CloudsLight", R.CloudSurf[0], halfWidth, halfHeight, false);
-            drawPass("CloudsResolve", R.CloudSurf[nextAccum], halfWidth, halfHeight, false);
-            drawPass("CloudsComposite", sceneSurface, width, height, true);
+            drawPass("CloudsLight", R.CloudSurf[0], halfWidth, halfHeight, false, kProfCloudsLight);
+            drawPass("CloudsResolve", R.CloudSurf[nextAccum], halfWidth, halfHeight, false, kProfCloudsResolve);
+            drawPass("CloudsComposite", sceneSurface, width, height, true, kProfCloudsComposite);
             R.nCloudAccumIndex ^= 1;
             R.nCloudAccumFrame = FrameHistory::Frame();
         }
         else
-            drawPass("Clouds", sceneSurface, width, height, true);
+            drawPass("Clouds", sceneSurface, width, height, true, kProfCloudsMarch);
 
         for (size_t i = 0; i < std::size(kCloudRenderStates); ++i)
             pDevice->SetRenderState(kCloudRenderStates[i].state, savedRenderStates[i]);
@@ -5300,6 +5812,14 @@ private:
 
         effect->SetTexture(h.SurfaceTex2D, oldTextures[0]);
         effect->SetFloat(h.fWaterNormalStrength, oldTextures[0] ? R.fSSRWaterNormalStrength : 0.0f);
+        // The rain's rings, as the game's water shader takes them (WaterRainRings): its reflection is
+        // drawn over by this one, which hid them.
+        {
+            const auto rings = WaterRainRings();
+            R.nWaterSsrSurface = oldTextures[0] ? 1 : 0;
+            const D3DXVECTOR4 v(oldTextures[0] ? rings[0] : 0.0f, rings[1], rings[2], rings[3]);
+            effect->SetVector(h.vec4WaterRings, &v);
+        }
 
         pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
         pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
@@ -5410,9 +5930,41 @@ private:
         return desc.Width == RenderScale::ToRenderWidth(screen.Width) && desc.Height == RenderScale::ToRenderHeight(screen.Height);
     }
 
+    // The rain's rings on open water (water_rain_rings.patch, c178), set right before the water is
+    // drawn, through the game's device wrapper and the real device alike: set on the real device
+    // alone at the end of the G-buffer pass, the water never saw them. x their strength while it
+    // rains (WetGroundDebug 2: four times full, rain or not), y the clock, zw their fade from 25 to 40 m: the
+    // water is mostly seen from a quay, further off than puddles.
+    static std::array<float, 4> WaterRainRings()
+    {
+        auto& R = PostFxResources;
+        const double seconds = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds * 0.001 : 0.0;
+        const float rain = CWeather::Rain ? std::clamp(*CWeather::Rain / 0.7f, 0.0f, 1.0f) : 0.0f;
+        float rings = R.fWetGround > 0.0f && R.WetWeatherEnabled() ? rain * R.fWetGroundRipples : 0.0f;
+        if (R.nWetGroundDebug == 2)
+            rings = 4.0f; // unmissable, in any weather
+        return { rings, float(std::fmod(seconds, 1000.0)), -1.0f / 15.0f, 40.0f / 15.0f };
+    }
+
+    static void SetWaterRainRings()
+    {
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+        const auto c178 = WaterRainRings();
+        pDevice->SetPixelShaderConstantF(178, c178.data(), 1);
+        std::memcpy(PostFxResources.WaterRingsLast, c178.data(), sizeof(PostFxResources.WaterRingsLast));
+        ++PostFxResources.nWaterRingDraws;
+        if (auto real = RealDevice(pDevice); real != pDevice)
+            real->SetPixelShaderConstantF(178, c178.data(), 1);
+    }
+
     static void __cdecl WaterRenderHook(int a1)
     {
         auto& R = PostFxResources;
+        SetWaterRainRings();
+        auto pProfileDevice = rage::grcDevice::GetD3DDevice();
+        ProfilerScope timedWater(pProfileDevice, kProfWaterAll);
         // The game renders water for other views too, into targets of other sizes: each call
         // took two full screen copies and a full screen pass, and a target of another size
         // had both mask copies released and created again, even with no water on screen.
@@ -5420,7 +5972,9 @@ private:
         const bool mainScene = R.SSREnabled() && R.SSREffect && R.fSSRWaterIntensity > 0.0f &&
                                !R.bWaterDoneThisFrame && RenderTargetIsScreenSized();
         R.bWaterMaskCaptured = mainScene && CopyRenderTargetToWaterMask(0);
+        ProfilerMark(pProfileDevice, kProfWaterGame, true);
         shWaterRender.unsafe_ccall<void>(a1);
+        ProfilerMark(pProfileDevice, kProfWaterGame, false);
         if (mainScene)
         {
             auto pDevice = rage::grcDevice::GetD3DDevice();
@@ -5511,6 +6065,7 @@ private:
                 SetDepthRange(effect, h, currGrcViewport->mNearClip, currGrcViewport->mFarClip);
                 effect->SetFloat(h.fFarPlane, currGrcViewport->mFarClip);
 
+                ProfilerMark(pDevice, kProfAODepth, true);
                 pDevice->SetRenderTarget(0, camDepthSurf[0]);
                 effect->BeginPass(0);
                 BindEffectSamplers(pDevice, effect);
@@ -5545,6 +6100,7 @@ private:
                     pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, mipVertices, sizeof(ScreenVertex));
                 }
                 effect->EndPass();
+                ProfilerMark(pDevice, kProfAODepth, false);
 
                 pDevice->SetRenderTarget(0, aoSurf);
                 pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_COLORVALUE(1.0, 0.0, 0, 1.0), 1.0f, 0);
@@ -5580,10 +6136,12 @@ private:
 
                 effect->CommitChanges();
 
+                ProfilerMark(pDevice, kProfAOMain, true);
                 effect->BeginPass(gtao ? 5 : 2); // 1 SAO, 2 GTAO
                 BindEffectSamplers(pDevice, effect);
                 pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
+                ProfilerMark(pDevice, kProfAOMain, false);
 
                 // GTAO's accumulation over frames, before the blur: the history is this frame's
                 // raw GTAO blended with last frame's, followed to where each pixel was.
@@ -5615,10 +6173,12 @@ private:
                     effect->CommitChanges();
 
                     pDevice->SetRenderTarget(0, R.AOAccumSurf[next]);
+                    ProfilerMark(pDevice, kProfAOTemporal, true);
                     effect->BeginPass(6);
                     BindEffectSamplers(pDevice, effect);
                     pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                     effect->EndPass();
+                    ProfilerMark(pDevice, kProfAOTemporal, false);
 
                     R.nAOAccumIndex = next;
                     R.nAOAccumFrame = FrameHistory::Frame();
@@ -5629,6 +6189,7 @@ private:
 
                 float hor[2] = { invViewportSize[0] * PostFxResources.fAmbientOcclusionBlurRadius, 0.0 };
                 float ver[2] = { 0.0, invViewportSize[1] * PostFxResources.fAmbientOcclusionBlurRadius };
+                ProfilerMark(pDevice, kProfAOBlur, true);
                 effect->BeginPass(3);
                 for (auto i = 0; i < PostFxResources.nAmbientOcclusionBlurPasses; ++i)
                 {
@@ -5649,15 +6210,18 @@ private:
                     pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 }
                 effect->EndPass();
+                ProfilerMark(pDevice, kProfAOBlur, false);
 
                 // final output
                 pDevice->SetRenderTarget(0, SpecularRT);
                 effect->SetTexture(h.AOTexture2D, PostFxResources.nAmbientOcclusionBlurPasses > 0 ? aoTex : blurSource);
 
+                ProfilerMark(pDevice, kProfAOApply, true);
                 effect->BeginPass(4);
                 BindEffectSamplers(pDevice, effect);
                 pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
                 effect->EndPass();
+                ProfilerMark(pDevice, kProfAOApply, false);
             }
             effect->End();
 
@@ -5742,6 +6306,21 @@ private:
                 fprintf(log, "  s12 before the shadows: srgb %lu  max mip %lu  min filter %lu  lod bias %.3f\n",
                         static_cast<unsigned long>(R.CloudSamplerBefore[0]), static_cast<unsigned long>(R.CloudSamplerBefore[1]),
                         static_cast<unsigned long>(R.CloudSamplerBefore[2]), std::bit_cast<float>(R.CloudSamplerBefore[3]));
+                fprintf(log, "  GGX lights: %u headlights among %u lights drawn since the last log\n", R.nLightGGXHeadlights, R.nLightGGXLights);
+                R.nLightGGXHeadlights = 0;
+                R.nLightGGXLights = 0;
+                fprintf(log, "  clouds in reflections: %s; %u reflection map and %u water reflection skies since the last log; viewport %lu,%lu %lux%lu of a %ux%u target\n",
+                        R.szCloudsReflectionStatus, R.nCloudReflectionCalls, R.nCloudWaterReflectionCalls, R.CloudReflectionViewport.X, R.CloudReflectionViewport.Y,
+                        R.CloudReflectionViewport.Width, R.CloudReflectionViewport.Height, R.CloudReflectionTarget[0], R.CloudReflectionTarget[1]);
+                R.nCloudReflectionCalls = 0;
+                R.nCloudWaterReflectionCalls = 0;
+                fprintf(log, "  water rings: c178 %.2f %.1f %.3f %.3f; %u water draws since the last log; SSR on the water %s\n",
+                        R.WaterRingsLast[0], R.WaterRingsLast[1], R.WaterRingsLast[2], R.WaterRingsLast[3], R.nWaterRingDraws,
+                        R.nWaterSsrSurface < 0 ? "not drawn" : R.nWaterSsrSurface ? "had the wave texture" : "had no wave texture (flat, no rings)");
+                R.nWaterRingDraws = 0;
+                fprintf(log, "  wet ground: %s; effect %s (hr 0x%08lX); wetness %.3f, rain %.3f, materials 0x%02X, debug %d\n",
+                        R.szWetGroundStatus, R.WetGroundEffect ? "built" : "missing", static_cast<unsigned long>(R.hrWetGroundEffect), R.fWetness,
+                        CWeather::Rain ? *CWeather::Rain : -1.0f, unsigned(R.nWetGroundMaterials), R.nWetGroundDebug);
                 fprintf(log, "  volumetric clouds: %s; effect %s (hr 0x%08lX); shadows follow them %d; HDRExposure %.3f; CloudColor %.3f %.3f %.3f; "
                              "SunsetColor %.3f %.3f %.3f; CloudInscatteringRange %.3f; SunDirection %.3f %.3f %.3f; SkyColor %.3f %.3f %.3f; MoonPosition %.3f %.3f %.3f\n",
                         R.szCloudsStatus, R.CloudsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrCloudsEffect), int(R.VolumetricCloudsOn()),
@@ -5928,6 +6507,7 @@ private:
             return;
 
         auto pDevice = rage::grcDevice::GetD3DDevice();
+        ProfilerScope timed(pDevice, kProfResolve);
         IDirect3DTexture9* scene = nullptr;
         IDirect3DSurface9* sceneSurface = nullptr;
         IDirect3DSurface9* output = nullptr;
@@ -5960,6 +6540,7 @@ private:
             return;
 
         auto pDevice = rage::grcDevice::GetD3DDevice();
+        ProfilerScope timed(pDevice, kProfResolve);
         auto scene = PostFxResources.mFullScreenRT->mD3DTexture;
         auto resolved = PostFxResources.FullScreenTex_temp1->mD3DTexture;
         IDirect3DSurface9* sceneSurface = nullptr;
@@ -6002,8 +6583,40 @@ private:
         }
     }
 
+    // Whether the bound target is the water's reflection (WATER_REFLECTION_COLOUR). Its sky is drawn
+    // through the sky's main branch, not the reflection map's (REFLECTION_MAP_COLOUR, the paraboloids
+    // the surfaces' sky reflection comes from, phases with flag 0x40000).
+    static bool IsWaterReflectionTarget(IDirect3DDevice9* pDevice)
+    {
+        auto rt = rage::grcTextureFactoryPC::GetRTByName("WATER_REFLECTION_COLOUR");
+        if (!pDevice || !rt || !rt->mD3DTexture)
+            return false;
+        IDirect3DSurface9* water = nullptr;
+        IDirect3DSurface9* bound = nullptr;
+        rt->mD3DTexture->GetSurfaceLevel(0, &water);
+        pDevice->GetRenderTarget(0, &bound);
+        const bool same = water && water == bound;
+        SAFE_RELEASE(water);
+        SAFE_RELEASE(bound);
+        return same;
+    }
+
     static inline injector::hook_back<int(__fastcall*)(int, void*, int, int, char, char, int, char)> hbDrawSkyHook;
+    // The sky's main branch, which also draws the water reflection's sky: the volumetric clouds go in
+    // right after it there, as into the reflection map (DrawSkyReflection).
     static int __fastcall DrawSky(int _this, void* edx, int a2, int a3, char a4, char a5, int a6, char a7)
+    {
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        const int result = DrawSkyMain(_this, edx, a2, a3, a4, a5, a6, a7);
+        if (pDevice && IsWaterReflectionTarget(pDevice))
+        {
+            ++PostFxResources.nCloudWaterReflectionCalls;
+            RenderVolumetricClouds(pDevice, nullptr, true, kProfCloudReflectionWater);
+        }
+        return result;
+    }
+
+    static int DrawSkyMain(int _this, void* edx, int a2, int a3, char a4, char a5, int a6, char a7)
     {
         auto pDevice = rage::grcDevice::GetD3DDevice();
         IDirect3DPixelShader9* pShader = nullptr;
@@ -6040,6 +6653,7 @@ private:
     static int __fastcall DrawSkyReflection(int _this, void* edx, int a2, int a3, char a4, char a5, int a6, char a7)
     {
         const int result = hbDrawSkyReflection.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+        ++PostFxResources.nCloudReflectionCalls;
         if (auto pDevice = rage::grcDevice::GetD3DDevice())
             RenderVolumetricClouds(pDevice, nullptr, true);
         return result;
@@ -6075,14 +6689,18 @@ private:
         ProfilerMark(pDevice, kProfGI, false);
         // deferred_lighting draws after this; BindSSRTexture bound last frame's results.
         if (pDevice)
+        {
             BindLightingInputs(pDevice);
+            SetLightingStage(pDevice, 1);
+        }
 
         return result;
     }
 
     // Draws one full screen quad of the SSR effect's technique into target, then restores the
-    // device state it touched.
-    static void DrawEffectPass(IDirect3DDevice9* pDevice, ID3DXEffect* effect, D3DXHANDLE technique, IDirect3DSurface9* target, float width, float height)
+    // device state it touched. The draw is timed as profile, see ProfilerSection.
+    static void DrawEffectPass(IDirect3DDevice9* pDevice, ID3DXEffect* effect, D3DXHANDLE technique, IDirect3DSurface9* target, float width, float height,
+                               int profile = -1)
     {
         struct ScreenVertex { float x, y, z, rhw; float u, v; };
         const ScreenVertex screenVertices[4] =
@@ -6118,6 +6736,7 @@ private:
             SSRTrace::Line("  draw %s: target %ux%u, viewport %ux%u at %u,%u, quad %.0fx%.0f", tech.Name ? tech.Name : "?",
                 desc.Width, desc.Height, unsigned(view.Width), unsigned(view.Height), unsigned(view.X), unsigned(view.Y), width, height);
         }
+        ProfilerScope timed(pDevice, profile);
         pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
         effect->EndPass();
         effect->End();
@@ -6252,13 +6871,13 @@ private:
             // then back to full size for the rest.
             const float halfWidth = float(DWORD(width) / 2), halfHeight = float(DWORD(height) / 2);
             SetTargetSize(effect, h, proj, halfWidth, halfHeight);
-            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawHalfSurf, halfWidth, halfHeight);
+            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawHalfSurf, halfWidth, halfHeight, kProfContactMarch);
             SetTargetSize(effect, h, proj, width, height);
             effect->SetTexture(h.SSRResultTex2D, R.ContactRawHalfTex->mD3DTexture);
-            DrawEffectPass(pDevice, effect, h.techContactUpsample, R.ContactRawSurf, width, height);
+            DrawEffectPass(pDevice, effect, h.techContactUpsample, R.ContactRawSurf, width, height, kProfContactUpsample);
         }
         else
-            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawSurf, width, height);
+            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawSurf, width, height, kProfContactMarch);
 
         // The same depth aware smoothing SSR uses; the raw result has alpha 1 everywhere, so
         // it is a plain weighted blur.
@@ -6268,7 +6887,7 @@ private:
             effect->SetTexture(h.SSRResultTex2D, R.ContactRawTex->mD3DTexture);
             effect->SetFloat(h.fDenoiseRadius, R.fSSRDenoiseRadius);
             effect->SetFloat(h.fDenoiseSSROnly, 0.0f);
-            DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.ContactSurf, width, height);
+            DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.ContactSurf, width, height, kProfContactDenoise);
             result = R.ContactTex->mD3DTexture;
         }
         else
@@ -6299,7 +6918,7 @@ private:
             effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
             BindMotionVectors(effect, accumWasValid);
             effect->SetFloat(h.fTemporalBlend, accumWasValid ? R.fContactTemporalBlend : 0.0f);
-            DrawEffectPass(pDevice, effect, h.techContactTemporal, R.ContactAccumSurf[next], width, height);
+            DrawEffectPass(pDevice, effect, h.techContactTemporal, R.ContactAccumSurf[next], width, height, kProfContactTemporal);
 
             result = R.ContactAccumTex[next]->mD3DTexture;
             R.ContactResult = result;
@@ -6485,7 +7104,7 @@ private:
         vpDesc.MaxZ = 1.0f;
         pDevice->SetViewport(&vpDesc);
 
-        DrawEffectPass(pDevice, effect, h.techSSGI, R.GIRawSurf, width, height);
+        DrawEffectPass(pDevice, effect, h.techSSGI, R.GIRawSurf, width, height, kProfGIMarch);
 
         // The same depth aware smoothing SSR uses; the gather has alpha 1 everywhere, so it is a
         // plain weighted blur. The radius is in full size pixels.
@@ -6495,7 +7114,7 @@ private:
             effect->SetTexture(h.SSRResultTex2D, gathered);
             effect->SetFloat(h.fDenoiseRadius, R.fSSRDenoiseRadius * 0.5f);
             effect->SetFloat(h.fDenoiseSSROnly, 0.0f);
-            DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.GIDenoisedSurf, width, height);
+            DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.GIDenoisedSurf, width, height, kProfGIDenoise);
             gathered = R.GIDenoisedTex->mD3DTexture;
         }
 
@@ -6508,7 +7127,7 @@ private:
         effect->SetFloat(h.fTemporalAnySurface, 1.0f);
         // The SSR pass left the menu's debug view in fDebugMode; view 10 would turn this pass into its own.
         effect->SetFloat(h.fDebugMode, 0.0f);
-        DrawEffectPass(pDevice, effect, h.techSSRTemporal, R.GIAccumSurf[next], width, height);
+        DrawEffectPass(pDevice, effect, h.techSSRTemporal, R.GIAccumSurf[next], width, height, kProfGITemporal);
         // View 10 runs the accumulation again into whichever half size target it does not read.
         IDirect3DTexture9* historyDebug = nullptr;
         if (R.SSRDebugMode() == R.kGIHistoryDebugMode && R.SSRDebugSurf && h.techSSRDebug)
@@ -6534,7 +7153,7 @@ private:
         if (h.techGIUpsample && R.GIFullSurf)
         {
             effect->SetTexture(h.SSRResultTex2D, R.GIResult);
-            DrawEffectPass(pDevice, effect, h.techGIUpsample, R.GIFullSurf, fullWidth, fullHeight);
+            DrawEffectPass(pDevice, effect, h.techGIUpsample, R.GIFullSurf, fullWidth, fullHeight, kProfGIUpsample);
             R.GIResult = R.GIFullTex->mD3DTexture;
         }
 
@@ -6646,18 +7265,18 @@ private:
         IDirect3DBaseTexture9* result = nullptr;
         if (scatter)
         {
-            DrawEffectPass(pDevice, effect, h.techSkinLight, R.SkinLightSurf[0], width, height);
+            DrawEffectPass(pDevice, effect, h.techSkinLight, R.SkinLightSurf[0], width, height, kProfSkinLight);
             // A kernel unit is half SkinScatteringWidth, and a metre at view depth 1 spans _11 / 2
             // of the screen across and _22 / 2 down.
             const float unit = R.fSkinScatteringWidth * 0.25f;
             D3DXVECTOR4 step(R.SkinCamera[0] * unit, 0.0f, 0.0f, R.fSkinScatteringWidth * 0.5f);
             effect->SetVector(h.vec4SkinStep, &step);
             effect->SetTexture(h.SkinLightTex2D, R.SkinLightTex[0]->mD3DTexture);
-            DrawEffectPass(pDevice, effect, h.techSkinScatter, R.SkinLightSurf[1], width, height);
+            DrawEffectPass(pDevice, effect, h.techSkinScatter, R.SkinLightSurf[1], width, height, kProfSkinScatter);
             step = D3DXVECTOR4(0.0f, R.SkinCamera[1] * unit, 0.0f, R.fSkinScatteringWidth * 0.5f);
             effect->SetVector(h.vec4SkinStep, &step);
             effect->SetTexture(h.SkinLightTex2D, R.SkinLightTex[1]->mD3DTexture);
-            DrawEffectPass(pDevice, effect, h.techSkinScatterFinal, R.SkinLightSurf[0], width, height);
+            DrawEffectPass(pDevice, effect, h.techSkinScatterFinal, R.SkinLightSurf[0], width, height, kProfSkinFinal);
             result = R.SkinLightTex[0]->mD3DTexture;
         }
         SSRTrace::Line("skin: scatter %d, near %.4f far %.1f", int(scatter), R.SkinCamera[2], R.SkinCamera[3]);
@@ -6713,6 +7332,37 @@ private:
     // + 0x28, its flags at edi + 0x20), contact shadows go off for those lights and back on after.
     static inline SafetyHookMid shLocalContactLight{};
 
+    // c206 for the light about to be drawn: a headlight's (a spot light of 8 m or more with the
+    // vehicle flag, as InstallShaftHooks tells them) the car's level right and half its lamps'
+    // spacing, from which the shaders take its highlight as one from each lamp; other lights none.
+    static void SetLightGGXShape(const rage::CLightSource& light)
+    {
+        auto& R = PostFxResources;
+        float shape[4] = {};
+        if (R.GGXLightingEnabled() && R.fLightsGGX > 0.0f && R.fLightsGGXHeadlights > 0.0f && light.mType == rage::LT_SPOT &&
+            (light.mFlags & rage::LF_VEHICLE) && light.mRadius >= 8.0f)
+        {
+            // dir x up, level
+            const float kx = light.mDirection.y, ky = -light.mDirection.x;
+            const float len = std::sqrt(kx * kx + ky * ky);
+            if (len > 1e-3f)
+            {
+                shape[0] = kx / len;
+                shape[1] = ky / len;
+                shape[3] = R.fLightsGGXHeadlights;
+                ++R.nLightGGXHeadlights;
+            }
+        }
+        ++R.nLightGGXLights;
+        if (std::memcmp(shape, R.LightGGXShape, sizeof(shape)) == 0)
+            return;
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+        std::memcpy(R.LightGGXShape, shape, sizeof(shape));
+        pDevice->SetPixelShaderConstantF(206, shape, 1);
+    }
+
     static void InstallLocalContactLightHook()
     {
         auto pattern = hook::pattern("83 C7 28 89 7C 24 1C 8B 47 1C 85 C0");
@@ -6721,7 +7371,12 @@ private:
         shLocalContactLight = safetyhook::create_mid(pattern.get_first(7), [](SafetyHookContext& regs)
         {
             auto& R = PostFxResources;
-            if (!R.bLocalContactPass || R.LocalContactShadowConsts[7] == 0.0f)
+            if (!R.bLocalContactPass)
+                return;
+            if (nLightingStage == 1)
+                SetLightingStage(rage::grcDevice::GetD3DDevice(), 2);
+            SetLightGGXShape(*reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28));
+            if (R.LocalContactShadowConsts[7] == 0.0f)
                 return;
             const bool off = (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x200) != 0;
             if (off == R.bLocalContactLightOff)
@@ -6732,6 +7387,21 @@ private:
                 return;
             const float none[4] = {};
             pDevice->SetPixelShaderConstantF(203, off ? none : &R.LocalContactShadowConsts[4], 1);
+        });
+    }
+
+    // The start of the game's light shaft loop (CE 0xac29cd, the shaft count read), for the profiler.
+    static inline SafetyHookMid shShaftLoopStart{};
+
+    static void InstallShaftLoopProfiler()
+    {
+        auto pattern = hook::pattern("8B 35 ? ? ? ? 89 74 24 38 E8 ? ? ? ? 50 E8 ? ? ? ? 83 C4 08 80 7D 08 00 74 0E FF 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 85 F6 0F 8E");
+        if (pattern.empty())
+            return;
+        shShaftLoopStart = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&)
+        {
+            if (nLightingStage > 0)
+                SetLightingStage(rage::grcDevice::GetD3DDevice(), 3);
         });
     }
 
@@ -6928,6 +7598,28 @@ public:
             pDevice->SetPixelShaderConstantF(201, scale, 1);
             pDevice->SetPixelShaderConstantF(205, offset, 1);
         }
+        // The GGX highlights. c200: x the strength (0 the game's own), halved since the shaders
+        // divide by twice the visibility's denominator, y the Fresnel rise, z the lights' radius
+        // squared, w the lobe's stretch along the light, squared. c165: the fill lights' share,
+        // the sun's (0 its own highlight), the environment BRDF's blend, the highlight's ceiling. c206, the headlights'
+        // spacing, is set per light (InstallLocalContactLightHook); s13 the G-buffer's specular for
+        // the fill lights, read by no game shader while the lights are drawn.
+        {
+            const bool enabled = R.GGXLightingEnabled();
+            const bool on = enabled && R.fLightsGGX > 0.0f;
+            const float stretch = 1.0f + R.fLightsGGXStretch;
+            const float c200[4] = { on ? R.fLightsGGX * 0.5f : 0.0f, R.fLightsGGXFresnel, R.fLightsGGXSize * R.fLightsGGXSize, stretch * stretch };
+            const float c165[4] = { on ? R.fLightsGGXFillLights : 0.0f, on ? R.fLightsGGXSun : 0.0f, enabled ? R.fLightsGGXEnvironment : 0.0f, R.fLightsGGXMax };
+            pDevice->SetPixelShaderConstantF(200, c200, 1);
+            pDevice->SetPixelShaderConstantF(165, c165, 1);
+            std::memset(R.LightGGXShape, 0, sizeof(R.LightGGXShape));
+            pDevice->SetPixelShaderConstantF(206, R.LightGGXShape, 1);
+            if (R.mSpecularRT && R.mSpecularRT->mD3DTexture)
+            {
+                BindSampler(pDevice, 13, R.mSpecularRT->mD3DTexture, D3DTEXF_POINT);
+                R.bSpecularBound = true;
+            }
+        }
         // The sun on materials with no specular map (x) and the cloud shadows (yzw, c198, c199, s12).
         {
             float threshold = 0.0f, bias = 0.0f, thickness = 0.0f;
@@ -7083,6 +7775,7 @@ public:
     {
         if (auto pDevice = rage::grcDevice::GetD3DDevice())
         {
+            nLightingStage = 0; // a frame that never closed its lighting leaves nothing open here
             ProfilerMark(pDevice, kProfLighting, true);
             BindLightingInputs(pDevice);
         }
@@ -7107,6 +7800,7 @@ public:
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
+        SetLightingStage(pDevice, 0);
         ProfilerMark(pDevice, kProfLighting, false);
 
         if (R.bContactBound)
@@ -7123,6 +7817,11 @@ public:
         {
             SetTextureBoth(pDevice, 11, nullptr);
             R.bMaterialIdBound = false;
+        }
+        if (R.bSpecularBound)
+        {
+            SetTextureBoth(pDevice, 13, nullptr);
+            R.bSpecularBound = false;
         }
         if (R.bCloudNoiseBound)
         {
@@ -7142,6 +7841,8 @@ public:
         pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(197, noLocalContactShadows, 1);
+        pDevice->SetPixelShaderConstantF(200, noLocalContactShadows, 1);
+        pDevice->SetPixelShaderConstantF(165, noLocalContactShadows, 1);
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
@@ -7233,9 +7934,11 @@ public:
                     CRenderPhaseDeferredLighting_LightsToScreen::OnAfterCopyLight() += OnAfterCopyLight;
                     InstallShaftHooks();
                     InstallLocalContactLightHook();
+                    InstallShaftLoopProfiler();
                     InstallPedSkinHooks();
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
+                        PostFxResources.bInteriorScene = Natives::IsInteriorScene();
                         auto cb = new T_CB_Generic_NoArgs(BindSSRTexture);
                         if (cb)
                             cb->Append();

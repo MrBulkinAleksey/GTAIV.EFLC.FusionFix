@@ -217,6 +217,7 @@ uniform float fWaterIntensity;  // final multiplier for the water pass
 uniform float4 vec4WaterPlane;  // water plane in reconstruction space, (normal.xyz, d)
 uniform float fWaterBlur;       // reflection blur radius in pixels at max ray distance
 uniform float fWaterNormalStrength; // ripple slope multiplier, 0 gives a flat mirror
+uniform float4 vec4WaterRings;      // the rain's rings: strength, seconds, fade with distance (scale, offset); 0 none
 uniform float fUseWaterMask;        // 1 limits the water pass to pixels the game drew water on
 
 uniform float4 vec4WaterToView[3];
@@ -936,6 +937,22 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return float4(r.rgb * (1.0 + (fWetGroundBoost - 1.0) * wetOnly), saturate(r.a * surfaceWeight * fIntensity));
 }
 
+// One grid of the rain's rings on open water, as water_rain_rings.patch draws them in the game's
+// water shader (the same cells, hash, times and profile), so this reflection ripples with the
+// game's: a drop in each cell at its own time, its ring running out to 0.4 of the cell and fading.
+float2 WaterRingGrid(float2 p, float cell, float rate, float seed)
+{
+    float2 q = p / cell + seed;
+    float2 id = floor(q);
+    float h = frac(52.9829178 * frac(dot(id, float2(0.0671105608, 0.00583714992))));
+    float h2 = frac(52.9829178 * frac(dot(id + 17.0, float2(0.0671105608, 0.00583714992))));
+    float2 d = frac(q) - (0.5 + (float2(h, h2) - 0.5) * 0.3);
+    float r = sqrt(max(dot(d, d), 0.001));
+    float phase = frac(vec4WaterRings.y * rate + h);
+    float x = (r - 0.4 * phase) * cell;
+    return d / r * (x * exp(-100.0 * x * x) * (1.0 - phase) * (1.0 - phase));
+}
+
 float3 WaterNormal(float2 worldXY, float distSq)
 {
     float near = max(1.0 - distSq * 0.0004, 0.0);
@@ -943,8 +960,18 @@ float3 WaterNormal(float2 worldXY, float distSq)
     float2 slope = (tex2D(SurfaceTex, worldXY * 0.002).zw - 0.5) * 0.0512 * (1.0 - near);
     slope += (tex2D(SurfaceTex, worldXY * 0.01).zw - 0.5) * 1.024;
     slope += (tex2D(SurfaceTex, worldXY * 0.0454545468).zw - 0.5) * 0.465454549 * near;
+    slope *= fWaterNormalStrength;
 
-    float3 nWorld = normalize(float3(slope * fWaterNormalStrength, 1.0));
+    [branch]
+    if (vec4WaterRings.x > 0.0)
+    {
+        float fade = saturate(sqrt(distSq) * vec4WaterRings.z + vec4WaterRings.w);
+        float2 rings = WaterRingGrid(worldXY, 1.0, 0.7, 0.0) + WaterRingGrid(worldXY, 1.37, 0.57, 5.3) +
+                       WaterRingGrid(worldXY, 0.83, 0.86, 11.7);
+        slope += rings * 7.0 * vec4WaterRings.x * fade;
+    }
+
+    float3 nWorld = normalize(float3(slope, 1.0));
 
     return float3(dot(vec4WaterToView[0].xyz, nWorld),
                   dot(vec4WaterToView[1].xyz, nWorld),
