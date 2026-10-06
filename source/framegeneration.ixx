@@ -337,9 +337,8 @@ namespace
             f.issued = true;
             bGpuRecording = false;
         }
+        // Recorded with every pacing, which the log compares; only 2 paces by it
         ReadGpuFrames();
-        if (nPacing != 2)
-            return;
 
         GpuSlot = (GpuSlot + 1) % GpuFrames.size();
         auto& f = GpuFrames[GpuSlot];
