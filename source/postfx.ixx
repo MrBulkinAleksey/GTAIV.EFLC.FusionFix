@@ -3523,6 +3523,8 @@ private:
         { D3DSAMP_MAGFILTER, D3DTEXF_POINT },
         { D3DSAMP_MINFILTER, D3DTEXF_POINT },
         { D3DSAMP_MIPFILTER, D3DTEXF_NONE },
+        // Depths, normals and light: never sRGB, whatever the game's last draw left on the register
+        { D3DSAMP_SRGBTEXTURE, FALSE },
     };
     static constexpr DWORD kSSRSamplerSlots = 8;
     static constexpr DWORD kSSRTextureSlots = 8;
@@ -3816,10 +3818,11 @@ private:
             {
                 D3DXPARAMETER_DESC desc = {};
                 effect->GetParameterDesc(param, &desc);
-                DWORD minFilter = 0;
+                DWORD minFilter = 0, srgb = 0;
                 pDevice->GetSamplerState(reg, D3DSAMP_MINFILTER, &minFilter);
+                pDevice->GetSamplerState(reg, D3DSAMP_SRGBTEXTURE, &srgb);
                 traced += " s" + std::to_string(reg) + "=" + (desc.Name ? desc.Name : "?") + ":" + SSRTrace::TextureName(want) +
-                    (want != have ? "(was " + SSRTrace::TextureName(have) + ")" : "") + (minFilter == D3DTEXF_LINEAR ? "/lin" : "/pt");
+                    (want != have ? "(was " + SSRTrace::TextureName(have) + ")" : "") + (minFilter == D3DTEXF_LINEAR ? "/lin" : "/pt") + (srgb ? "/SRGB" : "");
             }
             SAFE_RELEASE(want);
             SAFE_RELEASE(have);
