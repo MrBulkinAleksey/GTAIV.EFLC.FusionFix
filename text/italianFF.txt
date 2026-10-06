@@ -250,6 +250,12 @@ Specular Anti-Aliasing
 [VolumetricLight]
 Volumetric Light
 
+[GGXLighting]
+GGX Lighting
+
+[WetWeather]
+Wet Weather
+
 [VolumeClouds]
 Volumetric Clouds
 

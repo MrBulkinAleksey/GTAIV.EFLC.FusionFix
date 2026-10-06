@@ -433,6 +433,13 @@ public:
     //   grazing angles; asphalt and anything glossier, and the reflection's blur, stay the game's.
     //   0 keeps the game's, values between blend.
     float fLightsGGX = 1.0f;
+    // GGX Lighting in the graphics menu (PREF_GGX_LIGHTING, [POSTFX] GGXLighting): off keeps the game's
+    // highlights everywhere, the lamps', the sun's and the sky reflection's alike.
+    bool GGXLightingEnabled() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_GGX_LIGHTING");
+        return !p || p->get() != 0;
+    }
     float fLightsGGXFresnel = 0.5f;
     float fLightsGGXSize = 0.05f;
     float fLightsGGXStretch = 0.5f;
@@ -450,6 +457,13 @@ public:
     // surfaces turn. WetGroundMaterials a bit per material category (the material ID less its 128 and
     // 8 bits) that gets wet; WetGroundDebug 1 shows the categories, 2 wetness, puddles and rings.
     float fWetGround = 1.0f;
+    // Wet Weather in the graphics menu (PREF_WET_WEATHER, [POSTFX] WetWeather): off leaves the ground
+    // dry and the water without the rain's rings.
+    bool WetWeatherEnabled() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_WET_WEATHER");
+        return !p || p->get() != 0;
+    }
     float fWetGroundPuddles = 0.35f;
     float fWetGroundPuddleSize = 24.0f;
     float fWetGroundRipples = 1.0f;
@@ -2980,6 +2994,8 @@ private:
 
         if (R.fWetGround <= 0.0f)
             return skip("off in the ini");
+        if (!R.WetWeatherEnabled())
+            return skip("off in the menu");
         if (!R.WetGroundEffect)
             return skip("no effect");
         if (R.fWetness <= 0.0f && R.nWetGroundDebug != 1)
@@ -5924,7 +5940,7 @@ private:
         auto& R = PostFxResources;
         const double seconds = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds * 0.001 : 0.0;
         const float rain = CWeather::Rain ? std::clamp(*CWeather::Rain / 0.7f, 0.0f, 1.0f) : 0.0f;
-        float rings = R.fWetGround > 0.0f ? rain * R.fWetGroundRipples : 0.0f;
+        float rings = R.fWetGround > 0.0f && R.WetWeatherEnabled() ? rain * R.fWetGroundRipples : 0.0f;
         if (R.nWetGroundDebug == 2)
             rings = 4.0f; // unmissable, in any weather
         return { rings, float(std::fmod(seconds, 1000.0)), -1.0f / 15.0f, 40.0f / 15.0f };
@@ -7323,7 +7339,7 @@ private:
     {
         auto& R = PostFxResources;
         float shape[4] = {};
-        if (R.fLightsGGX > 0.0f && R.fLightsGGXHeadlights > 0.0f && light.mType == rage::LT_SPOT &&
+        if (R.GGXLightingEnabled() && R.fLightsGGX > 0.0f && R.fLightsGGXHeadlights > 0.0f && light.mType == rage::LT_SPOT &&
             (light.mFlags & rage::LF_VEHICLE) && light.mRadius >= 8.0f)
         {
             // dir x up, level
@@ -7589,10 +7605,11 @@ public:
         // spacing, is set per light (InstallLocalContactLightHook); s13 the G-buffer's specular for
         // the fill lights, read by no game shader while the lights are drawn.
         {
-            const bool on = R.fLightsGGX > 0.0f;
+            const bool enabled = R.GGXLightingEnabled();
+            const bool on = enabled && R.fLightsGGX > 0.0f;
             const float stretch = 1.0f + R.fLightsGGXStretch;
-            const float c200[4] = { R.fLightsGGX * 0.5f, R.fLightsGGXFresnel, R.fLightsGGXSize * R.fLightsGGXSize, stretch * stretch };
-            const float c165[4] = { on ? R.fLightsGGXFillLights : 0.0f, on ? R.fLightsGGXSun : 0.0f, R.fLightsGGXEnvironment, R.fLightsGGXMax };
+            const float c200[4] = { on ? R.fLightsGGX * 0.5f : 0.0f, R.fLightsGGXFresnel, R.fLightsGGXSize * R.fLightsGGXSize, stretch * stretch };
+            const float c165[4] = { on ? R.fLightsGGXFillLights : 0.0f, on ? R.fLightsGGXSun : 0.0f, enabled ? R.fLightsGGXEnvironment : 0.0f, R.fLightsGGXMax };
             pDevice->SetPixelShaderConstantF(200, c200, 1);
             pDevice->SetPixelShaderConstantF(165, c165, 1);
             std::memset(R.LightGGXShape, 0, sizeof(R.LightGGXShape));
