@@ -1395,6 +1395,7 @@ public:
         frame.HudLess = FrameGeneration::UsesHudLess();
         frame.DebugFlags = FrameGeneration::DebugFlags();
         frame.CpuSync = FrameGeneration::ForceCpuSync();
+        frame.LegacyInteropOrder = FrameGeneration::LegacyInteropOrder();
         auto world = CurrentCamera.View.Inverse();
         auto normalized = [&](int row, float sign, float (&out)[3])
         {

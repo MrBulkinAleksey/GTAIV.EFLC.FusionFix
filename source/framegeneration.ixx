@@ -74,6 +74,8 @@ namespace
                                                  // the scene change detection of FSR's optical flow
         constexpr int32_t CpuSync = 32768;      // the upscaler and the frame generation sync with the helper on the CPU,
                                                 // also with the frame generation off
+        constexpr int32_t LegacyInterop = 65536; // DXVK images asked for before its command thread caught up, as
+                                                 // before 841aa99, also with the frame generation off
     }
     int32_t nDebug = 0;
 
@@ -876,6 +878,32 @@ namespace
             ReadSettings();
     }
 
+    // Whatever is drawn over the whole frame after the HUD is part of the finished frame, and so has to be of the copy
+    // before the HUD too: the frame generation takes what differs for the HUD, the whole frame otherwise. Drawn here,
+    // where the console gamma itself is drawn and nothing of the game follows; through the game's device wrapper, which
+    // its effect was made with.
+    void ApplyFinishingPasses()
+    {
+        if (!ConsoleGamma::IsActive() || !HudLessRT)
+            return;
+        auto device = rage::grcDevice::GetD3DDevice();
+        if (!device)
+            return;
+        IDirect3DSurface9* oldTarget = nullptr;
+        IDirect3DSurface9* hudLessSurface = nullptr;
+        D3DVIEWPORT9 oldViewport{};
+        device->GetRenderTarget(0, &oldTarget);
+        device->GetViewport(&oldViewport);
+        HudLessRT->mD3DTexture->GetSurfaceLevel(0, &hudLessSurface);
+        if (hudLessSurface && SUCCEEDED(device->SetRenderTarget(0, hudLessSurface)))
+            ConsoleGamma::Apply(device);
+        if (oldTarget)
+            device->SetRenderTarget(0, oldTarget);
+        device->SetViewport(&oldViewport);
+        SAFE_RELEASE(hudLessSurface);
+        SAFE_RELEASE(oldTarget);
+    }
+
     // Render thread, after the frame is finished
     void OnBeforePresent()
     {
@@ -956,6 +984,8 @@ namespace
             CopyInto(device, backBuffer, InputRT))
         {
             auto hdr = HDROutput::IsActive();
+            if (hudLess)
+                ApplyFinishingPasses();
             static uint32_t generations = 0;
             bool reset = (nDebug & Debug::PeriodicReset) && ++generations % 120 == 0;
             if (Upscaler::Generate(InputRT->mD3DTexture, hudLess ? HudLessRT->mD3DTexture : nullptr, GeneratedRT->mD3DTexture, hdr ? HDROutput::GetPeakNits() : 0.0f, reset))
@@ -1030,6 +1060,11 @@ export namespace FrameGeneration
         return mode != Mode::Off ? flags : 0u;
     }
 
+    bool LegacyInteropOrder()
+    {
+        return (nDebug & Debug::LegacyInterop) != 0;
+    }
+
     // The game and the helper wait for each other's GPU work on the CPU (Debug::CpuSync)
     bool ForceCpuSync()
     {
@@ -1052,31 +1087,11 @@ export namespace FrameGeneration
         backBuffer->GetDesc(&desc);
         if (!CreateTargets(desc.Width, desc.Height))
             return;
+        // The console gamma it needs is drawn at the end of the frame (ApplyFinishingPasses), not here in the middle of the
+        // post processing, where its effect's state saving would go through the game's device wrapper
         bHudLessCaptured = CopyInto(device, backBuffer, HudLessRT);
         if (!bHudLessCaptured)
-        {
             LogOnce(4, "The frame before the HUD could not be copied");
-            return;
-        }
-
-        // Whatever is drawn over the whole frame after the HUD is part of the finished frame, and so has to be of this
-        // one too: the frame generation takes what differs for the HUD, the whole frame otherwise
-        if (ConsoleGamma::IsActive())
-        {
-            IDirect3DSurface9* oldTarget = nullptr;
-            IDirect3DSurface9* hudLessSurface = nullptr;
-            D3DVIEWPORT9 oldViewport{};
-            device->GetRenderTarget(0, &oldTarget);
-            device->GetViewport(&oldViewport);
-            HudLessRT->mD3DTexture->GetSurfaceLevel(0, &hudLessSurface);
-            if (hudLessSurface && SUCCEEDED(device->SetRenderTarget(0, hudLessSurface)))
-                ConsoleGamma::Apply(device);
-            if (oldTarget)
-                device->SetRenderTarget(0, oldTarget);
-            device->SetViewport(&oldViewport);
-            SAFE_RELEASE(hudLessSurface);
-            SAFE_RELEASE(oldTarget);
-        }
     }
 }
 

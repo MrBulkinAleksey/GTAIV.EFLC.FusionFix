@@ -114,6 +114,7 @@ namespace
         // Opens the shared textures and the fence of a configuration, and closes their handles
         virtual bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) = 0;
         bool cpuSync = false;         // ConfigureFlags::CpuSync: waited for on the CPU whatever the fence
+        bool legacyOrder = false;     // DXVK: the images asked for before its command thread caught up, as before
         bool WaitOnCpu() const { return (wine && !gameFence) || cpuSync; }
         virtual void ReleaseImports() = 0;
         // Game textures -> shared textures, then the fence reaches signalValue. Null inputs are skipped.
@@ -614,10 +615,9 @@ namespace
         bool SubmitInputs(const Textures& inputs, uint64_t signalValue) override
         {
             // Everything the game rendered so far must reach the queue first. Before the images are asked for, too: DXVK
-            // gives a texture new storage when it's overwritten while the GPU still reads the old one, which happens once
-            // the GPU falls behind, and only its command thread knows the new one. Asked earlier, the image was the old
-            // storage, the frame before.
-            interop->FlushRenderingCommands();
+            // can give a texture new storage (relocation), which only its command thread knows about.
+            if (!legacyOrder)
+                interop->FlushRenderingCommands();
 
             GameImage sources[TextureCount];
             for (size_t i = 0; i < TextureCount; ++i)
@@ -669,6 +669,8 @@ namespace
             vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, barriers, after);
             vk.vkEndCommandBuffer(cmd);
 
+            if (legacyOrder)
+                interop->FlushRenderingCommands();
             if (!WaitOnCpu())
                 return Submit(cmd, VK_NULL_HANDLE, 0, signalValue, VK_NULL_HANDLE);
 
@@ -683,7 +685,8 @@ namespace
         bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue) override
         {
             // The target's current storage, as for the inputs
-            interop->FlushRenderingCommands();
+            if (!legacyOrder)
+                interop->FlushRenderingCommands();
 
             auto i = static_cast<size_t>(index);
             GameImage destination;
@@ -1329,6 +1332,7 @@ export namespace Upscaler
         bool HudLess = false;             // Generate of this frame comes with the frame before the HUD
         uint32_t DebugFlags = 0;          // FfxApiDispatchFramegenerationFlags for the frame generation's own debug drawing
         bool CpuSync = false;             // wait for the GPU work of both sides on the CPU instead of on the GPU
+        bool LegacyInteropOrder = false;  // DXVK: images asked for before its command thread caught up, as before 841aa99
         float CameraPosition[3]{};        // world space
         float CameraUp[3]{};
         float CameraRight[3]{};
@@ -1416,6 +1420,7 @@ export namespace Upscaler
         preparedFrameId = 0;
         if (state != State::Ready || !IsAvailable(backend) || !frame.Color || !frame.Depth || !frame.Motion || !frame.Output)
             return false;
+        bridge->legacyOrder = frame.LegacyInteropOrder;
 
         if (!CollectPending())
             return false;
