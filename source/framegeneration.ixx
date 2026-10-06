@@ -3,6 +3,8 @@ module;
 #include <common.hxx>
 #include <cstdarg>
 #include <cstdio>
+#include <map>
+#include <string>
 
 export module framegeneration;
 
@@ -146,6 +148,30 @@ namespace
     IDirect3DSurface9* ProbeMemory = nullptr;
     bool bPresentedWithin = false;
 
+    // What was bound when the rendered frame was presented within a frame, by kind, against the dark frames
+    uint32_t DrawsThisFrame = 0;
+    struct PresentPoint
+    {
+        uint32_t draws = 0;
+        std::string target;     // "back buffer" or the size of render target 0
+        std::string depth;      // the size of the depth buffer, or "none"
+    } LastPoint;
+    std::map<std::string, std::pair<uint32_t, uint32_t>> PointsByKind;   // presents, dark frames
+    uint32_t DarkLogged = 0;
+
+    std::string SurfaceKind(IDirect3DSurface9* surface, IDirect3DSurface9* backBuffer)
+    {
+        if (!surface)
+            return "none";
+        if (surface == backBuffer)
+            return "back buffer";
+        D3DSURFACE_DESC desc{};
+        surface->GetDesc(&desc);
+        char text[48];
+        snprintf(text, sizeof(text), "%ux%u fmt %d", desc.Width, desc.Height, desc.Format);
+        return text;
+    }
+
     struct BrightnessStats
     {
         uint32_t frames = 0, dark = 0, within = 0, darkWithin = 0;
@@ -183,6 +209,15 @@ namespace
 
         auto& b = Brightness;
         bool dark = b.average > 8.0 && value < b.average * 0.25;
+        if (within)
+        {
+            auto& kind = PointsByKind[LastPoint.target + ", depth " + LastPoint.depth];
+            ++kind.first;
+            kind.second += dark;
+            if (dark && DarkLogged++ < 30)
+                Log("Dark frame %.1f against %.1f: presented after %u draw calls, target %s, depth %s",
+                    value, b.average, LastPoint.draws, LastPoint.target.c_str(), LastPoint.depth.c_str());
+        }
         b.average = b.average > 0.0 ? b.average + (value - b.average) * 0.05 : value;
         ++b.frames;
         b.dark += dark;
@@ -192,6 +227,9 @@ namespace
             return;
         Log("Brightness over %u frames: average %.1f, %u dark; %u had the rendered frame presented within them, %u of those dark",
             b.frames, b.average, b.dark, b.within, b.darkWithin);
+        for (auto& [kind, counts] : PointsByKind)
+            Log("  presented with %s bound: %u times, %u dark", kind.c_str(), counts.first, counts.second);
+        PointsByKind.clear();
         auto average = b.average;
         b = {};
         b.average = average;
@@ -280,6 +318,8 @@ namespace
             device->GetDepthStencilSurface(&depth);
             device->GetViewport(&viewport);
             device->GetScissorRect(&scissor);
+            if (nDebug & Debug::Brightness)
+                LastPoint = { DrawsThisFrame, SurfaceKind(targets[0], backBuffer), SurfaceKind(depth, nullptr) };
 
             // The game is inside its scene
             auto presentedAt = Now();
@@ -326,6 +366,8 @@ namespace
     // Draw calls of the render thread: the rendered frame goes once its time has come
     void CheckPending(IDirect3DDevice9* device)
     {
+        if (GetCurrentThreadId() == RenderThread)
+            ++DrawsThisFrame;
         if (!bPending || bInPresent || (nDebug & Debug::EndOfFrame) || GetCurrentThreadId() != RenderThread || Now().QuadPart < PendingDue.QuadPart)
             return;
         PresentPending(device, false);
@@ -409,6 +451,7 @@ namespace
 
         if (nDebug & Debug::Brightness)
             ProbeBrightness(device);
+        DrawsThisFrame = 0;
 
         // This frame ended before the last one went: it goes first
         if (bPending)
