@@ -1082,7 +1082,7 @@ namespace
             }
             frame.frameId = shared.FrameId;
             frame.hudLess = shared.HudLess != 0;
-            frame.debugFlags = shared.DebugFlags;
+            frame.debugFlags = shared.DebugFlags & 0xFFu;
 
             using T = Protocol::Texture;
             auto cmd = device.BeginFrame();
@@ -1116,6 +1116,158 @@ namespace
         bool preparedFrame = false;
         uint64_t preparedFrameId = 0;
 
+        // Protocol::DebugCheckStamps: the corner of Present and HudLess read back as the frame generation got them
+        struct StampCheck
+        {
+            static constexpr uint32_t Slots = 8;
+            static constexpr uint32_t SlotBytes = 512;      // a placement per texture, two textures a slot
+            ComPtr<ID3D12Resource> readback;
+            struct Slot
+            {
+                uint64_t expected = 0;
+                uint64_t fenceValue = 0;                    // done when the frame fence reaches it
+                bool pending = false;
+                bool hudLess = false;
+            } slots[Slots];
+            uint32_t next = 0;
+            uint32_t checked = 0, matched = 0, behind = 0, ahead = 0, other = 0, hudMatched = 0, hudBehind = 0, hudOther = 0, hudChecked = 0;
+            uint32_t lastSeen = 0, lastExpected = 0;
+        } stamps;
+
+        static float HalfToFloat(uint16_t h)
+        {
+            uint32_t sign = (h >> 15) & 1, exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF;
+            float value;
+            if (exponent == 0)
+                value = std::ldexp(static_cast<float>(mantissa), -24);
+            else if (exponent == 31)
+                value = mantissa ? NAN : INFINITY;
+            else
+                value = std::ldexp(static_cast<float>(mantissa | 0x400), static_cast<int>(exponent) - 25);
+            return sign ? -value : value;
+        }
+
+        // The number a stamp read back holds, -1 when it's no stamp
+        static int64_t DecodeStamp(const uint16_t* texel)
+        {
+            auto channel = [&](int i) { return static_cast<int>(std::lround(HalfToFloat(texel[i]) * 255.0f)); };
+            int r = channel(0), g = channel(1), b = channel(2);
+            if (b != 0x5A || r < 0 || r > 255 || g < 0 || g > 255)
+                return -1;
+            return (g << 8) | r;
+        }
+
+        // Before the frame generation reads them: copies the corners of Present (and HudLess) for later
+        void RecordStamps(ID3D12GraphicsCommandList* cmd, uint64_t frameId, bool hudLess)
+        {
+            using T = Protocol::Texture;
+            if (!stamps.readback)
+            {
+                D3D12_HEAP_PROPERTIES heap{};
+                heap.Type = D3D12_HEAP_TYPE_READBACK;
+                D3D12_RESOURCE_DESC desc{};
+                desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+                desc.Width = StampCheck::Slots * 2 * StampCheck::SlotBytes;
+                desc.Height = 1;
+                desc.DepthOrArraySize = 1;
+                desc.MipLevels = 1;
+                desc.SampleDesc.Count = 1;
+                desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+                if (FAILED(device.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&stamps.readback))))
+                    return;
+            }
+            auto& slot = stamps.slots[stamps.next];
+            if (slot.pending)
+                return;     // not read yet: this frame goes unchecked
+
+            T textures[2] = { T::Present, T::HudLess };
+            for (int t = 0; t < (hudLess ? 2 : 1); ++t)
+            {
+                auto resource = device.Texture(textures[t]);
+                if (!resource)
+                    continue;
+                auto desc = resource->GetDesc();
+                D3D12_RESOURCE_BARRIER barrier{};
+                barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                barrier.Transition.pResource = resource;
+                barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+                barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+                cmd->ResourceBarrier(1, &barrier);
+
+                D3D12_TEXTURE_COPY_LOCATION from{};
+                from.pResource = resource;
+                from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                D3D12_TEXTURE_COPY_LOCATION to{};
+                to.pResource = stamps.readback.Get();
+                to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                to.PlacedFootprint.Offset = (stamps.next * 2 + t) * StampCheck::SlotBytes;
+                to.PlacedFootprint.Footprint = { DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1, 1, 256 };
+                // Inside the stamp, away from its edges
+                const UINT x = static_cast<UINT>(desc.Width) - Protocol::StampSize / 2, y = desc.Height - Protocol::StampSize / 2;
+                D3D12_BOX box{ x, y, 0, x + 1, y + 1, 1 };
+                cmd->CopyTextureRegion(&to, 0, 0, 0, &from, &box);
+
+                std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+                cmd->ResourceBarrier(1, &barrier);
+            }
+            slot.expected = frameId;
+            slot.hudLess = hudLess;
+            slot.pending = true;
+            stamps.next = (stamps.next + 1) % StampCheck::Slots;
+        }
+
+        // The slots whose frames the GPU has finished
+        void CheckStamps()
+        {
+            if (!stamps.readback)
+                return;
+            auto fence = device.FrameFence();
+            uint64_t completed = fence ? fence->GetCompletedValue() : 0;
+            for (auto& slot : stamps.slots)
+            {
+                if (!slot.pending || slot.fenceValue == 0 || completed < slot.fenceValue)
+                    continue;
+                size_t index = &slot - stamps.slots;
+                D3D12_RANGE range{ index * 2 * StampCheck::SlotBytes, (index * 2 + 2) * StampCheck::SlotBytes };
+                void* data = nullptr;
+                if (SUCCEEDED(stamps.readback->Map(0, &range, &data)) && data)
+                {
+                    auto base = static_cast<const uint8_t*>(data) + index * 2 * StampCheck::SlotBytes;
+                    auto expected = static_cast<int64_t>(slot.expected & 0xFFFF);
+                    auto seen = DecodeStamp(reinterpret_cast<const uint16_t*>(base));
+                    ++stamps.checked;
+                    if (seen == expected) ++stamps.matched;
+                    else if (seen == ((expected - 1) & 0xFFFF)) ++stamps.behind;
+                    else if (seen == ((expected + 1) & 0xFFFF)) ++stamps.ahead;
+                    else ++stamps.other;
+                    stamps.lastSeen = static_cast<uint32_t>(seen);
+                    stamps.lastExpected = static_cast<uint32_t>(expected);
+                    if (slot.hudLess)
+                    {
+                        auto hud = DecodeStamp(reinterpret_cast<const uint16_t*>(base + StampCheck::SlotBytes));
+                        ++stamps.hudChecked;
+                        if (hud == expected) ++stamps.hudMatched;
+                        else if (hud == ((expected - 1) & 0xFFFF)) ++stamps.hudBehind;
+                        else ++stamps.hudOther;
+                    }
+                    D3D12_RANGE none{ 0, 0 };
+                    stamps.readback->Unmap(0, &none);
+                }
+                slot.pending = false;
+                slot.fenceValue = 0;
+            }
+            if (stamps.checked >= 300)
+            {
+                Log("Stamps over %u frames as the frame generation got them: Present %u this frame's, %u the one before, %u the one after, %u other (last %d for %u); "
+                    "HudLess %u this frame's, %u the one before, %u other of %u",
+                    stamps.checked, stamps.matched, stamps.behind, stamps.ahead, stamps.other, static_cast<int>(stamps.lastSeen), stamps.lastExpected,
+                    stamps.hudMatched, stamps.hudBehind, stamps.hudOther, stamps.hudChecked);
+                stamps.checked = stamps.matched = stamps.behind = stamps.ahead = stamps.other = 0;
+                stamps.hudChecked = stamps.hudMatched = stamps.hudBehind = stamps.hudOther = 0;
+            }
+        }
+
         // What the frame generation was asked, logged every 300 Generate requests
         struct GenerationStats
         {
@@ -1142,10 +1294,21 @@ namespace
             g.lastId = shared.FrameId;
 
             using T = Protocol::Texture;
+            bool stampCheck = (shared.DebugFlags & Protocol::DebugCheckStamps) != 0;
+            if (stampCheck)
+                CheckStamps();
             auto cmd = device.BeginFrame();
             bool generated = false;
+            uint32_t stampSlot = stamps.next;
+            bool stamped = false;
             if (prepared)
             {
+                // After the queue waited for the game's copies, before the frame generation reads them
+                if (stampCheck)
+                {
+                    RecordStamps(cmd, shared.FrameId, device.Texture(T::HudLess) != nullptr);
+                    stamped = stamps.slots[stampSlot].pending && stamps.slots[stampSlot].fenceValue == 0;
+                }
                 device.Transition(cmd, true, { T::Present, T::Generated, T::HudLess });
                 generated = fsr.GenerateFrame(cmd, device, shared.FrameId, shared.GenerateReset != 0,
                     (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0, shared.MaxLuminance);
@@ -1154,6 +1317,13 @@ namespace
                 if (device.wine)
                     device.CopyFromUav(cmd, T::Generated);
             }
+
+            // The fence value the stamps' frame is done at
+            auto finishStamps = [&](uint64_t value)
+            {
+                if (stamped)
+                    stamps.slots[stampSlot].fenceValue = value;
+            };
 
             if (g.generates >= 300)
             {
@@ -1166,9 +1336,14 @@ namespace
             }
 
             if (device.cpuSync)
-                return device.SubmitFrameAndWait() && generated;
+            {
+                bool ok = device.SubmitFrameAndWait() && generated;
+                finishStamps(device.localValue);
+                return ok;
+            }
 
             device.SubmitFrame(shared.WaitValue, shared.SignalValue, generated);
+            finishStamps(shared.SignalValue);
             return generated;
         }
 

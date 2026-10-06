@@ -9,6 +9,7 @@ module;
 #include <map>
 #include <vector>
 #include <string>
+#include <upscaler_protocol.hpp>
 
 export module framegeneration;
 
@@ -18,6 +19,8 @@ import consolegamma;
 import hdr;
 import renderscale;
 import upscaler;
+
+namespace Protocol = UpscalerProtocol;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -76,6 +79,8 @@ namespace
                                                 // also with the frame generation off
         constexpr int32_t LegacyInterop = 65536; // DXVK images asked for before its command thread caught up, as
                                                  // before 841aa99, also with the frame generation off
+        constexpr int32_t Stamps = 131072;      // the frame's number in a corner of what the frame generation gets, which
+                                                // the helper reads back and checks (its log)
     }
     int32_t nDebug = 0;
 
@@ -986,6 +991,21 @@ namespace
             auto hdr = HDROutput::IsActive();
             if (hudLess)
                 ApplyFinishingPasses();
+            // The frame's number in the bottom right corner of both, for the helper to check what it got
+            if (nDebug & Debug::Stamps)
+            {
+                const DWORD stamp = Protocol::StampColour(Upscaler::PreparedFrameId());
+                RECT corner{ LONG(desc.Width - Protocol::StampSize), LONG(desc.Height - Protocol::StampSize), LONG(desc.Width), LONG(desc.Height) };
+                for (auto rt : { InputRT, hudLess ? HudLessRT : nullptr })
+                {
+                    IDirect3DSurface9* surface = nullptr;
+                    if (rt && SUCCEEDED(rt->mD3DTexture->GetSurfaceLevel(0, &surface)) && surface)
+                    {
+                        device->ColorFill(surface, &corner, stamp);
+                        surface->Release();
+                    }
+                }
+            }
             static uint32_t generations = 0;
             bool reset = (nDebug & Debug::PeriodicReset) && ++generations % 120 == 0;
             if (Upscaler::Generate(InputRT->mD3DTexture, hudLess ? HudLessRT->mD3DTexture : nullptr, GeneratedRT->mD3DTexture, hdr ? HDROutput::GetPeakNits() : 0.0f, reset))
@@ -1052,7 +1072,7 @@ export namespace FrameGeneration
     // FfxApiDispatchFramegenerationFlags for FSR's own debug drawing: tear lines 1, reset indicators 2, debug view 4
     uint32_t DebugFlags()
     {
-        uint32_t flags = 0;
+        uint32_t flags = (nDebug & Debug::Stamps) ? Protocol::DebugCheckStamps : 0u;
         if (nDebug & Debug::FsrIndicators)
             flags |= 1u | 2u;
         if (nDebug & Debug::FsrDebugView)

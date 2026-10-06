@@ -1578,6 +1578,12 @@ export namespace Upscaler
         return state == State::Ready && preparedFrameId != 0 && bridge && bridge->frameGeneration && !generationFailed;
     }
 
+    // FrameId the next Generate sends, 0 when this frame was not prepared
+    uint64_t PreparedFrameId()
+    {
+        return preparedFrameId;
+    }
+
     // The last generated frame has nothing of the previous one: not worth showing
     bool WasGenerateReset()
     {

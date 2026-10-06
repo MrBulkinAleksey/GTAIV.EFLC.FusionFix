@@ -151,7 +151,8 @@ namespace UpscalerProtocol
         float CameraForward[3];
         uint64_t FrameId;             // +1 every frame, anything else resets the frame generation
         uint32_t HudLess;             // Generate of this frame comes with HudLess
-        uint32_t DebugFlags;          // FfxApiDispatchFramegenerationFlags to add, for the frame generation's own debug drawing
+        uint32_t DebugFlags;          // FfxApiDispatchFramegenerationFlags to add, for the frame generation's own debug drawing,
+                                      // and DebugCheckStamps
 
         // Generate (WaitValue and SignalValue as for Evaluate)
         float MaxLuminance;           // nits, HDR output
@@ -167,6 +168,17 @@ namespace UpscalerProtocol
         uint64_t FenceHandle;         // the helper's fence; with GameFence, the game's semaphore duplicated into the helper
     };
 #pragma pack(pop)
+
+    // DebugFlags: the game wrote FrameId into a corner of Present and HudLess (StampColour), the helper reads it back
+    // from the shared textures once its queue has waited for them, and logs whether it got this frame's
+    constexpr uint32_t DebugCheckStamps = 1u << 31;
+    constexpr uint32_t StampSize = 4;           // a square of this size in the bottom right corner
+
+    // The stamp of a frame: its number's low 16 bits in red and green, 0x5A in blue, each as n / 255
+    inline uint32_t StampColour(uint64_t frameId)
+    {
+        return 0xFF000000u | (static_cast<uint32_t>(frameId & 0xFF) << 16) | (static_cast<uint32_t>((frameId >> 8) & 0xFF) << 8) | 0x5Au;
+    }
 
     static_assert(sizeof(wchar_t) == 2);
     static_assert(offsetof(Shared, WaitValue) % 8 == 0);
