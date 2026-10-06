@@ -68,6 +68,8 @@ namespace
         constexpr int32_t Marker = 512;         // a square in the corner: magenta on generated frames, green on rendered ones
         constexpr int32_t Similarity = 1024;    // how much the generated frame differs from the rendered ones around it
         constexpr int32_t NoHudLess = 2048;     // the frame generation gets no frame before the HUD
+        constexpr int32_t FsrDebugView = 4096;  // FSR draws its own debug view into the generated frames (3.1, see with 2)
+        constexpr int32_t FsrIndicators = 8192; // FSR marks its resets and draws tear lines on the generated frames
     }
     int32_t nDebug = 0;
 
@@ -455,7 +457,7 @@ namespace
     struct SimilarityStats
     {
         uint32_t frames = 0, hudLessFrames = 0;
-        double toPrevious = 0.0, toCurrent = 0.0, between = 0.0, hudLessDiffers = 0.0;
+        double toPrevious = 0.0, toCurrent = 0.0, toBlend = 0.0, between = 0.0, hudLessDiffers = 0.0;
     } Similar;
 
     bool ReadSmall(IDirect3DDevice9* device, IDirect3DSurface9* source, std::vector<uint8_t>& pixels)
@@ -515,11 +517,16 @@ namespace
                 ++m.frames;
                 m.toPrevious += Difference(between, PreviousSmall) / frames;
                 m.toCurrent += Difference(between, now) / frames;
+                // Against the plain average of the two: a frame generation that can't follow the motion blends them
+                std::vector<uint8_t> blend(now.size());
+                for (size_t i = 0; i < blend.size(); ++i)
+                    blend[i] = static_cast<uint8_t>((now[i] + PreviousSmall[i] + 1) / 2);
+                m.toBlend += Difference(between, blend) / frames;
                 m.between += frames;
                 if (m.frames >= 100)
                 {
-                    Log("Generated frames over %u moving frames: they differ from the rendered frame before by %.2f and from the one after by %.2f of what those two differ by (%.1f on average); the frame before the HUD differs from the finished one over %.0f%% of the screen (%u frames)",
-                        m.frames, m.toPrevious / m.frames, m.toCurrent / m.frames, m.between / m.frames,
+                    Log("Generated frames over %u moving frames: they differ from the rendered frame before by %.2f, from the one after by %.2f and from the average of the two by %.2f of what those two differ by (%.1f on average); the frame before the HUD differs from the finished one over %.0f%% of the screen (%u frames)",
+                        m.frames, m.toPrevious / m.frames, m.toCurrent / m.frames, m.toBlend / m.frames, m.between / m.frames,
                         m.hudLessFrames ? 100.0 * m.hudLessDiffers / m.hudLessFrames : 0.0, m.hudLessFrames);
                     m = {};
                 }
@@ -976,6 +983,17 @@ export namespace FrameGeneration
     bool IsEnabled()
     {
         return mode != Mode::Off;
+    }
+
+    // FfxApiDispatchFramegenerationFlags for FSR's own debug drawing: tear lines 1, reset indicators 2, debug view 4
+    uint32_t DebugFlags()
+    {
+        uint32_t flags = 0;
+        if (nDebug & Debug::FsrIndicators)
+            flags |= 1u | 2u;
+        if (nDebug & Debug::FsrDebugView)
+            flags |= 4u;
+        return mode != Mode::Off ? flags : 0u;
     }
 
     // The frame before the HUD will be captured: tells Evaluate, which comes earlier in the frame

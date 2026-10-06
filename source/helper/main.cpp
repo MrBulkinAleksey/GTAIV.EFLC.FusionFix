@@ -407,6 +407,7 @@ namespace
         float cameraForward[3]{};
         uint64_t frameId = 0;
         bool hudLess = false;
+        uint32_t debugFlags = 0;
     };
 
     // -----------------------------------------------------------------------------------------------
@@ -803,7 +804,7 @@ namespace
             configure.swapChain = nullptr;
             configure.frameGenerationEnabled = true;
             configure.allowAsyncWorkloads = false;
-            configure.flags = FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY;
+            configure.flags = FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY | frame.debugFlags;
             configure.generationRect = { 0, 0, static_cast<int32_t>(displayWidth), static_cast<int32_t>(displayHeight) };
             configure.frameID = frame.frameId;
             // Written by Generate of this frame, read by its dispatch: the HUD is what differs from Present
@@ -821,7 +822,7 @@ namespace
             ffxDispatchDescFrameGenerationPrepareV2 prepare{};
             prepare.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2;
             prepare.frameID = frame.frameId;
-            prepare.flags = FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY;
+            prepare.flags = FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY | frame.debugFlags;
             prepare.commandList = cmd;
             prepare.renderSize = { frame.width, frame.height };
             prepare.jitterOffset = { frame.jitterX, frame.jitterY };
@@ -1081,6 +1082,7 @@ namespace
             }
             frame.frameId = shared.FrameId;
             frame.hudLess = shared.HudLess != 0;
+            frame.debugFlags = shared.DebugFlags;
 
             using T = Protocol::Texture;
             auto cmd = device.BeginFrame();
@@ -1088,6 +1090,14 @@ namespace
             bool evaluated = backend == Protocol::Backend::DLSS ? dlss.Evaluate(cmd, device, frame) : fsr.Evaluate(cmd, device, frame);
             // A failed preparation leaves the upscaled frame: Generate of this frame fails instead
             preparedFrame = fsr.HasFrameGeneration() && fsr.PrepareFrame(cmd, device, frame);
+            if (fsr.HasFrameGeneration())
+            {
+                ++generationStats.prepares;
+                generationStats.prepareFailed += !preparedFrame;
+                generationStats.prepareResets += frame.reset;
+                generationStats.prepareGaps += preparedFrameId != 0 && frame.frameId != preparedFrameId + 1;
+                generationStats.hudLess += frame.hudLess;
+            }
             preparedFrameId = frame.frameId;
             device.Transition(cmd, false, { T::Color, T::Depth, T::Motion, T::Reactive, T::Output });
 
@@ -1106,6 +1116,14 @@ namespace
         bool preparedFrame = false;
         uint64_t preparedFrameId = 0;
 
+        // What the frame generation was asked, logged every 300 Generate requests
+        struct GenerationStats
+        {
+            uint32_t prepares = 0, prepareFailed = 0, prepareResets = 0, prepareGaps = 0, hudLess = 0;
+            uint32_t generates = 0, unprepared = 0, resets = 0, failed = 0, gaps = 0;
+            uint64_t lastId = 0;
+        } generationStats;
+
         bool Generate()
         {
             auto& shared = *connection.shared;
@@ -1116,6 +1134,13 @@ namespace
             bool prepared = preparedFrame && preparedFrameId == shared.FrameId;
             preparedFrame = false;
 
+            auto& g = generationStats;
+            ++g.generates;
+            g.unprepared += !prepared;
+            g.resets += shared.GenerateReset != 0;
+            g.gaps += g.lastId != 0 && shared.FrameId != g.lastId + 1;
+            g.lastId = shared.FrameId;
+
             using T = Protocol::Texture;
             auto cmd = device.BeginFrame();
             bool generated = false;
@@ -1124,9 +1149,20 @@ namespace
                 device.Transition(cmd, true, { T::Present, T::Generated, T::HudLess });
                 generated = fsr.GenerateFrame(cmd, device, shared.FrameId, shared.GenerateReset != 0,
                     (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0, shared.MaxLuminance);
+                g.failed += !generated;
                 device.Transition(cmd, false, { T::Present, T::Generated, T::HudLess });
                 if (device.wine)
                     device.CopyFromUav(cmd, T::Generated);
+            }
+
+            if (g.generates >= 300)
+            {
+                Log("Frame generation over %u Generate: %u not prepared, %u reset, %u failed, %u with a gap in the frame numbers; "
+                    "%u Prepare: %u failed, %u reset, %u with a gap, %u with the frame before the HUD",
+                    g.generates, g.unprepared, g.resets, g.failed, g.gaps, g.prepares, g.prepareFailed, g.prepareResets, g.prepareGaps, g.hudLess);
+                auto lastId = g.lastId;
+                g = {};
+                g.lastId = lastId;
             }
 
             if (device.cpuSync)

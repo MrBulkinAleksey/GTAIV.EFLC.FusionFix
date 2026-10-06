@@ -1319,6 +1319,7 @@ export namespace Upscaler
         bool FrameGeneration = false;
         bool HighDynamicRange = false;    // the frame given to Generate is scRGB
         bool HudLess = false;             // Generate of this frame comes with the frame before the HUD
+        uint32_t DebugFlags = 0;          // FfxApiDispatchFramegenerationFlags for the frame generation's own debug drawing
         float CameraPosition[3]{};        // world space
         float CameraUp[3]{};
         float CameraRight[3]{};
@@ -1511,6 +1512,7 @@ export namespace Upscaler
         }
         shared.FrameId = ++frameId;
         shared.HudLess = frame.HudLess ? 1 : 0;
+        shared.DebugFlags = frame.DebugFlags;
 
         // The helper prepares the frame generation with this frame
         bool prepared = bridge->frameGeneration && !generationFailed;

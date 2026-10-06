@@ -29,7 +29,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 8;
+    constexpr uint32_t Version = 9;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -150,7 +150,7 @@ namespace UpscalerProtocol
         float CameraForward[3];
         uint64_t FrameId;             // +1 every frame, anything else resets the frame generation
         uint32_t HudLess;             // Generate of this frame comes with HudLess
-        uint32_t Reserved1;
+        uint32_t DebugFlags;          // FfxApiDispatchFramegenerationFlags to add, for the frame generation's own debug drawing
 
         // Generate (WaitValue and SignalValue as for Evaluate)
         float MaxLuminance;           // nits, HDR output
