@@ -10,6 +10,9 @@ module;
 #include <cstring>
 #include <mutex>
 #include <random>
+#include <regex>
+#include <array>
+#include <unordered_map>
 
 export module postfx;
 
@@ -84,6 +87,45 @@ bool IsPostFxAA()
     auto aa = UsePostFxAA->get();
     return aa == FusionFixSettings.AntialiasingText.eFXAA || (aa == FusionFixSettings.AntialiasingText.eSMAA && IsSMAASupported());
 }
+
+// The sampler states SSR.fx declares (MinFilter, MagFilter, MipFilter, AddressU, AddressV), read from its source once
+// it is created: D3DX put them on its own registers too, and the trace showed samplers declared without a filter
+// (SpecularTex, NormalTex) filtered linearly in some passes. Undeclared states are point and clamp, as
+// kSSRSamplerStates leaves them.
+using SamplerStates = std::array<DWORD, 5>;
+inline std::unordered_map<std::string, SamplerStates> SSRSamplerStates;
+
+inline void ReadSamplerStates(HMODULE hm, int resource, std::unordered_map<std::string, SamplerStates>& out)
+{
+    out.clear();
+    HRSRC info = FindResourceW(hm, MAKEINTRESOURCEW(resource), RT_RCDATA);
+    HGLOBAL data = info ? LoadResource(hm, info) : nullptr;
+    const char* text = data ? static_cast<const char*>(LockResource(data)) : nullptr;
+    if (!text)
+        return;
+    const std::string source(text, SizeofResource(hm, info));
+    auto lower = [](std::string v) { for (auto& ch : v) ch = char(std::tolower(static_cast<unsigned char>(ch))); return v; };
+    static const std::regex block(R"(sampler2D\s+(\w+)\s*\{([^}]*)\})");
+    static const std::regex assign(R"((\w+)\s*=\s*(\w+)\s*;)");
+    for (std::sregex_iterator it(source.begin(), source.end(), block), end; it != end; ++it)
+    {
+        SamplerStates st = { D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP };
+        const std::string body = (*it)[2];
+        for (std::sregex_iterator a(body.begin(), body.end(), assign); a != end; ++a)
+        {
+            const std::string key = lower((*a)[1]), value = lower((*a)[2]);
+            const DWORD filter = value == "linear" ? D3DTEXF_LINEAR : value == "none" ? D3DTEXF_NONE : D3DTEXF_POINT;
+            const DWORD address = value == "wrap" ? D3DTADDRESS_WRAP : value == "mirror" ? D3DTADDRESS_MIRROR : value == "border" ? D3DTADDRESS_BORDER : D3DTADDRESS_CLAMP;
+            if (key == "minfilter") st[0] = filter;
+            else if (key == "magfilter") st[1] = filter;
+            else if (key == "mipfilter") st[2] = filter;
+            else if (key == "addressu") st[3] = address;
+            else if (key == "addressv") st[4] = address;
+        }
+        out[(*it)[1]] = st;
+    }
+}
+
 
 class PostFxResource
 {
@@ -1118,6 +1160,7 @@ public:
             }
             else
             {
+                ReadSamplerStates(hm, IDR_SSR_FX, SSRSamplerStates);
                 auto& h = SSREffectHandles;
                 h.DepthTex2D = SSREffect->GetParameterByName(nullptr, "DepthTex2D");
                 h.HistoryTex2D = SSREffect->GetParameterByName(nullptr, "HistoryTex2D");
@@ -3890,12 +3933,14 @@ private:
     // The same holds for the float constants: with the ones D3DX left, SSGI's accumulation decoded the right depth
     // (6.1 m) as 15.3 m through fNearPlane and fFarDivNear while vec2PrevDepthRange, in another register, came through.
     // Each float constant of the shader is written from its parameter, a register per vector or array element.
-    struct EffectConstant { UINT reg; UINT count; D3DXHANDLE param; std::string name; };
+    struct EffectConstant { UINT reg; UINT count; D3DXHANDLE param; std::string name; D3DXREGISTER_SET set; };
 
-    static std::vector<std::pair<UINT, D3DXHANDLE>> FindEffectSamplers(ID3DXEffect* effect, IDirect3DPixelShader9* ps,
-                                                                       std::vector<EffectConstant>* constants = nullptr)
+    struct EffectSampler { UINT reg; D3DXHANDLE param; std::string name; };
+
+    static std::vector<EffectSampler> FindEffectSamplers(ID3DXEffect* effect, IDirect3DPixelShader9* ps,
+                                                         std::vector<EffectConstant>* constants = nullptr)
     {
-        std::vector<std::pair<UINT, D3DXHANDLE>> samplers;
+        std::vector<EffectSampler> samplers;
         std::vector<DWORD> function;
         UINT size = 0;
         if (SUCCEEDED(ps->GetFunction(nullptr, &size)) && size)
@@ -3916,16 +3961,16 @@ private:
             UINT count = 1;
             if (FAILED(table->GetConstantDesc(table->GetConstant(nullptr, i), &desc, &count)) || !desc.Name)
                 continue;
-            if (desc.RegisterSet == D3DXRS_FLOAT4 && constants)
+            if (desc.RegisterSet != D3DXRS_SAMPLER && constants)
             {
                 if (D3DXHANDLE param = effect->GetParameterByName(nullptr, desc.Name))
-                    constants->push_back({ desc.RegisterIndex, desc.RegisterCount, param, desc.Name });
+                    constants->push_back({ desc.RegisterIndex, desc.RegisterCount, param, desc.Name, desc.RegisterSet });
                 continue;
             }
             if (desc.RegisterSet != D3DXRS_SAMPLER)
                 continue;
             if (D3DXHANDLE param = effect->GetParameterByName(nullptr, (std::string(desc.Name) + "2D").c_str()))
-                samplers.emplace_back(desc.RegisterIndex, param);
+                samplers.push_back({ desc.RegisterIndex, param, desc.Name });
         }
         table->Release();
         return samplers;
@@ -3937,15 +3982,55 @@ private:
         for (const auto& c : constants)
         {
             D3DXPARAMETER_DESC pd = {};
-            if (FAILED(effect->GetParameterDesc(c.param, &pd)) || pd.Type != D3DXPT_FLOAT ||
+            if (FAILED(effect->GetParameterDesc(c.param, &pd)) ||
+                (pd.Type != D3DXPT_FLOAT && pd.Type != D3DXPT_INT && pd.Type != D3DXPT_BOOL) ||
                 (pd.Class != D3DXPC_SCALAR && pd.Class != D3DXPC_VECTOR) || c.count == 0 || c.count > 16)
                 continue;
-            float want[16 * 4] = {};
             const UINT elements = pd.Elements ? (std::min)(pd.Elements, c.count) : 1;
+            const UINT columns = (std::min)(pd.Columns, 4u);
+            // Integers and booleans in their own register sets (loop counters, static branches)
+            if (c.set == D3DXRS_INT4 || c.set == D3DXRS_BOOL)
+            {
+                int values[16 * 4] = {};
+                for (UINT e = 0; e < elements; ++e)
+                {
+                    D3DXHANDLE h = pd.Elements ? effect->GetParameterElement(c.param, e) : c.param;
+                    if (pd.Type == D3DXPT_FLOAT)
+                    {
+                        float f[4] = {};
+                        effect->GetFloatArray(h, f, columns);
+                        for (UINT k = 0; k < columns; ++k)
+                            values[e * 4 + k] = int(f[k]);
+                    }
+                    else
+                        effect->GetIntArray(h, &values[e * 4], columns);
+                }
+                if (c.set == D3DXRS_INT4)
+                    pDevice->SetPixelShaderConstantI(c.reg, values, c.count);
+                else
+                {
+                    BOOL b[16] = {};
+                    for (UINT e = 0; e < (std::min)(c.count, 16u); ++e)
+                        b[e] = values[e * 4] != 0;
+                    pDevice->SetPixelShaderConstantB(c.reg, b, c.count);
+                }
+                continue;
+            }
+            if (c.set != D3DXRS_FLOAT4)
+                continue;
+            float want[16 * 4] = {};
             for (UINT e = 0; e < elements; ++e)
             {
                 D3DXHANDLE h = pd.Elements ? effect->GetParameterElement(c.param, e) : c.param;
-                effect->GetFloatArray(h, &want[e * 4], (std::min)(pd.Columns, 4u));
+                if (pd.Type == D3DXPT_FLOAT)
+                    effect->GetFloatArray(h, &want[e * 4], columns);
+                else
+                {
+                    int v[4] = {};
+                    effect->GetIntArray(h, v, columns);
+                    for (UINT k = 0; k < columns; ++k)
+                        want[e * 4 + k] = float(v[k]);
+                }
             }
             float have[16 * 4] = {};
             pDevice->GetPixelShaderConstantF(c.reg, have, c.count);
@@ -3972,6 +4057,19 @@ private:
             SSRTrace::Line("  constants set:%s", traced.c_str());
     }
 
+    // Writes the textures (and the float, int and bool constants) of the bound pixel shader from the effect's parameters,
+    // and for SSR.fx, whose callers save samplers 0 to kSSRSamplerSlots - 1 around their passes, the sampler states.
+    static void BindEffectConstantsOnly(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
+    {
+        IDirect3DPixelShader9* ps = nullptr;
+        if (FAILED(pDevice->GetPixelShader(&ps)) || !ps)
+            return;
+        std::vector<EffectConstant> constants;
+        FindEffectSamplers(effect, ps, &constants);
+        ps->Release();
+        BindEffectConstants(pDevice, effect, constants);
+    }
+
     static void BindEffectSamplers(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
     {
         IDirect3DPixelShader9* ps = nullptr;
@@ -3984,8 +4082,21 @@ private:
         ps->Release();
 
         std::string traced;
-        for (const auto& [reg, param] : samplers)
+        const bool states = effect == PostFxResources.SSREffect;
+        for (const auto& [reg, param, name] : samplers)
         {
+            if (states && reg < kSSRSamplerSlots)
+            {
+                auto found = SSRSamplerStates.find(name);
+                const SamplerStates st = found != SSRSamplerStates.end() ? found->second
+                    : SamplerStates{ D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP };
+                pDevice->SetSamplerState(reg, D3DSAMP_MINFILTER, st[0]);
+                pDevice->SetSamplerState(reg, D3DSAMP_MAGFILTER, st[1]);
+                pDevice->SetSamplerState(reg, D3DSAMP_MIPFILTER, st[2]);
+                pDevice->SetSamplerState(reg, D3DSAMP_ADDRESSU, st[3]);
+                pDevice->SetSamplerState(reg, D3DSAMP_ADDRESSV, st[4]);
+                pDevice->SetSamplerState(reg, D3DSAMP_SRGBTEXTURE, FALSE);
+            }
             IDirect3DBaseTexture9* want = nullptr;
             IDirect3DBaseTexture9* have = nullptr;
             effect->GetTexture(param, &want);
@@ -4971,6 +5082,7 @@ private:
             effect->CommitChanges();
             // Never the scene while drawing into it.
             bindTextures(halfSize && target != sceneSurface, halfSize && target != R.CloudSkyRefSurf, halfSize && target == R.CloudSurf[0]);
+            BindEffectConstantsOnly(pDevice, effect);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
             effect->EndPass();
             effect->End();
