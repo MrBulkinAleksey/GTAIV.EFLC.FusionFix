@@ -651,7 +651,7 @@ index 4e9d1955..af2aa9d4 100644
 +    ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index dee4384c..22f8047f 100644
+index dee4384c..aee24570 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -84,6 +84,9 @@
@@ -672,15 +672,19 @@ index dee4384c..22f8047f 100644
      mov r20.x, c77.z
      mul r20.xy, r20.x, c8.xy
      mad r4.xyz, r3, r20.x, r2 // scale bias with resolution
-@@ -273,6 +277,7 @@
+@@ -273,8 +277,11 @@
      endif
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      dp3 r0.y, r2, r2
 +    mov r12.w, r0.y // FusionFix GGX lights: the distance to the light squared
      add r1.xyz, r2, c2.x
      nrm r2.xyz, r1
++    mov r10.xyz, r3 // FusionFix GGX lights: N and L, which the game overwrites before its highlight
++    mov r11.xyz, r2
      mov r1.y, c2.y
-@@ -309,6 +314,36 @@
+     mad_sat r0.y, r0.y, -c80.x, r1.y
+     mul r0.y, r0.y, r0.y
+@@ -309,6 +316,36 @@
      add r0.x, r3.x, r3.x
      mul r1.w, r3.y, c0.y
      pow r2.w, r0.y, r1.w
@@ -690,34 +694,34 @@ index dee4384c..22f8047f 100644
 +    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
 +    // --- lamps, half the spacing (c206.w) either way along the car's right (c206.xyz), so wet roads show both
 +    // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
-+    mov r9.xyz, r3
++    mov r9.xyz, r10
 +    mov r9.w, r1.w
 +    mov r13.x, c206.w
 +    if_lt c172.z, r13.x // a headlight: both lamps
 +      rsq r13.y, r12.w
 +      rcp r13.y, r13.y
 +      mul r14.xyz, c206, c206.w
-+      mad r15.xyz, r2, r13.y, r14
++      mad r15.xyz, r11, r13.y, r14
 +      nrm r19.xyz, r15
 +      call l1
 +      mov r19.w, r13.w
 +      rsq r13.y, r12.w
 +      rcp r13.y, r13.y
 +      mul r14.xyz, c206, c206.w
-+      mad r15.xyz, r2, r13.y, -r14
++      mad r15.xyz, r11, r13.y, -r14
 +      nrm r19.xyz, r15
 +      call l1
 +      add r13.w, r13.w, r19.w
 +      mul r13.w, r13.w, c173.w
 +    else
-+      mov r19.xyz, r2
++      mov r19.xyz, r11
 +      call l1
 +    endif
 +    cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
      mul r1.xyz, r1, r2.w
      mul r1.xyz, r0.x, r1
      texld r4, r0.zwzw, s0
-@@ -467,3 +502,66 @@
+@@ -467,3 +504,66 @@
      cmp oDepth, -v9_abs.y, r19.y, r19.x
  
  // approximately 122 instruction slots used (9 texture, 113 arithmetic)
