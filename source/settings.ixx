@@ -233,6 +233,8 @@ private:
             else
                 WriteToIni();
             if (callback) callback(value);
+            // Rows shown on a condition may come or go with it
+            menuConditionsDirty = true;
         }
 
         // Values that are not available on this system are skipped, in the direction the value was changed
@@ -286,8 +288,11 @@ private:
         int32_t beforePreference = -1;  // or the preference of that row
         uint8_t episodes = 0xFF;        // shown in these episodes: 1 IV, 2 TLAD, 4 TBoGT
         bool gap = false;               // an empty line
+        std::function<bool()> shown;    // shown while this holds (SetRowCondition), else always
     };
     static inline std::vector<DynamicOption> dynamicOptions;
+    // A value changed in the menu: rows shown on a condition are put in or taken out (ProcessMenu)
+    static inline bool menuConditionsDirty = false;
     // Text of the number next to code-defined sliders (MENU_DISPLAY_VALUE_SLIDERBAR), by preference
     static inline std::unordered_map<int32_t, std::function<std::wstring()>> valueTexts;
     static inline SafetyHookMid valueTextHook;
@@ -557,6 +562,17 @@ private:
                 return option.action == added.option.action && option.preference == added.option.preference &&
                     std::strcmp(option.label, added.option.label) == 0;
             });
+            // A row whose condition doesn't hold: taken out if it was put in before
+            if (added.shown && !added.shown())
+            {
+                if (found != options.data + options.count)
+                {
+                    auto row = static_cast<int32_t>(found - options.data);
+                    std::memmove(&options.data[row], &options.data[row + 1], (options.count - row - 1) * sizeof(SettingsTables::Option));
+                    --options.count;
+                }
+                continue;
+            }
             if (found != options.data + options.count)
                 continue;
             // The frontend instance has visibility/layout storage for 50 rows,
@@ -980,6 +996,13 @@ private:
         auto previousMenu = std::exchange(inputMenu, menu);
         auto previousSubmenu = std::exchange(openSubmenu, -1);
         auto result = processMenu.ccall<uint8_t>(menu);
+        // A value changed: rows shown on a condition come or go, the selection stays on its row
+        if (std::exchange(menuConditionsDirty, false) && menu == 0 &&
+            std::any_of(dynamicOptions.begin(), dynamicOptions.end(), [](const auto& added) { return static_cast<bool>(added.shown); }))
+        {
+            FillMenu(0);
+            FixSelection(0, false);
+        }
         auto submenu = openSubmenu;
         selectedButton = previous;
         inputMenu = previousMenu;
@@ -2324,6 +2347,15 @@ public:
             AddRow(category, "Graphics API", "PREF_GRAPHICSAPI", 3, "MENU_DISPLAY_GRAPHICS_API");
         }
 
+        // Upscaling and frame generation work with DLAA and FSR only: their rows are shown with those
+        auto upscalerAntialiasing = []() -> bool
+        {
+            static auto aa = FusionFixSettings.GetRef("PREF_ANTIALIASING");
+            return aa && (aa->get() == FusionFixSettings.AntialiasingText.eDLAA || aa->get() == FusionFixSettings.AntialiasingText.eFSR);
+        };
+        SetRowCondition("PREF_UPSCALER_QUALITY", upscalerAntialiasing);
+        SetRowCondition("PREF_FRAME_GENERATION", upscalerAntialiasing);
+
         // Graphics: a Lighting category for the screen space effects and the reach of the night shadows
         for (auto screen : { MenuScreen::Graphics, MenuScreen::TitleGraphics })
         {
@@ -2987,6 +3019,18 @@ public:
         if (prefID && mFusionPrefs.contains(*prefID)) mFusionPrefs.at(*prefID).callback = nullptr;
     }
     // Values the predicate rejects are skipped when the setting is changed in the menu
+    // The rows of a preference added through AddRow are shown only while 'shown' holds; the menu is filled again
+    // after a value changes in it
+    void SetRowCondition(std::string_view name, std::function<bool()> shown)
+    {
+        const auto prefID = GetPrefIDByName(name);
+        if (!prefID)
+            return;
+        for (auto& added : dynamicOptions)
+            if (added.option.preference == *prefID)
+                added.shown = shown;
+    }
+
     void SetAvailability(std::string_view name, std::function<bool(int32_t)>&& available)
     {
         const auto prefID = GetPrefIDByName(name);
