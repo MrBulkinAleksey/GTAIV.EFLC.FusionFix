@@ -3594,6 +3594,10 @@ private:
         pDevice->GetRenderState(D3DRS_SRGBWRITEENABLE, &srgbWrite);
         pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
 
+        // c200 is also the GGX lights' (BindLightingInputs): lights drawn before it is set again would read the peak
+        float savedParams[4] = {};
+        pDevice->GetPixelShaderConstantF(200, savedParams, 1);
+
         pDevice->SetRenderTarget(0, R.backBuffer);
         SetTextureBoth(pDevice, 2, R.FullScreenTex_temp2->mD3DTexture);
         pDevice->SetPixelShaderConstantF(200, params, 1);
@@ -3601,6 +3605,7 @@ private:
         pDevice->SetVertexShader(vShader);
         pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
+        pDevice->SetPixelShaderConstantF(200, savedParams, 1);
         pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, srgbWrite);
         for (size_t i = 0; i < std::size(kStates); ++i)
             pDevice->SetSamplerState(2, kStates[i], saved[i]);
