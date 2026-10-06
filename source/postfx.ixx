@@ -622,6 +622,11 @@ public:
     const char* szCloudsReflectionStatus = "never called";
     uint32_t nCloudReflectionCalls = 0;
     uint32_t nCloudWaterReflectionCalls = 0;
+    // The water's rings, for the log: c178 as last set, the water draws since the last log, and
+    // whether SSR's water pass last had the game's wave texture (none: a flat mirror, no rings).
+    float WaterRingsLast[4] = {};
+    uint32_t nWaterRingDraws = 0;
+    int nWaterSsrSurface = -1;
     D3DVIEWPORT9 CloudReflectionViewport = {};
     UINT CloudReflectionTarget[2] = {};
     HRESULT hrCloudsEffect = S_OK;
@@ -5795,6 +5800,7 @@ private:
         // drawn over by this one, which hid them.
         {
             const auto rings = WaterRainRings();
+            R.nWaterSsrSurface = oldTextures[0] ? 1 : 0;
             const D3DXVECTOR4 v(oldTextures[0] ? rings[0] : 0.0f, rings[1], rings[2], rings[3]);
             effect->SetVector(h.vec4WaterRings, &v);
         }
@@ -5931,6 +5937,8 @@ private:
             return;
         const auto c178 = WaterRainRings();
         pDevice->SetPixelShaderConstantF(178, c178.data(), 1);
+        std::memcpy(PostFxResources.WaterRingsLast, c178.data(), sizeof(PostFxResources.WaterRingsLast));
+        ++PostFxResources.nWaterRingDraws;
         if (auto real = RealDevice(pDevice); real != pDevice)
             real->SetPixelShaderConstantF(178, c178.data(), 1);
     }
@@ -6290,6 +6298,10 @@ private:
                         R.CloudReflectionViewport.Width, R.CloudReflectionViewport.Height, R.CloudReflectionTarget[0], R.CloudReflectionTarget[1]);
                 R.nCloudReflectionCalls = 0;
                 R.nCloudWaterReflectionCalls = 0;
+                fprintf(log, "  water rings: c178 %.2f %.1f %.3f %.3f; %u water draws since the last log; SSR on the water %s\n",
+                        R.WaterRingsLast[0], R.WaterRingsLast[1], R.WaterRingsLast[2], R.WaterRingsLast[3], R.nWaterRingDraws,
+                        R.nWaterSsrSurface < 0 ? "not drawn" : R.nWaterSsrSurface ? "had the wave texture" : "had no wave texture (flat, no rings)");
+                R.nWaterRingDraws = 0;
                 fprintf(log, "  wet ground: %s; effect %s (hr 0x%08lX); wetness %.3f, rain %.3f, materials 0x%02X, debug %d\n",
                         R.szWetGroundStatus, R.WetGroundEffect ? "built" : "missing", static_cast<unsigned long>(R.hrWetGroundEffect), R.fWetness,
                         CWeather::Rain ? *CWeather::Rain : -1.0f, unsigned(R.nWetGroundMaterials), R.nWetGroundDebug);
