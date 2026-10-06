@@ -163,6 +163,7 @@ workspace "GTAIV.EFLC.FusionFix"
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_Reactive /Fo \"../source/resources/temporal/Reactive.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_RainLayer /Fo \"../source/resources/temporal/RainLayer.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_RainComposite /Fo \"../source/resources/temporal/RainComposite.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
+      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_SteadyDepth /Fo \"../source/resources/temporal/SteadyDepth.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
 
       -- HDR output
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_HDROutput /Fo \"../source/resources/hdr/HDROutput.pso\" \"../source/resources/hdr/HDR.hlsl\"",

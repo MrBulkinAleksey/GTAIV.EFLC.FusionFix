@@ -25,6 +25,7 @@ import upscaler;
 #define IDR_TEMPORAL_PS_REACTIVE        3010
 #define IDR_TEMPORAL_PS_RAIN_LAYER      3011
 #define IDR_TEMPORAL_PS_RAIN_COMPOSITE  3012
+#define IDR_TEMPORAL_PS_STEADY_DEPTH    3013
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -54,6 +55,9 @@ import upscaler;
 // - The rain has no motion vectors either, and the streaks of a whole screen of it smeared or vanished. It's drawn
 //   into a copy of the scene instead, and what it changed there is added to the picture after the resolve, DLAA or
 //   FSR (see RenderRain).
+// - What reads the depth after the resolve, or samples it at a few points, sees the jitter in it: on edges it flips
+//   between the near and the far surface. Depth of field, sun shafts and the coronas' occlusion read a depth averaged
+//   over the jitter instead (see StabilizeDepth).
 
 namespace TemporalMath
 {
@@ -195,6 +199,7 @@ public:
     static inline float fReactiveScale = 2.0f;
     static inline float fReactiveMax = 0.75f;
     static inline bool bRainLayer = true;
+    static inline bool bSteadyDepth = true;
 
     static inline HMODULE hm = NULL;
 
@@ -207,6 +212,7 @@ public:
     static inline rage::grcRenderTargetPC* DepthRT = nullptr;       // standard [0, 1] depth before transparent geometry
     static inline rage::grcRenderTargetPC* OpaqueRT = nullptr;      // scene luminance before transparent geometry
     static inline rage::grcRenderTargetPC* ReactiveRT = nullptr;    // reactive mask for FSR
+    static inline rage::grcRenderTargetPC* SteadyDepthRT[2] = {};   // logarithmic depth averaged over the jitter
     static inline uint32_t OpaqueFrame = 0;                          // SceneFrame OpaqueRT was written in
     static inline uint32_t HistoryIndex = 0;
     static inline uint32_t HistoryFrame = 0;          // SceneFrame the history was written in
@@ -229,6 +235,7 @@ public:
     static inline IDirect3DPixelShader9* ReactivePS = nullptr;
     static inline IDirect3DPixelShader9* RainLayerPS = nullptr;
     static inline IDirect3DPixelShader9* RainCompositePS = nullptr;
+    static inline IDirect3DPixelShader9* SteadyDepthPS = nullptr;
     static inline IDirect3DVertexDeclaration9* BoneWriteDecl = nullptr;
 
     static bool ShadersLoaded()
@@ -268,6 +275,7 @@ public:
         loadCompiledShader(IDR_TEMPORAL_PS_REACTIVE, ReactivePS);
         loadCompiledShader(IDR_TEMPORAL_PS_RAIN_LAYER, RainLayerPS);
         loadCompiledShader(IDR_TEMPORAL_PS_RAIN_COMPOSITE, RainCompositePS);
+        loadCompiledShader(IDR_TEMPORAL_PS_STEADY_DEPTH, SteadyDepthPS);
 
         if (!BoneWriteDecl)
         {
@@ -312,6 +320,12 @@ public:
         desc.mFormat = rage::GRCFMT_R32F;
         DepthRT = rage::CreateEmptyRenderTarget("TemporalDepth", width, height, 32, desc);
 
+        if (bSteadyDepth)
+        {
+            SteadyDepthRT[0] = rage::CreateEmptyRenderTarget("TemporalSteadyDepth0", width, height, 32, desc);
+            SteadyDepthRT[1] = rage::CreateEmptyRenderTarget("TemporalSteadyDepth1", width, height, 32, desc);
+        }
+
         if (bReactiveMask)
         {
             desc.mFormat = rage::GRCFMT_R16F;
@@ -341,6 +355,9 @@ public:
         destroy(DepthRT);
         destroy(OpaqueRT);
         destroy(ReactiveRT);
+        destroy(SteadyDepthRT[0]);
+        destroy(SteadyDepthRT[1]);
+        SteadyFrame = 0;
         ReleaseSceneTargets();
         HistoryFrame = 0;
         UpscalerFrame = 0;
@@ -1658,6 +1675,97 @@ public:
     }
 
     // ---------------------------------------------------------------------------------------------
+    // Steady depth, render thread, right after the fog pass
+    //
+    // The logarithmic depth of _DEFERRED_GBUFFER_3_, on edges blended with its reprojected history clamped to the
+    // neighbourhood, so it holds still where the jitter flips it between two surfaces. The coronas test their
+    // occlusion against it at a dozen points around their centre, which made the partly hidden ones flicker; depth of
+    // field and sun shafts read it after the resolve.
+
+    static inline SafetyHookInline shRenderCoronas{};
+    static inline uint32_t SteadyIndex = 0;
+    static inline uint32_t SteadyFrame = 0;     // SceneFrame of SteadyDepthRT[SteadyIndex]
+
+    static void StabilizeDepth()
+    {
+        using namespace TemporalAA;
+
+        if (!bSteadyDepth || !SteadyDepthPS || !IsJitterActive() || SteadyFrame == SceneFrame || MotionFrame != SceneFrame || !CurrentCamera.Valid)
+            return;
+        if (!SteadyDepthRT[0] || !SteadyDepthRT[0]->mD3DTexture || !SteadyDepthRT[1] || !SteadyDepthRT[1]->mD3DTexture || !MotionRT || !MotionRT->mD3DTexture)
+            return;
+        auto device = RealDevice();
+        auto depthRT = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_3_");
+        if (!device || !depthRT || !depthRT->mD3DTexture || CurrentCamera.Near <= 0.0f || CurrentCamera.Far <= CurrentCamera.Near)
+            return;
+
+        auto previousIndex = SteadyIndex;
+        auto currentIndex = SteadyIndex ^ 1u;
+        IDirect3DSurface9* surface = nullptr;
+        SteadyDepthRT[currentIndex]->mD3DTexture->GetSurfaceLevel(0, &surface);
+        if (!surface)
+            return;
+
+        bool historyValid = SteadyFrame != 0 && SteadyFrame + 1 == SceneFrame && PreviousCamera.Valid && !IsCameraCut();
+        auto width = static_cast<float>(HistoryWidth);
+        auto height = static_cast<float>(HistoryHeight);
+        // A neighbourhood more than 2% of the distance deep is an edge
+        auto edge = std::log2(1.02f) / std::log2(CurrentCamera.Far / CurrentCamera.Near);
+        float constants[3 * 4] =
+        {
+            1.0f / width, 1.0f / height, width, height,
+            0.1f, 0.5f, 0.25f, historyValid ? 1.0f : 0.0f,
+            edge, 0.0f, 0.0f, 0.0f,
+        };
+
+        bInternalDraw = true;
+        {
+            StateBackup backup(device);
+            SamplerBackup sampler1(device, 1);
+            SamplerBackup sampler2(device, 2);
+            device->SetRenderTarget(0, surface);
+            for (DWORD i = 1; i < 4; ++i)
+                device->SetRenderTarget(i, nullptr);
+            device->SetDepthStencilSurface(nullptr);
+            SetFullscreenStates(device);
+            BindSampler(device, 0, depthRT->mD3DTexture, D3DTEXF_POINT);
+            BindSampler(device, 1, SteadyDepthRT[previousIndex]->mD3DTexture, D3DTEXF_POINT);
+            BindSampler(device, 2, MotionRT->mD3DTexture, D3DTEXF_POINT);
+            device->SetPixelShader(SteadyDepthPS);
+            device->SetPixelShaderConstantF(0, constants, 3);
+            DrawFullscreen(device, width, height);
+        }
+        bInternalDraw = false;
+        surface->Release();
+
+        SteadyIndex = currentIndex;
+        SteadyFrame = SceneFrame;
+    }
+
+    static IDirect3DTexture9* GetSteadyDepth()
+    {
+        auto rt = SteadyDepthRT[SteadyIndex];
+        return SteadyFrame != 0 && SteadyFrame == TemporalAA::SceneFrame && rt ? rt->mD3DTexture : nullptr;
+    }
+
+    // CCoronas::Render, a draw list callback after the fog pass: its effect reads _DEFERRED_GBUFFER_3_, which holds the
+    // steady depth while it draws
+    static void __cdecl RenderCoronas()
+    {
+        auto steady = GetSteadyDepth();
+        auto depthRT = steady ? rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_3_") : nullptr;
+        IDirect3DTexture9* own = nullptr;
+        if (depthRT && depthRT->mD3DTexture)
+        {
+            own = depthRT->mD3DTexture;
+            depthRT->mD3DTexture = steady;
+        }
+        shRenderCoronas.unsafe_ccall();
+        if (own)
+            depthRT->mD3DTexture = own;
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // DLAA and FSR
 
     static inline uint32_t UpscalerFrame = 0;             // SceneFrame of the last upscaled frame
@@ -1890,6 +1998,7 @@ public:
             fReactiveScale = std::clamp(iniReader.ReadFloat("TEMPORAL", "ReactiveMaskScale", 2.0f), 0.0f, 64.0f);
             fReactiveMax = std::clamp(iniReader.ReadFloat("TEMPORAL", "ReactiveMaskMaximum", 0.75f), 0.0f, 1.0f);
             bRainLayer = iniReader.ReadInteger("TEMPORAL", "RainAfterAntialiasing", 1) != 0;
+            bSteadyDepth = iniReader.ReadInteger("TEMPORAL", "SteadyDepth", 1) != 0;
 
             GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&Resolve, &hm);
 
@@ -1929,6 +2038,11 @@ public:
             pattern = hook::pattern("55 8B EC 83 E4 F0 83 EC 6C B9 ? ? ? ? 56 FF 35");
             if (!pattern.empty())
                 shRenderRain = safetyhook::create_inline(pattern.get_first(0), RenderRain);
+
+            // CCoronas::Render, called by its draw list callback
+            pattern = hook::pattern("53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 FC 56 57 E8");
+            if (!pattern.empty())
+                shRenderCoronas = safetyhook::create_inline(pattern.get_first(0), RenderCoronas);
 
             FusionFixSettings.SetAvailability("PREF_ANTIALIASING", [](int32_t value) -> bool
             {
@@ -2074,9 +2188,17 @@ export namespace TemporalAA
         return SceneFrame != 0 && Temporal::StippleFrame == SceneFrame;
     }
 
+    // Depth averaged over the jitter for what reads it after the resolve (depth of field, sun shafts), at the render
+    // size, or null when this frame has none
+    IDirect3DTexture9* GetSteadyDepth()
+    {
+        return Temporal::GetSteadyDepth();
+    }
+
     // Called by PostFX right after the fog pass of the scene
     void OnFogDrawn()
     {
         Temporal::CaptureOpaque();
+        Temporal::StabilizeDepth();
     }
 }

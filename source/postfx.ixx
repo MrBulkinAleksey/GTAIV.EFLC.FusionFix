@@ -3358,7 +3358,7 @@ private:
                                 pDevice->SetPixelShader(PostFxResources.dof_coc_ps);
                                 pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
                                 if (PostFxResources.bEnablePreAlphaDepth)
-                                    SetTextureBoth(pDevice, 1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
+                                    SetTextureBoth(pDevice, 1, PostDepth());
                                 SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
                                 SetTextureBoth(pDevice, 8, PostFxResources.FullScreenDownsampleTex2->mD3DTexture);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
@@ -3392,7 +3392,7 @@ private:
                                 pDevice->SetPixelShader(PostFxResources.SSPrepass_PS);
                                 pDevice->SetRenderTarget(0, PostFxResources.FullScreenDownsampleSurf);
                                 if (PostFxResources.bEnablePreAlphaDepth)
-                                    SetTextureBoth(pDevice, 1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
+                                    SetTextureBoth(pDevice, 1, PostDepth());
                                 SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
                                 SetTextureBoth(pDevice, 13, PostFxResources.DiffuseTex);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
@@ -3437,7 +3437,7 @@ private:
                             pDevice->SetRenderTarget(0, PostFxResources.backBuffer);
 
                         if (PostFxResources.bEnablePreAlphaDepth)
-                            SetTextureBoth(pDevice, 1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
+                            SetTextureBoth(pDevice, 1, PostDepth());
                         SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
                         pDevice->Clear(0, 0, D3DCLEAR_TARGET, 0, 0, 0);
 
@@ -5875,6 +5875,15 @@ private:
         bInsteadDrawPrimitiveDownsample = true;
         hbDrawCallDownsample.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitiveDownsample = false;
+    }
+
+    // Depth of field, sun shafts and the game's post processing read the depth after the resolve: averaged over the
+    // jitter when temporal anti-aliasing has it, which keeps their edges still
+    static IDirect3DTexture9* PostDepth()
+    {
+        if (auto steady = TemporalAA::GetSteadyDepth())
+            return steady;
+        return PostFxResources.PreAlphaDepthCopyRT->mD3DTexture;
     }
 
     // With temporal anti-aliasing, DLAA or FSR the stipple filter runs before them, on the scene at the render size,

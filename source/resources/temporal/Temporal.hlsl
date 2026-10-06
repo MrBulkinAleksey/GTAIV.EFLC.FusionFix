@@ -396,3 +396,57 @@ float4 PS_RainComposite(float2 uv : TEXCOORD0) : COLOR0
 {
     return float4(tex2Dlod(RainLayerTex, float4(uv + gRainOffset.xy, 0.0, 0.0)).rgb, 0.0);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Steady depth: the logarithmic depth averaged over the jitter, for what reads depth after the resolve or
+// samples it at a few points (depth of field, sun shafts, the coronas' occlusion). On edges the jittered depth
+// flips between the near and the far surface from frame to frame; there the reprojected history, clamped to the
+// neighbourhood, takes most of the weight.
+
+sampler2D SteadyNowTex    : register(s0); // _DEFERRED_GBUFFER_3_, logarithmic depth
+sampler2D SteadyHistTex   : register(s1);
+sampler2D SteadyMotionTex : register(s2);
+
+float4 gSteadyTexel  : register(c0); // 1 / width, 1 / height, width, height
+float4 gSteadyBlend  : register(c1); // x: minimum current weight, y: maximum, z: weight per pixel of motion, w: history valid
+float4 gSteadyEdge   : register(c2); // x: depth range of the neighbourhood that counts as an edge
+
+float4 PS_SteadyDepth(float2 uv : TEXCOORD0) : COLOR0
+{
+    const float2 offsets[8] =
+    {
+        float2(-1.0, -1.0), float2(0.0, -1.0), float2(1.0, -1.0), float2(-1.0, 0.0),
+        float2(1.0, 0.0), float2(-1.0, 1.0), float2(0.0, 1.0), float2(1.0, 1.0)
+    };
+
+    float now = tex2Dlod(SteadyNowTex, float4(uv, 0.0, 0.0)).r;
+    float nearest = now;
+    float farthest = now;
+    float2 nearestOffset = 0.0;
+
+    [unroll]
+    for (int i = 0; i < 8; ++i)
+    {
+        float d = tex2Dlod(SteadyNowTex, float4(uv + offsets[i] * gSteadyTexel.xy, 0.0, 0.0)).r;
+        if (d < nearest)
+        {
+            nearest = d;
+            nearestOffset = offsets[i];
+        }
+        farthest = max(farthest, d);
+    }
+
+    // Flat surfaces barely move with the jitter
+    if (gSteadyBlend.w <= 0.0 || farthest - nearest <= gSteadyEdge.x)
+        return float4(now, 0.0, 0.0, 1.0);
+
+    float2 motion = tex2Dlod(SteadyMotionTex, float4(uv + nearestOffset * gSteadyTexel.xy, 0.0, 0.0)).xy;
+    float2 historyUV = uv + motion;
+    if (any(historyUV != saturate(historyUV)))
+        return float4(now, 0.0, 0.0, 1.0);
+
+    float history = clamp(tex2Dlod(SteadyHistTex, float4(historyUV, 0.0, 0.0)).r, nearest, farthest);
+    float speed = length(motion * gSteadyTexel.zw);
+    float weight = lerp(gSteadyBlend.x, gSteadyBlend.y, saturate(speed * gSteadyBlend.z));
+    return float4(lerp(history, now, weight), 0.0, 0.0, 1.0);
+}
