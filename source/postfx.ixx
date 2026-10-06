@@ -2210,12 +2210,12 @@ namespace SSRTrace
             IDirect3DBaseTexture9* probe = R.SSRHistoryTex ? R.SSRHistoryTex->mD3DTexture : rtTexture;
             if (probe == old15)
                 probe = nullptr;
-            pDevice->SetTexture(15, probe);
+            SetTextureBoth(pDevice, 15, probe);
             IDirect3DBaseTexture9* now15 = nullptr;
             pDevice->GetTexture(15, &now15);
             takes = now15 == probe ? "yes" : "NO";
             SAFE_RELEASE(now15);
-            pDevice->SetTexture(15, old15);
+            SetTextureBoth(pDevice, 15, old15);
             SAFE_RELEASE(old15);
         }
         IDirect3DPixelShader9* ps = nullptr;
@@ -2312,7 +2312,7 @@ private:
         IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
         for (int i = 0; i < PostfxTextureCount; i++)
         {
-            pDevice->SetTexture(i, prePostFx[i]);
+            SetTextureBoth(pDevice, i, prePostFx[i]);
             pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, Samplers[i]);
             SAFE_RELEASE(prePostFx[i]);
         }
@@ -2340,10 +2340,10 @@ private:
         }
         if (auto pDevice = rage::grcDevice::GetD3DDevice())
         {
-            pDevice->SetTexture(3, nullptr);
-            pDevice->SetTexture(8, nullptr);
-            pDevice->SetTexture(9, nullptr);
-            pDevice->SetTexture(11, nullptr);
+            SetTextureBoth(pDevice, 3, nullptr);
+            SetTextureBoth(pDevice, 8, nullptr);
+            SetTextureBoth(pDevice, 9, nullptr);
+            SetTextureBoth(pDevice, 11, nullptr);
         }
         PostFxResources.bGIBound = false;
         PostFxResources.bMaterialIdBound = false;
@@ -2831,7 +2831,7 @@ private:
         };
         for (auto [state, value] : kStates)
             pDevice->SetRenderState(state, value);
-        pDevice->SetTexture(0, R.mDepthRT->mD3DTexture);
+        SetTextureBoth(pDevice, 0, R.mDepthRT->mD3DTexture);
         pDevice->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
@@ -2929,7 +2929,7 @@ private:
 
             pDevice->SetRenderTarget(0, scratchSurface);
             pDevice->SetDepthStencilSurface(nullptr);
-            pDevice->SetTexture(0, R.mDepthRT->mD3DTexture);
+            SetTextureBoth(pDevice, 0, R.mDepthRT->mD3DTexture);
             pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
             pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
             pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
@@ -2941,7 +2941,7 @@ private:
             pDevice->SetRenderTarget(0, rt0);
             pDevice->SetDepthStencilSurface(ds);
             pDevice->SetViewport(&oldView);
-            pDevice->SetTexture(0, old0);
+            SetTextureBoth(pDevice, 0, old0);
             pDevice->SetPixelShader(oldPS);
             pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, minF);
             pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, magF);
@@ -3125,7 +3125,7 @@ private:
                     pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, prevMipFilter[0]);
                     pDevice->SetSamplerState(0, D3DSAMP_ADDRESSU, prevAddressU[0]);
                     pDevice->SetSamplerState(0, D3DSAMP_ADDRESSV, prevAddressV[0]);
-                    pDevice->SetTexture(0, prevTex[0]);
+                    SetTextureBoth(pDevice, 0, prevTex[0]);
 
                     if ((PostFxResources.SSREnabled() || PostFxResources.SSGIEnabled()) && PostFxResources.SSRHistorySurf && PostFxResources.SSRSurf)
                     {
@@ -3154,9 +3154,9 @@ private:
 
                     pDevice->SetPixelShader(prevPS);
 
-                    pDevice->SetTexture(1, scene);
+                    SetTextureBoth(pDevice, 1, scene);
                     hbDrawPrimitivePostFX.fun();
-                    pDevice->SetTexture(1, prevTex[1]);
+                    SetTextureBoth(pDevice, 1, prevTex[1]);
                 }
             }
         }
@@ -3297,7 +3297,7 @@ private:
         pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
 
         pDevice->SetRenderTarget(0, R.backBuffer);
-        pDevice->SetTexture(2, R.FullScreenTex_temp2->mD3DTexture);
+        SetTextureBoth(pDevice, 2, R.FullScreenTex_temp2->mD3DTexture);
         pDevice->SetPixelShaderConstantF(200, params, 1);
         pDevice->SetPixelShader(R.CAS_PS);
         pDevice->SetVertexShader(vShader);
@@ -3348,27 +3348,27 @@ private:
                     //    pDevice->SetPixelShader(PostFxResources.SSAO_gen_ps);
                     //    vec4[1] = PostFxResources.AoDistance;
                     //
-                    //    //pDevice->SetTexture(2, 0);
+                    //    //SetTextureBoth(pDevice, 2, 0);
                     //    pDevice->SetRenderTarget(0, PostFxResources.pShadowBlurSurf1);
-                    //    //pDevice->SetTexture(2, PostFxResources.textureRead);
+                    //    //SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
                     //    pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
-                    //    pDevice->SetTexture(3, 0);
+                    //    SetTextureBoth(pDevice, 3, 0);
                     //
                     //    pDevice->SetPixelShader(PostFxResources.DeferredShadowBlurCircle_ps);
                     //    pDevice->SetRenderTarget(0, PostFxResources.pShadowBlurSurf2);
-                    //    pDevice->SetTexture(11, PostFxResources.pShadowBlurTex1->mD3DTexture);
+                    //    SetTextureBoth(pDevice, 11, PostFxResources.pShadowBlurTex1->mD3DTexture);
                     //    pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
                     //
-                    //    pDevice->SetTexture(11, 0);
+                    //    SetTextureBoth(pDevice, 11, 0);
                     //
                     //    pDevice->SetPixelShader(PostFxResources.SSAO_blend_ps);
                     //    pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
-                    //    pDevice->SetTexture(2, PostFxResources.textureRead);
-                    //    pDevice->SetTexture(3, PostFxResources.pShadowBlurTex2->mD3DTexture);
+                    //    SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
+                    //    SetTextureBoth(pDevice, 3, PostFxResources.pShadowBlurTex2->mD3DTexture);
                     //    pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
                     //    PostFxResources.swapbuffers();
-                    //    pDevice->SetTexture(2, PostFxResources.textureRead);
-                    //    pDevice->SetTexture(3, PostFxResources.prePostFx[3]);
+                    //    SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
+                    //    SetTextureBoth(pDevice, 3, PostFxResources.prePostFx[3]);
                     //    pDevice->SetPixelShader(pShader);
                     //}
 
@@ -3387,7 +3387,7 @@ private:
                     {
                         pDevice->SetPixelShader(PostFxResources.stipple_filter_ps);
                         pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
-                        pDevice->SetTexture(2, PostFxResources.textureRead);
+                        SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
                         pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
                         PostFxResources.swapbuffers();
                         pDevice->SetPixelShader(pShader);
@@ -3407,20 +3407,20 @@ private:
 
                                 pDevice->SetPixelShader(PostFxResources.dof_blur_ps);
                                 pDevice->SetRenderTarget(0, PostFxResources.FullScreenDownsampleSurf);
-                                pDevice->SetTexture(8, PostFxResources.HalfScreenTex);
+                                SetTextureBoth(pDevice, 8, PostFxResources.HalfScreenTex);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
                                 pDevice->SetPixelShader(PostFxResources.depth_of_field_tent_ps);
                                 pDevice->SetRenderTarget(0, PostFxResources.FullScreenDownsampleSurf2);
-                                pDevice->SetTexture(8, PostFxResources.FullScreenDownsampleTex->mD3DTexture);
+                                SetTextureBoth(pDevice, 8, PostFxResources.FullScreenDownsampleTex->mD3DTexture);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
                                 pDevice->SetPixelShader(PostFxResources.dof_coc_ps);
                                 pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
                                 if (PostFxResources.bEnablePreAlphaDepth)
-                                    pDevice->SetTexture(1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
-                                pDevice->SetTexture(2, PostFxResources.textureRead);
-                                pDevice->SetTexture(8, PostFxResources.FullScreenDownsampleTex2->mD3DTexture);
+                                    SetTextureBoth(pDevice, 1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
+                                SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
+                                SetTextureBoth(pDevice, 8, PostFxResources.FullScreenDownsampleTex2->mD3DTexture);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
                                 PostFxResources.swapbuffers();
 
@@ -3452,28 +3452,28 @@ private:
                                 pDevice->SetPixelShader(PostFxResources.SSPrepass_PS);
                                 pDevice->SetRenderTarget(0, PostFxResources.FullScreenDownsampleSurf);
                                 if (PostFxResources.bEnablePreAlphaDepth)
-                                    pDevice->SetTexture(1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
-                                pDevice->SetTexture(2, PostFxResources.textureRead);
-                                pDevice->SetTexture(13, PostFxResources.DiffuseTex);
+                                    SetTextureBoth(pDevice, 1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
+                                SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
+                                SetTextureBoth(pDevice, 13, PostFxResources.DiffuseTex);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
                                 // sample sunshafts from a cropped texture
                                 pDevice->SetPixelShader(PostFxResources.SSDraw_PS);
                                 pDevice->SetRenderTarget(0, PostFxResources.FullScreenDownsampleSurf2);
-                                pDevice->SetTexture(11, PostFxResources.FullScreenDownsampleTex->mD3DTexture);
+                                SetTextureBoth(pDevice, 11, PostFxResources.FullScreenDownsampleTex->mD3DTexture);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
                                 // second sunshafts pass
                                 pDevice->SetPixelShader(PostFxResources.SSDraw_PS);
                                 pDevice->SetRenderTarget(0, PostFxResources.FullScreenDownsampleSurf);
-                                pDevice->SetTexture(11, PostFxResources.FullScreenDownsampleTex2->mD3DTexture);
+                                SetTextureBoth(pDevice, 11, PostFxResources.FullScreenDownsampleTex2->mD3DTexture);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
                                 // add sunshafts to screen
                                 pDevice->SetPixelShader(PostFxResources.SSAdd_PS);
                                 pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
-                                pDevice->SetTexture(2, PostFxResources.textureRead);
-                                pDevice->SetTexture(11, PostFxResources.FullScreenDownsampleTex->mD3DTexture);
+                                SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
+                                SetTextureBoth(pDevice, 11, PostFxResources.FullScreenDownsampleTex->mD3DTexture);
 
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
                                 PostFxResources.swapbuffers();
@@ -3487,7 +3487,7 @@ private:
                     {
                         for (int i = 0; i < 4; i++)
                         {
-                            pDevice->SetTexture(i, PostFxResources.prePostFx[i]);
+                            SetTextureBoth(pDevice, i, PostFxResources.prePostFx[i]);
                             pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, PostFxResources.Samplers[i]);
                         }
 
@@ -3497,8 +3497,8 @@ private:
                             pDevice->SetRenderTarget(0, PostFxResources.backBuffer);
 
                         if (PostFxResources.bEnablePreAlphaDepth)
-                            pDevice->SetTexture(1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
-                        pDevice->SetTexture(2, PostFxResources.textureRead);
+                            SetTextureBoth(pDevice, 1, PostFxResources.PreAlphaDepthCopyRT->mD3DTexture);
+                        SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
                         pDevice->Clear(0, 0, D3DCLEAR_TARGET, 0, 0, 0);
 
                         pDevice->SetPixelShader(pShader);
@@ -3520,8 +3520,8 @@ private:
                             // pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
                             pDevice->SetRenderTarget(0, PostFxResources.backBuffer);
 
-                            pDevice->SetTexture(2, PostFxResources.FullScreenTex_temp2->mD3DTexture);
-                            // pDevice->SetTexture(2, PostFxResources.textureRead);
+                            SetTextureBoth(pDevice, 2, PostFxResources.FullScreenTex_temp2->mD3DTexture);
+                            // SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
 
                             hr = pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
                             pDevice->SetPixelShader(pShader);
@@ -3590,7 +3590,7 @@ private:
                             pDevice->SetPixelShader(PostFxResources.SMAA_EdgeDetection);
                             pDevice->SetVertexShader(PostFxResources.SMAA_EdgeDetectionVS);
                             pDevice->SetRenderTarget(0, PostFxResources.edgesSurf);
-                            pDevice->SetTexture(0, PostFxResources.FullScreenTex_temp2->mD3DTexture);
+                            SetTextureBoth(pDevice, 0, PostFxResources.FullScreenTex_temp2->mD3DTexture);
                             pDevice->Clear(0, 0, D3DCLEAR_TARGET, 0, 0, 0);
                             pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
@@ -3598,9 +3598,9 @@ private:
                             pDevice->SetPixelShader(PostFxResources.SMAA_BlendingWeightsCalculation);
                             pDevice->SetVertexShader(PostFxResources.SMAA_BlendingWeightsCalculationVS);
                             pDevice->SetRenderTarget(0, PostFxResources.blendSurf);
-                            pDevice->SetTexture(1, PostFxResources.edgesTex->mD3DTexture);
-                            pDevice->SetTexture(2, PostFxResources.SMAA_areaTex);
-                            pDevice->SetTexture(3, PostFxResources.SMAA_searchTex);
+                            SetTextureBoth(pDevice, 1, PostFxResources.edgesTex->mD3DTexture);
+                            SetTextureBoth(pDevice, 2, PostFxResources.SMAA_areaTex);
+                            SetTextureBoth(pDevice, 3, PostFxResources.SMAA_searchTex);
                             pDevice->Clear(0, 0, D3DCLEAR_TARGET, 0, 0, 0);
                             pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
@@ -3611,8 +3611,8 @@ private:
                             // pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
                             pDevice->SetRenderTarget(0, PostFxResources.backBuffer);
 
-                            pDevice->SetTexture(0, PostFxResources.FullScreenTex_temp2->mD3DTexture);
-                            pDevice->SetTexture(4, PostFxResources.blendTex->mD3DTexture);
+                            SetTextureBoth(pDevice, 0, PostFxResources.FullScreenTex_temp2->mD3DTexture);
+                            SetTextureBoth(pDevice, 4, PostFxResources.blendTex->mD3DTexture);
 
                             pDevice->GetSamplerState(0, D3DSAMP_SRGBTEXTURE, &oldSample);
                             pDevice->GetRenderState(D3DRS_SRGBWRITEENABLE, &OldSRGB); // save srgb state
@@ -3634,11 +3634,11 @@ private:
                                 pDevice->SetSamplerState(i, D3DSAMP_ADDRESSW, oldSample);
                             }
 
-                            pDevice->SetTexture(0, PostFxResources.prePostFx[0]);
-                            pDevice->SetTexture(1, PostFxResources.prePostFx[1]);
-                            pDevice->SetTexture(2, PostFxResources.FullScreenTex_temp2->mD3DTexture);
-                            pDevice->SetTexture(3, PostFxResources.prePostFx[3]);
-                            pDevice->SetTexture(4, PostFxResources.prePostFx[4]);
+                            SetTextureBoth(pDevice, 0, PostFxResources.prePostFx[0]);
+                            SetTextureBoth(pDevice, 1, PostFxResources.prePostFx[1]);
+                            SetTextureBoth(pDevice, 2, PostFxResources.FullScreenTex_temp2->mD3DTexture);
+                            SetTextureBoth(pDevice, 3, PostFxResources.prePostFx[3]);
+                            SetTextureBoth(pDevice, 4, PostFxResources.prePostFx[4]);
                             pDevice->SetPixelShader(pShader);
                             pDevice->SetVertexShader(vShader);
                         }
@@ -3648,7 +3648,7 @@ private:
 
                     for (int i = 0; i < PostfxTextureCount; i++)
                     {
-                        pDevice->SetTexture(i, PostFxResources.prePostFx[i]);
+                        SetTextureBoth(pDevice, i, PostFxResources.prePostFx[i]);
                         pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, PostFxResources.Samplers[i]);
                         SAFE_RELEASE(PostFxResources.prePostFx[i]);
                     }
@@ -3657,7 +3657,7 @@ private:
 
                 for (int i = 0; i < PostfxTextureCount; i++)
                 {
-                    pDevice->SetTexture(i, PostFxResources.prePostFx[i]);
+                    SetTextureBoth(pDevice, i, PostFxResources.prePostFx[i]);
                     pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, PostFxResources.Samplers[i]);
                     SAFE_RELEASE(PostFxResources.prePostFx[i]);
                 }
@@ -3667,7 +3667,7 @@ private:
 
         for (int i = 0; i < PostfxTextureCount; i++)
         {
-            pDevice->SetTexture(i, PostFxResources.prePostFx[i]);
+            SetTextureBoth(pDevice, i, PostFxResources.prePostFx[i]);
             pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, PostFxResources.Samplers[i]);
             SAFE_RELEASE(PostFxResources.prePostFx[i]);
         }
@@ -3726,7 +3726,7 @@ private:
                     device->SetSamplerState(slot, kSSRSamplerStates[i].state, states[slot][i]);
             for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
             {
-                device->SetTexture(slot, textures[slot]);
+                SetTextureBoth(device, slot, textures[slot]);
                 SAFE_RELEASE(textures[slot]);
             }
         }
@@ -4407,7 +4407,7 @@ private:
         {
             for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
                 pDevice->GetTexture(slot, &oldTextures[slot]);
-            pDevice->SetTexture(3, nullptr);
+            SetTextureBoth(pDevice, 3, nullptr);
 
             pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
             pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
@@ -4604,7 +4604,7 @@ private:
 
             for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
             {
-                pDevice->SetTexture(slot, oldTextures[slot]);
+                SetTextureBoth(pDevice, slot, oldTextures[slot]);
                 SAFE_RELEASE(oldTextures[slot]);
             }
         }
@@ -5126,7 +5126,7 @@ private:
             pDevice->SetRenderState(kCloudRenderStates[i].state, savedRenderStates[i]);
         for (DWORD slot = 0; slot < 10; ++slot)
         {
-            pDevice->SetTexture(slot, oldTextures[slot]);
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
             for (size_t i = 0; i < std::size(kSamplerStates); ++i)
                 pDevice->SetSamplerState(slot, kSamplerStates[i], savedSamplerStates[slot][i]);
             SAFE_RELEASE(oldTextures[slot]);
@@ -5263,7 +5263,7 @@ private:
 
         for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
             pDevice->GetTexture(slot, &oldTextures[slot]);
-        pDevice->SetTexture(3, nullptr);
+        SetTextureBoth(pDevice, 3, nullptr);
 
         effect->SetTexture(h.SurfaceTex2D, oldTextures[0]);
         effect->SetFloat(h.fWaterNormalStrength, oldTextures[0] ? R.fSSRWaterNormalStrength : 0.0f);
@@ -5305,7 +5305,7 @@ private:
 
         for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
         {
-            pDevice->SetTexture(slot, oldTextures[slot]);
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
             SAFE_RELEASE(oldTextures[slot]);
         }
 
@@ -5837,7 +5837,7 @@ private:
         pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
         for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
         {
-            pDevice->SetTexture(slot, oldTextures[slot]);
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
             SAFE_RELEASE(oldTextures[slot]);
         }
 
@@ -6266,7 +6266,7 @@ private:
         pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
         for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
         {
-            pDevice->SetTexture(slot, oldTextures[slot]);
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
             SAFE_RELEASE(oldTextures[slot]);
         }
         pDevice->SetRenderTarget(0, rt0);
@@ -6497,7 +6497,7 @@ private:
         pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
         for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
         {
-            pDevice->SetTexture(slot, oldTextures[slot]);
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
             SAFE_RELEASE(oldTextures[slot]);
         }
         pDevice->SetRenderTarget(0, rt0);
@@ -6620,7 +6620,7 @@ private:
         pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
         for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
         {
-            pDevice->SetTexture(slot, oldTextures[slot]);
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
             SAFE_RELEASE(oldTextures[slot]);
         }
         pDevice->SetRenderTarget(0, rt0);
@@ -6849,7 +6849,7 @@ public:
         }
         else if (R.bContactBound)
         {
-            pDevice->SetTexture(9, nullptr);
+            SetTextureBoth(pDevice, 9, nullptr);
             R.bContactBound = false;
         }
         pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
@@ -6974,7 +6974,7 @@ public:
                 R.CloudSamplerBefore[1] = maxMip;
                 R.CloudSamplerBefore[2] = minFilter;
                 R.CloudSamplerBefore[3] = lodBias;
-                pDevice->SetTexture(12, noise);
+                SetTextureBoth(pDevice, 12, noise);
                 pDevice->SetSamplerState(12, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
                 pDevice->SetSamplerState(12, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
                 pDevice->SetSamplerState(12, D3DSAMP_ADDRESSW, D3DTADDRESS_WRAP);
@@ -7006,7 +7006,7 @@ public:
             tex = R.SSRResult;
         else if (R.SSRTex && R.SSRTex->mD3DTexture)
             tex = R.SSRTex->mD3DTexture; // cleared while SSR is off
-        pDevice->SetTexture(3, tex);
+        SetTextureBoth(pDevice, 3, tex);
         SSRTrace::Line("bind for lighting: s3 %s, ssr valid this frame %d", SSRTrace::TextureName(tex).c_str(), int(R.bSSRValidThisFrame));
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
@@ -7053,17 +7053,17 @@ public:
 
         if (R.bContactBound)
         {
-            pDevice->SetTexture(9, nullptr);
+            SetTextureBoth(pDevice, 9, nullptr);
             R.bContactBound = false;
         }
         if (R.bGIBound)
         {
-            pDevice->SetTexture(8, nullptr);
+            SetTextureBoth(pDevice, 8, nullptr);
             R.bGIBound = false;
         }
         if (R.bMaterialIdBound)
         {
-            pDevice->SetTexture(11, nullptr);
+            SetTextureBoth(pDevice, 11, nullptr);
             R.bMaterialIdBound = false;
         }
         if (R.bCloudNoiseBound)
@@ -7073,7 +7073,7 @@ public:
             pDevice->GetTexture(12, &bound);
             R.bCloudNoiseSurvived = bound && bound == R.CloudNoiseTexture;
             SAFE_RELEASE(bound);
-            pDevice->SetTexture(12, nullptr);
+            SetTextureBoth(pDevice, 12, nullptr);
             R.bCloudNoiseBound = false;
         }
         // Lights drawn for other views (reflections, mirrors) must not march with this camera,
@@ -7123,9 +7123,9 @@ public:
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice || !R.bGlassBound)
             return;
-        pDevice->SetTexture(9, nullptr);
-        pDevice->SetTexture(11, nullptr);
-        pDevice->SetTexture(13, nullptr);
+        SetTextureBoth(pDevice, 9, nullptr);
+        SetTextureBoth(pDevice, 11, nullptr);
+        SetTextureBoth(pDevice, 13, nullptr);
         R.bGlassBound = false;
     }
 
