@@ -410,6 +410,19 @@ public:
     // times the square of one less their colour's saturation and faded out on dark colours.
     // They are told apart by the gloss 258 / 1023 they write (world_no_specular_mark.patch).
     float fSpecularSheen = 0.1f;
+    // Street lamps' and headlights' highlights (c200; local_light_specular_ggx.patch): the game's
+    // are pow(R.L, n), the same peak at every gloss and nothing past the lobe. LightsGGX swaps in a
+    // GGX lobe of the same width with a height correlated Smith term, so glossy surfaces get a
+    // bright core with a long soft tail and wet roads long streaks towards the lamps, times that
+    // strength; 0 keeps the game's. LightsGGXFresnel is how far the reflectance rises from
+    // kLightsGGXReflectance head on towards 1 at grazing angles, and LightsGGXSize the lights'
+    // radius in metres, which widens the lobe by its angle so small lamps leave no tiny specks.
+    float fLightsGGX = 1.0f;
+    float fLightsGGXFresnel = 0.5f;
+    float fLightsGGXSize = 0.1f;
+    // The reflectance head on, chosen so a gloss of 32, the game's default, keeps about the
+    // energy of its old highlight seen from above.
+    static constexpr float kLightsGGXReflectance = 0.125f;
     // Cloud shadows on the ground (c197.y-w, c198, c199, s12; deferred_lighting_sun_under_clouds.patch):
     // the ray from a surface towards the sun meets a cloud deck CloudShadowsHeight up, and the sun is
     // dimmed by up to CloudShadows where the clouds cover it there. The sky's clouds are on a dome
@@ -1392,6 +1405,9 @@ public:
     {
         fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
         fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 50.0f);
+        fLightsGGX = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGX", 1.0f), 0.0f, 4.0f);
+        fLightsGGXFresnel = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXFresnel", 0.5f), 0.0f, 1.0f);
+        fLightsGGXSize = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSize", 0.1f), 0.0f, 2.0f);
         fCloudShadows = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadows", 0.6f), 0.0f, 1.0f);
         fCloudShadowsHeight = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsHeight", 1200.0f), 100.0f, 10000.0f);
         fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 16000.0f), 100.0f, 50000.0f);
@@ -6801,6 +6817,13 @@ public:
             pDevice->SetPixelShaderConstantF(201, scale, 1);
             pDevice->SetPixelShaderConstantF(205, offset, 1);
         }
+        // The lights' GGX highlights: x the strength (0 the game's own), halved since the shaders
+        // divide by twice the visibility's denominator, y the Fresnel rise, z the lights' radius
+        // squared, w the reflectance head on.
+        {
+            const float c200[4] = { R.fLightsGGX * 0.5f, R.fLightsGGXFresnel, R.fLightsGGXSize * R.fLightsGGXSize, R.kLightsGGXReflectance };
+            pDevice->SetPixelShaderConstantF(200, c200, 1);
+        }
         // The sun on materials with no specular map (x) and the cloud shadows (yzw, c198, c199, s12).
         {
             float threshold = 0.0f, bias = 0.0f, thickness = 0.0f;
@@ -7015,6 +7038,7 @@ public:
         pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(197, noLocalContactShadows, 1);
+        pDevice->SetPixelShaderConstantF(200, noLocalContactShadows, 1);
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;

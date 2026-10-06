@@ -1,0 +1,535 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index dee4384c..45c440cf 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -84,6 +84,7 @@
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+     def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -116,6 +117,7 @@
+     mad r2.xyz, v0, -r1.z, c15
+     mad r4.xyz, v0, -r1.z, c2.x
+     nrm r5.xyz, r4
++    mov r12.xyz, r5 // FusionFix GGX lights: the view ray
+     mov r20.x, c77.z
+     mul r20.xy, r20.x, c8.xy
+     mad r4.xyz, r3, r20.x, r2 // scale bias with resolution
+@@ -273,6 +275,7 @@
+     endif
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     dp3 r0.y, r2, r2
++    mov r12.w, r0.y // FusionFix GGX lights: the distance to the light squared
+     add r1.xyz, r2, c2.x
+     nrm r2.xyz, r1
+     mov r1.y, c2.y
+@@ -309,6 +312,50 @@
+     add r0.x, r3.x, r3.x
+     mul r1.w, r3.y, c0.y
+     pow r2.w, r0.y, r1.w
++    // --- FusionFix GGX lights (c200: LightsGGX in postfx.ixx): the game's highlight is pow(R.L, n) with no
++    // --- N.L and the same peak at every gloss; a GGX lobe has a long soft tail round a bright core, its
++    // --- energy follows the gloss, and it widens by the light's size over its distance. c200.x is the
++    // --- strength (0 keeps the game's highlight), y the Fresnel rise at grazing angles, z the light's
++    // --- size squared, w the reflectance head on. r12.xyz is the view ray, r12.w the distance squared.
++    add r13.xyz, r2, -r12
++    nrm r14.xyz, r13 // half vector
++    dp3_sat r15.x, r3, r14 // N.H
++    dp3_sat r15.y, r3, -r12 // N.V
++    dp3_sat r15.z, r3, r2 // N.L
++    dp3_sat r15.w, r2, r14 // L.H
++    add r16.x, r1.w, c163.y
++    rcp r16.x, r16.x
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2), the GGX lobe as wide as the game's
++    add r16.y, r12.w, c163.z
++    rcp r16.y, r16.y
++    mad_sat r16.x, c200.z, r16.y, r16.x // a sphere light widens it by its size over its distance
++    mul r16.z, r15.x, r15.x
++    mad r16.w, r16.x, r16.z, -r16.z
++    add r16.w, r16.w, c163.x
++    mul r16.w, r16.w, r16.w
++    rcp r16.w, r16.w
++    mul r13.w, r16.x, r16.w // pi times the distribution
++    rsq r16.y, r16.x
++    rcp r16.y, r16.y // alpha
++    add r17.x, r15.z, r15.y
++    mul r17.y, r15.z, r15.y
++    add r17.y, r17.y, r17.y
++    lrp r18.x, r16.y, r17.x, r17.y // height correlated Smith, approximated: 0.5 / this is the visibility
++    add r18.x, r18.x, c163.z
++    rcp r18.x, r18.x
++    mul r13.w, r13.w, r18.x
++    mul r13.w, r13.w, r15.z
++    add r17.x, c163.x, -r15.w
++    mul r17.y, r17.x, r17.x
++    mul r17.y, r17.y, r17.y
++    mul r17.x, r17.x, r17.y // Schlick's (1 - L.H)^5
++    mul_sat r17.x, r17.x, c200.y
++    mov r17.y, c200.w
++    lrp r18.y, r17.x, c163.x, r17.y // Fresnel
++    mul r13.w, r13.w, r18.y
++    mul r13.w, r13.w, c200.x
++    min r13.w, r13.w, c163.w
++    cmp r2.w, -c200.x, r2.w, r13.w
+     mul r1.xyz, r1, r2.w
+     mul r1.xyz, r0.x, r1
+     texld r4, r0.zwzw, s0
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+index 31cfc0a5..348ca6fc 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -55,6 +55,7 @@
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+     def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -124,8 +125,10 @@
+     endif
+     mad r4.xyw, v0.xyzz, -r0.w, c1.w
+     nrm r7.xyz, r4.xyww
++    mov r12.xyz, r7 // FusionFix GGX lights: the view ray
+     add r2.xyz, -r2, c72
+     dp3 r0.w, r2, r2
++    mov r12.w, r0.w // FusionFix GGX lights: the distance to the light squared
+     add r2.xyz, r2, c1.w
+     nrm r8.xyz, r2
+     mov r1.x, c1.x
+@@ -150,6 +153,50 @@
+     mul r0.xyz, r0, r1.x
+     cmp r0.xyz, r0.w, r0, c1.z
+     pow r0.w, r1.y, r1.w
++    // --- FusionFix GGX lights (c200: LightsGGX in postfx.ixx): the game's highlight is pow(R.L, n) with no
++    // --- N.L and the same peak at every gloss; a GGX lobe has a long soft tail round a bright core, its
++    // --- energy follows the gloss, and it widens by the light's size over its distance. c200.x is the
++    // --- strength (0 keeps the game's highlight), y the Fresnel rise at grazing angles, z the light's
++    // --- size squared, w the reflectance head on. r12.xyz is the view ray, r12.w the distance squared.
++    add r13.xyz, r8, -r12
++    nrm r14.xyz, r13 // half vector
++    dp3_sat r15.x, r5, r14 // N.H
++    dp3_sat r15.y, r5, -r12 // N.V
++    dp3_sat r15.z, r5, r8 // N.L
++    dp3_sat r15.w, r8, r14 // L.H
++    add r16.x, r1.w, c163.y
++    rcp r16.x, r16.x
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2), the GGX lobe as wide as the game's
++    add r16.y, r12.w, c163.z
++    rcp r16.y, r16.y
++    mad_sat r16.x, c200.z, r16.y, r16.x // a sphere light widens it by its size over its distance
++    mul r16.z, r15.x, r15.x
++    mad r16.w, r16.x, r16.z, -r16.z
++    add r16.w, r16.w, c163.x
++    mul r16.w, r16.w, r16.w
++    rcp r16.w, r16.w
++    mul r13.w, r16.x, r16.w // pi times the distribution
++    rsq r16.y, r16.x
++    rcp r16.y, r16.y // alpha
++    add r17.x, r15.z, r15.y
++    mul r17.y, r15.z, r15.y
++    add r17.y, r17.y, r17.y
++    lrp r18.x, r16.y, r17.x, r17.y // height correlated Smith, approximated: 0.5 / this is the visibility
++    add r18.x, r18.x, c163.z
++    rcp r18.x, r18.x
++    mul r13.w, r13.w, r18.x
++    mul r13.w, r13.w, r15.z
++    add r17.x, c163.x, -r15.w
++    mul r17.y, r17.x, r17.x
++    mul r17.y, r17.y, r17.y
++    mul r17.x, r17.x, r17.y // Schlick's (1 - L.H)^5
++    mul_sat r17.x, r17.x, c200.y
++    mov r17.y, c200.w
++    lrp r18.y, r17.x, c163.x, r17.y // Fresnel
++    mul r13.w, r13.w, r18.y
++    mul r13.w, r13.w, c200.x
++    min r13.w, r13.w, c163.w
++    cmp r0.w, -c200.x, r0.w, r13.w
+     mul r1.xyw, r0.xyzz, r0.w
+     mul r0.xyz, r21, r0 // FusionFix skin lighting: the wrapped N.L per channel
+     mul r2.xyz, r3, r6
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index 91955bce..a0d52f1b 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -86,6 +86,7 @@
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+     def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -156,8 +157,10 @@
+     endif
+     mad r4.xyz, v0, -r0.w, c1.w
+     nrm r7.xyz, r4
++    mov r12.xyz, r7 // FusionFix GGX lights: the view ray
+     add r4.xyz, -r2, c79
+     dp3 r0.w, r4, r4
++    mov r12.w, r0.w // FusionFix GGX lights: the distance to the light squared
+     add r4.xyz, r4, c1.w
+     nrm r8.xyz, r4
+     mov r1.x, c1.x
+@@ -332,6 +335,50 @@
+     mad r2.xyz, r5, -r0.w, r7
+     dp3_sat r0.w, r8, r2
+     pow r2.x, r0.w, r1.w
++    // --- FusionFix GGX lights (c200: LightsGGX in postfx.ixx): the game's highlight is pow(R.L, n) with no
++    // --- N.L and the same peak at every gloss; a GGX lobe has a long soft tail round a bright core, its
++    // --- energy follows the gloss, and it widens by the light's size over its distance. c200.x is the
++    // --- strength (0 keeps the game's highlight), y the Fresnel rise at grazing angles, z the light's
++    // --- size squared, w the reflectance head on. r12.xyz is the view ray, r12.w the distance squared.
++    add r13.xyz, r8, -r12
++    nrm r14.xyz, r13 // half vector
++    dp3_sat r15.x, r5, r14 // N.H
++    dp3_sat r15.y, r5, -r12 // N.V
++    dp3_sat r15.z, r5, r8 // N.L
++    dp3_sat r15.w, r8, r14 // L.H
++    add r16.x, r1.w, c163.y
++    rcp r16.x, r16.x
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2), the GGX lobe as wide as the game's
++    add r16.y, r12.w, c163.z
++    rcp r16.y, r16.y
++    mad_sat r16.x, c200.z, r16.y, r16.x // a sphere light widens it by its size over its distance
++    mul r16.z, r15.x, r15.x
++    mad r16.w, r16.x, r16.z, -r16.z
++    add r16.w, r16.w, c163.x
++    mul r16.w, r16.w, r16.w
++    rcp r16.w, r16.w
++    mul r13.w, r16.x, r16.w // pi times the distribution
++    rsq r16.y, r16.x
++    rcp r16.y, r16.y // alpha
++    add r17.x, r15.z, r15.y
++    mul r17.y, r15.z, r15.y
++    add r17.y, r17.y, r17.y
++    lrp r18.x, r16.y, r17.x, r17.y // height correlated Smith, approximated: 0.5 / this is the visibility
++    add r18.x, r18.x, c163.z
++    rcp r18.x, r18.x
++    mul r13.w, r13.w, r18.x
++    mul r13.w, r13.w, r15.z
++    add r17.x, c163.x, -r15.w
++    mul r17.y, r17.x, r17.x
++    mul r17.y, r17.y, r17.y
++    mul r17.x, r17.x, r17.y // Schlick's (1 - L.H)^5
++    mul_sat r17.x, r17.x, c200.y
++    mov r17.y, c200.w
++    lrp r18.y, r17.x, c163.x, r17.y // Fresnel
++    mul r13.w, r13.w, r18.y
++    mul r13.w, r13.w, c200.x
++    min r13.w, r13.w, c163.w
++    cmp r2.x, -c200.x, r2.x, r13.w
+     dp3_sat r0.w, r8, r5
+     dp3 r21.w, r8, r5 // FusionFix skin lighting: N.L, unclamped
+     mul r21.xyz, c201, r20.w // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+index 311b0a49..903c6931 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -50,6 +50,7 @@
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+     def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -81,11 +82,13 @@
+     mad r3.xyz, v0, -r0.z, c15
+     add r3.xyz, -r3, c66
+     nrm r4.xyz, r1
++    mov r12.xyz, r4 // FusionFix GGX lights: the view ray
+     dp3 r0.z, r4, r2
+     add r0.z, r0.z, r0.z
+     mad r1.xyz, r2, -r0.z, r4
+     add r4.xyz, r3, c2.y
+     dp3 r0.z, r3, r3
++    mov r12.w, r0.z // FusionFix GGX lights: the distance to the light squared
+     mov r3.z, c2.z
+     mad_sat r0.z, r0.z, -c73.x, r3.z
+     mul r0.z, r0.z, r0.z
+@@ -102,6 +105,50 @@
+     mul r0.x, r1.y, r1.y
+     mul r0.x, r0.x, c0.y
+     pow r1.y, r0.w, r0.x
++    // --- FusionFix GGX lights (c200: LightsGGX in postfx.ixx): the game's highlight is pow(R.L, n) with no
++    // --- N.L and the same peak at every gloss; a GGX lobe has a long soft tail round a bright core, its
++    // --- energy follows the gloss, and it widens by the light's size over its distance. c200.x is the
++    // --- strength (0 keeps the game's highlight), y the Fresnel rise at grazing angles, z the light's
++    // --- size squared, w the reflectance head on. r12.xyz is the view ray, r12.w the distance squared.
++    add r13.xyz, r3, -r12
++    nrm r14.xyz, r13 // half vector
++    dp3_sat r15.x, r2, r14 // N.H
++    dp3_sat r15.y, r2, -r12 // N.V
++    dp3_sat r15.z, r2, r3 // N.L
++    dp3_sat r15.w, r3, r14 // L.H
++    add r16.x, r0.x, c163.y
++    rcp r16.x, r16.x
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2), the GGX lobe as wide as the game's
++    add r16.y, r12.w, c163.z
++    rcp r16.y, r16.y
++    mad_sat r16.x, c200.z, r16.y, r16.x // a sphere light widens it by its size over its distance
++    mul r16.z, r15.x, r15.x
++    mad r16.w, r16.x, r16.z, -r16.z
++    add r16.w, r16.w, c163.x
++    mul r16.w, r16.w, r16.w
++    rcp r16.w, r16.w
++    mul r13.w, r16.x, r16.w // pi times the distribution
++    rsq r16.y, r16.x
++    rcp r16.y, r16.y // alpha
++    add r17.x, r15.z, r15.y
++    mul r17.y, r15.z, r15.y
++    add r17.y, r17.y, r17.y
++    lrp r18.x, r16.y, r17.x, r17.y // height correlated Smith, approximated: 0.5 / this is the visibility
++    add r18.x, r18.x, c163.z
++    rcp r18.x, r18.x
++    mul r13.w, r13.w, r18.x
++    mul r13.w, r13.w, r15.z
++    add r17.x, c163.x, -r15.w
++    mul r17.y, r17.x, r17.x
++    mul r17.y, r17.y, r17.y
++    mul r17.x, r17.x, r17.y // Schlick's (1 - L.H)^5
++    mul_sat r17.x, r17.x, c200.y
++    mov r17.y, c200.w
++    lrp r18.y, r17.x, c163.x, r17.y // Fresnel
++    mul r13.w, r13.w, r18.y
++    mul r13.w, r13.w, c200.x
++    min r13.w, r13.w, c163.w
++    cmp r1.y, -c200.x, r1.y, r13.w
+     mul r0.x, r0.z, c3.x
+     dp3 r0.y, r3, -c72
+     dp3_sat r0.w, r3, r2
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+index ffaab0be..974635eb 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -53,6 +53,7 @@
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+     def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -85,11 +86,13 @@
+     mad r3.xyz, v0, -r0.z, c15
+     add r3.xyz, -r3, c66
+     nrm r4.xyz, r1
++    mov r12.xyz, r4 // FusionFix GGX lights: the view ray
+     dp3 r0.z, r4, r2
+     add r0.z, r0.z, r0.z
+     mad r1.xyz, r2, -r0.z, r4
+     add r4.xyz, r3, c3.z
+     dp3 r0.z, r3, r3
++    mov r12.w, r0.z // FusionFix GGX lights: the distance to the light squared
+     mov r3.x, c3.x
+     mad_sat r0.z, r0.z, -c73.x, r3.x
+     mul r0.z, r0.z, r0.z
+@@ -101,6 +104,50 @@
+     add r1.x, r1.x, r1.x
+     mul r1.y, r1.y, c0.y
+     pow r2.w, r0.w, r1.y
++    // --- FusionFix GGX lights (c200: LightsGGX in postfx.ixx): the game's highlight is pow(R.L, n) with no
++    // --- N.L and the same peak at every gloss; a GGX lobe has a long soft tail round a bright core, its
++    // --- energy follows the gloss, and it widens by the light's size over its distance. c200.x is the
++    // --- strength (0 keeps the game's highlight), y the Fresnel rise at grazing angles, z the light's
++    // --- size squared, w the reflectance head on. r12.xyz is the view ray, r12.w the distance squared.
++    add r13.xyz, r3, -r12
++    nrm r14.xyz, r13 // half vector
++    dp3_sat r15.x, r2, r14 // N.H
++    dp3_sat r15.y, r2, -r12 // N.V
++    dp3_sat r15.z, r2, r3 // N.L
++    dp3_sat r15.w, r3, r14 // L.H
++    add r16.x, r1.y, c163.y
++    rcp r16.x, r16.x
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2), the GGX lobe as wide as the game's
++    add r16.y, r12.w, c163.z
++    rcp r16.y, r16.y
++    mad_sat r16.x, c200.z, r16.y, r16.x // a sphere light widens it by its size over its distance
++    mul r16.z, r15.x, r15.x
++    mad r16.w, r16.x, r16.z, -r16.z
++    add r16.w, r16.w, c163.x
++    mul r16.w, r16.w, r16.w
++    rcp r16.w, r16.w
++    mul r13.w, r16.x, r16.w // pi times the distribution
++    rsq r16.y, r16.x
++    rcp r16.y, r16.y // alpha
++    add r17.x, r15.z, r15.y
++    mul r17.y, r15.z, r15.y
++    add r17.y, r17.y, r17.y
++    lrp r18.x, r16.y, r17.x, r17.y // height correlated Smith, approximated: 0.5 / this is the visibility
++    add r18.x, r18.x, c163.z
++    rcp r18.x, r18.x
++    mul r13.w, r13.w, r18.x
++    mul r13.w, r13.w, r15.z
++    add r17.x, c163.x, -r15.w
++    mul r17.y, r17.x, r17.x
++    mul r17.y, r17.y, r17.y
++    mul r17.x, r17.x, r17.y // Schlick's (1 - L.H)^5
++    mul_sat r17.x, r17.x, c200.y
++    mov r17.y, c200.w
++    lrp r18.y, r17.x, c163.x, r17.y // Fresnel
++    mul r13.w, r13.w, r18.y
++    mul r13.w, r13.w, c200.x
++    min r13.w, r13.w, c163.w
++    cmp r2.w, -c200.x, r2.w, r13.w
+     mul r0.w, r0.z, c4.x
+     dp3 r1.y, r3, -c72
+     dp3_sat r1.z, r3, r2
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+index b7a116d3..b475d81b 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -53,6 +53,7 @@
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+     def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -85,11 +86,13 @@
+     mad r3.xyz, v0, -r0.z, c15
+     add r3.xyz, -r3, c66
+     nrm r4.xyz, r1
++    mov r12.xyz, r4 // FusionFix GGX lights: the view ray
+     dp3 r0.z, r4, r2
+     add r0.z, r0.z, r0.z
+     mad r1.xyz, r2, -r0.z, r4
+     add r4.xyz, r3, c0.w
+     dp3 r0.z, r3, r3
++    mov r12.w, r0.z // FusionFix GGX lights: the distance to the light squared
+     mov r3.y, c0.y
+     mad_sat r0.z, r0.z, -c73.x, r3.y
+     mul r0.z, r0.z, r0.z
+@@ -100,6 +103,50 @@
+     mul r1.y, r1.y, r1.y
+     mul r1.y, r1.y, c1.y
+     pow r2.w, r0.w, r1.y
++    // --- FusionFix GGX lights (c200: LightsGGX in postfx.ixx): the game's highlight is pow(R.L, n) with no
++    // --- N.L and the same peak at every gloss; a GGX lobe has a long soft tail round a bright core, its
++    // --- energy follows the gloss, and it widens by the light's size over its distance. c200.x is the
++    // --- strength (0 keeps the game's highlight), y the Fresnel rise at grazing angles, z the light's
++    // --- size squared, w the reflectance head on. r12.xyz is the view ray, r12.w the distance squared.
++    add r13.xyz, r3, -r12
++    nrm r14.xyz, r13 // half vector
++    dp3_sat r15.x, r2, r14 // N.H
++    dp3_sat r15.y, r2, -r12 // N.V
++    dp3_sat r15.z, r2, r3 // N.L
++    dp3_sat r15.w, r3, r14 // L.H
++    add r16.x, r1.y, c163.y
++    rcp r16.x, r16.x
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2), the GGX lobe as wide as the game's
++    add r16.y, r12.w, c163.z
++    rcp r16.y, r16.y
++    mad_sat r16.x, c200.z, r16.y, r16.x // a sphere light widens it by its size over its distance
++    mul r16.z, r15.x, r15.x
++    mad r16.w, r16.x, r16.z, -r16.z
++    add r16.w, r16.w, c163.x
++    mul r16.w, r16.w, r16.w
++    rcp r16.w, r16.w
++    mul r13.w, r16.x, r16.w // pi times the distribution
++    rsq r16.y, r16.x
++    rcp r16.y, r16.y // alpha
++    add r17.x, r15.z, r15.y
++    mul r17.y, r15.z, r15.y
++    add r17.y, r17.y, r17.y
++    lrp r18.x, r16.y, r17.x, r17.y // height correlated Smith, approximated: 0.5 / this is the visibility
++    add r18.x, r18.x, c163.z
++    rcp r18.x, r18.x
++    mul r13.w, r13.w, r18.x
++    mul r13.w, r13.w, r15.z
++    add r17.x, c163.x, -r15.w
++    mul r17.y, r17.x, r17.x
++    mul r17.y, r17.y, r17.y
++    mul r17.x, r17.x, r17.y // Schlick's (1 - L.H)^5
++    mul_sat r17.x, r17.x, c200.y
++    mov r17.y, c200.w
++    lrp r18.y, r17.x, c163.x, r17.y // Fresnel
++    mul r13.w, r13.w, r18.y
++    mul r13.w, r13.w, c200.x
++    min r13.w, r13.w, c163.w
++    cmp r2.w, -c200.x, r2.w, r13.w
+     mul r0.w, r0.z, c4.y
+     dp3 r1.y, r3, -c72
+     dp3_sat r1.w, r3, r2
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+index b32e9e9b..bf7352aa 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -53,6 +53,7 @@
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+     def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
++    def c163, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -85,11 +86,13 @@
+     mad r3.xyz, v0, -r0.z, c15
+     add r3.xyz, -r3, c66
+     nrm r4.xyz, r1
++    mov r12.xyz, r4 // FusionFix GGX lights: the view ray
+     dp3 r0.z, r4, r2
+     add r0.z, r0.z, r0.z
+     mad r1.xyz, r2, -r0.z, r4
+     add r4.xyz, r3, c4.x
+     dp3 r0.z, r3, r3
++    mov r12.w, r0.z // FusionFix GGX lights: the distance to the light squared
+     mov r3.z, c3.z
+     mad_sat r0.z, r0.z, -c73.x, -r3.z
+     mul r0.z, r0.z, r0.z
+@@ -101,6 +104,50 @@
+     add r1.x, r1.x, r1.x
+     mul r1.y, r1.y, c0.y
+     pow r2.w, r0.w, r1.y
++    // --- FusionFix GGX lights (c200: LightsGGX in postfx.ixx): the game's highlight is pow(R.L, n) with no
++    // --- N.L and the same peak at every gloss; a GGX lobe has a long soft tail round a bright core, its
++    // --- energy follows the gloss, and it widens by the light's size over its distance. c200.x is the
++    // --- strength (0 keeps the game's highlight), y the Fresnel rise at grazing angles, z the light's
++    // --- size squared, w the reflectance head on. r12.xyz is the view ray, r12.w the distance squared.
++    add r13.xyz, r3, -r12
++    nrm r14.xyz, r13 // half vector
++    dp3_sat r15.x, r2, r14 // N.H
++    dp3_sat r15.y, r2, -r12 // N.V
++    dp3_sat r15.z, r2, r3 // N.L
++    dp3_sat r15.w, r3, r14 // L.H
++    add r16.x, r1.y, c163.y
++    rcp r16.x, r16.x
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2), the GGX lobe as wide as the game's
++    add r16.y, r12.w, c163.z
++    rcp r16.y, r16.y
++    mad_sat r16.x, c200.z, r16.y, r16.x // a sphere light widens it by its size over its distance
++    mul r16.z, r15.x, r15.x
++    mad r16.w, r16.x, r16.z, -r16.z
++    add r16.w, r16.w, c163.x
++    mul r16.w, r16.w, r16.w
++    rcp r16.w, r16.w
++    mul r13.w, r16.x, r16.w // pi times the distribution
++    rsq r16.y, r16.x
++    rcp r16.y, r16.y // alpha
++    add r17.x, r15.z, r15.y
++    mul r17.y, r15.z, r15.y
++    add r17.y, r17.y, r17.y
++    lrp r18.x, r16.y, r17.x, r17.y // height correlated Smith, approximated: 0.5 / this is the visibility
++    add r18.x, r18.x, c163.z
++    rcp r18.x, r18.x
++    mul r13.w, r13.w, r18.x
++    mul r13.w, r13.w, r15.z
++    add r17.x, c163.x, -r15.w
++    mul r17.y, r17.x, r17.x
++    mul r17.y, r17.y, r17.y
++    mul r17.x, r17.x, r17.y // Schlick's (1 - L.H)^5
++    mul_sat r17.x, r17.x, c200.y
++    mov r17.y, c200.w
++    lrp r18.y, r17.x, c163.x, r17.y // Fresnel
++    mul r13.w, r13.w, r18.y
++    mul r13.w, r13.w, c200.x
++    min r13.w, r13.w, c163.w
++    cmp r2.w, -c200.x, r2.w, r13.w
+     mul r0.w, r0.z, c4.y
+     dp3 r1.y, r3, -c72
+     dp3_sat r1.z, r3, r2
