@@ -50,6 +50,7 @@ namespace
         constexpr int32_t NoPresent = 1;        // the copies around it, without the Present
         constexpr int32_t NoCopies = 2;         // the Present of whatever the back buffer holds, without the copies
         constexpr int32_t EndOfFrame = 4;       // never within a frame: the waiting frame goes when the next one ends
+        constexpr int32_t Brightness = 8;       // reads every finished frame back and counts the dark ones
     }
     int32_t nDebug = 0;
 
@@ -139,9 +140,68 @@ namespace
         }
     } Stats;
 
+    // Debug::Brightness: each finished frame, as the game left it, is read back at 8x8 and compared with the frames
+    // before it. Frames that had the rendered frame presented within them are counted apart.
+    IDirect3DSurface9* ProbeRT = nullptr;
+    IDirect3DSurface9* ProbeMemory = nullptr;
+    bool bPresentedWithin = false;
+
+    struct BrightnessStats
+    {
+        uint32_t frames = 0, dark = 0, within = 0, darkWithin = 0;
+        double average = 0.0;
+    } Brightness;
+
+    void ProbeBrightness(IDirect3DDevice9* device)
+    {
+        bool within = bPresentedWithin;
+        bPresentedWithin = false;
+        if (!ProbeRT && FAILED(device->CreateRenderTarget(8, 8, D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &ProbeRT, nullptr)))
+            return;
+        if (!ProbeMemory && FAILED(device->CreateOffscreenPlainSurface(8, 8, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &ProbeMemory, nullptr)))
+            return;
+
+        IDirect3DSurface9* backBuffer = nullptr;
+        if (FAILED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) || !backBuffer)
+            return;
+        bool read = SUCCEEDED(device->StretchRect(backBuffer, nullptr, ProbeRT, nullptr, D3DTEXF_LINEAR)) &&
+            SUCCEEDED(device->GetRenderTargetData(ProbeRT, ProbeMemory));
+        backBuffer->Release();
+
+        D3DLOCKED_RECT locked{};
+        if (!read || FAILED(ProbeMemory->LockRect(&locked, nullptr, D3DLOCK_READONLY)))
+            return;
+        double sum = 0.0;
+        for (int y = 0; y < 8; ++y)
+        {
+            auto row = reinterpret_cast<const uint8_t*>(locked.pBits) + y * locked.Pitch;
+            for (int x = 0; x < 8; ++x)
+                sum += row[x * 4] + row[x * 4 + 1] + row[x * 4 + 2];
+        }
+        ProbeMemory->UnlockRect();
+        auto value = sum / (64.0 * 3.0);
+
+        auto& b = Brightness;
+        bool dark = b.average > 8.0 && value < b.average * 0.25;
+        b.average = b.average > 0.0 ? b.average + (value - b.average) * 0.05 : value;
+        ++b.frames;
+        b.dark += dark;
+        b.within += within;
+        b.darkWithin += dark && within;
+        if (b.frames < 300)
+            return;
+        Log("Brightness over %u frames: average %.1f, %u dark; %u had the rendered frame presented within them, %u of those dark",
+            b.frames, b.average, b.dark, b.within, b.darkWithin);
+        auto average = b.average;
+        b = {};
+        b.average = average;
+    }
+
     void ReleaseTargets()
     {
         bPending = false;
+        SAFE_RELEASE(ProbeRT);
+        SAFE_RELEASE(ProbeMemory);
         for (auto rt : { &PresentRT, &GeneratedRT, &HudLessRT, &SavedRT })
         {
             if (*rt)
@@ -253,6 +313,7 @@ namespace
             SAFE_RELEASE(depth);
 
             Stats.Add(Ms(GeneratedAt, presentedAt), Ms(GeneratedAt, PendingDue), late);
+            bPresentedWithin = !late;
         }
         else
         {
@@ -345,6 +406,9 @@ namespace
                 FrameMs = FrameMs > 0.0 ? FrameMs + (frame - FrameMs) * 0.1 : frame;
         }
         LastFrameEnd = now;
+
+        if (nDebug & Debug::Brightness)
+            ProbeBrightness(device);
 
         // This frame ended before the last one went: it goes first
         if (bPending)
