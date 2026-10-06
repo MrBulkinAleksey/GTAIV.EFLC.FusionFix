@@ -35,6 +35,12 @@ namespace HDRBrightness
     constexpr float PaperWhiteDefault = 200.0f;   // close to 203, the BT.2408 reference white
 }
 
+export namespace HDROutput
+{
+    // Marks the HDR output's pass for the PostFx profiler (begin, then end), when it is set.
+    inline void (*ProfileOutput)(IDirect3DDevice9* device, bool begin) = nullptr;
+}
+
 class HDR
 {
 public:
@@ -291,6 +297,15 @@ public:
         auto device = rage::grcDevice::GetD3DDevice();
         if (!device)
             return;
+        if (HDROutput::ProfileOutput)
+            HDROutput::ProfileOutput(device, true);
+        RenderOutputPass(device);
+        if (HDROutput::ProfileOutput)
+            HDROutput::ProfileOutput(device, false);
+    }
+
+    static void RenderOutputPass(IDirect3DDevice9* device)
+    {
 
         IDirect3DSurface9* backBuffer = nullptr;
         if (FAILED(device->GetRenderTarget(0, &backBuffer)) || !backBuffer)

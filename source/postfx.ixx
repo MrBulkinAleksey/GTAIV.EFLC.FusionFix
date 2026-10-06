@@ -2931,6 +2931,8 @@ private:
 
         OnDeviceReset();
 
+        TemporalAA::ProfileMotion = [](IDirect3DDevice9* device, bool begin) { ProfilerMark(device, kProfMotion, begin); };
+        HDROutput::ProfileOutput = [](IDirect3DDevice9* device, bool begin) { ProfilerMark(device, kProfHDROutput, begin); };
         TemporalAA::OnGBufferEnd = [](IDirect3DDevice9* device)
         {
             CopySceneDepth(device);
@@ -3149,6 +3151,7 @@ private:
         RefreshGBufferTargets();
         if (!pDevice || !R.SceneDepthSurf || !R.Blit_PS || !R.mDepthRT || !R.mDepthRT->mD3DTexture)
             return;
+        ProfilerScope timed(pDevice, kProfDepthCopy);
         pDevice->SetRenderTarget(0, R.SceneDepthSurf);
         for (DWORD i = 1; i < 4; ++i)
             pDevice->SetRenderTarget(i, nullptr);
@@ -4136,7 +4139,9 @@ private:
     // can be entered more than once a frame, as the water is, and its times add up. The GGX
     // highlights, the sky reflection's BRDF and the rain's rings on the water are a few
     // instructions more in the game's own lighting and water shaders: they show in the lighting
-    // phase's "other" and in the water's time, not as sections of their own.
+    // phase's lamps, sun and water, not as sections of their own. The lighting phase's game part is
+    // split by where the game is (SetLightingStage): its sun and ambient once FusionFix's passes are
+    // done, its lamps from the first light of the light loop, its shafts from the shaft loop.
     // A frame runs from one post processing to the next. Off, no query is made.
     enum ProfilerSection
     {
@@ -4145,8 +4150,11 @@ private:
             kProfSSR, kProfSSRTrace, kProfSSRFill, kProfSSRResolve, kProfSSRDenoise, kProfSSRTemporal, kProfSSRDebug,
             kProfContact, kProfContactMarch, kProfContactUpsample, kProfContactDenoise, kProfContactTemporal,
             kProfGI, kProfGIMarch, kProfGIDenoise, kProfGITemporal, kProfGIUpsample,
+            kProfLightSun, kProfLightLocal, kProfLightShafts,
+        kProfDepthCopy,
+        kProfMotion,
         kProfWetGround, kProfWetGroundCopies, kProfWetGroundPass,
-        kProfWater,
+        kProfWaterAll, kProfWaterGame, kProfWater,
         kProfCloudReflection, kProfCloudReflectionMap, kProfCloudReflectionWater,
         kProfFogPass,
             kProfClouds, kProfCloudsSkyRef, kProfCloudsMarch, kProfCloudsLight, kProfCloudsResolve, kProfCloudsComposite,
@@ -4155,6 +4163,7 @@ private:
         kProfResolve,
         kProfPost,
             kProfPostTAA, kProfPostStipple, kProfPostDOF, kProfPostSunShafts, kProfPostGame, kProfPostAA, kProfPostSharpen,
+        kProfHDROutput,
         kProfSections
     };
     struct ProfilerSectionInfo { const char* name; int parent; };
@@ -4169,8 +4178,12 @@ private:
             { "smoothing", kProfContact }, { "accumulation", kProfContact },
             { "indirect light", kProfLighting }, { "march", kProfGI }, { "smoothing", kProfGI },
             { "accumulation", kProfGI }, { "upsample", kProfGI },
+            { "the game's sun and ambient", kProfLighting }, { "the game's lamps and headlights", kProfLighting },
+            { "the game's light shafts", kProfLighting },
+        { "depth copy at the G-buffer's end", -1 },
+        { "motion vectors (temporal AA, upscaling)", -1 },
         { "wet ground", -1 }, { "copies of the G-buffer", kProfWetGround }, { "wet pass", kProfWetGround },
-        { "water SSR", -1 },
+        { "water", -1 }, { "the game's water", kProfWaterAll }, { "SSR on the water", kProfWaterAll },
         { "clouds in reflections", -1 }, { "the reflection map", kProfCloudReflection }, { "the water's reflection", kProfCloudReflection },
         { "fog pass", -1 },
             { "volumetric clouds", kProfFogPass }, { "sky brightness", kProfClouds }, { "march", kProfClouds },
@@ -4183,6 +4196,7 @@ private:
             { "temporal AA", kProfPost }, { "stipple filter", kProfPost }, { "depth of field", kProfPost },
             { "sun shafts", kProfPost }, { "the game's post processing", kProfPost }, { "FXAA / SMAA", kProfPost },
             { "sharpening", kProfPost },
+        { "HDR output", -1 },
     };
     static_assert(std::size(kProfilerSectionInfo) == kProfSections);
     static constexpr int kProfilerFrames = 4;
@@ -4362,6 +4376,22 @@ private:
             return;
         q->Issue(D3DISSUE_END);
         f.marks[f.count++] = { section, begin };
+    }
+
+    // Which part of the game's lighting is being drawn, for the profiler: 0 none, 1 the sun and
+    // ambient, 2 the lamps, 3 the light shafts. It only moves on, so a part the game skips leaves
+    // the one before running, and 0 closes whatever is open.
+    static inline int nLightingStage = 0;
+    static void SetLightingStage(IDirect3DDevice9* pDevice, int stage)
+    {
+        static constexpr int kSections[] = { -1, kProfLightSun, kProfLightLocal, kProfLightShafts };
+        if (stage != 0 && stage <= nLightingStage)
+            return;
+        if (nLightingStage > 0)
+            ProfilerMark(pDevice, kSections[nLightingStage], false);
+        nLightingStage = stage;
+        if (stage > 0)
+            ProfilerMark(pDevice, kSections[stage], true);
     }
 
     // Times what runs from here to the end of the scope; a section below 0 times nothing.
@@ -5905,6 +5935,8 @@ private:
     {
         auto& R = PostFxResources;
         SetWaterRainRings();
+        auto pProfileDevice = rage::grcDevice::GetD3DDevice();
+        ProfilerScope timedWater(pProfileDevice, kProfWaterAll);
         // The game renders water for other views too, into targets of other sizes: each call
         // took two full screen copies and a full screen pass, and a target of another size
         // had both mask copies released and created again, even with no water on screen.
@@ -5912,7 +5944,9 @@ private:
         const bool mainScene = R.SSREnabled() && R.SSREffect && R.fSSRWaterIntensity > 0.0f &&
                                !R.bWaterDoneThisFrame && RenderTargetIsScreenSized();
         R.bWaterMaskCaptured = mainScene && CopyRenderTargetToWaterMask(0);
+        ProfilerMark(pProfileDevice, kProfWaterGame, true);
         shWaterRender.unsafe_ccall<void>(a1);
+        ProfilerMark(pProfileDevice, kProfWaterGame, false);
         if (mainScene)
         {
             auto pDevice = rage::grcDevice::GetD3DDevice();
@@ -6623,7 +6657,10 @@ private:
         ProfilerMark(pDevice, kProfGI, false);
         // deferred_lighting draws after this; BindSSRTexture bound last frame's results.
         if (pDevice)
+        {
             BindLightingInputs(pDevice);
+            SetLightingStage(pDevice, 1);
+        }
 
         return result;
     }
@@ -7304,6 +7341,8 @@ private:
             auto& R = PostFxResources;
             if (!R.bLocalContactPass)
                 return;
+            if (nLightingStage == 1)
+                SetLightingStage(rage::grcDevice::GetD3DDevice(), 2);
             SetLightGGXShape(*reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28));
             if (R.LocalContactShadowConsts[7] == 0.0f)
                 return;
@@ -7316,6 +7355,21 @@ private:
                 return;
             const float none[4] = {};
             pDevice->SetPixelShaderConstantF(203, off ? none : &R.LocalContactShadowConsts[4], 1);
+        });
+    }
+
+    // The start of the game's light shaft loop (CE 0xac29cd, the shaft count read), for the profiler.
+    static inline SafetyHookMid shShaftLoopStart{};
+
+    static void InstallShaftLoopProfiler()
+    {
+        auto pattern = hook::pattern("8B 35 ? ? ? ? 89 74 24 38 E8 ? ? ? ? 50 E8 ? ? ? ? 83 C4 08 80 7D 08 00 74 0E FF 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 85 F6 0F 8E");
+        if (pattern.empty())
+            return;
+        shShaftLoopStart = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&)
+        {
+            if (nLightingStage > 0)
+                SetLightingStage(rage::grcDevice::GetD3DDevice(), 3);
         });
     }
 
@@ -7688,6 +7742,7 @@ public:
     {
         if (auto pDevice = rage::grcDevice::GetD3DDevice())
         {
+            nLightingStage = 0; // a frame that never closed its lighting leaves nothing open here
             ProfilerMark(pDevice, kProfLighting, true);
             BindLightingInputs(pDevice);
         }
@@ -7712,6 +7767,7 @@ public:
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
+        SetLightingStage(pDevice, 0);
         ProfilerMark(pDevice, kProfLighting, false);
 
         if (R.bContactBound)
@@ -7845,6 +7901,7 @@ public:
                     CRenderPhaseDeferredLighting_LightsToScreen::OnAfterCopyLight() += OnAfterCopyLight;
                     InstallShaftHooks();
                     InstallLocalContactLightHook();
+                    InstallShaftLoopProfiler();
                     InstallPedSkinHooks();
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
