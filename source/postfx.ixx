@@ -2937,6 +2937,15 @@ private:
                 R.fWetness = R.fWetGroundDrying > 0.0f ? (std::max)(rain, R.fWetness - float(dt) / R.fWetGroundDrying) : rain;
         }
 
+        // The rain's rings on open water (water_rain_rings.patch, c178): x their strength while it rains,
+        // y the clock, zw their fade from 17.5 to 25 m. Water is drawn after this, every frame.
+        if (pDevice)
+        {
+            const float rings = R.fWetGround > 0.0f ? rain * R.fWetGroundRipples : 0.0f;
+            const float c178[4] = { rings, float(std::fmod(seconds, 1000.0)), -1.0f / 7.5f, 25.0f / 7.5f };
+            pDevice->SetPixelShaderConstantF(178, c178, 1);
+        }
+
         if (R.fWetGround <= 0.0f)
             return skip("off in the ini");
         if (!R.WetGroundEffect)
