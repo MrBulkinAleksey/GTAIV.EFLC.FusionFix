@@ -327,7 +327,7 @@ public:
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff, fWetness, fWetGroundBoost;
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
-        D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY;
+        D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY, vec4WaterRings;
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
@@ -1274,6 +1274,7 @@ public:
                 h.fWaterIntensity = SSREffect->GetParameterByName(nullptr, "fWaterIntensity");
                 h.fWaterBlur = SSREffect->GetParameterByName(nullptr, "fWaterBlur");
                 h.fWaterNormalStrength = SSREffect->GetParameterByName(nullptr, "fWaterNormalStrength");
+                h.vec4WaterRings = SSREffect->GetParameterByName(nullptr, "vec4WaterRings");
                 h.vec4WaterToView = SSREffect->GetParameterByName(nullptr, "vec4WaterToView");
                 h.vec4WaterWorldX = SSREffect->GetParameterByName(nullptr, "vec4WaterWorldX");
                 h.vec4WaterWorldY = SSREffect->GetParameterByName(nullptr, "vec4WaterWorldY");
@@ -5597,6 +5598,13 @@ private:
 
         effect->SetTexture(h.SurfaceTex2D, oldTextures[0]);
         effect->SetFloat(h.fWaterNormalStrength, oldTextures[0] ? R.fSSRWaterNormalStrength : 0.0f);
+        // The rain's rings, as the game's water shader takes them (WaterRainRings): its reflection is
+        // drawn over by this one, which hid them.
+        {
+            const auto rings = WaterRainRings();
+            const D3DXVECTOR4 v(oldTextures[0] ? rings[0] : 0.0f, rings[1], rings[2], rings[3]);
+            effect->SetVector(h.vec4WaterRings, &v);
+        }
 
         pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
         pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
@@ -5712,21 +5720,26 @@ private:
     // alone at the end of the G-buffer pass, the water never saw them. x their strength while it
     // rains (WetGroundDebug 2: full, rain or not), y the clock, zw their fade from 25 to 40 m: the
     // water is mostly seen from a quay, further off than puddles.
-    static void SetWaterRainRings()
+    static std::array<float, 4> WaterRainRings()
     {
         auto& R = PostFxResources;
-        auto pDevice = rage::grcDevice::GetD3DDevice();
-        if (!pDevice)
-            return;
         const double seconds = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds * 0.001 : 0.0;
         const float rain = CWeather::Rain ? std::clamp(*CWeather::Rain / 0.7f, 0.0f, 1.0f) : 0.0f;
         float rings = R.fWetGround > 0.0f ? rain * R.fWetGroundRipples : 0.0f;
         if (R.nWetGroundDebug == 2)
             rings = (std::max)(R.fWetGroundRipples, 1.0f);
-        const float c178[4] = { rings, float(std::fmod(seconds, 1000.0)), -1.0f / 15.0f, 40.0f / 15.0f };
-        pDevice->SetPixelShaderConstantF(178, c178, 1);
+        return { rings, float(std::fmod(seconds, 1000.0)), -1.0f / 15.0f, 40.0f / 15.0f };
+    }
+
+    static void SetWaterRainRings()
+    {
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+        const auto c178 = WaterRainRings();
+        pDevice->SetPixelShaderConstantF(178, c178.data(), 1);
         if (auto real = RealDevice(pDevice); real != pDevice)
-            real->SetPixelShaderConstantF(178, c178, 1);
+            real->SetPixelShaderConstantF(178, c178.data(), 1);
     }
 
     static void __cdecl WaterRenderHook(int a1)
