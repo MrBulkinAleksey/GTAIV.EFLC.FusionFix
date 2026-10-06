@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-index 7a8a6fe0..e90b7add 100644
+index 7a8a6fe0..b97d3034 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 @@ -104,6 +104,13 @@
@@ -12,11 +12,11 @@ index 7a8a6fe0..e90b7add 100644
 +    def c177, 2, 512, 5, 4 // FusionFix GGX lights: the gloss scale, the mip per roughness, the last mip
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
-+    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing
++    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
-@@ -587,6 +594,70 @@
+@@ -587,6 +594,16 @@
        mul_sat r3.w, r3.w, c72.x
        mad r5.w, r3.w, -c5.x, c5.x
        pow r3.w, r2.w, r4.y
@@ -24,70 +24,16 @@ index 7a8a6fe0..e90b7add 100644
 +      // --- same lobe as the lamps', from a light at a great distance.
 +      mov r12.xyz, r3
 +      mov r12.w, c172.w
-+      add r13.xyz, -c17, -r12
-+      nrm r14.xyz, r13 // half vector
-+      dp3_sat r15.x, r2, r14 // N.H
-+      dp3_sat r15.y, r2, -r12 // N.V
-+      dp3_sat r15.z, r2, -c17 // N.L
-+      dp3_sat r15.w, -c17, r14 // L.H
-+      add r16.x, r4.y, c171.y
-+      rcp r16.x, r16.x
-+      add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
-+      add r16.y, r12.w, c171.z
-+      rcp r16.y, r16.y // 1 / distance squared
-+      mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
-+      dp3 r16.z, r2, -c17
-+      mad r13.xyz, r2, -r16.z, -c17
-+      add r13.xyz, r13, c173
-+      dp3 r16.z, r2, r13
-+      mad r13.xyz, r2, -r16.z, r13 // flat on the surface again
-+      nrm r17.xyz, r13 // X, the light projected onto the surface
-+      crs r18.xyz, r2, r17 // Y
-+      dp3 r13.x, r17, c206
-+      dp3 r13.y, r18, c206
-+      mul r13.xy, r13, r13
-+      mul r13.xy, r13, c206.w
-+      mad r13.xy, r13, r16.y, r16.x // alpha squared along X and Y, with the headlights' spacing
-+      mul r13.x, r13.x, c200.w // stretched towards the light
-+      min r13.xy, r13, c171.x
-+      dp3 r16.z, r14, r17
-+      dp3 r16.w, r14, r18
-+      mul r16.zw, r16, r16
-+      rcp r17.x, r13.x
-+      rcp r17.y, r13.y
-+      mul r16.z, r16.z, r17.x
-+      mad r16.z, r16.w, r17.y, r16.z
-+      mad r16.z, r15.x, r15.x, r16.z
-+      mul r16.z, r16.z, r16.z
-+      rcp r16.z, r16.z
-+      mul r16.w, r13.x, r13.y
-+      rsq r16.w, r16.w
-+      mul r13.w, r16.z, r16.w // pi times the distribution
-+      rsq r16.y, r16.w // alpha, the mean of both
-+      add r17.x, r15.z, r15.y
-+      mul r17.y, r15.z, r15.y
-+      add r17.y, r17.y, r17.y
-+      lrp r18.x, r16.y, r17.x, r17.y // 0.5 / this is the visibility
-+      add r18.x, r18.x, c171.z
-+      rcp r18.x, r18.x
-+      mul r13.w, r13.w, r18.x
-+      mul r13.w, r13.w, r15.z
-+      add r17.x, c171.x, -r15.w
-+      mul r17.y, r17.x, r17.x
-+      mul r17.y, r17.y, r17.y
-+      mul r17.x, r17.x, r17.y // (1 - L.H)^5
-+      mul_sat r17.x, r17.x, c200.y
-+      mov r17.y, c172.x
-+      lrp r18.y, r17.x, c171.x, r17.y // Fresnel
-+      mul r13.w, r13.w, r18.y
-+      mul r13.w, r13.w, c200.x
-+      min r13.w, r13.w, c171.w
++      mov r9.xyz, r2
++      mov r9.w, r4.y
++      mov r19.xyz, -c17
++      call l1
 +      mul r13.w, r13.w, c165.y
 +      cmp r3.w, -c165.y, r3.w, r13.w
        mul r6.xyz, c18.w, c18
        mul r7.xyz, r3.w, r6
        mul r7.xyz, r0.y, r7
-@@ -604,6 +675,19 @@
+@@ -604,6 +621,19 @@
        mad r1.yz, r3.xxyw, r0.w, c4.y
        add r5.xy, -r1.yzzw, c2.w
        mov r5.z, c3.y
@@ -107,7 +53,7 @@ index 7a8a6fe0..e90b7add 100644
        texldl r3, r5, s5
        // --- FusionFix SSR: blend the screen-space reflection over the parabolic one.
        mov r10.xy, v0
-@@ -619,6 +703,19 @@
+@@ -619,6 +649,19 @@
        mul r0.xzw, r0.x, r1.yyzw
        mul r0.xzw, r4.z, r0
        mul r0.xzw, r0, c39.w
@@ -127,8 +73,72 @@ index 7a8a6fe0..e90b7add 100644
        mul r0.xzw, r1.x, r0
        mul r0.xzw, r0, c6.x
        add r1.x, c17.w, c17.w
+@@ -735,3 +778,62 @@
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+ 
+ // approximately 167 instruction slots used (18 texture, 149 arithmetic)
++
++    ret
++    // --- FusionFix GGX lights: the lobe (see above)
++    label l1
++    add r13.xyz, r19, -r12
++    nrm r14.xyz, r13 // half vector
++    dp3_sat r15.x, r9, r14 // N.H
++    dp3_sat r15.y, r9, -r12 // N.V
++    dp3_sat r15.z, r9, r19 // N.L
++    dp3_sat r15.w, r19, r14 // L.H
++    add r16.x, r9.w, c171.y
++    rcp r16.x, r16.x
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.y, r12.w, c171.z
++    rcp r16.y, r16.y // 1 / distance squared
++    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
++    dp3 r16.z, r9, r19
++    mad r13.xyz, r9, -r16.z, r19
++    add r13.xyz, r13, c173
++    dp3 r16.z, r9, r13
++    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
++    nrm r17.xyz, r13 // X, the light projected onto the surface
++    crs r18.xyz, r9, r17 // Y
++    mov r13.xy, r16.x
++    mul r13.x, r13.x, c200.w // stretched towards the light
++    min r13.xy, r13, c171.x
++    dp3 r16.z, r14, r17
++    dp3 r16.w, r14, r18
++    mul r16.zw, r16, r16
++    rcp r17.x, r13.x
++    rcp r17.y, r13.y
++    mul r16.z, r16.z, r17.x
++    mad r16.z, r16.w, r17.y, r16.z
++    mad r16.z, r15.x, r15.x, r16.z
++    mul r16.z, r16.z, r16.z
++    rcp r16.z, r16.z
++    mul r16.w, r13.x, r13.y
++    rsq r16.w, r16.w
++    mul r13.w, r16.z, r16.w // pi times the distribution
++    rsq r16.y, r16.w // alpha, the mean of both
++    add r17.x, r15.z, r15.y
++    mul r17.y, r15.z, r15.y
++    add r17.y, r17.y, r17.y
++    lrp r18.x, r16.y, r17.x, r17.y // 0.5 / this is the visibility
++    add r18.x, r18.x, c171.z
++    rcp r18.x, r18.x
++    mul r13.w, r13.w, r18.x
++    mul r13.w, r13.w, r15.z
++    add r17.x, c171.x, -r15.w
++    mul r17.y, r17.x, r17.x
++    mul r17.y, r17.y, r17.y
++    mul r17.x, r17.x, r17.y // (1 - L.H)^5
++    mul_sat r17.x, r17.x, c200.y
++    mov r17.y, c172.x
++    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
++    mul r13.w, r13.w, r18.y
++    mul r13.w, r13.w, c200.x
++    min r13.w, r13.w, c171.w
++    ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index afca255b..5d28d943 100644
+index afca255b..bf80a48d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 @@ -46,6 +46,9 @@
@@ -137,7 +147,7 @@ index afca255b..5d28d943 100644
      def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
-+    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing
++    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
@@ -174,7 +184,7 @@ index afca255b..5d28d943 100644
      dp3 r0.x, r2, r1
      dp3 r0.y, r1, -c72
      add r0.y, r0.y, -c74.x
-@@ -84,12 +94,88 @@
+@@ -84,12 +94,53 @@
      mul_sat r0.x, r0.x, c2.x
      mul r0.w, r0.z, c1.z
      mul r0.y, r0.y, r0.w
@@ -185,74 +195,39 @@ index afca255b..5d28d943 100644
      mul r0.xyw, r3.xyzz, r0
      cmp r26.xyz, r0.z, r0.xyww, c2.y
      mov r26.w, c1.x
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): an anisotropic GGX lobe as wide as the
-+    // --- game's pow(R.L, n), with a height correlated Smith term and Schlick's Fresnel. Along the light
-+    // --- projected onto the surface (X) it is stretched by c200.w, so wet roads streak towards lamps; both
-+    // --- ways it widens by the light's size over its distance (c200.z, size squared), and a headlight's
-+    // --- light, one for both lamps, by their spacing along the car's right (c206.xyz, half spacing squared
-+    // --- in c206.w). c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
++    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
++    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
++    // --- lamps, half the spacing (c206.w) either way along the car's right (c206.xyz), so wet roads show both
++    // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
 +    // --- FusionFix GGX lights on lights the game gives no highlight: c165.x times the GGX one, from the
 +    // --- G-buffer's specular (s13, bound by FusionFix during lighting); the light's falloff and cone in r11.w.
 +    mul r10.y, r10.y, r10.y
 +    mul r10.y, r10.y, c172.y
-+    add r13.xyz, r11, -r12
-+    nrm r14.xyz, r13 // half vector
-+    dp3_sat r15.x, r9, r14 // N.H
-+    dp3_sat r15.y, r9, -r12 // N.V
-+    dp3_sat r15.z, r9, r11 // N.L
-+    dp3_sat r15.w, r11, r14 // L.H
-+    add r16.x, r10.y, c171.y
-+    rcp r16.x, r16.x
-+    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
-+    add r16.y, r12.w, c171.z
-+    rcp r16.y, r16.y // 1 / distance squared
-+    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
-+    dp3 r16.z, r9, r11
-+    mad r13.xyz, r9, -r16.z, r11
-+    add r13.xyz, r13, c173
-+    dp3 r16.z, r9, r13
-+    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
-+    nrm r17.xyz, r13 // X, the light projected onto the surface
-+    crs r18.xyz, r9, r17 // Y
-+    dp3 r13.x, r17, c206
-+    dp3 r13.y, r18, c206
-+    mul r13.xy, r13, r13
-+    mul r13.xy, r13, c206.w
-+    mad r13.xy, r13, r16.y, r16.x // alpha squared along X and Y, with the headlights' spacing
-+    mul r13.x, r13.x, c200.w // stretched towards the light
-+    min r13.xy, r13, c171.x
-+    dp3 r16.z, r14, r17
-+    dp3 r16.w, r14, r18
-+    mul r16.zw, r16, r16
-+    rcp r17.x, r13.x
-+    rcp r17.y, r13.y
-+    mul r16.z, r16.z, r17.x
-+    mad r16.z, r16.w, r17.y, r16.z
-+    mad r16.z, r15.x, r15.x, r16.z
-+    mul r16.z, r16.z, r16.z
-+    rcp r16.z, r16.z
-+    mul r16.w, r13.x, r13.y
-+    rsq r16.w, r16.w
-+    mul r13.w, r16.z, r16.w // pi times the distribution
-+    rsq r16.y, r16.w // alpha, the mean of both
-+    add r17.x, r15.z, r15.y
-+    mul r17.y, r15.z, r15.y
-+    add r17.y, r17.y, r17.y
-+    lrp r18.x, r16.y, r17.x, r17.y // 0.5 / this is the visibility
-+    add r18.x, r18.x, c171.z
-+    rcp r18.x, r18.x
-+    mul r13.w, r13.w, r18.x
-+    mul r13.w, r13.w, r15.z
-+    add r17.x, c171.x, -r15.w
-+    mul r17.y, r17.x, r17.x
-+    mul r17.y, r17.y, r17.y
-+    mul r17.x, r17.x, r17.y // (1 - L.H)^5
-+    mul_sat r17.x, r17.x, c200.y
-+    mov r17.y, c172.x
-+    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
-+    mul r13.w, r13.w, r18.y
-+    mul r13.w, r13.w, c200.x
-+    min r13.w, r13.w, c171.w
++    mov r9.xyz, r9
++    mov r9.w, r10.y
++    mov r13.x, c206.w
++    if_lt c172.z, r13.x // a headlight: both lamps
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r11, r13.y, r14
++      nrm r19.xyz, r15
++      call l1
++      mov r19.w, r13.w
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r11, r13.y, -r14
++      nrm r19.xyz, r15
++      call l1
++      add r13.w, r13.w, r19.w
++      mul r13.w, r13.w, c173.w
++    else
++      mov r19.xyz, r11
++      call l1
++    endif
 +    add r10.x, r10.x, r10.x
 +    mul r13.w, r13.w, r10.x
 +    max r11.w, r11.w, c172.z
@@ -263,8 +238,72 @@ index afca255b..5d28d943 100644
      // --- FusionFix local contact shadows: a short ray from this pixel towards the light
      // --- through the opaque depth catches small occluders, also for lights without a shadow
      // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
+@@ -231,3 +282,62 @@
+     cmp oDepth, -v9_abs.y, r19.y, r19.x
+ 
+ // approximately 36 instruction slots used (3 texture, 33 arithmetic)
++
++    ret
++    // --- FusionFix GGX lights: the lobe (see above)
++    label l1
++    add r13.xyz, r19, -r12
++    nrm r14.xyz, r13 // half vector
++    dp3_sat r15.x, r9, r14 // N.H
++    dp3_sat r15.y, r9, -r12 // N.V
++    dp3_sat r15.z, r9, r19 // N.L
++    dp3_sat r15.w, r19, r14 // L.H
++    add r16.x, r9.w, c171.y
++    rcp r16.x, r16.x
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.y, r12.w, c171.z
++    rcp r16.y, r16.y // 1 / distance squared
++    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
++    dp3 r16.z, r9, r19
++    mad r13.xyz, r9, -r16.z, r19
++    add r13.xyz, r13, c173
++    dp3 r16.z, r9, r13
++    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
++    nrm r17.xyz, r13 // X, the light projected onto the surface
++    crs r18.xyz, r9, r17 // Y
++    mov r13.xy, r16.x
++    mul r13.x, r13.x, c200.w // stretched towards the light
++    min r13.xy, r13, c171.x
++    dp3 r16.z, r14, r17
++    dp3 r16.w, r14, r18
++    mul r16.zw, r16, r16
++    rcp r17.x, r13.x
++    rcp r17.y, r13.y
++    mul r16.z, r16.z, r17.x
++    mad r16.z, r16.w, r17.y, r16.z
++    mad r16.z, r15.x, r15.x, r16.z
++    mul r16.z, r16.z, r16.z
++    rcp r16.z, r16.z
++    mul r16.w, r13.x, r13.y
++    rsq r16.w, r16.w
++    mul r13.w, r16.z, r16.w // pi times the distribution
++    rsq r16.y, r16.w // alpha, the mean of both
++    add r17.x, r15.z, r15.y
++    mul r17.y, r15.z, r15.y
++    add r17.y, r17.y, r17.y
++    lrp r18.x, r16.y, r17.x, r17.y // 0.5 / this is the visibility
++    add r18.x, r18.x, c171.z
++    rcp r18.x, r18.x
++    mul r13.w, r13.w, r18.x
++    mul r13.w, r13.w, r15.z
++    add r17.x, c171.x, -r15.w
++    mul r17.y, r17.x, r17.x
++    mul r17.y, r17.y, r17.y
++    mul r17.x, r17.x, r17.y // (1 - L.H)^5
++    mul_sat r17.x, r17.x, c200.y
++    mov r17.y, c172.x
++    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
++    mul r13.w, r13.w, r18.y
++    mul r13.w, r13.w, c200.x
++    min r13.w, r13.w, c171.w
++    ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index fb737859..fd3a40f3 100644
+index fb737859..e2299414 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 @@ -49,6 +49,9 @@
@@ -273,7 +312,7 @@ index fb737859..fd3a40f3 100644
      def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
-+    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing
++    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
@@ -308,7 +347,7 @@ index fb737859..fd3a40f3 100644
      dp3 r0.w, r3, r1
      dp3 r1.x, r1, -c72
      add r1.x, r1.x, -c74.x
-@@ -87,13 +96,90 @@
+@@ -87,13 +96,55 @@
      mul_sat r0.w, r0.w, c3.y
      mul r1.y, r0.z, c2.w
      mul r1.x, r1.x, r1.y
@@ -321,40 +360,77 @@ index fb737859..fd3a40f3 100644
 +    texld r10, r0, s13
      mul r0.xyw, r1.xyzz, r2.xyzz
      cmp r0.xyz, r0.z, r0.xyww, -c1.z
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): an anisotropic GGX lobe as wide as the
-+    // --- game's pow(R.L, n), with a height correlated Smith term and Schlick's Fresnel. Along the light
-+    // --- projected onto the surface (X) it is stretched by c200.w, so wet roads streak towards lamps; both
-+    // --- ways it widens by the light's size over its distance (c200.z, size squared), and a headlight's
-+    // --- light, one for both lamps, by their spacing along the car's right (c206.xyz, half spacing squared
-+    // --- in c206.w). c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
++    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
++    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
++    // --- lamps, half the spacing (c206.w) either way along the car's right (c206.xyz), so wet roads show both
++    // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
 +    // --- FusionFix GGX lights on lights the game gives no highlight: c165.x times the GGX one, from the
 +    // --- G-buffer's specular (s13, bound by FusionFix during lighting); the light's falloff and cone in r11.w.
 +    mul r10.y, r10.y, r10.y
 +    mul r10.y, r10.y, c172.y
-+    add r13.xyz, r11, -r12
++    mov r9.xyz, r9
++    mov r9.w, r10.y
++    mov r13.x, c206.w
++    if_lt c172.z, r13.x // a headlight: both lamps
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r11, r13.y, r14
++      nrm r19.xyz, r15
++      call l1
++      mov r19.w, r13.w
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r11, r13.y, -r14
++      nrm r19.xyz, r15
++      call l1
++      add r13.w, r13.w, r19.w
++      mul r13.w, r13.w, c173.w
++    else
++      mov r19.xyz, r11
++      call l1
++    endif
++    add r10.x, r10.x, r10.x
++    mul r13.w, r13.w, r10.x
++    max r11.w, r11.w, c172.z
++    mul r13.w, r13.w, r11.w
++    mul r13.w, r13.w, c165.x
++    mul r14.xyz, c76.w, c76
++    mad r0.xyz, r14, r13.w, r0
+     mad r1.x, r3.x, c1.x, c1.y
+     cmp r1.x, r1.x, c1.y, c1.z
+     mad r1.x, r3.x, c0.w, r1.x
+@@ -241,3 +292,62 @@
+     cmp oDepth, -v9_abs.y, r19.y, r19.x
+ 
+ // approximately 42 instruction slots used (4 texture, 38 arithmetic)
++
++    ret
++    // --- FusionFix GGX lights: the lobe (see above)
++    label l1
++    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
 +    dp3_sat r15.y, r9, -r12 // N.V
-+    dp3_sat r15.z, r9, r11 // N.L
-+    dp3_sat r15.w, r11, r14 // L.H
-+    add r16.x, r10.y, c171.y
++    dp3_sat r15.z, r9, r19 // N.L
++    dp3_sat r15.w, r19, r14 // L.H
++    add r16.x, r9.w, c171.y
 +    rcp r16.x, r16.x
 +    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
-+    dp3 r16.z, r9, r11
-+    mad r13.xyz, r9, -r16.z, r11
++    dp3 r16.z, r9, r19
++    mad r13.xyz, r9, -r16.z, r19
 +    add r13.xyz, r13, c173
 +    dp3 r16.z, r9, r13
 +    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
 +    nrm r17.xyz, r13 // X, the light projected onto the surface
 +    crs r18.xyz, r9, r17 // Y
-+    dp3 r13.x, r17, c206
-+    dp3 r13.y, r18, c206
-+    mul r13.xy, r13, r13
-+    mul r13.xy, r13, c206.w
-+    mad r13.xy, r13, r16.y, r16.x // alpha squared along X and Y, with the headlights' spacing
++    mov r13.xy, r16.x
 +    mul r13.x, r13.x, c200.w // stretched towards the light
 +    min r13.xy, r13, c171.x
 +    dp3 r16.z, r14, r17
@@ -389,18 +465,10 @@ index fb737859..fd3a40f3 100644
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
 +    min r13.w, r13.w, c171.w
-+    add r10.x, r10.x, r10.x
-+    mul r13.w, r13.w, r10.x
-+    max r11.w, r11.w, c172.z
-+    mul r13.w, r13.w, r11.w
-+    mul r13.w, r13.w, c165.x
-+    mul r14.xyz, c76.w, c76
-+    mad r0.xyz, r14, r13.w, r0
-     mad r1.x, r3.x, c1.x, c1.y
-     cmp r1.x, r1.x, c1.y, c1.z
-     mad r1.x, r3.x, c0.w, r1.x
++    ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 4e9d1955..4f16fc79 100644
+index 4e9d1955..7f30784b 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 @@ -49,6 +49,9 @@
@@ -409,7 +477,7 @@ index 4e9d1955..4f16fc79 100644
      def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
-+    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing
++    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
@@ -444,7 +512,7 @@ index 4e9d1955..4f16fc79 100644
      dp3 r0.w, r3, r1
      dp3 r1.x, r1, -c72
      add r1.x, r1.x, -c74.x
-@@ -87,13 +96,90 @@
+@@ -87,13 +96,55 @@
      mul_sat r0.w, r0.w, c3.y
      mul r1.y, r0.z, c2.w
      mul r1.x, r1.x, r1.y
@@ -457,40 +525,77 @@ index 4e9d1955..4f16fc79 100644
 +    texld r10, r0, s13
      mul r0.xyw, r1.xyzz, r2.xyzz
      cmp r0.xyz, r0.z, r0.xyww, -c1.z
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): an anisotropic GGX lobe as wide as the
-+    // --- game's pow(R.L, n), with a height correlated Smith term and Schlick's Fresnel. Along the light
-+    // --- projected onto the surface (X) it is stretched by c200.w, so wet roads streak towards lamps; both
-+    // --- ways it widens by the light's size over its distance (c200.z, size squared), and a headlight's
-+    // --- light, one for both lamps, by their spacing along the car's right (c206.xyz, half spacing squared
-+    // --- in c206.w). c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
++    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
++    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
++    // --- lamps, half the spacing (c206.w) either way along the car's right (c206.xyz), so wet roads show both
++    // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
 +    // --- FusionFix GGX lights on lights the game gives no highlight: c165.x times the GGX one, from the
 +    // --- G-buffer's specular (s13, bound by FusionFix during lighting); the light's falloff and cone in r11.w.
 +    mul r10.y, r10.y, r10.y
 +    mul r10.y, r10.y, c172.y
-+    add r13.xyz, r11, -r12
++    mov r9.xyz, r9
++    mov r9.w, r10.y
++    mov r13.x, c206.w
++    if_lt c172.z, r13.x // a headlight: both lamps
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r11, r13.y, r14
++      nrm r19.xyz, r15
++      call l1
++      mov r19.w, r13.w
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r11, r13.y, -r14
++      nrm r19.xyz, r15
++      call l1
++      add r13.w, r13.w, r19.w
++      mul r13.w, r13.w, c173.w
++    else
++      mov r19.xyz, r11
++      call l1
++    endif
++    add r10.x, r10.x, r10.x
++    mul r13.w, r13.w, r10.x
++    max r11.w, r11.w, c172.z
++    mul r13.w, r13.w, r11.w
++    mul r13.w, r13.w, c165.x
++    mul r14.xyz, c76.w, c76
++    mad r0.xyz, r14, r13.w, r0
+     mad r1.x, r3.x, c1.x, c1.y
+     cmp r1.x, r1.x, c1.y, c1.z
+     mad r1.x, r3.x, c0.w, r1.x
+@@ -241,3 +292,62 @@
+     cmp oDepth, -v9_abs.y, r19.y, r19.x
+ 
+ // approximately 42 instruction slots used (4 texture, 38 arithmetic)
++
++    ret
++    // --- FusionFix GGX lights: the lobe (see above)
++    label l1
++    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
 +    dp3_sat r15.y, r9, -r12 // N.V
-+    dp3_sat r15.z, r9, r11 // N.L
-+    dp3_sat r15.w, r11, r14 // L.H
-+    add r16.x, r10.y, c171.y
++    dp3_sat r15.z, r9, r19 // N.L
++    dp3_sat r15.w, r19, r14 // L.H
++    add r16.x, r9.w, c171.y
 +    rcp r16.x, r16.x
 +    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
-+    dp3 r16.z, r9, r11
-+    mad r13.xyz, r9, -r16.z, r11
++    dp3 r16.z, r9, r19
++    mad r13.xyz, r9, -r16.z, r19
 +    add r13.xyz, r13, c173
 +    dp3 r16.z, r9, r13
 +    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
 +    nrm r17.xyz, r13 // X, the light projected onto the surface
 +    crs r18.xyz, r9, r17 // Y
-+    dp3 r13.x, r17, c206
-+    dp3 r13.y, r18, c206
-+    mul r13.xy, r13, r13
-+    mul r13.xy, r13, c206.w
-+    mad r13.xy, r13, r16.y, r16.x // alpha squared along X and Y, with the headlights' spacing
++    mov r13.xy, r16.x
 +    mul r13.x, r13.x, c200.w // stretched towards the light
 +    min r13.xy, r13, c171.x
 +    dp3 r16.z, r14, r17
@@ -525,18 +630,10 @@ index 4e9d1955..4f16fc79 100644
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
 +    min r13.w, r13.w, c171.w
-+    add r10.x, r10.x, r10.x
-+    mul r13.w, r13.w, r10.x
-+    max r11.w, r11.w, c172.z
-+    mul r13.w, r13.w, r11.w
-+    mul r13.w, r13.w, c165.x
-+    mul r14.xyz, c76.w, c76
-+    mad r0.xyz, r14, r13.w, r0
-     mad r1.x, r3.x, c1.x, c1.y
-     cmp r1.x, r1.x, c1.y, c1.z
-     mad r1.x, r3.x, c0.w, r1.x
++    ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index dee4384c..64393036 100644
+index dee4384c..2e9c3866 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -84,6 +84,9 @@
@@ -545,7 +642,7 @@ index dee4384c..64393036 100644
      def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
-+    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing
++    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
@@ -565,40 +662,71 @@ index dee4384c..64393036 100644
      add r1.xyz, r2, c2.x
      nrm r2.xyz, r1
      mov r1.y, c2.y
-@@ -309,6 +314,71 @@
+@@ -309,6 +314,36 @@
      add r0.x, r3.x, r3.x
      mul r1.w, r3.y, c0.y
      pow r2.w, r0.y, r1.w
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): an anisotropic GGX lobe as wide as the
-+    // --- game's pow(R.L, n), with a height correlated Smith term and Schlick's Fresnel. Along the light
-+    // --- projected onto the surface (X) it is stretched by c200.w, so wet roads streak towards lamps; both
-+    // --- ways it widens by the light's size over its distance (c200.z, size squared), and a headlight's
-+    // --- light, one for both lamps, by their spacing along the car's right (c206.xyz, half spacing squared
-+    // --- in c206.w). c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
-+    add r13.xyz, r2, -r12
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
++    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
++    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
++    // --- lamps, half the spacing (c206.w) either way along the car's right (c206.xyz), so wet roads show both
++    // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
++    mov r9.xyz, r3
++    mov r9.w, r1.w
++    mov r13.x, c206.w
++    if_lt c172.z, r13.x // a headlight: both lamps
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r2, r13.y, r14
++      nrm r19.xyz, r15
++      call l1
++      mov r19.w, r13.w
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r2, r13.y, -r14
++      nrm r19.xyz, r15
++      call l1
++      add r13.w, r13.w, r19.w
++      mul r13.w, r13.w, c173.w
++    else
++      mov r19.xyz, r2
++      call l1
++    endif
++    cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
+     mul r1.xyz, r1, r2.w
+     mul r1.xyz, r0.x, r1
+     texld r4, r0.zwzw, s0
+@@ -467,3 +502,62 @@
+     cmp oDepth, -v9_abs.y, r19.y, r19.x
+ 
+ // approximately 122 instruction slots used (9 texture, 113 arithmetic)
++
++    ret
++    // --- FusionFix GGX lights: the lobe (see above)
++    label l1
++    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
-+    dp3_sat r15.x, r3, r14 // N.H
-+    dp3_sat r15.y, r3, -r12 // N.V
-+    dp3_sat r15.z, r3, r2 // N.L
-+    dp3_sat r15.w, r2, r14 // L.H
-+    add r16.x, r1.w, c171.y
++    dp3_sat r15.x, r9, r14 // N.H
++    dp3_sat r15.y, r9, -r12 // N.V
++    dp3_sat r15.z, r9, r19 // N.L
++    dp3_sat r15.w, r19, r14 // L.H
++    add r16.x, r9.w, c171.y
 +    rcp r16.x, r16.x
 +    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
-+    dp3 r16.z, r3, r2
-+    mad r13.xyz, r3, -r16.z, r2
++    dp3 r16.z, r9, r19
++    mad r13.xyz, r9, -r16.z, r19
 +    add r13.xyz, r13, c173
-+    dp3 r16.z, r3, r13
-+    mad r13.xyz, r3, -r16.z, r13 // flat on the surface again
++    dp3 r16.z, r9, r13
++    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
 +    nrm r17.xyz, r13 // X, the light projected onto the surface
-+    crs r18.xyz, r3, r17 // Y
-+    dp3 r13.x, r17, c206
-+    dp3 r13.y, r18, c206
-+    mul r13.xy, r13, r13
-+    mul r13.xy, r13, c206.w
-+    mad r13.xy, r13, r16.y, r16.x // alpha squared along X and Y, with the headlights' spacing
++    crs r18.xyz, r9, r17 // Y
++    mov r13.xy, r16.x
 +    mul r13.x, r13.x, c200.w // stretched towards the light
 +    min r13.xy, r13, c171.x
 +    dp3 r16.z, r14, r17
@@ -633,12 +761,10 @@ index dee4384c..64393036 100644
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
 +    min r13.w, r13.w, c171.w
-+    cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
-     mul r1.xyz, r1, r2.w
-     mul r1.xyz, r0.x, r1
-     texld r4, r0.zwzw, s0
++    ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index 4ffde2ff..901abfce 100644
+index 4ffde2ff..ab3ae0dd 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 @@ -77,6 +77,9 @@
@@ -647,7 +773,7 @@ index 4ffde2ff..901abfce 100644
      def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
-+    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing
++    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
@@ -688,7 +814,7 @@ index 4ffde2ff..901abfce 100644
      dp3 r1.y, r4, -c79
      dp3 r1.z, r3, r4
      add r1.z, r1.z, c1.y
-@@ -271,13 +281,90 @@
+@@ -271,13 +281,55 @@
      mul_sat r1.y, r1.y, c82.x
      mul r1.w, r1.x, c1.z
      mul r1.y, r1.y, r1.w
@@ -701,40 +827,77 @@ index 4ffde2ff..901abfce 100644
      mul r0.xyz, r0, r1.yzww
      cmp r26.xyz, r1.x, r0, c2.y
      mov r26.w, c1.x
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): an anisotropic GGX lobe as wide as the
-+    // --- game's pow(R.L, n), with a height correlated Smith term and Schlick's Fresnel. Along the light
-+    // --- projected onto the surface (X) it is stretched by c200.w, so wet roads streak towards lamps; both
-+    // --- ways it widens by the light's size over its distance (c200.z, size squared), and a headlight's
-+    // --- light, one for both lamps, by their spacing along the car's right (c206.xyz, half spacing squared
-+    // --- in c206.w). c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
++    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
++    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
++    // --- lamps, half the spacing (c206.w) either way along the car's right (c206.xyz), so wet roads show both
++    // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
 +    // --- FusionFix GGX lights on lights the game gives no highlight: c165.x times the GGX one, from the
 +    // --- G-buffer's specular (s13, bound by FusionFix during lighting); the light's falloff and cone in r11.w.
 +    mul r10.y, r10.y, r10.y
 +    mul r10.y, r10.y, c172.y
-+    add r13.xyz, r11, -r12
++    mov r9.xyz, r9
++    mov r9.w, r10.y
++    mov r13.x, c206.w
++    if_lt c172.z, r13.x // a headlight: both lamps
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r11, r13.y, r14
++      nrm r19.xyz, r15
++      call l1
++      mov r19.w, r13.w
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r11, r13.y, -r14
++      nrm r19.xyz, r15
++      call l1
++      add r13.w, r13.w, r19.w
++      mul r13.w, r13.w, c173.w
++    else
++      mov r19.xyz, r11
++      call l1
++    endif
++    add r10.x, r10.x, r10.x
++    mul r13.w, r13.w, r10.x
++    max r11.w, r11.w, c172.z
++    mul r13.w, r13.w, r11.w
++    mul r13.w, r13.w, c165.x
++    mul r14.xyz, c83.w, c83
++    mad r26.xyz, r14, r13.w, r26
+     // --- FusionFix local contact shadows: a short ray from this pixel towards the light
+     // --- through the opaque depth catches small occluders, also for lights without a shadow
+     // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
+@@ -419,3 +471,62 @@
+     cmp oDepth, -v9_abs.y, r19.y, r19.x
+ 
+ // approximately 92 instruction slots used (7 texture, 85 arithmetic)
++
++    ret
++    // --- FusionFix GGX lights: the lobe (see above)
++    label l1
++    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
 +    dp3_sat r15.x, r9, r14 // N.H
 +    dp3_sat r15.y, r9, -r12 // N.V
-+    dp3_sat r15.z, r9, r11 // N.L
-+    dp3_sat r15.w, r11, r14 // L.H
-+    add r16.x, r10.y, c171.y
++    dp3_sat r15.z, r9, r19 // N.L
++    dp3_sat r15.w, r19, r14 // L.H
++    add r16.x, r9.w, c171.y
 +    rcp r16.x, r16.x
 +    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
-+    dp3 r16.z, r9, r11
-+    mad r13.xyz, r9, -r16.z, r11
++    dp3 r16.z, r9, r19
++    mad r13.xyz, r9, -r16.z, r19
 +    add r13.xyz, r13, c173
 +    dp3 r16.z, r9, r13
 +    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
 +    nrm r17.xyz, r13 // X, the light projected onto the surface
 +    crs r18.xyz, r9, r17 // Y
-+    dp3 r13.x, r17, c206
-+    dp3 r13.y, r18, c206
-+    mul r13.xy, r13, r13
-+    mul r13.xy, r13, c206.w
-+    mad r13.xy, r13, r16.y, r16.x // alpha squared along X and Y, with the headlights' spacing
++    mov r13.xy, r16.x
 +    mul r13.x, r13.x, c200.w // stretched towards the light
 +    min r13.xy, r13, c171.x
 +    dp3 r16.z, r14, r17
@@ -769,18 +932,10 @@ index 4ffde2ff..901abfce 100644
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
 +    min r13.w, r13.w, c171.w
-+    add r10.x, r10.x, r10.x
-+    mul r13.w, r13.w, r10.x
-+    max r11.w, r11.w, c172.z
-+    mul r13.w, r13.w, r11.w
-+    mul r13.w, r13.w, c165.x
-+    mul r14.xyz, c83.w, c83
-+    mad r26.xyz, r14, r13.w, r26
-     // --- FusionFix local contact shadows: a short ray from this pixel towards the light
-     // --- through the opaque depth catches small occluders, also for lights without a shadow
-     // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
++    ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 31cfc0a5..78180c89 100644
+index 31cfc0a5..bedeaa48 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -55,6 +55,9 @@
@@ -789,7 +944,7 @@ index 31cfc0a5..78180c89 100644
      def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
-+    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing
++    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
@@ -804,40 +959,71 @@ index 31cfc0a5..78180c89 100644
      add r2.xyz, r2, c1.w
      nrm r8.xyz, r2
      mov r1.x, c1.x
-@@ -150,6 +155,71 @@
+@@ -150,6 +155,36 @@
      mul r0.xyz, r0, r1.x
      cmp r0.xyz, r0.w, r0, c1.z
      pow r0.w, r1.y, r1.w
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): an anisotropic GGX lobe as wide as the
-+    // --- game's pow(R.L, n), with a height correlated Smith term and Schlick's Fresnel. Along the light
-+    // --- projected onto the surface (X) it is stretched by c200.w, so wet roads streak towards lamps; both
-+    // --- ways it widens by the light's size over its distance (c200.z, size squared), and a headlight's
-+    // --- light, one for both lamps, by their spacing along the car's right (c206.xyz, half spacing squared
-+    // --- in c206.w). c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
-+    add r13.xyz, r8, -r12
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
++    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
++    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
++    // --- lamps, half the spacing (c206.w) either way along the car's right (c206.xyz), so wet roads show both
++    // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
++    mov r9.xyz, r5
++    mov r9.w, r1.w
++    mov r13.x, c206.w
++    if_lt c172.z, r13.x // a headlight: both lamps
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r8, r13.y, r14
++      nrm r19.xyz, r15
++      call l1
++      mov r19.w, r13.w
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r8, r13.y, -r14
++      nrm r19.xyz, r15
++      call l1
++      add r13.w, r13.w, r19.w
++      mul r13.w, r13.w, c173.w
++    else
++      mov r19.xyz, r8
++      call l1
++    endif
++    cmp r0.w, -c200.x, r0.w, r13.w // the game's highlight while c200.x is 0
+     mul r1.xyw, r0.xyzz, r0.w
+     mul r0.xyz, r21, r0 // FusionFix skin lighting: the wrapped N.L per channel
+     mul r2.xyz, r3, r6
+@@ -299,3 +334,62 @@
+     cmp oDepth, -v9_abs.y, r19.y, r19.x
+ 
+ // approximately 90 instruction slots used (8 texture, 82 arithmetic)
++
++    ret
++    // --- FusionFix GGX lights: the lobe (see above)
++    label l1
++    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
-+    dp3_sat r15.x, r5, r14 // N.H
-+    dp3_sat r15.y, r5, -r12 // N.V
-+    dp3_sat r15.z, r5, r8 // N.L
-+    dp3_sat r15.w, r8, r14 // L.H
-+    add r16.x, r1.w, c171.y
++    dp3_sat r15.x, r9, r14 // N.H
++    dp3_sat r15.y, r9, -r12 // N.V
++    dp3_sat r15.z, r9, r19 // N.L
++    dp3_sat r15.w, r19, r14 // L.H
++    add r16.x, r9.w, c171.y
 +    rcp r16.x, r16.x
 +    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
-+    dp3 r16.z, r5, r8
-+    mad r13.xyz, r5, -r16.z, r8
++    dp3 r16.z, r9, r19
++    mad r13.xyz, r9, -r16.z, r19
 +    add r13.xyz, r13, c173
-+    dp3 r16.z, r5, r13
-+    mad r13.xyz, r5, -r16.z, r13 // flat on the surface again
++    dp3 r16.z, r9, r13
++    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
 +    nrm r17.xyz, r13 // X, the light projected onto the surface
-+    crs r18.xyz, r5, r17 // Y
-+    dp3 r13.x, r17, c206
-+    dp3 r13.y, r18, c206
-+    mul r13.xy, r13, r13
-+    mul r13.xy, r13, c206.w
-+    mad r13.xy, r13, r16.y, r16.x // alpha squared along X and Y, with the headlights' spacing
++    crs r18.xyz, r9, r17 // Y
++    mov r13.xy, r16.x
 +    mul r13.x, r13.x, c200.w // stretched towards the light
 +    min r13.xy, r13, c171.x
 +    dp3 r16.z, r14, r17
@@ -872,12 +1058,10 @@ index 31cfc0a5..78180c89 100644
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
 +    min r13.w, r13.w, c171.w
-+    cmp r0.w, -c200.x, r0.w, r13.w // the game's highlight while c200.x is 0
-     mul r1.xyw, r0.xyzz, r0.w
-     mul r0.xyz, r21, r0 // FusionFix skin lighting: the wrapped N.L per channel
-     mul r2.xyz, r3, r6
++    ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 91955bce..b618c3a3 100644
+index 91955bce..73483a47 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -86,6 +86,9 @@
@@ -886,7 +1070,7 @@ index 91955bce..b618c3a3 100644
      def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
-+    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing
++    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
@@ -901,40 +1085,71 @@ index 91955bce..b618c3a3 100644
      add r4.xyz, r4, c1.w
      nrm r8.xyz, r4
      mov r1.x, c1.x
-@@ -332,6 +337,71 @@
+@@ -332,6 +337,36 @@
      mad r2.xyz, r5, -r0.w, r7
      dp3_sat r0.w, r8, r2
      pow r2.x, r0.w, r1.w
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): an anisotropic GGX lobe as wide as the
-+    // --- game's pow(R.L, n), with a height correlated Smith term and Schlick's Fresnel. Along the light
-+    // --- projected onto the surface (X) it is stretched by c200.w, so wet roads streak towards lamps; both
-+    // --- ways it widens by the light's size over its distance (c200.z, size squared), and a headlight's
-+    // --- light, one for both lamps, by their spacing along the car's right (c206.xyz, half spacing squared
-+    // --- in c206.w). c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
-+    add r13.xyz, r8, -r12
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
++    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
++    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
++    // --- lamps, half the spacing (c206.w) either way along the car's right (c206.xyz), so wet roads show both
++    // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
++    mov r9.xyz, r5
++    mov r9.w, r1.w
++    mov r13.x, c206.w
++    if_lt c172.z, r13.x // a headlight: both lamps
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r8, r13.y, r14
++      nrm r19.xyz, r15
++      call l1
++      mov r19.w, r13.w
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r8, r13.y, -r14
++      nrm r19.xyz, r15
++      call l1
++      add r13.w, r13.w, r19.w
++      mul r13.w, r13.w, c173.w
++    else
++      mov r19.xyz, r8
++      call l1
++    endif
++    cmp r2.x, -c200.x, r2.x, r13.w // the game's highlight while c200.x is 0
+     dp3_sat r0.w, r8, r5
+     dp3 r21.w, r8, r5 // FusionFix skin lighting: N.L, unclamped
+     mul r21.xyz, c201, r20.w // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
+@@ -485,3 +520,62 @@
+     cmp oDepth, -v9_abs.y, r19.y, r19.x
+ 
+ // approximately 144 instruction slots used (12 texture, 132 arithmetic)
++
++    ret
++    // --- FusionFix GGX lights: the lobe (see above)
++    label l1
++    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
-+    dp3_sat r15.x, r5, r14 // N.H
-+    dp3_sat r15.y, r5, -r12 // N.V
-+    dp3_sat r15.z, r5, r8 // N.L
-+    dp3_sat r15.w, r8, r14 // L.H
-+    add r16.x, r1.w, c171.y
++    dp3_sat r15.x, r9, r14 // N.H
++    dp3_sat r15.y, r9, -r12 // N.V
++    dp3_sat r15.z, r9, r19 // N.L
++    dp3_sat r15.w, r19, r14 // L.H
++    add r16.x, r9.w, c171.y
 +    rcp r16.x, r16.x
 +    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
-+    dp3 r16.z, r5, r8
-+    mad r13.xyz, r5, -r16.z, r8
++    dp3 r16.z, r9, r19
++    mad r13.xyz, r9, -r16.z, r19
 +    add r13.xyz, r13, c173
-+    dp3 r16.z, r5, r13
-+    mad r13.xyz, r5, -r16.z, r13 // flat on the surface again
++    dp3 r16.z, r9, r13
++    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
 +    nrm r17.xyz, r13 // X, the light projected onto the surface
-+    crs r18.xyz, r5, r17 // Y
-+    dp3 r13.x, r17, c206
-+    dp3 r13.y, r18, c206
-+    mul r13.xy, r13, r13
-+    mul r13.xy, r13, c206.w
-+    mad r13.xy, r13, r16.y, r16.x // alpha squared along X and Y, with the headlights' spacing
++    crs r18.xyz, r9, r17 // Y
++    mov r13.xy, r16.x
 +    mul r13.x, r13.x, c200.w // stretched towards the light
 +    min r13.xy, r13, c171.x
 +    dp3 r16.z, r14, r17
@@ -969,12 +1184,10 @@ index 91955bce..b618c3a3 100644
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
 +    min r13.w, r13.w, c171.w
-+    cmp r2.x, -c200.x, r2.x, r13.w // the game's highlight while c200.x is 0
-     dp3_sat r0.w, r8, r5
-     dp3 r21.w, r8, r5 // FusionFix skin lighting: N.L, unclamped
-     mul r21.xyz, c201, r20.w // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
++    ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-index c05c5756..8c05b049 100644
+index c05c5756..627b5463 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 @@ -105,6 +105,13 @@
@@ -987,11 +1200,11 @@ index c05c5756..8c05b049 100644
 +    def c177, 2, 512, 5, 4 // FusionFix GGX lights: the gloss scale, the mip per roughness, the last mip
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
-+    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing
++    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      dcl_texcoord v0.xy
      dcl_texcoord1 v1
-@@ -596,6 +603,70 @@
+@@ -596,6 +603,16 @@
        max r6.x, r5.x, r4.y
        add r4.y, r6.x, c4.y
        pow r5.x, r2.w, r4.y
@@ -999,70 +1212,16 @@ index c05c5756..8c05b049 100644
 +      // --- same lobe as the lamps', from a light at a great distance.
 +      mov r12.xyz, r3
 +      mov r12.w, c172.w
-+      add r13.xyz, -c17, -r12
-+      nrm r14.xyz, r13 // half vector
-+      dp3_sat r15.x, r2, r14 // N.H
-+      dp3_sat r15.y, r2, -r12 // N.V
-+      dp3_sat r15.z, r2, -c17 // N.L
-+      dp3_sat r15.w, -c17, r14 // L.H
-+      add r16.x, r4.y, c171.y
-+      rcp r16.x, r16.x
-+      add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
-+      add r16.y, r12.w, c171.z
-+      rcp r16.y, r16.y // 1 / distance squared
-+      mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
-+      dp3 r16.z, r2, -c17
-+      mad r13.xyz, r2, -r16.z, -c17
-+      add r13.xyz, r13, c173
-+      dp3 r16.z, r2, r13
-+      mad r13.xyz, r2, -r16.z, r13 // flat on the surface again
-+      nrm r17.xyz, r13 // X, the light projected onto the surface
-+      crs r18.xyz, r2, r17 // Y
-+      dp3 r13.x, r17, c206
-+      dp3 r13.y, r18, c206
-+      mul r13.xy, r13, r13
-+      mul r13.xy, r13, c206.w
-+      mad r13.xy, r13, r16.y, r16.x // alpha squared along X and Y, with the headlights' spacing
-+      mul r13.x, r13.x, c200.w // stretched towards the light
-+      min r13.xy, r13, c171.x
-+      dp3 r16.z, r14, r17
-+      dp3 r16.w, r14, r18
-+      mul r16.zw, r16, r16
-+      rcp r17.x, r13.x
-+      rcp r17.y, r13.y
-+      mul r16.z, r16.z, r17.x
-+      mad r16.z, r16.w, r17.y, r16.z
-+      mad r16.z, r15.x, r15.x, r16.z
-+      mul r16.z, r16.z, r16.z
-+      rcp r16.z, r16.z
-+      mul r16.w, r13.x, r13.y
-+      rsq r16.w, r16.w
-+      mul r13.w, r16.z, r16.w // pi times the distribution
-+      rsq r16.y, r16.w // alpha, the mean of both
-+      add r17.x, r15.z, r15.y
-+      mul r17.y, r15.z, r15.y
-+      add r17.y, r17.y, r17.y
-+      lrp r18.x, r16.y, r17.x, r17.y // 0.5 / this is the visibility
-+      add r18.x, r18.x, c171.z
-+      rcp r18.x, r18.x
-+      mul r13.w, r13.w, r18.x
-+      mul r13.w, r13.w, r15.z
-+      add r17.x, c171.x, -r15.w
-+      mul r17.y, r17.x, r17.x
-+      mul r17.y, r17.y, r17.y
-+      mul r17.x, r17.x, r17.y // (1 - L.H)^5
-+      mul_sat r17.x, r17.x, c200.y
-+      mov r17.y, c172.x
-+      lrp r18.y, r17.x, c171.x, r17.y // Fresnel
-+      mul r13.w, r13.w, r18.y
-+      mul r13.w, r13.w, c200.x
-+      min r13.w, r13.w, c171.w
++      mov r9.xyz, r2
++      mov r9.w, r4.y
++      mov r19.xyz, -c17
++      call l1
 +      mul r13.w, r13.w, c165.y
 +      cmp r5.x, -c165.y, r5.x, r13.w
        mul r5.yzw, c18.w, c18.xxyz
        mul r6.yzw, r5.x, r5
        mul r6.yzw, r0.y, r6
-@@ -618,6 +689,19 @@
+@@ -618,6 +635,19 @@
        mad r1.y, r4.x, -c3.x, r2.w
        mad r7.w, r0.w, -c2.w, c2.w
        mov r7.z, c0.x
@@ -1082,7 +1241,7 @@ index c05c5756..8c05b049 100644
        texldl r7, r7, s6
        // --- FusionFix SSR: blend the screen-space reflection over the parabolic one.
        mov r10.xy, v0
-@@ -633,6 +717,19 @@
+@@ -633,6 +663,19 @@
        mul r0.xzw, r0.z, r3.xyyz
        mul r0.xzw, r4.z, r0
        mul r0.xzw, r0, c39.w
@@ -1102,6 +1261,70 @@ index c05c5756..8c05b049 100644
        mul r0.xzw, r1.x, r0
        mul r0.xzw, r0, c8.y
        add r1.x, c17.w, c17.w
+@@ -753,3 +796,62 @@
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+ 
+ // approximately 184 instruction slots used (19 texture, 165 arithmetic)
++
++    ret
++    // --- FusionFix GGX lights: the lobe (see above)
++    label l1
++    add r13.xyz, r19, -r12
++    nrm r14.xyz, r13 // half vector
++    dp3_sat r15.x, r9, r14 // N.H
++    dp3_sat r15.y, r9, -r12 // N.V
++    dp3_sat r15.z, r9, r19 // N.L
++    dp3_sat r15.w, r19, r14 // L.H
++    add r16.x, r9.w, c171.y
++    rcp r16.x, r16.x
++    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
++    add r16.y, r12.w, c171.z
++    rcp r16.y, r16.y // 1 / distance squared
++    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
++    dp3 r16.z, r9, r19
++    mad r13.xyz, r9, -r16.z, r19
++    add r13.xyz, r13, c173
++    dp3 r16.z, r9, r13
++    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
++    nrm r17.xyz, r13 // X, the light projected onto the surface
++    crs r18.xyz, r9, r17 // Y
++    mov r13.xy, r16.x
++    mul r13.x, r13.x, c200.w // stretched towards the light
++    min r13.xy, r13, c171.x
++    dp3 r16.z, r14, r17
++    dp3 r16.w, r14, r18
++    mul r16.zw, r16, r16
++    rcp r17.x, r13.x
++    rcp r17.y, r13.y
++    mul r16.z, r16.z, r17.x
++    mad r16.z, r16.w, r17.y, r16.z
++    mad r16.z, r15.x, r15.x, r16.z
++    mul r16.z, r16.z, r16.z
++    rcp r16.z, r16.z
++    mul r16.w, r13.x, r13.y
++    rsq r16.w, r16.w
++    mul r13.w, r16.z, r16.w // pi times the distribution
++    rsq r16.y, r16.w // alpha, the mean of both
++    add r17.x, r15.z, r15.y
++    mul r17.y, r15.z, r15.y
++    add r17.y, r17.y, r17.y
++    lrp r18.x, r16.y, r17.x, r17.y // 0.5 / this is the visibility
++    add r18.x, r18.x, c171.z
++    rcp r18.x, r18.x
++    mul r13.w, r13.w, r18.x
++    mul r13.w, r13.w, r15.z
++    add r17.x, c171.x, -r15.w
++    mul r17.y, r17.x, r17.x
++    mul r17.y, r17.y, r17.y
++    mul r17.x, r17.x, r17.y // (1 - L.H)^5
++    mul_sat r17.x, r17.x, c200.y
++    mov r17.y, c172.x
++    lrp r18.y, r17.x, c171.x, r17.y // Fresnel
++    mul r13.w, r13.w, r18.y
++    mul r13.w, r13.w, c200.x
++    min r13.w, r13.w, c171.w
++    ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
 index a4de2c5b..68a8f9df 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
@@ -1241,7 +1464,7 @@ index 92d6423d..e0bb4692 100644
        add r1.w, r3.x, r3.x
        mad r2.x, r0.y, r3.y, r1.w
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 311b0a49..c58d36d6 100644
+index 311b0a49..cfcb3c2d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -50,6 +50,9 @@
@@ -1250,7 +1473,7 @@ index 311b0a49..c58d36d6 100644
      def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
-+    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing
++    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
@@ -1268,40 +1491,71 @@ index 311b0a49..c58d36d6 100644
      mov r3.z, c2.z
      mad_sat r0.z, r0.z, -c73.x, r3.z
      mul r0.z, r0.z, r0.z
-@@ -102,6 +107,71 @@
+@@ -102,6 +107,36 @@
      mul r0.x, r1.y, r1.y
      mul r0.x, r0.x, c0.y
      pow r1.y, r0.w, r0.x
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): an anisotropic GGX lobe as wide as the
-+    // --- game's pow(R.L, n), with a height correlated Smith term and Schlick's Fresnel. Along the light
-+    // --- projected onto the surface (X) it is stretched by c200.w, so wet roads streak towards lamps; both
-+    // --- ways it widens by the light's size over its distance (c200.z, size squared), and a headlight's
-+    // --- light, one for both lamps, by their spacing along the car's right (c206.xyz, half spacing squared
-+    // --- in c206.w). c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
-+    add r13.xyz, r3, -r12
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
++    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
++    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
++    // --- lamps, half the spacing (c206.w) either way along the car's right (c206.xyz), so wet roads show both
++    // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
++    mov r9.xyz, r2
++    mov r9.w, r0.x
++    mov r13.x, c206.w
++    if_lt c172.z, r13.x // a headlight: both lamps
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r3, r13.y, r14
++      nrm r19.xyz, r15
++      call l1
++      mov r19.w, r13.w
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r3, r13.y, -r14
++      nrm r19.xyz, r15
++      call l1
++      add r13.w, r13.w, r19.w
++      mul r13.w, r13.w, c173.w
++    else
++      mov r19.xyz, r3
++      call l1
++    endif
++    cmp r1.y, -c200.x, r1.y, r13.w // the game's highlight while c200.x is 0
+     mul r0.x, r0.z, c3.x
+     dp3 r0.y, r3, -c72
+     dp3_sat r0.w, r3, r2
+@@ -265,3 +300,62 @@
+     cmp oDepth, -v9_abs.y, r19.y, r19.x
+ 
+ // approximately 59 instruction slots used (4 texture, 55 arithmetic)
++
++    ret
++    // --- FusionFix GGX lights: the lobe (see above)
++    label l1
++    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
-+    dp3_sat r15.x, r2, r14 // N.H
-+    dp3_sat r15.y, r2, -r12 // N.V
-+    dp3_sat r15.z, r2, r3 // N.L
-+    dp3_sat r15.w, r3, r14 // L.H
-+    add r16.x, r0.x, c171.y
++    dp3_sat r15.x, r9, r14 // N.H
++    dp3_sat r15.y, r9, -r12 // N.V
++    dp3_sat r15.z, r9, r19 // N.L
++    dp3_sat r15.w, r19, r14 // L.H
++    add r16.x, r9.w, c171.y
 +    rcp r16.x, r16.x
 +    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
-+    dp3 r16.z, r2, r3
-+    mad r13.xyz, r2, -r16.z, r3
++    dp3 r16.z, r9, r19
++    mad r13.xyz, r9, -r16.z, r19
 +    add r13.xyz, r13, c173
-+    dp3 r16.z, r2, r13
-+    mad r13.xyz, r2, -r16.z, r13 // flat on the surface again
++    dp3 r16.z, r9, r13
++    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
 +    nrm r17.xyz, r13 // X, the light projected onto the surface
-+    crs r18.xyz, r2, r17 // Y
-+    dp3 r13.x, r17, c206
-+    dp3 r13.y, r18, c206
-+    mul r13.xy, r13, r13
-+    mul r13.xy, r13, c206.w
-+    mad r13.xy, r13, r16.y, r16.x // alpha squared along X and Y, with the headlights' spacing
++    crs r18.xyz, r9, r17 // Y
++    mov r13.xy, r16.x
 +    mul r13.x, r13.x, c200.w // stretched towards the light
 +    min r13.xy, r13, c171.x
 +    dp3 r16.z, r14, r17
@@ -1336,12 +1590,10 @@ index 311b0a49..c58d36d6 100644
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
 +    min r13.w, r13.w, c171.w
-+    cmp r1.y, -c200.x, r1.y, r13.w // the game's highlight while c200.x is 0
-     mul r0.x, r0.z, c3.x
-     dp3 r0.y, r3, -c72
-     dp3_sat r0.w, r3, r2
++    ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index ffaab0be..41008367 100644
+index ffaab0be..3d12673e 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -53,6 +53,9 @@
@@ -1350,7 +1602,7 @@ index ffaab0be..41008367 100644
      def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
-+    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing
++    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
@@ -1368,40 +1620,71 @@ index ffaab0be..41008367 100644
      mov r3.x, c3.x
      mad_sat r0.z, r0.z, -c73.x, r3.x
      mul r0.z, r0.z, r0.z
-@@ -101,6 +106,71 @@
+@@ -101,6 +106,36 @@
      add r1.x, r1.x, r1.x
      mul r1.y, r1.y, c0.y
      pow r2.w, r0.w, r1.y
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): an anisotropic GGX lobe as wide as the
-+    // --- game's pow(R.L, n), with a height correlated Smith term and Schlick's Fresnel. Along the light
-+    // --- projected onto the surface (X) it is stretched by c200.w, so wet roads streak towards lamps; both
-+    // --- ways it widens by the light's size over its distance (c200.z, size squared), and a headlight's
-+    // --- light, one for both lamps, by their spacing along the car's right (c206.xyz, half spacing squared
-+    // --- in c206.w). c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
-+    add r13.xyz, r3, -r12
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
++    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
++    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
++    // --- lamps, half the spacing (c206.w) either way along the car's right (c206.xyz), so wet roads show both
++    // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
++    mov r9.xyz, r2
++    mov r9.w, r1.y
++    mov r13.x, c206.w
++    if_lt c172.z, r13.x // a headlight: both lamps
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r3, r13.y, r14
++      nrm r19.xyz, r15
++      call l1
++      mov r19.w, r13.w
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r3, r13.y, -r14
++      nrm r19.xyz, r15
++      call l1
++      add r13.w, r13.w, r19.w
++      mul r13.w, r13.w, c173.w
++    else
++      mov r19.xyz, r3
++      call l1
++    endif
++    cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
+     mul r0.w, r0.z, c4.x
+     dp3 r1.y, r3, -c72
+     dp3_sat r1.z, r3, r2
+@@ -274,3 +309,62 @@
+     cmp oDepth, -v9_abs.y, r19.y, r19.x
+ 
+ // approximately 64 instruction slots used (5 texture, 59 arithmetic)
++
++    ret
++    // --- FusionFix GGX lights: the lobe (see above)
++    label l1
++    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
-+    dp3_sat r15.x, r2, r14 // N.H
-+    dp3_sat r15.y, r2, -r12 // N.V
-+    dp3_sat r15.z, r2, r3 // N.L
-+    dp3_sat r15.w, r3, r14 // L.H
-+    add r16.x, r1.y, c171.y
++    dp3_sat r15.x, r9, r14 // N.H
++    dp3_sat r15.y, r9, -r12 // N.V
++    dp3_sat r15.z, r9, r19 // N.L
++    dp3_sat r15.w, r19, r14 // L.H
++    add r16.x, r9.w, c171.y
 +    rcp r16.x, r16.x
 +    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
-+    dp3 r16.z, r2, r3
-+    mad r13.xyz, r2, -r16.z, r3
++    dp3 r16.z, r9, r19
++    mad r13.xyz, r9, -r16.z, r19
 +    add r13.xyz, r13, c173
-+    dp3 r16.z, r2, r13
-+    mad r13.xyz, r2, -r16.z, r13 // flat on the surface again
++    dp3 r16.z, r9, r13
++    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
 +    nrm r17.xyz, r13 // X, the light projected onto the surface
-+    crs r18.xyz, r2, r17 // Y
-+    dp3 r13.x, r17, c206
-+    dp3 r13.y, r18, c206
-+    mul r13.xy, r13, r13
-+    mul r13.xy, r13, c206.w
-+    mad r13.xy, r13, r16.y, r16.x // alpha squared along X and Y, with the headlights' spacing
++    crs r18.xyz, r9, r17 // Y
++    mov r13.xy, r16.x
 +    mul r13.x, r13.x, c200.w // stretched towards the light
 +    min r13.xy, r13, c171.x
 +    dp3 r16.z, r14, r17
@@ -1436,12 +1719,10 @@ index ffaab0be..41008367 100644
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
 +    min r13.w, r13.w, c171.w
-+    cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
-     mul r0.w, r0.z, c4.x
-     dp3 r1.y, r3, -c72
-     dp3_sat r1.z, r3, r2
++    ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index b7a116d3..7971ba1f 100644
+index b7a116d3..2ddfba8b 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -53,6 +53,9 @@
@@ -1450,7 +1731,7 @@ index b7a116d3..7971ba1f 100644
      def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
-+    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing
++    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
@@ -1468,40 +1749,71 @@ index b7a116d3..7971ba1f 100644
      mov r3.y, c0.y
      mad_sat r0.z, r0.z, -c73.x, r3.y
      mul r0.z, r0.z, r0.z
-@@ -100,6 +105,71 @@
+@@ -100,6 +105,36 @@
      mul r1.y, r1.y, r1.y
      mul r1.y, r1.y, c1.y
      pow r2.w, r0.w, r1.y
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): an anisotropic GGX lobe as wide as the
-+    // --- game's pow(R.L, n), with a height correlated Smith term and Schlick's Fresnel. Along the light
-+    // --- projected onto the surface (X) it is stretched by c200.w, so wet roads streak towards lamps; both
-+    // --- ways it widens by the light's size over its distance (c200.z, size squared), and a headlight's
-+    // --- light, one for both lamps, by their spacing along the car's right (c206.xyz, half spacing squared
-+    // --- in c206.w). c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
-+    add r13.xyz, r3, -r12
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
++    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
++    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
++    // --- lamps, half the spacing (c206.w) either way along the car's right (c206.xyz), so wet roads show both
++    // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
++    mov r9.xyz, r2
++    mov r9.w, r1.y
++    mov r13.x, c206.w
++    if_lt c172.z, r13.x // a headlight: both lamps
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r3, r13.y, r14
++      nrm r19.xyz, r15
++      call l1
++      mov r19.w, r13.w
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r3, r13.y, -r14
++      nrm r19.xyz, r15
++      call l1
++      add r13.w, r13.w, r19.w
++      mul r13.w, r13.w, c173.w
++    else
++      mov r19.xyz, r3
++      call l1
++    endif
++    cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
+     mul r0.w, r0.z, c4.y
+     dp3 r1.y, r3, -c72
+     dp3_sat r1.w, r3, r2
+@@ -276,3 +311,62 @@
+     cmp oDepth, -v9_abs.y, r19.y, r19.x
+ 
+ // approximately 66 instruction slots used (5 texture, 61 arithmetic)
++
++    ret
++    // --- FusionFix GGX lights: the lobe (see above)
++    label l1
++    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
-+    dp3_sat r15.x, r2, r14 // N.H
-+    dp3_sat r15.y, r2, -r12 // N.V
-+    dp3_sat r15.z, r2, r3 // N.L
-+    dp3_sat r15.w, r3, r14 // L.H
-+    add r16.x, r1.y, c171.y
++    dp3_sat r15.x, r9, r14 // N.H
++    dp3_sat r15.y, r9, -r12 // N.V
++    dp3_sat r15.z, r9, r19 // N.L
++    dp3_sat r15.w, r19, r14 // L.H
++    add r16.x, r9.w, c171.y
 +    rcp r16.x, r16.x
 +    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
-+    dp3 r16.z, r2, r3
-+    mad r13.xyz, r2, -r16.z, r3
++    dp3 r16.z, r9, r19
++    mad r13.xyz, r9, -r16.z, r19
 +    add r13.xyz, r13, c173
-+    dp3 r16.z, r2, r13
-+    mad r13.xyz, r2, -r16.z, r13 // flat on the surface again
++    dp3 r16.z, r9, r13
++    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
 +    nrm r17.xyz, r13 // X, the light projected onto the surface
-+    crs r18.xyz, r2, r17 // Y
-+    dp3 r13.x, r17, c206
-+    dp3 r13.y, r18, c206
-+    mul r13.xy, r13, r13
-+    mul r13.xy, r13, c206.w
-+    mad r13.xy, r13, r16.y, r16.x // alpha squared along X and Y, with the headlights' spacing
++    crs r18.xyz, r9, r17 // Y
++    mov r13.xy, r16.x
 +    mul r13.x, r13.x, c200.w // stretched towards the light
 +    min r13.xy, r13, c171.x
 +    dp3 r16.z, r14, r17
@@ -1536,12 +1848,10 @@ index b7a116d3..7971ba1f 100644
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
 +    min r13.w, r13.w, c171.w
-+    cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
-     mul r0.w, r0.z, c4.y
-     dp3 r1.y, r3, -c72
-     dp3_sat r1.w, r3, r2
++    ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index b32e9e9b..6058a083 100644
+index b32e9e9b..42cc8f15 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -53,6 +53,9 @@
@@ -1550,7 +1860,7 @@ index b32e9e9b..6058a083 100644
      def c162, 0.0671105608, 0.00583714992, 52.9829178, -1
 +    def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
 +    def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
-+    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing
++    def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      dcl_texcoord v0
@@ -1568,40 +1878,71 @@ index b32e9e9b..6058a083 100644
      mov r3.z, c3.z
      mad_sat r0.z, r0.z, -c73.x, -r3.z
      mul r0.z, r0.z, r0.z
-@@ -101,6 +106,71 @@
+@@ -101,6 +106,36 @@
      add r1.x, r1.x, r1.x
      mul r1.y, r1.y, c0.y
      pow r2.w, r0.w, r1.y
-+    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): an anisotropic GGX lobe as wide as the
-+    // --- game's pow(R.L, n), with a height correlated Smith term and Schlick's Fresnel. Along the light
-+    // --- projected onto the surface (X) it is stretched by c200.w, so wet roads streak towards lamps; both
-+    // --- ways it widens by the light's size over its distance (c200.z, size squared), and a headlight's
-+    // --- light, one for both lamps, by their spacing along the car's right (c206.xyz, half spacing squared
-+    // --- in c206.w). c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
-+    add r13.xyz, r3, -r12
++    // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n),
++    // --- with a height correlated Smith term and Schlick's Fresnel (subroutine l1). Along the light projected onto
++    // --- the surface it is stretched by c200.w, so wet roads streak towards lamps, and it widens by the light's size
++    // --- over its distance (c200.z, size squared). A headlight's light, one for both lamps, is taken as the two
++    // --- lamps, half the spacing (c206.w) either way along the car's right (c206.xyz), so wet roads show both
++    // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
++    mov r9.xyz, r2
++    mov r9.w, r1.y
++    mov r13.x, c206.w
++    if_lt c172.z, r13.x // a headlight: both lamps
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r3, r13.y, r14
++      nrm r19.xyz, r15
++      call l1
++      mov r19.w, r13.w
++      rsq r13.y, r12.w
++      rcp r13.y, r13.y
++      mul r14.xyz, c206, c206.w
++      mad r15.xyz, r3, r13.y, -r14
++      nrm r19.xyz, r15
++      call l1
++      add r13.w, r13.w, r19.w
++      mul r13.w, r13.w, c173.w
++    else
++      mov r19.xyz, r3
++      call l1
++    endif
++    cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
+     mul r0.w, r0.z, c4.y
+     dp3 r1.y, r3, -c72
+     dp3_sat r1.z, r3, r2
+@@ -278,3 +313,62 @@
+     cmp oDepth, -v9_abs.y, r19.y, r19.x
+ 
+ // approximately 68 instruction slots used (5 texture, 63 arithmetic)
++
++    ret
++    // --- FusionFix GGX lights: the lobe (see above)
++    label l1
++    add r13.xyz, r19, -r12
 +    nrm r14.xyz, r13 // half vector
-+    dp3_sat r15.x, r2, r14 // N.H
-+    dp3_sat r15.y, r2, -r12 // N.V
-+    dp3_sat r15.z, r2, r3 // N.L
-+    dp3_sat r15.w, r3, r14 // L.H
-+    add r16.x, r1.y, c171.y
++    dp3_sat r15.x, r9, r14 // N.H
++    dp3_sat r15.y, r9, -r12 // N.V
++    dp3_sat r15.z, r9, r19 // N.L
++    dp3_sat r15.w, r19, r14 // L.H
++    add r16.x, r9.w, c171.y
 +    rcp r16.x, r16.x
 +    add r16.x, r16.x, r16.x // alpha squared = 2 / (n + 2)
 +    add r16.y, r12.w, c171.z
 +    rcp r16.y, r16.y // 1 / distance squared
 +    mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
-+    dp3 r16.z, r2, r3
-+    mad r13.xyz, r2, -r16.z, r3
++    dp3 r16.z, r9, r19
++    mad r13.xyz, r9, -r16.z, r19
 +    add r13.xyz, r13, c173
-+    dp3 r16.z, r2, r13
-+    mad r13.xyz, r2, -r16.z, r13 // flat on the surface again
++    dp3 r16.z, r9, r13
++    mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
 +    nrm r17.xyz, r13 // X, the light projected onto the surface
-+    crs r18.xyz, r2, r17 // Y
-+    dp3 r13.x, r17, c206
-+    dp3 r13.y, r18, c206
-+    mul r13.xy, r13, r13
-+    mul r13.xy, r13, c206.w
-+    mad r13.xy, r13, r16.y, r16.x // alpha squared along X and Y, with the headlights' spacing
++    crs r18.xyz, r9, r17 // Y
++    mov r13.xy, r16.x
 +    mul r13.x, r13.x, c200.w // stretched towards the light
 +    min r13.xy, r13, c171.x
 +    dp3 r16.z, r14, r17
@@ -1636,7 +1977,5 @@ index b32e9e9b..6058a083 100644
 +    mul r13.w, r13.w, r18.y
 +    mul r13.w, r13.w, c200.x
 +    min r13.w, r13.w, c171.w
-+    cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
-     mul r0.w, r0.z, c4.y
-     dp3 r1.y, r3, -c72
-     dp3_sat r1.z, r3, r2
++    ret
+\ No newline at end of file

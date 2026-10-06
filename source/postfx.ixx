@@ -422,7 +422,8 @@ public:
     // - LightsGGXStretch: the lobe is that much wider along the light projected onto the surface,
     //   so wet roads streak towards lamps.
     // - LightsGGXHeadlights: half the spacing of a car's lamps. The game lights both with one light
-    //   between them; its lobe widens by that along the car's right, so the highlight covers both.
+    //   between them; its highlight is taken as two, that far either way along the car's right, so
+    //   a wet road shows a streak from each lamp.
     // - LightsGGXFillLights: lights the game draws with no highlight at all (fillerVolumePoint) get
     //   this much of one, from the G-buffer's specular on s13.
     // - LightsGGXSun: the sun's highlight the same way, 0 keeps the game's.
@@ -451,8 +452,11 @@ public:
     float fWetGroundDrying = 240.0f;
     int nWetGroundMaterials = 1;
     int nWetGroundDebug = 0;
-    // c206 as last set for a light, so lights of the same shape set nothing.
+    // c206 as last set for a light, so lights of the same shape set nothing; the headlights found
+    // since the last Ctrl+Shift+F10 log, and the lights looked at.
     float LightGGXShape[4] = {};
+    uint32_t nLightGGXHeadlights = 0;
+    uint32_t nLightGGXLights = 0;
     // Cloud shadows on the ground (c197.y-w, c198, c199, s12; deferred_lighting_sun_under_clouds.patch):
     // the ray from a surface towards the sun meets a cloud deck CloudShadowsHeight up, and the sun is
     // dimmed by up to CloudShadows where the clouds cover it there. The sky's clouds are on a dome
@@ -5956,6 +5960,9 @@ private:
                 fprintf(log, "  s12 before the shadows: srgb %lu  max mip %lu  min filter %lu  lod bias %.3f\n",
                         static_cast<unsigned long>(R.CloudSamplerBefore[0]), static_cast<unsigned long>(R.CloudSamplerBefore[1]),
                         static_cast<unsigned long>(R.CloudSamplerBefore[2]), std::bit_cast<float>(R.CloudSamplerBefore[3]));
+                fprintf(log, "  GGX lights: %u headlights among %u lights drawn since the last log\n", R.nLightGGXHeadlights, R.nLightGGXLights);
+                R.nLightGGXHeadlights = 0;
+                R.nLightGGXLights = 0;
                 fprintf(log, "  clouds in reflections: %s; %u calls since the last log; viewport %lu,%lu %lux%lu of a %ux%u target\n",
                         R.szCloudsReflectionStatus, R.nCloudReflectionCalls, R.CloudReflectionViewport.X, R.CloudReflectionViewport.Y,
                         R.CloudReflectionViewport.Width, R.CloudReflectionViewport.Height, R.CloudReflectionTarget[0], R.CloudReflectionTarget[1]);
@@ -6913,7 +6920,7 @@ private:
 
     // c206 for the light about to be drawn: a headlight's (a spot light of 8 m or more with the
     // vehicle flag, as InstallShaftHooks tells them) the car's level right and half its lamps'
-    // spacing squared, which widens its GGX highlight across both lamps; other lights none.
+    // spacing, from which the shaders take its highlight as one from each lamp; other lights none.
     static void SetLightGGXShape(const rage::CLightSource& light)
     {
         auto& R = PostFxResources;
@@ -6928,9 +6935,11 @@ private:
             {
                 shape[0] = kx / len;
                 shape[1] = ky / len;
-                shape[3] = R.fLightsGGXHeadlights * R.fLightsGGXHeadlights;
+                shape[3] = R.fLightsGGXHeadlights;
+                ++R.nLightGGXHeadlights;
             }
         }
+        ++R.nLightGGXLights;
         if (std::memcmp(shape, R.LightGGXShape, sizeof(shape)) == 0)
             return;
         auto pDevice = rage::grcDevice::GetD3DDevice();
