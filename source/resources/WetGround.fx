@@ -59,7 +59,7 @@ float2 Rings(float2 p, float cell, float rate, float seed)
     float r = length(d);
     float phase = frac(vec4Wet.w * rate + h);
     float x = r - 0.4 * phase;
-    float profile = cos(60.0 * x * cell) * exp(-900.0 * x * x * cell * cell) * (1.0 - phase) * (1.0 - phase);
+    float profile = cos(40.0 * x * cell) * exp(-400.0 * x * x * cell * cell) * (1.0 - phase) * (1.0 - phase);
     return d / max(r, 1e-3) * profile;
 }
 
@@ -136,25 +136,27 @@ Targets Wet_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS)
     // Darker: a third on walls, all of it on the ground, more in water.
     float darken = wet * lerp(0.33, 1.0, ground) * vec4Shape.w;
     o.albedo.rgb *= 1.0 - darken * 0.4;
-    o.albedo.rgb *= 1.0 - puddle * 0.35;
+    o.albedo.rgb *= 1.0 - puddle * 0.5;
 
     // Gloss as sqrt(power / 512), specular intensity halved, as the G-buffer stores them: a wet film
-    // to about power 150 and a quarter of the full highlight, water to a mirror and all of it.
+    // to about power 150, water to about 410. The game multiplies the sky's reflection by ten times
+    // twice the specular intensity, so water takes little more than the film: at 0.5 puddles at
+    // night were pale grey sheets of reflected sky, and every ring sparkled.
     float filmGloss = lerp(o.specular.y, max(o.specular.y, 0.55), wet * ground);
     float filmSpec = lerp(o.specular.x, max(o.specular.x, 0.12), wet * ground);
-    o.specular.y = lerp(filmGloss, 1.0, puddle);
-    o.specular.x = lerp(filmSpec, 0.5, puddle);
+    o.specular.y = lerp(filmGloss, 0.9, puddle);
+    o.specular.x = lerp(filmSpec, 0.15, puddle);
 
     // The water's surface is level, and the rain rings it.
     float3 Nw = normalize(lerp(N, float3(0.0, 0.0, 1.0), puddle));
-    float near = saturate((vec4Shape.z - distance) / (vec4Shape.z * 0.3));
+    float near = saturate((vec4Shape.z - distance) / (vec4Shape.z * 0.6));
     float ringStrength = vec4Shape.y * vec4Wet.z * puddle * near;
     float2 tilt = 0.0;
     [branch]
     if (ringStrength > 0.0)
     {
         tilt = Rings(P.xy, 0.35, 1.0, 0.0) + Rings(P.xy, 0.35 * 1.37, 0.81, 5.3) + Rings(P.xy, 0.35 * 0.83, 1.23, 11.7);
-        Nw = normalize(Nw + float3(tilt * ringStrength * 0.6, 0.0));
+        Nw = normalize(Nw + float3(tilt * ringStrength * 0.3, 0.0));
     }
     o.normal.xyz = Nw * 0.5 + 0.5;
 

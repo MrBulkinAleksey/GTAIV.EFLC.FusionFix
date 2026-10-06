@@ -2944,11 +2944,11 @@ private:
         }
 
         // The rain's rings on open water (water_rain_rings.patch, c178): x their strength while it rains,
-        // y the clock, zw their fade from 17.5 to 25 m. Water is drawn after this, every frame.
+        // y the clock, zw their fade from 6 to 15 m. Water is drawn after this, every frame.
         if (pDevice)
         {
             const float rings = R.fWetGround > 0.0f ? rain * R.fWetGroundRipples : 0.0f;
-            const float c178[4] = { rings, float(std::fmod(seconds, 1000.0)), -1.0f / 7.5f, 25.0f / 7.5f };
+            const float c178[4] = { rings, float(std::fmod(seconds, 1000.0)), -1.0f / 9.0f, 15.0f / 9.0f };
             pDevice->SetPixelShaderConstantF(178, c178, 1);
         }
 
@@ -3020,7 +3020,7 @@ private:
         // The rings' clock wraps every 1000 s, where a frame's jump goes unseen among the rings.
         const D3DXVECTOR4 wet(R.fWetness * R.fWetGround, R.fWetGroundPuddles, rain, float(std::fmod(seconds, 1000.0)));
         effect->SetVector("vec4Wet", &wet);
-        const D3DXVECTOR4 shape(1.0f / R.fWetGroundPuddleSize, R.fWetGroundRipples, 25.0f, R.fWetGroundDarkening);
+        const D3DXVECTOR4 shape(1.0f / R.fWetGroundPuddleSize, R.fWetGroundRipples, 15.0f, R.fWetGroundDarkening);
         effect->SetVector("vec4Shape", &shape);
         const int mask = R.nWetGroundMaterials;
         const D3DXVECTOR4 allow0(float(mask & 1), float((mask >> 1) & 1), float((mask >> 2) & 1), float((mask >> 3) & 1));
