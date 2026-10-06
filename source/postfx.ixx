@@ -88,6 +88,33 @@ bool IsPostFxAA()
     return aa == FusionFixSettings.AntialiasingText.eFXAA || (aa == FusionFixSettings.AntialiasingText.eSMAA && IsSMAASupported());
 }
 
+// rage::grcDevice::GetD3DDevice() is the game's wrapper of the D3D9 device, not the device: it keeps the textures it
+// bound per sampler (RageDirect3DDevice9::g_TexturesBySampler) and passes on only what it takes for a change. Temporal
+// AA, RenderScale and the device hooks bind on the real device behind its back, so a texture set through the wrapper
+// could be dropped as already bound while the device held another: SSGI's accumulation read the G-buffer normals as
+// its depth (whole steps of 1/255) with the right depth "bound", and D3DX, binding through the wrapper too, seemed to
+// put textures and states on the wrong registers. These set through both: the wrapper, so its record stays true and
+// what restores the game's state later is passed on, and the real device, so it takes now.
+static IDirect3DDevice9* RealDevice(IDirect3DDevice9* wrapper)
+{
+    auto real = RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
+    return real ? real : wrapper;
+}
+
+static void SetTextureBoth(IDirect3DDevice9* device, DWORD stage, IDirect3DBaseTexture9* texture)
+{
+    device->SetTexture(stage, texture);
+    if (auto real = RealDevice(device); real != device)
+        real->SetTexture(stage, texture);
+}
+
+static void SetSamplerStateBoth(IDirect3DDevice9* device, DWORD sampler, D3DSAMPLERSTATETYPE type, DWORD value)
+{
+    device->SetSamplerState(sampler, type, value);
+    if (auto real = RealDevice(device); real != device)
+        real->SetSamplerState(sampler, type, value);
+}
+
 // The sampler states SSR.fx declares (MinFilter, MagFilter, MipFilter, AddressU, AddressV), read from its source once
 // it is created: D3DX put them on its own registers too, and the trace showed samplers declared without a filter
 // (SpecularTex, NormalTex) filtered linearly in some passes. Undeclared states are point and clamp, as
@@ -3061,10 +3088,10 @@ private:
                         }
                         if (PostFxResources.mDepthRT && PostFxResources.mDepthRT->mD3DTexture)
                         {
-                            pDevice->SetTexture(0, PostFxResources.mDepthRT->mD3DTexture);
-                            pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
-                            pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
-                            pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+                            SetTextureBoth(pDevice, 0, PostFxResources.mDepthRT->mD3DTexture);
+                            SetSamplerStateBoth(pDevice, 0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+                            SetSamplerStateBoth(pDevice, 0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+                            SetSamplerStateBoth(pDevice, 0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
                         }
 
                         BlitToTarget(pDevice, PostFxResources.PreAlphaDepthSurface);
@@ -3076,10 +3103,10 @@ private:
                                                  camera.Near, camera.Far);
                             SSRTrace::DepthProbe(pDevice, "fog depth copy", PostFxResources.PreAlphaDepthCopyRT->mD3DTexture, camera.Near, camera.Far);
                         }
-                        pDevice->SetTexture(0, prevTex[0]);
-                        pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, prevMinFilter[0]);
-                        pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, prevMagFilter[0]);
-                        pDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, prevMipFilter[0]);
+                        SetTextureBoth(pDevice, 0, prevTex[0]);
+                        SetSamplerStateBoth(pDevice, 0, D3DSAMP_MINFILTER, prevMinFilter[0]);
+                        SetSamplerStateBoth(pDevice, 0, D3DSAMP_MAGFILTER, prevMagFilter[0]);
+                        SetSamplerStateBoth(pDevice, 0, D3DSAMP_MIPFILTER, prevMipFilter[0]);
                     }
                 }
             }
@@ -3108,7 +3135,7 @@ private:
                     pDevice->SetRenderTarget(0, PostFxResources.HDRFullScreenSurface);
                     pDevice->SetDepthStencilSurface(nullptr);
 
-                    pDevice->SetTexture(0, scene);
+                    SetTextureBoth(pDevice, 0, scene);
 
                     // Its own quad, as for the depth copy above: SSR's and SSGI's history is taken from this copy and
                     // read where last frame's depth copy is.
@@ -4007,12 +4034,16 @@ private:
                 }
                 if (c.set == D3DXRS_INT4)
                     pDevice->SetPixelShaderConstantI(c.reg, values, c.count);
+                    if (auto real = RealDevice(pDevice); real != pDevice)
+                        real->SetPixelShaderConstantI(c.reg, values, c.count);
                 else
                 {
                     BOOL b[16] = {};
                     for (UINT e = 0; e < (std::min)(c.count, 16u); ++e)
                         b[e] = values[e * 4] != 0;
                     pDevice->SetPixelShaderConstantB(c.reg, b, c.count);
+                    if (auto real = RealDevice(pDevice); real != pDevice)
+                        real->SetPixelShaderConstantB(c.reg, b, c.count);
                 }
                 continue;
             }
@@ -4033,7 +4064,7 @@ private:
                 }
             }
             float have[16 * 4] = {};
-            pDevice->GetPixelShaderConstantF(c.reg, have, c.count);
+            RealDevice(pDevice)->GetPixelShaderConstantF(c.reg, have, c.count);
             bool differs = false;
             for (UINT e = 0; e < elements; ++e)
                 for (UINT k = 0; k < (std::min)(pd.Columns, 4u); ++k)
@@ -4045,6 +4076,8 @@ private:
                     for (UINT k = (e < elements ? (std::min)(pd.Columns, 4u) : 0u); k < 4; ++k)
                         want[e * 4 + k] = have[e * 4 + k];
                 pDevice->SetPixelShaderConstantF(c.reg, want, c.count);
+                if (auto real = RealDevice(pDevice); real != pDevice)
+                    real->SetPixelShaderConstantF(c.reg, want, c.count);
                 if (SSRTrace::Active())
                 {
                     char item[160];
@@ -4090,26 +4123,26 @@ private:
                 auto found = SSRSamplerStates.find(name);
                 const SamplerStates st = found != SSRSamplerStates.end() ? found->second
                     : SamplerStates{ D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP };
-                pDevice->SetSamplerState(reg, D3DSAMP_MINFILTER, st[0]);
-                pDevice->SetSamplerState(reg, D3DSAMP_MAGFILTER, st[1]);
-                pDevice->SetSamplerState(reg, D3DSAMP_MIPFILTER, st[2]);
-                pDevice->SetSamplerState(reg, D3DSAMP_ADDRESSU, st[3]);
-                pDevice->SetSamplerState(reg, D3DSAMP_ADDRESSV, st[4]);
-                pDevice->SetSamplerState(reg, D3DSAMP_SRGBTEXTURE, FALSE);
+                SetSamplerStateBoth(pDevice, reg, D3DSAMP_MINFILTER, st[0]);
+                SetSamplerStateBoth(pDevice, reg, D3DSAMP_MAGFILTER, st[1]);
+                SetSamplerStateBoth(pDevice, reg, D3DSAMP_MIPFILTER, st[2]);
+                SetSamplerStateBoth(pDevice, reg, D3DSAMP_ADDRESSU, st[3]);
+                SetSamplerStateBoth(pDevice, reg, D3DSAMP_ADDRESSV, st[4]);
+                SetSamplerStateBoth(pDevice, reg, D3DSAMP_SRGBTEXTURE, FALSE);
             }
             IDirect3DBaseTexture9* want = nullptr;
             IDirect3DBaseTexture9* have = nullptr;
             effect->GetTexture(param, &want);
-            pDevice->GetTexture(reg, &have);
-            if (want != have)
-                pDevice->SetTexture(reg, want);
+            RealDevice(pDevice)->GetTexture(reg, &have);
+            // Always, through both: the wrapper may hold want on record while the device has another
+            SetTextureBoth(pDevice, reg, want);
             if (SSRTrace::Active())
             {
                 D3DXPARAMETER_DESC desc = {};
                 effect->GetParameterDesc(param, &desc);
                 DWORD minFilter = 0, srgb = 0;
-                pDevice->GetSamplerState(reg, D3DSAMP_MINFILTER, &minFilter);
-                pDevice->GetSamplerState(reg, D3DSAMP_SRGBTEXTURE, &srgb);
+                RealDevice(pDevice)->GetSamplerState(reg, D3DSAMP_MINFILTER, &minFilter);
+                RealDevice(pDevice)->GetSamplerState(reg, D3DSAMP_SRGBTEXTURE, &srgb);
                 traced += " s" + std::to_string(reg) + "=" + (desc.Name ? desc.Name : "?") + ":" + SSRTrace::TextureName(want) +
                     (want != have ? "(was " + SSRTrace::TextureName(have) + ")" : "") + (minFilter == D3DTEXF_LINEAR ? "/lin" : "/pt") + (srgb ? "/SRGB" : "");
             }
@@ -5037,26 +5070,26 @@ private:
             // half size clouds, s4 the history, s5 the accumulated clouds, s6 the scene, for the sky's
             // brightness, never while drawing into it, s7 that brightness, s8 and s9 the march's sums.
             // The reflections have no depth texture of their own: none reads as sky everywhere.
-            pDevice->SetTexture(0, reflection ? nullptr : R.mDepthRT->mD3DTexture);
-            pDevice->SetTexture(1, coverage);
-            pDevice->SetTexture(2, detail);
-            pDevice->SetTexture(3, halfSize && !readMarch ? R.CloudTex[0]->mD3DTexture : nullptr);
-            pDevice->SetTexture(4, halfSize ? R.CloudTex[prevAccum]->mD3DTexture : nullptr);
-            pDevice->SetTexture(5, halfSize ? R.CloudTex[nextAccum]->mD3DTexture : nullptr);
-            pDevice->SetTexture(6, readScene ? sceneBase : nullptr);
-            pDevice->SetTexture(7, readSkyRef && R.CloudSkyRefTex ? R.CloudSkyRefTex->mD3DTexture : nullptr);
-            pDevice->SetTexture(8, readMarch ? R.CloudMarchTex[0]->mD3DTexture : nullptr);
-            pDevice->SetTexture(9, readMarch ? R.CloudMarchTex[1]->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 0, reflection ? nullptr : R.mDepthRT->mD3DTexture);
+            SetTextureBoth(pDevice, 1, coverage);
+            SetTextureBoth(pDevice, 2, detail);
+            SetTextureBoth(pDevice, 3, halfSize && !readMarch ? R.CloudTex[0]->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 4, halfSize ? R.CloudTex[prevAccum]->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 5, halfSize ? R.CloudTex[nextAccum]->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 6, readScene ? sceneBase : nullptr);
+            SetTextureBoth(pDevice, 7, readSkyRef && R.CloudSkyRefTex ? R.CloudSkyRefTex->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 8, readMarch ? R.CloudMarchTex[0]->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 9, readMarch ? R.CloudMarchTex[1]->mD3DTexture : nullptr);
             for (DWORD slot = 0; slot < 10; ++slot)
             {
                 const bool wrap = slot == 1 || slot == 2;
                 const bool linear = slot != 0 && slot != 3 && slot != 8 && slot != 9;
-                pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
-                pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
-                pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSW, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
-                pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
-                pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
-                pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, slot == 1 ? D3DTEXF_LINEAR : D3DTEXF_NONE);
+                SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSU, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+                SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSV, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+                SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSW, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
+                SetSamplerStateBoth(pDevice, slot, D3DSAMP_MAGFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+                SetSamplerStateBoth(pDevice, slot, D3DSAMP_MINFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+                SetSamplerStateBoth(pDevice, slot, D3DSAMP_MIPFILTER, slot == 1 ? D3DTEXF_LINEAR : D3DTEXF_NONE);
             }
         };
         auto drawPass = [&](const char* technique, IDirect3DSurface9* target, float w, float h, bool blend)
@@ -7020,12 +7053,12 @@ public:
 
     static void BindSampler(IDirect3DDevice9* pDevice, DWORD slot, IDirect3DBaseTexture9* tex, DWORD filter)
     {
-        pDevice->SetTexture(slot, tex);
-        pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-        pDevice->SetSamplerState(slot, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-        pDevice->SetSamplerState(slot, D3DSAMP_MAGFILTER, filter);
-        pDevice->SetSamplerState(slot, D3DSAMP_MINFILTER, filter);
-        pDevice->SetSamplerState(slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        SetTextureBoth(pDevice, slot, tex);
+        SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        SetSamplerStateBoth(pDevice, slot, D3DSAMP_MAGFILTER, filter);
+        SetSamplerStateBoth(pDevice, slot, D3DSAMP_MINFILTER, filter);
+        SetSamplerStateBoth(pDevice, slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
     }
 
     // Right after deferred lighting: binds this frame's camera, and the textures the fog pass
