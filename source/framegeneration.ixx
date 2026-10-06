@@ -14,6 +14,7 @@ import common;
 import comvars;
 import consolegamma;
 import hdr;
+import settings;
 import upscaler;
 
 #ifndef SAFE_RELEASE
@@ -24,18 +25,21 @@ import upscaler;
 //
 // - The upscaler's Evaluate prepares the frame generation with the frame's depth and motion vectors.
 // - The finished scene before the HUD is copied into HudLess, right after the post processing. The HUD is what
-//   differs from it, and the frame generation keeps it from the current frame instead of interpolating it. Not
-//   with HDR output yet: the HDR pass converts the whole frame only afterwards.
+//   differs from it, and the frame generation keeps it from the current frame instead of interpolating it. What is
+//   drawn over the whole frame after the HUD, the console gamma and the HDR output, is drawn over the copy too.
 // - Once the frame is finished, HUD and HDR output included, the back buffer is copied into Present and the helper
 //   generates the frame between it and the previous one into Generated.
-// - FrameGeneration = 1 in [TEMPORAL]: the game presents the generated frame in place of its own, which waits in
+// - Frame Generation in the graphics menu (Advanced, with DLAA or FSR and AMD's frame generation library): the game
+//   presents the generated frame in place of its own, which waits in
 //   PresentRT. Nothing waits for it: the game goes on with the next frame, and a draw call of the render thread
 //   halfway through it (FrameGenerationDelay, see FrameGenerationPacing below) presents the rendered frame, inside
 //   the game's scene, and leaves the back buffer as it found it. A frame that ends before that presents the waiting
 //   one first.
-// - FrameGeneration = 2 shows the generated frames in place of the rendered ones, to check the generation itself.
-// - FrameGenerationDebug: 1 marks which frames reach the screen, 2 logs how far between its neighbours a generated
-//   frame is (reads frames back, slow).
+// - Not in the menus, where nothing moves, nor with DLSS-IV loaded, which replays the game's D3D9 calls on a thread of
+//   its own and so runs ahead of what the helper is handed.
+// - [TEMPORAL] in the ini: FrameGenerationDelay, FrameGenerationPacing, and FrameGenerationDebug: 1 marks which frames
+//   reach the screen, 2 logs how far between its neighbours a generated frame is (reads frames back, slow), 4 shows
+//   the generated frames in place of the rendered ones.
 
 namespace
 {
@@ -54,6 +58,7 @@ namespace
     {
         constexpr int32_t Marker = 1;       // a square in the corner: magenta on generated frames, green on rendered ones
         constexpr int32_t Similarity = 2;   // how much the generated frame differs from the rendered ones around it
+        constexpr int32_t ShowGenerated = 4; // only the generated frames are shown, to check the generation itself
     }
     int32_t nDebug = 0;
 
@@ -651,23 +656,15 @@ namespace
         std::error_code error;
         IniTime = std::filesystem::last_write_time(IniPath, error);
 
-        auto previous = mode;
-        mode = static_cast<Mode>(std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGeneration", 0), 0, 2));
         fDelay = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
         nDebug = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDebug", 0);
         auto previousPacing = nPacing;
         nPacing = std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGenerationPacing", 2), 0, 2);
         if (nPacing != previousPacing)
             TargetDraw = 0.0;
-        Log("Frame generation: %s, delay %.2f, pacing %d, debug %d", mode == Mode::Off ? "off" : mode == Mode::ShowGenerated ? "showing the generated frames" : "on",
-            fDelay, nPacing, nDebug);
+        Log("Frame generation settings: delay %.2f, pacing %d, debug %d", fDelay, nPacing, nDebug);
 
-        // A fresh start for the pacing and the statistics
-        if (mode != previous)
-        {
-            LastFrameEnd.QuadPart = 0;
-            bPending = false;
-        }
+        // A fresh start for the statistics
         Stats = {};
         GpuStats = {};
     }
@@ -685,13 +682,51 @@ namespace
             ReadSettings();
     }
 
+    // DLSS-IV, another DLSS and FSR for the game, records the D3D9 calls of the render thread and replays them on a thread
+    // of its own 300 presents in: the copies for the helper then ran ahead of the frame they copy, and every generated
+    // frame was a copy of the frame before
+    bool IsDlssIvLoaded()
+    {
+        static bool loaded = false;
+        static ULONGLONG checked = 0;
+        if (!loaded && GetTickCount64() - checked > 2000)
+        {
+            checked = GetTickCount64();
+            loaded = GetModuleHandleW(L"DLSS-IV.asi") != nullptr;
+            if (loaded)
+                Log("DLSS-IV.asi is loaded: no frame generation while it is (it replays the game's D3D9 calls on a thread of its own)");
+        }
+        return loaded;
+    }
+
+    // The menu's choice, while the frame generation can run
+    void UpdateMode()
+    {
+        static auto pref = FusionFixSettings.GetRef("PREF_FRAME_GENERATION");
+        auto previous = mode;
+        bool on = pref && pref->get() != 0 && Upscaler::IsFrameGenerationAvailable() && !IsDlssIvLoaded();
+        mode = !on ? Mode::Off : (nDebug & Debug::ShowGenerated) ? Mode::ShowGenerated : Mode::On;
+        if (mode != previous)
+        {
+            Log("Frame generation: %s", mode == Mode::Off ? "off" : mode == Mode::ShowGenerated ? "showing the generated frames" : "on");
+            // A fresh start for the pacing
+            LastFrameEnd.QuadPart = 0;
+            bPending = false;
+        }
+    }
+
+    bool IsMenuActive()
+    {
+        return CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive;
+    }
+
     // Whatever is drawn over the whole frame after the HUD is part of the finished frame, and so has to be of the copy
     // before the HUD too: the frame generation takes what differs for the HUD, the whole frame otherwise. Drawn here,
     // where the console gamma itself is drawn and nothing of the game follows; through the game's device wrapper, which
     // its effect was made with.
     void ApplyFinishingPasses()
     {
-        if (!ConsoleGamma::IsActive() || !HudLessRT)
+        if ((!ConsoleGamma::IsActive() && !HDROutput::IsActive()) || !HudLessRT)
             return;
         auto device = rage::grcDevice::GetD3DDevice();
         if (!device)
@@ -702,8 +737,13 @@ namespace
         device->GetRenderTarget(0, &oldTarget);
         device->GetViewport(&oldViewport);
         HudLessRT->mD3DTexture->GetSurfaceLevel(0, &hudLessSurface);
+        // In their order at the end of the frame: the console gamma at EndScene, the HDR output after it
         if (hudLessSurface && SUCCEEDED(device->SetRenderTarget(0, hudLessSurface)))
-            ConsoleGamma::Apply(device);
+        {
+            if (ConsoleGamma::IsActive())
+                ConsoleGamma::Apply(device);
+            HDROutput::ApplyToRenderTarget();
+        }
         if (oldTarget)
             device->SetRenderTarget(0, oldTarget);
         device->SetViewport(&oldViewport);
@@ -715,8 +755,10 @@ namespace
     void OnBeforePresent()
     {
         CheckSettings();
+        UpdateMode();
         bool hudLess = bHudLessCaptured;
         bHudLessCaptured = false;
+        FusionFix::bFrameGenerationPresenting = false;
         if (mode == Mode::Off)
             return;
 
@@ -743,7 +785,8 @@ namespace
         if (bPending)
             PresentPending(device, true);
 
-        if (!Upscaler::IsFrameGenerationReady())
+        // Not in the menus: the generation starts over once they close
+        if (!Upscaler::IsFrameGenerationReady() || IsMenuActive())
             return;
         bool pacing = mode == Mode::On;
         if (pacing)
@@ -822,6 +865,7 @@ namespace
                 }
                 if (paced)
                 {
+                    FusionFix::bFrameGenerationPresenting = true;
                     GeneratedAt = Now();
                     PendingDue = After(GeneratedAt, std::clamp(FrameMs * fDelay, 0.0, 50.0));
                     bPending = true;
@@ -854,7 +898,7 @@ export namespace FrameGeneration
     // The frame before the HUD will be captured: tells Evaluate, which comes earlier in the frame
     bool UsesHudLess()
     {
-        return mode != Mode::Off && !HDROutput::IsActive();
+        return mode != Mode::Off;
     }
 
     // Render thread, right after the post processing: the back buffer holds the scene without the HUD
@@ -884,6 +928,24 @@ public:
         {
             QueryPerformanceFrequency(&Frequency);
             ReadSettings();
+
+            // Offered once the helper found AMD's frame generation library, and not with DLSS-IV. The choice comes back
+            // with them: the cfg keeps it.
+            FusionFixSettings.SetAvailability("PREF_FRAME_GENERATION", [](int32_t value) -> bool
+            {
+                return value == 0 || (Upscaler::IsFrameGenerationAvailable() && !IsDlssIvLoaded());
+            });
+            static auto refreshAvailability = []()
+            {
+                static uint32_t generation = UINT32_MAX;
+                if (generation != Upscaler::Generation())
+                {
+                    generation = Upscaler::Generation();
+                    FusionFixSettings.RefreshAvailability("PREF_FRAME_GENERATION");
+                }
+            };
+            FusionFix::onGameProcessEvent() += []() { refreshAvailability(); };
+            FusionFix::onMenuDrawingEvent() += []() { refreshAvailability(); };
 
             FusionFix::onBeforePresent() += []()
             {

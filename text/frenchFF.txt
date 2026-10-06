@@ -124,6 +124,9 @@ Performance
 [UpscUltraPerf]
 Ultra Performance
 
+[FrameGeneration]
+Frame Generation
+
 [FPS Limiter]
 Limiteur de FPS
 

@@ -531,4 +531,12 @@ export namespace HDROutput
     {
         return HDR::GetPeak();
     }
+
+    // The HDR output's pass on render target 0 instead of the back buffer, while it is active: for copies of the frame
+    // that have to match the finished one
+    void ApplyToRenderTarget()
+    {
+        if (IsActive())
+            HDR::RenderOutput();
+    }
 }

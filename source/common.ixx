@@ -150,6 +150,8 @@ public:
         static Event<> BeforePresent;
         return BeforePresent;
     }
+    // Frame generation presents a generated frame for each rendered one (render thread, for the FPS counter)
+    static inline bool bFrameGenerationPresenting = false;
     static Event<>& onReadGameConfig()
     {
         static Event<> ReadGameConfig;

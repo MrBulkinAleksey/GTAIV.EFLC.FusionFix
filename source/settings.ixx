@@ -2103,6 +2103,7 @@ public:
             { 0, "PREF_BICUBIC_TEXTURES",       "TEXTURES",   "BicubicFiltering",                   "",                           0, nullptr, 0, 1 },
             { 0, "PREF_SPECULAR_AA",            "TEXTURES",   "SpecularAntiAliasing",               "",                           0, nullptr, 0, 1 },
             { 0, "PREF_UPSCALER_QUALITY",       "TEMPORAL",   "UpscalerQuality",                    "MENU_DISPLAY_UPSCALER_QUALITY", 0, nullptr, 0, 4 },
+            { 0, "PREF_FRAME_GENERATION",       "TEMPORAL",   "FrameGeneration",                    "",                           0, nullptr, 0, 1 },
             { 0, "PREF_VOLUMETRIC_CLOUDS",      "POSTFX",     "VolumetricClouds",                   "",                           1, nullptr, 0, 1 },
         };
 
@@ -2309,6 +2310,8 @@ public:
             AddRow(category, "Antialiasing", "PREF_ANTIALIASING", 6, "MENU_DISPLAY_ANTIALIASING");
             // DLAA and FSR: the scene below the screen size, applied with a device reset
             AddRow(category, "UpscalerQuality", "PREF_UPSCALER_QUALITY", 5, "MENU_DISPLAY_UPSCALER_QUALITY");
+            // AMD frame generation, with DLAA or FSR and AMD's frame generation library
+            AddRow(category, "FrameGeneration", "PREF_FRAME_GENERATION", 2, toggle);
             AddEmptyLine(category);
             AddRow(category, "Volumetric Fog", "PREF_VOLUMETRICFOG", 2, toggle);
             AddRow(category, "Sun Shafts", "PREF_SUNSHAFTS", 2, toggle);
@@ -3710,11 +3713,16 @@ public:
                         };
                         auto curEp = _dwCurrentEpisode ? *_dwCurrentEpisode : 0;
                         static char str_format_fps[] = "%02d";
+                        // With frame generation, the frames shown too: one generated for each rendered one
+                        static char str_format_fps_generated[] = "%02d (%02d)";
                         static const D3DXCOLOR TBOGT(D3DCOLOR_XRGB(0xD7, 0x11, 0x6E));
                         static const D3DXCOLOR TLAD(D3DCOLOR_XRGB(0x6F, 0x0D, 0x0F));
                         static const D3DXCOLOR IV(CText::hasViceCityStrings() ? D3DCOLOR_XRGB(0xF5, 0x8F, 0xBE) : D3DCOLOR_XRGB(0xF0, 0xA0, 0x00));
 
-                        DrawTextOutline(pFPSFont, 10, 10, (curEp == 2) ? TBOGT : ((curEp == 1) ? TLAD : IV), str_format_fps, fps);
+                        if (FusionFix::bFrameGenerationPresenting)
+                            DrawTextOutline(pFPSFont, 10, 10, (curEp == 2) ? TBOGT : ((curEp == 1) ? TLAD : IV), str_format_fps_generated, fps, fps * 2);
+                        else
+                            DrawTextOutline(pFPSFont, 10, 10, (curEp == 2) ? TBOGT : ((curEp == 1) ? TLAD : IV), str_format_fps, fps);
 
                         if (bExtendedTimecycEditing)
                         {

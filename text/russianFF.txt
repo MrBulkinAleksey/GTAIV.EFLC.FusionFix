@@ -124,6 +124,9 @@ Logitech LightSync RGB
 [UpscUltraPerf]
 Ультрапроизводительность
 
+[FrameGeneration]
+Генерация кадров
+
 [FPS Limiter]
 Ограничитель кадров
 
