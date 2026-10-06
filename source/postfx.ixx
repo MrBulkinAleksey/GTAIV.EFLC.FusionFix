@@ -3887,7 +3887,13 @@ private:
     // where they sampled the specular one, and SSR came out empty, while it worked in the pause
     // menu, where the game had bound others.
 
-    static std::vector<std::pair<UINT, D3DXHANDLE>> FindEffectSamplers(ID3DXEffect* effect, IDirect3DPixelShader9* ps)
+    // The same holds for the float constants: with the ones D3DX left, SSGI's accumulation decoded the right depth
+    // (6.1 m) as 15.3 m through fNearPlane and fFarDivNear while vec2PrevDepthRange, in another register, came through.
+    // Each float constant of the shader is written from its parameter, a register per vector or array element.
+    struct EffectConstant { UINT reg; UINT count; D3DXHANDLE param; std::string name; };
+
+    static std::vector<std::pair<UINT, D3DXHANDLE>> FindEffectSamplers(ID3DXEffect* effect, IDirect3DPixelShader9* ps,
+                                                                       std::vector<EffectConstant>* constants = nullptr)
     {
         std::vector<std::pair<UINT, D3DXHANDLE>> samplers;
         std::vector<DWORD> function;
@@ -3908,8 +3914,15 @@ private:
         {
             D3DXCONSTANT_DESC desc = {};
             UINT count = 1;
-            if (FAILED(table->GetConstantDesc(table->GetConstant(nullptr, i), &desc, &count)) ||
-                desc.RegisterSet != D3DXRS_SAMPLER || !desc.Name)
+            if (FAILED(table->GetConstantDesc(table->GetConstant(nullptr, i), &desc, &count)) || !desc.Name)
+                continue;
+            if (desc.RegisterSet == D3DXRS_FLOAT4 && constants)
+            {
+                if (D3DXHANDLE param = effect->GetParameterByName(nullptr, desc.Name))
+                    constants->push_back({ desc.RegisterIndex, desc.RegisterCount, param, desc.Name });
+                continue;
+            }
+            if (desc.RegisterSet != D3DXRS_SAMPLER)
                 continue;
             if (D3DXHANDLE param = effect->GetParameterByName(nullptr, (std::string(desc.Name) + "2D").c_str()))
                 samplers.emplace_back(desc.RegisterIndex, param);
@@ -3918,12 +3931,55 @@ private:
         return samplers;
     }
 
+    static void BindEffectConstants(IDirect3DDevice9* pDevice, ID3DXEffect* effect, const std::vector<EffectConstant>& constants)
+    {
+        std::string traced;
+        for (const auto& c : constants)
+        {
+            D3DXPARAMETER_DESC pd = {};
+            if (FAILED(effect->GetParameterDesc(c.param, &pd)) || pd.Type != D3DXPT_FLOAT ||
+                (pd.Class != D3DXPC_SCALAR && pd.Class != D3DXPC_VECTOR) || c.count == 0 || c.count > 16)
+                continue;
+            float want[16 * 4] = {};
+            const UINT elements = pd.Elements ? (std::min)(pd.Elements, c.count) : 1;
+            for (UINT e = 0; e < elements; ++e)
+            {
+                D3DXHANDLE h = pd.Elements ? effect->GetParameterElement(c.param, e) : c.param;
+                effect->GetFloatArray(h, &want[e * 4], (std::min)(pd.Columns, 4u));
+            }
+            float have[16 * 4] = {};
+            pDevice->GetPixelShaderConstantF(c.reg, have, c.count);
+            bool differs = false;
+            for (UINT e = 0; e < elements; ++e)
+                for (UINT k = 0; k < (std::min)(pd.Columns, 4u); ++k)
+                    differs |= want[e * 4 + k] != have[e * 4 + k];
+            if (differs)
+            {
+                // The components the shader does not read keep what the register held
+                for (UINT e = 0; e < c.count; ++e)
+                    for (UINT k = (e < elements ? (std::min)(pd.Columns, 4u) : 0u); k < 4; ++k)
+                        want[e * 4 + k] = have[e * 4 + k];
+                pDevice->SetPixelShaderConstantF(c.reg, want, c.count);
+                if (SSRTrace::Active())
+                {
+                    char item[160];
+                    snprintf(item, sizeof(item), " c%u %s=%g (was %g)", c.reg, c.name.c_str(), want[0], have[0]);
+                    traced += item;
+                }
+            }
+        }
+        if (SSRTrace::Active() && !traced.empty())
+            SSRTrace::Line("  constants set:%s", traced.c_str());
+    }
+
     static void BindEffectSamplers(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
     {
         IDirect3DPixelShader9* ps = nullptr;
         if (FAILED(pDevice->GetPixelShader(&ps)) || !ps)
             return;
-        const auto samplers = FindEffectSamplers(effect, ps);
+        std::vector<EffectConstant> constants;
+        const auto samplers = FindEffectSamplers(effect, ps, &constants);
+        BindEffectConstants(pDevice, effect, constants);
         const void* shader = ps;
         ps->Release();
 
