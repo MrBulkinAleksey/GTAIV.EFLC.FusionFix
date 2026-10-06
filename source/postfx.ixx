@@ -621,6 +621,7 @@ public:
     // since the last log, and the viewport and target it drew into.
     const char* szCloudsReflectionStatus = "never called";
     uint32_t nCloudReflectionCalls = 0;
+    uint32_t nCloudWaterReflectionCalls = 0;
     D3DVIEWPORT9 CloudReflectionViewport = {};
     UINT CloudReflectionTarget[2] = {};
     HRESULT hrCloudsEffect = S_OK;
@@ -6104,10 +6105,11 @@ private:
                 fprintf(log, "  GGX lights: %u headlights among %u lights drawn since the last log\n", R.nLightGGXHeadlights, R.nLightGGXLights);
                 R.nLightGGXHeadlights = 0;
                 R.nLightGGXLights = 0;
-                fprintf(log, "  clouds in reflections: %s; %u calls since the last log; viewport %lu,%lu %lux%lu of a %ux%u target\n",
-                        R.szCloudsReflectionStatus, R.nCloudReflectionCalls, R.CloudReflectionViewport.X, R.CloudReflectionViewport.Y,
+                fprintf(log, "  clouds in reflections: %s; %u reflection map and %u water reflection skies since the last log; viewport %lu,%lu %lux%lu of a %ux%u target\n",
+                        R.szCloudsReflectionStatus, R.nCloudReflectionCalls, R.nCloudWaterReflectionCalls, R.CloudReflectionViewport.X, R.CloudReflectionViewport.Y,
                         R.CloudReflectionViewport.Width, R.CloudReflectionViewport.Height, R.CloudReflectionTarget[0], R.CloudReflectionTarget[1]);
                 R.nCloudReflectionCalls = 0;
+                R.nCloudWaterReflectionCalls = 0;
                 fprintf(log, "  wet ground: %s; effect %s (hr 0x%08lX); wetness %.3f, rain %.3f, materials 0x%02X, debug %d\n",
                         R.szWetGroundStatus, R.WetGroundEffect ? "built" : "missing", static_cast<unsigned long>(R.hrWetGroundEffect), R.fWetness,
                         CWeather::Rain ? *CWeather::Rain : -1.0f, unsigned(R.nWetGroundMaterials), R.nWetGroundDebug);
@@ -6371,8 +6373,40 @@ private:
         }
     }
 
+    // Whether the bound target is the water's reflection (WATER_REFLECTION_COLOUR). Its sky is drawn
+    // through the sky's main branch, not the reflection map's (REFLECTION_MAP_COLOUR, the paraboloids
+    // the surfaces' sky reflection comes from, phases with flag 0x40000).
+    static bool IsWaterReflectionTarget(IDirect3DDevice9* pDevice)
+    {
+        auto rt = rage::grcTextureFactoryPC::GetRTByName("WATER_REFLECTION_COLOUR");
+        if (!pDevice || !rt || !rt->mD3DTexture)
+            return false;
+        IDirect3DSurface9* water = nullptr;
+        IDirect3DSurface9* bound = nullptr;
+        rt->mD3DTexture->GetSurfaceLevel(0, &water);
+        pDevice->GetRenderTarget(0, &bound);
+        const bool same = water && water == bound;
+        SAFE_RELEASE(water);
+        SAFE_RELEASE(bound);
+        return same;
+    }
+
     static inline injector::hook_back<int(__fastcall*)(int, void*, int, int, char, char, int, char)> hbDrawSkyHook;
+    // The sky's main branch, which also draws the water reflection's sky: the volumetric clouds go in
+    // right after it there, as into the reflection map (DrawSkyReflection).
     static int __fastcall DrawSky(int _this, void* edx, int a2, int a3, char a4, char a5, int a6, char a7)
+    {
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        const int result = DrawSkyMain(_this, edx, a2, a3, a4, a5, a6, a7);
+        if (pDevice && IsWaterReflectionTarget(pDevice))
+        {
+            ++PostFxResources.nCloudWaterReflectionCalls;
+            RenderVolumetricClouds(pDevice, nullptr, true);
+        }
+        return result;
+    }
+
+    static int DrawSkyMain(int _this, void* edx, int a2, int a3, char a4, char a5, int a6, char a7)
     {
         auto pDevice = rage::grcDevice::GetD3DDevice();
         IDirect3DPixelShader9* pShader = nullptr;
