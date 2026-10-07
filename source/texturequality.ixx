@@ -6,6 +6,7 @@ module;
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <format>
 #include <functional>
 #include <optional>
 #include <unordered_map>
@@ -65,7 +66,15 @@ class TextureQuality
     // world_terrain_and_parallax.patch marks with a constant (c186: 0.37, 0.61, 1e-12, kind).
     static inline SafetyHookInline shSetPixelShader{};
     static inline bool bPixelShaderHookTried = false;
-    static inline std::unordered_map<IDirect3DPixelShader9*, int> shaderKinds;
+    struct SeenShader
+    {
+        int kind = 0;
+        // The number every shader of the pack carries in def c219 (snippets/AddShadersSignature2.lua),
+        // after which its .asm says "// <number>"; 0 for none.
+        uint32_t signature = 0;
+        uint64_t binds = 0;
+    };
+    static inline std::unordered_map<IDirect3DPixelShader9*, SeenShader> shaderKinds;
     static inline uint64_t groundBinds[3] = {};
     static inline uint32_t groundFrames = 0;
     static inline bool bLastGround = false;
@@ -320,14 +329,12 @@ private:
         nGroundDebug = std::clamp(iniReader.ReadInteger("TEXTURES", "GroundSurfacesDebug", 0), 0, 1);
     }
 
-    // 0 for any other shader, 1 for the terrain, 2 for gta_parallax*.
-    static int GroundShaderKind(IDirect3DPixelShader9* shader)
+    // Kind 0 for any other shader, 1 for the terrain, 2 for gta_parallax*.
+    static SeenShader& GroundShaderInfo(IDirect3DPixelShader9* shader)
     {
-        if (!shader)
-            return 0;
         if (auto it = shaderKinds.find(shader); it != shaderKinds.end())
             return it->second;
-        int kind = 0;
+        SeenShader info;
         UINT size = 0;
         if (SUCCEEDED(shader->GetFunction(nullptr, &size)) && size >= 16 && size < (1u << 20))
         {
@@ -335,24 +342,27 @@ private:
             if (SUCCEEDED(shader->GetFunction(code.data(), &size)))
             {
                 const uint32_t mark[3] = { std::bit_cast<uint32_t>(0.37f), std::bit_cast<uint32_t>(0.61f), std::bit_cast<uint32_t>(1e-12f) };
+                const uint32_t sign[3] = { std::bit_cast<uint32_t>(1.8395173895e+25f), std::bit_cast<uint32_t>(3.9938258725e+24f), std::bit_cast<uint32_t>(4.5435787456e+30f) };
                 for (size_t i = 0; i + 3 < code.size(); ++i)
                 {
                     if (code[i] == mark[0] && code[i + 1] == mark[1] && code[i + 2] == mark[2])
-                    {
-                        kind = std::clamp(static_cast<int>(std::bit_cast<float>(code[i + 3])), 0, 2);
-                        break;
-                    }
+                        info.kind = std::clamp(static_cast<int>(std::bit_cast<float>(code[i + 3])), 0, 2);
+                    if (code[i] == sign[0] && code[i + 1] == sign[1] && code[i + 2] == sign[2])
+                        info.signature = code[i + 3];
                 }
             }
         }
-        shaderKinds.emplace(shader, kind);
-        return kind;
+        return shaderKinds.emplace(shader, info).first->second;
     }
 
     static HRESULT WINAPI SetPixelShaderHook(IDirect3DDevice9* pDevice, IDirect3DPixelShader9* shader)
     {
-        if (bInGBuffer && nGroundDebug)
-            ++groundBinds[GroundShaderKind(shader)];
+        if (bInGBuffer && nGroundDebug && shader)
+        {
+            auto& info = GroundShaderInfo(shader);
+            ++info.binds;
+            ++groundBinds[info.kind];
+        }
         return shSetPixelShader.unsafe_stdcall<HRESULT>(pDevice, shader);
     }
 
@@ -373,6 +383,19 @@ private:
                     bLastGround ? "on" : "off", pDetailTex ? "made" : (bDetailTexFailed ? "failed" : "not made"), nGroundDebug,
                     shSetPixelShader ? "on" : (bPixelShaderHookTried ? "failed" : "not tried"), groundFrames,
                     groundBinds[1] / frames, groundBinds[2] / frames, groundBinds[0] / frames, shaderKinds.size());
+            // Which shaders those were, the most bound first, by their number in the pack
+            std::vector<const SeenShader*> seen;
+            for (const auto& [ptr, info] : shaderKinds)
+                if (info.binds)
+                    seen.push_back(&info);
+            std::sort(seen.begin(), seen.end(), [](auto a, auto b) { return a->binds > b->binds; });
+            std::string list;
+            for (auto info : seen)
+                list += std::format("{}{} {:.1f}", list.empty() ? "" : ", ", info->signature, info->binds / frames);
+            if (!list.empty())
+                FusionLog::Write("Ground", "Shaders", "G-buffer pixel shaders by their number in the pack, binds per frame: %s\n", list.c_str());
+            for (auto& [ptr, info] : shaderKinds)
+                info.binds = 0;
             memset(groundBinds, 0, sizeof(groundBinds));
             groundFrames = 0;
         }
