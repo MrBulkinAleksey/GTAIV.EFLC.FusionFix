@@ -41,8 +41,9 @@ import settings;
 // And what keeps the cost of more props down (the game already keeps them out of shadows: it sets
 // entity +0x24 0x10000 on each, and the render lists then drop the shadow phases, CE 0xae85a5/0xae7058):
 //  - ProceduralSmallPropDistance: props drawn no further than this keep their distance (litter, cans).
-//  - ProceduralInReflections = 0: the render lists drop the reflection phases (water, type 0x11, and type
-//    0x1f, mask CE 0x159af28) for props, as for shadows.
+//  - ProceduralInReflections = 0: the render lists drop the water reflection phases for props, as for
+//    shadows: the mask CE 0x159af28 has the phases of type 0x11 (water reflection) and of type 0x1f, which
+//    is the scene itself (its bit alone in CE 0x159af24), so that one is kept.
 //  - ProceduralSpawnsPerUpdate: the queue of positions makes no more props than this an update, the rest
 //    wait for the next ones, so a jump in distance or a new area doesn't stall a frame. Waiting positions
 //    of a provider the game removed meanwhile (its requests at +0x522c, processed first) are dropped.
@@ -75,7 +76,8 @@ namespace Procedural
     void(__cdecl* GameFree)(void*) = nullptr;
     void(__cdecl* SetGrassFade)(float nearDistance, float farDistance) = nullptr;
     float* pRadius[3] = {};             // the 30 m half extents of the 2dfx box, in code
-    uint32_t* pReflectionPhases = nullptr; // CE 0x159af28, a bit a reflection render phase
+    uint32_t* pReflectionPhases = nullptr; // CE 0x159af28: the phases of type 0x11 (water reflection) and 0x1f
+    uint32_t* pScenePhase = nullptr;       // CE 0x159af24: the one of type 0x1f, the scene itself, kept
 
     std::vector<uint8_t> extraRecords;
     float fBaseNear = 0.0f;             // the manager's own near (20), read before it's first changed
@@ -324,14 +326,17 @@ namespace Procedural
     // The render lists: reflection phases off for props
     uint32_t DropReflections(uintptr_t entity, uint32_t phases)
     {
-        if (bInReflections || !pReflectionPhases || !(phases & *pReflectionPhases))
+        if (bInReflections || !pReflectionPhases || !pScenePhase)
+            return phases;
+        auto reflections = *pReflectionPhases & ~*pScenePhase;
+        if (!(phases & reflections))
             return phases;
         // Props have 0x10000 (no shadows) and 0x40000000 from the generator; few other entities have both
         constexpr uint32_t propFlags = 0x10000 | 0x40000000;
         if ((*(uint32_t*)(entity + 0x24) & propFlags) != propFlags || !IsProp(entity))
             return phases;
         nReflectionsSkipped++;
-        return phases & ~*pReflectionPhases;
+        return phases & ~reflections;
     }
 
     SafetyHookInline shUpdate;
@@ -492,6 +497,7 @@ public:
             if (!pattern.empty() && !listA.empty() && !listB.empty())
             {
                 pReflectionPhases = *pattern.get_first<uint32_t*>(2);
+                pScenePhase = *listB.get_first<uint32_t*>(0xD); // test [0x159af24], edx after the je
                 static auto ListAHook = safetyhook::create_mid(listA.get_first(0), [](SafetyHookContext& regs)
                 {
                     regs.ecx = DropReflections(regs.esi, uint32_t(regs.ecx));
