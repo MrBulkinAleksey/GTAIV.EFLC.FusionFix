@@ -3422,7 +3422,9 @@ public:
 
         pattern = find_pattern("A3 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? E8 ? ? ? ? A1", "A3 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? E8 ? ? ? ? 8B 0D");
         RageDirect3DDevice9::m_pRealDevice = *pattern.get_first<IDirect3DDevice9**>(1);
-        static auto StoreDeviceHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
+        // On the instruction after the store, eax still holds the device: the store itself ends the pattern
+        // "83 C4 0C A1 ? ? ? ? A3" that other plugins (Xbox Rain Droplets) look for, and they crash without it.
+        static auto StoreDeviceHook = safetyhook::create_mid(pattern.get_first(5), [](SafetyHookContext& regs)
         {
             RageDirect3DDevice9::RuntimeDevice = reinterpret_cast<IDirect3DDevice9*>(regs.eax);
         });
