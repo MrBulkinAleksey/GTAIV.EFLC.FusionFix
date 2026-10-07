@@ -332,6 +332,7 @@ public:
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY, vec4WaterRings;
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D, SSRHitDistTex2D;
+        D3DXHANDLE MarchDepthTex2D, fStepsPerPixel;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
         D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
@@ -821,6 +822,8 @@ public:
     bool bPostFxProfiler = false;
     float fSSRTowardCamera = 0.0f;
     float fSSRReflectionBlur = 0.0f;
+    // ScreenSpaceReflectionsStepPixels: pixels of a ray on the march's target per step, 2 by default.
+    float fSSRStepPixels = 2.0f;
     float fSSRDistanceFade = 0.0f;
     float fSSRFallback = 0.8f;
     rage::grcRenderTargetPC* SSRDenoisedTex = nullptr;
@@ -847,6 +850,10 @@ public:
     // target it is drawn with.
     rage::grcRenderTargetPC* SSRHitDistTex[2] = {};
     IDirect3DSurface9* SSRHitDistSurf[2] = {};
+    // View depth at half the full size, the nearest of each 2x2 pixels (MarchDepth_PS), which the
+    // march steps through at either SSR size; R32F.
+    rage::grcRenderTargetPC* SSRMarchDepthTex = nullptr;
+    IDirect3DSurface9* SSRMarchDepthSurf = nullptr;
     // Accumulation over frames (SSRTemporal_PS in SSR.fx): each frame blends the smoothed
     // result with the previous accumulation into the other target of a pair, one pair per
     // resolution. ScreenSpaceReflectionsTemporal is the share of the history kept, 0 turns
@@ -1382,6 +1389,8 @@ public:
                 h.SSRAccumTex2D = SSREffect->GetParameterByName(nullptr, "SSRAccumTex2D");
                 h.SSRFallbackTex2D = SSREffect->GetParameterByName(nullptr, "SSRFallbackTex2D");
                 h.SSRHitDistTex2D = SSREffect->GetParameterByName(nullptr, "SSRHitDistTex2D");
+                h.MarchDepthTex2D = SSREffect->GetParameterByName(nullptr, "MarchDepthTex2D");
+                h.fStepsPerPixel = SSREffect->GetParameterByName(nullptr, "fStepsPerPixel");
                 h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
                 h.techSSRTemporal = SSREffect->GetTechniqueByName("SSRTemporal");
                 h.MotionTex2D = SSREffect->GetParameterByName(nullptr, "MotionTex2D");
@@ -1591,6 +1600,7 @@ public:
         fLightsGGXMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXMax", 2.0f), 0.1f, 16.0f);
         fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 1.5f), 0.0f, 8.0f);
+        fSSRStepPixels = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStepPixels", 2.0f), 1.0f, 8.0f);
         fLightsGGXSoft = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSoft", 0.0f), 0.0f, 1.0f);
         fLightsGGXStretchView = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXStretchView", 1.0f), 0.0f, 1.0f);
         fLightsGGXGlints = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlints", 1.0f), 0.0f, 8.0f);
@@ -2576,6 +2586,7 @@ private:
         PostFxResources.bSSRDenoised = false;
         SAFE_RELEASE(PostFxResources.SSRHalfSurf);
         SAFE_RELEASE(PostFxResources.SSRHalfDenoisedSurf);
+        SAFE_RELEASE(PostFxResources.SSRMarchDepthSurf);
         for (int i = 0; i < 2; ++i)
         {
             SAFE_RELEASE(PostFxResources.SSRTraceSurf[i]);
@@ -2586,7 +2597,7 @@ private:
         for (auto* rt : { &PostFxResources.SSRHalfTex, &PostFxResources.SSRHalfDenoisedTex, &PostFxResources.SSRTraceTex[0],
                           &PostFxResources.SSRTraceTex[1], &PostFxResources.SSRFallbackTex[0], &PostFxResources.SSRFallbackTex[1],
                           &PostFxResources.SSRSpreadTex[0], &PostFxResources.SSRSpreadTex[1], &PostFxResources.SSRHitDistTex[0],
-                          &PostFxResources.SSRHitDistTex[1] })
+                          &PostFxResources.SSRHitDistTex[1], &PostFxResources.SSRMarchDepthTex })
         {
             if (*rt)
             {
@@ -2933,6 +2944,9 @@ private:
                         PostFxResources.SSRHitDistTex[half] = rage::CreateEmptyRenderTarget(half ? "SSRHalfHitDistTex" : "SSRHitDistTex",
                             w, hgt, 64, aoDesc, PostFxResources.SSRHitDistSurf[half]);
                 }
+                auto marchDesc = rage::OwnRenderTargetDesc(rage::GRCFMT_R32F);
+                PostFxResources.SSRMarchDepthTex = rage::CreateEmptyRenderTarget("SSRMarchDepthTex", width / 2, height / 2, 32, marchDesc,
+                    PostFxResources.SSRMarchDepthSurf);
             }
 
             PostFxResources.ContactRawTex = rage::CreateEmptyRenderTarget("ContactShadowRawTex", width, height, 64, aoDesc, PostFxResources.ContactRawSurf);
@@ -5111,11 +5125,12 @@ private:
         if (vp)
             SSRTrace::Line("ssr: vp %p %dx%d near %.3f far %.1f", static_cast<void*>(vp), int(vp->mWidth), int(vp->mHeight), vp->mNearClip, vp->mFarClip);
         if (!R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex || !vp || R.fSSRIntensity <= 0.0f ||
-            !R.SSRTraceSurf[0] || !R.SSRFallbackSurf[0])
+            !R.SSRTraceSurf[0] || !R.SSRFallbackSurf[0] || !R.SSRMarchDepthSurf)
         {
-            SSRTrace::Line("ssr: left, effect %p depth %p history %p vp %p intensity %.2f trace %p fallback %p",
+            SSRTrace::Line("ssr: left, effect %p depth %p history %p vp %p intensity %.2f trace %p fallback %p march depth %p",
                 static_cast<void*>(R.SSREffect), static_cast<void*>(R.mDepthRT), static_cast<void*>(R.SSRHistoryTex),
-                static_cast<void*>(vp), R.fSSRIntensity, static_cast<void*>(R.SSRTraceSurf[0]), static_cast<void*>(R.SSRFallbackSurf[0]));
+                static_cast<void*>(vp), R.fSSRIntensity, static_cast<void*>(R.SSRTraceSurf[0]), static_cast<void*>(R.SSRFallbackSurf[0]),
+                static_cast<void*>(R.SSRMarchDepthSurf));
             clearSSR();
             R.nSSRAccumFrame = 0;
             return;
@@ -5219,6 +5234,7 @@ private:
         effect->SetFloat(h.fIntensity, R.fSSRIntensity);
         effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);
         effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
+        effect->SetFloat(h.fStepsPerPixel, 1.0f / R.fSSRStepPixels);
         const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1] &&
                               R.SSRHitDistSurf[half];
         SetNoiseOffset(effect, temporal && R.bSSRTemporalJitter);
@@ -5303,6 +5319,14 @@ private:
                         unsigned(rtHr), unsigned(passHr), unsigned(drawHr));
                 }
             };
+            // The depth the march steps through, at half the full size whatever size SSR runs at;
+            // timed with the march.
+            ProfilerMark(pDevice, kProfSSRTrace, true);
+            setPassSize(float(DWORD(width) / 2), float(DWORD(height) / 2));
+            draw(4, R.SSRMarchDepthSurf);
+            setPassSize(half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height);
+            effect->SetTexture(h.MarchDepthTex2D, R.SSRMarchDepthTex->mD3DTexture);
+
             // The march also writes how far its rays went, for the accumulation.
             IDirect3DSurface9* oldTarget1 = nullptr;
             if (temporal)
@@ -5310,7 +5334,6 @@ private:
                 pDevice->GetRenderTarget(1, &oldTarget1);
                 pDevice->SetRenderTarget(1, R.SSRHitDistSurf[half]);
             }
-            ProfilerMark(pDevice, kProfSSRTrace, true);
             draw(0, R.SSRTraceSurf[half]);
             ProfilerMark(pDevice, kProfSSRTrace, false);
             if (temporal)
