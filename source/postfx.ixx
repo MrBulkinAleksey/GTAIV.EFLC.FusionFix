@@ -485,6 +485,7 @@ public:
         float colour[3];
         float radius;
         float distance;
+        bool twin;
     };
     GlintLight GlintCandidates[kGlintCandidates] = {};
     uint32_t nGlintCandidates = 0;
@@ -3300,12 +3301,12 @@ private:
                 for (auto& c : d)
                     c /= len;
             // The car's level right, dir x up, as SetLightGGXShape takes it; a light aimed straight up
-            // or down keeps one lamp.
+            // or down, or a lamp alone, keeps one lamp.
             const float kx = d[1], ky = -d[0];
             const float rlen = std::sqrt(kx * kx + ky * ky);
             const bool level = rlen > 1e-3f;
             // The game's own highlight ends at about two thirds of the light's radius.
-            position[i] = D3DXVECTOR4(g.position[0], g.position[1], g.position[2], level ? R.fLightsGGXHeadlights : 0.0f);
+            position[i] = D3DXVECTOR4(g.position[0], g.position[1], g.position[2], level && g.twin ? R.fLightsGGXHeadlights : 0.0f);
             direction[i] = D3DXVECTOR4(d[0], d[1], d[2], 1.0f / (0.66f * g.radius));
             right[i] = D3DXVECTOR4(level ? kx / rlen : 0.0f, level ? ky / rlen : 0.0f, 0.0f, 0.0f);
             colour[i] = D3DXVECTOR4(g.colour[0], g.colour[1], g.colour[2], 0.0f);
@@ -7938,6 +7939,14 @@ private:
     // c206 for the light about to be drawn: a headlight's (a spot light of 8 m or more with the
     // vehicle flag, as InstallShaftHooks tells them) the car's level right and half its lamps'
     // spacing, from which the shaders take its highlight as one from each lamp; other lights none.
+    // Only the beam of both lamps is split: the game draws a car's two lamps as one light between
+    // them with the "headlights" projected texture (CE 0xA3E070), and a lamp left alone by a broken
+    // one as a light of its own at that lamp with none (0xA3DE90), whose highlight stays one.
+    static bool IsTwinHeadlight(const rage::CLightSource& light)
+    {
+        return light.mProjTexHash != 0;
+    }
+
     static void SetLightGGXShape(const rage::CLightSource& light)
     {
         auto& R = PostFxResources;
@@ -7952,7 +7961,7 @@ private:
             {
                 shape[0] = kx / len;
                 shape[1] = ky / len;
-                shape[3] = R.fLightsGGXHeadlights;
+                shape[3] = IsTwinHeadlight(light) ? R.fLightsGGXHeadlights : 0.0f;
                 ++R.nLightGGXHeadlights;
             }
         }
@@ -7985,6 +7994,7 @@ private:
         g.colour[2] = light.mColor.z * light.mIntensity;
         g.radius = light.mRadius;
         g.distance = 0.0f;
+        g.twin = IsTwinHeadlight(light);
         // What the game gives headlights, for the log: the ranges of intensity and outer cone.
         if (R.nGlintCandidates == 1)
         {
