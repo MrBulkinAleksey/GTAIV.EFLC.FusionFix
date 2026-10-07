@@ -660,6 +660,8 @@ public:
     // The sky's brightness this frame, 1 x 1, which the clouds are matched to (CloudsSkyRef).
     rage::grcRenderTargetPC* CloudSkyRefTex = nullptr;
     IDirect3DSurface9* CloudSkyRefSurf = nullptr;
+    // The frame it was last drawn in, 0 never: the reflections take the sky's hue from it.
+    uint32_t nCloudSkyRefFrame = 0;
     // The march's sums at half size, which CloudsLight lights: (transmittance, sun, shade, silver)
     // and (glow, first hit).
     rage::grcRenderTargetPC* CloudMarchTex[2] = {};
@@ -2945,6 +2947,7 @@ private:
                 // Cleared: it is only ever blended into, and a NaN left in it would stay for good.
                 if (PostFxResources.CloudSkyRefSurf && pDevice)
                     pDevice->ColorFill(PostFxResources.CloudSkyRefSurf, nullptr, D3DCOLOR_ARGB(0, 0, 0, 0));
+                PostFxResources.nCloudSkyRefFrame = 0;
             }
             PostFxResources.SSRHalfDenoisedTex = rage::CreateEmptyRenderTarget("SSRHalfDenoisedTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfDenoisedSurf);
             {
@@ -6010,17 +6013,18 @@ private:
         const bool canReadScene = !reflection && R.CloudSurf[0] && R.CloudSurf[1] && R.CloudSurf[2] && R.CloudSkyRefSurf &&
                                   R.CloudMarchSurf[0] && R.CloudMarchSurf[1];
         // The shaded side is lit by the sky above it rather than the sun: it takes the sky's hue at its
-        // own brightness, by VolumetricCloudsSkyLight, and the sunlit side some of it too. Where the
-        // scene can be read, the hue of the sky on screen (CloudsSkyRef, in Clouds.fx): the game's
-        // SkyColor stays bluish under a pink evening sky, and the clouds came out white against it.
-        // Elsewhere SkyColor's hue.
+        // own brightness, by VolumetricCloudsSkyLight, and the sunlit side some of it too. The hue of
+        // the sky on screen (CloudsSkyRef, in Clouds.fx), the reflections that of the frame before:
+        // the game's SkyColor stays bluish under a pink evening sky, and the clouds came out white
+        // against it. SkyColor's hue only while there is no sky colour of a recent frame.
         constexpr float kCloudLitSkyHue = 0.4f;
+        const bool skyRefRecent = R.CloudSkyRefTex && R.nCloudSkyRefFrame && FrameHistory::Frame() - R.nCloudSkyRefFrame <= 2;
         {
-            const float skyHue[3] = { canReadScene ? R.fVolumetricCloudsSkyLight : 0.0f, canReadScene ? kCloudLitSkyHue : 0.0f,
+            const float skyHue[3] = { skyRefRecent ? R.fVolumetricCloudsSkyLight : 0.0f, skyRefRecent ? kCloudLitSkyHue : 0.0f,
                                       R.fVolumetricCloudsSaturation };
             effect->SetFloatArray("vec3SkyHue", skyHue, 3);
         }
-        if (!canReadScene)
+        if (!skyRefRecent)
         {
             const auto& skyColour = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
             const float skyLuma = 0.2126f * skyColour[0] + 0.7152f * skyColour[1] + 0.0722f * skyColour[2];
@@ -6029,7 +6033,7 @@ private:
                 for (int i = 0; i < 3; ++i)
                     shadeColour[i] += ((std::max)(skyColour[i], 0.0f) / skyLuma * shadeLuma - shadeColour[i]) * R.fVolumetricCloudsSkyLight;
         }
-        if (!canReadScene)
+        if (!skyRefRecent)
         {
             const auto& skyColour = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
             const float skyLuma = 0.2126f * skyColour[0] + 0.7152f * skyColour[1] + 0.0722f * skyColour[2];
@@ -6291,7 +6295,7 @@ private:
             effect->BeginPass(0);
             effect->CommitChanges();
             // Never the scene while drawing into it.
-            bindTextures(halfSize && target != sceneSurface, halfSize && target != R.CloudSkyRefSurf, halfSize && target == R.CloudSurf[0]);
+            bindTextures(halfSize && target != sceneSurface, target != R.CloudSkyRefSurf, halfSize && target == R.CloudSurf[0]);
             BindEffectConstantsOnly(pDevice, effect);
             ProfilerScope timedPass(pDevice, reflection ? -1 : profile);
             pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
@@ -6307,6 +6311,7 @@ private:
                 const D3DXVECTOR4 skyRefProj = ProjInfo(proj, 1.0f, 1.0f);
                 effect->SetVector("vec4SkyRefProj", &skyRefProj);
                 drawPass("CloudsSkyRef", R.CloudSkyRefSurf, 1.0f, 1.0f, true, kProfCloudsSkyRef);
+                R.nCloudSkyRefFrame = FrameHistory::Frame();
             }
             // The march into its two targets, then its light into the half size clouds.
             pDevice->SetRenderTarget(1, R.CloudMarchSurf[1]);

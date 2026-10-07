@@ -81,7 +81,7 @@ float fCeiling;
 // is, over that sunlit side's luma; 0 leaves them at the game's cloud colour.
 float fSkyMatch;           // the brightest channel the cloud rolls off towards (at most the sky's clamp without HDR)
 // How much the sky's own hue on screen (CloudsSkyRef) tints the shaded side (x) and the sunlit side
-// (y), and VolumetricCloudsSaturation (z); 0 while the march cannot read the scene.
+// (y), and VolumetricCloudsSaturation (z); 0 while there is no sky colour of a recent frame.
 float3 vec3SkyHue;
 float3 vec3SunTint;       // the hue of the game's SunColor at its brightness 1, mixed towards white by VolumetricCloudsSunTint
 float3 vec3GlowColour;    // the game's cloud colour, exposed, in the sun's own hue: the sunlight straight through
@@ -569,18 +569,13 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     float3 sunLit = vec3LitColour * vec3SunTint;
     float3 shadeColour = vec3ShadeColour;
     // The sky lights the clouds too, in the colour it has on screen: pink at dusk, grey in rain. The
-    // game's SkyColor is not that colour, and the clouds took a bluish white under a pink sky.
-    float3 skyRef = 0.0;
-    float skyLuma = 0.0;
-    [branch]
-    if (full && fSkyMatch > 0.0)
-    {
-        skyRef = tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).rgb;
-        skyLuma = dot(skyRef, float3(0.2126, 0.7152, 0.0722));
-        float3 hue = skyLuma > 1e-4 ? lerp(1.0, clamp(skyRef / skyLuma, 0.0, 3.0), vec3SkyHue.z) : 1.0;
-        shadeColour = lerp(shadeColour, dot(shadeColour, float3(0.2126, 0.7152, 0.0722)) * hue, vec3SkyHue.x);
-        sunLit = lerp(sunLit, dot(sunLit, float3(0.2126, 0.7152, 0.0722)) * hue, vec3SkyHue.y);
-    }
+    // game's SkyColor is not that colour, and the clouds took a bluish white under a pink sky. The
+    // reflections take the scene's sky of the frame before.
+    float3 skyRef = tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).rgb;
+    float skyLuma = dot(skyRef, float3(0.2126, 0.7152, 0.0722));
+    float3 hue = skyLuma > 1e-4 ? lerp(1.0, clamp(skyRef / skyLuma, 0.0, 3.0), vec3SkyHue.z) : 1.0;
+    shadeColour = lerp(shadeColour, dot(shadeColour, float3(0.2126, 0.7152, 0.0722)) * hue, vec3SkyHue.x);
+    sunLit = lerp(sunLit, dot(sunLit, float3(0.2126, 0.7152, 0.0722)) * hue, vec3SkyHue.y);
     // Each term apart, so VolumetricCloudsDebug 3 to 11 can show it alone.
     float3 termBase = shadeColour * sums.shade + sunLit * sums.sun;
     // Towards the sun only: the game's cos^2 lit the clouds' edges as brightly with the sun behind the
