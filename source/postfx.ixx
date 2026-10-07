@@ -2675,6 +2675,7 @@ private:
             PostFxResources.SSREffect->OnLostDevice();
         if (PostFxResources.CloudsEffect)
             PostFxResources.CloudsEffect->OnLostDevice();
+        EffectBindings().clear();
         if (PostFxResources.WetGroundEffect)
             PostFxResources.WetGroundEffect->OnLostDevice();
         PostFxResources.ReleaseWetCopies();
@@ -2868,12 +2869,15 @@ private:
             {
                 PostFxResources.ContactRawHalfTex = rage::CreateEmptyRenderTarget("ContactShadowRawHalfTex", width / 2, height / 2, 64, aoDesc, PostFxResources.ContactRawHalfSurf);
             }
-            PostFxResources.ContactTex = rage::CreateEmptyRenderTarget("ContactShadowTex", width, height, 64, aoDesc, PostFxResources.ContactSurf);
+            // Smoothed and accumulated at the size they are marched at, brought up to full size last
+            const int contactWidth = PostFxResources.bContactShadowsHalfRes ? width / 2 : width;
+            const int contactHeight = PostFxResources.bContactShadowsHalfRes ? height / 2 : height;
+            PostFxResources.ContactTex = rage::CreateEmptyRenderTarget("ContactShadowTex", contactWidth, contactHeight, 64, aoDesc, PostFxResources.ContactSurf);
             if (PostFxResources.fContactTemporalBlend > 0.0f)
             {
                 static const char* names[2] = { "ContactShadowAccumTex0", "ContactShadowAccumTex1" };
                 for (int i = 0; i < 2; ++i)
-                    PostFxResources.ContactAccumTex[i] = rage::CreateEmptyRenderTarget(names[i], width, height, 64, aoDesc, PostFxResources.ContactAccumSurf[i]);
+                    PostFxResources.ContactAccumTex[i] = rage::CreateEmptyRenderTarget(names[i], contactWidth, contactHeight, 64, aoDesc, PostFxResources.ContactAccumSurf[i]);
             }
 
             if (PostFxResources.fSSRTemporalBlend > 0.0f)
@@ -4442,18 +4446,43 @@ private:
     // parameter holds, found through the shader's constant table (sampler X reads X2D in SSR.fx
     // and AO.fx). D3DX left some holding what the game had bound, about four a frame in the SSR
     // passes: a diagnostic pass read a G-buffer texture where it sampled the depth.
-    // Each shader's samplers are looked up for every draw, from its bytecode and constant table,
-    // a few dozen draws a frame. Kept per effect and shader they went wrong in play: the smoothing
-    // and accumulation of SSR left registers with what the game had bound, a G-buffer texture
-    // where they sampled the specular one, and SSR came out empty, while it worked in the pause
-    // menu, where the game had bound others.
+    // Which register takes which parameter is read once per effect and shader from the shader's
+    // constant table and kept (EffectBindings), as the effects keep their shaders for the whole
+    // game; cleared on a lost device. What the registers get is written for every draw, through the
+    // game's device wrapper and the device both: SSR coming out empty in play, while it worked in the
+    // pause menu, was the wrapper dropping textures it had on record (SetTextureBoth), not this map.
 
     // The same holds for the float constants: with the ones D3DX left, SSGI's accumulation decoded the right depth
     // (6.1 m) as 15.3 m through fNearPlane and fFarDivNear while vec2PrevDepthRange, in another register, came through.
     // Each float constant of the shader is written from its parameter, a register per vector or array element.
-    struct EffectConstant { UINT reg; UINT count; D3DXHANDLE param; std::string name; D3DXREGISTER_SET set; };
+    struct EffectConstant
+    {
+        UINT reg; UINT count; D3DXHANDLE param; std::string name; D3DXREGISTER_SET set;
+        // From the parameter's description: a scalar or vector of floats, integers or booleans, and its elements
+        bool usable = false;
+        D3DXPARAMETER_TYPE type = D3DXPT_FLOAT;
+        UINT columns = 0;
+        std::vector<D3DXHANDLE> elements;
+    };
 
-    struct EffectSampler { UINT reg; D3DXHANDLE param; std::string name; };
+    struct EffectSampler
+    {
+        UINT reg; D3DXHANDLE param; std::string name;
+        bool setStates = false;     // SSR.fx's samplers below kSSRSamplerSlots, whose states its callers save
+        SamplerStates states{};
+    };
+
+    struct EffectBinding
+    {
+        std::vector<EffectSampler> samplers;
+        std::vector<EffectConstant> constants;
+    };
+
+    static std::map<std::pair<ID3DXEffect*, IDirect3DPixelShader9*>, EffectBinding>& EffectBindings()
+    {
+        static std::map<std::pair<ID3DXEffect*, IDirect3DPixelShader9*>, EffectBinding> bindings;
+        return bindings;
+    }
 
     static std::vector<EffectSampler> FindEffectSamplers(ID3DXEffect* effect, IDirect3DPixelShader9* ps,
                                                          std::vector<EffectConstant>* constants = nullptr)
@@ -4499,21 +4528,18 @@ private:
         std::string traced;
         for (const auto& c : constants)
         {
-            D3DXPARAMETER_DESC pd = {};
-            if (FAILED(effect->GetParameterDesc(c.param, &pd)) ||
-                (pd.Type != D3DXPT_FLOAT && pd.Type != D3DXPT_INT && pd.Type != D3DXPT_BOOL) ||
-                (pd.Class != D3DXPC_SCALAR && pd.Class != D3DXPC_VECTOR) || c.count == 0 || c.count > 16)
+            if (!c.usable)
                 continue;
-            const UINT elements = pd.Elements ? (std::min)(pd.Elements, c.count) : 1;
-            const UINT columns = (std::min)(pd.Columns, 4u);
+            const UINT elements = UINT(c.elements.size());
+            const UINT columns = c.columns;
             // Integers and booleans in their own register sets (loop counters, static branches)
             if (c.set == D3DXRS_INT4 || c.set == D3DXRS_BOOL)
             {
                 int values[16 * 4] = {};
                 for (UINT e = 0; e < elements; ++e)
                 {
-                    D3DXHANDLE h = pd.Elements ? effect->GetParameterElement(c.param, e) : c.param;
-                    if (pd.Type == D3DXPT_FLOAT)
+                    D3DXHANDLE h = c.elements[e];
+                    if (c.type == D3DXPT_FLOAT)
                     {
                         float f[4] = {};
                         effect->GetFloatArray(h, f, columns);
@@ -4545,8 +4571,8 @@ private:
             float want[16 * 4] = {};
             for (UINT e = 0; e < elements; ++e)
             {
-                D3DXHANDLE h = pd.Elements ? effect->GetParameterElement(c.param, e) : c.param;
-                if (pd.Type == D3DXPT_FLOAT)
+                D3DXHANDLE h = c.elements[e];
+                if (c.type == D3DXPT_FLOAT)
                     effect->GetFloatArray(h, &want[e * 4], columns);
                 else
                 {
@@ -4560,13 +4586,13 @@ private:
             RealDevice(pDevice)->GetPixelShaderConstantF(c.reg, have, c.count);
             bool differs = false;
             for (UINT e = 0; e < elements; ++e)
-                for (UINT k = 0; k < (std::min)(pd.Columns, 4u); ++k)
+                for (UINT k = 0; k < columns; ++k)
                     differs |= want[e * 4 + k] != have[e * 4 + k];
             if (differs)
             {
                 // The components the shader does not read keep what the register held
                 for (UINT e = 0; e < c.count; ++e)
-                    for (UINT k = (e < elements ? (std::min)(pd.Columns, 4u) : 0u); k < 4; ++k)
+                    for (UINT k = (e < elements ? columns : 0u); k < 4; ++k)
                         want[e * 4 + k] = have[e * 4 + k];
                 pDevice->SetPixelShaderConstantF(c.reg, want, c.count);
                 if (auto real = RealDevice(pDevice); real != pDevice)
@@ -4583,6 +4609,51 @@ private:
             SSRTrace::Line("  constants set:%s", traced.c_str());
     }
 
+    // The registers of a shader of an effect and the parameters they take, read once
+    static const EffectBinding& GetEffectBinding(ID3DXEffect* effect, IDirect3DPixelShader9* ps)
+    {
+        auto& bindings = EffectBindings();
+        const auto key = std::make_pair(effect, ps);
+        if (auto it = bindings.find(key); it != bindings.end())
+            return it->second;
+
+        EffectBinding binding;
+        binding.samplers = FindEffectSamplers(effect, ps, &binding.constants);
+        for (auto& c : binding.constants)
+        {
+            D3DXPARAMETER_DESC pd = {};
+            c.usable = SUCCEEDED(effect->GetParameterDesc(c.param, &pd)) &&
+                (pd.Type == D3DXPT_FLOAT || pd.Type == D3DXPT_INT || pd.Type == D3DXPT_BOOL) &&
+                (pd.Class == D3DXPC_SCALAR || pd.Class == D3DXPC_VECTOR) && c.count > 0 && c.count <= 16;
+            if (!c.usable)
+                continue;
+            c.type = pd.Type;
+            c.columns = (std::min)(pd.Columns, 4u);
+            const UINT elements = pd.Elements ? (std::min)(pd.Elements, c.count) : 1;
+            for (UINT e = 0; e < elements; ++e)
+                c.elements.push_back(pd.Elements ? effect->GetParameterElement(c.param, e) : c.param);
+        }
+        if (effect == PostFxResources.SSREffect)
+        {
+            for (auto& sampler : binding.samplers)
+            {
+                if (sampler.reg >= kSSRSamplerSlots)
+                    continue;
+                auto found = SSRSamplerStates.find(sampler.name);
+                sampler.setStates = true;
+                sampler.states = found != SSRSamplerStates.end() ? found->second
+                    : SamplerStates{ D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP };
+            }
+        }
+        // A shader whose table could not be read is tried again next time
+        if (binding.samplers.empty() && binding.constants.empty())
+        {
+            static EffectBinding none;
+            return none;
+        }
+        return bindings.emplace(key, std::move(binding)).first->second;
+    }
+
     // Writes the textures (and the float, int and bool constants) of the bound pixel shader from the effect's parameters,
     // and for SSR.fx, whose callers save samplers 0 to kSSRSamplerSlots - 1 around their passes, the sampler states.
     static void BindEffectConstantsOnly(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
@@ -4590,10 +4661,9 @@ private:
         IDirect3DPixelShader9* ps = nullptr;
         if (FAILED(pDevice->GetPixelShader(&ps)) || !ps)
             return;
-        std::vector<EffectConstant> constants;
-        FindEffectSamplers(effect, ps, &constants);
+        const auto& binding = GetEffectBinding(effect, ps);
         ps->Release();
-        BindEffectConstants(pDevice, effect, constants);
+        BindEffectConstants(pDevice, effect, binding.constants);
     }
 
     static void BindEffectSamplers(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
@@ -4601,21 +4671,20 @@ private:
         IDirect3DPixelShader9* ps = nullptr;
         if (FAILED(pDevice->GetPixelShader(&ps)) || !ps)
             return;
-        std::vector<EffectConstant> constants;
-        const auto samplers = FindEffectSamplers(effect, ps, &constants);
-        BindEffectConstants(pDevice, effect, constants);
+        const auto& binding = GetEffectBinding(effect, ps);
+        const auto& samplers = binding.samplers;
+        BindEffectConstants(pDevice, effect, binding.constants);
         const void* shader = ps;
         ps->Release();
 
         std::string traced;
-        const bool states = effect == PostFxResources.SSREffect;
-        for (const auto& [reg, param, name] : samplers)
+        for (const auto& sampler : samplers)
         {
-            if (states && reg < kSSRSamplerSlots)
+            const UINT reg = sampler.reg;
+            const D3DXHANDLE param = sampler.param;
+            if (sampler.setStates)
             {
-                auto found = SSRSamplerStates.find(name);
-                const SamplerStates st = found != SSRSamplerStates.end() ? found->second
-                    : SamplerStates{ D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP };
+                const SamplerStates& st = sampler.states;
                 SetSamplerStateBoth(pDevice, reg, D3DSAMP_MINFILTER, st[0]);
                 SetSamplerStateBoth(pDevice, reg, D3DSAMP_MAGFILTER, st[1]);
                 SetSamplerStateBoth(pDevice, reg, D3DSAMP_MIPFILTER, st[2]);
@@ -4626,7 +4695,8 @@ private:
             IDirect3DBaseTexture9* want = nullptr;
             IDirect3DBaseTexture9* have = nullptr;
             effect->GetTexture(param, &want);
-            RealDevice(pDevice)->GetTexture(reg, &have);
+            if (SSRTrace::Active())
+                RealDevice(pDevice)->GetTexture(reg, &have);
             // Always, through both: the wrapper may hold want on record while the device has another
             SetTextureBoth(pDevice, reg, want);
             if (SSRTrace::Active())
@@ -4948,11 +5018,11 @@ private:
         }
         {
             // The march, the guess for its misses (skipped while ScreenSpaceReflectionsFallback is
-            // 0, SSR_PS then does not read it), and the two together.
+            // 0, SSR_PS then does not read it), and the two together. Each draws every pixel of
+            // the viewport, no blending, nothing discarded: nothing is cleared first.
             auto draw = [&](UINT pass, IDirect3DSurface9* target)
             {
                 const HRESULT rtHr = pDevice->SetRenderTarget(0, target);
-                pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
                 const HRESULT passHr = effect->BeginPass(pass);
                 effect->CommitChanges();
                 BindEffectSamplers(pDevice, effect);
@@ -4968,7 +5038,7 @@ private:
                         unsigned(rtHr), unsigned(passHr), unsigned(drawHr));
                 }
             };
-            // The march also writes how far its rays went, for the accumulation; Clear clears both.
+            // The march also writes how far its rays went, for the accumulation.
             IDirect3DSurface9* oldTarget1 = nullptr;
             if (temporal)
             {
@@ -6899,34 +6969,32 @@ private:
         vpDesc.MaxZ = 1.0f;
         pDevice->SetViewport(&vpDesc);
 
-        if (R.bContactShadowsHalfRes && R.ContactRawHalfSurf && h.techContactUpsample)
-        {
-            // The march at half size, with the pixel size and reconstruction basis of that size,
-            // then back to full size for the rest.
-            const float halfWidth = float(DWORD(width) / 2), halfHeight = float(DWORD(height) / 2);
-            SetTargetSize(effect, h, proj, halfWidth, halfHeight);
-            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawHalfSurf, halfWidth, halfHeight, kProfContactMarch);
-            SetTargetSize(effect, h, proj, width, height);
-            effect->SetTexture(h.SSRResultTex2D, R.ContactRawHalfTex->mD3DTexture);
-            DrawEffectPass(pDevice, effect, h.techContactUpsample, R.ContactRawSurf, width, height, kProfContactUpsample);
-        }
-        else
-            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawSurf, width, height, kProfContactMarch);
+        // At half size the march, the smoothing and the accumulation run on the half size targets, with the pixel
+        // size and reconstruction basis of that size, and the result is brought up to full size last, as for the
+        // indirect light. Should the half size march target be missing, the full size march goes on its own: the
+        // smoothing and accumulation targets are of the half size.
+        const bool halfTargets = R.bContactShadowsHalfRes;
+        const bool half = halfTargets && R.ContactRawHalfSurf && h.techContactUpsample;
+        const bool smooth = half || !halfTargets;
+        const float passWidth = half ? float(DWORD(width) / 2) : width;
+        const float passHeight = half ? float(DWORD(height) / 2) : height;
+        if (half)
+            SetTargetSize(effect, h, proj, passWidth, passHeight);
+        DrawEffectPass(pDevice, effect, h.techContactShadows, half ? R.ContactRawHalfSurf : R.ContactRawSurf, passWidth, passHeight, kProfContactMarch);
 
         // The same depth aware smoothing SSR uses; the raw result has alpha 1 everywhere, so
-        // it is a plain weighted blur.
-        IDirect3DTexture9* result = R.ContactRawTex->mD3DTexture;
-        if (R.fSSRDenoiseRadius > 0.0f && h.techSSRDenoise)
+        // it is a plain weighted blur. The radius is in full size pixels.
+        IDirect3DTexture9* result = half ? R.ContactRawHalfTex->mD3DTexture : R.ContactRawTex->mD3DTexture;
+        if (smooth && R.fSSRDenoiseRadius > 0.0f && h.techSSRDenoise)
         {
-            effect->SetTexture(h.SSRResultTex2D, R.ContactRawTex->mD3DTexture);
-            effect->SetFloat(h.fDenoiseRadius, R.fSSRDenoiseRadius);
+            effect->SetTexture(h.SSRResultTex2D, result);
+            effect->SetFloat(h.fDenoiseRadius, half ? R.fSSRDenoiseRadius * 0.5f : R.fSSRDenoiseRadius);
             effect->SetFloat(h.fDenoiseSSROnly, 0.0f);
-            DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.ContactSurf, width, height, kProfContactDenoise);
+            DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.ContactSurf, passWidth, passHeight, kProfContactDenoise);
             result = R.ContactTex->mD3DTexture;
         }
-        R.ContactResult = result;
 
-        if (temporal)
+        if (temporal && smooth)
         {
             // Without a history to reproject the blend is 0, any camera does
             D3DXMATRIX prevViewProj;
@@ -6948,13 +7016,21 @@ private:
             effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
             BindMotionVectors(effect, accumWasValid);
             effect->SetFloat(h.fTemporalBlend, accumWasValid ? R.fContactTemporalBlend : 0.0f);
-            DrawEffectPass(pDevice, effect, h.techContactTemporal, R.ContactAccumSurf[next], width, height, kProfContactTemporal);
+            DrawEffectPass(pDevice, effect, h.techContactTemporal, R.ContactAccumSurf[next], passWidth, passHeight, kProfContactTemporal);
 
             result = R.ContactAccumTex[next]->mD3DTexture;
-            R.ContactResult = result;
             R.nContactAccumIndex = next;
             R.nContactAccumFrame = FrameHistory::Frame();
         }
+
+        if (half)
+        {
+            SetTargetSize(effect, h, proj, width, height);
+            effect->SetTexture(h.SSRResultTex2D, result);
+            DrawEffectPass(pDevice, effect, h.techContactUpsample, R.ContactRawSurf, width, height, kProfContactUpsample);
+            result = R.ContactRawTex->mD3DTexture;
+        }
+        R.ContactResult = result;
 
         if (R.SSRDebugMode() == R.kContactDebugMode && R.SSRDebugSurf && h.techSSRDebug)
         {
