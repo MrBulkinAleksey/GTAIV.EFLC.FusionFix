@@ -56,6 +56,7 @@ import temporal;
 #define IDR_CAS                                  137
 #define IDR_CLOUDS_FX                            138
 #define IDR_WETGROUND_FX                         139
+#define IDR_HEADLIGHTGLINTS_FX                   140
 
 #define IDR_SSDraw_PS_compiled                   2127
 #define IDR_SSPrepass_PS_compiled                2128
@@ -331,6 +332,7 @@ public:
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY, vec4WaterRings;
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D, SSRHitDistTex2D;
+        D3DXHANDLE MarchDepthTex2D, fStepsPerPixel;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
         D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
@@ -411,7 +413,8 @@ public:
     // Materials with no specular map (c197.x; deferred_lighting_sun_sheen.patch) write no specular
     // intensity, so buildings and LOD roads got neither the sun's highlight nor the sky's
     // reflection. The sun pass gives them half this much of one, as if the G-buffer held it,
-    // times the square of one less their colour's saturation and faded out on dark colours.
+    // times the square of one less their colour's saturation and faded out on dark colours, and so
+    // do lamps and headlights (local_light_specular_sheen_and_fade.patch), for their highlights.
     // They are told apart by the gloss 258 / 1023 they write (world_no_specular_mark.patch).
     float fSpecularSheen = 0.1f;
     // Highlights of lamps, headlights and the sun (c165, c200, c206; local_light_specular_ggx.patch):
@@ -451,7 +454,45 @@ public:
     // - LightsGGXMax: the most a GGX highlight may reach, in the game's own peak (its pow(R.L, n) at 1).
     //   GGX keeps the energy, so a narrow lobe peaks far above it: at 8, normal mapped clothes, skin and
     //   wood burnt into white patches and grazing edges into white strips.
+    //   The highlight also fades out as the surface turns away from the camera (N.V under 0.08,
+    //   local_light_specular_sheen_and_fade.patch), where normal mapped pixels sparkled.
     float fLightsGGXMax = 2.0f;
+    // - LightsGGXSoft (c183, c184.x; local_light_specular_soft_lobe.patch): 0 the lobe above, 1 a softer
+    //   look: as wide as a Blinn lobe of the same exponent 1.3 times as rough, widened by 0.2 more at any
+    //   distance, and its peak held at the game's whatever the gloss, so rough surfaces get a broad
+    //   glow and glossy ones no brighter core. Values between blend.
+    // - LightsGGXStretchView (c184.y): 0 stretches the lobe along the light projected onto the surface,
+    //   1 along the view, so streaks on wet roads run straight towards the camera. Both agree at the
+    //   highlight's centre; only its tail turns.
+    float fLightsGGXSoft = 0.0f;
+    float fLightsGGXStretchView = 1.0f;
+    // - LightsGGXGlints (HeadlightGlints.fx, RenderHeadlightGlints): the lamps of headlights seen in
+    //   glossy surfaces from any side but behind, not only inside their beam; 0 none. LightsGGXGlintsSize
+    //   the lamps' radius in metres, LightsGGXGlintsGloss the gloss from which surfaces glint,
+    //   LightsGGXGlintsMax the ceiling of the GGX lobe before Fresnel.
+    float fLightsGGXGlints = 1.0f;
+    float fLightsGGXGlintsSize = 0.1f;
+    float fLightsGGXGlintsGloss = 0.5f;
+    float fLightsGGXGlintsMax = 64.0f;
+    // The headlights the light loop met this lighting pass (InstallLocalContactLightHook), of which the
+    // kGlintLights nearest the camera glint; what the last pass did, for the Ctrl+Shift+F10 log.
+    static constexpr uint32_t kGlintCandidates = 64;
+    static constexpr uint32_t kGlintLights = 16;
+    struct GlintLight
+    {
+        float position[3];
+        float direction[3];
+        float colour[3];
+        float radius;
+        float distance;
+    };
+    GlintLight GlintCandidates[kGlintCandidates] = {};
+    uint32_t nGlintCandidates = 0;
+    bool bGlintsDone = false;
+    const char* szGlintsStatus = "not drawn yet";
+    uint32_t nGlintsLastLights = 0;
+    float GlintsLastIntensity[2] = {};
+    float GlintsLastCone[2] = {};
     // Wet ground (WetGround.fx): WetGround the strength, 0 off. WetGroundPuddles the share of flat
     // ground under water at full wetness, WetGroundPuddleSize the metres one tile of the puddle map
     // takes, WetGroundRipples the rain's rings in them, WetGroundDarkening how much darker wet
@@ -589,6 +630,8 @@ public:
     // while it writes the G-buffer.
     ID3DXEffect* WetGroundEffect = nullptr;
     HRESULT hrWetGroundEffect = S_OK;
+    ID3DXEffect* HeadlightGlintsEffect = nullptr;
+    HRESULT hrHeadlightGlintsEffect = S_OK;
     IDirect3DTexture9* WetCopyTex[3] = {};
     IDirect3DSurface9* WetCopySurf[3] = {};
     // How wet the world is, 0..1: rises with the rain over WetGroundWetting seconds and dries over
@@ -779,6 +822,8 @@ public:
     bool bPostFxProfiler = false;
     float fSSRTowardCamera = 0.0f;
     float fSSRReflectionBlur = 0.0f;
+    // ScreenSpaceReflectionsStepPixels: pixels of a ray on the march's target per step, 2 by default.
+    float fSSRStepPixels = 2.0f;
     float fSSRDistanceFade = 0.0f;
     float fSSRFallback = 0.8f;
     rage::grcRenderTargetPC* SSRDenoisedTex = nullptr;
@@ -805,6 +850,10 @@ public:
     // target it is drawn with.
     rage::grcRenderTargetPC* SSRHitDistTex[2] = {};
     IDirect3DSurface9* SSRHitDistSurf[2] = {};
+    // View depth at half the full size, the nearest of each 2x2 pixels (MarchDepth_PS), which the
+    // march steps through at either SSR size; R32F.
+    rage::grcRenderTargetPC* SSRMarchDepthTex = nullptr;
+    IDirect3DSurface9* SSRMarchDepthSurf = nullptr;
     // Accumulation over frames (SSRTemporal_PS in SSR.fx): each frame blends the smoothed
     // result with the previous accumulation into the other target of a pair, one pair per
     // resolution. ScreenSpaceReflectionsTemporal is the share of the history kept, 0 turns
@@ -885,8 +934,10 @@ public:
     float fSSRGlossBoost = 2.0f;
     float fSSRGlossCutoff = 0.5f;
     // ScreenSpaceReflectionsWetGround: while it rains, SSR on ground facing up that is under the
-    // gloss cutoff, drawn this many times brighter (fWetGroundBoost in SSR.fx); 0 turns it off.
-    float fSSRWetGround = 2.0f;
+    // gloss cutoff, drawn this many times brighter (fWetGroundBoost in SSR.fx); 0 turns it off. The
+    // wet ground pass gives only puddles water's specular: its film keeps about dry asphalt's (0.12),
+    // so at 1 cars on wet roads reflected half as bright as at 2, and 2 was brighter than the scene.
+    float fSSRWetGround = 1.5f;
     float fSSRWaterIntensity = 1.0f;
     // CWater::Render loads this as the Z of every flat water vertex, so it is the real
     // surface height rather than an assumed sea level.
@@ -1338,6 +1389,8 @@ public:
                 h.SSRAccumTex2D = SSREffect->GetParameterByName(nullptr, "SSRAccumTex2D");
                 h.SSRFallbackTex2D = SSREffect->GetParameterByName(nullptr, "SSRFallbackTex2D");
                 h.SSRHitDistTex2D = SSREffect->GetParameterByName(nullptr, "SSRHitDistTex2D");
+                h.MarchDepthTex2D = SSREffect->GetParameterByName(nullptr, "MarchDepthTex2D");
+                h.fStepsPerPixel = SSREffect->GetParameterByName(nullptr, "fStepsPerPixel");
                 h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
                 h.techSSRTemporal = SSREffect->GetTechniqueByName("SSRTemporal");
                 h.MotionTex2D = SSREffect->GetParameterByName(nullptr, "MotionTex2D");
@@ -1380,6 +1433,23 @@ public:
             if (hrWetGroundEffect != S_OK)
             {
                 WetGroundEffect = nullptr;
+                if (errors)
+                    MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
+            }
+            SAFE_RELEASE(errors);
+        }
+
+        // Without it headlights glint only inside their beams, as the game has them.
+        static bool headlightGlintsEffectTried = false;
+        if (!HeadlightGlintsEffect && !headlightGlintsEffectTried)
+        {
+            headlightGlintsEffectTried = true;
+            ID3DXBuffer* errors = nullptr;
+            hrHeadlightGlintsEffect = D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
+                hm, MAKEINTRESOURCEW(IDR_HEADLIGHTGLINTS_FX), nullptr, nullptr, 0, nullptr, &HeadlightGlintsEffect, &errors);
+            if (hrHeadlightGlintsEffect != S_OK)
+            {
+                HeadlightGlintsEffect = nullptr;
                 if (errors)
                     MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
             }
@@ -1528,6 +1598,15 @@ public:
         fLightsGGXSun = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSun", 1.0f), 0.0f, 4.0f);
         fLightsGGXEnvironment = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXEnvironment", 1.0f), 0.0f, 1.0f);
         fLightsGGXMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXMax", 2.0f), 0.1f, 16.0f);
+        fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
+        fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 1.5f), 0.0f, 8.0f);
+        fSSRStepPixels = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStepPixels", 2.0f), 1.0f, 8.0f);
+        fLightsGGXSoft = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSoft", 0.0f), 0.0f, 1.0f);
+        fLightsGGXStretchView = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXStretchView", 1.0f), 0.0f, 1.0f);
+        fLightsGGXGlints = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlints", 1.0f), 0.0f, 8.0f);
+        fLightsGGXGlintsSize = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlintsSize", 0.1f), 0.01f, 1.0f);
+        fLightsGGXGlintsGloss = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlintsGloss", 0.5f), 0.0f, 1.0f);
+        fLightsGGXGlintsMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlintsMax", 64.0f), 1.0f, 1000.0f);
         fWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "WetGround", 1.0f), 0.0f, 1.0f);
         fWetGroundPuddles = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddles", 0.35f), 0.0f, 1.0f);
         fWetGroundPuddleSize = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddleSize", 24.0f), 2.0f, 500.0f);
@@ -1586,10 +1665,8 @@ public:
         fSSRMaxDistance = std::max(1.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsMaxDistance", 24.0f));
         fSSRThickness = std::max(0.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsThickness", 0.3f));
         fSSREdgeFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsEdgeFade", 0.1f), 0.001f, 0.5f);
-        fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRGlossBoost = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossBoost", 2.0f), 0.0f, 8.0f);
         fSSRGlossCutoff = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossCutoff", 0.5f), 0.0f, 1.0f);
-        fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 2.0f), 0.0f, 8.0f);
         fSSRWaterIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWaterLevelOffset = iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterLevelOffset", 0.0f);
         fSSRWaterBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterBlur", 3.0f), 0.0f, 32.0f);
@@ -2509,6 +2586,7 @@ private:
         PostFxResources.bSSRDenoised = false;
         SAFE_RELEASE(PostFxResources.SSRHalfSurf);
         SAFE_RELEASE(PostFxResources.SSRHalfDenoisedSurf);
+        SAFE_RELEASE(PostFxResources.SSRMarchDepthSurf);
         for (int i = 0; i < 2; ++i)
         {
             SAFE_RELEASE(PostFxResources.SSRTraceSurf[i]);
@@ -2519,7 +2597,7 @@ private:
         for (auto* rt : { &PostFxResources.SSRHalfTex, &PostFxResources.SSRHalfDenoisedTex, &PostFxResources.SSRTraceTex[0],
                           &PostFxResources.SSRTraceTex[1], &PostFxResources.SSRFallbackTex[0], &PostFxResources.SSRFallbackTex[1],
                           &PostFxResources.SSRSpreadTex[0], &PostFxResources.SSRSpreadTex[1], &PostFxResources.SSRHitDistTex[0],
-                          &PostFxResources.SSRHitDistTex[1] })
+                          &PostFxResources.SSRHitDistTex[1], &PostFxResources.SSRMarchDepthTex })
         {
             if (*rt)
             {
@@ -2678,6 +2756,8 @@ private:
         EffectBindings().clear();
         if (PostFxResources.WetGroundEffect)
             PostFxResources.WetGroundEffect->OnLostDevice();
+        if (PostFxResources.HeadlightGlintsEffect)
+            PostFxResources.HeadlightGlintsEffect->OnLostDevice();
         PostFxResources.ReleaseWetCopies();
         ReleaseProfiler();
 
@@ -2774,6 +2854,8 @@ private:
             PostFxResources.CloudsEffect->OnResetDevice();
         if (PostFxResources.WetGroundEffect)
             PostFxResources.WetGroundEffect->OnResetDevice();
+        if (PostFxResources.HeadlightGlintsEffect)
+            PostFxResources.HeadlightGlintsEffect->OnResetDevice();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             SAFE_RELEASE(PostFxResources.AOCamDepthSurf[i]);
@@ -2862,6 +2944,9 @@ private:
                         PostFxResources.SSRHitDistTex[half] = rage::CreateEmptyRenderTarget(half ? "SSRHalfHitDistTex" : "SSRHitDistTex",
                             w, hgt, 64, aoDesc, PostFxResources.SSRHitDistSurf[half]);
                 }
+                auto marchDesc = rage::OwnRenderTargetDesc(rage::GRCFMT_R32F);
+                PostFxResources.SSRMarchDepthTex = rage::CreateEmptyRenderTarget("SSRMarchDepthTex", width / 2, height / 2, 32, marchDesc,
+                    PostFxResources.SSRMarchDepthSurf);
             }
 
             PostFxResources.ContactRawTex = rage::CreateEmptyRenderTarget("ContactShadowRawTex", width, height, 64, aoDesc, PostFxResources.ContactRawSurf);
@@ -3158,6 +3243,198 @@ private:
         pDevice->SetRenderState(D3DRS_COLORWRITEENABLE2, colorWrite[2]);
         for (auto& surf : gbufferSurf)
             SAFE_RELEASE(surf);
+    }
+
+    // Headlight glints (HeadlightGlints.fx): at the start of the game's light shaft loop, once every light
+    // of the main view is drawn, added to the lit scene they were drawn into. Whatever the pass changes is
+    // put back for the shafts.
+    static void RenderHeadlightGlints(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        R.nGlintsLastLights = 0;
+        auto skip = [&](const char* why) { R.szGlintsStatus = why; };
+        if (!R.GGXLightingEnabled() || R.fLightsGGX <= 0.0f)
+            return skip("GGX Lighting off");
+        if (R.fLightsGGXGlints <= 0.0f)
+            return skip("off in the ini");
+        if (!R.HeadlightGlintsEffect)
+            return skip("no effect");
+        if (!R.nGlintCandidates)
+            return skip("no headlights");
+        if (!pDevice || !R.mNormalRT || !R.mSpecularRT || !R.mNormalRT->mD3DTexture || !R.mSpecularRT->mD3DTexture)
+            return skip("no G-buffer");
+        IDirect3DTexture9* depth = LightingDepth();
+        if (!depth)
+            return skip("no depth");
+        rage::grcViewport* vp = rage::GetCurrentViewport();
+        if (!vp)
+            return skip("no viewport");
+        D3DSURFACE_DESC desc = {};
+        if (FAILED(R.mNormalRT->mD3DTexture->GetLevelDesc(0, &desc)))
+            return skip("no G-buffer");
+
+        ProfilerScope timed(pDevice, kProfGlints);
+        // The nearest headlights.
+        const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+        auto* candidates = R.GlintCandidates;
+        const uint32_t found = R.nGlintCandidates;
+        for (uint32_t i = 0; i < found; ++i)
+        {
+            const float dx = candidates[i].position[0] - viewInv.m[3][0];
+            const float dy = candidates[i].position[1] - viewInv.m[3][1];
+            const float dz = candidates[i].position[2] - viewInv.m[3][2];
+            candidates[i].distance = dx * dx + dy * dy + dz * dz;
+        }
+        const uint32_t count = (std::min)(found, PostFxResource::kGlintLights);
+        std::partial_sort(candidates, candidates + count, candidates + found,
+                          [](const auto& a, const auto& b) { return a.distance < b.distance; });
+
+        constexpr uint32_t kLights = PostFxResource::kGlintLights;
+        D3DXVECTOR4 position[kLights] = {}, direction[kLights] = {}, right[kLights] = {}, colour[kLights] = {};
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const auto& g = candidates[i];
+            float d[3] = { g.direction[0], g.direction[1], g.direction[2] };
+            const float len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            if (len > 1e-3f)
+                for (auto& c : d)
+                    c /= len;
+            // The car's level right, dir x up, as SetLightGGXShape takes it; a light aimed straight up
+            // or down keeps one lamp.
+            const float kx = d[1], ky = -d[0];
+            const float rlen = std::sqrt(kx * kx + ky * ky);
+            const bool level = rlen > 1e-3f;
+            // The game's own highlight ends at about two thirds of the light's radius.
+            position[i] = D3DXVECTOR4(g.position[0], g.position[1], g.position[2], level ? R.fLightsGGXHeadlights : 0.0f);
+            direction[i] = D3DXVECTOR4(d[0], d[1], d[2], 1.0f / (0.66f * g.radius));
+            right[i] = D3DXVECTOR4(level ? kx / rlen : 0.0f, level ? ky / rlen : 0.0f, 0.0f, 0.0f);
+            colour[i] = D3DXVECTOR4(g.colour[0], g.colour[1], g.colour[2], 0.0f);
+        }
+
+        ID3DXEffect* effect = R.HeadlightGlintsEffect;
+        const float width = float(desc.Width), height = float(desc.Height);
+        const D3DMATRIX& proj = *(const D3DMATRIX*)vp->mProjectionMatrix;
+        const D3DXVECTOR4 projInfo = ProjInfo(proj, width, height);
+        effect->SetVector("vec4ProjInfo", &projInfo);
+        effect->SetFloat("fNearPlane", vp->mNearClip);
+        effect->SetFloat("fFarDivNear", vp->mFarClip / vp->mNearClip);
+        {
+            D3DXVECTOR4 toView[3];
+            WorldToViewRows(vp, toView);
+            const D3DXVECTOR4 worldX(toView[0].x, toView[1].x, toView[2].x, viewInv.m[3][0]);
+            const D3DXVECTOR4 worldY(toView[0].y, toView[1].y, toView[2].y, viewInv.m[3][1]);
+            const D3DXVECTOR4 worldZ(toView[0].z, toView[1].z, toView[2].z, viewInv.m[3][2]);
+            effect->SetVector("vec4WorldX", &worldX);
+            effect->SetVector("vec4WorldY", &worldY);
+            effect->SetVector("vec4WorldZ", &worldZ);
+        }
+        const float invSize[2] = { 1.0f / width, 1.0f / height };
+        effect->SetFloatArray("vec2InvSize", invSize, 2);
+        const D3DXVECTOR4 glint(R.fLightsGGXGlints, R.fLightsGGXGlintsGloss, R.fLightsGGXGlintsSize, R.fLightsGGXGlintsMax);
+        effect->SetVector("vec4Glint", &glint);
+        effect->SetFloat("fLightCount", float(count));
+        effect->SetVectorArray("vec4LightPos", position, kLights);
+        effect->SetVectorArray("vec4LightDir", direction, kLights);
+        effect->SetVectorArray("vec4LightRight", right, kLights);
+        effect->SetVectorArray("vec4LightColour", colour, kLights);
+
+        // Saved: the textures, sampler states, constants, shaders, render states and geometry the pass sets.
+        static constexpr DWORD kSlots = 3;
+        static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER,
+                                                                   D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
+        IDirect3DBaseTexture9* oldTextures[kSlots] = {};
+        DWORD savedSamplerStates[kSlots][std::size(kSamplerStates)] = {};
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+        {
+            pDevice->GetTexture(slot, &oldTextures[slot]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                pDevice->GetSamplerState(slot, kSamplerStates[i], &savedSamplerStates[slot][i]);
+        }
+        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        IDirect3DPixelShader9* oldPS = nullptr;
+        IDirect3DVertexShader9* oldVS = nullptr;
+        IDirect3DVertexDeclaration9* oldDecl = nullptr;
+        IDirect3DVertexBuffer9* oldVB = nullptr;
+        UINT oldOffset = 0, oldStride = 0;
+        DWORD oldFVF = 0;
+        D3DVIEWPORT9 oldViewport = {};
+        pDevice->GetPixelShader(&oldPS);
+        pDevice->GetVertexShader(&oldVS);
+        pDevice->GetVertexDeclaration(&oldDecl);
+        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        pDevice->GetFVF(&oldFVF);
+        pDevice->GetViewport(&oldViewport);
+
+        static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kStates[] =
+        {
+            { D3DRS_ZENABLE, FALSE }, { D3DRS_ZWRITEENABLE, FALSE }, { D3DRS_ALPHATESTENABLE, FALSE }, { D3DRS_STENCILENABLE, FALSE },
+            { D3DRS_CULLMODE, D3DCULL_NONE }, { D3DRS_COLORWRITEENABLE, 0x07 }, { D3DRS_SCISSORTESTENABLE, FALSE },
+            { D3DRS_SRGBWRITEENABLE, FALSE }, { D3DRS_FILLMODE, D3DFILL_SOLID }, { D3DRS_CLIPPLANEENABLE, 0 }, { D3DRS_FOGENABLE, FALSE },
+            { D3DRS_ALPHABLENDENABLE, TRUE }, { D3DRS_SEPARATEALPHABLENDENABLE, FALSE }, { D3DRS_BLENDOP, D3DBLENDOP_ADD },
+            { D3DRS_SRCBLEND, D3DBLEND_ONE }, { D3DRS_DESTBLEND, D3DBLEND_ONE },
+        };
+        DWORD savedStates[std::size(kStates)] = {};
+        for (size_t i = 0; i < std::size(kStates); ++i)
+        {
+            pDevice->GetRenderState(kStates[i].state, &savedStates[i]);
+            pDevice->SetRenderState(kStates[i].state, kStates[i].value);
+        }
+        D3DVIEWPORT9 viewport = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
+        pDevice->SetViewport(&viewport);
+        pDevice->SetVertexShader(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+
+        UINT passes = 0;
+        effect->SetTechnique("Glints");
+        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
+        effect->BeginPass(0);
+        effect->CommitChanges();
+        IDirect3DBaseTexture9* textures[kSlots] = { depth, R.mNormalRT->mD3DTexture, R.mSpecularRT->mD3DTexture };
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+        {
+            SetTextureBoth(pDevice, slot, textures[slot]);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_SRGBTEXTURE, FALSE);
+        }
+        BindEffectConstantsOnly(pDevice, effect);
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        const ScreenVertex quad[4] =
+        {
+            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,         height - 0.5f,  0.0f, 1.0f, 0.0f, 1.0f },
+            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
+            { width - 0.5f,  height - 0.5f,  0.0f, 1.0f, 1.0f, 1.0f },
+        };
+        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(ScreenVertex));
+        effect->EndPass();
+        effect->End();
+        R.szGlintsStatus = "drawn";
+        R.nGlintsLastLights = count;
+
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+        {
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
+            SAFE_RELEASE(oldTextures[slot]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                SetSamplerStateBoth(pDevice, slot, kSamplerStates[i], savedSamplerStates[slot][i]);
+        }
+        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        for (size_t i = 0; i < std::size(kStates); ++i)
+            pDevice->SetRenderState(kStates[i].state, savedStates[i]);
+        pDevice->SetViewport(&oldViewport);
+        pDevice->SetPixelShader(oldPS);
+        pDevice->SetVertexShader(oldVS);
+        pDevice->SetFVF(oldFVF);
+        pDevice->SetVertexDeclaration(oldDecl);
+        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
+        SAFE_RELEASE(oldPS);
+        SAFE_RELEASE(oldVS);
+        SAFE_RELEASE(oldDecl);
+        SAFE_RELEASE(oldVB);
     }
 
     // At the end of the G-buffer pass (TemporalAA::OnGBufferEnd, the device state saved around it): this frame's
@@ -4191,7 +4468,7 @@ private:
             kProfSSR, kProfSSRTrace, kProfSSRFill, kProfSSRResolve, kProfSSRDenoise, kProfSSRTemporal, kProfSSRDebug,
             kProfContact, kProfContactMarch, kProfContactUpsample, kProfContactDenoise, kProfContactTemporal,
             kProfGI, kProfGIMarch, kProfGIDenoise, kProfGITemporal, kProfGIUpsample,
-            kProfLightSun, kProfLightLocal, kProfLightShafts,
+            kProfLightSun, kProfLightLocal, kProfLightShafts, kProfGlints,
         kProfDepthCopy,
         kProfMotion,
         kProfWetGround, kProfWetGroundCopies, kProfWetGroundPass,
@@ -4220,7 +4497,7 @@ private:
             { "indirect light", kProfLighting }, { "march", kProfGI }, { "smoothing", kProfGI },
             { "accumulation", kProfGI }, { "upsample", kProfGI },
             { "the game's sun and ambient", kProfLighting }, { "the game's lamps and headlights", kProfLighting },
-            { "the game's light shafts", kProfLighting },
+            { "the game's light shafts", kProfLighting }, { "headlight glints", kProfLightShafts },
         { "depth copy at the G-buffer's end", -1 },
         { "motion vectors (temporal AA, upscaling)", -1 },
         { "wet ground", -1 }, { "copies of the G-buffer", kProfWetGround }, { "wet pass", kProfWetGround },
@@ -4848,11 +5125,12 @@ private:
         if (vp)
             SSRTrace::Line("ssr: vp %p %dx%d near %.3f far %.1f", static_cast<void*>(vp), int(vp->mWidth), int(vp->mHeight), vp->mNearClip, vp->mFarClip);
         if (!R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex || !vp || R.fSSRIntensity <= 0.0f ||
-            !R.SSRTraceSurf[0] || !R.SSRFallbackSurf[0])
+            !R.SSRTraceSurf[0] || !R.SSRFallbackSurf[0] || !R.SSRMarchDepthSurf)
         {
-            SSRTrace::Line("ssr: left, effect %p depth %p history %p vp %p intensity %.2f trace %p fallback %p",
+            SSRTrace::Line("ssr: left, effect %p depth %p history %p vp %p intensity %.2f trace %p fallback %p march depth %p",
                 static_cast<void*>(R.SSREffect), static_cast<void*>(R.mDepthRT), static_cast<void*>(R.SSRHistoryTex),
-                static_cast<void*>(vp), R.fSSRIntensity, static_cast<void*>(R.SSRTraceSurf[0]), static_cast<void*>(R.SSRFallbackSurf[0]));
+                static_cast<void*>(vp), R.fSSRIntensity, static_cast<void*>(R.SSRTraceSurf[0]), static_cast<void*>(R.SSRFallbackSurf[0]),
+                static_cast<void*>(R.SSRMarchDepthSurf));
             clearSSR();
             R.nSSRAccumFrame = 0;
             return;
@@ -4956,6 +5234,7 @@ private:
         effect->SetFloat(h.fIntensity, R.fSSRIntensity);
         effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);
         effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
+        effect->SetFloat(h.fStepsPerPixel, 1.0f / R.fSSRStepPixels);
         const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1] &&
                               R.SSRHitDistSurf[half];
         SetNoiseOffset(effect, temporal && R.bSSRTemporalJitter);
@@ -4977,12 +5256,14 @@ private:
         if (hasNormals)
             effect->SetTexture(h.NormalTex2D, R.mNormalRT->mD3DTexture);
         effect->SetFloat(h.fUseGBufferNormals, (hasNormals && R.bSSRGBufferNormals) ? 1.0f : 0.0f);
-        // CWeather::Rain eases towards the weather's rain amount, 0.3 for drizzle, 0.7 for rain
-        // and 1.0 for a thunderstorm, so the ground wets and dries with it; rain counts as wet.
+        // How wet the ground is, as the wet ground pass has it (RenderWetGround, which runs at the end
+        // of the G-buffer pass every frame and keeps it up to date even while it draws nothing): it
+        // follows CWeather::Rain over WetGroundWetting and WetGroundDrying seconds. Taken from the rain
+        // itself, a shower turned on had SSR mirror the whole road at once, half a minute before the
+        // ground pass made it wet.
         // Telling ground from walls takes the G-buffer normals, and the gloss the specular one.
-        const float rain = CWeather::Rain ? *CWeather::Rain : 0.0f;
         const bool wetGround = R.fSSRWetGround > 0.0f && hasNormals && hasSpecular;
-        effect->SetFloat(h.fWetness, wetGround ? std::clamp(rain / 0.7f, 0.0f, 1.0f) : 0.0f);
+        effect->SetFloat(h.fWetness, wetGround ? R.fWetness : 0.0f);
         effect->SetFloat(h.fWetGroundBoost, R.fSSRWetGround);
 
         UINT passes = 0;
@@ -5038,6 +5319,14 @@ private:
                         unsigned(rtHr), unsigned(passHr), unsigned(drawHr));
                 }
             };
+            // The depth the march steps through, at half the full size whatever size SSR runs at;
+            // timed with the march.
+            ProfilerMark(pDevice, kProfSSRTrace, true);
+            setPassSize(float(DWORD(width) / 2), float(DWORD(height) / 2));
+            draw(4, R.SSRMarchDepthSurf);
+            setPassSize(half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height);
+            effect->SetTexture(h.MarchDepthTex2D, R.SSRMarchDepthTex->mD3DTexture);
+
             // The march also writes how far its rays went, for the accumulation.
             IDirect3DSurface9* oldTarget1 = nullptr;
             if (temporal)
@@ -5045,7 +5334,6 @@ private:
                 pDevice->GetRenderTarget(1, &oldTarget1);
                 pDevice->SetRenderTarget(1, R.SSRHitDistSurf[half]);
             }
-            ProfilerMark(pDevice, kProfSSRTrace, true);
             draw(0, R.SSRTraceSurf[half]);
             ProfilerMark(pDevice, kProfSSRTrace, false);
             if (temporal)
@@ -6396,6 +6684,9 @@ private:
                 log.Printf("GGX lights: %u headlights among %u lights drawn since the last log\n", R.nLightGGXHeadlights, R.nLightGGXLights);
                 R.nLightGGXHeadlights = 0;
                 R.nLightGGXLights = 0;
+                log.Printf("headlight glints: %s; effect %s (hr 0x%08lX); %u headlights drawn; their intensity %.3f to %.3f, outer cone %.3f to %.3f\n",
+                        R.szGlintsStatus, R.HeadlightGlintsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrHeadlightGlintsEffect),
+                        R.nGlintsLastLights, R.GlintsLastIntensity[0], R.GlintsLastIntensity[1], R.GlintsLastCone[0], R.GlintsLastCone[1]);
                 log.Component("CloudReflections");
                 log.Printf("clouds in reflections: %s; %u reflection map and %u water reflection skies since the last log; viewport %lu,%lu %lux%lu of a %ux%u target\n",
                         R.szCloudsReflectionStatus, R.nCloudReflectionCalls, R.nCloudWaterReflectionCalls, R.CloudReflectionViewport.X, R.CloudReflectionViewport.Y,
@@ -7489,6 +7780,37 @@ private:
         pDevice->SetPixelShaderConstantF(206, shape, 1);
     }
 
+    // A headlight the light loop is about to draw, as SetLightGGXShape tells them, kept for its glints.
+    static void CollectGlintLight(const rage::CLightSource& light)
+    {
+        auto& R = PostFxResources;
+        if (R.nGlintCandidates >= R.kGlintCandidates || light.mType != rage::LT_SPOT || !(light.mFlags & rage::LF_VEHICLE) ||
+            light.mRadius < 8.0f || light.mIntensity <= 0.0f)
+            return;
+        auto& g = R.GlintCandidates[R.nGlintCandidates++];
+        g.position[0] = light.mPosition.x;
+        g.position[1] = light.mPosition.y;
+        g.position[2] = light.mPosition.z;
+        g.direction[0] = light.mDirection.x;
+        g.direction[1] = light.mDirection.y;
+        g.direction[2] = light.mDirection.z;
+        g.colour[0] = light.mColor.x * light.mIntensity;
+        g.colour[1] = light.mColor.y * light.mIntensity;
+        g.colour[2] = light.mColor.z * light.mIntensity;
+        g.radius = light.mRadius;
+        g.distance = 0.0f;
+        // What the game gives headlights, for the log: the ranges of intensity and outer cone.
+        if (R.nGlintCandidates == 1)
+        {
+            R.GlintsLastIntensity[0] = R.GlintsLastIntensity[1] = light.mIntensity;
+            R.GlintsLastCone[0] = R.GlintsLastCone[1] = light.mOuterConeAngle;
+        }
+        R.GlintsLastIntensity[0] = (std::min)(R.GlintsLastIntensity[0], light.mIntensity);
+        R.GlintsLastIntensity[1] = (std::max)(R.GlintsLastIntensity[1], light.mIntensity);
+        R.GlintsLastCone[0] = (std::min)(R.GlintsLastCone[0], light.mOuterConeAngle);
+        R.GlintsLastCone[1] = (std::max)(R.GlintsLastCone[1], light.mOuterConeAngle);
+    }
+
     static void InstallLocalContactLightHook()
     {
         auto pattern = hook::pattern("83 C7 28 89 7C 24 1C 8B 47 1C 85 C0");
@@ -7502,6 +7824,7 @@ private:
             if (nLightingStage == 1)
                 SetLightingStage(rage::grcDevice::GetD3DDevice(), 2);
             SetLightGGXShape(*reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28));
+            CollectGlintLight(*reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28));
             if (R.LocalContactShadowConsts[7] == 0.0f)
                 return;
             const bool off = (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x200) != 0;
@@ -7526,8 +7849,16 @@ private:
             return;
         shShaftLoopStart = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&)
         {
+            auto pDevice = rage::grcDevice::GetD3DDevice();
             if (nLightingStage > 0)
-                SetLightingStage(rage::grcDevice::GetD3DDevice(), 3);
+                SetLightingStage(pDevice, 3);
+            // Every light of the main view is drawn by now, and its target is still the lit scene.
+            auto& R = PostFxResources;
+            if (R.bLocalContactPass && !R.bGlintsDone)
+            {
+                R.bGlintsDone = true;
+                RenderHeadlightGlints(pDevice);
+            }
         });
     }
 
@@ -7738,8 +8069,17 @@ public:
             const float c165[4] = { on ? R.fLightsGGXFillLights : 0.0f, on ? R.fLightsGGXSun : 0.0f, enabled ? R.fLightsGGXEnvironment : 0.0f, R.fLightsGGXMax };
             pDevice->SetPixelShaderConstantF(200, c200, 1);
             pDevice->SetPixelShaderConstantF(165, c165, 1);
+            // c183: alpha squared = w / (x n + 2), the peak times y + z alpha squared; c184: x a widening
+            // added to alpha squared, y how far the stretch turns from the light to the view.
+            const float soft = R.fLightsGGXSoft;
+            const float c183[4] = { 4.0f - 3.0f * soft, 1.0f - soft, 32.0f * soft, 2.0f + 1.38f * soft };
+            const float c184[4] = { 0.04f * soft, R.fLightsGGXStretchView, 0.0f, 0.0f };
+            pDevice->SetPixelShaderConstantF(183, c183, 1);
+            pDevice->SetPixelShaderConstantF(184, c184, 1);
             std::memset(R.LightGGXShape, 0, sizeof(R.LightGGXShape));
             pDevice->SetPixelShaderConstantF(206, R.LightGGXShape, 1);
+            R.nGlintCandidates = 0;
+            R.bGlintsDone = false;
             if (R.mSpecularRT && R.mSpecularRT->mD3DTexture)
             {
                 BindSampler(pDevice, 13, R.mSpecularRT->mD3DTexture, D3DTEXF_POINT);
