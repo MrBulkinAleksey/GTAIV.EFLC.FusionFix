@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS3.asm b/win32_30_nv8/gta_default/gta_defaultPS3.asm
-index ff566cc..e6e5695 100644
+index ff566cc..36c01d9 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS3.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS3.asm
 @@ -21,6 +21,12 @@
@@ -23,7 +23,7 @@ index ff566cc..e6e5695 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -104,6 +111,62 @@
+@@ -104,6 +111,76 @@
          mov r0.xyz, r25
        endif
      endif
@@ -31,6 +31,7 @@ index ff566cc..e6e5695 100644
 +    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
 +    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
 +    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -67,6 +68,19 @@ index ff566cc..e6e5695 100644
 +      mul r10.z, r10.z, c166.z
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
 +      add r12.x, r5.z, -c187.z
 +      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
 +      add_sat r12.x, r12.x, c187.z
@@ -86,7 +100,7 @@ index ff566cc..e6e5695 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -129,7 +192,40 @@
+@@ -129,7 +206,40 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -128,8 +142,19 @@ index ff566cc..e6e5695 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
+@@ -137,7 +247,9 @@
+     mov oC0.xyz, r0
+     mov oC0.w, r1.x
+     mov oC1.w, r1.x
+-    mad oC2.xz, v2.x, c1.yyzw, c1.ywyw
++    mad r22.xz, v2.x, c1.yyzw, c1.ywyw
++    mov oC2.x, r22.x
++    mul oC2.z, r22.z, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
+     // mov oC2.w, r1.x
+     add r20.x, -c152.w, r1.x
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS4.asm b/win32_30_nv8/gta_default/gta_defaultPS4.asm
-index 3c1f0f3..0d570cd 100644
+index 3c1f0f3..85472a4 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS4.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS4.asm
 @@ -21,6 +21,12 @@
@@ -153,7 +178,7 @@ index 3c1f0f3..0d570cd 100644
      dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s10
-@@ -102,6 +109,62 @@
+@@ -102,6 +109,76 @@
          mov r0.xyz, r25
        endif
      endif
@@ -161,6 +186,7 @@ index 3c1f0f3..0d570cd 100644
 +    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
 +    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
 +    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -197,6 +223,19 @@ index 3c1f0f3..0d570cd 100644
 +      mul r10.z, r10.z, c166.z
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
 +      add r12.x, r5.z, -c187.z
 +      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
 +      add_sat r12.x, r12.x, c187.z
@@ -216,7 +255,7 @@ index 3c1f0f3..0d570cd 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -110,7 +173,40 @@
+@@ -110,7 +187,40 @@
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
      endif
@@ -258,8 +297,19 @@ index 3c1f0f3..0d570cd 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      mul r0.w, r0.w, v2.w
+@@ -119,7 +229,9 @@
+     mul r0.w, r0.w, c39.x
+     mov oC0, r0
+     mov oC1.w, r0.w
+-    mad oC2.xz, v2.x, c2.yyzw, c2.ywyw
++    mad r22.xz, v2.x, c2.yyzw, c2.ywyw
++    mov oC2.x, r22.x
++    mul oC2.z, r22.z, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
+     mov oC2.w, r0.w
+     mov r0.yz, c0
 diff --git a/win32_30_nv8/gta_normal/gta_normalPS3.asm b/win32_30_nv8/gta_normal/gta_normalPS3.asm
-index 6155923..f2e6885 100644
+index 6155923..aaf5093 100644
 --- a/win32_30_nv8/gta_normal/gta_normalPS3.asm
 +++ b/win32_30_nv8/gta_normal/gta_normalPS3.asm
 @@ -27,6 +27,12 @@
@@ -283,7 +333,7 @@ index 6155923..f2e6885 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -111,6 +118,62 @@
+@@ -111,6 +118,76 @@
          mov r0.xyz, r25
        endif
      endif
@@ -291,6 +341,7 @@ index 6155923..f2e6885 100644
 +    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
 +    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
 +    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -327,6 +378,19 @@ index 6155923..f2e6885 100644
 +      mul r10.z, r10.z, c166.z
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
 +      add r12.x, r5.z, -c187.z
 +      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
 +      add_sat r12.x, r12.x, c187.z
@@ -346,8 +410,17 @@ index 6155923..f2e6885 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
+@@ -184,7 +261,7 @@
+     mov oC1.w, r1.x
+     mul r30.w, r1.z, c72.x
+     mul oC2.x, r30.w, r29.x // FusionFix specular anti-aliasing: lowered with the wider highlight
+-    mov oC2.z, v4.x
++    mul oC2.z, v4.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     // mov oC2.w, r1.x
+     add r20.x, -c152.w, r1.x
+     cmp oC2.w, r20.x, c1.z, -c1.y
 diff --git a/win32_30_nv8/gta_normal/gta_normalPS4.asm b/win32_30_nv8/gta_normal/gta_normalPS4.asm
-index cef7cdb..391ec4c 100644
+index cef7cdb..cfa0094 100644
 --- a/win32_30_nv8/gta_normal/gta_normalPS4.asm
 +++ b/win32_30_nv8/gta_normal/gta_normalPS4.asm
 @@ -29,6 +29,12 @@
@@ -371,7 +444,7 @@ index cef7cdb..391ec4c 100644
      dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s1
-@@ -116,6 +123,62 @@
+@@ -116,6 +123,76 @@
          mov r1.xyz, r25
        endif
      endif
@@ -379,6 +452,7 @@ index cef7cdb..391ec4c 100644
 +    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
 +    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
 +    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -415,6 +489,19 @@ index cef7cdb..391ec4c 100644
 +      mul r10.z, r10.z, c166.z
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r1
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
 +      add r12.x, r5.z, -c187.z
 +      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
 +      add_sat r12.x, r12.x, c187.z
@@ -434,8 +521,17 @@ index cef7cdb..391ec4c 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
+@@ -175,7 +252,7 @@
+     mov oC1.w, r0.x
+     mul r30.w, r0.z, c72.x
+     mul oC2.x, r30.w, r29.x // FusionFix specular anti-aliasing: lowered with the wider highlight
+-    mov oC2.z, v4.x
++    mul oC2.z, v4.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.w, r0.x
+     mov r0.xw, c2
+     mul oC3, r0.wxxx, c52.x
 diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
-index 95f58df..7a84c82 100644
+index 95f58df..08c98a5 100644
 --- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
 +++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
 @@ -31,6 +31,12 @@
@@ -459,7 +555,7 @@ index 95f58df..7a84c82 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -116,6 +123,62 @@
+@@ -116,6 +123,76 @@
          mov r0.xyz, r25
        endif
      endif
@@ -467,6 +563,7 @@ index 95f58df..7a84c82 100644
 +    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
 +    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
 +    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -503,6 +600,19 @@ index 95f58df..7a84c82 100644
 +      mul r10.z, r10.z, c166.z
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
 +      add r12.x, r5.z, -c187.z
 +      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
 +      add_sat r12.x, r12.x, c187.z
@@ -522,8 +632,17 @@ index 95f58df..7a84c82 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
+@@ -192,7 +269,7 @@
+     mov oC0.xyz, r0
+     mov oC0.w, r1.x
+     mov oC1.w, r1.x
+-    mov oC2.z, v4.x
++    mul oC2.z, v4.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     // mov oC2.w, r1.x
+     add r20.x, -c152.w, r1.x
+     cmp oC2.w, r20.x, c1.z, -c1.y
 diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
-index 5bdd4d9..f53e8c3 100644
+index 5bdd4d9..a6486ac 100644
 --- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
 +++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
 @@ -33,6 +33,12 @@
@@ -547,7 +666,7 @@ index 5bdd4d9..f53e8c3 100644
      dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s1
-@@ -121,6 +128,62 @@
+@@ -121,6 +128,76 @@
          mov r1.xyz, r25
        endif
      endif
@@ -555,6 +674,7 @@ index 5bdd4d9..f53e8c3 100644
 +    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
 +    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
 +    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -591,6 +711,19 @@ index 5bdd4d9..f53e8c3 100644
 +      mul r10.z, r10.z, c166.z
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r1
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
 +      add r12.x, r5.z, -c187.z
 +      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
 +      add_sat r12.x, r12.x, c187.z
@@ -610,6 +743,15 @@ index 5bdd4d9..f53e8c3 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
+@@ -183,7 +260,7 @@
+     mov oC0.xyz, r1
+     mov oC0.w, r0.x
+     mov oC1.w, r0.x
+-    mov oC2.z, v4.x
++    mul oC2.z, v4.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.w, r0.x
+     mov r0.xw, c2
+     mul oC3, r0.wxxx, c52.x
 diff --git a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm b/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
 index 651fe30..048402d 100644
 --- a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
@@ -1049,7 +1191,7 @@ index 7d9644a..22ff627 100644
      mul oC2.z, r2.x, v4.x
      mul r0.x, r2.x, c73.x
 diff --git a/win32_30_nv8/gta_spec/gta_specPS3.asm b/win32_30_nv8/gta_spec/gta_specPS3.asm
-index d721e6d..ed76e58 100644
+index d721e6d..521ad41 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS3.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS3.asm
 @@ -27,6 +27,12 @@
@@ -1073,7 +1215,7 @@ index d721e6d..ed76e58 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -109,6 +116,62 @@
+@@ -109,6 +116,76 @@
          mov r0.xyz, r25
        endif
      endif
@@ -1081,6 +1223,7 @@ index d721e6d..ed76e58 100644
 +    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
 +    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
 +    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -1117,6 +1260,19 @@ index d721e6d..ed76e58 100644
 +      mul r10.z, r10.z, c166.z
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
 +      add r12.x, r5.z, -c187.z
 +      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
 +      add_sat r12.x, r12.x, c187.z
@@ -1136,7 +1292,7 @@ index d721e6d..ed76e58 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -128,7 +191,40 @@
+@@ -128,7 +205,40 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -1178,8 +1334,17 @@ index d721e6d..ed76e58 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      texld r3, v0, s1
+@@ -144,7 +254,7 @@
+     mov oC0.xyz, r0
+     mov oC0.w, r1.x
+     mov oC1.w, r1.x
+-    mov oC2.z, v2.x
++    mul oC2.z, v2.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     // mov oC2.w, r1.x
+     add r20.x, -c152.w, r1.x
+     cmp oC2.w, r20.x, c0.z, -c0.y
 diff --git a/win32_30_nv8/gta_spec/gta_specPS4.asm b/win32_30_nv8/gta_spec/gta_specPS4.asm
-index 3067a70..8c7490e 100644
+index 3067a70..f7eb0e5 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS4.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS4.asm
 @@ -29,6 +29,12 @@
@@ -1203,7 +1368,7 @@ index 3067a70..8c7490e 100644
      dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s1
-@@ -110,6 +117,62 @@
+@@ -110,6 +117,76 @@
          mov r0.xyz, r25
        endif
      endif
@@ -1211,6 +1376,7 @@ index 3067a70..8c7490e 100644
 +    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
 +    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
 +    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -1247,6 +1413,19 @@ index 3067a70..8c7490e 100644
 +      mul r10.z, r10.z, c166.z
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
 +      add r12.x, r5.z, -c187.z
 +      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
 +      add_sat r12.x, r12.x, c187.z
@@ -1266,7 +1445,7 @@ index 3067a70..8c7490e 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -118,7 +181,40 @@
+@@ -118,7 +195,40 @@
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
      endif
@@ -1308,6 +1487,15 @@ index 3067a70..8c7490e 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      texld r2, v0, s1
+@@ -135,7 +245,7 @@
+     mul r0.w, r0.w, c39.x
+     mov oC0, r0
+     mov oC1.w, r0.w
+-    mov oC2.z, v2.x
++    mul oC2.z, v2.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.w, r0.w
+     mov r0.yz, c0
+     mul oC3, -r0.yzzz, c52.x
 diff --git a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm b/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
 index 5882ea1..9d0522b 100644
 --- a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
@@ -1849,7 +2037,7 @@ index 10dd3b6..9ba3dfc 100644
      mad oC2.xz, v4.w, c0.yyzw, c0.ywyw
      mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS3.asm b/win32_30_nv8/rage_default/rage_defaultPS3.asm
-index 3a528b5..69ba50d 100644
+index 3a528b5..140bb8c 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS3.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS3.asm
 @@ -23,6 +23,12 @@
@@ -1865,7 +2053,7 @@ index 3a528b5..69ba50d 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -32,10 +38,68 @@
+@@ -32,10 +38,82 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -1879,6 +2067,7 @@ index 3a528b5..69ba50d 100644
 +    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
 +    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
 +    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -1915,6 +2104,19 @@ index 3a528b5..69ba50d 100644
 +      mul r10.z, r10.z, c166.z
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
 +      add r12.x, r5.z, -c187.z
 +      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
 +      add_sat r12.x, r12.x, c187.z
@@ -1934,7 +2136,7 @@ index 3a528b5..69ba50d 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v2.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -47,7 +111,36 @@
+@@ -47,7 +125,36 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -1972,8 +2174,19 @@ index 3a528b5..69ba50d 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
+@@ -55,7 +162,9 @@
+     mov oC0.xyz, r0
+     mov oC0.w, r1.x
+     mov oC1.w, r1.x
+-    mad oC2.xz, v2.x, c1.yyzw, c1.ywyw
++    mad r22.xz, v2.x, c1.yyzw, c1.ywyw
++    mov oC2.x, r22.x
++    mul oC2.z, r22.z, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
+     // mov oC2.w, r1.x
+     add r20.x, -c152.w, r1.x
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS4.asm b/win32_30_nv8/rage_default/rage_defaultPS4.asm
-index 657ce1d..7173176 100644
+index 657ce1d..bbecb8d 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS4.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS4.asm
 @@ -25,6 +25,12 @@
@@ -1989,7 +2202,7 @@ index 657ce1d..7173176 100644
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      // def c2, 0.5, 0.001953125, 0, 0
-@@ -34,11 +40,98 @@
+@@ -34,11 +40,112 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -2004,6 +2217,7 @@ index 657ce1d..7173176 100644
 +    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
 +    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
 +    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -2040,6 +2254,19 @@ index 657ce1d..7173176 100644
 +      mul r10.z, r10.z, c166.z
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
 +      add r12.x, r5.z, -c187.z
 +      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
 +      add_sat r12.x, r12.x, c187.z
@@ -2089,3 +2316,14 @@ index 657ce1d..7173176 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      mul r0.w, r0.w, v2.w
+@@ -53,7 +160,9 @@
+     mov oC1.w, r0.w
+     // mul oC2.x, r1.x, c72.x
+     // mov oC2.z, v2.x
+-    mad oC2.xz, v2.x, c2.yyzw, c2.ywyw
++    mad r22.xz, v2.x, c2.yyzw, c2.ywyw
++    mov oC2.x, r22.x
++    mul oC2.z, r22.z, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
+     mov oC2.w, r0.w
+     mov r0.yz, c0

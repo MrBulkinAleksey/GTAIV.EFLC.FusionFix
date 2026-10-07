@@ -28,7 +28,7 @@ import settings;
 //  - Bicubic Filtering: magnified diffuse textures read with a Catmull-Rom filter (b13, c192).
 //  - Specular Anti-Aliasing: highlights widened where the normal turns within a pixel (b14, c193).
 //  - Ground Surfaces: terrain layers blended by height, their repeat broken up, wide colour patches
-//    and bumps from their height; parallax occlusion mapping on gta_parallax* (b15, c166-c170, s12).
+//    and bumps from their height; parallax occlusion mapping on gta_parallax* (b15, c166-c171, s12).
 // The shader side is shaders/patches/texture_quality.patch and world_terrain_and_parallax.patch;
 // Sharpening is a post fx pass.
 class TextureQuality
@@ -58,6 +58,8 @@ class TextureQuality
     static inline float fGroundDetailBumps = 0.005f;
     static inline float fGroundBumpsFadeStart = 15.0f;
     static inline float fGroundBumpsFadeEnd = 60.0f;
+    static inline float fGroundCavity = 2.0f;
+    static inline float fGroundCavityAlbedo = 0.3f;
     static inline float fParallaxMinSteps = 8.0f;
     static inline float fParallaxMaxSteps = 32.0f;
     static inline float fParallaxDepth = 1.0f;
@@ -324,6 +326,8 @@ private:
         fGroundDetailBumps = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundDetailBumps", 0.005f), 0.0f, 0.1f);
         fGroundBumpsFadeStart = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsFadeStart", 15.0f), 0.0f, 1000.0f);
         fGroundBumpsFadeEnd = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsFadeEnd", 60.0f), fGroundBumpsFadeStart, 1000.0f);
+        fGroundCavity = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundCavity", 2.0f), 0.0f, 10.0f);
+        fGroundCavityAlbedo = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundCavityAlbedo", 0.3f), 0.0f, 1.0f);
         // The shader's loop stops at 32 steps.
         fParallaxMinSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMinSteps", 8.0f), 2.0f, 32.0f);
         fParallaxMaxSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMaxSteps", 32.0f), fParallaxMinSteps, 32.0f);
@@ -500,7 +504,7 @@ private:
             // The noise's blobs are about a twelfth of the texture's repeat across.
             constexpr float kBlobsPerRepeat = 12.0f;
             const float fadeRange = (std::max)(fGroundBumpsFadeEnd - fGroundBumpsFadeStart, 0.1f);
-            const float params[20] = {
+            const float params[24] = {
                 // c166: height blend depth and strength, anti-tiling strength and the sharpness of its patches
                 fGroundHeightBlendDepth, fGroundHeightBlend, fGroundAntiTiling, fGroundAntiTilingSharpness,
                 // c167: per metre, the colour patches' and the anti-tiling's noise; a mip bias that leaves out its grain;
@@ -513,8 +517,11 @@ private:
                 // c170: parallax steps looking straight down, the more added flat along the surface, depth
                 // and GroundSurfacesDebug: the terrain drawn half magenta, gta_parallax* half cyan, other ground orange
                 fParallaxMinSteps, fParallaxMaxSteps - fParallaxMinSteps, fParallaxDepth, float(nGroundDebug),
+                // c171: the hollows' occlusion per unit of brightness under the local average, the part of it the
+                // colour takes, -, the mip bias that reads the local average
+                fGroundCavity, fGroundCavityAlbedo, 0.0f, 3.0f,
             };
-            pDevice->SetPixelShaderConstantF(166, params, 5);
+            pDevice->SetPixelShaderConstantF(166, params, 6);
         }
 
         const BOOL flags[4] = { detail, bBicubic, specularAA, ground };
