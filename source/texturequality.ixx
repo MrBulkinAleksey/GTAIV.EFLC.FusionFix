@@ -49,11 +49,12 @@ class TextureQuality
     static inline float fSpecularAAMax = 0.18f;
     static inline float fGroundHeightBlend = 1.0f;
     static inline float fGroundHeightBlendDepth = 0.2f;
-    static inline float fGroundAntiTiling = 0.6f;
+    static inline float fGroundAntiTiling = 1.0f;
     static inline float fGroundAntiTilingSize = 4.0f;
-    static inline float fGroundColorVariation = 0.2f;
+    static inline float fGroundAntiTilingSharpness = 16.0f;
+    static inline float fGroundColorVariation = 0.25f;
     static inline float fGroundColorVariationSize = 15.0f;
-    static inline float fGroundBumps = 0.03f;
+    static inline float fGroundBumps = 0.08f;
     static inline float fGroundDetailBumps = 0.005f;
     static inline float fGroundBumpsFadeStart = 15.0f;
     static inline float fGroundBumpsFadeEnd = 60.0f;
@@ -314,11 +315,12 @@ private:
     {
         fGroundHeightBlend = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundHeightBlend", 1.0f), 0.0f, 1.0f);
         fGroundHeightBlendDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundHeightBlendDepth", 0.2f), 0.01f, 1.0f);
-        fGroundAntiTiling = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTiling", 0.6f), 0.0f, 1.0f);
+        fGroundAntiTiling = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTiling", 1.0f), 0.0f, 1.0f);
         fGroundAntiTilingSize = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTilingSize", 4.0f), 0.5f, 100.0f);
-        fGroundColorVariation = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundColorVariation", 0.2f), 0.0f, 1.0f);
+        fGroundAntiTilingSharpness = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTilingSharpness", 16.0f), 1.0f, 100.0f);
+        fGroundColorVariation = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundColorVariation", 0.25f), 0.0f, 1.0f);
         fGroundColorVariationSize = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundColorVariationSize", 15.0f), 1.0f, 500.0f);
-        fGroundBumps = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumps", 0.03f), 0.0f, 0.5f);
+        fGroundBumps = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumps", 0.08f), 0.0f, 0.5f);
         fGroundDetailBumps = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundDetailBumps", 0.005f), 0.0f, 0.1f);
         fGroundBumpsFadeStart = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsFadeStart", 15.0f), 0.0f, 1000.0f);
         fGroundBumpsFadeEnd = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsFadeEnd", 60.0f), fGroundBumpsFadeStart, 1000.0f);
@@ -500,11 +502,12 @@ private:
             const float fadeRange = (std::max)(fGroundBumpsFadeEnd - fGroundBumpsFadeStart, 0.1f);
             const float params[20] = {
                 // c166: height blend depth and strength, anti-tiling strength and the sharpness of its patches
-                fGroundHeightBlendDepth, fGroundHeightBlend, fGroundAntiTiling, 4.0f,
-                // c167: per metre, the colour patches' and the anti-tiling's noise; a mip bias that leaves out its grain
-                1.0f / (kBlobsPerRepeat * fGroundColorVariationSize), 1.0f / (kBlobsPerRepeat * fGroundAntiTilingSize), 1.0f, 0.0f,
+                fGroundHeightBlendDepth, fGroundHeightBlend, fGroundAntiTiling, fGroundAntiTilingSharpness,
+                // c167: per metre, the colour patches' and the anti-tiling's noise; a mip bias that leaves out its grain;
+                // the colour noise's contrast: blurred, it strays only about 0.1 from its mean, so it is stretched to -1 to 1
+                1.0f / (kBlobsPerRepeat * fGroundColorVariationSize), 1.0f / (kBlobsPerRepeat * fGroundAntiTilingSize), 1.0f, 3.0f,
                 // c168: how much the colour patches lighten and darken each channel, a little warmer where lighter
-                2.0f * fGroundColorVariation, 1.8f * fGroundColorVariation, 1.5f * fGroundColorVariation, 0.0f,
+                fGroundColorVariation, 0.9f * fGroundColorVariation, 0.75f * fGroundColorVariation, 0.0f,
                 // c169: bump height in metres, its fade with the distance as a * depth + b, the detail grain's height
                 fGroundBumps, -1.0f / fadeRange, fGroundBumpsFadeEnd / fadeRange, fGroundDetailBumps,
                 // c170: parallax steps looking straight down, the more added flat along the surface, depth

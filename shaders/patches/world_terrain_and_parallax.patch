@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS3.asm b/win32_30_nv8/gta_default/gta_defaultPS3.asm
-index ff566cc..711e3f4 100644
+index ff566cc..e6e5695 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS3.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS3.asm
 @@ -21,6 +21,12 @@
@@ -23,7 +23,7 @@ index ff566cc..711e3f4 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -104,6 +111,59 @@
+@@ -104,6 +111,62 @@
          mov r0.xyz, r25
        endif
      endif
@@ -68,6 +68,9 @@ index ff566cc..711e3f4 100644
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
 +      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
 +      mul r12.x, r12.x, r4.w
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
@@ -83,7 +86,7 @@ index ff566cc..711e3f4 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -129,7 +189,40 @@
+@@ -129,7 +192,40 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -126,7 +129,7 @@ index ff566cc..711e3f4 100644
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS4.asm b/win32_30_nv8/gta_default/gta_defaultPS4.asm
-index 3c1f0f3..f5cfbb5 100644
+index 3c1f0f3..0d570cd 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS4.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS4.asm
 @@ -21,6 +21,12 @@
@@ -150,7 +153,7 @@ index 3c1f0f3..f5cfbb5 100644
      dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s10
-@@ -102,6 +109,59 @@
+@@ -102,6 +109,62 @@
          mov r0.xyz, r25
        endif
      endif
@@ -195,6 +198,9 @@ index 3c1f0f3..f5cfbb5 100644
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
 +      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
 +      mul r12.x, r12.x, r4.w
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
@@ -210,7 +216,7 @@ index 3c1f0f3..f5cfbb5 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -110,7 +170,40 @@
+@@ -110,7 +173,40 @@
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
      endif
@@ -253,7 +259,7 @@ index 3c1f0f3..f5cfbb5 100644
      rsq r1.w, r1.w
      mul r0.w, r0.w, v2.w
 diff --git a/win32_30_nv8/gta_normal/gta_normalPS3.asm b/win32_30_nv8/gta_normal/gta_normalPS3.asm
-index 6155923..2f798e6 100644
+index 6155923..f2e6885 100644
 --- a/win32_30_nv8/gta_normal/gta_normalPS3.asm
 +++ b/win32_30_nv8/gta_normal/gta_normalPS3.asm
 @@ -27,6 +27,12 @@
@@ -277,7 +283,7 @@ index 6155923..2f798e6 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -111,6 +118,59 @@
+@@ -111,6 +118,62 @@
          mov r0.xyz, r25
        endif
      endif
@@ -322,6 +328,9 @@ index 6155923..2f798e6 100644
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
 +      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
 +      mul r12.x, r12.x, r4.w
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
@@ -338,7 +347,7 @@ index 6155923..2f798e6 100644
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
 diff --git a/win32_30_nv8/gta_normal/gta_normalPS4.asm b/win32_30_nv8/gta_normal/gta_normalPS4.asm
-index cef7cdb..4fd639a 100644
+index cef7cdb..391ec4c 100644
 --- a/win32_30_nv8/gta_normal/gta_normalPS4.asm
 +++ b/win32_30_nv8/gta_normal/gta_normalPS4.asm
 @@ -29,6 +29,12 @@
@@ -362,7 +371,7 @@ index cef7cdb..4fd639a 100644
      dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s1
-@@ -116,6 +123,59 @@
+@@ -116,6 +123,62 @@
          mov r1.xyz, r25
        endif
      endif
@@ -407,6 +416,9 @@ index cef7cdb..4fd639a 100644
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r1
 +      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
 +      mul r12.x, r12.x, r4.w
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
@@ -423,7 +435,7 @@ index cef7cdb..4fd639a 100644
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
 diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
-index 95f58df..2af6d46 100644
+index 95f58df..7a84c82 100644
 --- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
 +++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
 @@ -31,6 +31,12 @@
@@ -447,7 +459,7 @@ index 95f58df..2af6d46 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -116,6 +123,59 @@
+@@ -116,6 +123,62 @@
          mov r0.xyz, r25
        endif
      endif
@@ -492,6 +504,9 @@ index 95f58df..2af6d46 100644
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
 +      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
 +      mul r12.x, r12.x, r4.w
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
@@ -508,7 +523,7 @@ index 95f58df..2af6d46 100644
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
 diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
-index 5bdd4d9..80b4a8b 100644
+index 5bdd4d9..f53e8c3 100644
 --- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
 +++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
 @@ -33,6 +33,12 @@
@@ -532,7 +547,7 @@ index 5bdd4d9..80b4a8b 100644
      dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s1
-@@ -121,6 +128,59 @@
+@@ -121,6 +128,62 @@
          mov r1.xyz, r25
        endif
      endif
@@ -577,6 +592,9 @@ index 5bdd4d9..80b4a8b 100644
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r1
 +      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
 +      mul r12.x, r12.x, r4.w
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
@@ -1031,7 +1049,7 @@ index 7d9644a..22ff627 100644
      mul oC2.z, r2.x, v4.x
      mul r0.x, r2.x, c73.x
 diff --git a/win32_30_nv8/gta_spec/gta_specPS3.asm b/win32_30_nv8/gta_spec/gta_specPS3.asm
-index d721e6d..1b5ebf1 100644
+index d721e6d..ed76e58 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS3.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS3.asm
 @@ -27,6 +27,12 @@
@@ -1055,7 +1073,7 @@ index d721e6d..1b5ebf1 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -109,6 +116,59 @@
+@@ -109,6 +116,62 @@
          mov r0.xyz, r25
        endif
      endif
@@ -1100,6 +1118,9 @@ index d721e6d..1b5ebf1 100644
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
 +      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
 +      mul r12.x, r12.x, r4.w
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
@@ -1115,7 +1136,7 @@ index d721e6d..1b5ebf1 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -128,7 +188,40 @@
+@@ -128,7 +191,40 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -1158,7 +1179,7 @@ index d721e6d..1b5ebf1 100644
      rsq r0.w, r0.w
      texld r3, v0, s1
 diff --git a/win32_30_nv8/gta_spec/gta_specPS4.asm b/win32_30_nv8/gta_spec/gta_specPS4.asm
-index 3067a70..9b109a7 100644
+index 3067a70..8c7490e 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS4.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS4.asm
 @@ -29,6 +29,12 @@
@@ -1182,7 +1203,7 @@ index 3067a70..9b109a7 100644
      dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s1
-@@ -110,6 +117,59 @@
+@@ -110,6 +117,62 @@
          mov r0.xyz, r25
        endif
      endif
@@ -1227,6 +1248,9 @@ index 3067a70..9b109a7 100644
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
 +      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
 +      mul r12.x, r12.x, r4.w
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
@@ -1242,7 +1266,7 @@ index 3067a70..9b109a7 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -118,7 +178,40 @@
+@@ -118,7 +181,40 @@
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
      endif
@@ -1285,7 +1309,7 @@ index 3067a70..9b109a7 100644
      rsq r1.w, r1.w
      texld r2, v0, s1
 diff --git a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm b/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
-index 5882ea1..34f7ee0 100644
+index 5882ea1..9d0522b 100644
 --- a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
 +++ b/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
 @@ -21,6 +21,10 @@
@@ -1307,7 +1331,7 @@ index 5882ea1..34f7ee0 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -47,10 +52,76 @@
+@@ -47,10 +52,79 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, c39.x
      texkill r20
@@ -1371,6 +1395,9 @@ index 5882ea1..34f7ee0 100644
 +      lrp r13.x, r12.w, r9.x, r11.x
 +      mov r11.x, r13.x
 +      add r12.x, r3.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
 +      mul r2.xyz, r10, r12
@@ -1388,7 +1415,7 @@ index 5882ea1..34f7ee0 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -61,7 +132,36 @@
+@@ -61,7 +135,36 @@
      endif
      mul oC0.xyz, r2, v2
      mov oC0.w, c39.x
@@ -1427,7 +1454,7 @@ index 5882ea1..34f7ee0 100644
      mad oC2.xz, v2.w, c0.yyzw, c0.ywyw
      mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
 diff --git a/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm b/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
-index b1190ce..fa0cbd9 100644
+index b1190ce..46e5f34 100644
 --- a/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
 +++ b/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
 @@ -23,6 +23,10 @@
@@ -1449,7 +1476,7 @@ index b1190ce..fa0cbd9 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -51,13 +56,108 @@
+@@ -51,13 +56,111 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, c39.x
      texkill r20
@@ -1545,6 +1572,9 @@ index b1190ce..fa0cbd9 100644
 +      lrp r13.x, r12.w, r9.x, r11.x
 +      mov r11.x, r13.x
 +      add r12.x, r3.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
 +      mul r1.xyz, r10, r12
@@ -1565,7 +1595,7 @@ index b1190ce..fa0cbd9 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -68,7 +168,36 @@
+@@ -68,7 +171,36 @@
      endif
      mul oC0.xyz, r1, v3
      mov oC0.w, c39.x
@@ -1604,7 +1634,7 @@ index b1190ce..fa0cbd9 100644
      mad oC2.xz, v3.w, c0.yyzw, c0.ywyw
      mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
 diff --git a/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm b/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
-index 10dd3b6..62f3e35 100644
+index 10dd3b6..9ba3dfc 100644
 --- a/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
 +++ b/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
 @@ -25,6 +25,10 @@
@@ -1626,7 +1656,7 @@ index 10dd3b6..62f3e35 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -55,16 +60,140 @@
+@@ -55,16 +60,143 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, c39.x
      texkill r20
@@ -1754,6 +1784,9 @@ index 10dd3b6..62f3e35 100644
 +      lrp r13.x, r12.w, r9.x, r11.x
 +      mov r11.x, r13.x
 +      add r12.x, r3.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
 +      mul r2.xyz, r10, r12
@@ -1777,7 +1810,7 @@ index 10dd3b6..62f3e35 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -75,7 +204,36 @@
+@@ -75,7 +207,36 @@
      endif
      mul oC0.xyz, r2, v4
      mov oC0.w, c39.x
@@ -1816,7 +1849,7 @@ index 10dd3b6..62f3e35 100644
      mad oC2.xz, v4.w, c0.yyzw, c0.ywyw
      mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS3.asm b/win32_30_nv8/rage_default/rage_defaultPS3.asm
-index 3a528b5..145f29c 100644
+index 3a528b5..69ba50d 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS3.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS3.asm
 @@ -23,6 +23,12 @@
@@ -1832,7 +1865,7 @@ index 3a528b5..145f29c 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -32,10 +38,65 @@
+@@ -32,10 +38,68 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -1883,6 +1916,9 @@ index 3a528b5..145f29c 100644
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
 +      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
 +      mul r12.x, r12.x, r4.w
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
@@ -1898,7 +1934,7 @@ index 3a528b5..145f29c 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v2.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -47,7 +108,36 @@
+@@ -47,7 +111,36 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -1937,7 +1973,7 @@ index 3a528b5..145f29c 100644
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS4.asm b/win32_30_nv8/rage_default/rage_defaultPS4.asm
-index 657ce1d..6778f85 100644
+index 657ce1d..7173176 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS4.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS4.asm
 @@ -25,6 +25,12 @@
@@ -1953,7 +1989,7 @@ index 657ce1d..6778f85 100644
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      // def c2, 0.5, 0.001953125, 0, 0
-@@ -34,11 +40,95 @@
+@@ -34,11 +40,98 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -2005,6 +2041,9 @@ index 657ce1d..6778f85 100644
 +      mul r10.z, r10.z, r8.w
 +      lrp r11.xyz, r10.z, r9, r0
 +      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
 +      mul r12.x, r12.x, r4.w
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
