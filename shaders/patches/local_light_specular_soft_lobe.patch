@@ -1,0 +1,494 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+index ce725d7f..fc37e203 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+@@ -792,16 +792,20 @@
+     dp3_sat r15.y, r9, -r12 // N.V
+     dp3_sat r15.z, r9, r19 // N.L
+     dp3_sat r15.w, r19, r14 // L.H
+-    add r16.x, r9.w, r9.w
+-    add r16.x, r16.x, r16.x
++    mul r16.x, r9.w, c183.x
+     add r16.x, r16.x, c171.y
+     rcp r16.x, r16.x
+-    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
++    mul r16.x, r16.x, c183.w // alpha squared = c183.w / (c183.x n + 2); 2 / (4n + 2) by default: n is a Phong
++    // exponent on R.L, as wide as a Blinn one four times it. LightsGGXSoft takes 3.38 / (n + 2), a Blinn lobe 1.3 times as rough
++    mad r14.w, r16.x, c183.z, c183.y // the peak's scale: 1, or with LightsGGXSoft 32 alpha squared, the game's own peak
+     add r16.y, r12.w, c171.z
+     rcp r16.y, r16.y // 1 / distance squared
+     mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
+-    dp3 r16.z, r9, r19
+-    mad r13.xyz, r9, -r16.z, r19
++    add r16.x, r16.x, c184.x // LightsGGXSoft: wider still, by 0.2 at any distance
++    add r17.xyz, -r12, -r19
++    mad r17.xyz, r17, c184.y, r19 // stretched along the light, or along the view with LightsGGXStretchView (c184.y)
++    dp3 r16.z, r9, r17
++    mad r13.xyz, r9, -r16.z, r17
+     add r13.xyz, r13, c173
+     dp3 r16.z, r9, r13
+     mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
+@@ -841,6 +845,7 @@
+     lrp r18.y, r17.x, c171.x, r17.y // Fresnel
+     mul r13.w, r13.w, r18.y
+     mul r13.w, r13.w, c200.x
++    mul r13.w, r13.w, r14.w
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
+     // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
+index 63763841..a2ea1af5 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
+@@ -321,16 +321,20 @@
+     dp3_sat r15.y, r9, -r12 // N.V
+     dp3_sat r15.z, r9, r19 // N.L
+     dp3_sat r15.w, r19, r14 // L.H
+-    add r16.x, r9.w, r9.w
+-    add r16.x, r16.x, r16.x
++    mul r16.x, r9.w, c183.x
+     add r16.x, r16.x, c171.y
+     rcp r16.x, r16.x
+-    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
++    mul r16.x, r16.x, c183.w // alpha squared = c183.w / (c183.x n + 2); 2 / (4n + 2) by default: n is a Phong
++    // exponent on R.L, as wide as a Blinn one four times it. LightsGGXSoft takes 3.38 / (n + 2), a Blinn lobe 1.3 times as rough
++    mad r14.w, r16.x, c183.z, c183.y // the peak's scale: 1, or with LightsGGXSoft 32 alpha squared, the game's own peak
+     add r16.y, r12.w, c171.z
+     rcp r16.y, r16.y // 1 / distance squared
+     mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
+-    dp3 r16.z, r9, r19
+-    mad r13.xyz, r9, -r16.z, r19
++    add r16.x, r16.x, c184.x // LightsGGXSoft: wider still, by 0.2 at any distance
++    add r17.xyz, -r12, -r19
++    mad r17.xyz, r17, c184.y, r19 // stretched along the light, or along the view with LightsGGXStretchView (c184.y)
++    dp3 r16.z, r9, r17
++    mad r13.xyz, r9, -r16.z, r17
+     add r13.xyz, r13, c173
+     dp3 r16.z, r9, r13
+     mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
+@@ -370,6 +374,7 @@
+     lrp r18.y, r17.x, c171.x, r17.y // Fresnel
+     mul r13.w, r13.w, r18.y
+     mul r13.w, r13.w, c200.x
++    mul r13.w, r13.w, r14.w
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
+     // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+index 14c6054d..4bd9a450 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+@@ -331,16 +331,20 @@
+     dp3_sat r15.y, r9, -r12 // N.V
+     dp3_sat r15.z, r9, r19 // N.L
+     dp3_sat r15.w, r19, r14 // L.H
+-    add r16.x, r9.w, r9.w
+-    add r16.x, r16.x, r16.x
++    mul r16.x, r9.w, c183.x
+     add r16.x, r16.x, c171.y
+     rcp r16.x, r16.x
+-    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
++    mul r16.x, r16.x, c183.w // alpha squared = c183.w / (c183.x n + 2); 2 / (4n + 2) by default: n is a Phong
++    // exponent on R.L, as wide as a Blinn one four times it. LightsGGXSoft takes 3.38 / (n + 2), a Blinn lobe 1.3 times as rough
++    mad r14.w, r16.x, c183.z, c183.y // the peak's scale: 1, or with LightsGGXSoft 32 alpha squared, the game's own peak
+     add r16.y, r12.w, c171.z
+     rcp r16.y, r16.y // 1 / distance squared
+     mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
+-    dp3 r16.z, r9, r19
+-    mad r13.xyz, r9, -r16.z, r19
++    add r16.x, r16.x, c184.x // LightsGGXSoft: wider still, by 0.2 at any distance
++    add r17.xyz, -r12, -r19
++    mad r17.xyz, r17, c184.y, r19 // stretched along the light, or along the view with LightsGGXStretchView (c184.y)
++    dp3 r16.z, r9, r17
++    mad r13.xyz, r9, -r16.z, r17
+     add r13.xyz, r13, c173
+     dp3 r16.z, r9, r13
+     mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
+@@ -380,6 +384,7 @@
+     lrp r18.y, r17.x, c171.x, r17.y // Fresnel
+     mul r13.w, r13.w, r18.y
+     mul r13.w, r13.w, c200.x
++    mul r13.w, r13.w, r14.w
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
+     // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
+index 0656aca0..3fc96033 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
+@@ -331,16 +331,20 @@
+     dp3_sat r15.y, r9, -r12 // N.V
+     dp3_sat r15.z, r9, r19 // N.L
+     dp3_sat r15.w, r19, r14 // L.H
+-    add r16.x, r9.w, r9.w
+-    add r16.x, r16.x, r16.x
++    mul r16.x, r9.w, c183.x
+     add r16.x, r16.x, c171.y
+     rcp r16.x, r16.x
+-    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
++    mul r16.x, r16.x, c183.w // alpha squared = c183.w / (c183.x n + 2); 2 / (4n + 2) by default: n is a Phong
++    // exponent on R.L, as wide as a Blinn one four times it. LightsGGXSoft takes 3.38 / (n + 2), a Blinn lobe 1.3 times as rough
++    mad r14.w, r16.x, c183.z, c183.y // the peak's scale: 1, or with LightsGGXSoft 32 alpha squared, the game's own peak
+     add r16.y, r12.w, c171.z
+     rcp r16.y, r16.y // 1 / distance squared
+     mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
+-    dp3 r16.z, r9, r19
+-    mad r13.xyz, r9, -r16.z, r19
++    add r16.x, r16.x, c184.x // LightsGGXSoft: wider still, by 0.2 at any distance
++    add r17.xyz, -r12, -r19
++    mad r17.xyz, r17, c184.y, r19 // stretched along the light, or along the view with LightsGGXStretchView (c184.y)
++    dp3 r16.z, r9, r17
++    mad r13.xyz, r9, -r16.z, r17
+     add r13.xyz, r13, c173
+     dp3 r16.z, r9, r13
+     mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
+@@ -380,6 +384,7 @@
+     lrp r18.y, r17.x, c171.x, r17.y // Fresnel
+     mul r13.w, r13.w, r18.y
+     mul r13.w, r13.w, c200.x
++    mul r13.w, r13.w, r14.w
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
+     // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index da2c4316..330784b5 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -543,16 +543,20 @@
+     dp3_sat r15.y, r9, -r12 // N.V
+     dp3_sat r15.z, r9, r19 // N.L
+     dp3_sat r15.w, r19, r14 // L.H
+-    add r16.x, r9.w, r9.w
+-    add r16.x, r16.x, r16.x
++    mul r16.x, r9.w, c183.x
+     add r16.x, r16.x, c171.y
+     rcp r16.x, r16.x
+-    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
++    mul r16.x, r16.x, c183.w // alpha squared = c183.w / (c183.x n + 2); 2 / (4n + 2) by default: n is a Phong
++    // exponent on R.L, as wide as a Blinn one four times it. LightsGGXSoft takes 3.38 / (n + 2), a Blinn lobe 1.3 times as rough
++    mad r14.w, r16.x, c183.z, c183.y // the peak's scale: 1, or with LightsGGXSoft 32 alpha squared, the game's own peak
+     add r16.y, r12.w, c171.z
+     rcp r16.y, r16.y // 1 / distance squared
+     mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
+-    dp3 r16.z, r9, r19
+-    mad r13.xyz, r9, -r16.z, r19
++    add r16.x, r16.x, c184.x // LightsGGXSoft: wider still, by 0.2 at any distance
++    add r17.xyz, -r12, -r19
++    mad r17.xyz, r17, c184.y, r19 // stretched along the light, or along the view with LightsGGXStretchView (c184.y)
++    dp3 r16.z, r9, r17
++    mad r13.xyz, r9, -r16.z, r17
+     add r13.xyz, r13, c173
+     dp3 r16.z, r9, r13
+     mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
+@@ -592,6 +596,7 @@
+     lrp r18.y, r17.x, c171.x, r17.y // Fresnel
+     mul r13.w, r13.w, r18.y
+     mul r13.w, r13.w, c200.x
++    mul r13.w, r13.w, r14.w
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
+     // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+index a4da8349..bbd04281 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+@@ -510,16 +510,20 @@
+     dp3_sat r15.y, r9, -r12 // N.V
+     dp3_sat r15.z, r9, r19 // N.L
+     dp3_sat r15.w, r19, r14 // L.H
+-    add r16.x, r9.w, r9.w
+-    add r16.x, r16.x, r16.x
++    mul r16.x, r9.w, c183.x
+     add r16.x, r16.x, c171.y
+     rcp r16.x, r16.x
+-    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
++    mul r16.x, r16.x, c183.w // alpha squared = c183.w / (c183.x n + 2); 2 / (4n + 2) by default: n is a Phong
++    // exponent on R.L, as wide as a Blinn one four times it. LightsGGXSoft takes 3.38 / (n + 2), a Blinn lobe 1.3 times as rough
++    mad r14.w, r16.x, c183.z, c183.y // the peak's scale: 1, or with LightsGGXSoft 32 alpha squared, the game's own peak
+     add r16.y, r12.w, c171.z
+     rcp r16.y, r16.y // 1 / distance squared
+     mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
+-    dp3 r16.z, r9, r19
+-    mad r13.xyz, r9, -r16.z, r19
++    add r16.x, r16.x, c184.x // LightsGGXSoft: wider still, by 0.2 at any distance
++    add r17.xyz, -r12, -r19
++    mad r17.xyz, r17, c184.y, r19 // stretched along the light, or along the view with LightsGGXStretchView (c184.y)
++    dp3 r16.z, r9, r17
++    mad r13.xyz, r9, -r16.z, r17
+     add r13.xyz, r13, c173
+     dp3 r16.z, r9, r13
+     mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
+@@ -559,6 +563,7 @@
+     lrp r18.y, r17.x, c171.x, r17.y // Fresnel
+     mul r13.w, r13.w, r18.y
+     mul r13.w, r13.w, c200.x
++    mul r13.w, r13.w, r14.w
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
+     // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+index 2e807044..4a1bc515 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -373,16 +373,20 @@
+     dp3_sat r15.y, r9, -r12 // N.V
+     dp3_sat r15.z, r9, r19 // N.L
+     dp3_sat r15.w, r19, r14 // L.H
+-    add r16.x, r9.w, r9.w
+-    add r16.x, r16.x, r16.x
++    mul r16.x, r9.w, c183.x
+     add r16.x, r16.x, c171.y
+     rcp r16.x, r16.x
+-    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
++    mul r16.x, r16.x, c183.w // alpha squared = c183.w / (c183.x n + 2); 2 / (4n + 2) by default: n is a Phong
++    // exponent on R.L, as wide as a Blinn one four times it. LightsGGXSoft takes 3.38 / (n + 2), a Blinn lobe 1.3 times as rough
++    mad r14.w, r16.x, c183.z, c183.y // the peak's scale: 1, or with LightsGGXSoft 32 alpha squared, the game's own peak
+     add r16.y, r12.w, c171.z
+     rcp r16.y, r16.y // 1 / distance squared
+     mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
+-    dp3 r16.z, r9, r19
+-    mad r13.xyz, r9, -r16.z, r19
++    add r16.x, r16.x, c184.x // LightsGGXSoft: wider still, by 0.2 at any distance
++    add r17.xyz, -r12, -r19
++    mad r17.xyz, r17, c184.y, r19 // stretched along the light, or along the view with LightsGGXStretchView (c184.y)
++    dp3 r16.z, r9, r17
++    mad r13.xyz, r9, -r16.z, r17
+     add r13.xyz, r13, c173
+     dp3 r16.z, r9, r13
+     mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
+@@ -422,6 +426,7 @@
+     lrp r18.y, r17.x, c171.x, r17.y // Fresnel
+     mul r13.w, r13.w, r18.y
+     mul r13.w, r13.w, c200.x
++    mul r13.w, r13.w, r14.w
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
+     // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index d48728aa..543de390 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -559,16 +559,20 @@
+     dp3_sat r15.y, r9, -r12 // N.V
+     dp3_sat r15.z, r9, r19 // N.L
+     dp3_sat r15.w, r19, r14 // L.H
+-    add r16.x, r9.w, r9.w
+-    add r16.x, r16.x, r16.x
++    mul r16.x, r9.w, c183.x
+     add r16.x, r16.x, c171.y
+     rcp r16.x, r16.x
+-    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
++    mul r16.x, r16.x, c183.w // alpha squared = c183.w / (c183.x n + 2); 2 / (4n + 2) by default: n is a Phong
++    // exponent on R.L, as wide as a Blinn one four times it. LightsGGXSoft takes 3.38 / (n + 2), a Blinn lobe 1.3 times as rough
++    mad r14.w, r16.x, c183.z, c183.y // the peak's scale: 1, or with LightsGGXSoft 32 alpha squared, the game's own peak
+     add r16.y, r12.w, c171.z
+     rcp r16.y, r16.y // 1 / distance squared
+     mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
+-    dp3 r16.z, r9, r19
+-    mad r13.xyz, r9, -r16.z, r19
++    add r16.x, r16.x, c184.x // LightsGGXSoft: wider still, by 0.2 at any distance
++    add r17.xyz, -r12, -r19
++    mad r17.xyz, r17, c184.y, r19 // stretched along the light, or along the view with LightsGGXStretchView (c184.y)
++    dp3 r16.z, r9, r17
++    mad r13.xyz, r9, -r16.z, r17
+     add r13.xyz, r13, c173
+     dp3 r16.z, r9, r13
+     mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
+@@ -608,6 +612,7 @@
+     lrp r18.y, r17.x, c171.x, r17.y // Fresnel
+     mul r13.w, r13.w, r18.y
+     mul r13.w, r13.w, c200.x
++    mul r13.w, r13.w, r14.w
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
+     // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+index 886d00e8..79a28da0 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+@@ -810,16 +810,20 @@
+     dp3_sat r15.y, r9, -r12 // N.V
+     dp3_sat r15.z, r9, r19 // N.L
+     dp3_sat r15.w, r19, r14 // L.H
+-    add r16.x, r9.w, r9.w
+-    add r16.x, r16.x, r16.x
++    mul r16.x, r9.w, c183.x
+     add r16.x, r16.x, c171.y
+     rcp r16.x, r16.x
+-    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
++    mul r16.x, r16.x, c183.w // alpha squared = c183.w / (c183.x n + 2); 2 / (4n + 2) by default: n is a Phong
++    // exponent on R.L, as wide as a Blinn one four times it. LightsGGXSoft takes 3.38 / (n + 2), a Blinn lobe 1.3 times as rough
++    mad r14.w, r16.x, c183.z, c183.y // the peak's scale: 1, or with LightsGGXSoft 32 alpha squared, the game's own peak
+     add r16.y, r12.w, c171.z
+     rcp r16.y, r16.y // 1 / distance squared
+     mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
+-    dp3 r16.z, r9, r19
+-    mad r13.xyz, r9, -r16.z, r19
++    add r16.x, r16.x, c184.x // LightsGGXSoft: wider still, by 0.2 at any distance
++    add r17.xyz, -r12, -r19
++    mad r17.xyz, r17, c184.y, r19 // stretched along the light, or along the view with LightsGGXStretchView (c184.y)
++    dp3 r16.z, r9, r17
++    mad r13.xyz, r9, -r16.z, r17
+     add r13.xyz, r13, c173
+     dp3 r16.z, r9, r13
+     mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
+@@ -859,6 +863,7 @@
+     lrp r18.y, r17.x, c171.x, r17.y // Fresnel
+     mul r13.w, r13.w, r18.y
+     mul r13.w, r13.w, c200.x
++    mul r13.w, r13.w, r14.w
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
+     // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+index 8db0a1bd..0879030c 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -339,16 +339,20 @@
+     dp3_sat r15.y, r9, -r12 // N.V
+     dp3_sat r15.z, r9, r19 // N.L
+     dp3_sat r15.w, r19, r14 // L.H
+-    add r16.x, r9.w, r9.w
+-    add r16.x, r16.x, r16.x
++    mul r16.x, r9.w, c183.x
+     add r16.x, r16.x, c171.y
+     rcp r16.x, r16.x
+-    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
++    mul r16.x, r16.x, c183.w // alpha squared = c183.w / (c183.x n + 2); 2 / (4n + 2) by default: n is a Phong
++    // exponent on R.L, as wide as a Blinn one four times it. LightsGGXSoft takes 3.38 / (n + 2), a Blinn lobe 1.3 times as rough
++    mad r14.w, r16.x, c183.z, c183.y // the peak's scale: 1, or with LightsGGXSoft 32 alpha squared, the game's own peak
+     add r16.y, r12.w, c171.z
+     rcp r16.y, r16.y // 1 / distance squared
+     mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
+-    dp3 r16.z, r9, r19
+-    mad r13.xyz, r9, -r16.z, r19
++    add r16.x, r16.x, c184.x // LightsGGXSoft: wider still, by 0.2 at any distance
++    add r17.xyz, -r12, -r19
++    mad r17.xyz, r17, c184.y, r19 // stretched along the light, or along the view with LightsGGXStretchView (c184.y)
++    dp3 r16.z, r9, r17
++    mad r13.xyz, r9, -r16.z, r17
+     add r13.xyz, r13, c173
+     dp3 r16.z, r9, r13
+     mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
+@@ -388,6 +392,7 @@
+     lrp r18.y, r17.x, c171.x, r17.y // Fresnel
+     mul r13.w, r13.w, r18.y
+     mul r13.w, r13.w, c200.x
++    mul r13.w, r13.w, r14.w
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
+     // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+index d5ace0b4..36f1262f 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -348,16 +348,20 @@
+     dp3_sat r15.y, r9, -r12 // N.V
+     dp3_sat r15.z, r9, r19 // N.L
+     dp3_sat r15.w, r19, r14 // L.H
+-    add r16.x, r9.w, r9.w
+-    add r16.x, r16.x, r16.x
++    mul r16.x, r9.w, c183.x
+     add r16.x, r16.x, c171.y
+     rcp r16.x, r16.x
+-    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
++    mul r16.x, r16.x, c183.w // alpha squared = c183.w / (c183.x n + 2); 2 / (4n + 2) by default: n is a Phong
++    // exponent on R.L, as wide as a Blinn one four times it. LightsGGXSoft takes 3.38 / (n + 2), a Blinn lobe 1.3 times as rough
++    mad r14.w, r16.x, c183.z, c183.y // the peak's scale: 1, or with LightsGGXSoft 32 alpha squared, the game's own peak
+     add r16.y, r12.w, c171.z
+     rcp r16.y, r16.y // 1 / distance squared
+     mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
+-    dp3 r16.z, r9, r19
+-    mad r13.xyz, r9, -r16.z, r19
++    add r16.x, r16.x, c184.x // LightsGGXSoft: wider still, by 0.2 at any distance
++    add r17.xyz, -r12, -r19
++    mad r17.xyz, r17, c184.y, r19 // stretched along the light, or along the view with LightsGGXStretchView (c184.y)
++    dp3 r16.z, r9, r17
++    mad r13.xyz, r9, -r16.z, r17
+     add r13.xyz, r13, c173
+     dp3 r16.z, r9, r13
+     mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
+@@ -397,6 +401,7 @@
+     lrp r18.y, r17.x, c171.x, r17.y // Fresnel
+     mul r13.w, r13.w, r18.y
+     mul r13.w, r13.w, c200.x
++    mul r13.w, r13.w, r14.w
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
+     // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+index b7b9f541..679b5e29 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -350,16 +350,20 @@
+     dp3_sat r15.y, r9, -r12 // N.V
+     dp3_sat r15.z, r9, r19 // N.L
+     dp3_sat r15.w, r19, r14 // L.H
+-    add r16.x, r9.w, r9.w
+-    add r16.x, r16.x, r16.x
++    mul r16.x, r9.w, c183.x
+     add r16.x, r16.x, c171.y
+     rcp r16.x, r16.x
+-    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
++    mul r16.x, r16.x, c183.w // alpha squared = c183.w / (c183.x n + 2); 2 / (4n + 2) by default: n is a Phong
++    // exponent on R.L, as wide as a Blinn one four times it. LightsGGXSoft takes 3.38 / (n + 2), a Blinn lobe 1.3 times as rough
++    mad r14.w, r16.x, c183.z, c183.y // the peak's scale: 1, or with LightsGGXSoft 32 alpha squared, the game's own peak
+     add r16.y, r12.w, c171.z
+     rcp r16.y, r16.y // 1 / distance squared
+     mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
+-    dp3 r16.z, r9, r19
+-    mad r13.xyz, r9, -r16.z, r19
++    add r16.x, r16.x, c184.x // LightsGGXSoft: wider still, by 0.2 at any distance
++    add r17.xyz, -r12, -r19
++    mad r17.xyz, r17, c184.y, r19 // stretched along the light, or along the view with LightsGGXStretchView (c184.y)
++    dp3 r16.z, r9, r17
++    mad r13.xyz, r9, -r16.z, r17
+     add r13.xyz, r13, c173
+     dp3 r16.z, r9, r13
+     mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
+@@ -399,6 +403,7 @@
+     lrp r18.y, r17.x, c171.x, r17.y // Fresnel
+     mul r13.w, r13.w, r18.y
+     mul r13.w, r13.w, c200.x
++    mul r13.w, r13.w, r14.w
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
+     // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+index 5548ac5b..9721f180 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -352,16 +352,20 @@
+     dp3_sat r15.y, r9, -r12 // N.V
+     dp3_sat r15.z, r9, r19 // N.L
+     dp3_sat r15.w, r19, r14 // L.H
+-    add r16.x, r9.w, r9.w
+-    add r16.x, r16.x, r16.x
++    mul r16.x, r9.w, c183.x
+     add r16.x, r16.x, c171.y
+     rcp r16.x, r16.x
+-    add r16.x, r16.x, r16.x // alpha squared = 2 / (4n + 2): n is a Phong exponent on R.L, as wide as a Blinn one four times it
++    mul r16.x, r16.x, c183.w // alpha squared = c183.w / (c183.x n + 2); 2 / (4n + 2) by default: n is a Phong
++    // exponent on R.L, as wide as a Blinn one four times it. LightsGGXSoft takes 3.38 / (n + 2), a Blinn lobe 1.3 times as rough
++    mad r14.w, r16.x, c183.z, c183.y // the peak's scale: 1, or with LightsGGXSoft 32 alpha squared, the game's own peak
+     add r16.y, r12.w, c171.z
+     rcp r16.y, r16.y // 1 / distance squared
+     mad r16.x, c200.z, r16.y, r16.x // a sphere light: its size over its distance
+-    dp3 r16.z, r9, r19
+-    mad r13.xyz, r9, -r16.z, r19
++    add r16.x, r16.x, c184.x // LightsGGXSoft: wider still, by 0.2 at any distance
++    add r17.xyz, -r12, -r19
++    mad r17.xyz, r17, c184.y, r19 // stretched along the light, or along the view with LightsGGXStretchView (c184.y)
++    dp3 r16.z, r9, r17
++    mad r13.xyz, r9, -r16.z, r17
+     add r13.xyz, r13, c173
+     dp3 r16.z, r9, r13
+     mad r13.xyz, r9, -r16.z, r13 // flat on the surface again
+@@ -401,6 +405,7 @@
+     lrp r18.y, r17.x, c171.x, r17.y // Fresnel
+     mul r13.w, r13.w, r18.y
+     mul r13.w, r13.w, c200.x
++    mul r13.w, r13.w, r14.w
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
+     // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);

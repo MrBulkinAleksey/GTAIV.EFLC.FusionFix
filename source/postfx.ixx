@@ -455,6 +455,15 @@ public:
     //   The highlight also fades out as the surface turns away from the camera (N.V under 0.08,
     //   local_light_specular_sheen_and_fade.patch), where normal mapped pixels sparkled.
     float fLightsGGXMax = 2.0f;
+    // - LightsGGXSoft (c183, c184.x; local_light_specular_soft_lobe.patch): 0 the lobe above, 1 a softer
+    //   look: as wide as a Blinn lobe of the same exponent 1.3 times as rough, widened by 0.2 more at any
+    //   distance, and its peak held at the game's whatever the gloss, so rough surfaces get a broad
+    //   glow and glossy ones no brighter core. Values between blend.
+    // - LightsGGXStretchView (c184.y): 0 stretches the lobe along the light projected onto the surface,
+    //   1 along the view, so streaks on wet roads run straight towards the camera. Both agree at the
+    //   highlight's centre; only its tail turns.
+    float fLightsGGXSoft = 0.0f;
+    float fLightsGGXStretchView = 0.0f;
     // Wet ground (WetGround.fx): WetGround the strength, 0 off. WetGroundPuddles the share of flat
     // ground under water at full wetness, WetGroundPuddleSize the metres one tile of the puddle map
     // takes, WetGroundRipples the rain's rings in them, WetGroundDarkening how much darker wet
@@ -1531,6 +1540,8 @@ public:
         fLightsGGXSun = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSun", 1.0f), 0.0f, 4.0f);
         fLightsGGXEnvironment = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXEnvironment", 1.0f), 0.0f, 1.0f);
         fLightsGGXMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXMax", 2.0f), 0.1f, 16.0f);
+        fLightsGGXSoft = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSoft", 0.0f), 0.0f, 1.0f);
+        fLightsGGXStretchView = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXStretchView", 0.0f), 0.0f, 1.0f);
         fWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "WetGround", 1.0f), 0.0f, 1.0f);
         fWetGroundPuddles = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddles", 0.35f), 0.0f, 1.0f);
         fWetGroundPuddleSize = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddleSize", 24.0f), 2.0f, 500.0f);
@@ -7741,6 +7752,13 @@ public:
             const float c165[4] = { on ? R.fLightsGGXFillLights : 0.0f, on ? R.fLightsGGXSun : 0.0f, enabled ? R.fLightsGGXEnvironment : 0.0f, R.fLightsGGXMax };
             pDevice->SetPixelShaderConstantF(200, c200, 1);
             pDevice->SetPixelShaderConstantF(165, c165, 1);
+            // c183: alpha squared = w / (x n + 2), the peak times y + z alpha squared; c184: x a widening
+            // added to alpha squared, y how far the stretch turns from the light to the view.
+            const float soft = R.fLightsGGXSoft;
+            const float c183[4] = { 4.0f - 3.0f * soft, 1.0f - soft, 32.0f * soft, 2.0f + 1.38f * soft };
+            const float c184[4] = { 0.04f * soft, R.fLightsGGXStretchView, 0.0f, 0.0f };
+            pDevice->SetPixelShaderConstantF(183, c183, 1);
+            pDevice->SetPixelShaderConstantF(184, c184, 1);
             std::memset(R.LightGGXShape, 0, sizeof(R.LightGGXShape));
             pDevice->SetPixelShaderConstantF(206, R.LightGGXShape, 1);
             if (R.mSpecularRT && R.mSpecularRT->mD3DTexture)
