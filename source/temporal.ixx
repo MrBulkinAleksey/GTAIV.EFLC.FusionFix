@@ -1314,8 +1314,9 @@ public:
     {
         using namespace TemporalAA;
 
-        // Once per frame, for the scene the motion vectors were rendered for
-        if (!bReactiveMask || GetMode() == Mode::Off || OpaqueFrame == SceneFrame || MotionFrame != SceneFrame)
+        // Once per frame, for the scene the motion vectors were rendered for; read by temporal AA and FSR's reactive
+        // mask, not by DLSS, which goes without one
+        if (!bReactiveMask || GetMode() == Mode::Off || GetMode() == Mode::DLAA || OpaqueFrame == SceneFrame || MotionFrame != SceneFrame)
             return;
         if (!OpaqueRT || !OpaqueRT->mD3DTexture || !OpaqueLumaPS)
             return;
