@@ -29,6 +29,11 @@ namespace PlayerShadowAllocation
     static std::atomic<DWORD> ownerThread{0};
     static uintptr_t gameBase = 0;
     static bool cameraPriority = false;
+    static bool casterPriority = false;
+    // Copied on the game-process callback, read by selection on the render side.
+    static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
+    static fusionfix::shadows::ShadowCasterPresence casters{};
+    static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0};
     static std::atomic<uint32_t> cameraPasses{0}, cameraFallbacks{0};
     static std::atomic<uint32_t> auxiliaryViewsRejected{0}, sceneCameraReads{0};
     static bool publicationEnabled = false; // Immutable after ready is published.
@@ -49,6 +54,7 @@ namespace PlayerShadowAllocation
         bool continuityActive=false;
         bool tracedComparison=false;
         fusionfix::shadows::ShadowView view{};
+        fusionfix::shadows::ShadowCasterPresence casters{};
         uintptr_t ped = 0, occupiedCar = 0;
         uint32_t frame = 0, viewFrame = 0;
         uintptr_t stackAnchor = 0;
@@ -159,6 +165,29 @@ namespace PlayerShadowAllocation
         });
         return static_cast<bool>(cameraCaptureHook);
     }
+    static void CaptureCasters() noexcept
+    {
+        using fusionfix::shadows::ShadowCasterPresence;
+        if (!casterPriority || !Enabled() || !CTimer::m_snTimeInMilliseconds) return;
+        PlayerCar::Focus focus;
+        ShadowCasterPresence next{};
+        next.timeMs = static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds);
+        if (PlayerCar::ReadFocus(focus)) {
+            const auto add = [&](uintptr_t entity, float extent) {
+                float p[3];
+                if (!CEntity::GetPosition(entity, p)) return;
+                const float x = p[0] - focus.position[0], y = p[1] - focus.position[1], z = p[2] - focus.position[2];
+                if (x * x + y * y + z * z <= ShadowCasterPresence::Range * ShadowCasterPresence::Range)
+                    next.Add({p[0], p[1], p[2]}, extent);
+            };
+            next.valid = CVehicle::ForEachVehicle([&](uintptr_t v) { add(v, ShadowCasterPresence::VehicleExtent); }) &&
+                CPed::ForEachPed([&](uintptr_t p) { add(p, ShadowCasterPresence::PedExtent); });
+        }
+        if (!castersLock.test_and_set(std::memory_order_acquire)) {
+            casters = next; ++casterCaptures; castersLock.clear(std::memory_order_release);
+        }
+    }
+
     static bool Prepare() noexcept
     {
         if (!Enabled() || !CTimer::m_frameCount || !CTimer::m_snTimeInMilliseconds ||
@@ -179,6 +208,13 @@ namespace PlayerShadowAllocation
         state.lampContinuity.Begin(ped,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
         state.continuity.Begin(ped,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
         state.nativeCandidates.fill({}); labRelevant.fill(0);
+        if (casterPriority && !castersLock.test_and_set(std::memory_order_acquire)) {
+            state.casters = casters; castersLock.clear(std::memory_order_release);
+        }
+        // A contended copy keeps the last one; a stale one, from a pause or a
+        // load, makes every lamp count as lighting someone.
+        if (static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds) - state.casters.timeMs > 250u)
+            state.casters.valid = false;
         state.continuityActive=false;
         state.tracedComparison=false;
         state.stackAnchor = 0;
@@ -271,8 +307,16 @@ namespace PlayerShadowAllocation
         // Keep the softer on-foot acquisition preference, but do not halve an
         // incumbent's visibility merely because the player is walking.
         const float effectiveWeight=retained ? visibleWeight : viewWeight;
-        const float adjusted=fusionfix::shadows::NativeLampPriorityDistance(original,
+        float adjusted=fusionfix::shadows::NativeLampPriorityDistance(original,
             distanceSquared,effectiveWeight,reach,retained);
+        // Driving, rank a visible lamp by how close the car is about to be, so
+        // the lamps over the traffic ahead take their slots before it is near.
+        if(casterPriority && state.occupiedCar && std::isfinite(distanceSquared) && distanceSquared>1.0f) {
+            const float anticipated=fusionfix::shadows::DrivingLampPriorityDistance(state.player,state.drivingFocus,
+                position,distanceSquared,visibleWeight);
+            if(std::isfinite(anticipated) && anticipated>=0 && anticipated<distanceSquared)
+                adjusted*=std::sqrt(anticipated/distanceSquared);
+        }
         if(adjusted!=original && std::isfinite(adjusted) && adjusted>=0) {
             regs.xmm0.f32[0]=adjusted; ++lampDistanceAdjusted;
         }
@@ -340,8 +384,15 @@ namespace PlayerShadowAllocation
                 {light.mPosition.x,light.mPosition.y,light.mPosition.z},light.mRadius);
             const bool relevant=std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=reach*reach &&
                 (volumeVisible || kind==budget::Kind::PlayerBeam);
+            // A cached lamp with nobody in its light looks the same from its cache.
+            const bool cached=(flags&rage::LF_STATIC_SHADOW) && light.mShadowCacheIndex>=0;
+            const bool needsSlot=!casterPriority || kind!=budget::Kind::Lamp || !cached ||
+                state.casters.Lights({light.mPosition.x,light.mPosition.y,light.mPosition.z},
+                    {light.mDirection.x,light.mDirection.y,light.mDirection.z},
+                    static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle);
+            if(!needsSlot) ++lampsWithoutCasters;
             labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(
-                {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam);
+                {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam,needsSlot);
             // Record why a prior choice loses its claim, independently of
             // whether native sorting eventually drops it. Bounded to 7/pass.
             for(const auto& old:state.previousSelection) if(old.key==key) {

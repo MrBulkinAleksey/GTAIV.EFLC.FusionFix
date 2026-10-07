@@ -716,6 +716,29 @@ CPool<void*>** pPedPool;
 CPool<void*>** pCamPool;
 CPool<void*>** pVehiclePool;
 
+// The pool where its storage, flags, size and stride look sane, nullptr otherwise.
+CPool<void*>* CheckedPool(CPool<void*>** global, int32_t minStride)
+{
+    const auto pool = global ? *global : nullptr;
+    if (!pool || !pool->m_aStorage || !pool->m_aFlags || pool->m_nSize <= 0 || pool->m_nSize > 4096 ||
+        pool->m_nStorageSize < minStride || pool->m_nStorageSize > 0x10000 ||
+        reinterpret_cast<uintptr_t>(pool->m_aStorage) >
+            UINTPTR_MAX - static_cast<uintptr_t>(pool->m_nSize) * pool->m_nStorageSize)
+        return nullptr;
+    return pool;
+}
+
+// Calls visit(entity) for every occupied slot; false where the pool is not usable.
+template <typename Visit>
+bool ForEachInPool(CPool<void*>* pool, Visit&& visit)
+{
+    if (!pool) return false;
+    for (int32_t i = 0; i < pool->m_nSize; ++i)
+        if (const auto entity = reinterpret_cast<uintptr_t>(pool->GetSlot(i)))
+            visit(entity);
+    return true;
+}
+
 namespace CObject
 {
     export CPool<void*>* GetObjectsPool()
@@ -737,6 +760,13 @@ namespace CPed
     export CPool<void*>* GetPedPool()
     {
         return *pPedPool;
+    }
+
+    // Calls visit(ped) for every ped in the pool; false where the pool is not usable.
+    export template <typename Visit>
+    bool ForEachPed(Visit&& visit)
+    {
+        return ForEachInPool(CheckedPool(pPedPool, 0x24), visit);
     }
 
     export template <typename... Args, typename = std::enable_if_t<(std::is_convertible_v<Args, TaskID> && ...)>>
@@ -790,25 +820,14 @@ namespace CVehicle
     // The vehicle pool where its storage, flags, size and stride look sane, nullptr otherwise.
     export CPool<void*>* GetCheckedVehiclePool()
     {
-        const auto pool = pVehiclePool ? *pVehiclePool : nullptr;
-        if (!pool || !pool->m_aStorage || !pool->m_aFlags || pool->m_nSize <= 0 || pool->m_nSize > 4096 ||
-            pool->m_nStorageSize < 0x24 || pool->m_nStorageSize > 0x10000 ||
-            reinterpret_cast<uintptr_t>(pool->m_aStorage) >
-                UINTPTR_MAX - static_cast<uintptr_t>(pool->m_nSize) * pool->m_nStorageSize)
-            return nullptr;
-        return pool;
+        return CheckedPool(pVehiclePool, 0x24);
     }
 
     // Calls visit(vehicle) for every vehicle in the pool; false where the pool is not usable.
     export template <typename Visit>
     bool ForEachVehicle(Visit&& visit)
     {
-        const auto pool = GetCheckedVehiclePool();
-        if (!pool) return false;
-        for (int32_t i = 0; i < pool->m_nSize; ++i)
-            if (const auto vehicle = reinterpret_cast<uintptr_t>(pool->GetSlot(i)))
-                visit(vehicle);
-        return true;
+        return ForEachInPool(GetCheckedVehiclePool(), visit);
     }
 }
 

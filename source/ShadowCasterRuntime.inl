@@ -122,6 +122,9 @@ namespace ShadowDiagnostics
                 << " continuity_overrides=" << PlayerShadowAllocation::continuityOverrides.load()
                 << " continuity_rejected=" << PlayerShadowAllocation::continuityRejected.load()
                 << " lamp_distance_adjusted=" << PlayerShadowAllocation::lampDistanceAdjusted.load()
+                << " caster_priority=" << PlayerShadowAllocation::casterPriority
+                << " caster_captures=" << PlayerShadowAllocation::casterCaptures.load()
+                << " lamps_without_casters=" << PlayerShadowAllocation::lampsWithoutCasters.load()
                 << " nearby_receivers=" << NearbyVehicleLighting36::enabled.load()
                 << " receiver_captures=" << NearbyVehicleLighting36::captures.load()
                 << " receiver_matches=" << NearbyVehicleLighting36::matches.load()
