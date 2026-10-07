@@ -463,7 +463,7 @@ public:
     //   1 along the view, so streaks on wet roads run straight towards the camera. Both agree at the
     //   highlight's centre; only its tail turns.
     float fLightsGGXSoft = 0.0f;
-    float fLightsGGXStretchView = 0.0f;
+    float fLightsGGXStretchView = 1.0f;
     // Wet ground (WetGround.fx): WetGround the strength, 0 off. WetGroundPuddles the share of flat
     // ground under water at full wetness, WetGroundPuddleSize the metres one tile of the puddle map
     // takes, WetGroundRipples the rain's rings in them, WetGroundDarkening how much darker wet
@@ -1545,7 +1545,7 @@ public:
         fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 2.0f), 0.0f, 8.0f);
         fLightsGGXSoft = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSoft", 0.0f), 0.0f, 1.0f);
-        fLightsGGXStretchView = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXStretchView", 0.0f), 0.0f, 1.0f);
+        fLightsGGXStretchView = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXStretchView", 1.0f), 0.0f, 1.0f);
         fWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "WetGround", 1.0f), 0.0f, 1.0f);
         fWetGroundPuddles = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddles", 0.35f), 0.0f, 1.0f);
         fWetGroundPuddleSize = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddleSize", 24.0f), 2.0f, 500.0f);
