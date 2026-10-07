@@ -411,7 +411,8 @@ public:
     // Materials with no specular map (c197.x; deferred_lighting_sun_sheen.patch) write no specular
     // intensity, so buildings and LOD roads got neither the sun's highlight nor the sky's
     // reflection. The sun pass gives them half this much of one, as if the G-buffer held it,
-    // times the square of one less their colour's saturation and faded out on dark colours.
+    // times the square of one less their colour's saturation and faded out on dark colours, and so
+    // do lamps and headlights (local_light_specular_sheen_and_fade.patch), for their highlights.
     // They are told apart by the gloss 258 / 1023 they write (world_no_specular_mark.patch).
     float fSpecularSheen = 0.1f;
     // Highlights of lamps, headlights and the sun (c165, c200, c206; local_light_specular_ggx.patch):
@@ -451,6 +452,8 @@ public:
     // - LightsGGXMax: the most a GGX highlight may reach, in the game's own peak (its pow(R.L, n) at 1).
     //   GGX keeps the energy, so a narrow lobe peaks far above it: at 8, normal mapped clothes, skin and
     //   wood burnt into white patches and grazing edges into white strips.
+    //   The highlight also fades out as the surface turns away from the camera (N.V under 0.08,
+    //   local_light_specular_sheen_and_fade.patch), where normal mapped pixels sparkled.
     float fLightsGGXMax = 2.0f;
     // Wet ground (WetGround.fx): WetGround the strength, 0 off. WetGroundPuddles the share of flat
     // ground under water at full wetness, WetGroundPuddleSize the metres one tile of the puddle map
