@@ -56,6 +56,7 @@ class TextureQuality
     static inline float fGroundColorVariationSize = 15.0f;
     static inline float fGroundBumps = 0.08f;
     static inline float fGroundDetailBumps = 0.005f;
+    static inline float fGroundBumpsCoarse = 0.25f;
     static inline float fGroundBumpsFadeStart = 15.0f;
     static inline float fGroundBumpsFadeEnd = 60.0f;
     static inline float fGroundCavity = 2.0f;
@@ -323,6 +324,7 @@ private:
         fGroundColorVariation = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundColorVariation", 0.25f), 0.0f, 1.0f);
         fGroundColorVariationSize = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundColorVariationSize", 15.0f), 1.0f, 500.0f);
         fGroundBumps = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumps", 0.08f), 0.0f, 0.5f);
+        fGroundBumpsCoarse = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsCoarse", 0.25f), 0.0f, 2.0f);
         fGroundDetailBumps = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundDetailBumps", 0.005f), 0.0f, 0.1f);
         fGroundBumpsFadeStart = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsFadeStart", 15.0f), 0.0f, 1000.0f);
         fGroundBumpsFadeEnd = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsFadeEnd", 60.0f), fGroundBumpsFadeStart, 1000.0f);
@@ -518,8 +520,8 @@ private:
                 // and GroundSurfacesDebug: the terrain drawn half magenta, gta_parallax* half cyan, other ground orange
                 fParallaxMinSteps, fParallaxMaxSteps - fParallaxMinSteps, fParallaxDepth, float(nGroundDebug),
                 // c171: the hollows' occlusion per unit of brightness under the local average, the part of it the
-                // colour takes, -, the mip bias that reads the local average
-                fGroundCavity, fGroundCavityAlbedo, 0.0f, 3.0f,
+                // colour takes, the height of the local average's lumps in metres, the mip bias that reads it
+                fGroundCavity, fGroundCavityAlbedo, fGroundBumpsCoarse, 3.0f,
             };
             pDevice->SetPixelShaderConstantF(166, params, 6);
         }

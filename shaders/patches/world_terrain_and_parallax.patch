@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS3.asm b/win32_30_nv8/gta_default/gta_defaultPS3.asm
-index ff566cc..36c01d9 100644
+index ff566cc..131d6a6 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS3.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS3.asm
 @@ -21,6 +21,12 @@
@@ -100,7 +100,7 @@ index ff566cc..36c01d9 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -129,7 +206,40 @@
+@@ -129,7 +206,41 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -112,6 +112,7 @@ index ff566cc..36c01d9 100644
 +      nrm r16.xyz, v1
 +      dp3 r13.x, r0, c188
 +      mul r13.x, r13.x, c169.x
++      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
 +      if b12
 +        add r13.y, r24.z, -c187.z
 +        mad r13.x, r13.y, c169.w, r13.x
@@ -142,7 +143,7 @@ index ff566cc..36c01d9 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
-@@ -137,7 +247,9 @@
+@@ -137,7 +248,9 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -154,7 +155,7 @@ index ff566cc..36c01d9 100644
      // mov oC2.w, r1.x
      add r20.x, -c152.w, r1.x
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS4.asm b/win32_30_nv8/gta_default/gta_defaultPS4.asm
-index 3c1f0f3..85472a4 100644
+index 3c1f0f3..1b2b18f 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS4.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS4.asm
 @@ -21,6 +21,12 @@
@@ -255,7 +256,7 @@ index 3c1f0f3..85472a4 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -110,7 +187,40 @@
+@@ -110,7 +187,41 @@
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
      endif
@@ -267,6 +268,7 @@ index 3c1f0f3..85472a4 100644
 +      nrm r16.xyz, v1
 +      dp3 r13.x, r0, c188
 +      mul r13.x, r13.x, c169.x
++      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
 +      if b12
 +        add r13.y, r24.z, -c187.z
 +        mad r13.x, r13.y, c169.w, r13.x
@@ -297,7 +299,7 @@ index 3c1f0f3..85472a4 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      mul r0.w, r0.w, v2.w
-@@ -119,7 +229,9 @@
+@@ -119,7 +230,9 @@
      mul r0.w, r0.w, c39.x
      mov oC0, r0
      mov oC1.w, r0.w
@@ -1191,7 +1193,7 @@ index 7d9644a..22ff627 100644
      mul oC2.z, r2.x, v4.x
      mul r0.x, r2.x, c73.x
 diff --git a/win32_30_nv8/gta_spec/gta_specPS3.asm b/win32_30_nv8/gta_spec/gta_specPS3.asm
-index d721e6d..521ad41 100644
+index d721e6d..358ccf1 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS3.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS3.asm
 @@ -27,6 +27,12 @@
@@ -1292,7 +1294,7 @@ index d721e6d..521ad41 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -128,7 +205,40 @@
+@@ -128,7 +205,41 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -1304,6 +1306,7 @@ index d721e6d..521ad41 100644
 +      nrm r16.xyz, v1
 +      dp3 r13.x, r0, c188
 +      mul r13.x, r13.x, c169.x
++      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
 +      if b12
 +        add r13.y, r24.z, -c187.z
 +        mad r13.x, r13.y, c169.w, r13.x
@@ -1334,7 +1337,7 @@ index d721e6d..521ad41 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      texld r3, v0, s1
-@@ -144,7 +254,7 @@
+@@ -144,7 +255,7 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -1344,7 +1347,7 @@ index d721e6d..521ad41 100644
      add r20.x, -c152.w, r1.x
      cmp oC2.w, r20.x, c0.z, -c0.y
 diff --git a/win32_30_nv8/gta_spec/gta_specPS4.asm b/win32_30_nv8/gta_spec/gta_specPS4.asm
-index 3067a70..f7eb0e5 100644
+index 3067a70..e17011a 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS4.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS4.asm
 @@ -29,6 +29,12 @@
@@ -1445,7 +1448,7 @@ index 3067a70..f7eb0e5 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -118,7 +195,40 @@
+@@ -118,7 +195,41 @@
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
      endif
@@ -1457,6 +1460,7 @@ index 3067a70..f7eb0e5 100644
 +      nrm r16.xyz, v1
 +      dp3 r13.x, r0, c188
 +      mul r13.x, r13.x, c169.x
++      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
 +      if b12
 +        add r13.y, r24.z, -c187.z
 +        mad r13.x, r13.y, c169.w, r13.x
@@ -1487,7 +1491,7 @@ index 3067a70..f7eb0e5 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      texld r2, v0, s1
-@@ -135,7 +245,7 @@
+@@ -135,7 +246,7 @@
      mul r0.w, r0.w, c39.x
      mov oC0, r0
      mov oC1.w, r0.w
@@ -2037,7 +2041,7 @@ index 10dd3b6..9ba3dfc 100644
      mad oC2.xz, v4.w, c0.yyzw, c0.ywyw
      mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS3.asm b/win32_30_nv8/rage_default/rage_defaultPS3.asm
-index 3a528b5..140bb8c 100644
+index 3a528b5..6f5ea90 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS3.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS3.asm
 @@ -23,6 +23,12 @@
@@ -2136,7 +2140,7 @@ index 3a528b5..140bb8c 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v2.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -47,7 +125,36 @@
+@@ -47,7 +125,37 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -2148,6 +2152,7 @@ index 3a528b5..140bb8c 100644
 +      nrm r16.xyz, v1
 +      dp3 r13.x, r0, c188
 +      mul r13.x, r13.x, c169.x
++      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
 +      mad_sat r13.y, v9.w, c169.y, c169.z
 +      mul r13.x, r13.x, r13.y
 +      add r13.y, r16.z, -c184.w
@@ -2174,7 +2179,7 @@ index 3a528b5..140bb8c 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
-@@ -55,7 +162,9 @@
+@@ -55,7 +163,9 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -2186,7 +2191,7 @@ index 3a528b5..140bb8c 100644
      // mov oC2.w, r1.x
      add r20.x, -c152.w, r1.x
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS4.asm b/win32_30_nv8/rage_default/rage_defaultPS4.asm
-index 657ce1d..bbecb8d 100644
+index 657ce1d..d3f6432 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS4.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS4.asm
 @@ -25,6 +25,12 @@
@@ -2202,7 +2207,7 @@ index 657ce1d..bbecb8d 100644
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      // def c2, 0.5, 0.001953125, 0, 0
-@@ -34,11 +40,112 @@
+@@ -34,11 +40,113 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -2290,6 +2295,7 @@ index 657ce1d..bbecb8d 100644
 +      nrm r16.xyz, v1
 +      dp3 r13.x, r0, c188
 +      mul r13.x, r13.x, c169.x
++      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
 +      mad_sat r13.y, v9.w, c169.y, c169.z
 +      mul r13.x, r13.x, r13.y
 +      add r13.y, r16.z, -c184.w
@@ -2316,7 +2322,7 @@ index 657ce1d..bbecb8d 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      mul r0.w, r0.w, v2.w
-@@ -53,7 +160,9 @@
+@@ -53,7 +161,9 @@
      mov oC1.w, r0.w
      // mul oC2.x, r1.x, c72.x
      // mov oC2.z, v2.x
