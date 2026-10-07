@@ -5240,12 +5240,14 @@ private:
         if (hasNormals)
             effect->SetTexture(h.NormalTex2D, R.mNormalRT->mD3DTexture);
         effect->SetFloat(h.fUseGBufferNormals, (hasNormals && R.bSSRGBufferNormals) ? 1.0f : 0.0f);
-        // CWeather::Rain eases towards the weather's rain amount, 0.3 for drizzle, 0.7 for rain
-        // and 1.0 for a thunderstorm, so the ground wets and dries with it; rain counts as wet.
+        // How wet the ground is, as the wet ground pass has it (RenderWetGround, which runs at the end
+        // of the G-buffer pass every frame and keeps it up to date even while it draws nothing): it
+        // follows CWeather::Rain over WetGroundWetting and WetGroundDrying seconds. Taken from the rain
+        // itself, a shower turned on had SSR mirror the whole road at once, half a minute before the
+        // ground pass made it wet.
         // Telling ground from walls takes the G-buffer normals, and the gloss the specular one.
-        const float rain = CWeather::Rain ? *CWeather::Rain : 0.0f;
         const bool wetGround = R.fSSRWetGround > 0.0f && hasNormals && hasSpecular;
-        effect->SetFloat(h.fWetness, wetGround ? std::clamp(rain / 0.7f, 0.0f, 1.0f) : 0.0f);
+        effect->SetFloat(h.fWetness, wetGround ? R.fWetness : 0.0f);
         effect->SetFloat(h.fWetGroundBoost, R.fSSRWetGround);
 
         UINT passes = 0;
