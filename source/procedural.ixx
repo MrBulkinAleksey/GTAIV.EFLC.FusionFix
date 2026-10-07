@@ -46,7 +46,7 @@ import settings;
 //  - ProceduralSpawnsPerUpdate: the queue of positions makes no more props than this an update, the rest
 //    wait for the next ones, so a jump in distance or a new area doesn't stall a frame. Waiting positions
 //    of a provider the game removed meanwhile (its requests at +0x522c, processed first) are dropped.
-//  - The log has the time of the generator's update (CE 0xc0aa90) and how many props are out.
+//  - ProceduralLog: the log has the time of the generator's update (CE 0xc0aa90) and how many props are out.
 namespace Procedural
 {
     constexpr uint32_t VanillaRecords = 512;
@@ -64,6 +64,7 @@ namespace Procedural
     float fSmallProp = 30.0f;
     bool bInReflections = false;
     int32_t nSpawnsPerUpdate = 128;
+    bool bLog = false;
 
     // The game's
     uint8_t* pGenerator = nullptr;      // CE 0x1683290
@@ -372,6 +373,7 @@ public:
             fSmallProp = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralSmallPropDistance", 30.0f), 0.0f, 1000.0f);
             bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
             nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
+            bLog = iniReader.ReadInteger("PROCEDURAL", "ProceduralLog", 0) != 0;
 
             // Generator init: the extra records and the larger queue
             auto pattern = hook::pattern("53 55 56 8B D9 57 8D 73 14 BF 00 02 00 00");
@@ -462,8 +464,9 @@ public:
             if (!pattern.empty())
                 shRelease = safetyhook::create_inline(pattern.get_first(0), Release);
 
+            // The generator's update is timed only for the log
             pattern = hook::pattern("81 EC B8 02 00 00 A1 ? ? ? ? 33 C4 89 84 24 B4 02 00 00 53 8B D9");
-            if (!pattern.empty())
+            if (bLog && !pattern.empty())
                 shUpdate = safetyhook::create_inline(pattern.get_first(0), Update);
 
             // The queue: before its loop of creations (esi the generator) and after it, the queue emptied
@@ -516,10 +519,12 @@ public:
                 Records(), nMatrixLimit, fDensity, fDistance, fSmallProp, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
         };
 
-        // Every 30 s while the generator runs: its time, how many props, and what hit a limit
+        // With ProceduralLog, every 30 s while the generator runs: its time, how many props, and what hit a limit
         FusionFix::onGameProcessEvent() += []()
         {
             using namespace Procedural;
+            if (!bLog)
+                return;
             static uint64_t last = GetTickCount64();
             auto now = GetTickCount64();
             if (now - last < 30000)
