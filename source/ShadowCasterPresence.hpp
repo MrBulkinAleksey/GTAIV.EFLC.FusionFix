@@ -56,4 +56,30 @@ struct ShadowCasterPresence {
         return gain;
     }
 };
+
+// Keeps a light's gain for a while after it drops, so a caster on the edge of
+// a lamp's light or of the frame does not hand the slot back and forth every
+// frame. A rise counts at once. Ranking history only: keys, never pointers.
+class SlotGainHold {
+    struct Entry { std::uint32_t key{}; std::uint64_t generation{}; std::uint32_t time{}; SlotGain gain{}; };
+    std::array<Entry, 128> entries_{};
+public:
+    std::uint32_t holdMs = 0;
+    SlotGain Apply(std::uint32_t key, std::uint64_t generation, SlotGain gain, std::uint32_t now) noexcept {
+        if (!holdMs || !key) return gain;
+        Entry* oldest = &entries_[0];
+        for (auto& e : entries_) {
+            if (e.key == key && e.generation == generation) {
+                if (gain < e.gain && now - e.time <= holdMs) return e.gain;
+                e = {key, generation, now, gain};
+                return gain;
+            }
+            if (!e.key || now - e.time > now - oldest->time) oldest = &e;
+            if (!e.key) break;
+        }
+        if (gain != SlotGain::None) *oldest = {key, generation, now, gain};
+        return gain;
+    }
+    void Reset() noexcept { entries_ = {}; }
+};
 }

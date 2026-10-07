@@ -30,6 +30,7 @@ namespace PlayerShadowAllocation
     static uintptr_t gameBase = 0;
     static bool cameraPriority = false;
     static bool casterPriority = false;
+    static uint32_t casterHoldMs = 0;
     // Copied on the game-process callback, read by selection on the render side.
     static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
     static fusionfix::shadows::ShadowCasterPresence casters{};
@@ -55,6 +56,7 @@ namespace PlayerShadowAllocation
         bool tracedComparison=false;
         fusionfix::shadows::ShadowView view{};
         fusionfix::shadows::ShadowCasterPresence casters{};
+        fusionfix::shadows::SlotGainHold gainHold;
         uintptr_t ped = 0, occupiedCar = 0;
         uint32_t frame = 0, viewFrame = 0;
         uintptr_t stackAnchor = 0;
@@ -199,7 +201,9 @@ namespace PlayerShadowAllocation
         if (ped != state.ped) {
             state.view = {};
             state.previousSelection = {}; state.previousSelectionFrame = 0;
+            state.gainHold.Reset();
         }
+        state.gainHold.holdMs = casterHoldMs;
         state.ped = ped;
         state.player = {focus.position[0], focus.position[1], focus.position[2]};
         state.occupiedCar = focus.car;
@@ -396,6 +400,8 @@ namespace PlayerShadowAllocation
                         {light.mDirection.x,light.mDirection.y,light.mDirection.z},
                         static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle)
                     : volumeVisible ? SlotGain::InView : SlotGain::OffScreen;
+            if(casterPriority) gain=state.gainHold.Apply(key,kind==budget::Kind::Lamp?LampGeometry(light):0,gain,
+                static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
             if(gain==SlotGain::None) ++lampsWithoutCasters;
             else if(gain==SlotGain::OffScreen) ++lightsOffScreen;
             labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(
