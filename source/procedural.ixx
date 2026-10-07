@@ -4,7 +4,9 @@ module;
 #include "FusionLog.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <format>
+#include <unordered_set>
 #include <vector>
 
 export module procedural;
@@ -35,6 +37,16 @@ import settings;
 //  - Grass & Props Distance: grass, surface props and 2dfx props go further (and props' own draw distance).
 //  - ProceduralDensity: more or fewer props (not grass).
 //  - The 64 candidates of one entity's 2dfx props are capped, which the game itself never checked.
+//
+// And what keeps the cost of more props down (the game already keeps them out of shadows: it sets
+// entity +0x24 0x10000 on each, and the render lists then drop the shadow phases, CE 0xae85a5/0xae7058):
+//  - ProceduralSmallPropDistance: props drawn no further than this keep their distance (litter, cans).
+//  - ProceduralInReflections = 0: the render lists drop the reflection phases (water, type 0x11, and type
+//    0x1f, mask CE 0x159af28) for props, as for shadows.
+//  - ProceduralSpawnsPerUpdate: the queue of positions makes no more props than this an update, the rest
+//    wait for the next ones, so a jump in distance or a new area doesn't stall a frame. Waiting positions
+//    of a provider the game removed meanwhile (its requests at +0x522c, processed first) are dropped.
+//  - The log has the time of the generator's update (CE 0xc0aa90) and how many props are out.
 namespace Procedural
 {
     constexpr uint32_t VanillaRecords = 512;
@@ -49,6 +61,9 @@ namespace Procedural
     int32_t nMatrixLimit = 1024;
     float fDensity = 1.0f;
     float fDistance = 1.0f;
+    float fSmallProp = 30.0f;
+    bool bInReflections = false;
+    int32_t nSpawnsPerUpdate = 128;
 
     // The game's
     uint8_t* pGenerator = nullptr;      // CE 0x1683290
@@ -59,6 +74,7 @@ namespace Procedural
     void(__cdecl* GameFree)(void*) = nullptr;
     void(__cdecl* SetGrassFade)(float nearDistance, float farDistance) = nullptr;
     float* pRadius[3] = {};             // the 30 m half extents of the 2dfx box, in code
+    uint32_t* pReflectionPhases = nullptr; // CE 0x159af28, a bit a reflection render phase
 
     std::vector<uint8_t> extraRecords;
     float fBaseNear = 0.0f;             // the manager's own near (20), read before it's first changed
@@ -66,9 +82,30 @@ namespace Procedural
     struct Definition { float spacing, inverseSquare, distanceSquared; };
     std::vector<Definition> definitions;  // as procedural.dat set them
 
+    // The props that are out, for the render lists
+    std::unordered_set<uintptr_t> props;
+    SRWLOCK propsLock = SRWLOCK_INIT;
+
+    bool IsProp(uintptr_t entity)
+    {
+        AcquireSRWLockShared(&propsLock);
+        bool found = props.contains(entity);
+        ReleaseSRWLockShared(&propsLock);
+        return found;
+    }
+
+    // Positions held over to the next update, first in the queue then
+    std::vector<uint8_t> waiting;
+    uint32_t nCarried = 0;
+
     // Statistics for the log
-    uint32_t nUsedMax = 0, nUsedLogged = 0;
+    uint32_t nUsedMax = 0;
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
+    uint32_t nQueueMax = 0, nWaitingMax = 0, nDropped = 0;
+    uint32_t nReflectionsSkipped = 0;
+    uint32_t nUpdates = 0;
+    double fUpdateMs = 0.0, fUpdateMaxMs = 0.0;
+    uint32_t nDistances[5] = {};        // props' own draw distances: under 15, 30, 60, 100 m, and further
 
     uint32_t Records() { return std::max<uint32_t>(VanillaRecords, uint32_t(nPool)); }
 
@@ -86,6 +123,11 @@ namespace Procedural
     void ExtendGenerator(uint8_t* generator)
     {
         pGenerator = generator;
+        nCarried = 0;
+        waiting.clear();
+        AcquireSRWLockExclusive(&propsLock);
+        props.clear();
+        ReleaseSRWLockExclusive(&propsLock);
         auto extra = Records() - VanillaRecords;
         if (extra && ListPush)
         {
@@ -179,23 +221,130 @@ namespace Procedural
         return result;
     }
 
-    // A prop's own draw distance (entity +0x50) goes with the distance it now spawns at
+    // A prop's own draw distance (entity +0x50) goes with the distance it now spawns at, but for small ones
     SafetyHookInline shCreate;
     uint8_t* __fastcall Create(uint8_t* generator, void* edx, void* a1, void* a2, void* a3, void* a4, void* a5)
     {
         auto record = shCreate.unsafe_fastcall<uint8_t*>(generator, edx, a1, a2, a3, a4, a5);
-        if (record && fDistance != 1.0f)
+        if (record)
         {
             if (auto entity = *(uint8_t**)(record + 8))
             {
+                AcquireSRWLockExclusive(&propsLock);
+                props.insert(uintptr_t(entity));
+                ReleaseSRWLockExclusive(&propsLock);
+
                 auto& drawDistance = *(float*)(entity + 0x50);
                 if (std::isfinite(drawDistance) && drawDistance > 0.0f && drawDistance < 2000.0f)
-                    drawDistance *= fDistance;
+                {
+                    nDistances[drawDistance < 15.0f ? 0 : drawDistance < 30.0f ? 1 : drawDistance < 60.0f ? 2 : drawDistance < 100.0f ? 3 : 4]++;
+                    if (fDistance != 1.0f && drawDistance >= fSmallProp)
+                        drawDistance *= fDistance;
+                }
             }
         }
         if (auto used = UsedRecords(); used > nUsedMax)
             nUsedMax = used;
         return record;
+    }
+
+    SafetyHookInline shRelease;
+    void __fastcall Release(uint8_t* generator, void* edx, uint8_t* record, void* list)
+    {
+        if (auto entity = *(uintptr_t*)(record + 8))
+        {
+            AcquireSRWLockExclusive(&propsLock);
+            props.erase(entity);
+            ReleaseSRWLockExclusive(&propsLock);
+        }
+        shRelease.unsafe_fastcall(generator, edx, record, list);
+    }
+
+    // Before the queue's props are made (the game's lock held, the providers it removed already done)
+    void BeforeQueue(uint8_t* generator)
+    {
+        auto queue = *(uint8_t**)(generator + 0x5224);
+        auto& count = *(uint16_t*)(generator + 0x5228);
+        if (!queue)
+            return;
+
+        // Held-over positions of a provider removed since
+        auto removals = *(uint8_t**)(generator + 0x522C);
+        uint32_t removalCount = *(uint16_t*)(generator + 0x5230);
+        if (nCarried && removals && removalCount)
+        {
+            uint32_t write = 0;
+            for (uint32_t i = 0; i < count; i++)
+            {
+                auto entry = queue + size_t(i) * QueueEntrySize;
+                bool removed = false;
+                if (i < nCarried)
+                {
+                    auto provider = *(uintptr_t*)(entry + 0x1C);
+                    for (uint32_t j = 0; j < removalCount && !removed; j++)
+                        removed = *(uintptr_t*)(removals + size_t(j) * 8) == provider;
+                }
+                if (removed)
+                {
+                    nDropped++;
+                    continue;
+                }
+                if (write != i)
+                    memcpy(queue + size_t(write) * QueueEntrySize, entry, QueueEntrySize);
+                write++;
+            }
+            count = uint16_t(write);
+        }
+        nCarried = 0;
+        nQueueMax = std::max<uint32_t>(nQueueMax, count);
+
+        waiting.clear();
+        if (nSpawnsPerUpdate > 0 && count > uint32_t(nSpawnsPerUpdate))
+        {
+            waiting.assign(queue + size_t(nSpawnsPerUpdate) * QueueEntrySize, queue + size_t(count) * QueueEntrySize);
+            count = uint16_t(nSpawnsPerUpdate);
+        }
+    }
+
+    // After they're made and the queue emptied: the held-over ones go back to its front
+    void AfterQueue(uint8_t* generator)
+    {
+        auto queue = *(uint8_t**)(generator + 0x5224);
+        if (!queue || waiting.empty())
+            return;
+        auto n = uint32_t(waiting.size() / QueueEntrySize);
+        memcpy(queue, waiting.data(), waiting.size());
+        *(uint16_t*)(generator + 0x5228) = uint16_t(n);
+        nCarried = n;
+        nWaitingMax = std::max(nWaitingMax, n);
+        waiting.clear();
+    }
+
+    // The render lists: reflection phases off for props
+    uint32_t DropReflections(uintptr_t entity, uint32_t phases)
+    {
+        if (bInReflections || !pReflectionPhases || !(phases & *pReflectionPhases))
+            return phases;
+        // Props have 0x10000 (no shadows) and 0x40000000 from the generator; few other entities have both
+        constexpr uint32_t propFlags = 0x10000 | 0x40000000;
+        if ((*(uint32_t*)(entity + 0x24) & propFlags) != propFlags || !IsProp(entity))
+            return phases;
+        nReflectionsSkipped++;
+        return phases & ~*pReflectionPhases;
+    }
+
+    SafetyHookInline shUpdate;
+    void __fastcall Update(uint8_t* generator, void* edx)
+    {
+        LARGE_INTEGER start, end, frequency;
+        QueryPerformanceCounter(&start);
+        shUpdate.unsafe_fastcall(generator, edx);
+        QueryPerformanceCounter(&end);
+        QueryPerformanceFrequency(&frequency);
+        double ms = double(end.QuadPart - start.QuadPart) * 1000.0 / double(frequency.QuadPart);
+        fUpdateMs += ms;
+        fUpdateMaxMs = std::max(fUpdateMaxMs, ms);
+        nUpdates++;
     }
 
     void Log(const char* component, const std::string& text)
@@ -220,6 +369,9 @@ public:
             nMatrixLimit = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralMatrixLimit", 1024), int32_t(VanillaRecords), nPool);
             fDensity = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralDensity", 1.0f), 0.25f, 2.0f);
             fDistance = DistanceFromPref(FusionFixSettings.Get("PREF_PROCEDURAL_DISTANCE"));
+            fSmallProp = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralSmallPropDistance", 30.0f), 0.0f, 1000.0f);
+            bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
+            nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
 
             // Generator init: the extra records and the larger queue
             auto pattern = hook::pattern("53 55 56 8B D9 57 8D 73 14 BF 00 02 00 00");
@@ -306,6 +458,48 @@ public:
             if (!pattern.empty())
                 shCreate = safetyhook::create_inline(pattern.get_first(0), Create);
 
+            pattern = hook::pattern("56 8B 74 24 08 57 8B 46 10 8B F9");
+            if (!pattern.empty())
+                shRelease = safetyhook::create_inline(pattern.get_first(0), Release);
+
+            pattern = hook::pattern("81 EC B8 02 00 00 A1 ? ? ? ? 33 C4 89 84 24 B4 02 00 00 53 8B D9");
+            if (!pattern.empty())
+                shUpdate = safetyhook::create_inline(pattern.get_first(0), Update);
+
+            // The queue: before its loop of creations (esi the generator) and after it, the queue emptied
+            pattern = hook::pattern("33 C0 33 FF 66 3B 86 28 52 00 00");
+            auto queueEnd = hook::pattern("66 89 86 30 52 00 00 8B CE 5E E9");
+            if (!pattern.empty() && !queueEnd.empty())
+            {
+                static auto BeforeQueueHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
+                {
+                    BeforeQueue((uint8_t*)regs.esi);
+                });
+                static auto AfterQueueHook = safetyhook::create_mid(queueEnd.get_first(0), [](SafetyHookContext& regs)
+                {
+                    AfterQueue((uint8_t*)regs.esi);
+                });
+            }
+
+            // Render lists, where the shadow phases are dropped for entities with 0x10000: esi the entity,
+            // ecx its phases (the second also keeps them at [esp+0x28])
+            pattern = hook::pattern("85 0D ? ? ? ? 75 ? 0F B6 46 63 3D EF 00 00 00");
+            auto listA = hook::pattern("F7 43 40 00 01 00 00 F3 0F 10 47 04");
+            auto listB = hook::pattern("89 4C 24 28 A9 00 00 00 08");
+            if (!pattern.empty() && !listA.empty() && !listB.empty())
+            {
+                pReflectionPhases = *pattern.get_first<uint32_t*>(2);
+                static auto ListAHook = safetyhook::create_mid(listA.get_first(0), [](SafetyHookContext& regs)
+                {
+                    regs.ecx = DropReflections(regs.esi, uint32_t(regs.ecx));
+                });
+                static auto ListBHook = safetyhook::create_mid(listB.get_first(4), [](SafetyHookContext& regs)
+                {
+                    regs.ecx = DropReflections(regs.esi, uint32_t(regs.ecx));
+                    *(uint32_t*)(regs.esp + 0x28) = uint32_t(regs.ecx);
+                });
+            }
+
             FusionFixSettings.SetCallback("PREF_PROCEDURAL_DISTANCE", [](int32_t value)
             {
                 fDistance = DistanceFromPref(value);
@@ -317,25 +511,35 @@ public:
                 Log("Settings", std::format("distance x{:.2f}", fDistance));
             });
 
-            Log("Settings", std::format("records {} (game 512), matrix limit {}, density x{:.2f}, distance x{:.2f}",
-                Records(), nMatrixLimit, fDensity, fDistance));
+            Log("Settings", std::format("records {} (game 512), matrix limit {}, density x{:.2f}, distance x{:.2f}, "
+                "small props under {:.0f} m keep theirs, in reflections {}, spawns an update {}",
+                Records(), nMatrixLimit, fDensity, fDistance, fSmallProp, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
         };
 
-        // How full the records got, written when the most in use went up by 64 or more
+        // Every 30 s while the generator runs: its time, how many props, and what hit a limit
         FusionFix::onGameProcessEvent() += []()
         {
             using namespace Procedural;
-            static uint64_t last = 0;
+            static uint64_t last = GetTickCount64();
             auto now = GetTickCount64();
-            if (now - last < 10000)
+            if (now - last < 30000)
                 return;
             last = now;
-            if (nUsedMax >= nUsedLogged + 64)
-            {
-                nUsedLogged = nUsedMax;
-                Log("Pool", std::format("most records in use {} of {}, now {}; entities with 2dfx props over 128 in the box: {}, "
-                    "2dfx props over 64 candidates: {}", nUsedMax, Records(), UsedRecords(), nEntitiesCapped, nCandidatesCapped));
-            }
+            if (!nUpdates)
+                return;
+            AcquireSRWLockShared(&propsLock);
+            auto alive = props.size();
+            ReleaseSRWLockShared(&propsLock);
+            Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
+                "queue at most {}, held over at most {}, dropped {}; reflections skipped {}; box full {}, candidates capped {}; "
+                "own draw distance <15 m {}, <30 {}, <60 {}, <100 {}, further {}",
+                fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
+                nQueueMax, nWaitingMax, nDropped, nReflectionsSkipped, nEntitiesCapped, nCandidatesCapped,
+                nDistances[0], nDistances[1], nDistances[2], nDistances[3], nDistances[4]));
+            fUpdateMs = fUpdateMaxMs = 0.0;
+            nUpdates = 0;
+            nQueueMax = nWaitingMax = 0;
+            nReflectionsSkipped = 0;
         };
     }
 } ProceduralProps;
