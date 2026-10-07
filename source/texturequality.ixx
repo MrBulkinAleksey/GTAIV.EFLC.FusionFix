@@ -64,7 +64,9 @@ class TextureQuality
     static inline float fGroundParallaxDepth = 0.05f;
     static inline float fGroundParallaxContrast = 3.0f;
     static inline float fGroundSelfShadow = 0.5f;
-    static inline float fGroundSelfShadowSharpness = 8.0f;
+    static inline float fGroundSelfShadowSharpness = 4.0f;
+    static inline float fGroundParallaxFadeStart = 10.0f;
+    static inline float fGroundParallaxFadeEnd = 30.0f;
     // Towards the sun or the moon, from the game's gDirectionalLight, and whether it was ever read.
     static inline float sunDirection[3] = {};
     static inline bool bSunDirection = false;
@@ -340,7 +342,9 @@ private:
         fGroundParallaxDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxDepth", 0.05f), 0.0f, 0.5f);
         fGroundParallaxContrast = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxContrast", 3.0f), 0.1f, 20.0f);
         fGroundSelfShadow = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundSelfShadow", 0.5f), 0.0f, 1.0f);
-        fGroundSelfShadowSharpness = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundSelfShadowSharpness", 8.0f), 0.5f, 50.0f);
+        fGroundSelfShadowSharpness = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundSelfShadowSharpness", 4.0f), 0.5f, 50.0f);
+        fGroundParallaxFadeStart = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxFadeStart", 10.0f), 0.0f, 1000.0f);
+        fGroundParallaxFadeEnd = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxFadeEnd", 30.0f), fGroundParallaxFadeStart, 1000.0f);
         // The shader's loop stops at 32 steps.
         fParallaxMinSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMinSteps", 8.0f), 2.0f, 32.0f);
         fParallaxMaxSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMaxSteps", 32.0f), fParallaxMinSteps, 32.0f);
@@ -517,6 +521,7 @@ private:
             // The noise's blobs are about a twelfth of the texture's repeat across.
             constexpr float kBlobsPerRepeat = 12.0f;
             const float fadeRange = (std::max)(fGroundBumpsFadeEnd - fGroundBumpsFadeStart, 0.1f);
+            const float parallaxFadeRange = (std::max)(fGroundParallaxFadeEnd - fGroundParallaxFadeStart, 0.1f);
             // The ground's parallax looks at it from the camera of the pass, the scene's at its start.
             float camera[3] = {};
             if (auto viewport = rage::GetCurrentViewport(); viewport && viewport->mIsPerspective)
@@ -556,8 +561,9 @@ private:
                 // c173: towards the sun, how dark the parallax's self-shadow is
                 sunDirection[0], sunDirection[1], sunDirection[2], bSunDirection ? fGroundSelfShadow : 0.0f,
                 // c174: how much the brightness, against the texture's average, raises the parallax's height; how
-                // sharply the self-shadow comes in with the height standing above the ray to the sun
-                fGroundParallaxContrast, fGroundSelfShadowSharpness, 0.0f, 0.0f,
+                // sharply the self-shadow comes in with the height standing above the ray to the sun; the parallax's
+                // fade with the distance as a * depth + b
+                fGroundParallaxContrast, fGroundSelfShadowSharpness, -1.0f / parallaxFadeRange, fGroundParallaxFadeEnd / parallaxFadeRange,
             };
             pDevice->SetPixelShaderConstantF(166, params, 9);
         }

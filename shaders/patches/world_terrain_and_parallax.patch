@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS3.asm b/win32_30_nv8/gta_default/gta_defaultPS3.asm
-index ff566cc..b3fcdee 100644
+index ff566cc..22dbb40 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS3.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS3.asm
 @@ -21,6 +21,15 @@
@@ -18,7 +18,7 @@ index ff566cc..b3fcdee 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -34,23 +43,176 @@
+@@ -34,23 +43,178 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -52,7 +52,7 @@ index ff566cc..b3fcdee 100644
 +      add r8.z, r8.z, -c184.y
 +      mul_sat r8.z, r8.z, c184.z
 +      mul r8.w, r8.z, r4.w
-+      mad_sat r13.y, v9.w, c169.y, c169.z
++      mad_sat r13.y, v9.w, c174.z, c174.w // the parallax's own fade, nearer than the bumps', as its steps grow coarse
 +      mul r8.w, r8.w, r13.y
 +      mul r8.w, r8.w, c172.w // the depth in metres here
 +      dp3 r8.y, r7, c188 // the texture's average brightness, the height's middle
@@ -82,6 +82,8 @@ index ff566cc..b3fcdee 100644
 +        min r13.xy, r13, c187.z
 +        max r21.xy, r13, -c187.z // how far the coordinates move from the top to the bottom of the height
 +        mad r21.zw, r21.xyxy, c187.z, v0.xyxy // and where the top is
++        mul r30.xy, r26, c187.w
++        mul r31.xy, r22, c187.w // the height read a mip softer than the colour, so its steps do not shimmer
 +        mad r12.w, -r12_abs.z, c170.y, c170.y
 +        add r12.w, r12.w, c170.x
 +        rcp r12.w, r12.w // the step
@@ -92,7 +94,7 @@ index ff566cc..b3fcdee 100644
 +          add r28.x, r28.x, r12.w
 +          min r28.x, r28.x, c187.y
 +          mad r27.xy, r28.x, -r21, r21.zwzw
-+          texldd r29, r27, s0, r26, r22
++          texldd r29, r27, s0, r30, r31
 +          dp3 r29.x, r29, c188
 +          add r29.x, r29.x, -r8.y
 +          mul r29.x, r29.x, c174.x
@@ -121,7 +123,7 @@ index ff566cc..b3fcdee 100644
 +        mov r6.w, c187.x
 +        mul r6.x, r29.y, c182.x
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -132,7 +134,7 @@ index ff566cc..b3fcdee 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.y
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -143,7 +145,7 @@ index ff566cc..b3fcdee 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.z
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -154,7 +156,7 @@ index ff566cc..b3fcdee 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.w
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -165,7 +167,7 @@ index ff566cc..b3fcdee 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c181.x
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -199,7 +201,7 @@ index ff566cc..b3fcdee 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -104,10 +266,81 @@
+@@ -104,10 +268,81 @@
          mov r0.xyz, r25
        endif
      endif
@@ -282,7 +284,7 @@ index ff566cc..b3fcdee 100644
        texld r24, r24, s12
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
-@@ -129,7 +362,41 @@
+@@ -129,7 +364,44 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -292,7 +294,10 @@ index ff566cc..b3fcdee 100644
 +    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
 +    if b15
 +      nrm r16.xyz, v1
-+      dp3 r13.x, r0, c188
++      mov r17.xy, r23
++      mov r17.w, c187.y
++      texldb r17, r17, s0 // the texture a mip softer: its finest grain, smaller than a pixel, would shimmer
++      dp3 r13.x, r17, c188
 +      mul r13.x, r13.x, c169.x
 +      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
 +      if b12
@@ -325,7 +330,7 @@ index ff566cc..b3fcdee 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
-@@ -137,7 +404,9 @@
+@@ -137,7 +409,9 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -337,7 +342,7 @@ index ff566cc..b3fcdee 100644
      // mov oC2.w, r1.x
      add r20.x, -c152.w, r1.x
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS4.asm b/win32_30_nv8/gta_default/gta_defaultPS4.asm
-index 3c1f0f3..46b25de 100644
+index 3c1f0f3..b0797cd 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS4.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS4.asm
 @@ -21,6 +21,15 @@
@@ -356,7 +361,7 @@ index 3c1f0f3..46b25de 100644
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      def c2, 0.5, 0, 1, 0.25
-@@ -32,23 +41,176 @@
+@@ -32,23 +41,178 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -390,7 +395,7 @@ index 3c1f0f3..46b25de 100644
 +      add r8.z, r8.z, -c184.y
 +      mul_sat r8.z, r8.z, c184.z
 +      mul r8.w, r8.z, r4.w
-+      mad_sat r13.y, v9.w, c169.y, c169.z
++      mad_sat r13.y, v9.w, c174.z, c174.w // the parallax's own fade, nearer than the bumps', as its steps grow coarse
 +      mul r8.w, r8.w, r13.y
 +      mul r8.w, r8.w, c172.w // the depth in metres here
 +      dp3 r8.y, r7, c188 // the texture's average brightness, the height's middle
@@ -420,6 +425,8 @@ index 3c1f0f3..46b25de 100644
 +        min r13.xy, r13, c187.z
 +        max r21.xy, r13, -c187.z // how far the coordinates move from the top to the bottom of the height
 +        mad r21.zw, r21.xyxy, c187.z, v0.xyxy // and where the top is
++        mul r30.xy, r26, c187.w
++        mul r31.xy, r22, c187.w // the height read a mip softer than the colour, so its steps do not shimmer
 +        mad r12.w, -r12_abs.z, c170.y, c170.y
 +        add r12.w, r12.w, c170.x
 +        rcp r12.w, r12.w // the step
@@ -430,7 +437,7 @@ index 3c1f0f3..46b25de 100644
 +          add r28.x, r28.x, r12.w
 +          min r28.x, r28.x, c187.y
 +          mad r27.xy, r28.x, -r21, r21.zwzw
-+          texldd r29, r27, s0, r26, r22
++          texldd r29, r27, s0, r30, r31
 +          dp3 r29.x, r29, c188
 +          add r29.x, r29.x, -r8.y
 +          mul r29.x, r29.x, c174.x
@@ -459,7 +466,7 @@ index 3c1f0f3..46b25de 100644
 +        mov r6.w, c187.x
 +        mul r6.x, r29.y, c182.x
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -470,7 +477,7 @@ index 3c1f0f3..46b25de 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.y
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -481,7 +488,7 @@ index 3c1f0f3..46b25de 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.z
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -492,7 +499,7 @@ index 3c1f0f3..46b25de 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.w
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -503,7 +510,7 @@ index 3c1f0f3..46b25de 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c181.x
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -537,7 +544,7 @@ index 3c1f0f3..46b25de 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -102,15 +264,120 @@
+@@ -102,15 +266,123 @@
          mov r0.xyz, r25
        endif
      endif
@@ -627,7 +634,10 @@ index 3c1f0f3..46b25de 100644
 +    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
 +    if b15
 +      nrm r16.xyz, v1
-+      dp3 r13.x, r0, c188
++      mov r17.xy, r23
++      mov r17.w, c187.y
++      texldb r17, r17, s0 // the texture a mip softer: its finest grain, smaller than a pixel, would shimmer
++      dp3 r13.x, r17, c188
 +      mul r13.x, r13.x, c169.x
 +      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
 +      if b12
@@ -660,7 +670,7 @@ index 3c1f0f3..46b25de 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      mul r0.w, r0.w, v2.w
-@@ -119,7 +386,9 @@
+@@ -119,7 +391,9 @@
      mul r0.w, r0.w, c39.x
      mov oC0, r0
      mov oC1.w, r0.w
@@ -1554,7 +1564,7 @@ index 7d9644a..22ff627 100644
      mul oC2.z, r2.x, v4.x
      mul r0.x, r2.x, c73.x
 diff --git a/win32_30_nv8/gta_spec/gta_specPS3.asm b/win32_30_nv8/gta_spec/gta_specPS3.asm
-index d721e6d..21f99a7 100644
+index d721e6d..e3cb356 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS3.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS3.asm
 @@ -27,6 +27,15 @@
@@ -1573,7 +1583,7 @@ index d721e6d..21f99a7 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -38,24 +47,177 @@
+@@ -38,24 +47,179 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -1608,7 +1618,7 @@ index d721e6d..21f99a7 100644
 +      add r8.z, r8.z, -c184.y
 +      mul_sat r8.z, r8.z, c184.z
 +      mul r8.w, r8.z, r4.w
-+      mad_sat r13.y, v9.w, c169.y, c169.z
++      mad_sat r13.y, v9.w, c174.z, c174.w // the parallax's own fade, nearer than the bumps', as its steps grow coarse
 +      mul r8.w, r8.w, r13.y
 +      mul r8.w, r8.w, c172.w // the depth in metres here
 +      dp3 r8.y, r7, c188 // the texture's average brightness, the height's middle
@@ -1638,6 +1648,8 @@ index d721e6d..21f99a7 100644
 +        min r13.xy, r13, c187.z
 +        max r21.xy, r13, -c187.z // how far the coordinates move from the top to the bottom of the height
 +        mad r21.zw, r21.xyxy, c187.z, v0.xyxy // and where the top is
++        mul r30.xy, r26, c187.w
++        mul r31.xy, r22, c187.w // the height read a mip softer than the colour, so its steps do not shimmer
 +        mad r12.w, -r12_abs.z, c170.y, c170.y
 +        add r12.w, r12.w, c170.x
 +        rcp r12.w, r12.w // the step
@@ -1648,7 +1660,7 @@ index d721e6d..21f99a7 100644
 +          add r28.x, r28.x, r12.w
 +          min r28.x, r28.x, c187.y
 +          mad r27.xy, r28.x, -r21, r21.zwzw
-+          texldd r29, r27, s0, r26, r22
++          texldd r29, r27, s0, r30, r31
 +          dp3 r29.x, r29, c188
 +          add r29.x, r29.x, -r8.y
 +          mul r29.x, r29.x, c174.x
@@ -1677,7 +1689,7 @@ index d721e6d..21f99a7 100644
 +        mov r6.w, c187.x
 +        mul r6.x, r29.y, c182.x
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -1688,7 +1700,7 @@ index d721e6d..21f99a7 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.y
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -1699,7 +1711,7 @@ index d721e6d..21f99a7 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.z
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -1710,7 +1722,7 @@ index d721e6d..21f99a7 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.w
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -1721,7 +1733,7 @@ index d721e6d..21f99a7 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c181.x
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -1755,7 +1767,7 @@ index d721e6d..21f99a7 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -109,10 +271,81 @@
+@@ -109,10 +273,81 @@
          mov r0.xyz, r25
        endif
      endif
@@ -1838,7 +1850,7 @@ index d721e6d..21f99a7 100644
        texld r24, r24, s12
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
-@@ -128,10 +361,44 @@
+@@ -128,10 +363,47 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -1848,7 +1860,10 @@ index d721e6d..21f99a7 100644
 +    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
 +    if b15
 +      nrm r16.xyz, v1
-+      dp3 r13.x, r0, c188
++      mov r17.xy, r23
++      mov r17.w, c187.y
++      texldb r17, r17, s0 // the texture a mip softer: its finest grain, smaller than a pixel, would shimmer
++      dp3 r13.x, r17, c188
 +      mul r13.x, r13.x, c169.x
 +      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
 +      if b12
@@ -1885,7 +1900,7 @@ index d721e6d..21f99a7 100644
      mul r2.x, r3.w, c66.x
      dp3 r2.w, r3, c73
      mul r2.w, r2.w, c72.x
-@@ -144,7 +411,7 @@
+@@ -144,7 +416,7 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -1895,7 +1910,7 @@ index d721e6d..21f99a7 100644
      add r20.x, -c152.w, r1.x
      cmp oC2.w, r20.x, c0.z, -c0.y
 diff --git a/win32_30_nv8/gta_spec/gta_specPS4.asm b/win32_30_nv8/gta_spec/gta_specPS4.asm
-index 3067a70..cbb47c2 100644
+index 3067a70..a0caa86 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS4.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS4.asm
 @@ -29,6 +29,15 @@
@@ -1914,7 +1929,7 @@ index 3067a70..cbb47c2 100644
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      def c2, 0.5, 0.001953125, 0, 0
-@@ -39,24 +48,177 @@
+@@ -39,24 +48,179 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -1949,7 +1964,7 @@ index 3067a70..cbb47c2 100644
 +      add r8.z, r8.z, -c184.y
 +      mul_sat r8.z, r8.z, c184.z
 +      mul r8.w, r8.z, r4.w
-+      mad_sat r13.y, v9.w, c169.y, c169.z
++      mad_sat r13.y, v9.w, c174.z, c174.w // the parallax's own fade, nearer than the bumps', as its steps grow coarse
 +      mul r8.w, r8.w, r13.y
 +      mul r8.w, r8.w, c172.w // the depth in metres here
 +      dp3 r8.y, r7, c188 // the texture's average brightness, the height's middle
@@ -1979,6 +1994,8 @@ index 3067a70..cbb47c2 100644
 +        min r13.xy, r13, c187.z
 +        max r21.xy, r13, -c187.z // how far the coordinates move from the top to the bottom of the height
 +        mad r21.zw, r21.xyxy, c187.z, v0.xyxy // and where the top is
++        mul r30.xy, r26, c187.w
++        mul r31.xy, r22, c187.w // the height read a mip softer than the colour, so its steps do not shimmer
 +        mad r12.w, -r12_abs.z, c170.y, c170.y
 +        add r12.w, r12.w, c170.x
 +        rcp r12.w, r12.w // the step
@@ -1989,7 +2006,7 @@ index 3067a70..cbb47c2 100644
 +          add r28.x, r28.x, r12.w
 +          min r28.x, r28.x, c187.y
 +          mad r27.xy, r28.x, -r21, r21.zwzw
-+          texldd r29, r27, s0, r26, r22
++          texldd r29, r27, s0, r30, r31
 +          dp3 r29.x, r29, c188
 +          add r29.x, r29.x, -r8.y
 +          mul r29.x, r29.x, c174.x
@@ -2018,7 +2035,7 @@ index 3067a70..cbb47c2 100644
 +        mov r6.w, c187.x
 +        mul r6.x, r29.y, c182.x
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -2029,7 +2046,7 @@ index 3067a70..cbb47c2 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.y
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -2040,7 +2057,7 @@ index 3067a70..cbb47c2 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.z
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -2051,7 +2068,7 @@ index 3067a70..cbb47c2 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.w
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -2062,7 +2079,7 @@ index 3067a70..cbb47c2 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c181.x
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -2096,7 +2113,7 @@ index 3067a70..cbb47c2 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -110,18 +272,123 @@
+@@ -110,18 +274,126 @@
          mov r0.xyz, r25
        endif
      endif
@@ -2186,7 +2203,10 @@ index 3067a70..cbb47c2 100644
 +    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
 +    if b15
 +      nrm r16.xyz, v1
-+      dp3 r13.x, r0, c188
++      mov r17.xy, r23
++      mov r17.w, c187.y
++      texldb r17, r17, s0 // the texture a mip softer: its finest grain, smaller than a pixel, would shimmer
++      dp3 r13.x, r17, c188
 +      mul r13.x, r13.x, c169.x
 +      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
 +      if b12
@@ -2223,7 +2243,7 @@ index 3067a70..cbb47c2 100644
      mul r2.w, r2.w, c66.x
      dp3 r2.x, r2, c73
      mul r2.x, r2.x, c72.x
-@@ -135,7 +402,7 @@
+@@ -135,7 +407,7 @@
      mul r0.w, r0.w, c39.x
      mov oC0, r0
      mov oC1.w, r0.w
@@ -2773,7 +2793,7 @@ index 10dd3b6..9ba3dfc 100644
      mad oC2.xz, v4.w, c0.yyzw, c0.ywyw
      mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS3.asm b/win32_30_nv8/rage_default/rage_defaultPS3.asm
-index 3a528b5..e116461 100644
+index 3a528b5..74760ff 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS3.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS3.asm
 @@ -23,6 +23,15 @@
@@ -2792,7 +2812,7 @@ index 3a528b5..e116461 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -32,10 +41,235 @@
+@@ -32,10 +41,237 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -2826,7 +2846,7 @@ index 3a528b5..e116461 100644
 +      add r8.z, r8.z, -c184.y
 +      mul_sat r8.z, r8.z, c184.z
 +      mul r8.w, r8.z, r4.w
-+      mad_sat r13.y, v9.w, c169.y, c169.z
++      mad_sat r13.y, v9.w, c174.z, c174.w // the parallax's own fade, nearer than the bumps', as its steps grow coarse
 +      mul r8.w, r8.w, r13.y
 +      mul r8.w, r8.w, c172.w // the depth in metres here
 +      dp3 r8.y, r7, c188 // the texture's average brightness, the height's middle
@@ -2856,6 +2876,8 @@ index 3a528b5..e116461 100644
 +        min r13.xy, r13, c187.z
 +        max r21.xy, r13, -c187.z // how far the coordinates move from the top to the bottom of the height
 +        mad r21.zw, r21.xyxy, c187.z, v0.xyxy // and where the top is
++        mul r30.xy, r26, c187.w
++        mul r31.xy, r22, c187.w // the height read a mip softer than the colour, so its steps do not shimmer
 +        mad r12.w, -r12_abs.z, c170.y, c170.y
 +        add r12.w, r12.w, c170.x
 +        rcp r12.w, r12.w // the step
@@ -2866,7 +2888,7 @@ index 3a528b5..e116461 100644
 +          add r28.x, r28.x, r12.w
 +          min r28.x, r28.x, c187.y
 +          mad r27.xy, r28.x, -r21, r21.zwzw
-+          texldd r29, r27, s0, r26, r22
++          texldd r29, r27, s0, r30, r31
 +          dp3 r29.x, r29, c188
 +          add r29.x, r29.x, -r8.y
 +          mul r29.x, r29.x, c174.x
@@ -2895,7 +2917,7 @@ index 3a528b5..e116461 100644
 +        mov r6.w, c187.x
 +        mul r6.x, r29.y, c182.x
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -2906,7 +2928,7 @@ index 3a528b5..e116461 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.y
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -2917,7 +2939,7 @@ index 3a528b5..e116461 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.z
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -2928,7 +2950,7 @@ index 3a528b5..e116461 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.w
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -2939,7 +2961,7 @@ index 3a528b5..e116461 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c181.x
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -3029,7 +3051,7 @@ index 3a528b5..e116461 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v2.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -47,7 +281,37 @@
+@@ -47,7 +283,40 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -3039,7 +3061,10 @@ index 3a528b5..e116461 100644
 +    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
 +    if b15
 +      nrm r16.xyz, v1
-+      dp3 r13.x, r0, c188
++      mov r17.xy, r23
++      mov r17.w, c187.y
++      texldb r17, r17, s0 // the texture a mip softer: its finest grain, smaller than a pixel, would shimmer
++      dp3 r13.x, r17, c188
 +      mul r13.x, r13.x, c169.x
 +      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
 +      mad_sat r13.y, v9.w, c169.y, c169.z
@@ -3068,7 +3093,7 @@ index 3a528b5..e116461 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
-@@ -55,7 +319,9 @@
+@@ -55,7 +324,9 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -3080,7 +3105,7 @@ index 3a528b5..e116461 100644
      // mov oC2.w, r1.x
      add r20.x, -c152.w, r1.x
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS4.asm b/win32_30_nv8/rage_default/rage_defaultPS4.asm
-index 657ce1d..a57bf79 100644
+index 657ce1d..dfcd6e3 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS4.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS4.asm
 @@ -25,6 +25,15 @@
@@ -3099,7 +3124,7 @@ index 657ce1d..a57bf79 100644
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      // def c2, 0.5, 0.001953125, 0, 0
-@@ -34,11 +43,266 @@
+@@ -34,11 +43,271 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -3134,7 +3159,7 @@ index 657ce1d..a57bf79 100644
 +      add r8.z, r8.z, -c184.y
 +      mul_sat r8.z, r8.z, c184.z
 +      mul r8.w, r8.z, r4.w
-+      mad_sat r13.y, v9.w, c169.y, c169.z
++      mad_sat r13.y, v9.w, c174.z, c174.w // the parallax's own fade, nearer than the bumps', as its steps grow coarse
 +      mul r8.w, r8.w, r13.y
 +      mul r8.w, r8.w, c172.w // the depth in metres here
 +      dp3 r8.y, r7, c188 // the texture's average brightness, the height's middle
@@ -3164,6 +3189,8 @@ index 657ce1d..a57bf79 100644
 +        min r13.xy, r13, c187.z
 +        max r21.xy, r13, -c187.z // how far the coordinates move from the top to the bottom of the height
 +        mad r21.zw, r21.xyxy, c187.z, v0.xyxy // and where the top is
++        mul r30.xy, r26, c187.w
++        mul r31.xy, r22, c187.w // the height read a mip softer than the colour, so its steps do not shimmer
 +        mad r12.w, -r12_abs.z, c170.y, c170.y
 +        add r12.w, r12.w, c170.x
 +        rcp r12.w, r12.w // the step
@@ -3174,7 +3201,7 @@ index 657ce1d..a57bf79 100644
 +          add r28.x, r28.x, r12.w
 +          min r28.x, r28.x, c187.y
 +          mad r27.xy, r28.x, -r21, r21.zwzw
-+          texldd r29, r27, s0, r26, r22
++          texldd r29, r27, s0, r30, r31
 +          dp3 r29.x, r29, c188
 +          add r29.x, r29.x, -r8.y
 +          mul r29.x, r29.x, c174.x
@@ -3203,7 +3230,7 @@ index 657ce1d..a57bf79 100644
 +        mov r6.w, c187.x
 +        mul r6.x, r29.y, c182.x
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -3214,7 +3241,7 @@ index 657ce1d..a57bf79 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.y
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -3225,7 +3252,7 @@ index 657ce1d..a57bf79 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.z
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -3236,7 +3263,7 @@ index 657ce1d..a57bf79 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c182.w
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -3247,7 +3274,7 @@ index 657ce1d..a57bf79 100644
 +        max r6.w, r6.w, r6.z
 +        mul r6.x, r29.y, c181.x
 +        mad r27.xy, r6.x, r11.zwzw, r23
-+        texldd r5, r27, s0, r26, r22
++        texldd r5, r27, s0, r30, r31
 +        dp3 r5.x, r5, c188
 +        add r5.x, r5.x, -r8.y
 +        mul r5.x, r5.x, c174.x
@@ -3339,7 +3366,10 @@ index 657ce1d..a57bf79 100644
 +    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
 +    if b15
 +      nrm r16.xyz, v1
-+      dp3 r13.x, r0, c188
++      mov r17.xy, r23
++      mov r17.w, c187.y
++      texldb r17, r17, s0 // the texture a mip softer: its finest grain, smaller than a pixel, would shimmer
++      dp3 r13.x, r17, c188
 +      mul r13.x, r13.x, c169.x
 +      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
 +      mad_sat r13.y, v9.w, c169.y, c169.z
@@ -3368,7 +3398,7 @@ index 657ce1d..a57bf79 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      mul r0.w, r0.w, v2.w
-@@ -53,7 +317,9 @@
+@@ -53,7 +322,9 @@
      mov oC1.w, r0.w
      // mul oC2.x, r1.x, c72.x
      // mov oC2.z, v2.x
