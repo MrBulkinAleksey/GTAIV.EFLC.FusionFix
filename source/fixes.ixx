@@ -1,6 +1,7 @@
 module;
 
 #include <common.hxx>
+#include "FusionLog.hpp"
 
 export module fixes;
 
@@ -249,6 +250,30 @@ public:
 
     Fixes()
     {
+        // The game pins its main thread to the first logical processor at startup, which it shares with most of the
+        // interrupts Windows handles and with its SMT sibling. Dropping SetThreadAffinityMask(GetCurrentThread(), 1)
+        // lets the scheduler move the thread. Patched synchronously, before the game's entry point runs it.
+        FusionFix::onInitEvent() += []()
+        {
+            CIniReader iniReader("");
+            if (iniReader.ReadInteger("MISC", "UnpinMainThread", 1) == 0)
+                return;
+
+            // push 1 / mov esi, ecx / call GetCurrentThread / push eax / call SetThreadAffinityMask
+            auto pattern = hook::pattern("6A 01 8B F1 FF 15 ? ? ? ? 50 FF 15");
+            if (pattern.empty())
+            {
+                FusionLog::Write("Threads", "Affinity", "SetThreadAffinityMask call not found, main thread stays pinned\n");
+                return;
+            }
+
+            auto p = pattern.get_first<uint8_t>(0);
+            injector::MakeNOP(p, 2, true);      // push 1
+            injector::MakeNOP(p + 4, 6, true);  // call GetCurrentThread
+            injector::MakeNOP(p + 10, 7, true); // push eax / call SetThreadAffinityMask
+            FusionLog::Write("Threads", "Affinity", "Main thread affinity pin removed at %p\n", p);
+        };
+
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
