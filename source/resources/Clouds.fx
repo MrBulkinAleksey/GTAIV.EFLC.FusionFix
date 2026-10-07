@@ -50,7 +50,7 @@ sampler2D CurrentTex : register(s3);   // this frame's clouds at half size (Clou
 sampler2D HistoryTex : register(s4);   // the clouds accumulated up to last frame (CloudsResolve)
 sampler2D CloudTex : register(s5);     // the accumulated clouds (CloudsComposite)
 sampler2D SceneTex : register(s6);     // the lit scene, the sky in it (CloudsSkyRef, and the halo behind the clouds in CloudsLight)
-sampler2D SkyRefTex : register(s7);    // the sky's brightness this frame, in red (CloudsSkyRef's target)
+sampler2D SkyRefTex : register(s7);    // the sky's mean colour this frame (CloudsSkyRef's target)
 sampler2D MarchTex0 : register(s8);    // the march's sums: transmittance, sun, shade, silver (CloudsLight)
 sampler2D MarchTex1 : register(s9);    // and glow, first hit
 
@@ -80,6 +80,9 @@ float fCeiling;
 // VolumetricCloudsSkyMatch, how many times brighter than the sky behind them the clouds' sunlit side
 // is, over that sunlit side's luma; 0 leaves them at the game's cloud colour.
 float fSkyMatch;           // the brightest channel the cloud rolls off towards (at most the sky's clamp without HDR)
+// How much the sky's own hue on screen (CloudsSkyRef) tints the shaded side (x) and the sunlit side
+// (y), and VolumetricCloudsSaturation (z); 0 while the march cannot read the scene.
+float3 vec3SkyHue;
 float3 vec3SunTint;       // the hue of the game's SunColor at its brightness 1, mixed towards white by VolumetricCloudsSunTint
 float3 vec3GlowColour;    // the game's cloud colour, exposed, in the sun's own hue: the sunlight straight through
 float4 vec4Layer;         // base height, thickness, 1 / coverage scale, coverage
@@ -564,8 +567,22 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     // constant 1.7 times the cloud colour in its place left the clouds at that peak from every side,
     // with nothing for the rim to rise above.
     float3 sunLit = vec3LitColour * vec3SunTint;
+    float3 shadeColour = vec3ShadeColour;
+    // The sky lights the clouds too, in the colour it has on screen: pink at dusk, grey in rain. The
+    // game's SkyColor is not that colour, and the clouds took a bluish white under a pink sky.
+    float3 skyRef = 0.0;
+    float skyLuma = 0.0;
+    [branch]
+    if (full && fSkyMatch > 0.0)
+    {
+        skyRef = tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).rgb;
+        skyLuma = dot(skyRef, float3(0.2126, 0.7152, 0.0722));
+        float3 hue = skyLuma > 1e-4 ? lerp(1.0, clamp(skyRef / skyLuma, 0.0, 3.0), vec3SkyHue.z) : 1.0;
+        shadeColour = lerp(shadeColour, dot(shadeColour, float3(0.2126, 0.7152, 0.0722)) * hue, vec3SkyHue.x);
+        sunLit = lerp(sunLit, dot(sunLit, float3(0.2126, 0.7152, 0.0722)) * hue, vec3SkyHue.y);
+    }
     // Each term apart, so VolumetricCloudsDebug 3 to 11 can show it alone.
-    float3 termBase = vec3ShadeColour * sums.shade + sunLit * sums.sun;
+    float3 termBase = shadeColour * sums.shade + sunLit * sums.sun;
     // Towards the sun only: the game's cos^2 lit the clouds' edges as brightly with the sun behind the
     // eye, and every cloud across the sky had a white outline.
     float towardsSun = max(cosTheta, 0.0);
@@ -627,7 +644,6 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     [branch]
     if (full && fSkyMatch > 0.0)
     {
-        float skyLuma = tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).r;
         float3 sky = tex2Dlod(SceneTex, float4(uv, 0, 0)).rgb;
         float behind = dot(sky, float3(0.2126, 0.7152, 0.0722));
         float skyMul = skyLuma > 1e-4 ? clamp(fSkyMatch * skyLuma, 0.1, 2.0) : 1.0;
@@ -659,7 +675,7 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         if (fDebug >= 2.0)
         {
             float3 lightMul = shadeMul * kneeMul * skyMul;
-            float3 shown = fDebug == 2.0 ? skyLuma * cover
+            float3 shown = fDebug == 2.0 ? skyRef * cover
                          : fDebug == 3.0 ? termBase * lightMul * haze
                          : fDebug == 4.0 ? termSilver * lightMul * haze
                          : fDebug == 5.0 ? termSunset * lightMul * haze
@@ -835,14 +851,14 @@ technique CloudsResolve
     }
 }
 
-// The sky's brightness this frame, for every cloud alike: the mean luma of the sky on an 8 x 6 grid
+// The sky's colour this frame, for every cloud alike: the mean of the sky on an 8 x 6 grid
 // over the screen, where the depth is clear and more than 25 degrees from the sun, so its halo
 // stays out. Blended into a 1 x 1 target a tenth a frame, so turning the camera does not flicker
 // the clouds; a frame with no sky in it leaves the target as it was.
 float4 vec4SkyRefProj;    // ProjInfo for a 1 x 1 viewport: the view ray of a point in texture coordinates
 float4 CloudsSkyRef_PS(float2 uv : TEXCOORD0) : COLOR0
 {
-    float sum = 0.0;
+    float3 sum = 0.0;
     float count = 0.0;
     [loop]
     for (int y = 0; y < 6; ++y)
@@ -857,11 +873,11 @@ float4 CloudsSkyRef_PS(float2 uv : TEXCOORD0) : COLOR0
             float3 dir = normalize(float3(dot(v, vec4WorldX.xyz), dot(v, vec4WorldY.xyz), dot(v, vec4WorldZ.xyz)));
             if (dot(dir, vec3SunDir) > 0.906)
                 continue;
-            sum += dot(tex2Dlod(SceneTex, float4(s, 0, 0)).rgb, float3(0.2126, 0.7152, 0.0722));
+            sum += tex2Dlod(SceneTex, float4(s, 0, 0)).rgb;
             count += 1.0;
         }
     }
-    return count > 0.0 ? float4(0.1 * sum / count, 0.0, 0.0, 0.9) : float4(0.0, 0.0, 0.0, 1.0);
+    return count > 0.0 ? float4(0.1 * sum / count, 0.9) : float4(0.0, 0.0, 0.0, 1.0);
 }
 
 technique CloudsSkyRef

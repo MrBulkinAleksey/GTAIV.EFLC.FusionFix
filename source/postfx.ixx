@@ -6005,8 +6005,22 @@ private:
             shadeColour[i] = cloudColour[i] * R.fVolumetricCloudsShade * exposure;
             sunsetLit[i] = sunsetColour[i] * exposure;
         }
-        // The shaded side is lit by the sky above it rather than the sun: it takes the hue of the
-        // game's SkyColor at its own brightness, by VolumetricCloudsSkyLight, bluish by day.
+        // Matched to the sky in the scene behind them, while the march has targets of its own to draw
+        // into and can read the scene; the reflections keep the game's cloud colour.
+        const bool canReadScene = !reflection && R.CloudSurf[0] && R.CloudSurf[1] && R.CloudSurf[2] && R.CloudSkyRefSurf &&
+                                  R.CloudMarchSurf[0] && R.CloudMarchSurf[1];
+        // The shaded side is lit by the sky above it rather than the sun: it takes the sky's hue at its
+        // own brightness, by VolumetricCloudsSkyLight, and the sunlit side some of it too. Where the
+        // scene can be read, the hue of the sky on screen (CloudsSkyRef, in Clouds.fx): the game's
+        // SkyColor stays bluish under a pink evening sky, and the clouds came out white against it.
+        // Elsewhere SkyColor's hue.
+        constexpr float kCloudLitSkyHue = 0.4f;
+        {
+            const float skyHue[3] = { canReadScene ? R.fVolumetricCloudsSkyLight : 0.0f, canReadScene ? kCloudLitSkyHue : 0.0f,
+                                      R.fVolumetricCloudsSaturation };
+            effect->SetFloatArray("vec3SkyHue", skyHue, 3);
+        }
+        if (!canReadScene)
         {
             const auto& skyColour = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
             const float skyLuma = 0.2126f * skyColour[0] + 0.7152f * skyColour[1] + 0.0722f * skyColour[2];
@@ -6015,14 +6029,14 @@ private:
                 for (int i = 0; i < 3; ++i)
                     shadeColour[i] += ((std::max)(skyColour[i], 0.0f) / skyLuma * shadeLuma - shadeColour[i]) * R.fVolumetricCloudsSkyLight;
         }
-        // The sky lights the sunlit side too: it takes a fifth of the sky's hue, at its own brightness.
+        if (!canReadScene)
         {
             const auto& skyColour = rage::grmShaderInfo::getShaderParamData(R.CloudSkyColorIdx);
             const float skyLuma = 0.2126f * skyColour[0] + 0.7152f * skyColour[1] + 0.0722f * skyColour[2];
             const float litLuma = 0.2126f * litColour[0] + 0.7152f * litColour[1] + 0.0722f * litColour[2];
             if (skyLuma > 1e-4f)
                 for (int i = 0; i < 3; ++i)
-                    litColour[i] += ((std::max)(skyColour[i], 0.0f) / skyLuma * litLuma - litColour[i]) * 0.2f;
+                    litColour[i] += ((std::max)(skyColour[i], 0.0f) / skyLuma * litLuma - litColour[i]) * kCloudLitSkyHue;
         }
         // VolumetricCloudsSaturation, about each colour's luma.
         for (float* colour : { litColour, shadeColour, sunsetLit })
@@ -6063,11 +6077,7 @@ private:
         effect->SetFloatArray("vec3SunsetColour", sunsetLit, 3);
         effect->SetFloat("fSilver", inscattering);
         effect->SetFloat("fCeiling", ceiling);
-        // Matched to the sky in the scene behind them, while the march has targets of its own to draw
-        // into and can read the scene; the reflections keep the game's cloud colour.
         {
-            const bool canReadScene = !reflection && R.CloudSurf[0] && R.CloudSurf[1] && R.CloudSurf[2] && R.CloudSkyRefSurf &&
-                                      R.CloudMarchSurf[0] && R.CloudMarchSurf[1];
             const float litLuma = 0.2126f * litColour[0] + 0.7152f * litColour[1] + 0.0722f * litColour[2];
             effect->SetFloat("fSkyMatch", canReadScene && litLuma > 1e-4f ? R.fVolumetricCloudsSkyMatch * R.Cloud.skyMatch / litLuma : 0.0f);
         }
