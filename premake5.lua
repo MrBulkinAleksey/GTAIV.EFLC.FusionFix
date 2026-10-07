@@ -158,7 +158,6 @@ workspace "GTAIV.EFLC.FusionFix"
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_BoneWrite /Fo \"../source/resources/temporal/BoneWrite.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_CameraMotion /Fo \"../source/resources/temporal/CameraMotion.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_TemporalResolve /Fo \"../source/resources/temporal/TemporalResolve.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_UpscalerDepth /Fo \"../source/resources/temporal/UpscalerDepth.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_OpaqueLuma /Fo \"../source/resources/temporal/OpaqueLuma.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_Reactive /Fo \"../source/resources/temporal/Reactive.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_RainLayer /Fo \"../source/resources/temporal/RainLayer.pso\" \"../source/resources/temporal/Temporal.hlsl\"",

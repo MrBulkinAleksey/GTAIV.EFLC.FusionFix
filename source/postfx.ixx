@@ -56,6 +56,7 @@ import temporal;
 #define IDR_CAS                                  137
 #define IDR_CLOUDS_FX                            138
 #define IDR_WETGROUND_FX                         139
+#define IDR_HEADLIGHTGLINTS_FX                   140
 
 #define IDR_SSDraw_PS_compiled                   2127
 #define IDR_SSPrepass_PS_compiled                2128
@@ -331,6 +332,7 @@ public:
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY, vec4WaterRings;
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D, SSRHitDistTex2D;
+        D3DXHANDLE MarchDepthTex2D, fStepsPerPixel;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
         D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
@@ -411,7 +413,8 @@ public:
     // Materials with no specular map (c197.x; deferred_lighting_sun_sheen.patch) write no specular
     // intensity, so buildings and LOD roads got neither the sun's highlight nor the sky's
     // reflection. The sun pass gives them half this much of one, as if the G-buffer held it,
-    // times the square of one less their colour's saturation and faded out on dark colours.
+    // times the square of one less their colour's saturation and faded out on dark colours, and so
+    // do lamps and headlights (local_light_specular_sheen_and_fade.patch), for their highlights.
     // They are told apart by the gloss 258 / 1023 they write (world_no_specular_mark.patch).
     float fSpecularSheen = 0.1f;
     // Highlights of lamps, headlights and the sun (c165, c200, c206; local_light_specular_ggx.patch):
@@ -451,7 +454,45 @@ public:
     // - LightsGGXMax: the most a GGX highlight may reach, in the game's own peak (its pow(R.L, n) at 1).
     //   GGX keeps the energy, so a narrow lobe peaks far above it: at 8, normal mapped clothes, skin and
     //   wood burnt into white patches and grazing edges into white strips.
+    //   The highlight also fades out as the surface turns away from the camera (N.V under 0.08,
+    //   local_light_specular_sheen_and_fade.patch), where normal mapped pixels sparkled.
     float fLightsGGXMax = 2.0f;
+    // - LightsGGXSoft (c183, c184.x; local_light_specular_soft_lobe.patch): 0 the lobe above, 1 a softer
+    //   look: as wide as a Blinn lobe of the same exponent 1.3 times as rough, widened by 0.2 more at any
+    //   distance, and its peak held at the game's whatever the gloss, so rough surfaces get a broad
+    //   glow and glossy ones no brighter core. Values between blend.
+    // - LightsGGXStretchView (c184.y): 0 stretches the lobe along the light projected onto the surface,
+    //   1 along the view, so streaks on wet roads run straight towards the camera. Both agree at the
+    //   highlight's centre; only its tail turns.
+    float fLightsGGXSoft = 0.0f;
+    float fLightsGGXStretchView = 1.0f;
+    // - LightsGGXGlints (HeadlightGlints.fx, RenderHeadlightGlints): the lamps of headlights seen in
+    //   glossy surfaces from any side but behind, not only inside their beam; 0 none. LightsGGXGlintsSize
+    //   the lamps' radius in metres, LightsGGXGlintsGloss the gloss from which surfaces glint,
+    //   LightsGGXGlintsMax the ceiling of the GGX lobe before Fresnel.
+    float fLightsGGXGlints = 1.0f;
+    float fLightsGGXGlintsSize = 0.1f;
+    float fLightsGGXGlintsGloss = 0.5f;
+    float fLightsGGXGlintsMax = 64.0f;
+    // The headlights the light loop met this lighting pass (InstallLocalContactLightHook), of which the
+    // kGlintLights nearest the camera glint; what the last pass did, for the Ctrl+Shift+F10 log.
+    static constexpr uint32_t kGlintCandidates = 64;
+    static constexpr uint32_t kGlintLights = 16;
+    struct GlintLight
+    {
+        float position[3];
+        float direction[3];
+        float colour[3];
+        float radius;
+        float distance;
+    };
+    GlintLight GlintCandidates[kGlintCandidates] = {};
+    uint32_t nGlintCandidates = 0;
+    bool bGlintsDone = false;
+    const char* szGlintsStatus = "not drawn yet";
+    uint32_t nGlintsLastLights = 0;
+    float GlintsLastIntensity[2] = {};
+    float GlintsLastCone[2] = {};
     // Wet ground (WetGround.fx): WetGround the strength, 0 off. WetGroundPuddles the share of flat
     // ground under water at full wetness, WetGroundPuddleSize the metres one tile of the puddle map
     // takes, WetGroundRipples the rain's rings in them, WetGroundDarkening how much darker wet
@@ -589,6 +630,8 @@ public:
     // while it writes the G-buffer.
     ID3DXEffect* WetGroundEffect = nullptr;
     HRESULT hrWetGroundEffect = S_OK;
+    ID3DXEffect* HeadlightGlintsEffect = nullptr;
+    HRESULT hrHeadlightGlintsEffect = S_OK;
     IDirect3DTexture9* WetCopyTex[3] = {};
     IDirect3DSurface9* WetCopySurf[3] = {};
     // How wet the world is, 0..1: rises with the rain over WetGroundWetting seconds and dries over
@@ -779,6 +822,8 @@ public:
     bool bPostFxProfiler = false;
     float fSSRTowardCamera = 0.0f;
     float fSSRReflectionBlur = 0.0f;
+    // ScreenSpaceReflectionsStepPixels: pixels of a ray on the march's target per step, 2 by default.
+    float fSSRStepPixels = 2.0f;
     float fSSRDistanceFade = 0.0f;
     float fSSRFallback = 0.8f;
     rage::grcRenderTargetPC* SSRDenoisedTex = nullptr;
@@ -805,6 +850,10 @@ public:
     // target it is drawn with.
     rage::grcRenderTargetPC* SSRHitDistTex[2] = {};
     IDirect3DSurface9* SSRHitDistSurf[2] = {};
+    // View depth at half the full size, the nearest of each 2x2 pixels (MarchDepth_PS), which the
+    // march steps through at either SSR size; R32F.
+    rage::grcRenderTargetPC* SSRMarchDepthTex = nullptr;
+    IDirect3DSurface9* SSRMarchDepthSurf = nullptr;
     // Accumulation over frames (SSRTemporal_PS in SSR.fx): each frame blends the smoothed
     // result with the previous accumulation into the other target of a pair, one pair per
     // resolution. ScreenSpaceReflectionsTemporal is the share of the history kept, 0 turns
@@ -885,8 +934,10 @@ public:
     float fSSRGlossBoost = 2.0f;
     float fSSRGlossCutoff = 0.5f;
     // ScreenSpaceReflectionsWetGround: while it rains, SSR on ground facing up that is under the
-    // gloss cutoff, drawn this many times brighter (fWetGroundBoost in SSR.fx); 0 turns it off.
-    float fSSRWetGround = 2.0f;
+    // gloss cutoff, drawn this many times brighter (fWetGroundBoost in SSR.fx); 0 turns it off. The
+    // wet ground pass gives only puddles water's specular: its film keeps about dry asphalt's (0.12),
+    // so at 1 cars on wet roads reflected half as bright as at 2, and 2 was brighter than the scene.
+    float fSSRWetGround = 1.5f;
     float fSSRWaterIntensity = 1.0f;
     // CWater::Render loads this as the Z of every flat water vertex, so it is the real
     // surface height rather than an assumed sea level.
@@ -1338,6 +1389,8 @@ public:
                 h.SSRAccumTex2D = SSREffect->GetParameterByName(nullptr, "SSRAccumTex2D");
                 h.SSRFallbackTex2D = SSREffect->GetParameterByName(nullptr, "SSRFallbackTex2D");
                 h.SSRHitDistTex2D = SSREffect->GetParameterByName(nullptr, "SSRHitDistTex2D");
+                h.MarchDepthTex2D = SSREffect->GetParameterByName(nullptr, "MarchDepthTex2D");
+                h.fStepsPerPixel = SSREffect->GetParameterByName(nullptr, "fStepsPerPixel");
                 h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
                 h.techSSRTemporal = SSREffect->GetTechniqueByName("SSRTemporal");
                 h.MotionTex2D = SSREffect->GetParameterByName(nullptr, "MotionTex2D");
@@ -1380,6 +1433,23 @@ public:
             if (hrWetGroundEffect != S_OK)
             {
                 WetGroundEffect = nullptr;
+                if (errors)
+                    MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
+            }
+            SAFE_RELEASE(errors);
+        }
+
+        // Without it headlights glint only inside their beams, as the game has them.
+        static bool headlightGlintsEffectTried = false;
+        if (!HeadlightGlintsEffect && !headlightGlintsEffectTried)
+        {
+            headlightGlintsEffectTried = true;
+            ID3DXBuffer* errors = nullptr;
+            hrHeadlightGlintsEffect = D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
+                hm, MAKEINTRESOURCEW(IDR_HEADLIGHTGLINTS_FX), nullptr, nullptr, 0, nullptr, &HeadlightGlintsEffect, &errors);
+            if (hrHeadlightGlintsEffect != S_OK)
+            {
+                HeadlightGlintsEffect = nullptr;
                 if (errors)
                     MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
             }
@@ -1528,6 +1598,15 @@ public:
         fLightsGGXSun = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSun", 1.0f), 0.0f, 4.0f);
         fLightsGGXEnvironment = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXEnvironment", 1.0f), 0.0f, 1.0f);
         fLightsGGXMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXMax", 2.0f), 0.1f, 16.0f);
+        fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
+        fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 1.5f), 0.0f, 8.0f);
+        fSSRStepPixels = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStepPixels", 2.0f), 1.0f, 8.0f);
+        fLightsGGXSoft = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSoft", 0.0f), 0.0f, 1.0f);
+        fLightsGGXStretchView = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXStretchView", 1.0f), 0.0f, 1.0f);
+        fLightsGGXGlints = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlints", 1.0f), 0.0f, 8.0f);
+        fLightsGGXGlintsSize = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlintsSize", 0.1f), 0.01f, 1.0f);
+        fLightsGGXGlintsGloss = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlintsGloss", 0.5f), 0.0f, 1.0f);
+        fLightsGGXGlintsMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlintsMax", 64.0f), 1.0f, 1000.0f);
         fWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "WetGround", 1.0f), 0.0f, 1.0f);
         fWetGroundPuddles = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddles", 0.35f), 0.0f, 1.0f);
         fWetGroundPuddleSize = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddleSize", 24.0f), 2.0f, 500.0f);
@@ -1586,10 +1665,8 @@ public:
         fSSRMaxDistance = std::max(1.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsMaxDistance", 24.0f));
         fSSRThickness = std::max(0.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsThickness", 0.3f));
         fSSREdgeFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsEdgeFade", 0.1f), 0.001f, 0.5f);
-        fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRGlossBoost = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossBoost", 2.0f), 0.0f, 8.0f);
         fSSRGlossCutoff = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossCutoff", 0.5f), 0.0f, 1.0f);
-        fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 2.0f), 0.0f, 8.0f);
         fSSRWaterIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWaterLevelOffset = iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterLevelOffset", 0.0f);
         fSSRWaterBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterBlur", 3.0f), 0.0f, 32.0f);
@@ -2509,6 +2586,7 @@ private:
         PostFxResources.bSSRDenoised = false;
         SAFE_RELEASE(PostFxResources.SSRHalfSurf);
         SAFE_RELEASE(PostFxResources.SSRHalfDenoisedSurf);
+        SAFE_RELEASE(PostFxResources.SSRMarchDepthSurf);
         for (int i = 0; i < 2; ++i)
         {
             SAFE_RELEASE(PostFxResources.SSRTraceSurf[i]);
@@ -2519,7 +2597,7 @@ private:
         for (auto* rt : { &PostFxResources.SSRHalfTex, &PostFxResources.SSRHalfDenoisedTex, &PostFxResources.SSRTraceTex[0],
                           &PostFxResources.SSRTraceTex[1], &PostFxResources.SSRFallbackTex[0], &PostFxResources.SSRFallbackTex[1],
                           &PostFxResources.SSRSpreadTex[0], &PostFxResources.SSRSpreadTex[1], &PostFxResources.SSRHitDistTex[0],
-                          &PostFxResources.SSRHitDistTex[1] })
+                          &PostFxResources.SSRHitDistTex[1], &PostFxResources.SSRMarchDepthTex })
         {
             if (*rt)
             {
@@ -2675,8 +2753,11 @@ private:
             PostFxResources.SSREffect->OnLostDevice();
         if (PostFxResources.CloudsEffect)
             PostFxResources.CloudsEffect->OnLostDevice();
+        EffectBindings().clear();
         if (PostFxResources.WetGroundEffect)
             PostFxResources.WetGroundEffect->OnLostDevice();
+        if (PostFxResources.HeadlightGlintsEffect)
+            PostFxResources.HeadlightGlintsEffect->OnLostDevice();
         PostFxResources.ReleaseWetCopies();
         ReleaseProfiler();
 
@@ -2773,6 +2854,8 @@ private:
             PostFxResources.CloudsEffect->OnResetDevice();
         if (PostFxResources.WetGroundEffect)
             PostFxResources.WetGroundEffect->OnResetDevice();
+        if (PostFxResources.HeadlightGlintsEffect)
+            PostFxResources.HeadlightGlintsEffect->OnResetDevice();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             SAFE_RELEASE(PostFxResources.AOCamDepthSurf[i]);
@@ -2861,6 +2944,9 @@ private:
                         PostFxResources.SSRHitDistTex[half] = rage::CreateEmptyRenderTarget(half ? "SSRHalfHitDistTex" : "SSRHitDistTex",
                             w, hgt, 64, aoDesc, PostFxResources.SSRHitDistSurf[half]);
                 }
+                auto marchDesc = rage::OwnRenderTargetDesc(rage::GRCFMT_R32F);
+                PostFxResources.SSRMarchDepthTex = rage::CreateEmptyRenderTarget("SSRMarchDepthTex", width / 2, height / 2, 32, marchDesc,
+                    PostFxResources.SSRMarchDepthSurf);
             }
 
             PostFxResources.ContactRawTex = rage::CreateEmptyRenderTarget("ContactShadowRawTex", width, height, 64, aoDesc, PostFxResources.ContactRawSurf);
@@ -2868,12 +2954,15 @@ private:
             {
                 PostFxResources.ContactRawHalfTex = rage::CreateEmptyRenderTarget("ContactShadowRawHalfTex", width / 2, height / 2, 64, aoDesc, PostFxResources.ContactRawHalfSurf);
             }
-            PostFxResources.ContactTex = rage::CreateEmptyRenderTarget("ContactShadowTex", width, height, 64, aoDesc, PostFxResources.ContactSurf);
+            // Smoothed and accumulated at the size they are marched at, brought up to full size last
+            const int contactWidth = PostFxResources.bContactShadowsHalfRes ? width / 2 : width;
+            const int contactHeight = PostFxResources.bContactShadowsHalfRes ? height / 2 : height;
+            PostFxResources.ContactTex = rage::CreateEmptyRenderTarget("ContactShadowTex", contactWidth, contactHeight, 64, aoDesc, PostFxResources.ContactSurf);
             if (PostFxResources.fContactTemporalBlend > 0.0f)
             {
                 static const char* names[2] = { "ContactShadowAccumTex0", "ContactShadowAccumTex1" };
                 for (int i = 0; i < 2; ++i)
-                    PostFxResources.ContactAccumTex[i] = rage::CreateEmptyRenderTarget(names[i], width, height, 64, aoDesc, PostFxResources.ContactAccumSurf[i]);
+                    PostFxResources.ContactAccumTex[i] = rage::CreateEmptyRenderTarget(names[i], contactWidth, contactHeight, 64, aoDesc, PostFxResources.ContactAccumSurf[i]);
             }
 
             if (PostFxResources.fSSRTemporalBlend > 0.0f)
@@ -3154,6 +3243,198 @@ private:
         pDevice->SetRenderState(D3DRS_COLORWRITEENABLE2, colorWrite[2]);
         for (auto& surf : gbufferSurf)
             SAFE_RELEASE(surf);
+    }
+
+    // Headlight glints (HeadlightGlints.fx): at the start of the game's light shaft loop, once every light
+    // of the main view is drawn, added to the lit scene they were drawn into. Whatever the pass changes is
+    // put back for the shafts.
+    static void RenderHeadlightGlints(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        R.nGlintsLastLights = 0;
+        auto skip = [&](const char* why) { R.szGlintsStatus = why; };
+        if (!R.GGXLightingEnabled() || R.fLightsGGX <= 0.0f)
+            return skip("GGX Lighting off");
+        if (R.fLightsGGXGlints <= 0.0f)
+            return skip("off in the ini");
+        if (!R.HeadlightGlintsEffect)
+            return skip("no effect");
+        if (!R.nGlintCandidates)
+            return skip("no headlights");
+        if (!pDevice || !R.mNormalRT || !R.mSpecularRT || !R.mNormalRT->mD3DTexture || !R.mSpecularRT->mD3DTexture)
+            return skip("no G-buffer");
+        IDirect3DTexture9* depth = LightingDepth();
+        if (!depth)
+            return skip("no depth");
+        rage::grcViewport* vp = rage::GetCurrentViewport();
+        if (!vp)
+            return skip("no viewport");
+        D3DSURFACE_DESC desc = {};
+        if (FAILED(R.mNormalRT->mD3DTexture->GetLevelDesc(0, &desc)))
+            return skip("no G-buffer");
+
+        ProfilerScope timed(pDevice, kProfGlints);
+        // The nearest headlights.
+        const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+        auto* candidates = R.GlintCandidates;
+        const uint32_t found = R.nGlintCandidates;
+        for (uint32_t i = 0; i < found; ++i)
+        {
+            const float dx = candidates[i].position[0] - viewInv.m[3][0];
+            const float dy = candidates[i].position[1] - viewInv.m[3][1];
+            const float dz = candidates[i].position[2] - viewInv.m[3][2];
+            candidates[i].distance = dx * dx + dy * dy + dz * dz;
+        }
+        const uint32_t count = (std::min)(found, PostFxResource::kGlintLights);
+        std::partial_sort(candidates, candidates + count, candidates + found,
+                          [](const auto& a, const auto& b) { return a.distance < b.distance; });
+
+        constexpr uint32_t kLights = PostFxResource::kGlintLights;
+        D3DXVECTOR4 position[kLights] = {}, direction[kLights] = {}, right[kLights] = {}, colour[kLights] = {};
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const auto& g = candidates[i];
+            float d[3] = { g.direction[0], g.direction[1], g.direction[2] };
+            const float len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            if (len > 1e-3f)
+                for (auto& c : d)
+                    c /= len;
+            // The car's level right, dir x up, as SetLightGGXShape takes it; a light aimed straight up
+            // or down keeps one lamp.
+            const float kx = d[1], ky = -d[0];
+            const float rlen = std::sqrt(kx * kx + ky * ky);
+            const bool level = rlen > 1e-3f;
+            // The game's own highlight ends at about two thirds of the light's radius.
+            position[i] = D3DXVECTOR4(g.position[0], g.position[1], g.position[2], level ? R.fLightsGGXHeadlights : 0.0f);
+            direction[i] = D3DXVECTOR4(d[0], d[1], d[2], 1.0f / (0.66f * g.radius));
+            right[i] = D3DXVECTOR4(level ? kx / rlen : 0.0f, level ? ky / rlen : 0.0f, 0.0f, 0.0f);
+            colour[i] = D3DXVECTOR4(g.colour[0], g.colour[1], g.colour[2], 0.0f);
+        }
+
+        ID3DXEffect* effect = R.HeadlightGlintsEffect;
+        const float width = float(desc.Width), height = float(desc.Height);
+        const D3DMATRIX& proj = *(const D3DMATRIX*)vp->mProjectionMatrix;
+        const D3DXVECTOR4 projInfo = ProjInfo(proj, width, height);
+        effect->SetVector("vec4ProjInfo", &projInfo);
+        effect->SetFloat("fNearPlane", vp->mNearClip);
+        effect->SetFloat("fFarDivNear", vp->mFarClip / vp->mNearClip);
+        {
+            D3DXVECTOR4 toView[3];
+            WorldToViewRows(vp, toView);
+            const D3DXVECTOR4 worldX(toView[0].x, toView[1].x, toView[2].x, viewInv.m[3][0]);
+            const D3DXVECTOR4 worldY(toView[0].y, toView[1].y, toView[2].y, viewInv.m[3][1]);
+            const D3DXVECTOR4 worldZ(toView[0].z, toView[1].z, toView[2].z, viewInv.m[3][2]);
+            effect->SetVector("vec4WorldX", &worldX);
+            effect->SetVector("vec4WorldY", &worldY);
+            effect->SetVector("vec4WorldZ", &worldZ);
+        }
+        const float invSize[2] = { 1.0f / width, 1.0f / height };
+        effect->SetFloatArray("vec2InvSize", invSize, 2);
+        const D3DXVECTOR4 glint(R.fLightsGGXGlints, R.fLightsGGXGlintsGloss, R.fLightsGGXGlintsSize, R.fLightsGGXGlintsMax);
+        effect->SetVector("vec4Glint", &glint);
+        effect->SetFloat("fLightCount", float(count));
+        effect->SetVectorArray("vec4LightPos", position, kLights);
+        effect->SetVectorArray("vec4LightDir", direction, kLights);
+        effect->SetVectorArray("vec4LightRight", right, kLights);
+        effect->SetVectorArray("vec4LightColour", colour, kLights);
+
+        // Saved: the textures, sampler states, constants, shaders, render states and geometry the pass sets.
+        static constexpr DWORD kSlots = 3;
+        static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER,
+                                                                   D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
+        IDirect3DBaseTexture9* oldTextures[kSlots] = {};
+        DWORD savedSamplerStates[kSlots][std::size(kSamplerStates)] = {};
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+        {
+            pDevice->GetTexture(slot, &oldTextures[slot]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                pDevice->GetSamplerState(slot, kSamplerStates[i], &savedSamplerStates[slot][i]);
+        }
+        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        IDirect3DPixelShader9* oldPS = nullptr;
+        IDirect3DVertexShader9* oldVS = nullptr;
+        IDirect3DVertexDeclaration9* oldDecl = nullptr;
+        IDirect3DVertexBuffer9* oldVB = nullptr;
+        UINT oldOffset = 0, oldStride = 0;
+        DWORD oldFVF = 0;
+        D3DVIEWPORT9 oldViewport = {};
+        pDevice->GetPixelShader(&oldPS);
+        pDevice->GetVertexShader(&oldVS);
+        pDevice->GetVertexDeclaration(&oldDecl);
+        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        pDevice->GetFVF(&oldFVF);
+        pDevice->GetViewport(&oldViewport);
+
+        static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kStates[] =
+        {
+            { D3DRS_ZENABLE, FALSE }, { D3DRS_ZWRITEENABLE, FALSE }, { D3DRS_ALPHATESTENABLE, FALSE }, { D3DRS_STENCILENABLE, FALSE },
+            { D3DRS_CULLMODE, D3DCULL_NONE }, { D3DRS_COLORWRITEENABLE, 0x07 }, { D3DRS_SCISSORTESTENABLE, FALSE },
+            { D3DRS_SRGBWRITEENABLE, FALSE }, { D3DRS_FILLMODE, D3DFILL_SOLID }, { D3DRS_CLIPPLANEENABLE, 0 }, { D3DRS_FOGENABLE, FALSE },
+            { D3DRS_ALPHABLENDENABLE, TRUE }, { D3DRS_SEPARATEALPHABLENDENABLE, FALSE }, { D3DRS_BLENDOP, D3DBLENDOP_ADD },
+            { D3DRS_SRCBLEND, D3DBLEND_ONE }, { D3DRS_DESTBLEND, D3DBLEND_ONE },
+        };
+        DWORD savedStates[std::size(kStates)] = {};
+        for (size_t i = 0; i < std::size(kStates); ++i)
+        {
+            pDevice->GetRenderState(kStates[i].state, &savedStates[i]);
+            pDevice->SetRenderState(kStates[i].state, kStates[i].value);
+        }
+        D3DVIEWPORT9 viewport = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
+        pDevice->SetViewport(&viewport);
+        pDevice->SetVertexShader(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+
+        UINT passes = 0;
+        effect->SetTechnique("Glints");
+        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
+        effect->BeginPass(0);
+        effect->CommitChanges();
+        IDirect3DBaseTexture9* textures[kSlots] = { depth, R.mNormalRT->mD3DTexture, R.mSpecularRT->mD3DTexture };
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+        {
+            SetTextureBoth(pDevice, slot, textures[slot]);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+            SetSamplerStateBoth(pDevice, slot, D3DSAMP_SRGBTEXTURE, FALSE);
+        }
+        BindEffectConstantsOnly(pDevice, effect);
+        struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        const ScreenVertex quad[4] =
+        {
+            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
+            { -0.5f,         height - 0.5f,  0.0f, 1.0f, 0.0f, 1.0f },
+            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
+            { width - 0.5f,  height - 0.5f,  0.0f, 1.0f, 1.0f, 1.0f },
+        };
+        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(ScreenVertex));
+        effect->EndPass();
+        effect->End();
+        R.szGlintsStatus = "drawn";
+        R.nGlintsLastLights = count;
+
+        for (DWORD slot = 0; slot < kSlots; ++slot)
+        {
+            SetTextureBoth(pDevice, slot, oldTextures[slot]);
+            SAFE_RELEASE(oldTextures[slot]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                SetSamplerStateBoth(pDevice, slot, kSamplerStates[i], savedSamplerStates[slot][i]);
+        }
+        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        for (size_t i = 0; i < std::size(kStates); ++i)
+            pDevice->SetRenderState(kStates[i].state, savedStates[i]);
+        pDevice->SetViewport(&oldViewport);
+        pDevice->SetPixelShader(oldPS);
+        pDevice->SetVertexShader(oldVS);
+        pDevice->SetFVF(oldFVF);
+        pDevice->SetVertexDeclaration(oldDecl);
+        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
+        SAFE_RELEASE(oldPS);
+        SAFE_RELEASE(oldVS);
+        SAFE_RELEASE(oldDecl);
+        SAFE_RELEASE(oldVB);
     }
 
     // At the end of the G-buffer pass (TemporalAA::OnGBufferEnd, the device state saved around it): this frame's
@@ -3517,6 +3798,7 @@ private:
 
 
         pDevice->GetRenderTarget(0, &PostFxResources.backBuffer);
+        FrameGeneration::OnPostProcessing();
         pDevice->GetPixelShader(&oldps);
         pDevice->GetVertexShader(&oldvs);
 
@@ -3564,17 +3846,25 @@ private:
         PostFxResources.surfaceRead = nullptr;
     }
 
-    // Sharpening (CAS.hlsl) of the finished frame, after anti-aliasing and before the HUD. The
-    // frame is copied to FullScreenTex_temp2, which anti-aliasing has read by now, and sharpened
-    // from there back into the back buffer.
-    static void ApplySharpening(IDirect3DDevice9* pDevice, IDirect3DPixelShader9* pShader, IDirect3DVertexShader9* vShader)
+    static bool IsSharpeningActive()
     {
         static auto sharpening = FusionFixSettings.GetRef("PREF_SHARPENING");
         auto& R = PostFxResources;
-        if (!sharpening || sharpening->get() <= 0 || !R.CAS_PS || !R.backBuffer || !R.FullScreenTex_temp2 || !R.FullScreenSurface_temp2)
+        return sharpening && sharpening->get() > 0 && R.CAS_PS && R.backBuffer && R.FullScreenTex_temp2 && R.FullScreenSurface_temp2;
+    }
+
+    // Sharpening (CAS.hlsl) of the finished frame, after anti-aliasing and before the HUD, from
+    // FullScreenTex_temp2 into the back buffer. Without anti-aliasing of its own the game's post
+    // processing drew the frame there already (inTemp2); after FXAA or SMAA, which read it from
+    // there, the frame is copied into it.
+    static void ApplySharpening(IDirect3DDevice9* pDevice, IDirect3DPixelShader9* pShader, IDirect3DVertexShader9* vShader, bool inTemp2)
+    {
+        static auto sharpening = FusionFixSettings.GetRef("PREF_SHARPENING");
+        auto& R = PostFxResources;
+        if (!IsSharpeningActive())
             return;
         ProfilerScope timed(pDevice, kProfPostSharpen);
-        if (FAILED(pDevice->StretchRect(R.backBuffer, nullptr, R.FullScreenSurface_temp2, nullptr, D3DTEXF_NONE)))
+        if (!inTemp2 && FAILED(pDevice->StretchRect(R.backBuffer, nullptr, R.FullScreenSurface_temp2, nullptr, D3DTEXF_NONE)))
             return;
 
         // Low, medium and high; the peak CAS weighs the neighbours with is -1 / lerp(8, 5, sharpness).
@@ -3594,6 +3884,10 @@ private:
         pDevice->GetRenderState(D3DRS_SRGBWRITEENABLE, &srgbWrite);
         pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
 
+        // c200 is also the GGX lights' (BindLightingInputs): lights drawn before it is set again would read the peak
+        float savedParams[4] = {};
+        pDevice->GetPixelShaderConstantF(200, savedParams, 1);
+
         pDevice->SetRenderTarget(0, R.backBuffer);
         SetTextureBoth(pDevice, 2, R.FullScreenTex_temp2->mD3DTexture);
         pDevice->SetPixelShaderConstantF(200, params, 1);
@@ -3601,6 +3895,7 @@ private:
         pDevice->SetVertexShader(vShader);
         pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
+        pDevice->SetPixelShaderConstantF(200, savedParams, 1);
         pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, srgbWrite);
         for (size_t i = 0; i < std::size(kStates); ++i)
             pDevice->SetSamplerState(2, kStates[i], saved[i]);
@@ -3675,12 +3970,14 @@ private:
                     if (TemporalAA::GetMode() != TemporalAA::Mode::Off && !TemporalAA::IsSceneResolved() && !RenderScale::IsActive())
                     {
                         ProfilerScope timed(pDevice, kProfPostTAA);
-                        FilterStippleBeforeResolve(PostFxResources.textureRead);
-                        if (TemporalAA::Resolve(pDevice, PostFxResources.textureRead, PostFxResources.renderTargetTex, PostFxResources.renderTargetSurf))
+                        auto source = FilterStippleBeforeResolve(PostFxResources.textureRead);
+                        if (TemporalAA::Resolve(pDevice, source, PostFxResources.renderTargetTex, PostFxResources.renderTargetSurf))
                         {
                             PostFxResources.swapbuffers();
                             pDevice->SetPixelShader(pShader);
                         }
+                        else if (source != PostFxResources.textureRead)
+                            TemporalAA::KeepStipple(PostFxResources.textureRead);
                     }
 
                     if (PostFxResources.useStippleFilter && PostFxResources.stipple_filter_ps && !TemporalAA::IsStippleFiltered())
@@ -3786,6 +4083,10 @@ private:
                         }
                     }
 
+                    // The sharpening reads the frame from FullScreenTex_temp2: without anti-aliasing of
+                    // its own the game's post processing draws it there
+                    const bool sharpenFromTemp2 = !IsPostFxAA() && IsSharpeningActive();
+
                     // game postfx
                     {
                         ProfilerScope timed(pDevice, kProfPostGame);
@@ -3795,7 +4096,7 @@ private:
                             pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, PostFxResources.Samplers[i]);
                         }
 
-                        if (IsPostFxAA())
+                        if (IsPostFxAA() || sharpenFromTemp2)
                             pDevice->SetRenderTarget(0, PostFxResources.FullScreenSurface_temp2);
                         else
                             pDevice->SetRenderTarget(0, PostFxResources.backBuffer);
@@ -3949,7 +4250,7 @@ private:
                         }
                     }
 
-                    ApplySharpening(pDevice, pShader, vShader);
+                    ApplySharpening(pDevice, pShader, vShader, sharpenFromTemp2);
                     FrameGeneration::CaptureHudLess(pDevice, PostFxResources.backBuffer);
 
                     for (int i = 0; i < PostfxTextureCount; i++)
@@ -4167,7 +4468,7 @@ private:
             kProfSSR, kProfSSRTrace, kProfSSRFill, kProfSSRResolve, kProfSSRDenoise, kProfSSRTemporal, kProfSSRDebug,
             kProfContact, kProfContactMarch, kProfContactUpsample, kProfContactDenoise, kProfContactTemporal,
             kProfGI, kProfGIMarch, kProfGIDenoise, kProfGITemporal, kProfGIUpsample,
-            kProfLightSun, kProfLightLocal, kProfLightShafts,
+            kProfLightSun, kProfLightLocal, kProfLightShafts, kProfGlints,
         kProfDepthCopy,
         kProfMotion,
         kProfWetGround, kProfWetGroundCopies, kProfWetGroundPass,
@@ -4196,7 +4497,7 @@ private:
             { "indirect light", kProfLighting }, { "march", kProfGI }, { "smoothing", kProfGI },
             { "accumulation", kProfGI }, { "upsample", kProfGI },
             { "the game's sun and ambient", kProfLighting }, { "the game's lamps and headlights", kProfLighting },
-            { "the game's light shafts", kProfLighting },
+            { "the game's light shafts", kProfLighting }, { "headlight glints", kProfLightShafts },
         { "depth copy at the G-buffer's end", -1 },
         { "motion vectors (temporal AA, upscaling)", -1 },
         { "wet ground", -1 }, { "copies of the G-buffer", kProfWetGround }, { "wet pass", kProfWetGround },
@@ -4422,18 +4723,43 @@ private:
     // parameter holds, found through the shader's constant table (sampler X reads X2D in SSR.fx
     // and AO.fx). D3DX left some holding what the game had bound, about four a frame in the SSR
     // passes: a diagnostic pass read a G-buffer texture where it sampled the depth.
-    // Each shader's samplers are looked up for every draw, from its bytecode and constant table,
-    // a few dozen draws a frame. Kept per effect and shader they went wrong in play: the smoothing
-    // and accumulation of SSR left registers with what the game had bound, a G-buffer texture
-    // where they sampled the specular one, and SSR came out empty, while it worked in the pause
-    // menu, where the game had bound others.
+    // Which register takes which parameter is read once per effect and shader from the shader's
+    // constant table and kept (EffectBindings), as the effects keep their shaders for the whole
+    // game; cleared on a lost device. What the registers get is written for every draw, through the
+    // game's device wrapper and the device both: SSR coming out empty in play, while it worked in the
+    // pause menu, was the wrapper dropping textures it had on record (SetTextureBoth), not this map.
 
     // The same holds for the float constants: with the ones D3DX left, SSGI's accumulation decoded the right depth
     // (6.1 m) as 15.3 m through fNearPlane and fFarDivNear while vec2PrevDepthRange, in another register, came through.
     // Each float constant of the shader is written from its parameter, a register per vector or array element.
-    struct EffectConstant { UINT reg; UINT count; D3DXHANDLE param; std::string name; D3DXREGISTER_SET set; };
+    struct EffectConstant
+    {
+        UINT reg; UINT count; D3DXHANDLE param; std::string name; D3DXREGISTER_SET set;
+        // From the parameter's description: a scalar or vector of floats, integers or booleans, and its elements
+        bool usable = false;
+        D3DXPARAMETER_TYPE type = D3DXPT_FLOAT;
+        UINT columns = 0;
+        std::vector<D3DXHANDLE> elements;
+    };
 
-    struct EffectSampler { UINT reg; D3DXHANDLE param; std::string name; };
+    struct EffectSampler
+    {
+        UINT reg; D3DXHANDLE param; std::string name;
+        bool setStates = false;     // SSR.fx's samplers below kSSRSamplerSlots, whose states its callers save
+        SamplerStates states{};
+    };
+
+    struct EffectBinding
+    {
+        std::vector<EffectSampler> samplers;
+        std::vector<EffectConstant> constants;
+    };
+
+    static std::map<std::pair<ID3DXEffect*, IDirect3DPixelShader9*>, EffectBinding>& EffectBindings()
+    {
+        static std::map<std::pair<ID3DXEffect*, IDirect3DPixelShader9*>, EffectBinding> bindings;
+        return bindings;
+    }
 
     static std::vector<EffectSampler> FindEffectSamplers(ID3DXEffect* effect, IDirect3DPixelShader9* ps,
                                                          std::vector<EffectConstant>* constants = nullptr)
@@ -4479,21 +4805,18 @@ private:
         std::string traced;
         for (const auto& c : constants)
         {
-            D3DXPARAMETER_DESC pd = {};
-            if (FAILED(effect->GetParameterDesc(c.param, &pd)) ||
-                (pd.Type != D3DXPT_FLOAT && pd.Type != D3DXPT_INT && pd.Type != D3DXPT_BOOL) ||
-                (pd.Class != D3DXPC_SCALAR && pd.Class != D3DXPC_VECTOR) || c.count == 0 || c.count > 16)
+            if (!c.usable)
                 continue;
-            const UINT elements = pd.Elements ? (std::min)(pd.Elements, c.count) : 1;
-            const UINT columns = (std::min)(pd.Columns, 4u);
+            const UINT elements = UINT(c.elements.size());
+            const UINT columns = c.columns;
             // Integers and booleans in their own register sets (loop counters, static branches)
             if (c.set == D3DXRS_INT4 || c.set == D3DXRS_BOOL)
             {
                 int values[16 * 4] = {};
                 for (UINT e = 0; e < elements; ++e)
                 {
-                    D3DXHANDLE h = pd.Elements ? effect->GetParameterElement(c.param, e) : c.param;
-                    if (pd.Type == D3DXPT_FLOAT)
+                    D3DXHANDLE h = c.elements[e];
+                    if (c.type == D3DXPT_FLOAT)
                     {
                         float f[4] = {};
                         effect->GetFloatArray(h, f, columns);
@@ -4525,8 +4848,8 @@ private:
             float want[16 * 4] = {};
             for (UINT e = 0; e < elements; ++e)
             {
-                D3DXHANDLE h = pd.Elements ? effect->GetParameterElement(c.param, e) : c.param;
-                if (pd.Type == D3DXPT_FLOAT)
+                D3DXHANDLE h = c.elements[e];
+                if (c.type == D3DXPT_FLOAT)
                     effect->GetFloatArray(h, &want[e * 4], columns);
                 else
                 {
@@ -4540,13 +4863,13 @@ private:
             RealDevice(pDevice)->GetPixelShaderConstantF(c.reg, have, c.count);
             bool differs = false;
             for (UINT e = 0; e < elements; ++e)
-                for (UINT k = 0; k < (std::min)(pd.Columns, 4u); ++k)
+                for (UINT k = 0; k < columns; ++k)
                     differs |= want[e * 4 + k] != have[e * 4 + k];
             if (differs)
             {
                 // The components the shader does not read keep what the register held
                 for (UINT e = 0; e < c.count; ++e)
-                    for (UINT k = (e < elements ? (std::min)(pd.Columns, 4u) : 0u); k < 4; ++k)
+                    for (UINT k = (e < elements ? columns : 0u); k < 4; ++k)
                         want[e * 4 + k] = have[e * 4 + k];
                 pDevice->SetPixelShaderConstantF(c.reg, want, c.count);
                 if (auto real = RealDevice(pDevice); real != pDevice)
@@ -4563,6 +4886,51 @@ private:
             SSRTrace::Line("  constants set:%s", traced.c_str());
     }
 
+    // The registers of a shader of an effect and the parameters they take, read once
+    static const EffectBinding& GetEffectBinding(ID3DXEffect* effect, IDirect3DPixelShader9* ps)
+    {
+        auto& bindings = EffectBindings();
+        const auto key = std::make_pair(effect, ps);
+        if (auto it = bindings.find(key); it != bindings.end())
+            return it->second;
+
+        EffectBinding binding;
+        binding.samplers = FindEffectSamplers(effect, ps, &binding.constants);
+        for (auto& c : binding.constants)
+        {
+            D3DXPARAMETER_DESC pd = {};
+            c.usable = SUCCEEDED(effect->GetParameterDesc(c.param, &pd)) &&
+                (pd.Type == D3DXPT_FLOAT || pd.Type == D3DXPT_INT || pd.Type == D3DXPT_BOOL) &&
+                (pd.Class == D3DXPC_SCALAR || pd.Class == D3DXPC_VECTOR) && c.count > 0 && c.count <= 16;
+            if (!c.usable)
+                continue;
+            c.type = pd.Type;
+            c.columns = (std::min)(pd.Columns, 4u);
+            const UINT elements = pd.Elements ? (std::min)(pd.Elements, c.count) : 1;
+            for (UINT e = 0; e < elements; ++e)
+                c.elements.push_back(pd.Elements ? effect->GetParameterElement(c.param, e) : c.param);
+        }
+        if (effect == PostFxResources.SSREffect)
+        {
+            for (auto& sampler : binding.samplers)
+            {
+                if (sampler.reg >= kSSRSamplerSlots)
+                    continue;
+                auto found = SSRSamplerStates.find(sampler.name);
+                sampler.setStates = true;
+                sampler.states = found != SSRSamplerStates.end() ? found->second
+                    : SamplerStates{ D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP };
+            }
+        }
+        // A shader whose table could not be read is tried again next time
+        if (binding.samplers.empty() && binding.constants.empty())
+        {
+            static EffectBinding none;
+            return none;
+        }
+        return bindings.emplace(key, std::move(binding)).first->second;
+    }
+
     // Writes the textures (and the float, int and bool constants) of the bound pixel shader from the effect's parameters,
     // and for SSR.fx, whose callers save samplers 0 to kSSRSamplerSlots - 1 around their passes, the sampler states.
     static void BindEffectConstantsOnly(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
@@ -4570,10 +4938,9 @@ private:
         IDirect3DPixelShader9* ps = nullptr;
         if (FAILED(pDevice->GetPixelShader(&ps)) || !ps)
             return;
-        std::vector<EffectConstant> constants;
-        FindEffectSamplers(effect, ps, &constants);
+        const auto& binding = GetEffectBinding(effect, ps);
         ps->Release();
-        BindEffectConstants(pDevice, effect, constants);
+        BindEffectConstants(pDevice, effect, binding.constants);
     }
 
     static void BindEffectSamplers(IDirect3DDevice9* pDevice, ID3DXEffect* effect)
@@ -4581,21 +4948,20 @@ private:
         IDirect3DPixelShader9* ps = nullptr;
         if (FAILED(pDevice->GetPixelShader(&ps)) || !ps)
             return;
-        std::vector<EffectConstant> constants;
-        const auto samplers = FindEffectSamplers(effect, ps, &constants);
-        BindEffectConstants(pDevice, effect, constants);
+        const auto& binding = GetEffectBinding(effect, ps);
+        const auto& samplers = binding.samplers;
+        BindEffectConstants(pDevice, effect, binding.constants);
         const void* shader = ps;
         ps->Release();
 
         std::string traced;
-        const bool states = effect == PostFxResources.SSREffect;
-        for (const auto& [reg, param, name] : samplers)
+        for (const auto& sampler : samplers)
         {
-            if (states && reg < kSSRSamplerSlots)
+            const UINT reg = sampler.reg;
+            const D3DXHANDLE param = sampler.param;
+            if (sampler.setStates)
             {
-                auto found = SSRSamplerStates.find(name);
-                const SamplerStates st = found != SSRSamplerStates.end() ? found->second
-                    : SamplerStates{ D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP };
+                const SamplerStates& st = sampler.states;
                 SetSamplerStateBoth(pDevice, reg, D3DSAMP_MINFILTER, st[0]);
                 SetSamplerStateBoth(pDevice, reg, D3DSAMP_MAGFILTER, st[1]);
                 SetSamplerStateBoth(pDevice, reg, D3DSAMP_MIPFILTER, st[2]);
@@ -4606,7 +4972,8 @@ private:
             IDirect3DBaseTexture9* want = nullptr;
             IDirect3DBaseTexture9* have = nullptr;
             effect->GetTexture(param, &want);
-            RealDevice(pDevice)->GetTexture(reg, &have);
+            if (SSRTrace::Active())
+                RealDevice(pDevice)->GetTexture(reg, &have);
             // Always, through both: the wrapper may hold want on record while the device has another
             SetTextureBoth(pDevice, reg, want);
             if (SSRTrace::Active())
@@ -4758,11 +5125,12 @@ private:
         if (vp)
             SSRTrace::Line("ssr: vp %p %dx%d near %.3f far %.1f", static_cast<void*>(vp), int(vp->mWidth), int(vp->mHeight), vp->mNearClip, vp->mFarClip);
         if (!R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex || !vp || R.fSSRIntensity <= 0.0f ||
-            !R.SSRTraceSurf[0] || !R.SSRFallbackSurf[0])
+            !R.SSRTraceSurf[0] || !R.SSRFallbackSurf[0] || !R.SSRMarchDepthSurf)
         {
-            SSRTrace::Line("ssr: left, effect %p depth %p history %p vp %p intensity %.2f trace %p fallback %p",
+            SSRTrace::Line("ssr: left, effect %p depth %p history %p vp %p intensity %.2f trace %p fallback %p march depth %p",
                 static_cast<void*>(R.SSREffect), static_cast<void*>(R.mDepthRT), static_cast<void*>(R.SSRHistoryTex),
-                static_cast<void*>(vp), R.fSSRIntensity, static_cast<void*>(R.SSRTraceSurf[0]), static_cast<void*>(R.SSRFallbackSurf[0]));
+                static_cast<void*>(vp), R.fSSRIntensity, static_cast<void*>(R.SSRTraceSurf[0]), static_cast<void*>(R.SSRFallbackSurf[0]),
+                static_cast<void*>(R.SSRMarchDepthSurf));
             clearSSR();
             R.nSSRAccumFrame = 0;
             return;
@@ -4866,6 +5234,7 @@ private:
         effect->SetFloat(h.fIntensity, R.fSSRIntensity);
         effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);
         effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
+        effect->SetFloat(h.fStepsPerPixel, 1.0f / R.fSSRStepPixels);
         const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1] &&
                               R.SSRHitDistSurf[half];
         SetNoiseOffset(effect, temporal && R.bSSRTemporalJitter);
@@ -4887,12 +5256,14 @@ private:
         if (hasNormals)
             effect->SetTexture(h.NormalTex2D, R.mNormalRT->mD3DTexture);
         effect->SetFloat(h.fUseGBufferNormals, (hasNormals && R.bSSRGBufferNormals) ? 1.0f : 0.0f);
-        // CWeather::Rain eases towards the weather's rain amount, 0.3 for drizzle, 0.7 for rain
-        // and 1.0 for a thunderstorm, so the ground wets and dries with it; rain counts as wet.
+        // How wet the ground is, as the wet ground pass has it (RenderWetGround, which runs at the end
+        // of the G-buffer pass every frame and keeps it up to date even while it draws nothing): it
+        // follows CWeather::Rain over WetGroundWetting and WetGroundDrying seconds. Taken from the rain
+        // itself, a shower turned on had SSR mirror the whole road at once, half a minute before the
+        // ground pass made it wet.
         // Telling ground from walls takes the G-buffer normals, and the gloss the specular one.
-        const float rain = CWeather::Rain ? *CWeather::Rain : 0.0f;
         const bool wetGround = R.fSSRWetGround > 0.0f && hasNormals && hasSpecular;
-        effect->SetFloat(h.fWetness, wetGround ? std::clamp(rain / 0.7f, 0.0f, 1.0f) : 0.0f);
+        effect->SetFloat(h.fWetness, wetGround ? R.fWetness : 0.0f);
         effect->SetFloat(h.fWetGroundBoost, R.fSSRWetGround);
 
         UINT passes = 0;
@@ -4928,11 +5299,11 @@ private:
         }
         {
             // The march, the guess for its misses (skipped while ScreenSpaceReflectionsFallback is
-            // 0, SSR_PS then does not read it), and the two together.
+            // 0, SSR_PS then does not read it), and the two together. Each draws every pixel of
+            // the viewport, no blending, nothing discarded: nothing is cleared first.
             auto draw = [&](UINT pass, IDirect3DSurface9* target)
             {
                 const HRESULT rtHr = pDevice->SetRenderTarget(0, target);
-                pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
                 const HRESULT passHr = effect->BeginPass(pass);
                 effect->CommitChanges();
                 BindEffectSamplers(pDevice, effect);
@@ -4948,14 +5319,21 @@ private:
                         unsigned(rtHr), unsigned(passHr), unsigned(drawHr));
                 }
             };
-            // The march also writes how far its rays went, for the accumulation; Clear clears both.
+            // The depth the march steps through, at half the full size whatever size SSR runs at;
+            // timed with the march.
+            ProfilerMark(pDevice, kProfSSRTrace, true);
+            setPassSize(float(DWORD(width) / 2), float(DWORD(height) / 2));
+            draw(4, R.SSRMarchDepthSurf);
+            setPassSize(half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height);
+            effect->SetTexture(h.MarchDepthTex2D, R.SSRMarchDepthTex->mD3DTexture);
+
+            // The march also writes how far its rays went, for the accumulation.
             IDirect3DSurface9* oldTarget1 = nullptr;
             if (temporal)
             {
                 pDevice->GetRenderTarget(1, &oldTarget1);
                 pDevice->SetRenderTarget(1, R.SSRHitDistSurf[half]);
             }
-            ProfilerMark(pDevice, kProfSSRTrace, true);
             draw(0, R.SSRTraceSurf[half]);
             ProfilerMark(pDevice, kProfSSRTrace, false);
             if (temporal)
@@ -6306,6 +6684,9 @@ private:
                 log.Printf("GGX lights: %u headlights among %u lights drawn since the last log\n", R.nLightGGXHeadlights, R.nLightGGXLights);
                 R.nLightGGXHeadlights = 0;
                 R.nLightGGXLights = 0;
+                log.Printf("headlight glints: %s; effect %s (hr 0x%08lX); %u headlights drawn; their intensity %.3f to %.3f, outer cone %.3f to %.3f\n",
+                        R.szGlintsStatus, R.HeadlightGlintsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrHeadlightGlintsEffect),
+                        R.nGlintsLastLights, R.GlintsLastIntensity[0], R.GlintsLastIntensity[1], R.GlintsLastCone[0], R.GlintsLastCone[1]);
                 log.Component("CloudReflections");
                 log.Printf("clouds in reflections: %s; %u reflection map and %u water reflection skies since the last log; viewport %lu,%lu %lux%lu of a %ux%u target\n",
                         R.szCloudsReflectionStatus, R.nCloudReflectionCalls, R.nCloudWaterReflectionCalls, R.CloudReflectionViewport.X, R.CloudReflectionViewport.Y,
@@ -6492,11 +6873,14 @@ private:
     }
 
     // With temporal anti-aliasing, DLAA or FSR the stipple filter runs before them, on the scene at the render size,
-    // instead of in the post processing after them
-    static void FilterStippleBeforeResolve(IDirect3DTexture9* scene)
+    // instead of in the post processing after them. Returns what the resolve reads: the filtered copy, or the scene
+    // when the filter did not run. A scene nothing resolved takes the copy with TemporalAA::KeepStipple.
+    static IDirect3DTexture9* FilterStippleBeforeResolve(IDirect3DTexture9* scene)
     {
-        if (TemporalAA::GetMode() != TemporalAA::Mode::Off && PostFxResources.useStippleFilter && PostFxResources.stipple_filter_ps)
-            TemporalAA::FilterStipple(scene, PostFxResources.stipple_filter_ps);
+        if (TemporalAA::GetMode() == TemporalAA::Mode::Off || !PostFxResources.useStippleFilter || !PostFxResources.stipple_filter_ps)
+            return scene;
+        auto filtered = TemporalAA::FilterStipple(scene, PostFxResources.stipple_filter_ps);
+        return filtered ? filtered : scene;
     }
 
     // Render scale: from here on FullScreenCopy is a texture of the screen size, with the scene upscaled by DLSS
@@ -6513,19 +6897,23 @@ private:
         IDirect3DSurface9* output = nullptr;
         if (!RenderScale::BeginPost(pDevice, scene, sceneSurface, output))
             return;
-        FilterStippleBeforeResolve(scene);
+        // The scene at the render size is not read past here: the filtered copy stands in for it
+        auto source = FilterStippleBeforeResolve(scene);
 
-        auto upscaled = PostFxResources.FullScreenTex_temp1->mD3DTexture;
-        IDirect3DSurface9* upscaledSurface = nullptr;
-        upscaled->GetSurfaceLevel(0, &upscaledSurface);
+        // DLSS and FSR write straight into the full size texture
+        IDirect3DTexture9* outputTexture = nullptr;
+        output->GetContainer(__uuidof(IDirect3DTexture9), reinterpret_cast<void**>(&outputTexture));
 
         auto mode = TemporalAA::GetMode();
-        if (upscaledSurface && (mode == TemporalAA::Mode::DLAA || mode == TemporalAA::Mode::FSR) &&
-            TemporalAA::Resolve(pDevice, scene, upscaled, upscaledSurface))
-            pDevice->StretchRect(upscaledSurface, nullptr, output, nullptr, D3DTEXF_POINT);
-        else
-            pDevice->StretchRect(sceneSurface, nullptr, output, nullptr, D3DTEXF_LINEAR);
-        SAFE_RELEASE(upscaledSurface);
+        if (!outputTexture || (mode != TemporalAA::Mode::DLAA && mode != TemporalAA::Mode::FSR) ||
+            !TemporalAA::Resolve(pDevice, source, outputTexture, output))
+        {
+            IDirect3DSurface9* sourceSurface = nullptr;
+            if (SUCCEEDED(source->GetSurfaceLevel(0, &sourceSurface)) && sourceSurface)
+                pDevice->StretchRect(sourceSurface, nullptr, output, nullptr, D3DTEXF_LINEAR);
+            SAFE_RELEASE(sourceSurface);
+        }
+        SAFE_RELEASE(outputTexture);
     }
 
     // Temporal anti-aliasing resolves the scene before the game computes bloom from it, which would otherwise
@@ -6547,8 +6935,15 @@ private:
         IDirect3DSurface9* resolvedSurface = nullptr;
         scene->GetSurfaceLevel(0, &sceneSurface);
         resolved->GetSurfaceLevel(0, &resolvedSurface);
-        FilterStippleBeforeResolve(scene);
-        if (sceneSurface && resolvedSurface && TemporalAA::Resolve(pDevice, scene, resolved, resolvedSurface))
+        auto source = FilterStippleBeforeResolve(scene);
+        // Straight into the scene when the resolve reads the stipple filter's copy, or when DLAA or FSR, which take
+        // the scene in before they write, resolve it; temporal AA reading the scene itself writes into the copy
+        auto mode = TemporalAA::GetMode();
+        bool upscaler = mode == TemporalAA::Mode::DLAA || mode == TemporalAA::Mode::FSR;
+        bool direct = sceneSurface && (source != scene || upscaler) && TemporalAA::Resolve(pDevice, source, scene, sceneSurface);
+        if (!direct && source != scene)
+            TemporalAA::KeepStipple(scene);
+        else if (!direct && sceneSurface && resolvedSurface && TemporalAA::Resolve(pDevice, scene, resolved, resolvedSurface))
             pDevice->StretchRect(resolvedSurface, nullptr, sceneSurface, nullptr, D3DTEXF_POINT);
         SAFE_RELEASE(resolvedSurface);
         SAFE_RELEASE(sceneSurface);
@@ -6616,35 +7011,55 @@ private:
         return result;
     }
 
+    // The scene's sky also writes the clouds' mask for the sun shafts (gta_atmoscatt_clouds, oC1) into
+    // _DEFERRED_GBUFFER_0_, bound as the second target. The scene is 64 bits a pixel, the G-buffer 32:
+    // a device that takes targets of different bit depths together, blending, draws the sky once, into both;
+    // any other draws it twice, with the G-buffer for the mask, then without for the scene, as before.
+    // The water's reflection, another size than the G-buffer, draws its sky once without it.
     static int DrawSkyMain(int _this, void* edx, int a2, int a3, char a4, char a5, int a6, char a7)
     {
         auto pDevice = rage::grcDevice::GetD3DDevice();
-        IDirect3DPixelShader9* pShader = nullptr;
-        HRESULT hr = S_FALSE;
-        pDevice->GetPixelShader(&pShader);
-        // atmoscatt clouds
-        if (PostFxResources.DiffuseTex != nullptr)
+        if (!PostFxResources.DiffuseTex)
+            return hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+
+        static const bool independentBitDepths = [&]()
         {
-            IDirect3DSurface9* DiffuseSurf = nullptr;
-            PostFxResources.DiffuseTex->GetSurfaceLevel(0, &DiffuseSurf);
-            if (DiffuseSurf)
-            {
-                IDirect3DSurface9* oldRenderTarget1 = 0;
-                pDevice->GetRenderTarget(1, &oldRenderTarget1);
-                pDevice->SetRenderTarget(1, DiffuseSurf);
-                hr = hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
-                pDevice->SetPixelShader(pShader);
-                pDevice->SetRenderTarget(1, oldRenderTarget1);
-                hr = hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
-                SAFE_RELEASE(oldRenderTarget1);
-                SAFE_RELEASE(DiffuseSurf);
-                SAFE_RELEASE(pShader);
-                return hr;
-            }
+            D3DCAPS9 caps = {};
+            // and blends with both bound, as the sky's layers may
+            constexpr DWORD needed = D3DPMISCCAPS_MRTINDEPENDENTBITDEPTHS | D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING;
+            return SUCCEEDED(pDevice->GetDeviceCaps(&caps)) && (caps.PrimitiveMiscCaps & needed) == needed;
+        }();
+
+        IDirect3DSurface9* DiffuseSurf = nullptr;
+        IDirect3DSurface9* target = nullptr;
+        PostFxResources.DiffuseTex->GetSurfaceLevel(0, &DiffuseSurf);
+        pDevice->GetRenderTarget(0, &target);
+        D3DSURFACE_DESC diffuseDesc = {}, targetDesc = {};
+        const bool scene = DiffuseSurf && target && SUCCEEDED(DiffuseSurf->GetDesc(&diffuseDesc)) && SUCCEEDED(target->GetDesc(&targetDesc)) &&
+                           diffuseDesc.Width == targetDesc.Width && diffuseDesc.Height == targetDesc.Height;
+        SAFE_RELEASE(target);
+        if (!scene)
+        {
             SAFE_RELEASE(DiffuseSurf);
-            SAFE_RELEASE(pShader);
+            return hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
         }
-        return hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+
+        IDirect3DPixelShader9* pShader = nullptr;
+        pDevice->GetPixelShader(&pShader);
+        IDirect3DSurface9* oldRenderTarget1 = nullptr;
+        pDevice->GetRenderTarget(1, &oldRenderTarget1);
+        pDevice->SetRenderTarget(1, DiffuseSurf);
+        int hr = hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+        pDevice->SetRenderTarget(1, oldRenderTarget1);
+        if (!independentBitDepths)
+        {
+            pDevice->SetPixelShader(pShader);
+            hr = hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+        }
+        SAFE_RELEASE(oldRenderTarget1);
+        SAFE_RELEASE(DiffuseSurf);
+        SAFE_RELEASE(pShader);
+        return hr;
     }
 
     // The reflection map's sky (CE 0xdbc2ab, the sky draw's branch for render phases with flag
@@ -6865,38 +7280,32 @@ private:
         vpDesc.MaxZ = 1.0f;
         pDevice->SetViewport(&vpDesc);
 
-        if (R.bContactShadowsHalfRes && R.ContactRawHalfSurf && h.techContactUpsample)
-        {
-            // The march at half size, with the pixel size and reconstruction basis of that size,
-            // then back to full size for the rest.
-            const float halfWidth = float(DWORD(width) / 2), halfHeight = float(DWORD(height) / 2);
-            SetTargetSize(effect, h, proj, halfWidth, halfHeight);
-            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawHalfSurf, halfWidth, halfHeight, kProfContactMarch);
-            SetTargetSize(effect, h, proj, width, height);
-            effect->SetTexture(h.SSRResultTex2D, R.ContactRawHalfTex->mD3DTexture);
-            DrawEffectPass(pDevice, effect, h.techContactUpsample, R.ContactRawSurf, width, height, kProfContactUpsample);
-        }
-        else
-            DrawEffectPass(pDevice, effect, h.techContactShadows, R.ContactRawSurf, width, height, kProfContactMarch);
+        // At half size the march, the smoothing and the accumulation run on the half size targets, with the pixel
+        // size and reconstruction basis of that size, and the result is brought up to full size last, as for the
+        // indirect light. Should the half size march target be missing, the full size march goes on its own: the
+        // smoothing and accumulation targets are of the half size.
+        const bool halfTargets = R.bContactShadowsHalfRes;
+        const bool half = halfTargets && R.ContactRawHalfSurf && h.techContactUpsample;
+        const bool smooth = half || !halfTargets;
+        const float passWidth = half ? float(DWORD(width) / 2) : width;
+        const float passHeight = half ? float(DWORD(height) / 2) : height;
+        if (half)
+            SetTargetSize(effect, h, proj, passWidth, passHeight);
+        DrawEffectPass(pDevice, effect, h.techContactShadows, half ? R.ContactRawHalfSurf : R.ContactRawSurf, passWidth, passHeight, kProfContactMarch);
 
         // The same depth aware smoothing SSR uses; the raw result has alpha 1 everywhere, so
-        // it is a plain weighted blur.
-        IDirect3DTexture9* result = R.ContactRawTex->mD3DTexture;
-        if (R.fSSRDenoiseRadius > 0.0f && h.techSSRDenoise)
+        // it is a plain weighted blur. The radius is in full size pixels.
+        IDirect3DTexture9* result = half ? R.ContactRawHalfTex->mD3DTexture : R.ContactRawTex->mD3DTexture;
+        if (smooth && R.fSSRDenoiseRadius > 0.0f && h.techSSRDenoise)
         {
-            effect->SetTexture(h.SSRResultTex2D, R.ContactRawTex->mD3DTexture);
-            effect->SetFloat(h.fDenoiseRadius, R.fSSRDenoiseRadius);
+            effect->SetTexture(h.SSRResultTex2D, result);
+            effect->SetFloat(h.fDenoiseRadius, half ? R.fSSRDenoiseRadius * 0.5f : R.fSSRDenoiseRadius);
             effect->SetFloat(h.fDenoiseSSROnly, 0.0f);
-            DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.ContactSurf, width, height, kProfContactDenoise);
+            DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.ContactSurf, passWidth, passHeight, kProfContactDenoise);
             result = R.ContactTex->mD3DTexture;
         }
-        else
-        {
-            pDevice->StretchRect(R.ContactRawSurf, nullptr, R.ContactSurf, nullptr, D3DTEXF_NONE);
-        }
-        R.ContactResult = R.ContactTex->mD3DTexture;
 
-        if (temporal)
+        if (temporal && smooth)
         {
             // Without a history to reproject the blend is 0, any camera does
             D3DXMATRIX prevViewProj;
@@ -6910,7 +7319,7 @@ private:
             const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
 
             const int prev = R.nContactAccumIndex, next = prev ^ 1;
-            effect->SetTexture(h.SSRResultTex2D, R.ContactTex->mD3DTexture);
+            effect->SetTexture(h.SSRResultTex2D, result);
             effect->SetTexture(h.SSRAccumTex2D, R.ContactAccumTex[prev]->mD3DTexture);
             effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
             effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
@@ -6918,13 +7327,21 @@ private:
             effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
             BindMotionVectors(effect, accumWasValid);
             effect->SetFloat(h.fTemporalBlend, accumWasValid ? R.fContactTemporalBlend : 0.0f);
-            DrawEffectPass(pDevice, effect, h.techContactTemporal, R.ContactAccumSurf[next], width, height, kProfContactTemporal);
+            DrawEffectPass(pDevice, effect, h.techContactTemporal, R.ContactAccumSurf[next], passWidth, passHeight, kProfContactTemporal);
 
             result = R.ContactAccumTex[next]->mD3DTexture;
-            R.ContactResult = result;
             R.nContactAccumIndex = next;
             R.nContactAccumFrame = FrameHistory::Frame();
         }
+
+        if (half)
+        {
+            SetTargetSize(effect, h, proj, width, height);
+            effect->SetTexture(h.SSRResultTex2D, result);
+            DrawEffectPass(pDevice, effect, h.techContactUpsample, R.ContactRawSurf, width, height, kProfContactUpsample);
+            result = R.ContactRawTex->mD3DTexture;
+        }
+        R.ContactResult = result;
 
         if (R.SSRDebugMode() == R.kContactDebugMode && R.SSRDebugSurf && h.techSSRDebug)
         {
@@ -7363,6 +7780,37 @@ private:
         pDevice->SetPixelShaderConstantF(206, shape, 1);
     }
 
+    // A headlight the light loop is about to draw, as SetLightGGXShape tells them, kept for its glints.
+    static void CollectGlintLight(const rage::CLightSource& light)
+    {
+        auto& R = PostFxResources;
+        if (R.nGlintCandidates >= R.kGlintCandidates || light.mType != rage::LT_SPOT || !(light.mFlags & rage::LF_VEHICLE) ||
+            light.mRadius < 8.0f || light.mIntensity <= 0.0f)
+            return;
+        auto& g = R.GlintCandidates[R.nGlintCandidates++];
+        g.position[0] = light.mPosition.x;
+        g.position[1] = light.mPosition.y;
+        g.position[2] = light.mPosition.z;
+        g.direction[0] = light.mDirection.x;
+        g.direction[1] = light.mDirection.y;
+        g.direction[2] = light.mDirection.z;
+        g.colour[0] = light.mColor.x * light.mIntensity;
+        g.colour[1] = light.mColor.y * light.mIntensity;
+        g.colour[2] = light.mColor.z * light.mIntensity;
+        g.radius = light.mRadius;
+        g.distance = 0.0f;
+        // What the game gives headlights, for the log: the ranges of intensity and outer cone.
+        if (R.nGlintCandidates == 1)
+        {
+            R.GlintsLastIntensity[0] = R.GlintsLastIntensity[1] = light.mIntensity;
+            R.GlintsLastCone[0] = R.GlintsLastCone[1] = light.mOuterConeAngle;
+        }
+        R.GlintsLastIntensity[0] = (std::min)(R.GlintsLastIntensity[0], light.mIntensity);
+        R.GlintsLastIntensity[1] = (std::max)(R.GlintsLastIntensity[1], light.mIntensity);
+        R.GlintsLastCone[0] = (std::min)(R.GlintsLastCone[0], light.mOuterConeAngle);
+        R.GlintsLastCone[1] = (std::max)(R.GlintsLastCone[1], light.mOuterConeAngle);
+    }
+
     static void InstallLocalContactLightHook()
     {
         auto pattern = hook::pattern("83 C7 28 89 7C 24 1C 8B 47 1C 85 C0");
@@ -7376,6 +7824,7 @@ private:
             if (nLightingStage == 1)
                 SetLightingStage(rage::grcDevice::GetD3DDevice(), 2);
             SetLightGGXShape(*reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28));
+            CollectGlintLight(*reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28));
             if (R.LocalContactShadowConsts[7] == 0.0f)
                 return;
             const bool off = (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x200) != 0;
@@ -7400,8 +7849,16 @@ private:
             return;
         shShaftLoopStart = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&)
         {
+            auto pDevice = rage::grcDevice::GetD3DDevice();
             if (nLightingStage > 0)
-                SetLightingStage(rage::grcDevice::GetD3DDevice(), 3);
+                SetLightingStage(pDevice, 3);
+            // Every light of the main view is drawn by now, and its target is still the lit scene.
+            auto& R = PostFxResources;
+            if (R.bLocalContactPass && !R.bGlintsDone)
+            {
+                R.bGlintsDone = true;
+                RenderHeadlightGlints(pDevice);
+            }
         });
     }
 
@@ -7612,8 +8069,17 @@ public:
             const float c165[4] = { on ? R.fLightsGGXFillLights : 0.0f, on ? R.fLightsGGXSun : 0.0f, enabled ? R.fLightsGGXEnvironment : 0.0f, R.fLightsGGXMax };
             pDevice->SetPixelShaderConstantF(200, c200, 1);
             pDevice->SetPixelShaderConstantF(165, c165, 1);
+            // c183: alpha squared = w / (x n + 2), the peak times y + z alpha squared; c184: x a widening
+            // added to alpha squared, y how far the stretch turns from the light to the view.
+            const float soft = R.fLightsGGXSoft;
+            const float c183[4] = { 4.0f - 3.0f * soft, 1.0f - soft, 32.0f * soft, 2.0f + 1.38f * soft };
+            const float c184[4] = { 0.04f * soft, R.fLightsGGXStretchView, 0.0f, 0.0f };
+            pDevice->SetPixelShaderConstantF(183, c183, 1);
+            pDevice->SetPixelShaderConstantF(184, c184, 1);
             std::memset(R.LightGGXShape, 0, sizeof(R.LightGGXShape));
             pDevice->SetPixelShaderConstantF(206, R.LightGGXShape, 1);
+            R.nGlintCandidates = 0;
+            R.bGlintsDone = false;
             if (R.mSpecularRT && R.mSpecularRT->mD3DTexture)
             {
                 BindSampler(pDevice, 13, R.mSpecularRT->mD3DTexture, D3DTEXF_POINT);

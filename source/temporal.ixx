@@ -20,7 +20,6 @@ import upscaler;
 #define IDR_TEMPORAL_PS_BONEWRITE       3005
 #define IDR_TEMPORAL_PS_CAMERA          3006
 #define IDR_TEMPORAL_PS_RESOLVE         3007
-#define IDR_TEMPORAL_PS_UPSCALER_DEPTH  3008
 #define IDR_TEMPORAL_PS_OPAQUE_LUMA     3009
 #define IDR_TEMPORAL_PS_REACTIVE        3010
 #define IDR_TEMPORAL_PS_RAIN_LAYER      3011
@@ -232,7 +231,6 @@ public:
     static inline IDirect3DPixelShader9* BoneWritePS = nullptr;
     static inline IDirect3DPixelShader9* CameraMotionPS = nullptr;
     static inline IDirect3DPixelShader9* ResolvePS = nullptr;
-    static inline IDirect3DPixelShader9* DepthPS = nullptr;
     static inline IDirect3DPixelShader9* OpaqueLumaPS = nullptr;
     static inline IDirect3DPixelShader9* ReactivePS = nullptr;
     static inline IDirect3DPixelShader9* RainLayerPS = nullptr;
@@ -242,7 +240,7 @@ public:
 
     static bool ShadersLoaded()
     {
-        return VelocityRigidVS && VelocitySkinnedVS && VelocityPS && BoneWriteVS && BoneWritePS && CameraMotionPS && ResolvePS && DepthPS && BoneWriteDecl;
+        return VelocityRigidVS && VelocitySkinnedVS && VelocityPS && BoneWriteVS && BoneWritePS && CameraMotionPS && ResolvePS && BoneWriteDecl;
     }
 
     static void LoadShaders(IDirect3DDevice9* pDevice)
@@ -272,7 +270,6 @@ public:
         loadCompiledShader(IDR_TEMPORAL_PS_BONEWRITE, BoneWritePS);
         loadCompiledShader(IDR_TEMPORAL_PS_CAMERA, CameraMotionPS);
         loadCompiledShader(IDR_TEMPORAL_PS_RESOLVE, ResolvePS);
-        loadCompiledShader(IDR_TEMPORAL_PS_UPSCALER_DEPTH, DepthPS);
         loadCompiledShader(IDR_TEMPORAL_PS_OPAQUE_LUMA, OpaqueLumaPS);
         loadCompiledShader(IDR_TEMPORAL_PS_REACTIVE, ReactivePS);
         loadCompiledShader(IDR_TEMPORAL_PS_RAIN_LAYER, RainLayerPS);
@@ -732,18 +729,67 @@ public:
 
         auto entity = EntityStack.back();
 
+        // What every draw is recorded with: most entities stand still, and the rest of the state is taken only for
+        // the draws that moved
         IDirect3DVertexDeclaration9* decl = nullptr;
-        IDirect3DIndexBuffer9* indices = nullptr;
         if (device->GetVertexDeclaration(&decl) != S_OK || !decl)
             return;
+        IDirect3DIndexBuffer9* indices = nullptr;
         device->GetIndices(&indices);
         if (!indices)
         {
             decl->Release();
             return;
         }
+        IDirect3DVertexBuffer9* stream0 = nullptr;
+        UINT offset0 = 0, stride0 = 0;
+        device->GetStreamSource(0, &stream0, &offset0, &stride0);
 
         auto& declInfo = GetDeclInfo(decl);
+
+        DrawRecord draw;
+        draw.IndexBuffer = indices;
+        draw.VertexBuffer = stream0;
+        draw.StartIndex = startIndex;
+        draw.PrimitiveCount = primitiveCount;
+        draw.NumVertices = numVertices;
+        device->GetVertexShaderConstantF(0, draw.World, 4);
+        if (declInfo.Skinned)
+        {
+            draw.Bones = static_cast<int32_t>(BonesCurrent.size());
+            BonesCurrent.resize(BonesCurrent.size() + BoneTexels * 4);
+            device->GetVertexShaderConstantF(64, &BonesCurrent[draw.Bones], BoneTexels);
+        }
+
+        // Record this frame's draw for the next frame
+        auto& record = EntitiesCurrent[entity];
+        auto ordinal = record.Draws.size();
+        record.Draws.push_back(draw);
+
+        // Only draws that moved since the previous frame need their own motion vectors, the rest is
+        // covered by the camera motion reprojected from depth
+        auto previous = FindPrevious(entity, ordinal, indices, stream0, startIndex, primitiveCount);
+        bool moved = false;
+        int32_t prevBones = -1;
+        if (previous)
+        {
+            moved = std::memcmp(previous->World, draw.World, sizeof(draw.World)) != 0;
+
+            if (declInfo.Skinned && previous->Bones >= 0 && static_cast<size_t>(previous->Bones + BoneTexels * 4) <= BonesPrevious.size())
+            {
+                prevBones = previous->Bones;
+                if (!moved)
+                    moved = std::memcmp(&BonesPrevious[prevBones], &BonesCurrent[draw.Bones], BoneTexels * 4 * sizeof(float)) != 0;
+            }
+        }
+
+        if (!moved)
+        {
+            decl->Release();
+            indices->Release();
+            SAFE_RELEASE(stream0);
+            return;
+        }
 
         Capture capture;
         capture.Decl = decl;
@@ -756,61 +802,21 @@ public:
         capture.PrimitiveCount = primitiveCount;
         capture.StreamCount = std::min(declInfo.Streams, MaxStreams);
         capture.Skinned = declInfo.Skinned;
+        capture.Bones = draw.Bones;
+        capture.PrevBones = prevBones;
+        std::memcpy(capture.World, draw.World, sizeof(capture.World));
+        std::memcpy(capture.PrevWorld, previous->World, sizeof(capture.PrevWorld));
 
-        for (uint32_t i = 0; i < capture.StreamCount; ++i)
+        capture.Streams[0] = stream0;
+        capture.Offsets[0] = offset0;
+        capture.Strides[0] = stride0;
+        for (uint32_t i = 1; i < capture.StreamCount; ++i)
             device->GetStreamSource(i, &capture.Streams[i], &capture.Offsets[i], &capture.Strides[i]);
+        if (capture.StreamCount == 0)
+            SAFE_RELEASE(capture.Streams[0]);
 
-        device->GetVertexShaderConstantF(0, capture.World, 4);
         device->GetVertexShaderConstantF(8, capture.WorldViewProj, 4);
         device->GetRenderState(D3DRS_CULLMODE, &capture.CullMode);
-
-        if (capture.Skinned)
-        {
-            capture.Bones = static_cast<int32_t>(BonesCurrent.size());
-            BonesCurrent.resize(BonesCurrent.size() + BoneTexels * 4);
-            device->GetVertexShaderConstantF(64, &BonesCurrent[capture.Bones], BoneTexels);
-        }
-
-        // Record this frame's draw for the next frame
-        auto& record = EntitiesCurrent[entity];
-        auto ordinal = record.Draws.size();
-        DrawRecord draw;
-        draw.IndexBuffer = indices;
-        draw.VertexBuffer = capture.Streams[0];
-        draw.StartIndex = startIndex;
-        draw.PrimitiveCount = primitiveCount;
-        draw.NumVertices = numVertices;
-        std::memcpy(draw.World, capture.World, sizeof(draw.World));
-        draw.Bones = capture.Bones;
-        record.Draws.push_back(draw);
-
-        // Only draws that moved since the previous frame need their own motion vectors, the rest is
-        // covered by the camera motion reprojected from depth
-        auto previous = FindPrevious(entity, ordinal, indices, capture.Streams[0], startIndex, primitiveCount);
-        bool moved = false;
-        if (previous)
-        {
-            std::memcpy(capture.PrevWorld, previous->World, sizeof(capture.PrevWorld));
-            moved = std::memcmp(capture.PrevWorld, capture.World, sizeof(capture.World)) != 0;
-
-            if (capture.Skinned && previous->Bones >= 0 && static_cast<size_t>(previous->Bones + BoneTexels * 4) <= BonesPrevious.size())
-            {
-                capture.PrevBones = previous->Bones;
-                if (!moved)
-                    moved = std::memcmp(&BonesPrevious[capture.PrevBones], &BonesCurrent[capture.Bones], BoneTexels * 4 * sizeof(float)) != 0;
-            }
-        }
-
-        if (!moved)
-        {
-            capture.Decl = nullptr;
-            capture.Indices = nullptr;
-            decl->Release();
-            indices->Release();
-            for (auto& stream : capture.Streams)
-                SAFE_RELEASE(stream);
-            return;
-        }
 
         if (!SceneDepthSurface)
             device->GetDepthStencilSurface(&SceneDepthSurface);
@@ -873,7 +879,7 @@ public:
         static constexpr D3DRENDERSTATETYPE RenderStates[] =
         {
             D3DRS_ZENABLE, D3DRS_ZWRITEENABLE, D3DRS_ZFUNC, D3DRS_ALPHABLENDENABLE, D3DRS_ALPHATESTENABLE,
-            D3DRS_STENCILENABLE, D3DRS_TWOSIDEDSTENCILMODE, D3DRS_CULLMODE, D3DRS_COLORWRITEENABLE,
+            D3DRS_STENCILENABLE, D3DRS_TWOSIDEDSTENCILMODE, D3DRS_CULLMODE, D3DRS_COLORWRITEENABLE, D3DRS_COLORWRITEENABLE1,
             D3DRS_SCISSORTESTENABLE, D3DRS_SRGBWRITEENABLE, D3DRS_FILLMODE, D3DRS_CLIPPLANEENABLE,
             D3DRS_POINTSIZE, D3DRS_POINTSCALEENABLE, D3DRS_POINTSPRITEENABLE, D3DRS_DEPTHBIAS,
             D3DRS_SLOPESCALEDEPTHBIAS, D3DRS_FOGENABLE, D3DRS_MULTISAMPLEANTIALIAS, D3DRS_SEPARATEALPHABLENDENABLE,
@@ -1065,9 +1071,20 @@ public:
 
         EndCaptureCleanup();
 
-        // Keep the draws of this frame for the next one
+        // Keep the draws of this frame for the next one. The records of the frame before are reused, their memory
+        // kept; those of entities not drawn this frame go.
         std::swap(EntitiesPrevious, EntitiesCurrent);
-        EntitiesCurrent.clear();
+        for (auto it = EntitiesCurrent.begin(); it != EntitiesCurrent.end();)
+        {
+            auto drawn = EntitiesPrevious.find(it->first);
+            if (drawn == EntitiesPrevious.end() || drawn->second.Draws.empty())
+                it = EntitiesCurrent.erase(it);
+            else
+            {
+                it->second.Draws.clear();
+                ++it;
+            }
+        }
         std::swap(BonesPrevious, BonesCurrent);
         BonesCurrent.clear();
     }
@@ -1093,7 +1110,7 @@ public:
         // current view space -> previous clip space, without jitter
         auto reproject = camera.View.Inverse() * previous.View * previous.ProjectionNoJitter;
 
-        float constants[6 * 4]{};
+        float constants[7 * 4]{};
         constants[0] = static_cast<float>(camera.Projection.m[0][0]);
         constants[1] = static_cast<float>(camera.Projection.m[1][1]);
         constants[2] = static_cast<float>(camera.Projection.m[2][0]);
@@ -1103,12 +1120,20 @@ public:
         constants[6] = camera.Near;
         constants[7] = std::log2(camera.Far / camera.Near);
         reproject.To(&constants[8]);
+        constants[24] = camera.Far;
+
+        // The same depth, as standard [0, 1] depth, for the resolve, DLAA and FSR, into the second target: both are
+        // the render size and 32 bits a pixel
+        IDirect3DSurface9* depthSurface = nullptr;
+        DepthRT->mD3DTexture->GetSurfaceLevel(0, &depthSurface);
 
         device->SetRenderTarget(0, motionSurface);
-        for (DWORD i = 1; i < 4; ++i)
+        device->SetRenderTarget(1, depthSurface);
+        for (DWORD i = 2; i < 4; ++i)
             device->SetRenderTarget(i, nullptr);
         device->SetDepthStencilSurface(nullptr);
         SetFullscreenStates(device, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN);
+        device->SetRenderState(D3DRS_COLORWRITEENABLE1, 0x0F);
 
         device->SetTexture(0, depthRT->mD3DTexture);
         device->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
@@ -1119,23 +1144,11 @@ public:
         device->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
 
         device->SetPixelShader(CameraMotionPS);
-        device->SetPixelShaderConstantF(0, constants, 6);
+        device->SetPixelShaderConstantF(0, constants, 7);
         DrawFullscreen(device, static_cast<float>(MotionRT->mWidth), static_cast<float>(MotionRT->mHeight));
         motionSurface->Release();
-
-        // The same depth, as standard [0, 1] depth, for the resolve, DLAA and FSR
-        IDirect3DSurface9* depthSurface = nullptr;
-        DepthRT->mD3DTexture->GetSurfaceLevel(0, &depthSurface);
-        if (depthSurface)
-        {
-            float depthConstants[4] = { camera.Near, std::log2(camera.Far / camera.Near), camera.Far, 0.0f };
-            device->SetRenderTarget(0, depthSurface);
-            device->SetRenderState(D3DRS_COLORWRITEENABLE, 0x0F);
-            device->SetPixelShader(DepthPS);
-            device->SetPixelShaderConstantF(0, depthConstants, 1);
-            DrawFullscreen(device, static_cast<float>(DepthRT->mWidth), static_cast<float>(DepthRT->mHeight));
-            depthSurface->Release();
-        }
+        SAFE_RELEASE(depthSurface);
+        device->SetRenderTarget(1, nullptr);
 
         device->SetTexture(0, nullptr);
     }
@@ -1301,8 +1314,9 @@ public:
     {
         using namespace TemporalAA;
 
-        // Once per frame, for the scene the motion vectors were rendered for
-        if (!bReactiveMask || GetMode() == Mode::Off || OpaqueFrame == SceneFrame || MotionFrame != SceneFrame)
+        // Once per frame, for the scene the motion vectors were rendered for; read by temporal AA and FSR's reactive
+        // mask, not by DLSS, which goes without one
+        if (!bReactiveMask || GetMode() == Mode::Off || GetMode() == Mode::DLAA || OpaqueFrame == SceneFrame || MotionFrame != SceneFrame)
             return;
         if (!OpaqueRT || !OpaqueRT->mD3DTexture || !OpaqueLumaPS)
             return;
@@ -1619,34 +1633,35 @@ public:
     //
     // Fading objects are drawn stippled, a pattern of pixels, and PostFX's stipple filter smooths it. The resolve, DLAA
     // and FSR used to come first and kept the pattern, or blurred it into a shimmer that left the filter nothing to find.
-    // With them the filter runs on the scene at the render size, before they do.
+    // With them the filter runs on the scene at the render size, before they do, into the copy, which the resolve
+    // then reads; the scene itself gets it only when nothing resolved it (KeepStipple).
 
     static inline uint32_t StippleFrame = 0;    // SceneFrame the scene was filtered in
 
-    static bool FilterStipple(IDirect3DTexture9* scene, IDirect3DPixelShader9* filter)
+    static IDirect3DTexture9* FilterStipple(IDirect3DTexture9* scene, IDirect3DPixelShader9* filter)
     {
         using namespace TemporalAA;
 
         if (!scene || !filter || StippleFrame == SceneFrame)
-            return false;
+            return nullptr;
         auto device = RealDevice();
         // GBUFFER_2.w marks the stippled pixels, which the filter keeps to with Definition on (c223.z)
         auto gbuffer2 = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_2_");
         if (!device || !gbuffer2 || !gbuffer2->mD3DTexture)
-            return false;
+            return nullptr;
 
         IDirect3DSurface9* sceneSurface = nullptr;
         D3DSURFACE_DESC desc{};
         if (FAILED(scene->GetSurfaceLevel(0, &sceneSurface)) || !sceneSurface || FAILED(sceneSurface->GetDesc(&desc)))
         {
             SAFE_RELEASE(sceneSurface);
-            return false;
+            return nullptr;
         }
         auto copy = GetSceneCopy(device, desc);
         if (!copy)
         {
             sceneSurface->Release();
-            return false;
+            return nullptr;
         }
 
         auto width = static_cast<float>(desc.Width);
@@ -1674,10 +1689,20 @@ public:
         }
         bInternalDraw = false;
 
-        device->StretchRect(copy, nullptr, sceneSurface, nullptr, D3DTEXF_POINT);
         sceneSurface->Release();
         StippleFrame = SceneFrame;
-        return true;
+        return SceneCopyTexture;
+    }
+
+    // The filtered copy into the scene, for a scene nothing resolved
+    static void KeepStipple(IDirect3DTexture9* scene)
+    {
+        auto device = RealDevice();
+        IDirect3DSurface9* sceneSurface = nullptr;
+        if (!device || !scene || !SceneCopySurface || FAILED(scene->GetSurfaceLevel(0, &sceneSurface)) || !sceneSurface)
+            return;
+        device->StretchRect(SceneCopySurface, nullptr, sceneSurface, nullptr, D3DTEXF_POINT);
+        sceneSurface->Release();
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -1775,6 +1800,7 @@ public:
     // DLAA and FSR
 
     static inline uint32_t UpscalerFrame = 0;             // SceneFrame of the last upscaled frame
+    static inline uint32_t UpscaleTried = 0;              // SceneFrame DLSS or FSR was last asked to resolve
     static inline LARGE_INTEGER UpscalerTime{};
 
     static bool Upscale(IDirect3DDevice9* device, Upscaler::Backend backend, IDirect3DTexture9* scene, IDirect3DTexture9* output)
@@ -1845,6 +1871,9 @@ public:
             AddRain(output, true);
             return true;
         }
+        // Into the scene itself only DLSS and FSR resolve: the caller tries again with a target of its own
+        if (outputTexture == scene)
+            return false;
 
         IDirect3DSurface9* sceneSurface = nullptr;
         if (RainFrame == TemporalAA::SceneFrame && scene && SUCCEEDED(scene->GetSurfaceLevel(0, &sceneSurface)))
@@ -1861,9 +1890,11 @@ private:
         if (!ResourcesReady() || !scene || !output || !CurrentCamera.Valid || MotionFrame != SceneFrame)
             return false;
 
+        // Once a scene: a second call after a failed one, into a target of the caller's, goes to temporal AA
         auto mode = GetMode();
-        if (mode == Mode::DLAA || mode == Mode::FSR)
+        if ((mode == Mode::DLAA || mode == Mode::FSR) && UpscaleTried != SceneFrame)
         {
+            UpscaleTried = SceneFrame;
             auto backend = mode == Mode::DLAA ? Upscaler::Backend::DLSS : Upscaler::Backend::FSR;
             if (outputTexture && Upscale(device, backend, scene, outputTexture))
             {
@@ -1876,8 +1907,9 @@ private:
         }
         UpscalerFrame = 0;
 
-        // TAA resolves at the render size only, the post processing stretches the scene instead
-        if (RenderScale::IsActive())
+        // TAA resolves at the render size only, the post processing stretches the scene instead; nor into the scene
+        // it reads, which only DLSS and FSR can write
+        if (RenderScale::IsActive() || outputTexture == scene)
             return false;
 
         auto previousIndex = HistoryIndex;
@@ -2183,9 +2215,16 @@ export namespace TemporalAA
     }
 
     // PostFX's stipple filter on the scene at the render size, right before the resolve; false if it did not run
-    bool FilterStipple(IDirect3DTexture9* scene, IDirect3DPixelShader9* filter)
+    // The filtered scene for the resolve to read, or null if the filter did not run
+    IDirect3DTexture9* FilterStipple(IDirect3DTexture9* scene, IDirect3DPixelShader9* filter)
     {
         return Temporal::FilterStipple(scene, filter);
+    }
+
+    // When nothing resolved the scene: the filtered copy goes into it
+    void KeepStipple(IDirect3DTexture9* scene)
+    {
+        Temporal::KeepStipple(scene);
     }
 
     // The scene of this frame was filtered before the resolve

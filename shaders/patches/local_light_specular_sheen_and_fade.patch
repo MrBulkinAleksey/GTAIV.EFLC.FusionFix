@@ -1,0 +1,699 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+index aac2c16f..ce725d7f 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+@@ -112,6 +112,7 @@
+     def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
++    def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+@@ -842,4 +843,11 @@
+     mul r13.w, r13.w, c200.x
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
++    // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
++    // --- normal mapped pixels facing away from it sparkled at the edges of cloth, faces and railings.
++    mul_sat r17.x, r15.y, c180.x
++    mad r17.y, r17.x, c180.y, c180.z
++    mul r17.x, r17.x, r17.x
++    mul r17.x, r17.x, r17.y
++    mul r13.w, r13.w, r17.x
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
+index 9f761b04..63763841 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
+@@ -49,6 +49,9 @@
+     def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
++    def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
++    def c181, 1, 0.0001, 10, 0 // FusionFix specular sheen on lamps: one, a small number, one over a tenth
++    def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -83,6 +86,31 @@
+     texld r2, r0, s1
+     texld r3, r0, s0
+     texld r10, r0, s13
++    // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
++    // --- (gloss 258 / 1023, world_no_specular_mark.patch) write specular 0, so lamps and headlights left concrete,
++    // --- plaster and LOD roads without a highlight. They take the specular intensity the sun pass gives them:
++    // --- SpecularSheen / 2 times the square of one less the albedo's saturation, faded out on dark albedo.
++    texld r20, r0, s0
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z // the brightest channel
++    min r20.x, r20.x, r20.y
++    min r20.x, r20.x, r20.z
++    add r20.x, r20.w, -r20.x
++    add r20.y, r20.w, c181.y
++    rcp r20.y, r20.y
++    mad_sat r20.x, r20.x, -r20.y, c181.x // 1 less the saturation
++    mul r20.x, r20.x, r20.x
++    mul_sat r20.w, r20.w, c181.z // smoothstep from black to a tenth
++    mad r20.y, r20.w, c180.y, c180.z
++    mul r20.w, r20.w, r20.w
++    mul r20.w, r20.w, r20.y
++    mul r20.w, r20.w, r20.x
++    mul r20.w, r20.w, c197.x
++    mul r20.w, r20.w, c180.w
++    add r20.y, r10.y, -c182.x // the gloss they write, 258 / 1023
++    add r20.y, -r20_abs.y, c182.y
++    cmp r20.y, r20.y, r20.w, r10.x
++    cmp r10.x, -r10.x, r20.y, r10.x // specular 0
+     mad r0.xyw, r2.xyzz, c0.y, c0.z
+     nrm r2.xyz, r0.xyww
+     mov r9.xyz, r2
+@@ -344,4 +372,11 @@
+     mul r13.w, r13.w, c200.x
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
++    // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
++    // --- normal mapped pixels facing away from it sparkled at the edges of cloth, faces and railings.
++    mul_sat r17.x, r15.y, c180.x
++    mad r17.y, r17.x, c180.y, c180.z
++    mul r17.x, r17.x, r17.x
++    mul r17.x, r17.x, r17.y
++    mul r13.w, r13.w, r17.x
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+index dbfb625c..14c6054d 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+@@ -52,6 +52,9 @@
+     def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
++    def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
++    def c181, 1, 0.0001, 10, 0 // FusionFix specular sheen on lamps: one, a small number, one over a tenth
++    def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -103,6 +106,31 @@
+     texld r2, r0, s0
+     texld r3, r0, s4
+     texld r10, r0, s13
++    // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
++    // --- (gloss 258 / 1023, world_no_specular_mark.patch) write specular 0, so lamps and headlights left concrete,
++    // --- plaster and LOD roads without a highlight. They take the specular intensity the sun pass gives them:
++    // --- SpecularSheen / 2 times the square of one less the albedo's saturation, faded out on dark albedo.
++    texld r20, r0, s0
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z // the brightest channel
++    min r20.x, r20.x, r20.y
++    min r20.x, r20.x, r20.z
++    add r20.x, r20.w, -r20.x
++    add r20.y, r20.w, c181.y
++    rcp r20.y, r20.y
++    mad_sat r20.x, r20.x, -r20.y, c181.x // 1 less the saturation
++    mul r20.x, r20.x, r20.x
++    mul_sat r20.w, r20.w, c181.z // smoothstep from black to a tenth
++    mad r20.y, r20.w, c180.y, c180.z
++    mul r20.w, r20.w, r20.w
++    mul r20.w, r20.w, r20.y
++    mul r20.w, r20.w, r20.x
++    mul r20.w, r20.w, c197.x
++    mul r20.w, r20.w, c180.w
++    add r20.y, r10.y, -c182.x // the gloss they write, 258 / 1023
++    add r20.y, -r20_abs.y, c182.y
++    cmp r20.y, r20.y, r20.w, r10.x
++    cmp r10.x, -r10.x, r20.y, r10.x // specular 0
+     mul r0.xyw, r1.xyzz, r2.xyzz
+     cmp r0.xyz, r0.z, r0.xyww, -c1.z
+     // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n) (a Phong lobe, as a Blinn one of 4n),
+@@ -354,4 +382,11 @@
+     mul r13.w, r13.w, c200.x
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
++    // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
++    // --- normal mapped pixels facing away from it sparkled at the edges of cloth, faces and railings.
++    mul_sat r17.x, r15.y, c180.x
++    mad r17.y, r17.x, c180.y, c180.z
++    mul r17.x, r17.x, r17.x
++    mul r17.x, r17.x, r17.y
++    mul r13.w, r13.w, r17.x
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
+index af2aa9d4..0656aca0 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
+@@ -52,6 +52,9 @@
+     def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
++    def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
++    def c181, 1, 0.0001, 10, 0 // FusionFix specular sheen on lamps: one, a small number, one over a tenth
++    def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -103,6 +106,31 @@
+     texld r2, r0, s0
+     texld r3, r0, s4
+     texld r10, r0, s13
++    // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
++    // --- (gloss 258 / 1023, world_no_specular_mark.patch) write specular 0, so lamps and headlights left concrete,
++    // --- plaster and LOD roads without a highlight. They take the specular intensity the sun pass gives them:
++    // --- SpecularSheen / 2 times the square of one less the albedo's saturation, faded out on dark albedo.
++    texld r20, r0, s0
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z // the brightest channel
++    min r20.x, r20.x, r20.y
++    min r20.x, r20.x, r20.z
++    add r20.x, r20.w, -r20.x
++    add r20.y, r20.w, c181.y
++    rcp r20.y, r20.y
++    mad_sat r20.x, r20.x, -r20.y, c181.x // 1 less the saturation
++    mul r20.x, r20.x, r20.x
++    mul_sat r20.w, r20.w, c181.z // smoothstep from black to a tenth
++    mad r20.y, r20.w, c180.y, c180.z
++    mul r20.w, r20.w, r20.w
++    mul r20.w, r20.w, r20.y
++    mul r20.w, r20.w, r20.x
++    mul r20.w, r20.w, c197.x
++    mul r20.w, r20.w, c180.w
++    add r20.y, r10.y, -c182.x // the gloss they write, 258 / 1023
++    add r20.y, -r20_abs.y, c182.y
++    cmp r20.y, r20.y, r20.w, r10.x
++    cmp r10.x, -r10.x, r20.y, r10.x // specular 0
+     mul r0.xyw, r1.xyzz, r2.xyzz
+     cmp r0.xyz, r0.z, r0.xyww, -c1.z
+     // --- FusionFix GGX lights (c200, c206: LightsGGX in postfx.ixx): a GGX lobe as wide as the game's pow(R.L, n) (a Phong lobe, as a Blinn one of 4n),
+@@ -354,4 +382,11 @@
+     mul r13.w, r13.w, c200.x
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
++    // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
++    // --- normal mapped pixels facing away from it sparkled at the edges of cloth, faces and railings.
++    mul_sat r17.x, r15.y, c180.x
++    mad r17.y, r17.x, c180.y, c180.z
++    mul r17.x, r17.x, r17.x
++    mul r17.x, r17.x, r17.y
++    mul r13.w, r13.w, r17.x
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index aee24570..da2c4316 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -87,6 +87,9 @@
+     def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
++    def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
++    def c181, 1, 0.0001, 10, 0 // FusionFix specular sheen on lamps: one, a small number, one over a tenth
++    def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -312,6 +315,31 @@
+     dp3_sat r0.y, r2, r4
+     mul r2.xyz, r1, r21 // FusionFix skin lighting: the wrapped N.L per channel
+     texld r3, r0.zwzw, s2
++    // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
++    // --- (gloss 258 / 1023, world_no_specular_mark.patch) write specular 0, so lamps and headlights left concrete,
++    // --- plaster and LOD roads without a highlight. They take the specular intensity the sun pass gives them:
++    // --- SpecularSheen / 2 times the square of one less the albedo's saturation, faded out on dark albedo.
++    texld r20, r0.zwzw, s0
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z // the brightest channel
++    min r20.x, r20.x, r20.y
++    min r20.x, r20.x, r20.z
++    add r20.x, r20.w, -r20.x
++    add r20.y, r20.w, c181.y
++    rcp r20.y, r20.y
++    mad_sat r20.x, r20.x, -r20.y, c181.x // 1 less the saturation
++    mul r20.x, r20.x, r20.x
++    mul_sat r20.w, r20.w, c181.z // smoothstep from black to a tenth
++    mad r20.y, r20.w, c180.y, c180.z
++    mul r20.w, r20.w, r20.w
++    mul r20.w, r20.w, r20.y
++    mul r20.w, r20.w, r20.x
++    mul r20.w, r20.w, c197.x
++    mul r20.w, r20.w, c180.w
++    add r20.y, r3.y, -c182.x // the gloss they write, 258 / 1023
++    add r20.y, -r20_abs.y, c182.y
++    cmp r20.y, r20.y, r20.w, r3.x
++    cmp r3.x, -r3.x, r20.y, r3.x // specular 0
+     mul r3.yz, r3, r3
+     add r0.x, r3.x, r3.x
+     mul r1.w, r3.y, c0.y
+@@ -566,4 +594,11 @@
+     mul r13.w, r13.w, c200.x
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
++    // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
++    // --- normal mapped pixels facing away from it sparkled at the edges of cloth, faces and railings.
++    mul_sat r17.x, r15.y, c180.x
++    mad r17.y, r17.x, c180.y, c180.z
++    mul r17.x, r17.x, r17.x
++    mul r17.x, r17.x, r17.y
++    mul r13.w, r13.w, r17.x
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+index 0365fc97..a4da8349 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+@@ -80,6 +80,9 @@
+     def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
++    def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
++    def c181, 1, 0.0001, 10, 0 // FusionFix specular sheen on lamps: one, a small number, one over a tenth
++    def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -105,6 +108,31 @@
+     mad r1.xyz, v0, -r0.z, c15
+     texld r2, r0, s1
+     texld r10, r0, s13
++    // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
++    // --- (gloss 258 / 1023, world_no_specular_mark.patch) write specular 0, so lamps and headlights left concrete,
++    // --- plaster and LOD roads without a highlight. They take the specular intensity the sun pass gives them:
++    // --- SpecularSheen / 2 times the square of one less the albedo's saturation, faded out on dark albedo.
++    texld r24, r0, s0
++    max r24.w, r24.x, r24.y
++    max r24.w, r24.w, r24.z // the brightest channel
++    min r24.x, r24.x, r24.y
++    min r24.x, r24.x, r24.z
++    add r24.x, r24.w, -r24.x
++    add r24.y, r24.w, c181.y
++    rcp r24.y, r24.y
++    mad_sat r24.x, r24.x, -r24.y, c181.x // 1 less the saturation
++    mul r24.x, r24.x, r24.x
++    mul_sat r24.w, r24.w, c181.z // smoothstep from black to a tenth
++    mad r24.y, r24.w, c180.y, c180.z
++    mul r24.w, r24.w, r24.w
++    mul r24.w, r24.w, r24.y
++    mul r24.w, r24.w, r24.x
++    mul r24.w, r24.w, c197.x
++    mul r24.w, r24.w, c180.w
++    add r24.y, r10.y, -c182.x // the gloss they write, 258 / 1023
++    add r24.y, -r24_abs.y, c182.y
++    cmp r24.y, r24.y, r24.w, r10.x
++    cmp r10.x, -r10.x, r24.y, r10.x // specular 0
+     texld r0, r0, s0
+     mad r2.xyz, r2, c0.y, c0.z
+     nrm r3.xyz, r2
+@@ -533,4 +561,11 @@
+     mul r13.w, r13.w, c200.x
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
++    // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
++    // --- normal mapped pixels facing away from it sparkled at the edges of cloth, faces and railings.
++    mul_sat r17.x, r15.y, c180.x
++    mad r17.y, r17.x, c180.y, c180.z
++    mul r17.x, r17.x, r17.x
++    mul r17.x, r17.x, r17.y
++    mul r13.w, r13.w, r17.x
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+index b69a7bfc..2e807044 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -58,6 +58,9 @@
+     def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
++    def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
++    def c181, 1, 0.0001, 10, 0 // FusionFix specular sheen on lamps: one, a small number, one over a tenth
++    def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -88,6 +91,31 @@
+     mul r0.w, r0.w, r2.y
+     mad r2.xyz, v0, -r0.w, c15
+     texld r4, r1, s4
++    // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
++    // --- (gloss 258 / 1023, world_no_specular_mark.patch) write specular 0, so lamps and headlights left concrete,
++    // --- plaster and LOD roads without a highlight. They take the specular intensity the sun pass gives them:
++    // --- SpecularSheen / 2 times the square of one less the albedo's saturation, faded out on dark albedo.
++    texld r23, r1, s1
++    max r23.w, r23.x, r23.y
++    max r23.w, r23.w, r23.z // the brightest channel
++    min r23.x, r23.x, r23.y
++    min r23.x, r23.x, r23.z
++    add r23.x, r23.w, -r23.x
++    add r23.y, r23.w, c181.y
++    rcp r23.y, r23.y
++    mad_sat r23.x, r23.x, -r23.y, c181.x // 1 less the saturation
++    mul r23.x, r23.x, r23.x
++    mul_sat r23.w, r23.w, c181.z // smoothstep from black to a tenth
++    mad r23.y, r23.w, c180.y, c180.z
++    mul r23.w, r23.w, r23.w
++    mul r23.w, r23.w, r23.y
++    mul r23.w, r23.w, r23.x
++    mul r23.w, r23.w, c197.x
++    mul r23.w, r23.w, c180.w
++    add r23.y, r4.y, -c182.x // the gloss they write, 258 / 1023
++    add r23.y, -r23_abs.y, c182.y
++    cmp r23.y, r23.y, r23.w, r4.x
++    cmp r4.x, -r4.x, r23.y, r4.x // specular 0
+     add r1.z, r4.x, r4.x
+     mul r1.w, r4.y, r4.y
+     mul r1.w, r1.w, c0.y
+@@ -396,4 +424,11 @@
+     mul r13.w, r13.w, c200.x
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
++    // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
++    // --- normal mapped pixels facing away from it sparkled at the edges of cloth, faces and railings.
++    mul_sat r17.x, r15.y, c180.x
++    mad r17.y, r17.x, c180.y, c180.z
++    mul r17.x, r17.x, r17.x
++    mul r17.x, r17.x, r17.y
++    mul r13.w, r13.w, r17.x
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index fbbfe871..d48728aa 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -89,6 +89,9 @@
+     def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
++    def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
++    def c181, 1, 0.0001, 10, 0 // FusionFix specular sheen on lamps: one, a small number, one over a tenth
++    def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -120,6 +123,31 @@
+     mul r0.w, r0.w, r2.y
+     mad r2.xyz, v0, -r0.w, c15
+     texld r4, r1, s4
++    // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
++    // --- (gloss 258 / 1023, world_no_specular_mark.patch) write specular 0, so lamps and headlights left concrete,
++    // --- plaster and LOD roads without a highlight. They take the specular intensity the sun pass gives them:
++    // --- SpecularSheen / 2 times the square of one less the albedo's saturation, faded out on dark albedo.
++    texld r24, r1, s1
++    max r24.w, r24.x, r24.y
++    max r24.w, r24.w, r24.z // the brightest channel
++    min r24.x, r24.x, r24.y
++    min r24.x, r24.x, r24.z
++    add r24.x, r24.w, -r24.x
++    add r24.y, r24.w, c181.y
++    rcp r24.y, r24.y
++    mad_sat r24.x, r24.x, -r24.y, c181.x // 1 less the saturation
++    mul r24.x, r24.x, r24.x
++    mul_sat r24.w, r24.w, c181.z // smoothstep from black to a tenth
++    mad r24.y, r24.w, c180.y, c180.z
++    mul r24.w, r24.w, r24.w
++    mul r24.w, r24.w, r24.y
++    mul r24.w, r24.w, r24.x
++    mul r24.w, r24.w, c197.x
++    mul r24.w, r24.w, c180.w
++    add r24.y, r4.y, -c182.x // the gloss they write, 258 / 1023
++    add r24.y, -r24_abs.y, c182.y
++    cmp r24.y, r24.y, r24.w, r4.x
++    cmp r4.x, -r4.x, r24.y, r4.x // specular 0
+     add r1.z, r4.x, r4.x
+     mul r1.w, r4.y, r4.y
+     mul r1.w, r1.w, c0.y
+@@ -582,4 +610,11 @@
+     mul r13.w, r13.w, c200.x
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
++    // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
++    // --- normal mapped pixels facing away from it sparkled at the edges of cloth, faces and railings.
++    mul_sat r17.x, r15.y, c180.x
++    mad r17.y, r17.x, c180.y, c180.z
++    mul r17.x, r17.x, r17.x
++    mul r17.x, r17.x, r17.y
++    mul r13.w, r13.w, r17.x
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+index 9604ed0b..886d00e8 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+@@ -113,6 +113,7 @@
+     def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
++    def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+@@ -860,4 +861,11 @@
+     mul r13.w, r13.w, c200.x
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
++    // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
++    // --- normal mapped pixels facing away from it sparkled at the edges of cloth, faces and railings.
++    mul_sat r17.x, r15.y, c180.x
++    mad r17.y, r17.x, c180.y, c180.z
++    mul r17.x, r17.x, r17.x
++    mul r17.x, r17.x, r17.y
++    mul r13.w, r13.w, r17.x
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+index 229f6e98..8db0a1bd 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -53,6 +53,9 @@
+     def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
++    def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
++    def c181, 1, 0.0001, 10, 0 // FusionFix specular sheen on lamps: one, a small number, one over a tenth
++    def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -98,6 +101,31 @@
+     nrm r3.xyz, r4
+     dp3_sat r0.w, r3, r1
+     texld r1, r0, s2
++    // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
++    // --- (gloss 258 / 1023, world_no_specular_mark.patch) write specular 0, so lamps and headlights left concrete,
++    // --- plaster and LOD roads without a highlight. They take the specular intensity the sun pass gives them:
++    // --- SpecularSheen / 2 times the square of one less the albedo's saturation, faded out on dark albedo.
++    texld r20, r0, s0
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z // the brightest channel
++    min r20.x, r20.x, r20.y
++    min r20.x, r20.x, r20.z
++    add r20.x, r20.w, -r20.x
++    add r20.y, r20.w, c181.y
++    rcp r20.y, r20.y
++    mad_sat r20.x, r20.x, -r20.y, c181.x // 1 less the saturation
++    mul r20.x, r20.x, r20.x
++    mul_sat r20.w, r20.w, c181.z // smoothstep from black to a tenth
++    mad r20.y, r20.w, c180.y, c180.z
++    mul r20.w, r20.w, r20.w
++    mul r20.w, r20.w, r20.y
++    mul r20.w, r20.w, r20.x
++    mul r20.w, r20.w, c197.x
++    mul r20.w, r20.w, c180.w
++    add r20.y, r1.y, -c182.x // the gloss they write, 258 / 1023
++    add r20.y, -r20_abs.y, c182.y
++    cmp r20.y, r20.y, r20.w, r1.x
++    cmp r1.x, -r1.x, r20.y, r1.x // specular 0
+     texld r4, r0, s0
+     // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
+     texld r20, r0, s11
+@@ -362,4 +390,11 @@
+     mul r13.w, r13.w, c200.x
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
++    // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
++    // --- normal mapped pixels facing away from it sparkled at the edges of cloth, faces and railings.
++    mul_sat r17.x, r15.y, c180.x
++    mad r17.y, r17.x, c180.y, c180.z
++    mul r17.x, r17.x, r17.x
++    mul r17.x, r17.x, r17.y
++    mul r13.w, r13.w, r17.x
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+index 0fa87c96..d5ace0b4 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -56,6 +56,9 @@
+     def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
++    def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
++    def c181, 1, 0.0001, 10, 0 // FusionFix specular sheen on lamps: one, a small number, one over a tenth
++    def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -102,6 +105,31 @@
+     nrm r3.xyz, r4
+     dp3_sat r0.w, r3, r1
+     texld r1, r0, s2
++    // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
++    // --- (gloss 258 / 1023, world_no_specular_mark.patch) write specular 0, so lamps and headlights left concrete,
++    // --- plaster and LOD roads without a highlight. They take the specular intensity the sun pass gives them:
++    // --- SpecularSheen / 2 times the square of one less the albedo's saturation, faded out on dark albedo.
++    texld r20, r0, s0
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z // the brightest channel
++    min r20.x, r20.x, r20.y
++    min r20.x, r20.x, r20.z
++    add r20.x, r20.w, -r20.x
++    add r20.y, r20.w, c181.y
++    rcp r20.y, r20.y
++    mad_sat r20.x, r20.x, -r20.y, c181.x // 1 less the saturation
++    mul r20.x, r20.x, r20.x
++    mul_sat r20.w, r20.w, c181.z // smoothstep from black to a tenth
++    mad r20.y, r20.w, c180.y, c180.z
++    mul r20.w, r20.w, r20.w
++    mul r20.w, r20.w, r20.y
++    mul r20.w, r20.w, r20.x
++    mul r20.w, r20.w, c197.x
++    mul r20.w, r20.w, c180.w
++    add r20.y, r1.y, -c182.x // the gloss they write, 258 / 1023
++    add r20.y, -r20_abs.y, c182.y
++    cmp r20.y, r20.y, r20.w, r1.x
++    cmp r1.x, -r1.x, r20.y, r1.x // specular 0
+     mul r1.y, r1.y, r1.y
+     add r1.x, r1.x, r1.x
+     mul r1.y, r1.y, c0.y
+@@ -371,4 +399,11 @@
+     mul r13.w, r13.w, c200.x
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
++    // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
++    // --- normal mapped pixels facing away from it sparkled at the edges of cloth, faces and railings.
++    mul_sat r17.x, r15.y, c180.x
++    mad r17.y, r17.x, c180.y, c180.z
++    mul r17.x, r17.x, r17.x
++    mul r17.x, r17.x, r17.y
++    mul r13.w, r13.w, r17.x
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+index 96077cd8..b7b9f541 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -56,6 +56,9 @@
+     def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
++    def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
++    def c181, 1, 0.0001, 10, 0 // FusionFix specular sheen on lamps: one, a small number, one over a tenth
++    def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -102,6 +105,31 @@
+     nrm r3.xyz, r4
+     dp3_sat r0.w, r3, r1
+     texld r1, r0, s2
++    // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
++    // --- (gloss 258 / 1023, world_no_specular_mark.patch) write specular 0, so lamps and headlights left concrete,
++    // --- plaster and LOD roads without a highlight. They take the specular intensity the sun pass gives them:
++    // --- SpecularSheen / 2 times the square of one less the albedo's saturation, faded out on dark albedo.
++    texld r20, r0, s0
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z // the brightest channel
++    min r20.x, r20.x, r20.y
++    min r20.x, r20.x, r20.z
++    add r20.x, r20.w, -r20.x
++    add r20.y, r20.w, c181.y
++    rcp r20.y, r20.y
++    mad_sat r20.x, r20.x, -r20.y, c181.x // 1 less the saturation
++    mul r20.x, r20.x, r20.x
++    mul_sat r20.w, r20.w, c181.z // smoothstep from black to a tenth
++    mad r20.y, r20.w, c180.y, c180.z
++    mul r20.w, r20.w, r20.w
++    mul r20.w, r20.w, r20.y
++    mul r20.w, r20.w, r20.x
++    mul r20.w, r20.w, c197.x
++    mul r20.w, r20.w, c180.w
++    add r20.y, r1.y, -c182.x // the gloss they write, 258 / 1023
++    add r20.y, -r20_abs.y, c182.y
++    cmp r20.y, r20.y, r20.w, r1.x
++    cmp r1.x, -r1.x, r20.y, r1.x // specular 0
+     mul r1.y, r1.y, r1.y
+     mul r1.y, r1.y, c1.y
+     pow r2.w, r0.w, r1.y
+@@ -373,4 +401,11 @@
+     mul r13.w, r13.w, c200.x
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
++    // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
++    // --- normal mapped pixels facing away from it sparkled at the edges of cloth, faces and railings.
++    mul_sat r17.x, r15.y, c180.x
++    mad r17.y, r17.x, c180.y, c180.z
++    mul r17.x, r17.x, r17.x
++    mul r17.x, r17.x, r17.y
++    mul r13.w, r13.w, r17.x
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+index 994b2ad8..5548ac5b 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -56,6 +56,9 @@
+     def c171, 1, 2, 9.99999975e-005, 8 // FusionFix GGX lights: one, two, a small number, the most a highlight may reach
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
++    def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
++    def c181, 1, 0.0001, 10, 0 // FusionFix specular sheen on lamps: one, a small number, one over a tenth
++    def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     dcl_texcoord v0
+@@ -102,6 +105,31 @@
+     nrm r3.xyz, r4
+     dp3_sat r0.w, r3, r1
+     texld r1, r0, s2
++    // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
++    // --- (gloss 258 / 1023, world_no_specular_mark.patch) write specular 0, so lamps and headlights left concrete,
++    // --- plaster and LOD roads without a highlight. They take the specular intensity the sun pass gives them:
++    // --- SpecularSheen / 2 times the square of one less the albedo's saturation, faded out on dark albedo.
++    texld r20, r0, s0
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z // the brightest channel
++    min r20.x, r20.x, r20.y
++    min r20.x, r20.x, r20.z
++    add r20.x, r20.w, -r20.x
++    add r20.y, r20.w, c181.y
++    rcp r20.y, r20.y
++    mad_sat r20.x, r20.x, -r20.y, c181.x // 1 less the saturation
++    mul r20.x, r20.x, r20.x
++    mul_sat r20.w, r20.w, c181.z // smoothstep from black to a tenth
++    mad r20.y, r20.w, c180.y, c180.z
++    mul r20.w, r20.w, r20.w
++    mul r20.w, r20.w, r20.y
++    mul r20.w, r20.w, r20.x
++    mul r20.w, r20.w, c197.x
++    mul r20.w, r20.w, c180.w
++    add r20.y, r1.y, -c182.x // the gloss they write, 258 / 1023
++    add r20.y, -r20_abs.y, c182.y
++    cmp r20.y, r20.y, r20.w, r1.x
++    cmp r1.x, -r1.x, r20.y, r1.x // specular 0
+     mul r1.y, r1.y, r1.y
+     add r1.x, r1.x, r1.x
+     mul r1.y, r1.y, c0.y
+@@ -375,4 +403,11 @@
+     mul r13.w, r13.w, c200.x
+     min r13.w, r13.w, c165.w // LightsGGXMax: GGX keeps the energy, so a narrow lobe peaks far above the game's
+     // highlight, and normal mapped cloth or skin and grazing edges burnt white
++    // --- FusionFix GGX lights: faded out as the surface turns away from the camera, smoothstep(0, 0.08, N.V);
++    // --- normal mapped pixels facing away from it sparkled at the edges of cloth, faces and railings.
++    mul_sat r17.x, r15.y, c180.x
++    mad r17.y, r17.x, c180.y, c180.z
++    mul r17.x, r17.x, r17.x
++    mul r17.x, r17.x, r17.y
++    mul r13.w, r13.w, r17.x
+     ret
+\ No newline at end of file

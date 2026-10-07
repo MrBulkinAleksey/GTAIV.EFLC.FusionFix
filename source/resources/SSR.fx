@@ -4,6 +4,7 @@ texture PrevDepthTex2D;
 texture SSRAccumTex2D;
 texture SSRFallbackTex2D;
 texture SSRHitDistTex2D;
+texture MarchDepthTex2D;
 texture MotionTex2D;
 texture AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D;
 texture SceneTex2D, SkinIDTex2D, SkinLightTex2D;
@@ -62,6 +63,18 @@ sampler2D SSRFallbackTex
 sampler2D SSRHitDistTex
 {
     Texture = <SSRHitDistTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
+};
+
+// View depth at half the full size, the nearest of each 2x2 pixels (MarchDepth_PS), which
+// SSRTrace_PS's march steps through; see TraceHit.
+sampler2D MarchDepthTex
+{
+    Texture = <MarchDepthTex2D>;
     AddressU = Clamp;
     AddressV = Clamp;
     MinFilter = POINT;
@@ -229,6 +242,7 @@ uniform float fUseGBufferNormals; // 1 reads the G-buffer normal, 0 rebuilds it 
 uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDenoise_PS
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
+uniform float fStepsPerPixel;     // march steps per pixel of a ray on this pass's target, 1 / ScreenSpaceReflectionsStepPixels
 uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step (set per pass: SSR and contact shadows each have their own switch)
 uniform float2 vec2NoiseOffset;   // pixels, moves where PixelJitter is read every frame while the passes accumulate (FrameHistory::NoiseOffset), 0 otherwise
 uniform float fTowardCamera;      // 0..1, how far reflections pointing back at the camera reach
@@ -434,6 +448,7 @@ struct ReflectionRay
     float invZ0, invZ1;
     float tEnd;
     float facing;
+    float len; // from P0 to the far end, uv1, in view space
 };
 
 bool SetupReflectionRay(float3 C, float3 n, out ReflectionRay ray)
@@ -468,6 +483,7 @@ bool SetupReflectionRay(float3 C, float3 n, out ReflectionRay ray)
     if (len <= 0.0)
         return false;
     float3 P1 = ray.P0 + R * len;
+    ray.len = len;
 
     ray.uv0 = ViewToUV(ray.P0);
     ray.uv1 = ViewToUV(P1);
@@ -504,9 +520,10 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
 
     // A ray short on screen needs fewer steps: a car far away reflects over a few dozen pixels,
     // and all NUM_STEPS there sampled each pixel several times. About one step per two pixels
-    // of the ray keeps the last and longest step, twice the average, within a few pixels.
+    // of the ray (fStepsPerPixel 0.5) keeps the last and longest step, twice the average, within
+    // a few pixels; with the steps moving every frame the accumulation makes up for fewer.
     float rayPixels = length(dUV * tEnd / vec2InvViewportSize);
-    float steps = clamp(ceil(rayPixels * 0.5), 12.0, (float) NUM_STEPS);
+    float steps = clamp(ceil(rayPixels * fStepsPerPixel), 12.0, (float) NUM_STEPS);
 
     // Steps grow with the square of their index: a few centimetres next to the surface, where
     // a ped standing by a car is, about twice the even spacing at the far end. Even steps a
@@ -520,15 +537,21 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
     float hitHi = 0.0;
     float prevT = 0.0;
     float prevDelta = -1.0;
-    // How far the ray travelled hidden behind what the screen shows, in world units.
+    // How far the ray travelled hidden behind what the screen shows, and how far it had come
+    // when it first went far behind something (-1 if it never did), as shares of ray.len: the
+    // view space point at t is P0 + (P1 - P0) * t * invZ1 * rayZ, so its distance from P0 takes
+    // two multiplications instead of building the point and its length every step.
     float hidden = 0.0;
-    // How far the ray had come when it first went far behind something, -1 if it never did.
     float firstHidden = -1.0;
-    float3 prevRayP = P0;
+    float prevU = 0.0;
 
     // One loop, no nested refinement inside it: D3DX compiles this effect while the game
     // loads, and an unrolled refinement inside the march made it take long enough to look
     // like a hang.
+    // The march reads MarchDepthTex, the nearest depth of each 2x2 pixels, already linear: its
+    // reads fall four times as close together in the texture cache, which is most of what a
+    // step costs, and need no decoding. Nearest, so a ray does not slip past a thin pole between
+    // two of its samples; the refinement below finds the hit in the full size depth.
     [loop] [fastopt]
     for (int i = 0; i < NUM_STEPS; ++i)
     {
@@ -540,7 +563,7 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
         float2 sampleUV = lerp(uv0, uv1, t);
         float rayZ = 1.0 / lerp(invZ0, invZ1, t);
 
-        float delta = rayZ - LinearDepth(sampleUV);
+        float delta = rayZ - tex2Dlod(MarchDepthTex, float4(sampleUV, 0, 0)).r;
 
         // The ray went behind the scene since the last sample, which was in front of it.
         // Estimate where it crossed from the two samples and judge the thickness there, not
@@ -552,7 +575,7 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
         {
             float tc = lerp(prevT, t, saturate(-prevDelta / max(delta - prevDelta, 1e-5)));
             float zc = 1.0 / lerp(invZ0, invZ1, tc);
-            float crossDelta = zc - LinearDepth(lerp(uv0, uv1, tc));
+            float crossDelta = zc - tex2Dlod(MarchDepthTex, float4(lerp(uv0, uv1, tc), 0, 0)).r;
             float crossThickness = abs(rayZ - 1.0 / lerp(invZ0, invZ1, prevT)) + fThickness;
             if (crossDelta <= crossThickness)
             {
@@ -562,21 +585,23 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
                 break;
             }
             if (firstHidden < 0.0)
-                firstHidden = length(prevRayP - P0);
+                firstHidden = prevU;
             if (fPassThinObjects <= 0.0)
                 break;
         }
 
-        float3 rayP = ViewPosFromUVZ(sampleUV, rayZ);
+        float u = t * invZ1 * rayZ;
         if (delta > 0.0)
-            hidden += length(rayP - prevRayP);
-        prevRayP = rayP;
+            hidden += u - prevU;
+        prevU = u;
         prevT = t;
         prevDelta = delta;
     }
 
     if (hit <= 0.0)
         return 0.0;
+    hidden *= ray.len;
+    firstHidden *= ray.len;
 
     // Binary refinement between the last sample in front of the scene and the first behind it.
     float lo = hitLo;
@@ -594,13 +619,17 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
 
     float2 finalUV = lerp(uv0, uv1, hi);
     float hitZ = 1.0 / lerp(invZ0, invZ1, hi);
-    float hitDelta = max(hitZ - LinearDepth(finalUV), 0.0);
+    float surfZ = LinearDepth(finalUV);
+    // Behind the surface, as the refinement leaves a ray that crossed it, or in front of it: the
+    // march's nearest of four pixels can show a crossing next to a pole's outline that the full
+    // size depth does not have, and the ray there runs on in front of what lies beyond.
+    float hitDelta = abs(hitZ - surfZ);
     float hitThickness = abs(hitZ - 1.0 / lerp(invZ0, invZ1, lo)) + fThickness;
     float3 hitP = ViewPosFromUVZ(finalUV, hitZ);
     gTraceHitZ = hitP.z;
 
     // The surface the depth buffer holds where the ray hit; hitP is up to a thickness off it.
-    float3 surfP = ViewPosFromUVZ(finalUV, LinearDepth(finalUV));
+    float3 surfP = ViewPosFromUVZ(finalUV, surfZ);
     float2 histUV = HistoryUV(surfP);
 
     float2 edge = saturate(min(min(finalUV, histUV), 1.0 - max(finalUV, histUV)) / max(fEdgeFade, 1e-4));
@@ -788,7 +817,7 @@ float3 NeighbourFill(float2 uv, float z, out float weight)
     {
         float2 tapUV = uv + taps[i] * vec2InvViewportSize;
         float4 hit = tex2Dlod(SSRResultTex, float4(tapUV, 0, 0));
-        float w = hit.a * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
+        float w = max(hit.a, 0.0) * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
         [branch]
         if (w > 0.0)
         {
@@ -826,11 +855,38 @@ struct TraceOutput
     float4 distance : COLOR1;
 };
 
+// MarchDepthTex for SSRTrace_PS's march, drawn at half the full size (vec2InvViewportSize is its
+// pixel): the nearest view depth of the four full size pixels under each of its own.
+float4 MarchDepth_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float2 r = 0.25 * vec2InvViewportSize;
+    float a = tex2Dlod(DepthTex, float4(uv - r, 0, 0)).r;
+    float b = tex2Dlod(DepthTex, float4(uv + r, 0, 0)).r;
+    float c = tex2Dlod(DepthTex, float4(uv + float2(r.x, -r.y), 0, 0)).r;
+    float d = tex2Dlod(DepthTex, float4(uv + float2(-r.x, r.y), 0, 0)).r;
+    // The log depth grows with the view depth, so its smallest is the nearest.
+    return pow(fFarDivNear, min(min(a, b), min(c, d))) * fNearPlane;
+}
+
+// What SSRTrace_PS writes into both its targets where SSRSurfaceWeight is 0: the passes after it
+// tell those pixels by one read of its target instead of the depth, specular and, in the rain,
+// normal reads of SSRSurfaceWeight each. Both targets are half float, so it stays negative.
+static const float4 kNoSurface = -1.0;
+
+bool NoSurface(float4 trace)
+{
+    return trace.a < -0.5;
+}
+
 TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
 {
     TraceOutput o = (TraceOutput)0;
     if (SSRSurfaceWeight(uv) <= 0.0)
+    {
+        o.colour = kNoSurface;
+        o.distance = kNoSurface;
         return o;
+    }
     float3 n;
     float3 C = SSRSurface(uv, vPos, n);
 
@@ -861,7 +917,8 @@ static const float kFallbackBelow = 0.1;
 // SetupReflectionRay works out again.
 float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
-    if (SSRSurfaceWeight(uv) <= 0.0 || tex2Dlod(SSRResultTex, float4(uv, 0, 0)).a >= kFallbackBelow)
+    float4 trace = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+    if (NoSurface(trace) || trace.a >= kFallbackBelow)
         return 0.0;
     float3 n;
     float3 C = SSRSurface(uv, vPos, n);
@@ -882,8 +939,8 @@ float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 float4 SSRSpread_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     float4 own = tex2Dlod(SSRFallbackTex, float4(uv, 0, 0));
-    if (own.a >= fFallback * 0.99 || SSRSurfaceWeight(uv) <= 0.0 ||
-        tex2Dlod(SSRResultTex, float4(uv, 0, 0)).a >= kFallbackBelow)
+    float4 trace = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+    if (own.a >= fFallback * 0.99 || NoSurface(trace) || trace.a >= kFallbackBelow)
         return own;
     static const float2 taps[8] =
     {
@@ -914,12 +971,12 @@ float4 SSRSpread_PS(float2 uv : TEXCOORD0) : COLOR0
 // SSRFallbackTex filling in where the ray found next to nothing (premultiplied).
 float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
+    float4 hit = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+    if (NoSurface(hit))
+        return 0.0;
     float wetOnly;
     float surfaceWeight = SSRSurfaceWeight(uv, wetOnly);
-    if (surfaceWeight <= 0.0)
-        return 0.0;
 
-    float4 hit = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
     if (fDebugMode > 2.5 && fDebugMode < 3.5)
         return hit;
     float4 r = hit;
@@ -1355,7 +1412,9 @@ bool GIHistoryDebug()
 
 float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
-    if (fTemporalAnySurface > 0.0 ? tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999 : SSRSurfaceWeight(uv) <= 0.0)
+    // SSR's march marked the pixels it skipped in SSRHitDistTex as well (kNoSurface).
+    if (fTemporalAnySurface > 0.0 ? tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999
+                                  : NoSurface(tex2Dlod(SSRHitDistTex, float4(uv, 0, 0))))
         return 0.0;
 
     float4 current = TemporalPremultiply(tex2Dlod(SSRResultTex, float4(uv, 0, 0)));
@@ -1763,6 +1822,11 @@ technique SSR
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 SSR_PS();
+    }
+    pass MarchDepth // into a half size R32F target, before the trace
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 MarchDepth_PS();
     }
 }
 

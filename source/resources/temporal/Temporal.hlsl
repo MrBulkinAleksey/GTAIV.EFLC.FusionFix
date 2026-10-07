@@ -136,39 +136,40 @@ float4 PS_BoneWrite(float4 value : TEXCOORD0) : COLOR0
 }
 
 // ---------------------------------------------------------------------------------------------
-// Camera motion vectors, reprojected from the depth buffer
+// Camera motion vectors, reprojected from the depth buffer, and in the same pass the depth for the resolve, DLSS
+// and FSR: the standard [0, 1] depth of a perspective projection, from the logarithmic one, taken like the motion
+// vectors before transparent geometry is drawn
 
 sampler2D SceneDepth : register(s0);
 
 float4 gProjection : register(c0); // P00, P11, P20 and P21 of the (jittered) projection
 float4 gJitter     : register(c1); // xy: jitter in NDC, z: near, w: log2(far / near)
 row_major float4x4 gReproject : register(c2); // current view space -> previous clip space, jitter excluded
+float4 gDepthRange : register(c6); // x: far
 
-float4 PS_CameraMotion(float2 uv : TEXCOORD0) : COLOR0
+struct CameraMotionOut
+{
+    float4 Motion : COLOR0;
+    float4 Depth  : COLOR1;
+};
+
+CameraMotionOut PS_CameraMotion(float2 uv : TEXCOORD0)
 {
     float z = tex2Dlod(SceneDepth, float4(uv, 0.0, 0.0)).r;
-    float distance = gJitter.z * exp2(z * gJitter.w);
+    float near = gJitter.z;
+    float far = gDepthRange.x;
+    float distance = near * exp2(z * gJitter.w);
 
     float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     float3 view = float3(distance * (ndc.x + gProjection.z) / gProjection.x, distance * (ndc.y + gProjection.w) / gProjection.y, -distance);
 
     float4 previous = mul(float4(view, 1.0), gReproject);
     float2 current = ndc + gJitter.xy;
-    return float4((previous.xy / previous.w - current) * float2(0.5, -0.5), 0.0, 1.0);
-}
 
-// ---------------------------------------------------------------------------------------------
-// Depth for the resolve, DLSS and FSR: the standard [0, 1] depth of a perspective projection, from the
-// logarithmic one, taken like the motion vectors before transparent geometry is drawn
-
-float4 gDepthConvert : register(c0); // x: near, y: log2(far / near), z: far
-
-float4 PS_UpscalerDepth(float2 uv : TEXCOORD0) : COLOR0
-{
-    float z = tex2Dlod(SceneDepth, float4(uv, 0.0, 0.0)).r;
-    float distance = gDepthConvert.x * exp2(z * gDepthConvert.y);
-    float depth = gDepthConvert.z * (distance - gDepthConvert.x) / (distance * (gDepthConvert.z - gDepthConvert.x));
-    return depth.xxxx;
+    CameraMotionOut o;
+    o.Motion = float4((previous.xy / previous.w - current) * float2(0.5, -0.5), 0.0, 1.0);
+    o.Depth = (far * (distance - near) / (distance * (far - near))).xxxx;
+    return o;
 }
 
 // ---------------------------------------------------------------------------------------------
