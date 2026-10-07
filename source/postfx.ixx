@@ -1601,6 +1601,7 @@ public:
         fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 1.5f), 0.0f, 8.0f);
         fSSRStepPixels = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStepPixels", 2.0f), 1.0f, 8.0f);
+        bPostFxProfiler = iniReader.ReadInteger("POSTFX", "PostFxProfiler", 0) != 0;
         fLightsGGXSoft = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSoft", 0.0f), 0.0f, 1.0f);
         fLightsGGXStretchView = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXStretchView", 1.0f), 0.0f, 1.0f);
         fLightsGGXGlints = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlints", 1.0f), 0.0f, 8.0f);
@@ -1676,7 +1677,6 @@ public:
         bSSRPassThinObjects = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsPastThinObjects", 1) != 0;
         bSSRStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsStepJitter", 1) != 0;
         bSSRTemporalJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsTemporalJitter", 1) != 0;
-        bPostFxProfiler = iniReader.ReadInteger("POSTFX", "PostFxProfiler", 0) != 0;
         fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporal", 0.85f), 0.0f, 0.97f);
         fSSRTowardCamera = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", 0.0f), 0.0f, 1.0f);
         fSSRReflectionBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsBlur", 0.0f), 0.0f, 32.0f);
@@ -4634,9 +4634,7 @@ private:
             if (targets > 0.0)
                 log.Printf("    %-32s %6.2f\n", "other", (std::max)(game - targets, 0.0) / n);
         }
-        std::fill(std::begin(profilerSums), std::end(profilerSums), 0.0);
-        profilerFrameSum = 0.0;
-        nProfilerSamples = 0;
+        ResetProfilerSums();
     }
 
     // Adds a frame whose queries were issued kProfilerFrames frames ago, if the GPU has them.
@@ -4675,12 +4673,46 @@ private:
             WriteProfilerBlock();
     }
 
+    // Starts the averages over, as the profiler is turned on and as the ini is read again in game, so a
+    // block holds no frames from before.
+    static void ResetProfilerSums()
+    {
+        std::fill(std::begin(profilerSums), std::end(profilerSums), 0.0);
+        profilerFrameSum = 0.0;
+        nProfilerSamples = 0;
+    }
+
+    // Whether the profiler ran last frame: PostFxProfiler is a live setting, Ctrl+Shift+F10 turns it on
+    // and off in game.
+    static inline bool bProfilerRunning = false;
+
     // Once a frame, as post processing begins: closes this frame's queries and opens the next.
     static void ProfilerNextFrame(IDirect3DDevice9* pDevice)
     {
         auto& R = PostFxResources;
-        if (!R.bPostFxProfiler || !pDevice)
+        if (!pDevice)
             return;
+        if (!R.bPostFxProfiler)
+        {
+            if (bProfilerRunning)
+            {
+                ReleaseProfiler();
+                ResetProfilerSums();
+                nProfilerOpenTarget = -1;
+                nProfilerOwnSections = 0;
+                bProfilerRunning = false;
+                FusionLog::Block log("PostFx", "Profiler");
+                log.Printf("off\n");
+            }
+            return;
+        }
+        if (!bProfilerRunning)
+        {
+            ResetProfilerSums();
+            bProfilerRunning = true;
+            FusionLog::Block log("PostFx", "Profiler");
+            log.Printf("on, a block every %d frames\n", kProfilerAverage);
+        }
         InstallProfilerTargetHooks();
         // The target section open at the frame's end is closed in this frame and opened again in the next.
         const int target = nProfilerOpenTarget;
@@ -4738,6 +4770,8 @@ private:
 
     static void SwitchProfilerTarget(IDirect3DDevice9* pDevice)
     {
+        if (!PostFxResources.bPostFxProfiler)
+            return;
         const int want = nProfilerOwnSections > 0 ? -1
                        : kProfTargetScreen + (profilerTargetStack.empty() ? 0 : profilerTargetStack.back());
         if (want == nProfilerOpenTarget)
@@ -4802,13 +4836,14 @@ private:
                                                     rage::grcRenderTargetPC* depth, uint32_t a5, bool a6, uint32_t mip)
     {
         pfnLockRenderTarget(factory, index, color, depth, a5, a6, mip);
-        if (index != 0 || !PostFxResources.bPostFxProfiler)
+        // Followed with the profiler off too, so the stack is right when it is turned on again in game.
+        if (index != 0)
             return;
         // Shadow maps are drawn into a depth target alone. A lock the game never undid would grow the stack
         // for good; deeper than any nesting it uses, the stack starts over.
         if (profilerTargetStack.size() >= 16)
             profilerTargetStack.clear();
-        profilerTargetStack.push_back(ProfilerTargetId(color ? color : depth));
+        profilerTargetStack.push_back(PostFxResources.bPostFxProfiler ? ProfilerTargetId(color ? color : depth) : 0);
         SwitchProfilerTarget(rage::grcDevice::GetD3DDevice());
     }
 
@@ -6790,7 +6825,15 @@ private:
         {
             CIniReader iniReader("");
             auto& R = PostFxResources;
+            const bool profiling = R.bPostFxProfiler;
             R.ReadLiveIni(iniReader);
+            // A mark between the profiler's blocks, the next of which holds only frames with what was read.
+            if (profiling && R.bPostFxProfiler)
+            {
+                ResetProfilerSums();
+                FusionLog::Block log("PostFx", "Profiler");
+                log.Printf("Ctrl+Shift+F10: the ini read again, the next block starts afresh\n");
+            }
             // The cloud values the shadows were cast with, to tune CloudShadowsCoverage by.
             if (FusionLog::Block log("PostFx", "CloudShadows"); true)
             {
