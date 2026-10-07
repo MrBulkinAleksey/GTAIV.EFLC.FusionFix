@@ -641,7 +641,6 @@ public:
     // there the G-buffer's vertex colour says nothing of the sky, and tunnels and rooms got puddles.
     bool bInteriorScene = false;
     const char* szWetGroundStatus = "not run yet";
-    bool bWetGroundDrawn = false; // this frame, so SSR does not brighten what it already made glossy
     void ReleaseWetCopies()
     {
         for (int i = 0; i < 3; ++i)
@@ -928,9 +927,10 @@ public:
     float fSSRGlossBoost = 2.0f;
     float fSSRGlossCutoff = 0.5f;
     // ScreenSpaceReflectionsWetGround: while it rains, SSR on ground facing up that is under the
-    // gloss cutoff, drawn this many times brighter (fWetGroundBoost in SSR.fx), unless the wet ground
-    // pass drew this frame and already gave them water's specular; 0 turns it off.
-    float fSSRWetGround = 2.0f;
+    // gloss cutoff, drawn this many times brighter (fWetGroundBoost in SSR.fx); 0 turns it off. The
+    // wet ground pass gives only puddles water's specular: its film keeps about dry asphalt's (0.12),
+    // so at 1 cars on wet roads reflected half as bright as at 2, and 2 was brighter than the scene.
+    float fSSRWetGround = 1.5f;
     float fSSRWaterIntensity = 1.0f;
     // CWater::Render loads this as the Z of every flat water vertex, so it is the real
     // surface height rather than an assumed sea level.
@@ -1590,7 +1590,7 @@ public:
         fLightsGGXEnvironment = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXEnvironment", 1.0f), 0.0f, 1.0f);
         fLightsGGXMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXMax", 2.0f), 0.1f, 16.0f);
         fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
-        fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 2.0f), 0.0f, 8.0f);
+        fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 1.5f), 0.0f, 8.0f);
         fLightsGGXSoft = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSoft", 0.0f), 0.0f, 1.0f);
         fLightsGGXStretchView = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXStretchView", 1.0f), 0.0f, 1.0f);
         fLightsGGXGlints = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlints", 1.0f), 0.0f, 8.0f);
@@ -3047,7 +3047,6 @@ private:
     {
         auto& R = PostFxResources;
         auto skip = [&](const char* why) { R.szWetGroundStatus = why; };
-        R.bWetGroundDrawn = false;
 
         // The wetness, in game time, so it stands still while the game is paused.
         const double seconds = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds * 0.001 : 0.0;
@@ -3117,7 +3116,6 @@ private:
             return skip("could not copy the G-buffer");
         }
         R.szWetGroundStatus = "drawn";
-        R.bWetGroundDrawn = true;
 
         ID3DXEffect* effect = R.WetGroundEffect;
         const float width = float(desc[0].Width), height = float(desc[0].Height);
@@ -5248,10 +5246,7 @@ private:
         const float rain = CWeather::Rain ? *CWeather::Rain : 0.0f;
         const bool wetGround = R.fSSRWetGround > 0.0f && hasNormals && hasSpecular;
         effect->SetFloat(h.fWetness, wetGround ? std::clamp(rain / 0.7f, 0.0f, 1.0f) : 0.0f);
-        // The wet ground pass already gives wet roads the specular and gloss of water, and
-        // deferred_lighting multiplies SSR by them, so brightening them here as well made their
-        // reflections brighter than what they reflect.
-        effect->SetFloat(h.fWetGroundBoost, R.bWetGroundDrawn ? 1.0f : R.fSSRWetGround);
+        effect->SetFloat(h.fWetGroundBoost, R.fSSRWetGround);
 
         UINT passes = 0;
         IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
