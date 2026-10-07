@@ -6720,35 +6720,55 @@ private:
         return result;
     }
 
+    // The scene's sky also writes the clouds' mask for the sun shafts (gta_atmoscatt_clouds, oC1) into
+    // _DEFERRED_GBUFFER_0_, bound as the second target. The scene is 64 bits a pixel, the G-buffer 32:
+    // a device that takes targets of different bit depths together, blending, draws the sky once, into both;
+    // any other draws it twice, with the G-buffer for the mask, then without for the scene, as before.
+    // The water's reflection, another size than the G-buffer, draws its sky once without it.
     static int DrawSkyMain(int _this, void* edx, int a2, int a3, char a4, char a5, int a6, char a7)
     {
         auto pDevice = rage::grcDevice::GetD3DDevice();
-        IDirect3DPixelShader9* pShader = nullptr;
-        HRESULT hr = S_FALSE;
-        pDevice->GetPixelShader(&pShader);
-        // atmoscatt clouds
-        if (PostFxResources.DiffuseTex != nullptr)
+        if (!PostFxResources.DiffuseTex)
+            return hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+
+        static const bool independentBitDepths = [&]()
         {
-            IDirect3DSurface9* DiffuseSurf = nullptr;
-            PostFxResources.DiffuseTex->GetSurfaceLevel(0, &DiffuseSurf);
-            if (DiffuseSurf)
-            {
-                IDirect3DSurface9* oldRenderTarget1 = 0;
-                pDevice->GetRenderTarget(1, &oldRenderTarget1);
-                pDevice->SetRenderTarget(1, DiffuseSurf);
-                hr = hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
-                pDevice->SetPixelShader(pShader);
-                pDevice->SetRenderTarget(1, oldRenderTarget1);
-                hr = hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
-                SAFE_RELEASE(oldRenderTarget1);
-                SAFE_RELEASE(DiffuseSurf);
-                SAFE_RELEASE(pShader);
-                return hr;
-            }
+            D3DCAPS9 caps = {};
+            // and blends with both bound, as the sky's layers may
+            constexpr DWORD needed = D3DPMISCCAPS_MRTINDEPENDENTBITDEPTHS | D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING;
+            return SUCCEEDED(pDevice->GetDeviceCaps(&caps)) && (caps.PrimitiveMiscCaps & needed) == needed;
+        }();
+
+        IDirect3DSurface9* DiffuseSurf = nullptr;
+        IDirect3DSurface9* target = nullptr;
+        PostFxResources.DiffuseTex->GetSurfaceLevel(0, &DiffuseSurf);
+        pDevice->GetRenderTarget(0, &target);
+        D3DSURFACE_DESC diffuseDesc = {}, targetDesc = {};
+        const bool scene = DiffuseSurf && target && SUCCEEDED(DiffuseSurf->GetDesc(&diffuseDesc)) && SUCCEEDED(target->GetDesc(&targetDesc)) &&
+                           diffuseDesc.Width == targetDesc.Width && diffuseDesc.Height == targetDesc.Height;
+        SAFE_RELEASE(target);
+        if (!scene)
+        {
             SAFE_RELEASE(DiffuseSurf);
-            SAFE_RELEASE(pShader);
+            return hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
         }
-        return hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+
+        IDirect3DPixelShader9* pShader = nullptr;
+        pDevice->GetPixelShader(&pShader);
+        IDirect3DSurface9* oldRenderTarget1 = nullptr;
+        pDevice->GetRenderTarget(1, &oldRenderTarget1);
+        pDevice->SetRenderTarget(1, DiffuseSurf);
+        int hr = hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+        pDevice->SetRenderTarget(1, oldRenderTarget1);
+        if (!independentBitDepths)
+        {
+            pDevice->SetPixelShader(pShader);
+            hr = hbDrawSkyHook.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+        }
+        SAFE_RELEASE(oldRenderTarget1);
+        SAFE_RELEASE(DiffuseSurf);
+        SAFE_RELEASE(pShader);
+        return hr;
     }
 
     // The reflection map's sky (CE 0xdbc2ab, the sky draw's branch for render phases with flag
