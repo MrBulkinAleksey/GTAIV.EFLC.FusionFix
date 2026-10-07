@@ -547,6 +547,12 @@ export namespace HDROutput
         return HDR::GetPeak();
     }
 
+    // Paper white of the HDR output, in nits
+    float GetPaperWhiteNits()
+    {
+        return HDR::GetPaperWhite();
+    }
+
     // The HDR output's pass on render target 0 instead of the back buffer, while it is active: for copies of the frame
     // that have to match the finished one
     void ApplyToRenderTarget()
