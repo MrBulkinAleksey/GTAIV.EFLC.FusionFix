@@ -788,7 +788,7 @@ float3 NeighbourFill(float2 uv, float z, out float weight)
     {
         float2 tapUV = uv + taps[i] * vec2InvViewportSize;
         float4 hit = tex2Dlod(SSRResultTex, float4(tapUV, 0, 0));
-        float w = hit.a * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
+        float w = max(hit.a, 0.0) * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
         [branch]
         if (w > 0.0)
         {
@@ -826,11 +826,25 @@ struct TraceOutput
     float4 distance : COLOR1;
 };
 
+// What SSRTrace_PS writes into both its targets where SSRSurfaceWeight is 0: the passes after it
+// tell those pixels by one read of its target instead of the depth, specular and, in the rain,
+// normal reads of SSRSurfaceWeight each. Both targets are half float, so it stays negative.
+static const float4 kNoSurface = -1.0;
+
+bool NoSurface(float4 trace)
+{
+    return trace.a < -0.5;
+}
+
 TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
 {
     TraceOutput o = (TraceOutput)0;
     if (SSRSurfaceWeight(uv) <= 0.0)
+    {
+        o.colour = kNoSurface;
+        o.distance = kNoSurface;
         return o;
+    }
     float3 n;
     float3 C = SSRSurface(uv, vPos, n);
 
@@ -861,7 +875,8 @@ static const float kFallbackBelow = 0.1;
 // SetupReflectionRay works out again.
 float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
-    if (SSRSurfaceWeight(uv) <= 0.0 || tex2Dlod(SSRResultTex, float4(uv, 0, 0)).a >= kFallbackBelow)
+    float4 trace = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+    if (NoSurface(trace) || trace.a >= kFallbackBelow)
         return 0.0;
     float3 n;
     float3 C = SSRSurface(uv, vPos, n);
@@ -882,8 +897,8 @@ float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 float4 SSRSpread_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     float4 own = tex2Dlod(SSRFallbackTex, float4(uv, 0, 0));
-    if (own.a >= fFallback * 0.99 || SSRSurfaceWeight(uv) <= 0.0 ||
-        tex2Dlod(SSRResultTex, float4(uv, 0, 0)).a >= kFallbackBelow)
+    float4 trace = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+    if (own.a >= fFallback * 0.99 || NoSurface(trace) || trace.a >= kFallbackBelow)
         return own;
     static const float2 taps[8] =
     {
@@ -914,12 +929,12 @@ float4 SSRSpread_PS(float2 uv : TEXCOORD0) : COLOR0
 // SSRFallbackTex filling in where the ray found next to nothing (premultiplied).
 float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
+    float4 hit = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+    if (NoSurface(hit))
+        return 0.0;
     float wetOnly;
     float surfaceWeight = SSRSurfaceWeight(uv, wetOnly);
-    if (surfaceWeight <= 0.0)
-        return 0.0;
 
-    float4 hit = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
     if (fDebugMode > 2.5 && fDebugMode < 3.5)
         return hit;
     float4 r = hit;
@@ -1355,7 +1370,9 @@ bool GIHistoryDebug()
 
 float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
-    if (fTemporalAnySurface > 0.0 ? tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999 : SSRSurfaceWeight(uv) <= 0.0)
+    // SSR's march marked the pixels it skipped in SSRHitDistTex as well (kNoSurface).
+    if (fTemporalAnySurface > 0.0 ? tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999
+                                  : NoSurface(tex2Dlod(SSRHitDistTex, float4(uv, 0, 0))))
         return 0.0;
 
     float4 current = TemporalPremultiply(tex2Dlod(SSRResultTex, float4(uv, 0, 0)));
