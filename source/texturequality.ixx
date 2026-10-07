@@ -75,7 +75,7 @@ class TextureQuality
         uint64_t binds = 0;
     };
     static inline std::unordered_map<IDirect3DPixelShader9*, SeenShader> shaderKinds;
-    static inline uint64_t groundBinds[3] = {};
+    static inline uint64_t groundBinds[4] = {};
     static inline uint32_t groundFrames = 0;
     static inline bool bLastGround = false;
 
@@ -329,7 +329,8 @@ private:
         nGroundDebug = std::clamp(iniReader.ReadInteger("TEXTURES", "GroundSurfacesDebug", 0), 0, 1);
     }
 
-    // Kind 0 for any other shader, 1 for the terrain, 2 for gta_parallax*.
+    // Kind 0 for any other shader, 1 for the terrain, 2 for gta_parallax*, 3 for the generic world
+    // shaders that treat ground facing up (gta_default, rage_default, gta_spec, gta_normal, gta_normal_spec).
     static SeenShader& GroundShaderInfo(IDirect3DPixelShader9* shader)
     {
         if (auto it = shaderKinds.find(shader); it != shaderKinds.end())
@@ -346,7 +347,7 @@ private:
                 for (size_t i = 0; i + 3 < code.size(); ++i)
                 {
                     if (code[i] == mark[0] && code[i + 1] == mark[1] && code[i + 2] == mark[2])
-                        info.kind = std::clamp(static_cast<int>(std::bit_cast<float>(code[i + 3])), 0, 2);
+                        info.kind = std::clamp(static_cast<int>(std::bit_cast<float>(code[i + 3])), 0, 3);
                     if (code[i] == sign[0] && code[i + 1] == sign[1] && code[i + 2] == sign[2])
                         info.signature = code[i + 3];
                 }
@@ -379,10 +380,10 @@ private:
             ReadGroundIni(iniReader);
             const double frames = groundFrames ? double(groundFrames) : 1.0;
             FusionLog::Write("Ground", "Draws", "Ground Surfaces %s, detail texture %s, debug %d, set-pixel-shader hook %s; per frame over %u frames: "
-                    "terrain shaders %.1f, parallax shaders %.1f, other shaders %.1f; %zu shaders seen\n",
+                    "terrain shaders %.1f, parallax shaders %.1f, world shaders with ground %.1f, other shaders %.1f; %zu shaders seen\n",
                     bLastGround ? "on" : "off", pDetailTex ? "made" : (bDetailTexFailed ? "failed" : "not made"), nGroundDebug,
                     shSetPixelShader ? "on" : (bPixelShaderHookTried ? "failed" : "not tried"), groundFrames,
-                    groundBinds[1] / frames, groundBinds[2] / frames, groundBinds[0] / frames, shaderKinds.size());
+                    groundBinds[1] / frames, groundBinds[2] / frames, groundBinds[3] / frames, groundBinds[0] / frames, shaderKinds.size());
             // Which shaders those were, the most bound first, by their number in the pack
             std::vector<const SeenShader*> seen;
             for (const auto& [ptr, info] : shaderKinds)
@@ -507,7 +508,7 @@ private:
                 // c169: bump height in metres, its fade with the distance as a * depth + b, the detail grain's height
                 fGroundBumps, -1.0f / fadeRange, fGroundBumpsFadeEnd / fadeRange, fGroundDetailBumps,
                 // c170: parallax steps looking straight down, the more added flat along the surface, depth
-                // and GroundSurfacesDebug: the terrain drawn half magenta, gta_parallax* half cyan
+                // and GroundSurfacesDebug: the terrain drawn half magenta, gta_parallax* half cyan, other ground orange
                 fParallaxMinSteps, fParallaxMaxSteps - fParallaxMinSteps, fParallaxDepth, float(nGroundDebug),
             };
             pDevice->SetPixelShaderConstantF(166, params, 5);

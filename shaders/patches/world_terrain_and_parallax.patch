@@ -1,3 +1,597 @@
+diff --git a/win32_30_nv8/gta_default/gta_defaultPS3.asm b/win32_30_nv8/gta_default/gta_defaultPS3.asm
+index ff566cc..711e3f4 100644
+--- a/win32_30_nv8/gta_default/gta_defaultPS3.asm
++++ b/win32_30_nv8/gta_default/gta_defaultPS3.asm
+@@ -21,6 +21,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.1019476965e-43 // 150
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0, 0, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -34,6 +40,7 @@
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl vPos.xy
+     dcl_2d s0
+@@ -104,6 +111,59 @@
+         mov r0.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+@@ -129,7 +189,40 @@
+     dp4 r20.x, r20_abs, c152.xzwy
+     add r20, -r20.x, r1.x
+     texkill r20
+-    add r1.yzw, c0.w, v1.xxyz
++    // --- FusionFix ground surfaces: with no normal map, the texture's light and shade (and the detail
++    // --- texture's grain) bend the normal of ground facing up, by their screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      nrm r16.xyz, v1
++      dp3 r13.x, r0, c188
++      mul r13.x, r13.x, c169.x
++      if b12
++        add r13.y, r24.z, -c187.z
++        mad r13.x, r13.y, c169.w, r13.x
++      endif
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      add r13.y, r16.z, -c184.w
++      mul_sat r13.y, r13.y, c183.x
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r16.xyz, r18
++      add r1.yzw, c0.w, r16.xxyz
++    else
++      add r1.yzw, c0.w, v1.xxyz
++    endif
+     dp3 r0.w, r1.yzww, r1.yzww
+     rsq r0.w, r0.w
+     mad r1.yzw, r1, r0.w, -c0.y
+diff --git a/win32_30_nv8/gta_default/gta_defaultPS4.asm b/win32_30_nv8/gta_default/gta_defaultPS4.asm
+index 3c1f0f3..f5cfbb5 100644
+--- a/win32_30_nv8/gta_default/gta_defaultPS4.asm
++++ b/win32_30_nv8/gta_default/gta_defaultPS4.asm
+@@ -21,6 +21,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.1159606811e-43 // 151
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0, 0, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter
+     def c0, 0, -1, -0, 9.99999975e-006
+     def c1, 3.99600005, 4, 0.125, 0.25
+     def c2, 0.5, 0, 1, 0.25
+@@ -32,6 +38,7 @@
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
+     dcl vPos.xy
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl_2d s0
+     dcl_2d s10
+@@ -102,6 +109,59 @@
+         mov r0.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+@@ -110,7 +170,40 @@
+       mad r25.x, r24.z, c190.y, c190.z
+       mul r0.xyz, r0, r25.x
+     endif
+-    add r1.xyz, c0.w, v1
++    // --- FusionFix ground surfaces: with no normal map, the texture's light and shade (and the detail
++    // --- texture's grain) bend the normal of ground facing up, by their screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      nrm r16.xyz, v1
++      dp3 r13.x, r0, c188
++      mul r13.x, r13.x, c169.x
++      if b12
++        add r13.y, r24.z, -c187.z
++        mad r13.x, r13.y, c169.w, r13.x
++      endif
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      add r13.y, r16.z, -c184.w
++      mul_sat r13.y, r13.y, c183.x
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r16.xyz, r18
++      add r1.xyz, c0.w, r16
++    else
++      add r1.xyz, c0.w, v1
++    endif
+     dp3 r1.w, r1, r1
+     rsq r1.w, r1.w
+     mul r0.w, r0.w, v2.w
+diff --git a/win32_30_nv8/gta_normal/gta_normalPS3.asm b/win32_30_nv8/gta_normal/gta_normalPS3.asm
+index 6155923..2f798e6 100644
+--- a/win32_30_nv8/gta_normal/gta_normalPS3.asm
++++ b/win32_30_nv8/gta_normal/gta_normalPS3.asm
+@@ -27,6 +27,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.9835444427e-43 // 427
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0, 0, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -40,6 +46,7 @@
+     dcl_texcoord4 v2.xyz
+     dcl_texcoord5 v3.xyz
+     dcl_color v4.xw
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl vPos.xy
+     dcl_2d s0
+@@ -111,6 +118,59 @@
+         mov r0.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+diff --git a/win32_30_nv8/gta_normal/gta_normalPS4.asm b/win32_30_nv8/gta_normal/gta_normalPS4.asm
+index cef7cdb..4fd639a 100644
+--- a/win32_30_nv8/gta_normal/gta_normalPS4.asm
++++ b/win32_30_nv8/gta_normal/gta_normalPS4.asm
+@@ -29,6 +29,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.9975574273e-43 // 428
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0, 0, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter
+     def c0, -0.5, 9.99999975e-006, 0.5, 0.001953125
+     def c1, 3.99600005, 4, 0.125, 0.25
+     def c2, 0, -1, -0, 1
+@@ -41,6 +47,7 @@
+     dcl_texcoord5 v3.xyz
+     dcl_color v4.xw
+     dcl vPos.xy
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl_2d s0
+     dcl_2d s1
+@@ -116,6 +123,59 @@
+         mov r1.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r1, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r1
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r1.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r1
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r1.xyz, r12, r12.w, r1
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
+index 95f58df..2af6d46 100644
+--- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
++++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
+@@ -31,6 +31,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.8153886269e-43 // 415
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0, 0, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -44,6 +50,7 @@
+     dcl_texcoord4 v2.xyz
+     dcl_texcoord5 v3.xyz
+     dcl_color v4.xw
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl vPos.xy
+     dcl_2d s0
+@@ -116,6 +123,59 @@
+         mov r0.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
+index 5bdd4d9..80b4a8b 100644
+--- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
++++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
+@@ -33,6 +33,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.8294016116e-43 // 416
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0, 0, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter
+     def c0, -0.5, 9.99999975e-006, 0.5, 0.001953125
+     def c1, 3.99600005, 4, 0.125, 0.25
+     def c2, 0, -1, -0, 1
+@@ -45,6 +51,7 @@
+     dcl_texcoord5 v3.xyz
+     dcl_color v4.xw
+     dcl vPos.xy
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl_2d s0
+     dcl_2d s1
+@@ -121,6 +128,59 @@
+         mov r1.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r1, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r1
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r1.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r1
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r1.xyz, r12, r12.w, r1
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
 diff --git a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm b/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
 index 651fe30..048402d 100644
 --- a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
@@ -436,6 +1030,260 @@ index 7d9644a..22ff627 100644
      mul oC0.xyz, r0, r2.x
      mul oC2.z, r2.x, v4.x
      mul r0.x, r2.x, c73.x
+diff --git a/win32_30_nv8/gta_spec/gta_specPS3.asm b/win32_30_nv8/gta_spec/gta_specPS3.asm
+index d721e6d..1b5ebf1 100644
+--- a/win32_30_nv8/gta_spec/gta_specPS3.asm
++++ b/win32_30_nv8/gta_spec/gta_specPS3.asm
+@@ -27,6 +27,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.2676609395e-43 // 590
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0, 0, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -38,6 +44,7 @@
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl vPos.xy
+     dcl_2d s0
+@@ -109,6 +116,59 @@
+         mov r0.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+@@ -128,7 +188,40 @@
+     dp4 r20.x, r20_abs, c152.xzwy
+     add r20, -r20.x, r1.x
+     texkill r20
+-    add r1.yzw, c0.w, v1.xxyz
++    // --- FusionFix ground surfaces: with no normal map, the texture's light and shade (and the detail
++    // --- texture's grain) bend the normal of ground facing up, by their screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      nrm r16.xyz, v1
++      dp3 r13.x, r0, c188
++      mul r13.x, r13.x, c169.x
++      if b12
++        add r13.y, r24.z, -c187.z
++        mad r13.x, r13.y, c169.w, r13.x
++      endif
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      add r13.y, r16.z, -c184.w
++      mul_sat r13.y, r13.y, c183.x
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r16.xyz, r18
++      add r1.yzw, c0.w, r16.xxyz
++    else
++      add r1.yzw, c0.w, v1.xxyz
++    endif
+     dp3 r0.w, r1.yzww, r1.yzww
+     rsq r0.w, r0.w
+     texld r3, v0, s1
+diff --git a/win32_30_nv8/gta_spec/gta_specPS4.asm b/win32_30_nv8/gta_spec/gta_specPS4.asm
+index 3067a70..9b109a7 100644
+--- a/win32_30_nv8/gta_spec/gta_specPS4.asm
++++ b/win32_30_nv8/gta_spec/gta_specPS4.asm
+@@ -29,6 +29,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.2816739242e-43 // 591
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0, 0, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter
+     def c0, 0, -1, -0, 9.99999975e-006
+     def c1, 3.99600005, 4, 0.125, 0.25
+     def c2, 0.5, 0.001953125, 0, 0
+@@ -39,6 +45,7 @@
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
+     dcl vPos.xy
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl_2d s0
+     dcl_2d s1
+@@ -110,6 +117,59 @@
+         mov r0.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+@@ -118,7 +178,40 @@
+       mad r25.x, r24.z, c190.y, c190.z
+       mul r0.xyz, r0, r25.x
+     endif
+-    add r1.xyz, c0.w, v1
++    // --- FusionFix ground surfaces: with no normal map, the texture's light and shade (and the detail
++    // --- texture's grain) bend the normal of ground facing up, by their screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      nrm r16.xyz, v1
++      dp3 r13.x, r0, c188
++      mul r13.x, r13.x, c169.x
++      if b12
++        add r13.y, r24.z, -c187.z
++        mad r13.x, r13.y, c169.w, r13.x
++      endif
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      add r13.y, r16.z, -c184.w
++      mul_sat r13.y, r13.y, c183.x
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r16.xyz, r18
++      add r1.xyz, c0.w, r16
++    else
++      add r1.xyz, c0.w, v1
++    endif
+     dp3 r1.w, r1, r1
+     rsq r1.w, r1.w
+     texld r2, v0, s1
 diff --git a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm b/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
 index 5882ea1..34f7ee0 100644
 --- a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
@@ -967,3 +1815,238 @@ index 10dd3b6..62f3e35 100644
      mov oC1.w, c39.x
      mad oC2.xz, v4.w, c0.yyzw, c0.ywyw
      mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
+diff --git a/win32_30_nv8/rage_default/rage_defaultPS3.asm b/win32_30_nv8/rage_default/rage_defaultPS3.asm
+index 3a528b5..145f29c 100644
+--- a/win32_30_nv8/rage_default/rage_defaultPS3.asm
++++ b/win32_30_nv8/rage_default/rage_defaultPS3.asm
+@@ -23,6 +23,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0958153991e-42 // 782
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0, 0, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -32,10 +38,65 @@
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl vPos.xy
+     dcl_2d s0
++    dcl_2d s12 // FusionFix ground surfaces: noise
+     texld r0, v0, s0
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     mul_sat r0.w, r0.w, c154.x
+     // mul r0.w, r0.w, v2.w disabled vertex alpha
+     mul r1.x, r0.w, c39.x
+@@ -47,7 +108,36 @@
+     dp4 r20.x, r20_abs, c152.xzwy
+     add r20, -r20.x, r1.x
+     texkill r20
+-    add r1.yzw, c0.w, v1.xxyz
++    // --- FusionFix ground surfaces: with no normal map, the texture's light and shade (and the detail
++    // --- texture's grain) bend the normal of ground facing up, by their screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      nrm r16.xyz, v1
++      dp3 r13.x, r0, c188
++      mul r13.x, r13.x, c169.x
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      add r13.y, r16.z, -c184.w
++      mul_sat r13.y, r13.y, c183.x
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r16.xyz, r18
++      add r1.yzw, c0.w, r16.xxyz
++    else
++      add r1.yzw, c0.w, v1.xxyz
++    endif
+     dp3 r0.w, r1.yzww, r1.yzww
+     rsq r0.w, r0.w
+     mad r1.yzw, r1, r0.w, -c0.y
+diff --git a/win32_30_nv8/rage_default/rage_defaultPS4.asm b/win32_30_nv8/rage_default/rage_defaultPS4.asm
+index 657ce1d..6778f85 100644
+--- a/win32_30_nv8/rage_default/rage_defaultPS4.asm
++++ b/win32_30_nv8/rage_default/rage_defaultPS4.asm
+@@ -25,6 +25,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0972166976e-42 // 783
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0, 0, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter
+     def c0, 0, -1, -0, 9.99999975e-006
+     def c1, 3.99600005, 4, 0.125, 0.25
+     // def c2, 0.5, 0.001953125, 0, 0
+@@ -34,11 +40,95 @@
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
+     dcl vPos.xy
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl_2d s0
++    dcl_2d s12 // FusionFix ground surfaces: noise
+     dcl_2d s10
+     texld r0, v0, s0
+-    add r1.xyz, c0.w, v1
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
++    // --- FusionFix ground surfaces: with no normal map, the texture's light and shade (and the detail
++    // --- texture's grain) bend the normal of ground facing up, by their screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      nrm r16.xyz, v1
++      dp3 r13.x, r0, c188
++      mul r13.x, r13.x, c169.x
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      add r13.y, r16.z, -c184.w
++      mul_sat r13.y, r13.y, c183.x
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r16.xyz, r18
++      add r1.xyz, c0.w, r16
++    else
++      add r1.xyz, c0.w, v1
++    endif
+     dp3 r1.w, r1, r1
+     rsq r1.w, r1.w
+     mul r0.w, r0.w, v2.w
