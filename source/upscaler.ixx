@@ -1175,6 +1175,19 @@ namespace
                 CloseHandle(job);
             process = job = nullptr;
         }
+
+        // Before the helper is started again: its shared memory and events go with it
+        void Close()
+        {
+            if (shared)
+                UnmapViewOfFile(shared);
+            for (auto handle : { mapping, request, response })
+                if (handle)
+                    CloseHandle(handle);
+            shared = nullptr;
+            mapping = request = response = nullptr;
+            pending = false;
+        }
     };
 
     // ---------------------------------------------------------------------------------------------
@@ -1239,6 +1252,36 @@ namespace
         helper.Stop(true);
     }
 
+    // The helper exited while it worked: it is started again, a few times, and the upscaler stays offered meanwhile.
+    // Without this the choice vanished from the menu until the game was restarted.
+    void Lost()
+    {
+        static uint32_t restarts = 0;
+        if (restarts++ >= 3)
+        {
+            Log("The helper exited, it is not started again any more");
+            Fail();
+            return;
+        }
+
+        Log("The helper exited, starting it again");
+        bridge->ReleaseImports();
+        helper.Stop(false);
+        helper.Close();
+        configuredBackend = 0;
+        configureFailed = false;
+        generationFailed = false;
+        preparedFrameId = 0;
+        if (!helper.Start(HelperPath(), bridge->luid))
+        {
+            Log("The helper could not be started: error %lu", GetLastError());
+            helper.Stop(false);
+            Fail();
+            return;
+        }
+        state = State::Starting;
+    }
+
     const char* CommandName(Protocol::Command command)
     {
         return command == Protocol::Command::Generate ? "Generate" : "Evaluate";
@@ -1264,7 +1307,7 @@ namespace
             bridge->SignalFromCpu(pendingOutputValue);
         if (exited)
         {
-            Fail();
+            Lost();
             return false;
         }
         if (answer == HelperProcess::Answer::None)
@@ -1451,7 +1494,7 @@ export namespace Upscaler
                 Log("Configure %ux%u -> %ux%u failed%s: %s", frame.Width, frame.Height, outputWidth, outputHeight,
                     exited ? ", the helper exited" : "", shared.Message);
                 if (exited)
-                    Fail();
+                    Lost();
                 return false;
             }
             bridge->gameFence = (shared.Flags & Protocol::ConfigureFlags::GameFence) != 0;
@@ -1541,7 +1584,7 @@ export namespace Upscaler
             if (Report(reported))
                 Log("Evaluate failed%s", exited ? ", the helper exited" : "");
             if (exited)
-                Fail();
+                Lost();
             else
                 configureFailed = true;
             return false;
@@ -1620,7 +1663,7 @@ export namespace Upscaler
             if (Report(reported))
                 Log("Generate failed%s", exited ? ", the helper exited" : "");
             if (exited)
-                Fail();
+                Lost();
             else
                 generationFailed = true;
             return false;

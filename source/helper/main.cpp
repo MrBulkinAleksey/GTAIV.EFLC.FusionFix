@@ -90,11 +90,12 @@ namespace
             return game != nullptr;
         }
 
-        void Respond(Protocol::Status status)
+        // serial: of the request answered. The game may already have written the next one while this was worked on.
+        void Respond(Protocol::Status status, uint32_t serial)
         {
             shared->ResponseStatus = status;
             MemoryBarrier();
-            shared->ResponseSerial = shared->RequestSerial;
+            shared->ResponseSerial = serial;
             MemoryBarrier();
             SetEvent(response);
         }
@@ -1187,7 +1188,7 @@ namespace
             if (!device.Create(luid))
             {
                 connection.Message("D3D12 device could not be created on the game's adapter");
-                connection.Respond(Protocol::Status::Failed);
+                connection.Respond(Protocol::Status::Failed, shared.RequestSerial);
                 return 2;
             }
 
@@ -1211,7 +1212,7 @@ namespace
             shared.FSRAvailable = fsr.available;
             shared.FrameGenerationAvailable = fsr.available && fsr.frameGenerationAvailable;
             connection.Message("%s; %s", dlssMessage.c_str(), fsrMessage.c_str());
-            connection.Respond(Protocol::Status::Ok);
+            connection.Respond(Protocol::Status::Ok, shared.RequestSerial);
 
             HANDLE handles[] = { connection.request, connection.game };
             while (true)
@@ -1221,10 +1222,12 @@ namespace
                     break;
 
                 MemoryBarrier();
+                auto serial = shared.RequestSerial;
+                MemoryBarrier();
                 auto command = shared.RequestCommand;
                 if (command == Protocol::Command::Shutdown)
                 {
-                    connection.Respond(Protocol::Status::Ok);
+                    connection.Respond(Protocol::Status::Ok, serial);
                     break;
                 }
 
@@ -1259,7 +1262,7 @@ namespace
                 }
                 default: break;
                 }
-                connection.Respond(ok ? Protocol::Status::Ok : Protocol::Status::Failed);
+                connection.Respond(ok ? Protocol::Status::Ok : Protocol::Status::Failed, serial);
             }
 
             if (device.queue && device.localFence)
