@@ -1,4 +1,5 @@
 #pragma once
+#include "ShadowCasterPresence.hpp"
 #include <array>
 #include <cstdint>
 
@@ -19,9 +20,9 @@ public:
         unsigned claim=Unclaimed;
         bool ownBeam=false;
         bool observed=false;
-        // A slot shows something the light has nowhere else: a beam or an
-        // uncached lamp, or a cached lamp with a vehicle or ped in its light.
-        bool needsSlot=true;
+        // Beams and uncached lamps by whether their light reaches the view,
+        // cached lamps by the vehicles and peds in their light.
+        SlotGain gain=SlotGain::InView;
     };
     void Begin(std::uintptr_t session,std::uint32_t frame,std::uint32_t now) noexcept {
         if(session!=session_ || frame<frame_ || now-time_>2000u) claims_={};
@@ -30,8 +31,8 @@ public:
         // through short gaps; abandon it after a pause/load, never by score.
         if(now-lastCommit_>250u || frame-lastCommitFrame_>16u) claims_={};
     }
-    Candidate Observe(Identity id,std::uint32_t flags,bool relevant,bool own,bool needsSlot=true) const noexcept {
-        Candidate c{flags,Unclaimed,own,true,needsSlot};
+    Candidate Observe(Identity id,std::uint32_t flags,bool relevant,bool own,SlotGain gain=SlotGain::InView) const noexcept {
+        Candidate c{flags,Unclaimed,own,true,gain};
         if(id.key && relevant)
             for(unsigned i=0;i<Slots;++i)
                 if(claims_[i].key==id.key && claims_[i].generation==id.generation) {c.claim=i;break;}
@@ -46,12 +47,13 @@ public:
     // Preserve special native 0x400 priority. Own headlights stay usable on
     // entry/exit; otherwise hold the already drawn set across *all* light types.
     // A newcomer's category/distance cannot evict a still-visible valid claim,
-    // unless the claim only redraws what the lamp's cache already shows.
+    // unless the newcomer's shadow is in view and the claim's is not, or the
+    // claim only redraws what the lamp's cache already shows.
     static int Compare(int native,const Candidate& challenger,const Candidate& incumbent) noexcept {
         if(native<0 || native>2 || !challenger.observed || !incumbent.observed ||
            ((challenger.flags|incumbent.flags)&0x400u)) return native;
         if(challenger.ownBeam!=incumbent.ownBeam) return challenger.ownBeam?0:2;
-        if(challenger.needsSlot!=incumbent.needsSlot) return challenger.needsSlot?0:2;
+        if(challenger.gain!=incumbent.gain) return challenger.gain>incumbent.gain?0:2;
         if(challenger.claim!=incumbent.claim) return challenger.claim<incumbent.claim?0:2;
         return native;
     }

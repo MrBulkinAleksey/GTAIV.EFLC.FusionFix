@@ -33,7 +33,7 @@ namespace PlayerShadowAllocation
     // Copied on the game-process callback, read by selection on the render side.
     static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
     static fusionfix::shadows::ShadowCasterPresence casters{};
-    static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0};
+    static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0}, lightsOffScreen{0};
     static std::atomic<uint32_t> cameraPasses{0}, cameraFallbacks{0};
     static std::atomic<uint32_t> auxiliaryViewsRejected{0}, sceneCameraReads{0};
     static bool publicationEnabled = false; // Immutable after ready is published.
@@ -230,6 +230,7 @@ namespace PlayerShadowAllocation
             }
             if (state.view.valid) ++cameraPasses; else ++cameraFallbacks;
         }
+        if (casterPriority) state.casters.Look(state.view);
         if (reinterpret_cast<uintptr_t>(CurrentLights()) < 0x10000) return false;
         state.pass.Begin({state.frame, static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),
                           ped, state.occupiedCar != 0}, CurrentLights(), CurrentCount());
@@ -384,15 +385,21 @@ namespace PlayerShadowAllocation
                 {light.mPosition.x,light.mPosition.y,light.mPosition.z},light.mRadius);
             const bool relevant=std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=reach*reach &&
                 (volumeVisible || kind==budget::Kind::PlayerBeam);
-            // A cached lamp with nobody in its light looks the same from its cache.
+            // A cached lamp with nobody in its light looks the same from its cache;
+            // beams and uncached lamps shadow the world wherever they shine.
+            using fusionfix::shadows::SlotGain;
             const bool cached=(flags&rage::LF_STATIC_SHADOW) && light.mShadowCacheIndex>=0;
-            const bool needsSlot=!casterPriority || kind!=budget::Kind::Lamp || !cached ||
-                state.casters.Lights({light.mPosition.x,light.mPosition.y,light.mPosition.z},
-                    {light.mDirection.x,light.mDirection.y,light.mDirection.z},
-                    static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle);
-            if(!needsSlot) ++lampsWithoutCasters;
+            auto gain=SlotGain::InView;
+            if(casterPriority && kind!=budget::Kind::PlayerBeam)
+                gain=kind==budget::Kind::Lamp && cached
+                    ? state.casters.Lights({light.mPosition.x,light.mPosition.y,light.mPosition.z},
+                        {light.mDirection.x,light.mDirection.y,light.mDirection.z},
+                        static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle)
+                    : volumeVisible ? SlotGain::InView : SlotGain::OffScreen;
+            if(gain==SlotGain::None) ++lampsWithoutCasters;
+            else if(gain==SlotGain::OffScreen) ++lightsOffScreen;
             labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(
-                {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam,needsSlot);
+                {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam,gain);
             // Record why a prior choice loses its claim, independently of
             // whether native sorting eventually drops it. Bounded to 7/pass.
             for(const auto& old:state.previousSelection) if(old.key==key) {
