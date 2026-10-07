@@ -238,6 +238,9 @@ Specular Anti-Aliasing
 [GroundSurf]
 Ground Surfaces
 
+[FF_PROCDIST]
+Grass & Props Distance
+
 [LodBias1]
 -0.25
 

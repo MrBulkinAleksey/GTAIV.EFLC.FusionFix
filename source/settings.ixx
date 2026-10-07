@@ -2131,6 +2131,7 @@ public:
             { 0, "PREF_GGX_LIGHTING",           "POSTFX",     "GGXLighting",                        "",                           1, nullptr, 0, 1 },
             { 0, "PREF_WET_WEATHER",            "POSTFX",     "WetWeather",                         "",                           1, nullptr, 0, 1 },
             { 0, "PREF_GROUND_SURFACES",        "TEXTURES",   "GroundSurfaces",                     "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_PROCEDURAL_DISTANCE",    "PROCEDURAL", "ProceduralDistance",                 "",                           0, nullptr, 0, 8 },
         };
 
         for (auto& setting : arr)
@@ -2318,6 +2319,10 @@ public:
             AddRow(category, "Depth of Field", "PREF_TCYC_DOF", 6, "MENU_DISPLAY_DOF");
             AddRow(category, "TreeFX", "PREF_TREE_LIGHTING", 3, "MENU_DISPLAY_TREE_LIGHTING");
             AddRow(category, "Tree Alpha", "PREF_TREEALPHA", 3, "MENU_DISPLAY_TREE_LIGHTING");
+            // Grass and procedural props go further by a quarter of the game's distance a step (procedural.ixx)
+            if (auto id = GetPrefIDByName("PREF_PROCEDURAL_DISTANCE"); id && valueTextHook)
+                valueTexts[*id] = [this, id = *id] { auto step = std::clamp(Get(id), 0, 8); return step ? std::format(L"x{:.2f}", 1.0f + 0.25f * step) : std::wstring(CText::getText("MO_DEF")); };
+            AddRow(category, "FF_PROCDIST", "PREF_PROCEDURAL_DISTANCE", 9, valueTextHook ? "MENU_DISPLAY_VALUE_SLIDERBAR" : slider);
             AddEmptyLine(category);
             AddRow(category, "Bloom", "PREF_BLOOM", 2, toggle);
             AddRow(category, "Screen Filter", "PREF_TIMECYC", 5, "MENU_DISPLAY_TIMECYC");
