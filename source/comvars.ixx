@@ -2606,6 +2606,18 @@ export namespace RageDirect3DDevice9
 
     IDirect3DDevice9** m_pRealDevice = nullptr;
 
+    // The device the game stored on creation. Script Hook (Aru's, under the .Net hook) later puts a proxy of its own in
+    // the game's pointer, which passes each call on to the device it keeps: vtable hooks taken from both and calls
+    // into the D3D9 runtime with the proxy for the device crash, so these always go by this one.
+    IDirect3DDevice9* RuntimeDevice = nullptr;
+
+    IDirect3DDevice9* GetRuntimeDevice()
+    {
+        if (!RuntimeDevice && m_pRealDevice)
+            RuntimeDevice = *m_pRealDevice;
+        return RuntimeDevice;
+    }
+
     IDirect3DTexture9** g_TexturesBySampler = nullptr;
 
     IDirect3DTexture9* GetTexture(uint32_t index)
@@ -2622,7 +2634,7 @@ export namespace RageDirect3DDevice9
     // the real device, so it takes now.
     IDirect3DDevice9* RealDevice(IDirect3DDevice9* wrapper)
     {
-        auto real = m_pRealDevice ? *m_pRealDevice : nullptr;
+        auto real = GetRuntimeDevice();
         return real ? real : wrapper;
     }
 
@@ -3410,6 +3422,10 @@ public:
 
         pattern = find_pattern("A3 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? E8 ? ? ? ? A1", "A3 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? E8 ? ? ? ? 8B 0D");
         RageDirect3DDevice9::m_pRealDevice = *pattern.get_first<IDirect3DDevice9**>(1);
+        static auto StoreDeviceHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
+        {
+            RageDirect3DDevice9::RuntimeDevice = reinterpret_cast<IDirect3DDevice9*>(regs.eax);
+        });
 
         // CFrontEnd::CheckForBackInput, same in all versions. The menu API hooks the other reads of the menu screen
         // that could be used here, possibly before this runs.

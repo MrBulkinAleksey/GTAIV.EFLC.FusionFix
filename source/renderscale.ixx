@@ -365,7 +365,7 @@ namespace
 
     void InstallHooks()
     {
-        auto device = RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
+        auto device = RageDirect3DDevice9::GetRuntimeDevice();
         if (!device)
             return;
         auto vtable = *reinterpret_cast<void***>(device);
@@ -553,7 +553,7 @@ export namespace RenderScale
         // The full size depth buffer only exists once the device hooks made it, and starts the post processing empty.
         // The hooked functions are the D3D9 runtime's own: they take the real device, not the game's wrapper that
         // grcDevice hands out.
-        auto realDevice = RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
+        auto realDevice = RageDirect3DDevice9::GetRuntimeDevice();
         if (FullDepth && RealSetDepthStencilSurface && RealClear && realDevice)
         {
             IDirect3DSurface9* oldDepth = nullptr;

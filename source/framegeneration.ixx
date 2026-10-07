@@ -807,7 +807,7 @@ namespace
         bSharpenDeferred = false;
         FusionFix::bFrameGenerationPresenting = false;
 
-        auto device = RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
+        auto device = RageDirect3DDevice9::GetRuntimeDevice();
         if (!device)
             return;
         if (mode == Mode::Off)

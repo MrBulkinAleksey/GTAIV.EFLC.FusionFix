@@ -1391,7 +1391,7 @@ export namespace Upscaler
     {
         if (state == State::Idle)
         {
-            auto device = RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
+            auto device = RageDirect3DDevice9::GetRuntimeDevice();
             if (!device)
                 return;
 

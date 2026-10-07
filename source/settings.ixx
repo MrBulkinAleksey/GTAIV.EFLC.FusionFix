@@ -3691,7 +3691,7 @@ public:
                     static std::list<int> m_times;
                     static int fontSize = 0;
 
-                    auto pDevice = *RageDirect3DDevice9::m_pRealDevice;
+                    auto pDevice = RageDirect3DDevice9::GetRuntimeDevice();
 
                     LARGE_INTEGER frequency;
                     LARGE_INTEGER time;

@@ -839,7 +839,7 @@ public:
 
     static void InstallDrawHook()
     {
-        auto device = RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
+        auto device = RageDirect3DDevice9::GetRuntimeDevice();
         if (!device)
             return;
 
@@ -1041,7 +1041,7 @@ public:
         bool capturing = bCapturing;
         bCapturing = false;
 
-        auto device = RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
+        auto device = RageDirect3DDevice9::GetRuntimeDevice();
         if (device && GetMode() != Mode::Off && CurrentCamera.Valid && ResourcesReady())
         {
             bInternalDraw = true;
@@ -1321,7 +1321,7 @@ public:
         if (!OpaqueRT || !OpaqueRT->mD3DTexture || !OpaqueLumaPS)
             return;
 
-        auto device = RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
+        auto device = RageDirect3DDevice9::GetRuntimeDevice();
         if (!device)
             return;
 
@@ -1447,7 +1447,7 @@ public:
 
     static IDirect3DDevice9* RealDevice()
     {
-        return RageDirect3DDevice9::m_pRealDevice ? *RageDirect3DDevice9::m_pRealDevice : nullptr;
+        return RageDirect3DDevice9::GetRuntimeDevice();
     }
 
     static void ReleaseSceneTargets()
