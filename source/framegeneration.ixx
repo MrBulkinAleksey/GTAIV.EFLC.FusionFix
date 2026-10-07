@@ -101,6 +101,7 @@ namespace
     bool bPending = false;
     bool bInPresent = false;
     bool bEndOfFrameOnly = false;   // the runtime refused a Present inside the game's scene
+    bool bBackBufferDrawn = false;  // the post processing of this frame began: the back buffer has the frame from then on
     LARGE_INTEGER PendingDue{};
     LARGE_INTEGER GeneratedAt{};
 
@@ -493,8 +494,15 @@ namespace
         if (FAILED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) || !backBuffer)
             return;
 
+        // Nothing of this frame is in the back buffer before its post processing, which clears it and draws the whole
+        // frame: only a back buffer the game drew into, or is drawing into, is kept and given back after the Present
+        IDirect3DSurface9* bound = nullptr;
+        device->GetRenderTarget(0, &bound);
+        bool keep = late || bBackBufferDrawn || bound == backBuffer;
+        SAFE_RELEASE(bound);
+
         bInPresent = true;
-        if (CopyInto(device, backBuffer, SavedRT) && CopyFrom(device, PresentRT, backBuffer))
+        if ((!keep || CopyInto(device, backBuffer, SavedRT)) && CopyFrom(device, PresentRT, backBuffer))
         {
             Mark(device, backBuffer, false);
             // Present moves the images of the two back buffers around: what is bound to the device is bound again
@@ -536,7 +544,7 @@ namespace
 
             // The game's back buffer as it was, in whichever surface is the back buffer now
             IDirect3DSurface9* current = nullptr;
-            if (SUCCEEDED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &current)) && current)
+            if (keep && SUCCEEDED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &current)) && current)
             {
                 CopyFrom(device, SavedRT, current);
                 current->Release();
@@ -782,6 +790,7 @@ namespace
         // This frame ended before the last one went: it goes first
         if (bPending)
             PresentPending(device, true);
+        bBackBufferDrawn = false;
 
         // Not in the menus: the generation starts over once they close
         if (!Upscaler::IsFrameGenerationReady() || IsMenuActive())
@@ -897,6 +906,12 @@ export namespace FrameGeneration
     bool UsesHudLess()
     {
         return mode != Mode::Off;
+    }
+
+    // Render thread, as the post processing begins to draw the frame into the back buffer
+    void OnPostProcessing()
+    {
+        bBackBufferDrawn = true;
     }
 
     // Render thread, right after the post processing: the back buffer holds the scene without the HUD

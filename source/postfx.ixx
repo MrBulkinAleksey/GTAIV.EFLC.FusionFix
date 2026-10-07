@@ -3517,6 +3517,7 @@ private:
 
 
         pDevice->GetRenderTarget(0, &PostFxResources.backBuffer);
+        FrameGeneration::OnPostProcessing();
         pDevice->GetPixelShader(&oldps);
         pDevice->GetVertexShader(&oldvs);
 
@@ -3564,17 +3565,25 @@ private:
         PostFxResources.surfaceRead = nullptr;
     }
 
-    // Sharpening (CAS.hlsl) of the finished frame, after anti-aliasing and before the HUD. The
-    // frame is copied to FullScreenTex_temp2, which anti-aliasing has read by now, and sharpened
-    // from there back into the back buffer.
-    static void ApplySharpening(IDirect3DDevice9* pDevice, IDirect3DPixelShader9* pShader, IDirect3DVertexShader9* vShader)
+    static bool IsSharpeningActive()
     {
         static auto sharpening = FusionFixSettings.GetRef("PREF_SHARPENING");
         auto& R = PostFxResources;
-        if (!sharpening || sharpening->get() <= 0 || !R.CAS_PS || !R.backBuffer || !R.FullScreenTex_temp2 || !R.FullScreenSurface_temp2)
+        return sharpening && sharpening->get() > 0 && R.CAS_PS && R.backBuffer && R.FullScreenTex_temp2 && R.FullScreenSurface_temp2;
+    }
+
+    // Sharpening (CAS.hlsl) of the finished frame, after anti-aliasing and before the HUD, from
+    // FullScreenTex_temp2 into the back buffer. Without anti-aliasing of its own the game's post
+    // processing drew the frame there already (inTemp2); after FXAA or SMAA, which read it from
+    // there, the frame is copied into it.
+    static void ApplySharpening(IDirect3DDevice9* pDevice, IDirect3DPixelShader9* pShader, IDirect3DVertexShader9* vShader, bool inTemp2)
+    {
+        static auto sharpening = FusionFixSettings.GetRef("PREF_SHARPENING");
+        auto& R = PostFxResources;
+        if (!IsSharpeningActive())
             return;
         ProfilerScope timed(pDevice, kProfPostSharpen);
-        if (FAILED(pDevice->StretchRect(R.backBuffer, nullptr, R.FullScreenSurface_temp2, nullptr, D3DTEXF_NONE)))
+        if (!inTemp2 && FAILED(pDevice->StretchRect(R.backBuffer, nullptr, R.FullScreenSurface_temp2, nullptr, D3DTEXF_NONE)))
             return;
 
         // Low, medium and high; the peak CAS weighs the neighbours with is -1 / lerp(8, 5, sharpness).
@@ -3680,12 +3689,14 @@ private:
                     if (TemporalAA::GetMode() != TemporalAA::Mode::Off && !TemporalAA::IsSceneResolved() && !RenderScale::IsActive())
                     {
                         ProfilerScope timed(pDevice, kProfPostTAA);
-                        FilterStippleBeforeResolve(PostFxResources.textureRead);
-                        if (TemporalAA::Resolve(pDevice, PostFxResources.textureRead, PostFxResources.renderTargetTex, PostFxResources.renderTargetSurf))
+                        auto source = FilterStippleBeforeResolve(PostFxResources.textureRead);
+                        if (TemporalAA::Resolve(pDevice, source, PostFxResources.renderTargetTex, PostFxResources.renderTargetSurf))
                         {
                             PostFxResources.swapbuffers();
                             pDevice->SetPixelShader(pShader);
                         }
+                        else if (source != PostFxResources.textureRead)
+                            TemporalAA::KeepStipple(PostFxResources.textureRead);
                     }
 
                     if (PostFxResources.useStippleFilter && PostFxResources.stipple_filter_ps && !TemporalAA::IsStippleFiltered())
@@ -3791,6 +3802,10 @@ private:
                         }
                     }
 
+                    // The sharpening reads the frame from FullScreenTex_temp2: without anti-aliasing of
+                    // its own the game's post processing draws it there
+                    const bool sharpenFromTemp2 = !IsPostFxAA() && IsSharpeningActive();
+
                     // game postfx
                     {
                         ProfilerScope timed(pDevice, kProfPostGame);
@@ -3800,7 +3815,7 @@ private:
                             pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, PostFxResources.Samplers[i]);
                         }
 
-                        if (IsPostFxAA())
+                        if (IsPostFxAA() || sharpenFromTemp2)
                             pDevice->SetRenderTarget(0, PostFxResources.FullScreenSurface_temp2);
                         else
                             pDevice->SetRenderTarget(0, PostFxResources.backBuffer);
@@ -3954,7 +3969,7 @@ private:
                         }
                     }
 
-                    ApplySharpening(pDevice, pShader, vShader);
+                    ApplySharpening(pDevice, pShader, vShader, sharpenFromTemp2);
                     FrameGeneration::CaptureHudLess(pDevice, PostFxResources.backBuffer);
 
                     for (int i = 0; i < PostfxTextureCount; i++)
@@ -6497,11 +6512,14 @@ private:
     }
 
     // With temporal anti-aliasing, DLAA or FSR the stipple filter runs before them, on the scene at the render size,
-    // instead of in the post processing after them
-    static void FilterStippleBeforeResolve(IDirect3DTexture9* scene)
+    // instead of in the post processing after them. Returns what the resolve reads: the filtered copy, or the scene
+    // when the filter did not run. A scene nothing resolved takes the copy with TemporalAA::KeepStipple.
+    static IDirect3DTexture9* FilterStippleBeforeResolve(IDirect3DTexture9* scene)
     {
-        if (TemporalAA::GetMode() != TemporalAA::Mode::Off && PostFxResources.useStippleFilter && PostFxResources.stipple_filter_ps)
-            TemporalAA::FilterStipple(scene, PostFxResources.stipple_filter_ps);
+        if (TemporalAA::GetMode() == TemporalAA::Mode::Off || !PostFxResources.useStippleFilter || !PostFxResources.stipple_filter_ps)
+            return scene;
+        auto filtered = TemporalAA::FilterStipple(scene, PostFxResources.stipple_filter_ps);
+        return filtered ? filtered : scene;
     }
 
     // Render scale: from here on FullScreenCopy is a texture of the screen size, with the scene upscaled by DLSS
@@ -6518,19 +6536,23 @@ private:
         IDirect3DSurface9* output = nullptr;
         if (!RenderScale::BeginPost(pDevice, scene, sceneSurface, output))
             return;
-        FilterStippleBeforeResolve(scene);
+        // The scene at the render size is not read past here: the filtered copy stands in for it
+        auto source = FilterStippleBeforeResolve(scene);
 
-        auto upscaled = PostFxResources.FullScreenTex_temp1->mD3DTexture;
-        IDirect3DSurface9* upscaledSurface = nullptr;
-        upscaled->GetSurfaceLevel(0, &upscaledSurface);
+        // DLSS and FSR write straight into the full size texture
+        IDirect3DTexture9* outputTexture = nullptr;
+        output->GetContainer(__uuidof(IDirect3DTexture9), reinterpret_cast<void**>(&outputTexture));
 
         auto mode = TemporalAA::GetMode();
-        if (upscaledSurface && (mode == TemporalAA::Mode::DLAA || mode == TemporalAA::Mode::FSR) &&
-            TemporalAA::Resolve(pDevice, scene, upscaled, upscaledSurface))
-            pDevice->StretchRect(upscaledSurface, nullptr, output, nullptr, D3DTEXF_POINT);
-        else
-            pDevice->StretchRect(sceneSurface, nullptr, output, nullptr, D3DTEXF_LINEAR);
-        SAFE_RELEASE(upscaledSurface);
+        if (!outputTexture || (mode != TemporalAA::Mode::DLAA && mode != TemporalAA::Mode::FSR) ||
+            !TemporalAA::Resolve(pDevice, source, outputTexture, output))
+        {
+            IDirect3DSurface9* sourceSurface = nullptr;
+            if (SUCCEEDED(source->GetSurfaceLevel(0, &sourceSurface)) && sourceSurface)
+                pDevice->StretchRect(sourceSurface, nullptr, output, nullptr, D3DTEXF_LINEAR);
+            SAFE_RELEASE(sourceSurface);
+        }
+        SAFE_RELEASE(outputTexture);
     }
 
     // Temporal anti-aliasing resolves the scene before the game computes bloom from it, which would otherwise
@@ -6552,8 +6574,15 @@ private:
         IDirect3DSurface9* resolvedSurface = nullptr;
         scene->GetSurfaceLevel(0, &sceneSurface);
         resolved->GetSurfaceLevel(0, &resolvedSurface);
-        FilterStippleBeforeResolve(scene);
-        if (sceneSurface && resolvedSurface && TemporalAA::Resolve(pDevice, scene, resolved, resolvedSurface))
+        auto source = FilterStippleBeforeResolve(scene);
+        // Straight into the scene when the resolve reads the stipple filter's copy, or when DLAA or FSR, which take
+        // the scene in before they write, resolve it; temporal AA reading the scene itself writes into the copy
+        auto mode = TemporalAA::GetMode();
+        bool upscaler = mode == TemporalAA::Mode::DLAA || mode == TemporalAA::Mode::FSR;
+        bool direct = sceneSurface && (source != scene || upscaler) && TemporalAA::Resolve(pDevice, source, scene, sceneSurface);
+        if (!direct && source != scene)
+            TemporalAA::KeepStipple(scene);
+        else if (!direct && sceneSurface && resolvedSurface && TemporalAA::Resolve(pDevice, scene, resolved, resolvedSurface))
             pDevice->StretchRect(resolvedSurface, nullptr, sceneSurface, nullptr, D3DTEXF_POINT);
         SAFE_RELEASE(resolvedSurface);
         SAFE_RELEASE(sceneSurface);
@@ -6895,11 +6924,7 @@ private:
             DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.ContactSurf, width, height, kProfContactDenoise);
             result = R.ContactTex->mD3DTexture;
         }
-        else
-        {
-            pDevice->StretchRect(R.ContactRawSurf, nullptr, R.ContactSurf, nullptr, D3DTEXF_NONE);
-        }
-        R.ContactResult = R.ContactTex->mD3DTexture;
+        R.ContactResult = result;
 
         if (temporal)
         {
@@ -6915,7 +6940,7 @@ private:
             const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
 
             const int prev = R.nContactAccumIndex, next = prev ^ 1;
-            effect->SetTexture(h.SSRResultTex2D, R.ContactTex->mD3DTexture);
+            effect->SetTexture(h.SSRResultTex2D, result);
             effect->SetTexture(h.SSRAccumTex2D, R.ContactAccumTex[prev]->mD3DTexture);
             effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
             effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);

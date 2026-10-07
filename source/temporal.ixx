@@ -1632,34 +1632,35 @@ public:
     //
     // Fading objects are drawn stippled, a pattern of pixels, and PostFX's stipple filter smooths it. The resolve, DLAA
     // and FSR used to come first and kept the pattern, or blurred it into a shimmer that left the filter nothing to find.
-    // With them the filter runs on the scene at the render size, before they do.
+    // With them the filter runs on the scene at the render size, before they do, into the copy, which the resolve
+    // then reads; the scene itself gets it only when nothing resolved it (KeepStipple).
 
     static inline uint32_t StippleFrame = 0;    // SceneFrame the scene was filtered in
 
-    static bool FilterStipple(IDirect3DTexture9* scene, IDirect3DPixelShader9* filter)
+    static IDirect3DTexture9* FilterStipple(IDirect3DTexture9* scene, IDirect3DPixelShader9* filter)
     {
         using namespace TemporalAA;
 
         if (!scene || !filter || StippleFrame == SceneFrame)
-            return false;
+            return nullptr;
         auto device = RealDevice();
         // GBUFFER_2.w marks the stippled pixels, which the filter keeps to with Definition on (c223.z)
         auto gbuffer2 = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_2_");
         if (!device || !gbuffer2 || !gbuffer2->mD3DTexture)
-            return false;
+            return nullptr;
 
         IDirect3DSurface9* sceneSurface = nullptr;
         D3DSURFACE_DESC desc{};
         if (FAILED(scene->GetSurfaceLevel(0, &sceneSurface)) || !sceneSurface || FAILED(sceneSurface->GetDesc(&desc)))
         {
             SAFE_RELEASE(sceneSurface);
-            return false;
+            return nullptr;
         }
         auto copy = GetSceneCopy(device, desc);
         if (!copy)
         {
             sceneSurface->Release();
-            return false;
+            return nullptr;
         }
 
         auto width = static_cast<float>(desc.Width);
@@ -1687,10 +1688,20 @@ public:
         }
         bInternalDraw = false;
 
-        device->StretchRect(copy, nullptr, sceneSurface, nullptr, D3DTEXF_POINT);
         sceneSurface->Release();
         StippleFrame = SceneFrame;
-        return true;
+        return SceneCopyTexture;
+    }
+
+    // The filtered copy into the scene, for a scene nothing resolved
+    static void KeepStipple(IDirect3DTexture9* scene)
+    {
+        auto device = RealDevice();
+        IDirect3DSurface9* sceneSurface = nullptr;
+        if (!device || !scene || !SceneCopySurface || FAILED(scene->GetSurfaceLevel(0, &sceneSurface)) || !sceneSurface)
+            return;
+        device->StretchRect(SceneCopySurface, nullptr, sceneSurface, nullptr, D3DTEXF_POINT);
+        sceneSurface->Release();
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -1788,6 +1799,7 @@ public:
     // DLAA and FSR
 
     static inline uint32_t UpscalerFrame = 0;             // SceneFrame of the last upscaled frame
+    static inline uint32_t UpscaleTried = 0;              // SceneFrame DLSS or FSR was last asked to resolve
     static inline LARGE_INTEGER UpscalerTime{};
 
     static bool Upscale(IDirect3DDevice9* device, Upscaler::Backend backend, IDirect3DTexture9* scene, IDirect3DTexture9* output)
@@ -1858,6 +1870,9 @@ public:
             AddRain(output, true);
             return true;
         }
+        // Into the scene itself only DLSS and FSR resolve: the caller tries again with a target of its own
+        if (outputTexture == scene)
+            return false;
 
         IDirect3DSurface9* sceneSurface = nullptr;
         if (RainFrame == TemporalAA::SceneFrame && scene && SUCCEEDED(scene->GetSurfaceLevel(0, &sceneSurface)))
@@ -1874,9 +1889,11 @@ private:
         if (!ResourcesReady() || !scene || !output || !CurrentCamera.Valid || MotionFrame != SceneFrame)
             return false;
 
+        // Once a scene: a second call after a failed one, into a target of the caller's, goes to temporal AA
         auto mode = GetMode();
-        if (mode == Mode::DLAA || mode == Mode::FSR)
+        if ((mode == Mode::DLAA || mode == Mode::FSR) && UpscaleTried != SceneFrame)
         {
+            UpscaleTried = SceneFrame;
             auto backend = mode == Mode::DLAA ? Upscaler::Backend::DLSS : Upscaler::Backend::FSR;
             if (outputTexture && Upscale(device, backend, scene, outputTexture))
             {
@@ -1889,8 +1906,9 @@ private:
         }
         UpscalerFrame = 0;
 
-        // TAA resolves at the render size only, the post processing stretches the scene instead
-        if (RenderScale::IsActive())
+        // TAA resolves at the render size only, the post processing stretches the scene instead; nor into the scene
+        // it reads, which only DLSS and FSR can write
+        if (RenderScale::IsActive() || outputTexture == scene)
             return false;
 
         auto previousIndex = HistoryIndex;
@@ -2196,9 +2214,16 @@ export namespace TemporalAA
     }
 
     // PostFX's stipple filter on the scene at the render size, right before the resolve; false if it did not run
-    bool FilterStipple(IDirect3DTexture9* scene, IDirect3DPixelShader9* filter)
+    // The filtered scene for the resolve to read, or null if the filter did not run
+    IDirect3DTexture9* FilterStipple(IDirect3DTexture9* scene, IDirect3DPixelShader9* filter)
     {
         return Temporal::FilterStipple(scene, filter);
+    }
+
+    // When nothing resolved the scene: the filtered copy goes into it
+    void KeepStipple(IDirect3DTexture9* scene)
+    {
+        Temporal::KeepStipple(scene);
     }
 
     // The scene of this frame was filtered before the resolve
