@@ -4517,9 +4517,16 @@ private:
         { "HDR output", -1 },
     };
     static_assert(std::size(kProfilerSectionInfo) == kProfSections);
+    // The game's own passes, between FusionFix's top level sections, are timed by the render target the
+    // game has locked (grcTextureFactoryPC::LockRenderTarget, index 0): shadow maps, the G-buffer, the
+    // reflection maps and so on, each a section of its own after kProfSections, named by the target as
+    // the game first locks it. kProfTargetScreen stands for what the game draws with no target locked.
+    static constexpr int kProfilerTargets = 64;
+    static constexpr int kProfTargetScreen = kProfSections;
+    static constexpr int kProfAll = kProfSections + kProfilerTargets;
     static constexpr int kProfilerFrames = 4;
     static constexpr int kProfilerAverage = 120;
-    static constexpr int kProfilerStamps = 192; // timestamps a frame, two per section entered
+    static constexpr int kProfilerStamps = 512; // timestamps a frame, two per section entered
     struct ProfilerFrame
     {
         IDirect3DQuery9* disjoint = nullptr;
@@ -4534,7 +4541,10 @@ private:
     };
     static inline ProfilerFrame profilerFrames[kProfilerFrames];
     static inline int nProfilerFrame = -1;
-    static inline double profilerSums[kProfSections] = {};
+    static inline double profilerSums[kProfAll] = {};
+    static inline std::string profilerTargetNames[kProfilerTargets] = { "no target locked (the screen)" };
+    static inline int nProfilerTargets = 1;
+    static inline std::unordered_map<const void*, int> profilerTargetIds; // the game's targets by address
     static inline double profilerFrameSum = 0.0;
     static inline int nProfilerSamples = 0;
 
@@ -4603,7 +4613,26 @@ private:
                 WriteProfilerSection(log, i, 0, n);
                 sections += profilerSums[i];
             }
-            log.Printf("  %-34s %6.2f\n", "the game's other passes", (std::max)(profilerFrameSum - sections, 0.0) / n);
+            const double game = (std::max)(profilerFrameSum - sections, 0.0);
+            log.Printf("  %-34s %6.2f\n", "the game's other passes", game / n);
+            // By the target the game drew into, the most expensive first; what is left over is time no target
+            // accounts for, such as the GPU waiting on the game.
+            int order[kProfilerTargets];
+            for (int i = 0; i < nProfilerTargets; ++i)
+                order[i] = i;
+            std::sort(order, order + nProfilerTargets,
+                      [](int a, int b) { return profilerSums[kProfSections + a] > profilerSums[kProfSections + b]; });
+            double targets = 0.0;
+            for (int i = 0; i < nProfilerTargets; ++i)
+            {
+                const double t = profilerSums[kProfSections + order[i]];
+                if (t / n < 0.005)
+                    continue;
+                log.Printf("    %-32s %6.2f\n", profilerTargetNames[order[i]].c_str(), t / n);
+                targets += t;
+            }
+            if (targets > 0.0)
+                log.Printf("    %-32s %6.2f\n", "other", (std::max)(game - targets, 0.0) / n);
         }
         std::fill(std::begin(profilerSums), std::end(profilerSums), 0.0);
         profilerFrameSum = 0.0;
@@ -4619,9 +4648,9 @@ private:
             f.freq->GetData(&freq, sizeof(freq), 0) != S_OK || !freq ||
             f.start->GetData(&start, sizeof(start), 0) != S_OK || f.stop->GetData(&stop, sizeof(stop), 0) != S_OK)
             return;
-        double ms[kProfSections] = {};
-        UINT64 open[kProfSections] = {};
-        bool opened[kProfSections] = {};
+        double ms[kProfAll] = {};
+        UINT64 open[kProfAll] = {};
+        bool opened[kProfAll] = {};
         for (int i = 0; i < f.count; ++i)
         {
             UINT64 t = 0;
@@ -4639,7 +4668,7 @@ private:
                 opened[section] = false;
             }
         }
-        for (int i = 0; i < kProfSections; ++i)
+        for (int i = 0; i < kProfAll; ++i)
             profilerSums[i] += ms[i];
         profilerFrameSum += double(stop - start) * 1000.0 / double(freq);
         if (++nProfilerSamples >= kProfilerAverage)
@@ -4652,6 +4681,13 @@ private:
         auto& R = PostFxResources;
         if (!R.bPostFxProfiler || !pDevice)
             return;
+        InstallProfilerTargetHooks();
+        // The target section open at the frame's end is closed in this frame and opened again in the next.
+        const int target = nProfilerOpenTarget;
+        if (target >= 0)
+            ProfilerStamp(pDevice, target, false);
+        nProfilerOpenTarget = -1;
+        nProfilerOwnSections = 0;
         if (nProfilerFrame >= 0 && profilerFrames[nProfilerFrame].issued)
         {
             auto& cur = profilerFrames[nProfilerFrame];
@@ -4676,9 +4712,10 @@ private:
         f.disjoint->Issue(D3DISSUE_BEGIN);
         f.start->Issue(D3DISSUE_END);
         f.issued = true;
+        SwitchProfilerTarget(pDevice);
     }
 
-    static void ProfilerMark(IDirect3DDevice9* pDevice, int section, bool begin)
+    static void ProfilerStamp(IDirect3DDevice9* pDevice, int section, bool begin)
     {
         if (!PostFxResources.bPostFxProfiler || !pDevice || nProfilerFrame < 0 || section < 0)
             return;
@@ -4690,6 +4727,112 @@ private:
             return;
         q->Issue(D3DISSUE_END);
         f.marks[f.count++] = { section, begin };
+    }
+
+    // The game's target sections (see kProfilerTargets): the targets it has locked, innermost last; the
+    // section open now, -1 for none; and how many of FusionFix's top level sections are open, which
+    // pause the game's while they run.
+    static inline std::vector<int> profilerTargetStack;
+    static inline int nProfilerOpenTarget = -1;
+    static inline int nProfilerOwnSections = 0;
+
+    static void SwitchProfilerTarget(IDirect3DDevice9* pDevice)
+    {
+        const int want = nProfilerOwnSections > 0 ? -1
+                       : kProfTargetScreen + (profilerTargetStack.empty() ? 0 : profilerTargetStack.back());
+        if (want == nProfilerOpenTarget)
+            return;
+        if (nProfilerOpenTarget >= 0)
+            ProfilerStamp(pDevice, nProfilerOpenTarget, false);
+        if (want >= 0)
+            ProfilerStamp(pDevice, want, true);
+        nProfilerOpenTarget = want;
+    }
+
+    static void ProfilerMark(IDirect3DDevice9* pDevice, int section, bool begin)
+    {
+        if (!PostFxResources.bPostFxProfiler || !pDevice || nProfilerFrame < 0 || section < 0)
+            return;
+        const bool topLevel = section < kProfSections && kProfilerSectionInfo[section].parent < 0;
+        if (topLevel && begin)
+        {
+            ++nProfilerOwnSections;
+            SwitchProfilerTarget(pDevice);
+        }
+        ProfilerStamp(pDevice, section, begin);
+        if (topLevel && !begin && nProfilerOwnSections > 0)
+        {
+            --nProfilerOwnSections;
+            SwitchProfilerTarget(pDevice);
+        }
+    }
+
+    // The game's targets come and go through grcTextureFactoryPC's LockRenderTarget and
+    // UnlockRenderTarget (vtable slots 15 and 16), which the game only calls through the vtable. The
+    // two entries are replaced once the profiler runs, and only then.
+    using LockRenderTargetFn = void(__thiscall*)(void*, uint32_t, rage::grcRenderTargetPC*, rage::grcRenderTargetPC*, uint32_t, bool, uint32_t);
+    using UnlockRenderTargetFn = void(__thiscall*)(void*, uint32_t, void*, int32_t);
+    static inline LockRenderTargetFn pfnLockRenderTarget = nullptr;
+    static inline UnlockRenderTargetFn pfnUnlockRenderTarget = nullptr;
+
+    static int ProfilerTargetId(rage::grcRenderTargetPC* rt)
+    {
+        if (!rt)
+            return 0;
+        std::string name = rt->mName ? rt->mName : "unnamed target";
+        // A target the game made again, as on a resolution change, can take the address of another.
+        if (auto it = profilerTargetIds.find(rt); it != profilerTargetIds.end() && (it->second == 0 || profilerTargetNames[it->second] == name))
+            return it->second;
+        int id = -1;
+        for (int i = 1; i < nProfilerTargets; ++i)
+            if (profilerTargetNames[i] == name)
+                id = i;
+        if (id < 0 && nProfilerTargets < kProfilerTargets)
+        {
+            id = nProfilerTargets++;
+            profilerTargetNames[id] = std::move(name);
+        }
+        if (id < 0)
+            id = 0; // out of sections: counted with the screen
+        profilerTargetIds[rt] = id;
+        return id;
+    }
+
+    static void __fastcall ProfilerLockRenderTarget(void* factory, void*, uint32_t index, rage::grcRenderTargetPC* color,
+                                                    rage::grcRenderTargetPC* depth, uint32_t a5, bool a6, uint32_t mip)
+    {
+        pfnLockRenderTarget(factory, index, color, depth, a5, a6, mip);
+        if (index != 0 || !PostFxResources.bPostFxProfiler)
+            return;
+        // Shadow maps are drawn into a depth target alone. A lock the game never undid would grow the stack
+        // for good; deeper than any nesting it uses, the stack starts over.
+        if (profilerTargetStack.size() >= 16)
+            profilerTargetStack.clear();
+        profilerTargetStack.push_back(ProfilerTargetId(color ? color : depth));
+        SwitchProfilerTarget(rage::grcDevice::GetD3DDevice());
+    }
+
+    static void __fastcall ProfilerUnlockRenderTarget(void* factory, void*, uint32_t index, void* resolveFlags, int32_t unused)
+    {
+        pfnUnlockRenderTarget(factory, index, resolveFlags, unused);
+        if (index != 0 || profilerTargetStack.empty())
+            return;
+        profilerTargetStack.pop_back();
+        SwitchProfilerTarget(rage::grcDevice::GetD3DDevice());
+    }
+
+    static void InstallProfilerTargetHooks()
+    {
+        if (pfnLockRenderTarget || !rage::grcTextureFactory::g_pTextureFactory)
+            return;
+        auto* factory = rage::grcTextureFactoryPC::GetInstance();
+        if (!factory)
+            return;
+        auto* vft = *reinterpret_cast<uintptr_t**>(factory);
+        pfnLockRenderTarget = reinterpret_cast<LockRenderTargetFn>(vft[15]);
+        pfnUnlockRenderTarget = reinterpret_cast<UnlockRenderTargetFn>(vft[16]);
+        injector::WriteMemory(&vft[15], reinterpret_cast<uintptr_t>(&ProfilerLockRenderTarget), true);
+        injector::WriteMemory(&vft[16], reinterpret_cast<uintptr_t>(&ProfilerUnlockRenderTarget), true);
     }
 
     // Which part of the game's lighting is being drawn, for the profiler: 0 none, 1 the sun and
