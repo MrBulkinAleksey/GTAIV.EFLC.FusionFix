@@ -145,7 +145,7 @@ public:
             // [BudgetedIV]
             uint32_t nVehicleBudget = iniReader.ReadInteger("BudgetedIV", "VehicleBudget", 0);
             uint32_t nPedBudget = iniReader.ReadInteger("BudgetedIV", "PedBudget", 0);
-            auto bExtendedLimits = iniReader.ReadInteger("BudgetedIV", "ExtendedLimits", 0);
+            auto bExtendedLimits = iniReader.ReadInteger("BudgetedIV", "ExtendedLimits", 1);
             auto nLiveriesLimit = std::clamp(iniReader.ReadInteger("BudgetedIV", "LiveriesLimit", CHAR_MAX), 0, CHAR_MAX);
 
             // Pools
@@ -412,7 +412,7 @@ public:
             CIniReader iniReader("");
 
             // [BudgetedIV]
-            auto bExtendedLimits = iniReader.ReadInteger("BudgetedIV", "ExtendedLimits", 0);
+            auto bExtendedLimits = iniReader.ReadInteger("BudgetedIV", "ExtendedLimits", 1);
 
             enum CModelInfoStore
             {
