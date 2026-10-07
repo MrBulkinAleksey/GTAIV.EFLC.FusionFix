@@ -28,7 +28,7 @@ import settings;
 //  - Bicubic Filtering: magnified diffuse textures read with a Catmull-Rom filter (b13, c192).
 //  - Specular Anti-Aliasing: highlights widened where the normal turns within a pixel (b14, c193).
 //  - Ground Surfaces: terrain layers blended by height, their repeat broken up, wide colour patches
-//    and bumps from their height; parallax occlusion mapping on gta_parallax* (b15, c166-c171, s12).
+//    and bumps from their height; parallax occlusion mapping on gta_parallax* and natural ground (b15, c166-c174, s12).
 // The shader side is shaders/patches/texture_quality.patch and world_terrain_and_parallax.patch;
 // Sharpening is a post fx pass.
 class TextureQuality
@@ -61,6 +61,8 @@ class TextureQuality
     static inline float fGroundBumpsFadeEnd = 60.0f;
     static inline float fGroundCavity = 2.0f;
     static inline float fGroundCavityAlbedo = 0.3f;
+    static inline float fGroundParallaxDepth = 0.05f;
+    static inline float fGroundParallaxContrast = 3.0f;
     static inline float fParallaxMinSteps = 8.0f;
     static inline float fParallaxMaxSteps = 32.0f;
     static inline float fParallaxDepth = 1.0f;
@@ -330,6 +332,8 @@ private:
         fGroundBumpsFadeEnd = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsFadeEnd", 60.0f), fGroundBumpsFadeStart, 1000.0f);
         fGroundCavity = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundCavity", 2.0f), 0.0f, 10.0f);
         fGroundCavityAlbedo = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundCavityAlbedo", 0.3f), 0.0f, 1.0f);
+        fGroundParallaxDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxDepth", 0.05f), 0.0f, 0.5f);
+        fGroundParallaxContrast = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxContrast", 3.0f), 0.1f, 20.0f);
         // The shader's loop stops at 32 steps.
         fParallaxMinSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMinSteps", 8.0f), 2.0f, 32.0f);
         fParallaxMaxSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMaxSteps", 32.0f), fParallaxMinSteps, 32.0f);
@@ -506,7 +510,12 @@ private:
             // The noise's blobs are about a twelfth of the texture's repeat across.
             constexpr float kBlobsPerRepeat = 12.0f;
             const float fadeRange = (std::max)(fGroundBumpsFadeEnd - fGroundBumpsFadeStart, 0.1f);
-            const float params[24] = {
+            // The ground's parallax looks at it from the camera of the pass, the scene's at its start.
+            float camera[3] = {};
+            if (auto viewport = rage::GetCurrentViewport(); viewport && viewport->mIsPerspective)
+                for (int i = 0; i < 3; ++i)
+                    camera[i] = viewport->mViewInverseMatrix[3][i];
+            const float params[36] = {
                 // c166: height blend depth and strength, anti-tiling strength and the sharpness of its patches
                 fGroundHeightBlendDepth, fGroundHeightBlend, fGroundAntiTiling, fGroundAntiTilingSharpness,
                 // c167: per metre, the colour patches' and the anti-tiling's noise; a mip bias that leaves out its grain;
@@ -522,8 +531,14 @@ private:
                 // c171: the hollows' occlusion per unit of brightness under the local average, the part of it the
                 // colour takes, the height of the local average's lumps in metres, the mip bias that reads it
                 fGroundCavity, fGroundCavityAlbedo, fGroundBumpsCoarse, 3.0f,
+                // c172: the camera's position, the depth of the ground's parallax in metres
+                camera[0], camera[1], camera[2], fGroundParallaxDepth,
+                // c173: -
+                0.0f, 0.0f, 0.0f, 0.0f,
+                // c174: how much the brightness, against the texture's average, raises the parallax's height
+                fGroundParallaxContrast, 0.0f, 0.0f, 0.0f,
             };
-            pDevice->SetPixelShaderConstantF(166, params, 6);
+            pDevice->SetPixelShaderConstantF(166, params, 9);
         }
 
         const BOOL flags[4] = { detail, bBicubic, specularAA, ground };
