@@ -44,8 +44,9 @@ import settings;
 //  - ProceduralInReflections = 0: the render lists drop the water reflection phases for props, as for
 //    shadows: the mask CE 0x159af28 has the phases of type 0x11 (water reflection) and of type 0x1f, which
 //    is the scene itself (its bit alone in CE 0x159af24), so that one is kept.
-//  - ProceduralSpawnsPerUpdate: the queue of positions makes no more props than this an update, the rest
-//    wait for the next ones, so a jump in distance or a new area doesn't stall a frame. Waiting positions
+//  - ProceduralSpawnsPerUpdate: the queue of positions makes no more props than this an update, nearest
+//    first and all within 50 m at once, the rest wait for the next ones, so a jump in distance or a new
+//    area doesn't stall a frame. Waiting positions
 //    of a provider the game removed meanwhile (its requests at +0x522c, processed first) are dropped.
 //  - ProceduralLog: the log has the time of the generator's update (CE 0xc0aa90) and how many props are out.
 namespace Procedural
@@ -56,6 +57,7 @@ namespace Procedural
     constexpr int32_t EntityCandidates = 64;
     constexpr float VanillaEntityRadius = 30.0f;
     constexpr float QueryLead = 40.0f;
+    constexpr float NearAlways = 50.0f;     // queued props closer than this are made at once
 
     // Settings
     int32_t nPool = 4096;
@@ -72,14 +74,17 @@ namespace Procedural
     uint8_t* pManager = nullptr;        // CE 0x16fb6a0, taken from the first call that has it
     uint8_t* pDefinitions = nullptr;    // CE 0x16c8fb0, procedural.dat's PROCOBJ records
     void(__fastcall* ListPush)(void* list, void* edx, void* node) = nullptr;
-    void* (__cdecl* GameAlloc)(size_t) = nullptr;
-    void(__cdecl* GameFree)(void*) = nullptr;
+    float* pCamera = nullptr;           // CE 0x128e340, where the generator measures distances from
     void(__cdecl* SetGrassFade)(float nearDistance, float farDistance) = nullptr;
     float* pRadius[3] = {};             // the 30 m half extents of the 2dfx box, in code
     uint32_t* pReflectionPhases = nullptr; // CE 0x159af28: the phases of type 0x11 (water reflection) and 0x1f
     uint32_t* pScenePhase = nullptr;       // CE 0x159af24: the one of type 0x1f, the scene itself, kept
 
     std::vector<uint8_t> extraRecords;
+    // The larger queue is ours, not from the game's heap: the game's own buffer of 512 is kept aside and
+    // put back before the game frees it (reset CE 0xc0aa2e, destructor CE 0xc08dc5)
+    std::vector<uint8_t> queueStorage;
+    void* pGameQueue = nullptr;
     float fBaseNear = 0.0f;             // the manager's own near (20), read before it's first changed
 
     struct Definition { float spacing, inverseSquare, distanceSquared; };
@@ -140,16 +145,26 @@ namespace Procedural
         }
 
         auto queueSize = std::min<uint32_t>(Records(), 0xFFFF);
-        if (queueSize > VanillaRecords && GameAlloc && GameFree)
+        if (queueSize > VanillaRecords)
         {
-            if (auto queue = GameAlloc(size_t(queueSize) * QueueEntrySize))
-            {
-                GameFree(*(void**)(generator + 0x5224));
-                *(void**)(generator + 0x5224) = queue;
-                *(uint16_t*)(generator + 0x5228) = 0;
-                *(uint16_t*)(generator + 0x522A) = uint16_t(queueSize);
-                *(uint32_t*)(generator + 0x5220) = queueSize;
-            }
+            queueStorage.assign(size_t(queueSize) * QueueEntrySize, 0);
+            pGameQueue = *(void**)(generator + 0x5224);
+            *(void**)(generator + 0x5224) = queueStorage.data();
+            *(uint16_t*)(generator + 0x5228) = 0;
+            *(uint16_t*)(generator + 0x522A) = uint16_t(queueSize);
+            *(uint32_t*)(generator + 0x5220) = queueSize;
+        }
+    }
+
+    void RestoreGameQueue(uint8_t* generator)
+    {
+        if (pGameQueue && *(void**)(generator + 0x5224) == queueStorage.data())
+        {
+            *(void**)(generator + 0x5224) = pGameQueue;
+            *(uint16_t*)(generator + 0x5228) = 0;
+            *(uint16_t*)(generator + 0x522A) = uint16_t(VanillaRecords);
+            *(uint32_t*)(generator + 0x5220) = VanillaRecords;
+            pGameQueue = nullptr;
         }
     }
 
@@ -302,11 +317,32 @@ namespace Procedural
         nQueueMax = std::max<uint32_t>(nQueueMax, count);
 
         waiting.clear();
-        if (nSpawnsPerUpdate > 0 && count > uint32_t(nSpawnsPerUpdate))
+        if (nSpawnsPerUpdate <= 0 || count <= uint32_t(nSpawnsPerUpdate))
+            return;
+
+        // Nearest first, and all of those close to the camera now, so nothing appears late where one already is
+        uint32_t made = uint32_t(nSpawnsPerUpdate);
+        if (pCamera)
         {
-            waiting.assign(queue + size_t(nSpawnsPerUpdate) * QueueEntrySize, queue + size_t(count) * QueueEntrySize);
-            count = uint16_t(nSpawnsPerUpdate);
+            std::vector<std::pair<float, uint32_t>> order(count);
+            for (uint32_t i = 0; i < count; i++)
+            {
+                auto position = (float*)(queue + size_t(i) * QueueEntrySize);
+                float dx = position[0] - pCamera[0], dy = position[1] - pCamera[1], dz = position[2] - pCamera[2];
+                order[i] = { dx * dx + dy * dy + dz * dz, i };
+            }
+            std::stable_sort(order.begin(), order.end(), [](auto& a, auto& b) { return a.first < b.first; });
+            std::vector<uint8_t> sorted(size_t(count) * QueueEntrySize);
+            for (uint32_t i = 0; i < count; i++)
+                memcpy(sorted.data() + size_t(i) * QueueEntrySize, queue + size_t(order[i].second) * QueueEntrySize, QueueEntrySize);
+            memcpy(queue, sorted.data(), sorted.size());
+            while (made < count && order[made].first < NearAlways * NearAlways)
+                made++;
         }
+        if (made >= count)
+            return;
+        waiting.assign(queue + size_t(made) * QueueEntrySize, queue + size_t(count) * QueueEntrySize);
+        count = uint16_t(made);
     }
 
     // After they're made and the queue emptied: the held-over ones go back to its front
@@ -382,17 +418,28 @@ public:
 
             // Generator init: the extra records and the larger queue
             auto pattern = hook::pattern("53 55 56 8B D9 57 8D 73 14 BF 00 02 00 00");
-            auto queue = hook::pattern("68 00 40 00 00 E8 ? ? ? ? 83 C4 04 89 83 24 52 00 00");
-            auto queueFree = hook::pattern("FF B5 24 52 00 00 E8");
-            if (pattern.empty() || queue.empty() || queueFree.empty())
+            auto resetFree = hook::pattern("FF B5 24 52 00 00 E8");
+            auto destructorFree = hook::pattern("FF B6 24 52 00 00 E8");
+            if (pattern.empty() || resetFree.empty() || destructorFree.empty())
             {
                 Log("Pool", "the procedural object generator was not found (not the Complete Edition?), nothing changed");
                 return;
             }
             ListPush = (decltype(ListPush))injector::GetBranchDestination(pattern.get_first(0x32)).as_int();
-            GameAlloc = (decltype(GameAlloc))injector::GetBranchDestination(queue.get_first(5)).as_int();
-            GameFree = (decltype(GameFree))injector::GetBranchDestination(queueFree.get_first(6)).as_int();
             shGeneratorInit = safetyhook::create_inline(pattern.get_first(0), GeneratorInit);
+            static auto ResetFreeHook = safetyhook::create_mid(resetFree.get_first(0), [](SafetyHookContext& regs)
+            {
+                RestoreGameQueue((uint8_t*)regs.ebp);
+            });
+            static auto DestructorFreeHook = safetyhook::create_mid(destructorFree.get_first(0), [](SafetyHookContext& regs)
+            {
+                RestoreGameQueue((uint8_t*)regs.esi);
+            });
+
+            // The camera position the generator measures from (movss xmm2, [0x128e340] in CE 0xc09440)
+            pattern = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C");
+            if (!pattern.empty())
+                pCamera = *pattern.get_first<float*>(12);
 
             // Caps on props with a matrix of their own: the matrices come from a pool that evicts the
             // least used when full, so they're raised less than the records
