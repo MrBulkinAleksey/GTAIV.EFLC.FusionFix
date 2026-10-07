@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS3.asm b/win32_30_nv8/gta_default/gta_defaultPS3.asm
-index ff566cc..6ca963f 100644
+index ff566cc..b3fcdee 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS3.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS3.asm
-@@ -21,6 +21,13 @@
+@@ -21,6 +21,15 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.1019476965e-43 // 150
@@ -13,10 +13,12 @@ index ff566cc..6ca963f 100644
 +    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
 +    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
 +    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the parallax's most steps
++    def c182, 0.15, 0.3, 0.5, 0.7 // FusionFix ground surfaces: how far towards the sun the self-shadow looks, as parts of the hit's depth
++    def c181, 0.9, 0, 0, 0
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -34,23 +41,104 @@
+@@ -34,23 +43,176 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -31,6 +33,7 @@ index ff566cc..6ca963f 100644
 +    // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
 +    // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
 +    mov r23.xy, v0
++    mov r16.w, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -104,6 +107,77 @@ index ff566cc..6ca963f 100644
 +        add r29.y, r28.x, -r28.z
 +        mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
 +        mad r23.xy, r29.y, -r21, r21.zwzw
++        // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
++        dp3 r11.x, c173, r4
++        max r11.y, r11.x, c183.z
++        rcp r11.y, r11.y
++        dp3 r11.z, c173, r9
++        dp3 r11.w, c173, r10
++        mul r11.zw, r11, r12.x
++        mul r11.zw, r11, r11.y
++        mul r11.zw, r11, r8.w
++        min r11.zw, r11, c187.z
++        max r11.zw, r11, -c187.z // how far the coordinates move per unit of depth climbed towards the sun
++        mov r6.w, c187.x
++        mul r6.x, r29.y, c182.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.y
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.z
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.w
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c181.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul_sat r6.w, r6.w, c174.y
++        mul r6.w, r6.w, c173.w
++        add r16.w, c187.y, -r6.w
++        cmp r16.w, r11.x, r16.w, c187.y // the sun behind the surface leaves it to the lighting
 +      endif
 +    endif
 +    texld r0, r23, s0
@@ -125,7 +199,7 @@ index ff566cc..6ca963f 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -104,10 +192,80 @@
+@@ -104,10 +266,81 @@
          mov r0.xyz, r25
        endif
      endif
@@ -191,6 +265,7 @@ index ff566cc..6ca963f 100644
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
 +      mul r0.xyz, r11, r12
++      mul r0.xyz, r0, r16.w // the parallax's self-shadow, on the colour as the G-buffer has no place for it
 +      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
 +      if_gt r12.w, c187.x
 +        add r12.xyz, c185, -r0
@@ -207,7 +282,7 @@ index ff566cc..6ca963f 100644
        texld r24, r24, s12
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
-@@ -129,7 +287,41 @@
+@@ -129,7 +362,41 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -250,7 +325,7 @@ index ff566cc..6ca963f 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
-@@ -137,7 +329,9 @@
+@@ -137,7 +404,9 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -262,10 +337,10 @@ index ff566cc..6ca963f 100644
      // mov oC2.w, r1.x
      add r20.x, -c152.w, r1.x
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS4.asm b/win32_30_nv8/gta_default/gta_defaultPS4.asm
-index 3c1f0f3..a7721aa 100644
+index 3c1f0f3..46b25de 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS4.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS4.asm
-@@ -21,6 +21,13 @@
+@@ -21,6 +21,15 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.1159606811e-43 // 151
@@ -276,10 +351,12 @@ index 3c1f0f3..a7721aa 100644
 +    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
 +    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
 +    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the parallax's most steps
++    def c182, 0.15, 0.3, 0.5, 0.7 // FusionFix ground surfaces: how far towards the sun the self-shadow looks, as parts of the hit's depth
++    def c181, 0.9, 0, 0, 0
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      def c2, 0.5, 0, 1, 0.25
-@@ -32,23 +39,104 @@
+@@ -32,23 +41,176 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -294,6 +371,7 @@ index 3c1f0f3..a7721aa 100644
 +    // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
 +    // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
 +    mov r23.xy, v0
++    mov r16.w, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -367,6 +445,77 @@ index 3c1f0f3..a7721aa 100644
 +        add r29.y, r28.x, -r28.z
 +        mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
 +        mad r23.xy, r29.y, -r21, r21.zwzw
++        // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
++        dp3 r11.x, c173, r4
++        max r11.y, r11.x, c183.z
++        rcp r11.y, r11.y
++        dp3 r11.z, c173, r9
++        dp3 r11.w, c173, r10
++        mul r11.zw, r11, r12.x
++        mul r11.zw, r11, r11.y
++        mul r11.zw, r11, r8.w
++        min r11.zw, r11, c187.z
++        max r11.zw, r11, -c187.z // how far the coordinates move per unit of depth climbed towards the sun
++        mov r6.w, c187.x
++        mul r6.x, r29.y, c182.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.y
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.z
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.w
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c181.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul_sat r6.w, r6.w, c174.y
++        mul r6.w, r6.w, c173.w
++        add r16.w, c187.y, -r6.w
++        cmp r16.w, r11.x, r16.w, c187.y // the sun behind the surface leaves it to the lighting
 +      endif
 +    endif
 +    texld r0, r23, s0
@@ -388,7 +537,7 @@ index 3c1f0f3..a7721aa 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -102,15 +190,119 @@
+@@ -102,15 +264,120 @@
          mov r0.xyz, r25
        endif
      endif
@@ -454,6 +603,7 @@ index 3c1f0f3..a7721aa 100644
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
 +      mul r0.xyz, r11, r12
++      mul r0.xyz, r0, r16.w // the parallax's self-shadow, on the colour as the G-buffer has no place for it
 +      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
 +      if_gt r12.w, c187.x
 +        add r12.xyz, c185, -r0
@@ -510,7 +660,7 @@ index 3c1f0f3..a7721aa 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      mul r0.w, r0.w, v2.w
-@@ -119,7 +311,9 @@
+@@ -119,7 +386,9 @@
      mul r0.w, r0.w, c39.x
      mov oC0, r0
      mov oC1.w, r0.w
@@ -1404,10 +1554,10 @@ index 7d9644a..22ff627 100644
      mul oC2.z, r2.x, v4.x
      mul r0.x, r2.x, c73.x
 diff --git a/win32_30_nv8/gta_spec/gta_specPS3.asm b/win32_30_nv8/gta_spec/gta_specPS3.asm
-index d721e6d..75b1ef0 100644
+index d721e6d..21f99a7 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS3.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS3.asm
-@@ -27,6 +27,13 @@
+@@ -27,6 +27,15 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.2676609395e-43 // 590
@@ -1418,10 +1568,12 @@ index d721e6d..75b1ef0 100644
 +    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
 +    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
 +    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the parallax's most steps
++    def c182, 0.15, 0.3, 0.5, 0.7 // FusionFix ground surfaces: how far towards the sun the self-shadow looks, as parts of the hit's depth
++    def c181, 0.9, 0, 0, 0
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -38,24 +45,105 @@
+@@ -38,24 +47,177 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -1437,6 +1589,7 @@ index d721e6d..75b1ef0 100644
 +    // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
 +    // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
 +    mov r23.xy, v0
++    mov r16.w, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -1510,6 +1663,77 @@ index d721e6d..75b1ef0 100644
 +        add r29.y, r28.x, -r28.z
 +        mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
 +        mad r23.xy, r29.y, -r21, r21.zwzw
++        // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
++        dp3 r11.x, c173, r4
++        max r11.y, r11.x, c183.z
++        rcp r11.y, r11.y
++        dp3 r11.z, c173, r9
++        dp3 r11.w, c173, r10
++        mul r11.zw, r11, r12.x
++        mul r11.zw, r11, r11.y
++        mul r11.zw, r11, r8.w
++        min r11.zw, r11, c187.z
++        max r11.zw, r11, -c187.z // how far the coordinates move per unit of depth climbed towards the sun
++        mov r6.w, c187.x
++        mul r6.x, r29.y, c182.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.y
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.z
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.w
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c181.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul_sat r6.w, r6.w, c174.y
++        mul r6.w, r6.w, c173.w
++        add r16.w, c187.y, -r6.w
++        cmp r16.w, r11.x, r16.w, c187.y // the sun behind the surface leaves it to the lighting
 +      endif
 +    endif
 +    texld r0, r23, s0
@@ -1531,7 +1755,7 @@ index d721e6d..75b1ef0 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -109,10 +197,80 @@
+@@ -109,10 +271,81 @@
          mov r0.xyz, r25
        endif
      endif
@@ -1597,6 +1821,7 @@ index d721e6d..75b1ef0 100644
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
 +      mul r0.xyz, r11, r12
++      mul r0.xyz, r0, r16.w // the parallax's self-shadow, on the colour as the G-buffer has no place for it
 +      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
 +      if_gt r12.w, c187.x
 +        add r12.xyz, c185, -r0
@@ -1613,7 +1838,7 @@ index d721e6d..75b1ef0 100644
        texld r24, r24, s12
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
-@@ -128,10 +286,44 @@
+@@ -128,10 +361,44 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -1660,7 +1885,7 @@ index d721e6d..75b1ef0 100644
      mul r2.x, r3.w, c66.x
      dp3 r2.w, r3, c73
      mul r2.w, r2.w, c72.x
-@@ -144,7 +336,7 @@
+@@ -144,7 +411,7 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -1670,10 +1895,10 @@ index d721e6d..75b1ef0 100644
      add r20.x, -c152.w, r1.x
      cmp oC2.w, r20.x, c0.z, -c0.y
 diff --git a/win32_30_nv8/gta_spec/gta_specPS4.asm b/win32_30_nv8/gta_spec/gta_specPS4.asm
-index 3067a70..114f5d5 100644
+index 3067a70..cbb47c2 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS4.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS4.asm
-@@ -29,6 +29,13 @@
+@@ -29,6 +29,15 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.2816739242e-43 // 591
@@ -1684,10 +1909,12 @@ index 3067a70..114f5d5 100644
 +    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
 +    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
 +    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the parallax's most steps
++    def c182, 0.15, 0.3, 0.5, 0.7 // FusionFix ground surfaces: how far towards the sun the self-shadow looks, as parts of the hit's depth
++    def c181, 0.9, 0, 0, 0
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      def c2, 0.5, 0.001953125, 0, 0
-@@ -39,24 +46,105 @@
+@@ -39,24 +48,177 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -1703,6 +1930,7 @@ index 3067a70..114f5d5 100644
 +    // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
 +    // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
 +    mov r23.xy, v0
++    mov r16.w, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -1776,6 +2004,77 @@ index 3067a70..114f5d5 100644
 +        add r29.y, r28.x, -r28.z
 +        mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
 +        mad r23.xy, r29.y, -r21, r21.zwzw
++        // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
++        dp3 r11.x, c173, r4
++        max r11.y, r11.x, c183.z
++        rcp r11.y, r11.y
++        dp3 r11.z, c173, r9
++        dp3 r11.w, c173, r10
++        mul r11.zw, r11, r12.x
++        mul r11.zw, r11, r11.y
++        mul r11.zw, r11, r8.w
++        min r11.zw, r11, c187.z
++        max r11.zw, r11, -c187.z // how far the coordinates move per unit of depth climbed towards the sun
++        mov r6.w, c187.x
++        mul r6.x, r29.y, c182.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.y
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.z
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.w
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c181.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul_sat r6.w, r6.w, c174.y
++        mul r6.w, r6.w, c173.w
++        add r16.w, c187.y, -r6.w
++        cmp r16.w, r11.x, r16.w, c187.y // the sun behind the surface leaves it to the lighting
 +      endif
 +    endif
 +    texld r0, r23, s0
@@ -1797,7 +2096,7 @@ index 3067a70..114f5d5 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -110,18 +198,122 @@
+@@ -110,18 +272,123 @@
          mov r0.xyz, r25
        endif
      endif
@@ -1863,6 +2162,7 @@ index 3067a70..114f5d5 100644
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
 +      mul r0.xyz, r11, r12
++      mul r0.xyz, r0, r16.w // the parallax's self-shadow, on the colour as the G-buffer has no place for it
 +      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
 +      if_gt r12.w, c187.x
 +        add r12.xyz, c185, -r0
@@ -1923,7 +2223,7 @@ index 3067a70..114f5d5 100644
      mul r2.w, r2.w, c66.x
      dp3 r2.x, r2, c73
      mul r2.x, r2.x, c72.x
-@@ -135,7 +327,7 @@
+@@ -135,7 +402,7 @@
      mul r0.w, r0.w, c39.x
      mov oC0, r0
      mov oC1.w, r0.w
@@ -2473,10 +2773,10 @@ index 10dd3b6..9ba3dfc 100644
      mad oC2.xz, v4.w, c0.yyzw, c0.ywyw
      mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS3.asm b/win32_30_nv8/rage_default/rage_defaultPS3.asm
-index 3a528b5..524ea06 100644
+index 3a528b5..e116461 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS3.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS3.asm
-@@ -23,6 +23,13 @@
+@@ -23,6 +23,15 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0958153991e-42 // 782
@@ -2487,10 +2787,12 @@ index 3a528b5..524ea06 100644
 +    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
 +    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
 +    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the parallax's most steps
++    def c182, 0.15, 0.3, 0.5, 0.7 // FusionFix ground surfaces: how far towards the sun the self-shadow looks, as parts of the hit's depth
++    def c181, 0.9, 0, 0, 0
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -32,10 +39,162 @@
+@@ -32,10 +41,235 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -2505,6 +2807,7 @@ index 3a528b5..524ea06 100644
 +    // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
 +    // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
 +    mov r23.xy, v0
++    mov r16.w, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -2578,6 +2881,77 @@ index 3a528b5..524ea06 100644
 +        add r29.y, r28.x, -r28.z
 +        mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
 +        mad r23.xy, r29.y, -r21, r21.zwzw
++        // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
++        dp3 r11.x, c173, r4
++        max r11.y, r11.x, c183.z
++        rcp r11.y, r11.y
++        dp3 r11.z, c173, r9
++        dp3 r11.w, c173, r10
++        mul r11.zw, r11, r12.x
++        mul r11.zw, r11, r11.y
++        mul r11.zw, r11, r8.w
++        min r11.zw, r11, c187.z
++        max r11.zw, r11, -c187.z // how far the coordinates move per unit of depth climbed towards the sun
++        mov r6.w, c187.x
++        mul r6.x, r29.y, c182.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.y
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.z
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.w
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c181.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul_sat r6.w, r6.w, c174.y
++        mul r6.w, r6.w, c173.w
++        add r16.w, c187.y, -r6.w
++        cmp r16.w, r11.x, r16.w, c187.y // the sun behind the surface leaves it to the lighting
 +      endif
 +    endif
 +    texld r0, r23, s0
@@ -2643,6 +3017,7 @@ index 3a528b5..524ea06 100644
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
 +      mul r0.xyz, r11, r12
++      mul r0.xyz, r0, r16.w // the parallax's self-shadow, on the colour as the G-buffer has no place for it
 +      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
 +      if_gt r12.w, c187.x
 +        add r12.xyz, c185, -r0
@@ -2654,7 +3029,7 @@ index 3a528b5..524ea06 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v2.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -47,7 +206,37 @@
+@@ -47,7 +281,37 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -2693,7 +3068,7 @@ index 3a528b5..524ea06 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
-@@ -55,7 +244,9 @@
+@@ -55,7 +319,9 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -2705,10 +3080,10 @@ index 3a528b5..524ea06 100644
      // mov oC2.w, r1.x
      add r20.x, -c152.w, r1.x
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS4.asm b/win32_30_nv8/rage_default/rage_defaultPS4.asm
-index 657ce1d..1be32c1 100644
+index 657ce1d..a57bf79 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS4.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS4.asm
-@@ -25,6 +25,13 @@
+@@ -25,6 +25,15 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0972166976e-42 // 783
@@ -2719,10 +3094,12 @@ index 657ce1d..1be32c1 100644
 +    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
 +    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
 +    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the parallax's most steps
++    def c182, 0.15, 0.3, 0.5, 0.7 // FusionFix ground surfaces: how far towards the sun the self-shadow looks, as parts of the hit's depth
++    def c181, 0.9, 0, 0, 0
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      // def c2, 0.5, 0.001953125, 0, 0
-@@ -34,11 +41,193 @@
+@@ -34,11 +43,266 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -2738,6 +3115,7 @@ index 657ce1d..1be32c1 100644
 +    // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
 +    // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
 +    mov r23.xy, v0
++    mov r16.w, c187.y
 +    if b15
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
@@ -2811,6 +3189,77 @@ index 657ce1d..1be32c1 100644
 +        add r29.y, r28.x, -r28.z
 +        mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
 +        mad r23.xy, r29.y, -r21, r21.zwzw
++        // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
++        dp3 r11.x, c173, r4
++        max r11.y, r11.x, c183.z
++        rcp r11.y, r11.y
++        dp3 r11.z, c173, r9
++        dp3 r11.w, c173, r10
++        mul r11.zw, r11, r12.x
++        mul r11.zw, r11, r11.y
++        mul r11.zw, r11, r8.w
++        min r11.zw, r11, c187.z
++        max r11.zw, r11, -c187.z // how far the coordinates move per unit of depth climbed towards the sun
++        mov r6.w, c187.x
++        mul r6.x, r29.y, c182.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.y
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.z
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.w
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c181.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r26, r22
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul_sat r6.w, r6.w, c174.y
++        mul r6.w, r6.w, c173.w
++        add r16.w, c187.y, -r6.w
++        cmp r16.w, r11.x, r16.w, c187.y // the sun behind the surface leaves it to the lighting
 +      endif
 +    endif
 +    texld r0, r23, s0
@@ -2876,6 +3325,7 @@ index 657ce1d..1be32c1 100644
 +      mul r12.xyz, r12.x, c168
 +      add r12.xyz, r12, c187.y
 +      mul r0.xyz, r11, r12
++      mul r0.xyz, r0, r16.w // the parallax's self-shadow, on the colour as the G-buffer has no place for it
 +      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
 +      if_gt r12.w, c187.x
 +        add r12.xyz, c185, -r0
@@ -2918,7 +3368,7 @@ index 657ce1d..1be32c1 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      mul r0.w, r0.w, v2.w
-@@ -53,7 +242,9 @@
+@@ -53,7 +317,9 @@
      mov oC1.w, r0.w
      // mul oC2.x, r1.x, c72.x
      // mov oC2.z, v2.x

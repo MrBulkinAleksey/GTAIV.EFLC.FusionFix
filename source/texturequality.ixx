@@ -63,6 +63,11 @@ class TextureQuality
     static inline float fGroundCavityAlbedo = 0.3f;
     static inline float fGroundParallaxDepth = 0.05f;
     static inline float fGroundParallaxContrast = 3.0f;
+    static inline float fGroundSelfShadow = 0.5f;
+    static inline float fGroundSelfShadowSharpness = 8.0f;
+    // Towards the sun or the moon, from the game's gDirectionalLight, and whether it was ever read.
+    static inline float sunDirection[3] = {};
+    static inline bool bSunDirection = false;
     static inline float fParallaxMinSteps = 8.0f;
     static inline float fParallaxMaxSteps = 32.0f;
     static inline float fParallaxDepth = 1.0f;
@@ -334,6 +339,8 @@ private:
         fGroundCavityAlbedo = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundCavityAlbedo", 0.3f), 0.0f, 1.0f);
         fGroundParallaxDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxDepth", 0.05f), 0.0f, 0.5f);
         fGroundParallaxContrast = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxContrast", 3.0f), 0.1f, 20.0f);
+        fGroundSelfShadow = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundSelfShadow", 0.5f), 0.0f, 1.0f);
+        fGroundSelfShadowSharpness = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundSelfShadowSharpness", 8.0f), 0.5f, 50.0f);
         // The shader's loop stops at 32 steps.
         fParallaxMinSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMinSteps", 8.0f), 2.0f, 32.0f);
         fParallaxMaxSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMaxSteps", 32.0f), fParallaxMinSteps, 32.0f);
@@ -515,6 +522,19 @@ private:
             if (auto viewport = rage::GetCurrentViewport(); viewport && viewport->mIsPerspective)
                 for (int i = 0; i < 3; ++i)
                     camera[i] = viewport->mViewInverseMatrix[3][i];
+            // gDirectionalLight is a RAGE global, the same register in every shader, still the last frame's here:
+            // the direction the sun's (or the moon's) light travels.
+            float light[4] = {};
+            if (SUCCEEDED(pDevice->GetPixelShaderConstantF(17, light, 1)))
+            {
+                const float len = std::sqrt(light[0] * light[0] + light[1] * light[1] + light[2] * light[2]);
+                if (len > 0.9f && len < 1.1f)
+                {
+                    for (int i = 0; i < 3; ++i)
+                        sunDirection[i] = -light[i] / len;
+                    bSunDirection = true;
+                }
+            }
             const float params[36] = {
                 // c166: height blend depth and strength, anti-tiling strength and the sharpness of its patches
                 fGroundHeightBlendDepth, fGroundHeightBlend, fGroundAntiTiling, fGroundAntiTilingSharpness,
@@ -533,10 +553,11 @@ private:
                 fGroundCavity, fGroundCavityAlbedo, fGroundBumpsCoarse, 3.0f,
                 // c172: the camera's position, the depth of the ground's parallax in metres
                 camera[0], camera[1], camera[2], fGroundParallaxDepth,
-                // c173: -
-                0.0f, 0.0f, 0.0f, 0.0f,
-                // c174: how much the brightness, against the texture's average, raises the parallax's height
-                fGroundParallaxContrast, 0.0f, 0.0f, 0.0f,
+                // c173: towards the sun, how dark the parallax's self-shadow is
+                sunDirection[0], sunDirection[1], sunDirection[2], bSunDirection ? fGroundSelfShadow : 0.0f,
+                // c174: how much the brightness, against the texture's average, raises the parallax's height; how
+                // sharply the self-shadow comes in with the height standing above the ray to the sun
+                fGroundParallaxContrast, fGroundSelfShadowSharpness, 0.0f, 0.0f,
             };
             pDevice->SetPixelShaderConstantF(166, params, 9);
         }
