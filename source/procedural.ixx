@@ -45,7 +45,7 @@ import settings;
 //    shadows: the mask CE 0x159af28 has the phases of type 0x11 (water reflection) and of type 0x1f, which
 //    is the scene itself (its bit alone in CE 0x159af24), so that one is kept.
 //  - ProceduralSpawnsPerUpdate: the queue of positions makes no more props than this an update, nearest
-//    first and all within 50 m at once, the rest wait for the next ones, so a jump in distance or a new
+//    and those ahead of the camera first, all within 50 m at once, the rest wait for the next ones, so a jump in distance or a new
 //    area doesn't stall a frame. Waiting positions
 //    of a provider the game removed meanwhile (its requests at +0x522c, processed first) are dropped.
 //  - ProceduralLog: the log has the time of the generator's update (CE 0xc0aa90) and how many props are out.
@@ -74,7 +74,9 @@ namespace Procedural
     uint8_t* pManager = nullptr;        // CE 0x16fb6a0, taken from the first call that has it
     uint8_t* pDefinitions = nullptr;    // CE 0x16c8fb0, procedural.dat's PROCOBJ records
     void(__fastcall* ListPush)(void* list, void* edx, void* node) = nullptr;
-    float* pCamera = nullptr;           // CE 0x128e340, where the generator measures distances from
+    float* pCamera = nullptr;           // CE 0x128e340, where the generator measures distances from: the
+                                        // last row of the camera's matrix at CE 0x128e310, whose second row
+                                        // (0x128e320) is where it looks (the game's heading comes from it, CE 0xa88308)
     void(__cdecl* SetGrassFade)(float nearDistance, float farDistance) = nullptr;
     float* pRadius[3] = {};             // the 30 m half extents of the 2dfx box, in code
     uint32_t* pReflectionPhases = nullptr; // CE 0x159af28: the phases of type 0x11 (water reflection) and 0x1f
@@ -320,24 +322,49 @@ namespace Procedural
         if (nSpawnsPerUpdate <= 0 || count <= uint32_t(nSpawnsPerUpdate))
             return;
 
-        // Nearest first, and all of those close to the camera now, so nothing appears late where one already is
+        // Nearest first, those ahead before those behind (a prop ahead counts as at its distance, one to the
+        // side as twice as far, one behind as three times), and all close to the camera now, so nothing
+        // appears late where one already is or is looking
         uint32_t made = uint32_t(nSpawnsPerUpdate);
         if (pCamera)
         {
-            std::vector<std::pair<float, uint32_t>> order(count);
+            const float* forward = pCamera - 8;
+            struct Order { float priority, distanceSquared; uint32_t index; };
+            std::vector<Order> order(count);
             for (uint32_t i = 0; i < count; i++)
             {
                 auto position = (float*)(queue + size_t(i) * QueueEntrySize);
                 float dx = position[0] - pCamera[0], dy = position[1] - pCamera[1], dz = position[2] - pCamera[2];
-                order[i] = { dx * dx + dy * dy + dz * dz, i };
+                float distanceSquared = dx * dx + dy * dy + dz * dz;
+                float distance = std::sqrt(distanceSquared);
+                float facing = distance > 0.001f ? (dx * forward[0] + dy * forward[1] + dz * forward[2]) / distance : 1.0f;
+                float weight = 2.0f - std::clamp(facing, -1.0f, 1.0f);
+                order[i] = { distanceSquared * weight * weight, distanceSquared, i };
             }
-            std::stable_sort(order.begin(), order.end(), [](auto& a, auto& b) { return a.first < b.first; });
+            std::stable_sort(order.begin(), order.end(), [](auto& a, auto& b) { return a.priority < b.priority; });
             std::vector<uint8_t> sorted(size_t(count) * QueueEntrySize);
             for (uint32_t i = 0; i < count; i++)
-                memcpy(sorted.data() + size_t(i) * QueueEntrySize, queue + size_t(order[i].second) * QueueEntrySize, QueueEntrySize);
+                memcpy(sorted.data() + size_t(i) * QueueEntrySize, queue + size_t(order[i].index) * QueueEntrySize, QueueEntrySize);
             memcpy(queue, sorted.data(), sorted.size());
-            while (made < count && order[made].first < NearAlways * NearAlways)
-                made++;
+            // Every one within NearAlways is made now, wherever it is in that order
+            uint32_t nearCount = 0;
+            for (auto& o : order)
+                nearCount += o.distanceSquared < NearAlways * NearAlways;
+            if (nearCount > made)
+            {
+                // Bring the near ones that sorted after the budget forward, keeping the order otherwise
+                std::vector<uint8_t> first, rest;
+                first.reserve(size_t(count) * QueueEntrySize);
+                for (uint32_t i = 0; i < count; i++)
+                {
+                    auto entry = sorted.data() + size_t(i) * QueueEntrySize;
+                    bool take = i < made || order[i].distanceSquared < NearAlways * NearAlways;
+                    (take ? first : rest).insert((take ? first : rest).end(), entry, entry + QueueEntrySize);
+                }
+                made = uint32_t(first.size() / QueueEntrySize);
+                memcpy(queue, first.data(), first.size());
+                memcpy(queue + first.size(), rest.data(), rest.size());
+            }
         }
         if (made >= count)
             return;
