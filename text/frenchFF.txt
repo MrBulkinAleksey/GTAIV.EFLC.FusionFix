@@ -235,6 +235,9 @@ Bicubic Filtering
 [SpecularAA]
 Specular Anti-Aliasing
 
+[GroundSurf]
+Ground Surfaces
+
 [LodBias1]
 -0.25
 

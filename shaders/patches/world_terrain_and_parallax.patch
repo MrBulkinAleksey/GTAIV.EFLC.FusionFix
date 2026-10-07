@@ -1,0 +1,3411 @@
+diff --git a/win32_30_nv8/gta_default/gta_defaultPS3.asm b/win32_30_nv8/gta_default/gta_defaultPS3.asm
+index ff566cc..22dbb40 100644
+--- a/win32_30_nv8/gta_default/gta_defaultPS3.asm
++++ b/win32_30_nv8/gta_default/gta_defaultPS3.asm
+@@ -21,6 +21,15 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.1019476965e-43 // 150
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
++    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the parallax's most steps
++    def c182, 0.15, 0.3, 0.5, 0.7 // FusionFix ground surfaces: how far towards the sun the self-shadow looks, as parts of the hit's depth
++    def c181, 0.9, 0, 0, 0
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -34,23 +43,178 @@
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl vPos.xy
+     dcl_2d s0
+     dcl_2d s12 // FusionFix detail texture
+-    texld r0, v0, s0
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping on natural ground facing up
++    // --- with no normal map, the texture's brightness against its average as the height: the view ray is marched
++    // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
++    // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
++    mov r23.xy, v0
++    mov r16.w, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z
++      mul r8.w, r8.z, r4.w
++      mad_sat r13.y, v9.w, c174.z, c174.w // the parallax's own fade, nearer than the bumps', as its steps grow coarse
++      mul r8.w, r8.w, r13.y
++      mul r8.w, r8.w, c172.w // the depth in metres here
++      dp3 r8.y, r7, c188 // the texture's average brightness, the height's middle
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r26.xy, v0.xyxy
++      dsy r22.xy, v0.xyxy
++      if_gt r8.w, c187.x
++        crs r17.xyz, r15, r4
++        crs r18.xyz, r4, r14
++        dp3 r12.x, r14, r17
++        rcp r12.x, r12.x
++        mul r9.xyz, r17, r26.x
++        mad r9.xyz, r18, r22.x, r9 // u's gradient in the world, times the determinant
++        mul r10.xyz, r17, r26.y
++        mad r10.xyz, r18, r22.y, r10 // v's
++        add r11.xyz, c172, -v5
++        nrm r6.xyz, r11 // towards the camera
++        dp3 r12.z, r6, r4
++        max r12.y, r12.z, c183.y
++        rcp r12.y, r12.y
++        dp3 r13.x, r6, r9
++        dp3 r13.y, r6, r10
++        mul r13.xy, r13, r12.x
++        mul r13.xy, r13, r12.y
++        mul r13.xy, r13, r8.w
++        min r13.xy, r13, c187.z
++        max r21.xy, r13, -c187.z // how far the coordinates move from the top to the bottom of the height
++        mad r21.zw, r21.xyxy, c187.z, v0.xyxy // and where the top is
++        mul r30.xy, r26, c187.w
++        mul r31.xy, r22, c187.w // the height read a mip softer than the colour, so its steps do not shimmer
++        mad r12.w, -r12_abs.z, c170.y, c170.y
++        add r12.w, r12.w, c170.x
++        rcp r12.w, r12.w // the step
++        mov r28.x, c187.x
++        mov r28.y, c187.y
++        rep i1
++          mov r28.zw, r28.xxxy
++          add r28.x, r28.x, r12.w
++          min r28.x, r28.x, c187.y
++          mad r27.xy, r28.x, -r21, r21.zwzw
++          texldd r29, r27, s0, r30, r31
++          dp3 r29.x, r29, c188
++          add r29.x, r29.x, -r8.y
++          mul r29.x, r29.x, c174.x
++          add_sat r29.w, r29.x, c187.z // the height there
++          add r29.x, c187.y, -r28.x
++          add r28.y, r29.x, -r29.w // how far above it the ray still is
++          break_le r28.y, c187.x
++        endrep
++        add r29.x, r28.w, -r28.y
++        rcp r29.x, r29.x
++        mul r29.x, r28.w, r29.x
++        add r29.y, r28.x, -r28.z
++        mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
++        mad r23.xy, r29.y, -r21, r21.zwzw
++        // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
++        dp3 r11.x, c173, r4
++        max r11.y, r11.x, c183.z
++        rcp r11.y, r11.y
++        dp3 r11.z, c173, r9
++        dp3 r11.w, c173, r10
++        mul r11.zw, r11, r12.x
++        mul r11.zw, r11, r11.y
++        mul r11.zw, r11, r8.w
++        min r11.zw, r11, c187.z
++        max r11.zw, r11, -c187.z // how far the coordinates move per unit of depth climbed towards the sun
++        mov r6.w, c187.x
++        mul r6.x, r29.y, c182.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.y
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.z
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.w
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c181.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul_sat r6.w, r6.w, c174.y
++        mul r6.w, r6.w, c173.w
++        add r16.w, c187.y, -r6.w
++        cmp r16.w, r11.x, r16.w, c187.y // the sun behind the surface leaves it to the lighting
++      endif
++    endif
++    texld r0, r23, s0
+     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
+     // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
+     if b13
+-      dsx r24.xy, v0.xyxy
+-      dsy r24.zw, v0.xyxy
++      dsx r24.xy, r23.xyxy
++      dsy r24.zw, r23.xyxy
+       mul r24, r24, c192.xyxy
+       dp2add r30.z, r24, r24, c194.z
+       dp2add r30.w, r24.zwzw, r24.zwzw, c194.z
+       max r30.z, r30.z, r30.w
+       mad_sat r30.z, r30.z, c195.y, c195.z
+       if_gt r30.z, c194.z
+-        mul r24.xy, v0.xyxy, c192
++        mul r24.xy, r23.xyxy, c192
+         add r24.zw, r24.xyxy, c196.x
+         frc r25.xy, r24.zwzw
+         add r24.zw, r24, -r25.xyxy
+@@ -104,10 +268,81 @@
+         mov r0.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, r23
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, r23, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, r23
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mul r0.xyz, r0, r16.w // the parallax's self-shadow, on the colour as the G-buffer has no place for it
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+-      mul r24.xy, v0.xyxy, c190.x
++      mul r24.xy, r23.xyxy, c190.x
+       texld r24, r24, s12
+       mad r25.x, r24.z, c190.y, c190.z
+       mul r0.xyz, r0, r25.x
+@@ -129,7 +364,44 @@
+     dp4 r20.x, r20_abs, c152.xzwy
+     add r20, -r20.x, r1.x
+     texkill r20
+-    add r1.yzw, c0.w, v1.xxyz
++    // --- FusionFix ground surfaces: with no normal map, the texture's light and shade (and the detail
++    // --- texture's grain) bend the normal of ground facing up, by their screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      nrm r16.xyz, v1
++      mov r17.xy, r23
++      mov r17.w, c187.y
++      texldb r17, r17, s0 // the texture a mip softer: its finest grain, smaller than a pixel, would shimmer
++      dp3 r13.x, r17, c188
++      mul r13.x, r13.x, c169.x
++      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
++      if b12
++        add r13.y, r24.z, -c187.z
++        mad r13.x, r13.y, c169.w, r13.x
++      endif
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      add r13.y, r16.z, -c184.w
++      mul_sat r13.y, r13.y, c183.x
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r16.xyz, r18
++      add r1.yzw, c0.w, r16.xxyz
++    else
++      add r1.yzw, c0.w, v1.xxyz
++    endif
+     dp3 r0.w, r1.yzww, r1.yzww
+     rsq r0.w, r0.w
+     mad r1.yzw, r1, r0.w, -c0.y
+@@ -137,7 +409,9 @@
+     mov oC0.xyz, r0
+     mov oC0.w, r1.x
+     mov oC1.w, r1.x
+-    mad oC2.xz, v2.x, c1.yyzw, c1.ywyw
++    mad r22.xz, v2.x, c1.yyzw, c1.ywyw
++    mov oC2.x, r22.x
++    mul oC2.z, r22.z, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
+     // mov oC2.w, r1.x
+     add r20.x, -c152.w, r1.x
+diff --git a/win32_30_nv8/gta_default/gta_defaultPS4.asm b/win32_30_nv8/gta_default/gta_defaultPS4.asm
+index 3c1f0f3..b0797cd 100644
+--- a/win32_30_nv8/gta_default/gta_defaultPS4.asm
++++ b/win32_30_nv8/gta_default/gta_defaultPS4.asm
+@@ -21,6 +21,15 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.1159606811e-43 // 151
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
++    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the parallax's most steps
++    def c182, 0.15, 0.3, 0.5, 0.7 // FusionFix ground surfaces: how far towards the sun the self-shadow looks, as parts of the hit's depth
++    def c181, 0.9, 0, 0, 0
+     def c0, 0, -1, -0, 9.99999975e-006
+     def c1, 3.99600005, 4, 0.125, 0.25
+     def c2, 0.5, 0, 1, 0.25
+@@ -32,23 +41,178 @@
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
+     dcl vPos.xy
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl_2d s0
+     dcl_2d s10
+     dcl_2d s12 // FusionFix detail texture
+-    texld r0, v0, s0
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping on natural ground facing up
++    // --- with no normal map, the texture's brightness against its average as the height: the view ray is marched
++    // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
++    // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
++    mov r23.xy, v0
++    mov r16.w, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z
++      mul r8.w, r8.z, r4.w
++      mad_sat r13.y, v9.w, c174.z, c174.w // the parallax's own fade, nearer than the bumps', as its steps grow coarse
++      mul r8.w, r8.w, r13.y
++      mul r8.w, r8.w, c172.w // the depth in metres here
++      dp3 r8.y, r7, c188 // the texture's average brightness, the height's middle
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r26.xy, v0.xyxy
++      dsy r22.xy, v0.xyxy
++      if_gt r8.w, c187.x
++        crs r17.xyz, r15, r4
++        crs r18.xyz, r4, r14
++        dp3 r12.x, r14, r17
++        rcp r12.x, r12.x
++        mul r9.xyz, r17, r26.x
++        mad r9.xyz, r18, r22.x, r9 // u's gradient in the world, times the determinant
++        mul r10.xyz, r17, r26.y
++        mad r10.xyz, r18, r22.y, r10 // v's
++        add r11.xyz, c172, -v5
++        nrm r6.xyz, r11 // towards the camera
++        dp3 r12.z, r6, r4
++        max r12.y, r12.z, c183.y
++        rcp r12.y, r12.y
++        dp3 r13.x, r6, r9
++        dp3 r13.y, r6, r10
++        mul r13.xy, r13, r12.x
++        mul r13.xy, r13, r12.y
++        mul r13.xy, r13, r8.w
++        min r13.xy, r13, c187.z
++        max r21.xy, r13, -c187.z // how far the coordinates move from the top to the bottom of the height
++        mad r21.zw, r21.xyxy, c187.z, v0.xyxy // and where the top is
++        mul r30.xy, r26, c187.w
++        mul r31.xy, r22, c187.w // the height read a mip softer than the colour, so its steps do not shimmer
++        mad r12.w, -r12_abs.z, c170.y, c170.y
++        add r12.w, r12.w, c170.x
++        rcp r12.w, r12.w // the step
++        mov r28.x, c187.x
++        mov r28.y, c187.y
++        rep i1
++          mov r28.zw, r28.xxxy
++          add r28.x, r28.x, r12.w
++          min r28.x, r28.x, c187.y
++          mad r27.xy, r28.x, -r21, r21.zwzw
++          texldd r29, r27, s0, r30, r31
++          dp3 r29.x, r29, c188
++          add r29.x, r29.x, -r8.y
++          mul r29.x, r29.x, c174.x
++          add_sat r29.w, r29.x, c187.z // the height there
++          add r29.x, c187.y, -r28.x
++          add r28.y, r29.x, -r29.w // how far above it the ray still is
++          break_le r28.y, c187.x
++        endrep
++        add r29.x, r28.w, -r28.y
++        rcp r29.x, r29.x
++        mul r29.x, r28.w, r29.x
++        add r29.y, r28.x, -r28.z
++        mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
++        mad r23.xy, r29.y, -r21, r21.zwzw
++        // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
++        dp3 r11.x, c173, r4
++        max r11.y, r11.x, c183.z
++        rcp r11.y, r11.y
++        dp3 r11.z, c173, r9
++        dp3 r11.w, c173, r10
++        mul r11.zw, r11, r12.x
++        mul r11.zw, r11, r11.y
++        mul r11.zw, r11, r8.w
++        min r11.zw, r11, c187.z
++        max r11.zw, r11, -c187.z // how far the coordinates move per unit of depth climbed towards the sun
++        mov r6.w, c187.x
++        mul r6.x, r29.y, c182.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.y
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.z
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.w
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c181.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul_sat r6.w, r6.w, c174.y
++        mul r6.w, r6.w, c173.w
++        add r16.w, c187.y, -r6.w
++        cmp r16.w, r11.x, r16.w, c187.y // the sun behind the surface leaves it to the lighting
++      endif
++    endif
++    texld r0, r23, s0
+     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
+     // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
+     if b13
+-      dsx r24.xy, v0.xyxy
+-      dsy r24.zw, v0.xyxy
++      dsx r24.xy, r23.xyxy
++      dsy r24.zw, r23.xyxy
+       mul r24, r24, c192.xyxy
+       dp2add r30.z, r24, r24, c194.z
+       dp2add r30.w, r24.zwzw, r24.zwzw, c194.z
+       max r30.z, r30.z, r30.w
+       mad_sat r30.z, r30.z, c195.y, c195.z
+       if_gt r30.z, c194.z
+-        mul r24.xy, v0.xyxy, c192
++        mul r24.xy, r23.xyxy, c192
+         add r24.zw, r24.xyxy, c196.x
+         frc r25.xy, r24.zwzw
+         add r24.zw, r24, -r25.xyxy
+@@ -102,15 +266,123 @@
+         mov r0.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, r23
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, r23, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, r23
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mul r0.xyz, r0, r16.w // the parallax's self-shadow, on the colour as the G-buffer has no place for it
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+-      mul r24.xy, v0.xyxy, c190.x
++      mul r24.xy, r23.xyxy, c190.x
+       texld r24, r24, s12
+       mad r25.x, r24.z, c190.y, c190.z
+       mul r0.xyz, r0, r25.x
+     endif
+-    add r1.xyz, c0.w, v1
++    // --- FusionFix ground surfaces: with no normal map, the texture's light and shade (and the detail
++    // --- texture's grain) bend the normal of ground facing up, by their screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      nrm r16.xyz, v1
++      mov r17.xy, r23
++      mov r17.w, c187.y
++      texldb r17, r17, s0 // the texture a mip softer: its finest grain, smaller than a pixel, would shimmer
++      dp3 r13.x, r17, c188
++      mul r13.x, r13.x, c169.x
++      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
++      if b12
++        add r13.y, r24.z, -c187.z
++        mad r13.x, r13.y, c169.w, r13.x
++      endif
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      add r13.y, r16.z, -c184.w
++      mul_sat r13.y, r13.y, c183.x
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r16.xyz, r18
++      add r1.xyz, c0.w, r16
++    else
++      add r1.xyz, c0.w, v1
++    endif
+     dp3 r1.w, r1, r1
+     rsq r1.w, r1.w
+     mul r0.w, r0.w, v2.w
+@@ -119,7 +391,9 @@
+     mul r0.w, r0.w, c39.x
+     mov oC0, r0
+     mov oC1.w, r0.w
+-    mad oC2.xz, v2.x, c2.yyzw, c2.ywyw
++    mad r22.xz, v2.x, c2.yyzw, c2.ywyw
++    mov oC2.x, r22.x
++    mul oC2.z, r22.z, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
+     mov oC2.w, r0.w
+     mov r0.yz, c0
+diff --git a/win32_30_nv8/gta_normal/gta_normalPS3.asm b/win32_30_nv8/gta_normal/gta_normalPS3.asm
+index 6155923..eef654c 100644
+--- a/win32_30_nv8/gta_normal/gta_normalPS3.asm
++++ b/win32_30_nv8/gta_normal/gta_normalPS3.asm
+@@ -27,6 +27,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.9835444427e-43 // 427
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -40,6 +46,7 @@
+     dcl_texcoord4 v2.xyz
+     dcl_texcoord5 v3.xyz
+     dcl_color v4.xw
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl vPos.xy
+     dcl_2d s0
+@@ -111,6 +118,76 @@
+         mov r0.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+@@ -184,7 +261,7 @@
+     mov oC1.w, r1.x
+     mul r30.w, r1.z, c72.x
+     mul oC2.x, r30.w, r29.x // FusionFix specular anti-aliasing: lowered with the wider highlight
+-    mov oC2.z, v4.x
++    mul oC2.z, v4.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     // mov oC2.w, r1.x
+     add r20.x, -c152.w, r1.x
+     cmp oC2.w, r20.x, c1.z, -c1.y
+diff --git a/win32_30_nv8/gta_normal/gta_normalPS4.asm b/win32_30_nv8/gta_normal/gta_normalPS4.asm
+index cef7cdb..bfdedcb 100644
+--- a/win32_30_nv8/gta_normal/gta_normalPS4.asm
++++ b/win32_30_nv8/gta_normal/gta_normalPS4.asm
+@@ -29,6 +29,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.9975574273e-43 // 428
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
+     def c0, -0.5, 9.99999975e-006, 0.5, 0.001953125
+     def c1, 3.99600005, 4, 0.125, 0.25
+     def c2, 0, -1, -0, 1
+@@ -41,6 +47,7 @@
+     dcl_texcoord5 v3.xyz
+     dcl_color v4.xw
+     dcl vPos.xy
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl_2d s0
+     dcl_2d s1
+@@ -116,6 +123,76 @@
+         mov r1.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r1, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r1
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r1.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r1
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r1.xyz, r12, r12.w, r1
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+@@ -175,7 +252,7 @@
+     mov oC1.w, r0.x
+     mul r30.w, r0.z, c72.x
+     mul oC2.x, r30.w, r29.x // FusionFix specular anti-aliasing: lowered with the wider highlight
+-    mov oC2.z, v4.x
++    mul oC2.z, v4.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.w, r0.x
+     mov r0.xw, c2
+     mul oC3, r0.wxxx, c52.x
+diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
+index 95f58df..f777c46 100644
+--- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
++++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
+@@ -31,6 +31,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.8153886269e-43 // 415
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -44,6 +50,7 @@
+     dcl_texcoord4 v2.xyz
+     dcl_texcoord5 v3.xyz
+     dcl_color v4.xw
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl vPos.xy
+     dcl_2d s0
+@@ -116,6 +123,76 @@
+         mov r0.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+@@ -192,7 +269,7 @@
+     mov oC0.xyz, r0
+     mov oC0.w, r1.x
+     mov oC1.w, r1.x
+-    mov oC2.z, v4.x
++    mul oC2.z, v4.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     // mov oC2.w, r1.x
+     add r20.x, -c152.w, r1.x
+     cmp oC2.w, r20.x, c1.z, -c1.y
+diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
+index 5bdd4d9..5d4ddf4 100644
+--- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
++++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
+@@ -33,6 +33,12 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.8294016116e-43 // 416
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
+     def c0, -0.5, 9.99999975e-006, 0.5, 0.001953125
+     def c1, 3.99600005, 4, 0.125, 0.25
+     def c2, 0, -1, -0, 1
+@@ -45,6 +51,7 @@
+     dcl_texcoord5 v3.xyz
+     dcl_color v4.xw
+     dcl vPos.xy
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl_2d s0
+     dcl_2d s1
+@@ -121,6 +128,76 @@
+         mov r1.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, v0, c186
++      texld r9, r9, s0
++      dp3 r10.x, r1, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r1
++      mov r22.xy, v0
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r1.xyz, r11, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r1
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r1.xyz, r12, r12.w, r1
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+@@ -183,7 +260,7 @@
+     mov oC0.xyz, r1
+     mov oC0.w, r0.x
+     mov oC1.w, r0.x
+-    mov oC2.z, v4.x
++    mul oC2.z, v4.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.w, r0.x
+     mov r0.xw, c2
+     mul oC3, r0.wxxx, c52.x
+diff --git a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm b/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
+index 651fe30..048402d 100644
+--- a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
++++ b/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
+@@ -29,6 +29,11 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.4599859205e-43 // 461
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 2 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 0, 1, 1, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the most steps
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -58,6 +63,41 @@
+     mul r0.z, r1.y, c66.x
+     mad r0.z, r0.w, c66.x, -r0.z
+     mad r0.xy, r0.z, r0, v0
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping, the view ray
++    // --- marched through the height map in more steps the flatter it looks along the surface, and the
++    // --- hit found between the last two of them, in place of one offset by the height under the pixel.
++    if b15
++      dsx r26.xy, v0.xyxy
++      dsy r22.xy, v0.xyxy
++      dp3 r27.w, v5, v5
++      rsq r27.w, r27.w
++      mul r27.z, v5.z, r27.w
++      mad r27.z, -r27_abs.z, c170.y, c170.y
++      add r27.z, r27.z, c170.x
++      rcp r27.z, r27.z // the step
++      mul r21.xy, v5, r27.w
++      mul r21.xy, r21, c66.x
++      mul r21.xy, r21, c170.z
++      mad r21.zw, r21.xyxy, c187.z, v0.xyxy
++      mov r28.x, c187.x
++      mov r28.y, c187.y
++      rep i1
++        mov r28.zw, r28.xxxy
++        add r28.x, r28.x, r27.z
++        min r28.x, r28.x, c187.y
++        mad r23.xy, r28.x, -r21, r21.zwzw
++        texldd r29, r23, s1, r26, r22
++        add r29.x, c187.y, -r28.x
++        add r28.y, r29.x, -r29.w // how far above the height map the ray still is
++        break_le r28.y, c187.x
++      endrep
++      add r29.x, r28.w, -r28.y
++      rcp r29.x, r29.x
++      mul r29.x, r28.w, r29.x
++      add r29.y, r28.x, -r28.z
++      mad r29.y, r29.x, r29.y, r28.z
++      mad r0.xy, r29.y, -r21, r21.zwzw
++    endif
+     texld r2, r0, s0
+     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
+     // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
+@@ -161,6 +201,14 @@
+     rsq r1.z, r1.z
+     dp2add r1.x, r1, r1, c2.w
+     cmp r1.x, r1.x, -c2.x, -c2.y
++    // --- FusionFix ground surfaces: GroundSurfacesDebug, half the colour the debug colour
++    if b15
++      mov r21.w, c170.w
++      if_gt r21.w, c187.x
++        add r21.xyz, c185, -r2
++        mad r2.xyz, r21, c187.z, r2
++      endif
++    endif
+     mul oC0.xyz, r2, r1.x
+     mul oC2.z, r1.x, v4.x
+     mul r1.x, r1.x, c73.x
+diff --git a/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm b/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
+index 1a11347..b747bbc 100644
+--- a/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
++++ b/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
+@@ -31,6 +31,11 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.4739989052e-43 // 462
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 2 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 0, 1, 1, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the most steps
+     def c0, 0.5, -0.5, -0.00200000009, 0.001953125
+     def c1, 0, -1, -0, 9.99999975e-006
+     def c2, 3.99600005, 4, 0.125, 0.25
+@@ -58,6 +63,41 @@
+     mul r0.z, r1.x, c66.x
+     mad r0.z, r0.w, c66.x, -r0.z
+     mad r0.xy, r0.z, r0, v0
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping, the view ray
++    // --- marched through the height map in more steps the flatter it looks along the surface, and the
++    // --- hit found between the last two of them, in place of one offset by the height under the pixel.
++    if b15
++      dsx r26.xy, v0.xyxy
++      dsy r22.xy, v0.xyxy
++      dp3 r27.w, v5, v5
++      rsq r27.w, r27.w
++      mul r27.z, v5.z, r27.w
++      mad r27.z, -r27_abs.z, c170.y, c170.y
++      add r27.z, r27.z, c170.x
++      rcp r27.z, r27.z // the step
++      mul r21.xy, v5, r27.w
++      mul r21.xy, r21, c66.x
++      mul r21.xy, r21, c170.z
++      mad r21.zw, r21.xyxy, c187.z, v0.xyxy
++      mov r28.x, c187.x
++      mov r28.y, c187.y
++      rep i1
++        mov r28.zw, r28.xxxy
++        add r28.x, r28.x, r27.z
++        min r28.x, r28.x, c187.y
++        mad r23.xy, r28.x, -r21, r21.zwzw
++        texldd r29, r23, s1, r26, r22
++        add r29.x, c187.y, -r28.x
++        add r28.y, r29.x, -r29.w // how far above the height map the ray still is
++        break_le r28.y, c187.x
++      endrep
++      add r29.x, r28.w, -r28.y
++      rcp r29.x, r29.x
++      mul r29.x, r28.w, r29.x
++      add r29.y, r28.x, -r28.z
++      mad r29.y, r29.x, r29.y, r28.z
++      mad r0.xy, r29.y, -r21, r21.zwzw
++    endif
+     texld r2, r0, s1
+     texld r0, r0, s0
+     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
+@@ -150,6 +190,14 @@
+     rsq r2.z, r2.z
+     dp2add r2.x, r2, r2, c0.z
+     cmp r2.x, r2.x, -c1.y, -c1.z
++    // --- FusionFix ground surfaces: GroundSurfacesDebug, half the colour the debug colour
++    if b15
++      mov r21.w, c170.w
++      if_gt r21.w, c187.x
++        add r21.xyz, c185, -r0
++        mad r0.xyz, r21, c187.z, r0
++      endif
++    endif
+     mul oC0.xyz, r0, r2.x
+     mul oC2.z, r2.x, v4.x
+     mul r0.x, r2.x, c73.x
+diff --git a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
+index 1234f9b..8a7294f 100644
+--- a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
++++ b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
+@@ -33,6 +33,11 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.1517002584e-43 // 439
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 2 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 0, 1, 1, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the most steps
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -63,6 +68,41 @@
+     mul r0.z, r1.y, c66.x
+     mad r0.z, r0.w, c66.x, -r0.z
+     mad r0.xy, r0.z, r0, v0
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping, the view ray
++    // --- marched through the height map in more steps the flatter it looks along the surface, and the
++    // --- hit found between the last two of them, in place of one offset by the height under the pixel.
++    if b15
++      dsx r26.xy, v0.xyxy
++      dsy r22.xy, v0.xyxy
++      dp3 r27.w, v5, v5
++      rsq r27.w, r27.w
++      mul r27.z, v5.z, r27.w
++      mad r27.z, -r27_abs.z, c170.y, c170.y
++      add r27.z, r27.z, c170.x
++      rcp r27.z, r27.z // the step
++      mul r21.xy, v5, r27.w
++      mul r21.xy, r21, c66.x
++      mul r21.xy, r21, c170.z
++      mad r21.zw, r21.xyxy, c187.z, v0.xyxy
++      mov r28.x, c187.x
++      mov r28.y, c187.y
++      rep i1
++        mov r28.zw, r28.xxxy
++        add r28.x, r28.x, r27.z
++        min r28.x, r28.x, c187.y
++        mad r23.xy, r28.x, -r21, r21.zwzw
++        texldd r29, r23, s1, r26, r22
++        add r29.x, c187.y, -r28.x
++        add r28.y, r29.x, -r29.w // how far above the height map the ray still is
++        break_le r28.y, c187.x
++      endrep
++      add r29.x, r28.w, -r28.y
++      rcp r29.x, r29.x
++      mul r29.x, r28.w, r29.x
++      add r29.y, r28.x, -r28.z
++      mad r29.y, r29.x, r29.y, r28.z
++      mad r0.xy, r29.y, -r21, r21.zwzw
++    endif
+     texld r2, r0, s0
+     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
+     // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
+@@ -170,6 +210,14 @@
+     mul r2.w, r2.w, c73.x
+     dp2add r1.x, r1, r1, c2.w
+     cmp r1.x, r1.x, -c2.x, -c2.y
++    // --- FusionFix ground surfaces: GroundSurfacesDebug, half the colour the debug colour
++    if b15
++      mov r21.w, c170.w
++      if_gt r21.w, c187.x
++        add r21.xyz, c185, -r2
++        mad r2.xyz, r21, c187.z, r2
++      endif
++    endif
+     mul oC0.xyz, r2, r1.x
+     mul oC2.z, r1.x, v4.x
+     mul r1.x, r2.w, r1.x
+diff --git a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
+index 828f4ae..22e66d4 100644
+--- a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
++++ b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
+@@ -35,6 +35,11 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.1657132430e-43 // 440
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 2 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 0, 1, 1, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the most steps
+     def c0, 0.5, -0.5, -0.00200000009, 0.001953125
+     def c1, 0, -1, -0, 9.99999975e-006
+     def c2, 3.99600005, 4, 0.125, 0.25
+@@ -63,6 +68,41 @@
+     mul r0.z, r1.x, c66.x
+     mad r0.z, r0.w, c66.x, -r0.z
+     mad r0.xy, r0.z, r0, v0
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping, the view ray
++    // --- marched through the height map in more steps the flatter it looks along the surface, and the
++    // --- hit found between the last two of them, in place of one offset by the height under the pixel.
++    if b15
++      dsx r26.xy, v0.xyxy
++      dsy r22.xy, v0.xyxy
++      dp3 r27.w, v5, v5
++      rsq r27.w, r27.w
++      mul r27.z, v5.z, r27.w
++      mad r27.z, -r27_abs.z, c170.y, c170.y
++      add r27.z, r27.z, c170.x
++      rcp r27.z, r27.z // the step
++      mul r21.xy, v5, r27.w
++      mul r21.xy, r21, c66.x
++      mul r21.xy, r21, c170.z
++      mad r21.zw, r21.xyxy, c187.z, v0.xyxy
++      mov r28.x, c187.x
++      mov r28.y, c187.y
++      rep i1
++        mov r28.zw, r28.xxxy
++        add r28.x, r28.x, r27.z
++        min r28.x, r28.x, c187.y
++        mad r23.xy, r28.x, -r21, r21.zwzw
++        texldd r29, r23, s1, r26, r22
++        add r29.x, c187.y, -r28.x
++        add r28.y, r29.x, -r29.w // how far above the height map the ray still is
++        break_le r28.y, c187.x
++      endrep
++      add r29.x, r28.w, -r28.y
++      rcp r29.x, r29.x
++      mul r29.x, r28.w, r29.x
++      add r29.y, r28.x, -r28.z
++      mad r29.y, r29.x, r29.y, r28.z
++      mad r0.xy, r29.y, -r21, r21.zwzw
++    endif
+     texld r1, r0, s1
+     texld r0, r0, s0
+     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
+@@ -159,6 +199,14 @@
+     mul r2.w, r2.w, c73.x
+     dp2add r1.x, r1, r1, c0.z
+     cmp r1.x, r1.x, -c1.y, -c1.z
++    // --- FusionFix ground surfaces: GroundSurfacesDebug, half the colour the debug colour
++    if b15
++      mov r21.w, c170.w
++      if_gt r21.w, c187.x
++        add r21.xyz, c185, -r0
++        mad r0.xyz, r21, c187.z, r0
++      endif
++    endif
+     mul oC0.xyz, r0, r1.x
+     mul oC2.z, r1.x, v4.x
+     mul r0.x, r2.w, r1.x
+diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
+index 88a09b5..d666ce7 100644
+--- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
++++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
+@@ -29,6 +29,11 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.3058430895e-43 // 450
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 2 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 0, 1, 1, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the most steps
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -69,6 +74,41 @@
+       mov r3.yzw, r5.xxyw
+       cmp r2, r0.z, r2, r3
+     endrep
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping, the view ray
++    // --- marched through the height map in more steps the flatter it looks along the surface, and the
++    // --- hit found between the last two of them, in place of one offset by the height under the pixel.
++    if b15
++      dsx r26.xy, v0.xyxy
++      dsy r22.xy, v0.xyxy
++      dp3 r27.w, v5, v5
++      rsq r27.w, r27.w
++      mul r27.z, v5.z, r27.w
++      mad r27.z, -r27_abs.z, c170.y, c170.y
++      add r27.z, r27.z, c170.x
++      rcp r27.z, r27.z // the step
++      mul r21.xy, -r1, c170.z
++      mov r21.zw, v0.xyxy
++      mov r28.x, c187.x
++      mov r28.y, c187.y
++      rep i1
++        mov r28.zw, r28.xxxy
++        add r28.x, r28.x, r27.z
++        min r28.x, r28.x, c187.y
++        mad r23.xy, r28.x, -r21, r21.zwzw
++        texldd r29, r23, s1, r26, r22
++        add r29.x, c187.y, -r28.x
++        add r28.y, r29.x, -r29.w // how far above the height map the ray still is
++        break_le r28.y, c187.x
++      endrep
++      add r29.x, r28.w, -r28.y
++      rcp r29.x, r29.x
++      mul r29.x, r28.w, r29.x
++      add r29.y, r28.x, -r28.z
++      mad r29.y, r29.x, r29.y, r28.z
++      mad r1.zw, r29.y, -r21, r21.zwzw
++      texld r29, r1.zwzw, s1
++      mov r2.yzw, r29.xxyw
++    endif
+     texld r0, r1.zwzw, s0
+     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
+     // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
+@@ -171,6 +211,14 @@
+     rsq r0.w, r0.w
+     dp2add r2.x, r2.yzzw, r2.yzzw, c2.x
+     cmp r2.x, r2.x, -c1.y, -c1.z
++    // --- FusionFix ground surfaces: GroundSurfacesDebug, half the colour the debug colour
++    if b15
++      mov r21.w, c170.w
++      if_gt r21.w, c187.x
++        add r21.xyz, c185, -r0
++        mad r0.xyz, r21, c187.z, r0
++      endif
++    endif
+     mul oC0.xyz, r0, r2.x
+     mul oC2.z, r2.x, v4.x
+     mul r0.x, r2.x, c73.x
+diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
+index 7d9644a..22ff627 100644
+--- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
++++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
+@@ -31,6 +31,11 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.3198560741e-43 // 451
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 2 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 0, 1, 1, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the most steps
+     def c0, 9.99999975e-006, 0, 1, -0.125
+     def c1, -1, -0, -0.5, -0.00200000009
+     def c2, 0.001953125, 0, 0, 0
+@@ -70,6 +75,41 @@
+       mov r3.yzw, r5.xxyw
+       cmp r2, r0.z, r2, r3
+     endrep
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping, the view ray
++    // --- marched through the height map in more steps the flatter it looks along the surface, and the
++    // --- hit found between the last two of them, in place of one offset by the height under the pixel.
++    if b15
++      dsx r26.xy, v0.xyxy
++      dsy r22.xy, v0.xyxy
++      dp3 r27.w, v5, v5
++      rsq r27.w, r27.w
++      mul r27.z, v5.z, r27.w
++      mad r27.z, -r27_abs.z, c170.y, c170.y
++      add r27.z, r27.z, c170.x
++      rcp r27.z, r27.z // the step
++      mul r21.xy, -r1, c170.z
++      mov r21.zw, v0.xyxy
++      mov r28.x, c187.x
++      mov r28.y, c187.y
++      rep i1
++        mov r28.zw, r28.xxxy
++        add r28.x, r28.x, r27.z
++        min r28.x, r28.x, c187.y
++        mad r23.xy, r28.x, -r21, r21.zwzw
++        texldd r29, r23, s1, r26, r22
++        add r29.x, c187.y, -r28.x
++        add r28.y, r29.x, -r29.w // how far above the height map the ray still is
++        break_le r28.y, c187.x
++      endrep
++      add r29.x, r28.w, -r28.y
++      rcp r29.x, r29.x
++      mul r29.x, r28.w, r29.x
++      add r29.y, r28.x, -r28.z
++      mad r29.y, r29.x, r29.y, r28.z
++      mad r1.zw, r29.y, -r21, r21.zwzw
++      texld r29, r1.zwzw, s1
++      mov r2.yzw, r29.xxyw
++    endif
+     texld r0, r1.zwzw, s0
+     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
+     // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
+@@ -161,6 +201,14 @@
+     rsq r1.w, r1.w
+     dp2add r2.x, r2.yzzw, r2.yzzw, c1.w
+     cmp r2.x, r2.x, -c1.x, -c1.y
++    // --- FusionFix ground surfaces: GroundSurfacesDebug, half the colour the debug colour
++    if b15
++      mov r21.w, c170.w
++      if_gt r21.w, c187.x
++        add r21.xyz, c185, -r0
++        mad r0.xyz, r21, c187.z, r0
++      endif
++    endif
+     mul oC0.xyz, r0, r2.x
+     mul oC2.z, r2.x, v4.x
+     mul r0.x, r2.x, c73.x
+diff --git a/win32_30_nv8/gta_spec/gta_specPS3.asm b/win32_30_nv8/gta_spec/gta_specPS3.asm
+index d721e6d..e3cb356 100644
+--- a/win32_30_nv8/gta_spec/gta_specPS3.asm
++++ b/win32_30_nv8/gta_spec/gta_specPS3.asm
+@@ -27,6 +27,15 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.2676609395e-43 // 590
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
++    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the parallax's most steps
++    def c182, 0.15, 0.3, 0.5, 0.7 // FusionFix ground surfaces: how far towards the sun the self-shadow looks, as parts of the hit's depth
++    def c181, 0.9, 0, 0, 0
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -38,24 +47,179 @@
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl vPos.xy
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s12 // FusionFix detail texture
+-    texld r0, v0, s0
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping on natural ground facing up
++    // --- with no normal map, the texture's brightness against its average as the height: the view ray is marched
++    // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
++    // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
++    mov r23.xy, v0
++    mov r16.w, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z
++      mul r8.w, r8.z, r4.w
++      mad_sat r13.y, v9.w, c174.z, c174.w // the parallax's own fade, nearer than the bumps', as its steps grow coarse
++      mul r8.w, r8.w, r13.y
++      mul r8.w, r8.w, c172.w // the depth in metres here
++      dp3 r8.y, r7, c188 // the texture's average brightness, the height's middle
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r26.xy, v0.xyxy
++      dsy r22.xy, v0.xyxy
++      if_gt r8.w, c187.x
++        crs r17.xyz, r15, r4
++        crs r18.xyz, r4, r14
++        dp3 r12.x, r14, r17
++        rcp r12.x, r12.x
++        mul r9.xyz, r17, r26.x
++        mad r9.xyz, r18, r22.x, r9 // u's gradient in the world, times the determinant
++        mul r10.xyz, r17, r26.y
++        mad r10.xyz, r18, r22.y, r10 // v's
++        add r11.xyz, c172, -v5
++        nrm r6.xyz, r11 // towards the camera
++        dp3 r12.z, r6, r4
++        max r12.y, r12.z, c183.y
++        rcp r12.y, r12.y
++        dp3 r13.x, r6, r9
++        dp3 r13.y, r6, r10
++        mul r13.xy, r13, r12.x
++        mul r13.xy, r13, r12.y
++        mul r13.xy, r13, r8.w
++        min r13.xy, r13, c187.z
++        max r21.xy, r13, -c187.z // how far the coordinates move from the top to the bottom of the height
++        mad r21.zw, r21.xyxy, c187.z, v0.xyxy // and where the top is
++        mul r30.xy, r26, c187.w
++        mul r31.xy, r22, c187.w // the height read a mip softer than the colour, so its steps do not shimmer
++        mad r12.w, -r12_abs.z, c170.y, c170.y
++        add r12.w, r12.w, c170.x
++        rcp r12.w, r12.w // the step
++        mov r28.x, c187.x
++        mov r28.y, c187.y
++        rep i1
++          mov r28.zw, r28.xxxy
++          add r28.x, r28.x, r12.w
++          min r28.x, r28.x, c187.y
++          mad r27.xy, r28.x, -r21, r21.zwzw
++          texldd r29, r27, s0, r30, r31
++          dp3 r29.x, r29, c188
++          add r29.x, r29.x, -r8.y
++          mul r29.x, r29.x, c174.x
++          add_sat r29.w, r29.x, c187.z // the height there
++          add r29.x, c187.y, -r28.x
++          add r28.y, r29.x, -r29.w // how far above it the ray still is
++          break_le r28.y, c187.x
++        endrep
++        add r29.x, r28.w, -r28.y
++        rcp r29.x, r29.x
++        mul r29.x, r28.w, r29.x
++        add r29.y, r28.x, -r28.z
++        mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
++        mad r23.xy, r29.y, -r21, r21.zwzw
++        // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
++        dp3 r11.x, c173, r4
++        max r11.y, r11.x, c183.z
++        rcp r11.y, r11.y
++        dp3 r11.z, c173, r9
++        dp3 r11.w, c173, r10
++        mul r11.zw, r11, r12.x
++        mul r11.zw, r11, r11.y
++        mul r11.zw, r11, r8.w
++        min r11.zw, r11, c187.z
++        max r11.zw, r11, -c187.z // how far the coordinates move per unit of depth climbed towards the sun
++        mov r6.w, c187.x
++        mul r6.x, r29.y, c182.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.y
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.z
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.w
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c181.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul_sat r6.w, r6.w, c174.y
++        mul r6.w, r6.w, c173.w
++        add r16.w, c187.y, -r6.w
++        cmp r16.w, r11.x, r16.w, c187.y // the sun behind the surface leaves it to the lighting
++      endif
++    endif
++    texld r0, r23, s0
+     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
+     // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
+     if b13
+-      dsx r24.xy, v0.xyxy
+-      dsy r24.zw, v0.xyxy
++      dsx r24.xy, r23.xyxy
++      dsy r24.zw, r23.xyxy
+       mul r24, r24, c192.xyxy
+       dp2add r30.z, r24, r24, c194.z
+       dp2add r30.w, r24.zwzw, r24.zwzw, c194.z
+       max r30.z, r30.z, r30.w
+       mad_sat r30.z, r30.z, c195.y, c195.z
+       if_gt r30.z, c194.z
+-        mul r24.xy, v0.xyxy, c192
++        mul r24.xy, r23.xyxy, c192
+         add r24.zw, r24.xyxy, c196.x
+         frc r25.xy, r24.zwzw
+         add r24.zw, r24, -r25.xyxy
+@@ -109,10 +273,81 @@
+         mov r0.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, r23
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, r23, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, r23
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mul r0.xyz, r0, r16.w // the parallax's self-shadow, on the colour as the G-buffer has no place for it
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+-      mul r24.xy, v0.xyxy, c190.x
++      mul r24.xy, r23.xyxy, c190.x
+       texld r24, r24, s12
+       mad r25.x, r24.z, c190.y, c190.z
+       mul r0.xyz, r0, r25.x
+@@ -128,10 +363,47 @@
+     dp4 r20.x, r20_abs, c152.xzwy
+     add r20, -r20.x, r1.x
+     texkill r20
+-    add r1.yzw, c0.w, v1.xxyz
++    // --- FusionFix ground surfaces: with no normal map, the texture's light and shade (and the detail
++    // --- texture's grain) bend the normal of ground facing up, by their screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      nrm r16.xyz, v1
++      mov r17.xy, r23
++      mov r17.w, c187.y
++      texldb r17, r17, s0 // the texture a mip softer: its finest grain, smaller than a pixel, would shimmer
++      dp3 r13.x, r17, c188
++      mul r13.x, r13.x, c169.x
++      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
++      if b12
++        add r13.y, r24.z, -c187.z
++        mad r13.x, r13.y, c169.w, r13.x
++      endif
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      add r13.y, r16.z, -c184.w
++      mul_sat r13.y, r13.y, c183.x
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r16.xyz, r18
++      add r1.yzw, c0.w, r16.xxyz
++    else
++      add r1.yzw, c0.w, v1.xxyz
++    endif
+     dp3 r0.w, r1.yzww, r1.yzww
+     rsq r0.w, r0.w
+-    texld r3, v0, s1
++    texld r3, r23, s1
+     mul r2.x, r3.w, c66.x
+     dp3 r2.w, r3, c73
+     mul r2.w, r2.w, c72.x
+@@ -144,7 +416,7 @@
+     mov oC0.xyz, r0
+     mov oC0.w, r1.x
+     mov oC1.w, r1.x
+-    mov oC2.z, v2.x
++    mul oC2.z, v2.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     // mov oC2.w, r1.x
+     add r20.x, -c152.w, r1.x
+     cmp oC2.w, r20.x, c0.z, -c0.y
+diff --git a/win32_30_nv8/gta_spec/gta_specPS4.asm b/win32_30_nv8/gta_spec/gta_specPS4.asm
+index 3067a70..a0caa86 100644
+--- a/win32_30_nv8/gta_spec/gta_specPS4.asm
++++ b/win32_30_nv8/gta_spec/gta_specPS4.asm
+@@ -29,6 +29,15 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.2816739242e-43 // 591
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
++    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the parallax's most steps
++    def c182, 0.15, 0.3, 0.5, 0.7 // FusionFix ground surfaces: how far towards the sun the self-shadow looks, as parts of the hit's depth
++    def c181, 0.9, 0, 0, 0
+     def c0, 0, -1, -0, 9.99999975e-006
+     def c1, 3.99600005, 4, 0.125, 0.25
+     def c2, 0.5, 0.001953125, 0, 0
+@@ -39,24 +48,179 @@
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
+     dcl vPos.xy
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s10
+     dcl_2d s12 // FusionFix detail texture
+-    texld r0, v0, s0
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping on natural ground facing up
++    // --- with no normal map, the texture's brightness against its average as the height: the view ray is marched
++    // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
++    // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
++    mov r23.xy, v0
++    mov r16.w, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z
++      mul r8.w, r8.z, r4.w
++      mad_sat r13.y, v9.w, c174.z, c174.w // the parallax's own fade, nearer than the bumps', as its steps grow coarse
++      mul r8.w, r8.w, r13.y
++      mul r8.w, r8.w, c172.w // the depth in metres here
++      dp3 r8.y, r7, c188 // the texture's average brightness, the height's middle
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r26.xy, v0.xyxy
++      dsy r22.xy, v0.xyxy
++      if_gt r8.w, c187.x
++        crs r17.xyz, r15, r4
++        crs r18.xyz, r4, r14
++        dp3 r12.x, r14, r17
++        rcp r12.x, r12.x
++        mul r9.xyz, r17, r26.x
++        mad r9.xyz, r18, r22.x, r9 // u's gradient in the world, times the determinant
++        mul r10.xyz, r17, r26.y
++        mad r10.xyz, r18, r22.y, r10 // v's
++        add r11.xyz, c172, -v5
++        nrm r6.xyz, r11 // towards the camera
++        dp3 r12.z, r6, r4
++        max r12.y, r12.z, c183.y
++        rcp r12.y, r12.y
++        dp3 r13.x, r6, r9
++        dp3 r13.y, r6, r10
++        mul r13.xy, r13, r12.x
++        mul r13.xy, r13, r12.y
++        mul r13.xy, r13, r8.w
++        min r13.xy, r13, c187.z
++        max r21.xy, r13, -c187.z // how far the coordinates move from the top to the bottom of the height
++        mad r21.zw, r21.xyxy, c187.z, v0.xyxy // and where the top is
++        mul r30.xy, r26, c187.w
++        mul r31.xy, r22, c187.w // the height read a mip softer than the colour, so its steps do not shimmer
++        mad r12.w, -r12_abs.z, c170.y, c170.y
++        add r12.w, r12.w, c170.x
++        rcp r12.w, r12.w // the step
++        mov r28.x, c187.x
++        mov r28.y, c187.y
++        rep i1
++          mov r28.zw, r28.xxxy
++          add r28.x, r28.x, r12.w
++          min r28.x, r28.x, c187.y
++          mad r27.xy, r28.x, -r21, r21.zwzw
++          texldd r29, r27, s0, r30, r31
++          dp3 r29.x, r29, c188
++          add r29.x, r29.x, -r8.y
++          mul r29.x, r29.x, c174.x
++          add_sat r29.w, r29.x, c187.z // the height there
++          add r29.x, c187.y, -r28.x
++          add r28.y, r29.x, -r29.w // how far above it the ray still is
++          break_le r28.y, c187.x
++        endrep
++        add r29.x, r28.w, -r28.y
++        rcp r29.x, r29.x
++        mul r29.x, r28.w, r29.x
++        add r29.y, r28.x, -r28.z
++        mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
++        mad r23.xy, r29.y, -r21, r21.zwzw
++        // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
++        dp3 r11.x, c173, r4
++        max r11.y, r11.x, c183.z
++        rcp r11.y, r11.y
++        dp3 r11.z, c173, r9
++        dp3 r11.w, c173, r10
++        mul r11.zw, r11, r12.x
++        mul r11.zw, r11, r11.y
++        mul r11.zw, r11, r8.w
++        min r11.zw, r11, c187.z
++        max r11.zw, r11, -c187.z // how far the coordinates move per unit of depth climbed towards the sun
++        mov r6.w, c187.x
++        mul r6.x, r29.y, c182.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.y
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.z
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.w
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c181.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul_sat r6.w, r6.w, c174.y
++        mul r6.w, r6.w, c173.w
++        add r16.w, c187.y, -r6.w
++        cmp r16.w, r11.x, r16.w, c187.y // the sun behind the surface leaves it to the lighting
++      endif
++    endif
++    texld r0, r23, s0
+     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
+     // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
+     if b13
+-      dsx r24.xy, v0.xyxy
+-      dsy r24.zw, v0.xyxy
++      dsx r24.xy, r23.xyxy
++      dsy r24.zw, r23.xyxy
+       mul r24, r24, c192.xyxy
+       dp2add r30.z, r24, r24, c194.z
+       dp2add r30.w, r24.zwzw, r24.zwzw, c194.z
+       max r30.z, r30.z, r30.w
+       mad_sat r30.z, r30.z, c195.y, c195.z
+       if_gt r30.z, c194.z
+-        mul r24.xy, v0.xyxy, c192
++        mul r24.xy, r23.xyxy, c192
+         add r24.zw, r24.xyxy, c196.x
+         frc r25.xy, r24.zwzw
+         add r24.zw, r24, -r25.xyxy
+@@ -110,18 +274,126 @@
+         mov r0.xyz, r25
+       endif
+     endif
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, r23
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, r23, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, r23
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mul r0.xyz, r0, r16.w // the parallax's self-shadow, on the colour as the G-buffer has no place for it
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+-      mul r24.xy, v0.xyxy, c190.x
++      mul r24.xy, r23.xyxy, c190.x
+       texld r24, r24, s12
+       mad r25.x, r24.z, c190.y, c190.z
+       mul r0.xyz, r0, r25.x
+     endif
+-    add r1.xyz, c0.w, v1
++    // --- FusionFix ground surfaces: with no normal map, the texture's light and shade (and the detail
++    // --- texture's grain) bend the normal of ground facing up, by their screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      nrm r16.xyz, v1
++      mov r17.xy, r23
++      mov r17.w, c187.y
++      texldb r17, r17, s0 // the texture a mip softer: its finest grain, smaller than a pixel, would shimmer
++      dp3 r13.x, r17, c188
++      mul r13.x, r13.x, c169.x
++      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
++      if b12
++        add r13.y, r24.z, -c187.z
++        mad r13.x, r13.y, c169.w, r13.x
++      endif
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      add r13.y, r16.z, -c184.w
++      mul_sat r13.y, r13.y, c183.x
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r16.xyz, r18
++      add r1.xyz, c0.w, r16
++    else
++      add r1.xyz, c0.w, v1
++    endif
+     dp3 r1.w, r1, r1
+     rsq r1.w, r1.w
+-    texld r2, v0, s1
++    texld r2, r23, s1
+     mul r2.w, r2.w, c66.x
+     dp3 r2.x, r2, c73
+     mul r2.x, r2.x, c72.x
+@@ -135,7 +407,7 @@
+     mul r0.w, r0.w, c39.x
+     mov oC0, r0
+     mov oC1.w, r0.w
+-    mov oC2.z, v2.x
++    mul oC2.z, v2.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.w, r0.w
+     mov r0.yz, c0
+     mul oC3, -r0.yzzz, c52.x
+diff --git a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm b/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
+index 5882ea1..9d0522b 100644
+--- a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
++++ b/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
+@@ -21,6 +21,10 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.4218037706e-43 // 601
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 1 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0, 1, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -35,6 +39,7 @@
+     dcl_color v2
+     dcl_color1 v3.y
+     dcl_texcoord2 v4.xyz
++    dcl_texcoord1 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl vPos.xy
+     dcl_2d s0
+@@ -47,10 +52,79 @@
+     dp4 r20.x, r20_abs, c152.xzwy
+     add r20, -r20.x, c39.x
+     texkill r20
+-    texld r0, v0, s0
+-    texld r1, v1, s1
+-    mul r0.w, r1.w, v3.y
+-    lrp r2.xyz, r0.w, r1, r0
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): each layer read twice, the second time shifted, and
++    // --- the two mixed in patches of a world space noise, so the texture's repeat shows less; the layers
++    // --- blended by their height (their brightness), so the next one shows first in the gaps of the one
++    // --- below; and the result lightened and darkened, warmer and cooler, in wide patches.
++    if b15
++      mul r3.xy, v5, c167.x
++      mov r3.w, c167.z
++      texldb r3, r3, s12 // the colour patches, mips biased to leave out the noise's fine grain
++      mul r4.xy, v5, c167.y
++      mov r4.w, c167.z
++      texldb r4, r4, s12 // the patches where the second read shows
++      add r4.w, r4.z, -c187.z
++      mul r4.w, r4.w, c166.w
++      texld r5, v0, s0
++      add r6.xy, v0, c186
++      texld r6, r6, s0
++      dp3 r7.x, r5, c188
++      dp3 r7.y, r6, c188
++      add r7.z, r7.y, -r7.x
++      mad r7.z, r7.z, c187.w, r4.w
++      add_sat r7.z, r7.z, c187.z
++      mul r7.z, r7.z, c166.z
++      lrp r8, r7.z, r6, r5
++      lrp r9.x, r7.z, r7.y, r7.x // the layer's height
++      mov r10.xyz, r8
++      mov r11.x, r9.x
++      texld r5, v1, s1
++      add r6.xy, v1, c186
++      texld r6, r6, s1
++      dp3 r7.x, r5, c188
++      dp3 r7.y, r6, c188
++      add r7.z, r7.y, -r7.x
++      mad r7.z, r7.z, c187.w, r4.w
++      add_sat r7.z, r7.z, c187.z
++      mul r7.z, r7.z, c166.z
++      lrp r8, r7.z, r6, r5
++      lrp r9.x, r7.z, r7.y, r7.x // the layer's height
++      mul r7.x, r8.w, v3.y // the game's weight, from the texture's alpha and the vertex
++      add r7.y, r11.x, -r7.x
++      add r7.y, r7.y, c187.y
++      add r7.z, r9.x, r7.x
++      max r7.w, r7.y, r7.z
++      add r7.w, r7.w, -c166.x
++      add r12.x, r7.y, -r7.w
++      add r12.y, r7.z, -r7.w
++      max r12.xy, r12, c187.x
++      add r12.z, r12.x, r12.y
++      rcp r12.z, r12.z
++      mul r12.z, r12.y, r12.z // the height's weight
++      add r12.w, r12.z, -r7.x
++      mad r12.w, r12.w, c166.y, r7.x // between the game's and the height's
++      lrp r13.xyz, r12.w, r8, r10
++      mov r10.xyz, r13
++      lrp r13.x, r12.w, r9.x, r11.x
++      mov r11.x, r13.x
++      add r12.x, r3.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r2.xyz, r10, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: half the colour the debug colour
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r2
++        mad r2.xyz, r12, c187.z, r2
++      endif
++    else
++      texld r0, v0, s0
++      texld r1, v1, s1
++      mul r0.w, r1.w, v3.y
++      lrp r2.xyz, r0.w, r1, r0
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+@@ -61,7 +135,36 @@
+     endif
+     mul oC0.xyz, r2, v2
+     mov oC0.w, c39.x
+-    mad oC1.xyz, v4, c0.x, c0.x
++    // --- FusionFix ground surfaces: the terrain has no normal map, so its height (the layers' brightness,
++    // --- and the detail texture's grain) bends the vertex normal, by its screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      mul r13.x, r11.x, c169.x
++      if b12
++        add r13.y, r24.z, -c187.z
++        mad r13.x, r13.y, c169.w, r13.x
++      endif
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      nrm r16.xyz, v4
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r30.xyz, r18
++    else
++      mov r30.xyz, v4
++    endif
++    mad oC1.xyz, r30, c0.x, c0.x
+     mov oC1.w, c39.x
+     mad oC2.xz, v2.w, c0.yyzw, c0.ywyw
+     mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
+diff --git a/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm b/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
+index b1190ce..46e5f34 100644
+--- a/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
++++ b/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
+@@ -23,6 +23,10 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.4778557092e-43 // 605
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 1 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0, 1, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -38,6 +42,7 @@
+     dcl_color v3
+     dcl_color1 v4.yz
+     dcl_texcoord2 v5.xyz
++    dcl_texcoord1 v6.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl vPos.xy
+     dcl_2d s0
+@@ -51,13 +56,111 @@
+     dp4 r20.x, r20_abs, c152.xzwy
+     add r20, -r20.x, c39.x
+     texkill r20
+-    texld r0, v0, s0
+-    texld r1, v1, s1
+-    mul r0.w, r1.w, v4.y
+-    lrp r2.xyz, r0.w, r1, r0
+-    texld r0, v2, s2
+-    mul r0.w, r0.w, v4.z
+-    lrp r1.xyz, r0.w, r0, r2
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): each layer read twice, the second time shifted, and
++    // --- the two mixed in patches of a world space noise, so the texture's repeat shows less; the layers
++    // --- blended by their height (their brightness), so the next one shows first in the gaps of the one
++    // --- below; and the result lightened and darkened, warmer and cooler, in wide patches.
++    if b15
++      mul r3.xy, v6, c167.x
++      mov r3.w, c167.z
++      texldb r3, r3, s12 // the colour patches, mips biased to leave out the noise's fine grain
++      mul r4.xy, v6, c167.y
++      mov r4.w, c167.z
++      texldb r4, r4, s12 // the patches where the second read shows
++      add r4.w, r4.z, -c187.z
++      mul r4.w, r4.w, c166.w
++      texld r5, v0, s0
++      add r6.xy, v0, c186
++      texld r6, r6, s0
++      dp3 r7.x, r5, c188
++      dp3 r7.y, r6, c188
++      add r7.z, r7.y, -r7.x
++      mad r7.z, r7.z, c187.w, r4.w
++      add_sat r7.z, r7.z, c187.z
++      mul r7.z, r7.z, c166.z
++      lrp r8, r7.z, r6, r5
++      lrp r9.x, r7.z, r7.y, r7.x // the layer's height
++      mov r10.xyz, r8
++      mov r11.x, r9.x
++      texld r5, v1, s1
++      add r6.xy, v1, c186
++      texld r6, r6, s1
++      dp3 r7.x, r5, c188
++      dp3 r7.y, r6, c188
++      add r7.z, r7.y, -r7.x
++      mad r7.z, r7.z, c187.w, r4.w
++      add_sat r7.z, r7.z, c187.z
++      mul r7.z, r7.z, c166.z
++      lrp r8, r7.z, r6, r5
++      lrp r9.x, r7.z, r7.y, r7.x // the layer's height
++      mul r7.x, r8.w, v4.y // the game's weight, from the texture's alpha and the vertex
++      add r7.y, r11.x, -r7.x
++      add r7.y, r7.y, c187.y
++      add r7.z, r9.x, r7.x
++      max r7.w, r7.y, r7.z
++      add r7.w, r7.w, -c166.x
++      add r12.x, r7.y, -r7.w
++      add r12.y, r7.z, -r7.w
++      max r12.xy, r12, c187.x
++      add r12.z, r12.x, r12.y
++      rcp r12.z, r12.z
++      mul r12.z, r12.y, r12.z // the height's weight
++      add r12.w, r12.z, -r7.x
++      mad r12.w, r12.w, c166.y, r7.x // between the game's and the height's
++      lrp r13.xyz, r12.w, r8, r10
++      mov r10.xyz, r13
++      lrp r13.x, r12.w, r9.x, r11.x
++      mov r11.x, r13.x
++      texld r5, v2, s2
++      add r6.xy, v2, c186
++      texld r6, r6, s2
++      dp3 r7.x, r5, c188
++      dp3 r7.y, r6, c188
++      add r7.z, r7.y, -r7.x
++      mad r7.z, r7.z, c187.w, r4.w
++      add_sat r7.z, r7.z, c187.z
++      mul r7.z, r7.z, c166.z
++      lrp r8, r7.z, r6, r5
++      lrp r9.x, r7.z, r7.y, r7.x // the layer's height
++      mul r7.x, r8.w, v4.z // the game's weight, from the texture's alpha and the vertex
++      add r7.y, r11.x, -r7.x
++      add r7.y, r7.y, c187.y
++      add r7.z, r9.x, r7.x
++      max r7.w, r7.y, r7.z
++      add r7.w, r7.w, -c166.x
++      add r12.x, r7.y, -r7.w
++      add r12.y, r7.z, -r7.w
++      max r12.xy, r12, c187.x
++      add r12.z, r12.x, r12.y
++      rcp r12.z, r12.z
++      mul r12.z, r12.y, r12.z // the height's weight
++      add r12.w, r12.z, -r7.x
++      mad r12.w, r12.w, c166.y, r7.x // between the game's and the height's
++      lrp r13.xyz, r12.w, r8, r10
++      mov r10.xyz, r13
++      lrp r13.x, r12.w, r9.x, r11.x
++      mov r11.x, r13.x
++      add r12.x, r3.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r1.xyz, r10, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: half the colour the debug colour
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r1
++        mad r1.xyz, r12, c187.z, r1
++      endif
++    else
++      texld r0, v0, s0
++      texld r1, v1, s1
++      mul r0.w, r1.w, v4.y
++      lrp r2.xyz, r0.w, r1, r0
++      texld r0, v2, s2
++      mul r0.w, r0.w, v4.z
++      lrp r1.xyz, r0.w, r0, r2
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+@@ -68,7 +171,36 @@
+     endif
+     mul oC0.xyz, r1, v3
+     mov oC0.w, c39.x
+-    mad oC1.xyz, v5, c0.x, c0.x
++    // --- FusionFix ground surfaces: the terrain has no normal map, so its height (the layers' brightness,
++    // --- and the detail texture's grain) bends the vertex normal, by its screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      mul r13.x, r11.x, c169.x
++      if b12
++        add r13.y, r24.z, -c187.z
++        mad r13.x, r13.y, c169.w, r13.x
++      endif
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v6
++      dsy r15.xyz, v6
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      nrm r16.xyz, v5
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r30.xyz, r18
++    else
++      mov r30.xyz, v5
++    endif
++    mad oC1.xyz, r30, c0.x, c0.x
+     mov oC1.w, c39.x
+     mad oC2.xz, v3.w, c0.yyzw, c0.ywyw
+     mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
+diff --git a/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm b/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
+index 10dd3b6..9ba3dfc 100644
+--- a/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
++++ b/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
+@@ -25,6 +25,10 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.5479206324e-43 // 610
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 1 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0, 1, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -41,6 +45,7 @@
+     dcl_color v4
+     dcl_color1 v5.yzw
+     dcl_texcoord2 v6.xyz
++    dcl_texcoord1 v7.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl vPos.xy
+     dcl_2d s0
+@@ -55,16 +60,143 @@
+     dp4 r20.x, r20_abs, c152.xzwy
+     add r20, -r20.x, c39.x
+     texkill r20
+-    texld r0, v0, s0
+-    texld r1, v1, s1
+-    mul r0.w, r1.w, v5.y
+-    lrp r2.xyz, r0.w, r1, r0
+-    texld r0, v2, s2
+-    mul r0.w, r0.w, v5.z
+-    lrp r1.xyz, r0.w, r0, r2
+-    texld r0, v3, s3
+-    mul r0.w, r0.w, v5.w
+-    lrp r2.xyz, r0.w, r0, r1
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): each layer read twice, the second time shifted, and
++    // --- the two mixed in patches of a world space noise, so the texture's repeat shows less; the layers
++    // --- blended by their height (their brightness), so the next one shows first in the gaps of the one
++    // --- below; and the result lightened and darkened, warmer and cooler, in wide patches.
++    if b15
++      mul r3.xy, v7, c167.x
++      mov r3.w, c167.z
++      texldb r3, r3, s12 // the colour patches, mips biased to leave out the noise's fine grain
++      mul r4.xy, v7, c167.y
++      mov r4.w, c167.z
++      texldb r4, r4, s12 // the patches where the second read shows
++      add r4.w, r4.z, -c187.z
++      mul r4.w, r4.w, c166.w
++      texld r5, v0, s0
++      add r6.xy, v0, c186
++      texld r6, r6, s0
++      dp3 r7.x, r5, c188
++      dp3 r7.y, r6, c188
++      add r7.z, r7.y, -r7.x
++      mad r7.z, r7.z, c187.w, r4.w
++      add_sat r7.z, r7.z, c187.z
++      mul r7.z, r7.z, c166.z
++      lrp r8, r7.z, r6, r5
++      lrp r9.x, r7.z, r7.y, r7.x // the layer's height
++      mov r10.xyz, r8
++      mov r11.x, r9.x
++      texld r5, v1, s1
++      add r6.xy, v1, c186
++      texld r6, r6, s1
++      dp3 r7.x, r5, c188
++      dp3 r7.y, r6, c188
++      add r7.z, r7.y, -r7.x
++      mad r7.z, r7.z, c187.w, r4.w
++      add_sat r7.z, r7.z, c187.z
++      mul r7.z, r7.z, c166.z
++      lrp r8, r7.z, r6, r5
++      lrp r9.x, r7.z, r7.y, r7.x // the layer's height
++      mul r7.x, r8.w, v5.y // the game's weight, from the texture's alpha and the vertex
++      add r7.y, r11.x, -r7.x
++      add r7.y, r7.y, c187.y
++      add r7.z, r9.x, r7.x
++      max r7.w, r7.y, r7.z
++      add r7.w, r7.w, -c166.x
++      add r12.x, r7.y, -r7.w
++      add r12.y, r7.z, -r7.w
++      max r12.xy, r12, c187.x
++      add r12.z, r12.x, r12.y
++      rcp r12.z, r12.z
++      mul r12.z, r12.y, r12.z // the height's weight
++      add r12.w, r12.z, -r7.x
++      mad r12.w, r12.w, c166.y, r7.x // between the game's and the height's
++      lrp r13.xyz, r12.w, r8, r10
++      mov r10.xyz, r13
++      lrp r13.x, r12.w, r9.x, r11.x
++      mov r11.x, r13.x
++      texld r5, v2, s2
++      add r6.xy, v2, c186
++      texld r6, r6, s2
++      dp3 r7.x, r5, c188
++      dp3 r7.y, r6, c188
++      add r7.z, r7.y, -r7.x
++      mad r7.z, r7.z, c187.w, r4.w
++      add_sat r7.z, r7.z, c187.z
++      mul r7.z, r7.z, c166.z
++      lrp r8, r7.z, r6, r5
++      lrp r9.x, r7.z, r7.y, r7.x // the layer's height
++      mul r7.x, r8.w, v5.z // the game's weight, from the texture's alpha and the vertex
++      add r7.y, r11.x, -r7.x
++      add r7.y, r7.y, c187.y
++      add r7.z, r9.x, r7.x
++      max r7.w, r7.y, r7.z
++      add r7.w, r7.w, -c166.x
++      add r12.x, r7.y, -r7.w
++      add r12.y, r7.z, -r7.w
++      max r12.xy, r12, c187.x
++      add r12.z, r12.x, r12.y
++      rcp r12.z, r12.z
++      mul r12.z, r12.y, r12.z // the height's weight
++      add r12.w, r12.z, -r7.x
++      mad r12.w, r12.w, c166.y, r7.x // between the game's and the height's
++      lrp r13.xyz, r12.w, r8, r10
++      mov r10.xyz, r13
++      lrp r13.x, r12.w, r9.x, r11.x
++      mov r11.x, r13.x
++      texld r5, v3, s3
++      add r6.xy, v3, c186
++      texld r6, r6, s3
++      dp3 r7.x, r5, c188
++      dp3 r7.y, r6, c188
++      add r7.z, r7.y, -r7.x
++      mad r7.z, r7.z, c187.w, r4.w
++      add_sat r7.z, r7.z, c187.z
++      mul r7.z, r7.z, c166.z
++      lrp r8, r7.z, r6, r5
++      lrp r9.x, r7.z, r7.y, r7.x // the layer's height
++      mul r7.x, r8.w, v5.w // the game's weight, from the texture's alpha and the vertex
++      add r7.y, r11.x, -r7.x
++      add r7.y, r7.y, c187.y
++      add r7.z, r9.x, r7.x
++      max r7.w, r7.y, r7.z
++      add r7.w, r7.w, -c166.x
++      add r12.x, r7.y, -r7.w
++      add r12.y, r7.z, -r7.w
++      max r12.xy, r12, c187.x
++      add r12.z, r12.x, r12.y
++      rcp r12.z, r12.z
++      mul r12.z, r12.y, r12.z // the height's weight
++      add r12.w, r12.z, -r7.x
++      mad r12.w, r12.w, c166.y, r7.x // between the game's and the height's
++      lrp r13.xyz, r12.w, r8, r10
++      mov r10.xyz, r13
++      lrp r13.x, r12.w, r9.x, r11.x
++      mov r11.x, r13.x
++      add r12.x, r3.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r2.xyz, r10, r12
++      mov r12.w, c170.w // GroundSurfacesDebug: half the colour the debug colour
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r2
++        mad r2.xyz, r12, c187.z, r2
++      endif
++    else
++      texld r0, v0, s0
++      texld r1, v1, s1
++      mul r0.w, r1.w, v5.y
++      lrp r2.xyz, r0.w, r1, r0
++      texld r0, v2, s2
++      mul r0.w, r0.w, v5.z
++      lrp r1.xyz, r0.w, r0, r2
++      texld r0, v3, s3
++      mul r0.w, r0.w, v5.w
++      lrp r2.xyz, r0.w, r0, r1
++    endif
+     // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
+     // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
+     if b12
+@@ -75,7 +207,36 @@
+     endif
+     mul oC0.xyz, r2, v4
+     mov oC0.w, c39.x
+-    mad oC1.xyz, v6, c0.x, c0.x
++    // --- FusionFix ground surfaces: the terrain has no normal map, so its height (the layers' brightness,
++    // --- and the detail texture's grain) bends the vertex normal, by its screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      mul r13.x, r11.x, c169.x
++      if b12
++        add r13.y, r24.z, -c187.z
++        mad r13.x, r13.y, c169.w, r13.x
++      endif
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v7
++      dsy r15.xyz, v7
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      nrm r16.xyz, v6
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r30.xyz, r18
++    else
++      mov r30.xyz, v6
++    endif
++    mad oC1.xyz, r30, c0.x, c0.x
+     mov oC1.w, c39.x
+     mad oC2.xz, v4.w, c0.yyzw, c0.ywyw
+     mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
+diff --git a/win32_30_nv8/rage_default/rage_defaultPS3.asm b/win32_30_nv8/rage_default/rage_defaultPS3.asm
+index 3a528b5..74760ff 100644
+--- a/win32_30_nv8/rage_default/rage_defaultPS3.asm
++++ b/win32_30_nv8/rage_default/rage_defaultPS3.asm
+@@ -23,6 +23,15 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0958153991e-42 // 782
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
++    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the parallax's most steps
++    def c182, 0.15, 0.3, 0.5, 0.7 // FusionFix ground surfaces: how far towards the sun the self-shadow looks, as parts of the hit's depth
++    def c181, 0.9, 0, 0, 0
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
+@@ -32,10 +41,237 @@
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl vPos.xy
+     dcl_2d s0
+-    texld r0, v0, s0
++    dcl_2d s12 // FusionFix ground surfaces: noise
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping on natural ground facing up
++    // --- with no normal map, the texture's brightness against its average as the height: the view ray is marched
++    // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
++    // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
++    mov r23.xy, v0
++    mov r16.w, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z
++      mul r8.w, r8.z, r4.w
++      mad_sat r13.y, v9.w, c174.z, c174.w // the parallax's own fade, nearer than the bumps', as its steps grow coarse
++      mul r8.w, r8.w, r13.y
++      mul r8.w, r8.w, c172.w // the depth in metres here
++      dp3 r8.y, r7, c188 // the texture's average brightness, the height's middle
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r26.xy, v0.xyxy
++      dsy r22.xy, v0.xyxy
++      if_gt r8.w, c187.x
++        crs r17.xyz, r15, r4
++        crs r18.xyz, r4, r14
++        dp3 r12.x, r14, r17
++        rcp r12.x, r12.x
++        mul r9.xyz, r17, r26.x
++        mad r9.xyz, r18, r22.x, r9 // u's gradient in the world, times the determinant
++        mul r10.xyz, r17, r26.y
++        mad r10.xyz, r18, r22.y, r10 // v's
++        add r11.xyz, c172, -v5
++        nrm r6.xyz, r11 // towards the camera
++        dp3 r12.z, r6, r4
++        max r12.y, r12.z, c183.y
++        rcp r12.y, r12.y
++        dp3 r13.x, r6, r9
++        dp3 r13.y, r6, r10
++        mul r13.xy, r13, r12.x
++        mul r13.xy, r13, r12.y
++        mul r13.xy, r13, r8.w
++        min r13.xy, r13, c187.z
++        max r21.xy, r13, -c187.z // how far the coordinates move from the top to the bottom of the height
++        mad r21.zw, r21.xyxy, c187.z, v0.xyxy // and where the top is
++        mul r30.xy, r26, c187.w
++        mul r31.xy, r22, c187.w // the height read a mip softer than the colour, so its steps do not shimmer
++        mad r12.w, -r12_abs.z, c170.y, c170.y
++        add r12.w, r12.w, c170.x
++        rcp r12.w, r12.w // the step
++        mov r28.x, c187.x
++        mov r28.y, c187.y
++        rep i1
++          mov r28.zw, r28.xxxy
++          add r28.x, r28.x, r12.w
++          min r28.x, r28.x, c187.y
++          mad r27.xy, r28.x, -r21, r21.zwzw
++          texldd r29, r27, s0, r30, r31
++          dp3 r29.x, r29, c188
++          add r29.x, r29.x, -r8.y
++          mul r29.x, r29.x, c174.x
++          add_sat r29.w, r29.x, c187.z // the height there
++          add r29.x, c187.y, -r28.x
++          add r28.y, r29.x, -r29.w // how far above it the ray still is
++          break_le r28.y, c187.x
++        endrep
++        add r29.x, r28.w, -r28.y
++        rcp r29.x, r29.x
++        mul r29.x, r28.w, r29.x
++        add r29.y, r28.x, -r28.z
++        mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
++        mad r23.xy, r29.y, -r21, r21.zwzw
++        // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
++        dp3 r11.x, c173, r4
++        max r11.y, r11.x, c183.z
++        rcp r11.y, r11.y
++        dp3 r11.z, c173, r9
++        dp3 r11.w, c173, r10
++        mul r11.zw, r11, r12.x
++        mul r11.zw, r11, r11.y
++        mul r11.zw, r11, r8.w
++        min r11.zw, r11, c187.z
++        max r11.zw, r11, -c187.z // how far the coordinates move per unit of depth climbed towards the sun
++        mov r6.w, c187.x
++        mul r6.x, r29.y, c182.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.y
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.z
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.w
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c181.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul_sat r6.w, r6.w, c174.y
++        mul r6.w, r6.w, c173.w
++        add r16.w, c187.y, -r6.w
++        cmp r16.w, r11.x, r16.w, c187.y // the sun behind the surface leaves it to the lighting
++      endif
++    endif
++    texld r0, r23, s0
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, r23
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, r23, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, r23
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mul r0.xyz, r0, r16.w // the parallax's self-shadow, on the colour as the G-buffer has no place for it
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
+     mul_sat r0.w, r0.w, c154.x
+     // mul r0.w, r0.w, v2.w disabled vertex alpha
+     mul r1.x, r0.w, c39.x
+@@ -47,7 +283,40 @@
+     dp4 r20.x, r20_abs, c152.xzwy
+     add r20, -r20.x, r1.x
+     texkill r20
+-    add r1.yzw, c0.w, v1.xxyz
++    // --- FusionFix ground surfaces: with no normal map, the texture's light and shade (and the detail
++    // --- texture's grain) bend the normal of ground facing up, by their screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      nrm r16.xyz, v1
++      mov r17.xy, r23
++      mov r17.w, c187.y
++      texldb r17, r17, s0 // the texture a mip softer: its finest grain, smaller than a pixel, would shimmer
++      dp3 r13.x, r17, c188
++      mul r13.x, r13.x, c169.x
++      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      add r13.y, r16.z, -c184.w
++      mul_sat r13.y, r13.y, c183.x
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r16.xyz, r18
++      add r1.yzw, c0.w, r16.xxyz
++    else
++      add r1.yzw, c0.w, v1.xxyz
++    endif
+     dp3 r0.w, r1.yzww, r1.yzww
+     rsq r0.w, r0.w
+     mad r1.yzw, r1, r0.w, -c0.y
+@@ -55,7 +324,9 @@
+     mov oC0.xyz, r0
+     mov oC0.w, r1.x
+     mov oC1.w, r1.x
+-    mad oC2.xz, v2.x, c1.yyzw, c1.ywyw
++    mad r22.xz, v2.x, c1.yyzw, c1.ywyw
++    mov oC2.x, r22.x
++    mul oC2.z, r22.z, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
+     // mov oC2.w, r1.x
+     add r20.x, -c152.w, r1.x
+diff --git a/win32_30_nv8/rage_default/rage_defaultPS4.asm b/win32_30_nv8/rage_default/rage_defaultPS4.asm
+index 657ce1d..dfcd6e3 100644
+--- a/win32_30_nv8/rage_default/rage_defaultPS4.asm
++++ b/win32_30_nv8/rage_default/rage_defaultPS4.asm
+@@ -25,6 +25,15 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0972166976e-42 // 783
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 1, 0.5, 0, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    def c184, 13, 0.12, 6, 0.65 // FusionFix ground surfaces: the smallest mip, saturation from which a texture counts as natural and its scale, ground from this normal z
++    def c183, 4, 0.25, 0.05, 0 // FusionFix ground surfaces: up to ground over a normal z of a quarter, the flattest view and sun the parallax takes
++    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the parallax's most steps
++    def c182, 0.15, 0.3, 0.5, 0.7 // FusionFix ground surfaces: how far towards the sun the self-shadow looks, as parts of the hit's depth
++    def c181, 0.9, 0, 0, 0
+     def c0, 0, -1, -0, 9.99999975e-006
+     def c1, 3.99600005, 4, 0.125, 0.25
+     // def c2, 0.5, 0.001953125, 0, 0
+@@ -34,11 +43,271 @@
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
+     dcl vPos.xy
++    dcl_texcoord6 v5.xyz // FusionFix ground surfaces: world position
+     dcl_texcoord9 v9
+     dcl_2d s0
++    dcl_2d s12 // FusionFix ground surfaces: noise
+     dcl_2d s10
+-    texld r0, v0, s0
+-    add r1.xyz, c0.w, v1
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping on natural ground facing up
++    // --- with no normal map, the texture's brightness against its average as the height: the view ray is marched
++    // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
++    // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
++    mov r23.xy, v0
++    mov r16.w, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x
++      mov r7.xy, v0
++      mov r7.zw, c184.x
++      texldl r7, r7, s0
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z
++      mul r8.w, r8.z, r4.w
++      mad_sat r13.y, v9.w, c174.z, c174.w // the parallax's own fade, nearer than the bumps', as its steps grow coarse
++      mul r8.w, r8.w, r13.y
++      mul r8.w, r8.w, c172.w // the depth in metres here
++      dp3 r8.y, r7, c188 // the texture's average brightness, the height's middle
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r26.xy, v0.xyxy
++      dsy r22.xy, v0.xyxy
++      if_gt r8.w, c187.x
++        crs r17.xyz, r15, r4
++        crs r18.xyz, r4, r14
++        dp3 r12.x, r14, r17
++        rcp r12.x, r12.x
++        mul r9.xyz, r17, r26.x
++        mad r9.xyz, r18, r22.x, r9 // u's gradient in the world, times the determinant
++        mul r10.xyz, r17, r26.y
++        mad r10.xyz, r18, r22.y, r10 // v's
++        add r11.xyz, c172, -v5
++        nrm r6.xyz, r11 // towards the camera
++        dp3 r12.z, r6, r4
++        max r12.y, r12.z, c183.y
++        rcp r12.y, r12.y
++        dp3 r13.x, r6, r9
++        dp3 r13.y, r6, r10
++        mul r13.xy, r13, r12.x
++        mul r13.xy, r13, r12.y
++        mul r13.xy, r13, r8.w
++        min r13.xy, r13, c187.z
++        max r21.xy, r13, -c187.z // how far the coordinates move from the top to the bottom of the height
++        mad r21.zw, r21.xyxy, c187.z, v0.xyxy // and where the top is
++        mul r30.xy, r26, c187.w
++        mul r31.xy, r22, c187.w // the height read a mip softer than the colour, so its steps do not shimmer
++        mad r12.w, -r12_abs.z, c170.y, c170.y
++        add r12.w, r12.w, c170.x
++        rcp r12.w, r12.w // the step
++        mov r28.x, c187.x
++        mov r28.y, c187.y
++        rep i1
++          mov r28.zw, r28.xxxy
++          add r28.x, r28.x, r12.w
++          min r28.x, r28.x, c187.y
++          mad r27.xy, r28.x, -r21, r21.zwzw
++          texldd r29, r27, s0, r30, r31
++          dp3 r29.x, r29, c188
++          add r29.x, r29.x, -r8.y
++          mul r29.x, r29.x, c174.x
++          add_sat r29.w, r29.x, c187.z // the height there
++          add r29.x, c187.y, -r28.x
++          add r28.y, r29.x, -r29.w // how far above it the ray still is
++          break_le r28.y, c187.x
++        endrep
++        add r29.x, r28.w, -r28.y
++        rcp r29.x, r29.x
++        mul r29.x, r28.w, r29.x
++        add r29.y, r28.x, -r28.z
++        mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
++        mad r23.xy, r29.y, -r21, r21.zwzw
++        // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
++        dp3 r11.x, c173, r4
++        max r11.y, r11.x, c183.z
++        rcp r11.y, r11.y
++        dp3 r11.z, c173, r9
++        dp3 r11.w, c173, r10
++        mul r11.zw, r11, r12.x
++        mul r11.zw, r11, r11.y
++        mul r11.zw, r11, r8.w
++        min r11.zw, r11, c187.z
++        max r11.zw, r11, -c187.z // how far the coordinates move per unit of depth climbed towards the sun
++        mov r6.w, c187.x
++        mul r6.x, r29.y, c182.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.y
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.z
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c182.w
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul r6.x, r29.y, c181.x
++        mad r27.xy, r6.x, r11.zwzw, r23
++        texldd r5, r27, s0, r30, r31
++        dp3 r5.x, r5, c188
++        add r5.x, r5.x, -r8.y
++        mul r5.x, r5.x, c174.x
++        add_sat r5.x, r5.x, c187.z
++        add r6.y, r29.y, -r6.x
++        add r6.y, c187.y, -r6.y
++        add r6.z, r5.x, -r6.y
++        max r6.w, r6.w, r6.z
++        mul_sat r6.w, r6.w, c174.y
++        mul r6.w, r6.w, c173.w
++        add r16.w, c187.y, -r6.w
++        cmp r16.w, r11.x, r16.w, c187.y // the sun behind the surface leaves it to the lighting
++      endif
++    endif
++    texld r0, r23, s0
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): on ground, surfaces facing up whose texture's
++    // --- average colour is not grey (grass, earth, gravel; not asphalt, its markings or concrete), the
++    // --- texture is read a second time, shifted, and the two mixed in patches of a world space noise, so its
++    // --- repeat shows less; and any ground facing up is lightened and darkened in wide patches.
++    mov r21.x, c187.y
++    if b15
++      nrm r4.xyz, v1
++      add r4.w, r4.z, -c184.w
++      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      mul r5.xy, v5, c167.x
++      mov r5.w, c167.z
++      texldb r5, r5, s12
++      mul r6.xy, v5, c167.y
++      mov r6.w, c167.z
++      texldb r6, r6, s12
++      mov r7.xy, r23
++      mov r7.zw, c184.x
++      texldl r7, r7, s0 // the texture's average colour
++      max r8.x, r7.x, r7.y
++      max r8.x, r8.x, r7.z
++      min r8.y, r7.x, r7.y
++      min r8.y, r8.y, r7.z
++      add r8.z, r8.x, -r8.y
++      max r8.x, r8.x, c186.z
++      rcp r8.x, r8.x
++      mul r8.z, r8.z, r8.x
++      add r8.z, r8.z, -c184.y
++      mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.w, r8.z, r4.w
++      add r9.xy, r23, c186
++      texld r9, r9, s0
++      dp3 r10.x, r0, c188
++      dp3 r10.y, r9, c188
++      add r10.z, r10.y, -r10.x
++      add r10.w, r6.z, -c187.z
++      mul r10.w, r10.w, c166.w
++      mad r10.z, r10.z, c187.w, r10.w
++      add_sat r10.z, r10.z, c187.z
++      mul r10.z, r10.z, c166.z
++      mul r10.z, r10.z, r8.w
++      lrp r11.xyz, r10.z, r9, r0
++      mov r22.xy, r23
++      mov r22.w, c171.w
++      texldb r22, r22, s0 // the texture's local average
++      dp3 r21.y, r22, c188
++      dp3 r22.x, r11, c188
++      add r22.x, r22.x, -r21.y
++      mul r22.x, r22.x, c171.x
++      mul r22.x, r22.x, r4.w
++      add_sat r21.x, r22.x, c187.y // the hollows' occlusion, which the ambient light and reflections take
++      add r22.y, r21.x, -c187.y
++      mul r22.y, r22.y, c171.y
++      add r22.y, r22.y, c187.y
++      mul r11.xyz, r11, r22.y // and a part of it on the colour, for the sun
++      add r12.x, r5.z, -c187.z
++      mul r12.x, r12.x, c167.w // the noise's spread brought to -1 to 1
++      add_sat r12.x, r12.x, c187.z
++      mad r12.x, r12.x, c187.w, -c187.y
++      mul r12.x, r12.x, r4.w
++      mul r12.xyz, r12.x, c168
++      add r12.xyz, r12, c187.y
++      mul r0.xyz, r11, r12
++      mul r0.xyz, r0, r16.w // the parallax's self-shadow, on the colour as the G-buffer has no place for it
++      mov r12.w, c170.w // GroundSurfacesDebug: ground half orange, more so where it counts as natural
++      if_gt r12.w, c187.x
++        add r12.xyz, c185, -r0
++        mad r12.w, r8.z, c187.z, c187.z
++        mul r12.w, r12.w, r4.w
++        mad r0.xyz, r12, r12.w, r0
++      endif
++    endif
++    // --- FusionFix ground surfaces: with no normal map, the texture's light and shade (and the detail
++    // --- texture's grain) bend the normal of ground facing up, by their screen space slopes over the
++    // --- world position's (Mikkelsen's surface gradient); it fades out with distance.
++    if b15
++      nrm r16.xyz, v1
++      mov r17.xy, r23
++      mov r17.w, c187.y
++      texldb r17, r17, s0 // the texture a mip softer: its finest grain, smaller than a pixel, would shimmer
++      dp3 r13.x, r17, c188
++      mul r13.x, r13.x, c169.x
++      mad r13.x, r21.y, c171.z, r13.x // and the local average's, for the larger lumps
++      mad_sat r13.y, v9.w, c169.y, c169.z
++      mul r13.x, r13.x, r13.y
++      add r13.y, r16.z, -c184.w
++      mul_sat r13.y, r13.y, c183.x
++      mul r13.x, r13.x, r13.y
++      dsx r14.xyz, v5
++      dsy r15.xyz, v5
++      dsx r13.z, r13.x
++      dsy r13.w, r13.x
++      crs r17.xyz, r15, r16
++      crs r18.xyz, r16, r14
++      dp3 r12.x, r14, r17
++      mul r17.xyz, r17, r13.z
++      mad r17.xyz, r18, r13.w, r17
++      cmp r12.y, r12.x, c187.y, -c187.y
++      mul r17.xyz, r17, r12.y
++      max r12.x, r12_abs.x, c186.z
++      mad r18.xyz, r16, r12.x, -r17
++      nrm r16.xyz, r18
++      add r1.xyz, c0.w, r16
++    else
++      add r1.xyz, c0.w, v1
++    endif
+     dp3 r1.w, r1, r1
+     rsq r1.w, r1.w
+     mul r0.w, r0.w, v2.w
+@@ -53,7 +322,9 @@
+     mov oC1.w, r0.w
+     // mul oC2.x, r1.x, c72.x
+     // mov oC2.z, v2.x
+-    mad oC2.xz, v2.x, c2.yyzw, c2.ywyw
++    mad r22.xz, v2.x, c2.yyzw, c2.ywyw
++    mov oC2.x, r22.x
++    mul oC2.z, r22.z, r21.x // FusionFix ground surfaces: and the hollows' occlusion
+     mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
+     mov oC2.w, r0.w
+     mov r0.yz, c0

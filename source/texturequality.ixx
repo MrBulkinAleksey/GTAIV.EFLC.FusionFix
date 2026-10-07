@@ -1,12 +1,15 @@
 module;
 
 #include <common.hxx>
+#include "FusionLog.hpp"
 #include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <format>
 #include <functional>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 export module texturequality;
@@ -24,7 +27,10 @@ import settings;
 //  - Detail Textures: a fine grain on surfaces up close (b12, c190, c191, s12).
 //  - Bicubic Filtering: magnified diffuse textures read with a Catmull-Rom filter (b13, c192).
 //  - Specular Anti-Aliasing: highlights widened where the normal turns within a pixel (b14, c193).
-// The shader side is shaders/patches/texture_quality.patch; Sharpening is a post fx pass.
+//  - Ground Surfaces: terrain layers blended by height, their repeat broken up, wide colour patches
+//    and bumps from their height; parallax occlusion mapping on gta_parallax* and natural ground (b15, c166-c174, s12).
+// The shader side is shaders/patches/texture_quality.patch and world_terrain_and_parallax.patch;
+// Sharpening is a post fx pass.
 class TextureQuality
 {
     // s0-s5 hold the material textures in the G-buffer shaders; s10 is the stipple texture.
@@ -34,12 +40,57 @@ class TextureQuality
     // IDirect3DDevice9 methods
     static constexpr int kSetTexture = 65;
     static constexpr int kSetSamplerState = 69;
+    static constexpr int kSetPixelShader = 107;
 
     static inline float fDetailTiling = 8.0f;
     static inline float fDetailAlbedo = 0.15f;
     static inline float fDetailNormal = 0.5f;
     static inline float fSpecularAAStrength = 1.0f;
     static inline float fSpecularAAMax = 0.18f;
+    static inline float fGroundHeightBlend = 1.0f;
+    static inline float fGroundHeightBlendDepth = 0.2f;
+    static inline float fGroundAntiTiling = 1.0f;
+    static inline float fGroundAntiTilingSize = 4.0f;
+    static inline float fGroundAntiTilingSharpness = 16.0f;
+    static inline float fGroundColorVariation = 0.25f;
+    static inline float fGroundColorVariationSize = 15.0f;
+    static inline float fGroundBumps = 0.08f;
+    static inline float fGroundDetailBumps = 0.005f;
+    static inline float fGroundBumpsCoarse = 0.25f;
+    static inline float fGroundBumpsFadeStart = 15.0f;
+    static inline float fGroundBumpsFadeEnd = 60.0f;
+    static inline float fGroundCavity = 2.0f;
+    static inline float fGroundCavityAlbedo = 0.3f;
+    static inline float fGroundParallaxDepth = 0.05f;
+    static inline float fGroundParallaxContrast = 3.0f;
+    static inline float fGroundSelfShadow = 0.5f;
+    static inline float fGroundSelfShadowSharpness = 4.0f;
+    static inline float fGroundParallaxFadeStart = 10.0f;
+    static inline float fGroundParallaxFadeEnd = 30.0f;
+    // Towards the sun or the moon, from the game's gDirectionalLight, and whether it was ever read.
+    static inline float sunDirection[3] = {};
+    static inline bool bSunDirection = false;
+    static inline float fParallaxMinSteps = 8.0f;
+    static inline float fParallaxMaxSteps = 32.0f;
+    static inline float fParallaxDepth = 1.0f;
+    static inline int nGroundDebug = 0;
+
+    // GroundSurfacesDebug: how often the G-buffer pass binds the ground's shaders, which
+    // world_terrain_and_parallax.patch marks with a constant (c186: 0.37, 0.61, 1e-12, kind).
+    static inline SafetyHookInline shSetPixelShader{};
+    static inline bool bPixelShaderHookTried = false;
+    struct SeenShader
+    {
+        int kind = 0;
+        // The number every shader of the pack carries in def c219 (snippets/AddShadersSignature2.lua),
+        // after which its .asm says "// <number>"; 0 for none.
+        uint32_t signature = 0;
+        uint64_t binds = 0;
+    };
+    static inline std::unordered_map<IDirect3DPixelShader9*, SeenShader> shaderKinds;
+    static inline uint64_t groundBinds[4] = {};
+    static inline uint32_t groundFrames = 0;
+    static inline bool bLastGround = false;
 
     // Made during the asynchronous init, which is over before the G-buffer hooks are added.
     static inline std::vector<std::vector<uint32_t>> detailLevels;
@@ -272,18 +323,132 @@ private:
         return shSetTexture && shSetSamplerState;
     }
 
+    static void ReadGroundIni(CIniReader& iniReader)
+    {
+        fGroundHeightBlend = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundHeightBlend", 1.0f), 0.0f, 1.0f);
+        fGroundHeightBlendDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundHeightBlendDepth", 0.2f), 0.01f, 1.0f);
+        fGroundAntiTiling = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTiling", 1.0f), 0.0f, 1.0f);
+        fGroundAntiTilingSize = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTilingSize", 4.0f), 0.5f, 100.0f);
+        fGroundAntiTilingSharpness = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTilingSharpness", 16.0f), 1.0f, 100.0f);
+        fGroundColorVariation = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundColorVariation", 0.25f), 0.0f, 1.0f);
+        fGroundColorVariationSize = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundColorVariationSize", 15.0f), 1.0f, 500.0f);
+        fGroundBumps = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumps", 0.08f), 0.0f, 0.5f);
+        fGroundBumpsCoarse = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsCoarse", 0.25f), 0.0f, 2.0f);
+        fGroundDetailBumps = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundDetailBumps", 0.005f), 0.0f, 0.1f);
+        fGroundBumpsFadeStart = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsFadeStart", 15.0f), 0.0f, 1000.0f);
+        fGroundBumpsFadeEnd = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsFadeEnd", 60.0f), fGroundBumpsFadeStart, 1000.0f);
+        fGroundCavity = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundCavity", 2.0f), 0.0f, 10.0f);
+        fGroundCavityAlbedo = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundCavityAlbedo", 0.3f), 0.0f, 1.0f);
+        fGroundParallaxDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxDepth", 0.05f), 0.0f, 0.5f);
+        fGroundParallaxContrast = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxContrast", 3.0f), 0.1f, 20.0f);
+        fGroundSelfShadow = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundSelfShadow", 0.5f), 0.0f, 1.0f);
+        fGroundSelfShadowSharpness = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundSelfShadowSharpness", 4.0f), 0.5f, 50.0f);
+        fGroundParallaxFadeStart = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxFadeStart", 10.0f), 0.0f, 1000.0f);
+        fGroundParallaxFadeEnd = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxFadeEnd", 30.0f), fGroundParallaxFadeStart, 1000.0f);
+        // The shader's loop stops at 32 steps.
+        fParallaxMinSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMinSteps", 8.0f), 2.0f, 32.0f);
+        fParallaxMaxSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMaxSteps", 32.0f), fParallaxMinSteps, 32.0f);
+        fParallaxDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionDepth", 1.0f), 0.0f, 4.0f);
+        nGroundDebug = std::clamp(iniReader.ReadInteger("TEXTURES", "GroundSurfacesDebug", 0), 0, 1);
+    }
+
+    // Kind 0 for any other shader, 1 for the terrain, 2 for gta_parallax*, 3 for the generic world
+    // shaders that treat ground facing up (gta_default, rage_default, gta_spec, gta_normal, gta_normal_spec).
+    static SeenShader& GroundShaderInfo(IDirect3DPixelShader9* shader)
+    {
+        if (auto it = shaderKinds.find(shader); it != shaderKinds.end())
+            return it->second;
+        SeenShader info;
+        UINT size = 0;
+        if (SUCCEEDED(shader->GetFunction(nullptr, &size)) && size >= 16 && size < (1u << 20))
+        {
+            std::vector<uint32_t> code(size / 4);
+            if (SUCCEEDED(shader->GetFunction(code.data(), &size)))
+            {
+                const uint32_t mark[3] = { std::bit_cast<uint32_t>(0.37f), std::bit_cast<uint32_t>(0.61f), std::bit_cast<uint32_t>(1e-12f) };
+                const uint32_t sign[3] = { std::bit_cast<uint32_t>(1.8395173895e+25f), std::bit_cast<uint32_t>(3.9938258725e+24f), std::bit_cast<uint32_t>(4.5435787456e+30f) };
+                for (size_t i = 0; i + 3 < code.size(); ++i)
+                {
+                    if (code[i] == mark[0] && code[i + 1] == mark[1] && code[i + 2] == mark[2])
+                        info.kind = std::clamp(static_cast<int>(std::bit_cast<float>(code[i + 3])), 0, 3);
+                    if (code[i] == sign[0] && code[i + 1] == sign[1] && code[i + 2] == sign[2])
+                        info.signature = code[i + 3];
+                }
+            }
+        }
+        return shaderKinds.emplace(shader, info).first->second;
+    }
+
+    static HRESULT WINAPI SetPixelShaderHook(IDirect3DDevice9* pDevice, IDirect3DPixelShader9* shader)
+    {
+        if (bInGBuffer && nGroundDebug && shader)
+        {
+            auto& info = GroundShaderInfo(shader);
+            ++info.binds;
+            ++groundBinds[info.kind];
+        }
+        return shSetPixelShader.unsafe_stdcall<HRESULT>(pDevice, shader);
+    }
+
+    // Ctrl+Shift+F10, which reads the post fx's live settings again, reads the ground's too, and
+    // with GroundSurfacesDebug on writes what the G-buffer pass drew with to GTAIV.EFLC.FusionFix.Ground.log.
+    static void TickGroundIniReload(IDirect3DDevice9* pDevice)
+    {
+        static bool keyWasDown = false;
+        const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+            (GetAsyncKeyState(VK_F10) & 0x8000);
+        if (down && !keyWasDown)
+        {
+            CIniReader iniReader("");
+            ReadGroundIni(iniReader);
+            const double frames = groundFrames ? double(groundFrames) : 1.0;
+            FusionLog::Write("Ground", "Draws", "Ground Surfaces %s, detail texture %s, debug %d, set-pixel-shader hook %s; per frame over %u frames: "
+                    "terrain shaders %.1f, parallax shaders %.1f, world shaders with ground %.1f, other shaders %.1f; %zu shaders seen\n",
+                    bLastGround ? "on" : "off", pDetailTex ? "made" : (bDetailTexFailed ? "failed" : "not made"), nGroundDebug,
+                    shSetPixelShader ? "on" : (bPixelShaderHookTried ? "failed" : "not tried"), groundFrames,
+                    groundBinds[1] / frames, groundBinds[2] / frames, groundBinds[3] / frames, groundBinds[0] / frames, shaderKinds.size());
+            // Which shaders those were, the most bound first, by their number in the pack
+            std::vector<const SeenShader*> seen;
+            for (const auto& [ptr, info] : shaderKinds)
+                if (info.binds)
+                    seen.push_back(&info);
+            std::sort(seen.begin(), seen.end(), [](auto a, auto b) { return a->binds > b->binds; });
+            std::string list;
+            for (auto info : seen)
+                list += std::format("{}{} {:.1f}", list.empty() ? "" : ", ", info->signature, info->binds / frames);
+            if (!list.empty())
+                FusionLog::Write("Ground", "Shaders", "G-buffer pixel shaders by their number in the pack, binds per frame: %s\n", list.c_str());
+            for (auto& [ptr, info] : shaderKinds)
+                info.binds = 0;
+            memset(groundBinds, 0, sizeof(groundBinds));
+            groundFrames = 0;
+        }
+        keyWasDown = down;
+
+        if (nGroundDebug && !bPixelShaderHookTried)
+        {
+            bPixelShaderHookTried = true;
+            auto vtbl = *reinterpret_cast<void***>(pDevice);
+            shSetPixelShader = safetyhook::create_inline(vtbl[kSetPixelShader], SetPixelShaderHook);
+        }
+        if (nGroundDebug)
+            ++groundFrames;
+    }
+
     // First command of the G-buffer pass.
     static void BeginGBuffer()
     {
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
+        TickGroundIniReload(pDevice);
 
         static auto lodBiasPref = FusionFixSettings.GetRef("PREF_TEXTURE_LOD_BIAS");
         static auto anisoPref = FusionFixSettings.GetRef("PREF_ANISO_ALL_MAPS");
         static auto detailPref = FusionFixSettings.GetRef("PREF_DETAIL_TEXTURES");
         static auto bicubicPref = FusionFixSettings.GetRef("PREF_BICUBIC_TEXTURES");
         static auto specularAAPref = FusionFixSettings.GetRef("PREF_SPECULAR_AA");
+        static auto groundPref = FusionFixSettings.GetRef("PREF_GROUND_SURFACES");
 
         bAnisoAllMaps = Pref(anisoPref) != 0;
         bBicubic = Pref(bicubicPref) != 0;
@@ -291,6 +456,9 @@ private:
             bAnisoAllMaps = bBicubic = false;
         const bool detail = Pref(detailPref) != 0 && GetDetailTexture(pDevice);
         const bool specularAA = Pref(specularAAPref) != 0;
+        // The ground's noise is the detail texture read at the scale of metres.
+        const bool ground = Pref(groundPref) != 0 && GetDetailTexture(pDevice);
+        bLastGround = ground;
         bInGBuffer = true;
 
         // Menu steps of -0.25, and the render scale's: textures as sharp as they'd be at the screen size, which DLSS
@@ -308,7 +476,7 @@ private:
             bLodBiasSet = true;
         }
 
-        if (detail)
+        if (detail || ground)
         {
             RageDirect3DDevice9::SetTextureBoth(pDevice, kDetailStage, pDetailTex);
             pDevice->SetSamplerState(kDetailStage, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
@@ -319,6 +487,10 @@ private:
             pDevice->SetSamplerState(kDetailStage, D3DSAMP_MAXANISOTROPY, 4);
             // Its mips fade to grey, so below the screen size it would fade out nearer without the render scale's bias
             pDevice->SetSamplerState(kDetailStage, D3DSAMP_MIPMAPLODBIAS, std::bit_cast<DWORD>(scaleBias));
+        }
+
+        if (detail)
+        {
             // c190: tiling, the albedo grain as 1 + (height - 0.5) * 2 * strength; c191: the bumps
             const float params[8] = { fDetailTiling, 2.0f * fDetailAlbedo, 1.0f - fDetailAlbedo, 0.0f,
                                       fDetailNormal, -0.5f * fDetailNormal, 0.0f, 0.0f };
@@ -344,8 +516,60 @@ private:
             pDevice->SetPixelShaderConstantF(193, params, 1);
         }
 
-        const BOOL flags[3] = { detail, bBicubic, specularAA };
-        pDevice->SetPixelShaderConstantB(12, flags, 3);
+        if (ground)
+        {
+            // The noise's blobs are about a twelfth of the texture's repeat across.
+            constexpr float kBlobsPerRepeat = 12.0f;
+            const float fadeRange = (std::max)(fGroundBumpsFadeEnd - fGroundBumpsFadeStart, 0.1f);
+            const float parallaxFadeRange = (std::max)(fGroundParallaxFadeEnd - fGroundParallaxFadeStart, 0.1f);
+            // The ground's parallax looks at it from the camera of the pass, the scene's at its start.
+            float camera[3] = {};
+            if (auto viewport = rage::GetCurrentViewport(); viewport && viewport->mIsPerspective)
+                for (int i = 0; i < 3; ++i)
+                    camera[i] = viewport->mViewInverseMatrix[3][i];
+            // gDirectionalLight is a RAGE global, the same register in every shader, still the last frame's here:
+            // the direction the sun's (or the moon's) light travels.
+            float light[4] = {};
+            if (SUCCEEDED(pDevice->GetPixelShaderConstantF(17, light, 1)))
+            {
+                const float len = std::sqrt(light[0] * light[0] + light[1] * light[1] + light[2] * light[2]);
+                if (len > 0.9f && len < 1.1f)
+                {
+                    for (int i = 0; i < 3; ++i)
+                        sunDirection[i] = -light[i] / len;
+                    bSunDirection = true;
+                }
+            }
+            const float params[36] = {
+                // c166: height blend depth and strength, anti-tiling strength and the sharpness of its patches
+                fGroundHeightBlendDepth, fGroundHeightBlend, fGroundAntiTiling, fGroundAntiTilingSharpness,
+                // c167: per metre, the colour patches' and the anti-tiling's noise; a mip bias that leaves out its grain;
+                // the colour noise's contrast: blurred, it strays only about 0.1 from its mean, so it is stretched to -1 to 1
+                1.0f / (kBlobsPerRepeat * fGroundColorVariationSize), 1.0f / (kBlobsPerRepeat * fGroundAntiTilingSize), 1.0f, 3.0f,
+                // c168: how much the colour patches lighten and darken each channel, a little warmer where lighter
+                fGroundColorVariation, 0.9f * fGroundColorVariation, 0.75f * fGroundColorVariation, 0.0f,
+                // c169: bump height in metres, its fade with the distance as a * depth + b, the detail grain's height
+                fGroundBumps, -1.0f / fadeRange, fGroundBumpsFadeEnd / fadeRange, fGroundDetailBumps,
+                // c170: parallax steps looking straight down, the more added flat along the surface, depth
+                // and GroundSurfacesDebug: the terrain drawn half magenta, gta_parallax* half cyan, other ground orange
+                fParallaxMinSteps, fParallaxMaxSteps - fParallaxMinSteps, fParallaxDepth, float(nGroundDebug),
+                // c171: the hollows' occlusion per unit of brightness under the local average, the part of it the
+                // colour takes, the height of the local average's lumps in metres, the mip bias that reads it
+                fGroundCavity, fGroundCavityAlbedo, fGroundBumpsCoarse, 3.0f,
+                // c172: the camera's position, the depth of the ground's parallax in metres
+                camera[0], camera[1], camera[2], fGroundParallaxDepth,
+                // c173: towards the sun, how dark the parallax's self-shadow is
+                sunDirection[0], sunDirection[1], sunDirection[2], bSunDirection ? fGroundSelfShadow : 0.0f,
+                // c174: how much the brightness, against the texture's average, raises the parallax's height; how
+                // sharply the self-shadow comes in with the height standing above the ray to the sun; the parallax's
+                // fade with the distance as a * depth + b
+                fGroundParallaxContrast, fGroundSelfShadowSharpness, -1.0f / parallaxFadeRange, fGroundParallaxFadeEnd / parallaxFadeRange,
+            };
+            pDevice->SetPixelShaderConstantF(166, params, 9);
+        }
+
+        const BOOL flags[4] = { detail, bBicubic, specularAA, ground };
+        pDevice->SetPixelShaderConstantB(12, flags, 4);
     }
 
     // Last command of the G-buffer pass: lighting, post fx and the other render phases see the
@@ -372,8 +596,8 @@ private:
             }
         }
         RageDirect3DDevice9::SetTextureBoth(pDevice, kDetailStage, nullptr);
-        const BOOL flags[3] = {};
-        pDevice->SetPixelShaderConstantB(12, flags, 3);
+        const BOOL flags[4] = {};
+        pDevice->SetPixelShaderConstantB(12, flags, 4);
     }
 
 public:
@@ -387,6 +611,7 @@ public:
             fDetailNormal = std::clamp(iniReader.ReadFloat("TEXTURES", "DetailTexturesNormal", 0.5f), 0.0f, 2.0f);
             fSpecularAAStrength = std::clamp(iniReader.ReadFloat("TEXTURES", "SpecularAntiAliasingStrength", 1.0f), 0.0f, 4.0f);
             fSpecularAAMax = std::clamp(iniReader.ReadFloat("TEXTURES", "SpecularAntiAliasingMax", 0.18f), 0.0f, 1.0f);
+            ReadGroundIni(iniReader);
             detailLevels = MakeDetailLevels();
         };
 
@@ -415,6 +640,8 @@ public:
             bLodBiasSet = false;
             memset(bRaisedMinFilter, 0, sizeof(bRaisedMinFilter));
             memset(lastDiffuseSize, 0, sizeof(lastDiffuseSize));
+            // Shaders made after the reset may reuse the old ones' addresses.
+            shaderKinds.clear();
         };
     }
 } TextureQuality;
