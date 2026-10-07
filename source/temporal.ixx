@@ -1,6 +1,7 @@
 module;
 
 #include <common.hxx>
+#include "FusionLog.hpp"
 
 export module temporal;
 
@@ -1803,6 +1804,40 @@ public:
     static inline uint32_t UpscaleTried = 0;              // SceneFrame DLSS or FSR was last asked to resolve
     static inline LARGE_INTEGER UpscalerTime{};
 
+    // Ctrl+Shift+F8: the upscaler's inputs and output of one frame as DDS files next to the plugin, and the jitter of
+    // the frames before it in GTAIV.EFLC.FusionFix.Upscaler.log, to tell what the upscaler was given from what it made
+    static inline float RecentJitter[32][2]{};
+    static inline uint32_t RecentJitterCount = 0;
+
+    static void DumpUpscalerFrame(const Upscaler::Frame& frame)
+    {
+        auto save = [](IDirect3DTexture9* texture, const wchar_t* name)
+        {
+            if (!texture)
+                return;
+            auto path = FusionLog::PathFor("Upscaler", std::wstring(L".") + name + L".dds");
+            auto hr = D3DXSaveTextureToFileW(path.c_str(), D3DXIFF_DDS, texture, nullptr);
+            D3DSURFACE_DESC desc{};
+            texture->GetLevelDesc(0, &desc);
+            FusionLog::Write("Upscaler", "Dump", "%ls: %ux%u format %d, saved 0x%08lX", name, desc.Width, desc.Height,
+                int(desc.Format), hr);
+        };
+        save(frame.Color, L"Color");
+        save(frame.Depth, L"Depth");
+        save(frame.Motion, L"Motion");
+        save(frame.Reactive, L"Reactive");
+        save(frame.Output, L"Output");
+        FusionLog::Write("Upscaler", "Dump", "render %ux%u, output %ux%u, jitter %.4f %.4f, near %.4f far %.1f fovY %.4f, reset %d, "
+            "sharpness %.2f, render scale %.4f", frame.Width, frame.Height, frame.OutputWidth, frame.OutputHeight, frame.JitterX,
+            frame.JitterY, frame.CameraNear, frame.CameraFar, frame.CameraFovY, int(frame.Reset), frame.Sharpness, RenderScale::GetScale());
+        auto count = std::min<uint32_t>(RecentJitterCount, 32);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            auto& j = RecentJitter[(RecentJitterCount - count + i) % 32];
+            FusionLog::Write("Upscaler", "Dump", "jitter -%u: %.4f %.4f", count - 1 - i, j[0], j[1]);
+        }
+    }
+
     static bool Upscale(IDirect3DDevice9* device, Upscaler::Backend backend, IDirect3DTexture9* scene, IDirect3DTexture9* output)
     {
         using namespace TemporalAA;
@@ -1853,6 +1888,15 @@ public:
 
         if (!Upscaler::Evaluate(backend, frame))
             return false;
+
+        RecentJitter[RecentJitterCount % 32][0] = frame.JitterX;
+        RecentJitter[RecentJitterCount % 32][1] = frame.JitterY;
+        ++RecentJitterCount;
+        static bool dumpKeyDown = false;
+        bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) && (GetAsyncKeyState(VK_F8) & 0x8000);
+        if (down && !dumpKeyDown)
+            DumpUpscalerFrame(frame);
+        dumpKeyDown = down;
 
         UpscalerFrame = SceneFrame;
         return true;
