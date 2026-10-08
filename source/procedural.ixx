@@ -3,6 +3,7 @@ module;
 #include <common.hxx>
 #include "FusionLog.hpp"
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <bit>
 #include <cstring>
@@ -75,7 +76,7 @@ namespace Procedural
     int32_t nDrawBufferMB = 8;
     int32_t nDrawableRefs = 100000;
     int32_t nOcclusionTests = 32768;
-    int32_t nDrawBudget = 7000;         // ProceduralDrawBudget: adds to the render lists a frame before far props are left out
+    int32_t nDrawBudget = 7000;         // ProceduralDrawBudget: adds to the render lists a frame, the furthest props left out past it
     bool bScaleDrawDistance = true;
     // What else Grass & Props Distance scales, each one that can be left at x1 to find which one a problem follows:
     // the grass fade and how far ground triangles are gathered, how far surface props spawn, the 2dfx box
@@ -203,9 +204,42 @@ namespace Procedural
     volatile LONG nListPeak = 0, nStampWraps = 0;
     // Times the game ran out of drawable references and took models from other entities to free some
     volatile LONG nDrawableReclaims = 0;
-    // This frame's adds to the render lists for the budget, and the props it left out (for the trace)
-    volatile LONG nBudgetAdds = 0, nBudgetSkipped = 0;
-    constexpr float BudgetNear = 30.0f; // props nearer than this always go in
+    // The budget goes to the nearest props: this frame's adds of anything else and of props by 10 m of distance,
+    // wanted or not, set the radius for the next frame within which props go in (the nearest first)
+    constexpr float BudgetNear = 30.0f;     // props nearer than this always go in
+    constexpr float BudgetBucket = 10.0f;
+    constexpr int BudgetBuckets = 40;       // to 400 m, further all in the last
+    constexpr float BudgetGrow = 5.0f;      // metres the radius may widen a frame; it narrows at once
+    volatile LONG nBudgetOther = 0, nBudgetSkipped = 0;
+    volatile LONG nBudgetProps[BudgetBuckets] = {};
+    float fBudgetRadius = 1.0e9f;           // the radius for this frame
+    volatile LONG nBudgetRadiusMin = LONG_MAX;  // for the trace: the narrowest since the last line
+
+    void UpdateBudgetRadius()
+    {
+        LONG props[BudgetBuckets];
+        for (int i = 0; i < BudgetBuckets; i++)
+            props[i] = InterlockedExchange(&nBudgetProps[i], 0);
+        LONG left = LONG(nDrawBudget) - InterlockedExchange(&nBudgetOther, 0);
+        float target = BudgetBucket * BudgetBuckets * 10.0f;
+        if (nDrawBudget)
+        {
+            for (int i = 0; i < BudgetBuckets; i++)
+            {
+                left -= props[i];
+                if (left < 0)
+                {
+                    target = std::max(BudgetNear, BudgetBucket * float(i));
+                    break;
+                }
+            }
+        }
+        fBudgetRadius = target < fBudgetRadius ? target : std::min(target, fBudgetRadius + BudgetGrow);
+        LONG radius = LONG(std::min(fBudgetRadius, 100000.0f));
+        for (LONG current = nBudgetRadiusMin; radius < current; current = nBudgetRadiusMin)
+            if (InterlockedCompareExchange(&nBudgetRadiusMin, radius, current) == current)
+                break;
+    }
     // The occlusion tests of a pass (CE 0x17a3374, the most seen at the frame's end) and where it's kept
     uint32_t* pOcclusionTests = nullptr;
     volatile LONG nOcclusionPeak = 0;
@@ -707,7 +741,7 @@ namespace Procedural
             Trace(std::format("U {} n={} cam={:.1f},{:.1f},{:.1f} heading={:.0f} pitch={:.0f} speed={:.1f} grassfar={:.0f} gather={:.0f} "
                 "triangles={} buildings_free={} queue={} new={} made={} waiting={} dropped={} failed={} records={} "
                 "prop_matrices={} matrices={}/{} by_props={} evicted={} draw_kb={}/{} draw_wraps={} list_max={} stamp_wraps={} "
-                "watched_missed={}/{} frame_adds={} frame_prop_adds={} drawable_reclaims={} occlusion_tests={}/{} budget_skipped={} ms={:.3f}",
+                "watched_missed={}/{} frame_adds={} frame_prop_adds={} drawable_reclaims={} occlusion_tests={}/{} budget_skipped={} budget_radius={} ms={:.3f}",
                 When(), updateIndex++, pCamera[0], pCamera[1], pCamera[2], heading, pitch, speed, grassFar, gather,
                 LONG(nTriangles), BuildingsFree(), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(),
                 *(uint32_t*)generator, matrices.first, nMatrixPoolSize, matrices.second, InterlockedExchange(&nEvictions, 0),
@@ -716,7 +750,7 @@ namespace Procedural
                 InterlockedExchange(&nWatchedMissed, 0), InterlockedExchange(&nFrames, 0),
                 InterlockedExchange(&nFrameAddsPeak, 0), InterlockedExchange(&nFramePropAddsPeak, 0),
                 InterlockedExchange(&nDrawableReclaims, 0), InterlockedExchange(&nOcclusionPeak, 0), nOcclusionTests,
-                InterlockedExchange(&nBudgetSkipped, 0), ms));
+                InterlockedExchange(&nBudgetSkipped, 0), InterlockedExchange(&nBudgetRadiusMin, LONG_MAX), ms));
             lastQueue = lastNew = lastMade = lastWaiting = lastDropped = lastFailed = 0;
         }
     }
@@ -870,7 +904,7 @@ public:
                 {
                     static auto SwapHook = safetyhook::create_mid(swap.get_first(0), [](SafetyHookContext& regs)
                     {
-                        InterlockedExchange(&nBudgetAdds, 0);
+                        UpdateBudgetRadius();
                         if (!bTrace)
                             return;
                         auto buffers = (uint8_t*)regs.ecx;
@@ -942,22 +976,33 @@ public:
                 nOcclusionTests = 8192;
 
             // More than some 8000 adds to the render lists a frame and objects vanished for frames, the player too
-            // (traces at x3: none up to 7190, flicker from 8554). Past ProceduralDrawBudget adds in a frame, props
-            // further than 30 m are left out: their phases zeroed, which CE 0xae43a0 takes for nothing to add
+            // (traces at x3: none up to 7190, flicker from 8554). Props beyond the radius that keeps a frame within
+            // ProceduralDrawBudget (UpdateBudgetRadius, never under 30 m) are left out: their phases zeroed, which
+            // CE 0xae43a0 takes for nothing to add
             nDrawBudget = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawBudget", 7000), 0, 1 << 20);
             if (auto add = hook::pattern("83 EC 10 53 8B 5C 24 18 85 DB 0F 84"); !add.empty())
             {
                 static auto AddHook = safetyhook::create_mid(add.get_first(0), [](SafetyHookContext& regs)
                 {
                     auto entity = *(uintptr_t*)(regs.esp + 8);
-                    auto adds = InterlockedIncrement(&nBudgetAdds);
                     constexpr uint32_t propFlags = 0x10000 | 0x40000000;
-                    bool prop = entity && (*(uint32_t*)(entity + 0x24) & propFlags) == propFlags;
-                    if (prop && nDrawBudget && adds > nDrawBudget && *(float*)(regs.esp + 0xC) > BudgetNear && IsProp(entity))
+                    bool prop = entity && (*(uint32_t*)(entity + 0x24) & propFlags) == propFlags && IsProp(entity);
+                    if (nDrawBudget)
                     {
-                        *(uint32_t*)(regs.esp + 4) = 0;
-                        InterlockedIncrement(&nBudgetSkipped);
-                        return;
+                        if (!prop)
+                            InterlockedIncrement(&nBudgetOther);
+                        else
+                        {
+                            float distance = *(float*)(regs.esp + 0xC);
+                            int bucket = std::isfinite(distance) && distance > 0.0f ? std::min(BudgetBuckets - 1, int(distance / BudgetBucket)) : 0;
+                            InterlockedIncrement(&nBudgetProps[bucket]);
+                            if (distance > BudgetNear && distance > fBudgetRadius)
+                            {
+                                *(uint32_t*)(regs.esp + 4) = 0;
+                                InterlockedIncrement(&nBudgetSkipped);
+                                return;
+                            }
+                        }
                     }
                     if (!bTrace)
                         return;
