@@ -74,7 +74,10 @@ namespace Procedural
     int32_t nMatrixPool = 28000;
     int32_t nDrawBufferMB = 8;
     int32_t nDrawableRefs = 100000;
-    bool bScaleDrawDistance = true;     // ProceduralScaleDrawDistance = 0 leaves props' own draw distance as the game set it
+    bool bScaleDrawDistance = true;
+    // What else Grass & Props Distance scales, each one that can be left at x1 to find which one a problem follows:
+    // the grass fade and how far ground triangles are gathered, how far surface props spawn, the 2dfx box
+    bool bScaleGather = true, bScaleSpawn = true, bScaleBox = true;     // ProceduralScaleDrawDistance = 0 leaves props' own draw distance as the game set it
     float fDensity = 1.0f;
     float fDistance = 1.0f;
     int32_t nGroundTriangles = 2048;
@@ -369,8 +372,9 @@ namespace Procedural
         auto& farDistance = *(float*)(manager + 0x14);
         if (fBaseNear <= 0.0f)
             fBaseNear = nearDistance;
-        nearDistance = fBaseNear * fDistance;
-        farDistance *= fDistance;
+        float scale = bScaleGather ? fDistance : 1.0f;
+        nearDistance = fBaseNear * scale;
+        farDistance *= scale;
         *(float*)(manager + 0x1C) = farDistance + QueryLead;
         *(float*)(manager + 0x20) = farDistance * farDistance;
     }
@@ -386,7 +390,8 @@ namespace Procedural
             auto record = pDefinitions + 8 + i * 0x44;
             *(float*)(record + 0x08) = definitions[i].spacing / rootDensity;
             *(float*)(record + 0x0C) = definitions[i].inverseSquare * fDensity;
-            *(float*)(record + 0x10) = definitions[i].distanceSquared * fDistance * fDistance;
+            float scale = bScaleSpawn ? fDistance : 1.0f;
+            *(float*)(record + 0x10) = definitions[i].distanceSquared * scale * scale;
         }
     }
 
@@ -394,7 +399,7 @@ namespace Procedural
     {
         for (auto radius : pRadius)
             if (radius)
-                injector::WriteMemory(radius, VanillaEntityRadius * fDistance, true);
+                injector::WriteMemory(radius, VanillaEntityRadius * (bScaleBox ? fDistance : 1.0f), true);
     }
 
     float DistanceFromPref(int32_t step) { return 1.0f + 0.25f * float(std::clamp(step, 0, 8)); }
@@ -815,6 +820,9 @@ public:
             // over commands of the same frame, so with many more props drawn anything could vanish for a frame: cars,
             // the player's too, trees, fences. Theirs are from our memory here, larger, and the four checks follow
             bScaleDrawDistance = iniReader.ReadInteger("PROCEDURAL", "ProceduralScaleDrawDistance", 1) != 0;
+            bScaleGather = iniReader.ReadInteger("PROCEDURAL", "ProceduralScaleGather", 1) != 0;
+            bScaleSpawn = iniReader.ReadInteger("PROCEDURAL", "ProceduralScaleSpawn", 1) != 0;
+            bScaleBox = iniReader.ReadInteger("PROCEDURAL", "ProceduralScaleBox", 1) != 0;
             nDrawBufferMB = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawBuffer", 8), 2, 32);
             {
                 auto alloc1 = hook::pattern("68 10 27 20 00 8B F1 E8");
