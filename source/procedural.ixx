@@ -72,6 +72,7 @@ namespace Procedural
     int32_t nPool = 4096;
     int32_t nMatrixLimit = 4096;
     int32_t nMatrixPool = 28000;
+    int32_t nDrawBufferMB = 8;
     float fDensity = 1.0f;
     float fDistance = 1.0f;
     int32_t nGroundTriangles = 2048;
@@ -180,6 +181,9 @@ namespace Procedural
     // map entities, vehicles, peds and objects: 0x50-byte nodes at +0x1e0, the owner at +0x40 (0 when free).
     // When none is free, the least recently used is taken from its owner (CE 0xa33cb0), which keeps only its heading
     uint8_t* pMatrixPool = nullptr;
+    // The two buffers the frame's draw commands go to (CE 0x1175c58), with the most a frame used and how many
+    // times one ran out (the game then starts over at its beginning, over this frame's own commands)
+    volatile LONG nDrawPeak = 0, nDrawWraps = 0;
     uint32_t nMatrixPoolSize = 0;
     float lastCamera[3] = {};
     uint64_t lastCameraTime = 0;
@@ -613,10 +617,11 @@ namespace Procedural
             auto matrices = MatrixPoolUse();
             Trace(std::format("U {} n={} cam={:.1f},{:.1f},{:.1f} heading={:.0f} pitch={:.0f} speed={:.1f} grassfar={:.0f} gather={:.0f} "
                 "triangles={} buildings_free={} queue={} new={} made={} waiting={} dropped={} failed={} records={} "
-                "prop_matrices={} matrices={}/{} by_props={} evicted={} ms={:.3f}",
+                "prop_matrices={} matrices={}/{} by_props={} evicted={} draw_kb={}/{} draw_wraps={} ms={:.3f}",
                 When(), updateIndex++, pCamera[0], pCamera[1], pCamera[2], heading, pitch, speed, grassFar, gather,
                 LONG(nTriangles), BuildingsFree(), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(),
-                *(uint32_t*)generator, matrices.first, nMatrixPoolSize, matrices.second, InterlockedExchange(&nEvictions, 0), ms));
+                *(uint32_t*)generator, matrices.first, nMatrixPoolSize, matrices.second, InterlockedExchange(&nEvictions, 0),
+                InterlockedExchange(&nDrawPeak, 0) >> 10, nDrawBufferMB << 10, InterlockedExchange(&nDrawWraps, 0), ms));
             lastQueue = lastNew = lastMade = lastWaiting = lastDropped = lastFailed = 0;
         }
     }
@@ -722,6 +727,61 @@ public:
                 }
                 else
                     nMatrixPool = 7000;
+            }
+
+            // The frame's draw commands go to one of two buffers of 2 MB (CE 0x8deb60 makes them, 0x8de140 swaps them
+            // each frame). Run out, and the game starts over at the buffer's beginning (CE 0x8dc3a0, 0x8dc7e0, 0x8dcad0),
+            // over commands of the same frame, so with many more props drawn anything could vanish for a frame: cars,
+            // the player's too, trees, fences. Theirs are from our memory here, larger, and the four checks follow
+            nDrawBufferMB = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawBuffer", 8), 2, 32);
+            {
+                auto alloc1 = hook::pattern("68 10 27 20 00 8B F1 E8");
+                auto alloc2 = hook::pattern("68 10 27 20 00 89 06 E8");
+                auto release = hook::pattern("FF 36 E8 ? ? ? ? FF 76 04 C7 06 00 00 00 00 E8");
+                auto check1 = hook::pattern("89 0D ? ? ? ? 81 F9 00 00 20 00");
+                auto check2 = hook::pattern("3D 00 00 20 00 72 ? 8B 47 14");
+                auto check3 = hook::pattern("3D 00 00 20 00 72 ? 8B 41 14");
+                auto check4 = hook::pattern("3D 00 00 20 00 73 ? 8B 41 10");
+                auto swap = hook::pattern("56 8B F1 B9 ? ? ? ? E8 ? ? ? ? B8 01 00 00 00 2B 46 10");
+                if (nDrawBufferMB != 2 && !alloc1.empty() && !alloc2.empty() && !release.empty() && !check1.empty() &&
+                    !check2.empty() && !check3.empty() && !check4.empty())
+                {
+                    struct DrawBuffers
+                    {
+                        static void* __cdecl Alloc(size_t size) { return _aligned_malloc(size, 16); }
+                        static void __cdecl Free(void* memory) { _aligned_free(memory); }
+                    };
+                    uint32_t size = uint32_t(nDrawBufferMB) << 20;
+                    injector::WriteMemory(alloc1.get_first(1), size + 0x2710, true);
+                    injector::WriteMemory(alloc2.get_first(1), size + 0x2710, true);
+                    injector::MakeCALL(alloc1.get_first(7), DrawBuffers::Alloc, true);
+                    injector::MakeCALL(alloc2.get_first(7), DrawBuffers::Alloc, true);
+                    injector::MakeCALL(release.get_first(2), DrawBuffers::Free, true);
+                    injector::MakeCALL(release.get_first(16), DrawBuffers::Free, true);
+                    injector::WriteMemory(check1.get_first(8), size, true);
+                    injector::WriteMemory(check2.get_first(1), size, true);
+                    injector::WriteMemory(check3.get_first(1), size, true);
+                    injector::WriteMemory(check4.get_first(1), size, true);
+                }
+                else
+                    nDrawBufferMB = 2;
+
+                // Before the swap: how far this frame's two streams got (+0x18, +0x1c) and whether either ran out (+8, +9)
+                if (!swap.empty())
+                {
+                    static auto SwapHook = safetyhook::create_mid(swap.get_first(0), [](SafetyHookContext& regs)
+                    {
+                        if (!bTrace)
+                            return;
+                        auto buffers = (uint8_t*)regs.ecx;
+                        LONG used = LONG(std::max(*(uint32_t*)(buffers + 0x18), *(uint32_t*)(buffers + 0x1C)));
+                        for (LONG peak = nDrawPeak; used > peak; peak = nDrawPeak)
+                            if (InterlockedCompareExchange(&nDrawPeak, used, peak) == peak)
+                                break;
+                        if (*(buffers + 8) || *(buffers + 9))
+                            InterlockedIncrement(&nDrawWraps);
+                    });
+                }
             }
 
             // Props are buildings: the free places of that pool, for the trace
@@ -915,9 +975,9 @@ public:
                 Log("Settings", std::format("distance x{:.2f}", fDistance));
             });
 
-            Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, matrix pool {} (game 7000), density x{:.2f}, "
+            Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, matrix pool {} (game 7000), draw buffers {} MB (game 2), density x{:.2f}, "
                 "distance x{:.2f}, in reflections {}, spawns an update {}",
-                nGroundTriangles, Records(), nMatrixLimit, nMatrixPool, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
+                nGroundTriangles, Records(), nMatrixLimit, nMatrixPool, nDrawBufferMB, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
         };
 
         // With ProceduralLog, every 30 s while the generator runs: its time, how many props, and what hit a limit
