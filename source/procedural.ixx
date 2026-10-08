@@ -75,6 +75,7 @@ namespace Procedural
     int32_t nDrawBufferMB = 8;
     int32_t nDrawableRefs = 100000;
     int32_t nOcclusionTests = 32768;
+    int32_t nDrawBudget = 7000;         // ProceduralDrawBudget: adds to the render lists a frame before far props are left out
     bool bScaleDrawDistance = true;
     // What else Grass & Props Distance scales, each one that can be left at x1 to find which one a problem follows:
     // the grass fade and how far ground triangles are gathered, how far surface props spawn, the 2dfx box
@@ -202,6 +203,9 @@ namespace Procedural
     volatile LONG nListPeak = 0, nStampWraps = 0;
     // Times the game ran out of drawable references and took models from other entities to free some
     volatile LONG nDrawableReclaims = 0;
+    // This frame's adds to the render lists for the budget, and the props it left out (for the trace)
+    volatile LONG nBudgetAdds = 0, nBudgetSkipped = 0;
+    constexpr float BudgetNear = 30.0f; // props nearer than this always go in
     // The occlusion tests of a pass (CE 0x17a3374, the most seen at the frame's end) and where it's kept
     uint32_t* pOcclusionTests = nullptr;
     volatile LONG nOcclusionPeak = 0;
@@ -703,7 +707,7 @@ namespace Procedural
             Trace(std::format("U {} n={} cam={:.1f},{:.1f},{:.1f} heading={:.0f} pitch={:.0f} speed={:.1f} grassfar={:.0f} gather={:.0f} "
                 "triangles={} buildings_free={} queue={} new={} made={} waiting={} dropped={} failed={} records={} "
                 "prop_matrices={} matrices={}/{} by_props={} evicted={} draw_kb={}/{} draw_wraps={} list_max={} stamp_wraps={} "
-                "watched_missed={}/{} frame_adds={} frame_prop_adds={} drawable_reclaims={} occlusion_tests={}/{} ms={:.3f}",
+                "watched_missed={}/{} frame_adds={} frame_prop_adds={} drawable_reclaims={} occlusion_tests={}/{} budget_skipped={} ms={:.3f}",
                 When(), updateIndex++, pCamera[0], pCamera[1], pCamera[2], heading, pitch, speed, grassFar, gather,
                 LONG(nTriangles), BuildingsFree(), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(),
                 *(uint32_t*)generator, matrices.first, nMatrixPoolSize, matrices.second, InterlockedExchange(&nEvictions, 0),
@@ -711,7 +715,8 @@ namespace Procedural
                 InterlockedExchange(&nListPeak, 0), InterlockedExchange(&nStampWraps, 0),
                 InterlockedExchange(&nWatchedMissed, 0), InterlockedExchange(&nFrames, 0),
                 InterlockedExchange(&nFrameAddsPeak, 0), InterlockedExchange(&nFramePropAddsPeak, 0),
-                InterlockedExchange(&nDrawableReclaims, 0), InterlockedExchange(&nOcclusionPeak, 0), nOcclusionTests, ms));
+                InterlockedExchange(&nDrawableReclaims, 0), InterlockedExchange(&nOcclusionPeak, 0), nOcclusionTests,
+                InterlockedExchange(&nBudgetSkipped, 0), ms));
             lastQueue = lastNew = lastMade = lastWaiting = lastDropped = lastFailed = 0;
         }
     }
@@ -865,6 +870,7 @@ public:
                 {
                     static auto SwapHook = safetyhook::create_mid(swap.get_first(0), [](SafetyHookContext& regs)
                     {
+                        InterlockedExchange(&nBudgetAdds, 0);
                         if (!bTrace)
                             return;
                         auto buffers = (uint8_t*)regs.ecx;
@@ -935,6 +941,34 @@ public:
             else
                 nOcclusionTests = 8192;
 
+            // More than some 8000 adds to the render lists a frame and objects vanished for frames, the player too
+            // (traces at x3: none up to 7190, flicker from 8554). Past ProceduralDrawBudget adds in a frame, props
+            // further than 30 m are left out: their phases zeroed, which CE 0xae43a0 takes for nothing to add
+            nDrawBudget = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawBudget", 7000), 0, 1 << 20);
+            if (auto add = hook::pattern("83 EC 10 53 8B 5C 24 18 85 DB 0F 84"); !add.empty())
+            {
+                static auto AddHook = safetyhook::create_mid(add.get_first(0), [](SafetyHookContext& regs)
+                {
+                    auto entity = *(uintptr_t*)(regs.esp + 8);
+                    auto adds = InterlockedIncrement(&nBudgetAdds);
+                    constexpr uint32_t propFlags = 0x10000 | 0x40000000;
+                    bool prop = entity && (*(uint32_t*)(entity + 0x24) & propFlags) == propFlags;
+                    if (prop && nDrawBudget && adds > nDrawBudget && *(float*)(regs.esp + 0xC) > BudgetNear && IsProp(entity))
+                    {
+                        *(uint32_t*)(regs.esp + 4) = 0;
+                        InterlockedIncrement(&nBudgetSkipped);
+                        return;
+                    }
+                    if (!bTrace)
+                        return;
+                    InterlockedIncrement(&nFrameAdds);
+                    if (entity && entity == nWatched)
+                        InterlockedExchange(&nWatchedAdded, 1);
+                    else if (prop)
+                        InterlockedIncrement(&nFramePropAdds);
+                });
+            }
+
             // Props are buildings: the free places of that pool, for the trace
             if (auto pool = hook::pattern("8B 0D ? ? ? ? E8 ? ? ? ? 3D F4 01 00 00"); !pool.empty())
             {
@@ -984,19 +1018,6 @@ public:
                         auto name = *(const char**)(regs.esp + 8);
                         std::lock_guard lock(poolsMutex);
                         pools.push_back({ name ? name : "?", (uint8_t*)regs.ecx, 0 });
-                    });
-                }
-                // Every add to the render lists (CE 0xae43a0: phases, entity, distance, kind)
-                if (auto add = hook::pattern("83 EC 10 53 8B 5C 24 18 85 DB 0F 84"); !add.empty())
-                {
-                    static auto AddHook = safetyhook::create_mid(add.get_first(0), [](SafetyHookContext& regs)
-                    {
-                        auto entity = *(uintptr_t*)(regs.esp + 8);
-                        InterlockedIncrement(&nFrameAdds);
-                        if (entity && entity == nWatched)
-                            InterlockedExchange(&nWatchedAdded, 1);
-                        else if (entity && (*(uint32_t*)(entity + 0x24) & (0x10000 | 0x40000000)) == (0x10000 | 0x40000000))
-                            InterlockedIncrement(&nFramePropAdds);
                     });
                 }
                 if (auto stamp = hook::pattern("BA 20 9D 1A 01 8B 0A 85 C9"); !stamp.empty())
@@ -1214,9 +1235,9 @@ public:
                 Log("Settings", std::format("distance x{:.2f}", fDistance));
             });
 
-            Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, matrix pool {} (game 7000), draw buffers {} MB (game 2), drawable references {} (game 13000), occlusion tests {} (game 8192), density x{:.2f}, "
+            Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, matrix pool {} (game 7000), draw buffers {} MB (game 2), drawable references {} (game 13000), occlusion tests {} (game 8192), draw budget {}, density x{:.2f}, "
                 "distance x{:.2f}, in reflections {}, spawns an update {}",
-                nGroundTriangles, Records(), nMatrixLimit, nMatrixPool, nDrawBufferMB, nDrawableRefs, nOcclusionTests, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
+                nGroundTriangles, Records(), nMatrixLimit, nMatrixPool, nDrawBufferMB, nDrawableRefs, nOcclusionTests, nDrawBudget, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
         };
 
         // With ProceduralLog, every 30 s while the generator runs: its time, how many props, and what hit a limit
