@@ -243,6 +243,7 @@ uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDeno
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
 uniform float fStepsPerPixel;     // march steps per pixel of a ray on this pass's target, 1 / ScreenSpaceReflectionsStepPixels
+uniform float fMarchFullDepth;    // 1 marches through the full size depth instead of MarchDepthTex (ScreenSpaceReflectionsMarchFullDepth, temporary, to compare)
 uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step (set per pass: SSR and contact shadows each have their own switch)
 uniform float2 vec2NoiseOffset;   // pixels, moves where PixelJitter is read every frame while the passes accumulate (FrameHistory::NoiseOffset), 0 otherwise
 uniform float fTowardCamera;      // 0..1, how far reflections pointing back at the camera reach
@@ -499,6 +500,12 @@ bool SetupReflectionRay(float3 C, float3 n, out ReflectionRay ray)
     return true;
 }
 
+// The view depth the march compares its ray with at uv, see TraceHit.
+float MarchDepth(float2 uv)
+{
+    return fMarchFullDepth > 0.0 ? LinearDepth(uv) : tex2Dlod(MarchDepthTex, float4(uv, 0, 0)).r;
+}
+
 // Marches the reflected ray of the surface at C with normal n. The hit is (where to read it in
 // HistoryTex, confidence 0..1, the ray's length over fMaxDistance), 0 for a miss; HitColour
 // turns it into a colour.
@@ -563,7 +570,7 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
         float2 sampleUV = lerp(uv0, uv1, t);
         float rayZ = 1.0 / lerp(invZ0, invZ1, t);
 
-        float delta = rayZ - tex2Dlod(MarchDepthTex, float4(sampleUV, 0, 0)).r;
+        float delta = rayZ - MarchDepth(sampleUV);
 
         // The ray went behind the scene since the last sample, which was in front of it.
         // Estimate where it crossed from the two samples and judge the thickness there, not
@@ -575,7 +582,7 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
         {
             float tc = lerp(prevT, t, saturate(-prevDelta / max(delta - prevDelta, 1e-5)));
             float zc = 1.0 / lerp(invZ0, invZ1, tc);
-            float crossDelta = zc - tex2Dlod(MarchDepthTex, float4(lerp(uv0, uv1, tc), 0, 0)).r;
+            float crossDelta = zc - MarchDepth(lerp(uv0, uv1, tc));
             float crossThickness = abs(rayZ - 1.0 / lerp(invZ0, invZ1, prevT)) + fThickness;
             if (crossDelta <= crossThickness)
             {
