@@ -56,6 +56,7 @@ import settings;
 bool bHighResolutionNightShadows = false;
 static bool bCloseHeadlightRelevance = false;
 static bool bTrafficSelfShadowFix = false;
+static float fTrafficSignalDrawScale = 1.0f;  // TrafficSignalDrawDistance
 #include "PlayerCarRuntime.inl"
 #include "BeamTraceRuntime.inl"
 #include "HeadlightEnhancementRuntime.inl"
@@ -411,7 +412,7 @@ public:
             // the first time an entity of it is made, and each entity made with the old value or its own
             if (auto distance = std::clamp(iniReader.ReadFloat("SHADOWS", "TrafficSignalDrawDistance", 2.5f), 1.0f, 5.0f); distance != 1.0f)
             {
-                static float scale = distance;
+                fTrafficSignalDrawScale = distance;
                 if (auto pattern = hook::pattern("F3 0F 11 47 50 EB 0A 8B 44 24 18 8B 40 2C 89 47 50 8B 44 24 18"); !pattern.empty())
                 {
                     static std::mutex scaledMutex;
@@ -425,9 +426,9 @@ public:
                         auto& entityDistance = *(float*)(regs.edi + 0x50);
                         std::lock_guard lock(scaledMutex);
                         if (scaledModels.insert(uintptr_t(model)).second && std::isfinite(modelDistance) && modelDistance > 0.0f)
-                            modelDistance *= scale;
+                            modelDistance *= fTrafficSignalDrawScale;
                         if (std::isfinite(entityDistance) && entityDistance > 0.0f && entityDistance != modelDistance)
-                            entityDistance *= scale;
+                            entityDistance *= fTrafficSignalDrawScale;
                     });
                 }
             }
