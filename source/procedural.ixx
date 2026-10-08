@@ -173,6 +173,33 @@ namespace Procedural
     // What the last pass over the queue did, for the update's line
     uint32_t lastQueue = 0, lastNew = 0, lastMade = 0, lastWaiting = 0, lastDropped = 0, lastFailed = 0;
     uint32_t updateIndex = 0;
+    volatile LONG nEvictions = 0;       // matrices the game took from an entity to give to another, since the last update
+
+    // The pool of entity matrices (CE 0x12ddf60, 7000 at CE 0xa32210) that props with a matrix share with tilted
+    // map entities, vehicles, peds and objects: 0x50-byte nodes at +0x1e0, the owner at +0x40 (0 when free).
+    // When none is free, the least recently used is taken from its owner (CE 0xa33cb0), which keeps only its heading
+    uint8_t* pMatrixPool = nullptr;
+    uint32_t nMatrixPoolSize = 0;
+
+    // Matrices of the pool in use, and how many of them props hold
+    std::pair<uint32_t, uint32_t> MatrixPoolUse()
+    {
+        auto nodes = pMatrixPool ? *(uint8_t**)(pMatrixPool + 0x1E0) : nullptr;
+        if (!nodes)
+            return {};
+        uint32_t used = 0, byProps = 0;
+        AcquireSRWLockShared(&propsLock);
+        for (uint32_t i = 0; i < nMatrixPoolSize; i++)
+        {
+            if (auto owner = *(uintptr_t*)(nodes + i * 0x50 + 0x40))
+            {
+                used++;
+                byProps += props.contains(owner);
+            }
+        }
+        ReleaseSRWLockShared(&propsLock);
+        return { used, byProps };
+    }
     float lastCamera[3] = {};
     uint64_t lastCameraTime = 0;
 
@@ -582,10 +609,13 @@ namespace Procedural
             lastCameraTime = now;
             float grassFar = pManager ? *(float*)(pManager + 0x14) : 0.0f;
             float gather = pManager ? *(float*)(pManager + 0x1C) : 0.0f;
+            auto matrices = MatrixPoolUse();
             Trace(std::format("U {} n={} cam={:.1f},{:.1f},{:.1f} heading={:.0f} pitch={:.0f} speed={:.1f} grassfar={:.0f} gather={:.0f} "
-                "triangles={} buildings_free={} queue={} new={} made={} waiting={} dropped={} failed={} records={} ms={:.3f}",
+                "triangles={} buildings_free={} queue={} new={} made={} waiting={} dropped={} failed={} records={} "
+                "prop_matrices={} matrices={}/{} by_props={} evicted={} ms={:.3f}",
                 When(), updateIndex++, pCamera[0], pCamera[1], pCamera[2], heading, pitch, speed, grassFar, gather,
-                LONG(nTriangles), BuildingsFree(), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(), ms));
+                LONG(nTriangles), BuildingsFree(), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(),
+                *(uint32_t*)generator, matrices.first, nMatrixPoolSize, matrices.second, InterlockedExchange(&nEvictions, 0), ms));
             lastQueue = lastNew = lastMade = lastWaiting = lastDropped = lastFailed = 0;
         }
     }
@@ -675,6 +705,24 @@ public:
             auto logLevel = iniReader.ReadInteger("PROCEDURAL", "ProceduralLog", 0);
             bLog = logLevel >= 1;
             bTrace = logLevel >= 2;
+
+            // The matrix pool (push 7000, mov ecx, pool in its init) and its evictions (mov ecx, [pool's oldest];
+            // mov ecx, [ecx+0x40]; call CE 0xa33cb0), both for the trace
+            if (bTrace)
+            {
+                if (auto init = hook::pattern("68 ? ? ? ? B9 ? ? ? ? C7 05 ? ? ? ? 00 00 80 3F"); !init.empty())
+                {
+                    nMatrixPoolSize = *init.get_first<uint32_t>(1);
+                    pMatrixPool = *init.get_first<uint8_t*>(6);
+                }
+                auto evictions = hook::pattern("8B 0D ? ? ? ? 8B 49 40 E8 ? ? ? ? B9");
+                static std::vector<SafetyHookMid> evictionHooks;
+                for (size_t i = 0; i < evictions.size(); i++)
+                    evictionHooks.push_back(safetyhook::create_mid(evictions.get(i).get<void>(9), [](SafetyHookContext&)
+                    {
+                        InterlockedIncrement(&nEvictions);
+                    }));
+            }
 
             // Generator init: the extra records and the larger queue
             auto pattern = hook::pattern("53 55 56 8B D9 57 8D 73 14 BF 00 02 00 00");
