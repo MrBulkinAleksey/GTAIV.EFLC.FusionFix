@@ -463,6 +463,36 @@ public:
                 nWeaponModels = std::max(nWeaponModels, 200u);
             }
 
+            // WeaponInfo. Weapon mods add entries past the game's 60 (and get their ids from the hash lookup below), so
+            // like the weapon model store this is raised without ExtendedLimits too
+            {
+                auto ref1 = (intptr_t)find_pattern("BF ? ? ? ? 8D 64 24 ? 8B CE E8 ? ? ? ? 81 C6 ? ? ? ? 4F 79 ? 68 ? ? ? ? E8 ? ? ? ? 83 C4 ? 5F 5E C3 56", "BE ? ? ? ? EB ? 8D 49 ? E8").get_first(1);
+                auto ref2 = (intptr_t)hook::pattern("83 F8 ? 7C ? 8B 44 24 ? C3").get_first(2);
+
+                auto pattern = find_pattern("81 C3 ? ? ? ? 89 03", "81 C7 ? ? ? ? 89 07");
+                auto aWeaponInfo = *pattern.get_first<uintptr_t>(2);
+                auto WeaponInfo = LimitAdjuster(aWeaponInfo, 0x110, 60, 16).ReplaceXrefs(0, 0x24, 0x1A98, 0x1A9C, 0x1AB4, 0x1B30, 0x3430, 0x3540, 0x363C, 0x3870, 0x3980, 0x3DC0).ReplaceNumericRefs(ref1, ref2);
+
+                // The two loops over every entry's +0x24 field stop at the old array's end (cmp reg, imm; jl). That address is
+                // also a separate global, so it can't go through ReplaceXrefs. Unpatched, the loops run off the new array
+                // whenever it is allocated below the exe (Proton), or stop after one entry otherwise.
+                auto oldEnd = aWeaponInfo + 0x110 * 60 + 0x24;
+                auto newEnd = uintptr_t(WeaponInfo.GetNewArrayPointer() + 0x110 * WeaponInfo.GetNewElementsCount() + 0x24);
+                hook::pattern("81 ? " + pattern_str(to_bytes(oldEnd)) + "7C").for_each_result([&](hook::pattern_match match)
+                {
+                    injector::WriteMemory(match.get<void>(2), newEnd, true);
+                });
+
+                pattern = hook::pattern("8B 44 24 04 83 F8 3C 7D ? 69 C0 10 01 00 00 05");
+                injector::MakeNOP(pattern.get_first(7), 2);
+
+                pattern = hook::pattern("8B 4C 24 ? 33 C0 3B 0C 85");
+                if (!pattern.empty())
+                {
+                    shGetWeaponInfoIdByHash = safetyhook::create_inline(pattern.get_first(0), getWeaponInfoIdByHash);
+                }
+            }
+
             if (bExtendedLimits)
             {
                 // Stores
@@ -577,35 +607,6 @@ public:
                 {
                     auto pattern = find_pattern("81 C7 ? ? ? ? 83 BB ? ? ? ? ? 7D", "81 C7 ? ? ? ? 83 BE");
                     auto VehOff = LimitAdjuster(*pattern.get_first<uintptr_t>(2), 640, 205, 6).ReplaceXrefs(0, 0x1C0, 0x1E0);
-                }
-
-                // WeaponInfo
-                {
-                    auto ref1 = (intptr_t)find_pattern("BF ? ? ? ? 8D 64 24 ? 8B CE E8 ? ? ? ? 81 C6 ? ? ? ? 4F 79 ? 68 ? ? ? ? E8 ? ? ? ? 83 C4 ? 5F 5E C3 56", "BE ? ? ? ? EB ? 8D 49 ? E8").get_first(1);
-                    auto ref2 = (intptr_t)hook::pattern("83 F8 ? 7C ? 8B 44 24 ? C3").get_first(2);
-
-                    auto pattern = find_pattern("81 C3 ? ? ? ? 89 03", "81 C7 ? ? ? ? 89 07");
-                    auto aWeaponInfo = *pattern.get_first<uintptr_t>(2);
-                    auto WeaponInfo = LimitAdjuster(aWeaponInfo, 0x110, 60, 16).ReplaceXrefs(0, 0x24, 0x1A98, 0x1A9C, 0x1AB4, 0x1B30, 0x3430, 0x3540, 0x363C, 0x3870, 0x3980, 0x3DC0).ReplaceNumericRefs(ref1, ref2);
-
-                    // The two loops over every entry's +0x24 field stop at the old array's end (cmp reg, imm; jl). That address is
-                    // also a separate global, so it can't go through ReplaceXrefs. Unpatched, the loops run off the new array
-                    // whenever it is allocated below the exe (Proton), or stop after one entry otherwise.
-                    auto oldEnd = aWeaponInfo + 0x110 * 60 + 0x24;
-                    auto newEnd = uintptr_t(WeaponInfo.GetNewArrayPointer() + 0x110 * WeaponInfo.GetNewElementsCount() + 0x24);
-                    hook::pattern("81 ? " + pattern_str(to_bytes(oldEnd)) + "7C").for_each_result([&](hook::pattern_match match)
-                    {
-                        injector::WriteMemory(match.get<void>(2), newEnd, true);
-                    });
-
-                    pattern = hook::pattern("8B 44 24 04 83 F8 3C 7D ? 69 C0 10 01 00 00 05");
-                    injector::MakeNOP(pattern.get_first(7), 2);
-
-                    pattern = hook::pattern("8B 4C 24 ? 33 C0 3B 0C 85");
-                    if (!pattern.empty())
-                    {
-                        shGetWeaponInfoIdByHash = safetyhook::create_inline(pattern.get_first(0), getWeaponInfoIdByHash);
-                    }
                 }
             }
         };
