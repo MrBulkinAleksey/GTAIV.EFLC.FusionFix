@@ -76,7 +76,8 @@ namespace Procedural
     int32_t nDrawBufferMB = 8;
     int32_t nDrawableRefs = 100000;
     int32_t nOcclusionTests = 32768;
-    int32_t nDrawBudget = 7000;         // ProceduralDrawBudget: adds to the render lists a frame, the furthest props left out past it
+    int32_t nRenderCache = 32768;
+    int32_t nDrawBudget = 0;         // ProceduralDrawBudget: adds to the render lists a frame, the furthest props left out past it
     bool bScaleDrawDistance = true;
     // What else Grass & Props Distance scales, each one that can be left at x1 to find which one a problem follows:
     // the grass fade and how far ground triangles are gathered, how far surface props spawn, the 2dfx box
@@ -975,11 +976,35 @@ public:
             else
                 nOcclusionTests = 8192;
 
+            // The entities a frame draws go to one buffer of 8-byte entries (CE 0xae5ca0 returns its start, 0x159b768,
+            // room for 9692; CE 0xae2520 adds one without a check). The sector scans stop taking entities once it holds
+            // 8192 (cmp ecx, 0x10000 at CE 0xae927b and 0xae941b), and whatever the scans meet after that is not drawn
+            // that frame: looking at a whole district at x3 that was cars, trees and the player, a different set each
+            // frame. Ours holds ProceduralRenderCache entries, and the scans stop at three quarters of it
+            nRenderCache = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralRenderCache", 32768), 9692, 1 << 20);
+            if (auto scans = hook::pattern("E8 ? ? ? ? 8B 0D ? ? ? ? 2B C8 83 E1 F8 81 F9 00 00 01 00"); scans.size() == 2)
+            {
+                auto start = (uint8_t*)injector::GetBranchDestination(scans.get_first(0)).as_int();
+                if (start == (uint8_t*)injector::GetBranchDestination(scans.get(1).get<void>(0)).as_int() && start[0] == 0xB8 && start[5] == 0xC3)
+                {
+                    static std::vector<uint8_t> renderCache;
+                    renderCache.assign(size_t(nRenderCache) * 8 + 64, 0);
+                    injector::WriteMemory(start + 1, uint32_t(uintptr_t(renderCache.data())), true);
+                    uint32_t limit = uint32_t(nRenderCache) / 4 * 3 * 8;
+                    for (size_t i = 0; i < scans.size(); i++)
+                        injector::WriteMemory(scans.get(i).get<void>(18), limit, true);
+                }
+                else
+                    nRenderCache = 9692;
+            }
+            else
+                nRenderCache = 9692;
+
             // More than some 8000 adds to the render lists a frame and objects vanished for frames, the player too
             // (traces at x3: none up to 7190, flicker from 8554). Props beyond the radius that keeps a frame within
             // ProceduralDrawBudget (UpdateBudgetRadius, never under 30 m) are left out: their phases zeroed, which
             // CE 0xae43a0 takes for nothing to add
-            nDrawBudget = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawBudget", 7000), 0, 1 << 20);
+            nDrawBudget = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawBudget", 0), 0, 1 << 20);
             if (auto add = hook::pattern("83 EC 10 53 8B 5C 24 18 85 DB 0F 84"); !add.empty())
             {
                 static auto AddHook = safetyhook::create_mid(add.get_first(0), [](SafetyHookContext& regs)
@@ -1280,9 +1305,9 @@ public:
                 Log("Settings", std::format("distance x{:.2f}", fDistance));
             });
 
-            Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, matrix pool {} (game 7000), draw buffers {} MB (game 2), drawable references {} (game 13000), occlusion tests {} (game 8192), draw budget {}, density x{:.2f}, "
+            Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, matrix pool {} (game 7000), draw buffers {} MB (game 2), drawable references {} (game 13000), occlusion tests {} (game 8192), render cache {} (game 9692, scans to 8192), draw budget {}, density x{:.2f}, "
                 "distance x{:.2f}, in reflections {}, spawns an update {}",
-                nGroundTriangles, Records(), nMatrixLimit, nMatrixPool, nDrawBufferMB, nDrawableRefs, nOcclusionTests, nDrawBudget, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
+                nGroundTriangles, Records(), nMatrixLimit, nMatrixPool, nDrawBufferMB, nDrawableRefs, nOcclusionTests, nRenderCache, nDrawBudget, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
         };
 
         // With ProceduralLog, every 30 s while the generator runs: its time, how many props, and what hit a limit
