@@ -238,6 +238,9 @@ Logitech LightSync RGB
 [GroundSurf]
 Поверхности земли
 
+[FF_PROCDIST]
+Дальность травы и предметов
+
 [LodBias1]
 -0.25
 
