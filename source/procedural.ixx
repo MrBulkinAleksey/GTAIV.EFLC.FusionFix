@@ -200,6 +200,30 @@ namespace Procedural
     volatile uintptr_t nWatched = 0;    // the car or the ped this frame
     volatile LONG nWatchedAdded = 0, nWatchedMissed = 0, nFrames = 0, nFrameAdds = 0, nFrameAddsPeak = 0, nFramePropAdds = 0, nFramePropAddsPeak = 0;
 
+    // Every pool the game makes with CE 0xc6c5f0 (size, name, element size; +8 size, +0x14 used), for the trace:
+    // once a second the most each held since, so a pool that runs out shows by name
+    struct PoolUse { const char* name; uint8_t* pool; uint32_t peak; };
+    std::vector<PoolUse> pools;
+    std::mutex poolsMutex;
+    uint64_t lastPoolsLine = 0;
+
+    void SamplePools(bool write)
+    {
+        std::lock_guard lock(poolsMutex);
+        for (auto& p : pools)
+            p.peak = std::max(p.peak, *(uint32_t*)(p.pool + 0x14));
+        if (!write)
+            return;
+        std::string line = "M " + When();
+        for (auto& p : pools)
+        {
+            auto size = *(uint32_t*)(p.pool + 8);
+            line += std::format(" [{}]={}/{}{}", p.name, p.peak, size, p.peak + size / 50 >= size ? "!" : "");
+            p.peak = 0;
+        }
+        Trace(std::move(line));
+    }
+
     void Peak(volatile LONG& peak, LONG value)
     {
         for (LONG current = peak; value > current; current = peak)
@@ -657,6 +681,13 @@ namespace Procedural
             float grassFar = pManager ? *(float*)(pManager + 0x14) : 0.0f;
             float gather = pManager ? *(float*)(pManager + 0x1C) : 0.0f;
             auto matrices = MatrixPoolUse();
+            {
+                auto now = GetTickCount64();
+                bool write = now - lastPoolsLine >= 1000;
+                if (write)
+                    lastPoolsLine = now;
+                SamplePools(write);
+            }
             Trace(std::format("U {} n={} cam={:.1f},{:.1f},{:.1f} heading={:.0f} pitch={:.0f} speed={:.1f} grassfar={:.0f} gather={:.0f} "
                 "triangles={} buildings_free={} queue={} new={} made={} waiting={} dropped={} failed={} records={} "
                 "prop_matrices={} matrices={}/{} by_props={} evicted={} draw_kb={}/{} draw_wraps={} list_max={} stamp_wraps={} "
@@ -873,6 +904,16 @@ public:
                                 if (InterlockedCompareExchange(&nListPeak, count, peak) == peak)
                                     break;
                         }));
+                // Pools as the game makes them (mid hook at the entry, before ExtendedLimits' patch at +0xa)
+                if (auto ctor = hook::pattern("8B 54 24 0C 56 57 8B 7C 24 0C"); !ctor.empty())
+                {
+                    static auto PoolHook = safetyhook::create_mid(ctor.get_first(0), [](SafetyHookContext& regs)
+                    {
+                        auto name = *(const char**)(regs.esp + 8);
+                        std::lock_guard lock(poolsMutex);
+                        pools.push_back({ name ? name : "?", (uint8_t*)regs.ecx, 0 });
+                    });
+                }
                 // Every add to the render lists (CE 0xae43a0: phases, entity, distance, kind)
                 if (auto add = hook::pattern("83 EC 10 53 8B 5C 24 18 85 DB 0F 84"); !add.empty())
                 {
