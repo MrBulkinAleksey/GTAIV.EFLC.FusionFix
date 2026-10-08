@@ -6,6 +6,7 @@ module;
 #include <cmath>
 #include <bit>
 #include <cstring>
+#include <malloc.h>
 #include <format>
 #include <mutex>
 #include <string>
@@ -84,6 +85,8 @@ namespace Procedural
     uint8_t* pManager = nullptr;        // CE 0x16fb6a0, taken from the first call that has it
     uint8_t* pDefinitions = nullptr;    // CE 0x16c8fb0, procedural.dat's PROCOBJ records
     void(__fastcall* ListPush)(void* list, void* edx, void* node) = nullptr;
+    float* pDetailExtra = nullptr;      // CE 0x103f714: Detail Quality's 10..110 m, added to every entity's draw distance
+    uint8_t** pBuildingPool = nullptr;  // CE 0x12bd0e8: props are buildings; the generator wants 500 of it free
     float* pCamera = nullptr;           // CE 0x128e340, where the generator measures distances from: the
                                         // last row of the camera's matrix at CE 0x128e310, whose second row
                                         // (0x128e320) is where it looks (the game's heading comes from it, CE 0xa88308)
@@ -196,6 +199,12 @@ namespace Procedural
     uint32_t nReflectionsSkipped = 0;
     uint32_t nUpdates = 0;
     double fUpdateMs = 0.0, fUpdateMaxMs = 0.0;
+
+    int32_t BuildingsFree()
+    {
+        auto pool = pBuildingPool ? *pBuildingPool : nullptr;
+        return pool ? int32_t(*(uint32_t*)(pool + 8) - *(uint32_t*)(pool + 0x14)) : -1;
+    }
 
     uint32_t Records() { return std::max<uint32_t>(VanillaRecords, uint32_t(nPool)); }
 
@@ -365,9 +374,15 @@ namespace Procedural
                 props.insert(uintptr_t(entity));
                 ReleaseSRWLockExclusive(&propsLock);
 
+                // Drawn while its own distance times the phase's multiplier (about 1) plus Detail Quality's extra
+                // is more than the camera's distance (CE 0xaec13a), so for the slider to take that whole reach
+                // k times further the prop's own distance becomes k * own + (k - 1) * extra
                 auto& drawDistance = *(float*)(entity + 0x50);
                 if (fDistance != 1.0f && std::isfinite(drawDistance) && drawDistance > 0.0f && drawDistance < 2000.0f)
-                    drawDistance *= fDistance;
+                {
+                    float extra = pDetailExtra ? *pDetailExtra : 0.0f;
+                    drawDistance = drawDistance * fDistance + (fDistance - 1.0f) * std::max(extra, 0.0f);
+                }
             }
         }
         if (auto used = UsedRecords(); used > nUsedMax)
@@ -568,9 +583,9 @@ namespace Procedural
             float grassFar = pManager ? *(float*)(pManager + 0x14) : 0.0f;
             float gather = pManager ? *(float*)(pManager + 0x1C) : 0.0f;
             Trace(std::format("U {} n={} cam={:.1f},{:.1f},{:.1f} heading={:.0f} pitch={:.0f} speed={:.1f} grassfar={:.0f} gather={:.0f} "
-                "triangles={} queue={} new={} made={} waiting={} dropped={} failed={} records={} ms={:.3f}",
+                "triangles={} buildings_free={} queue={} new={} made={} waiting={} dropped={} failed={} records={} ms={:.3f}",
                 When(), updateIndex++, pCamera[0], pCamera[1], pCamera[2], heading, pitch, speed, grassFar, gather,
-                LONG(nTriangles), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(), ms));
+                LONG(nTriangles), BuildingsFree(), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(), ms));
             lastQueue = lastNew = lastMade = lastWaiting = lastDropped = lastFailed = 0;
         }
     }
@@ -621,15 +636,40 @@ public:
             CIniReader iniReader("");
 
             // [PROCEDURAL]
-            nPool = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralPool", 4096), int32_t(VanillaRecords), 32768);
+            nPool = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralPool", 16384), int32_t(VanillaRecords), 65535);
             nMatrixLimit = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralMatrixLimit", 1024), int32_t(VanillaRecords), nPool);
             fDensity = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralDensity", 1.0f), 0.25f, 2.0f);
             fDistance = DistanceFromPref(FusionFixSettings.Get("PREF_PROCEDURAL_DISTANCE"));
-            nGroundTriangles = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralGroundTriangles", 2048), 512, 16384);
+            nGroundTriangles = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralGroundTriangles", 8192), 512, 32768);
 
-            // The manager's capacity of ground triangles (mov [ecx+0x18], 0x200 in its constructor)
+            // The manager's capacity of ground triangles (mov [ecx+0x18], 0x200 in its constructor). Its three arrays
+            // (0x60 bytes a triangle, a 0x10 header) are made and let go only in its init (CE 0xc87150), here from our
+            // memory and not the game's heap
             if (auto capacity = hook::pattern("C7 41 18 00 02 00 00 C7 41 1C 00 00 A0 42"); !capacity.empty())
-                injector::WriteMemory(capacity.get_first(3), uint32_t(nGroundTriangles), true);
+            {
+                auto allocs = hook::pattern("50 E8 ? ? ? ? 83 C4 04 85 C0 74 07 89 38 83 C0 10");
+                auto free1 = hook::pattern("50 E8 ? ? ? ? 83 C4 04 C7 86 30 0F 00 00 00 00 00 00");
+                auto free2 = hook::pattern("50 E8 ? ? ? ? 8B 4C 24 10 83 C4 04 C7 07 00 00 00 00");
+                if (allocs.size() == 2 && !free1.empty() && !free2.empty())
+                {
+                    struct TriangleArrays
+                    {
+                        static void* __cdecl Alloc(size_t size) { return _aligned_malloc(size, 16); }
+                        static void __cdecl Free(void* memory) { _aligned_free(memory); }
+                    };
+                    for (size_t i = 0; i < 2; i++)
+                        injector::MakeCALL(allocs.get(i).get<void>(1), TriangleArrays::Alloc, true);
+                    injector::MakeCALL(free1.get_first(1), TriangleArrays::Free, true);
+                    injector::MakeCALL(free2.get_first(1), TriangleArrays::Free, true);
+                    injector::WriteMemory(capacity.get_first(3), uint32_t(nGroundTriangles), true);
+                }
+                else
+                    injector::WriteMemory(capacity.get_first(3), uint32_t(std::min(nGroundTriangles, 2048)), true);
+            }
+
+            // Props are buildings: the free places of that pool, for the trace
+            if (auto pool = hook::pattern("8B 0D ? ? ? ? E8 ? ? ? ? 3D F4 01 00 00"); !pool.empty())
+                pBuildingPool = *pool.get_first<uint8_t**>(2);
             bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
             nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
             auto logLevel = iniReader.ReadInteger("PROCEDURAL", "ProceduralLog", 0);
@@ -721,7 +761,10 @@ public:
             }
             pattern = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 59 05 ? ? ? ? F3 0F 58 05 ? ? ? ? F3 0F 11 41 14");
             if (!pattern.empty())
+            {
+                pDetailExtra = *pattern.get_first<float*>(4);
                 shUpdateDistances = safetyhook::create_inline(pattern.get_first(0), UpdateDistances);
+            }
 
             // procedural.dat's PROCOBJ records, kept as loaded so density and distance can change later
             pattern = hook::pattern("B8 F8 42 00 00 E8 ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 F4 42 00 00");
