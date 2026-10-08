@@ -1,6 +1,7 @@
 module;
 
 #include <common.hxx>
+#include "ShadowLookupLayout.hpp"
 #include <d3dx9tex.h>
 #include <algorithm>
 #include <bit>
@@ -756,6 +757,10 @@ public:
     // c203 off for a light and back on (see InstallLocalContactLightHook).
     bool bLocalContactPass = false;
     bool bLocalContactLightOff = false;
+    // Lights without a shadow map this frame (most headlights, lamps left without a slot) light a car's surroundings all the same, so
+    // their contact shadow is only a dark frame around it on a lit floor (tunnels): this much of it is kept
+    float fLocalContactShadowUnshadowed = 0.0f;
+    float fLocalContactLightIntensity = -1.0f;  // what c202.w holds for the light being drawn
     float fLocalContactShadowLength = 0.5f;
     float fLocalContactShadowThickness = 0.2f;
     float fLocalContactShadowMaxDistance = 40.0f;
@@ -1727,6 +1732,7 @@ public:
         fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.2f), 0.01f, 5.0f);
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
+        fLocalContactShadowUnshadowed = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsWithoutShadowMap", 0.0f), 0.0f, 1.0f);
         fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 4.0f), 0.0f, 20.0f);
         fVolumetricLightScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightScale", 0.25f), 0.0f, 2.0f);
         fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 100.0f), 10.0f, 1000.0f);
@@ -8115,11 +8121,40 @@ private:
         R.GlintsLastCone[1] = (std::max)(R.GlintsLastCone[1], light.mOuterConeAngle);
     }
 
+    // Whether the game has a shadow map for this light this frame, read as its own lookup does (CE 0x925db0, which
+    // deferred lighting calls for each light; called again here it would clear a cache entry's flag): off unless
+    // [0x1036780]; buffer [0x1174794]; a cached map where (buffer * 16 + cache index) * 0x100 + 0x119d1d0 is set;
+    // a dynamic one in the 7 keys at 0x119fc08 + buffer * 0x880, 0x110 apart. Without the layout, by the flags alone
+    static inline uintptr_t ShadowLookupBase = 0;
+    static bool HasShadowMap(const rage::CLightSource& light)
+    {
+        if (!(light.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW)))
+            return false;
+        if (!ShadowLookupBase)
+            return true;
+        const auto at = [](uintptr_t address) { return ShadowLookupBase + address - 0x400000; };
+        if (!*reinterpret_cast<const uint8_t*>(at(0x1036780)))
+            return false;
+        const int buffer = *reinterpret_cast<const int*>(at(0x1174794));
+        if (buffer < 0 || buffer > 1)
+            return true;
+        if ((light.mFlags & rage::LF_STATIC_SHADOW) && light.mShadowCacheIndex >= 0 && light.mShadowCacheIndex < 16 &&
+            *reinterpret_cast<const uint32_t*>(at(0x119D1D0) + (buffer * 16 + light.mShadowCacheIndex) * 0x100))
+            return true;
+        if (light.mFlags & rage::LF_DYNAMIC_SHADOW)
+            for (int i = 0; i < 7; i++)
+                if (*reinterpret_cast<const uint32_t*>(at(0x119FC08) + buffer * 0x880 + i * 0x110) == uint32_t(light.mCastShadows))
+                    return true;
+        return false;
+    }
+
     static void InstallLocalContactLightHook()
     {
         auto pattern = hook::pattern("83 C7 28 89 7C 24 1C 8B 47 1C 85 C0");
         if (pattern.empty())
             return;
+        if (auto base = GameBase(); shadow_lookup_layout::Validate(base))
+            ShadowLookupBase = base;
         shLocalContactLight = safetyhook::create_mid(pattern.get_first(7), [](SafetyHookContext& regs)
         {
             auto& R = PostFxResources;
@@ -8131,13 +8166,23 @@ private:
             CollectGlintLight(*reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28));
             if (R.LocalContactShadowConsts[7] == 0.0f)
                 return;
-            const bool off = (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x200) != 0;
-            if (off == R.bLocalContactLightOff)
-                return;
-            R.bLocalContactLightOff = off;
+            const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28);
+            const float intensity = (light.mFlags & 0x200) ? 0.0f
+                : R.fLocalContactShadowUnshadowed >= 1.0f || HasShadowMap(light) ? R.fLocalContactShadowIntensity
+                : R.fLocalContactShadowIntensity * R.fLocalContactShadowUnshadowed;
+            const bool off = intensity <= 0.0f;
             auto pDevice = rage::grcDevice::GetD3DDevice();
             if (!pDevice)
                 return;
+            if (!off && intensity != R.fLocalContactLightIntensity)
+            {
+                float consts[4] = { R.LocalContactShadowConsts[0], R.LocalContactShadowConsts[1], R.LocalContactShadowConsts[2], intensity };
+                pDevice->SetPixelShaderConstantF(202, consts, 1);
+                R.fLocalContactLightIntensity = intensity;
+            }
+            if (off == R.bLocalContactLightOff)
+                return;
+            R.bLocalContactLightOff = off;
             const float none[4] = {};
             pDevice->SetPixelShaderConstantF(203, off ? none : &R.LocalContactShadowConsts[4], 1);
         });
@@ -8344,6 +8389,7 @@ public:
         pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
         R.bLocalContactPass = true;
         R.bLocalContactLightOff = false;
+        R.fLocalContactLightIntensity = R.LocalContactShadowConsts[3];
 
         // The sun on skin: c201 the scale of the N.L curve less 1, c205 its offset and the red penumbra.
         {
