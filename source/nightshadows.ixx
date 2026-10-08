@@ -20,6 +20,7 @@ module;
 #include "ShadowVolumeVisibility43.hpp"
 #include "ShadowCasterPresence.hpp"
 #include "ShadowSlotTrace.hpp"
+#include "ShadowLampSpacing.hpp"
 #include "NativeCacheDependencies44.hpp"
 #include "ShadowInactiveSlots.hpp"
 #include "ShadowViewPriority.hpp"
@@ -447,6 +448,7 @@ public:
                 PlayerShadowAllocation::casterPriority = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriority", 0) != 0;
                 PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityHold", 0), 0, 2000));
                 PlayerShadowAllocation::slotTrace.enabled = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityLog", 0) != 0;
+                PlayerShadowAllocation::lampSpacing.spacing = std::clamp(iniReader.ReadFloat("SHADOWS", "LampSpacing", 0.0f), 0.0f, 40.0f);
                 const int allocationMode = iniReader.ReadInteger("SHADOWS", "ExperimentalPlayerShadowAllocation", 0);
                 ShadowDiagnostics::allocationMode = allocationMode;
                 if (shadowDiagnostics)

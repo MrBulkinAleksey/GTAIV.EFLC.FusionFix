@@ -26,6 +26,7 @@ public:
         bool cached{}, visible{};
         Vec3 position{};
         float distanceSquared{}, viewWeight{}, priorityDistanceSquared{-1.0f};
+        bool spacedOut{};             // lowered for a nearer lamp beside it (LampSpacing)
         bool observed{};
     };
     struct Selected { std::uint32_t key{}; int index{-1}; };
@@ -79,8 +80,8 @@ public:
             std::string waited = k.inViewSince ? std::format(" waited={}", time_ - k.inViewSince) : std::string(" waited=-");
             std::string sinceLost = k.lostAt ? std::format(" since_lost={}", time_ - k.lostAt) : std::string();
             if (light)
-                Line(std::format("+ {} slot={} key={:08x} {} gain={} raw={} cached={}{} weight={:.2f} prio={}{}{}", When(), slot, now.key,
-                    Kind(light->kind), Gain(light->gain), Gain(light->raw), light->cached ? 1 : 0, Where(*light), light->viewWeight,
+                Line(std::format("+ {} slot={} key={:08x} {} gain={} raw={} cached={} spaced={}{} weight={:.2f} prio={}{}{}", When(), slot, now.key,
+                    Kind(light->kind), Gain(light->gain), Gain(light->raw), light->cached ? 1 : 0, light->spacedOut ? 1 : 0, Where(*light), light->viewWeight,
                     light->priorityDistanceSquared >= 0 ? std::format("{:.1f}", std::sqrt(light->priorityDistanceSquared)) : std::string("-"),
                     waited, sinceLost));
             else
@@ -101,11 +102,12 @@ public:
         if (changed) ++changes_;
 
         if (changed || time_ - lastSummary_ >= 500u) {
-            unsigned none = 0, off = 0, in = 0, wanted = 0, lamps = 0, beams = 0;
+            unsigned none = 0, off = 0, in = 0, wanted = 0, lamps = 0, beams = 0, spaced = 0;
             float nearestWanted = -1.0f;
             for (const auto& light : lights_) {
                 if (!light.observed) continue;
                 (light.gain == SlotGain::None ? none : light.gain == SlotGain::OffScreen ? off : in)++;
+                spaced += light.spacedOut;
                 if (light.gain == SlotGain::InView && !Holds(selection, light.key)) {
                     ++wanted;
                     const float d = std::sqrt((std::max)(light.distanceSquared, 0.0f));
@@ -124,8 +126,8 @@ public:
                 speed = std::sqrt(x * x + y * y + z * z) * 1000.0f / float(time_ - lastSummary_);
             }
             Line(std::format("P {} player={:.1f},{:.1f},{:.1f} speed={:.1f} driving={} heading={:.0f} pitch={:.0f} lights={} "
-                "in_view={} off_screen={} none={} wanted={} nearest_wanted={} slots={} lamps={} beams={} changes={}",
-                When(), player_.x, player_.y, player_.z, speed, driving_ ? 1 : 0, heading, pitch, none + off + in, in, off, none, wanted,
+                "in_view={} off_screen={} none={} spaced={} wanted={} nearest_wanted={} slots={} lamps={} beams={} changes={}",
+                When(), player_.x, player_.y, player_.z, speed, driving_ ? 1 : 0, heading, pitch, none + off + in, in, off, none, spaced, wanted,
                 nearestWanted >= 0 ? std::format("{:.1f}", nearestWanted) : std::string("-"), lamps + beams, lamps, beams, changes_));
             changes_ = 0;
             lastSummary_ = time_; lastPlayer_ = player_;

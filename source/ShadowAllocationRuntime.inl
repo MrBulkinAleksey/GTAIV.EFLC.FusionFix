@@ -37,6 +37,9 @@ namespace PlayerShadowAllocation
     static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0}, lightsOffScreen{0};
     // CasterAwareLampPriorityLog: filled by selection, written out from the game's thread.
     static fusionfix::shadows::ShadowSlotTrace slotTrace;
+    // LampSpacing: lamps beside a nearer one in view give way to lamps further along
+    static fusionfix::shadows::ShadowLampSpacing lampSpacing;
+    static std::atomic<uint32_t> lampsSpacedOut{0};
     static void FlushSlotTrace() noexcept
     {
         static ULONGLONG last = 0;
@@ -248,6 +251,25 @@ namespace PlayerShadowAllocation
         state.pass.Begin({state.frame, static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),
                           ped, state.occupiedCar != 0}, CurrentLights(), CurrentCount());
         state.continuityActive=publicationEnabled && nativeLampPriority && state.pass.Active();
+        if(lampSpacing.spacing>0 && state.continuityActive) {
+            try {
+                const auto* lights=CurrentLights();
+                const auto count=CurrentCount();
+                lampSpacing.Begin(count);
+                for(uint32_t i=0;i<count && i<4096;++i) {
+                    const auto& light=lights[i];
+                    if(!(light.mFlags&rage::LF_DYNAMIC_SHADOW) || (light.mFlags&rage::LF_VEHICLE)) continue;
+                    const Vec3 position{light.mPosition.x,light.mPosition.y,light.mPosition.z};
+                    const float x=position.x-state.player.x,y=position.y-state.player.y,z=position.z-state.player.z;
+                    const float distanceSquared=x*x+y*y+z*z;
+                    if(!std::isfinite(distanceSquared) || distanceSquared>90.0f*90.0f ||
+                       !fusionfix::shadows::ShadowVolumeMayReachView(state.view,position,light.mRadius)) continue;
+                    lampSpacing.Add({i,position,{light.mDirection.x,light.mDirection.y,light.mDirection.z},
+                        static_cast<int>(light.mType)==2,distanceSquared});
+                }
+                lampSpacing.Resolve();
+            } catch(...) { lampSpacing.spacing=0; }
+        }
         if(slotTrace.enabled && state.continuityActive)
             try { slotTrace.Begin(state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),state.player,
                 state.occupiedCar!=0,state.view,CurrentCount()); } catch(...) { slotTrace.enabled=false; }
@@ -415,9 +437,11 @@ namespace PlayerShadowAllocation
             const auto rawGain=gain;
             if(casterPriority) gain=state.gainHold.Apply(key,kind==budget::Kind::Lamp?LampGeometry(light):0,gain,
                 static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
+            const bool spacedOut=lampSpacing.spacing>0 && kind==budget::Kind::Lamp && lampSpacing.SpacedOut(index);
+            if(spacedOut && gain==SlotGain::InView) { gain=SlotGain::OffScreen; ++lampsSpacedOut; }
             if(slotTrace.enabled)
                 try { slotTrace.Observe(index,{key,static_cast<uint8_t>(kind),rawGain,gain,cached,volumeVisible,
-                    {light.mPosition.x,light.mPosition.y,light.mPosition.z},geometry.distanceSquared,viewWeight,priorityDistance}); }
+                    {light.mPosition.x,light.mPosition.y,light.mPosition.z},geometry.distanceSquared,viewWeight,priorityDistance,spacedOut}); }
                 catch(...) { slotTrace.enabled=false; }
             if(gain==SlotGain::None) ++lampsWithoutCasters;
             else if(gain==SlotGain::OffScreen) ++lightsOffScreen;
