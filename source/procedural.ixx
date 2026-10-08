@@ -74,6 +74,7 @@ namespace Procedural
     int32_t nMatrixPool = 28000;
     int32_t nDrawBufferMB = 8;
     int32_t nDrawableRefs = 100000;
+    int32_t nOcclusionTests = 32768;
     bool bScaleDrawDistance = true;
     // What else Grass & Props Distance scales, each one that can be left at x1 to find which one a problem follows:
     // the grass fade and how far ground triangles are gathered, how far surface props spawn, the 2dfx box
@@ -201,6 +202,9 @@ namespace Procedural
     volatile LONG nListPeak = 0, nStampWraps = 0;
     // Times the game ran out of drawable references and took models from other entities to free some
     volatile LONG nDrawableReclaims = 0;
+    // The occlusion tests of a pass (CE 0x17a3374, the most seen at the frame's end) and where it's kept
+    uint32_t* pOcclusionTests = nullptr;
+    volatile LONG nOcclusionPeak = 0;
     // Flicker, seen from the render lists: frames in which the player's car (driving) or the player (on foot)
     // went into no render list at all, out of how many frames; and the most entities added in a frame
     volatile uintptr_t nWatched = 0;    // the car or the ped this frame
@@ -699,7 +703,7 @@ namespace Procedural
             Trace(std::format("U {} n={} cam={:.1f},{:.1f},{:.1f} heading={:.0f} pitch={:.0f} speed={:.1f} grassfar={:.0f} gather={:.0f} "
                 "triangles={} buildings_free={} queue={} new={} made={} waiting={} dropped={} failed={} records={} "
                 "prop_matrices={} matrices={}/{} by_props={} evicted={} draw_kb={}/{} draw_wraps={} list_max={} stamp_wraps={} "
-                "watched_missed={}/{} frame_adds={} frame_prop_adds={} drawable_reclaims={} ms={:.3f}",
+                "watched_missed={}/{} frame_adds={} frame_prop_adds={} drawable_reclaims={} occlusion_tests={}/{} ms={:.3f}",
                 When(), updateIndex++, pCamera[0], pCamera[1], pCamera[2], heading, pitch, speed, grassFar, gather,
                 LONG(nTriangles), BuildingsFree(), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(),
                 *(uint32_t*)generator, matrices.first, nMatrixPoolSize, matrices.second, InterlockedExchange(&nEvictions, 0),
@@ -707,7 +711,7 @@ namespace Procedural
                 InterlockedExchange(&nListPeak, 0), InterlockedExchange(&nStampWraps, 0),
                 InterlockedExchange(&nWatchedMissed, 0), InterlockedExchange(&nFrames, 0),
                 InterlockedExchange(&nFrameAddsPeak, 0), InterlockedExchange(&nFramePropAddsPeak, 0),
-                InterlockedExchange(&nDrawableReclaims, 0), ms));
+                InterlockedExchange(&nDrawableReclaims, 0), InterlockedExchange(&nOcclusionPeak, 0), nOcclusionTests, ms));
             lastQueue = lastNew = lastMade = lastWaiting = lastDropped = lastFailed = 0;
         }
     }
@@ -876,6 +880,8 @@ public:
                         if (nWatched && !InterlockedExchange(&nWatchedAdded, 0))
                             InterlockedIncrement(&nWatchedMissed);
                         Peak(nFrameAddsPeak, InterlockedExchange(&nFrameAdds, 0));
+                        if (pOcclusionTests)
+                            Peak(nOcclusionPeak, LONG(*pOcclusionTests));
                         Peak(nFramePropAddsPeak, InterlockedExchange(&nFramePropAdds, 0));
                         uintptr_t car = CPlayer::findPlayerCar ? CPlayer::findPlayerCar() : 0;
                         nWatched = car ? car : (CPlayer::getLocalPlayerPed ? CPlayer::getLocalPlayerPed() : 0);
@@ -903,6 +909,31 @@ public:
                     injector::WriteMemory(size.get_first(1), uint32_t(nDrawableRefs), true);
                 }
             }
+
+            // The occlusion system tests each entity's box against what's drawn in front of it (CE 0xb42f90 and the like),
+            // counting the tests of a pass (CE 0x17a3374, cleared at 0xdbd6ec) and answering "hidden" from the 8192nd on.
+            // Looking at a whole district across the river at x3 took over 8000, and anything tested after that, a car,
+            // a tree, the player, was left out of the frame. The count is only compared, never an index: four checks
+            nOcclusionTests = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralOcclusionTests", 32768), 8192, 1 << 20);
+            if (auto checks = hook::pattern("A1 ? ? ? ? 40 A3 ? ? ? ? 3D 00 20 00 00"); checks.size() == 4)
+            {
+                pOcclusionTests = *checks.get(0).get<uint32_t*>(1);
+                bool same = true;
+                for (size_t i = 0; i < checks.size(); i++)
+                    same = same && *checks.get(i).get<uint32_t*>(1) == pOcclusionTests && *checks.get(i).get<uint32_t*>(7) == pOcclusionTests;
+                if (same)
+                {
+                    for (size_t i = 0; i < checks.size(); i++)
+                        injector::WriteMemory(checks.get(i).get<void>(12), uint32_t(nOcclusionTests), true);
+                }
+                else
+                {
+                    pOcclusionTests = nullptr;
+                    nOcclusionTests = 8192;
+                }
+            }
+            else
+                nOcclusionTests = 8192;
 
             // Props are buildings: the free places of that pool, for the trace
             if (auto pool = hook::pattern("8B 0D ? ? ? ? E8 ? ? ? ? 3D F4 01 00 00"); !pool.empty())
@@ -1183,9 +1214,9 @@ public:
                 Log("Settings", std::format("distance x{:.2f}", fDistance));
             });
 
-            Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, matrix pool {} (game 7000), draw buffers {} MB (game 2), drawable references {} (game 13000), density x{:.2f}, "
+            Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, matrix pool {} (game 7000), draw buffers {} MB (game 2), drawable references {} (game 13000), occlusion tests {} (game 8192), density x{:.2f}, "
                 "distance x{:.2f}, in reflections {}, spawns an update {}",
-                nGroundTriangles, Records(), nMatrixLimit, nMatrixPool, nDrawBufferMB, nDrawableRefs, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
+                nGroundTriangles, Records(), nMatrixLimit, nMatrixPool, nDrawBufferMB, nDrawableRefs, nOcclusionTests, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
         };
 
         // With ProceduralLog, every 30 s while the generator runs: its time, how many props, and what hit a limit
