@@ -434,6 +434,39 @@ namespace Procedural
         }
     }
 
+    // ProceduralGatherPriority: the manager takes ground triangles in the order of the collision it walks (CE 0xc87b00),
+    // while one of its points is within +0x20 (far squared, CE 0xc87f40) and a record is free ([+4], the head of the
+    // free list, 16-bit indices from 1, next at +0x56 of a record at [+0xf30] + (index - 1) * 0x60), and lets one go once
+    // all of it is beyond. Full, it took nearby triangles only as far ones went, often within procedural.dat's minimum
+    // distance, which then never got props. So while it is nearly full that radius narrows, the game lets the furthest
+    // go its own way and takes the near ones in their place; with room again it widens back
+    bool bGatherPriority = true;
+    float fGatherFull = 0.0f;               // the radius set for Detail Quality and the slider
+    float fGatherNow = 0.0f;                // the radius this frame
+    constexpr float GatherMin = 60.0f;
+
+    void UpdateGatherRadius()
+    {
+        if (!bGatherPriority || !pManager || fGatherFull <= 0.0f)
+            return;
+        auto records = *(uint8_t**)(pManager + 0xF30);
+        uint32_t capacity = *(uint32_t*)(pManager + 0x18);
+        if (!records || !capacity)
+            return;
+        uint32_t free = 0;
+        for (uint32_t index = *(uint16_t*)(pManager + 4); index && index <= capacity && free <= capacity; free++)
+            index = *(uint16_t*)(records + size_t(index - 1) * 0x60 + 0x56);
+        float low = std::min(GatherMin, fGatherFull);
+        if (fGatherNow <= 0.0f)
+            fGatherNow = fGatherFull;
+        if (free < capacity / 32)
+            fGatherNow = std::max(low, fGatherNow - 8.0f);
+        else if (free > capacity / 8)
+            fGatherNow = std::min(fGatherFull, fGatherNow + 2.0f);
+        fGatherNow = std::clamp(fGatherNow, low, fGatherFull);
+        *(float*)(pManager + 0x20) = fGatherNow * fGatherNow;
+    }
+
     // The manager's grass and gathering distances, from what the game just set for Detail Quality
     void ScaleManagerDistances(uint8_t* manager)
     {
@@ -447,6 +480,8 @@ namespace Procedural
         farDistance *= scale;
         *(float*)(manager + 0x1C) = farDistance + QueryLead;
         *(float*)(manager + 0x20) = farDistance * farDistance;
+        fGatherFull = farDistance;
+        fGatherNow = std::min(fGatherNow > 0.0f ? fGatherNow : farDistance, farDistance);
     }
 
     void ApplyDefinitions()
@@ -785,6 +820,7 @@ namespace Procedural
         QueryPerformanceCounter(&start);
         ApplyBuildingReserve();
         shUpdate.unsafe_fastcall(generator, edx);
+        UpdateGatherRadius();
         QueryPerformanceCounter(&end);
         QueryPerformanceFrequency(&frequency);
         double ms = double(end.QuadPart - start.QuadPart) * 1000.0 / double(frequency.QuadPart);
@@ -821,7 +857,7 @@ namespace Procedural
                 "triangles={} buildings_free={} queue={} new={} made={} waiting={} dropped={} failed={} records={} "
                 "prop_matrices={} matrices={}/{} by_props={} evicted={} draw_kb={}/{} draw_wraps={} list_max={} stamp_wraps={} "
                 "watched_missed={}/{} frame_adds={} frame_prop_adds={} drawable_reclaims={} occlusion_tests={}/{} budget_skipped={} budget_radius={} "
-                "parked={} ms={:.3f}",
+                "parked={} gather_now={:.0f} ms={:.3f}",
                 When(), updateIndex++, pCamera[0], pCamera[1], pCamera[2], heading, pitch, speed, grassFar, gather,
                 LONG(nTriangles), BuildingsFree(), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(),
                 *(uint32_t*)generator, matrices.first, nMatrixPoolSize, matrices.second, InterlockedExchange(&nEvictions, 0),
@@ -831,7 +867,7 @@ namespace Procedural
                 InterlockedExchange(&nFrameAddsPeak, 0), InterlockedExchange(&nFramePropAddsPeak, 0),
                 InterlockedExchange(&nDrawableReclaims, 0), InterlockedExchange(&nOcclusionPeak, 0), nOcclusionTests,
                 InterlockedExchange(&nBudgetSkipped, 0), InterlockedExchange(&nBudgetRadiusMin, LONG_MAX),
-                parked.size() / QueueEntrySize, ms));
+                parked.size() / QueueEntrySize, fGatherNow, ms));
             lastQueue = lastNew = lastMade = lastWaiting = lastDropped = lastFailed = 0;
         }
     }
@@ -1125,6 +1161,7 @@ public:
                 pBuildingReserve = pool.get_first<uint32_t>(12);
             }
             bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
+            bGatherPriority = iniReader.ReadInteger("PROCEDURAL", "ProceduralGatherPriority", 1) != 0;
             fConeBack = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeBack", 70.0f), 0.0f, 1000.0f);
             nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
             auto logLevel = iniReader.ReadInteger("PROCEDURAL", "ProceduralLog", 0);
@@ -1324,9 +1361,9 @@ public:
             if (!pattern.empty())
                 shRelease = safetyhook::create_inline(pattern.get_first(0), Release);
 
-            // The generator's update is timed only for the log
+            // The generator's update: the gathering radius each frame, and its time for the log
             pattern = hook::pattern("81 EC B8 02 00 00 A1 ? ? ? ? 33 C4 89 84 24 B4 02 00 00 53 8B D9");
-            if (bLog && !pattern.empty())
+            if (!pattern.empty())
                 shUpdate = safetyhook::create_inline(pattern.get_first(0), Update);
 
             if (bTrace)
