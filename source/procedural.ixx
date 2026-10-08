@@ -98,6 +98,13 @@ namespace Procedural
     uint32_t* pReflectionPhases = nullptr; // CE 0x159af28: the phases of type 0x11 (water reflection) and 0x1f
     uint32_t* pScenePhase = nullptr;       // CE 0x159af24: the one of type 0x1f, the scene itself, kept
 
+    // Map entities with 2dfx props the generator found this update. The game marks them with the world scan
+    // stamp (CE 0x11a8908) in entity +0x3c, the field and stamp the render lists' sector scan swaps to skip
+    // what it already took (CE 0xae92ee); a render pass reading the stamp after the generator moved it on took
+    // the generator's entities for done and left them out of that frame. With the 2dfx box at x3 (90 m) that
+    // was every tree, fence or ladder around the player flickering. The generator keeps its own set here
+    std::unordered_set<uintptr_t> scanned;
+
     std::vector<uint8_t> extraRecords;
     // The larger queue is ours, not from the game's heap: the game's own buffer of 512 is kept aside and
     // put back before the game frees it (reset CE 0xc0aa2e, destructor CE 0xc08dc5)
@@ -914,6 +921,41 @@ public:
             {
                 RestoreGameQueue((uint8_t*)regs.esi);
             });
+
+            // The generator's own record of the entities its 2dfx scan found, instead of the shared stamp: its
+            // increment is jumped over, the mark (movzx eax, stamp; ...; mov [edi+0x3c], eax) becomes an insert,
+            // and the check whether a provider was found this update (cmp [ecx+0x3c], eax; je) a lookup
+            {
+                auto increment = hook::pattern("66 A1 ? ? ? ? 55 57 BF FF FF 00 00 BD 01 00 00 00 66 3B C7 73 0A");
+                auto check = hook::pattern("0F B7 05 ? ? ? ? 8B 4A 10 8B 32 39 41 3C 74");
+                auto mark = hook::pattern("0F B7 05 ? ? ? ? 32 C9 89 47 3C");
+                if (!increment.empty() && !check.empty() && !mark.empty())
+                {
+                    static auto ClearHook = safetyhook::create_mid(increment.get_first(0), [](SafetyHookContext&)
+                    {
+                        scanned.clear();
+                    });
+                    injector::MakeJMP(increment.get_first(18), increment.get_first(45), true);
+
+                    injector::MakeNOP(mark.get_first(0), 7, true);
+                    injector::MakeNOP(mark.get_first(9), 3, true);
+                    static auto MarkHook = safetyhook::create_mid(mark.get_first(0), [](SafetyHookContext& regs)
+                    {
+                        scanned.insert(regs.edi);
+                    });
+
+                    injector::MakeNOP(check.get_first(0), 7, true);
+                    injector::MakeNOP(check.get_first(12), 3, true);
+                    static auto CheckHook = safetyhook::create_mid(check.get_first(12), [](SafetyHookContext& regs)
+                    {
+                        constexpr uint32_t ZF = 0x40;
+                        if (scanned.contains(regs.ecx))
+                            regs.eflags |= ZF;
+                        else
+                            regs.eflags &= ~ZF;
+                    });
+                }
+            }
 
             // The camera position the generator measures from (movss xmm2, [0x128e340] in CE 0xc09440)
             pattern = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C");
