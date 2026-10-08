@@ -4,8 +4,12 @@ module;
 #include "FusionLog.hpp"
 #include <algorithm>
 #include <cmath>
+#include <bit>
 #include <cstring>
 #include <format>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -67,7 +71,8 @@ namespace Procedural
     float fSmallProp = 30.0f;
     bool bInReflections = false;
     int32_t nSpawnsPerUpdate = 128;
-    bool bLog = false;
+    bool bLog = false;                  // ProceduralLog >= 1: the statistics every 30 s
+    bool bTrace = false;                // ProceduralLog >= 2: every event, to ProceduralTrace.log
 
     // The game's
     uint8_t* pGenerator = nullptr;      // CE 0x1683290
@@ -91,6 +96,77 @@ namespace Procedural
 
     struct Definition { float spacing, inverseSquare, distanceSquared; };
     std::vector<Definition> definitions;  // as procedural.dat set them
+
+    // Trace (ProceduralLog = 2): lines gathered here and written once a second to
+    // GTAIV.EFLC.FusionFix.ProceduralTrace.log, at most TraceLimit bytes a run
+    constexpr size_t TraceLimit = 64u << 20;
+    std::mutex traceMutex;
+    std::string traceText;
+    size_t traceWritten = 0;
+    bool traceFull = false;
+    const uint64_t traceStart = GetTickCount64();
+
+    void Trace(std::string&& line)
+    {
+        if (!bTrace || traceFull)
+            return;
+        std::lock_guard lock(traceMutex);
+        traceText += line;
+        traceText += '\n';
+    }
+
+    void FlushTrace()
+    {
+        std::string text;
+        {
+            std::lock_guard lock(traceMutex);
+            text.swap(traceText);
+        }
+        if (text.empty() || traceFull)
+            return;
+        traceWritten += text.size();
+        if (traceWritten > TraceLimit)
+        {
+            traceFull = true;
+            text += std::format("trace stopped at {} MB\n", TraceLimit >> 20);
+        }
+        FusionLog::WriteText("ProceduralTrace", "", text);
+    }
+
+    uint32_t Frame() { return CTimer::m_frameCount ? *CTimer::m_frameCount : 0; }
+    uint64_t Now() { return GetTickCount64() - traceStart; }
+
+    // " t=ms f=frame": when, in milliseconds since the plugin started and in frames
+    std::string When() { return std::format("t={} f={}", Now(), Frame()); }
+
+    // " pos=x,y,z d=metres ang=degrees": where, and how far and how far off the camera's view direction
+    std::string Where(const float* position)
+    {
+        if (!pCamera)
+            return std::format(" pos={:.1f},{:.1f},{:.1f}", position[0], position[1], position[2]);
+        const float* forward = pCamera - 8;
+        float dx = position[0] - pCamera[0], dy = position[1] - pCamera[1], dz = position[2] - pCamera[2];
+        float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+        float facing = distance > 0.001f ? (dx * forward[0] + dy * forward[1] + dz * forward[2]) / distance : 1.0f;
+        float angle = std::acos(std::clamp(facing, -1.0f, 1.0f)) * 57.29578f;
+        return std::format(" pos={:.1f},{:.1f},{:.1f} d={:.1f} ang={:.0f}", position[0], position[1], position[2], distance, angle);
+    }
+
+    // Queued positions by when they came in, to tell how long each waited
+    std::unordered_map<uint64_t, uint64_t> queuedAt;
+    uint64_t PositionKey(const float* position)
+    {
+        uint64_t key = 1469598103934665603ull;
+        for (int i = 0; i < 3; i++)
+            key = (key ^ std::bit_cast<uint32_t>(position[i])) * 1099511628211ull;
+        return key;
+    }
+
+    // What the last pass over the queue did, for the update's line
+    uint32_t lastQueue = 0, lastNew = 0, lastMade = 0, lastWaiting = 0, lastDropped = 0, lastFailed = 0;
+    uint32_t updateIndex = 0;
+    float lastCamera[3] = {};
+    uint64_t lastCameraTime = 0;
 
     // The props that are out, for the render lists
     std::unordered_set<uintptr_t> props;
@@ -135,6 +211,8 @@ namespace Procedural
         pGenerator = generator;
         nCarried = 0;
         waiting.clear();
+        queuedAt.clear();
+        Trace(std::format("I {} generator init, records {}", When(), Records()));
         AcquireSRWLockExclusive(&propsLock);
         props.clear();
         ReleaseSRWLockExclusive(&propsLock);
@@ -246,6 +324,33 @@ namespace Procedural
     uint8_t* __fastcall Create(uint8_t* generator, void* edx, void* a1, void* a2, void* a3, void* a4, void* a5)
     {
         auto record = shCreate.unsafe_fastcall<uint8_t*>(generator, edx, a1, a2, a3, a4, a5);
+        if (bTrace)
+        {
+            // From the queue (a1 is its entry) or from a 2dfx effect
+            auto queue = pGenerator ? *(uint8_t**)(pGenerator + 0x5224) : nullptr;
+            auto entry = (uint8_t*)a1;
+            bool queued = queue && entry >= queue && entry < queue + size_t(*(uint32_t*)(pGenerator + 0x5220)) * QueueEntrySize;
+            std::string waited;
+            if (queued)
+            {
+                if (auto it = queuedAt.find(PositionKey((float*)entry)); it != queuedAt.end())
+                {
+                    waited = std::format(" waited={}", Now() - it->second);
+                    queuedAt.erase(it);
+                }
+            }
+            auto entity = record ? *(uint8_t**)(record + 8) : nullptr;
+            float position[3] = {};
+            if (entity && CEntity::GetPosition(uintptr_t(entity), position))
+                Trace(std::format("P {} src={} model={} draw={:.0f}{}{}", When(), queued ? "surface" : "2dfx",
+                    *(int16_t*)(entity + 0x2E), *(float*)(entity + 0x50), Where(position), waited));
+            else
+            {
+                lastFailed++;
+                Trace(std::format("P {} src={} failed{}{}", When(), queued ? "surface" : "2dfx",
+                    queued ? Where((float*)entry) : std::string(), waited));
+            }
+        }
         if (record)
         {
             if (auto entity = *(uint8_t**)(record + 8))
@@ -273,6 +378,9 @@ namespace Procedural
     {
         if (auto entity = *(uintptr_t*)(record + 8))
         {
+            float position[3] = {};
+            if (bTrace && CEntity::GetPosition(entity, position))
+                Trace(std::format("R {} model={}{}", When(), *(int16_t*)(entity + 0x2E), Where(position)));
             AcquireSRWLockExclusive(&propsLock);
             props.erase(entity);
             ReleaseSRWLockExclusive(&propsLock);
@@ -291,8 +399,11 @@ namespace Procedural
         // Held-over positions of a provider removed since
         auto removals = *(uint8_t**)(generator + 0x522C);
         uint32_t removalCount = *(uint16_t*)(generator + 0x5230);
+        uint32_t carriedLeft = std::min<uint32_t>(nCarried, count);
+        uint32_t droppedBefore = nDropped;
         if (nCarried && removals && removalCount)
         {
+            carriedLeft = 0;
             uint32_t write = 0;
             for (uint32_t i = 0; i < count; i++)
             {
@@ -307,8 +418,14 @@ namespace Procedural
                 if (removed)
                 {
                     nDropped++;
+                    if (bTrace)
+                    {
+                        queuedAt.erase(PositionKey((float*)entry));
+                        Trace(std::format("D {}{}", When(), Where((float*)entry)));
+                    }
                     continue;
                 }
+                carriedLeft += i < nCarried;
                 if (write != i)
                     memcpy(queue + size_t(write) * QueueEntrySize, entry, QueueEntrySize);
                 write++;
@@ -317,6 +434,20 @@ namespace Procedural
         }
         nCarried = 0;
         nQueueMax = std::max<uint32_t>(nQueueMax, count);
+        lastQueue = count;
+        lastNew = count - carriedLeft;
+        lastDropped = nDropped - droppedBefore;
+        lastMade = count;
+        lastWaiting = 0;
+        if (bTrace)
+        {
+            for (uint32_t i = carriedLeft; i < count; i++)
+            {
+                auto entry = (float*)(queue + size_t(i) * QueueEntrySize);
+                queuedAt[PositionKey(entry)] = Now();
+                Trace(std::format("Q {}{}", When(), Where(entry)));
+            }
+        }
 
         waiting.clear();
         if (nSpawnsPerUpdate <= 0 || count <= uint32_t(nSpawnsPerUpdate))
@@ -370,6 +501,8 @@ namespace Procedural
             return;
         waiting.assign(queue + size_t(made) * QueueEntrySize, queue + size_t(count) * QueueEntrySize);
         count = uint16_t(made);
+        lastMade = made;
+        lastWaiting = uint32_t(waiting.size() / QueueEntrySize);
     }
 
     // After they're made and the queue emptied: the held-over ones go back to its front
@@ -414,6 +547,56 @@ namespace Procedural
         fUpdateMs += ms;
         fUpdateMaxMs = std::max(fUpdateMaxMs, ms);
         nUpdates++;
+
+        if (bTrace && pCamera)
+        {
+            // The camera: where, its heading (as the game takes it, 0 north) and pitch, and how fast it moves
+            const float* forward = pCamera - 8;
+            float heading = std::atan2(-forward[0], forward[1]) * 57.29578f;
+            float pitch = std::asin(std::clamp(forward[2], -1.0f, 1.0f)) * 57.29578f;
+            auto now = Now();
+            float speed = 0.0f;
+            if (lastCameraTime && now > lastCameraTime)
+            {
+                float dx = pCamera[0] - lastCamera[0], dy = pCamera[1] - lastCamera[1], dz = pCamera[2] - lastCamera[2];
+                speed = std::sqrt(dx * dx + dy * dy + dz * dz) * 1000.0f / float(now - lastCameraTime);
+            }
+            std::copy_n(pCamera, 3, lastCamera);
+            lastCameraTime = now;
+            float grassFar = pManager ? *(float*)(pManager + 0x14) : 0.0f;
+            float gather = pManager ? *(float*)(pManager + 0x1C) : 0.0f;
+            Trace(std::format("U {} n={} cam={:.1f},{:.1f},{:.1f} heading={:.0f} pitch={:.0f} speed={:.1f} grassfar={:.0f} gather={:.0f} "
+                "queue={} new={} made={} waiting={} dropped={} failed={} records={} ms={:.3f}",
+                When(), updateIndex++, pCamera[0], pCamera[1], pCamera[2], heading, pitch, speed, grassFar, gather,
+                lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(), ms));
+            lastQueue = lastNew = lastMade = lastWaiting = lastDropped = lastFailed = 0;
+        }
+    }
+
+    // Triangles of the ground the manager gathers (CE 0xc86540 fills one: centre +0x30, +0x55 bit 0 grass,
+    // bit 1 props; null when it has neither) and lets go (CE 0xc87010)
+    SafetyHookInline shAddTriangle;
+    uint8_t* __fastcall AddTriangle(uint8_t* triangle, void* edx, void* a1, void* a2, void* a3, void* a4, void* a5, void* a6, void* a7, void* a8)
+    {
+        auto result = shAddTriangle.unsafe_fastcall<uint8_t*>(triangle, edx, a1, a2, a3, a4, a5, a6, a7, a8);
+        if (bTrace && result)
+        {
+            auto flags = *(uint8_t*)(result + 0x55);
+            Trace(std::format("T {} grass={} props={} area={:.1f}{}", When(), flags & 1, (flags >> 1) & 1,
+                *(float*)(result + 0x48), Where((float*)(result + 0x30))));
+        }
+        return result;
+    }
+
+    SafetyHookInline shRemoveTriangle;
+    void __fastcall RemoveTriangle(uint8_t* triangle, void* edx)
+    {
+        if (bTrace)
+        {
+            auto flags = *(uint8_t*)(triangle + 0x55);
+            Trace(std::format("X {} grass={} props={}{}", When(), flags & 1, (flags >> 1) & 1, Where((float*)(triangle + 0x30))));
+        }
+        shRemoveTriangle.unsafe_fastcall(triangle, edx);
     }
 
     void Log(const char* component, const std::string& text)
@@ -441,7 +624,9 @@ public:
             fSmallProp = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralSmallPropDistance", 30.0f), 0.0f, 1000.0f);
             bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
             nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
-            bLog = iniReader.ReadInteger("PROCEDURAL", "ProceduralLog", 0) != 0;
+            auto logLevel = iniReader.ReadInteger("PROCEDURAL", "ProceduralLog", 0);
+            bLog = logLevel >= 1;
+            bTrace = logLevel >= 2;
 
             // Generator init: the extra records and the larger queue
             auto pattern = hook::pattern("53 55 56 8B D9 57 8D 73 14 BF 00 02 00 00");
@@ -548,6 +733,16 @@ public:
             if (bLog && !pattern.empty())
                 shUpdate = safetyhook::create_inline(pattern.get_first(0), Update);
 
+            if (bTrace)
+            {
+                pattern = hook::pattern("55 8B EC 83 E4 F0 83 EC 18 8B 55 10 56 8B 75 0C 57 8B 7D 08");
+                if (!pattern.empty())
+                    shAddTriangle = safetyhook::create_inline(pattern.get_first(0), AddTriangle);
+                pattern = hook::pattern("56 8B F1 F6 46 55 04 C7 46 48 00 00 00 00");
+                if (!pattern.empty())
+                    shRemoveTriangle = safetyhook::create_inline(pattern.get_first(0), RemoveTriangle);
+            }
+
             // The queue: before its loop of creations (esi the generator) and after it, the queue emptied
             pattern = hook::pattern("33 C0 33 FF 66 3B 86 28 52 00 00");
             auto queueEnd = hook::pattern("66 89 86 30 52 00 00 8B CE 5E E9");
@@ -605,6 +800,12 @@ public:
             using namespace Procedural;
             if (!bLog)
                 return;
+            static uint64_t lastFlush = 0;
+            if (bTrace && GetTickCount64() - lastFlush >= 1000)
+            {
+                lastFlush = GetTickCount64();
+                FlushTrace();
+            }
             static uint64_t last = GetTickCount64();
             auto now = GetTickCount64();
             if (now - last < 30000)
