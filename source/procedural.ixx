@@ -180,6 +180,20 @@ namespace Procedural
     // When none is free, the least recently used is taken from its owner (CE 0xa33cb0), which keeps only its heading
     uint8_t* pMatrixPool = nullptr;
     uint32_t nMatrixPoolSize = 0;
+    float lastCamera[3] = {};
+    uint64_t lastCameraTime = 0;
+
+    // The props that are out, for the render lists
+    std::unordered_set<uintptr_t> props;
+    SRWLOCK propsLock = SRWLOCK_INIT;
+
+    bool IsProp(uintptr_t entity)
+    {
+        AcquireSRWLockShared(&propsLock);
+        bool found = props.contains(entity);
+        ReleaseSRWLockShared(&propsLock);
+        return found;
+    }
 
     // Matrices of the pool in use, and how many of them props hold
     std::pair<uint32_t, uint32_t> MatrixPoolUse()
@@ -199,20 +213,6 @@ namespace Procedural
         }
         ReleaseSRWLockShared(&propsLock);
         return { used, byProps };
-    }
-    float lastCamera[3] = {};
-    uint64_t lastCameraTime = 0;
-
-    // The props that are out, for the render lists
-    std::unordered_set<uintptr_t> props;
-    SRWLOCK propsLock = SRWLOCK_INIT;
-
-    bool IsProp(uintptr_t entity)
-    {
-        AcquireSRWLockShared(&propsLock);
-        bool found = props.contains(entity);
-        ReleaseSRWLockShared(&propsLock);
-        return found;
     }
 
     // Positions held over to the next update, first in the queue then
