@@ -325,7 +325,7 @@ public:
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth, vec2PrevDepthRange;
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fSpreadRadius;
-        D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, fCSCover, techContactShadows;
+        D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
@@ -744,7 +744,6 @@ public:
     float SkinCamera[4] = {};
     float fContactShadowMaxDistance = 60.0f;
     float fContactShadowIntensity = 1.0f;
-    float fContactShadowMoonCover = 15.0f;
     bool bContactShadowStepJitter = true;
     // ContactShadowsHalfResolution: the march runs at half size into ContactRawHalfTex and
     // ContactUpsample_PS brings it to full size, weighing by depth, before the smoothing.
@@ -1401,7 +1400,6 @@ public:
                 h.fCSThickness = SSREffect->GetParameterByName(nullptr, "fCSThickness");
                 h.fCSMaxViewDistance = SSREffect->GetParameterByName(nullptr, "fCSMaxViewDistance");
                 h.fCSIntensity = SSREffect->GetParameterByName(nullptr, "fCSIntensity");
-                h.fCSCover = SSREffect->GetParameterByName(nullptr, "fCSCover");
                 h.techContactShadows = SSREffect->GetTechniqueByName("ContactShadows");
                 h.techContactTemporal = SSREffect->GetTechniqueByName("ContactTemporal");
                 h.techContactUpsample = SSREffect->GetTechniqueByName("ContactUpsample");
@@ -1709,7 +1707,6 @@ public:
         fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.15f), 0.01f, 10.0f);
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
         fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
-        fContactShadowMoonCover = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMoonCover", 15.0f), 0.0f, 50.0f);
         bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
         bContactShadowsHalfRes = iniReader.ReadInteger("POSTFX", "ContactShadowsHalfResolution", 1) != 0;
         fContactTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsTemporal", 0.8f), 0.0f, 0.95f);
@@ -7534,12 +7531,6 @@ private:
         effect->SetFloat(h.fCSThickness, R.fContactShadowThickness);
         effect->SetFloat(h.fCSMaxViewDistance, R.fContactShadowMaxDistance);
         effect->SetFloat(h.fCSIntensity, R.fContactShadowIntensity);
-        // The moon lights by night, which the game gives no shadow map: then the second ray looks for what covers
-        // a point. The sky's SunDirection (y up) below the horizon tells it; by day the sun's shadow map does that
-        bool moon = false;
-        if (R.bCloudParamsRegistered)
-            moon = rage::grmShaderInfo::getShaderParamData(R.CloudSunDirectionIdx)[1] < 0.0f;
-        effect->SetFloat(h.fCSCover, moon ? R.fContactShadowMoonCover : 0.0f);
 
         IDirect3DSurface9* rt0 = nullptr;
         IDirect3DSurface9* ds = nullptr;

@@ -259,7 +259,6 @@ uniform float fCSLength;            // world units a contact shadow ray travels
 uniform float fCSThickness;         // how deep behind the scene a sample may land and still occlude
 uniform float fCSMaxViewDistance;   // contact shadows fade out towards this view distance
 uniform float fCSIntensity;         // strength, 0..1
-uniform float fCSCover;             // world units of a second, coarse ray towards the moon, 0 off (by day)
 
 // Screen space indirect light, see SSGI_PS.
 uniform float fGIRayLength;         // world units an indirect light ray travels
@@ -284,7 +283,6 @@ uniform float fSkinStrength;        // 0..2, the share of light that scatters, t
 
 #ifndef CS_STEPS
 #define CS_STEPS 16
-#define CS_COVER_STEPS 8
 #endif
 
 static const float HISTORY_CLAMP = 8.0;
@@ -1294,44 +1292,10 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     }
 
     float fade = 1.0 - smoothstep(fCSMaxViewDistance * 0.75, fCSMaxViewDistance, C.z);
-
-    // At night the game has no shadow map for the moon, so its light reached the road in tunnels
-    // and under bridges, and the short ray above took it away only next to the tyres: a dark
-    // frame around each car on a moonlit floor. A second, coarse ray goes further towards the moon;
-    // something it meets there, a tunnel's ceiling, covers the point, and all of the moon goes.
-    float cover = 0.0;
-    float coverLen = fCSCover;
-    if (L.z < 0.0)
-        coverLen = min(coverLen, (P0.z - fNearPlane * 2.0) / -L.z);
-    [branch]
-    if (occlusion < 1.0 && coverLen > len)
-    {
-        prevZ = P0.z + L.z * len;
-        for (int j = 1; j <= CS_COVER_STEPS; ++j)
-        {
-            float t = len + (coverLen - len) * ((float) j - 1.0 + jitter) / (float) CS_COVER_STEPS;
-            float3 P = P0 + L * t;
-            float2 sampleUV = ViewToUV(P);
-            if (any(sampleUV <= 0.0) || any(sampleUV >= 1.0))
-                break;
-            // A ceiling is thick, and a coarse step can pass well behind its front: the thickness
-            // is the step's own depth plus a metre.
-            float delta = P.z - LinearDepth(sampleUV);
-            float thickness = abs(P.z - prevZ) + 1.0;
-            prevZ = P.z;
-            if (delta > 0.0 && delta < thickness)
-            {
-                cover = 1.0;
-                break;
-            }
-        }
-    }
-
     // With the sun grazing the surface the ray runs along it and any seam blocks it; the game's
-    // own lighting already darkens such surfaces, so contact shadows fade out there. Not cover:
-    // a low moon still lights a tunnel's floor through the leak.
-    float contact = occlusion * saturate(dot(n, L) * 5.0);
-    return float4(saturate(max(contact, cover) * fade * fCSIntensity), 0.0, 0.0, 1.0);
+    // own lighting already darkens such surfaces, so contact shadows fade out there.
+    fade *= saturate(dot(n, L) * 5.0);
+    return float4(saturate(occlusion * fade * fCSIntensity), 0.0, 0.0, 1.0);
 }
 
 // Contact shadows marched at half size (SSRResultTex), brought up to full size: each of the four
