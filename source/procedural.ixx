@@ -70,7 +70,8 @@ namespace Procedural
 
     // Settings
     int32_t nPool = 4096;
-    int32_t nMatrixLimit = 1024;
+    int32_t nMatrixLimit = 4096;
+    int32_t nMatrixPool = 28000;
     float fDensity = 1.0f;
     float fDistance = 1.0f;
     int32_t nGroundTriangles = 2048;
@@ -667,7 +668,7 @@ public:
 
             // [PROCEDURAL]
             nPool = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralPool", 16384), int32_t(VanillaRecords), 65535);
-            nMatrixLimit = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralMatrixLimit", 1024), int32_t(VanillaRecords), nPool);
+            nMatrixLimit = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralMatrixLimit", 4096), int32_t(VanillaRecords), nPool);
             fDensity = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralDensity", 1.0f), 0.25f, 2.0f);
             fDistance = DistanceFromPref(FusionFixSettings.Get("PREF_PROCEDURAL_DISTANCE"));
             nGroundTriangles = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralGroundTriangles", 8192), 512, 32768);
@@ -695,6 +696,32 @@ public:
                 }
                 else
                     injector::WriteMemory(capacity.get_first(3), uint32_t(std::min(nGroundTriangles, 2048)), true);
+            }
+
+            // The pool of entity matrices (7000 in CE 0xa32210) is a cache: any entity that keeps only a position and a
+            // heading gets one from it when something needs its whole matrix (CE 0xa30750), and when none is free the
+            // least recently used is taken from its owner (CE 0xa33cb0). Props drawn further out made that working set
+            // outgrow 7000 (a trace: full half the time, 36000 taken in two minutes, props holding 4000), so trees and
+            // cars away from the player flickered. Its nodes are linked by pointers only; the array is ours
+            // (operator new at CE 0xa3218c, delete at CE 0xa341c8) so the game's heap doesn't pay for it
+            nMatrixPool = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralMatrixPool", 28000), 7000, 65536);
+            if (auto size = hook::pattern("68 58 1B 00 00 B9 ? ? ? ? C7 05"); !size.empty())
+            {
+                auto alloc = hook::pattern("51 E8 ? ? ? ? 89 83 E0 01 00 00");
+                auto release = hook::pattern("FF B6 E0 01 00 00 E8 ? ? ? ? 83 C4 04");
+                if (nMatrixPool != 7000 && !alloc.empty() && !release.empty())
+                {
+                    struct MatrixNodes
+                    {
+                        static void* __cdecl Alloc(size_t size) { return _aligned_malloc(size, 16); }
+                        static void __cdecl Free(void* memory) { _aligned_free(memory); }
+                    };
+                    injector::MakeCALL(alloc.get_first(1), MatrixNodes::Alloc, true);
+                    injector::MakeCALL(release.get_first(6), MatrixNodes::Free, true);
+                    injector::WriteMemory(size.get_first(1), uint32_t(nMatrixPool), true);
+                }
+                else
+                    nMatrixPool = 7000;
             }
 
             // Props are buildings: the free places of that pool, for the trace
@@ -888,9 +915,9 @@ public:
                 Log("Settings", std::format("distance x{:.2f}", fDistance));
             });
 
-            Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, density x{:.2f}, "
+            Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, matrix pool {} (game 7000), density x{:.2f}, "
                 "distance x{:.2f}, in reflections {}, spawns an update {}",
-                nGroundTriangles, Records(), nMatrixLimit, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
+                nGroundTriangles, Records(), nMatrixLimit, nMatrixPool, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
         };
 
         // With ProceduralLog, every 30 s while the generator runs: its time, how many props, and what hit a limit
