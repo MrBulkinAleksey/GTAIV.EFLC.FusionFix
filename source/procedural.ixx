@@ -73,6 +73,7 @@ namespace Procedural
     int32_t nMatrixLimit = 4096;
     int32_t nMatrixPool = 28000;
     int32_t nDrawBufferMB = 8;
+    int32_t nDrawableRefs = 60000;
     bool bScaleDrawDistance = true;     // ProceduralScaleDrawDistance = 0 leaves props' own draw distance as the game set it
     float fDensity = 1.0f;
     float fDistance = 1.0f;
@@ -195,6 +196,8 @@ namespace Procedural
     // The longest render list an entity was added to (CE 0xae43a0: 16-bit count and capacity, so 65535 at most),
     // and how often the 16-bit stamp of a world scan ran out (CE 0x93e800 then clears it on every entity)
     volatile LONG nListPeak = 0, nStampWraps = 0;
+    // Times the game ran out of drawable references and took models from other entities to free some
+    volatile LONG nDrawableReclaims = 0;
     // Flicker, seen from the render lists: frames in which the player's car (driving) or the player (on foot)
     // went into no render list at all, out of how many frames; and the most entities added in a frame
     volatile uintptr_t nWatched = 0;    // the car or the ped this frame
@@ -691,14 +694,15 @@ namespace Procedural
             Trace(std::format("U {} n={} cam={:.1f},{:.1f},{:.1f} heading={:.0f} pitch={:.0f} speed={:.1f} grassfar={:.0f} gather={:.0f} "
                 "triangles={} buildings_free={} queue={} new={} made={} waiting={} dropped={} failed={} records={} "
                 "prop_matrices={} matrices={}/{} by_props={} evicted={} draw_kb={}/{} draw_wraps={} list_max={} stamp_wraps={} "
-                "watched_missed={}/{} frame_adds={} frame_prop_adds={} ms={:.3f}",
+                "watched_missed={}/{} frame_adds={} frame_prop_adds={} drawable_reclaims={} ms={:.3f}",
                 When(), updateIndex++, pCamera[0], pCamera[1], pCamera[2], heading, pitch, speed, grassFar, gather,
                 LONG(nTriangles), BuildingsFree(), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(),
                 *(uint32_t*)generator, matrices.first, nMatrixPoolSize, matrices.second, InterlockedExchange(&nEvictions, 0),
                 InterlockedExchange(&nDrawPeak, 0) >> 10, nDrawBufferMB << 10, InterlockedExchange(&nDrawWraps, 0),
                 InterlockedExchange(&nListPeak, 0), InterlockedExchange(&nStampWraps, 0),
                 InterlockedExchange(&nWatchedMissed, 0), InterlockedExchange(&nFrames, 0),
-                InterlockedExchange(&nFrameAddsPeak, 0), InterlockedExchange(&nFramePropAddsPeak, 0), ms));
+                InterlockedExchange(&nFrameAddsPeak, 0), InterlockedExchange(&nFramePropAddsPeak, 0),
+                InterlockedExchange(&nDrawableReclaims, 0), ms));
             lastQueue = lastNew = lastMade = lastWaiting = lastDropped = lastFailed = 0;
         }
     }
@@ -871,6 +875,27 @@ public:
                 }
             }
 
+            // Every entity with its model in gets a drawable reference (CE 0xa30983 -> 0xaf4710, kept in entity +0x34),
+            // 0x14-byte nodes made once at start (CE 0xaf48f0: 13000, ExtendedLimits makes it 20000). When none is free
+            // the game takes models from other entities (CE 0xa8a990 on the list at 0x1173750) and tries again; with
+            // thousands of props that happened all the time, and trees, fences, cars, the player's too, lost their
+            // models for a frame or more. More of them, from our memory (the game never frees the array)
+            nDrawableRefs = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawableRefs", 60000), 13000, 200000);
+            if (auto size = hook::pattern("68 ? ? ? ? E8 ? FF FF FF C3"); !size.empty())
+            {
+                auto init = injector::GetBranchDestination(size.get_first(5)).as_int();
+                auto call = (uint8_t*)init + 0x1D;
+                if (*(uint8_t*)(init + 0x1C) == 0x51 && *call == 0xE8 && *size.get_first<uint32_t>(1) < uint32_t(nDrawableRefs))
+                {
+                    struct DrawableRefs
+                    {
+                        static void* __cdecl Alloc(size_t size) { return _aligned_malloc(size, 16); }
+                    };
+                    injector::MakeCALL(call, DrawableRefs::Alloc, true);
+                    injector::WriteMemory(size.get_first(1), uint32_t(nDrawableRefs), true);
+                }
+            }
+
             // Props are buildings: the free places of that pool, for the trace
             if (auto pool = hook::pattern("8B 0D ? ? ? ? E8 ? ? ? ? 3D F4 01 00 00"); !pool.empty())
             {
@@ -904,6 +929,14 @@ public:
                                 if (InterlockedCompareExchange(&nListPeak, count, peak) == peak)
                                     break;
                         }));
+                // The game out of drawable references: mov ecx, 0x1173750; call CE 0xa8a990 in CE 0xaf4710
+                if (auto reclaim = hook::pattern("B9 ? ? ? ? E8 ? ? ? ? 8B CF E8 ? ? ? ? 8B F0 85 F6 75 0A"); !reclaim.empty())
+                {
+                    static auto ReclaimHook = safetyhook::create_mid(reclaim.get_first(0), [](SafetyHookContext&)
+                    {
+                        InterlockedIncrement(&nDrawableReclaims);
+                    });
+                }
                 // Pools as the game makes them (mid hook at the entry, before ExtendedLimits' patch at +0xa)
                 if (auto ctor = hook::pattern("8B 54 24 0C 56 57 8B 7C 24 0C"); !ctor.empty())
                 {
@@ -1142,9 +1175,9 @@ public:
                 Log("Settings", std::format("distance x{:.2f}", fDistance));
             });
 
-            Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, matrix pool {} (game 7000), draw buffers {} MB (game 2), density x{:.2f}, "
+            Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, matrix pool {} (game 7000), draw buffers {} MB (game 2), drawable references {} (game 13000), density x{:.2f}, "
                 "distance x{:.2f}, in reflections {}, spawns an update {}",
-                nGroundTriangles, Records(), nMatrixLimit, nMatrixPool, nDrawBufferMB, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
+                nGroundTriangles, Records(), nMatrixLimit, nMatrixPool, nDrawBufferMB, nDrawableRefs, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
         };
 
         // With ProceduralLog, every 30 s while the generator runs: its time, how many props, and what hit a limit
