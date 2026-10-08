@@ -31,7 +31,7 @@ import settings;
 //  - +0x0008  512 records, put in a free list at +0x3008 by the init (CE 0xc09d20), so 512 props at most
 //  - +0x3020  64 candidate positions for the props of the 2dfx effects of one entity, no bounds check
 //  - +0x5220  the cap of the per-update queue of positions (+0x5224, 0x20 bytes each, 512)
-// Props come from procedural.dat by surface (spacing, how far they spawn) and from 2dfx effects of map
+// Props come from procedural.dat by surface (spacing, how near the camera may be when they are made) and from 2dfx effects of map
 // entities found in a 30 m box around the camera (CE 0xc0aa90, at most 128 entities). Grass and the
 // surface props go as far as the procedural manager (CE 0x16fb6a0) says: +0x10 near and +0x14 far of the
 // grass fade (20 and 20 + Detail Quality / 2, so 25..75 m), +0x1c how far cells are gathered (far + 40),
@@ -80,8 +80,8 @@ namespace Procedural
     int32_t nDrawBudget = 0;         // ProceduralDrawBudget: adds to the render lists a frame, the furthest props left out past it
     bool bScaleDrawDistance = true;
     // What else Grass & Props Distance scales, each one that can be left at x1 to find which one a problem follows:
-    // the grass fade and how far ground triangles are gathered, how far surface props spawn, the 2dfx box
-    bool bScaleGather = true, bScaleSpawn = true, bScaleBox = true;     // ProceduralScaleDrawDistance = 0 leaves props' own draw distance as the game set it
+    // the grass fade and how far ground triangles are gathered, the 2dfx box
+    bool bScaleGather = true, bScaleBox = true;     // ProceduralScaleDrawDistance = 0 leaves props' own draw distance as the game set it
     float fDensity = 1.0f;
     float fDistance = 1.0f;
     int32_t nGroundTriangles = 2048;
@@ -120,7 +120,10 @@ namespace Procedural
     void* pGameQueue = nullptr;
     float fBaseNear = 0.0f;             // the manager's own near (20), read before it's first changed
 
-    struct Definition { float spacing, inverseSquare, distanceSquared; };
+    // procedural.dat's PROCOBJ fields here (loaded at CE 0xc29310): +0x08 spacing (at least 2), +0x0c 1 / spacing^2,
+    // +0x10 the minimum distance squared (at most 80 m): the generator makes a triangle's props only while the camera
+    // is further than that (CE 0xc09440), and tries once, when the triangle comes in, so props don't pop up in view
+    struct Definition { float spacing, inverseSquare, minDistanceSquared; };
     std::vector<Definition> definitions;  // as procedural.dat set them
 
     // Trace (ProceduralLog = 2): lines gathered here and written once a second to
@@ -457,8 +460,9 @@ namespace Procedural
             auto record = pDefinitions + 8 + i * 0x44;
             *(float*)(record + 0x08) = definitions[i].spacing / rootDensity;
             *(float*)(record + 0x0C) = definitions[i].inverseSquare * fDensity;
-            float scale = bScaleSpawn ? fDistance : 1.0f;
-            *(float*)(record + 0x10) = definitions[i].distanceSquared * scale * scale;
+            // The minimum distance stays as the game has it: scaled with the slider it kept props off every triangle
+            // that came in nearer than three times as far, after a load or when the triangle cap freed a place nearby
+            *(float*)(record + 0x10) = definitions[i].minDistanceSquared;
         }
     }
 
@@ -941,7 +945,6 @@ public:
             // the player's too, trees, fences. Theirs are from our memory here, larger, and the four checks follow
             bScaleDrawDistance = iniReader.ReadInteger("PROCEDURAL", "ProceduralScaleDrawDistance", 1) != 0;
             bScaleGather = iniReader.ReadInteger("PROCEDURAL", "ProceduralScaleGather", 1) != 0;
-            bScaleSpawn = iniReader.ReadInteger("PROCEDURAL", "ProceduralScaleSpawn", 1) != 0;
             bScaleBox = iniReader.ReadInteger("PROCEDURAL", "ProceduralScaleBox", 1) != 0;
             nDrawBufferMB = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawBuffer", 8), 2, 32);
             {
