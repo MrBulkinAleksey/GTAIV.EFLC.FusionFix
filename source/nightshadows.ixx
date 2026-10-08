@@ -42,6 +42,8 @@ module;
 #include "PoolDescriptorSnapshots.hpp"
 #include <fstream>
 #include <atomic>
+#include <mutex>
+#include <unordered_set>
 #include <intrin.h>
 
 export module nightshadows;
@@ -401,6 +403,34 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
+
+            // Traffic signals light up only while their own model is drawn in full: the signal's light comes from
+            // its entity's pre-render (CE 0xa32854 -> 0xd208f0, models with 0x3000000 in +0x40), which runs only for
+            // entities drawn this frame. Their draw distance (model +0x2c, copied to entity +0x50 at CE 0x9d7a44, or
+            // the placement's own) is short, so a signal ahead stayed dark until close. Scaled here: the model once,
+            // the first time an entity of it is made, and each entity made with the old value or its own
+            if (auto distance = std::clamp(iniReader.ReadFloat("SHADOWS", "TrafficSignalDrawDistance", 2.5f), 1.0f, 5.0f); distance != 1.0f)
+            {
+                static float scale = distance;
+                if (auto pattern = hook::pattern("F3 0F 11 47 50 EB 0A 8B 44 24 18 8B 40 2C 89 47 50 8B 44 24 18"); !pattern.empty())
+                {
+                    static std::mutex scaledMutex;
+                    static std::unordered_set<uintptr_t> scaledModels;
+                    static auto SignalDistanceHook = safetyhook::create_mid(pattern.get_first(17), [](SafetyHookContext& regs)
+                    {
+                        auto model = *(uint8_t**)(regs.esp + 0x18);
+                        if (!model || regs.edi < 0x10000 || (*(uint32_t*)(model + 0x40) & 0xFF000000) != 0x3000000)
+                            return;
+                        auto& modelDistance = *(float*)(model + 0x2C);
+                        auto& entityDistance = *(float*)(regs.edi + 0x50);
+                        std::lock_guard lock(scaledMutex);
+                        if (scaledModels.insert(uintptr_t(model)).second && std::isfinite(modelDistance) && modelDistance > 0.0f)
+                            modelDistance *= scale;
+                        if (std::isfinite(entityDistance) && entityDistance > 0.0f && entityDistance != modelDistance)
+                            entityDistance *= scale;
+                    });
+                }
+            }
             if (iniReader.ReadInteger("SHADOWS", "ExperimentalCrashDiagnostics", 0) != 0)
             {
                 const auto crashPath = iniReader.GetIniPath().parent_path() /
