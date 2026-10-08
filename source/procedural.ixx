@@ -319,6 +319,29 @@ namespace Procedural
     std::vector<uint8_t> waiting;
     uint32_t nCarried = 0;
 
+    // ProceduralConeBack: positions outside a cone around where the camera looks are kept here, not made, and go
+    // back to the queue once the camera turns to them. Its radius is the gathering radius straight ahead, this behind,
+    // between them as ((1 + cos) / 2)^2, about a third of the way at the sides. Made props stay where they are: the
+    // generator lets go of them only with their ground triangle
+    float fConeBack = 70.0f;
+    constexpr size_t ParkedLimit = 65536;   // positions kept at most, the oldest go first
+    std::vector<uint8_t> parked;
+
+    bool InCone(const float* position)
+    {
+        if (fConeBack <= 0.0f || !pCamera)
+            return true;
+        const float* forward = pCamera - 8;
+        float dx = position[0] - pCamera[0], dy = position[1] - pCamera[1], dz = position[2] - pCamera[2];
+        float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (distance <= fConeBack)
+            return true;
+        float facing = distance > 0.001f ? std::clamp((dx * forward[0] + dy * forward[1] + dz * forward[2]) / distance, -1.0f, 1.0f) : 1.0f;
+        float ahead = pManager ? std::max(*(float*)(pManager + 0x1C), fConeBack) : 1.0e9f;
+        float t = (1.0f + facing) * 0.5f;
+        return distance <= fConeBack + (ahead - fConeBack) * t * t;
+    }
+
     // Statistics for the log
     uint32_t nUsedMax = 0;
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
@@ -370,6 +393,7 @@ namespace Procedural
         ApplyBuildingReserve();
         nCarried = 0;
         waiting.clear();
+        parked.clear();
         queuedAt.clear();
         Trace(std::format("I {} generator init, records {}", When(), Records()));
         AcquireSRWLockExclusive(&propsLock);
@@ -598,6 +622,56 @@ namespace Procedural
             count = uint16_t(write);
         }
         nCarried = 0;
+
+        // The cone: kept positions of a removed provider go, those now inside come back (nearest first is the sort
+        // below), and those outside are kept
+        if (fConeBack > 0.0f && pCamera)
+        {
+            uint32_t capacity = *(uint32_t*)(generator + 0x5220);
+            std::vector<uint8_t> keep;
+            keep.reserve(parked.size());
+            for (size_t offset = 0; offset < parked.size(); offset += QueueEntrySize)
+            {
+                auto entry = parked.data() + offset;
+                bool removed = false;
+                if (removals)
+                {
+                    auto provider = *(uintptr_t*)(entry + 0x1C);
+                    for (uint32_t j = 0; j < removalCount && !removed; j++)
+                        removed = *(uintptr_t*)(removals + size_t(j) * 8) == provider;
+                }
+                if (removed)
+                {
+                    nDropped++;
+                    continue;
+                }
+                if (count < capacity && InCone((float*)entry))
+                {
+                    memcpy(queue + size_t(count) * QueueEntrySize, entry, QueueEntrySize);
+                    count++;
+                    continue;
+                }
+                keep.insert(keep.end(), entry, entry + QueueEntrySize);
+            }
+            uint32_t write = 0;
+            for (uint32_t i = 0; i < count; i++)
+            {
+                auto entry = queue + size_t(i) * QueueEntrySize;
+                if (!InCone((float*)entry))
+                {
+                    keep.insert(keep.end(), entry, entry + QueueEntrySize);
+                    continue;
+                }
+                if (write != i)
+                    memcpy(queue + size_t(write) * QueueEntrySize, entry, QueueEntrySize);
+                write++;
+            }
+            carriedLeft = std::min(carriedLeft, write);
+            count = uint16_t(write);
+            if (keep.size() > ParkedLimit * QueueEntrySize)
+                keep.erase(keep.begin(), keep.end() - ParkedLimit * QueueEntrySize);
+            parked.swap(keep);
+        }
         nQueueMax = std::max<uint32_t>(nQueueMax, count);
         lastQueue = count;
         lastNew = count - carriedLeft;
@@ -742,7 +816,8 @@ namespace Procedural
             Trace(std::format("U {} n={} cam={:.1f},{:.1f},{:.1f} heading={:.0f} pitch={:.0f} speed={:.1f} grassfar={:.0f} gather={:.0f} "
                 "triangles={} buildings_free={} queue={} new={} made={} waiting={} dropped={} failed={} records={} "
                 "prop_matrices={} matrices={}/{} by_props={} evicted={} draw_kb={}/{} draw_wraps={} list_max={} stamp_wraps={} "
-                "watched_missed={}/{} frame_adds={} frame_prop_adds={} drawable_reclaims={} occlusion_tests={}/{} budget_skipped={} budget_radius={} ms={:.3f}",
+                "watched_missed={}/{} frame_adds={} frame_prop_adds={} drawable_reclaims={} occlusion_tests={}/{} budget_skipped={} budget_radius={} "
+                "parked={} ms={:.3f}",
                 When(), updateIndex++, pCamera[0], pCamera[1], pCamera[2], heading, pitch, speed, grassFar, gather,
                 LONG(nTriangles), BuildingsFree(), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(),
                 *(uint32_t*)generator, matrices.first, nMatrixPoolSize, matrices.second, InterlockedExchange(&nEvictions, 0),
@@ -751,7 +826,8 @@ namespace Procedural
                 InterlockedExchange(&nWatchedMissed, 0), InterlockedExchange(&nFrames, 0),
                 InterlockedExchange(&nFrameAddsPeak, 0), InterlockedExchange(&nFramePropAddsPeak, 0),
                 InterlockedExchange(&nDrawableReclaims, 0), InterlockedExchange(&nOcclusionPeak, 0), nOcclusionTests,
-                InterlockedExchange(&nBudgetSkipped, 0), InterlockedExchange(&nBudgetRadiusMin, LONG_MAX), ms));
+                InterlockedExchange(&nBudgetSkipped, 0), InterlockedExchange(&nBudgetRadiusMin, LONG_MAX),
+                parked.size() / QueueEntrySize, ms));
             lastQueue = lastNew = lastMade = lastWaiting = lastDropped = lastFailed = 0;
         }
     }
@@ -1046,6 +1122,7 @@ public:
                 pBuildingReserve = pool.get_first<uint32_t>(12);
             }
             bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
+            fConeBack = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeBack", 70.0f), 0.0f, 1000.0f);
             nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
             auto logLevel = iniReader.ReadInteger("PROCEDURAL", "ProceduralLog", 0);
             bLog = logLevel >= 1;
