@@ -73,6 +73,7 @@ namespace Procedural
     int32_t nMatrixLimit = 4096;
     int32_t nMatrixPool = 28000;
     int32_t nDrawBufferMB = 8;
+    bool bScaleDrawDistance = true;     // ProceduralScaleDrawDistance = 0 leaves props' own draw distance as the game set it
     float fDensity = 1.0f;
     float fDistance = 1.0f;
     int32_t nGroundTriangles = 2048;
@@ -187,6 +188,17 @@ namespace Procedural
     // The longest render list an entity was added to (CE 0xae43a0: 16-bit count and capacity, so 65535 at most),
     // and how often the 16-bit stamp of a world scan ran out (CE 0x93e800 then clears it on every entity)
     volatile LONG nListPeak = 0, nStampWraps = 0;
+    // Flicker, seen from the render lists: frames in which the player's car (driving) or the player (on foot)
+    // went into no render list at all, out of how many frames; and the most entities added in a frame
+    volatile uintptr_t nWatched = 0;    // the car or the ped this frame
+    volatile LONG nWatchedAdded = 0, nWatchedMissed = 0, nFrames = 0, nFrameAdds = 0, nFrameAddsPeak = 0, nFramePropAdds = 0, nFramePropAddsPeak = 0;
+
+    void Peak(volatile LONG& peak, LONG value)
+    {
+        for (LONG current = peak; value > current; current = peak)
+            if (InterlockedCompareExchange(&peak, value, current) == current)
+                break;
+    }
     uint32_t nMatrixPoolSize = 0;
     float lastCamera[3] = {};
     uint64_t lastCameraTime = 0;
@@ -432,7 +444,7 @@ namespace Procedural
                 // is more than the camera's distance (CE 0xaec13a), so for the slider to take that whole reach
                 // k times further the prop's own distance becomes k * own + (k - 1) * extra
                 auto& drawDistance = *(float*)(entity + 0x50);
-                if (fDistance != 1.0f && std::isfinite(drawDistance) && drawDistance > 0.0f && drawDistance < 2000.0f)
+                if (bScaleDrawDistance && fDistance != 1.0f && std::isfinite(drawDistance) && drawDistance > 0.0f && drawDistance < 2000.0f)
                 {
                     float extra = pDetailExtra ? *pDetailExtra : 0.0f;
                     drawDistance = drawDistance * fDistance + (fDistance - 1.0f) * std::max(extra, 0.0f);
@@ -640,12 +652,15 @@ namespace Procedural
             auto matrices = MatrixPoolUse();
             Trace(std::format("U {} n={} cam={:.1f},{:.1f},{:.1f} heading={:.0f} pitch={:.0f} speed={:.1f} grassfar={:.0f} gather={:.0f} "
                 "triangles={} buildings_free={} queue={} new={} made={} waiting={} dropped={} failed={} records={} "
-                "prop_matrices={} matrices={}/{} by_props={} evicted={} draw_kb={}/{} draw_wraps={} list_max={} stamp_wraps={} ms={:.3f}",
+                "prop_matrices={} matrices={}/{} by_props={} evicted={} draw_kb={}/{} draw_wraps={} list_max={} stamp_wraps={} "
+                "watched_missed={}/{} frame_adds={} frame_prop_adds={} ms={:.3f}",
                 When(), updateIndex++, pCamera[0], pCamera[1], pCamera[2], heading, pitch, speed, grassFar, gather,
                 LONG(nTriangles), BuildingsFree(), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(),
                 *(uint32_t*)generator, matrices.first, nMatrixPoolSize, matrices.second, InterlockedExchange(&nEvictions, 0),
                 InterlockedExchange(&nDrawPeak, 0) >> 10, nDrawBufferMB << 10, InterlockedExchange(&nDrawWraps, 0),
-                InterlockedExchange(&nListPeak, 0), InterlockedExchange(&nStampWraps, 0), ms));
+                InterlockedExchange(&nListPeak, 0), InterlockedExchange(&nStampWraps, 0),
+                InterlockedExchange(&nWatchedMissed, 0), InterlockedExchange(&nFrames, 0),
+                InterlockedExchange(&nFrameAddsPeak, 0), InterlockedExchange(&nFramePropAddsPeak, 0), ms));
             lastQueue = lastNew = lastMade = lastWaiting = lastDropped = lastFailed = 0;
         }
     }
@@ -757,6 +772,7 @@ public:
             // each frame). Run out, and the game starts over at the buffer's beginning (CE 0x8dc3a0, 0x8dc7e0, 0x8dcad0),
             // over commands of the same frame, so with many more props drawn anything could vanish for a frame: cars,
             // the player's too, trees, fences. Theirs are from our memory here, larger, and the four checks follow
+            bScaleDrawDistance = iniReader.ReadInteger("PROCEDURAL", "ProceduralScaleDrawDistance", 1) != 0;
             nDrawBufferMB = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawBuffer", 8), 2, 32);
             {
                 auto alloc1 = hook::pattern("68 10 27 20 00 8B F1 E8");
@@ -804,6 +820,15 @@ public:
                                 break;
                         if (*(buffers + 8) || *(buffers + 9))
                             InterlockedIncrement(&nDrawWraps);
+
+                        // The frame just built: did the watched entity go into any render list
+                        InterlockedIncrement(&nFrames);
+                        if (nWatched && !InterlockedExchange(&nWatchedAdded, 0))
+                            InterlockedIncrement(&nWatchedMissed);
+                        Peak(nFrameAddsPeak, InterlockedExchange(&nFrameAdds, 0));
+                        Peak(nFramePropAddsPeak, InterlockedExchange(&nFramePropAdds, 0));
+                        uintptr_t car = CPlayer::findPlayerCar ? CPlayer::findPlayerCar() : 0;
+                        nWatched = car ? car : (CPlayer::getLocalPlayerPed ? CPlayer::getLocalPlayerPed() : 0);
                     });
                 }
             }
@@ -841,6 +866,19 @@ public:
                                 if (InterlockedCompareExchange(&nListPeak, count, peak) == peak)
                                     break;
                         }));
+                // Every add to the render lists (CE 0xae43a0: phases, entity, distance, kind)
+                if (auto add = hook::pattern("83 EC 10 53 8B 5C 24 18 85 DB 0F 84"); !add.empty())
+                {
+                    static auto AddHook = safetyhook::create_mid(add.get_first(0), [](SafetyHookContext& regs)
+                    {
+                        auto entity = *(uintptr_t*)(regs.esp + 8);
+                        InterlockedIncrement(&nFrameAdds);
+                        if (entity && entity == nWatched)
+                            InterlockedExchange(&nWatchedAdded, 1);
+                        else if (entity && (*(uint32_t*)(entity + 0x24) & (0x10000 | 0x40000000)) == (0x10000 | 0x40000000))
+                            InterlockedIncrement(&nFramePropAdds);
+                    });
+                }
                 if (auto stamp = hook::pattern("BA 20 9D 1A 01 8B 0A 85 C9"); !stamp.empty())
                 {
                     static auto StampHook = safetyhook::create_mid(stamp.get_first(0), [](SafetyHookContext&)
