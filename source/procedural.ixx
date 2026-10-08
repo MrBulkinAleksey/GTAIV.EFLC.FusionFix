@@ -238,6 +238,24 @@ namespace Procedural
         return pool ? int32_t(*(uint32_t*)(pool + 8) - *(uint32_t*)(pool + 0x14)) : -1;
     }
 
+    void Log(const char* component, const std::string& text);
+
+    // The generator makes a prop only while 500 places of the building pool are free (CE 0xc08ebf). With
+    // thousands of props that left the map too few to stream a new area in: without ExtendedLimits (32000) it
+    // ran out and the game crashed making a map entity (CE 0x9d77e0). An eighth of the pool is kept for it
+    uint32_t* pBuildingReserve = nullptr;
+    uint32_t nBuildingReserve = 0;
+
+    void ApplyBuildingReserve()
+    {
+        auto pool = pBuildingPool ? *pBuildingPool : nullptr;
+        if (!pool || !pBuildingReserve || nBuildingReserve)
+            return;
+        nBuildingReserve = std::max<uint32_t>(2000, *(uint32_t*)(pool + 8) / 8);
+        injector::WriteMemory(pBuildingReserve, nBuildingReserve, true);
+        Log("Settings", std::format("building pool {}, {} of it kept free for the map (game 500)", *(uint32_t*)(pool + 8), nBuildingReserve));
+    }
+
     uint32_t Records() { return std::max<uint32_t>(VanillaRecords, uint32_t(nPool)); }
 
     uint32_t UsedRecords()
@@ -254,6 +272,7 @@ namespace Procedural
     void ExtendGenerator(uint8_t* generator)
     {
         pGenerator = generator;
+        ApplyBuildingReserve();
         nCarried = 0;
         waiting.clear();
         queuedAt.clear();
@@ -589,6 +608,7 @@ namespace Procedural
     {
         LARGE_INTEGER start, end, frequency;
         QueryPerformanceCounter(&start);
+        ApplyBuildingReserve();
         shUpdate.unsafe_fastcall(generator, edx);
         QueryPerformanceCounter(&end);
         QueryPerformanceFrequency(&frequency);
@@ -786,7 +806,10 @@ public:
 
             // Props are buildings: the free places of that pool, for the trace
             if (auto pool = hook::pattern("8B 0D ? ? ? ? E8 ? ? ? ? 3D F4 01 00 00"); !pool.empty())
+            {
                 pBuildingPool = *pool.get_first<uint8_t**>(2);
+                pBuildingReserve = pool.get_first<uint32_t>(12);
+            }
             bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
             nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
             auto logLevel = iniReader.ReadInteger("PROCEDURAL", "ProceduralLog", 0);
