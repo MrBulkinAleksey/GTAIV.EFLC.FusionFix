@@ -73,7 +73,7 @@ namespace Procedural
     int32_t nMatrixLimit = 4096;
     int32_t nMatrixPool = 28000;
     int32_t nDrawBufferMB = 8;
-    int32_t nDrawableRefs = 60000;
+    int32_t nDrawableRefs = 100000;
     bool bScaleDrawDistance = true;     // ProceduralScaleDrawDistance = 0 leaves props' own draw distance as the game set it
     float fDensity = 1.0f;
     float fDistance = 1.0f;
@@ -880,7 +880,7 @@ public:
             // the game takes models from other entities (CE 0xa8a990 on the list at 0x1173750) and tries again; with
             // thousands of props that happened all the time, and trees, fences, cars, the player's too, lost their
             // models for a frame or more. More of them, from our memory (the game never frees the array)
-            nDrawableRefs = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawableRefs", 60000), 13000, 200000);
+            nDrawableRefs = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawableRefs", 100000), 13000, 200000);
             if (auto size = hook::pattern("68 ? ? ? ? E8 ? FF FF FF C3"); !size.empty())
             {
                 auto init = injector::GetBranchDestination(size.get_first(5)).as_int();
