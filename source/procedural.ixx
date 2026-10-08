@@ -797,14 +797,17 @@ public:
             nGroundTriangles = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralGroundTriangles", 8192), 512, 32768);
 
             // The manager's capacity of ground triangles (mov [ecx+0x18], 0x200 in its constructor). Its three arrays
-            // (0x60 bytes a triangle, a 0x10 header) are made and let go only in its init (CE 0xc87150), here from our
-            // memory and not the game's heap
+            // (0x60 bytes a triangle, a 0x10 header) are made in its init (CE 0xc87150), here from our memory and not
+            // the game's heap. They are let go there and in its shutdown (CE 0xc87450, also run on loading a save or
+            // switching episodes, CE 0x5c10e1); a free missed there handed our memory to the game's heap: MMA10
             if (auto capacity = hook::pattern("C7 41 18 00 02 00 00 C7 41 1C 00 00 A0 42"); !capacity.empty())
             {
                 auto allocs = hook::pattern("50 E8 ? ? ? ? 83 C4 04 85 C0 74 07 89 38 83 C0 10");
                 auto free1 = hook::pattern("50 E8 ? ? ? ? 83 C4 04 C7 86 30 0F 00 00 00 00 00 00");
                 auto free2 = hook::pattern("50 E8 ? ? ? ? 8B 4C 24 10 83 C4 04 C7 07 00 00 00 00");
-                if (allocs.size() == 2 && !free1.empty() && !free2.empty())
+                auto free3 = hook::pattern("A1 ? ? ? ? 85 C0 74 ? 83 C0 F0 50 E8 ? ? ? ? 83 C4 04 C7 05");
+                auto free4 = hook::pattern("8B 86 ? ? ? ? 85 C0 74 ? 83 C0 F0 50 E8 ? ? ? ? 83 C4 04 C7 86");
+                if (allocs.size() == 2 && !free1.empty() && !free2.empty() && !free3.empty() && !free4.empty())
                 {
                     struct TriangleArrays
                     {
@@ -815,6 +818,8 @@ public:
                         injector::MakeCALL(allocs.get(i).get<void>(1), TriangleArrays::Alloc, true);
                     injector::MakeCALL(free1.get_first(1), TriangleArrays::Free, true);
                     injector::MakeCALL(free2.get_first(1), TriangleArrays::Free, true);
+                    injector::MakeCALL(free3.get_first(13), TriangleArrays::Free, true);
+                    injector::MakeCALL(free4.get_first(14), TriangleArrays::Free, true);
                     injector::WriteMemory(capacity.get_first(3), uint32_t(nGroundTriangles), true);
                 }
                 else
