@@ -184,6 +184,9 @@ namespace Procedural
     // The two buffers the frame's draw commands go to (CE 0x1175c58), with the most a frame used and how many
     // times one ran out (the game then starts over at its beginning, over this frame's own commands)
     volatile LONG nDrawPeak = 0, nDrawWraps = 0;
+    // The longest render list an entity was added to (CE 0xae43a0: 16-bit count and capacity, so 65535 at most),
+    // and how often the 16-bit stamp of a world scan ran out (CE 0x93e800 then clears it on every entity)
+    volatile LONG nListPeak = 0, nStampWraps = 0;
     uint32_t nMatrixPoolSize = 0;
     float lastCamera[3] = {};
     uint64_t lastCameraTime = 0;
@@ -637,11 +640,12 @@ namespace Procedural
             auto matrices = MatrixPoolUse();
             Trace(std::format("U {} n={} cam={:.1f},{:.1f},{:.1f} heading={:.0f} pitch={:.0f} speed={:.1f} grassfar={:.0f} gather={:.0f} "
                 "triangles={} buildings_free={} queue={} new={} made={} waiting={} dropped={} failed={} records={} "
-                "prop_matrices={} matrices={}/{} by_props={} evicted={} draw_kb={}/{} draw_wraps={} ms={:.3f}",
+                "prop_matrices={} matrices={}/{} by_props={} evicted={} draw_kb={}/{} draw_wraps={} list_max={} stamp_wraps={} ms={:.3f}",
                 When(), updateIndex++, pCamera[0], pCamera[1], pCamera[2], heading, pitch, speed, grassFar, gather,
                 LONG(nTriangles), BuildingsFree(), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(),
                 *(uint32_t*)generator, matrices.first, nMatrixPoolSize, matrices.second, InterlockedExchange(&nEvictions, 0),
-                InterlockedExchange(&nDrawPeak, 0) >> 10, nDrawBufferMB << 10, InterlockedExchange(&nDrawWraps, 0), ms));
+                InterlockedExchange(&nDrawPeak, 0) >> 10, nDrawBufferMB << 10, InterlockedExchange(&nDrawWraps, 0),
+                InterlockedExchange(&nListPeak, 0), InterlockedExchange(&nStampWraps, 0), ms));
             lastQueue = lastNew = lastMade = lastWaiting = lastDropped = lastFailed = 0;
         }
     }
@@ -824,6 +828,25 @@ public:
                 {
                     nMatrixPoolSize = *init.get_first<uint32_t>(1);
                     pMatrixPool = *init.get_first<uint8_t*>(6);
+                }
+                // ecx is the list at both pushes: near (lea ecx, [esi+...]) and by phase (lea ecx, [ecx+esi])
+                static std::vector<SafetyHookMid> listHooks;
+                for (auto [text, offset] : { std::pair{ "6A 10 8D 8E ? ? ? ? F3 0F 11 4C 24 18 E8", 14 },
+                                             std::pair{ "6A 10 8D 0C 31 F3 0F 11 44 24 20 E8", 11 } })
+                    if (auto push = hook::pattern(text); !push.empty())
+                        listHooks.push_back(safetyhook::create_mid(push.get_first(offset), [](SafetyHookContext& regs)
+                        {
+                            LONG count = *(uint16_t*)(regs.ecx + 4) + 1;
+                            for (LONG peak = nListPeak; count > peak; peak = nListPeak)
+                                if (InterlockedCompareExchange(&nListPeak, count, peak) == peak)
+                                    break;
+                        }));
+                if (auto stamp = hook::pattern("BA 20 9D 1A 01 8B 0A 85 C9"); !stamp.empty())
+                {
+                    static auto StampHook = safetyhook::create_mid(stamp.get_first(0), [](SafetyHookContext&)
+                    {
+                        InterlockedIncrement(&nStampWraps);
+                    });
                 }
                 auto evictions = hook::pattern("8B 0D ? ? ? ? 8B 49 40 E8 ? ? ? ? B9");
                 static std::vector<SafetyHookMid> evictionHooks;
