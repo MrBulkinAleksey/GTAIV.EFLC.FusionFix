@@ -37,14 +37,18 @@ import settings;
 // moving the Detail Quality slider left it stale; here it's set again with each change.
 //
 // What this does:
+//  - ProceduralGroundTriangles: the manager keeps no more than 512 triangles of the ground with grass or
+//    props (its +0x18, set in its constructor at CE 0xc86c2e, sizes its three arrays of 0x60-byte records,
+//    linked by 16-bit indices). Those fill up as soon as a place loads (a trace showed 511 at once), and
+//    triangles further on are only taken once some nearer ones are let go, so grass and props came in
+//    20-30 m ahead of the camera instead of at the gathering distance.
 //  - ProceduralPool: more records than 512, so props don't vanish or pop where many are around.
-//  - Grass & Props Distance: grass, surface props and 2dfx props go further (and props' own draw distance).
+//  - Grass & Props Distance: grass, surface props and 2dfx props go further.
 //  - ProceduralDensity: more or fewer props (not grass).
 //  - The 64 candidates of one entity's 2dfx props are capped, which the game itself never checked.
 //
 // And what keeps the cost of more props down (the game already keeps them out of shadows: it sets
 // entity +0x24 0x10000 on each, and the render lists then drop the shadow phases, CE 0xae85a5/0xae7058):
-//  - ProceduralSmallPropDistance: props drawn no further than this keep their distance (litter, cans).
 //  - ProceduralInReflections = 0: the render lists drop the water reflection phases for props, as for
 //    shadows: the mask CE 0x159af28 has the phases of type 0x11 (water reflection) and of type 0x1f, which
 //    is the scene itself (its bit alone in CE 0x159af24), so that one is kept.
@@ -68,7 +72,8 @@ namespace Procedural
     int32_t nMatrixLimit = 1024;
     float fDensity = 1.0f;
     float fDistance = 1.0f;
-    float fSmallProp = 30.0f;
+    int32_t nGroundTriangles = 2048;
+    volatile LONG nTriangles = 0;       // with the trace on, the triangles the manager holds
     bool bInReflections = false;
     int32_t nSpawnsPerUpdate = 128;
     bool bLog = false;                  // ProceduralLog >= 1: the statistics every 30 s
@@ -191,7 +196,6 @@ namespace Procedural
     uint32_t nReflectionsSkipped = 0;
     uint32_t nUpdates = 0;
     double fUpdateMs = 0.0, fUpdateMaxMs = 0.0;
-    uint32_t nDistances[5] = {};        // props' own draw distances: under 15, 30, 60, 100 m, and further
 
     uint32_t Records() { return std::max<uint32_t>(VanillaRecords, uint32_t(nPool)); }
 
@@ -319,7 +323,8 @@ namespace Procedural
         return result;
     }
 
-    // A prop's own draw distance (entity +0x50) goes with the distance it now spawns at, but for small ones
+    // Props made: kept in a set for the render lists, and traced (draw= is entity +0x50, which the other mod took
+    // for a draw distance; the trace shows 5..20 on props drawn 60 m away, so it is not, and it is left alone)
     SafetyHookInline shCreate;
     uint8_t* __fastcall Create(uint8_t* generator, void* edx, void* a1, void* a2, void* a3, void* a4, void* a5)
     {
@@ -358,14 +363,6 @@ namespace Procedural
                 AcquireSRWLockExclusive(&propsLock);
                 props.insert(uintptr_t(entity));
                 ReleaseSRWLockExclusive(&propsLock);
-
-                auto& drawDistance = *(float*)(entity + 0x50);
-                if (std::isfinite(drawDistance) && drawDistance > 0.0f && drawDistance < 2000.0f)
-                {
-                    nDistances[drawDistance < 15.0f ? 0 : drawDistance < 30.0f ? 1 : drawDistance < 60.0f ? 2 : drawDistance < 100.0f ? 3 : 4]++;
-                    if (fDistance != 1.0f && drawDistance >= fSmallProp)
-                        drawDistance *= fDistance;
-                }
             }
         }
         if (auto used = UsedRecords(); used > nUsedMax)
@@ -566,9 +563,9 @@ namespace Procedural
             float grassFar = pManager ? *(float*)(pManager + 0x14) : 0.0f;
             float gather = pManager ? *(float*)(pManager + 0x1C) : 0.0f;
             Trace(std::format("U {} n={} cam={:.1f},{:.1f},{:.1f} heading={:.0f} pitch={:.0f} speed={:.1f} grassfar={:.0f} gather={:.0f} "
-                "queue={} new={} made={} waiting={} dropped={} failed={} records={} ms={:.3f}",
+                "triangles={} queue={} new={} made={} waiting={} dropped={} failed={} records={} ms={:.3f}",
                 When(), updateIndex++, pCamera[0], pCamera[1], pCamera[2], heading, pitch, speed, grassFar, gather,
-                lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(), ms));
+                LONG(nTriangles), lastQueue, lastNew, lastMade, lastWaiting, lastDropped, lastFailed, UsedRecords(), ms));
             lastQueue = lastNew = lastMade = lastWaiting = lastDropped = lastFailed = 0;
         }
     }
@@ -581,6 +578,7 @@ namespace Procedural
         auto result = shAddTriangle.unsafe_fastcall<uint8_t*>(triangle, edx, a1, a2, a3, a4, a5, a6, a7, a8);
         if (bTrace && result)
         {
+            InterlockedIncrement(&nTriangles);
             auto flags = *(uint8_t*)(result + 0x55);
             Trace(std::format("T {} grass={} props={} area={:.1f}{}", When(), flags & 1, (flags >> 1) & 1,
                 *(float*)(result + 0x48), Where((float*)(result + 0x30))));
@@ -593,6 +591,7 @@ namespace Procedural
     {
         if (bTrace)
         {
+            InterlockedDecrement(&nTriangles);
             auto flags = *(uint8_t*)(triangle + 0x55);
             Trace(std::format("X {} grass={} props={}{}", When(), flags & 1, (flags >> 1) & 1, Where((float*)(triangle + 0x30))));
         }
@@ -621,7 +620,11 @@ public:
             nMatrixLimit = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralMatrixLimit", 1024), int32_t(VanillaRecords), nPool);
             fDensity = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralDensity", 1.0f), 0.25f, 2.0f);
             fDistance = DistanceFromPref(FusionFixSettings.Get("PREF_PROCEDURAL_DISTANCE"));
-            fSmallProp = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralSmallPropDistance", 30.0f), 0.0f, 1000.0f);
+            nGroundTriangles = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralGroundTriangles", 2048), 512, 16384);
+
+            // The manager's capacity of ground triangles (mov [ecx+0x18], 0x200 in its constructor)
+            if (auto capacity = hook::pattern("C7 41 18 00 02 00 00 C7 41 1C 00 00 A0 42"); !capacity.empty())
+                injector::WriteMemory(capacity.get_first(3), uint32_t(nGroundTriangles), true);
             bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
             nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
             auto logLevel = iniReader.ReadInteger("PROCEDURAL", "ProceduralLog", 0);
@@ -789,9 +792,9 @@ public:
                 Log("Settings", std::format("distance x{:.2f}", fDistance));
             });
 
-            Log("Settings", std::format("records {} (game 512), matrix limit {}, density x{:.2f}, distance x{:.2f}, "
-                "small props under {:.0f} m keep theirs, in reflections {}, spawns an update {}",
-                Records(), nMatrixLimit, fDensity, fDistance, fSmallProp, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
+            Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, density x{:.2f}, "
+                "distance x{:.2f}, in reflections {}, spawns an update {}",
+                nGroundTriangles, Records(), nMatrixLimit, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
         };
 
         // With ProceduralLog, every 30 s while the generator runs: its time, how many props, and what hit a limit
@@ -817,11 +820,9 @@ public:
             auto alive = props.size();
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; reflections skipped {}; box full {}, candidates capped {}; "
-                "own draw distance <15 m {}, <30 {}, <60 {}, <100 {}, further {}",
+                "queue at most {}, held over at most {}, dropped {}; reflections skipped {}; box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
-                nQueueMax, nWaitingMax, nDropped, nReflectionsSkipped, nEntitiesCapped, nCandidatesCapped,
-                nDistances[0], nDistances[1], nDistances[2], nDistances[3], nDistances[4]));
+                nQueueMax, nWaitingMax, nDropped, nReflectionsSkipped, nEntitiesCapped, nCandidatesCapped));
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
