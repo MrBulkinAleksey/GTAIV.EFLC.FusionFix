@@ -43,7 +43,7 @@ import settings;
 //    triangles further on are only taken once some nearer ones are let go, so grass and props came in
 //    20-30 m ahead of the camera instead of at the gathering distance.
 //  - ProceduralPool: more records than 512, so props don't vanish or pop where many are around.
-//  - Grass & Props Distance: grass, surface props and 2dfx props go further.
+//  - Grass & Props Distance: grass, surface props and 2dfx props go further, and props' own draw distance.
 //  - ProceduralDensity: more or fewer props (not grass).
 //  - The 64 candidates of one entity's 2dfx props are capped, which the game itself never checked.
 //
@@ -323,8 +323,9 @@ namespace Procedural
         return result;
     }
 
-    // Props made: kept in a set for the render lists, and traced (draw= is entity +0x50, which the other mod took
-    // for a draw distance; the trace shows 5..20 on props drawn 60 m away, so it is not, and it is left alone)
+    // Props made: kept in a set for the render lists, traced, and their own draw distance (entity +0x50, copied
+    // from the model's at 0x9d7a52; the render lists draw an entity within it times the phase's multiplier,
+    // CE 0xaebfa5/0xaec03a) goes with the distance they now spawn at
     SafetyHookInline shCreate;
     uint8_t* __fastcall Create(uint8_t* generator, void* edx, void* a1, void* a2, void* a3, void* a4, void* a5)
     {
@@ -363,6 +364,10 @@ namespace Procedural
                 AcquireSRWLockExclusive(&propsLock);
                 props.insert(uintptr_t(entity));
                 ReleaseSRWLockExclusive(&propsLock);
+
+                auto& drawDistance = *(float*)(entity + 0x50);
+                if (fDistance != 1.0f && std::isfinite(drawDistance) && drawDistance > 0.0f && drawDistance < 2000.0f)
+                    drawDistance *= fDistance;
             }
         }
         if (auto used = UsedRecords(); used > nUsedMax)
