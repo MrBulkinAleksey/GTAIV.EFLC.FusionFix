@@ -19,6 +19,7 @@ module;
 #include "NativeShadowContinuity42.hpp"
 #include "ShadowVolumeVisibility43.hpp"
 #include "ShadowCasterPresence.hpp"
+#include "ShadowSlotTrace.hpp"
 #include "NativeCacheDependencies44.hpp"
 #include "ShadowInactiveSlots.hpp"
 #include "ShadowViewPriority.hpp"
@@ -395,7 +396,7 @@ public:
         }
 
         // Registered before game callbacks start, independent of async init.
-        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); PlayerShadowAllocation::CaptureCasters(); EmergencyTrafficShadows::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
+        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); PlayerShadowAllocation::CaptureCasters(); PlayerShadowAllocation::FlushSlotTrace(); EmergencyTrafficShadows::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
@@ -445,6 +446,7 @@ public:
                 PlayerShadowAllocation::nativeLampPriority = iniReader.ReadInteger("SHADOWS", "NativeLampViewPriority", 0) != 0;
                 PlayerShadowAllocation::casterPriority = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriority", 0) != 0;
                 PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityHold", 0), 0, 2000));
+                PlayerShadowAllocation::slotTrace.enabled = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityLog", 0) != 0;
                 const int allocationMode = iniReader.ReadInteger("SHADOWS", "ExperimentalPlayerShadowAllocation", 0);
                 ShadowDiagnostics::allocationMode = allocationMode;
                 if (shadowDiagnostics)

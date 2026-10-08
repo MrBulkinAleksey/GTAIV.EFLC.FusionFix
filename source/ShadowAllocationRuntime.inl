@@ -35,6 +35,15 @@ namespace PlayerShadowAllocation
     static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
     static fusionfix::shadows::ShadowCasterPresence casters{};
     static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0}, lightsOffScreen{0};
+    // CasterAwareLampPriorityLog: filled by selection, written out from the game's thread.
+    static fusionfix::shadows::ShadowSlotTrace slotTrace;
+    static void FlushSlotTrace() noexcept
+    {
+        static ULONGLONG last = 0;
+        if (!slotTrace.enabled || GetTickCount64() - last < 1000) return;
+        last = GetTickCount64();
+        try { slotTrace.Flush(); } catch (...) {}
+    }
     static std::atomic<uint32_t> cameraPasses{0}, cameraFallbacks{0};
     static std::atomic<uint32_t> auxiliaryViewsRejected{0}, sceneCameraReads{0};
     static bool publicationEnabled = false; // Immutable after ready is published.
@@ -239,6 +248,9 @@ namespace PlayerShadowAllocation
         state.pass.Begin({state.frame, static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),
                           ped, state.occupiedCar != 0}, CurrentLights(), CurrentCount());
         state.continuityActive=publicationEnabled && nativeLampPriority && state.pass.Active();
+        if(slotTrace.enabled && state.continuityActive)
+            try { slotTrace.Begin(state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),state.player,
+                state.occupiedCar!=0,state.view,CurrentCount()); } catch(...) { slotTrace.enabled=false; }
         if(state.continuityActive && ShadowTrace34::enabled.load(std::memory_order_relaxed)) {
             const auto tick=GetTickCount();
             for(int row=0;row<4;++row) {
@@ -400,8 +412,13 @@ namespace PlayerShadowAllocation
                         {light.mDirection.x,light.mDirection.y,light.mDirection.z},
                         static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle)
                     : volumeVisible ? SlotGain::InView : SlotGain::OffScreen;
+            const auto rawGain=gain;
             if(casterPriority) gain=state.gainHold.Apply(key,kind==budget::Kind::Lamp?LampGeometry(light):0,gain,
                 static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
+            if(slotTrace.enabled)
+                try { slotTrace.Observe(index,{key,static_cast<uint8_t>(kind),rawGain,gain,cached,volumeVisible,
+                    {light.mPosition.x,light.mPosition.y,light.mPosition.z},geometry.distanceSquared,viewWeight,priorityDistance}); }
+                catch(...) { slotTrace.enabled=false; }
             if(gain==SlotGain::None) ++lampsWithoutCasters;
             else if(gain==SlotGain::OffScreen) ++lightsOffScreen;
             labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(
@@ -508,6 +525,12 @@ namespace PlayerShadowAllocation
                 }
                 for(const auto& slot:selection.slots)
                     if(slot.key && slot.kind==budget::Kind::PlayerBeam) BeamTrace::Mark(BeamTrace::Selected);
+                if(slotTrace.enabled && state.continuityActive) {
+                    std::array<fusionfix::shadows::ShadowSlotTrace::Selected,7> traced{};
+                    for(unsigned i=0;i<7;++i) if(selection.validMask&(1u<<i))
+                        traced[i]={static_cast<uint32_t>(selection.slots[i].key),static_cast<int>(selection.slots[i].index)};
+                    try { slotTrace.Commit(traced); } catch(...) { slotTrace.enabled=false; }
+                }
                 state.previousSelection=selection.slots;
                 state.previousSelectionFrame=state.frame;
                 std::array<fusionfix::shadows::NativeShadowContinuity42::Identity,7> identities{};
