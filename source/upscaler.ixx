@@ -243,6 +243,7 @@ namespace
         uint32_t outputWidth = 0;
         uint32_t outputHeight = 0;
         bool frameGeneration = false; // Present and Generated were imported
+        bool eightBitFrames = false;  // ConfigureFlags::EightBitFrames: the frame generation's textures are B8G8R8A8
         bool wine = false;            // ConfigureFlags::Wine
         bool gameFence = false;       // Wine: the helper opened the game's semaphore, else both sides wait on the CPU
 
@@ -440,6 +441,12 @@ namespace
             VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT
         };
 
+        // The frame generation's textures are the back buffer's A8R8G8B8 with eightBitFrames
+        VkFormat Format(size_t index) const
+        {
+            return eightBitFrames && Protocol::IsFrameGenerationTexture(static_cast<Protocol::Texture>(index)) ? VK_FORMAT_B8G8R8A8_UNORM : Formats[index];
+        }
+
         bool Init(IDirect3DDevice9* realDevice)
         {
             if (FAILED(realDevice->QueryInterface(__uuidof(ID3D9VkInteropDevice), reinterpret_cast<void**>(&interop))) || !interop)
@@ -511,6 +518,7 @@ namespace
             semaphore = VK_NULL_HANDLE;
             width = height = outputWidth = outputHeight = 0;
             frameGeneration = false;
+            eightBitFrames = false;
         }
 
         // Windows: a D3D12 resource handle. Wine: the same as an opaque handle, which is what vkd3d-proton exports
@@ -641,6 +649,7 @@ namespace
         bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
         {
             bool ok = true;
+            eightBitFrames = (shared.Flags & Protocol::ConfigureFlags::EightBitFrames) != 0;
             for (size_t i = 0; i < images.size(); ++i)
             {
                 auto handle = reinterpret_cast<HANDLE>(shared.TextureHandles[i]);
@@ -649,7 +658,7 @@ namespace
                     continue;
                 auto iw = Protocol::IsOutputSize(static_cast<Protocol::Texture>(i)) ? ow : w;
                 auto ih = Protocol::IsOutputSize(static_cast<Protocol::Texture>(i)) ? oh : h;
-                ok = handle && ImportImage(images[i], handle, Formats[i], iw, ih);
+                ok = handle && ImportImage(images[i], handle, Format(i), iw, ih);
                 if (!ok)
                 {
                     Log("import: shared texture %zu (%ux%u) failed, handle %p", i, iw, ih, handle);
@@ -765,13 +774,13 @@ namespace
             {
                 if (!inputs[i])
                     continue;
-                if (!images[i].image || !GetGameImage(inputs[i], sources[i]) || sources[i].format != Formats[i] ||
+                if (!images[i].image || !GetGameImage(inputs[i], sources[i]) || sources[i].format != Format(i) ||
                     sources[i].extent.width != Width(i) || sources[i].extent.height != Height(i))
                 {
                     static uint32_t reported = 0;
                     if (Report(reported))
                         Log("inputs: texture %zu is format %d %ux%u, expected %d %ux%u", i, sources[i].format, sources[i].extent.width,
-                            sources[i].extent.height, Formats[i], Width(i), Height(i));
+                            sources[i].extent.height, Format(i), Width(i), Height(i));
                     return false;
                 }
             }
@@ -836,13 +845,13 @@ namespace
             auto imagesStart = Timing::Start();
             bool found = images[i].image && GetGameImage(target, destination);
             Timing::Add(Upscaler::TimingPart::Images, imagesStart);
-            if (!found || destination.format != Formats[i] ||
+            if (!found || destination.format != Format(i) ||
                 destination.extent.width != Width(i) || destination.extent.height != Height(i))
             {
                 static uint32_t reported = 0;
                 if (Report(reported))
                     Log("output: target %zu is format %d %ux%u, expected %d %ux%u", i, destination.format, destination.extent.width,
-                        destination.extent.height, Formats[i], Width(i), Height(i));
+                        destination.extent.height, Format(i), Width(i), Height(i));
                 return false;
             }
 
@@ -910,6 +919,8 @@ namespace
         case DXGI_FORMAT_R16_FLOAT: case DXGI_FORMAT_R16_UNORM: case DXGI_FORMAT_R16_UINT:
         case DXGI_FORMAT_R16_SNORM: case DXGI_FORMAT_R16_SINT:
             return DXGI_FORMAT_R16_TYPELESS;
+        case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+            return DXGI_FORMAT_B8G8R8A8_TYPELESS;
         default:
             return format;
         }
@@ -1058,6 +1069,7 @@ namespace
             sharedFence = nullptr;
             width = height = outputWidth = outputHeight = 0;
             frameGeneration = false;
+            eightBitFrames = false;
         }
 
         bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
@@ -1086,6 +1098,7 @@ namespace
             outputWidth = ow;
             outputHeight = oh;
             frameGeneration = images[static_cast<size_t>(Protocol::Texture::Present)] && images[static_cast<size_t>(Protocol::Texture::Generated)];
+            eightBitFrames = (shared.Flags & Protocol::ConfigureFlags::EightBitFrames) != 0;
             return true;
         }
 
@@ -1626,8 +1639,10 @@ export namespace Upscaler
         auto flags = frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u;
         if (bridge->wine)
             flags |= Protocol::ConfigureFlags::Wine;
+        // Without HDR the frames are the 8-bit back buffer's: 8-bit textures halve what the frame generation's copies move
         if (frame.FrameGeneration && frameGenerationAvailable)
-            flags |= Protocol::ConfigureFlags::FrameGeneration | (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : 0u);
+            flags |= Protocol::ConfigureFlags::FrameGeneration |
+                (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : Protocol::ConfigureFlags::EightBitFrames);
         auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
         auto outputHeight = frame.OutputHeight ? frame.OutputHeight : frame.Height;
         bool reconfigure = configuredBackend != backendId || configuredWidth != frame.Width || configuredHeight != frame.Height ||
@@ -1775,6 +1790,12 @@ export namespace Upscaler
     bool WasGenerateReset()
     {
         return generatedReset;
+    }
+
+    // The frame generation's textures, and so the game's copies for them, are A8R8G8B8
+    bool IsFrameGenerationEightBit()
+    {
+        return bridge && bridge->frameGeneration && bridge->eightBitFrames;
     }
 
     bool IsFrameGenerationAvailable()

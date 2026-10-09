@@ -388,6 +388,14 @@ namespace
             allocatorValues.fill(0);
         }
 
+        // A shader can write the format through a typed UAV
+        bool CanWrite(DXGI_FORMAT format)
+        {
+            D3D12_FEATURE_DATA_FORMAT_SUPPORT support{ format };
+            return SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support))) &&
+                (support.Support1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW) && (support.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE);
+        }
+
         bool CreateTexture(Protocol::Texture index, uint32_t width, uint32_t height, DXGI_FORMAT format, bool unorderedAccess)
         {
             D3D12_HEAP_PROPERTIES heap{};
@@ -869,7 +877,7 @@ namespace
         // -------------------------------------------------------------------------------------------
         // Frame generation, without AMD's swap chain: the game presents the frames itself
 
-        bool CreateFrameGeneration(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, bool hdr)
+        bool CreateFrameGeneration(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, bool hdr, bool eightBit)
         {
             ReleaseFrameGeneration();
             if (!frameGenerationAvailable)
@@ -891,7 +899,7 @@ namespace
             create.flags = hdr ? FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE : 0;
             create.displaySize = { outputWidth, outputHeight };
             create.maxRenderSize = { width, height };
-            create.backBufferFormat = FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
+            create.backBufferFormat = eightBit ? FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM : FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
 
             auto result = functions.CreateContext(&frameGeneration, &create.header, nullptr);
             if (result != FFX_API_RETURN_OK)
@@ -1139,10 +1147,19 @@ namespace
             if (flags & Protocol::ConfigureFlags::FrameGeneration)
             {
                 bool hdr = (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0;
-                bool generation = fsr.CreateFrameGeneration(width, height, outputWidth, outputHeight, hdr) &&
-                    device.CreateTexture(T::Present, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, false) &&
-                    device.CreateTexture(T::Generated, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, true) &&
-                    device.CreateTexture(T::HudLess, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, false);
+                // The frames as the back buffer has them, 8 bits without HDR, if the frame generation can write them
+                if ((flags & Protocol::ConfigureFlags::EightBitFrames) && (hdr || !device.CanWrite(DXGI_FORMAT_B8G8R8A8_UNORM)))
+                {
+                    Log("B8G8R8A8_UNORM can't be written by a shader on this GPU: the frame generation's textures stay 16-bit float");
+                    flags &= ~Protocol::ConfigureFlags::EightBitFrames;
+                    shared.Flags = flags;
+                }
+                bool eightBit = (flags & Protocol::ConfigureFlags::EightBitFrames) != 0;
+                auto format = eightBit ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT;
+                bool generation = fsr.CreateFrameGeneration(width, height, outputWidth, outputHeight, hdr, eightBit) &&
+                    device.CreateTexture(T::Present, outputWidth, outputHeight, format, false) &&
+                    device.CreateTexture(T::Generated, outputWidth, outputHeight, format, true) &&
+                    device.CreateTexture(T::HudLess, outputWidth, outputHeight, format, false);
                 if (!generation)
                 {
                     Log("Frame generation could not be set up at %ux%u -> %ux%u", width, height, outputWidth, outputHeight);
@@ -1150,7 +1167,7 @@ namespace
                     device.ReleaseTexture(T::Present);
                     device.ReleaseTexture(T::Generated);
                     device.ReleaseTexture(T::HudLess);
-                    flags &= ~Protocol::ConfigureFlags::FrameGeneration;
+                    flags &= ~(Protocol::ConfigureFlags::FrameGeneration | Protocol::ConfigureFlags::EightBitFrames);
                     shared.Flags = flags;
                 }
             }
@@ -1170,7 +1187,7 @@ namespace
 
             backend = shared.ConfigureBackend;
             connection.Message("%s ready at %ux%u -> %ux%u%s", backend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height, outputWidth, outputHeight,
-                fsr.HasFrameGeneration() ? ", with frame generation" : "");
+                !fsr.HasFrameGeneration() ? "" : (flags & Protocol::ConfigureFlags::EightBitFrames) ? ", with frame generation (8-bit frames)" : ", with frame generation");
             return true;
         }
 

@@ -84,6 +84,7 @@ namespace
     bool bPendingSharpened = false; // the waiting rendered frame is in SharpenedRT
     uint32_t TargetWidth = 0;
     uint32_t TargetHeight = 0;
+    bool bTargetsEightBit = false;
 
     // GTAIV.EFLC.FusionFix.FrameGeneration.log next to the plugin (FusionLog), each kind of failure once
     void Log(const char* format, ...)
@@ -444,19 +445,22 @@ namespace
         TargetWidth = TargetHeight = 0;
     }
 
-    // Both at the back buffer's size, 16-bit float as the helper's textures
+    // All at the back buffer's size, in the format of the helper's textures: A8R8G8B8 as the back buffer without HDR,
+    // where the helper can write it, 16-bit float otherwise
     bool CreateTargets(uint32_t width, uint32_t height)
     {
-        if (PresentRT && GeneratedRT && HudLessRT && SavedRT && SharpenedRT && TargetWidth == width && TargetHeight == height)
+        bool eightBit = Upscaler::IsFrameGenerationEightBit();
+        if (PresentRT && GeneratedRT && HudLessRT && SavedRT && SharpenedRT && TargetWidth == width && TargetHeight == height && bTargetsEightBit == eightBit)
             return true;
         ReleaseTargets();
 
-        auto desc = rage::OwnRenderTargetDesc(rage::GRCFMT_A16B16G16R16F);
-        PresentRT = rage::CreateEmptyRenderTarget("FrameGenerationPresent", width, height, 64, desc);
-        GeneratedRT = rage::CreateEmptyRenderTarget("FrameGenerationGenerated", width, height, 64, desc);
-        HudLessRT = rage::CreateEmptyRenderTarget("FrameGenerationHudLess", width, height, 64, desc);
-        SavedRT = rage::CreateEmptyRenderTarget("FrameGenerationSaved", width, height, 64, desc);
-        SharpenedRT = rage::CreateEmptyRenderTarget("FrameGenerationSharpened", width, height, 64, desc);
+        auto desc = rage::OwnRenderTargetDesc(eightBit ? rage::GRCFMT_A8R8G8B8 : rage::GRCFMT_A16B16G16R16F);
+        uint32_t bits = eightBit ? 32 : 64;
+        PresentRT = rage::CreateEmptyRenderTarget("FrameGenerationPresent", width, height, bits, desc);
+        GeneratedRT = rage::CreateEmptyRenderTarget("FrameGenerationGenerated", width, height, bits, desc);
+        HudLessRT = rage::CreateEmptyRenderTarget("FrameGenerationHudLess", width, height, bits, desc);
+        SavedRT = rage::CreateEmptyRenderTarget("FrameGenerationSaved", width, height, bits, desc);
+        SharpenedRT = rage::CreateEmptyRenderTarget("FrameGenerationSharpened", width, height, bits, desc);
         if (!PresentRT || !PresentRT->mD3DTexture || !GeneratedRT || !GeneratedRT->mD3DTexture || !HudLessRT || !HudLessRT->mD3DTexture ||
             !SavedRT || !SavedRT->mD3DTexture || !SharpenedRT || !SharpenedRT->mD3DTexture)
         {
@@ -465,7 +469,8 @@ namespace
         }
         TargetWidth = width;
         TargetHeight = height;
-        Log("Targets: %ux%u", width, height);
+        bTargetsEightBit = eightBit;
+        Log("Targets: %ux%u, %s", width, height, eightBit ? "A8R8G8B8" : "A16B16G16R16F");
         return true;
     }
 
