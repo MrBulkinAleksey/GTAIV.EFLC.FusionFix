@@ -57,6 +57,45 @@ bool bHighResolutionNightShadows = false;
 static bool bCloseHeadlightRelevance = false;
 static bool bTrafficSelfShadowFix = false;
 static float fTrafficSignalDrawScale = 1.0f;  // TrafficSignalDrawDistance
+// TrafficSignalDrawDistanceLog: what the scale reached, to GTAIV.EFLC.FusionFix.NightShadows.TrafficSignals.log
+namespace TrafficSignalLog
+{
+    static bool enabled = false;
+    static std::atomic<uint32_t> models{0}, entities{0}, placed{0}, lit{0};
+    static std::atomic<float> farthestLit{0.0f}, farthestLitDistance{0.0f}, farthestDistance{0.0f};
+    static std::mutex firstMutex;
+    static std::string first; // the first models scaled, from and to
+
+    // Each signal whose light the pre-render is about to make (CE 0xA32853, esi the entity).
+    static void Lit(uintptr_t entity) noexcept
+    {
+        float position[3], camera[3];
+        if (!CEntity::GetPosition(entity, position) || !GameCamera::Position(camera)) return;
+        const float x = position[0] - camera[0], y = position[1] - camera[1], z = position[2] - camera[2];
+        const float d = std::sqrt(x * x + y * y + z * z);
+        ++lit;
+        if (d > farthestLit.load(std::memory_order_relaxed)) {
+            farthestLit = d;
+            farthestLitDistance = *reinterpret_cast<const float*>(entity + 0x50);
+        }
+    }
+
+    // Game thread, every two seconds.
+    static void Write() noexcept
+    {
+        static ULONGLONG last = 0;
+        if (!enabled || GetTickCount64() - last < 2000) return;
+        last = GetTickCount64();
+        std::string firstModels;
+        { std::lock_guard lock(firstMutex); firstModels.swap(first); }
+        FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance",
+            "scale %.2f; scaled %u models, %u signals made with the model's distance, %u with their own (farthest %.1f m); "
+            "lit in the last 2 s %u, the farthest %.1f m from the camera with a draw distance of %.1f m%s%s\n",
+            fTrafficSignalDrawScale, models.load(), entities.load(), placed.load(), farthestDistance.load(),
+            lit.exchange(0), farthestLit.exchange(0.0f), farthestLitDistance.exchange(0.0f),
+            firstModels.empty() ? "" : "; models: ", firstModels.c_str());
+    }
+}
 #include "PlayerCarRuntime.inl"
 #include "BeamTraceRuntime.inl"
 #include "HeadlightEnhancementRuntime.inl"
@@ -400,7 +439,7 @@ public:
         }
 
         // Registered before game callbacks start, independent of async init.
-        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); PlayerShadowAllocation::CaptureCasters(); PlayerShadowAllocation::FlushSlotTrace(); EmergencyTrafficShadows::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
+        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); PlayerShadowAllocation::CaptureCasters(); PlayerShadowAllocation::FlushSlotTrace(); EmergencyTrafficShadows::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); TrafficSignalLog::Write(); };
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
@@ -410,6 +449,20 @@ public:
             // entities drawn this frame. Their draw distance (model +0x2c, copied to entity +0x50 at CE 0x9d7a44, or
             // the placement's own) is short, so a signal ahead stayed dark until close. Scaled here: the model once,
             // the first time an entity of it is made, and each entity made with the old value or its own
+            TrafficSignalLog::enabled = iniReader.ReadInteger("SHADOWS", "TrafficSignalDrawDistanceLog", 0) != 0;
+            if (TrafficSignalLog::enabled)
+            {
+                // push esi / call 0xD208F0, the signal's light from its pre-render
+                if (auto pattern = hook::pattern("56 E8 ? ? ? ? 83 C4 04 5E 5D 33 C0 5B 59 C3"); !pattern.empty())
+                {
+                    static auto SignalLitHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
+                    {
+                        TrafficSignalLog::Lit(regs.esi);
+                    });
+                }
+                else
+                    FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the signal light call was not found\n");
+            }
             if (auto distance = std::clamp(iniReader.ReadFloat("SHADOWS", "TrafficSignalDrawDistance", 2.5f), 1.0f, 5.0f); distance != 1.0f)
             {
                 fTrafficSignalDrawScale = distance;
@@ -426,11 +479,31 @@ public:
                         auto& entityDistance = *(float*)(regs.edi + 0x50);
                         std::lock_guard lock(scaledMutex);
                         if (scaledModels.insert(uintptr_t(model)).second && std::isfinite(modelDistance) && modelDistance > 0.0f)
+                        {
+                            const float from = modelDistance;
                             modelDistance *= fTrafficSignalDrawScale;
+                            if (TrafficSignalLog::enabled)
+                            {
+                                ++TrafficSignalLog::models;
+                                std::lock_guard firstLock(TrafficSignalLog::firstMutex);
+                                if (TrafficSignalLog::first.size() < 400)
+                                    TrafficSignalLog::first += std::format("{}{:08x} {:.1f}->{:.1f}", TrafficSignalLog::first.empty() ? "" : ", ",
+                                        uintptr_t(model), from, modelDistance);
+                            }
+                        }
                         if (std::isfinite(entityDistance) && entityDistance > 0.0f && entityDistance != modelDistance)
+                        {
                             entityDistance *= fTrafficSignalDrawScale;
+                            ++TrafficSignalLog::placed;
+                        }
+                        else
+                            ++TrafficSignalLog::entities;
+                        if (entityDistance > TrafficSignalLog::farthestDistance.load(std::memory_order_relaxed))
+                            TrafficSignalLog::farthestDistance = entityDistance;
                     });
                 }
+                else
+                    FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the signal draw distance store was not found\n");
             }
             if (iniReader.ReadInteger("SHADOWS", "ExperimentalCrashDiagnostics", 0) != 0)
             {
