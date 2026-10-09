@@ -23,7 +23,15 @@ public:
         // Beams and uncached lamps by whether their light reaches the view,
         // cached lamps by the vehicles and peds in their light.
         SlotGain gain=SlotGain::InView;
+        // What it is ranked by, squared; negative when unknown. Only ClaimDistanceRatio reads it.
+        float distanceSquared=-1.0f;
+        // Its gain comes from a vehicle or ped in a cached lamp's light: only such a newcomer
+        // can push out a far claim, so dense uncached lamps (tunnels) do not swap more often.
+        bool byCaster=false;
     };
+    // ClaimDistanceRatio: a claim keeps its slot against a newcomer of the same gain unless
+    // the claim is this many times further away than the newcomer; 0 always keeps it.
+    static inline float claimDistanceRatio=0.0f;
     // Why held claims were dropped, for the slot trace: 0 when none were held or none dropped.
     enum Reset : unsigned { ResetSession=1, ResetFrameBack=2, ResetPause=4, ResetCommitTime=8, ResetCommitFrames=16 };
     unsigned Begin(std::uintptr_t session,std::uint32_t frame,std::uint32_t now) noexcept {
@@ -38,8 +46,9 @@ public:
         if(gap) claims_={};
         return held?reset|gap:0u;
     }
-    Candidate Observe(Identity id,std::uint32_t flags,bool relevant,bool own,SlotGain gain=SlotGain::InView) const noexcept {
-        Candidate c{flags,Unclaimed,own,true,gain};
+    Candidate Observe(Identity id,std::uint32_t flags,bool relevant,bool own,SlotGain gain=SlotGain::InView,
+                      float distanceSquared=-1.0f,bool byCaster=false) const noexcept {
+        Candidate c{flags,Unclaimed,own,true,gain,distanceSquared,byCaster};
         if(id.key && relevant)
             for(unsigned i=0;i<Slots;++i)
                 if(claims_[i].key==id.key && claims_[i].generation==id.generation) {c.claim=i;break;}
@@ -57,13 +66,21 @@ public:
     // unless the newcomer's shadow is in view and the claim's is not, or the
     // claim only redraws what the lamp's cache already shows.
     // Which rule of Compare decided, for the slot trace.
-    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim };
+    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Nearer };
+    // Whether the unclaimed one of the two is so much nearer that the claim gives way.
+    static bool NearerThanClaim(const Candidate& unclaimed,const Candidate& claimed) noexcept {
+        const float r=claimDistanceRatio;
+        return r>0 && unclaimed.byCaster && unclaimed.claim==Unclaimed && claimed.claim!=Unclaimed &&
+            unclaimed.distanceSquared>=0 && claimed.distanceSquared>=0 &&
+            unclaimed.distanceSquared*r*r<claimed.distanceSquared;
+    }
     static Rule Decider(int native,const Candidate& challenger,const Candidate& incumbent) noexcept {
         if(native<0 || native>2 || !challenger.observed || !incumbent.observed) return Rule::Native;
         if((challenger.flags|incumbent.flags)&0x400u) return Rule::Special;
         if(challenger.ownBeam!=incumbent.ownBeam) return Rule::OwnBeam;
         if(challenger.gain!=incumbent.gain) return Rule::Gain;
-        if(challenger.claim!=incumbent.claim) return Rule::Claim;
+        if(challenger.claim!=incumbent.claim)
+            return NearerThanClaim(challenger,incumbent) || NearerThanClaim(incumbent,challenger) ? Rule::Nearer : Rule::Claim;
         return Rule::Native;
     }
     static int Compare(int native,const Candidate& challenger,const Candidate& incumbent) noexcept {
@@ -71,7 +88,11 @@ public:
            ((challenger.flags|incumbent.flags)&0x400u)) return native;
         if(challenger.ownBeam!=incumbent.ownBeam) return challenger.ownBeam?0:2;
         if(challenger.gain!=incumbent.gain) return challenger.gain>incumbent.gain?0:2;
-        if(challenger.claim!=incumbent.claim) return challenger.claim<incumbent.claim?0:2;
+        if(challenger.claim!=incumbent.claim) {
+            if(NearerThanClaim(challenger,incumbent)) return 0;
+            if(NearerThanClaim(incumbent,challenger)) return 2;
+            return challenger.claim<incumbent.claim?0:2;
+        }
         return native;
     }
 private:

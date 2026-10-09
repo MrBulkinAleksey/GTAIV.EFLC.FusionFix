@@ -37,12 +37,13 @@ public:
         std::uint8_t caster{};
         bool casterInView{};
         float casterDistance{};
+        float reachSquared{};         // beyond it the light cannot take a slot; 0 unknown
         bool observed{};
     };
     struct Selected { std::uint32_t key{}; int index{-1}; };
     // The rule of NativeShadowContinuity42::Compare that decided, and two of the game's own:
     // native (categories, its result kept), distance (left to the game's distance).
-    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Distance, Grace };
+    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Distance, Grace, Nearer };
     static constexpr std::uint32_t FlapMs = 2000;
 
     bool enabled = false;
@@ -184,7 +185,8 @@ public:
         for (const auto& light : lights_) {
             if (!light.observed || !light.key) continue;
             auto& k = keys_[light.key];
-            if (light.gain != SlotGain::InView || Holds(selection, light.key)) {
+            const bool outOfReach = light.reachSquared > 0 && light.distanceSquared > light.reachSquared;
+            if (light.gain != SlotGain::InView || outOfReach || Holds(selection, light.key)) {
                 if (!Holds(selection, light.key)) k.wantedSince = 0;
                 continue;
             }
@@ -298,6 +300,7 @@ private:
         case Rule::Claim: return "claim";
         case Rule::Distance: return "distance";
         case Rule::Grace: return "grace";
+        case Rule::Nearer: return "nearer";
         default: return "native";
         }
     }

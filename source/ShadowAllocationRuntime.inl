@@ -466,6 +466,7 @@ namespace PlayerShadowAllocation
                 try {
                     fusionfix::shadows::ShadowSlotTrace::Light traced{key,static_cast<uint8_t>(kind),rawGain,gain,cached,volumeVisible,
                         {light.mPosition.x,light.mPosition.y,light.mPosition.z},geometry.distanceSquared,viewWeight,priorityDistance,spacedOut};
+                    traced.reachSquared=reach*reach;
                     if(caster>=0 && static_cast<unsigned>(caster)<state.casters.count) {
                         const auto& p=state.casters.points[caster];
                         traced.caster=state.casters.extents[caster]>=fusionfix::shadows::ShadowCasterPresence::VehicleExtent?1:2;
@@ -478,7 +479,8 @@ namespace PlayerShadowAllocation
             if(gain==SlotGain::None) ++lampsWithoutCasters;
             else if(gain==SlotGain::OffScreen) ++lightsOffScreen;
             labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(
-                {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam,gain);
+                {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam,gain,
+                priorityDistance>=0?priorityDistance:geometry.distanceSquared,caster>=0 && rawGain!=SlotGain::None);
             // Record why a prior choice loses its claim, independently of
             // whether native sorting eventually drops it. Bounded to 7/pass.
             for(const auto& old:state.previousSelection) if(old.key==key) {
@@ -525,6 +527,7 @@ namespace PlayerShadowAllocation
             auto rule=result!=ours ? Trace::Rule::Grace
                 : decider==Rule::Special ? Trace::Rule::Special : decider==Rule::OwnBeam ? Trace::Rule::OwnBeam
                 : decider==Rule::Gain ? Trace::Rule::Gain : decider==Rule::Claim ? Trace::Rule::Claim
+                : decider==Rule::Nearer ? Trace::Rule::Nearer
                 : result==1 ? Trace::Rule::Distance : Trace::Rule::Native;
             const auto* lights=CurrentLights();
             try { slotTrace.Compared(static_cast<uint32_t>(lights[challenger].mCastShadows),
