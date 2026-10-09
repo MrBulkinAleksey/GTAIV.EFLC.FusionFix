@@ -99,8 +99,11 @@ namespace TrafficSignalLog
     static std::atomic<uint32_t> listedFlags{0}; // of the farthest signal light ahead in the list
     static float* roadLimit = nullptr;           // [0x103AB80], the road light's distance
     // TrafficSignalLightTest: 1 draws the signals' lights without the interior bit 0x20 (they carry
-    // 0x260, street lamps do not), 2 draws them dark, to tell what the light on the road is.
+    // 0x260, street lamps do not), 2 draws them dark, to tell what the light on the road is (it is
+    // theirs: 2 took it away, 1 changed nothing), 3 draws those beyond 100 m three times as wide and
+    // bright, to tell whether far away the road takes no light at all or only this one.
     static int lightTest = 0;
+    static bool CameraFar(uintptr_t lightPlus28, float metres) noexcept;
     // The camera as the game thread last saw it, for the steps on the render thread (no natives there).
     static std::atomic<float> cameraPosition[3]{}, cameraForward[3]{};
     static std::atomic<bool> cameraKnown{false};
@@ -238,6 +241,11 @@ namespace TrafficSignalLog
             {
                 if (lightTest == 1) *reinterpret_cast<uint32_t*>(regs.edi + 0x20) &= ~0x20u;
                 else if (lightTest == 2) *reinterpret_cast<float*>(regs.edi + 0x18) = 0.0f;
+                else if (lightTest == 3 && CameraFar(regs.edi, 100.0f))
+                {
+                    *reinterpret_cast<float*>(regs.edi + 0x2C) *= 3.0f; // radius, light + 0x54
+                    *reinterpret_cast<float*>(regs.edi + 0x18) *= 3.0f; // intensity, light + 0x40
+                }
             }
             if (enabled) Drawn(framed, regs.edi);
         });
@@ -246,16 +254,26 @@ namespace TrafficSignalLog
         static auto unoccludedHook = safetyhook::create_mid(at + 0x64, [](SafetyHookContext& regs) { Drawn(unoccluded, regs.edi); });
     }
 
+    static bool CameraFar(uintptr_t lightPlus28, float metres) noexcept
+    {
+        if (!cameraKnown.load(std::memory_order_relaxed)) return false;
+        const auto& light = *reinterpret_cast<const rage::CLightSource*>(lightPlus28 - 0x28);
+        const float x = light.mPosition.x - cameraPosition[0], y = light.mPosition.y - cameraPosition[1],
+            z = light.mPosition.z - cameraPosition[2];
+        return x * x + y * y + z * z > metres * metres;
+    }
+
     // Step 3, once a game frame: the signal lights in the list the renderer draws ([0x103EED0], count [0x154DFD0]).
     static void Tick() noexcept
     {
-        if (!enabled) return;
+        if (!enabled && !lightTest) return;
         {
             float position[3], forward[3];
             const bool known = GameCamera::Position(position) && CameraForward(forward);
             for (int i = 0; i < 3; ++i) { cameraPosition[i] = position[i]; cameraForward[i] = forward[i]; }
             cameraKnown = known;
         }
+        if (!enabled) return;
         const auto list = *reinterpret_cast<const rage::CLightSource* const*>(GameBase() + 0xC3EED0);
         const auto count = *reinterpret_cast<const uint32_t*>(GameBase() + 0x114DFD0);
         if (!list || count > 0x280) return;
@@ -676,7 +694,7 @@ public:
             // the placement's own) is short, so a signal ahead stayed dark until close. Scaled here: the model once,
             // the first time an entity of it is made, and each entity made with the old value or its own
             TrafficSignalLog::enabled = iniReader.ReadInteger("SHADOWS", "TrafficSignalDrawDistanceLog", 0) != 0;
-            TrafficSignalLog::lightTest = std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalLightTest", 0), 0, 2);
+            TrafficSignalLog::lightTest = std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalLightTest", 0), 0, 3);
             if (TrafficSignalLog::enabled || TrafficSignalLog::lightTest)
                 TrafficSignalLog::InstallDrawSteps();
             if (TrafficSignalLog::enabled)
