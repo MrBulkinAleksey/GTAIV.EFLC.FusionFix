@@ -98,6 +98,7 @@ namespace TrafficSignalLog
     static Step logic, lights, listed, framed, inFront, unoccluded, roadCalls, roadTaken;
     static std::atomic<uint32_t> listedFlags{0}; // of the farthest signal light ahead in the list
     static std::atomic<float> listedColour{0.0f}; // its colour's brightest channel, which the 2dfx fade scales
+    static std::atomic<uint32_t> listedProjection{0}, listedType{0}; // its projected texture's hash and its type
     // The 2dfx fade distances of signals as the effect has them (+0x60 times [0x1048230], +0x64), and how often
     static std::atomic<float> fadeFirst{0.0f}, fadeSecond{0.0f};
     static std::atomic<uint32_t> fadeSeen{0};
@@ -105,7 +106,8 @@ namespace TrafficSignalLog
     // TrafficSignalLightTest: 1 draws the signals' lights without the interior bit 0x20 (they carry
     // 0x260, street lamps do not), 2 draws them dark, to tell what the light on the road is (it is
     // theirs: 2 took it away, 1 changed nothing), 3 draws those beyond 100 m three times as wide and
-    // bright, to tell whether far away the road takes no light at all or only this one.
+    // bright, to tell whether far away the road takes no light at all or only this one (it did not help),
+    // 4 draws them without their projected texture.
     static int lightTest = 0;
     static bool CameraFar(uintptr_t lightPlus28, float metres) noexcept;
     // The camera as the game thread last saw it, for the steps on the render thread (no natives there).
@@ -245,6 +247,7 @@ namespace TrafficSignalLog
             {
                 if (lightTest == 1) *reinterpret_cast<uint32_t*>(regs.edi + 0x20) &= ~0x20u;
                 else if (lightTest == 2) *reinterpret_cast<float*>(regs.edi + 0x18) = 0.0f;
+                else if (lightTest == 4) *reinterpret_cast<int32_t*>(regs.edi + 0x28) = 0; // projected texture, light + 0x50
                 else if (lightTest == 3 && CameraFar(regs.edi, 100.0f))
                 {
                     *reinterpret_cast<float*>(regs.edi + 0x2C) *= 3.0f; // radius, light + 0x54
@@ -292,6 +295,8 @@ namespace TrafficSignalLog
             if (ahead && d > listed.aheadFarthest.load(std::memory_order_relaxed)) {
                 listedFlags = light.mFlags;
                 listedColour = (std::max)({ light.mColor.x, light.mColor.y, light.mColor.z });
+                listedProjection = static_cast<uint32_t>(light.mProjTexHash);
+                listedType = static_cast<uint32_t>(light.mType);
             }
             listed.Add(d, light.mIntensity, ahead);
         }
@@ -310,12 +315,12 @@ namespace TrafficSignalLog
             FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance",
                 "scale %.2f; scaled %u models, %u signals made with the model's distance, %u with their own (farthest %.1f m); "
                 "last 2 s: logic %s, 2dfx lights %s, in the light list %s (a light per frame), drawn: in the frame %s, "
-                "in front %s, not occluded %s; ahead's flags %08x colour %.3f; road light: called %s, within its distance %s, "
+                "in front %s, not occluded %s; ahead's flags %08x colour %.3f type %u projected texture %08x; road light: called %s, within its distance %s, "
                 "its distance %.1f m; 2dfx fades seen %u, distances %.1f / %.1f m before scaling%s%s\n",
                 fTrafficSignalDrawScale, models.load(), entities.load(), placed.load(), farthestDistance.load(),
                 logic.Take("draw distance").c_str(), lights.Take("fade").c_str(), listed.Take("intensity").c_str(),
                 framed.Take("radius").c_str(), inFront.Take("radius").c_str(), unoccluded.Take("radius").c_str(),
-                listedFlags.exchange(0), listedColour.exchange(0.0f), roadCalls.Take("game scale").c_str(), roadTaken.Take("game scale").c_str(),
+                listedFlags.exchange(0), listedColour.exchange(0.0f), listedType.exchange(0), listedProjection.exchange(0), roadCalls.Take("game scale").c_str(), roadTaken.Take("game scale").c_str(),
                 roadLimit ? *roadLimit : -1.0f, fadeSeen.exchange(0), fadeFirst.load(), fadeSecond.load(),
                 firstModels.empty() ? "" : "; models: ", firstModels.c_str());
         }
@@ -701,7 +706,7 @@ public:
             // the placement's own) is short, so a signal ahead stayed dark until close. Scaled here: the model once,
             // the first time an entity of it is made, and each entity made with the old value or its own
             TrafficSignalLog::enabled = iniReader.ReadInteger("SHADOWS", "TrafficSignalDrawDistanceLog", 0) != 0;
-            TrafficSignalLog::lightTest = std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalLightTest", 0), 0, 3);
+            TrafficSignalLog::lightTest = std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalLightTest", 0), 0, 4);
             if (TrafficSignalLog::enabled || TrafficSignalLog::lightTest)
                 TrafficSignalLog::InstallDrawSteps();
             if (TrafficSignalLog::enabled)
