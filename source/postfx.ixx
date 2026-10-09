@@ -8175,10 +8175,10 @@ private:
             const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28);
             // A contact shadow only belongs where the light's own shadow map shows the car: a dynamic slot. Elsewhere
             // (no slot, lit from its cache, lights casting no shadows) it stood alone, a dark frame around a car with no
-            // shadow, and LocalContactShadowsWithoutShadowMap applies. Lights inside only (0x20 without 0x40) that cast
-            // no shadows at all keep theirs, as most in buildings do; tunnel lamps are inside too, but race for slots,
-            // and the frame ran along the car from lamp to lamp as it drove.
-            const bool insideOnly = (light.mFlags & 0x60) == 0x20 &&
+            // shadow, and LocalContactShadowsWithoutShadowMap applies. In a room scene, lights inside only (0x20
+            // without 0x40) that cast no shadows at all keep theirs, as most in buildings do. Tunnel lamps are flagged
+            // inside too, and there the frame ran along the car from back to front under every lamp it passed.
+            const bool insideOnly = R.bInteriorScene && (light.mFlags & 0x60) == 0x20 &&
                 !(light.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW));
             const float intensity = (light.mFlags & 0x200) ? 0.0f
                 : R.fLocalContactShadowUnshadowed >= 1.0f || insideOnly || HasShadowMap(light)
