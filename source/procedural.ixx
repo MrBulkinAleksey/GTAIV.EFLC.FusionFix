@@ -856,19 +856,24 @@ public:
             // 0x14-byte nodes made once at start (CE 0xaf48f0: 13000, ExtendedLimits makes it 20000). When none is free
             // the game takes models from other entities (CE 0xa8a990 on the list at 0x1173750) and tries again; with
             // thousands of props that happened all the time, and trees, fences, cars, the player's too, lost their
-            // models for a frame or more. More of them, from our memory (the game never frees the array)
+            // models for a frame or more. More of them, from our memory. The game frees the array in the session's
+            // shutdown (CE 0xaf4b80 from 0xb1e970, on exit too); left to the game's free, our block stopped the game
+            // there or broke its heap, so that free is ours as well
             nDrawableRefs = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawableRefs", 100000), 13000, 200000);
             if (auto size = hook::pattern("68 ? ? ? ? E8 ? FF FF FF C3"); !size.empty())
             {
                 auto init = injector::GetBranchDestination(size.get_first(5)).as_int();
                 auto call = (uint8_t*)init + 0x1D;
-                if (*(uint8_t*)(init + 0x1C) == 0x51 && *call == 0xE8 && *size.get_first<uint32_t>(1) < uint32_t(nDrawableRefs))
+                auto release = hook::pattern("56 8B F1 FF 76 50 E8 ? ? ? ? 83 C4 04 C7 46 50 00 00 00 00 5E C3");
+                if (*(uint8_t*)(init + 0x1C) == 0x51 && *call == 0xE8 && !release.empty() && *size.get_first<uint32_t>(1) < uint32_t(nDrawableRefs))
                 {
                     struct DrawableRefs
                     {
                         static void* __cdecl Alloc(size_t size) { return _aligned_malloc(size, 16); }
+                        static void __cdecl Free(void* memory) { _aligned_free(memory); }
                     };
                     injector::MakeCALL(call, DrawableRefs::Alloc, true);
+                    injector::MakeCALL(release.get_first(6), DrawableRefs::Free, true);
                     injector::WriteMemory(size.get_first(1), uint32_t(nDrawableRefs), true);
                 }
             }
