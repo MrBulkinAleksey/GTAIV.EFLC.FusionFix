@@ -19,6 +19,7 @@ public:
     void Reset() noexcept { previous={};velocity={};focus={};owner=0;lastTime=0;ready=false; }
     // The car's speed over the ground in m/s, smoothed over about 0.3 s; 0 on foot.
     float Speed() const noexcept { return ready ? std::sqrt(velocity.x*velocity.x+velocity.y*velocity.y) : 0.0f; }
+    Vec3 Velocity() const noexcept { return ready ? velocity : Vec3{}; }
     Vec3 Update(Vec3 position,std::uintptr_t vehicle,std::uint32_t time) noexcept {
         focus=position;
         if(!vehicle || !std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)) {

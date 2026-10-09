@@ -27,6 +27,17 @@ public:
     float spacing = 0.0f;              // metres in use this pass, 0 is off
     float base = 0.0f;                 // LampSpacing: on foot and at low speed
     float seconds = 0.0f;              // LampSpacingSeconds: driving, speed times this, at least base
+    // LampSpacingAlongRoad: the spacing counts along the way you drive, not in a straight line, and
+    // lamps abreast of each other (tunnels light both sides) are kept or lowered together. A straight
+    // line made the kept lamps zigzag from one side to the other, so a car ahead was lit from the left,
+    // then from the right. Off while standing (no way to measure along).
+    bool alongRoad = false;
+    static constexpr float Abreast = 3.0f, Across = 15.0f; // same row-crossing within 3 m along; rows within 15 m
+    void Direction(Vec3 velocity) {
+        const float length = std::sqrt(velocity.x * velocity.x + velocity.y * velocity.y);
+        axisValid_ = alongRoad && length > 1.0f;
+        if (axisValid_) axis_ = {velocity.x / length, velocity.y / length, 0.0f};
+    }
 
     // Driving past a row of lamps, a slot changes hands each time a lamp with one is passed,
     // speed / spacing times a second. The spacing grows with speed so a slot's lamp lasts about
@@ -72,7 +83,12 @@ public:
             for (const auto* other : kept_) {
                 const float x = lamp.position.x - other->position.x, y = lamp.position.y - other->position.y,
                     z = lamp.position.z - other->position.z;
-                if (x * x + y * y + z * z > limit || lamp.spot != other->spot) continue;
+                if (axisValid_) {
+                    const float along = std::abs(x * axis_.x + y * axis_.y);
+                    const float across2 = x * x + y * y - along * along;
+                    if (along > spacing || along < Abreast || across2 > Across * Across || lamp.spot != other->spot) continue;
+                }
+                else if (x * x + y * y + z * z > limit || lamp.spot != other->spot) continue;
                 if (lamp.spot && lamp.direction.x * other->direction.x + lamp.direction.y * other->direction.y +
                     lamp.direction.z * other->direction.z < 0.7f * Length(lamp.direction) * Length(other->direction)) continue;
                 beside = true;
@@ -98,6 +114,8 @@ private:
         return key && std::binary_search(keptKeys_.begin(), keptKeys_.end(), key);
     }
     std::uint32_t changedAt_ = 0;
+    Vec3 axis_{};
+    bool axisValid_ = false;
     float smoothedSpeed_ = 0.0f;
     std::uint32_t lastTime_ = 0;
     std::vector<std::uint8_t> spacedOut_;
