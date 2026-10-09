@@ -95,7 +95,9 @@ namespace TrafficSignalLog
                 an ? std::format(", farthest {:.1f} m, {} {:.2f}", ad, value, av) : std::string());
         }
     };
-    static Step logic, lights, listed, framed, inFront, unoccluded;
+    static Step logic, lights, listed, framed, inFront, unoccluded, roadCalls, roadTaken;
+    static std::atomic<uint32_t> listedFlags{0}; // of the farthest signal light ahead in the list
+    static float* roadLimit = nullptr;           // [0x103AB80], the road light's distance
     // The camera as the game thread last saw it, for the steps on the render thread (no natives there).
     static std::atomic<float> cameraPosition[3]{}, cameraForward[3]{};
     static std::atomic<bool> cameraKnown{false};
@@ -177,6 +179,37 @@ namespace TrafficSignalLog
         step.Add(d, light.mRadius, ahead);
     }
 
+    // The road light (CE 0x9BBC70: [esp+4] its position on entry, esi once within the distance at 0x9BBD0A).
+    static void Road(Step& step, const float* position) noexcept
+    {
+        float camera[3], forward[3];
+        if (!position || !cameraKnown.load(std::memory_order_relaxed)) return;
+        for (int i = 0; i < 3; ++i) { camera[i] = cameraPosition[i]; forward[i] = cameraForward[i]; }
+        const float x = position[0] - camera[0], y = position[1] - camera[1], z = position[2] - camera[2];
+        const float d = std::sqrt(x * x + y * y + z * z);
+        if (!std::isfinite(d)) return;
+        step.Add(d, *reinterpret_cast<const float*>(GameBase() + 0xC3F6BC),
+            d > 0.01f && (x * forward[0] + y * forward[1] + z * forward[2]) / d > 0.94f);
+    }
+
+    static void InstallRoadSteps()
+    {
+        auto entry = hook::pattern("55 8B EC 83 E4 F0 83 EC 28 80 7D 18 00 56 57 0F 84");
+        if (entry.empty()) { FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the road light was not found\n"); return; }
+        const auto at = reinterpret_cast<uintptr_t>(entry.get_first(0));
+        // 0x9BBD0A: shl eax, 6 / add eax, ecx, the entry's slot once within the distance
+        if (std::memcmp(reinterpret_cast<const void*>(at + 0x9A), "\xC1\xE0\x06\x03\xC1", 5))
+        { FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the road light differs\n"); return; }
+        static auto callHook = safetyhook::create_mid(at, [](SafetyHookContext& regs)
+        {
+            Road(roadCalls, *reinterpret_cast<const float* const*>(regs.esp + 4));
+        });
+        static auto takenHook = safetyhook::create_mid(at + 0x9A, [](SafetyHookContext& regs)
+        {
+            Road(roadTaken, reinterpret_cast<const float*>(regs.esi));
+        });
+    }
+
     static void InstallDrawSteps()
     {
         // call 0x4B1A70 / test al, al / je / movss xmm0, [esp+14h] / xorps xmm0, [...]
@@ -222,7 +255,9 @@ namespace TrafficSignalLog
             const float position[3] = { light.mPosition.x, light.mPosition.y, light.mPosition.z };
             float d;
             bool ahead;
-            if (CameraDistance(position, d, ahead)) listed.Add(d, light.mIntensity, ahead);
+            if (!CameraDistance(position, d, ahead)) continue;
+            if (ahead && d > listed.aheadFarthest.load(std::memory_order_relaxed)) listedFlags = light.mFlags;
+            listed.Add(d, light.mIntensity, ahead);
         }
     }
 
@@ -239,10 +274,13 @@ namespace TrafficSignalLog
             FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance",
                 "scale %.2f; scaled %u models, %u signals made with the model's distance, %u with their own (farthest %.1f m); "
                 "last 2 s: logic %s, 2dfx lights %s, in the light list %s (a light per frame), drawn: in the frame %s, "
-                "in front %s, not occluded %s%s%s\n",
+                "in front %s, not occluded %s; ahead's flags %08x; road light: called %s, within its distance %s, "
+                "its distance %.1f m%s%s\n",
                 fTrafficSignalDrawScale, models.load(), entities.load(), placed.load(), farthestDistance.load(),
                 logic.Take("draw distance").c_str(), lights.Take("fade").c_str(), listed.Take("intensity").c_str(),
                 framed.Take("radius").c_str(), inFront.Take("radius").c_str(), unoccluded.Take("radius").c_str(),
+                listedFlags.exchange(0), roadCalls.Take("game scale").c_str(), roadTaken.Take("game scale").c_str(),
+                roadLimit ? *roadLimit : -1.0f,
                 firstModels.empty() ? "" : "; models: ", firstModels.c_str());
         }
         catch (...) {}
@@ -629,6 +667,7 @@ public:
                 else
                     FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the 2dfx lights call was not found\n");
                 TrafficSignalLog::InstallDrawSteps();
+                TrafficSignalLog::InstallRoadSteps();
             }
             if (auto distance = std::clamp(iniReader.ReadFloat("SHADOWS", "TrafficSignalDrawDistance", 2.5f), 1.0f, 5.0f); distance != 1.0f)
             {
@@ -683,6 +722,7 @@ public:
                     *limitRead.get_first<float*>(4) == *fadeRead.get_first<float*>(4) && **limitRead.get_first<float*>(4) == 60.0f)
                 {
                     static float* limit = *limitRead.get_first<float*>(4);
+                    TrafficSignalLog::roadLimit = limit;
                     static const float gameLimit = *limit;
                     injector::WriteMemory<float>(limit, gameLimit * fTrafficSignalDrawScale, true);
                     // comiss xmm0, xmm1 with ecx the entries so far, xmm1 the distance, xmm0 the limit
