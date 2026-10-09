@@ -115,6 +115,11 @@ namespace TrafficSignalLog
     // at once on the way closer; drawn without its projected texture (TrafficSignalLightTest 4) it stayed,
     // and so it does now beyond this distance. Near, where its shape shows, it keeps the texture.
     static float plainBeyond = 100.0f;
+    // TrafficSignalFarRadius / TrafficSignalFarIntensity: there too that light lit the cars under the signal but
+    // not the road: its radius is small, and the far road (a simpler model) lies just out of its reach, while
+    // three times as wide (TrafficSignalLightTest 3) lit it, too brightly. Beyond the same distance the radius
+    // grows and the intensity drops by these.
+    static float farRadius = 2.0f, farIntensity = 0.7f;
     static constexpr int LightTests = 8;
     static const char* LightTestName(int test) noexcept
     {
@@ -249,7 +254,11 @@ namespace TrafficSignalLog
             if (!test && !(plainBeyond > 0.0f)) return;
             auto& light = *reinterpret_cast<rage::CLightSource*>(regs.edi - 0x28);
             if ((light.mFlags & 0x201) != 0x200) return;
-            if (plainBeyond > 0.0f && light.mProjTexHash && CameraFar(regs.edi, plainBeyond)) light.mProjTexHash = 0;
+            if (plainBeyond > 0.0f && CameraFar(regs.edi, plainBeyond)) {
+                light.mProjTexHash = 0;
+                light.mRadius *= farRadius;
+                light.mIntensity *= farIntensity;
+            }
             switch (test)
             {
             case 1: light.mFlags &= ~0x20u; break;
@@ -752,6 +761,8 @@ public:
             TrafficSignalLog::lightTest = std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalLightTest", 0), 0,
                 TrafficSignalLog::LightTests - 1);
             TrafficSignalLog::plainBeyond = std::clamp(iniReader.ReadFloat("SHADOWS", "TrafficSignalPlainLightBeyond", 100.0f), 0.0f, 1000.0f);
+            TrafficSignalLog::farRadius = std::clamp(iniReader.ReadFloat("SHADOWS", "TrafficSignalFarRadius", 2.0f), 1.0f, 5.0f);
+            TrafficSignalLog::farIntensity = std::clamp(iniReader.ReadFloat("SHADOWS", "TrafficSignalFarIntensity", 0.7f), 0.0f, 2.0f);
             TrafficSignalLog::InstallLightTests();
             if (TrafficSignalLog::enabled)
                 TrafficSignalLog::InstallDrawSteps();
