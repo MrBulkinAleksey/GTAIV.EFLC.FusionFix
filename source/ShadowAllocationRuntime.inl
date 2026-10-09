@@ -277,21 +277,27 @@ namespace PlayerShadowAllocation
         // with a cache index in its slot record (+0xF0), is drawn whole; with the static world in it the road
         // shadowed a headlight's own beam out.
         const auto cacheIndex = *reinterpret_cast<const int32_t*>(gameBase + 0xD9F1F0 + slot * 0x110);
-        if (mode == 3) {
-            bool outside = true;
-            if (!cacheWithCarsInside) {
-                // The light being cached, by its key in the slot record (+0xF8), in this frame's list
-                const auto key = *reinterpret_cast<const uint32_t*>(gameBase + 0xD9F1F8 + slot * 0x110);
-                const auto* lights = CurrentLights();
-                const auto count = CurrentCount();
-                outside = false;
-                if (reinterpret_cast<uintptr_t>(lights) >= 0x10000 && count <= 4096)
-                    for (uint32_t i = 0; i < count; ++i)
-                        if (static_cast<uint32_t>(lights[i].mCastShadows) == key) { outside = (lights[i].mFlags & 0x40) != 0; break; }
-            }
-            if (outside) *reinterpret_cast<uint8_t*>(phase + 0x16) = 1;
+        const bool cached = mode == 4 && cacheIndex >= 0 && cacheIndex < 16;
+        if (mode != 3 && !cached) return;
+        // Inside lamps keep the game's way in both: drawn whole in a slot, the room lamp put the player standing
+        // under it onto the ceiling above it just as its cache render did.
+        bool outside = true;
+        // In a room scene every lamp counts as inside, whatever its flags.
+        if (!cacheWithCarsInside && Natives::IsInteriorScene()) return;
+        if (!cacheWithCarsInside) {
+            // The light, by its key in the slot record (+0xF8), in this frame's list
+            const auto key = *reinterpret_cast<const uint32_t*>(gameBase + 0xD9F1F8 + slot * 0x110);
+            const auto* lights = CurrentLights();
+            const auto count = CurrentCount();
+            outside = false;
+            if (reinterpret_cast<uintptr_t>(lights) >= 0x10000 && count <= 4096)
+                for (uint32_t i = 0; i < count; ++i)
+                    if (static_cast<uint32_t>(lights[i].mCastShadows) == key) { outside = (lights[i].mFlags & 0x40) != 0; break; }
         }
-        else if (mode == 4 && cacheIndex >= 0 && cacheIndex < 16) {
+        if (!outside) return;
+        if (mode == 3)
+            *reinterpret_cast<uint8_t*>(phase + 0x16) = 1;
+        else {
             mode = 5;
             *reinterpret_cast<uint8_t*>(phase + 0x15) = 1;
             *reinterpret_cast<uint8_t*>(phase + 0x16) = 1;
