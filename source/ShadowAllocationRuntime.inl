@@ -132,13 +132,14 @@ namespace PlayerShadowAllocation
     // it; the light loop (InstallShadowFadeIn) gives the shadow shaders how much is still to come (c143.x,
     // local_light_with_shadow_fade_in.patch). Lights with a cached map already showed a shadow, the static
     // one, and are left as they are. Render thread, like selection and the light loop.
+    // The same table tells SlotMinHold how long each light has held its slot.
     struct FadeEntry { uint32_t key{}; uint32_t since{}; bool fades{}; };
     static std::array<FadeEntry,7> fadeEntries{};
-    static uint32_t shadowFadeMs = 0;
+    static uint32_t shadowFadeMs = 0, slotMinHoldMs = 0;
 
     static void NoteFadeIns(const budget::PlayerShadowBudget::Selection& selection) noexcept
     {
-        if (!shadowFadeMs) return;
+        if (!shadowFadeMs && !slotMinHoldMs) return;
         const auto now = GetTickCount();
         const auto* lights = CurrentLights();
         const auto count = CurrentCount();
@@ -157,6 +158,15 @@ namespace PlayerShadowAllocation
             next[i] = {key, now, !cached};
         }
         fadeEntries = next;
+    }
+
+    // Whether a light took its slot less than SlotMinHold ago.
+    static bool SlotIsFresh(uint32_t key) noexcept
+    {
+        if (!slotMinHoldMs || !key) return false;
+        for (const auto& e : fadeEntries)
+            if (e.key == key) return GetTickCount() - e.since < slotMinHoldMs;
+        return false;
     }
 
     // How much of a light's shadow is still to come in, 0 for all of it there.
@@ -558,7 +568,8 @@ namespace PlayerShadowAllocation
             else if(gain==SlotGain::OffScreen) ++lightsOffScreen;
             labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(
                 {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam,gain,
-                priorityDistance>=0?priorityDistance:geometry.distanceSquared,caster>=0 && rawGain!=SlotGain::None);
+                priorityDistance>=0?priorityDistance:geometry.distanceSquared,caster>=0 && rawGain!=SlotGain::None,
+                kind!=budget::Kind::PlayerBeam && SlotIsFresh(key));
             // Record why a prior choice loses its claim, independently of
             // whether native sorting eventually drops it. Bounded to 7/pass.
             for(const auto& old:state.previousSelection) if(old.key==key) {
@@ -605,7 +616,7 @@ namespace PlayerShadowAllocation
             auto rule=result!=ours ? Trace::Rule::Grace
                 : decider==Rule::Special ? Trace::Rule::Special : decider==Rule::OwnBeam ? Trace::Rule::OwnBeam
                 : decider==Rule::Gain ? Trace::Rule::Gain : decider==Rule::Claim ? Trace::Rule::Claim
-                : decider==Rule::Nearer ? Trace::Rule::Nearer
+                : decider==Rule::Nearer ? Trace::Rule::Nearer : decider==Rule::Fresh ? Trace::Rule::Fresh
                 : result==1 ? Trace::Rule::Distance : Trace::Rule::Native;
             const auto* lights=CurrentLights();
             try { slotTrace.Compared(static_cast<uint32_t>(lights[challenger].mCastShadows),

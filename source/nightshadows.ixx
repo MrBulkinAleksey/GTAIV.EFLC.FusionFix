@@ -856,6 +856,7 @@ public:
                 PlayerShadowAllocation::lampSpacing.spacing = PlayerShadowAllocation::lampSpacing.base;
                 PlayerShadowAllocation::lampSpacing.seconds = std::clamp(iniReader.ReadFloat("SHADOWS", "LampSpacingSeconds", 0.5f), 0.0f, 5.0f);
                 PlayerShadowAllocation::lampSpacing.alongRoad = iniReader.ReadInteger("SHADOWS", "LampSpacingAlongRoad", 1) != 0;
+                PlayerShadowAllocation::slotMinHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "SlotMinHold", 1000), 0, 5000));
                 fusionfix::shadows::NativeShadowContinuity42::claimDistanceRatio =
                     std::clamp(iniReader.ReadFloat("SHADOWS", "ClaimDistanceRatio", 1.5f), 0.0f, 10.0f);
                 const int allocationMode = iniReader.ReadInteger("SHADOWS", "ExperimentalPlayerShadowAllocation", 0);
