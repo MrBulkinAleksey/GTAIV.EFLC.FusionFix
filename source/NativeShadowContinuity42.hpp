@@ -24,12 +24,19 @@ public:
         // cached lamps by the vehicles and peds in their light.
         SlotGain gain=SlotGain::InView;
     };
-    void Begin(std::uintptr_t session,std::uint32_t frame,std::uint32_t now) noexcept {
-        if(session!=session_ || frame<frame_ || now-time_>2000u) claims_={};
+    // Why held claims were dropped, for the slot trace: 0 when none were held or none dropped.
+    enum Reset : unsigned { ResetSession=1, ResetFrameBack=2, ResetPause=4, ResetCommitTime=8, ResetCommitFrames=16 };
+    unsigned Begin(std::uintptr_t session,std::uint32_t frame,std::uint32_t now) noexcept {
+        bool held=false;
+        for(const auto& c:claims_) held|=c.key!=0;
+        unsigned reset=(session!=session_?ResetSession:0u)|(frame<frame_?ResetFrameBack:0u)|(now-time_>2000u?ResetPause:0u);
+        if(reset) claims_={};
         session_=session;frame_=frame;time_=now;
         // A native update-divisor may skip passes. Keep the last successful set
         // through short gaps; abandon it after a pause/load, never by score.
-        if(now-lastCommit_>250u || frame-lastCommitFrame_>16u) claims_={};
+        const unsigned gap=(now-lastCommit_>250u?ResetCommitTime:0u)|(frame-lastCommitFrame_>16u?ResetCommitFrames:0u);
+        if(gap) claims_={};
+        return held?reset|gap:0u;
     }
     Candidate Observe(Identity id,std::uint32_t flags,bool relevant,bool own,SlotGain gain=SlotGain::InView) const noexcept {
         Candidate c{flags,Unclaimed,own,true,gain};
@@ -49,6 +56,16 @@ public:
     // A newcomer's category/distance cannot evict a still-visible valid claim,
     // unless the newcomer's shadow is in view and the claim's is not, or the
     // claim only redraws what the lamp's cache already shows.
+    // Which rule of Compare decided, for the slot trace.
+    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim };
+    static Rule Decider(int native,const Candidate& challenger,const Candidate& incumbent) noexcept {
+        if(native<0 || native>2 || !challenger.observed || !incumbent.observed) return Rule::Native;
+        if((challenger.flags|incumbent.flags)&0x400u) return Rule::Special;
+        if(challenger.ownBeam!=incumbent.ownBeam) return Rule::OwnBeam;
+        if(challenger.gain!=incumbent.gain) return Rule::Gain;
+        if(challenger.claim!=incumbent.claim) return Rule::Claim;
+        return Rule::Native;
+    }
     static int Compare(int native,const Candidate& challenger,const Candidate& incumbent) noexcept {
         if(native<0 || native>2 || !challenger.observed || !incumbent.observed ||
            ((challenger.flags|incumbent.flags)&0x400u)) return native;

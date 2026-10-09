@@ -17,6 +17,11 @@ namespace fusionfix::shadows {
 // tuning the caster aware priority: how far and how long after a lamp has a
 // caster in view it takes a slot, how long it holds it, how often gains flip.
 // Selection side only (render thread), written out once a second from the game's.
+// Lines: + took a slot (won= the rule of Compare it beat someone by, over= whom),
+// - lost one (lost= the rule, to= whom; pushed when only shifted out), F took it
+// back within FlapMs of losing it, T the keys that did so most, R a holder's claim
+// stopped counting (reach, view, gen, nan), C held claims were dropped all at once,
+// X a pass left to the game's own choice, M a mark (Ctrl+Shift+F7 or F12).
 class ShadowSlotTrace {
 public:
     struct Light {
@@ -30,6 +35,10 @@ public:
         bool observed{};
     };
     struct Selected { std::uint32_t key{}; int index{-1}; };
+    // The rule of NativeShadowContinuity42::Compare that decided, and two of the game's own:
+    // native (categories, its result kept), distance (left to the game's distance).
+    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Distance, Grace };
+    static constexpr std::uint32_t FlapMs = 2000;
 
     bool enabled = false;
 
@@ -49,6 +58,59 @@ public:
             if (length > 0.0001f) for (float& f : forward_) f /= length;
         }
         lights_.assign((std::min)(count, 4096u), Light{});
+        wins_.clear(); losses_.clear();
+    }
+
+    // Every comparison the insertion sort makes this pass: 0 the challenger goes in
+    // ahead, 1 the game's distance decides, 2 the incumbent stays.
+    void Compared(std::uint32_t challenger, std::uint32_t incumbent, Rule rule, int result) {
+        if (result == 2) return;
+        if (!wins_.contains(challenger)) wins_[challenger] = {incumbent, rule};
+        losses_[incumbent] = {challenger, rule};
+    }
+
+    // A key that held a slot last pass, as this pass sees it; logged when why its claim
+    // does not count changes.
+    void Claim(std::uint32_t key, bool sameGeneration, float distanceSquared, float reachSquared, bool volumeVisible, bool ownBeam) {
+        std::string reason;
+        if (!sameGeneration) reason += "gen,";
+        if (!std::isfinite(distanceSquared)) reason += "nan,";
+        else if (distanceSquared > reachSquared) reason += "reach,";
+        if (!volumeVisible && !ownBeam) reason += "view,";
+        if (!reason.empty()) reason.pop_back();
+        auto& k = keys_[key];
+        if (reason == k.claimReason) return;
+        k.claimReason = reason;
+        if (!reason.empty())
+            Line(std::format("R {} key={:08x} reason={} d={:.1f} reach={:.1f} slot={}", When(), key, reason,
+                std::sqrt((std::max)(distanceSquared, 0.0f)), std::sqrt((std::max)(reachSquared, 0.0f)), k.slot));
+    }
+
+    // The held claims dropped at the start of a pass (NativeShadowContinuity42::Reset bits).
+    void ClaimsReset(unsigned reasons, std::uint32_t timeMs, std::uint32_t frame) {
+        std::string why;
+        if (reasons & 1) why += "session,";
+        if (reasons & 2) why += "frame_back,";
+        if (reasons & 4) why += "pause,";
+        if (reasons & 8) why += std::format("no_commit_for_{}ms,", timeMs - lastCommitTime_);
+        if (reasons & 16) why += std::format("no_commit_for_{}f,", frame - lastCommitFrame_);
+        if (!why.empty()) why.pop_back();
+        Line(std::format("C t={} f={} claims_dropped={}", timeMs, frame, why));
+    }
+
+    // A pass the game chose for alone: once when it starts and when the reason changes.
+    void Rejected(unsigned code, std::uint32_t timeMs, std::uint32_t frame) {
+        ++rejects_;
+        if (rejecting_ && code == rejectCode_) return;
+        rejecting_ = true; rejectCode_ = code;
+        // 0 our adapter's checks, then ShadowAllocationPass's failure codes
+        static constexpr const char* names[] = { "adapter", "list", "input", "duplicate", "capacity", "commit", "commit_lamps" };
+        Line(std::format("X t={} f={} rejected={}", timeMs, frame, code < 7 ? names[code] : "other"));
+    }
+
+    // Game thread: a mark where something was seen.
+    void Mark(std::uint32_t timeMs, std::uint32_t frame, const char* why) {
+        Line(std::format("M t={} f={} {}", timeMs, frame, why));
     }
 
     void Observe(std::uint32_t index, const Light& light) {
@@ -79,13 +141,21 @@ public:
             const Light* light = LightAt(now.index);
             std::string waited = k.inViewSince ? std::format(" waited={}", time_ - k.inViewSince) : std::string(" waited=-");
             std::string sinceLost = k.lostAt ? std::format(" since_lost={}", time_ - k.lostAt) : std::string();
+            std::string won = " won=-";
+            if (const auto w = wins_.find(now.key); w != wins_.end())
+                won = std::format(" won={} over={:08x}", RuleName(w->second.rule), w->second.other);
             if (light)
-                Line(std::format("+ {} slot={} key={:08x} {} gain={} raw={} cached={} spaced={}{} weight={:.2f} prio={}{}{}", When(), slot, now.key,
+                Line(std::format("+ {} slot={} key={:08x} {} gain={} raw={} cached={} spaced={}{} weight={:.2f} prio={}{}{}{}", When(), slot, now.key,
                     Kind(light->kind), Gain(light->gain), Gain(light->raw), light->cached ? 1 : 0, light->spacedOut ? 1 : 0, Where(*light), light->viewWeight,
                     light->priorityDistanceSquared >= 0 ? std::format("{:.1f}", std::sqrt(light->priorityDistanceSquared)) : std::string("-"),
-                    waited, sinceLost));
+                    waited, sinceLost, won));
             else
                 Line(std::format("+ {} slot={} key={:08x} unobserved", When(), slot, now.key));
+            if (k.lostAt && time_ - k.lostAt < FlapMs) {
+                ++k.flaps;
+                Line(std::format("F {} key={:08x} back_after={} had_lost={}{}", When(), now.key, time_ - k.lostAt, k.lostBy,
+                    light ? std::format(" {} d={:.1f}", Kind(light->kind), std::sqrt((std::max)(light->distanceSquared, 0.0f))) : std::string()));
+            }
             k.slot = int(slot); k.slotSince = time_;
         }
         for (const auto& old : previous_) {
@@ -93,13 +163,20 @@ public:
             changed = true;
             auto& k = keys_[old.key];
             const Light* light = FindLight(old.key);
-            Line(std::format("- {} key={:08x} held_for={}{}", When(), old.key, time_ - k.slotSince,
+            if (const auto l = losses_.find(old.key); l != losses_.end())
+                k.lostBy = std::format("{} to={:08x}", RuleName(l->second.rule), l->second.other);
+            else
+                k.lostBy = light ? "pushed" : "gone";
+            if (!k.claimReason.empty()) k.lostBy += " claim=" + k.claimReason;
+            Line(std::format("- {} key={:08x} held_for={} lost={}{}", When(), old.key, time_ - k.slotSince, k.lostBy,
                 light ? std::format(" {} gain={} raw={}{}", Kind(light->kind), Gain(light->gain), Gain(light->raw), Where(*light))
                       : std::string(" gone")));
             k.slot = -1; k.lostAt = time_;
         }
         previous_ = selection;
         if (changed) ++changes_;
+        rejecting_ = false;
+        lastCommitTime_ = time_; lastCommitFrame_ = frame_;
 
         if (changed || time_ - lastSummary_ >= 500u) {
             unsigned none = 0, off = 0, in = 0, wanted = 0, lamps = 0, beams = 0, spaced = 0;
@@ -126,11 +203,30 @@ public:
                 speed = std::sqrt(x * x + y * y + z * z) * 1000.0f / float(time_ - lastSummary_);
             }
             Line(std::format("P {} player={:.1f},{:.1f},{:.1f} speed={:.1f} driving={} heading={:.0f} pitch={:.0f} lights={} "
-                "in_view={} off_screen={} none={} spaced={} wanted={} nearest_wanted={} slots={} lamps={} beams={} changes={}",
+                "in_view={} off_screen={} none={} spaced={} wanted={} nearest_wanted={} slots={} lamps={} beams={} changes={} rejected={}",
                 When(), player_.x, player_.y, player_.z, speed, driving_ ? 1 : 0, heading, pitch, none + off + in, in, off, none, spaced, wanted,
-                nearestWanted >= 0 ? std::format("{:.1f}", nearestWanted) : std::string("-"), lamps + beams, lamps, beams, changes_));
-            changes_ = 0;
+                nearestWanted >= 0 ? std::format("{:.1f}", nearestWanted) : std::string("-"), lamps + beams, lamps, beams, changes_, rejects_));
+            changes_ = 0; rejects_ = 0;
             lastSummary_ = time_; lastPlayer_ = player_;
+        }
+
+        // Who came back soonest after losing a slot, most often first, every ten seconds
+        if (time_ - lastTop_ >= 10000u) {
+            std::vector<std::pair<std::uint32_t, const KeyState*>> top;
+            for (const auto& [key, k] : keys_) if (k.flaps) top.emplace_back(key, &k);
+            std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.second->flaps > b.second->flaps; });
+            if (!top.empty()) {
+                std::string list;
+                for (std::size_t i = 0; i < top.size() && i < 5; ++i) {
+                    const Light* light = FindLight(top[i].first);
+                    list += std::format(" {:08x}x{}({}{} last_lost={})", top[i].first, top[i].second->flaps,
+                        light ? Kind(light->kind) : "?", light ? std::format(" d={:.1f}", std::sqrt((std::max)(light->distanceSquared, 0.0f))) : std::string(),
+                        top[i].second->lostBy);
+                }
+                Line(std::format("T {} flaps in 10 s:{}", When(), list));
+            }
+            for (auto& [key, k] : keys_) k.flaps = 0;
+            lastTop_ = time_;
         }
 
         // Keys not seen for a while, so the map stays small
@@ -161,7 +257,22 @@ private:
         bool known{};
         int slot = -1;
         std::uint32_t inViewSince{}, slotSince{}, lostAt{}, lastSeen{};
+        unsigned flaps{};
+        std::string lostBy, claimReason;
     };
+    struct Decision { std::uint32_t other{}; Rule rule{}; };
+
+    static const char* RuleName(Rule rule) {
+        switch (rule) {
+        case Rule::Special: return "special";
+        case Rule::OwnBeam: return "own_beam";
+        case Rule::Gain: return "gain";
+        case Rule::Claim: return "claim";
+        case Rule::Distance: return "distance";
+        case Rule::Grace: return "grace";
+        default: return "native";
+        }
+    }
 
     static const char* Kind(std::uint8_t kind) { return kind == 0 ? "lamp" : kind == 1 ? "own_beam" : "beam"; }
     static const char* Gain(SlotGain gain) { return gain == SlotGain::None ? "none" : gain == SlotGain::OffScreen ? "off" : "in"; }
@@ -197,8 +308,10 @@ private:
         text_ += '\n';
     }
 
-    std::uint32_t frame_{}, time_{}, lastSummary_{}, lastPrune_{};
-    unsigned changes_{};
+    std::uint32_t frame_{}, time_{}, lastSummary_{}, lastPrune_{}, lastTop_{}, lastCommitTime_{}, lastCommitFrame_{};
+    unsigned changes_{}, rejects_{}, rejectCode_{};
+    bool rejecting_{};
+    std::unordered_map<std::uint32_t, Decision> wins_, losses_;
     Vec3 player_{}, lastPlayer_{};
     bool driving_{}, cameraValid_{};
     float camera_[3]{}, forward_[3]{};

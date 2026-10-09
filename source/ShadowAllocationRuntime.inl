@@ -42,6 +42,18 @@ namespace PlayerShadowAllocation
     static std::atomic<uint32_t> lampsSpacedOut{0};
     static void FlushSlotTrace() noexcept
     {
+        // A mark in the trace where something was seen: Ctrl+Shift+F7, or F12, the usual screenshot key.
+        if (slotTrace.enabled && CTimer::m_snTimeInMilliseconds && CTimer::m_frameCount) {
+            static bool markWasDown = false, shotWasDown = false;
+            const bool mark = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+                (GetAsyncKeyState(VK_F7) & 0x8000);
+            const bool shot = (GetAsyncKeyState(VK_F12) & 0x8000) != 0;
+            try {
+                if (mark && !markWasDown) slotTrace.Mark(static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds), *CTimer::m_frameCount, "key");
+                if (shot && !shotWasDown) slotTrace.Mark(static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds), *CTimer::m_frameCount, "screenshot");
+            } catch (...) {}
+            markWasDown = mark; shotWasDown = shot;
+        }
         static ULONGLONG last = 0;
         if (!slotTrace.enabled || GetTickCount64() - last < 1000) return;
         last = GetTickCount64();
@@ -66,6 +78,7 @@ namespace PlayerShadowAllocation
         std::array<fusionfix::shadows::NativeShadowContinuity42::Candidate,4096> nativeCandidates{};
         bool continuityActive=false;
         bool tracedComparison=false;
+        unsigned claimsReset=0; // NativeShadowContinuity42::Begin, for the slot trace
         fusionfix::shadows::ShadowView view{};
         fusionfix::shadows::ShadowCasterPresence casters{};
         fusionfix::shadows::SlotGainHold gainHold;
@@ -87,9 +100,16 @@ namespace PlayerShadowAllocation
     static std::atomic<uint32_t> lampRemoved{0}, lampMissingInput{0}, lampDroppedPresent{0};
     static std::array<std::atomic<uint32_t>,8> rejectedPassReasons{};
     static std::atomic<uint32_t> rejectedAdapterChecks{0};
+    static void TraceRejected(unsigned code) noexcept
+    {
+        if (slotTrace.enabled && CTimer::m_snTimeInMilliseconds && CTimer::m_frameCount)
+            try { slotTrace.Rejected(code, static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds), *CTimer::m_frameCount); }
+            catch (...) { slotTrace.enabled = false; }
+    }
+
     static void RejectPass() noexcept
     {
-        if (state.pass.Active()) { ++fallbackPasses; ++rejectedAdapterChecks; }
+        if (state.pass.Active()) { ++fallbackPasses; ++rejectedAdapterChecks; TraceRejected(0); }
         state.pass.Cancel();
     }
 
@@ -222,7 +242,7 @@ namespace PlayerShadowAllocation
         state.drivingFocus=state.motionFocus.Update(state.player,state.occupiedCar,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
         state.frame = *CTimer::m_frameCount;
         state.lampContinuity.Begin(ped,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
-        state.continuity.Begin(ped,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
+        state.claimsReset=state.continuity.Begin(ped,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
         state.nativeCandidates.fill({}); labRelevant.fill(0);
         if (casterPriority && !castersLock.test_and_set(std::memory_order_acquire)) {
             state.casters = casters; castersLock.clear(std::memory_order_release);
@@ -272,7 +292,9 @@ namespace PlayerShadowAllocation
         }
         if(slotTrace.enabled && state.continuityActive)
             try { slotTrace.Begin(state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),state.player,
-                state.occupiedCar!=0,state.view,CurrentCount()); } catch(...) { slotTrace.enabled=false; }
+                state.occupiedCar!=0,state.view,CurrentCount());
+                if(state.claimsReset) slotTrace.ClaimsReset(state.claimsReset,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),state.frame); }
+            catch(...) { slotTrace.enabled=false; }
         if(state.continuityActive && ShadowTrace34::enabled.load(std::memory_order_relaxed)) {
             const auto tick=GetTickCount();
             for(int row=0;row<4;++row) {
@@ -451,13 +473,16 @@ namespace PlayerShadowAllocation
             // whether native sorting eventually drops it. Bounded to 7/pass.
             for(const auto& old:state.previousSelection) if(old.key==key) {
                 const bool sameGeneration=old.generation==(kind==budget::Kind::Lamp?LampGeometry(light):0);
+                if(slotTrace.enabled)
+                    try { slotTrace.Claim(key,sameGeneration,geometry.distanceSquared,reach*reach,volumeVisible,kind==budget::Kind::PlayerBeam); }
+                    catch(...) { slotTrace.enabled=false; }
                 ShadowTrace34::Emit({7,state.frame,GetTickCount(),key,relevant?1:0,sameGeneration?1:0,
                     static_cast<int>(flags | (volumeVisible?0x10000u:0)),static_cast<int>(state.nativeCandidates[index].claim),
                     viewWeight,geometry.distanceSquared,reach,light.mRadius});
                 break;
             }
         }
-        if (!state.pass.Active()) { ++fallbackPasses; ++rejectedPassReasons[state.pass.FailureCode() & 7]; }
+        if (!state.pass.Active()) { ++fallbackPasses; ++rejectedPassReasons[state.pass.FailureCode() & 7]; TraceRejected(state.pass.FailureCode()); }
     }
 
     static void CompareNativeCandidates(SafetyHookContext& regs) noexcept
@@ -481,7 +506,21 @@ namespace PlayerShadowAllocation
         ++continuityComparisons;
         const int original=static_cast<int>(regs.eax);
         int result=fusionfix::shadows::NativeShadowContinuity42::Compare(original,a,b);
+        const int ours=result;
         if(labCompareGrace)result=labCompareGrace(original,result,challenger,incumbent);
+        if(slotTrace.enabled) {
+            using Trace=fusionfix::shadows::ShadowSlotTrace;
+            using Rule=fusionfix::shadows::NativeShadowContinuity42::Rule;
+            const auto decider=fusionfix::shadows::NativeShadowContinuity42::Decider(original,a,b);
+            auto rule=result!=ours ? Trace::Rule::Grace
+                : decider==Rule::Special ? Trace::Rule::Special : decider==Rule::OwnBeam ? Trace::Rule::OwnBeam
+                : decider==Rule::Gain ? Trace::Rule::Gain : decider==Rule::Claim ? Trace::Rule::Claim
+                : result==1 ? Trace::Rule::Distance : Trace::Rule::Native;
+            const auto* lights=CurrentLights();
+            try { slotTrace.Compared(static_cast<uint32_t>(lights[challenger].mCastShadows),
+                static_cast<uint32_t>(lights[incumbent].mCastShadows),rule,result); }
+            catch(...) { slotTrace.enabled=false; }
+        }
         if(result!=original) {
             regs.eax=static_cast<uint32_t>(result); ++continuityOverrides;
             // Decisions only, not render completion. No allocations/file I/O.
@@ -566,7 +605,7 @@ namespace PlayerShadowAllocation
             }
             else ++observedPasses;
         }
-        else { ++fallbackPasses; ++rejectedPassReasons[state.pass.FailureCode() & 7]; }
+        else { ++fallbackPasses; ++rejectedPassReasons[state.pass.FailureCode() & 7]; TraceRejected(state.pass.FailureCode()); }
     }
 
     static void __cdecl Select()
