@@ -138,6 +138,8 @@ namespace PlayerShadowAllocation
     static uint32_t shadowFadeMs = 0, slotMinHoldMs = 0;
     static float behindLampReach = 12.0f; // BehindLampReach
     static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
+    // CacheWithCars, for the status line
+    static std::atomic<uint32_t> cacheCarRefreshes{0}, cacheRefreshes{0}, slotsDrawnWhole{0};
 
     static void NoteFadeIns(const budget::PlayerShadowBudget::Selection& selection) noexcept
     {
@@ -185,6 +187,105 @@ namespace PlayerShadowAllocation
         return 0.0f;
     }
 
+    // CacheWithCars: only the seven dynamic slots drew vehicles and peds; the eight cached lamps showed the
+    // static world alone, so a car under a lamp without a slot had no shadow from it. Three changes:
+    // - the cache renders (record mode 3, through slot 0) draw dynamic objects too (InstallCacheWithCars);
+    // - a cached lamp in a dynamic slot (mode 4: the cache copied in, dynamic objects drawn over it) draws its
+    //   slot whole instead (mode 5, as an uncached lamp), since its cache may hold where cars were;
+    // - the selection refreshes one cache entry a pass, round robin (CE 0x927F32: [0x119D098] & 7, redrawn
+    //   if its state +0xF4 is 1, which the selection sets for every cached lamp in this frame's list). The
+    //   entry refreshed is taken instead among lamps with someone in their light now or at their last
+    //   refresh (to clear a car that left), the longest unrefreshed first; every fourth pass is left to the
+    //   game's round robin. With a pass every frame, two or three such lamps each refresh many times a second.
+    static bool cacheWithCars = false;
+    struct CacheRender { uint32_t key{}; uint32_t at{}; bool hadCaster{}; };
+    static std::array<CacheRender,8> cacheRenders{};
+
+    static bool CachedLampLightsSomeone(const rage::CLightSource& light) noexcept
+    {
+        if (!state.casters.valid) return false;
+        int which = -1;
+        const auto gain = state.casters.Lights({light.mPosition.x,light.mPosition.y,light.mPosition.z},
+            {light.mDirection.x,light.mDirection.y,light.mDirection.z},
+            static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle,&which);
+        return which >= 0 && gain != fusionfix::shadows::SlotGain::None;
+    }
+
+    // CE 0x927F71: ecx is the cache entry the round robin will redraw if its state is 1.
+    static void PickCacheRefresh(SafetyHookContext& regs) noexcept
+    {
+        const FloatingPointState fp;
+        if (!cacheWithCars || !Enabled() || state.depth != 1) return;
+        if (*reinterpret_cast<const uint8_t*>(gameBase + 0xD9D011)) return; // the game forced an entry
+        const auto* lights = CurrentLights();
+        const auto count = CurrentCount();
+        if (reinterpret_cast<uintptr_t>(lights) < 0x10000 || count > 4096) return;
+        const auto entry = [](unsigned i) { return gameBase + 0xDA0B00 + i * 0x100; }; // +0xF0 key, +0xF4 state, +0xF8 light
+        const auto now = GetTickCount();
+        static uint32_t passes = 0;
+        int best = -1;
+        uint32_t bestAge = 0;
+        if (++passes % 4 != 0)
+            for (unsigned i = 0; i < 8; ++i) {
+                const auto e = entry(i);
+                const int index = *reinterpret_cast<const int32_t*>(e + 0xF8);
+                if (*reinterpret_cast<const int32_t*>(e + 0xF4) != 1 || index < 0 || static_cast<uint32_t>(index) >= count) continue;
+                auto& r = cacheRenders[i];
+                const auto key = *reinterpret_cast<const uint32_t*>(e + 0xF0);
+                if (r.key != key) r = { key, 0, false };
+                // A lamp holding a dynamic slot draws its shadow there; its cache waits.
+                bool inSlot = false;
+                for (unsigned n = 1; n < 8 && !inSlot; ++n)
+                    inSlot = *reinterpret_cast<const uint32_t*>(gameBase + 0xD9F1F8 + n * 0x110) == key; // slot record +0xF8 key
+                if (inSlot) continue;
+                if (!CachedLampLightsSomeone(lights[index]) && !r.hadCaster) continue;
+                const uint32_t age = now - r.at;
+                if (best < 0 || age > bestAge) { best = int(i); bestAge = age; }
+            }
+        if (best >= 0) { regs.ecx = static_cast<uint32_t>(best); ++cacheCarRefreshes; }
+        // Whichever entry is redrawn, remember when and whether someone was in its light.
+        const unsigned chosen = regs.ecx & 7;
+        const auto e = entry(chosen);
+        const int index = *reinterpret_cast<const int32_t*>(e + 0xF8);
+        if (*reinterpret_cast<const int32_t*>(e + 0xF4) == 1 && index >= 0 && static_cast<uint32_t>(index) < count) {
+            cacheRenders[chosen] = { *reinterpret_cast<const uint32_t*>(e + 0xF0), now, CachedLampLightsSomeone(lights[index]) };
+            ++cacheRefreshes;
+        }
+    }
+
+    // CE 0xD7833E, in a slot's render phase building its list (esi the phase, +0x940 its slot, +0x15 draw the
+    // static world, +0x16 draw dynamic objects, just set from the slot record's mode +0xFC).
+    static void CacheWithCarsList(SafetyHookContext& regs) noexcept
+    {
+        if (!cacheWithCars || !Enabled()) return;
+        const auto phase = regs.esi;
+        const auto slot = *reinterpret_cast<const uint32_t*>(phase + 0x940);
+        if (slot >= 8) return;
+        auto& mode = *reinterpret_cast<int32_t*>(gameBase + 0xD9F1FC + slot * 0x110);
+        if (mode == 3) *reinterpret_cast<uint8_t*>(phase + 0x16) = 1;
+        else if (mode == 4) {
+            mode = 5;
+            *reinterpret_cast<uint8_t*>(phase + 0x15) = 1;
+            *reinterpret_cast<uint8_t*>(phase + 0x16) = 1;
+            ++slotsDrawnWhole;
+        }
+    }
+
+    static SafetyHookMid cacheRefreshHook, cacheListHook;
+    static void InstallCacheWithCars(bool enabled) noexcept
+    {
+        if (!enabled || !ready.load(std::memory_order_acquire)) return;
+        auto refresh = hook::pattern("8B D1 C1 E2 08 83 BA ? ? ? ? 01 0F 85");
+        auto list = hook::pattern("0F B6 05 ? ? ? ? 6A 00 50 56 8D 86 FC 08 00 00");
+        if (refresh.empty() || list.empty()) return;
+        auto a = safetyhook::MidHook::create(refresh.get_first(0), PickCacheRefresh);
+        auto b = safetyhook::MidHook::create(list.get_first(0), CacheWithCarsList);
+        if (!a || !b) return;
+        cacheRefreshHook = std::move(*a);
+        cacheListHook = std::move(*b);
+        cacheWithCars = true;
+    }
+
     // Game thread, once a second with the slot trace: whether selection runs at all, and how passes end.
     static void SlotTraceStatus() noexcept
     {
@@ -203,11 +304,12 @@ namespace PlayerShadowAllocation
         try {
             slotTrace.Status(std::format("ready={} install={} thread_ok={} night_shadows={} headlight_shadows={} vehicle_night_shadows={} "
                 "publication={} lamp_priority={} in the last second: applied={} observed={} fallback={} adapter_rejects={} reasons:{} "
-                "lamps_behind_walls={} sight_probes={} hits={}",
+                "lamps_behind_walls={} sight_probes={} hits={} cache_refreshes={} for_cars={} slots_drawn_whole={}",
                 ready.load() ? 1 : 0, ready.load() ? std::string("enabled") : "[" + installStatus + "]", unsupportedThread.load() ? 0 : 1, bExtraNightShadows ? 1 : 0, bHeadlightShadows ? 1 : 0,
                 bVehicleNightShadows ? 1 : 0, publicationEnabled ? 1 : 0, nativeLampPriority ? 1 : 0,
                 a - applied, o - observed, f - fallback, r - adapter, why.empty() ? " -" : why,
-                lampsHidden.exchange(0), sightProbes.exchange(0), sightHits.exchange(0)));
+                lampsHidden.exchange(0), sightProbes.exchange(0), sightHits.exchange(0),
+                cacheRefreshes.exchange(0), cacheCarRefreshes.exchange(0), slotsDrawnWhole.exchange(0)));
         } catch (...) {}
         applied = a; observed = o; fallback = f; adapter = r;
     }
