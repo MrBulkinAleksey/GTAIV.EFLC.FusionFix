@@ -157,7 +157,8 @@ namespace PlayerShadowAllocation
             const auto index = selection.slots[i].index;
             if (lights && index < count)
                 cached = (lights[index].mFlags & rage::LF_STATIC_SHADOW) && lights[index].mShadowCacheIndex >= 0;
-            next[i] = {key, now, !cached};
+            // Own headlights come on with their shadow; fading it in only showed the beam unshadowed at first.
+            next[i] = {key, now, !cached && selection.slots[i].kind != budget::Kind::PlayerBeam};
         }
         fadeEntries = next;
     }
