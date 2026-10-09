@@ -95,7 +95,10 @@ namespace TrafficSignalLog
                 an ? std::format(", farthest {:.1f} m, {} {:.2f}", ad, value, av) : std::string());
         }
     };
-    static Step logic, lights, listed;
+    static Step logic, lights, listed, framed, inFront, unoccluded;
+    // The camera as the game thread last saw it, for the steps on the render thread (no natives there).
+    static std::atomic<float> cameraPosition[3]{}, cameraForward[3]{};
+    static std::atomic<bool> cameraKnown{false};
 
     // Where the camera looks, once a frame (GET_CAM_ROT: x pitch, z heading, degrees).
     static bool CameraForward(float (&forward)[3]) noexcept
@@ -159,10 +162,56 @@ namespace TrafficSignalLog
             lights.Add(d, fade, ahead);
     }
 
+    // Steps 4 to 6, render thread, in the loop that draws the frame's lights (CE 0xAC1030, edi the
+    // light + 0x28): its sphere in the frame (0x4B1A70), not behind the camera, not occluded (0x431E40).
+    static void Drawn(Step& step, uintptr_t lightPlus28) noexcept
+    {
+        if (!cameraKnown.load(std::memory_order_relaxed)) return;
+        const auto& light = *reinterpret_cast<const rage::CLightSource*>(lightPlus28 - 0x28);
+        if ((light.mFlags & 0x201) != 0x200) return;
+        const float x = light.mPosition.x - cameraPosition[0], y = light.mPosition.y - cameraPosition[1],
+            z = light.mPosition.z - cameraPosition[2];
+        const float d = std::sqrt(x * x + y * y + z * z);
+        if (!std::isfinite(d)) return;
+        const bool ahead = d > 0.01f && (x * cameraForward[0] + y * cameraForward[1] + z * cameraForward[2]) / d > 0.94f;
+        step.Add(d, light.mRadius, ahead);
+    }
+
+    static void InstallDrawSteps()
+    {
+        // call 0x4B1A70 / test al, al / je / movss xmm0, [esp+14h] / xorps xmm0, [...]
+        auto pattern = hook::pattern("E8 ? ? ? ? 84 C0 0F 84 ? ? ? ? F3 0F 10 44 24 14 0F 57 05");
+        if (pattern.empty())
+        {
+            FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the light draw loop was not found\n");
+            return;
+        }
+        const auto at = reinterpret_cast<uintptr_t>(pattern.get_first(0));
+        // +0x25 movss xmm0, [edi+2Ch] once in front; +0x64 cmp byte ptr [ebp+0Ch], 0 once not occluded
+        if (std::memcmp(reinterpret_cast<const void*>(at + 0x25), "\xF3\x0F\x10\x47\x2C", 5) ||
+            std::memcmp(reinterpret_cast<const void*>(at + 0x64), "\x80\x7D\x0C\x00", 4))
+        {
+            FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the light draw loop differs\n");
+            return;
+        }
+        static auto framedHook = safetyhook::create_mid(at + 5, [](SafetyHookContext& regs)
+        {
+            if (regs.eax & 0xFF) Drawn(framed, regs.edi);
+        });
+        static auto inFrontHook = safetyhook::create_mid(at + 0x25, [](SafetyHookContext& regs) { Drawn(inFront, regs.edi); });
+        static auto unoccludedHook = safetyhook::create_mid(at + 0x64, [](SafetyHookContext& regs) { Drawn(unoccluded, regs.edi); });
+    }
+
     // Step 3, once a game frame: the signal lights in the list the renderer draws ([0x103EED0], count [0x154DFD0]).
     static void Tick() noexcept
     {
         if (!enabled) return;
+        {
+            float position[3], forward[3];
+            const bool known = GameCamera::Position(position) && CameraForward(forward);
+            for (int i = 0; i < 3; ++i) { cameraPosition[i] = position[i]; cameraForward[i] = forward[i]; }
+            cameraKnown = known;
+        }
         const auto list = *reinterpret_cast<const rage::CLightSource* const*>(GameBase() + 0xC3EED0);
         const auto count = *reinterpret_cast<const uint32_t*>(GameBase() + 0x114DFD0);
         if (!list || count > 0x280) return;
@@ -189,9 +238,11 @@ namespace TrafficSignalLog
             { std::lock_guard lock(firstMutex); firstModels.swap(first); }
             FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance",
                 "scale %.2f; scaled %u models, %u signals made with the model's distance, %u with their own (farthest %.1f m); "
-                "last 2 s: logic %s, 2dfx lights %s, in the light list %s (a light per frame)%s%s\n",
+                "last 2 s: logic %s, 2dfx lights %s, in the light list %s (a light per frame), drawn: in the frame %s, "
+                "in front %s, not occluded %s%s%s\n",
                 fTrafficSignalDrawScale, models.load(), entities.load(), placed.load(), farthestDistance.load(),
                 logic.Take("draw distance").c_str(), lights.Take("fade").c_str(), listed.Take("intensity").c_str(),
+                framed.Take("radius").c_str(), inFront.Take("radius").c_str(), unoccluded.Take("radius").c_str(),
                 firstModels.empty() ? "" : "; models: ", firstModels.c_str());
         }
         catch (...) {}
@@ -573,6 +624,7 @@ public:
                 }
                 else
                     FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the 2dfx lights call was not found\n");
+                TrafficSignalLog::InstallDrawSteps();
             }
             if (auto distance = std::clamp(iniReader.ReadFloat("SHADOWS", "TrafficSignalDrawDistance", 2.5f), 1.0f, 5.0f); distance != 1.0f)
             {
