@@ -200,10 +200,12 @@ namespace PlayerShadowAllocation
         }
         try {
             slotTrace.Status(std::format("ready={} install={} thread_ok={} night_shadows={} headlight_shadows={} vehicle_night_shadows={} "
-                "publication={} lamp_priority={} in the last second: applied={} observed={} fallback={} adapter_rejects={} reasons:{}",
+                "publication={} lamp_priority={} in the last second: applied={} observed={} fallback={} adapter_rejects={} reasons:{} "
+                "lamps_behind_walls={} sight_probes={} hits={}",
                 ready.load() ? 1 : 0, ready.load() ? std::string("enabled") : "[" + installStatus + "]", unsupportedThread.load() ? 0 : 1, bExtraNightShadows ? 1 : 0, bHeadlightShadows ? 1 : 0,
                 bVehicleNightShadows ? 1 : 0, publicationEnabled ? 1 : 0, nativeLampPriority ? 1 : 0,
-                a - applied, o - observed, f - fallback, r - adapter, why.empty() ? " -" : why));
+                a - applied, o - observed, f - fallback, r - adapter, why.empty() ? " -" : why,
+                lampsHidden.exchange(0), sightProbes.exchange(0), sightHits.exchange(0)));
         } catch (...) {}
         applied = a; observed = o; fallback = f; adapter = r;
     }
@@ -280,6 +282,106 @@ namespace PlayerShadowAllocation
         });
         return static_cast<bool>(cameraCaptureHook);
     }
+    // LampsBehindWalls: whether a light reaches the frame is told by its volume against the view, which
+    // walls do not stop, so in a tunnel the lamps of the bore beside it, as bright and never seen, took
+    // slots from those over the cars in front. An uncached lamp in view within its reach is checked by a
+    // segment from it to the camera against the map's collision, the way the game's ground probe tests
+    // it (CE 0x738880 on [0x12B9C78]); one that hits something counts as off screen. Selection (render
+    // thread) only reads the answers and asks for stale ones; the game thread probes a few a frame.
+    struct LampSight { Vec3 position{}; uint32_t checked{}, asked{}; bool hidden{}, pending{}, known{}; };
+    static std::mutex sightMutex;
+    static std::unordered_map<uint32_t, LampSight> lampSight;
+    static bool lampsBehindWalls = false;
+    static uint32_t sightFlags = 6; // the ground probe's: the map, not vehicles
+    static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0};
+    static uintptr_t probeFunction = 0, probeLevel = 0, probeFar = 0;
+
+    static bool LampBehindWall(uint32_t key, Vec3 position) noexcept
+    {
+        if (!lampsBehindWalls || !key) return false;
+        const auto now = GetTickCount();
+        std::lock_guard lock(sightMutex);
+        auto& s = lampSight[key];
+        const float x = s.position.x - position.x, y = s.position.y - position.y, z = s.position.z - position.z;
+        if (!s.asked || x * x + y * y + z * z > 0.25f) s = { position }; // new, or the key moved to another lamp
+        s.asked = now;
+        if (!s.pending && (!s.known || now - s.checked > 300)) s.pending = true;
+        return s.known && s.hidden && now - s.checked < 1500;
+    }
+
+    struct alignas(16) SightSegment { float a[4]; float b[4]; };
+    struct alignas(16) SightResult { uint8_t bytes[0x60]; };
+    using SightProbe = int(__thiscall*)(void* level, const SightSegment*, SightResult*, void* exclude,
+        uint32_t includeFlags, uint32_t typeFlags, uint32_t stateFlags, uint32_t maxResults, uint32_t unknown);
+
+    // The physics instance of an entity, as the ground probe takes one: its vtable +0xA0, else +0x38.
+    static void* EntityInstance(uintptr_t entity) noexcept
+    {
+        if (!entity) return nullptr;
+        const auto vtable = *reinterpret_cast<const uintptr_t*>(entity);
+        auto inst = reinterpret_cast<void*(__thiscall*)(uintptr_t)>(*reinterpret_cast<const uintptr_t*>(vtable + 0xA0))(entity);
+        return inst ? inst : *reinterpret_cast<void* const*>(entity + 0x38);
+    }
+
+    // Game thread, every frame: up to eight lamps asked about, oldest first.
+    static void ProbeLampSight(uintptr_t exclude) noexcept
+    {
+        if (!lampsBehindWalls || !probeFunction) return;
+        float camera[3];
+        if (!GameCamera::Position(camera)) return;
+        std::array<std::pair<uint32_t, Vec3>, 8> work{};
+        unsigned n = 0;
+        const auto now = GetTickCount();
+        {
+            std::lock_guard lock(sightMutex);
+            std::erase_if(lampSight, [&](const auto& e) { return now - e.second.asked > 5000; });
+            for (auto& [key, s] : lampSight)
+                if (s.pending && n < work.size()) work[n++] = { key, s.position };
+        }
+        const auto level = *reinterpret_cast<void* const*>(probeLevel);
+        if (!level) return;
+        void* skip = EntityInstance(exclude);
+        for (unsigned i = 0; i < n; ++i) {
+            const auto& p = work[i].second;
+            float d[3] = { camera[0] - p.x, camera[1] - p.y, camera[2] - p.z };
+            const float length = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            bool hidden = false;
+            if (length > 1.0f) {
+                // From half a metre off the lamp, so its own fitting in the ceiling is not the wall
+                const float k = 0.5f / length;
+                SightSegment segment{ { p.x + d[0] * k, p.y + d[1] * k, p.z + d[2] * k, 0.0f }, { camera[0], camera[1], camera[2], 0.0f } };
+                SightResult result{};
+                const auto farPoint = reinterpret_cast<const float*>(probeFar);
+                for (uint32_t at : { 0x10u, 0x20u, 0x30u }) std::memcpy(result.bytes + at, farPoint, 12);
+                *reinterpret_cast<uint32_t*>(result.bytes + 0x4C) = 0xFFFF;
+                hidden = reinterpret_cast<SightProbe>(probeFunction)(level, &segment, &result, skip, sightFlags, 0xFFFFFFFF, 7, 1, 0) != 0;
+                ++sightProbes;
+                if (hidden) ++sightHits;
+            }
+            std::lock_guard lock(sightMutex);
+            if (auto it = lampSight.find(work[i].first); it != lampSight.end()) {
+                it->second.hidden = hidden; it->second.known = true; it->second.pending = false; it->second.checked = GetTickCount();
+            }
+        }
+    }
+
+    // At install: the ground probe's call (CE 0xA54570 mov ecx, [level] ... 0xA5458A call 0x738880).
+    static void InstallLampSight(bool enabled, uint32_t flags) noexcept
+    {
+        if (!enabled) return;
+        const auto base = GameBase();
+        const auto at = reinterpret_cast<const uint8_t*>(base + 0x654570);
+        const auto call = reinterpret_cast<const uint8_t*>(base + 0x65458A);
+        if (at[0] != 0x8B || at[1] != 0x0D || *reinterpret_cast<const uint32_t*>(at + 2) != base + 0xEB9C78 ||
+            call[0] != 0xE8 || base + 0x65458A + 5 + *reinterpret_cast<const int32_t*>(call + 1) != base + 0x338880)
+            return;
+        probeLevel = base + 0xEB9C78;
+        probeFunction = base + 0x338880;
+        probeFar = base + 0x174B320;
+        sightFlags = flags;
+        lampsBehindWalls = true;
+    }
+
     static void CaptureCasters() noexcept
     {
         using fusionfix::shadows::ShadowCasterPresence;
@@ -287,7 +389,8 @@ namespace PlayerShadowAllocation
         PlayerCar::Focus focus;
         ShadowCasterPresence next{};
         next.timeMs = static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds);
-        if (PlayerCar::ReadFocus(focus)) {
+        const bool focused = PlayerCar::ReadFocus(focus);
+        if (focused) {
             const auto add = [&](uintptr_t entity, float extent) {
                 float p[3];
                 if (!CEntity::GetPosition(entity, p)) return;
@@ -301,6 +404,7 @@ namespace PlayerShadowAllocation
         if (!castersLock.test_and_set(std::memory_order_acquire)) {
             casters = next; ++casterCaptures; castersLock.clear(std::memory_order_release);
         }
+        if (focused) try { ProbeLampSight(focus.car); } catch (...) {}
     }
 
     static bool Prepare() noexcept
@@ -553,6 +657,11 @@ namespace PlayerShadowAllocation
             if(casterPriority && kind==budget::Kind::Lamp && !cached && gain==SlotGain::InView && behindLampReach>0 &&
                state.view.valid && viewWeight<=1.01f && geometry.distanceSquared>behindLampReach*behindLampReach)
                 gain=SlotGain::OffScreen;
+            if(casterPriority && kind==budget::Kind::Lamp && !cached && gain==SlotGain::InView &&
+               geometry.distanceSquared<=reach*reach &&
+               LampBehindWall(key,{light.mPosition.x,light.mPosition.y,light.mPosition.z})) {
+                gain=SlotGain::OffScreen; ++lampsHidden;
+            }
             const auto rawGain=gain;
             if(casterPriority) gain=state.gainHold.Apply(key,kind==budget::Kind::Lamp?LampGeometry(light):0,gain,
                 static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
