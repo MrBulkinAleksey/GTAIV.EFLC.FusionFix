@@ -129,6 +129,17 @@ namespace
     bool bSkipPresent = false;
     bool bDeferredFlow = false;             // the waiting frames came from the deferred flow
     LARGE_INTEGER PendingGeneratedDue{};
+
+    // Logs the order the frames go in whenever it changes
+    void LogFlow(bool deferred)
+    {
+        static int logged = -1;
+        if (logged == int(deferred))
+            return;
+        logged = int(deferred);
+        Log(deferred ? "Generated frames: made while the next frame renders, both frames shown inside it"
+                     : "Generated frames: shown by the game's Present at the frame's end, the rendered one inside the next frame");
+    }
     bool bInPresent = false;
     bool bEndOfFrameOnly = false;   // the runtime refused a Present inside the game's scene
     bool bBackBufferDrawn = false;  // the post processing of this frame began: the back buffer has the frame from then on
@@ -708,8 +719,10 @@ namespace
             PresentWaiting(device, false, false);
     }
 
-    // The game's Present, left out after a frame whose frames are presented inside the next one
-    HRESULT(__stdcall* RealPresent)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*) = nullptr;
+    // The game's Present, left out after a frame whose frames are presented inside the next one. An inline hook on the
+    // runtime's Present itself: a plugin between the game and the device (Script Hook's device proxy, an overlay) can
+    // call it through a pointer it kept from before a hook in the vtable, which then never saw the game's Present.
+    SafetyHookInline shPresent{};
 
     HRESULT __stdcall Present(IDirect3DDevice9* device, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty)
     {
@@ -718,7 +731,31 @@ namespace
             bSkipPresent = false;
             return D3D_OK;
         }
-        return RealPresent(device, source, destination, window, dirty);
+        return shPresent.unsafe_stdcall<HRESULT>(device, source, destination, window, dirty);
+    }
+
+    // The same through the swap chain, which the game could present with as well
+    SafetyHookInline shSwapChainPresent{};
+
+    HRESULT __stdcall SwapChainPresent(IDirect3DSwapChain9* swapChain, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty, DWORD flags)
+    {
+        if (bSkipPresent && !bInPresent && GetCurrentThreadId() == RenderThread)
+        {
+            bSkipPresent = false;
+            return D3D_OK;
+        }
+        return shSwapChainPresent.unsafe_stdcall<HRESULT>(swapChain, source, destination, window, dirty, flags);
+    }
+
+    // The module some code is in, for the log
+    std::string ModuleOf(const void* address)
+    {
+        HMODULE module = nullptr;
+        char path[MAX_PATH]{};
+        if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<const char*>(address), &module) ||
+            !GetModuleFileNameA(module, path, MAX_PATH))
+            return "no module";
+        return std::filesystem::path(path).filename().string();
     }
 
     HRESULT(__stdcall* RealDrawPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT) = nullptr;
@@ -767,13 +804,30 @@ namespace
         auto vtable = *reinterpret_cast<void***>(device);
         if (vtable == hooked)
             return;
-        Patch(vtable, 17, RealPresent, &Present);
         Patch(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
         Patch(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
         Patch(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
         Patch(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
         hooked = vtable;
-        Log("Present and draw call hooks installed");
+        Log("Draw call hooks installed");
+
+        if (!shPresent)
+        {
+            auto target = vtable[17];
+            shPresent = safetyhook::create_inline(target, reinterpret_cast<void*>(&Present));
+            Log("Present at %p in %s: %s", target, ModuleOf(target).c_str(), shPresent ? "hooked" : "could NOT be hooked, the generated frames go at the frame's end");
+            if (!shPresent)
+                bDeferredBroken = true;
+
+            IDirect3DSwapChain9* swapChain = nullptr;
+            if (SUCCEEDED(device->GetSwapChain(0, &swapChain)) && swapChain)
+            {
+                auto swapTarget = (*reinterpret_cast<void***>(swapChain))[3];
+                shSwapChainPresent = safetyhook::create_inline(swapTarget, reinterpret_cast<void*>(&SwapChainPresent));
+                Log("Swap chain Present at %p in %s: %s", swapTarget, ModuleOf(swapTarget).c_str(), shSwapChainPresent ? "hooked" : "not hooked");
+                swapChain->Release();
+            }
+        }
     }
 
     // The settings of [TEMPORAL], read again whenever the ini changes while the game runs
@@ -956,7 +1010,9 @@ namespace
         {
             bSkipPresent = false;
             bDeferredBroken = true;
-            Log("The game's Present did not come through the device's Present: the generated frames go at the frame's end again");
+            auto vtable = *reinterpret_cast<void***>(device);
+            Log("The game's Present did not come through the device's Present (the device's vtable has it at %p in %s now): the generated frames go at the frame's end again",
+                vtable[17], ModuleOf(vtable[17]).c_str());
         }
 
         // This frame ended before the last one's frames went: they go first, in their order
@@ -1050,6 +1106,7 @@ namespace
                 bPending = true;
                 bSkipPresent = true;
                 bDeferredFlow = true;
+                LogFlow(true);
                 FusionFix::bFrameGenerationPresenting = true;
                 PendingGeneratedDue = After(Now(), std::clamp(FrameMs * fShowGeneratedAt, 0.0, 50.0));
             }
@@ -1115,6 +1172,7 @@ namespace
                 if (paced)
                 {
                     bDeferredFlow = false;
+                    LogFlow(false);
                     FusionFix::bFrameGenerationPresenting = true;
                     GeneratedAt = Now();
                     PendingDue = After(GeneratedAt, std::clamp(FrameMs * fDelay, 0.0, 50.0));
