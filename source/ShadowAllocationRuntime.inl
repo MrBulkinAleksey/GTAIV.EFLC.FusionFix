@@ -198,7 +198,7 @@ namespace PlayerShadowAllocation
     //   refresh (to clear a car that left), the longest unrefreshed first; every fourth pass is left to the
     //   game's round robin. With a pass every frame, two or three such lamps each refresh many times a second.
     static bool cacheWithCars = false;
-    struct CacheRender { uint32_t key{}; uint32_t at{}; bool hadCaster{}; };
+    struct CacheRender { uint32_t key{}; uint32_t at{}; bool hadCaster{}; bool wasInSlot{}; bool urgent{}; };
     static std::array<CacheRender,8> cacheRenders{};
 
     static bool CachedLampLightsSomeone(const rage::CLightSource& light) noexcept
@@ -225,7 +225,10 @@ namespace PlayerShadowAllocation
         static uint32_t passes = 0;
         int best = -1;
         uint32_t bestAge = 0;
-        if (++passes % 4 != 0)
+        // Every fourth pass goes to the game's round robin, unless a lamp just left its slot.
+        bool urgent = false;
+        for (const auto& r : cacheRenders) urgent |= r.urgent;
+        if (urgent || ++passes % 4 != 0)
             for (unsigned i = 0; i < 8; ++i) {
                 const auto e = entry(i);
                 const int index = *reinterpret_cast<const int32_t*>(e + 0xF8);
@@ -233,13 +236,15 @@ namespace PlayerShadowAllocation
                 auto& r = cacheRenders[i];
                 const auto key = *reinterpret_cast<const uint32_t*>(e + 0xF0);
                 if (r.key != key) r = { key, 0, false };
-                // A lamp holding a dynamic slot draws its shadow there; its cache waits.
+                // A lamp that just lost its dynamic slot shows its cache again at once, and its cache may hold
+                // a car from long ago, so it is redrawn before any other.
                 bool inSlot = false;
                 for (unsigned n = 1; n < 8 && !inSlot; ++n)
                     inSlot = *reinterpret_cast<const uint32_t*>(gameBase + 0xD9F1F8 + n * 0x110) == key; // slot record +0xF8 key
-                if (inSlot) continue;
-                if (!CachedLampLightsSomeone(lights[index]) && !r.hadCaster) continue;
-                const uint32_t age = now - r.at;
+                if (r.wasInSlot && !inSlot) r.urgent = true;
+                r.wasInSlot = inSlot;
+                if (!r.urgent && !CachedLampLightsSomeone(lights[index]) && !r.hadCaster) continue;
+                const uint32_t age = r.urgent ? 0xFFFFFFFFu : now - r.at;
                 if (best < 0 || age > bestAge) { best = int(i); bestAge = age; }
             }
         if (best >= 0) { regs.ecx = static_cast<uint32_t>(best); ++cacheCarRefreshes; }
@@ -248,7 +253,9 @@ namespace PlayerShadowAllocation
         const auto e = entry(chosen);
         const int index = *reinterpret_cast<const int32_t*>(e + 0xF8);
         if (*reinterpret_cast<const int32_t*>(e + 0xF4) == 1 && index >= 0 && static_cast<uint32_t>(index) < count) {
-            cacheRenders[chosen] = { *reinterpret_cast<const uint32_t*>(e + 0xF0), now, CachedLampLightsSomeone(lights[index]) };
+            auto& r = cacheRenders[chosen];
+            const auto key = *reinterpret_cast<const uint32_t*>(e + 0xF0);
+            r = { key, now, CachedLampLightsSomeone(lights[index]), r.key == key && r.wasInSlot, false };
             ++cacheRefreshes;
         }
     }
