@@ -28,6 +28,7 @@ import settings;
 import shaders;
 import renderscale;
 import temporal;
+import upscaler;
 
 #define IDR_FXAA                                 101
 #define IDR_SMAA                                 102
@@ -3064,6 +3065,17 @@ private:
 
         TemporalAA::ProfileMotion = [](IDirect3DDevice9* device, bool begin) { ProfilerMark(device, kProfMotion, begin); };
         HDROutput::ProfileOutput = [](IDirect3DDevice9* device, bool begin) { ProfilerMark(device, kProfHDROutput, begin); };
+        Upscaler::Profile = [](IDirect3DDevice9* device, Upscaler::ProfilePart part, bool begin)
+        {
+            static constexpr int kSections[] =
+            {
+                kProfResolveReactive, kProfResolveUpscale, kProfFrameGeneration, kProfFrameGenerationCopies,
+                kProfFrameGenerationGenerate, kProfFrameGenerationShow, kProfFrameGenerationPresent,
+            };
+            const auto i = static_cast<size_t>(part);
+            if (i < std::size(kSections))
+                ProfilerMark(device, kSections[i], begin);
+        };
         TemporalAA::OnGBufferEnd = [](IDirect3DDevice9* device)
         {
             CopySceneDepth(device);
@@ -4581,9 +4593,13 @@ private:
             kProfSkin, kProfSkinLight, kProfSkinScatter, kProfSkinFinal,
             kProfFog,
         kProfResolve,
+            kProfResolveReactive, kProfResolveUpscale,
         kProfPost,
             kProfPostTAA, kProfPostStipple, kProfPostDOF, kProfPostSunShafts, kProfPostGame, kProfPostAA, kProfPostSharpen,
         kProfHDROutput,
+        kProfFrameGeneration,
+            kProfFrameGenerationCopies, kProfFrameGenerationGenerate, kProfFrameGenerationShow,
+        kProfFrameGenerationPresent,
         kProfSections
     };
     struct ProfilerSectionInfo { const char* name; int parent; };
@@ -4612,11 +4628,16 @@ private:
             { "final", kProfSkin },
             { "the game's fog", kProfFogPass },
         { "temporal AA / upscaling", -1 },
+            { "reactive mask", kProfResolve }, { "DLSS / FSR, copies and wait included", kProfResolve },
         { "post processing", -1 },
             { "temporal AA", kProfPost }, { "stipple filter", kProfPost }, { "depth of field", kProfPost },
             { "sun shafts", kProfPost }, { "the game's post processing", kProfPost }, { "FXAA / SMAA", kProfPost },
             { "sharpening", kProfPost },
         { "HDR output", -1 },
+        { "frame generation", -1 },
+            { "frame made ready for it", kProfFrameGeneration }, { "generation, copies and wait included", kProfFrameGeneration },
+            { "generated frame into the back buffer", kProfFrameGeneration },
+        { "rendered frame's Present (frame generation)", -1 },
     };
     static_assert(std::size(kProfilerSectionInfo) == kProfSections);
     // The game's own passes, between FusionFix's top level sections, are timed by the render target the

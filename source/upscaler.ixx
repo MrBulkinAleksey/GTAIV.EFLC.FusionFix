@@ -17,6 +17,148 @@ import comvars;
 
 namespace Protocol = UpscalerProtocol;
 
+export namespace Upscaler
+{
+    // UpscalerTimingLog in [TEMPORAL]: the render thread's time on the CPU in the parts of the exchange with the helper
+    // and of the frame generation, every 300 upscaled frames in GTAIV.EFLC.FusionFix.Upscaler.log
+    enum class TimingPart : int
+    {
+        Flush,                  // DXVK's FlushRenderingCommands, which waits for DXVK's command stream thread
+        Submit,                 // our submissions to DXVK's queue, LockSubmissionQueue waiting for DXVK's pending ones
+        Images,                 // the game's textures looked up (DXVK) or unwrapped (D3D9on12)
+        CpuWait,                // waits on the CPU for the GPU or the helper (Wine without the game's semaphore)
+        Collect,                // the helper's answer to the request before
+        Evaluate,               // all of Evaluate
+        Generate,               // all of Generate
+        FrameGenerationEnd,     // the frame generation at the end of the frame, Generate included
+        FrameGenerationPresent, // the rendered frame's Present inside the next frame
+        Count
+    };
+
+    // A GPU section for the PostFx profiler (begin, then end), when it is set
+    enum class ProfilePart : int
+    {
+        Reactive,               // FSR's reactive mask
+        Upscale,                // DLSS or FSR with the copies to and from the helper, and the wait for it
+        FrameGeneration,        // all of the frame generation at the end of the frame, around the three below
+        FrameGenerationCopies,  // the finished frame and the one before the HUD made ready for the helper
+        FrameGenerationGenerate, // the generation with the copies to and from the helper, and the wait for it
+        FrameGenerationShow,    // the generated frame sharpened or copied into the back buffer
+        FrameGenerationPresent, // the rendered frame presented inside the next frame
+    };
+    inline void (*Profile)(IDirect3DDevice9* device, ProfilePart part, bool begin) = nullptr;
+}
+
+namespace
+{
+    namespace Timing
+    {
+        constexpr size_t Parts = static_cast<size_t>(Upscaler::TimingPart::Count);
+        constexpr const char* Names[Parts] =
+        {
+            "DXVK FlushRenderingCommands",
+            "submissions to DXVK's queue",
+            "game textures looked up / unwrapped",
+            "waits on the CPU for the GPU or the helper",
+            "the helper's answer to the request before",
+            "Evaluate, all of it",
+            "Generate, all of it",
+            "frame generation at the frame's end, all of it",
+            "rendered frame's Present inside the next frame",
+        };
+        constexpr uint32_t Frames = 300;
+
+        bool enabled = false;
+        LARGE_INTEGER frequency{};
+        double sums[Parts]{};
+        double maxima[Parts]{};
+        uint32_t calls[Parts]{};
+        uint32_t frames = 0;
+        double frameSum = 0.0;
+        double frameMax = 0.0;
+        int64_t lastFrame = 0;
+
+        int64_t Now()
+        {
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+            return now.QuadPart;
+        }
+
+        double Ms(int64_t ticks)
+        {
+            return static_cast<double>(ticks) * 1000.0 / static_cast<double>(frequency.QuadPart);
+        }
+
+        void Reset()
+        {
+            std::fill(std::begin(sums), std::end(sums), 0.0);
+            std::fill(std::begin(maxima), std::end(maxima), 0.0);
+            std::fill(std::begin(calls), std::end(calls), 0u);
+            frames = 0;
+            frameSum = frameMax = 0.0;
+        }
+
+        int64_t Start()
+        {
+            return enabled ? Now() : 0;
+        }
+
+        void Add(Upscaler::TimingPart part, int64_t start)
+        {
+            if (!enabled || !start)
+                return;
+            auto i = static_cast<size_t>(part);
+            auto ms = Ms(Now() - start);
+            sums[i] += ms;
+            maxima[i] = std::max(maxima[i], ms);
+            ++calls[i];
+        }
+
+        // Render thread, once a frame at Evaluate: the time since the last one is the frame's
+        void NextFrame()
+        {
+            if (!enabled)
+            {
+                lastFrame = 0;
+                return;
+            }
+            auto now = Now();
+            if (lastFrame)
+            {
+                auto frame = Ms(now - lastFrame);
+                if (frame < 250.0)
+                {
+                    frameSum += frame;
+                    frameMax = std::max(frameMax, frame);
+                    ++frames;
+                }
+            }
+            lastFrame = now;
+            if (frames < Frames)
+                return;
+
+            {
+                FusionLog::Block log("Upscaler", "Timing");
+                log.Printf("Render thread, CPU milliseconds over %u frames: frame %.2f on average, %.2f at most\n", frames, frameSum / frames, frameMax);
+                log.Printf("  %-48s %8s %8s %8s %6s\n", "", "a frame", "a call", "at most", "calls");
+                for (size_t i = 0; i < Parts; ++i)
+                    if (calls[i])
+                        log.Printf("  %-48s %8.3f %8.3f %8.3f %6u\n", Names[i], sums[i] / frames, sums[i] / calls[i], maxima[i], calls[i]);
+            }
+            Reset();
+        }
+
+        struct Scope
+        {
+            Upscaler::TimingPart part;
+            int64_t start;
+            explicit Scope(Upscaler::TimingPart part) : part(part), start(Start()) {}
+            ~Scope() { Add(part, start); }
+        };
+    }
+}
+
 // NVIDIA DLSS and AMD FSR, run by GTAIV.EFLC.FusionFix.exe (x64) next to the plugin.
 //
 // The helper creates shared D3D12 textures and a shared fence. The plugin copies the frame's color, depth,
@@ -568,6 +710,7 @@ namespace
             auto& s = slots[slot];
             if (s.submitted)
             {
+                Timing::Scope timed(Upscaler::TimingPart::CpuWait);
                 vk.vkWaitForFences(device, 1, &s.fence, VK_TRUE, 2000000000ull);
                 vk.vkResetFences(device, 1, &s.fence);
                 s.submitted = false;
@@ -600,6 +743,7 @@ namespace
                 timeline.pSignalSemaphoreValues = &signalValue;
             }
 
+            Timing::Scope timed(Upscaler::TimingPart::Submit);
             interop->LockSubmissionQueue();
             auto result = vk.vkQueueSubmit(queue, 1, &submit, fence);
             interop->ReleaseSubmissionQueue();
@@ -610,8 +754,12 @@ namespace
         {
             // Everything the game rendered so far must reach the queue first. Before the images are asked for, too: DXVK
             // can give a texture new storage (relocation), which only its command thread knows about.
-            interop->FlushRenderingCommands();
+            {
+                Timing::Scope timed(Upscaler::TimingPart::Flush);
+                interop->FlushRenderingCommands();
+            }
 
+            auto imagesStart = Timing::Start();
             GameImage sources[TextureCount];
             for (size_t i = 0; i < TextureCount; ++i)
             {
@@ -627,6 +775,7 @@ namespace
                     return false;
                 }
             }
+            Timing::Add(Upscaler::TimingPart::Images, imagesStart);
 
             auto& s = NextSlot();
 
@@ -668,6 +817,7 @@ namespace
             // Wine: done before the helper is asked to read them
             if (!Submit(cmd, VK_NULL_HANDLE, 0, 0, s.fence))
                 return false;
+            Timing::Scope timed(Upscaler::TimingPart::CpuWait);
             auto done = vk.vkWaitForFences(device, 1, &s.fence, VK_TRUE, 2000000000ull) == VK_SUCCESS;
             vk.vkResetFences(device, 1, &s.fence);
             return done;
@@ -676,11 +826,17 @@ namespace
         bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue) override
         {
             // The target's current storage, as for the inputs
-            interop->FlushRenderingCommands();
+            {
+                Timing::Scope timed(Upscaler::TimingPart::Flush);
+                interop->FlushRenderingCommands();
+            }
 
             auto i = static_cast<size_t>(index);
             GameImage destination;
-            if (!images[i].image || !GetGameImage(target, destination) || destination.format != Formats[i] ||
+            auto imagesStart = Timing::Start();
+            bool found = images[i].image && GetGameImage(target, destination);
+            Timing::Add(Upscaler::TimingPart::Images, imagesStart);
+            if (!found || destination.format != Formats[i] ||
                 destination.extent.width != Width(i) || destination.extent.height != Height(i))
             {
                 static uint32_t reported = 0;
@@ -826,6 +982,7 @@ namespace
 
         void WaitFor(uint64_t value)
         {
+            Timing::Scope timed(Upscaler::TimingPart::CpuWait);
             if (value && fence->GetCompletedValue() < value && SUCCEEDED(fence->SetEventOnCompletion(value, event)))
                 WaitForSingleObject(event, 2000);
         }
@@ -936,17 +1093,21 @@ namespace
         {
             // D3D9on12 records into command lists of its own, which have to reach the GPU before this queue can
             // wait for them. An event query is the D3D9 way to submit them.
-            IDirect3DQuery9* query = nullptr;
-            if (SUCCEEDED(device9->CreateQuery(D3DQUERYTYPE_EVENT, &query)) && query)
             {
-                query->Issue(D3DISSUE_END);
-                query->GetData(nullptr, 0, D3DGETDATA_FLUSH);
-                query->Release();
+                Timing::Scope timed(Upscaler::TimingPart::Flush);
+                IDirect3DQuery9* query = nullptr;
+                if (SUCCEEDED(device9->CreateQuery(D3DQUERYTYPE_EVENT, &query)) && query)
+                {
+                    query->Issue(D3DISSUE_END);
+                    query->GetData(nullptr, 0, D3DGETDATA_FLUSH);
+                    query->Release();
+                }
             }
 
             // Unwrapping makes the queue wait for the D3D9 work on the resource, and leaves it in the common state
             ID3D12Resource* sources[TextureCount]{};
             bool ok = true;
+            auto imagesStart = Timing::Start();
             for (size_t i = 0; i < TextureCount && ok; ++i)
             {
                 if (!inputs[i])
@@ -954,6 +1115,7 @@ namespace
                 ok = images[i] && SUCCEEDED(on12->UnwrapUnderlyingResource(inputs[i], queue, IID_PPV_ARGS(&sources[i]))) && sources[i] &&
                     Matches(sources[i], images[i]);
             }
+            Timing::Add(Upscaler::TimingPart::Images, imagesStart);
 
             if (ok)
             {
@@ -1000,7 +1162,10 @@ namespace
         {
             auto source = images[static_cast<size_t>(index)];
             ID3D12Resource* destination = nullptr;
-            if (!source || FAILED(on12->UnwrapUnderlyingResource(target, queue, IID_PPV_ARGS(&destination))) || !destination)
+            auto imagesStart = Timing::Start();
+            bool unwrapped = source && SUCCEEDED(on12->UnwrapUnderlyingResource(target, queue, IID_PPV_ARGS(&destination))) && destination;
+            Timing::Add(Upscaler::TimingPart::Images, imagesStart);
+            if (!unwrapped)
                 return false;
 
             bool ok = Matches(destination, source);
@@ -1294,6 +1459,7 @@ namespace
         if (!helper.pending)
             return true;
 
+        Timing::Scope timed(Upscaler::TimingPart::Collect);
         auto answer = helper.Collect(500);
         if (answer == HelperProcess::Answer::Ok)
             return true;
@@ -1447,6 +1613,8 @@ export namespace Upscaler
     // Render thread: upscales Frame.Color into Frame.Output, false leaves Output untouched
     bool Evaluate(Backend backend, const Frame& frame)
     {
+        Timing::NextFrame();
+        Timing::Scope timed(TimingPart::Evaluate);
         preparedFrameId = 0;
         if (state != State::Ready || !IsAvailable(backend) || !frame.Color || !frame.Depth || !frame.Motion || !frame.Output)
             return false;
@@ -1577,7 +1745,10 @@ export namespace Upscaler
         }
 
         // On the CPU: the helper answers once its GPU work, which signals outputValue, has finished
-        if (!helper.Request(Protocol::Command::Evaluate, 500))
+        auto waitStart = Timing::Start();
+        bool answered = helper.Request(Protocol::Command::Evaluate, 500);
+        Timing::Add(TimingPart::CpuWait, waitStart);
+        if (!answered)
         {
             static uint32_t reported = 0;
             bool exited = WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0;
@@ -1618,6 +1789,7 @@ export namespace Upscaler
     {
         if (!IsFrameGenerationReady() || !present || !generated)
             return false;
+        Timing::Scope timed(TimingPart::Generate);
         auto id = preparedFrameId;
         preparedFrameId = 0;
 
@@ -1656,7 +1828,10 @@ export namespace Upscaler
             return bridge->SubmitOutput(generated, Protocol::Texture::Generated, outputValue);
         }
 
-        if (!helper.Request(Protocol::Command::Generate, 500))
+        auto waitStart = Timing::Start();
+        bool answered = helper.Request(Protocol::Command::Generate, 500);
+        Timing::Add(TimingPart::CpuWait, waitStart);
+        if (!answered)
         {
             static uint32_t reported = 0;
             bool exited = WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0;
@@ -1669,6 +1844,29 @@ export namespace Upscaler
             return false;
         }
         return bridge->SubmitOutput(generated, Protocol::Texture::Generated, outputValue);
+    }
+
+    // UpscalerTimingLog
+    void SetTimingLog(bool enabled)
+    {
+        if (enabled && !Timing::enabled)
+        {
+            QueryPerformanceFrequency(&Timing::frequency);
+            Timing::Reset();
+            Timing::lastFrame = 0;
+        }
+        Timing::enabled = enabled;
+    }
+
+    // The frame generation's parts of the timing: a start, 0 while it is off, then the part it was
+    int64_t TimingStart()
+    {
+        return Timing::Start();
+    }
+
+    void TimingAdd(TimingPart part, int64_t start)
+    {
+        Timing::Add(part, start);
     }
 
     // The job object ends the helper with the game, and the helper also watches the game process

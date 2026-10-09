@@ -498,8 +498,26 @@ namespace
         device->ColorFill(backBuffer, &square, generated ? D3DCOLOR_XRGB(255, 0, 255) : D3DCOLOR_XRGB(0, 255, 0));
     }
 
+    // A section of the PostFx profiler, when it runs
+    void Profile(IDirect3DDevice9* device, Upscaler::ProfilePart part, bool begin)
+    {
+        if (Upscaler::Profile)
+            Upscaler::Profile(device, part, begin);
+    }
+
+    void PresentPendingTimed(IDirect3DDevice9* device, bool late);
+
     // Presents the waiting rendered frame, the game's back buffer kept as it was. late: the next frame ended first.
     void PresentPending(IDirect3DDevice9* device, bool late)
+    {
+        auto start = Upscaler::TimingStart();
+        Profile(device, Upscaler::ProfilePart::FrameGenerationPresent, true);
+        PresentPendingTimed(device, late);
+        Profile(device, Upscaler::ProfilePart::FrameGenerationPresent, false);
+        Upscaler::TimingAdd(Upscaler::TimingPart::FrameGenerationPresent, start);
+    }
+
+    void PresentPendingTimed(IDirect3DDevice9* device, bool late)
     {
         bPending = false;
         bool retry = false;
@@ -676,6 +694,7 @@ namespace
         IniTime = std::filesystem::last_write_time(IniPath, error);
 
         fDelay = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
+        Upscaler::SetTimingLog(iniReader.ReadInteger("TEMPORAL", "UpscalerTimingLog", 0) != 0);
         nDebug = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDebug", 0);
         auto previousPacing = nPacing;
         nPacing = std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGenerationPacing", 2), 0, 2);
@@ -884,12 +903,20 @@ namespace
         PresentRT->mD3DTexture->GetSurfaceLevel(0, &presentSurface);
         GeneratedRT->mD3DTexture->GetSurfaceLevel(0, &generatedSurface);
 
-        if (presentSurface && generatedSurface && SUCCEEDED(device->StretchRect(backBuffer, nullptr, presentSurface, nullptr, D3DTEXF_POINT)))
+        Profile(device, Upscaler::ProfilePart::FrameGeneration, true);
+        Profile(device, Upscaler::ProfilePart::FrameGenerationCopies, true);
+        bool copied = presentSurface && generatedSurface && SUCCEEDED(device->StretchRect(backBuffer, nullptr, presentSurface, nullptr, D3DTEXF_POINT));
+        auto hdr = HDROutput::IsActive();
+        if (copied && hudLess)
+            ApplyFinishingPasses();
+        Profile(device, Upscaler::ProfilePart::FrameGenerationCopies, false);
+        if (copied)
         {
-            auto hdr = HDROutput::IsActive();
-            if (hudLess)
-                ApplyFinishingPasses();
-            if (Upscaler::Generate(PresentRT->mD3DTexture, hudLess ? HudLessRT->mD3DTexture : nullptr, GeneratedRT->mD3DTexture, hdr ? HDROutput::GetPeakNits() : 0.0f))
+            Profile(device, Upscaler::ProfilePart::FrameGenerationGenerate, true);
+            bool generated = Upscaler::Generate(PresentRT->mD3DTexture, hudLess ? HudLessRT->mD3DTexture : nullptr, GeneratedRT->mD3DTexture,
+                hdr ? HDROutput::GetPeakNits() : 0.0f);
+            Profile(device, Upscaler::ProfilePart::FrameGenerationGenerate, false);
+            if (generated)
             {
                 static bool first = true;
                 if (first)
@@ -914,6 +941,7 @@ namespace
                 // The game presents the generated frame, the rendered one waits in PresentRT. Not a frame generated
                 // without a previous one, nor before the frame time is known.
                 bool paced = pacing && !Upscaler::WasGenerateReset() && FrameMs > 0.0;
+                Profile(device, Upscaler::ProfilePart::FrameGenerationShow, true);
                 // Sharpened here when the post processing left it: before bPending, which a draw call would present
                 if (paced)
                 {
@@ -930,6 +958,7 @@ namespace
                 }
                 else if (sharpen)
                     SharpenBackBuffer(device, hudLess, true);
+                Profile(device, Upscaler::ProfilePart::FrameGenerationShow, false);
                 if (paced)
                 {
                     FusionFix::bFrameGenerationPresenting = true;
@@ -949,6 +978,7 @@ namespace
         {
             LogOnce(3, "The back buffer could not be copied");
         }
+        Profile(device, Upscaler::ProfilePart::FrameGeneration, false);
 
         SAFE_RELEASE(presentSurface);
         SAFE_RELEASE(generatedSurface);
@@ -1040,7 +1070,10 @@ public:
 
             FusionFix::onBeforePresent() += []()
             {
+                auto start = Upscaler::TimingStart();
                 OnBeforePresent();
+                if (mode != Mode::Off)
+                    Upscaler::TimingAdd(Upscaler::TimingPart::FrameGenerationEnd, start);
             };
 
             FusionFix::onBeforeReset() += []()
