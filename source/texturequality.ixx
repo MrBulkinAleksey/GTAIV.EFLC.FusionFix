@@ -323,8 +323,13 @@ private:
         return shSetTexture && shSetSamplerState;
     }
 
+    // UpscalerLodBias in [TEMPORAL]: with DLAA or FSR the textures' mips go this much further below the render scale's,
+    // as AMD and NVIDIA advise: the upscaler resolves the detail over the jittered frames that one frame would alias
+    static inline float fUpscalerLodBias = -1.0f;
+
     static void ReadGroundIni(CIniReader& iniReader)
     {
+        fUpscalerLodBias = std::clamp(iniReader.ReadFloat("TEMPORAL", "UpscalerLodBias", -1.0f), -2.0f, 0.0f);
         fGroundHeightBlend = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundHeightBlend", 1.0f), 0.0f, 1.0f);
         fGroundHeightBlendDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundHeightBlendDepth", 0.2f), 0.01f, 1.0f);
         fGroundAntiTiling = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTiling", 1.0f), 0.0f, 1.0f);
@@ -462,8 +467,8 @@ private:
         bInGBuffer = true;
 
         // Menu steps of -0.25, and the render scale's: textures as sharp as they'd be at the screen size, which DLSS
-        // and FSR keep through the upscale
-        const float scaleBias = std::log2(RenderScale::GetScale());
+        // and FSR keep through the upscale, and UpscalerLodBias more with them
+        const float scaleBias = std::log2(RenderScale::GetScale()) + (RenderScale::IsUpscalerAntialiasing() ? fUpscalerLodBias : 0.0f);
         const float bias = -0.25f * Pref(lodBiasPref) + scaleBias;
         if (bias < 0.0f)
         {

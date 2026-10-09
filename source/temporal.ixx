@@ -1853,7 +1853,11 @@ public:
         frame.Depth = DepthRT->mD3DTexture;
         frame.Motion = MotionRT->mD3DTexture;
         // NVIDIA advises against a mask for DLSS
+        if (Upscaler::Profile)
+            Upscaler::Profile(device, Upscaler::ProfilePart::Reactive, true);
         frame.Reactive = backend == Upscaler::Backend::FSR ? RenderReactive(device, scene) : nullptr;
+        if (Upscaler::Profile)
+            Upscaler::Profile(device, Upscaler::ProfilePart::Reactive, false);
         frame.Output = output;
         frame.Width = static_cast<uint32_t>(HistoryWidth);
         frame.Height = static_cast<uint32_t>(HistoryHeight);
@@ -1873,6 +1877,7 @@ public:
         frame.FrameGeneration = FrameGeneration::IsEnabled();
         frame.HighDynamicRange = HDROutput::IsActive();
         frame.HudLess = FrameGeneration::UsesHudLess();
+        frame.AsyncGeneration = FrameGeneration::UsesAsyncCompute();
         auto world = CurrentCamera.View.Inverse();
         auto normalized = [&](int row, float sign, float (&out)[3])
         {
@@ -1886,7 +1891,12 @@ public:
         for (int i = 0; i < 3; ++i)
             frame.CameraPosition[i] = static_cast<float>(world.m[3][i]);
 
-        if (!Upscaler::Evaluate(backend, frame))
+        if (Upscaler::Profile)
+            Upscaler::Profile(device, Upscaler::ProfilePart::Upscale, true);
+        bool evaluated = Upscaler::Evaluate(backend, frame);
+        if (Upscaler::Profile)
+            Upscaler::Profile(device, Upscaler::ProfilePart::Upscale, false);
+        if (!evaluated)
             return false;
 
         RecentJitter[RecentJitterCount % 32][0] = frame.JitterX;

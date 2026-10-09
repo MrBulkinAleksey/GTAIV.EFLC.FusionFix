@@ -29,7 +29,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 10;
+    constexpr uint32_t Version = 12;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -63,7 +63,8 @@ namespace UpscalerProtocol
     // Motion    DXGI_FORMAT_R16G16_FLOAT        previous - current position in texture coordinates, no jitter
     // Reactive  DXGI_FORMAT_R16_FLOAT           0 to 1, how much a pixel should follow the current frame
     // Output    DXGI_FORMAT_R16G16B16A16_FLOAT  written by the upscaler
-    // Frame generation only, at the output size, otherwise their handles are 0:
+    // Frame generation only, at the output size, otherwise their handles are 0; DXGI_FORMAT_B8G8R8A8_UNORM instead with
+    // ConfigureFlags::EightBitFrames:
     // Present   DXGI_FORMAT_R16G16B16A16_FLOAT  the finished frame, sRGB encoded or scRGB with HDR output
     // Generated DXGI_FORMAT_R16G16B16A16_FLOAT  written by the frame generation
     // HudLess   DXGI_FORMAT_R16G16B16A16_FLOAT  Present before the HUD was drawn, which tells the HUD apart
@@ -94,6 +95,8 @@ namespace UpscalerProtocol
         constexpr uint32_t GameFence = 1 << 2;      // FenceHandle is the game's semaphore; cleared by the helper if it can't open it
         constexpr uint32_t FrameGeneration = 1 << 3; // FSR frame generation; cleared by the helper if it can't create it
         constexpr uint32_t HighDynamicRange = 1 << 4; // Present is scRGB
+        constexpr uint32_t EightBitFrames = 1 << 5;   // the frame generation's textures are B8G8R8A8_UNORM; cleared by the helper if the GPU can't write them
+        constexpr uint32_t AsyncGeneration = 1 << 6;  // Generate runs on a compute queue of the helper; cleared if it has none
     }
 
 #pragma pack(push, 8)
