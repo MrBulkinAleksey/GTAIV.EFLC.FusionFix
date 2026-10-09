@@ -674,15 +674,19 @@ namespace PlayerShadowAllocation
         }
     }
 
+    // The guard as the image was when the ASI loaded, before any module hooked anything: install
+    // runs from the async initializers, where framelimit.ixx hooks the frame counter increment
+    // the guard checks, and whichever ran first decided whether night shadow selection worked.
+    static bool guardAtLoad = false;
+    static std::string guardDetailsAtLoad;
+
     static bool Install(bool publish)
     {
         gameBase = GameBase();
         publicationEnabled = publish;
-        if (!allocation::ValidateMappedImage(reinterpret_cast<const uint8_t*>(gameBase),
-                fusionfix::shadows::ce::ImageSize, gameBase))
+        if (!guardAtLoad)
         {
-            installStatus = "guard_failed " + fusionfix::shadows::ce::diagnostics::Describe(
-                reinterpret_cast<const uint8_t*>(gameBase), fusionfix::shadows::ce::ImageSize, gameBase);
+            installStatus = "guard_failed " + guardDetailsAtLoad;
             return false;
         }
         // Prepare all trampolines before any write. Mid hooks are inert until

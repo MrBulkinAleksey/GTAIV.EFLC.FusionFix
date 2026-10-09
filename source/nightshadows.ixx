@@ -587,6 +587,10 @@ public:
                 // range. This remains diagnostic only: no guard bypass.
                 ShadowDiagnostics::startupGuardDetails = fusionfix::shadows::ce::diagnostics::Describe(
                     image, fusionfix::shadows::ce::ImageSize, reinterpret_cast<uintptr_t>(image));
+                // The allocation adapter installs from the async initializers; its guard is taken here.
+                PlayerShadowAllocation::guardAtLoad = fusionfix::shadows::ce::allocation::ValidateMappedImage(
+                    image, fusionfix::shadows::ce::ImageSize, reinterpret_cast<uintptr_t>(image));
+                PlayerShadowAllocation::guardDetailsAtLoad = ShadowDiagnostics::startupGuardDetails;
             }
         }
 
