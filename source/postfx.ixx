@@ -760,6 +760,7 @@ public:
     // Lights without a shadow map this frame (most headlights, lamps left without a slot) light a car's surroundings all the same, so
     // their contact shadow is only a dark frame around it on a lit floor (tunnels): this much of it is kept
     float fLocalContactShadowUnshadowed = 0.0f;
+    bool bCacheWithCars = false; // [SHADOWS] CacheWithCars: cached shadow maps then hold cars and people too
     float fLocalContactLightIntensity = -1.0f;  // what c202.w holds for the light being drawn
     float fLocalContactShadowLength = 0.5f;
     float fLocalContactShadowThickness = 0.2f;
@@ -1738,6 +1739,7 @@ public:
         fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         fLocalContactShadowUnshadowed = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsWithoutShadowMap", 0.0f), 0.0f, 1.0f);
+        bCacheWithCars = iniReader.ReadInteger("SHADOWS", "CacheWithCars", 0) != 0;
         fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 4.0f), 0.0f, 20.0f);
         fVolumetricLightScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightScale", 0.25f), 0.0f, 2.0f);
         fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 100.0f), 10.0f, 1000.0f);
@@ -8132,7 +8134,9 @@ private:
     // [0x1036780]; buffer [0x1174794]; a cached map where (buffer * 16 + cache index) * 0x100 + 0x119d1d0 is set;
     // a dynamic one in the 7 keys at 0x119fc08 + buffer * 0x880, 0x110 apart. Without the layout, by the flags alone
     static inline uintptr_t ShadowLookupBase = 0;
-    static bool HasShadowMap(const rage::CLightSource& light)
+    // A cached map holds the static world only, unless CacheWithCars puts cars and people in it: then a light lit
+    // from its cache shows no car shadow, and a contact shadow under the car would stand alone.
+    static bool HasShadowMap(const rage::CLightSource& light, bool cacheCounts)
     {
         if (!(light.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW)))
             return false;
@@ -8144,7 +8148,7 @@ private:
         const int buffer = *reinterpret_cast<const int*>(at(0x1174794));
         if (buffer < 0 || buffer > 1)
             return true;
-        if ((light.mFlags & rage::LF_STATIC_SHADOW) && light.mShadowCacheIndex >= 0 && light.mShadowCacheIndex < 16 &&
+        if (cacheCounts && (light.mFlags & rage::LF_STATIC_SHADOW) && light.mShadowCacheIndex >= 0 && light.mShadowCacheIndex < 16 &&
             *reinterpret_cast<const uint32_t*>(at(0x119D1D0) + (buffer * 16 + light.mShadowCacheIndex) * 0x100))
             return true;
         if (light.mFlags & rage::LF_DYNAMIC_SHADOW)
@@ -8173,13 +8177,13 @@ private:
             if (R.LocalContactShadowConsts[7] == 0.0f)
                 return;
             const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28);
-            // LocalContactShadowsWithoutShadowMap is for lights that cast shadows but got no map this frame (tunnel
-            // lamps without a slot left a dark frame around cars). Lights that never cast shadows, most of those in
-            // buildings, and lights inside only (0x20 without 0x40) keep their contact shadows.
-            const bool castsShadows = (light.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW)) != 0;
+            // A contact shadow only belongs where the light's own shadow map can show the car: a dynamic slot, or the
+            // cache once CacheWithCars puts cars in it. Elsewhere outside (no slot, a static cache, lights casting no
+            // shadows) it stood alone, a dark frame around a car with no shadow, and LocalContactShadowsWithoutShadowMap
+            // applies. Lights inside only (0x20 without 0x40) keep theirs, as most in buildings cast no shadows at all.
             const bool insideOnly = (light.mFlags & 0x60) == 0x20;
             const float intensity = (light.mFlags & 0x200) ? 0.0f
-                : R.fLocalContactShadowUnshadowed >= 1.0f || !castsShadows || insideOnly || HasShadowMap(light)
+                : R.fLocalContactShadowUnshadowed >= 1.0f || insideOnly || HasShadowMap(light, R.bCacheWithCars)
                     ? R.fLocalContactShadowIntensity
                     : R.fLocalContactShadowIntensity * R.fLocalContactShadowUnshadowed;
             const bool off = intensity <= 0.0f;
