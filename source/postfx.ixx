@@ -4635,9 +4635,9 @@ private:
             { "sharpening", kProfPost },
         { "HDR output", -1 },
         { "frame generation", -1 },
-            { "frame made ready for it", kProfFrameGeneration }, { "generation, copies and wait included", kProfFrameGeneration },
+            { "frame made ready for it", kProfFrameGeneration }, { "generation (with its wait unless deferred)", kProfFrameGeneration },
             { "generated frame into the back buffer", kProfFrameGeneration },
-        { "rendered frame's Present (frame generation)", -1 },
+        { "frames presented inside the next frame", -1 },
     };
     static_assert(std::size(kProfilerSectionInfo) == kProfSections);
     // The game's own passes, between FusionFix's top level sections, are timed by the render target the

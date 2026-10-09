@@ -31,7 +31,7 @@ export namespace Upscaler
         Evaluate,               // all of Evaluate
         Generate,               // all of Generate
         FrameGenerationEnd,     // the frame generation at the end of the frame, Generate included
-        FrameGenerationPresent, // the rendered frame's Present inside the next frame
+        FrameGenerationPresent, // a frame presented inside the next frame, the generated one taken from the helper first
         Count
     };
 
@@ -44,7 +44,7 @@ export namespace Upscaler
         FrameGenerationCopies,  // the finished frame and the one before the HUD made ready for the helper
         FrameGenerationGenerate, // the generation with the copies to and from the helper, and the wait for it
         FrameGenerationShow,    // the generated frame sharpened or copied into the back buffer
-        FrameGenerationPresent, // the rendered frame presented inside the next frame
+        FrameGenerationPresent, // a frame presented inside the next frame, the generated one taken from the helper first
     };
     inline void (*Profile)(IDirect3DDevice9* device, ProfilePart part, bool begin) = nullptr;
 }
@@ -64,7 +64,7 @@ namespace
             "Evaluate, all of it",
             "Generate, all of it",
             "frame generation at the frame's end, all of it",
-            "rendered frame's Present inside the next frame",
+            "frames presented inside the next frame",
         };
         constexpr uint32_t Frames = 300;
 
@@ -422,7 +422,7 @@ namespace
             VkFence fence = VK_NULL_HANDLE;
             bool submitted = false;
         };
-        std::array<Slot, 4> slots{};
+        std::array<Slot, 8> slots{};   // one for each submission, its fence tracks it
         uint32_t slot = 0;
 
         struct SharedImage
@@ -821,7 +821,12 @@ namespace
             vk.vkEndCommandBuffer(cmd);
 
             if (!WaitOnCpu())
-                return Submit(cmd, VK_NULL_HANDLE, 0, signalValue, VK_NULL_HANDLE);
+            {
+                if (!Submit(cmd, VK_NULL_HANDLE, 0, signalValue, s.fence))
+                    return false;
+                s.submitted = true;
+                return true;
+            }
 
             // Wine: done before the helper is asked to read them
             if (!Submit(cmd, VK_NULL_HANDLE, 0, 0, s.fence))
@@ -855,7 +860,8 @@ namespace
                 return false;
             }
 
-            auto& s = slots[slot];
+            // A slot of its own: the copy of the generated frame can come after the next frame's Evaluate
+            auto& s = NextSlot();
             auto output = images[i].image;
             auto cmd = s.output;
             vk.vkResetCommandBuffer(cmd, 0);
@@ -1405,6 +1411,7 @@ namespace
     bool preparedReset = false;
     bool preparedHudLess = false;
     bool generatedReset = false;       // the last Generate had nothing to interpolate from
+    uint64_t generatedValue = 0;       // the helper signals it once the frame posted by PostGenerate is generated; 0 when none waits
 
     std::filesystem::path HelperPath()
     {
@@ -1450,6 +1457,7 @@ namespace
         configureFailed = false;
         generationFailed = false;
         preparedFrameId = 0;
+        generatedValue = 0;
         if (!helper.Start(HelperPath(), bridge->luid))
         {
             Log("The helper could not be started: error %lu", GetLastError());
@@ -1651,6 +1659,8 @@ export namespace Upscaler
         if (reconfigure)
         {
             bridge->ReleaseImports();
+            // A generated frame not taken yet went with the shared textures
+            generatedValue = 0;
             configuredBackend = backendId;
             configuredWidth = frame.Width;
             configuredHeight = frame.Height;
@@ -1804,11 +1814,13 @@ export namespace Upscaler
     }
 
     // Render thread, after the frame is finished: present is the frame at the output size (A16B16G16R16F, sRGB encoded
-    // or scRGB), hudLess the same before the HUD, when Evaluate was told it comes; generated receives the frame between
-    // the previous one and it. False leaves generated untouched.
-    bool Generate(IDirect3DTexture9* present, IDirect3DTexture9* hudLess, IDirect3DTexture9* generated, float maxLuminance)
+    // or scRGB, or A8R8G8B8 with IsFrameGenerationEightBit), hudLess the same before the HUD, when Evaluate was told it
+    // comes. The helper generates the frame between the previous one and it, which TakeGenerated copies out later: the
+    // game's GPU work goes on meanwhile. False: nothing to take.
+    bool PostGenerate(IDirect3DTexture9* present, IDirect3DTexture9* hudLess, float maxLuminance)
     {
-        if (!IsFrameGenerationReady() || !present || !generated)
+        generatedValue = 0;
+        if (!IsFrameGenerationReady() || !present)
             return false;
         Timing::Scope timed(TimingPart::Generate);
         auto id = preparedFrameId;
@@ -1846,7 +1858,8 @@ export namespace Upscaler
         if (!bridge->WaitOnCpu())
         {
             Post(Protocol::Command::Generate, outputValue);
-            return bridge->SubmitOutput(generated, Protocol::Texture::Generated, outputValue);
+            generatedValue = outputValue;
+            return true;
         }
 
         auto waitStart = Timing::Start();
@@ -1864,7 +1877,34 @@ export namespace Upscaler
                 generationFailed = true;
             return false;
         }
-        return bridge->SubmitOutput(generated, Protocol::Texture::Generated, outputValue);
+        generatedValue = outputValue;
+        return true;
+    }
+
+    // Render thread, any time before the next PostGenerate: the frame it posted into generated, once the helper is done
+    // with it, which the GPU waits for. False leaves generated untouched.
+    bool TakeGenerated(IDirect3DTexture9* generated)
+    {
+        auto value = generatedValue;
+        generatedValue = 0;
+        if (!value || !generated || state != State::Ready)
+            return false;
+        // The helper answered long ago; a failed Generate leaves nothing to take
+        if (!CollectPending() || generationFailed)
+            return false;
+        return bridge->SubmitOutput(generated, Protocol::Texture::Generated, value);
+    }
+
+    // The frame PostGenerate posted won't be taken
+    void DropGenerated()
+    {
+        generatedValue = 0;
+    }
+
+    // Both at once: generated receives the frame between the previous one and present
+    bool Generate(IDirect3DTexture9* present, IDirect3DTexture9* hudLess, IDirect3DTexture9* generated, float maxLuminance)
+    {
+        return generated && PostGenerate(present, hudLess, maxLuminance) && TakeGenerated(generated);
     }
 
     // UpscalerTimingLog

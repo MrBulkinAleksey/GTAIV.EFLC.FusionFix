@@ -31,12 +31,14 @@ import upscaler;
 //   drawn over the whole frame after the HUD, the console gamma and the HDR output, is drawn over the copy too.
 // - Once the frame is finished, HUD and HDR output included, the back buffer is copied into Present and the helper
 //   generates the frame between it and the previous one into Generated.
-// - Frame Generation in the graphics menu (Advanced, with DLAA or FSR and AMD's frame generation library): the game
-//   presents the generated frame in place of its own, which waits in
-//   PresentRT. Nothing waits for it: the game goes on with the next frame, and a draw call of the render thread
-//   halfway through it (FrameGenerationDelay, see FrameGenerationPacing below) presents the rendered frame, inside
-//   the game's scene, and leaves the back buffer as it found it. A frame that ends before that presents the waiting
-//   one first.
+// - Frame Generation in the graphics menu (Advanced, with DLAA or FSR and AMD's frame generation library), deferred
+//   (FrameGenerationDeferred, the default): the helper is handed the frame at its end and generates while the next frame
+//   renders. The game's own Present is left out; a draw call of the render thread FrameGenerationShowGeneratedAt into the
+//   next frame takes the generated frame from the helper and presents it, and one FrameGenerationDelay later presents
+//   the rendered frame, which waits in PresentRT, both inside the game's scene, the back buffer left as it was found.
+//   Without it the game presents the generated frame in place of its own, which the GPU waits for before it goes on, and
+//   the rendered frame goes from a draw call FrameGenerationDelay into the next frame. A frame that ends before its
+//   waiting frames went presents them first.
 // - Sharpening (CAS) is left out of the post processing and drawn over the frames as they are shown, the rendered and
 //   the generated one, with the HUD left as it is (SharpenShownFrame in postfx.ixx). Sharpened before the generation,
 //   the shadow under a moving car went along with the ground in the generated frames and was shown twice.
@@ -57,6 +59,12 @@ namespace
 
     Mode mode = Mode::Off;
     float fDelay = 0.5f;            // of the frame's own time, between the generated and the rendered frame
+    // FrameGenerationDeferred: the helper generates while the next frame renders, and both frames are presented inside
+    // it, the generated one FrameGenerationShowGeneratedAt into it; the game's own Present is left out. Without it the
+    // game's Present shows the generated frame, which the GPU waits for before it goes on with the next frame.
+    bool bDeferredSetting = true;
+    float fShowGeneratedAt = 0.2f;
+    bool bDeferredBroken = false;   // the game's Present did not come through the device: not deferred any more
 
     // FrameGenerationDebug in [TEMPORAL]
     namespace Debug
@@ -112,6 +120,15 @@ namespace
 
     // The rendered frame waiting in PresentRT for its Present, after the generated one went
     bool bPending = false;
+    // Deferred: the generated frame waiting for the helper and its Present, before the rendered one, and the game's
+    // Present that is left out
+    bool bPendingGenerated = false;
+    bool bGeneratedTaken = false;           // copied out of the helper into GeneratedRT
+    bool bPendingGeneratedSharpen = false;  // sharpened as it is shown
+    bool bPendingGeneratedHudLess = false;
+    bool bSkipPresent = false;
+    bool bDeferredFlow = false;             // the waiting frames came from the deferred flow
+    LARGE_INTEGER PendingGeneratedDue{};
     bool bInPresent = false;
     bool bEndOfFrameOnly = false;   // the runtime refused a Present inside the game's scene
     bool bBackBufferDrawn = false;  // the post processing of this frame began: the back buffer has the frame from then on
@@ -171,9 +188,19 @@ namespace
     // 1: the draw calls, FrameGenerationDelay of the previous frames' draw calls.
     // 2: the GPU: timestamps through the frame tell the draw call the GPU passes FrameGenerationDelay of its frame at,
     //    read back a few frames later without waiting; until there is one, as 1.
+    //    Deferred, the generated frame goes FrameGenerationShowGeneratedAt into the frame and the rendered one
+    //    FrameGenerationDelay after it, each by these rules.
     int32_t nPacing = 2;
     double DrawsEma = 0.0;          // draw calls of a frame, smoothed
-    double TargetDraw = 0.0;        // the draw call for 2, smoothed; 0 while unknown
+    double TargetDraws[2]{};        // the draw calls for 2, the generated frame's and the rendered frame's, smoothed; 0 while unknown
+
+    // Where in the frame a waiting frame goes: 0 the generated one (deferred), 1 the rendered one
+    double Aim(int which)
+    {
+        if (which == 0)
+            return fShowGeneratedAt;
+        return bDeferredFlow ? std::min(fShowGeneratedAt + fDelay, 0.98f) : fDelay;
+    }
 
     struct GpuFrame
     {
@@ -249,21 +276,26 @@ namespace
             if (disjoint || !frequency || times.size() < 3 || times.back() <= times.front())
                 continue;
 
-            // The first draw call the GPU reaches FrameGenerationDelay of the frame at, between two timestamps
+            // The first draw call the GPU reaches each aim of the frame at, between two timestamps
             double total = static_cast<double>(times.back() - times.front());
-            double aim = fDelay * total;
-            double draw = f.draws.back();
-            for (size_t i = 1; i < times.size(); ++i)
+            double draw = 0.0;
+            for (int which = 0; which < 2; ++which)
             {
-                double t = static_cast<double>(times[i] - times.front());
-                if (t < aim)
-                    continue;
-                double t0 = static_cast<double>(times[i - 1] - times.front());
-                double part = t > t0 ? (aim - t0) / (t - t0) : 0.0;
-                draw = f.draws[i - 1] + part * (static_cast<double>(f.draws[i]) - f.draws[i - 1]);
-                break;
+                double aim = Aim(which) * total;
+                draw = f.draws.back();
+                for (size_t i = 1; i < times.size(); ++i)
+                {
+                    double t = static_cast<double>(times[i] - times.front());
+                    if (t < aim)
+                        continue;
+                    double t0 = static_cast<double>(times[i - 1] - times.front());
+                    double part = t > t0 ? (aim - t0) / (t - t0) : 0.0;
+                    draw = f.draws[i - 1] + part * (static_cast<double>(f.draws[i]) - f.draws[i - 1]);
+                    break;
+                }
+                auto& target = TargetDraws[which];
+                target = target > 0.0 ? target + (draw - target) * 0.25 : draw;
             }
-            TargetDraw = TargetDraw > 0.0 ? TargetDraw + (draw - TargetDraw) * 0.25 : draw;
 
             auto& g = GpuStats;
             ++g.frames;
@@ -282,7 +314,7 @@ namespace
                 if (nDebug & Debug::PacingLog)
                     Log("GPU pacing (FrameGenerationPacing %d) over %u frames: %.2f ms of GPU work a frame, rendered frame presented at %.2f of it (%.2f..%.2f, aimed at %.2f, %u measured), draw call %.0f of %.0f",
                     nPacing, g.frames, g.frameMs / g.frames, g.presents ? g.at / g.presents : 0.0, g.presents ? g.atMin : 0.0, g.presents ? g.atMax : 0.0,
-                    fDelay, g.presents, g.target / g.frames, DrawsEma);
+                    Aim(1), g.presents, g.target / g.frames, DrawsEma);
                 g = {};
             }
         }
@@ -428,6 +460,8 @@ namespace
     void ReleaseTargets()
     {
         bPending = false;
+        bPendingGenerated = false;
+        bSkipPresent = false;
         ReleaseGpuTiming();
         SAFE_RELEASE(SmallRT);
         SAFE_RELEASE(SmallMemory);
@@ -510,21 +544,48 @@ namespace
             Upscaler::Profile(device, part, begin);
     }
 
-    void PresentPendingTimed(IDirect3DDevice9* device, bool late);
+    bool SharpenFrame(IDirect3DDevice9* device, rage::grcRenderTargetPC* frame, IDirect3DSurface9* target, bool hudLess);
+    void PresentFrame(IDirect3DDevice9* device, bool late, bool generated);
 
-    // Presents the waiting rendered frame, the game's back buffer kept as it was. late: the next frame ended first.
-    void PresentPending(IDirect3DDevice9* device, bool late)
+    // Presents a waiting frame, the rendered or the generated one, the game's back buffer kept as it was. late: the next
+    // frame ended first.
+    void PresentWaiting(IDirect3DDevice9* device, bool late, bool generated)
     {
         auto start = Upscaler::TimingStart();
         Profile(device, Upscaler::ProfilePart::FrameGenerationPresent, true);
-        PresentPendingTimed(device, late);
+        PresentFrame(device, late, generated);
         Profile(device, Upscaler::ProfilePart::FrameGenerationPresent, false);
         Upscaler::TimingAdd(Upscaler::TimingPart::FrameGenerationPresent, start);
     }
 
-    void PresentPendingTimed(IDirect3DDevice9* device, bool late)
+    // Deferred: the generated frame into the back buffer, sharpened as it is shown when the post processing left it
+    bool FillGenerated(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer)
     {
-        bPending = false;
+        if (bPendingGeneratedSharpen && SharpenFrame(device, GeneratedRT, backBuffer, bPendingGeneratedHudLess))
+            return true;
+        return CopyFrom(device, GeneratedRT, backBuffer);
+    }
+
+    void PresentFrame(IDirect3DDevice9* device, bool late, bool generated)
+    {
+        if (generated)
+        {
+            bPendingGenerated = false;
+            // Copied out of the helper once, here and not at the frame's end: the GPU went on with this frame meanwhile
+            if (!bGeneratedTaken)
+            {
+                bGeneratedTaken = true;
+                if (!Upscaler::TakeGenerated(GeneratedRT->mD3DTexture))
+                {
+                    LogOnce(9, "A generated frame could not be taken from the helper: the rendered frame goes alone");
+                    return;
+                }
+            }
+        }
+        else
+        {
+            bPending = false;
+        }
         bool retry = false;
         IDirect3DSurface9* backBuffer = nullptr;
         if (FAILED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) || !backBuffer)
@@ -538,9 +599,10 @@ namespace
         SAFE_RELEASE(bound);
 
         bInPresent = true;
-        if ((!keep || CopyInto(device, backBuffer, SavedRT)) && CopyFrom(device, bPendingSharpened ? SharpenedRT : PresentRT, backBuffer))
+        if ((!keep || CopyInto(device, backBuffer, SavedRT)) &&
+            (generated ? FillGenerated(device, backBuffer) : CopyFrom(device, bPendingSharpened ? SharpenedRT : PresentRT, backBuffer)))
         {
-            Mark(device, backBuffer, false);
+            Mark(device, backBuffer, generated);
             // Present moves the images of the two back buffers around: what is bound to the device is bound again
             // afterwards, so that the rest of the frame draws into the back buffer it had
             IDirect3DSurface9* targets[4]{};
@@ -557,7 +619,7 @@ namespace
             // and index buffers the game unbound at EndScene, and the game goes on drawing with ones it unbound, which
             // came out black after an EndScene of ours. At the end of the frame nothing is drawn after it.
             auto presentedAt = Now();
-            if (bGpuRecording && !late)
+            if (bGpuRecording && !late && !generated)
             {
                 auto& f = GpuFrames[GpuSlot];
                 f.presented->Issue(D3DISSUE_END);
@@ -576,7 +638,7 @@ namespace
                 retry = true;
             }
             else if (FAILED(hr))
-                LogOnce(6, "Present of the rendered frame failed");
+                LogOnce(6, "Present of a waiting frame failed");
 
             // The game's back buffer as it was, in whichever surface is the back buffer now
             IDirect3DSurface9* current = nullptr;
@@ -597,19 +659,35 @@ namespace
             SAFE_RELEASE(depth);
 
             if (retry)
-                bPending = true;
+                (generated ? bPendingGenerated : bPending) = true;
+            else if (generated)
+            {
+                // The rendered frame follows FrameGenerationDelay of a frame later
+                GeneratedAt = presentedAt;
+                PendingDue = After(presentedAt, std::clamp(FrameMs * fDelay, 0.0, 50.0));
+            }
             else
                 Stats.Add(Ms(GeneratedAt, presentedAt), Ms(GeneratedAt, PendingDue), late);
         }
         else
         {
-            LogOnce(5, "The rendered frame could not be put back into the back buffer");
+            LogOnce(5, "A waiting frame could not be put into the back buffer");
         }
         bInPresent = false;
         backBuffer->Release();
     }
 
-    // Draw calls of the render thread: the rendered frame goes once its time has come
+    // Whether a waiting frame's time has come: 0 the generated one, 1 the rendered one
+    bool IsDue(int which, LARGE_INTEGER due)
+    {
+        if (nPacing == 2 && TargetDraws[which] > 0.0)
+            return DrawsThisFrame >= TargetDraws[which];
+        if (nPacing >= 1 && DrawsEma > 0.0)
+            return DrawsThisFrame >= Aim(which) * DrawsEma;
+        return Now().QuadPart >= due.QuadPart;
+    }
+
+    // Draw calls of the render thread: the waiting frames go once their time has come, the generated one first
     void CheckPending(IDirect3DDevice9* device)
     {
         if (GetCurrentThreadId() != RenderThread)
@@ -617,20 +695,30 @@ namespace
         ++DrawsThisFrame;
         if (bGpuRecording && !bInPresent && DrawsThisFrame % CheckpointEvery == 0)
             Checkpoint(device);
-        if (!bPending || bInPresent || bEndOfFrameOnly)
+        if (bInPresent || bEndOfFrameOnly)
             return;
 
-        bool due = false;
-        if (nPacing == 2 && TargetDraw > 0.0)
-            due = DrawsThisFrame >= TargetDraw;
-        else if (nPacing >= 1 && DrawsEma > 0.0)
-            due = DrawsThisFrame >= fDelay * DrawsEma;
-        else
-            due = Now().QuadPart >= PendingDue.QuadPart;
-        if (!due)
+        if (bPendingGenerated)
+        {
+            if (IsDue(0, PendingGeneratedDue))
+                PresentWaiting(device, false, true);
             return;
+        }
+        if (bPending && IsDue(1, PendingDue))
+            PresentWaiting(device, false, false);
+    }
 
-        PresentPending(device, false);
+    // The game's Present, left out after a frame whose frames are presented inside the next one
+    HRESULT(__stdcall* RealPresent)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*) = nullptr;
+
+    HRESULT __stdcall Present(IDirect3DDevice9* device, const RECT* source, const RECT* destination, HWND window, const RGNDATA* dirty)
+    {
+        if (bSkipPresent && !bInPresent && GetCurrentThreadId() == RenderThread)
+        {
+            bSkipPresent = false;
+            return D3D_OK;
+        }
+        return RealPresent(device, source, destination, window, dirty);
     }
 
     HRESULT(__stdcall* RealDrawPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT) = nullptr;
@@ -679,12 +767,13 @@ namespace
         auto vtable = *reinterpret_cast<void***>(device);
         if (vtable == hooked)
             return;
+        Patch(vtable, 17, RealPresent, &Present);
         Patch(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
         Patch(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
         Patch(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
         Patch(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
         hooked = vtable;
-        Log("Draw call hooks installed");
+        Log("Present and draw call hooks installed");
     }
 
     // The settings of [TEMPORAL], read again whenever the ini changes while the game runs
@@ -701,11 +790,13 @@ namespace
         fDelay = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
         Upscaler::SetTimingLog(iniReader.ReadInteger("TEMPORAL", "UpscalerTimingLog", 0) != 0);
         nDebug = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDebug", 0);
-        auto previousPacing = nPacing;
         nPacing = std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGenerationPacing", 2), 0, 2);
-        if (nPacing != previousPacing)
-            TargetDraw = 0.0;
-        Log("Frame generation settings: delay %.2f, pacing %d, debug %d", fDelay, nPacing, nDebug);
+        bDeferredSetting = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDeferred", 1) != 0;
+        fShowGeneratedAt = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationShowGeneratedAt", 0.2f), 0.0f, 0.9f);
+        // The aims may have changed
+        TargetDraws[0] = TargetDraws[1] = 0.0;
+        Log("Frame generation settings: delay %.2f, pacing %d, deferred %d (generated frame at %.2f), debug %d", fDelay, nPacing,
+            int(bDeferredSetting), fShowGeneratedAt, nDebug);
 
         // A fresh start for the statistics
         Stats = {};
@@ -755,6 +846,9 @@ namespace
             // A fresh start for the pacing
             LastFrameEnd.QuadPart = 0;
             bPending = false;
+            bPendingGenerated = false;
+            bSkipPresent = false;
+            Upscaler::DropGenerated();
         }
     }
 
@@ -856,9 +950,20 @@ namespace
         NextGpuFrame(device);
         DrawsThisFrame = 0;
 
-        // This frame ended before the last one went: it goes first
+        // The game's Present after the last frame should have been left out: it went another way, and the frames would be
+        // shown out of order
+        if (bSkipPresent)
+        {
+            bSkipPresent = false;
+            bDeferredBroken = true;
+            Log("The game's Present did not come through the device's Present: the generated frames go at the frame's end again");
+        }
+
+        // This frame ended before the last one's frames went: they go first, in their order
+        if (bPendingGenerated)
+            PresentWaiting(device, true, true);
         if (bPending)
-            PresentPending(device, true);
+            PresentWaiting(device, true, false);
         bBackBufferDrawn = false;
 
         // Not in the menus: the generation starts over once they close
@@ -915,7 +1020,50 @@ namespace
         if (copied && hudLess)
             ApplyFinishingPasses();
         Profile(device, Upscaler::ProfilePart::FrameGenerationCopies, false);
-        if (copied)
+
+        // Deferred: the helper generates while the next frame renders, both frames go inside it, the game's Present not
+        bool deferred = pacing && bDeferredSetting && !bDeferredBroken && !bEndOfFrameOnly && !(nDebug & Debug::Similarity);
+        if (copied && deferred)
+        {
+            Profile(device, Upscaler::ProfilePart::FrameGenerationGenerate, true);
+            bool posted = Upscaler::PostGenerate(PresentRT->mD3DTexture, hudLess ? HudLessRT->mD3DTexture : nullptr, hdr ? HDROutput::GetPeakNits() : 0.0f);
+            Profile(device, Upscaler::ProfilePart::FrameGenerationGenerate, false);
+            // Not a frame generated without a previous one, nor before the frame time is known: the game's Present shows
+            // this frame as it is
+            bool paced = posted && !Upscaler::WasGenerateReset() && FrameMs > 0.0;
+            Profile(device, Upscaler::ProfilePart::FrameGenerationShow, true);
+            if (paced)
+            {
+                static bool first = true;
+                if (first)
+                    Log("First frame generated at %ux%u%s, shown inside the next frame", desc.Width, desc.Height, hdr ? ", HDR" : "");
+                first = false;
+
+                IDirect3DSurface9* sharpenedSurface = nullptr;
+                SharpenedRT->mD3DTexture->GetSurfaceLevel(0, &sharpenedSurface);
+                bPendingSharpened = sharpen && sharpenedSurface && SharpenFrame(device, PresentRT, sharpenedSurface, hudLess);
+                SAFE_RELEASE(sharpenedSurface);
+                bPendingGeneratedSharpen = sharpen;
+                bPendingGeneratedHudLess = hudLess;
+                bGeneratedTaken = false;
+                bPendingGenerated = true;
+                bPending = true;
+                bSkipPresent = true;
+                bDeferredFlow = true;
+                FusionFix::bFrameGenerationPresenting = true;
+                PendingGeneratedDue = After(Now(), std::clamp(FrameMs * fShowGeneratedAt, 0.0, 50.0));
+            }
+            else
+            {
+                if (!posted)
+                    LogOnce(2, "Generate failed, see GTAIV.EFLC.FusionFix.Upscaler.log and GTAIV.EFLC.FusionFix.UpscalerHelper.log");
+                Upscaler::DropGenerated();
+                if (sharpen)
+                    SharpenBackBuffer(device, hudLess, true);
+            }
+            Profile(device, Upscaler::ProfilePart::FrameGenerationShow, false);
+        }
+        else if (copied)
         {
             Profile(device, Upscaler::ProfilePart::FrameGenerationGenerate, true);
             bool generated = Upscaler::Generate(PresentRT->mD3DTexture, hudLess ? HudLessRT->mD3DTexture : nullptr, GeneratedRT->mD3DTexture,
@@ -966,6 +1114,7 @@ namespace
                 Profile(device, Upscaler::ProfilePart::FrameGenerationShow, false);
                 if (paced)
                 {
+                    bDeferredFlow = false;
                     FusionFix::bFrameGenerationPresenting = true;
                     GeneratedAt = Now();
                     PendingDue = After(GeneratedAt, std::clamp(FrameMs * fDelay, 0.0, 50.0));
