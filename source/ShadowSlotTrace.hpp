@@ -44,7 +44,7 @@ public:
     struct Selected { std::uint32_t key{}; int index{-1}; };
     // The rule of NativeShadowContinuity42::Compare that decided, and two of the game's own:
     // native (categories, its result kept), distance (left to the game's distance).
-    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Distance, Grace, Nearer, Fresh };
+    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Distance, Grace, Nearer, Fresh, Reach };
     static constexpr std::uint32_t FlapMs = 2000;
 
     bool enabled = false;
@@ -133,7 +133,8 @@ public:
         auto& k = keys_[light.key];
         k.lastSeen = time_;
         if (light.raw != k.raw) {
-            if (k.known && light.kind == 0)
+            // Only within the shadow reach: lamps far beyond it flipped at the frame's edge with every turn.
+            if (k.known && light.kind == 0 && (light.reachSquared <= 0 || light.distanceSquared <= light.reachSquared))
                 Line(std::format("G {} key={:08x} {} raw={}->{} held={}{} slot={}", When(), light.key, Kind(light.kind),
                     Gain(k.raw), Gain(light.raw), Gain(light.gain), Where(light), k.slot >= 0 ? 1 : 0));
             if (light.raw == SlotGain::InView) k.inViewSince = time_;
@@ -309,6 +310,7 @@ private:
         case Rule::Grace: return "grace";
         case Rule::Nearer: return "nearer";
         case Rule::Fresh: return "fresh";
+        case Rule::Reach: return "reach";
         default: return "native";
         }
     }

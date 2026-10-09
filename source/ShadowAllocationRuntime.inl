@@ -637,8 +637,11 @@ namespace PlayerShadowAllocation
             bool holder=false;
             for(const auto& old:state.previousSelection) if(old.key==key) { holder=true; break; }
             const float claimReach=holder ? reach*1.25f : reach;
-            const bool relevant=std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=claimReach*claimReach &&
-                (volumeVisible || kind==budget::Kind::PlayerBeam);
+            // Beyond the reach a light used to hold no claim at all, so the far lamps that got slots when nothing
+            // nearer wanted them handed them back and forth by distance; now its claim stands against others beyond
+            // it, and any light within the reach goes ahead of it (Candidate::inReach).
+            const bool inReach=std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=claimReach*claimReach;
+            const bool relevant=std::isfinite(geometry.distanceSquared) && (volumeVisible || kind==budget::Kind::PlayerBeam);
             // A cached lamp with nobody in its light looks the same from its cache;
             // beams and uncached lamps shadow the world wherever they shine.
             using fusionfix::shadows::SlotGain;
@@ -687,13 +690,13 @@ namespace PlayerShadowAllocation
             labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(
                 {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam,gain,
                 priorityDistance>=0?priorityDistance:geometry.distanceSquared,caster>=0 && rawGain!=SlotGain::None,
-                kind!=budget::Kind::PlayerBeam && SlotIsFresh(key));
+                kind!=budget::Kind::PlayerBeam && SlotIsFresh(key),inReach);
             // Record why a prior choice loses its claim, independently of
             // whether native sorting eventually drops it. Bounded to 7/pass.
             for(const auto& old:state.previousSelection) if(old.key==key) {
                 const bool sameGeneration=old.generation==(kind==budget::Kind::Lamp?LampGeometry(light):0);
                 if(slotTrace.enabled)
-                    try { slotTrace.Claim(key,sameGeneration,geometry.distanceSquared,claimReach*claimReach,volumeVisible,kind==budget::Kind::PlayerBeam); }
+                    try { slotTrace.Claim(key,sameGeneration,geometry.distanceSquared,3.4e38f,volumeVisible,kind==budget::Kind::PlayerBeam); }
                     catch(...) { slotTrace.enabled=false; }
                 ShadowTrace34::Emit({7,state.frame,GetTickCount(),key,relevant?1:0,sameGeneration?1:0,
                     static_cast<int>(flags | (volumeVisible?0x10000u:0)),static_cast<int>(state.nativeCandidates[index].claim),
@@ -735,6 +738,7 @@ namespace PlayerShadowAllocation
                 : decider==Rule::Special ? Trace::Rule::Special : decider==Rule::OwnBeam ? Trace::Rule::OwnBeam
                 : decider==Rule::Gain ? Trace::Rule::Gain : decider==Rule::Claim ? Trace::Rule::Claim
                 : decider==Rule::Nearer ? Trace::Rule::Nearer : decider==Rule::Fresh ? Trace::Rule::Fresh
+                : decider==Rule::Reach ? Trace::Rule::Reach
                 : result==1 ? Trace::Rule::Distance : Trace::Rule::Native;
             const auto* lights=CurrentLights();
             try { slotTrace.Compared(static_cast<uint32_t>(lights[challenger].mCastShadows),
