@@ -433,6 +433,9 @@ public:
                     cone.full = std::clamp(iniReader.ReadFloat("HEADLIGHTS", "NearConeFull", cone.full), 0.0f, cone.reach);
                     cone.spread = std::clamp(iniReader.ReadFloat("HEADLIGHTS", "NearConeSpread", cone.spread), 0.0f, 2.0f);
                     cone.speed = std::clamp(iniReader.ReadFloat("HEADLIGHTS", "NearConeSpeed", cone.speed), 0.1f, 50.0f);
+                    cone.probes = iniReader.ReadInteger("HEADLIGHTS", "NearConeProbes", 1) != 0;
+                    cone.probeFlags = static_cast<uint32_t>(iniReader.ReadInteger("HEADLIGHTS", "NearConeProbeFlags", static_cast<int>(cone.probeFlags)));
+                    cone.probeDistance = std::clamp(iniReader.ReadFloat("HEADLIGHTS", "NearConeProbeDistance", cone.probeDistance), 0.0f, 500.0f);
                     HeadlightEnhancement::InstallNearCone(iniReader.ReadInteger("HEADLIGHTS", "ExperimentalNearCone", 0) != 0, cone);
                 }
                 bCloseHeadlightRelevance = iniReader.ReadInteger("SHADOWS", "ExperimentalCloseHeadlightRelevance", 0) != 0;

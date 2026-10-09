@@ -127,6 +127,9 @@ namespace HeadlightEnhancement
                 << "\nnearConeStatus=" << nearConeStatus
                 << "\nnearConeBeams=" << nearConeBeams.load()
                 << "\nnearConeAdjusted=" << nearConeAdjusted.load()
+                << "\nnearConePedHits=" << nearConePedHits.load()
+                << "\nnearConeProbes=" << nearConeProbes.load()
+                << "\nnearConeProbeHits=" << nearConeProbeHits.load()
                 << "\nnearConeConesInDegrees=" << nearConeConesInDegrees.load()
                 << "\nnearConeLastCones=" << nearConeLastInner.load() << ' ' << nearConeLastOuter.load()
                 << "\noffscreenLightsStatus=" << offscreenLightsStatus
@@ -399,11 +402,13 @@ namespace HeadlightEnhancement
         shadowOriginStatus = "installed";
     }
 
-    // Experiment: a ped right by the lamps still cuts the beam's shadow, so the beam itself gives way
-    // to them. Within NearConeReach of the lamps a ped on one side moves that side's edge of the
+    // Experiment: anything right by the lamps still cuts the beam's shadow, so the beam itself gives
+    // way to it. Within NearConeReach of the lamps something on one side moves that side's edge of the
     // beam in by up to NearConeCut, while the edge on the other side stays where it was: the cone
     // narrows by half of that and turns away by the other half (sliding the whole beam, 191e631,
-    // moved the side nothing covered too). Peds on both sides move both edges in.
+    // moved the side nothing covered too). Things on both sides move both edges in. Peds are found
+    // in their pool; everything with collision (walls, cars, objects) by segments from the lamps
+    // across the beam, for cars within NearConeProbeDistance of the camera.
     // The game adds the beam of both lamps at one call (CE 0xA3FE11 -> 0xA3E070 -> 0xABCC50, which
     // appends it to the frame's light list [0x103EEDC], its count at 0x154CBBC); right after it,
     // with the car in esi, the light just added is turned and narrowed. Each car eases towards
@@ -415,12 +420,16 @@ namespace HeadlightEnhancement
         float full = 0.6f;     // metres from the lamps where it is all there
         float spread = 0.7f;   // half the spacing of the lamps, metres
         float speed = 4.0f;    // easing per second
+        bool probes = true;
+        uint32_t probeFlags = 0x8E; // what the game's camera tests against
+        float probeDistance = 40.0f;
     };
     static NearConeSettings nearCone{};
     static std::string nearConeStatus = "off in the ini";
     static SafetyHookMid nearConeBeforeHook, nearConeAfterHook;
     static uint32_t nearConeCount = 0;
     static std::atomic<uint32_t> nearConeBeams{0}, nearConeAdjusted{0}, nearConeConesInDegrees{0};
+    static std::atomic<uint32_t> nearConeProbes{0}, nearConeProbeHits{0}, nearConePedHits{0};
     static std::atomic<float> nearConeLastOuter{0.0f}, nearConeLastInner{0.0f};
 
     struct NearConeCar
@@ -428,6 +437,9 @@ namespace HeadlightEnhancement
         uintptr_t vehicle = 0;
         float left = 0.0f, right = 0.0f;
         std::chrono::steady_clock::time_point seen{};
+        // The segments' last answer, kept for a thirtieth of a second.
+        float probeLeft = 0.0f, probeRight = 0.0f;
+        std::chrono::steady_clock::time_point probed{};
     };
     static std::array<NearConeCar, 32> nearConeCars{};
 
@@ -445,40 +457,125 @@ namespace HeadlightEnhancement
         return *oldest;
     }
 
-    // How much of each side of the beam the peds by its lamps take, 0 to 1.
-    static void NearConeSides(const rage::CLightSource& light, float& left, float& right)
+    // The game's segment test (CE 0x738880 on the physics level [0x12B9C78], thiscall, 8 arguments;
+    // the ground probe 0xA54510 calls it so): the segment's ends 16 bytes apart, the first hit's
+    // position at +0x10 of the result, which is filled first as 0xA523F0 does.
+    struct alignas(16) ProbeSegment
+    {
+        float a[4];
+        float b[4];
+    };
+    struct alignas(16) ProbeResult
+    {
+        uint8_t bytes[0x60];
+    };
+    using ProbeFn = int(__thiscall*)(void* level, const ProbeSegment* segment, ProbeResult* result, void* exclude,
+        uint32_t includeFlags, uint32_t typeFlags, uint32_t stateFlags, uint32_t maxResults, uint32_t unknown);
+
+    // The car's own physics instance, as 0xA54510 takes an entity's: its vtable +0xA0, else +0x38.
+    static void* PhysicsInstance(uintptr_t entity)
+    {
+        const auto vtable = *reinterpret_cast<const uintptr_t*>(entity);
+        auto inst = reinterpret_cast<void*(__thiscall*)(uintptr_t)>(*reinterpret_cast<const uintptr_t*>(vtable + 0xA0))(entity);
+        return inst ? inst : *reinterpret_cast<void* const*>(entity + 0x38);
+    }
+
+    static bool Probe(const float (&from)[3], const float (&to)[3], void* exclude, float (&hit)[3])
+    {
+        const auto level = *reinterpret_cast<void* const*>(imageBase + 0xEB9C78);
+        if (!level) return false;
+        ProbeSegment segment{ { from[0], from[1], from[2], 0.0f }, { to[0], to[1], to[2], 0.0f } };
+        ProbeResult result{};
+        const auto farPoint = reinterpret_cast<const float*>(imageBase + 0x174B320);
+        for (uint32_t at : { 0x10u, 0x20u, 0x30u })
+            std::memcpy(result.bytes + at, farPoint, 12);
+        *reinterpret_cast<uint32_t*>(result.bytes + 0x4C) = 0xFFFF;
+        const auto probe = reinterpret_cast<ProbeFn>(imageBase + 0x338880);
+        ++nearConeProbes;
+        if (!probe(level, &segment, &result, exclude, nearCone.probeFlags, 0xFFFFFFFF, 7, 1, 0)) return false;
+        std::memcpy(hit, result.bytes + 0x10, sizeof(hit));
+        return std::isfinite(hit[0]) && std::isfinite(hit[1]) && std::isfinite(hit[2]);
+    }
+
+    // How much of each side of the beam what is by its lamps takes, 0 to 1.
+    static void NearConeSides(uintptr_t vehicle, NearConeCar& car, std::chrono::steady_clock::time_point now,
+        const rage::CLightSource& light, float outer, float& left, float& right)
     {
         left = right = 0.0f;
-        const auto pool = CPed::GetPedPool();
-        if (!pool || !pool->m_aStorage || !pool->m_aFlags || pool->m_nSize <= 0 || pool->m_nSize > 4096 ||
-            pool->m_nStorageSize < 0x24 || pool->m_nStorageSize > 0x10000)
-            return;
         const float fx = light.mDirection.x, fy = light.mDirection.y;
         const float flen = std::sqrt(fx * fx + fy * fy);
         if (!(flen > 1e-3f)) return;
         const float forward[2] = { fx / flen, fy / flen };
         const float rightAxis[2] = { forward[1], -forward[0] };
         const float fade = (std::max)(nearCone.reach - nearCone.full, 0.01f);
-        for (int32_t i = 0; i < pool->m_nSize; ++i)
-        {
-            const auto ped = reinterpret_cast<uintptr_t>(pool->GetSlot(i));
-            float position[3];
-            if (!ped || !CEntity::GetPosition(ped, position)) continue;
-            const float d[3] = { position[0] - light.mPosition.x, position[1] - light.mPosition.y,
-                                 position[2] - light.mPosition.z };
-            // A ped's position is about a metre above its feet, the lamps lower.
-            if (d[2] < -1.5f || d[2] > 2.0f) continue;
-            const float f = d[0] * forward[0] + d[1] * forward[1];
-            const float s = d[0] * rightAxis[0] + d[1] * rightAxis[1];
-            // Those inside the car or behind its front are out of the beam.
-            if (f < -0.6f) continue;
+        // Something at d from the beam's origin, in the plane: how close to the lamps, and which side.
+        const auto take = [&](float dx, float dy) {
+            const float f = dx * forward[0] + dy * forward[1];
+            const float s = dx * rightAxis[0] + dy * rightAxis[1];
+            // Inside the car or behind its front is out of the beam.
+            if (f < -0.6f) return false;
             const float distance = std::hypot((std::max)(f, 0.0f), (std::max)(std::abs(s) - nearCone.spread, 0.0f));
             const float w = std::clamp((nearCone.reach - distance) / fade, 0.0f, 1.0f);
-            if (w <= 0.0f) continue;
+            if (w <= 0.0f) return false;
             // Right in the middle counts for both sides.
             right = (std::max)(right, w * std::clamp(0.5f + s / 0.6f, 0.0f, 1.0f));
             left = (std::max)(left, w * std::clamp(0.5f - s / 0.6f, 0.0f, 1.0f));
+            return true;
+        };
+
+        const auto pool = CPed::GetPedPool();
+        if (pool && pool->m_aStorage && pool->m_aFlags && pool->m_nSize > 0 && pool->m_nSize <= 4096 &&
+            pool->m_nStorageSize >= 0x24 && pool->m_nStorageSize <= 0x10000)
+        {
+            for (int32_t i = 0; i < pool->m_nSize; ++i)
+            {
+                const auto ped = reinterpret_cast<uintptr_t>(pool->GetSlot(i));
+                float position[3];
+                if (!ped || !CEntity::GetPosition(ped, position)) continue;
+                // A ped's position is about a metre above its feet, the lamps lower.
+                const float dz = position[2] - light.mPosition.z;
+                if (dz < -1.5f || dz > 2.0f) continue;
+                if (take(position[0] - light.mPosition.x, position[1] - light.mPosition.y)) ++nearConePedHits;
+            }
         }
+
+        if (!nearCone.probes) return;
+        if (now - car.probed < std::chrono::milliseconds(33))
+        {
+            left = (std::max)(left, car.probeLeft);
+            right = (std::max)(right, car.probeRight);
+            return;
+        }
+        car.probed = now;
+        car.probeLeft = car.probeRight = 0.0f;
+        float camera[3];
+        if (!GameCamera::Position(camera)) return;
+        const float cx = light.mPosition.x - camera[0], cy = light.mPosition.y - camera[1], cz = light.mPosition.z - camera[2];
+        if (cx * cx + cy * cy + cz * cz > nearCone.probeDistance * nearCone.probeDistance) return;
+        const float pedLeft = left, pedRight = right;
+        left = right = 0.0f;
+        const auto exclude = PhysicsInstance(vehicle);
+        // From each lamp and from between them, level, across the beam's width.
+        for (const float lamp : { -nearCone.spread, 0.0f, nearCone.spread })
+        {
+            const float from[3] = { light.mPosition.x + rightAxis[0] * lamp, light.mPosition.y + rightAxis[1] * lamp,
+                                    light.mPosition.z };
+            for (const float k : { -1.0f, -0.5f, 0.0f, 0.5f, 1.0f })
+            {
+                // Positive angles turn left about up.
+                const float a = -k * outer, c = std::cos(a), sn = std::sin(a);
+                const float dir[2] = { forward[0] * c - forward[1] * sn, forward[0] * sn + forward[1] * c };
+                const float to[3] = { from[0] + dir[0] * nearCone.reach, from[1] + dir[1] * nearCone.reach, from[2] };
+                float hit[3];
+                if (Probe(from, to, exclude, hit) &&
+                    take(hit[0] - light.mPosition.x, hit[1] - light.mPosition.y))
+                    ++nearConeProbeHits;
+            }
+        }
+        car.probeLeft = left;
+        car.probeRight = right;
+        left = (std::max)(left, pedLeft);
+        right = (std::max)(right, pedRight);
     }
 
     static void RotateAboutUp(rage::Vector3& v, float c, float s)
@@ -507,21 +604,21 @@ namespace HeadlightEnhancement
         auto& car = NearConeState(static_cast<uintptr_t>(regs.esi), now);
         const float dt = std::clamp(std::chrono::duration<float>(now - car.seen).count(), 0.0f, 0.25f);
         car.seen = now;
+        // Spot cones are cosines of the half-angles; anything above 1 would be degrees.
+        const bool degrees = light.mOuterConeAngle > 1.0f;
+        constexpr float toRad = 3.14159265f / 180.0f;
+        const float outer = degrees ? light.mOuterConeAngle * toRad : std::acos(std::clamp(light.mOuterConeAngle, -1.0f, 1.0f));
+        const float inner = degrees ? light.mInnerConeAngle * toRad : std::acos(std::clamp(light.mInnerConeAngle, -1.0f, 1.0f));
         float left, right;
-        NearConeSides(light, left, right);
+        NearConeSides(static_cast<uintptr_t>(regs.esi), car, now, light, outer, left, right);
         const float ease = 1.0f - std::exp(-nearCone.speed * dt);
         car.left += (left - car.left) * ease;
         car.right += (right - car.right) * ease;
         if (car.left < 1e-3f && car.right < 1e-3f) return;
 
-        // Spot cones are cosines of the half-angles; anything above 1 would be degrees.
-        const bool degrees = light.mOuterConeAngle > 1.0f;
         nearConeLastOuter = light.mOuterConeAngle;
         nearConeLastInner = light.mInnerConeAngle;
         if (degrees) ++nearConeConesInDegrees;
-        constexpr float toRad = 3.14159265f / 180.0f;
-        const float outer = degrees ? light.mOuterConeAngle * toRad : std::acos(std::clamp(light.mOuterConeAngle, -1.0f, 1.0f));
-        const float inner = degrees ? light.mInnerConeAngle * toRad : std::acos(std::clamp(light.mInnerConeAngle, -1.0f, 1.0f));
         if (!(outer > 1e-3f)) return;
         // Neither edge past the axis: at least 5 degrees of the cone stay.
         const float room = (std::max)(2.0f * (outer - 5.0f * toRad), 0.0f);
@@ -554,7 +651,11 @@ namespace HeadlightEnhancement
             .Bytes(0x63FE11, {0xE8}).Branch(0x63FE12, 0x63E070)
             .Bytes(0x63FE16, {0x83,0xC4,0x30,0x5F,0x5E})
             .Bytes(0x6BD2C1, {0x8B,0x35}).Address(0x6BD2C3, 0x114CBBC)
-            .Bytes(0x6BD2DA, {0x03,0x0D}).Address(0x6BD2DC, 0xC3EEDC);
+            .Bytes(0x6BD2DA, {0x03,0x0D}).Address(0x6BD2DC, 0xC3EEDC)
+            // the ground probe's call: mov ecx, [level] ... call 0x738880
+            .Bytes(0x654570, {0x8B,0x0D}).Address(0x654572, 0xEB9C78)
+            .Bytes(0x65458A, {0xE8}).Branch(0x65458B, 0x338880)
+            .Bytes(0x654561, {0x8B,0x80,0xA0,0x00,0x00,0x00}).Bytes(0x65456D, {0x8B,0x46,0x38});
         if (!check)
         {
             nearConeStatus = check.Status();
