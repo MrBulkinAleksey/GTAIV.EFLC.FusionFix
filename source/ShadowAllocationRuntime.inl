@@ -143,9 +143,9 @@ namespace PlayerShadowAllocation
             reasons[i] = now;
         }
         try {
-            slotTrace.Status(std::format("ready={} thread_ok={} night_shadows={} headlight_shadows={} vehicle_night_shadows={} "
+            slotTrace.Status(std::format("ready={} install={} thread_ok={} night_shadows={} headlight_shadows={} vehicle_night_shadows={} "
                 "publication={} lamp_priority={} in the last second: applied={} observed={} fallback={} adapter_rejects={} reasons:{}",
-                ready.load() ? 1 : 0, unsupportedThread.load() ? 0 : 1, bExtraNightShadows ? 1 : 0, bHeadlightShadows ? 1 : 0,
+                ready.load() ? 1 : 0, ready.load() ? std::string("enabled") : "[" + installStatus + "]", unsupportedThread.load() ? 0 : 1, bExtraNightShadows ? 1 : 0, bHeadlightShadows ? 1 : 0,
                 bVehicleNightShadows ? 1 : 0, publicationEnabled ? 1 : 0, nativeLampPriority ? 1 : 0,
                 a - applied, o - observed, f - fallback, r - adapter, why.empty() ? " -" : why));
         } catch (...) {}
