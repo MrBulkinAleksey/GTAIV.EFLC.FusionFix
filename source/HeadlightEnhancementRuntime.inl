@@ -23,6 +23,11 @@ namespace HeadlightEnhancement
     static std::string shadowOriginStatus = "off in the ini";
     static std::atomic<uint32_t> shadowOriginsMoved{0}, shadowOriginCachesDropped{0};
     static std::string offscreenLightsStatus = "off in the ini";
+    // The near cone experiment's, see InstallNearCone.
+    static std::string nearConeStatus = "off in the ini";
+    static std::atomic<uint32_t> nearConeBeams{0}, nearConeAdjusted{0}, nearConeConesInDegrees{0};
+    static std::atomic<uint32_t> nearConeProbes{0}, nearConeProbeHits{0}, nearConePedHits{0};
+    static std::atomic<float> nearConeLastOuter{0.0f}, nearConeLastInner{0.0f};
     static fusionfix::DiagnosticsLog log;
 
     static std::string DumpBytes(uintptr_t address, size_t count)
@@ -425,12 +430,8 @@ namespace HeadlightEnhancement
         float probeDistance = 40.0f;
     };
     static NearConeSettings nearCone{};
-    static std::string nearConeStatus = "off in the ini";
     static SafetyHookMid nearConeBeforeHook, nearConeAfterHook;
     static uint32_t nearConeCount = 0;
-    static std::atomic<uint32_t> nearConeBeams{0}, nearConeAdjusted{0}, nearConeConesInDegrees{0};
-    static std::atomic<uint32_t> nearConeProbes{0}, nearConeProbeHits{0}, nearConePedHits{0};
-    static std::atomic<float> nearConeLastOuter{0.0f}, nearConeLastInner{0.0f};
 
     struct NearConeCar
     {
