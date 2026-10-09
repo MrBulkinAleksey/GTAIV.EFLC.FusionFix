@@ -28,8 +28,9 @@ public:
         // Its gain comes from a vehicle or ped in a cached lamp's light: only such a newcomer
         // can push out a far claim, so dense uncached lamps (tunnels) do not swap more often.
         bool byCaster=false;
-        // SlotMinHold: it took its slot less than that long ago and still holds a claim, so it keeps
-        // the slot against anything but own headlights and the game's 0x400 lights.
+        // SlotMinHold: it took its slot less than that long ago, still holds a claim and its shadow shows
+        // in view (gain InView), so it keeps the slot against anything but own headlights and the game's
+        // 0x400 lights.
         bool fresh=false;
     };
     // ClaimDistanceRatio: a claim keeps its slot against a newcomer of the same gain unless
@@ -55,7 +56,9 @@ public:
         if(id.key && relevant)
             for(unsigned i=0;i<Slots;++i)
                 if(claims_[i].key==id.key && claims_[i].generation==id.generation) {c.claim=i;break;}
-        c.fresh=fresh && c.claim!=Unclaimed;
+        // Only a slot whose shadow shows something in view is worth keeping: a lamp that took a free slot
+        // with nobody in its light would otherwise keep a lamp with a car under it waiting.
+        c.fresh=fresh && c.claim!=Unclaimed && gain==SlotGain::InView;
         return c;
     }
     bool Commit(const std::array<Identity,Slots>& chosen) noexcept {
