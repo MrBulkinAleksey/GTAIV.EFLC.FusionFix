@@ -786,6 +786,24 @@ public:
                 }
                 else
                     FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the signal road light distance was not found\n");
+
+                // The signal's light on the road is its 2dfx light (TrafficSignalLightTest 2 took it away), which
+                // fades by distances of its own: the effect's +0x60 times [0x1048230] and +0x64 (CE 0xC1DFF8 to
+                // 0xC1E128, the camera at 0x128E340), each over a range at +0x38 / +0x34. Past them the light is
+                // still made, at full intensity but with its colour faded to nothing, so it showed only from
+                // about 120 m and then at once. Both are scaled for signals; -1 means no fade and is kept.
+                // At 0xC1E07A esi is the entity, xmm1 the first distance (scaled), xmm6 the second.
+                if (auto fade = hook::pattern("F3 0F 59 0D ? ? ? ? F3 0F 58 D0 0F 2E CF 0F 51 D2"); !fade.empty())
+                {
+                    static auto SignalLightFadeHook = safetyhook::create_mid(fade.get_first(8), [](SafetyHookContext& regs)
+                    {
+                        if (!regs.esi || !TrafficSignalLog::IsSignal(regs.esi)) return;
+                        if (regs.xmm1.f32[0] > 0.0f) regs.xmm1.f32[0] *= fTrafficSignalDrawScale;
+                        if (regs.xmm6.f32[0] > 0.0f) regs.xmm6.f32[0] *= fTrafficSignalDrawScale;
+                    });
+                }
+                else
+                    FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the signal light fade was not found\n");
             }
             if (iniReader.ReadInteger("SHADOWS", "ExperimentalCrashDiagnostics", 0) != 0)
             {
