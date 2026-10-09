@@ -269,8 +269,12 @@ namespace PlayerShadowAllocation
         const auto slot = *reinterpret_cast<const uint32_t*>(phase + 0x940);
         if (slot >= 8) return;
         auto& mode = *reinterpret_cast<int32_t*>(gameBase + 0xD9F1FC + slot * 0x110);
+        // Mode 4 is also what headlights draw with (dynamic objects only, no cache): only a cached lamp, one
+        // with a cache index in its slot record (+0xF0), is drawn whole; with the static world in it the road
+        // shadowed a headlight's own beam out.
+        const auto cacheIndex = *reinterpret_cast<const int32_t*>(gameBase + 0xD9F1F0 + slot * 0x110);
         if (mode == 3) *reinterpret_cast<uint8_t*>(phase + 0x16) = 1;
-        else if (mode == 4) {
+        else if (mode == 4 && cacheIndex >= 0 && cacheIndex < 16) {
             mode = 5;
             *reinterpret_cast<uint8_t*>(phase + 0x15) = 1;
             *reinterpret_cast<uint8_t*>(phase + 0x16) = 1;
