@@ -494,7 +494,7 @@ public:
                 }
                 // After the allocation adapter, which checks the selection's bytes this hooks.
                 HeadlightEnhancement::InstallShadowOrigin(
-                    std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowBehindLamps", 0.7f), 0.0f, 2.0f));
+                    std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowBehindLamps", 0.8f), 0.0f, 2.0f));
                 // CE 1.8: shadows from traffic signals and emergency vehicle lights.
                 EmergencyTrafficShadows::log.Name("NightShadows", "EmergencyTraffic");
                 EmergencyTrafficShadows::Install(static_cast<unsigned>(std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalShadows", 2), 0, 7)),

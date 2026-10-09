@@ -243,6 +243,7 @@ uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDeno
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
 uniform float fStepsPerPixel;     // march steps per pixel of a ray on this pass's target, 1 / ScreenSpaceReflectionsStepPixels
+uniform float fMarchFullDepth;    // 1 marches through the full size depth instead of MarchDepthTex (ScreenSpaceReflectionsMarchFullDepth, temporary, to compare)
 uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step (set per pass: SSR and contact shadows each have their own switch)
 uniform float2 vec2NoiseOffset;   // pixels, moves where PixelJitter is read every frame while the passes accumulate (FrameHistory::NoiseOffset), 0 otherwise
 uniform float fTowardCamera;      // 0..1, how far reflections pointing back at the camera reach
@@ -499,6 +500,12 @@ bool SetupReflectionRay(float3 C, float3 n, out ReflectionRay ray)
     return true;
 }
 
+// The view depth the march compares its ray with at uv, see TraceHit.
+float MarchDepth(float2 uv)
+{
+    return fMarchFullDepth > 0.0 ? LinearDepth(uv) : tex2Dlod(MarchDepthTex, float4(uv, 0, 0)).r;
+}
+
 // Marches the reflected ray of the surface at C with normal n. The hit is (where to read it in
 // HistoryTex, confidence 0..1, the ray's length over fMaxDistance), 0 for a miss; HitColour
 // turns it into a colour.
@@ -563,7 +570,7 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
         float2 sampleUV = lerp(uv0, uv1, t);
         float rayZ = 1.0 / lerp(invZ0, invZ1, t);
 
-        float delta = rayZ - tex2Dlod(MarchDepthTex, float4(sampleUV, 0, 0)).r;
+        float delta = rayZ - MarchDepth(sampleUV);
 
         // The ray went behind the scene since the last sample, which was in front of it.
         // Estimate where it crossed from the two samples and judge the thickness there, not
@@ -575,7 +582,7 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
         {
             float tc = lerp(prevT, t, saturate(-prevDelta / max(delta - prevDelta, 1e-5)));
             float zc = 1.0 / lerp(invZ0, invZ1, tc);
-            float crossDelta = zc - tex2Dlod(MarchDepthTex, float4(lerp(uv0, uv1, tc), 0, 0)).r;
+            float crossDelta = zc - MarchDepth(lerp(uv0, uv1, tc));
             float crossThickness = abs(rayZ - 1.0 / lerp(invZ0, invZ1, prevT)) + fThickness;
             if (crossDelta <= crossThickness)
             {
@@ -795,6 +802,21 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
     return 0.0;
 }
 
+// The taps of the fill around a miss, NeighbourFill's and SSRSpread_PS's, turned by an angle and
+// shrunk by up to 0.6 of their reach, both different at each pixel and, while the passes
+// accumulate, each frame. The same ring at every pixel put a thin reflection, a kerb or a car's
+// edge, into the misses around it once for each ring, 9, 18 and 36 pixels off: two or three
+// shifted copies beside it. Turned, they fall apart into grain that the smoothing and the
+// accumulation take out.
+float2x2 FillTurn(float2 vPos)
+{
+    float angle = PixelJitter(vPos + vec2NoiseOffset) * 6.2831853;
+    float scale = lerp(0.4, 1.0, PixelJitter(vPos.yx + float2(37.0, 11.0) + vec2NoiseOffset));
+    float sn, cs;
+    sincos(angle, sn, cs);
+    return float2x2(cs, -sn, sn, cs) * scale;
+}
+
 // Misses among hits, SSRTrace_PS's in SSRResultTex: the reflection of the hits around them, those
 // on about the same surface only. A miss next to
 // what a car reflects, or among the hits on a door, showed the game's own map there, which holds
@@ -802,8 +824,9 @@ float3 ScreenFallback(float3 C, float3 R, out float weight)
 // blurred scene around the point a metre and a half along the ray, which filled them before,
 // was duller than the reflection around them and dimmed it. Where no hit is near, weight is 0
 // and the game's map stays, as it should where SSR finds nothing at all.
-float3 NeighbourFill(float2 uv, float z, out float weight)
+float3 NeighbourFill(float2 uv, float2 vPos, float z, out float weight)
 {
+    float2x2 turn = FillTurn(vPos);
     static const float2 taps[12] =
     {
         float2( 2.0,  0.0), float2(-2.0,  0.0), float2( 0.0,  2.0), float2( 0.0, -2.0),
@@ -815,7 +838,7 @@ float3 NeighbourFill(float2 uv, float z, out float weight)
     [loop] [fastopt]
     for (int i = 0; i < 12; ++i)
     {
-        float2 tapUV = uv + taps[i] * vec2InvViewportSize;
+        float2 tapUV = uv + mul(turn, taps[i]) * vec2InvViewportSize;
         float4 hit = tex2Dlod(SSRResultTex, float4(tapUV, 0, 0));
         float w = max(hit.a, 0.0) * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
         [branch]
@@ -927,7 +950,7 @@ float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float weight;
     float3 fallback = ScreenFallback(C, reflect(normalize(C), n), weight);
     if (weight <= 0.0)
-        fallback = NeighbourFill(uv, C.z, weight);
+        fallback = NeighbourFill(uv, vPos, C.z, weight);
     return float4(fallback, weight);
 }
 
@@ -936,8 +959,9 @@ float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 // first step reaches only the hits within nine pixels, and a wider hole, as around what stands
 // near a car, kept a dark rim. Weakening with each step leaves the game's own map showing
 // through where SSR finds nothing over a wide area. Reads the last step from SSRFallbackTex.
-float4 SSRSpread_PS(float2 uv : TEXCOORD0) : COLOR0
+float4 SSRSpread_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
+    float2x2 turn = FillTurn(vPos);
     float4 own = tex2Dlod(SSRFallbackTex, float4(uv, 0, 0));
     float4 trace = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
     if (own.a >= fFallback * 0.99 || NoSurface(trace) || trace.a >= kFallbackBelow)
@@ -953,7 +977,7 @@ float4 SSRSpread_PS(float2 uv : TEXCOORD0) : COLOR0
     [loop] [fastopt]
     for (int i = 0; i < 8; ++i)
     {
-        float2 tapUV = uv + taps[i] * fSpreadRadius * vec2InvViewportSize;
+        float2 tapUV = uv + mul(turn, taps[i]) * fSpreadRadius * vec2InvViewportSize;
         float4 tap = tex2Dlod(SSRFallbackTex, float4(tapUV, 0, 0));
         float w = tap.a * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
         sum += tap.rgb * w;
