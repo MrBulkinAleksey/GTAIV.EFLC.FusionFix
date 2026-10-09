@@ -13,6 +13,8 @@ namespace fusionfix::shadows {
 // within the spacing around it that shine the same way; those still take a
 // slot when nothing else wants one. Not chained: the lamps it lowered lower no
 // one, so a tunnel keeps every second or third lamp, not just one.
+// The lamps kept last pass go first: picking from the nearest alone shifted the whole row by one
+// lamp each time the nearest was passed, handing every slot over and back.
 class ShadowLampSpacing {
 public:
     struct Lamp {
@@ -20,6 +22,7 @@ public:
         Vec3 position{}, direction{};
         bool spot{};
         float distanceSquared{};
+        std::uint32_t key{};
     };
     float spacing = 0.0f;              // metres in use this pass, 0 is off
     float base = 0.0f;                 // LampSpacing: on foot and at low speed
@@ -29,7 +32,8 @@ public:
     // speed / spacing times a second. The spacing grows with speed so a slot's lamp lasts about
     // `seconds`. Speed is smoothed over about a second, and the spacing moves only in steps of
     // Step metres, since a new spacing hands slots to other lamps too.
-    static constexpr float Step = 2.5f, Max = 40.0f;
+    static constexpr float Step = 5.0f, Max = 40.0f;
+    static constexpr std::uint32_t HoldMs = 2000; // the spacing changes at most this often, but at once on stopping
     void Update(float speed, bool driving, std::uint32_t now) {
         const float dt = lastTime_ && now > lastTime_ ? (now - lastTime_) * 0.001f : 0.0f;
         lastTime_ = now;
@@ -37,7 +41,11 @@ public:
         smoothedSpeed_ += (speed - smoothedSpeed_) * std::clamp(dt, 0.0f, 1.0f);
         if (seconds <= 0.0f) { spacing = base; return; }
         const float target = std::clamp((std::max)(base, smoothedSpeed_ * seconds), 0.0f, Max);
-        if (std::abs(target - spacing) >= Step || (target <= base && smoothedSpeed_ < 1.0f)) spacing = target;
+        const bool stopped = target <= base && smoothedSpeed_ < 1.0f;
+        if ((stopped && spacing != target) || (std::abs(target - spacing) >= Step && now - changedAt_ >= HoldMs)) {
+            spacing = target;
+            changedAt_ = now;
+        }
     }
     float Speed() const { return smoothedSpeed_; }
 
@@ -50,7 +58,12 @@ public:
     // Returns how many lamps were lowered.
     unsigned Resolve() {
         if (spacing <= 0 || lamps_.size() < 2) return 0;
-        std::sort(lamps_.begin(), lamps_.end(), [](const Lamp& a, const Lamp& b) { return a.distanceSquared < b.distanceSquared; });
+        for (auto& lamp : lamps_) lamp.index |= WasKept(lamp.key) ? KeptBit : 0u;
+        std::sort(lamps_.begin(), lamps_.end(), [](const Lamp& a, const Lamp& b) {
+            const bool ka = a.index & KeptBit, kb = b.index & KeptBit;
+            return ka != kb ? ka : a.distanceSquared < b.distanceSquared;
+        });
+        for (auto& lamp : lamps_) lamp.index &= ~KeptBit;
         const float limit = spacing * spacing;
         unsigned lowered = 0;
         kept_.clear();
@@ -68,6 +81,9 @@ public:
             if (beside) { spacedOut_[lamp.index] = 1; ++lowered; }
             else kept_.push_back(&lamp);
         }
+        keptKeys_.clear();
+        for (const auto* lamp : kept_) if (lamp->key) keptKeys_.push_back(lamp->key);
+        std::sort(keptKeys_.begin(), keptKeys_.end());
         return lowered;
     }
     bool SpacedOut(std::uint32_t index) const { return index < spacedOut_.size() && spacedOut_[index]; }
@@ -76,6 +92,12 @@ private:
     static float Length(Vec3 v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
     std::vector<Lamp> lamps_;
     std::vector<const Lamp*> kept_;
+    std::vector<std::uint32_t> keptKeys_; // sorted, from the last Resolve
+    static constexpr std::uint32_t KeptBit = 0x80000000u; // borrowed from index while sorting
+    bool WasKept(std::uint32_t key) const {
+        return key && std::binary_search(keptKeys_.begin(), keptKeys_.end(), key);
+    }
+    std::uint32_t changedAt_ = 0;
     float smoothedSpeed_ = 0.0f;
     std::uint32_t lastTime_ = 0;
     std::vector<std::uint8_t> spacedOut_;

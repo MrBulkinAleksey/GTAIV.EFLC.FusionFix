@@ -312,7 +312,7 @@ namespace PlayerShadowAllocation
                     if(!std::isfinite(distanceSquared) || distanceSquared>90.0f*90.0f ||
                        !fusionfix::shadows::ShadowVolumeMayReachView(state.view,position,light.mRadius)) continue;
                     lampSpacing.Add({i,position,{light.mDirection.x,light.mDirection.y,light.mDirection.z},
-                        static_cast<int>(light.mType)==2,distanceSquared});
+                        static_cast<int>(light.mType)==2,distanceSquared,static_cast<uint32_t>(light.mCastShadows)});
                 }
                 lampSpacing.Resolve();
             } catch(...) { lampSpacing.spacing=lampSpacing.base=lampSpacing.seconds=0; }
@@ -470,7 +470,12 @@ namespace PlayerShadowAllocation
             // Protect the whole visible influence volume, not screen center.
             const bool volumeVisible=fusionfix::shadows::ShadowVolumeMayReachView(state.view,
                 {light.mPosition.x,light.mPosition.y,light.mPosition.z},light.mRadius);
-            const bool relevant=std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=reach*reach &&
+            // A light holding a slot keeps its claim a quarter further out than a newcomer may take one,
+            // so lights right at the reach do not drop it and win it back by turns.
+            bool holder=false;
+            for(const auto& old:state.previousSelection) if(old.key==key) { holder=true; break; }
+            const float claimReach=holder ? reach*1.25f : reach;
+            const bool relevant=std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=claimReach*claimReach &&
                 (volumeVisible || kind==budget::Kind::PlayerBeam);
             // A cached lamp with nobody in its light looks the same from its cache;
             // beams and uncached lamps shadow the world wherever they shine.
@@ -513,7 +518,7 @@ namespace PlayerShadowAllocation
             for(const auto& old:state.previousSelection) if(old.key==key) {
                 const bool sameGeneration=old.generation==(kind==budget::Kind::Lamp?LampGeometry(light):0);
                 if(slotTrace.enabled)
-                    try { slotTrace.Claim(key,sameGeneration,geometry.distanceSquared,reach*reach,volumeVisible,kind==budget::Kind::PlayerBeam); }
+                    try { slotTrace.Claim(key,sameGeneration,geometry.distanceSquared,claimReach*claimReach,volumeVisible,kind==budget::Kind::PlayerBeam); }
                     catch(...) { slotTrace.enabled=false; }
                 ShadowTrace34::Emit({7,state.frame,GetTickCount(),key,relevant?1:0,sameGeneration?1:0,
                     static_cast<int>(flags | (volumeVisible?0x10000u:0)),static_cast<int>(state.nativeCandidates[index].claim),
