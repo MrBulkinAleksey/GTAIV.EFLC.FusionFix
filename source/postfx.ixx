@@ -8173,9 +8173,15 @@ private:
             if (R.LocalContactShadowConsts[7] == 0.0f)
                 return;
             const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28);
+            // LocalContactShadowsWithoutShadowMap is for lights that cast shadows but got no map this frame (tunnel
+            // lamps without a slot left a dark frame around cars). Lights that never cast shadows, most of those in
+            // buildings, and lights inside only (0x20 without 0x40) keep their contact shadows.
+            const bool castsShadows = (light.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW)) != 0;
+            const bool insideOnly = (light.mFlags & 0x60) == 0x20;
             const float intensity = (light.mFlags & 0x200) ? 0.0f
-                : R.fLocalContactShadowUnshadowed >= 1.0f || HasShadowMap(light) ? R.fLocalContactShadowIntensity
-                : R.fLocalContactShadowIntensity * R.fLocalContactShadowUnshadowed;
+                : R.fLocalContactShadowUnshadowed >= 1.0f || !castsShadows || insideOnly || HasShadowMap(light)
+                    ? R.fLocalContactShadowIntensity
+                    : R.fLocalContactShadowIntensity * R.fLocalContactShadowUnshadowed;
             const bool off = intensity <= 0.0f;
             auto pDevice = rage::grcDevice::GetD3DDevice();
             if (!pDevice)
