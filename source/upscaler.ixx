@@ -256,8 +256,9 @@ namespace
         virtual void ReleaseImports() = 0;
         // Game textures -> shared textures, then the fence reaches signalValue. Null inputs are skipped.
         virtual bool SubmitInputs(const Textures& inputs, uint64_t signalValue) = 0;
-        // Once the fence reaches waitValue: shared texture (Output or Generated) -> game texture
-        virtual bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue) = 0;
+        // Once the fence reaches waitValue: shared texture (Output or Generated) -> game texture. afterInputs: right after
+        // SubmitInputs, with no D3D9 call in between, so the game's work has reached the queue already.
+        virtual bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue, bool afterInputs) = 0;
 
         // Size of a shared texture
         uint32_t Width(size_t index) const { return Protocol::IsOutputSize(static_cast<Protocol::Texture>(index)) ? outputWidth : width; }
@@ -837,9 +838,11 @@ namespace
             return done;
         }
 
-        bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue) override
+        bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue, bool afterInputs) override
         {
-            // The target's current storage, as for the inputs
+            // The target's current storage, as for the inputs. Right after them DXVK's command thread is idle and nothing
+            // new was recorded: a second wait for it would only cost the render thread.
+            if (!afterInputs)
             {
                 Timing::Scope timed(Upscaler::TimingPart::Flush);
                 interop->FlushRenderingCommands();
@@ -1177,7 +1180,7 @@ namespace
             return ok;
         }
 
-        bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue) override
+        bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue, bool afterInputs) override
         {
             auto source = images[static_cast<size_t>(index)];
             ID3D12Resource* destination = nullptr;
@@ -1766,7 +1769,7 @@ export namespace Upscaler
         {
             Post(Protocol::Command::Evaluate, outputValue);
             prepare();
-            return bridge->SubmitOutput(frame.Output, Protocol::Texture::Output, outputValue);
+            return bridge->SubmitOutput(frame.Output, Protocol::Texture::Output, outputValue, true);
         }
 
         // On the CPU: the helper answers once its GPU work, which signals outputValue, has finished
@@ -1787,7 +1790,7 @@ export namespace Upscaler
         }
 
         prepare();
-        return bridge->SubmitOutput(frame.Output, Protocol::Texture::Output, outputValue);
+        return bridge->SubmitOutput(frame.Output, Protocol::Texture::Output, outputValue, true);
     }
 
     // The frame generation is set up and prepared with this frame's Evaluate
@@ -1883,7 +1886,8 @@ export namespace Upscaler
 
     // Render thread, any time before the next PostGenerate: the frame it posted into generated, once the helper is done
     // with it, which the GPU waits for. False leaves generated untouched.
-    bool TakeGenerated(IDirect3DTexture9* generated)
+    // afterPost: right after PostGenerate, with no D3D9 call in between
+    bool TakeGenerated(IDirect3DTexture9* generated, bool afterPost = false)
     {
         auto value = generatedValue;
         generatedValue = 0;
@@ -1892,7 +1896,7 @@ export namespace Upscaler
         // The helper answered long ago; a failed Generate leaves nothing to take
         if (!CollectPending() || generationFailed)
             return false;
-        return bridge->SubmitOutput(generated, Protocol::Texture::Generated, value);
+        return bridge->SubmitOutput(generated, Protocol::Texture::Generated, value, afterPost);
     }
 
     // The frame PostGenerate posted won't be taken
@@ -1904,7 +1908,7 @@ export namespace Upscaler
     // Both at once: generated receives the frame between the previous one and present
     bool Generate(IDirect3DTexture9* present, IDirect3DTexture9* hudLess, IDirect3DTexture9* generated, float maxLuminance)
     {
-        return generated && PostGenerate(present, hudLess, maxLuminance) && TakeGenerated(generated);
+        return generated && PostGenerate(present, hudLess, maxLuminance) && TakeGenerated(generated, true);
     }
 
     // UpscalerTimingLog

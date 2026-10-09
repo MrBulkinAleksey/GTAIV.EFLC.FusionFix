@@ -80,7 +80,6 @@ namespace
     rage::grcRenderTargetPC* GeneratedRT = nullptr;
     rage::grcRenderTargetPC* HudLessRT = nullptr;
     rage::grcRenderTargetPC* SavedRT = nullptr;     // the back buffer while the rendered frame is presented
-    rage::grcRenderTargetPC* SharpenedRT = nullptr; // the rendered frame sharpened, while it waits for its Present
     bool bHudLessCaptured = false;  // this frame
 
     // Sharpening: the post processing leaves it to the frames as they are shown (SharpenShownFrame in postfx.ixx), from
@@ -89,7 +88,13 @@ namespace
         IDirect3DSurface9* target);
     Sharpener Sharpen = nullptr;
     bool bSharpenDeferred = false;  // this frame
-    bool bPendingSharpened = false; // the waiting rendered frame is in SharpenedRT
+    // The frames waiting for their Present are sharpened as they go, straight into the back buffer, with the frame
+    // before the HUD only while HudLessRT still holds theirs: a frame that ends first has put its own there
+    bool bPendingRenderedSharpen = false;
+    bool bPendingRenderedHudLess = false;
+    uint32_t FrameNumber = 0;       // of the frame that ended last
+    uint32_t HudLessFrame = 0;      // the frame HudLessRT holds
+    uint32_t PendingFrame = 0;      // the frame the waiting frames came from
     uint32_t TargetWidth = 0;
     uint32_t TargetHeight = 0;
     bool bTargetsEightBit = false;
@@ -479,7 +484,7 @@ namespace
         PreviousSmall.clear();
         OlderSmall.clear();
         GeneratedSmall.clear();
-        for (auto rt : { &PresentRT, &GeneratedRT, &HudLessRT, &SavedRT, &SharpenedRT })
+        for (auto rt : { &PresentRT, &GeneratedRT, &HudLessRT, &SavedRT })
         {
             if (*rt)
             {
@@ -495,7 +500,7 @@ namespace
     bool CreateTargets(uint32_t width, uint32_t height)
     {
         bool eightBit = Upscaler::IsFrameGenerationEightBit();
-        if (PresentRT && GeneratedRT && HudLessRT && SavedRT && SharpenedRT && TargetWidth == width && TargetHeight == height && bTargetsEightBit == eightBit)
+        if (PresentRT && GeneratedRT && HudLessRT && SavedRT && TargetWidth == width && TargetHeight == height && bTargetsEightBit == eightBit)
             return true;
         ReleaseTargets();
 
@@ -505,9 +510,8 @@ namespace
         GeneratedRT = rage::CreateEmptyRenderTarget("FrameGenerationGenerated", width, height, bits, desc);
         HudLessRT = rage::CreateEmptyRenderTarget("FrameGenerationHudLess", width, height, bits, desc);
         SavedRT = rage::CreateEmptyRenderTarget("FrameGenerationSaved", width, height, bits, desc);
-        SharpenedRT = rage::CreateEmptyRenderTarget("FrameGenerationSharpened", width, height, bits, desc);
         if (!PresentRT || !PresentRT->mD3DTexture || !GeneratedRT || !GeneratedRT->mD3DTexture || !HudLessRT || !HudLessRT->mD3DTexture ||
-            !SavedRT || !SavedRT->mD3DTexture || !SharpenedRT || !SharpenedRT->mD3DTexture)
+            !SavedRT || !SavedRT->mD3DTexture)
         {
             ReleaseTargets();
             return false;
@@ -572,9 +576,17 @@ namespace
     // Deferred: the generated frame into the back buffer, sharpened as it is shown when the post processing left it
     bool FillGenerated(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer)
     {
-        if (bPendingGeneratedSharpen && SharpenFrame(device, GeneratedRT, backBuffer, bPendingGeneratedHudLess))
+        if (bPendingGeneratedSharpen && SharpenFrame(device, GeneratedRT, backBuffer, bPendingGeneratedHudLess && HudLessFrame == PendingFrame))
             return true;
         return CopyFrom(device, GeneratedRT, backBuffer);
+    }
+
+    // The rendered frame into the back buffer, sharpened as it is shown when the post processing left it
+    bool FillRendered(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer)
+    {
+        if (bPendingRenderedSharpen && SharpenFrame(device, PresentRT, backBuffer, bPendingRenderedHudLess && HudLessFrame == PendingFrame))
+            return true;
+        return CopyFrom(device, PresentRT, backBuffer);
     }
 
     void PresentFrame(IDirect3DDevice9* device, bool late, bool generated)
@@ -611,7 +623,7 @@ namespace
 
         bInPresent = true;
         if ((!keep || CopyInto(device, backBuffer, SavedRT)) &&
-            (generated ? FillGenerated(device, backBuffer) : CopyFrom(device, bPendingSharpened ? SharpenedRT : PresentRT, backBuffer)))
+            (generated ? FillGenerated(device, backBuffer) : FillRendered(device, backBuffer)))
         {
             Mark(device, backBuffer, generated);
             // Present moves the images of the two back buffers around: what is bound to the device is bound again
@@ -971,6 +983,7 @@ namespace
     // Render thread, after the frame is finished
     void OnBeforePresent()
     {
+        ++FrameNumber;
         CheckSettings();
         UpdateMode();
         bool hudLess = bHudLessCaptured;
@@ -1095,10 +1108,9 @@ namespace
                     Log("First frame generated at %ux%u%s, shown inside the next frame", desc.Width, desc.Height, hdr ? ", HDR" : "");
                 first = false;
 
-                IDirect3DSurface9* sharpenedSurface = nullptr;
-                SharpenedRT->mD3DTexture->GetSurfaceLevel(0, &sharpenedSurface);
-                bPendingSharpened = sharpen && sharpenedSurface && SharpenFrame(device, PresentRT, sharpenedSurface, hudLess);
-                SAFE_RELEASE(sharpenedSurface);
+                bPendingRenderedSharpen = sharpen;
+                bPendingRenderedHudLess = hudLess;
+                PendingFrame = FrameNumber;
                 bPendingGeneratedSharpen = sharpen;
                 bPendingGeneratedHudLess = hudLess;
                 bGeneratedTaken = false;
@@ -1152,13 +1164,12 @@ namespace
                 // without a previous one, nor before the frame time is known.
                 bool paced = pacing && !Upscaler::WasGenerateReset() && FrameMs > 0.0;
                 Profile(device, Upscaler::ProfilePart::FrameGenerationShow, true);
-                // Sharpened here when the post processing left it: before bPending, which a draw call would present
+                // Sharpened as it is shown, when the post processing left it
                 if (paced)
                 {
-                    IDirect3DSurface9* sharpenedSurface = nullptr;
-                    SharpenedRT->mD3DTexture->GetSurfaceLevel(0, &sharpenedSurface);
-                    bPendingSharpened = sharpen && sharpenedSurface && SharpenFrame(device, PresentRT, sharpenedSurface, hudLess);
-                    SAFE_RELEASE(sharpenedSurface);
+                    bPendingRenderedSharpen = sharpen;
+                    bPendingRenderedHudLess = hudLess;
+                    PendingFrame = FrameNumber;
                 }
                 if (mode == Mode::ShowGenerated || paced)
                 {
@@ -1247,6 +1258,9 @@ export namespace FrameGeneration
         // The console gamma it needs is drawn at the end of the frame (ApplyFinishingPasses), not here in the middle of the
         // post processing, where its effect's state saving would go through the game's device wrapper
         bHudLessCaptured = CopyInto(device, backBuffer, HudLessRT);
+        // Of the frame that ends next
+        if (bHudLessCaptured)
+            HudLessFrame = FrameNumber + 1;
         if (!bHudLessCaptured)
             LogOnce(4, "The frame before the HUD could not be copied");
     }

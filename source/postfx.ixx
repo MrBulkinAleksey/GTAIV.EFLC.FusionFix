@@ -3904,7 +3904,8 @@ private:
     // With frame generation: sharpening of a frame as it is shown (ApplyCASMasked in CAS.hlsl), from frame into target.
     // Sharpened before it, the frame generation took the sharpened shadow under a moving car along with the ground and
     // showed it twice. Present and hudLess tell the HUD, which is left as it is. On the D3D9 runtime's own device, at
-    // the end of the frame, its state kept in a state block.
+    // the end of the frame or, deferred, inside the next one; what it changes is put back. Not with a state block of all
+    // the state: made and applied twice a frame, that cost DXVK the capture and the binding of everything again.
     static bool SharpenShownFrame(IDirect3DDevice9* device, IDirect3DTexture9* frame, IDirect3DTexture9* present, IDirect3DTexture9* hudLess,
         IDirect3DSurface9* target)
     {
@@ -3915,9 +3916,44 @@ private:
             FAILED(target->GetDesc(&desc)))
             return false;
 
-        IDirect3DStateBlock9* state = nullptr;
-        if (FAILED(device->CreateStateBlock(D3DSBT_ALL, &state)) || !state)
-            return false;
+        static constexpr D3DRENDERSTATETYPE kStates[] =
+        {
+            D3DRS_ZENABLE, D3DRS_ZWRITEENABLE, D3DRS_STENCILENABLE, D3DRS_ALPHABLENDENABLE, D3DRS_ALPHATESTENABLE,
+            D3DRS_SCISSORTESTENABLE, D3DRS_CULLMODE, D3DRS_SRGBWRITEENABLE, D3DRS_COLORWRITEENABLE,
+        };
+        static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] =
+        {
+            D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER, D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_SRGBTEXTURE,
+        };
+        IDirect3DSurface9* oldTargets[4]{};
+        D3DVIEWPORT9 oldViewport{};
+        DWORD oldStates[std::size(kStates)]{};
+        IDirect3DBaseTexture9* oldTextures[3]{};
+        DWORD oldSamplerStates[3][std::size(kSamplerStates)]{};
+        float oldConstants[2 * 4]{};
+        IDirect3DPixelShader9* oldPixelShader = nullptr;
+        IDirect3DVertexShader9* oldVertexShader = nullptr;
+        IDirect3DVertexDeclaration9* oldDeclaration = nullptr;
+        DWORD oldFvf = 0;
+        IDirect3DVertexBuffer9* oldStream = nullptr;   // DrawPrimitiveUP unbinds stream 0
+        UINT oldOffset = 0, oldStride = 0;
+        for (DWORD i = 0; i < 4; ++i)
+            device->GetRenderTarget(i, &oldTargets[i]);
+        device->GetViewport(&oldViewport);
+        for (size_t i = 0; i < std::size(kStates); ++i)
+            device->GetRenderState(kStates[i], &oldStates[i]);
+        for (DWORD i = 0; i < 3; ++i)
+        {
+            device->GetTexture(2 + i, &oldTextures[i]);
+            for (size_t j = 0; j < std::size(kSamplerStates); ++j)
+                device->GetSamplerState(2 + i, kSamplerStates[j], &oldSamplerStates[i][j]);
+        }
+        device->GetPixelShaderConstantF(200, oldConstants, 2);
+        device->GetPixelShader(&oldPixelShader);
+        device->GetVertexShader(&oldVertexShader);
+        device->GetVertexDeclaration(&oldDeclaration);
+        device->GetFVF(&oldFvf);
+        device->GetStreamSource(0, &oldStream, &oldOffset, &oldStride);
 
         const float w = float(desc.Width), h = float(desc.Height);
         const float peak[4] = { SharpeningPeak(), 0.0f, 0.0f, 0.0f };
@@ -3965,8 +4001,34 @@ private:
         };
         bool drawn = SUCCEEDED(device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(Vertex)));
 
-        state->Apply();
-        state->Release();
+        for (DWORD i = 0; i < 4; ++i)
+            if (oldTargets[i] || i > 0)
+                device->SetRenderTarget(i, oldTargets[i]);
+        device->SetViewport(&oldViewport);
+        for (size_t i = 0; i < std::size(kStates); ++i)
+            device->SetRenderState(kStates[i], oldStates[i]);
+        for (DWORD i = 0; i < 3; ++i)
+        {
+            device->SetTexture(2 + i, oldTextures[i]);
+            for (size_t j = 0; j < std::size(kSamplerStates); ++j)
+                device->SetSamplerState(2 + i, kSamplerStates[j], oldSamplerStates[i][j]);
+        }
+        device->SetPixelShaderConstantF(200, oldConstants, 2);
+        device->SetPixelShader(oldPixelShader);
+        device->SetVertexShader(oldVertexShader);
+        if (oldDeclaration)
+            device->SetVertexDeclaration(oldDeclaration);
+        else
+            device->SetFVF(oldFvf);
+        device->SetStreamSource(0, oldStream, oldOffset, oldStride);
+        for (auto& t : oldTargets)
+            SAFE_RELEASE(t);
+        for (auto& t : oldTextures)
+            SAFE_RELEASE(t);
+        SAFE_RELEASE(oldPixelShader);
+        SAFE_RELEASE(oldVertexShader);
+        SAFE_RELEASE(oldDeclaration);
+        SAFE_RELEASE(oldStream);
         return drawn;
     }
 

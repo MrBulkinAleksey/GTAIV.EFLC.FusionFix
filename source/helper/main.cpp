@@ -1329,6 +1329,11 @@ namespace
             gLog = _wfopen(shared.LogPath, L"w");
             Log("GTAIV.EFLC.FusionFix upscaler helper started for process %u", shared.GameProcessId);
 
+            // The game's GPU work waits for what this submits: a helper that gets the CPU late, behind the game's own
+            // busy threads, holds up the frame and the game's next request alike. Its work is short and it sleeps between.
+            bool raised = SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS) && SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+            Log("Priority %s", raised ? "raised: above normal, highest thread" : "could not be raised");
+
             LUID luid{ shared.AdapterLuidLow, shared.AdapterLuidHigh };
             if (!device.Create(luid))
             {
