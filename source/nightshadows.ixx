@@ -98,6 +98,9 @@ namespace TrafficSignalLog
     static Step logic, lights, listed, framed, inFront, unoccluded, roadCalls, roadTaken;
     static std::atomic<uint32_t> listedFlags{0}; // of the farthest signal light ahead in the list
     static float* roadLimit = nullptr;           // [0x103AB80], the road light's distance
+    // TrafficSignalLightTest: 1 draws the signals' lights without the interior bit 0x20 (they carry
+    // 0x260, street lamps do not), 2 draws them dark, to tell what the light on the road is.
+    static int lightTest = 0;
     // The camera as the game thread last saw it, for the steps on the render thread (no natives there).
     static std::atomic<float> cameraPosition[3]{}, cameraForward[3]{};
     static std::atomic<bool> cameraKnown{false};
@@ -229,8 +232,16 @@ namespace TrafficSignalLog
         }
         static auto framedHook = safetyhook::create_mid(at + 5, [](SafetyHookContext& regs)
         {
-            if (regs.eax & 0xFF) Drawn(framed, regs.edi);
+            if (!(regs.eax & 0xFF)) return;
+            // Before the loop reads the flags (+0x20) for the technique and the intensity (+0x18).
+            if (lightTest && (*reinterpret_cast<const uint32_t*>(regs.edi + 0x20) & 0x201) == 0x200)
+            {
+                if (lightTest == 1) *reinterpret_cast<uint32_t*>(regs.edi + 0x20) &= ~0x20u;
+                else if (lightTest == 2) *reinterpret_cast<float*>(regs.edi + 0x18) = 0.0f;
+            }
+            if (enabled) Drawn(framed, regs.edi);
         });
+        if (!enabled) return;
         static auto inFrontHook = safetyhook::create_mid(at + 0x25, [](SafetyHookContext& regs) { Drawn(inFront, regs.edi); });
         static auto unoccludedHook = safetyhook::create_mid(at + 0x64, [](SafetyHookContext& regs) { Drawn(unoccluded, regs.edi); });
     }
@@ -644,6 +655,9 @@ public:
             // the placement's own) is short, so a signal ahead stayed dark until close. Scaled here: the model once,
             // the first time an entity of it is made, and each entity made with the old value or its own
             TrafficSignalLog::enabled = iniReader.ReadInteger("SHADOWS", "TrafficSignalDrawDistanceLog", 0) != 0;
+            TrafficSignalLog::lightTest = std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalLightTest", 0), 0, 2);
+            if (TrafficSignalLog::enabled || TrafficSignalLog::lightTest)
+                TrafficSignalLog::InstallDrawSteps();
             if (TrafficSignalLog::enabled)
             {
                 // push esi / call 0xD208F0, the signal's light from its pre-render
@@ -666,7 +680,6 @@ public:
                 }
                 else
                     FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the 2dfx lights call was not found\n");
-                TrafficSignalLog::InstallDrawSteps();
                 TrafficSignalLog::InstallRoadSteps();
             }
             if (auto distance = std::clamp(iniReader.ReadFloat("SHADOWS", "TrafficSignalDrawDistance", 2.5f), 1.0f, 5.0f); distance != 1.0f)
@@ -780,7 +793,7 @@ public:
                     PlayerShadowAllocation::cameraPriority = PlayerShadowAllocation::InstallCameraCapture();
                 PlayerShadowAllocation::nativeLampPriority = iniReader.ReadInteger("SHADOWS", "NativeLampViewPriority", 0) != 0;
                 PlayerShadowAllocation::casterPriority = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriority", 0) != 0;
-                PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityHold", 0), 0, 2000));
+                PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityHold", 750), 0, 2000));
                 PlayerShadowAllocation::slotTrace.enabled = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityLog", 0) != 0;
                 PlayerShadowAllocation::lampSpacing.base = std::clamp(iniReader.ReadFloat("SHADOWS", "LampSpacing", 0.0f), 0.0f, 40.0f);
                 PlayerShadowAllocation::lampSpacing.spacing = PlayerShadowAllocation::lampSpacing.base;
