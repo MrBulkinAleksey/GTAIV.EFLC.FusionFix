@@ -47,6 +47,7 @@ public:
     static constexpr std::uint32_t FlapMs = 2000;
 
     bool enabled = false;
+    float spacing = 0.0f; // LampSpacing in use, for the summary
 
     void Begin(std::uint32_t frame, std::uint32_t timeMs, Vec3 player, bool driving, const ShadowView& view, std::uint32_t count) {
         frame_ = frame; time_ = timeMs; player_ = player; driving_ = driving;
@@ -232,9 +233,9 @@ public:
                 speed = std::sqrt(x * x + y * y + z * z) * 1000.0f / float(time_ - lastSummary_);
             }
             Line(std::format("P {} player={:.1f},{:.1f},{:.1f} speed={:.1f} driving={} heading={:.0f} pitch={:.0f} lights={} "
-                "in_view={} off_screen={} none={} spaced={} wanted={} nearest_wanted={} slots={} lamps={} beams={} changes={} rejected={}",
+                "in_view={} off_screen={} none={} spaced={} wanted={} nearest_wanted={} slots={} lamps={} beams={} changes={} rejected={} spacing={:.1f}",
                 When(), player_.x, player_.y, player_.z, speed, driving_ ? 1 : 0, heading, pitch, none + off + in, in, off, none, spaced, wanted,
-                nearestWanted >= 0 ? std::format("{:.1f}", nearestWanted) : std::string("-"), lamps + beams, lamps, beams, changes_, rejects_));
+                nearestWanted >= 0 ? std::format("{:.1f}", nearestWanted) : std::string("-"), lamps + beams, lamps, beams, changes_, rejects_, spacing));
             changes_ = 0; rejects_ = 0;
             lastSummary_ = time_; lastPlayer_ = player_;
         }

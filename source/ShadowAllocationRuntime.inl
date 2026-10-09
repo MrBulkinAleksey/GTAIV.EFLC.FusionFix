@@ -271,6 +271,8 @@ namespace PlayerShadowAllocation
         state.pass.Begin({state.frame, static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),
                           ped, state.occupiedCar != 0}, CurrentLights(), CurrentCount());
         state.continuityActive=publicationEnabled && nativeLampPriority && state.pass.Active();
+        lampSpacing.Update(state.motionFocus.Speed(),state.occupiedCar!=0,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
+        if(slotTrace.enabled) slotTrace.spacing=lampSpacing.spacing;
         if(lampSpacing.spacing>0 && state.continuityActive) {
             try {
                 const auto* lights=CurrentLights();
@@ -288,7 +290,7 @@ namespace PlayerShadowAllocation
                         static_cast<int>(light.mType)==2,distanceSquared});
                 }
                 lampSpacing.Resolve();
-            } catch(...) { lampSpacing.spacing=0; }
+            } catch(...) { lampSpacing.spacing=lampSpacing.base=lampSpacing.seconds=0; }
         }
         if(slotTrace.enabled && state.continuityActive)
             try { slotTrace.Begin(state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),state.player,

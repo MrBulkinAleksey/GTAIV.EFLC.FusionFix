@@ -624,7 +624,9 @@ public:
                 PlayerShadowAllocation::casterPriority = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriority", 0) != 0;
                 PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityHold", 0), 0, 2000));
                 PlayerShadowAllocation::slotTrace.enabled = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityLog", 0) != 0;
-                PlayerShadowAllocation::lampSpacing.spacing = std::clamp(iniReader.ReadFloat("SHADOWS", "LampSpacing", 0.0f), 0.0f, 40.0f);
+                PlayerShadowAllocation::lampSpacing.base = std::clamp(iniReader.ReadFloat("SHADOWS", "LampSpacing", 0.0f), 0.0f, 40.0f);
+                PlayerShadowAllocation::lampSpacing.spacing = PlayerShadowAllocation::lampSpacing.base;
+                PlayerShadowAllocation::lampSpacing.seconds = std::clamp(iniReader.ReadFloat("SHADOWS", "LampSpacingSeconds", 0.5f), 0.0f, 5.0f);
                 fusionfix::shadows::NativeShadowContinuity42::claimDistanceRatio =
                     std::clamp(iniReader.ReadFloat("SHADOWS", "ClaimDistanceRatio", 1.5f), 0.0f, 10.0f);
                 const int allocationMode = iniReader.ReadInteger("SHADOWS", "ExperimentalPlayerShadowAllocation", 0);

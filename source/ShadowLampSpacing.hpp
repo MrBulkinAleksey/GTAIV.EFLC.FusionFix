@@ -21,7 +21,25 @@ public:
         bool spot{};
         float distanceSquared{};
     };
-    float spacing = 0.0f;              // metres, 0 is off
+    float spacing = 0.0f;              // metres in use this pass, 0 is off
+    float base = 0.0f;                 // LampSpacing: on foot and at low speed
+    float seconds = 0.0f;              // LampSpacingSeconds: driving, speed times this, at least base
+
+    // Driving past a row of lamps, a slot changes hands each time a lamp with one is passed,
+    // speed / spacing times a second. The spacing grows with speed so a slot's lamp lasts about
+    // `seconds`. Speed is smoothed over about a second, and the spacing moves only in steps of
+    // Step metres, since a new spacing hands slots to other lamps too.
+    static constexpr float Step = 2.5f, Max = 40.0f;
+    void Update(float speed, bool driving, std::uint32_t now) {
+        const float dt = lastTime_ && now > lastTime_ ? (now - lastTime_) * 0.001f : 0.0f;
+        lastTime_ = now;
+        if (!std::isfinite(speed) || !driving) speed = 0.0f;
+        smoothedSpeed_ += (speed - smoothedSpeed_) * std::clamp(dt, 0.0f, 1.0f);
+        if (seconds <= 0.0f) { spacing = base; return; }
+        const float target = std::clamp((std::max)(base, smoothedSpeed_ * seconds), 0.0f, Max);
+        if (std::abs(target - spacing) >= Step || (target <= base && smoothedSpeed_ < 1.0f)) spacing = target;
+    }
+    float Speed() const { return smoothedSpeed_; }
 
     void Begin(std::uint32_t count) {
         lamps_.clear();
@@ -58,6 +76,8 @@ private:
     static float Length(Vec3 v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
     std::vector<Lamp> lamps_;
     std::vector<const Lamp*> kept_;
+    float smoothedSpeed_ = 0.0f;
+    std::uint32_t lastTime_ = 0;
     std::vector<std::uint8_t> spacedOut_;
 };
 }
