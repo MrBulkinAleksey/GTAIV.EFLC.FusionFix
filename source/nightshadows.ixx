@@ -426,6 +426,15 @@ public:
                 HeadlightEnhancement::InstallLightModes(iniReader.ReadInteger("HEADLIGHTS", "LightModes", 0) != 0);
                 HeadlightEnhancement::InstallOffscreenLights(iniReader.ReadInteger("HEADLIGHTS", "OffscreenLights", 1),
                     std::clamp(iniReader.ReadFloat("HEADLIGHTS", "OffscreenLightsDistance", 100.0f), 0.0f, 500.0f));
+                {
+                    HeadlightEnhancement::NearConeSettings cone;
+                    cone.cut = std::clamp(iniReader.ReadFloat("HEADLIGHTS", "NearConeCut", cone.cut), 0.0f, 60.0f);
+                    cone.reach = std::clamp(iniReader.ReadFloat("HEADLIGHTS", "NearConeReach", cone.reach), 0.1f, 5.0f);
+                    cone.full = std::clamp(iniReader.ReadFloat("HEADLIGHTS", "NearConeFull", cone.full), 0.0f, cone.reach);
+                    cone.spread = std::clamp(iniReader.ReadFloat("HEADLIGHTS", "NearConeSpread", cone.spread), 0.0f, 2.0f);
+                    cone.speed = std::clamp(iniReader.ReadFloat("HEADLIGHTS", "NearConeSpeed", cone.speed), 0.1f, 50.0f);
+                    HeadlightEnhancement::InstallNearCone(iniReader.ReadInteger("HEADLIGHTS", "ExperimentalNearCone", 0) != 0, cone);
+                }
                 bCloseHeadlightRelevance = iniReader.ReadInteger("SHADOWS", "ExperimentalCloseHeadlightRelevance", 0) != 0;
                 bTrafficSelfShadowFix = iniReader.ReadInteger("SHADOWS", "ExperimentalTrafficSelfShadowFix", 0) != 0;
                 NearbyVehicleLighting36::enabled.store(iniReader.ReadInteger("SHADOWS", "NearbyVehicleHeadlightReceivers", 0) != 0, std::memory_order_release);

@@ -124,6 +124,11 @@ namespace HeadlightEnhancement
                 << "\nshadowOriginStatus=" << shadowOriginStatus
                 << "\nshadowOriginsMoved=" << shadowOriginsMoved.load()
                 << "\nshadowOriginCachesDropped=" << shadowOriginCachesDropped.load()
+                << "\nnearConeStatus=" << nearConeStatus
+                << "\nnearConeBeams=" << nearConeBeams.load()
+                << "\nnearConeAdjusted=" << nearConeAdjusted.load()
+                << "\nnearConeConesInDegrees=" << nearConeConesInDegrees.load()
+                << "\nnearConeLastCones=" << nearConeLastInner.load() << ' ' << nearConeLastOuter.load()
                 << "\noffscreenLightsStatus=" << offscreenLightsStatus
                 << "\ntrackedVehicle=" << (PlayerCar::Last() != 0) << '\n';
         });
@@ -392,6 +397,179 @@ namespace HeadlightEnhancement
         }
         shadowOriginHook = std::move(*hook);
         shadowOriginStatus = "installed";
+    }
+
+    // Experiment: a ped right by the lamps still cuts the beam's shadow, so the beam itself gives way
+    // to them. Within NearConeReach of the lamps a ped on one side moves that side's edge of the
+    // beam in by up to NearConeCut, while the edge on the other side stays where it was: the cone
+    // narrows by half of that and turns away by the other half (sliding the whole beam, 191e631,
+    // moved the side nothing covered too). Peds on both sides move both edges in.
+    // The game adds the beam of both lamps at one call (CE 0xA3FE11 -> 0xA3E070 -> 0xABCC50, which
+    // appends it to the frame's light list [0x103EEDC], its count at 0x154CBBC); right after it,
+    // with the car in esi, the light just added is turned and narrowed. Each car eases towards
+    // what it sees at NearConeSpeed per second, so the beam does not jump with a hand.
+    struct NearConeSettings
+    {
+        float cut = 20.0f;     // degrees an edge moves in with someone right at the lamps on its side
+        float reach = 1.5f;    // metres from the lamps where it starts
+        float full = 0.6f;     // metres from the lamps where it is all there
+        float spread = 0.7f;   // half the spacing of the lamps, metres
+        float speed = 4.0f;    // easing per second
+    };
+    static NearConeSettings nearCone{};
+    static std::string nearConeStatus = "off in the ini";
+    static SafetyHookMid nearConeBeforeHook, nearConeAfterHook;
+    static uint32_t nearConeCount = 0;
+    static std::atomic<uint32_t> nearConeBeams{0}, nearConeAdjusted{0}, nearConeConesInDegrees{0};
+    static std::atomic<float> nearConeLastOuter{0.0f}, nearConeLastInner{0.0f};
+
+    struct NearConeCar
+    {
+        uintptr_t vehicle = 0;
+        float left = 0.0f, right = 0.0f;
+        std::chrono::steady_clock::time_point seen{};
+    };
+    static std::array<NearConeCar, 32> nearConeCars{};
+
+    static NearConeCar& NearConeState(uintptr_t vehicle, std::chrono::steady_clock::time_point now)
+    {
+        NearConeCar* oldest = &nearConeCars[0];
+        for (auto& car : nearConeCars)
+        {
+            if (car.vehicle == vehicle) return car;
+            if (car.seen < oldest->seen) oldest = &car;
+        }
+        *oldest = {};
+        oldest->vehicle = vehicle;
+        oldest->seen = now;
+        return *oldest;
+    }
+
+    // How much of each side of the beam the peds by its lamps take, 0 to 1.
+    static void NearConeSides(const rage::CLightSource& light, float& left, float& right)
+    {
+        left = right = 0.0f;
+        const auto pool = CPed::GetPedPool();
+        if (!pool || !pool->m_aStorage || !pool->m_aFlags || pool->m_nSize <= 0 || pool->m_nSize > 4096 ||
+            pool->m_nStorageSize < 0x24 || pool->m_nStorageSize > 0x10000)
+            return;
+        const float fx = light.mDirection.x, fy = light.mDirection.y;
+        const float flen = std::sqrt(fx * fx + fy * fy);
+        if (!(flen > 1e-3f)) return;
+        const float forward[2] = { fx / flen, fy / flen };
+        const float rightAxis[2] = { forward[1], -forward[0] };
+        const float fade = (std::max)(nearCone.reach - nearCone.full, 0.01f);
+        for (int32_t i = 0; i < pool->m_nSize; ++i)
+        {
+            const auto ped = reinterpret_cast<uintptr_t>(pool->GetSlot(i));
+            float position[3];
+            if (!ped || !CEntity::GetPosition(ped, position)) continue;
+            const float d[3] = { position[0] - light.mPosition.x, position[1] - light.mPosition.y,
+                                 position[2] - light.mPosition.z };
+            // A ped's position is about a metre above its feet, the lamps lower.
+            if (d[2] < -1.5f || d[2] > 2.0f) continue;
+            const float f = d[0] * forward[0] + d[1] * forward[1];
+            const float s = d[0] * rightAxis[0] + d[1] * rightAxis[1];
+            // Those inside the car or behind its front are out of the beam.
+            if (f < -0.6f) continue;
+            const float distance = std::hypot((std::max)(f, 0.0f), (std::max)(std::abs(s) - nearCone.spread, 0.0f));
+            const float w = std::clamp((nearCone.reach - distance) / fade, 0.0f, 1.0f);
+            if (w <= 0.0f) continue;
+            // Right in the middle counts for both sides.
+            right = (std::max)(right, w * std::clamp(0.5f + s / 0.6f, 0.0f, 1.0f));
+            left = (std::max)(left, w * std::clamp(0.5f - s / 0.6f, 0.0f, 1.0f));
+        }
+    }
+
+    static void RotateAboutUp(rage::Vector3& v, float c, float s)
+    {
+        const float x = v.x * c - v.y * s, y = v.x * s + v.y * c;
+        v.x = x;
+        v.y = y;
+    }
+
+    static void NearConeBefore(SafetyHookContext&)
+    {
+        nearConeCount = *reinterpret_cast<const uint32_t*>(imageBase + 0x114CBBC);
+    }
+
+    static void NearConeAfter(SafetyHookContext& regs)
+    {
+        const auto count = *reinterpret_cast<const uint32_t*>(imageBase + 0x114CBBC);
+        const auto lights = *reinterpret_cast<rage::CLightSource* const*>(imageBase + 0xC3EEDC);
+        // A full list replaces some other light instead; that one is left alone.
+        if (!lights || count != nearConeCount + 1 || count > 0x280) return;
+        auto& light = lights[count - 1];
+        if (light.mType != rage::LT_SPOT || !(light.mFlags & rage::LF_VEHICLE)) return;
+        ++nearConeBeams;
+
+        const auto now = std::chrono::steady_clock::now();
+        auto& car = NearConeState(static_cast<uintptr_t>(regs.esi), now);
+        const float dt = std::clamp(std::chrono::duration<float>(now - car.seen).count(), 0.0f, 0.25f);
+        car.seen = now;
+        float left, right;
+        NearConeSides(light, left, right);
+        const float ease = 1.0f - std::exp(-nearCone.speed * dt);
+        car.left += (left - car.left) * ease;
+        car.right += (right - car.right) * ease;
+        if (car.left < 1e-3f && car.right < 1e-3f) return;
+
+        // Spot cones are cosines of the half-angles; anything above 1 would be degrees.
+        const bool degrees = light.mOuterConeAngle > 1.0f;
+        nearConeLastOuter = light.mOuterConeAngle;
+        nearConeLastInner = light.mInnerConeAngle;
+        if (degrees) ++nearConeConesInDegrees;
+        constexpr float toRad = 3.14159265f / 180.0f;
+        const float outer = degrees ? light.mOuterConeAngle * toRad : std::acos(std::clamp(light.mOuterConeAngle, -1.0f, 1.0f));
+        const float inner = degrees ? light.mInnerConeAngle * toRad : std::acos(std::clamp(light.mInnerConeAngle, -1.0f, 1.0f));
+        if (!(outer > 1e-3f)) return;
+        // Neither edge past the axis: at least 5 degrees of the cone stay.
+        const float room = (std::max)(2.0f * (outer - 5.0f * toRad), 0.0f);
+        float cutLeft = car.left * nearCone.cut * toRad, cutRight = car.right * nearCone.cut * toRad;
+        if (cutLeft + cutRight > room)
+        {
+            const float k = room / (cutLeft + cutRight);
+            cutLeft *= k;
+            cutRight *= k;
+        }
+        const float narrowed = outer - 0.5f * (cutLeft + cutRight);
+        const float newInner = inner * narrowed / outer;
+        light.mOuterConeAngle = degrees ? narrowed / toRad : std::cos(narrowed);
+        light.mInnerConeAngle = degrees ? newInner / toRad : std::cos(newInner);
+        // Positive turns left about up: a cut left edge turns the axis right by half of it, so the
+        // right edge stays.
+        const float yaw = 0.5f * (cutRight - cutLeft);
+        const float c = std::cos(yaw), s = std::sin(yaw);
+        RotateAboutUp(light.mDirection, c, s);
+        RotateAboutUp(light.mTangent, c, s);
+        ++nearConeAdjusted;
+    }
+
+    static void InstallNearCone(bool enabled, const NearConeSettings& settings)
+    {
+        if (!enabled) return;
+        nearCone = settings;
+        // call 0xA3E070 / add esp, 30h / pop edi / pop esi
+        const auto check = CodeCheck()
+            .Bytes(0x63FE11, {0xE8}).Branch(0x63FE12, 0x63E070)
+            .Bytes(0x63FE16, {0x83,0xC4,0x30,0x5F,0x5E})
+            .Bytes(0x6BD2C1, {0x8B,0x35}).Address(0x6BD2C3, 0x114CBBC)
+            .Bytes(0x6BD2DA, {0x03,0x0D}).Address(0x6BD2DC, 0xC3EEDC);
+        if (!check)
+        {
+            nearConeStatus = check.Status();
+            return;
+        }
+        auto before = safetyhook::MidHook::create(imageBase + 0x63FE11, NearConeBefore);
+        auto after = safetyhook::MidHook::create(imageBase + 0x63FE16, NearConeAfter);
+        if (!before || !after)
+        {
+            nearConeStatus = "hook failed";
+            return;
+        }
+        nearConeBeforeHook = std::move(*before);
+        nearConeAfterHook = std::move(*after);
+        nearConeStatus = "installed";
     }
 
     // A car's lights, its headlight beams among them, are only made while the car was seen by one
