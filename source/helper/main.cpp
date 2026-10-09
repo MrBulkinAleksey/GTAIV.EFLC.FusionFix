@@ -130,12 +130,49 @@ namespace
         uint64_t localValue = 0;
         HANDLE fenceEvent = nullptr;
 
-        // Evaluate and Generate each take one
+        // Command lists of the frames, on a queue each: Evaluate on the direct queue, Generate on the compute queue with
+        // asyncGeneration, where the GPU can run it beside the game's next frame, on the direct queue otherwise. Their
+        // allocators are reused once the GPU finished with them.
         static constexpr uint32_t Frames = 6;
-        std::array<ComPtr<ID3D12CommandAllocator>, Frames> allocators;
-        std::array<uint64_t, Frames> allocatorValues{};
+        enum class Work : uint32_t { None, Evaluate, Generate };
+        struct Ring
+        {
+            ComPtr<ID3D12CommandQueue> queue;
+            std::array<ComPtr<ID3D12CommandAllocator>, Frames> allocators;
+            std::array<uint64_t, Frames> allocatorValues{};
+            ComPtr<ID3D12GraphicsCommandList> list;
+            uint32_t frame = 0;
+            uint64_t lastSignal = 0;        // the last value of the shared fence it was given to signal
+            // Timestamps, see below
+            uint32_t stampBase = 0;
+            double ticksPerMs = 0.0;
+            std::array<uint32_t, Frames> stampCounts{};
+            std::array<Work, Frames> stampWork{};
+
+            bool Create(ID3D12Device* device, D3D12_COMMAND_LIST_TYPE type)
+            {
+                D3D12_COMMAND_QUEUE_DESC queueDesc{};
+                queueDesc.Type = type;
+                if (FAILED(device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue))))
+                    return false;
+                for (auto& allocator : allocators)
+                    if (FAILED(device->CreateCommandAllocator(type, IID_PPV_ARGS(&allocator))))
+                        return false;
+                if (FAILED(device->CreateCommandList(0, type, allocators[0].Get(), nullptr, IID_PPV_ARGS(&list))))
+                    return false;
+                list->Close();
+                uint64_t frequency = 0;
+                if (SUCCEEDED(queue->GetTimestampFrequency(&frequency)) && frequency)
+                    ticksPerMs = static_cast<double>(frequency) / 1000.0;
+                return true;
+            }
+        };
+        Ring direct;
+        Ring compute;                       // its queue is empty when it could not be made
+        Ring* current = &direct;            // the ring of the frame being recorded
+        bool asyncGeneration = false;
+        ComPtr<ID3D12CommandQueue> queue;   // the direct one, for immediate work
         ComPtr<ID3D12GraphicsCommandList> list;
-        uint32_t frame = 0;
 
         std::array<SharedTexture, static_cast<size_t>(Protocol::Texture::Count)> textures;
         HANDLE sharedFenceHandle = nullptr;
@@ -143,29 +180,23 @@ namespace
         // GPU time of the helper's own work, a few timestamps a command list, read back once its allocator is reused
         // and logged every 300 frames: what the upscaler and the frame generation cost without the copies and the
         // waits on the game's side
-        enum class Work : uint32_t { None, Evaluate, Generate };
         static constexpr uint32_t StampsPerFrame = 4;
         ComPtr<ID3D12QueryHeap> queryHeap;
         ComPtr<ID3D12Resource> queryReadback;
         const uint64_t* queryData = nullptr;
-        double ticksPerMs = 0.0;
-        std::array<uint32_t, Frames> stampCounts{};
-        std::array<Work, Frames> stampWork{};
         struct GpuStats
         {
-            uint32_t evaluates = 0, generates = 0, prepares = 0;
+            uint32_t evaluates = 0, generates = 0, prepares = 0, asyncGenerates = 0;
             double upscale = 0.0, prepare = 0.0, generate = 0.0, evaluateList = 0.0, generateList = 0.0;
             double upscaleMax = 0.0, generateMax = 0.0;
         } gpuStats;
 
         void CreateTimestamps()
         {
-            uint64_t frequency = 0;
-            if (FAILED(queue->GetTimestampFrequency(&frequency)) || !frequency)
-                return;
+            constexpr uint32_t count = 2 * Frames * StampsPerFrame;
             D3D12_QUERY_HEAP_DESC heapDesc{};
             heapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
-            heapDesc.Count = Frames * StampsPerFrame;
+            heapDesc.Count = count;
             if (FAILED(device->CreateQueryHeap(&heapDesc, IID_PPV_ARGS(&queryHeap))))
                 return;
 
@@ -173,7 +204,7 @@ namespace
             heap.Type = D3D12_HEAP_TYPE_READBACK;
             D3D12_RESOURCE_DESC desc{};
             desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-            desc.Width = sizeof(uint64_t) * Frames * StampsPerFrame;
+            desc.Width = sizeof(uint64_t) * count;
             desc.Height = 1;
             desc.DepthOrArraySize = 1;
             desc.MipLevels = 1;
@@ -188,36 +219,40 @@ namespace
                 return;
             }
             queryData = static_cast<const uint64_t*>(mapped);
-            ticksPerMs = static_cast<double>(frequency) / 1000.0;
+            direct.stampBase = 0;
+            compute.stampBase = Frames * StampsPerFrame;
         }
 
         // A timestamp in the frame's command list
         void Stamp(ID3D12GraphicsCommandList* cmd)
         {
-            if (!queryHeap || stampCounts[frame] >= StampsPerFrame)
+            auto& r = *current;
+            if (!queryHeap || !r.ticksPerMs || r.stampCounts[r.frame] >= StampsPerFrame)
                 return;
-            cmd->EndQuery(queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, frame * StampsPerFrame + stampCounts[frame]++);
+            cmd->EndQuery(queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, r.stampBase + r.frame * StampsPerFrame + r.stampCounts[r.frame]++);
         }
 
         // Before the frame's command list is closed
         void ResolveStamps()
         {
-            if (queryHeap && stampCounts[frame])
-                list->ResolveQueryData(queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, frame * StampsPerFrame, stampCounts[frame], queryReadback.Get(),
-                    sizeof(uint64_t) * frame * StampsPerFrame);
+            auto& r = *current;
+            auto first = r.stampBase + r.frame * StampsPerFrame;
+            if (queryHeap && r.stampCounts[r.frame])
+                r.list->ResolveQueryData(queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, first, r.stampCounts[r.frame], queryReadback.Get(),
+                    sizeof(uint64_t) * first);
         }
 
         // The timestamps of a frame the GPU has finished: Evaluate has start, upscaled, prepared; Generate start, generated
-        void ReadStamps(uint32_t slot)
+        void ReadStamps(Ring& r, uint32_t slot)
         {
-            auto count = stampCounts[slot];
-            auto work = stampWork[slot];
-            stampCounts[slot] = 0;
-            stampWork[slot] = Work::None;
+            auto count = r.stampCounts[slot];
+            auto work = r.stampWork[slot];
+            r.stampCounts[slot] = 0;
+            r.stampWork[slot] = Work::None;
             if (!queryData || count < 2)
                 return;
-            auto t = queryData + slot * StampsPerFrame;
-            auto ms = [&](uint32_t from, uint32_t to) { return t[to] > t[from] ? static_cast<double>(t[to] - t[from]) / ticksPerMs : 0.0; };
+            auto t = queryData + r.stampBase + slot * StampsPerFrame;
+            auto ms = [&](uint32_t from, uint32_t to) { return t[to] > t[from] ? static_cast<double>(t[to] - t[from]) / r.ticksPerMs : 0.0; };
             auto& g = gpuStats;
             if (work == Work::Evaluate)
             {
@@ -235,6 +270,7 @@ namespace
             else if (work == Work::Generate)
             {
                 ++g.generates;
+                g.asyncGenerates += &r == &compute;
                 auto generate = ms(0, 1);
                 g.generate += generate;
                 g.generateMax = std::max(g.generateMax, generate);
@@ -246,8 +282,8 @@ namespace
                 Log("GPU milliseconds of the helper's work over %u frames: upscaler %.3f (%.3f at most), Evaluate's command list %.3f",
                     g.evaluates, g.upscale / g.evaluates, g.upscaleMax, g.evaluateList / g.evaluates);
                 if (g.prepares)
-                    Log("  frame generation: prepare %.3f over %u frames, generate %.3f (%.3f at most) over %u frames, Generate's command list %.3f",
-                        g.prepare / g.prepares, g.prepares, g.generates ? g.generate / g.generates : 0.0, g.generateMax, g.generates,
+                    Log("  frame generation: prepare %.3f over %u frames, generate %.3f (%.3f at most) over %u frames (%u on the compute queue), Generate's command list %.3f",
+                        g.prepare / g.prepares, g.prepares, g.generates ? g.generate / g.generates : 0.0, g.generateMax, g.generates, g.asyncGenerates,
                         g.generates ? g.generateList / g.generates : 0.0);
                 g = {};
             }
@@ -270,18 +306,15 @@ namespace
             if (FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device))))
                 return false;
 
-            D3D12_COMMAND_QUEUE_DESC queueDesc{};
-            queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-            if (FAILED(device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue))))
+            if (!direct.Create(device.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT))
                 return false;
-
-            for (auto& allocator : allocators)
-                if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))))
-                    return false;
-
-            if (FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocators[0].Get(), nullptr, IID_PPV_ARGS(&list))))
-                return false;
-            list->Close();
+            queue = direct.queue;
+            list = direct.list;
+            if (!compute.Create(device.Get(), D3D12_COMMAND_LIST_TYPE_COMPUTE))
+            {
+                Log("No compute queue: the frame generation runs on the direct queue");
+                compute = {};
+            }
 
             if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&localFence))))
                 return false;
@@ -303,8 +336,8 @@ namespace
         ID3D12GraphicsCommandList* BeginImmediate()
         {
             WaitFence(localFence.Get(), localValue, 5000);
-            allocators[0]->Reset();
-            list->Reset(allocators[0].Get(), nullptr);
+            direct.allocators[0]->Reset();
+            list->Reset(direct.allocators[0].Get(), nullptr);
             return list.Get();
         }
 
@@ -318,21 +351,23 @@ namespace
             return WaitFence(localFence.Get(), localValue, 10000);
         }
 
-        // Command list of one frame; allocators are reused once the GPU finished with them
+        // Command list of one frame
         ID3D12GraphicsCommandList* BeginFrame(Work work)
         {
-            frame = (frame + 1) % Frames;
+            current = work == Work::Generate && asyncGeneration && compute.queue ? &compute : &direct;
+            auto& r = *current;
+            r.frame = (r.frame + 1) % Frames;
             auto fence = FrameFence();
             if (fence)
-                WaitFence(fence, allocatorValues[frame], 1000);
+                WaitFence(fence, r.allocatorValues[r.frame], 1000);
             // Timestamps the GPU wrote: only once it is past the frame
-            if (stampCounts[frame] && fence && fence->GetCompletedValue() >= allocatorValues[frame])
-                ReadStamps(frame);
-            stampCounts[frame] = 0;
-            stampWork[frame] = work;
-            allocators[frame]->Reset();
-            list->Reset(allocators[frame].Get(), nullptr);
-            return list.Get();
+            if (r.stampCounts[r.frame] && fence && fence->GetCompletedValue() >= r.allocatorValues[r.frame])
+                ReadStamps(r, r.frame);
+            r.stampCounts[r.frame] = 0;
+            r.stampWork[r.frame] = work;
+            r.allocators[r.frame]->Reset();
+            r.list->Reset(r.allocators[r.frame].Get(), nullptr);
+            return r.list.Get();
         }
 
         // The fence the frames' allocators are tracked with
@@ -344,35 +379,44 @@ namespace
         // Wine: runs the frame and waits for it, the game copies the output once Evaluate is answered
         bool SubmitFrameAndWait()
         {
+            auto& r = *current;
             ResolveStamps();
-            if (FAILED(list->Close()))
+            if (FAILED(r.list->Close()))
                 return false;
-            ID3D12CommandList* lists[] = { list.Get() };
-            queue->ExecuteCommandLists(1, lists);
-            queue->Signal(localFence.Get(), ++localValue);
-            allocatorValues[frame] = localValue;
+            ID3D12CommandList* lists[] = { r.list.Get() };
+            r.queue->ExecuteCommandLists(1, lists);
+            r.queue->Signal(localFence.Get(), ++localValue);
+            r.allocatorValues[r.frame] = localValue;
             return WaitFence(localFence.Get(), localValue, 2000);
         }
 
         void SubmitFrame(uint64_t waitValue, uint64_t signalValue, bool execute)
         {
+            auto& r = *current;
             ResolveStamps();
-            list->Close();
-            queue->Wait(sharedFence.Get(), waitValue);
+            r.list->Close();
+            r.queue->Wait(sharedFence.Get(), waitValue);
             if (execute)
             {
-                ID3D12CommandList* lists[] = { list.Get() };
-                queue->ExecuteCommandLists(1, lists);
+                ID3D12CommandList* lists[] = { r.list.Get() };
+                r.queue->ExecuteCommandLists(1, lists);
             }
-            queue->Signal(sharedFence.Get(), signalValue);
-            allocatorValues[frame] = signalValue;
+            // The shared fence only goes up: the value given to the other queue before this one is signalled first, or
+            // this one's would let the game take that queue's frame before it is ready. The work itself still overlaps.
+            auto& other = &r == &direct ? compute : direct;
+            if (other.queue && other.lastSignal)
+                r.queue->Wait(sharedFence.Get(), other.lastSignal);
+            r.queue->Signal(sharedFence.Get(), signalValue);
+            r.lastSignal = signalValue;
+            r.allocatorValues[r.frame] = signalValue;
         }
 
         void ReleaseTextures()
         {
             // The game has already imported or dropped its duplicates
             if (auto fence = FrameFence())
-                WaitFence(fence, *std::max_element(allocatorValues.begin(), allocatorValues.end()), 1000);
+                for (auto ring : { &direct, &compute })
+                    WaitFence(fence, *std::max_element(ring->allocatorValues.begin(), ring->allocatorValues.end()), 1000);
             for (auto& texture : textures)
             {
                 if (texture.handle)
@@ -385,7 +429,11 @@ namespace
                 CloseHandle(sharedFenceHandle);
             sharedFenceHandle = nullptr;
             sharedFence.Reset();
-            allocatorValues.fill(0);
+            for (auto ring : { &direct, &compute })
+            {
+                ring->allocatorValues.fill(0);
+                ring->lastSignal = 0;
+            }
         }
 
         // A shader can write the format through a typed UAV
@@ -1155,6 +1203,11 @@ namespace
                     shared.Flags = flags;
                 }
                 bool eightBit = (flags & Protocol::ConfigureFlags::EightBitFrames) != 0;
+                if ((flags & Protocol::ConfigureFlags::AsyncGeneration) && !device.compute.queue)
+                {
+                    flags &= ~Protocol::ConfigureFlags::AsyncGeneration;
+                    shared.Flags = flags;
+                }
                 auto format = eightBit ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT;
                 bool generation = fsr.CreateFrameGeneration(width, height, outputWidth, outputHeight, hdr, eightBit) &&
                     device.CreateTexture(T::Present, outputWidth, outputHeight, format, false) &&
@@ -1167,7 +1220,7 @@ namespace
                     device.ReleaseTexture(T::Present);
                     device.ReleaseTexture(T::Generated);
                     device.ReleaseTexture(T::HudLess);
-                    flags &= ~(Protocol::ConfigureFlags::FrameGeneration | Protocol::ConfigureFlags::EightBitFrames);
+                    flags &= ~(Protocol::ConfigureFlags::FrameGeneration | Protocol::ConfigureFlags::EightBitFrames | Protocol::ConfigureFlags::AsyncGeneration);
                     shared.Flags = flags;
                 }
             }
@@ -1186,8 +1239,10 @@ namespace
                 return false;
 
             backend = shared.ConfigureBackend;
-            connection.Message("%s ready at %ux%u -> %ux%u%s", backend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height, outputWidth, outputHeight,
-                !fsr.HasFrameGeneration() ? "" : (flags & Protocol::ConfigureFlags::EightBitFrames) ? ", with frame generation (8-bit frames)" : ", with frame generation");
+            device.asyncGeneration = fsr.HasFrameGeneration() && (flags & Protocol::ConfigureFlags::AsyncGeneration) != 0;
+            connection.Message("%s ready at %ux%u -> %ux%u%s%s", backend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height, outputWidth, outputHeight,
+                !fsr.HasFrameGeneration() ? "" : (flags & Protocol::ConfigureFlags::EightBitFrames) ? ", with frame generation (8-bit frames" : ", with frame generation (16-bit frames",
+                (flags & Protocol::ConfigureFlags::AsyncGeneration) ? ", on the compute queue)" : fsr.HasFrameGeneration() ? ")" : "");
             return true;
         }
 
@@ -1415,10 +1470,14 @@ namespace
                 connection.Respond(ok ? Protocol::Status::Ok : Protocol::Status::Failed, serial);
             }
 
-            if (device.queue && device.localFence)
+            // Both queues done before their work's resources go
+            for (auto& q : { device.direct.queue, device.compute.queue })
             {
-                device.queue->Signal(device.localFence.Get(), ++device.localValue);
-                device.WaitFence(device.localFence.Get(), device.localValue, 2000);
+                if (q && device.localFence)
+                {
+                    q->Signal(device.localFence.Get(), ++device.localValue);
+                    device.WaitFence(device.localFence.Get(), device.localValue, 2000);
+                }
             }
             dlss.Shutdown();
             fsr.Shutdown();

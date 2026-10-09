@@ -64,6 +64,7 @@ namespace
     // game's Present shows the generated frame, which the GPU waits for before it goes on with the next frame.
     bool bDeferredSetting = true;
     float fShowGeneratedAt = 0.2f;
+    bool bAsyncCompute = true;      // FrameGenerationAsyncCompute: the helper generates on its compute queue
     bool bDeferredBroken = false;   // the game's Present did not come through the device: not deferred any more
 
     // FrameGenerationDebug in [TEMPORAL]
@@ -858,11 +859,12 @@ namespace
         nDebug = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDebug", 0);
         nPacing = std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGenerationPacing", 2), 0, 2);
         bDeferredSetting = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDeferred", 1) != 0;
+        bAsyncCompute = iniReader.ReadInteger("TEMPORAL", "FrameGenerationAsyncCompute", 1) != 0;
         fShowGeneratedAt = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationShowGeneratedAt", 0.2f), 0.0f, 0.9f);
         // The aims may have changed
         TargetDraws[0] = TargetDraws[1] = 0.0;
-        Log("Frame generation settings: delay %.2f, pacing %d, deferred %d (generated frame at %.2f), debug %d", fDelay, nPacing,
-            int(bDeferredSetting), fShowGeneratedAt, nDebug);
+        Log("Frame generation settings: delay %.2f, pacing %d, deferred %d (generated frame at %.2f), compute queue %d, debug %d", fDelay, nPacing,
+            int(bDeferredSetting), fShowGeneratedAt, int(bAsyncCompute), nDebug);
 
         // A fresh start for the statistics
         Stats = {};
@@ -1221,6 +1223,12 @@ export namespace FrameGeneration
     bool UsesHudLess()
     {
         return mode != Mode::Off;
+    }
+
+    // The helper generates on its compute queue, beside the game's next frame
+    bool UsesAsyncCompute()
+    {
+        return bAsyncCompute;
     }
 
     // The post processing's sharpening, for the frames as they are shown

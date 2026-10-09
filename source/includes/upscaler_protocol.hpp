@@ -29,7 +29,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 11;
+    constexpr uint32_t Version = 12;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -96,6 +96,7 @@ namespace UpscalerProtocol
         constexpr uint32_t FrameGeneration = 1 << 3; // FSR frame generation; cleared by the helper if it can't create it
         constexpr uint32_t HighDynamicRange = 1 << 4; // Present is scRGB
         constexpr uint32_t EightBitFrames = 1 << 5;   // the frame generation's textures are B8G8R8A8_UNORM; cleared by the helper if the GPU can't write them
+        constexpr uint32_t AsyncGeneration = 1 << 6;  // Generate runs on a compute queue of the helper; cleared if it has none
     }
 
 #pragma pack(push, 8)

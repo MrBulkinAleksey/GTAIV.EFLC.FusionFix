@@ -1553,6 +1553,7 @@ export namespace Upscaler
         bool FrameGeneration = false;
         bool HighDynamicRange = false;    // the frame given to Generate is scRGB
         bool HudLess = false;             // Generate of this frame comes with the frame before the HUD
+        bool AsyncGeneration = false;     // Generate on the helper's compute queue
         float CameraPosition[3]{};        // world space
         float CameraUp[3]{};
         float CameraRight[3]{};
@@ -1653,7 +1654,8 @@ export namespace Upscaler
         // Without HDR the frames are the 8-bit back buffer's: 8-bit textures halve what the frame generation's copies move
         if (frame.FrameGeneration && frameGenerationAvailable)
             flags |= Protocol::ConfigureFlags::FrameGeneration |
-                (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : Protocol::ConfigureFlags::EightBitFrames);
+                (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : Protocol::ConfigureFlags::EightBitFrames) |
+                (frame.AsyncGeneration ? Protocol::ConfigureFlags::AsyncGeneration : 0u);
         auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
         auto outputHeight = frame.OutputHeight ? frame.OutputHeight : frame.Height;
         bool reconfigure = configuredBackend != backendId || configuredWidth != frame.Width || configuredHeight != frame.Height ||
