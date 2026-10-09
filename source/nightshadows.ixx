@@ -671,6 +671,29 @@ public:
                 }
                 else
                     FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the signal draw distance store was not found\n");
+
+                // The coloured light a signal throws on the road is not its 2dfx light: its logic (0xD208F0 ->
+                // 0x9BBC70) adds it to a list of its own, 64 a frame, only within [0x103AB80] = 60 m of the camera
+                // over the game's distance scale [0x103F6BC], fading out towards there (0x9BBDFB). Those two reads
+                // are the only ones of that value, so it is scaled with the signals. Past 48 entries in a frame,
+                // signals further than the game's 60 m are left out, so the near ones keep their places.
+                auto limitRead = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 51 C9 F3 0F 5E 0D ? ? ? ? 0F 2F C1 F3 0F 11 4C 24 14");
+                auto fadeRead = hook::pattern("F3 0F 10 1D ? ? ? ? F3 0F 10 4C 24 14 F3 0F 10 15");
+                if (!limitRead.empty() && !fadeRead.empty() &&
+                    *limitRead.get_first<float*>(4) == *fadeRead.get_first<float*>(4) && **limitRead.get_first<float*>(4) == 60.0f)
+                {
+                    static float* limit = *limitRead.get_first<float*>(4);
+                    static const float gameLimit = *limit;
+                    injector::WriteMemory<float>(limit, gameLimit * fTrafficSignalDrawScale, true);
+                    // comiss xmm0, xmm1 with ecx the entries so far, xmm1 the distance, xmm0 the limit
+                    static auto SignalLightReserveHook = safetyhook::create_mid(limitRead.get_first(0x14), [](SafetyHookContext& regs)
+                    {
+                        if (regs.ecx >= 48 && regs.xmm1.f32[0] > gameLimit)
+                            regs.xmm0.f32[0] = gameLimit;
+                    });
+                }
+                else
+                    FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the signal road light distance was not found\n");
             }
             if (iniReader.ReadInteger("SHADOWS", "ExperimentalCrashDiagnostics", 0) != 0)
             {
