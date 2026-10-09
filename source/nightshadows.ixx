@@ -110,6 +110,11 @@ namespace TrafficSignalLog
     // bright, to tell whether far away the road takes no light at all or only this one (it did not help),
     // 4 draws them without their projected texture.
     static std::atomic<int> lightTest{0};
+    // TrafficSignalPlainLightBeyond: the coloured light a signal throws on the road (added by its logic,
+    // CE 0xD20F4A..0xD21029, flag 0x200, with a projected texture) went out from about 120 m and came back
+    // at once on the way closer; drawn without its projected texture (TrafficSignalLightTest 4) it stayed,
+    // and so it does now beyond this distance. Near, where its shape shows, it keeps the texture.
+    static float plainBeyond = 100.0f;
     static constexpr int LightTests = 8;
     static const char* LightTestName(int test) noexcept
     {
@@ -241,9 +246,10 @@ namespace TrafficSignalLog
         static auto hook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
         {
             const int test = lightTest.load(std::memory_order_relaxed);
-            if (!test) return;
+            if (!test && !(plainBeyond > 0.0f)) return;
             auto& light = *reinterpret_cast<rage::CLightSource*>(regs.edi - 0x28);
             if ((light.mFlags & 0x201) != 0x200) return;
+            if (plainBeyond > 0.0f && light.mProjTexHash && CameraFar(regs.edi, plainBeyond)) light.mProjTexHash = 0;
             switch (test)
             {
             case 1: light.mFlags &= ~0x20u; break;
@@ -307,7 +313,7 @@ namespace TrafficSignalLog
             }
             wasDown = down;
         }
-        if (!enabled && !lightTest) return;
+        if (!enabled && !lightTest && !(plainBeyond > 0.0f)) return;
         {
             float position[3], forward[3];
             const bool known = GameCamera::Position(position) && CameraForward(forward);
@@ -745,6 +751,7 @@ public:
             TrafficSignalLog::enabled = iniReader.ReadInteger("SHADOWS", "TrafficSignalDrawDistanceLog", 0) != 0;
             TrafficSignalLog::lightTest = std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalLightTest", 0), 0,
                 TrafficSignalLog::LightTests - 1);
+            TrafficSignalLog::plainBeyond = std::clamp(iniReader.ReadFloat("SHADOWS", "TrafficSignalPlainLightBeyond", 100.0f), 0.0f, 1000.0f);
             TrafficSignalLog::InstallLightTests();
             if (TrafficSignalLog::enabled)
                 TrafficSignalLog::InstallDrawSteps();
