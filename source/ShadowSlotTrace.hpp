@@ -21,7 +21,8 @@ namespace fusionfix::shadows {
 // - lost one (lost= the rule, to= whom; pushed when only shifted out), F took it
 // back within FlapMs of losing it, T the keys that did so most, R a holder's claim
 // stopped counting (reach, view, gen, nan), C held claims were dropped all at once,
-// X a pass left to the game's own choice, M a mark (Ctrl+Shift+F7 or F12), W a light
+// X a pass left to the game's own choice, S once a second whether selection runs at all,
+// M a mark (Ctrl+Shift+F7 or F12), W a light
 // that would add a shadow in view started waiting without a slot, and who kept it out.
 class ShadowSlotTrace {
 public:
@@ -113,6 +114,11 @@ public:
         // 0 our adapter's checks, then ShadowAllocationPass's failure codes
         static constexpr const char* names[] = { "adapter", "list", "input", "duplicate", "capacity", "commit", "commit_lamps" };
         Line(std::format("X t={} f={} rejected={}", timeMs, frame, code < 7 ? names[code] : "other"));
+    }
+
+    // Game thread: whether selection runs and how its passes end (ShadowAllocationRuntime).
+    void Status(const std::string& text) {
+        Line("S " + text);
     }
 
     // Game thread: a mark where something was seen.

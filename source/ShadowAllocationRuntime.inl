@@ -126,6 +126,31 @@ namespace PlayerShadowAllocation
         return ready.load(std::memory_order_acquire) && !unsupportedThread.load(std::memory_order_relaxed) &&
             bExtraNightShadows && bHeadlightShadows && bVehicleNightShadows;
     }
+
+    // Game thread, once a second with the slot trace: whether selection runs at all, and how passes end.
+    static void SlotTraceStatus() noexcept
+    {
+        static ULONGLONG last = 0;
+        if (!slotTrace.enabled || GetTickCount64() - last < 1000) return;
+        last = GetTickCount64();
+        static uint32_t applied = 0, observed = 0, fallback = 0, adapter = 0;
+        static std::array<uint32_t, 8> reasons{};
+        const uint32_t a = appliedPasses.load(), o = observedPasses.load(), f = fallbackPasses.load(), r = rejectedAdapterChecks.load();
+        std::string why;
+        for (unsigned i = 0; i < 8; ++i) {
+            const uint32_t now = rejectedPassReasons[i].load();
+            if (now != reasons[i]) why += std::format(" {}:{}", i, now - reasons[i]);
+            reasons[i] = now;
+        }
+        try {
+            slotTrace.Status(std::format("ready={} thread_ok={} night_shadows={} headlight_shadows={} vehicle_night_shadows={} "
+                "publication={} lamp_priority={} in the last second: applied={} observed={} fallback={} adapter_rejects={} reasons:{}",
+                ready.load() ? 1 : 0, unsupportedThread.load() ? 0 : 1, bExtraNightShadows ? 1 : 0, bHeadlightShadows ? 1 : 0,
+                bVehicleNightShadows ? 1 : 0, publicationEnabled ? 1 : 0, nativeLampPriority ? 1 : 0,
+                a - applied, o - observed, f - fallback, r - adapter, why.empty() ? " -" : why));
+        } catch (...) {}
+        applied = a; observed = o; fallback = f; adapter = r;
+    }
     static std::atomic<uint32_t> captureCalls{0}, captureValid{0}, perspectiveCalls{0};
     static std::atomic<int> captureWidth{0}, captureHeight{0}, activeWidth{0}, activeHeight{0};
     static SafetyHookMid cameraCaptureHook;

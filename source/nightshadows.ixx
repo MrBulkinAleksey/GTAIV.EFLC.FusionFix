@@ -74,26 +74,62 @@ namespace TrafficSignalLog
     {
         std::atomic<uint32_t> count{0};
         std::atomic<float> farthest{0.0f}, farthestValue{0.0f}; // value: draw distance, fade or intensity
-        void Add(float d, float value) noexcept
+        // The same for signals within 20 degrees of where the camera looks, the ones you watch light up
+        std::atomic<uint32_t> aheadCount{0};
+        std::atomic<float> aheadFarthest{0.0f}, aheadValue{0.0f};
+        void Add(float d, float value, bool ahead) noexcept
         {
             ++count;
             if (d > farthest.load(std::memory_order_relaxed)) { farthest = d; farthestValue = value; }
+            if (!ahead) return;
+            ++aheadCount;
+            if (d > aheadFarthest.load(std::memory_order_relaxed)) { aheadFarthest = d; aheadValue = value; }
         }
         std::string Take(const char* value)
         {
-            const auto n = count.exchange(0);
+            const auto n = count.exchange(0), an = aheadCount.exchange(0);
             const float d = farthest.exchange(0.0f), v = farthestValue.exchange(0.0f);
-            return n ? std::format("{} (farthest {:.1f} m, {} {:.2f})", n, d, value, v) : std::string("0");
+            const float ad = aheadFarthest.exchange(0.0f), av = aheadValue.exchange(0.0f);
+            if (!n) return "0";
+            return std::format("{} (farthest {:.1f} m, {} {:.2f}; ahead {}{})", n, d, value, v, an,
+                an ? std::format(", farthest {:.1f} m, {} {:.2f}", ad, value, av) : std::string());
         }
     };
     static Step logic, lights, listed;
 
-    static bool CameraDistance(const float (&position)[3], float& d) noexcept
+    // Where the camera looks, once a frame (GET_CAM_ROT: x pitch, z heading, degrees).
+    static bool CameraForward(float (&forward)[3]) noexcept
     {
-        float camera[3];
+        static uint32_t frame = 0;
+        static bool valid = false;
+        static float cached[3]{};
+        const uint32_t now = CTimer::m_frameCount ? *CTimer::m_frameCount : 0;
+        if (!valid || !now || now != frame)
+        {
+            Cam camera = 0;
+            Natives::GetRootCam(&camera);
+            float x = 0, y = 0, z = 0;
+            valid = camera != 0;
+            if (valid) Natives::GetCamRot(camera, &x, &y, &z);
+            constexpr float toRad = 3.14159265f / 180.0f;
+            cached[0] = -std::sin(z * toRad) * std::cos(x * toRad);
+            cached[1] = std::cos(z * toRad) * std::cos(x * toRad);
+            cached[2] = std::sin(x * toRad);
+            valid = valid && std::isfinite(cached[0]) && std::isfinite(cached[1]) && std::isfinite(cached[2]);
+            frame = now;
+        }
+        for (int i = 0; i < 3; ++i) forward[i] = cached[i];
+        return valid;
+    }
+
+    // Distance from the camera, and whether it lies within 20 degrees of where it looks.
+    static bool CameraDistance(const float (&position)[3], float& d, bool& ahead) noexcept
+    {
+        float camera[3], forward[3];
         if (!GameCamera::Position(camera)) return false;
         const float x = position[0] - camera[0], y = position[1] - camera[1], z = position[2] - camera[2];
         d = std::sqrt(x * x + y * y + z * z);
+        ahead = d > 0.01f && CameraForward(forward) && (x * forward[0] + y * forward[1] + z * forward[2]) / d > 0.94f;
         return std::isfinite(d);
     }
 
@@ -109,16 +145,18 @@ namespace TrafficSignalLog
     static void Logic(uintptr_t entity) noexcept
     {
         float position[3], d;
-        if (CEntity::GetPosition(entity, position) && CameraDistance(position, d))
-            logic.Add(d, *reinterpret_cast<const float*>(entity + 0x50));
+        bool ahead;
+        if (CEntity::GetPosition(entity, position) && CameraDistance(position, d, ahead))
+            logic.Add(d, *reinterpret_cast<const float*>(entity + 0x50), ahead);
     }
 
     // Step 2, CE 0xA32818, esi the entity, xmm1 the fade its lights get.
     static void Lights(uintptr_t entity, float fade) noexcept
     {
         float position[3], d;
-        if (IsSignal(entity) && CEntity::GetPosition(entity, position) && CameraDistance(position, d))
-            lights.Add(d, fade);
+        bool ahead;
+        if (IsSignal(entity) && CEntity::GetPosition(entity, position) && CameraDistance(position, d, ahead))
+            lights.Add(d, fade, ahead);
     }
 
     // Step 3, once a game frame: the signal lights in the list the renderer draws ([0x103EED0], count [0x154DFD0]).
@@ -134,7 +172,8 @@ namespace TrafficSignalLog
             if ((light.mFlags & 0x201) != 0x200) continue;
             const float position[3] = { light.mPosition.x, light.mPosition.y, light.mPosition.z };
             float d;
-            if (CameraDistance(position, d)) listed.Add(d, light.mIntensity);
+            bool ahead;
+            if (CameraDistance(position, d, ahead)) listed.Add(d, light.mIntensity, ahead);
         }
     }
 
@@ -501,7 +540,7 @@ public:
         }
 
         // Registered before game callbacks start, independent of async init.
-        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); PlayerShadowAllocation::CaptureCasters(); PlayerShadowAllocation::FlushSlotTrace(); EmergencyTrafficShadows::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); TrafficSignalLog::Tick(); TrafficSignalLog::Write(); };
+        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); PlayerShadowAllocation::CaptureCasters(); PlayerShadowAllocation::SlotTraceStatus(); PlayerShadowAllocation::FlushSlotTrace(); EmergencyTrafficShadows::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); TrafficSignalLog::Tick(); TrafficSignalLog::Write(); };
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
