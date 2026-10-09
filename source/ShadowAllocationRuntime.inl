@@ -198,6 +198,10 @@ namespace PlayerShadowAllocation
     //   refresh (to clear a car that left), the longest unrefreshed first; every fourth pass is left to the
     //   game's round robin. With a pass every frame, two or three such lamps each refresh many times a second.
     static bool cacheWithCars = false;
+    // CacheWithCarsInside: a lamp inside a room drew the player standing under it onto the ceiling above it, as if
+    // the cache render put dynamic objects into the wrong half of the paraboloid map; only lamps outside (flag
+    // 0x40) take cars and people into their cache unless this is on.
+    static bool cacheWithCarsInside = false;
     struct CacheRender { uint32_t key{}; uint32_t at{}; bool hadCaster{}; bool wasInSlot{}; bool urgent{}; };
     static std::array<CacheRender,8> cacheRenders{};
 
@@ -273,7 +277,20 @@ namespace PlayerShadowAllocation
         // with a cache index in its slot record (+0xF0), is drawn whole; with the static world in it the road
         // shadowed a headlight's own beam out.
         const auto cacheIndex = *reinterpret_cast<const int32_t*>(gameBase + 0xD9F1F0 + slot * 0x110);
-        if (mode == 3) *reinterpret_cast<uint8_t*>(phase + 0x16) = 1;
+        if (mode == 3) {
+            bool outside = true;
+            if (!cacheWithCarsInside) {
+                // The light being cached, by its key in the slot record (+0xF8), in this frame's list
+                const auto key = *reinterpret_cast<const uint32_t*>(gameBase + 0xD9F1F8 + slot * 0x110);
+                const auto* lights = CurrentLights();
+                const auto count = CurrentCount();
+                outside = false;
+                if (reinterpret_cast<uintptr_t>(lights) >= 0x10000 && count <= 4096)
+                    for (uint32_t i = 0; i < count; ++i)
+                        if (static_cast<uint32_t>(lights[i].mCastShadows) == key) { outside = (lights[i].mFlags & 0x40) != 0; break; }
+            }
+            if (outside) *reinterpret_cast<uint8_t*>(phase + 0x16) = 1;
+        }
         else if (mode == 4 && cacheIndex >= 0 && cacheIndex < 16) {
             mode = 5;
             *reinterpret_cast<uint8_t*>(phase + 0x15) = 1;

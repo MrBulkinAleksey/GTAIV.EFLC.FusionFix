@@ -947,6 +947,7 @@ public:
                         OutputDebugStringW(L"FusionFix experimental shadows: allocation adapter unavailable; original engine selection retained.\n");
                     else
                     {
+                        PlayerShadowAllocation::cacheWithCarsInside = iniReader.ReadInteger("SHADOWS", "CacheWithCarsInside", 0) != 0;
                         PlayerShadowAllocation::InstallCacheWithCars(iniReader.ReadInteger("SHADOWS", "CacheWithCars", 1) != 0);
                         if ((PlayerShadowAllocation::shadowFadeMs = static_cast<uint32_t>(
                                 std::clamp(iniReader.ReadInteger("SHADOWS", "ShadowFadeIn", 400), 0, 2000))) != 0)
