@@ -137,6 +137,7 @@ namespace PlayerShadowAllocation
     static std::array<FadeEntry,7> fadeEntries{};
     static uint32_t shadowFadeMs = 0, slotMinHoldMs = 0;
     static float behindLampReach = 12.0f; // BehindLampReach
+    static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
 
     static void NoteFadeIns(const budget::PlayerShadowBudget::Selection& selection) noexcept
     {
@@ -293,7 +294,6 @@ namespace PlayerShadowAllocation
     static std::unordered_map<uint32_t, LampSight> lampSight;
     static bool lampsBehindWalls = false;
     static uint32_t sightFlags = 6; // the ground probe's: the map, not vehicles
-    static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0};
     static uintptr_t probeFunction = 0, probeLevel = 0, probeFar = 0;
 
     static bool LampBehindWall(uint32_t key, Vec3 position) noexcept
