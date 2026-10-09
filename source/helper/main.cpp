@@ -140,6 +140,119 @@ namespace
         std::array<SharedTexture, static_cast<size_t>(Protocol::Texture::Count)> textures;
         HANDLE sharedFenceHandle = nullptr;
 
+        // GPU time of the helper's own work, a few timestamps a command list, read back once its allocator is reused
+        // and logged every 300 frames: what the upscaler and the frame generation cost without the copies and the
+        // waits on the game's side
+        enum class Work : uint32_t { None, Evaluate, Generate };
+        static constexpr uint32_t StampsPerFrame = 4;
+        ComPtr<ID3D12QueryHeap> queryHeap;
+        ComPtr<ID3D12Resource> queryReadback;
+        const uint64_t* queryData = nullptr;
+        double ticksPerMs = 0.0;
+        std::array<uint32_t, Frames> stampCounts{};
+        std::array<Work, Frames> stampWork{};
+        struct GpuStats
+        {
+            uint32_t evaluates = 0, generates = 0, prepares = 0;
+            double upscale = 0.0, prepare = 0.0, generate = 0.0, evaluateList = 0.0, generateList = 0.0;
+            double upscaleMax = 0.0, generateMax = 0.0;
+        } gpuStats;
+
+        void CreateTimestamps()
+        {
+            uint64_t frequency = 0;
+            if (FAILED(queue->GetTimestampFrequency(&frequency)) || !frequency)
+                return;
+            D3D12_QUERY_HEAP_DESC heapDesc{};
+            heapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+            heapDesc.Count = Frames * StampsPerFrame;
+            if (FAILED(device->CreateQueryHeap(&heapDesc, IID_PPV_ARGS(&queryHeap))))
+                return;
+
+            D3D12_HEAP_PROPERTIES heap{};
+            heap.Type = D3D12_HEAP_TYPE_READBACK;
+            D3D12_RESOURCE_DESC desc{};
+            desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+            desc.Width = sizeof(uint64_t) * Frames * StampsPerFrame;
+            desc.Height = 1;
+            desc.DepthOrArraySize = 1;
+            desc.MipLevels = 1;
+            desc.SampleDesc.Count = 1;
+            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            void* mapped = nullptr;
+            if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&queryReadback))) ||
+                FAILED(queryReadback->Map(0, nullptr, &mapped)) || !mapped)
+            {
+                queryHeap.Reset();
+                queryReadback.Reset();
+                return;
+            }
+            queryData = static_cast<const uint64_t*>(mapped);
+            ticksPerMs = static_cast<double>(frequency) / 1000.0;
+        }
+
+        // A timestamp in the frame's command list
+        void Stamp(ID3D12GraphicsCommandList* cmd)
+        {
+            if (!queryHeap || stampCounts[frame] >= StampsPerFrame)
+                return;
+            cmd->EndQuery(queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, frame * StampsPerFrame + stampCounts[frame]++);
+        }
+
+        // Before the frame's command list is closed
+        void ResolveStamps()
+        {
+            if (queryHeap && stampCounts[frame])
+                list->ResolveQueryData(queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, frame * StampsPerFrame, stampCounts[frame], queryReadback.Get(),
+                    sizeof(uint64_t) * frame * StampsPerFrame);
+        }
+
+        // The timestamps of a frame the GPU has finished: Evaluate has start, upscaled, prepared; Generate start, generated
+        void ReadStamps(uint32_t slot)
+        {
+            auto count = stampCounts[slot];
+            auto work = stampWork[slot];
+            stampCounts[slot] = 0;
+            stampWork[slot] = Work::None;
+            if (!queryData || count < 2)
+                return;
+            auto t = queryData + slot * StampsPerFrame;
+            auto ms = [&](uint32_t from, uint32_t to) { return t[to] > t[from] ? static_cast<double>(t[to] - t[from]) / ticksPerMs : 0.0; };
+            auto& g = gpuStats;
+            if (work == Work::Evaluate)
+            {
+                ++g.evaluates;
+                auto upscale = ms(0, 1);
+                g.upscale += upscale;
+                g.upscaleMax = std::max(g.upscaleMax, upscale);
+                if (count >= 3)
+                {
+                    ++g.prepares;
+                    g.prepare += ms(1, 2);
+                }
+                g.evaluateList += ms(0, count - 1);
+            }
+            else if (work == Work::Generate)
+            {
+                ++g.generates;
+                auto generate = ms(0, 1);
+                g.generate += generate;
+                g.generateMax = std::max(g.generateMax, generate);
+                g.generateList += ms(0, count - 1);
+            }
+
+            if (g.evaluates >= 300)
+            {
+                Log("GPU milliseconds of the helper's work over %u frames: upscaler %.3f (%.3f at most), Evaluate's command list %.3f",
+                    g.evaluates, g.upscale / g.evaluates, g.upscaleMax, g.evaluateList / g.evaluates);
+                if (g.prepares)
+                    Log("  frame generation: prepare %.3f over %u frames, generate %.3f (%.3f at most) over %u frames, Generate's command list %.3f",
+                        g.prepare / g.prepares, g.prepares, g.generates ? g.generate / g.generates : 0.0, g.generateMax, g.generates,
+                        g.generates ? g.generateList / g.generates : 0.0);
+                g = {};
+            }
+        }
+
         // Wine (see the protocol): the shared textures have no UAV flag, which keeps them plain for the game's Vulkan
         // import, the upscaler and the frame generation write into uavs, which are copied into the shared textures.
         // sharedFence is then the game's semaphore, or without it (cpuSync) the GPU work is waited for on the CPU.
@@ -173,6 +286,7 @@ namespace
             if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&localFence))))
                 return false;
 
+            CreateTimestamps();
             fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
             return fenceEvent != nullptr;
         }
@@ -205,11 +319,17 @@ namespace
         }
 
         // Command list of one frame; allocators are reused once the GPU finished with them
-        ID3D12GraphicsCommandList* BeginFrame()
+        ID3D12GraphicsCommandList* BeginFrame(Work work)
         {
             frame = (frame + 1) % Frames;
-            if (auto fence = FrameFence())
+            auto fence = FrameFence();
+            if (fence)
                 WaitFence(fence, allocatorValues[frame], 1000);
+            // Timestamps the GPU wrote: only once it is past the frame
+            if (stampCounts[frame] && fence && fence->GetCompletedValue() >= allocatorValues[frame])
+                ReadStamps(frame);
+            stampCounts[frame] = 0;
+            stampWork[frame] = work;
             allocators[frame]->Reset();
             list->Reset(allocators[frame].Get(), nullptr);
             return list.Get();
@@ -224,6 +344,7 @@ namespace
         // Wine: runs the frame and waits for it, the game copies the output once Evaluate is answered
         bool SubmitFrameAndWait()
         {
+            ResolveStamps();
             if (FAILED(list->Close()))
                 return false;
             ID3D12CommandList* lists[] = { list.Get() };
@@ -235,6 +356,7 @@ namespace
 
         void SubmitFrame(uint64_t waitValue, uint64_t signalValue, bool execute)
         {
+            ResolveStamps();
             list->Close();
             queue->Wait(sharedFence.Get(), waitValue);
             if (execute)
@@ -1085,11 +1207,15 @@ namespace
             frame.hudLess = shared.HudLess != 0;
 
             using T = Protocol::Texture;
-            auto cmd = device.BeginFrame();
+            auto cmd = device.BeginFrame(Device::Work::Evaluate);
             device.Transition(cmd, true, { T::Color, T::Depth, T::Motion, T::Reactive, T::Output });
+            device.Stamp(cmd);
             bool evaluated = backend == Protocol::Backend::DLSS ? dlss.Evaluate(cmd, device, frame) : fsr.Evaluate(cmd, device, frame);
+            device.Stamp(cmd);
             // A failed preparation leaves the upscaled frame: Generate of this frame fails instead
             preparedFrame = fsr.HasFrameGeneration() && fsr.PrepareFrame(cmd, device, frame);
+            if (fsr.HasFrameGeneration())
+                device.Stamp(cmd);
             if (fsr.HasFrameGeneration())
             {
                 ++generationStats.prepares;
@@ -1142,13 +1268,15 @@ namespace
             g.lastId = shared.FrameId;
 
             using T = Protocol::Texture;
-            auto cmd = device.BeginFrame();
+            auto cmd = device.BeginFrame(Device::Work::Generate);
             bool generated = false;
             if (prepared)
             {
                 device.Transition(cmd, true, { T::Present, T::Generated, T::HudLess });
+                device.Stamp(cmd);
                 generated = fsr.GenerateFrame(cmd, device, shared.FrameId, shared.GenerateReset != 0,
                     (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0, shared.MaxLuminance);
+                device.Stamp(cmd);
                 g.failed += !generated;
                 device.Transition(cmd, false, { T::Present, T::Generated, T::HudLess });
                 if (device.wine)
