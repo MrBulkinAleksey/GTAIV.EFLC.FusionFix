@@ -450,11 +450,12 @@ namespace PlayerShadowAllocation
             using fusionfix::shadows::SlotGain;
             const bool cached=(flags&rage::LF_STATIC_SHADOW) && light.mShadowCacheIndex>=0;
             auto gain=SlotGain::InView;
+            int caster=-1;
             if(casterPriority && kind!=budget::Kind::PlayerBeam)
                 gain=kind==budget::Kind::Lamp && cached
                     ? state.casters.Lights({light.mPosition.x,light.mPosition.y,light.mPosition.z},
                         {light.mDirection.x,light.mDirection.y,light.mDirection.z},
-                        static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle)
+                        static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle,&caster)
                     : volumeVisible ? SlotGain::InView : SlotGain::OffScreen;
             const auto rawGain=gain;
             if(casterPriority) gain=state.gainHold.Apply(key,kind==budget::Kind::Lamp?LampGeometry(light):0,gain,
@@ -462,8 +463,17 @@ namespace PlayerShadowAllocation
             const bool spacedOut=lampSpacing.spacing>0 && kind==budget::Kind::Lamp && lampSpacing.SpacedOut(index);
             if(spacedOut && gain==SlotGain::InView) { gain=SlotGain::OffScreen; ++lampsSpacedOut; }
             if(slotTrace.enabled)
-                try { slotTrace.Observe(index,{key,static_cast<uint8_t>(kind),rawGain,gain,cached,volumeVisible,
-                    {light.mPosition.x,light.mPosition.y,light.mPosition.z},geometry.distanceSquared,viewWeight,priorityDistance,spacedOut}); }
+                try {
+                    fusionfix::shadows::ShadowSlotTrace::Light traced{key,static_cast<uint8_t>(kind),rawGain,gain,cached,volumeVisible,
+                        {light.mPosition.x,light.mPosition.y,light.mPosition.z},geometry.distanceSquared,viewWeight,priorityDistance,spacedOut};
+                    if(caster>=0 && static_cast<unsigned>(caster)<state.casters.count) {
+                        const auto& p=state.casters.points[caster];
+                        traced.caster=state.casters.extents[caster]>=fusionfix::shadows::ShadowCasterPresence::VehicleExtent?1:2;
+                        traced.casterInView=state.casters.inView[caster];
+                        traced.casterDistance=std::sqrt((p.x-light.mPosition.x)*(p.x-light.mPosition.x)+
+                            (p.y-light.mPosition.y)*(p.y-light.mPosition.y)+(p.z-light.mPosition.z)*(p.z-light.mPosition.z));
+                    }
+                    slotTrace.Observe(index,traced); }
                 catch(...) { slotTrace.enabled=false; }
             if(gain==SlotGain::None) ++lampsWithoutCasters;
             else if(gain==SlotGain::OffScreen) ++lightsOffScreen;

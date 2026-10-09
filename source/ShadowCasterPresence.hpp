@@ -33,7 +33,9 @@ struct ShadowCasterPresence {
     }
     // The best caster a point or spot light's volume reaches: one in view
     // over one off screen.
-    SlotGain Lights(Vec3 source, Vec3 direction, int type, float radius, float outerCos) const noexcept {
+    // which: the caster that decided, -1 for none (or when every lamp counts).
+    SlotGain Lights(Vec3 source, Vec3 direction, int type, float radius, float outerCos, int* which = nullptr) const noexcept {
+        if (which) *which = -1;
         if (!valid || overflow || !std::isfinite(radius) || radius <= 0) return SlotGain::InView;
         auto gain = SlotGain::None;
         const float axis = direction.x * direction.x + direction.y * direction.y + direction.z * direction.z;
@@ -50,6 +52,7 @@ struct ShadowCasterPresence {
                 lit = x * x + y * y + z * z <= reach * reach;
             }
             if (!lit) continue;
+            if (which) *which = int(i);
             if (inView[i]) return SlotGain::InView;
             gain = SlotGain::OffScreen;
         }

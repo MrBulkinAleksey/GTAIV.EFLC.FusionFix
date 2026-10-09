@@ -21,7 +21,8 @@ namespace fusionfix::shadows {
 // - lost one (lost= the rule, to= whom; pushed when only shifted out), F took it
 // back within FlapMs of losing it, T the keys that did so most, R a holder's claim
 // stopped counting (reach, view, gen, nan), C held claims were dropped all at once,
-// X a pass left to the game's own choice, M a mark (Ctrl+Shift+F7 or F12).
+// X a pass left to the game's own choice, M a mark (Ctrl+Shift+F7 or F12), W a light
+// that would add a shadow in view started waiting without a slot, and who kept it out.
 class ShadowSlotTrace {
 public:
     struct Light {
@@ -32,6 +33,10 @@ public:
         Vec3 position{};
         float distanceSquared{}, viewWeight{}, priorityDistanceSquared{-1.0f};
         bool spacedOut{};             // lowered for a nearer lamp beside it (LampSpacing)
+        // The caster that gave a cached lamp its gain: 0 none, 1 vehicle, 2 ped; its distance from the lamp.
+        std::uint8_t caster{};
+        bool casterInView{};
+        float casterDistance{};
         bool observed{};
     };
     struct Selected { std::uint32_t key{}; int index{-1}; };
@@ -58,13 +63,13 @@ public:
             if (length > 0.0001f) for (float& f : forward_) f /= length;
         }
         lights_.assign((std::min)(count, 4096u), Light{});
-        wins_.clear(); losses_.clear();
+        wins_.clear(); losses_.clear(); blocks_.clear();
     }
 
     // Every comparison the insertion sort makes this pass: 0 the challenger goes in
     // ahead, 1 the game's distance decides, 2 the incumbent stays.
     void Compared(std::uint32_t challenger, std::uint32_t incumbent, Rule rule, int result) {
-        if (result == 2) return;
+        if (result == 2) { blocks_[challenger] = {incumbent, rule}; return; }
         if (!wins_.contains(challenger)) wins_[challenger] = {incumbent, rule};
         losses_[incumbent] = {challenger, rule};
     }
@@ -141,14 +146,16 @@ public:
             const Light* light = LightAt(now.index);
             std::string waited = k.inViewSince ? std::format(" waited={}", time_ - k.inViewSince) : std::string(" waited=-");
             std::string sinceLost = k.lostAt ? std::format(" since_lost={}", time_ - k.lostAt) : std::string();
+            std::string wanted = k.wantedSince ? std::format(" wanted_for={}", time_ - k.wantedSince) : std::string();
+            k.wantedSince = 0;
             std::string won = " won=-";
             if (const auto w = wins_.find(now.key); w != wins_.end())
                 won = std::format(" won={} over={:08x}", RuleName(w->second.rule), w->second.other);
             if (light)
-                Line(std::format("+ {} slot={} key={:08x} {} gain={} raw={} cached={} spaced={}{} weight={:.2f} prio={}{}{}{}", When(), slot, now.key,
+                Line(std::format("+ {} slot={} key={:08x} {} gain={} raw={} cached={} spaced={}{} weight={:.2f} prio={}{}{}{}{}{}", When(), slot, now.key,
                     Kind(light->kind), Gain(light->gain), Gain(light->raw), light->cached ? 1 : 0, light->spacedOut ? 1 : 0, Where(*light), light->viewWeight,
                     light->priorityDistanceSquared >= 0 ? std::format("{:.1f}", std::sqrt(light->priorityDistanceSquared)) : std::string("-"),
-                    waited, sinceLost, won));
+                    waited, sinceLost, won, wanted, light ? Caster(*light) : std::string()));
             else
                 Line(std::format("+ {} slot={} key={:08x} unobserved", When(), slot, now.key));
             if (k.lostAt && time_ - k.lostAt < FlapMs) {
@@ -173,6 +180,26 @@ public:
                       : std::string(" gone")));
             k.slot = -1; k.lostAt = time_;
         }
+        // Lights that would add a shadow in view but got no slot: once when they start waiting.
+        for (const auto& light : lights_) {
+            if (!light.observed || !light.key) continue;
+            auto& k = keys_[light.key];
+            if (light.gain != SlotGain::InView || Holds(selection, light.key)) {
+                if (!Holds(selection, light.key)) k.wantedSince = 0;
+                continue;
+            }
+            if (k.wantedSince) continue;
+            k.wantedSince = time_ ? time_ : 1;
+            std::string blocked = " blocked_by=-";
+            if (const auto b = blocks_.find(light.key); b != blocks_.end()) {
+                const Light* by = FindLight(b->second.other);
+                blocked = std::format(" blocked_by={:08x} rule={}{}", b->second.other, RuleName(b->second.rule),
+                    by ? std::format(" by_{} by_gain={} by_d={:.1f}", Kind(by->kind), Gain(by->gain), std::sqrt((std::max)(by->distanceSquared, 0.0f))) : std::string());
+            }
+            Line(std::format("W {} key={:08x} {} raw={} cached={}{}{}{}", When(), light.key, Kind(light.kind), Gain(light.raw),
+                light.cached ? 1 : 0, Where(light), Caster(light), blocked));
+        }
+
         previous_ = selection;
         if (changed) ++changes_;
         rejecting_ = false;
@@ -258,6 +285,7 @@ private:
         int slot = -1;
         std::uint32_t inViewSince{}, slotSince{}, lostAt{}, lastSeen{};
         unsigned flaps{};
+        std::uint32_t wantedSince{};
         std::string lostBy, claimReason;
     };
     struct Decision { std::uint32_t other{}; Rule rule{}; };
@@ -287,6 +315,10 @@ private:
         for (const auto& light : lights_) if (light.observed && light.key == key) return &light;
         return nullptr;
     }
+    static std::string Caster(const Light& light) {
+        if (!light.caster) return {};
+        return std::format(" caster={}{} caster_d={:.1f}", light.caster == 1 ? "vehicle" : "ped", light.casterInView ? "" : "_off", light.casterDistance);
+    }
     std::string When() const { return std::format("t={} f={}", time_, frame_); }
     // Where a light is: from the player (d) and off the camera's view (ang, 0 straight ahead)
     std::string Where(const Light& light) const {
@@ -311,7 +343,7 @@ private:
     std::uint32_t frame_{}, time_{}, lastSummary_{}, lastPrune_{}, lastTop_{}, lastCommitTime_{}, lastCommitFrame_{};
     unsigned changes_{}, rejects_{}, rejectCode_{};
     bool rejecting_{};
-    std::unordered_map<std::uint32_t, Decision> wins_, losses_;
+    std::unordered_map<std::uint32_t, Decision> wins_, losses_, blocks_;
     Vec3 player_{}, lastPlayer_{};
     bool driving_{}, cameraValid_{};
     float camera_[3]{}, forward_[3]{};
