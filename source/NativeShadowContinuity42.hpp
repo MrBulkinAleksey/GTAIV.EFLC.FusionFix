@@ -32,6 +32,9 @@ public:
         // in view (gain InView), so it keeps the slot against anything but own headlights and the game's
         // 0x400 lights.
         bool fresh=false;
+        // Within the shadow reach (a holder's a quarter further). One beyond it may still hold a slot when
+        // nothing nearer wants it, and keeps a claim against others beyond it, but gives way to any within.
+        bool inReach=true;
     };
     // ClaimDistanceRatio: a claim keeps its slot against a newcomer of the same gain unless
     // the claim is this many times further away than the newcomer; 0 always keeps it.
@@ -51,8 +54,9 @@ public:
         return held?reset|gap:0u;
     }
     Candidate Observe(Identity id,std::uint32_t flags,bool relevant,bool own,SlotGain gain=SlotGain::InView,
-                      float distanceSquared=-1.0f,bool byCaster=false,bool fresh=false) const noexcept {
+                      float distanceSquared=-1.0f,bool byCaster=false,bool fresh=false,bool inReach=true) const noexcept {
         Candidate c{flags,Unclaimed,own,true,gain,distanceSquared,byCaster};
+        c.inReach=inReach;
         if(id.key && relevant)
             for(unsigned i=0;i<Slots;++i)
                 if(claims_[i].key==id.key && claims_[i].generation==id.generation) {c.claim=i;break;}
@@ -73,7 +77,7 @@ public:
     // unless the newcomer's shadow is in view and the claim's is not, or the
     // claim only redraws what the lamp's cache already shows.
     // Which rule of Compare decided, for the slot trace.
-    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Nearer, Fresh };
+    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Nearer, Fresh, Reach };
     // Whether the unclaimed one of the two is so much nearer that the claim gives way.
     static bool NearerThanClaim(const Candidate& unclaimed,const Candidate& claimed) noexcept {
         const float r=claimDistanceRatio;
@@ -87,6 +91,7 @@ public:
         if(challenger.ownBeam!=incumbent.ownBeam) return Rule::OwnBeam;
         if(challenger.fresh!=incumbent.fresh) return Rule::Fresh;
         if(challenger.gain!=incumbent.gain) return Rule::Gain;
+        if(challenger.inReach!=incumbent.inReach) return Rule::Reach;
         if(challenger.claim!=incumbent.claim)
             return NearerThanClaim(challenger,incumbent) || NearerThanClaim(incumbent,challenger) ? Rule::Nearer : Rule::Claim;
         return Rule::Native;
@@ -97,6 +102,7 @@ public:
         if(challenger.ownBeam!=incumbent.ownBeam) return challenger.ownBeam?0:2;
         if(challenger.fresh!=incumbent.fresh) return challenger.fresh?0:2;
         if(challenger.gain!=incumbent.gain) return challenger.gain>incumbent.gain?0:2;
+        if(challenger.inReach!=incumbent.inReach) return challenger.inReach?0:2;
         if(challenger.claim!=incumbent.claim) {
             if(NearerThanClaim(challenger,incumbent)) return 0;
             if(NearerThanClaim(incumbent,challenger)) return 2;
