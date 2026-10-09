@@ -66,6 +66,26 @@ namespace TrafficSignalLog
     static std::mutex firstMutex;
     static std::string first; // the first models scaled, from and to
 
+    // What the scene's visibility test (CE 0xAEBFF0: entity, model, distance, ..., view) made of
+    // each signal and of the LOD parents (+0x4C) they hang from: whether the signal is drawn
+    // itself or left to its parent is what lights it.
+    struct Seen
+    {
+        float distance{}, drawDistance{}, viewScale{}, cap{};
+        int result{};
+        uint32_t flags{}; // entity +0x24
+        uintptr_t parent{};
+        float parentDrawDistance{};
+        int parentChildren{};
+        ULONGLONG time{}, litTime{};
+    };
+    struct ParentSeen { float distance{}, drawDistance{}; int result{}; ULONGLONG time{}; };
+    static std::mutex seenMutex;
+    static std::unordered_map<uintptr_t, Seen> signals;
+    static std::unordered_map<uintptr_t, ParentSeen> parents;
+    static SafetyHookInline visibilityHook;
+    static std::atomic<bool> anyParents{false}; // so other entities skip the lock
+
     // Each signal whose light the pre-render is about to make (CE 0xA32853, esi the entity).
     static void Lit(uintptr_t entity) noexcept
     {
@@ -74,9 +94,101 @@ namespace TrafficSignalLog
         const float x = position[0] - camera[0], y = position[1] - camera[1], z = position[2] - camera[2];
         const float d = std::sqrt(x * x + y * y + z * z);
         ++lit;
+        {
+            std::lock_guard lock(seenMutex);
+            if (const auto seen = signals.find(entity); seen != signals.end()) seen->second.litTime = GetTickCount64();
+        }
         if (d > farthestLit.load(std::memory_order_relaxed)) {
             farthestLit = d;
             farthestLitDistance = *reinterpret_cast<const float*>(entity + 0x50);
+        }
+    }
+
+
+    static bool IsSignalModel(uintptr_t model) noexcept
+    {
+        return model && (*reinterpret_cast<const uint32_t*>(model + 0x40) & 0xFF000000) == 0x3000000;
+    }
+
+    static int __cdecl Visibility(uintptr_t entity, uintptr_t model, float distance, int a3, int a4, uintptr_t view)
+    {
+        const int result = visibilityHook.ccall<int>(entity, model, distance, a3, a4, view);
+        if (!entity) return result;
+        const bool signal = IsSignalModel(model);
+        if (!signal && !anyParents.load(std::memory_order_relaxed)) return result;
+        std::lock_guard lock(seenMutex);
+        if (signal)
+        {
+            auto& seen = signals[entity];
+            seen.distance = distance;
+            seen.drawDistance = *reinterpret_cast<const float*>(entity + 0x50);
+            seen.viewScale = view ? *reinterpret_cast<const float*>(view + 0x934) : 0.0f;
+            // min(draw distance * view scale, model +0x1C + [0x1593BBC]) at CE 0xAEC056
+            seen.cap = *reinterpret_cast<const float*>(model + 0x1C) + *reinterpret_cast<const float*>(GameBase() + 0x1193BBC);
+            seen.result = result;
+            seen.flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
+            seen.parent = *reinterpret_cast<const uintptr_t*>(entity + 0x4C);
+            if (seen.parent)
+            {
+                seen.parentDrawDistance = *reinterpret_cast<const float*>(seen.parent + 0x50);
+                seen.parentChildren = *reinterpret_cast<const uint8_t*>(seen.parent + 0x61);
+            }
+            seen.time = GetTickCount64();
+        }
+        else if (const auto p = parents.find(entity); p != parents.end())
+            p->second = { distance, *reinterpret_cast<const float*>(entity + 0x50), result, GetTickCount64() };
+        return result;
+    }
+
+    static void InstallVisibility()
+    {
+        auto pattern = hook::pattern("83 EC 08 8B 44 24 10 F3 0F 10 05 ? ? ? ? 8B 40 40 56 8B 74 24 10 C1 E8 03");
+        if (pattern.empty())
+        {
+            FusionLog::Write("NightShadows.TrafficSignals", "Lod", "the visibility test was not found\n");
+            return;
+        }
+        visibilityHook = safetyhook::create_inline(pattern.get_first(0), Visibility);
+    }
+
+    // The signals seen in the last 2 s, nearest first: drawn or left to their parent.
+    static void WriteSeen()
+    {
+        std::vector<std::pair<uintptr_t, Seen>> recent;
+        std::unordered_map<uintptr_t, ParentSeen> parentCopy;
+        const auto now = GetTickCount64();
+        {
+            std::lock_guard lock(seenMutex);
+            std::erase_if(signals, [&](const auto& e) { return now - e.second.time > 10000; });
+            std::erase_if(parents, [&](const auto& e) { return now - e.second.time > 10000; });
+            for (const auto& [entity, seen] : signals)
+            {
+                if (now - seen.time <= 2000) recent.emplace_back(entity, seen);
+                if (seen.parent && !parents.contains(seen.parent)) parents[seen.parent] = { -1.0f, seen.parentDrawDistance, -1, now };
+            }
+            parentCopy = parents;
+            anyParents = !parents.empty();
+        }
+        std::sort(recent.begin(), recent.end(), [](const auto& a, const auto& b) { return a.second.distance < b.second.distance; });
+        if (recent.empty()) return;
+        FusionLog::Block log("NightShadows.TrafficSignals", "Lod");
+        log.Printf("%zu signals tested in the last 2 s (result: 0 drawn, 1 not, 2 culled, 3 left to the parent):\n", recent.size());
+        for (std::size_t i = 0; i < recent.size() && i < 12; ++i)
+        {
+            const auto& [entity, seen] = recent[i];
+            std::string parent = "none";
+            if (seen.parent)
+            {
+                const auto p = parentCopy.find(seen.parent);
+                parent = std::format("{:08x} draw={:.1f} children={}", seen.parent, seen.parentDrawDistance, seen.parentChildren);
+                if (p != parentCopy.end() && p->second.result >= 0)
+                    parent += std::format(" tested d={:.1f} result={}", p->second.distance, p->second.result);
+                else
+                    parent += " not tested";
+            }
+            log.Printf("  %08x d=%.1f result=%d draw=%.1f x view %.2f = %.1f cap=%.1f flags=%08x lit=%s parent=%s\n",
+                unsigned(entity), seen.distance, seen.result, seen.drawDistance, seen.viewScale, seen.drawDistance * seen.viewScale,
+                seen.cap, seen.flags, seen.litTime && now - seen.litTime <= 2000 ? "yes" : "no", parent.c_str());
         }
     }
 
@@ -94,6 +206,7 @@ namespace TrafficSignalLog
             fTrafficSignalDrawScale, models.load(), entities.load(), placed.load(), farthestDistance.load(),
             lit.exchange(0), farthestLit.exchange(0.0f), farthestLitDistance.exchange(0.0f),
             firstModels.empty() ? "" : "; models: ", firstModels.c_str());
+        try { WriteSeen(); } catch (...) {}
     }
 }
 #include "PlayerCarRuntime.inl"
@@ -462,6 +575,7 @@ public:
                 }
                 else
                     FusionLog::Write("NightShadows.TrafficSignals", "DrawDistance", "the signal light call was not found\n");
+                TrafficSignalLog::InstallVisibility();
             }
             if (auto distance = std::clamp(iniReader.ReadFloat("SHADOWS", "TrafficSignalDrawDistance", 2.5f), 1.0f, 5.0f); distance != 1.0f)
             {
