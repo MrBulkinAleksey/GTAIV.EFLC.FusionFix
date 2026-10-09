@@ -170,6 +170,17 @@ public:
                 WorldShutdown::OnDestroy(regs.ecx, regs.esp);
             });
             shDeletingDestructor = safetyhook::create_inline(*(void**)pBaseVtable, DeletingDestructor);
+            static auto ShutdownHook = safetyhook::create_mid(shutdown.get_first(0), [](SafetyHookContext& regs)
+            {
+                AcquireSRWLockShared(&WorldShutdown::lock);
+                auto count = WorldShutdown::destroyed.size();
+                ReleaseSRWLockShared(&WorldShutdown::lock);
+                FusionLog::WriteText("World", "Shutdown", std::format("the world's shutdown starts; {} buildings were destroyed this run", count));
+            });
+
+            FusionLog::WriteText("World", "Shutdown", std::format("on: destructor {}, deleting destructor {} ({}), shutdown {}, {} code ranges",
+                Describe(uintptr_t(destructor.get_first(0))), Describe(*(uintptr_t*)pBaseVtable),
+                shDeletingDestructor ? "hooked" : "NOT hooked", Describe(pShutdown), codeRanges.size()));
         };
     }
 } WorldShutdownGuard;
