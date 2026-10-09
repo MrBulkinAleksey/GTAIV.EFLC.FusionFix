@@ -124,7 +124,6 @@ namespace
     public:
         ComPtr<IDXGIAdapter1> adapter;
         ComPtr<ID3D12Device> device;
-        ComPtr<ID3D12CommandQueue> queue;
         ComPtr<ID3D12Fence> sharedFence;
         ComPtr<ID3D12Fence> localFence;
         uint64_t localValue = 0;
