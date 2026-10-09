@@ -136,6 +136,7 @@ namespace PlayerShadowAllocation
     struct FadeEntry { uint32_t key{}; uint32_t since{}; bool fades{}; };
     static std::array<FadeEntry,7> fadeEntries{};
     static uint32_t shadowFadeMs = 0, slotMinHoldMs = 0;
+    static float behindLampReach = 12.0f; // BehindLampReach
 
     static void NoteFadeIns(const budget::PlayerShadowBudget::Selection& selection) noexcept
     {
@@ -545,6 +546,13 @@ namespace PlayerShadowAllocation
                         {light.mDirection.x,light.mDirection.y,light.mDirection.z},
                         static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle,&caster)
                     : volumeVisible ? SlotGain::InView : SlotGain::OffScreen;
+            // An uncached lamp out of the frame (behind or beside the camera, view weight 1) whose light still
+            // reaches it counted as a shadow in view, and in tunnels lamps 15-20 m behind took slots from those
+            // ahead. Close behind it throws your car's shadow forward into view, so it keeps that within
+            // BehindLampReach; further away it ranks as off screen.
+            if(casterPriority && kind==budget::Kind::Lamp && !cached && gain==SlotGain::InView && behindLampReach>0 &&
+               state.view.valid && viewWeight<=1.01f && geometry.distanceSquared>behindLampReach*behindLampReach)
+                gain=SlotGain::OffScreen;
             const auto rawGain=gain;
             if(casterPriority) gain=state.gainHold.Apply(key,kind==budget::Kind::Lamp?LampGeometry(light):0,gain,
                 static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
