@@ -773,6 +773,9 @@ public:
             }
 
             // Improve physics (Affects automobile physics, object physics, Euphoria ragdolls, etc.)
+            // [EXPERIMENTAL] PhysicsFramerateFix = 0 keeps the game's own physics update, to tell what this changes.
+            CIniReader iniReader("");
+            if (iniReader.ReadInteger("EXPERIMENTAL", "PhysicsFramerateFix", 1) != 0)
             {
                 auto pattern = hook::pattern("51 56 E8 ? ? ? ? E8");
                 CPhysics::shUpdate = safetyhook::create_inline(pattern.get_first(0), CPhysics::Update);
