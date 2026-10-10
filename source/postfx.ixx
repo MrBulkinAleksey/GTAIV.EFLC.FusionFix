@@ -979,6 +979,12 @@ public:
     IDirect3DTexture9* AOLightingTex = nullptr;
     uint32_t nAOLightingFrame = 0;
     bool bAOLightingBound = false;
+    // Soft particles (shaders/patches/particles_soft_edges.patch): the game's sprite particles without a depth
+    // fade of their own fade out over this many metres in front of the opaque scene. The opaque depth goes on
+    // s14 and c186 from the end of the main view's lighting to its post processing.
+    bool bSoftParticles = true;
+    float fSoftParticlesDistance = 1.5f;
+    bool bSoftParticlesBound = false;
 
     struct
     {
@@ -1632,6 +1638,8 @@ public:
         fLightsGGXEnvironment = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXEnvironment", 1.0f), 0.0f, 1.0f);
         fLightsGGXMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXMax", 2.0f), 0.1f, 16.0f);
         fAmbientOcclusionFillLights = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionFillLights", 1.0f), 0.0f, 1.0f);
+        bSoftParticles = iniReader.ReadInteger("POSTFX", "SoftParticles", 1) != 0;
+        fSoftParticlesDistance = std::clamp(iniReader.ReadFloat("POSTFX", "SoftParticlesDistance", 1.5f), 0.1f, 10.0f);
         fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 1.5f), 0.0f, 8.0f);
         fSSRStepPixels = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStepPixels", 2.0f), 1.0f, 8.0f);
@@ -7015,6 +7023,7 @@ private:
     static void __fastcall DrawCallPostFX(void* _this, void* edx, int a2, int a3, int a4)
     {
         UnbindGlassReflections();
+        UnbindSoftParticles();
         bInsteadDrawPrimitivePostFX = true;
         hbDrawCallPostFX.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitivePostFX = false;
@@ -8734,6 +8743,8 @@ public:
         pDevice->SetPixelShaderConstantF(165, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(185, noLocalContactShadows, 1);
 
+        BindSoftParticles(pDevice);
+
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;
         R.bGlassFrameValid = false;
@@ -8762,6 +8773,44 @@ public:
         BindSampler(pDevice, 11, R.PreAlphaDepthCopyRT->mD3DTexture, D3DTEXF_POINT);
         BindSampler(pDevice, 13, R.SSRHistoryTex->mD3DTexture, D3DTEXF_LINEAR);
         R.bGlassBound = true;
+    }
+
+    // The opaque depth for the particles of the main view (see bSoftParticles): s14, read by no game shader after
+    // lighting, and c186: x one over the fade distance, y on, zw one over the size of the target they draw into.
+    static void BindSoftParticles(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        const auto vp = rage::GetCurrentViewport();
+        const bool on = R.bSoftParticles && vp && R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
+        float c186[4] = {};
+        if (on)
+        {
+            const float width = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
+            const float height = float(RenderScale::ToRenderHeight(uint32_t(vp->mHeight)));
+            c186[0] = 1.0f / R.fSoftParticlesDistance;
+            c186[1] = 1.0f;
+            c186[2] = 1.0f / (std::max)(width, 1.0f);
+            c186[3] = 1.0f / (std::max)(height, 1.0f);
+            BindSampler(pDevice, 14, R.PreAlphaDepthCopyRT->mD3DTexture, D3DTEXF_POINT);
+            R.bSoftParticlesBound = true;
+        }
+        pDevice->SetPixelShaderConstantF(186, c186, 1);
+    }
+
+    // Before post processing, so particles of other views (reflections, mirrors) keep their hard edges.
+    static void UnbindSoftParticles()
+    {
+        auto& R = PostFxResources;
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+        const float off[4] = {};
+        pDevice->SetPixelShaderConstantF(186, off, 1);
+        if (R.bSoftParticlesBound)
+        {
+            SetTextureBoth(pDevice, 14, nullptr);
+            R.bSoftParticlesBound = false;
+        }
     }
 
     // Once the main scene is done, so car glass drawn by other render phases (reflections,
