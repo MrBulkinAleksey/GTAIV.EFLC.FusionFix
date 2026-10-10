@@ -777,7 +777,7 @@ public:
     }
     float fVehicleBoxShadowLightSize = 0.5f;
     float fVehicleBoxShadowRounding = 0.3f;
-    float fVehicleBoxShadowScale[3] = { 0.9f, 0.85f, 0.8f }; // length, width, height, of the model's bounds
+    float fVehicleBoxShadowScale[3] = { 0.9f, 0.85f, 0.9f }; // length, width, height, of the model's bounds
     float fVehicleBoxShadowSelfMargin = 0.6f;
     float fVehicleBoxShadowLowLightNarrow = 0.6f;
     // Car lights (headlights, tail lights) shine low and close, so a box's shadow from them spreads over the whole road
@@ -1648,7 +1648,7 @@ public:
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 1) != 0;
         fVehicleBoxShadowScale[0] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLength", 0.9f), 0.3f, 1.2f);
         fVehicleBoxShadowScale[1] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsWidth", 0.85f), 0.3f, 1.2f);
-        fVehicleBoxShadowScale[2] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsHeight", 0.8f), 0.3f, 1.2f);
+        fVehicleBoxShadowScale[2] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsHeight", 0.9f), 0.3f, 1.2f);
         fVehicleBoxShadowSelfMargin = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsSelfMargin", 0.6f), 0.0f, 2.0f);
         fVehicleBoxShadowLowLightNarrow = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLowLightNarrow", 0.6f), 0.2f, 1.0f);
         fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
