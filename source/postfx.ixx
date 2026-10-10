@@ -8407,7 +8407,7 @@ private:
             auto& R = PostFxResources;
             float constants[7][4] = {};
             int used = 0;
-            float strength = 0.0f;
+            float strength = 0.0f, rounding = R.fVehicleBoxShadowRounding;
             if (R.VehicleBoxShadowsEnabled() && lightListDrawn &&
                 (R.bVehicleBoxShadowsFromCarLights || !(light.mFlags & rage::LF_VEHICLE)) &&
                 (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
@@ -8494,7 +8494,6 @@ private:
                     last[i] = nearest[i].second->vehicle;
                 // The model's bounds take in mirrors, aerials and bumpers, and the roof's height runs over the bonnet and
                 // boot too: the box is that much smaller, its bottom kept where it is.
-                const float rounding = R.fVehicleBoxShadowRounding;
                 const auto& scale = R.fVehicleBoxShadowScale;
                 for (int i = 0; i < used; ++i)
                 {
@@ -8522,10 +8521,25 @@ private:
                     const float halfHeight = box.halfHeight * scale[2] * lower;
                     float* c = constants[i * 2];
                     c[0] = box.centre[0]; c[1] = box.centre[1]; c[2] = box.centre[2] - (box.halfHeight - halfHeight);
-                    c[3] = (std::max)(box.halfLength * scale[0] * along - rounding, 0.05f);
+                    c[3] = box.halfLength * scale[0] * along;
                     c[4] = box.forward[0]; c[5] = box.forward[1];
-                    c[6] = (std::max)(box.halfWidth * scale[1] * across - rounding, 0.05f);
-                    c[7] = (std::max)(halfHeight - rounding, 0.05f);
+                    c[6] = box.halfWidth * scale[1] * across;
+                    c[7] = halfHeight;
+                }
+                // One rounding for the three boxes, no more than the smallest half size takes: beyond it a box grew
+                // round instead of rounder, a low car's top above its roof.
+                for (int i = 0; i < used; ++i)
+                {
+                    const float* c = constants[i * 2];
+                    rounding = (std::min)(rounding, (std::min)({ c[3], c[6], c[7] }) - 0.05f);
+                }
+                rounding = (std::max)(rounding, 0.0f);
+                for (int i = 0; i < used; ++i)
+                {
+                    float* c = constants[i * 2];
+                    c[3] -= rounding;
+                    c[6] -= rounding;
+                    c[7] -= rounding;
                 }
             }
             if (!used)
@@ -8544,7 +8558,7 @@ private:
                 c[4] = 1.0f;
             }
             constants[6][0] = R.fVehicleBoxShadowLightSize;
-            constants[6][1] = R.fVehicleBoxShadowRounding;
+            constants[6][1] = rounding;
             // A car's or ped's pixel nearer a box than this is on that car or in it, which its box does not shadow: the
             // box is smaller than the car and rounded, so roof, bonnet and spoiler stand out of it.
             constants[6][2] = R.fVehicleBoxShadowSelfMargin;
