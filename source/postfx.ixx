@@ -776,6 +776,7 @@ public:
     }
     float fVehicleBoxShadowLightSize = 0.5f;
     float fVehicleBoxShadowRounding = 0.3f;
+    float fVehicleBoxShadowScale[3] = { 0.9f, 0.85f, 0.8f }; // length, width, height, of the model's bounds
     // Car lights (headlights, tail lights) shine low and close, so a box's shadow from them spreads over the whole road
     // ahead and shows its shape; off by default, lamps only.
     bool bVehicleBoxShadowsFromCarLights = false;
@@ -1638,6 +1639,9 @@ public:
         fVehicleBoxShadowLightSize = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLightSize", 0.5f), 0.0f, 4.0f);
         fVehicleBoxShadowRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsRounding", 0.3f), 0.0f, 1.0f);
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
+        fVehicleBoxShadowScale[0] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLength", 0.9f), 0.3f, 1.2f);
+        fVehicleBoxShadowScale[1] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsWidth", 0.85f), 0.3f, 1.2f);
+        fVehicleBoxShadowScale[2] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsHeight", 0.8f), 0.3f, 1.2f);
         fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
         fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 50.0f);
         fLightsGGX = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGX", 1.0f), 0.0f, 4.0f);
@@ -7012,10 +7016,11 @@ private:
                         R.szGlintsStatus, R.HeadlightGlintsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrHeadlightGlintsEffect),
                         R.nGlintsLastLights, R.GlintsLastIntensity[0], R.GlintsLastIntensity[1], R.GlintsLastCone[0], R.GlintsLastCone[1]);
                 log.Component("VehicleBoxShadows");
-                log.Printf("vehicle box shadows: %s, hook %s; since the last log %u frames drawn with their boxes, %u without, %u lights shaded with boxes; light size %.2f, rounding %.2f, from car lights %d\n",
+                log.Printf("vehicle box shadows: %s, hook %s; since the last log %u frames drawn with their boxes, %u without, %u lights shaded with boxes; light size %.2f, rounding %.2f, from car lights %d, size %.2f %.2f %.2f of the bounds\n",
                         R.VehicleBoxShadowsEnabled() ? "on" : "off", VehicleBoxShadows::lightListBuilt ? "installed" : "missing",
                         VehicleBoxShadows::framesMatched.exchange(0), VehicleBoxShadows::framesUnmatched.exchange(0), VehicleBoxShadows::lightsWithBoxes.exchange(0),
-                        R.fVehicleBoxShadowLightSize, R.fVehicleBoxShadowRounding, int(R.bVehicleBoxShadowsFromCarLights));
+                        R.fVehicleBoxShadowLightSize, R.fVehicleBoxShadowRounding, int(R.bVehicleBoxShadowsFromCarLights),
+                        R.fVehicleBoxShadowScale[0], R.fVehicleBoxShadowScale[1], R.fVehicleBoxShadowScale[2]);
                 {
                     const auto& l = VehicleBoxShadows::lastLowLight;
                     log.Printf("%u times a lamp no higher than a car's roof was left without its box; the last at %.1f %.1f %.1f, %.2f m above the box's bottom: type %d, flags 0x%X, radius %.1f, intensity %.2f, shadow key 0x%08X, cache %d\n",
@@ -8327,16 +8332,20 @@ private:
                         nearest[at] = nearest[at - 1];
                     nearest[at] = { d2, &box };
                 }
+                // The model's bounds take in mirrors, aerials and bumpers, and the roof's height runs over the bonnet and
+                // boot too: the box is that much smaller, its bottom kept where it is.
                 const float rounding = R.fVehicleBoxShadowRounding;
+                const auto& scale = R.fVehicleBoxShadowScale;
                 for (int i = 0; i < used; ++i)
                 {
                     const auto& box = *nearest[i].second;
+                    const float halfHeight = box.halfHeight * scale[2];
                     float* c = constants[i * 2];
-                    c[0] = box.centre[0]; c[1] = box.centre[1]; c[2] = box.centre[2];
-                    c[3] = (std::max)(box.halfLength - rounding, 0.05f);
+                    c[0] = box.centre[0]; c[1] = box.centre[1]; c[2] = box.centre[2] - (box.halfHeight - halfHeight);
+                    c[3] = (std::max)(box.halfLength * scale[0] - rounding, 0.05f);
                     c[4] = box.forward[0]; c[5] = box.forward[1];
-                    c[6] = (std::max)(box.halfWidth - rounding, 0.05f);
-                    c[7] = (std::max)(box.halfHeight - rounding, 0.05f);
+                    c[6] = (std::max)(box.halfWidth * scale[1] - rounding, 0.05f);
+                    c[7] = (std::max)(halfHeight - rounding, 0.05f);
                 }
             }
             if (!used)
