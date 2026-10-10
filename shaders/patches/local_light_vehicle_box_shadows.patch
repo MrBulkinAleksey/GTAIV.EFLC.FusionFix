@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 330784b..fc9df35 100644
+index 330784b..e2bec95 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -92,6 +92,10 @@
@@ -13,7 +13,7 @@ index 330784b..fc9df35 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -520,6 +524,45 @@
+@@ -520,6 +524,48 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -21,7 +21,7 @@ index 330784b..fc9df35 100644
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how near a pixel may be to a box and still take
-+    // --- its shadow (the car's own surfaces do not), 1 while on for this light.
++    // --- its shadow (the car's own surfaces do not), the boxes' strength for this light, 0 for none.
 +    mov r12, c149
 +    max r13.x, r26_abs.x, r26_abs.y
 +    max r13.x, r13.x, r26_abs.z
@@ -54,12 +54,15 @@ index 330784b..fc9df35 100644
 +      mov r18, c147
 +      mov r19, c148
 +      call l3
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
 +      mul r31.w, r31.w, r17.w
 +    endif
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -606,4 +649,95 @@
+@@ -606,4 +652,95 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -157,7 +160,7 @@ index 330784b..fc9df35 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 4a1bc51..0d69ed8 100644
+index 4a1bc51..df5db55 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -63,6 +63,10 @@
@@ -171,7 +174,7 @@ index 4a1bc51..0d69ed8 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -350,6 +354,45 @@
+@@ -350,6 +354,48 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -179,7 +182,7 @@ index 4a1bc51..0d69ed8 100644
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how near a pixel may be to a box and still take
-+    // --- its shadow (the car's own surfaces do not), 1 while on for this light.
++    // --- its shadow (the car's own surfaces do not), the boxes' strength for this light, 0 for none.
 +    mov r12, c149
 +    max r13.x, r26_abs.x, r26_abs.y
 +    max r13.x, r13.x, r26_abs.z
@@ -212,12 +215,15 @@ index 4a1bc51..0d69ed8 100644
 +      mov r18, c147
 +      mov r19, c148
 +      call l3
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
 +      mul r31.w, r31.w, r17.w
 +    endif
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -436,4 +479,95 @@
+@@ -436,4 +482,95 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -315,7 +321,7 @@ index 4a1bc51..0d69ed8 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 543de39..348780b 100644
+index 543de39..ea467e0 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -94,6 +94,10 @@
@@ -329,7 +335,7 @@ index 543de39..348780b 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -536,6 +540,45 @@
+@@ -536,6 +540,48 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -337,7 +343,7 @@ index 543de39..348780b 100644
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how near a pixel may be to a box and still take
-+    // --- its shadow (the car's own surfaces do not), 1 while on for this light.
++    // --- its shadow (the car's own surfaces do not), the boxes' strength for this light, 0 for none.
 +    mov r12, c149
 +    max r13.x, r26_abs.x, r26_abs.y
 +    max r13.x, r13.x, r26_abs.z
@@ -370,12 +376,15 @@ index 543de39..348780b 100644
 +      mov r18, c147
 +      mov r19, c148
 +      call l3
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
 +      mul r31.w, r31.w, r17.w
 +    endif
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -622,4 +665,95 @@
+@@ -622,4 +668,95 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -473,7 +482,7 @@ index 543de39..348780b 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 0879030..3eebae9 100644
+index 0879030..e4bf986 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -58,6 +58,10 @@
@@ -487,7 +496,7 @@ index 0879030..3eebae9 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -316,6 +320,45 @@
+@@ -316,6 +320,48 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -495,7 +504,7 @@ index 0879030..3eebae9 100644
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how near a pixel may be to a box and still take
-+    // --- its shadow (the car's own surfaces do not), 1 while on for this light.
++    // --- its shadow (the car's own surfaces do not), the boxes' strength for this light, 0 for none.
 +    mov r12, c149
 +    max r13.x, r26_abs.x, r26_abs.y
 +    max r13.x, r13.x, r26_abs.z
@@ -528,12 +537,15 @@ index 0879030..3eebae9 100644
 +      mov r18, c147
 +      mov r19, c148
 +      call l3
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
 +      mul r31.w, r31.w, r17.w
 +    endif
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -402,4 +445,95 @@
+@@ -402,4 +448,95 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -631,7 +643,7 @@ index 0879030..3eebae9 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 36f1262..a550614 100644
+index 36f1262..7b4d31e 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -61,6 +61,10 @@
@@ -645,7 +657,7 @@ index 36f1262..a550614 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -325,6 +329,45 @@
+@@ -325,6 +329,48 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -653,7 +665,7 @@ index 36f1262..a550614 100644
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how near a pixel may be to a box and still take
-+    // --- its shadow (the car's own surfaces do not), 1 while on for this light.
++    // --- its shadow (the car's own surfaces do not), the boxes' strength for this light, 0 for none.
 +    mov r12, c149
 +    max r13.x, r26_abs.x, r26_abs.y
 +    max r13.x, r13.x, r26_abs.z
@@ -686,12 +698,15 @@ index 36f1262..a550614 100644
 +      mov r18, c147
 +      mov r19, c148
 +      call l3
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
 +      mul r31.w, r31.w, r17.w
 +    endif
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -411,4 +454,95 @@
+@@ -411,4 +457,95 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -789,7 +804,7 @@ index 36f1262..a550614 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 679b5e2..1573001 100644
+index 679b5e2..fe589c0 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -61,6 +61,10 @@
@@ -803,7 +818,7 @@ index 679b5e2..1573001 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -327,6 +331,45 @@
+@@ -327,6 +331,48 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -811,7 +826,7 @@ index 679b5e2..1573001 100644
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how near a pixel may be to a box and still take
-+    // --- its shadow (the car's own surfaces do not), 1 while on for this light.
++    // --- its shadow (the car's own surfaces do not), the boxes' strength for this light, 0 for none.
 +    mov r12, c149
 +    max r13.x, r26_abs.x, r26_abs.y
 +    max r13.x, r13.x, r26_abs.z
@@ -844,12 +859,15 @@ index 679b5e2..1573001 100644
 +      mov r18, c147
 +      mov r19, c148
 +      call l3
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
 +      mul r31.w, r31.w, r17.w
 +    endif
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -413,4 +456,95 @@
+@@ -413,4 +459,95 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -947,7 +965,7 @@ index 679b5e2..1573001 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 9721f18..777f84c 100644
+index 9721f18..23a4f93 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -61,6 +61,10 @@
@@ -961,7 +979,7 @@ index 9721f18..777f84c 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -329,6 +333,45 @@
+@@ -329,6 +333,48 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -969,7 +987,7 @@ index 9721f18..777f84c 100644
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how near a pixel may be to a box and still take
-+    // --- its shadow (the car's own surfaces do not), 1 while on for this light.
++    // --- its shadow (the car's own surfaces do not), the boxes' strength for this light, 0 for none.
 +    mov r12, c149
 +    max r13.x, r26_abs.x, r26_abs.y
 +    max r13.x, r13.x, r26_abs.z
@@ -1002,12 +1020,15 @@ index 9721f18..777f84c 100644
 +      mov r18, c147
 +      mov r19, c148
 +      call l3
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
 +      mul r31.w, r31.w, r17.w
 +    endif
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -415,4 +458,95 @@
+@@ -415,4 +461,95 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x

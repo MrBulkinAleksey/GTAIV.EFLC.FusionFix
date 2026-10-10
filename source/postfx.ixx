@@ -783,9 +783,10 @@ public:
     // Car lights (headlights, tail lights) shine low and close, so a box's shadow from them spreads over the whole road
     // ahead and shows its shape; off by default, lamps only.
     bool bVehicleBoxShadowsFromCarLights = false;
-    // Lamps holding a shadow slot, whose map shows the cars, take the boxes too: a lamp that wins and loses its slot
-    // changed between the two shadows, the map's and the box's, and the shadow under a car flickered.
-    bool bVehicleBoxShadowsWithSlots = true;
+    // A lamp that takes a shadow slot, whose map then shows the cars, fades its boxes out over SlotFade ms, so the
+    // shadow under a car does not jump between the two; WithSlots keeps them under its real shadow for good.
+    bool bVehicleBoxShadowsWithSlots = false;
+    uint32_t nVehicleBoxShadowSlotFadeMs = 600;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
@@ -1645,7 +1646,8 @@ public:
         fVehicleBoxShadowLightSize = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLightSize", 0.5f), 0.0f, 4.0f);
         fVehicleBoxShadowRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsRounding", 0.3f), 0.0f, 1.0f);
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
-        bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 1) != 0;
+        bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
+        nVehicleBoxShadowSlotFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsSlotFade", 600), 0, 5000));
         fVehicleBoxShadowScale[0] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLength", 1.0f), 0.3f, 1.2f);
         fVehicleBoxShadowScale[1] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsWidth", 0.95f), 0.3f, 1.2f);
         fVehicleBoxShadowScale[2] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsHeight", 0.9f), 0.3f, 1.2f);
@@ -8292,7 +8294,14 @@ private:
         static inline uintptr_t drawnFor = 0;
         static inline bool constantsOn = true;
         // The cars each lamp took last, render thread.
-        static inline std::unordered_map<uint64_t, std::array<uintptr_t, kPerLight>> held;
+        // What each lamp took last, render thread: its cars, and since when its own map shows them.
+        struct LampState
+        {
+            std::array<uintptr_t, kPerLight> cars{};
+            bool mapped = false;
+            DWORD since = 0;
+        };
+        static inline std::unordered_map<uint64_t, LampState> held;
         // For the log: the nearest car's model bounds (least, most) and its box, as taken.
         static inline float nearestBounds[6] = {}, nearestBox[4] = {}, nearestDistance = -1.0f;
 
@@ -8392,7 +8401,8 @@ private:
             auto& R = PostFxResources;
             float constants[7][4] = {};
             int used = 0;
-            if (R.VehicleBoxShadowsEnabled() && lightListDrawn && (!mapHasCars || R.bVehicleBoxShadowsWithSlots) &&
+            float strength = 0.0f;
+            if (R.VehicleBoxShadowsEnabled() && lightListDrawn &&
                 (R.bVehicleBoxShadowsFromCarLights || !(light.mFlags & rage::LF_VEHICLE)) &&
                 (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
             {
@@ -8416,9 +8426,23 @@ private:
                     uint64_t(uint32_t(int32_t(std::floor(light.mPosition.z * 4.0f))) & 0x1FFFFF);
                 if (held.size() > 4096)
                     held.clear();
-                auto& last = held[lightKey];
+                auto& state = held[lightKey];
+                auto& last = state.cars;
+                // A lamp whose own map shows the cars (a shadow slot) has the real shadow: its boxes fade out over
+                // VehicleBoxShadowsSlotFade after it takes the slot, so the shadow does not jump; when it loses the
+                // slot they are back at once, before the real one is gone. VehicleBoxShadowsWithSlots keeps them.
+                strength = 1.0f;
+                if (mapHasCars)
+                {
+                    if (!state.mapped)
+                        state.since = GetTickCount();
+                    if (!R.bVehicleBoxShadowsWithSlots)
+                        strength = R.nVehicleBoxShadowSlotFadeMs ?
+                            1.0f - float(GetTickCount() - state.since) / float(R.nVehicleBoxShadowSlotFadeMs) : 0.0f;
+                }
+                state.mapped = mapHasCars;
                 std::pair<float, const Box*> nearest[kPerLight] = {};
-                for (int i = 0; drawn && i < drawn->count; ++i)
+                for (int i = 0; drawn && strength > 0.0f && i < drawn->count; ++i)
                 {
                     const auto& box = drawn->boxes[i];
                     const float dx = light.mPosition.x - box.centre[0], dy = light.mPosition.y - box.centre[1], dz = light.mPosition.z - box.centre[2];
@@ -8503,7 +8527,7 @@ private:
             // A car's or ped's pixel nearer a box than this is on that car or in it, which its box does not shadow: the
             // box is smaller than the car and rounded, so roof, bonnet and spoiler stand out of it.
             constants[6][2] = R.fVehicleBoxShadowSelfMargin;
-            constants[6][3] = 1.0f;
+            constants[6][3] = (std::min)(strength, 1.0f);
             pDevice->SetPixelShaderConstantF(143, constants[0], 7);
             constantsOn = true;
             return true;
