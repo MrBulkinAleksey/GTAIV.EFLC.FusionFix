@@ -2178,6 +2178,9 @@ public:
             FusionFix::onAfterEndScene() += []()
             {
                 ++PresentFrame;
+                // The main menu draws no scene: without this the helper started, and DLAA and FSR became
+                // available, only once the world was loaded
+                Upscaler::Update();
             };
 
             FusionFix::onBeforeReset() += []()
