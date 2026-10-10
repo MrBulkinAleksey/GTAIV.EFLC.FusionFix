@@ -2672,6 +2672,36 @@ export namespace RageDirect3DDevice9
     }
 }
 
+namespace RageDirect3DDevice9
+{
+    void* StoreDeviceCall = nullptr;
+
+    void __stdcall StoreDevice(IDirect3DDevice9* device)
+    {
+        RuntimeDevice = device;
+    }
+
+    // Takes the place of the call right after the game stores its device, eax still holds it. The call's offset is
+    // the only part of "A3 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? E8 ? ? ? ? A1" that other plugins don't look for: Xbox Rain
+    // Droplets ends its pattern on the store, aCompleteEditionHook's covers everything up to the A1 and crashes
+    // without it. The call's ecx and edx are kept, it may be a thiscall.
+    __declspec(naked) void StoreDeviceThunk()
+    {
+        __asm
+        {
+            push ecx
+            push edx
+            push eax
+            push eax
+            call StoreDevice
+            pop eax
+            pop edx
+            pop ecx
+            jmp StoreDeviceCall
+        }
+    }
+}
+
 export class CRenderPhaseDeferredLighting_SceneToGBuffer
 {
 public:
@@ -3441,12 +3471,8 @@ public:
 
         pattern = find_pattern("A3 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? E8 ? ? ? ? A1", "A3 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? E8 ? ? ? ? 8B 0D");
         RageDirect3DDevice9::m_pRealDevice = *pattern.get_first<IDirect3DDevice9**>(1);
-        // On the instruction after the store, eax still holds the device: the store itself ends the pattern
-        // "83 C4 0C A1 ? ? ? ? A3" that other plugins (Xbox Rain Droplets) look for, and they crash without it.
-        static auto StoreDeviceHook = safetyhook::create_mid(pattern.get_first(5), [](SafetyHookContext& regs)
-        {
-            RageDirect3DDevice9::RuntimeDevice = reinterpret_cast<IDirect3DDevice9*>(regs.eax);
-        });
+        // The code around the store is left as it is: other plugins look for it (see StoreDeviceThunk)
+        RageDirect3DDevice9::StoreDeviceCall = injector::MakeCALL(pattern.get_first(15), RageDirect3DDevice9::StoreDeviceThunk).get();
 
         // CFrontEnd::CheckForBackInput, same in all versions. The menu API hooks the other reads of the menu screen
         // that could be used here, possibly before this runs.

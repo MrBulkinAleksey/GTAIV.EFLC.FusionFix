@@ -17,6 +17,148 @@ import comvars;
 
 namespace Protocol = UpscalerProtocol;
 
+export namespace Upscaler
+{
+    // UpscalerTimingLog in [TEMPORAL]: the render thread's time on the CPU in the parts of the exchange with the helper
+    // and of the frame generation, every 300 upscaled frames in GTAIV.EFLC.FusionFix.Upscaler.log
+    enum class TimingPart : int
+    {
+        Flush,                  // DXVK's FlushRenderingCommands, which waits for DXVK's command stream thread
+        Submit,                 // our submissions to DXVK's queue, LockSubmissionQueue waiting for DXVK's pending ones
+        Images,                 // the game's textures looked up (DXVK) or unwrapped (D3D9on12)
+        CpuWait,                // waits on the CPU for the GPU or the helper (Wine without the game's semaphore)
+        Collect,                // the helper's answer to the request before
+        Evaluate,               // all of Evaluate
+        Generate,               // all of Generate
+        FrameGenerationEnd,     // the frame generation at the end of the frame, Generate included
+        FrameGenerationPresent, // a frame presented inside the next frame, the generated one taken from the helper first
+        Count
+    };
+
+    // A GPU section for the PostFx profiler (begin, then end), when it is set
+    enum class ProfilePart : int
+    {
+        Reactive,               // FSR's reactive mask
+        Upscale,                // DLSS or FSR with the copies to and from the helper, and the wait for it
+        FrameGeneration,        // all of the frame generation at the end of the frame, around the three below
+        FrameGenerationCopies,  // the finished frame and the one before the HUD made ready for the helper
+        FrameGenerationGenerate, // the generation with the copies to and from the helper, and the wait for it
+        FrameGenerationShow,    // the generated frame sharpened or copied into the back buffer
+        FrameGenerationPresent, // a frame presented inside the next frame, the generated one taken from the helper first
+    };
+    inline void (*Profile)(IDirect3DDevice9* device, ProfilePart part, bool begin) = nullptr;
+}
+
+namespace
+{
+    namespace Timing
+    {
+        constexpr size_t Parts = static_cast<size_t>(Upscaler::TimingPart::Count);
+        constexpr const char* Names[Parts] =
+        {
+            "DXVK FlushRenderingCommands",
+            "submissions to DXVK's queue",
+            "game textures looked up / unwrapped",
+            "waits on the CPU for the GPU or the helper",
+            "the helper's answer to the request before",
+            "Evaluate, all of it",
+            "Generate, all of it",
+            "frame generation at the frame's end, all of it",
+            "frames presented inside the next frame",
+        };
+        constexpr uint32_t Frames = 300;
+
+        bool enabled = false;
+        LARGE_INTEGER frequency{};
+        double sums[Parts]{};
+        double maxima[Parts]{};
+        uint32_t calls[Parts]{};
+        uint32_t frames = 0;
+        double frameSum = 0.0;
+        double frameMax = 0.0;
+        int64_t lastFrame = 0;
+
+        int64_t Now()
+        {
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+            return now.QuadPart;
+        }
+
+        double Ms(int64_t ticks)
+        {
+            return static_cast<double>(ticks) * 1000.0 / static_cast<double>(frequency.QuadPart);
+        }
+
+        void Reset()
+        {
+            std::fill(std::begin(sums), std::end(sums), 0.0);
+            std::fill(std::begin(maxima), std::end(maxima), 0.0);
+            std::fill(std::begin(calls), std::end(calls), 0u);
+            frames = 0;
+            frameSum = frameMax = 0.0;
+        }
+
+        int64_t Start()
+        {
+            return enabled ? Now() : 0;
+        }
+
+        void Add(Upscaler::TimingPart part, int64_t start)
+        {
+            if (!enabled || !start)
+                return;
+            auto i = static_cast<size_t>(part);
+            auto ms = Ms(Now() - start);
+            sums[i] += ms;
+            maxima[i] = std::max(maxima[i], ms);
+            ++calls[i];
+        }
+
+        // Render thread, once a frame at Evaluate: the time since the last one is the frame's
+        void NextFrame()
+        {
+            if (!enabled)
+            {
+                lastFrame = 0;
+                return;
+            }
+            auto now = Now();
+            if (lastFrame)
+            {
+                auto frame = Ms(now - lastFrame);
+                if (frame < 250.0)
+                {
+                    frameSum += frame;
+                    frameMax = std::max(frameMax, frame);
+                    ++frames;
+                }
+            }
+            lastFrame = now;
+            if (frames < Frames)
+                return;
+
+            {
+                FusionLog::Block log("Upscaler", "Timing");
+                log.Printf("Render thread, CPU milliseconds over %u frames: frame %.2f on average, %.2f at most\n", frames, frameSum / frames, frameMax);
+                log.Printf("  %-48s %8s %8s %8s %6s\n", "", "a frame", "a call", "at most", "calls");
+                for (size_t i = 0; i < Parts; ++i)
+                    if (calls[i])
+                        log.Printf("  %-48s %8.3f %8.3f %8.3f %6u\n", Names[i], sums[i] / frames, sums[i] / calls[i], maxima[i], calls[i]);
+            }
+            Reset();
+        }
+
+        struct Scope
+        {
+            Upscaler::TimingPart part;
+            int64_t start;
+            explicit Scope(Upscaler::TimingPart part) : part(part), start(Start()) {}
+            ~Scope() { Add(part, start); }
+        };
+    }
+}
+
 // NVIDIA DLSS and AMD FSR, run by GTAIV.EFLC.FusionFix.exe (x64) next to the plugin.
 //
 // The helper creates shared D3D12 textures and a shared fence. The plugin copies the frame's color, depth,
@@ -101,6 +243,7 @@ namespace
         uint32_t outputWidth = 0;
         uint32_t outputHeight = 0;
         bool frameGeneration = false; // Present and Generated were imported
+        bool eightBitFrames = false;  // ConfigureFlags::EightBitFrames: the frame generation's textures are B8G8R8A8
         bool wine = false;            // ConfigureFlags::Wine
         bool gameFence = false;       // Wine: the helper opened the game's semaphore, else both sides wait on the CPU
 
@@ -113,8 +256,9 @@ namespace
         virtual void ReleaseImports() = 0;
         // Game textures -> shared textures, then the fence reaches signalValue. Null inputs are skipped.
         virtual bool SubmitInputs(const Textures& inputs, uint64_t signalValue) = 0;
-        // Once the fence reaches waitValue: shared texture (Output or Generated) -> game texture
-        virtual bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue) = 0;
+        // Once the fence reaches waitValue: shared texture (Output or Generated) -> game texture. afterInputs: right after
+        // SubmitInputs, with no D3D9 call in between, so the game's work has reached the queue already.
+        virtual bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue, bool afterInputs) = 0;
 
         // Size of a shared texture
         uint32_t Width(size_t index) const { return Protocol::IsOutputSize(static_cast<Protocol::Texture>(index)) ? outputWidth : width; }
@@ -279,7 +423,7 @@ namespace
             VkFence fence = VK_NULL_HANDLE;
             bool submitted = false;
         };
-        std::array<Slot, 4> slots{};
+        std::array<Slot, 8> slots{};   // one for each submission, its fence tracks it
         uint32_t slot = 0;
 
         struct SharedImage
@@ -297,6 +441,12 @@ namespace
             VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16_SFLOAT, VK_FORMAT_R16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
             VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT
         };
+
+        // The frame generation's textures are the back buffer's A8R8G8B8 with eightBitFrames
+        VkFormat Format(size_t index) const
+        {
+            return eightBitFrames && Protocol::IsFrameGenerationTexture(static_cast<Protocol::Texture>(index)) ? VK_FORMAT_B8G8R8A8_UNORM : Formats[index];
+        }
 
         bool Init(IDirect3DDevice9* realDevice)
         {
@@ -369,6 +519,7 @@ namespace
             semaphore = VK_NULL_HANDLE;
             width = height = outputWidth = outputHeight = 0;
             frameGeneration = false;
+            eightBitFrames = false;
         }
 
         // Windows: a D3D12 resource handle. Wine: the same as an opaque handle, which is what vkd3d-proton exports
@@ -499,6 +650,7 @@ namespace
         bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
         {
             bool ok = true;
+            eightBitFrames = (shared.Flags & Protocol::ConfigureFlags::EightBitFrames) != 0;
             for (size_t i = 0; i < images.size(); ++i)
             {
                 auto handle = reinterpret_cast<HANDLE>(shared.TextureHandles[i]);
@@ -507,7 +659,7 @@ namespace
                     continue;
                 auto iw = Protocol::IsOutputSize(static_cast<Protocol::Texture>(i)) ? ow : w;
                 auto ih = Protocol::IsOutputSize(static_cast<Protocol::Texture>(i)) ? oh : h;
-                ok = handle && ImportImage(images[i], handle, Formats[i], iw, ih);
+                ok = handle && ImportImage(images[i], handle, Format(i), iw, ih);
                 if (!ok)
                 {
                     Log("import: shared texture %zu (%ux%u) failed, handle %p", i, iw, ih, handle);
@@ -568,6 +720,7 @@ namespace
             auto& s = slots[slot];
             if (s.submitted)
             {
+                Timing::Scope timed(Upscaler::TimingPart::CpuWait);
                 vk.vkWaitForFences(device, 1, &s.fence, VK_TRUE, 2000000000ull);
                 vk.vkResetFences(device, 1, &s.fence);
                 s.submitted = false;
@@ -600,6 +753,7 @@ namespace
                 timeline.pSignalSemaphoreValues = &signalValue;
             }
 
+            Timing::Scope timed(Upscaler::TimingPart::Submit);
             interop->LockSubmissionQueue();
             auto result = vk.vkQueueSubmit(queue, 1, &submit, fence);
             interop->ReleaseSubmissionQueue();
@@ -610,23 +764,28 @@ namespace
         {
             // Everything the game rendered so far must reach the queue first. Before the images are asked for, too: DXVK
             // can give a texture new storage (relocation), which only its command thread knows about.
-            interop->FlushRenderingCommands();
+            {
+                Timing::Scope timed(Upscaler::TimingPart::Flush);
+                interop->FlushRenderingCommands();
+            }
 
+            auto imagesStart = Timing::Start();
             GameImage sources[TextureCount];
             for (size_t i = 0; i < TextureCount; ++i)
             {
                 if (!inputs[i])
                     continue;
-                if (!images[i].image || !GetGameImage(inputs[i], sources[i]) || sources[i].format != Formats[i] ||
+                if (!images[i].image || !GetGameImage(inputs[i], sources[i]) || sources[i].format != Format(i) ||
                     sources[i].extent.width != Width(i) || sources[i].extent.height != Height(i))
                 {
                     static uint32_t reported = 0;
                     if (Report(reported))
                         Log("inputs: texture %zu is format %d %ux%u, expected %d %ux%u", i, sources[i].format, sources[i].extent.width,
-                            sources[i].extent.height, Formats[i], Width(i), Height(i));
+                            sources[i].extent.height, Format(i), Width(i), Height(i));
                     return false;
                 }
             }
+            Timing::Add(Upscaler::TimingPart::Images, imagesStart);
 
             auto& s = NextSlot();
 
@@ -663,34 +822,49 @@ namespace
             vk.vkEndCommandBuffer(cmd);
 
             if (!WaitOnCpu())
-                return Submit(cmd, VK_NULL_HANDLE, 0, signalValue, VK_NULL_HANDLE);
+            {
+                if (!Submit(cmd, VK_NULL_HANDLE, 0, signalValue, s.fence))
+                    return false;
+                s.submitted = true;
+                return true;
+            }
 
             // Wine: done before the helper is asked to read them
             if (!Submit(cmd, VK_NULL_HANDLE, 0, 0, s.fence))
                 return false;
+            Timing::Scope timed(Upscaler::TimingPart::CpuWait);
             auto done = vk.vkWaitForFences(device, 1, &s.fence, VK_TRUE, 2000000000ull) == VK_SUCCESS;
             vk.vkResetFences(device, 1, &s.fence);
             return done;
         }
 
-        bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue) override
+        bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue, bool afterInputs) override
         {
-            // The target's current storage, as for the inputs
-            interop->FlushRenderingCommands();
+            // The target's current storage, as for the inputs. Right after them DXVK's command thread is idle and nothing
+            // new was recorded: a second wait for it would only cost the render thread.
+            if (!afterInputs)
+            {
+                Timing::Scope timed(Upscaler::TimingPart::Flush);
+                interop->FlushRenderingCommands();
+            }
 
             auto i = static_cast<size_t>(index);
             GameImage destination;
-            if (!images[i].image || !GetGameImage(target, destination) || destination.format != Formats[i] ||
+            auto imagesStart = Timing::Start();
+            bool found = images[i].image && GetGameImage(target, destination);
+            Timing::Add(Upscaler::TimingPart::Images, imagesStart);
+            if (!found || destination.format != Format(i) ||
                 destination.extent.width != Width(i) || destination.extent.height != Height(i))
             {
                 static uint32_t reported = 0;
                 if (Report(reported))
                     Log("output: target %zu is format %d %ux%u, expected %d %ux%u", i, destination.format, destination.extent.width,
-                        destination.extent.height, Formats[i], Width(i), Height(i));
+                        destination.extent.height, Format(i), Width(i), Height(i));
                 return false;
             }
 
-            auto& s = slots[slot];
+            // A slot of its own: the copy of the generated frame can come after the next frame's Evaluate
+            auto& s = NextSlot();
             auto output = images[i].image;
             auto cmd = s.output;
             vk.vkResetCommandBuffer(cmd, 0);
@@ -754,6 +928,8 @@ namespace
         case DXGI_FORMAT_R16_FLOAT: case DXGI_FORMAT_R16_UNORM: case DXGI_FORMAT_R16_UINT:
         case DXGI_FORMAT_R16_SNORM: case DXGI_FORMAT_R16_SINT:
             return DXGI_FORMAT_R16_TYPELESS;
+        case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+            return DXGI_FORMAT_B8G8R8A8_TYPELESS;
         default:
             return format;
         }
@@ -826,6 +1002,7 @@ namespace
 
         void WaitFor(uint64_t value)
         {
+            Timing::Scope timed(Upscaler::TimingPart::CpuWait);
             if (value && fence->GetCompletedValue() < value && SUCCEEDED(fence->SetEventOnCompletion(value, event)))
                 WaitForSingleObject(event, 2000);
         }
@@ -901,6 +1078,7 @@ namespace
             sharedFence = nullptr;
             width = height = outputWidth = outputHeight = 0;
             frameGeneration = false;
+            eightBitFrames = false;
         }
 
         bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
@@ -929,6 +1107,7 @@ namespace
             outputWidth = ow;
             outputHeight = oh;
             frameGeneration = images[static_cast<size_t>(Protocol::Texture::Present)] && images[static_cast<size_t>(Protocol::Texture::Generated)];
+            eightBitFrames = (shared.Flags & Protocol::ConfigureFlags::EightBitFrames) != 0;
             return true;
         }
 
@@ -936,17 +1115,21 @@ namespace
         {
             // D3D9on12 records into command lists of its own, which have to reach the GPU before this queue can
             // wait for them. An event query is the D3D9 way to submit them.
-            IDirect3DQuery9* query = nullptr;
-            if (SUCCEEDED(device9->CreateQuery(D3DQUERYTYPE_EVENT, &query)) && query)
             {
-                query->Issue(D3DISSUE_END);
-                query->GetData(nullptr, 0, D3DGETDATA_FLUSH);
-                query->Release();
+                Timing::Scope timed(Upscaler::TimingPart::Flush);
+                IDirect3DQuery9* query = nullptr;
+                if (SUCCEEDED(device9->CreateQuery(D3DQUERYTYPE_EVENT, &query)) && query)
+                {
+                    query->Issue(D3DISSUE_END);
+                    query->GetData(nullptr, 0, D3DGETDATA_FLUSH);
+                    query->Release();
+                }
             }
 
             // Unwrapping makes the queue wait for the D3D9 work on the resource, and leaves it in the common state
             ID3D12Resource* sources[TextureCount]{};
             bool ok = true;
+            auto imagesStart = Timing::Start();
             for (size_t i = 0; i < TextureCount && ok; ++i)
             {
                 if (!inputs[i])
@@ -954,6 +1137,7 @@ namespace
                 ok = images[i] && SUCCEEDED(on12->UnwrapUnderlyingResource(inputs[i], queue, IID_PPV_ARGS(&sources[i]))) && sources[i] &&
                     Matches(sources[i], images[i]);
             }
+            Timing::Add(Upscaler::TimingPart::Images, imagesStart);
 
             if (ok)
             {
@@ -996,11 +1180,14 @@ namespace
             return ok;
         }
 
-        bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue) override
+        bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue, bool afterInputs) override
         {
             auto source = images[static_cast<size_t>(index)];
             ID3D12Resource* destination = nullptr;
-            if (!source || FAILED(on12->UnwrapUnderlyingResource(target, queue, IID_PPV_ARGS(&destination))) || !destination)
+            auto imagesStart = Timing::Start();
+            bool unwrapped = source && SUCCEEDED(on12->UnwrapUnderlyingResource(target, queue, IID_PPV_ARGS(&destination))) && destination;
+            Timing::Add(Upscaler::TimingPart::Images, imagesStart);
+            if (!unwrapped)
                 return false;
 
             bool ok = Matches(destination, source);
@@ -1227,6 +1414,7 @@ namespace
     bool preparedReset = false;
     bool preparedHudLess = false;
     bool generatedReset = false;       // the last Generate had nothing to interpolate from
+    uint64_t generatedValue = 0;       // the helper signals it once the frame posted by PostGenerate is generated; 0 when none waits
 
     std::filesystem::path HelperPath()
     {
@@ -1272,6 +1460,7 @@ namespace
         configureFailed = false;
         generationFailed = false;
         preparedFrameId = 0;
+        generatedValue = 0;
         if (!helper.Start(HelperPath(), bridge->luid))
         {
             Log("The helper could not be started: error %lu", GetLastError());
@@ -1294,6 +1483,7 @@ namespace
         if (!helper.pending)
             return true;
 
+        Timing::Scope timed(Upscaler::TimingPart::Collect);
         auto answer = helper.Collect(500);
         if (answer == HelperProcess::Answer::Ok)
             return true;
@@ -1363,6 +1553,7 @@ export namespace Upscaler
         bool FrameGeneration = false;
         bool HighDynamicRange = false;    // the frame given to Generate is scRGB
         bool HudLess = false;             // Generate of this frame comes with the frame before the HUD
+        bool AsyncGeneration = false;     // Generate on the helper's compute queue
         float CameraPosition[3]{};        // world space
         float CameraUp[3]{};
         float CameraRight[3]{};
@@ -1447,6 +1638,8 @@ export namespace Upscaler
     // Render thread: upscales Frame.Color into Frame.Output, false leaves Output untouched
     bool Evaluate(Backend backend, const Frame& frame)
     {
+        Timing::NextFrame();
+        Timing::Scope timed(TimingPart::Evaluate);
         preparedFrameId = 0;
         if (state != State::Ready || !IsAvailable(backend) || !frame.Color || !frame.Depth || !frame.Motion || !frame.Output)
             return false;
@@ -1458,8 +1651,11 @@ export namespace Upscaler
         auto flags = frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u;
         if (bridge->wine)
             flags |= Protocol::ConfigureFlags::Wine;
+        // Without HDR the frames are the 8-bit back buffer's: 8-bit textures halve what the frame generation's copies move
         if (frame.FrameGeneration && frameGenerationAvailable)
-            flags |= Protocol::ConfigureFlags::FrameGeneration | (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : 0u);
+            flags |= Protocol::ConfigureFlags::FrameGeneration |
+                (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : Protocol::ConfigureFlags::EightBitFrames) |
+                (frame.AsyncGeneration ? Protocol::ConfigureFlags::AsyncGeneration : 0u);
         auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
         auto outputHeight = frame.OutputHeight ? frame.OutputHeight : frame.Height;
         bool reconfigure = configuredBackend != backendId || configuredWidth != frame.Width || configuredHeight != frame.Height ||
@@ -1468,6 +1664,8 @@ export namespace Upscaler
         if (reconfigure)
         {
             bridge->ReleaseImports();
+            // A generated frame not taken yet went with the shared textures
+            generatedValue = 0;
             configuredBackend = backendId;
             configuredWidth = frame.Width;
             configuredHeight = frame.Height;
@@ -1573,11 +1771,14 @@ export namespace Upscaler
         {
             Post(Protocol::Command::Evaluate, outputValue);
             prepare();
-            return bridge->SubmitOutput(frame.Output, Protocol::Texture::Output, outputValue);
+            return bridge->SubmitOutput(frame.Output, Protocol::Texture::Output, outputValue, true);
         }
 
         // On the CPU: the helper answers once its GPU work, which signals outputValue, has finished
-        if (!helper.Request(Protocol::Command::Evaluate, 500))
+        auto waitStart = Timing::Start();
+        bool answered = helper.Request(Protocol::Command::Evaluate, 500);
+        Timing::Add(TimingPart::CpuWait, waitStart);
+        if (!answered)
         {
             static uint32_t reported = 0;
             bool exited = WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0;
@@ -1591,7 +1792,7 @@ export namespace Upscaler
         }
 
         prepare();
-        return bridge->SubmitOutput(frame.Output, Protocol::Texture::Output, outputValue);
+        return bridge->SubmitOutput(frame.Output, Protocol::Texture::Output, outputValue, true);
     }
 
     // The frame generation is set up and prepared with this frame's Evaluate
@@ -1606,18 +1807,27 @@ export namespace Upscaler
         return generatedReset;
     }
 
+    // The frame generation's textures, and so the game's copies for them, are A8R8G8B8
+    bool IsFrameGenerationEightBit()
+    {
+        return bridge && bridge->frameGeneration && bridge->eightBitFrames;
+    }
+
     bool IsFrameGenerationAvailable()
     {
         return frameGenerationAvailable.load();
     }
 
     // Render thread, after the frame is finished: present is the frame at the output size (A16B16G16R16F, sRGB encoded
-    // or scRGB), hudLess the same before the HUD, when Evaluate was told it comes; generated receives the frame between
-    // the previous one and it. False leaves generated untouched.
-    bool Generate(IDirect3DTexture9* present, IDirect3DTexture9* hudLess, IDirect3DTexture9* generated, float maxLuminance)
+    // or scRGB, or A8R8G8B8 with IsFrameGenerationEightBit), hudLess the same before the HUD, when Evaluate was told it
+    // comes. The helper generates the frame between the previous one and it, which TakeGenerated copies out later: the
+    // game's GPU work goes on meanwhile. False: nothing to take.
+    bool PostGenerate(IDirect3DTexture9* present, IDirect3DTexture9* hudLess, float maxLuminance)
     {
-        if (!IsFrameGenerationReady() || !present || !generated)
+        generatedValue = 0;
+        if (!IsFrameGenerationReady() || !present)
             return false;
+        Timing::Scope timed(TimingPart::Generate);
         auto id = preparedFrameId;
         preparedFrameId = 0;
 
@@ -1653,10 +1863,14 @@ export namespace Upscaler
         if (!bridge->WaitOnCpu())
         {
             Post(Protocol::Command::Generate, outputValue);
-            return bridge->SubmitOutput(generated, Protocol::Texture::Generated, outputValue);
+            generatedValue = outputValue;
+            return true;
         }
 
-        if (!helper.Request(Protocol::Command::Generate, 500))
+        auto waitStart = Timing::Start();
+        bool answered = helper.Request(Protocol::Command::Generate, 500);
+        Timing::Add(TimingPart::CpuWait, waitStart);
+        if (!answered)
         {
             static uint32_t reported = 0;
             bool exited = WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0;
@@ -1668,7 +1882,58 @@ export namespace Upscaler
                 generationFailed = true;
             return false;
         }
-        return bridge->SubmitOutput(generated, Protocol::Texture::Generated, outputValue);
+        generatedValue = outputValue;
+        return true;
+    }
+
+    // Render thread, any time before the next PostGenerate: the frame it posted into generated, once the helper is done
+    // with it, which the GPU waits for. False leaves generated untouched.
+    // afterPost: right after PostGenerate, with no D3D9 call in between
+    bool TakeGenerated(IDirect3DTexture9* generated, bool afterPost = false)
+    {
+        auto value = generatedValue;
+        generatedValue = 0;
+        if (!value || !generated || state != State::Ready)
+            return false;
+        // The helper answered long ago; a failed Generate leaves nothing to take
+        if (!CollectPending() || generationFailed)
+            return false;
+        return bridge->SubmitOutput(generated, Protocol::Texture::Generated, value, afterPost);
+    }
+
+    // The frame PostGenerate posted won't be taken
+    void DropGenerated()
+    {
+        generatedValue = 0;
+    }
+
+    // Both at once: generated receives the frame between the previous one and present
+    bool Generate(IDirect3DTexture9* present, IDirect3DTexture9* hudLess, IDirect3DTexture9* generated, float maxLuminance)
+    {
+        return generated && PostGenerate(present, hudLess, maxLuminance) && TakeGenerated(generated, true);
+    }
+
+    // UpscalerTimingLog
+    void SetTimingLog(bool enabled)
+    {
+        if (enabled && !Timing::enabled)
+        {
+            QueryPerformanceFrequency(&Timing::frequency);
+            Timing::Reset();
+            Timing::lastFrame = 0;
+        }
+        Timing::enabled = enabled;
+    }
+
+    // The frame generation's parts of the timing: a start, 0 while it is off, then the part it was
+    int64_t TimingStart()
+    {
+        return Timing::Start();
+    }
+
+    void TimingAdd(TimingPart part, int64_t start)
+    {
+        Timing::Add(part, start);
     }
 
     // The job object ends the helper with the game, and the helper also watches the game process

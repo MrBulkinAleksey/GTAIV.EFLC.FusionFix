@@ -473,6 +473,19 @@ export namespace RenderScale
         return bActive ? static_cast<float>(RenderWidth) / static_cast<float>(DisplayWidth) : 1.0f;
     }
 
+    // DLAA or FSR is the antialiasing and its upscaler is there or still starting: the scene is jittered for it
+    bool IsUpscalerAntialiasing()
+    {
+        static auto antialiasing = FusionFixSettings.GetRef("PREF_ANTIALIASING");
+        if (!antialiasing)
+            return false;
+        auto mode = antialiasing->get();
+        if (mode != FusionFixSettings.AntialiasingText.eDLAA && mode != FusionFixSettings.AntialiasingText.eFSR)
+            return false;
+        auto backend = mode == FusionFixSettings.AntialiasingText.eDLAA ? Upscaler::Backend::DLSS : Upscaler::Backend::FSR;
+        return !Upscaler::IsSettled() || Upscaler::IsAvailable(backend);
+    }
+
     uint32_t GetRenderWidth() { return bActive ? RenderWidth : 0; }
     uint32_t GetRenderHeight() { return bActive ? RenderHeight : 0; }
     uint32_t GetDisplayWidth() { return bActive ? DisplayWidth : 0; }
