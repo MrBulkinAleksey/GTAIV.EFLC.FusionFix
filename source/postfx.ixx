@@ -8280,6 +8280,7 @@ private:
         struct List
         {
             std::atomic<uintptr_t> lights{0}; // the light list these boxes go with
+            uint32_t sequence = 0;            // which hand over: the game's three lists come round again every third
             int count = 0;
             float focus[3] = {};              // the player, where the boxes' shadows are seen
             Box boxes[kBoxes];
@@ -8315,6 +8316,8 @@ private:
             nextList = (nextList + 1) % kLists;
             list.lights.store(0, std::memory_order_release);
             list.count = 0;
+            static uint32_t handOvers = 0;
+            list.sequence = ++handOvers;
             if (!PostFxResources.VehicleBoxShadowsEnabled() || !lightListBuilt || !modelInfos)
                 return;
             float focus[3] = {};
@@ -8414,9 +8417,11 @@ private:
                 if (list != drawnFor)
                 {
                     drawnFor = list;
+                    // The newest with this list: the ring holds more hand overs than the game has lists, so an older
+                    // one with the same list, three or six frames old, made the shadows lag the cars by fits
                     const List* found = nullptr;
                     for (auto& l : lists)
-                        if (l.lights.load(std::memory_order_acquire) == list)
+                        if (l.lights.load(std::memory_order_acquire) == list && (!found || int32_t(l.sequence - found->sequence) > 0))
                             found = &l;
                     (found ? framesMatched : framesUnmatched).fetch_add(1, std::memory_order_relaxed);
                     // A frame whose boxes were not found keeps the last ones, a frame late, rather than shading with
