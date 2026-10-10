@@ -13,6 +13,7 @@ module;
 #include <random>
 #include <regex>
 #include <array>
+#include <atomic>
 #include <unordered_map>
 #include "FusionLog.hpp"
 
@@ -765,6 +766,16 @@ public:
     float fLocalContactShadowThickness = 0.2f;
     float fLocalContactShadowMaxDistance = 40.0f;
     float fLocalContactShadowIntensity = 1.0f;
+    // Vehicle Box Shadows in the graphics menu (PREF_VEHICLE_BOX_SHADOWS, [POSTFX] VehicleBoxShadows): cars shadowed as boxes
+    // by the lights whose shadow maps hold no cars (see VehicleBoxShadows). The light's size widens the penumbra with
+    // the way from the car to the ground; the rounding takes the box's edges off.
+    bool VehicleBoxShadowsEnabled() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_VEHICLE_BOX_SHADOWS");
+        return !p || p->get() != 0;
+    }
+    float fVehicleBoxShadowLightSize = 0.5f;
+    float fVehicleBoxShadowRounding = 0.3f;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
@@ -1621,6 +1632,8 @@ public:
         fGIOcclusion = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightOcclusion", 1.0f), 0.0f, 1.0f);
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         fLocalContactShadowUnshadowed = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsWithoutShadowMap", 0.0f), 0.0f, 1.0f);
+        fVehicleBoxShadowLightSize = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLightSize", 0.5f), 0.0f, 4.0f);
+        fVehicleBoxShadowRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsRounding", 0.3f), 0.0f, 1.0f);
         fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
         fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 50.0f);
         fLightsGGX = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGX", 1.0f), 0.0f, 4.0f);
@@ -6994,6 +7007,11 @@ private:
                 log.Printf("headlight glints: %s; effect %s (hr 0x%08lX); %u headlights drawn; their intensity %.3f to %.3f, outer cone %.3f to %.3f\n",
                         R.szGlintsStatus, R.HeadlightGlintsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrHeadlightGlintsEffect),
                         R.nGlintsLastLights, R.GlintsLastIntensity[0], R.GlintsLastIntensity[1], R.GlintsLastCone[0], R.GlintsLastCone[1]);
+                log.Component("VehicleBoxShadows");
+                log.Printf("vehicle box shadows: %s, hook %s; since the last log %u frames drawn with their boxes, %u without, %u lights shaded with boxes; light size %.2f, rounding %.2f\n",
+                        R.VehicleBoxShadowsEnabled() ? "on" : "off", VehicleBoxShadows::lightListBuilt ? "installed" : "missing",
+                        VehicleBoxShadows::framesMatched.exchange(0), VehicleBoxShadows::framesUnmatched.exchange(0), VehicleBoxShadows::lightsWithBoxes.exchange(0),
+                        R.fVehicleBoxShadowLightSize, R.fVehicleBoxShadowRounding);
                 log.Component("CloudReflections");
                 log.Printf("clouds in reflections: %s; %u reflection map and %u water reflection skies since the last log; viewport %lu,%lu %lux%lu of a %ux%u target\n",
                         R.szCloudsReflectionStatus, R.nCloudReflectionCalls, R.nCloudWaterReflectionCalls, R.CloudReflectionViewport.X, R.CloudReflectionViewport.Y,
@@ -8127,6 +8145,196 @@ private:
         R.GlintsLastCone[1] = (std::max)(R.GlintsLastCone[1], light.mOuterConeAngle);
     }
 
+    // VehicleBoxShadows: a light whose shadow map holds no cars (no dynamic slot this frame: lamps lit from their cache
+    // or casting no shadows, most headlights) left the cars under it without a shadow, with only the dark frame of the
+    // contact shadow round them. Each car is taken as a box with rounded edges, which the light shaders shadow
+    // (shaders/patches/local_light_vehicle_box_shadows.patch, c143-c149). The boxes are taken on the main thread as the
+    // game hands the frame's light list over (CE 0xac2dd0) and kept with that list, so the render thread shades a frame
+    // with the cars where they stood when its lights were made.
+    struct VehicleBoxShadows
+    {
+        struct Box
+        {
+            float centre[3], halfLength;
+            float forward[2], halfWidth, halfHeight;
+        };
+        static constexpr int kBoxes = 160, kPerLight = 3, kLists = 3;
+        struct List
+        {
+            std::atomic<uintptr_t> lights{0}; // the light list these boxes go with
+            int count = 0;
+            Box boxes[kBoxes];
+        };
+        static inline List lists[kLists]{};
+        static inline int nextList = 0;
+        static inline uintptr_t* lightListBuilt = nullptr; // CE 0x103eedc, the list the main thread fills
+        static inline uintptr_t* lightListDrawn = nullptr; // CE 0x103eed0, the list the render thread draws
+        static inline uintptr_t modelInfos = 0;             // CE 0x1295cd8, model infos by index
+        static inline SafetyHookMid shHandOver{};
+        // For the log: frames drawn with their boxes found or not, lights shaded with some.
+        static inline std::atomic<uint32_t> framesMatched{0}, framesUnmatched{0}, lightsWithBoxes{0};
+        static inline const List* drawn = nullptr;
+        static inline uintptr_t drawnFor = 0;
+        static inline bool constantsOn = true;
+
+        // Main thread: every car's box, the nearest the player first when there are more than fit.
+        static void Capture()
+        {
+            auto& list = lists[nextList];
+            nextList = (nextList + 1) % kLists;
+            list.lights.store(0, std::memory_order_release);
+            list.count = 0;
+            if (!PostFxResources.VehicleBoxShadowsEnabled() || !lightListBuilt || !modelInfos)
+                return;
+            float focus[3] = {};
+            if (!CPlayer::getLocalPlayerPed || !CEntity::GetPosition(CPlayer::getLocalPlayerPed(), focus))
+                return;
+            static std::array<std::pair<float, Box>, 256> found{};
+            int n = 0;
+            CVehicle::ForEachVehicle([&](uintptr_t vehicle)
+            {
+                if (n >= int(found.size()))
+                    return;
+                const float* m = CEntity::GetMatrix(vehicle);
+                const auto index = *reinterpret_cast<const int16_t*>(vehicle + 0x2E);
+                if (!m || index < 0 || index >= 31000)
+                    return;
+                const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + index * 4);
+                if (!info)
+                    return;
+                // The model's bounds (+0x20 least, +0x30 most, as GET_MODEL_DIMENSIONS reads them): x right, y forward, z up.
+                const auto lo = reinterpret_cast<const float*>(info + 0x20), hi = reinterpret_cast<const float*>(info + 0x30);
+                const float halfWidth = (hi[0] - lo[0]) * 0.5f, halfLength = (hi[1] - lo[1]) * 0.5f;
+                // The body stands on its wheels, so the box starts a little up, and the ground under the car takes its shadow.
+                const float height = hi[2] - lo[2], bottom = lo[2] + (std::min)(0.3f, height * 0.25f);
+                const float halfHeight = (hi[2] - bottom) * 0.5f;
+                // Cars, vans, buses and bikes; not helicopters with their rotors, nor anything broken.
+                if (!(halfWidth > 0.1f && halfWidth < 2.0f && halfLength > 0.2f && halfLength < 10.0f && halfHeight > 0.1f && halfHeight < 2.5f))
+                    return;
+                const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
+                if (!(flat > 0.5f))
+                    return;
+                const float local[3] = { (lo[0] + hi[0]) * 0.5f, (lo[1] + hi[1]) * 0.5f, (bottom + hi[2]) * 0.5f };
+                Box box{};
+                for (int i = 0; i < 3; ++i)
+                    box.centre[i] = m[12 + i] + m[i] * local[0] + m[4 + i] * local[1] + m[8 + i] * local[2];
+                if (!std::isfinite(box.centre[0]) || !std::isfinite(box.centre[1]) || !std::isfinite(box.centre[2]))
+                    return;
+                box.forward[0] = m[4] / flat;
+                box.forward[1] = m[5] / flat;
+                box.halfLength = halfLength;
+                box.halfWidth = halfWidth;
+                box.halfHeight = halfHeight;
+                const float x = box.centre[0] - focus[0], y = box.centre[1] - focus[1], z = box.centre[2] - focus[2];
+                found[n++] = { x * x + y * y + z * z, box };
+            });
+            if (n > kBoxes)
+                std::nth_element(found.begin(), found.begin() + kBoxes, found.begin() + n,
+                    [](const auto& a, const auto& b) { return a.first < b.first; });
+            list.count = (std::min)(n, kBoxes);
+            for (int i = 0; i < list.count; ++i)
+                list.boxes[i] = found[i].second;
+            list.lights.store(*lightListBuilt, std::memory_order_release);
+        }
+
+        static void Install()
+        {
+            // The hand over of the frame's light list: mov ecx, [index]; xor eax, eax; inc ecx; cmp ecx, 3; cmove ecx, eax;
+            // mov eax, [the list filled]; and where the render thread takes a list: add esi, lists; mov [drawn], esi
+            auto pattern = hook::pattern("8B 0D ? ? ? ? 33 C0 41 83 F9 03 0F 44 C8 A1 ? ? ? ? A3");
+            auto drawnPattern = hook::pattern("81 C6 ? ? ? ? 89 35 ? ? ? ? 8B 49 0C");
+            if (pattern.empty() || drawnPattern.empty())
+                return;
+            lightListBuilt = *pattern.get_first<uintptr_t*>(16);
+            lightListDrawn = *drawnPattern.get_first<uintptr_t*>(8);
+            modelInfos = GameBase() + 0xE95CD8;
+            shHandOver = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&) { Capture(); });
+        }
+
+        // Render thread, for the light about to be drawn: up to three cars its light reaches, the nearest the light first,
+        // without the car the light belongs to; none where the light's own map shows the cars.
+        static bool SetForLight(IDirect3DDevice9* pDevice, const rage::CLightSource& light, bool mapHasCars)
+        {
+            auto& R = PostFxResources;
+            float constants[7][4] = {};
+            int used = 0;
+            if (R.VehicleBoxShadowsEnabled() && lightListDrawn && !mapHasCars &&
+                (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
+            {
+                const uintptr_t list = *lightListDrawn;
+                // Looked up again once its entry has been reused for a later list too.
+                if (list != drawnFor || (drawn && drawn->lights.load(std::memory_order_acquire) != list))
+                {
+                    drawnFor = list;
+                    drawn = nullptr;
+                    for (auto& l : lists)
+                        if (l.lights.load(std::memory_order_acquire) == list)
+                            drawn = &l;
+                    (drawn ? framesMatched : framesUnmatched).fetch_add(1, std::memory_order_relaxed);
+                }
+                std::pair<float, const Box*> nearest[kPerLight] = {};
+                for (int i = 0; drawn && i < drawn->count; ++i)
+                {
+                    const auto& box = drawn->boxes[i];
+                    const float dx = light.mPosition.x - box.centre[0], dy = light.mPosition.y - box.centre[1], dz = light.mPosition.z - box.centre[2];
+                    const float reach = light.mRadius + box.halfLength + box.halfWidth + box.halfHeight;
+                    const float d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 > reach * reach || (used == kPerLight && d2 >= nearest[kPerLight - 1].first))
+                        continue;
+                    // A light within its own car (headlights, tail lights) is not shadowed by it.
+                    const float along = dx * box.forward[0] + dy * box.forward[1], across = dx * box.forward[1] - dy * box.forward[0];
+                    if (std::abs(along) < box.halfLength + 0.5f && std::abs(across) < box.halfWidth + 0.5f && std::abs(dz) < box.halfHeight + 0.5f)
+                        continue;
+                    int at = used < kPerLight ? used++ : kPerLight - 1;
+                    for (; at > 0 && nearest[at - 1].first > d2; --at)
+                        nearest[at] = nearest[at - 1];
+                    nearest[at] = { d2, &box };
+                }
+                const float rounding = R.fVehicleBoxShadowRounding;
+                for (int i = 0; i < used; ++i)
+                {
+                    const auto& box = *nearest[i].second;
+                    float* c = constants[i * 2];
+                    c[0] = box.centre[0]; c[1] = box.centre[1]; c[2] = box.centre[2];
+                    c[3] = (std::max)(box.halfLength - rounding, 0.05f);
+                    c[4] = box.forward[0]; c[5] = box.forward[1];
+                    c[6] = (std::max)(box.halfWidth - rounding, 0.05f);
+                    c[7] = (std::max)(box.halfHeight - rounding, 0.05f);
+                }
+            }
+            if (!used)
+            {
+                if (constantsOn)
+                    Off(pDevice);
+                return false;
+            }
+            lightsWithBoxes.fetch_add(1, std::memory_order_relaxed);
+            // The boxes left over stand far away, small.
+            for (int i = used; i < kPerLight; ++i)
+            {
+                float* c = constants[i * 2];
+                c[0] = c[1] = c[2] = 1.0e6f;
+                c[3] = c[6] = c[7] = 0.05f;
+                c[4] = 1.0f;
+            }
+            constants[6][0] = R.fVehicleBoxShadowLightSize;
+            constants[6][1] = R.fVehicleBoxShadowRounding;
+            constants[6][2] = 0.15f; // a pixel nearer a box than this is on the car, which its box does not shadow
+            constants[6][3] = 1.0f;
+            pDevice->SetPixelShaderConstantF(143, constants[0], 7);
+            constantsOn = true;
+            return true;
+        }
+
+        // Before and after the main view's lights: lights drawn for other views (reflections, mirrors) take none.
+        static void Off(IDirect3DDevice9* pDevice)
+        {
+            const float off[4] = {};
+            pDevice->SetPixelShaderConstantF(149, off, 1);
+            constantsOn = false;
+        }
+    };
+
     // Whether the game has a shadow map for this light this frame, read as its own lookup does (CE 0x925db0, which
     // deferred lighting calls for each light; called again here it would clear a cache entry's flag): off unless
     // [0x1036780]; buffer [0x1174794]; a cached map where (buffer * 16 + cache index) * 0x100 + 0x119d1d0 is set;
@@ -8168,26 +8376,29 @@ private:
                 return;
             if (nLightingStage == 1)
                 SetLightingStage(rage::grcDevice::GetD3DDevice(), 2);
-            SetLightGGXShape(*reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28));
-            CollectGlintLight(*reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28));
-            if (R.LocalContactShadowConsts[7] == 0.0f)
-                return;
             const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28);
-            // A contact shadow only belongs where the light's own shadow map shows the car: a dynamic slot. Elsewhere
-            // (no slot, lit from its cache, lights casting no shadows) it stood alone, a dark frame around a car with no
-            // shadow, and LocalContactShadowsWithoutShadowMap applies. In a room scene, lights inside only (0x20
-            // without 0x40) that cast no shadows at all keep theirs, as most in buildings do. Tunnel lamps are flagged
-            // inside too, and there the frame ran along the car from back to front under every lamp it passed.
-            const bool insideOnly = R.bInteriorScene && (light.mFlags & 0x60) == 0x20 &&
-                !(light.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW));
-            const float intensity = (light.mFlags & 0x200) ? 0.0f
-                : R.fLocalContactShadowUnshadowed >= 1.0f || insideOnly || HasShadowMap(light)
-                    ? R.fLocalContactShadowIntensity
-                    : R.fLocalContactShadowIntensity * R.fLocalContactShadowUnshadowed;
-            const bool off = intensity <= 0.0f;
+            SetLightGGXShape(light);
+            CollectGlintLight(light);
             auto pDevice = rage::grcDevice::GetD3DDevice();
             if (!pDevice)
                 return;
+            const bool mapped = HasShadowMap(light);
+            const bool boxed = VehicleBoxShadows::SetForLight(pDevice, light, mapped);
+            if (R.LocalContactShadowConsts[7] == 0.0f)
+                return;
+            // A contact shadow only belongs where a shadow shows the car: the light's own map in a dynamic slot, or
+            // the boxes of the cars it reaches. Elsewhere (no slot, lit from its cache, lights casting no shadows) it
+            // stood alone, a dark frame around a car with no shadow, and LocalContactShadowsWithoutShadowMap applies. In a
+            // room scene, lights inside only (0x20 without 0x40) that cast no shadows at all keep theirs, as most in
+            // buildings do. Tunnel lamps are flagged inside too, and there the frame ran along the car from back to front
+            // under every lamp it passed.
+            const bool insideOnly = R.bInteriorScene && (light.mFlags & 0x60) == 0x20 &&
+                !(light.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW));
+            const float intensity = (light.mFlags & 0x200) ? 0.0f
+                : R.fLocalContactShadowUnshadowed >= 1.0f || insideOnly || mapped || boxed
+                    ? R.fLocalContactShadowIntensity
+                    : R.fLocalContactShadowIntensity * R.fLocalContactShadowUnshadowed;
+            const bool off = intensity <= 0.0f;
             if (!off && intensity != R.fLocalContactLightIntensity)
             {
                 float consts[4] = { R.LocalContactShadowConsts[0], R.LocalContactShadowConsts[1], R.LocalContactShadowConsts[2], intensity };
@@ -8402,6 +8613,7 @@ public:
         }
         pDevice->SetPixelShaderConstantF(202, R.LocalContactShadowConsts, 3);
         R.bLocalContactPass = true;
+        VehicleBoxShadows::Off(pDevice);
         R.bLocalContactLightOff = false;
         R.fLocalContactLightIntensity = R.LocalContactShadowConsts[3];
 
@@ -8668,6 +8880,7 @@ public:
         const float noLocalContactShadows[4] = {};
         pDevice->SetPixelShaderConstantF(203, noLocalContactShadows, 1);
         R.bLocalContactPass = false;
+        VehicleBoxShadows::Off(pDevice);
         pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(197, noLocalContactShadows, 1);
@@ -8764,6 +8977,7 @@ public:
                     CRenderPhaseDeferredLighting_LightsToScreen::OnAfterCopyLight() += OnAfterCopyLight;
                     InstallShaftHooks();
                     InstallLocalContactLightHook();
+                    VehicleBoxShadows::Install();
                     InstallShaftLoopProfiler();
                     InstallPedSkinHooks();
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()

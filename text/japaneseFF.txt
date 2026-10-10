@@ -262,6 +262,9 @@ GGX Lighting
 [WetWeather]
 Wet Weather
 
+[VehBoxShadows]
+Car Shadows From All Lamps
+
 [VolumeClouds]
 Volumetric Clouds
 

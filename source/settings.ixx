@@ -2132,6 +2132,7 @@ public:
             { 0, "PREF_WET_WEATHER",            "POSTFX",     "WetWeather",                         "",                           1, nullptr, 0, 1 },
             { 0, "PREF_GROUND_SURFACES",        "TEXTURES",   "GroundSurfaces",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_PROCEDURAL_DISTANCE",    "PROCEDURAL", "ProceduralDistance",                 "",                           0, nullptr, 0, 8 },
+            { 0, "PREF_VEHICLE_BOX_SHADOWS",    "POSTFX",     "VehicleBoxShadows",                  "",                           1, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2378,6 +2379,7 @@ public:
             AddRow(category, "VolumeClouds", "PREF_VOLUMETRIC_CLOUDS", 2, toggle);
             AddRow(category, "GGXLighting", "PREF_GGX_LIGHTING", 2, toggle);
             AddRow(category, "WetWeather", "PREF_WET_WEATHER", 2, toggle);
+            AddRow(category, "VehBoxShadows", "PREF_VEHICLE_BOX_SHADOWS", 2, toggle);
             AddEmptyLine(category);
             // The number next to the slider is the reach in feet, 0 keeps the game's own
             for (auto [label, preference] : { std::pair{ "FF_HREACH", "PREF_HEADLIGHT_REACH" }, std::pair{ "FF_LREACH", "PREF_LAMP_REACH" } })

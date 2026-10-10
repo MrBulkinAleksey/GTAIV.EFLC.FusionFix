@@ -927,7 +927,7 @@ public:
                     else
                     {
                         PlayerShadowAllocation::cacheWithCarsInside = iniReader.ReadInteger("SHADOWS", "CacheWithCarsInside", 0) != 0;
-                        PlayerShadowAllocation::InstallCacheWithCars(iniReader.ReadInteger("SHADOWS", "CacheWithCars", 1) != 0);
+                        PlayerShadowAllocation::InstallCacheWithCars(iniReader.ReadInteger("SHADOWS", "CacheWithCars", 0) != 0);
                     }
                 }
                 // After the allocation adapter, which checks the selection's bytes this hooks.
