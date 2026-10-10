@@ -127,64 +127,39 @@ namespace PlayerShadowAllocation
             bExtraNightShadows && bHeadlightShadows && bVehicleNightShadows;
     }
 
-    // ShadowFadeIn: a light with no cached map that takes a slot had no shadow at all before, so its shadow
-    // came in whole in one frame, on the cars ahead most of all. Each slot remembers when its light took
-    // it; the light loop (InstallShadowFadeIn) gives the shadow shaders how much is still to come (c143.x,
-    // local_light_with_shadow_fade_in.patch). Lights with a cached map already showed a shadow, the static
-    // one, and are left as they are. Render thread, like selection and the light loop.
-    // The same table tells SlotMinHold how long each light has held its slot.
-    struct FadeEntry { uint32_t key{}; uint32_t since{}; bool fades{}; };
-    static std::array<FadeEntry,7> fadeEntries{};
-    static uint32_t shadowFadeMs = 0, slotMinHoldMs = 0;
+    // SlotMinHold: each slot remembers when its light took it. Render thread, like selection.
+    struct HoldEntry { uint32_t key{}; uint32_t since{}; };
+    static std::array<HoldEntry,7> holdEntries{};
+    static uint32_t slotMinHoldMs = 0;
     static float behindLampReach = 12.0f; // BehindLampReach
     static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
     // CacheWithCars, for the status line
     static std::atomic<uint32_t> cacheCarRefreshes{0}, cacheRefreshes{0}, slotsDrawnWhole{0};
 
-    static void NoteFadeIns(const budget::PlayerShadowBudget::Selection& selection) noexcept
+    static void NoteSlotAcquires(const budget::PlayerShadowBudget::Selection& selection) noexcept
     {
-        if (!shadowFadeMs && !slotMinHoldMs) return;
+        if (!slotMinHoldMs) return;
         const auto now = GetTickCount();
-        const auto* lights = CurrentLights();
-        const auto count = CurrentCount();
-        std::array<FadeEntry,7> next{};
+        std::array<HoldEntry,7> next{};
         for (unsigned i = 0; i < 7; ++i) {
             if (!(selection.validMask & (1u << i))) continue;
             const auto key = static_cast<uint32_t>(selection.slots[i].key);
             if (!key) continue;
-            const FadeEntry* held = nullptr;
-            for (const auto& e : fadeEntries) if (e.key == key) { held = &e; break; }
+            const HoldEntry* held = nullptr;
+            for (const auto& e : holdEntries) if (e.key == key) { held = &e; break; }
             if (held) { next[i] = *held; continue; }
-            bool cached = false;
-            const auto index = selection.slots[i].index;
-            if (lights && index < count)
-                cached = (lights[index].mFlags & rage::LF_STATIC_SHADOW) && lights[index].mShadowCacheIndex >= 0;
-            // Own headlights come on with their shadow; fading it in only showed the beam unshadowed at first.
-            next[i] = {key, now, !cached && selection.slots[i].kind != budget::Kind::PlayerBeam};
+            next[i] = {key, now};
         }
-        fadeEntries = next;
+        holdEntries = next;
     }
 
     // Whether a light took its slot less than SlotMinHold ago.
     static bool SlotIsFresh(uint32_t key) noexcept
     {
         if (!slotMinHoldMs || !key) return false;
-        for (const auto& e : fadeEntries)
+        for (const auto& e : holdEntries)
             if (e.key == key) return GetTickCount() - e.since < slotMinHoldMs;
         return false;
-    }
-
-    // How much of a light's shadow is still to come in, 0 for all of it there.
-    static float ShadowFadeLeft(uint32_t key) noexcept
-    {
-        if (!shadowFadeMs || !key) return 0.0f;
-        for (const auto& e : fadeEntries)
-            if (e.key == key) {
-                if (!e.fades) return 0.0f;
-                const float t = float(GetTickCount() - e.since) / float(shadowFadeMs);
-                return t >= 1.0f ? 0.0f : 1.0f - (std::max)(t, 0.0f);
-            }
-        return 0.0f;
     }
 
     // CacheWithCars: only the seven dynamic slots drew vehicles and peds; the eight cached lamps showed the
@@ -954,7 +929,7 @@ namespace PlayerShadowAllocation
                         traced[i]={static_cast<uint32_t>(selection.slots[i].key),static_cast<int>(selection.slots[i].index)};
                     try { slotTrace.Commit(traced); } catch(...) { slotTrace.enabled=false; }
                 }
-                NoteFadeIns(selection);
+                NoteSlotAcquires(selection);
                 state.previousSelection=selection.slots;
                 state.previousSelectionFrame=state.frame;
                 std::array<fusionfix::shadows::NativeShadowContinuity42::Identity,7> identities{};

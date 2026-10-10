@@ -689,27 +689,6 @@ export bool IsPlayerNightShadowFixActive() noexcept
         bExtraNightShadows && bHeadlightShadows && bVehicleNightShadows;
 }
 
-// ShadowFadeIn: in the loop that draws the frame's lights (CE 0xAC1030), once a light's sphere is in the
-// frame (0xAC11CC, edi the light + 0x28), c143.x gets how much of its shadow is still to come in.
-static void InstallShadowFadeIn()
-{
-    // movss xmm0, [esp+14h] / xorps xmm0, [...] / comiss xmm0, [esp+10h] / jbe; the test before it may
-    // already be hooked by the traffic signal log
-    auto pattern = hook::pattern("F3 0F 10 44 24 14 0F 57 05 ? ? ? ? 0F 2F 44 24 10 0F 86");
-    if (pattern.empty())
-    {
-        PlayerShadowAllocation::shadowFadeMs = 0;
-        return;
-    }
-    static auto hook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
-    {
-        const auto key = *reinterpret_cast<const uint32_t*>(regs.edi + 0x38); // light + 0x60
-        const float fade[4] = { PlayerShadowAllocation::ShadowFadeLeft(key), 0.0f, 0.0f, 0.0f };
-        if (auto device = rage::grcDevice::GetD3DDevice())
-            device->SetPixelShaderConstantF(143, fade, 1);
-    });
-}
-
 class NightShadows
 {
     // Taken while the ASI loads, before any FusionFix module installs hooks. The async
@@ -949,9 +928,6 @@ public:
                     {
                         PlayerShadowAllocation::cacheWithCarsInside = iniReader.ReadInteger("SHADOWS", "CacheWithCarsInside", 0) != 0;
                         PlayerShadowAllocation::InstallCacheWithCars(iniReader.ReadInteger("SHADOWS", "CacheWithCars", 1) != 0);
-                        if ((PlayerShadowAllocation::shadowFadeMs = static_cast<uint32_t>(
-                                std::clamp(iniReader.ReadInteger("SHADOWS", "ShadowFadeIn", 400), 0, 2000))) != 0)
-                            InstallShadowFadeIn();
                     }
                 }
                 // After the allocation adapter, which checks the selection's bytes this hooks.
