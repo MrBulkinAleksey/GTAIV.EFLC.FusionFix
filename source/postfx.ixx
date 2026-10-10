@@ -972,6 +972,13 @@ public:
     float fAmbientOcclusionGTAOThinOccluders = 0.5f;
     float fAmbientOcclusionTemporal = 0.9f;  // share of last frames' GTAO kept, 0 turns accumulation off
     bool bAmbientOcclusionMultiBounce = true;
+    // How much the AO darkens the game's fill lights (fillerVolumePoint, fillerVolumeShadowPoint): they
+    // stand in for bounced light, so corners and the ground under cars lose them as they lose the ambient.
+    // The AO's last result and the frame it was drawn in, bound on s7 while the lights are drawn.
+    float fAmbientOcclusionFillLights = 1.0f;
+    IDirect3DTexture9* AOLightingTex = nullptr;
+    uint32_t nAOLightingFrame = 0;
+    bool bAOLightingBound = false;
 
     struct
     {
@@ -1624,6 +1631,7 @@ public:
         fLightsGGXSun = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSun", 1.0f), 0.0f, 4.0f);
         fLightsGGXEnvironment = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXEnvironment", 1.0f), 0.0f, 1.0f);
         fLightsGGXMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXMax", 2.0f), 0.1f, 16.0f);
+        fAmbientOcclusionFillLights = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionFillLights", 1.0f), 0.0f, 1.0f);
         fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 1.5f), 0.0f, 8.0f);
         fSSRStepPixels = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStepPixels", 2.0f), 1.0f, 8.0f);
@@ -2802,6 +2810,7 @@ private:
         {
             PostFxResources.AOTex->Destroy();
             PostFxResources.AOTex = nullptr;
+            PostFxResources.AOLightingTex = nullptr;
         }
         if (PostFxResources.AOBlurTex)
         {
@@ -2898,6 +2907,7 @@ private:
         {
             PostFxResources.AOTex->Destroy();
             PostFxResources.AOTex = nullptr;
+            PostFxResources.AOLightingTex = nullptr;
         }
         if (PostFxResources.AOBlurTex)
         {
@@ -6962,7 +6972,10 @@ private:
 
                 // final output
                 pDevice->SetRenderTarget(0, SpecularRT);
-                effect->SetTexture(h.AOTexture2D, PostFxResources.nAmbientOcclusionBlurPasses > 0 ? aoTex : blurSource);
+                IDirect3DTexture9* finalAO = PostFxResources.nAmbientOcclusionBlurPasses > 0 ? aoTex : blurSource;
+                effect->SetTexture(h.AOTexture2D, finalAO);
+                PostFxResources.AOLightingTex = finalAO;
+                PostFxResources.nAOLightingFrame = FrameHistory::Frame();
 
                 ProfilerMark(pDevice, kProfAOApply, true);
                 effect->BeginPass(4);
@@ -8479,6 +8492,18 @@ public:
                 R.bSpecularBound = true;
             }
         }
+        // The AO on the fill lights: c185.x its strength, s7 this frame's AO (read by no deferred_lighting
+        // shader of the game's). Nothing while the AO did not run this frame.
+        {
+            const bool fresh = R.AOLightingTex && R.nAOLightingFrame == FrameHistory::Frame() && R.fAmbientOcclusionFillLights > 0.0f;
+            const float c185[4] = { fresh ? R.fAmbientOcclusionFillLights : 0.0f, 0.0f, 0.0f, 0.0f };
+            pDevice->SetPixelShaderConstantF(185, c185, 1);
+            if (fresh)
+            {
+                BindSampler(pDevice, 7, R.AOLightingTex, D3DTEXF_LINEAR);
+                R.bAOLightingBound = true;
+            }
+        }
         // The sun on materials with no specular map (x) and the cloud shadows (yzw, c198, c199, s12).
         {
             float threshold = 0.0f, bias = 0.0f, thickness = 0.0f;
@@ -8682,6 +8707,11 @@ public:
             SetTextureBoth(pDevice, 13, nullptr);
             R.bSpecularBound = false;
         }
+        if (R.bAOLightingBound)
+        {
+            SetTextureBoth(pDevice, 7, nullptr);
+            R.bAOLightingBound = false;
+        }
         if (R.bCloudNoiseBound)
         {
             // Whether the noise was still there once the lights were drawn, for the log.
@@ -8702,6 +8732,7 @@ public:
         pDevice->SetPixelShaderConstantF(197, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(200, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(165, noLocalContactShadows, 1);
+        pDevice->SetPixelShaderConstantF(185, noLocalContactShadows, 1);
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;

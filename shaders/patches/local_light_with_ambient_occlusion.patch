@@ -1,0 +1,116 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
+index a2ea1af..4ef5ff6 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
+@@ -61,6 +61,7 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s13 // FusionFix GGX lights: the G-buffer's specular (_DEFERRED_GBUFFER_2_), bound by FusionFix during lighting
++    dcl_2d s7 // FusionFix ambient occlusion on fill lights: FusionFix's own AO, bound by FusionFix during lighting
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s2
+@@ -298,6 +299,16 @@
+         add r31.w, c157.y, -r18.w
+       endif
+     endif
++    // --- FusionFix ambient occlusion on fill lights (c185.x, AmbientOcclusionFillLights in postfx.ixx): the game's fill
++    // --- lights stand in for light bounced around a room or a street, so FusionFix's screen space AO (s7, bound
++    // --- during lighting, 0 strength while the AO is off) darkens them in corners and under cars as it does the ambient.
++    add r20.xy, vPos, c158.z
++    mul r20.xy, r20, c77.zwzw
++    texld r20, r20, s7
++    add r20.x, r20.x, -c157.y
++    mul r20.x, r20.x, c185.x
++    add r20.x, r20.x, c157.y // 1 + (AO - 1) times the strength
++    mul r26.xyz, r26, r20.x
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+index 4bd9a45..dcde468 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+@@ -65,6 +65,7 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s13 // FusionFix GGX lights: the G-buffer's specular (_DEFERRED_GBUFFER_2_), bound by FusionFix during lighting
++    dcl_2d s7 // FusionFix ambient occlusion on fill lights: FusionFix's own AO, bound by FusionFix during lighting
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s2
+@@ -308,6 +309,16 @@
+         add r31.w, c157.y, -r18.w
+       endif
+     endif
++    // --- FusionFix ambient occlusion on fill lights (c185.x, AmbientOcclusionFillLights in postfx.ixx): the game's fill
++    // --- lights stand in for light bounced around a room or a street, so FusionFix's screen space AO (s7, bound
++    // --- during lighting, 0 strength while the AO is off) darkens them in corners and under cars as it does the ambient.
++    add r20.xy, vPos, c158.z
++    mul r20.xy, r20, c77.zwzw
++    texld r20, r20, s7
++    add r20.x, r20.x, -c157.y
++    mul r20.x, r20.x, c185.x
++    add r20.x, r20.x, c157.y // 1 + (AO - 1) times the strength
++    mul r26.xyz, r26, r20.x
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
+index 3fc9603..e0c646c 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
+@@ -65,6 +65,7 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s13 // FusionFix GGX lights: the G-buffer's specular (_DEFERRED_GBUFFER_2_), bound by FusionFix during lighting
++    dcl_2d s7 // FusionFix ambient occlusion on fill lights: FusionFix's own AO, bound by FusionFix during lighting
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s2
+@@ -308,6 +309,16 @@
+         add r31.w, c157.y, -r18.w
+       endif
+     endif
++    // --- FusionFix ambient occlusion on fill lights (c185.x, AmbientOcclusionFillLights in postfx.ixx): the game's fill
++    // --- lights stand in for light bounced around a room or a street, so FusionFix's screen space AO (s7, bound
++    // --- during lighting, 0 strength while the AO is off) darkens them in corners and under cars as it does the ambient.
++    add r20.xy, vPos, c158.z
++    mul r20.xy, r20, c77.zwzw
++    texld r20, r20, s7
++    add r20.x, r20.x, -c157.y
++    mul r20.x, r20.x, c185.x
++    add r20.x, r20.x, c157.y // 1 + (AO - 1) times the strength
++    mul r26.xyz, r26, r20.x
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+index bbd0428..4e02fc8 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+@@ -93,6 +93,7 @@
+     dcl_2d s2
+     dcl_2d s14
+     dcl_2d s13 // FusionFix GGX lights: the G-buffer's specular (_DEFERRED_GBUFFER_2_), bound by FusionFix during lighting
++    dcl_2d s7 // FusionFix ambient occlusion on fill lights: FusionFix's own AO, bound by FusionFix during lighting
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c84.zwzw
+     texld r1, r0, s2
+@@ -487,6 +488,16 @@
+         add r31.w, c157.y, -r18.w
+       endif
+     endif
++    // --- FusionFix ambient occlusion on fill lights (c185.x, AmbientOcclusionFillLights in postfx.ixx): the game's fill
++    // --- lights stand in for light bounced around a room or a street, so FusionFix's screen space AO (s7, bound
++    // --- during lighting, 0 strength while the AO is off) darkens them in corners and under cars as it does the ambient.
++    add r20.xy, vPos, c158.z
++    mul r20.xy, r20, c77.zwzw
++    texld r20, r20, s7
++    add r20.x, r20.x, -c157.y
++    mul r20.x, r20.x, c185.x
++    add r20.x, r20.x, c157.y // 1 + (AO - 1) times the strength
++    mul r26.xyz, r26, r20.x
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
