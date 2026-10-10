@@ -134,6 +134,15 @@ class Shaders
         }
     }
 
+    // RainDensity: the GPU rain's particle count (rain.NumberParticles) times 1, 2, 4 or 8; read once, when the
+    // rain is set up at startup.
+    static inline int nRainDensity = 1;
+    static inline injector::hook_back<float(__fastcall*)(void*, void*, uint32_t, float)> hbReadRainParticles;
+    static float __fastcall ReadRainParticles(void* settings, void* edx, uint32_t hash, float fallback)
+    {
+        return hbReadRainParticles.fun(settings, edx, hash, fallback) * float(nRainDensity);
+    }
+
 public:
     Shaders()
     {
@@ -191,6 +200,11 @@ public:
             bSkyHDR = iniReader.ReadInteger("POSTFX", "SkyHDR", 1) != 0;
 
             bNoBloomColorShift = iniReader.ReadInteger("MISC", "NoBloomColorShift", 1) != 0;
+            {
+                // powers of two keep the count square-friendly for the GPU particle textures
+                const int density = std::clamp(iniReader.ReadInteger("MISC", "RainDensity", 1), 1, 8);
+                nRainDensity = density >= 8 ? 8 : density >= 4 ? 4 : density >= 2 ? 2 : 1;
+            }
             fMaxPQValue = std::max(iniReader.ReadFloat("MISC", "MaxPQValue", 100.0f), 0.0000001f);
 
             // Redirect path to one unified folder
@@ -246,6 +260,14 @@ public:
                         }
                     }
                 }
+            }
+
+            // More rain drops: the read of rain.NumberParticles (default 16384.0) as the rain is set up
+            if (nRainDensity > 1)
+            {
+                auto pattern = hook::pattern("68 ? ? ? ? 8B F9 E8 ? ? ? ? 83 C4 04 B9 ? ? ? ? C7 04 24 00 00 80 46 50 E8");
+                if (!pattern.empty())
+                    hbReadRainParticles.fun = injector::MakeCALL(pattern.get_first(28), ReadRainParticles).get();
             }
 
             // Actually read the rain lighting settings in the visualsettings.dat
