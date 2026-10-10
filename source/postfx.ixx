@@ -7017,6 +7017,12 @@ private:
                         VehicleBoxShadows::framesMatched.exchange(0), VehicleBoxShadows::framesUnmatched.exchange(0), VehicleBoxShadows::lightsWithBoxes.exchange(0),
                         R.fVehicleBoxShadowLightSize, R.fVehicleBoxShadowRounding, int(R.bVehicleBoxShadowsFromCarLights));
                 {
+                    const auto& l = VehicleBoxShadows::lastLowLight;
+                    log.Printf("%u times a lamp no higher than a car's roof was left without its box; the last at %.1f %.1f %.1f, %.2f m above the box's bottom: type %d, flags 0x%X, radius %.1f, intensity %.2f, shadow key 0x%08X, cache %d\n",
+                            VehicleBoxShadows::lowLights.exchange(0), l.mPosition.x, l.mPosition.y, l.mPosition.z, VehicleBoxShadows::lastLowHeight,
+                            int(l.mType), l.mFlags, l.mRadius, l.mIntensity, uint32_t(l.mCastShadows), l.mShadowCacheIndex);
+                }
+                {
                     const auto& b = VehicleBoxShadows::nearestBounds;
                     const auto& x = VehicleBoxShadows::nearestBox;
                     log.Printf("nearest car %.1f m away: model bounds %.2f %.2f %.2f to %.2f %.2f %.2f (x right, y forward, z up); box half length %.2f, width %.2f, height %.2f, middle %.2f above its position\n",
@@ -8305,6 +8311,13 @@ private:
                     const float d2 = dx * dx + dy * dy + dz * dz;
                     if (d2 > reach * reach || (used == kPerLight && d2 >= nearest[kPerLight - 1].first))
                         continue;
+                    // A lamp no higher than the car's roof: real lamps stand above cars, but some in tunnels light from
+                    // the road or walls with no lamp there, and a box's shadow from them spread over the whole road.
+                    if (!(light.mFlags & rage::LF_VEHICLE) && dz < box.halfHeight + 0.3f)
+                    {
+                        NoteLowLight(light, box, dz);
+                        continue;
+                    }
                     // A light within its own car (headlights, tail lights) is not shadowed by it.
                     const float along = dx * box.forward[0] + dy * box.forward[1], across = dx * box.forward[1] - dy * box.forward[0];
                     if (std::abs(along) < box.halfLength + 0.5f && std::abs(across) < box.halfWidth + 0.5f && std::abs(dz) < box.halfHeight + 0.5f)
@@ -8348,6 +8361,17 @@ private:
             pDevice->SetPixelShaderConstantF(143, constants[0], 7);
             constantsOn = true;
             return true;
+        }
+
+        // For the log: lamps whose boxes were left out as they stand no higher than the roof, and the last of them.
+        static inline std::atomic<uint32_t> lowLights{0};
+        static inline rage::CLightSource lastLowLight{};
+        static inline float lastLowHeight = 0.0f;
+        static void NoteLowLight(const rage::CLightSource& light, const Box& box, float aboveMiddle)
+        {
+            lowLights.fetch_add(1, std::memory_order_relaxed);
+            lastLowLight = light;
+            lastLowHeight = aboveMiddle + box.halfHeight; // above the box's bottom
         }
 
         // Before and after the main view's lights: lights drawn for other views (reflections, mirrors) take none.
