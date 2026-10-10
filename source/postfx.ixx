@@ -8321,8 +8321,10 @@ private:
                 // The model's bounds (+0x20 least, +0x30 most, as GET_MODEL_DIMENSIONS reads them): x right, y forward, z up.
                 const auto lo = reinterpret_cast<const float*>(info + 0x20), hi = reinterpret_cast<const float*>(info + 0x30);
                 const float halfWidth = (hi[0] - lo[0]) * 0.5f, halfLength = (hi[1] - lo[1]) * 0.5f;
-                // The body stands on its wheels, so the box starts a little up, and the ground under the car takes its shadow.
-                const float height = hi[2] - lo[2], bottom = lo[2] + (std::min)(0.3f, height * 0.25f);
+                // From the wheels' bottom, so the shadow always meets the car where its contact shadow is: the ground
+                // under the car lies in the box and is shadowed whole (only a car's or ped's pixel above the box's foot
+                // escapes it, by the material IDs).
+                const float bottom = lo[2];
                 const float halfHeight = (hi[2] - bottom) * 0.5f;
                 // Cars, vans, buses and bikes; not helicopters with their rotors, nor anything broken.
                 if (!(halfWidth > 0.1f && halfWidth < 2.0f && halfLength > 0.2f && halfLength < 10.0f && halfHeight > 0.1f && halfHeight < 2.5f))

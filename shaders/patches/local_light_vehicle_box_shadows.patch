@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index a2ea1af..2cb74a6 100644
+index a2ea1af..edf2061 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 @@ -54,6 +54,10 @@
@@ -67,7 +67,7 @@ index a2ea1af..2cb74a6 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -384,4 +428,91 @@
+@@ -384,4 +428,97 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -133,6 +133,12 @@ index a2ea1af..2cb74a6 100644
 +    call l2 // how far this pixel is from the box
 +    add r20.w, r20.w, -r12.z
 +    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -161,7 +167,7 @@ index a2ea1af..2cb74a6 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index 4bd9a45..19c46b6 100644
+index 4bd9a45..52342e3 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 @@ -57,6 +57,10 @@
@@ -229,7 +235,7 @@ index 4bd9a45..19c46b6 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -394,4 +438,91 @@
+@@ -394,4 +438,97 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -295,6 +301,12 @@ index 4bd9a45..19c46b6 100644
 +    call l2 // how far this pixel is from the box
 +    add r20.w, r20.w, -r12.z
 +    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -323,7 +335,7 @@ index 4bd9a45..19c46b6 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 3fc9603..08e9953 100644
+index 3fc9603..50f9eb0 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 @@ -57,6 +57,10 @@
@@ -391,7 +403,7 @@ index 3fc9603..08e9953 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -394,4 +438,91 @@
+@@ -394,4 +438,97 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -457,6 +469,12 @@ index 3fc9603..08e9953 100644
 +    call l2 // how far this pixel is from the box
 +    add r20.w, r20.w, -r12.z
 +    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -485,7 +503,7 @@ index 3fc9603..08e9953 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 330784b..3b28a27 100644
+index 330784b..8b7f4b9 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -92,6 +92,10 @@
@@ -545,7 +563,7 @@ index 330784b..3b28a27 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -606,4 +649,91 @@
+@@ -606,4 +649,97 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -611,6 +629,12 @@ index 330784b..3b28a27 100644
 +    call l2 // how far this pixel is from the box
 +    add r20.w, r20.w, -r12.z
 +    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -639,7 +663,7 @@ index 330784b..3b28a27 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index bbd0428..1e49b4d 100644
+index bbd0428..1fc4dde 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 @@ -85,6 +85,10 @@
@@ -707,7 +731,7 @@ index bbd0428..1e49b4d 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -573,4 +617,91 @@
+@@ -573,4 +617,97 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -773,6 +797,12 @@ index bbd0428..1e49b4d 100644
 +    call l2 // how far this pixel is from the box
 +    add r20.w, r20.w, -r12.z
 +    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -801,7 +831,7 @@ index bbd0428..1e49b4d 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 4a1bc51..1831ab6 100644
+index 4a1bc51..c72c508 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -63,6 +63,10 @@
@@ -861,7 +891,7 @@ index 4a1bc51..1831ab6 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -436,4 +479,91 @@
+@@ -436,4 +479,97 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -927,6 +957,12 @@ index 4a1bc51..1831ab6 100644
 +    call l2 // how far this pixel is from the box
 +    add r20.w, r20.w, -r12.z
 +    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -955,7 +991,7 @@ index 4a1bc51..1831ab6 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 543de39..28d955f 100644
+index 543de39..9758a81 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -94,6 +94,10 @@
@@ -1015,7 +1051,7 @@ index 543de39..28d955f 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -622,4 +665,91 @@
+@@ -622,4 +665,97 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -1081,6 +1117,12 @@ index 543de39..28d955f 100644
 +    call l2 // how far this pixel is from the box
 +    add r20.w, r20.w, -r12.z
 +    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -1109,7 +1151,7 @@ index 543de39..28d955f 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 0879030..5a80bf4 100644
+index 0879030..170c819 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -58,6 +58,10 @@
@@ -1169,7 +1211,7 @@ index 0879030..5a80bf4 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -402,4 +445,91 @@
+@@ -402,4 +445,97 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -1235,6 +1277,12 @@ index 0879030..5a80bf4 100644
 +    call l2 // how far this pixel is from the box
 +    add r20.w, r20.w, -r12.z
 +    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -1263,7 +1311,7 @@ index 0879030..5a80bf4 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 36f1262..4fb0de6 100644
+index 36f1262..cd40461 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -61,6 +61,10 @@
@@ -1323,7 +1371,7 @@ index 36f1262..4fb0de6 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -411,4 +454,91 @@
+@@ -411,4 +454,97 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -1389,6 +1437,12 @@ index 36f1262..4fb0de6 100644
 +    call l2 // how far this pixel is from the box
 +    add r20.w, r20.w, -r12.z
 +    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -1417,7 +1471,7 @@ index 36f1262..4fb0de6 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 679b5e2..2ba2cea 100644
+index 679b5e2..81ef09c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -61,6 +61,10 @@
@@ -1477,7 +1531,7 @@ index 679b5e2..2ba2cea 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -413,4 +456,91 @@
+@@ -413,4 +456,97 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -1543,6 +1597,12 @@ index 679b5e2..2ba2cea 100644
 +    call l2 // how far this pixel is from the box
 +    add r20.w, r20.w, -r12.z
 +    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -1571,7 +1631,7 @@ index 679b5e2..2ba2cea 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 9721f18..b746f4a 100644
+index 9721f18..32c5cdb 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -61,6 +61,10 @@
@@ -1631,7 +1691,7 @@ index 9721f18..b746f4a 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -415,4 +458,91 @@
+@@ -415,4 +458,97 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -1697,6 +1757,12 @@ index 9721f18..b746f4a 100644
 +    call l2 // how far this pixel is from the box
 +    add r20.w, r20.w, -r12.z
 +    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
