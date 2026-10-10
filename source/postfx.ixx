@@ -8274,7 +8274,7 @@ private:
             float forward[2], halfWidth, halfHeight;
             uintptr_t vehicle;
         };
-        static constexpr int kBoxes = 160, kPerLight = 3, kLists = 3;
+        static constexpr int kBoxes = 160, kPerLight = 3, kLists = 8;
         struct List
         {
             std::atomic<uintptr_t> lights{0}; // the light list these boxes go with
@@ -8291,6 +8291,7 @@ private:
         // For the log: frames drawn with their boxes found or not, lights shaded with some.
         static inline std::atomic<uint32_t> framesMatched{0}, framesUnmatched{0}, lightsWithBoxes{0};
         static inline const List* drawn = nullptr;
+        static inline List lastFound{}; // a copy, render thread: the ring's entry may be reused while it is drawn
         static inline uintptr_t drawnFor = 0;
         static inline bool constantsOn = true;
         // The cars each lamp took last, render thread.
@@ -8408,17 +8409,26 @@ private:
             {
                 const uintptr_t list = *lightListDrawn;
                 // Looked up again once its entry has been reused for a later list too.
-                if (list != drawnFor || (drawn && drawn->lights.load(std::memory_order_acquire) != list))
+                if (list != drawnFor)
                 {
                     drawnFor = list;
-                    drawn = nullptr;
+                    const List* found = nullptr;
                     for (auto& l : lists)
                         if (l.lights.load(std::memory_order_acquire) == list)
-                            drawn = &l;
-                    (drawn ? framesMatched : framesUnmatched).fetch_add(1, std::memory_order_relaxed);
+                            found = &l;
+                    (found ? framesMatched : framesUnmatched).fetch_add(1, std::memory_order_relaxed);
+                    // A frame whose boxes were not found keeps the last ones, a frame late, rather than shading with
+                    // none: every box shadow blinked out for that frame.
+                    if (found)
+                    {
+                        lastFound.count = found->count;
+                        std::copy_n(found->boxes, found->count, lastFound.boxes);
+                        std::copy_n(found->focus, 3, lastFound.focus);
+                        drawn = &lastFound;
+                    }
                 }
                 // Which three: the nearest the light, weighed by how near the player they stand, where their shadows
-                // are seen; those the light took last frame are held at half that, so a car passing by the lamp does
+                // are seen; those the light took last frame are held at a quarter of that, so a car passing by the lamp does
                 // not push a standing one out, and its shadow from that lamp flickered. Lamps are told apart by where
                 // they stand, a quarter metre apart.
                 const uint64_t lightKey = (uint64_t(uint32_t(int32_t(std::floor(light.mPosition.x * 4.0f))) & 0x1FFFFF) << 42) |
@@ -8453,7 +8463,7 @@ private:
                     const float fx = box.centre[0] - drawn->focus[0], fy = box.centre[1] - drawn->focus[1], fz = box.centre[2] - drawn->focus[2];
                     float score = d2 * (1.0f + (fx * fx + fy * fy + fz * fz) / 400.0f);
                     if (std::find(last.begin(), last.end(), box.vehicle) != last.end())
-                        score *= 0.5f;
+                        score *= 0.25f;
                     if (used == kPerLight && score >= nearest[kPerLight - 1].first)
                         continue;
                     // A lamp no higher than the car's roof: real lamps stand above cars, but some in tunnels light from
