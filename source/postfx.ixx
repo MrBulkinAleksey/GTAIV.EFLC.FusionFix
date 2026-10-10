@@ -7016,6 +7016,12 @@ private:
                         R.VehicleBoxShadowsEnabled() ? "on" : "off", VehicleBoxShadows::lightListBuilt ? "installed" : "missing",
                         VehicleBoxShadows::framesMatched.exchange(0), VehicleBoxShadows::framesUnmatched.exchange(0), VehicleBoxShadows::lightsWithBoxes.exchange(0),
                         R.fVehicleBoxShadowLightSize, R.fVehicleBoxShadowRounding, int(R.bVehicleBoxShadowsFromCarLights));
+                {
+                    const auto& b = VehicleBoxShadows::nearestBounds;
+                    const auto& x = VehicleBoxShadows::nearestBox;
+                    log.Printf("nearest car %.1f m away: model bounds %.2f %.2f %.2f to %.2f %.2f %.2f (x right, y forward, z up); box half length %.2f, width %.2f, height %.2f, middle %.2f above its position\n",
+                            VehicleBoxShadows::nearestDistance, b[0], b[1], b[2], b[3], b[4], b[5], x[0], x[1], x[2], x[3]);
+                }
                 log.Component("CloudReflections");
                 log.Printf("clouds in reflections: %s; %u reflection map and %u water reflection skies since the last log; viewport %lu,%lu %lux%lu of a %ux%u target\n",
                         R.szCloudsReflectionStatus, R.nCloudReflectionCalls, R.nCloudWaterReflectionCalls, R.CloudReflectionViewport.X, R.CloudReflectionViewport.Y,
@@ -8180,6 +8186,8 @@ private:
         static inline const List* drawn = nullptr;
         static inline uintptr_t drawnFor = 0;
         static inline bool constantsOn = true;
+        // For the log: the nearest car's model bounds (least, most) and its box, as taken.
+        static inline float nearestBounds[6] = {}, nearestBox[4] = {}, nearestDistance = -1.0f;
 
         // Main thread: every car's box, the nearest the player first when there are more than fit.
         static void Capture()
@@ -8195,6 +8203,7 @@ private:
                 return;
             static std::array<std::pair<float, Box>, 256> found{};
             int n = 0;
+            float nearest = 1.0e30f;
             CVehicle::ForEachVehicle([&](uintptr_t vehicle)
             {
                 if (n >= int(found.size()))
@@ -8230,11 +8239,21 @@ private:
                 box.halfWidth = halfWidth;
                 box.halfHeight = halfHeight;
                 const float x = box.centre[0] - focus[0], y = box.centre[1] - focus[1], z = box.centre[2] - focus[2];
-                found[n++] = { x * x + y * y + z * z, box };
+                const float d2 = x * x + y * y + z * z;
+                if (d2 < nearest)
+                {
+                    nearest = d2;
+                    std::copy_n(lo, 3, nearestBounds);
+                    std::copy_n(hi, 3, nearestBounds + 3);
+                    nearestBox[0] = box.halfLength; nearestBox[1] = box.halfWidth; nearestBox[2] = box.halfHeight;
+                    nearestBox[3] = box.centre[2] - m[14]; // the box's middle above the car's position
+                }
+                found[n++] = { d2, box };
             });
             if (n > kBoxes)
                 std::nth_element(found.begin(), found.begin() + kBoxes, found.begin() + n,
                     [](const auto& a, const auto& b) { return a.first < b.first; });
+            nearestDistance = n ? std::sqrt(nearest) : -1.0f;
             list.count = (std::min)(n, kBoxes);
             for (int i = 0; i < list.count; ++i)
                 list.boxes[i] = found[i].second;

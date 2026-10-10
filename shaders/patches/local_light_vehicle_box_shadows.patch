@@ -1,17 +1,26 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index a2ea1af..e8cd7b5 100644
+index a2ea1af..4e0a62a 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-@@ -54,6 +54,8 @@
+@@ -54,6 +54,9 @@
      def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
 +    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
-+    def c185, 3, -2, 0, 0 // FusionFix vehicle box shadows: the smoothstep's terms
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, 0 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -298,6 +300,38 @@
+@@ -61,6 +64,7 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s13 // FusionFix GGX lights: the G-buffer's specular (_DEFERRED_GBUFFER_2_), bound by FusionFix during lighting
++    dcl_2d s11 // FusionFix vehicle box shadows: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s2
+@@ -298,6 +302,45 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -35,6 +44,13 @@ index a2ea1af..e8cd7b5 100644
 +      mul r14.y, r14.y, r14.x
 +      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
 +      add r16.xyz, c66, -r15 // and the way to the light
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
 +      mov r18, c143
 +      mov r19, c144
@@ -50,7 +66,7 @@ index a2ea1af..e8cd7b5 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -384,4 +418,63 @@
+@@ -384,4 +427,64 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -98,6 +114,7 @@ index a2ea1af..e8cd7b5 100644
 +    mul r24.z, r24.z, r24.z
 +    mul r24.z, r24.z, r24.w
 +    add r20.w, r20.w, -r12.z
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -116,19 +133,28 @@ index a2ea1af..e8cd7b5 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index 4bd9a45..954137a 100644
+index 4bd9a45..658f95d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-@@ -57,6 +57,8 @@
+@@ -57,6 +57,9 @@
      def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
 +    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
-+    def c185, 3, -2, 0, 0 // FusionFix vehicle box shadows: the smoothstep's terms
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, 0 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -308,6 +310,38 @@
+@@ -65,6 +68,7 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s13 // FusionFix GGX lights: the G-buffer's specular (_DEFERRED_GBUFFER_2_), bound by FusionFix during lighting
++    dcl_2d s11 // FusionFix vehicle box shadows: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s2
+@@ -308,6 +312,45 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -152,6 +178,13 @@ index 4bd9a45..954137a 100644
 +      mul r14.y, r14.y, r14.x
 +      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
 +      add r16.xyz, c66, -r15 // and the way to the light
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
 +      mov r18, c143
 +      mov r19, c144
@@ -167,7 +200,7 @@ index 4bd9a45..954137a 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -394,4 +428,63 @@
+@@ -394,4 +437,64 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -215,6 +248,7 @@ index 4bd9a45..954137a 100644
 +    mul r24.z, r24.z, r24.z
 +    mul r24.z, r24.z, r24.w
 +    add r20.w, r20.w, -r12.z
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -233,19 +267,28 @@ index 4bd9a45..954137a 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 3fc9603..edd9496 100644
+index 3fc9603..67a3409 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-@@ -57,6 +57,8 @@
+@@ -57,6 +57,9 @@
      def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
 +    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
-+    def c185, 3, -2, 0, 0 // FusionFix vehicle box shadows: the smoothstep's terms
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, 0 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -308,6 +310,38 @@
+@@ -65,6 +68,7 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s13 // FusionFix GGX lights: the G-buffer's specular (_DEFERRED_GBUFFER_2_), bound by FusionFix during lighting
++    dcl_2d s11 // FusionFix vehicle box shadows: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s2
+@@ -308,6 +312,45 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -269,6 +312,13 @@ index 3fc9603..edd9496 100644
 +      mul r14.y, r14.y, r14.x
 +      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
 +      add r16.xyz, c66, -r15 // and the way to the light
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
 +      mov r18, c143
 +      mov r19, c144
@@ -284,7 +334,7 @@ index 3fc9603..edd9496 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -394,4 +428,63 @@
+@@ -394,4 +437,64 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -332,6 +382,7 @@ index 3fc9603..edd9496 100644
 +    mul r24.z, r24.z, r24.z
 +    mul r24.z, r24.z, r24.w
 +    add r20.w, r20.w, -r12.z
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -350,19 +401,20 @@ index 3fc9603..edd9496 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 330784b..47713a3 100644
+index 330784b..ea7c338 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-@@ -92,6 +92,8 @@
+@@ -92,6 +92,9 @@
      def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
 +    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
-+    def c185, 3, -2, 0, 0 // FusionFix vehicle box shadows: the smoothstep's terms
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, 0 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -520,6 +522,38 @@
+@@ -520,6 +523,45 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -386,6 +438,13 @@ index 330784b..47713a3 100644
 +      mul r14.y, r14.y, r14.x
 +      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
 +      add r16.xyz, c78, -r15 // and the way to the light
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
 +      mov r18, c143
 +      mov r19, c144
@@ -401,7 +460,7 @@ index 330784b..47713a3 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -606,4 +640,63 @@
+@@ -606,4 +648,64 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -449,6 +508,7 @@ index 330784b..47713a3 100644
 +    mul r24.z, r24.z, r24.z
 +    mul r24.z, r24.z, r24.w
 +    add r20.w, r20.w, -r12.z
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -467,19 +527,28 @@ index 330784b..47713a3 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index bbd0428..bae0fb5 100644
+index bbd0428..b35eca0 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-@@ -85,6 +85,8 @@
+@@ -85,6 +85,9 @@
      def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
 +    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
-+    def c185, 3, -2, 0, 0 // FusionFix vehicle box shadows: the smoothstep's terms
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, 0 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -487,6 +489,38 @@
+@@ -93,6 +96,7 @@
+     dcl_2d s2
+     dcl_2d s14
+     dcl_2d s13 // FusionFix GGX lights: the G-buffer's specular (_DEFERRED_GBUFFER_2_), bound by FusionFix during lighting
++    dcl_2d s11 // FusionFix vehicle box shadows: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c84.zwzw
+     texld r1, r0, s2
+@@ -487,6 +491,45 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -503,6 +572,13 @@ index bbd0428..bae0fb5 100644
 +      mul r14.y, r14.y, r14.x
 +      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
 +      add r16.xyz, c78, -r15 // and the way to the light
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
 +      mov r18, c143
 +      mov r19, c144
@@ -518,7 +594,7 @@ index bbd0428..bae0fb5 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -573,4 +607,63 @@
+@@ -573,4 +616,64 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -566,6 +642,7 @@ index bbd0428..bae0fb5 100644
 +    mul r24.z, r24.z, r24.z
 +    mul r24.z, r24.z, r24.w
 +    add r20.w, r20.w, -r12.z
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -584,19 +661,20 @@ index bbd0428..bae0fb5 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 4a1bc51..c088ec4 100644
+index 4a1bc51..76ddbb0 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-@@ -63,6 +63,8 @@
+@@ -63,6 +63,9 @@
      def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
 +    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
-+    def c185, 3, -2, 0, 0 // FusionFix vehicle box shadows: the smoothstep's terms
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, 0 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -350,6 +352,38 @@
+@@ -350,6 +353,45 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -620,6 +698,13 @@ index 4a1bc51..c088ec4 100644
 +      mul r14.y, r14.y, r14.x
 +      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
 +      add r16.xyz, c72, -r15 // and the way to the light
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
 +      mov r18, c143
 +      mov r19, c144
@@ -635,7 +720,7 @@ index 4a1bc51..c088ec4 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -436,4 +470,63 @@
+@@ -436,4 +478,64 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -683,6 +768,7 @@ index 4a1bc51..c088ec4 100644
 +    mul r24.z, r24.z, r24.z
 +    mul r24.z, r24.z, r24.w
 +    add r20.w, r20.w, -r12.z
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -701,19 +787,20 @@ index 4a1bc51..c088ec4 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 543de39..b030fd0 100644
+index 543de39..00a465c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-@@ -94,6 +94,8 @@
+@@ -94,6 +94,9 @@
      def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
 +    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
-+    def c185, 3, -2, 0, 0 // FusionFix vehicle box shadows: the smoothstep's terms
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, 0 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -536,6 +538,38 @@
+@@ -536,6 +539,45 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -737,6 +824,13 @@ index 543de39..b030fd0 100644
 +      mul r14.y, r14.y, r14.x
 +      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
 +      add r16.xyz, c79, -r15 // and the way to the light
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
 +      mov r18, c143
 +      mov r19, c144
@@ -752,7 +846,7 @@ index 543de39..b030fd0 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -622,4 +656,63 @@
+@@ -622,4 +664,64 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -800,6 +894,7 @@ index 543de39..b030fd0 100644
 +    mul r24.z, r24.z, r24.z
 +    mul r24.z, r24.z, r24.w
 +    add r20.w, r20.w, -r12.z
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -818,19 +913,20 @@ index 543de39..b030fd0 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 0879030..7fe9b14 100644
+index 0879030..3b3ba35 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-@@ -58,6 +58,8 @@
+@@ -58,6 +58,9 @@
      def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
 +    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
-+    def c185, 3, -2, 0, 0 // FusionFix vehicle box shadows: the smoothstep's terms
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, 0 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -316,6 +318,38 @@
+@@ -316,6 +319,45 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -854,6 +950,13 @@ index 0879030..7fe9b14 100644
 +      mul r14.y, r14.y, r14.x
 +      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
 +      add r16.xyz, c66, -r15 // and the way to the light
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
 +      mov r18, c143
 +      mov r19, c144
@@ -869,7 +972,7 @@ index 0879030..7fe9b14 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -402,4 +436,63 @@
+@@ -402,4 +444,64 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -917,6 +1020,7 @@ index 0879030..7fe9b14 100644
 +    mul r24.z, r24.z, r24.z
 +    mul r24.z, r24.z, r24.w
 +    add r20.w, r20.w, -r12.z
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -935,19 +1039,20 @@ index 0879030..7fe9b14 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 36f1262..458dc40 100644
+index 36f1262..6fd8e8a 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-@@ -61,6 +61,8 @@
+@@ -61,6 +61,9 @@
      def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
 +    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
-+    def c185, 3, -2, 0, 0 // FusionFix vehicle box shadows: the smoothstep's terms
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, 0 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -325,6 +327,38 @@
+@@ -325,6 +328,45 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -971,6 +1076,13 @@ index 36f1262..458dc40 100644
 +      mul r14.y, r14.y, r14.x
 +      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
 +      add r16.xyz, c66, -r15 // and the way to the light
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
 +      mov r18, c143
 +      mov r19, c144
@@ -986,7 +1098,7 @@ index 36f1262..458dc40 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -411,4 +445,63 @@
+@@ -411,4 +453,64 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -1034,6 +1146,7 @@ index 36f1262..458dc40 100644
 +    mul r24.z, r24.z, r24.z
 +    mul r24.z, r24.z, r24.w
 +    add r20.w, r20.w, -r12.z
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -1052,19 +1165,20 @@ index 36f1262..458dc40 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 679b5e2..f045da0 100644
+index 679b5e2..5c8dbb3 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-@@ -61,6 +61,8 @@
+@@ -61,6 +61,9 @@
      def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
 +    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
-+    def c185, 3, -2, 0, 0 // FusionFix vehicle box shadows: the smoothstep's terms
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, 0 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -327,6 +329,38 @@
+@@ -327,6 +330,45 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -1088,6 +1202,13 @@ index 679b5e2..f045da0 100644
 +      mul r14.y, r14.y, r14.x
 +      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
 +      add r16.xyz, c66, -r15 // and the way to the light
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
 +      mov r18, c143
 +      mov r19, c144
@@ -1103,7 +1224,7 @@ index 679b5e2..f045da0 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -413,4 +447,63 @@
+@@ -413,4 +455,64 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -1151,6 +1272,7 @@ index 679b5e2..f045da0 100644
 +    mul r24.z, r24.z, r24.z
 +    mul r24.z, r24.z, r24.w
 +    add r20.w, r20.w, -r12.z
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
@@ -1169,19 +1291,20 @@ index 679b5e2..f045da0 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 9721f18..2ee9932 100644
+index 9721f18..931789c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-@@ -61,6 +61,8 @@
+@@ -61,6 +61,9 @@
      def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      defi i0, 12, 0, 0, 0
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
 +    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
-+    def c185, 3, -2, 0, 0 // FusionFix vehicle box shadows: the smoothstep's terms
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, 0 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -329,6 +331,38 @@
+@@ -329,6 +332,45 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -1205,6 +1328,13 @@ index 9721f18..2ee9932 100644
 +      mul r14.y, r14.y, r14.x
 +      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
 +      add r16.xyz, c66, -r15 // and the way to the light
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
 +      mov r18, c143
 +      mov r19, c144
@@ -1220,7 +1350,7 @@ index 9721f18..2ee9932 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -415,4 +449,63 @@
+@@ -415,4 +457,64 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -1268,6 +1398,7 @@ index 9721f18..2ee9932 100644
 +    mul r24.z, r24.z, r24.z
 +    mul r24.z, r24.z, r24.w
 +    add r20.w, r20.w, -r12.z
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
 +    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
 +    mul r17.w, r17.w, r24.z
 +    ret
