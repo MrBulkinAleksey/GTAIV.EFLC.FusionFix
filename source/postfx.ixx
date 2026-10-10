@@ -777,9 +777,9 @@ public:
     }
     float fVehicleBoxShadowLightSize = 0.5f;
     float fVehicleBoxShadowRounding = 0.3f;
-    float fVehicleBoxShadowScale[3] = { 0.9f, 0.85f, 0.9f }; // length, width, height, of the model's bounds
+    float fVehicleBoxShadowScale[3] = { 1.0f, 0.95f, 0.9f }; // length, width, height, of the model's bounds
     float fVehicleBoxShadowSelfMargin = 0.6f;
-    float fVehicleBoxShadowLowLightNarrow = 0.6f;
+    float fVehicleBoxShadowLowLightNarrow = 1.0f;
     // Car lights (headlights, tail lights) shine low and close, so a box's shadow from them spreads over the whole road
     // ahead and shows its shape; off by default, lamps only.
     bool bVehicleBoxShadowsFromCarLights = false;
@@ -1646,11 +1646,11 @@ public:
         fVehicleBoxShadowRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsRounding", 0.3f), 0.0f, 1.0f);
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 1) != 0;
-        fVehicleBoxShadowScale[0] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLength", 0.9f), 0.3f, 1.2f);
-        fVehicleBoxShadowScale[1] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsWidth", 0.85f), 0.3f, 1.2f);
+        fVehicleBoxShadowScale[0] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLength", 1.0f), 0.3f, 1.2f);
+        fVehicleBoxShadowScale[1] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsWidth", 0.95f), 0.3f, 1.2f);
         fVehicleBoxShadowScale[2] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsHeight", 0.9f), 0.3f, 1.2f);
         fVehicleBoxShadowSelfMargin = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsSelfMargin", 0.6f), 0.0f, 2.0f);
-        fVehicleBoxShadowLowLightNarrow = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLowLightNarrow", 0.6f), 0.2f, 1.0f);
+        fVehicleBoxShadowLowLightNarrow = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLowLightNarrow", 1.0f), 0.2f, 1.0f);
         fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
         fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 50.0f);
         fLightsGGX = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGX", 1.0f), 0.0f, 4.0f);
@@ -8270,12 +8270,14 @@ private:
         {
             float centre[3], halfLength;
             float forward[2], halfWidth, halfHeight;
+            uintptr_t vehicle;
         };
         static constexpr int kBoxes = 160, kPerLight = 3, kLists = 3;
         struct List
         {
             std::atomic<uintptr_t> lights{0}; // the light list these boxes go with
             int count = 0;
+            float focus[3] = {};              // the player, where the boxes' shadows are seen
             Box boxes[kBoxes];
         };
         static inline List lists[kLists]{};
@@ -8289,6 +8291,8 @@ private:
         static inline const List* drawn = nullptr;
         static inline uintptr_t drawnFor = 0;
         static inline bool constantsOn = true;
+        // The cars each lamp took last, render thread.
+        static inline std::unordered_map<uint64_t, std::array<uintptr_t, kPerLight>> held;
         // For the log: the nearest car's model bounds (least, most) and its box, as taken.
         static inline float nearestBounds[6] = {}, nearestBox[4] = {}, nearestDistance = -1.0f;
 
@@ -8343,6 +8347,7 @@ private:
                 box.halfLength = halfLength;
                 box.halfWidth = halfWidth;
                 box.halfHeight = halfHeight;
+                box.vehicle = vehicle;
                 const float x = box.centre[0] - focus[0], y = box.centre[1] - focus[1], z = box.centre[2] - focus[2];
                 const float d2 = x * x + y * y + z * z;
                 if (d2 < nearest)
@@ -8359,6 +8364,7 @@ private:
                 std::nth_element(found.begin(), found.begin() + kBoxes, found.begin() + n,
                     [](const auto& a, const auto& b) { return a.first < b.first; });
             nearestDistance = n ? std::sqrt(nearest) : -1.0f;
+            std::copy_n(focus, 3, list.focus);
             list.count = (std::min)(n, kBoxes);
             for (int i = 0; i < list.count; ++i)
                 list.boxes[i] = found[i].second;
@@ -8401,6 +8407,16 @@ private:
                             drawn = &l;
                     (drawn ? framesMatched : framesUnmatched).fetch_add(1, std::memory_order_relaxed);
                 }
+                // Which three: the nearest the light, weighed by how near the player they stand, where their shadows
+                // are seen; those the light took last frame are held at half that, so a car passing by the lamp does
+                // not push a standing one out, and its shadow from that lamp flickered. Lamps are told apart by where
+                // they stand, a quarter metre apart.
+                const uint64_t lightKey = (uint64_t(uint32_t(int32_t(std::floor(light.mPosition.x * 4.0f))) & 0x1FFFFF) << 42) |
+                    (uint64_t(uint32_t(int32_t(std::floor(light.mPosition.y * 4.0f))) & 0x1FFFFF) << 21) |
+                    uint64_t(uint32_t(int32_t(std::floor(light.mPosition.z * 4.0f))) & 0x1FFFFF);
+                if (held.size() > 4096)
+                    held.clear();
+                auto& last = held[lightKey];
                 std::pair<float, const Box*> nearest[kPerLight] = {};
                 for (int i = 0; drawn && i < drawn->count; ++i)
                 {
@@ -8408,7 +8424,13 @@ private:
                     const float dx = light.mPosition.x - box.centre[0], dy = light.mPosition.y - box.centre[1], dz = light.mPosition.z - box.centre[2];
                     const float reach = light.mRadius + box.halfLength + box.halfWidth + box.halfHeight;
                     const float d2 = dx * dx + dy * dy + dz * dz;
-                    if (d2 > reach * reach || (used == kPerLight && d2 >= nearest[kPerLight - 1].first))
+                    if (d2 > reach * reach)
+                        continue;
+                    const float fx = box.centre[0] - drawn->focus[0], fy = box.centre[1] - drawn->focus[1], fz = box.centre[2] - drawn->focus[2];
+                    float score = d2 * (1.0f + (fx * fx + fy * fy + fz * fz) / 400.0f);
+                    if (std::find(last.begin(), last.end(), box.vehicle) != last.end())
+                        score *= 0.5f;
+                    if (used == kPerLight && score >= nearest[kPerLight - 1].first)
                         continue;
                     // A lamp no higher than the car's roof: real lamps stand above cars, but some in tunnels light from
                     // the road or walls with no lamp there, and a box's shadow from them spread over the whole road.
@@ -8422,10 +8444,13 @@ private:
                     if (std::abs(along) < box.halfLength + 0.5f && std::abs(across) < box.halfWidth + 0.5f && std::abs(dz) < box.halfHeight + 0.5f)
                         continue;
                     int at = used < kPerLight ? used++ : kPerLight - 1;
-                    for (; at > 0 && nearest[at - 1].first > d2; --at)
+                    for (; at > 0 && nearest[at - 1].first > score; --at)
                         nearest[at] = nearest[at - 1];
-                    nearest[at] = { d2, &box };
+                    nearest[at] = { score, &box };
                 }
+                last = {};
+                for (int i = 0; i < used; ++i)
+                    last[i] = nearest[i].second->vehicle;
                 // The model's bounds take in mirrors, aerials and bumpers, and the roof's height runs over the bonnet and
                 // boot too: the box is that much smaller, its bottom kept where it is.
                 const float rounding = R.fVehicleBoxShadowRounding;
