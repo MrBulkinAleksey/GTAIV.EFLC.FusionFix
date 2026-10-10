@@ -985,6 +985,9 @@ public:
     bool bSoftParticles = true;
     float fSoftParticlesDistance = 1.5f;
     bool bSoftParticlesBound = false;
+    // The picture as if lit by light of this temperature in kelvin, its brightness kept; 6500 leaves it as the
+    // game draws it (shaders/patches/postfx_color_temperature.patch, c187).
+    float fColorTemperature = 6500.0f;
 
     struct
     {
@@ -1639,6 +1642,7 @@ public:
         fLightsGGXMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXMax", 2.0f), 0.1f, 16.0f);
         fAmbientOcclusionFillLights = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionFillLights", 1.0f), 0.0f, 1.0f);
         bSoftParticles = iniReader.ReadInteger("POSTFX", "SoftParticles", 1) != 0;
+        fColorTemperature = std::clamp(iniReader.ReadFloat("POSTFX", "ColorTemperature", 6500.0f), 1700.0f, 20000.0f);
         fSoftParticlesDistance = std::clamp(iniReader.ReadFloat("POSTFX", "SoftParticlesDistance", 1.5f), 0.1f, 10.0f);
         fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 1.5f), 0.0f, 8.0f);
@@ -7024,6 +7028,8 @@ private:
     {
         UnbindGlassReflections();
         UnbindSoftParticles();
+        if (auto pDevice = rage::grcDevice::GetD3DDevice())
+            SetColorTemperature(pDevice);
         bInsteadDrawPrimitivePostFX = true;
         hbDrawCallPostFX.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitivePostFX = false;
@@ -8795,6 +8801,44 @@ public:
             R.bSoftParticlesBound = true;
         }
         pDevice->SetPixelShaderConstantF(186, c186, 1);
+    }
+
+    // The colour of a black body at this temperature in linear sRGB, Y 1: Kang et al.'s fit of the Planckian
+    // locus (1667 K to 25000 K) to CIE xy, then XYZ to sRGB.
+    static void BlackBodyColor(float kelvin, float rgb[3])
+    {
+        const double t = kelvin, t2 = t * t, t3 = t2 * t;
+        const double x = t <= 4000.0 ? -0.2661239e9 / t3 - 0.2343589e6 / t2 + 0.8776956e3 / t + 0.179910
+                                     : -3.0258469e9 / t3 + 2.1070379e6 / t2 + 0.2226347e3 / t + 0.240390;
+        const double x2 = x * x, x3 = x2 * x;
+        const double y = t <= 2222.0 ? -1.1063814 * x3 - 1.34811020 * x2 + 2.18555832 * x - 0.20219683
+                       : t <= 4000.0 ? -0.9549476 * x3 - 1.37418593 * x2 + 2.09137015 * x - 0.16748867
+                                     : 3.0817580 * x3 - 5.87338670 * x2 + 3.75112997 * x - 0.37001483;
+        const double X = x / y, Y = 1.0, Z = (1.0 - x - y) / y;
+        rgb[0] = float(3.2406 * X - 1.5372 * Y - 0.4986 * Z);
+        rgb[1] = float(-0.9689 * X + 1.8758 * Y + 0.0415 * Z);
+        rgb[2] = float(0.0557 * X - 0.2040 * Y + 1.0570 * Z);
+    }
+
+    // c187 for the game's post processing: the light's colour over 6500 K's, scaled back to the same luminance,
+    // to the 1/2.2 power since the shader applies it to gamma space colour, less 1 (0 changes nothing).
+    static void SetColorTemperature(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        float c187[4] = {};
+        if (std::fabs(R.fColorTemperature - 6500.0f) > 1.0f)
+        {
+            float light[3], white[3];
+            BlackBodyColor(R.fColorTemperature, light);
+            BlackBodyColor(6500.0f, white);
+            float w[3];
+            for (int i = 0; i < 3; ++i)
+                w[i] = (std::max)(light[i], 0.0f) / white[i];
+            const float luminance = 0.2126f * w[0] + 0.7152f * w[1] + 0.0722f * w[2];
+            for (int i = 0; i < 3; ++i)
+                c187[i] = std::pow(w[i] / luminance, 1.0f / 2.2f) - 1.0f;
+        }
+        pDevice->SetPixelShaderConstantF(187, c187, 1);
     }
 
     // Before post processing, so particles of other views (reflections, mirrors) keep their hard edges.
