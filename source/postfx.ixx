@@ -777,6 +777,7 @@ public:
     float fVehicleBoxShadowLightSize = 0.5f;
     float fVehicleBoxShadowRounding = 0.3f;
     float fVehicleBoxShadowScale[3] = { 0.9f, 0.85f, 0.8f }; // length, width, height, of the model's bounds
+    float fVehicleBoxShadowSelfMargin = 0.6f;
     // Car lights (headlights, tail lights) shine low and close, so a box's shadow from them spreads over the whole road
     // ahead and shows its shape; off by default, lamps only.
     bool bVehicleBoxShadowsFromCarLights = false;
@@ -1646,6 +1647,7 @@ public:
         fVehicleBoxShadowScale[0] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLength", 0.9f), 0.3f, 1.2f);
         fVehicleBoxShadowScale[1] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsWidth", 0.85f), 0.3f, 1.2f);
         fVehicleBoxShadowScale[2] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsHeight", 0.8f), 0.3f, 1.2f);
+        fVehicleBoxShadowSelfMargin = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsSelfMargin", 0.6f), 0.0f, 2.0f);
         fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
         fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 50.0f);
         fLightsGGX = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGX", 1.0f), 0.0f, 4.0f);
@@ -7020,11 +7022,11 @@ private:
                         R.szGlintsStatus, R.HeadlightGlintsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrHeadlightGlintsEffect),
                         R.nGlintsLastLights, R.GlintsLastIntensity[0], R.GlintsLastIntensity[1], R.GlintsLastCone[0], R.GlintsLastCone[1]);
                 log.Component("VehicleBoxShadows");
-                log.Printf("vehicle box shadows: %s, hook %s; since the last log %u frames drawn with their boxes, %u without, %u lights shaded with boxes; light size %.2f, rounding %.2f, from car lights %d, with slots %d, size %.2f %.2f %.2f of the bounds\n",
+                log.Printf("vehicle box shadows: %s, hook %s; since the last log %u frames drawn with their boxes, %u without, %u lights shaded with boxes; light size %.2f, rounding %.2f, from car lights %d, with slots %d, size %.2f %.2f %.2f of the bounds, self margin %.2f\n",
                         R.VehicleBoxShadowsEnabled() ? "on" : "off", VehicleBoxShadows::lightListBuilt ? "installed" : "missing",
                         VehicleBoxShadows::framesMatched.exchange(0), VehicleBoxShadows::framesUnmatched.exchange(0), VehicleBoxShadows::lightsWithBoxes.exchange(0),
                         R.fVehicleBoxShadowLightSize, R.fVehicleBoxShadowRounding, int(R.bVehicleBoxShadowsFromCarLights), int(R.bVehicleBoxShadowsWithSlots),
-                        R.fVehicleBoxShadowScale[0], R.fVehicleBoxShadowScale[1], R.fVehicleBoxShadowScale[2]);
+                        R.fVehicleBoxShadowScale[0], R.fVehicleBoxShadowScale[1], R.fVehicleBoxShadowScale[2], R.fVehicleBoxShadowSelfMargin);
                 {
                     const auto& l = VehicleBoxShadows::lastLowLight;
                     log.Printf("%u times a lamp no higher than a car's roof was left without its box; the last at %.1f %.1f %.1f, %.2f m above the box's bottom: type %d, flags 0x%X, radius %.1f, intensity %.2f, shadow key 0x%08X, cache %d\n",
@@ -8369,7 +8371,9 @@ private:
             }
             constants[6][0] = R.fVehicleBoxShadowLightSize;
             constants[6][1] = R.fVehicleBoxShadowRounding;
-            constants[6][2] = 0.15f; // a pixel nearer a box than this is on the car, which its box does not shadow
+            // A car's or ped's pixel nearer a box than this is on that car or in it, which its box does not shadow: the
+            // box is smaller than the car and rounded, so roof, bonnet and spoiler stand out of it.
+            constants[6][2] = R.fVehicleBoxShadowSelfMargin;
             constants[6][3] = 1.0f;
             pDevice->SetPixelShaderConstantF(143, constants[0], 7);
             constantsOn = true;
