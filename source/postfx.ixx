@@ -780,6 +780,7 @@ public:
     float fVehicleBoxShadowScale[3] = { 1.0f, 0.95f, 0.9f }; // length, width, height, of the model's bounds
     float fVehicleBoxShadowSelfMargin = 0.6f;
     float fVehicleBoxShadowLowLightNarrow = 1.0f;
+    float fVehicleBoxShadowLowLightHeight = 0.6f;
     // Car lights (headlights, tail lights) shine low and close, so a box's shadow from them spreads over the whole road
     // ahead and shows its shape; off by default, lamps only.
     bool bVehicleBoxShadowsFromCarLights = false;
@@ -1653,6 +1654,7 @@ public:
         fVehicleBoxShadowScale[2] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsHeight", 0.9f), 0.3f, 1.2f);
         fVehicleBoxShadowSelfMargin = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsSelfMargin", 0.6f), 0.0f, 2.0f);
         fVehicleBoxShadowLowLightNarrow = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLowLightNarrow", 1.0f), 0.2f, 1.0f);
+        fVehicleBoxShadowLowLightHeight = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLowLightHeight", 0.6f), 0.2f, 1.0f);
         fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
         fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 50.0f);
         fLightsGGX = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGX", 1.0f), 0.0f, 4.0f);
@@ -8492,23 +8494,27 @@ private:
                 for (int i = 0; i < used; ++i)
                 {
                     const auto& box = *nearest[i].second;
-                    const float halfHeight = box.halfHeight * scale[2];
-                    // The lower the light, the longer the shadow, and the plainer its box's square shape: across the way
-                    // the light comes, the box narrows down to VehicleBoxShadowsLowLightNarrow of itself (the length for a
-                    // light to the side, the width for one ahead or behind); a light overhead keeps it whole.
-                    float along = 1.0f, across = 1.0f;
+                    // The lower the light, the longer the shadow, and the plainer its box's square shape. The box's top
+                    // comes down to VehicleBoxShadowsLowLightHeight of its height, which shortens the shadow while its
+                    // foot keeps the car's size, where the contact shadow is; across the way the light comes it may also
+                    // narrow to VehicleBoxShadowsLowLightNarrow (the length for a light to the side, the width for one
+                    // ahead or behind). A light overhead keeps it whole.
+                    float along = 1.0f, across = 1.0f, lower = 1.0f;
                     {
                         const float dx = light.mPosition.x - box.centre[0], dy = light.mPosition.y - box.centre[1], dz = light.mPosition.z - box.centre[2];
                         const float flat = std::sqrt(dx * dx + dy * dy), d = std::sqrt(flat * flat + dz * dz);
                         if (flat > 0.01f && d > 0.01f)
                         {
                             const float t = std::clamp((dz / d - 0.3f) / 0.6f, 0.0f, 1.0f);
-                            const float narrow = 1.0f - (1.0f - R.fVehicleBoxShadowLowLightNarrow) * (1.0f - t * t * (3.0f - 2.0f * t));
+                            const float low = 1.0f - t * t * (3.0f - 2.0f * t); // 0 overhead, 1 at 17 degrees and below
+                            const float narrow = 1.0f - (1.0f - R.fVehicleBoxShadowLowLightNarrow) * low;
                             const float a = std::abs(dx * box.forward[0] + dy * box.forward[1]) / flat; // 1: ahead or behind
                             along = 1.0f + (narrow - 1.0f) * (1.0f - a);
                             across = 1.0f + (narrow - 1.0f) * a;
+                            lower = 1.0f - (1.0f - R.fVehicleBoxShadowLowLightHeight) * low;
                         }
                     }
+                    const float halfHeight = box.halfHeight * scale[2] * lower;
                     float* c = constants[i * 2];
                     c[0] = box.centre[0]; c[1] = box.centre[1]; c[2] = box.centre[2] - (box.halfHeight - halfHeight);
                     c[3] = (std::max)(box.halfLength * scale[0] * along - rounding, 0.05f);
