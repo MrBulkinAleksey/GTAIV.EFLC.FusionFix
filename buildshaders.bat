@@ -38,6 +38,15 @@ for /R "%shaders_path%" %%a in (*.fxc.xml) do (
 )
 cd ../..
 
+rem The game reads a shader file into a buffer of 0x2C000 bytes and does not check its length: deferred_lighting.fxc
+rem at 180494 bytes broke the game's heap, which stopped it with SMPA50 when the world was torn down on exit.
+for /R "%shaders_path%" %%a in (*.fxc) do (
+    if %%~za GTR 180224 (
+        echo ::error title=Shader size::%%~nxa is %%~za bytes, more than the 180224 the game reads
+        exit 1
+    )
+)
+
 for /R "%shaders_path%" %%i in (*.fxc) do (
 echo D | xcopy "%%i" "%win32_30%" /K /H /Y
 )
