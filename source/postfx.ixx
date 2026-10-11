@@ -792,6 +792,7 @@ public:
     uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300;
     int32_t nVehicleBoxShadowsPerLamp = 3; // cars a lamp shadows as boxes, up to five; each costs its lit pixels about as much again
     bool bVehicleBoxShadowsLive = true;
+    bool bVehicleBoxShadowsLog = false; // VehicleBoxShadowsLog, see VehicleBoxShadows::Trace
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
@@ -1653,6 +1654,7 @@ public:
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
         bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 1) != 0;
+        bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;
         nVehicleBoxShadowsPerLamp = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerLamp", 3), 1, 5);
         nVehicleBoxShadowFadeInMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeIn", 300), 0, 5000));
         nVehicleBoxShadowFadeOutMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeOut", 300), 0, 5000));
@@ -8294,6 +8296,7 @@ private:
             uint32_t sequence = 0;            // which hand over: the game's three lists come round again every third
             int count = 0;
             float focus[3] = {};              // the player, where the boxes' shadows are seen
+            uintptr_t watched = 0;            // the car nearest the player, which VehicleBoxShadowsLog follows
             Box boxes[kBoxes];
         };
         static inline List lists[kLists]{};
@@ -8323,6 +8326,8 @@ private:
             int count = 0;
             float slotStrength = 0.0f;               // all its boxes, fading out while its own map shows the cars
             DWORD lastTick = 0;
+            // VehicleBoxShadowsLog: what it last did with the watched car
+            bool hadWatched = false, wasMapped = false, watchedLow = false;
         };
         static inline std::unordered_map<uint64_t, LampState> held;
         // For the log: the nearest car's model bounds (least, most) and its box, as taken.
@@ -8346,6 +8351,7 @@ private:
             int n = 0;
             const auto pool = CVehicle::GetCheckedVehiclePool();
             float nearest = 1.0e30f;
+            list.watched = 0;
             CVehicle::ForEachVehicle([&](uintptr_t vehicle)
             {
                 if (n >= int(found.size()))
@@ -8399,6 +8405,7 @@ private:
                 if (d2 < nearest)
                 {
                     nearest = d2;
+                    list.watched = vehicle;
                     std::copy_n(lo, 3, nearestBounds);
                     std::copy_n(hi, 3, nearestBounds + 3);
                     nearestBox[0] = box.halfLength; nearestBox[1] = box.halfWidth; nearestBox[2] = box.halfHeight;
@@ -8431,27 +8438,118 @@ private:
             shHandOver = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&) { Capture(); });
         }
 
+        // VehicleBoxShadowsLog: what happens to the shadows of the car nearest the player, to catch a flicker, written to
+        // GTAIV.EFLC.FusionFix.VehicleBoxShadows.log only as it changes: a lamp taking the car or leaving it (with its
+        // rank among the cars the lamp took and the box's strength), a lamp taking or losing its shadow slot, a lamp
+        // left out as no higher than the roof, a frame drawn without its own boxes; each second how many lamps shade
+        // the car. Ctrl+Shift+F7 or F12 put a mark where you saw something. Render thread; written every quarter second.
+        static inline std::string traceText;
+        static inline DWORD traceFlushed = 0, traceSecond = 0;
+        static inline uint32_t traceStaleWatched = 0, traceLampsOnWatched = 0, traceLampsSeen = 0;
+        static inline float traceStrongest = 0.0f;
+        static inline bool traceMarkDown = false, traceShotDown = false;
+        static void Trace(const char* format, ...)
+        {
+            char line[512];
+            va_list args;
+            va_start(args, format);
+            vsnprintf(line, sizeof(line), format, args);
+            va_end(args);
+            traceText += std::format("t={} ", GetTickCount());
+            traceText += line;
+            traceText += '\n';
+        }
+        // Once a frame, as a new light list is drawn.
+        static void TraceFrame()
+        {
+            const DWORD now = GetTickCount();
+            const bool mark = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) && (GetAsyncKeyState(VK_F7) & 0x8000);
+            const bool shot = (GetAsyncKeyState(VK_F12) & 0x8000) != 0;
+            if (mark && !traceMarkDown)
+                Trace("M mark (Ctrl+Shift+F7)");
+            if (shot && !traceShotDown)
+                Trace("M mark (screenshot)");
+            traceMarkDown = mark;
+            traceShotDown = shot;
+            if (now - traceSecond >= 1000)
+            {
+                if (traceSecond)
+                    Trace("S in the last second: %u lamp draws shaded the watched car (strongest %.2f), %u lamps with boxes, %u times its box stood where it was handed over",
+                        traceLampsOnWatched, traceStrongest, traceLampsSeen, traceStaleWatched);
+                traceSecond = now;
+                traceLampsOnWatched = traceLampsSeen = traceStaleWatched = 0;
+                traceStrongest = 0.0f;
+            }
+            if (!traceText.empty() && now - traceFlushed >= 250)
+            {
+                FusionLog::WriteText("VehicleBoxShadows", "Trace", traceText);
+                traceText.clear();
+                traceFlushed = now;
+            }
+        }
+        // After a lamp has chosen: its changes for the watched car.
+        static void TraceLamp(const rage::CLightSource& light, LampState& state, bool mapped, bool low, int taken,
+            const std::pair<float, const Box*> (&nearest)[kPerLight])
+        {
+            const auto watched = drawn->watched;
+            int rank = -1;
+            for (int i = 0; i < taken; ++i)
+                if (nearest[i].second->vehicle == watched)
+                    rank = i;
+            float strength = 0.0f, distance = -1.0f;
+            for (int i = 0; i < state.count; ++i)
+                if (state.boxes[i].box.vehicle == watched)
+                {
+                    strength = state.boxes[i].strength;
+                    const auto& c = state.boxes[i].box.centre;
+                    distance = std::sqrt((light.mPosition.x - c[0]) * (light.mPosition.x - c[0]) +
+                        (light.mPosition.y - c[1]) * (light.mPosition.y - c[1]) + (light.mPosition.z - c[2]) * (light.mPosition.z - c[2]));
+                }
+            ++traceLampsSeen;
+            const bool has = strength > 0.0f && state.slotStrength > 0.0f;
+            if (has)
+            {
+                ++traceLampsOnWatched;
+                traceStrongest = (std::max)(traceStrongest, strength * state.slotStrength);
+            }
+            const auto where = std::format("lamp at {:.1f} {:.1f} {:.1f} (flags 0x{:X}, radius {:.1f})", light.mPosition.x, light.mPosition.y,
+                light.mPosition.z, light.mFlags, light.mRadius);
+            if (rank >= 0 && !state.hadWatched)
+                Trace("+ %s took the car, %d of %d, %.1f m off, strength %.2f, lamp strength %.2f", where.c_str(), rank + 1, taken, distance, strength, state.slotStrength);
+            else if (rank < 0 && state.hadWatched)
+                Trace("- %s left the car, %s, %d taken, fading %.2f", where.c_str(), low ? "no higher than its roof" : taken ? "others nearer" : "out of reach",
+                    taken, strength);
+            if (mapped != state.wasMapped && (rank >= 0 || state.hadWatched))
+                Trace("%c %s %s its shadow slot, lamp strength %.2f", mapped ? 'P' : 'U', where.c_str(), mapped ? "took" : "lost", state.slotStrength);
+            if (low != state.watchedLow)
+                Trace("L %s %s", where.c_str(), low ? "is no higher than the car's roof, left out" : "is above the car's roof again");
+            state.hadWatched = rank >= 0;
+            state.wasMapped = mapped;
+            state.watchedLow = low;
+        }
+
         // VehicleBoxShadowsLive: the cars are drawn where they stand when the render thread draws them, which can be
         // ahead of where they stood when the light list was handed over, and the box shadows lagged the moving cars.
         // The box takes the car's matrix now, while its place in the pool still holds the same car.
-        static void Refresh(Box& box)
+        static bool Refresh(Box& box)
         {
             const auto pool = CVehicle::GetCheckedVehiclePool();
             if (!pool || box.slot < 0 || box.slot >= pool->m_nSize || pool->m_aFlags[box.slot] != box.flags ||
                 uintptr_t(pool->m_aStorage) + uintptr_t(box.slot) * pool->m_nStorageSize != box.vehicle)
-                return;
+                return false;
             const float* m = CEntity::GetMatrix(box.vehicle);
             if (!m)
-                return;
+                return false;
             float centre[3];
             for (int i = 0; i < 3; ++i)
                 centre[i] = m[12 + i] + m[i] * box.local[0] + m[4 + i] * box.local[1] + m[8 + i] * box.local[2];
             const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
             if (!(flat > 0.5f) || !std::isfinite(centre[0]) || !std::isfinite(centre[1]) || !std::isfinite(centre[2]))
-                return;
+                return false;
             std::copy_n(centre, 3, box.centre);
             box.forward[0] = m[4] / flat;
             box.forward[1] = m[5] / flat;
+            return true;
         }
 
         // Render thread, for the light about to be drawn: up to three cars its light reaches, the nearest the light first,
@@ -8480,6 +8578,12 @@ private:
                         if (l.lights.load(std::memory_order_acquire) == list && (!found || int32_t(l.sequence - found->sequence) > 0))
                             found = &l;
                     (found ? framesMatched : framesUnmatched).fetch_add(1, std::memory_order_relaxed);
+                    if (R.bVehicleBoxShadowsLog)
+                    {
+                        TraceFrame();
+                        if (!found)
+                            Trace("frame without its own boxes, drawn with the last ones");
+                    }
                     // A frame whose boxes were not found keeps the last ones, a frame late, rather than shading with
                     // none: every box shadow blinked out for that frame.
                     if (found)
@@ -8487,6 +8591,7 @@ private:
                         lastFound.count = found->count;
                         std::copy_n(found->boxes, found->count, lastFound.boxes);
                         std::copy_n(found->focus, 3, lastFound.focus);
+                        lastFound.watched = found->watched;
                         drawn = &lastFound;
                     }
                 }
@@ -8522,6 +8627,7 @@ private:
                     state.slotStrength = (std::min)(state.slotStrength + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
                 strength = state.slotStrength;
                 int taken = 0;
+                bool watchedLow = false;
                 const int perLamp = std::clamp(R.nVehicleBoxShadowsPerLamp, 1, kPerLight);
                 std::pair<float, const Box*> nearest[kPerLight] = {};
                 for (int i = 0; drawn && i < drawn->count; ++i)
@@ -8543,6 +8649,8 @@ private:
                     if (!(light.mFlags & rage::LF_VEHICLE) && dz < box.halfHeight + 0.3f)
                     {
                         NoteLowLight(light, box, dz);
+                        if (box.vehicle == drawn->watched)
+                            watchedLow = true;
                         continue;
                     }
                     // A light within its own car (headlights, tail lights) is not shadowed by it.
@@ -8584,14 +8692,16 @@ private:
                 state.boxes = next;
                 state.count = nextCount;
                 used = strength > 0.0f ? nextCount : 0;
+                if (R.bVehicleBoxShadowsLog && drawn && drawn->watched)
+                    TraceLamp(light, state, mapHasCars, watchedLow, taken, nearest);
                 // The model's bounds take in mirrors, aerials and bumpers, and the roof's height runs over the bonnet and
                 // boot too: the box is that much smaller, its bottom kept where it is.
                 const auto& scale = R.fVehicleBoxShadowScale;
                 for (int i = 0; i < used; ++i)
                 {
                     Box box = state.boxes[i].box;
-                    if (R.bVehicleBoxShadowsLive)
-                        Refresh(box);
+                    if (R.bVehicleBoxShadowsLive && !Refresh(box) && drawn && box.vehicle == drawn->watched)
+                        ++traceStaleWatched;
                     boxStrength[i] = state.boxes[i].strength;
                     // The lower the light, the longer the shadow, and the plainer its box's square shape. The box's top
                     // comes down to VehicleBoxShadowsLowLightHeight of its height, which shortens the shadow while its
