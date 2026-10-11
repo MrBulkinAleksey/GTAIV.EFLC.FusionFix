@@ -789,6 +789,7 @@ public:
     // shadow under a car does not jump between the two; WithSlots keeps them under its real shadow for good.
     bool bVehicleBoxShadowsWithSlots = false;
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
+    uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300;
     bool bVehicleBoxShadowsLive = true;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
@@ -1651,6 +1652,8 @@ public:
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
         bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 1) != 0;
+        nVehicleBoxShadowFadeInMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeIn", 300), 0, 5000));
+        nVehicleBoxShadowFadeOutMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeOut", 300), 0, 5000));
         nVehicleBoxShadowSlotFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsSlotFade", 600), 0, 5000));
         fVehicleBoxShadowScale[0] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLength", 1.0f), 0.3f, 1.2f);
         fVehicleBoxShadowScale[1] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsWidth", 0.95f), 0.3f, 1.2f);
@@ -8305,11 +8308,19 @@ private:
         static inline bool constantsOn = true;
         // The cars each lamp took last, render thread.
         // What each lamp took last, render thread: its cars, and since when its own map shows them.
+        struct Fading
+        {
+            Box box{};
+            float strength = 0.0f;
+            bool chosen = false;
+        };
         struct LampState
         {
-            std::array<uintptr_t, kPerLight> cars{};
-            bool mapped = false;
-            DWORD since = 0;
+            std::array<uintptr_t, kPerLight> cars{}; // the cars it took last frame
+            std::array<Fading, kPerLight> boxes{};   // the boxes it draws, fading in (taken) or out (left)
+            int count = 0;
+            float slotStrength = 0.0f;               // all its boxes, fading out while its own map shows the cars
+            DWORD lastTick = 0;
         };
         static inline std::unordered_map<uint64_t, LampState> held;
         // For the log: the nearest car's model bounds (least, most) and its box, as taken.
@@ -8449,6 +8460,7 @@ private:
             float constants[7][4] = {};
             int used = 0;
             float strength = 0.0f, rounding = R.fVehicleBoxShadowRounding;
+            float boxStrength[kPerLight] = {};
             if (R.VehicleBoxShadowsEnabled() && lightListDrawn &&
                 (R.bVehicleBoxShadowsFromCarLights || !(light.mFlags & rage::LF_VEHICLE)) &&
                 (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
@@ -8486,21 +8498,29 @@ private:
                     held.clear();
                 auto& state = held[lightKey];
                 auto& last = state.cars;
-                // A lamp whose own map shows the cars (a shadow slot) has the real shadow: its boxes fade out over
-                // VehicleBoxShadowsSlotFade after it takes the slot, so the shadow does not jump; when it loses the
-                // slot they are back at once, before the real one is gone. VehicleBoxShadowsWithSlots keeps them.
-                strength = 1.0f;
-                if (mapHasCars)
+                // VehicleBoxShadowsFadeIn / FadeOut: a box comes in and goes out over that many milliseconds, a car
+                // taken by the lamp or left, and a lamp just seen; 0 at once. Its strength rides in c143.w.
+                const DWORD now = GetTickCount();
+                const bool fresh = !state.lastTick || now - state.lastTick > 1000;
+                const float dt = fresh ? 0.0f : float(now - state.lastTick);
+                state.lastTick = now;
+                const auto step = [dt](uint32_t ms) { return ms ? dt / float(ms) : 1.0f; };
+                if (fresh)
                 {
-                    if (!state.mapped)
-                        state.since = GetTickCount();
-                    if (!R.bVehicleBoxShadowsWithSlots)
-                        strength = R.nVehicleBoxShadowSlotFadeMs ?
-                            1.0f - float(GetTickCount() - state.since) / float(R.nVehicleBoxShadowSlotFadeMs) : 0.0f;
+                    state.count = 0;
+                    state.slotStrength = R.nVehicleBoxShadowFadeInMs ? 0.0f : 1.0f;
                 }
-                state.mapped = mapHasCars;
+                // A lamp whose own map shows the cars (a shadow slot) has the real shadow: its boxes fade out over
+                // VehicleBoxShadowsSlotFade after it takes the slot, so the shadow does not jump, and come back over
+                // FadeIn when it loses it. VehicleBoxShadowsWithSlots keeps them.
+                if (mapHasCars && !R.bVehicleBoxShadowsWithSlots)
+                    state.slotStrength = (std::max)(state.slotStrength - step(R.nVehicleBoxShadowSlotFadeMs), 0.0f);
+                else
+                    state.slotStrength = (std::min)(state.slotStrength + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
+                strength = state.slotStrength;
+                int taken = 0;
                 std::pair<float, const Box*> nearest[kPerLight] = {};
-                for (int i = 0; drawn && strength > 0.0f && i < drawn->count; ++i)
+                for (int i = 0; drawn && i < drawn->count; ++i)
                 {
                     const auto& box = drawn->boxes[i];
                     const float dx = light.mPosition.x - box.centre[0], dy = light.mPosition.y - box.centre[1], dz = light.mPosition.z - box.centre[2];
@@ -8512,7 +8532,7 @@ private:
                     float score = d2 * (1.0f + (fx * fx + fy * fy + fz * fz) / 400.0f);
                     if (std::find(last.begin(), last.end(), box.vehicle) != last.end())
                         score *= 0.25f;
-                    if (used == kPerLight && score >= nearest[kPerLight - 1].first)
+                    if (taken == kPerLight && score >= nearest[kPerLight - 1].first)
                         continue;
                     // A lamp no higher than the car's roof: real lamps stand above cars, but some in tunnels light from
                     // the road or walls with no lamp there, and a box's shadow from them spread over the whole road.
@@ -8525,22 +8545,50 @@ private:
                     const float along = dx * box.forward[0] + dy * box.forward[1], across = dx * box.forward[1] - dy * box.forward[0];
                     if (std::abs(along) < box.halfLength + 0.5f && std::abs(across) < box.halfWidth + 0.5f && std::abs(dz) < box.halfHeight + 0.5f)
                         continue;
-                    int at = used < kPerLight ? used++ : kPerLight - 1;
+                    int at = taken < kPerLight ? taken++ : kPerLight - 1;
                     for (; at > 0 && nearest[at - 1].first > score; --at)
                         nearest[at] = nearest[at - 1];
                     nearest[at] = { score, &box };
                 }
                 last = {};
-                for (int i = 0; i < used; ++i)
+                for (int i = 0; i < taken; ++i)
                     last[i] = nearest[i].second->vehicle;
+                // The cars taken now come in, up to full strength, with their boxes as handed over now; those left fade
+                // out where they stood last, while there is room among the three.
+                std::array<Fading, kPerLight> next{};
+                int nextCount = 0;
+                for (int i = 0; i < taken; ++i)
+                {
+                    auto& f = next[nextCount++];
+                    f.box = *nearest[i].second;
+                    f.chosen = true;
+                    f.strength = step(R.nVehicleBoxShadowFadeInMs);
+                    for (int j = 0; j < state.count; ++j)
+                        if (state.boxes[j].box.vehicle == f.box.vehicle)
+                            f.strength += state.boxes[j].strength;
+                    f.strength = (std::min)(f.strength, 1.0f);
+                }
+                for (int j = 0; j < state.count && nextCount < kPerLight; ++j)
+                {
+                    const auto& old = state.boxes[j];
+                    if (std::find(last.begin(), last.end(), old.box.vehicle) != last.end())
+                        continue;
+                    const float left = old.strength - step(R.nVehicleBoxShadowFadeOutMs);
+                    if (left > 0.0f)
+                        next[nextCount++] = { old.box, left, false };
+                }
+                state.boxes = next;
+                state.count = nextCount;
+                used = strength > 0.0f ? nextCount : 0;
                 // The model's bounds take in mirrors, aerials and bumpers, and the roof's height runs over the bonnet and
                 // boot too: the box is that much smaller, its bottom kept where it is.
                 const auto& scale = R.fVehicleBoxShadowScale;
                 for (int i = 0; i < used; ++i)
                 {
-                    Box box = *nearest[i].second;
+                    Box box = state.boxes[i].box;
                     if (R.bVehicleBoxShadowsLive)
                         Refresh(box);
+                    boxStrength[i] = state.boxes[i].strength;
                     // The lower the light, the longer the shadow, and the plainer its box's square shape. The box's top
                     // comes down to VehicleBoxShadowsLowLightHeight of its height, which shortens the shadow while its
                     // foot keeps the car's size, where the contact shadow is; across the way the light comes it may also
@@ -8584,6 +8632,8 @@ private:
                     c[3] -= rounding;
                     c[6] -= rounding;
                     c[7] -= rounding;
+                    // The strength in fifteenths, sixteen apart above the half length (which stays under 16)
+                    c[3] = (std::min)(c[3], 15.9f) + 16.0f * std::round(std::clamp(boxStrength[i], 0.0f, 1.0f) * 15.0f);
                 }
             }
             if (!used)
