@@ -967,6 +967,14 @@ public:
                 }
             }
 
+            // A building (props too) or type 5 entity given a drawable reference also goes on the list at 0x1173750
+            // (CE 0xaf4778 -> 0xa8a420), 12-byte nodes, 10000 of them (CE 0xa8abd0). With more references than that the
+            // list ran full at x3, and the game dropped the model of the first entity on it (CE 0xa8a4a9): that frees a
+            // drawable reference, which takes the spinlock at 0x15f8b40 that CE 0xaf4710 still held, and the game hung
+            // for good. As many nodes as references, from the game's heap
+            if (auto list = hook::pattern("68 10 27 00 00 83 C1 08 E8 ? ? ? ? C3"); !list.empty())
+                injector::WriteMemory(list.get_first(1), uint32_t(nDrawableRefs), true);
+
             // The entities a frame draws go to one buffer of 8-byte entries (CE 0xae5ca0 returns its start, 0x159b768,
             // room for 9692; CE 0xae2520 adds one without a check). The sector scans stop taking entities once it holds
             // 8192 (cmp ecx, 0x10000 at CE 0xae927b and 0xae941b), and whatever the scans meet after that is not drawn
