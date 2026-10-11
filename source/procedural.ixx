@@ -1088,13 +1088,17 @@ public:
                 pCamera = *pattern.get_first<float*>(12);
 
             // Caps on props with a matrix of their own: the matrices come from a pool that evicts the
-            // least used when full, so they're raised less than the records
-            pattern = hook::pattern("81 3D ? ? ? ? 00 02 00 00 7C ? 57 B9");
-            if (!pattern.empty())
-                injector::WriteMemory(pattern.get_first(6), uint32_t(nMatrixLimit), true);
-            pattern = hook::pattern("81 F9 00 02 00 00 0F 8D ? ? ? ? 8B 4F 08 E8");
-            if (!pattern.empty())
-                injector::WriteMemory(pattern.get_first(2), uint32_t(nMatrixLimit), true);
+            // least used when full, so they're raised less than the records. Both or neither: another mod that
+            // raised them first (grass fix with RenderedObjectCapacity) leaves its own value, and the log says so
+            auto limit1 = hook::pattern("81 3D ? ? ? ? 00 02 00 00 7C ? 57 B9");
+            auto limit2 = hook::pattern("81 F9 00 02 00 00 0F 8D ? ? ? ? 8B 4F 08 E8");
+            if (!limit1.empty() && !limit2.empty())
+            {
+                injector::WriteMemory(limit1.get_first(6), uint32_t(nMatrixLimit), true);
+                injector::WriteMemory(limit2.get_first(2), uint32_t(nMatrixLimit), true);
+            }
+            else
+                nMatrixLimit = 0;
 
             // 2dfx props of one entity: count by density, and no more than the 64 candidates there are room for.
             // At cvttss2si edi, xmm1: xmm1 is the count, [esp+0x5c] the candidates of this entity so far
@@ -1228,7 +1232,7 @@ public:
 
             Log("Settings", std::format("ground triangles {} (game 512), records {} (game 512), matrix limit {}, matrix pool {} (game 7000), drawable references {} (game 13000), render cache {} (game 9692, scans to 8192), density x{:.2f}, "
                 "distance x{:.2f}, in reflections {}, spawns an update {}",
-                nGroundTriangles, Records(), nMatrixLimit, nMatrixPool, nDrawableRefs, nRenderCache, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
+                nGroundTriangles, Records(), nMatrixLimit ? std::to_string(nMatrixLimit) : "not set (already changed by another mod)", nMatrixPool, nDrawableRefs, nRenderCache, fDensity, fDistance, bInReflections ? "yes" : "no", nSpawnsPerUpdate));
         };
 
         // With ProceduralLog, every 30 s while the generator runs: its time, how many props, and what hit a limit
