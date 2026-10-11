@@ -41,12 +41,13 @@ import common;
 // Social Club, Steam and overlays are never stopped: their own protection may end the game when one is.
 namespace Profiler
 {
-    constexpr uint32_t StackCopy = 1024;    // bytes of a stopped thread's stack looked at for return addresses
+    constexpr uint32_t StackCopy = 4096;    // bytes of a stopped thread's stack looked at for return addresses; 1 KB
+                                            // lost the callers of functions with large frames (an _alloca of 768)
     constexpr uint32_t MaxFrames = 12;
     constexpr uint32_t TopFunctions = 20;
 
     int32_t nRate = 0;                      // samples a second of each sampled thread, 0: off
-    int32_t nThreads = 6;                   // how many of the busiest threads are sampled
+    int32_t nThreads = 4;                   // how many of the busiest threads are sampled
     int32_t nInterval = 30;                 // seconds a report
     int32_t nSpikeMs = 50;                  // a frame longer than this is reported on its own, 0: off
     std::atomic<DWORD> nMainThread = 0;      // the thread of CGame::Process, from its first frame
@@ -82,6 +83,7 @@ namespace Profiler
         std::vector<std::pair<uintptr_t, std::string>> exports; // sorted by address
     };
     std::vector<Module> modules;
+    std::vector<std::pair<uintptr_t, uintptr_t>> codeRanges;   // every module's executable ranges, sorted
 
     void LoadExports(Module& module)
     {
@@ -165,6 +167,10 @@ namespace Profiler
             modules.push_back(std::move(module));
         }
         std::sort(modules.begin(), modules.end(), [](auto& a, auto& b) { return a.base < b.base; });
+        codeRanges.clear();
+        for (auto& module : modules)
+            codeRanges.insert(codeRanges.end(), module.code.begin(), module.code.end());
+        std::sort(codeRanges.begin(), codeRanges.end());
     }
 
     const Module* FindModule(uintptr_t address)
@@ -187,13 +193,25 @@ namespace Profiler
         return nullptr;
     }
 
+    // The executable range address is in, of any module: most values on a stack are not code, so this is what
+    // the stack's scan asks first, by a binary search over all ranges
+    const std::pair<uintptr_t, uintptr_t>* CodeRange(uintptr_t address)
+    {
+        if (codeRanges.empty() || address < codeRanges.front().first || address >= codeRanges.back().second)
+            return nullptr;
+        auto it = std::upper_bound(codeRanges.begin(), codeRanges.end(), address, [](uintptr_t a, const auto& r) { return a < r.first; });
+        if (it == codeRanges.begin())
+            return nullptr;
+        --it;
+        return address < it->second ? &*it : nullptr;
+    }
+
     // Whether the instruction before address is a call: 1 for E8 rel32, 2 for FF /2 as call reg, [reg], [reg+disp8],
     // [reg+disp32], [disp32] and with a SIB byte, 0 for none
     bool IsIndirectCall(const uint8_t* p);
     int CallBefore(uintptr_t address)
     {
-        auto module = FindModule(address);
-        auto code = FindCode(module, address);
+        auto code = CodeRange(address);
         if (!code || address < code->first + 8)
             return 0;
         auto p = (const uint8_t*)address;
@@ -223,7 +241,9 @@ namespace Profiler
     }
 
     // Where the function holding address starts: functions are 16-byte aligned with int3 padding before them
-    // (or follow a ret right at their start), so the nearest such boundary below it, within 64 KB
+    // (or follow a ret right at their start), so the nearest such boundary below it, within 64 KB. In other modules a
+    // nearer export below wins: the system call stubs of ntdll follow each other with no padding, and all of them
+    // were named after the first
     std::unordered_map<uintptr_t, uintptr_t> functionStarts;
     uintptr_t FunctionStart(uintptr_t address)
     {
@@ -233,16 +253,26 @@ namespace Profiler
         auto module = FindModule(address);
         if (auto code = FindCode(module, address))
         {
+            uintptr_t found = 0;
             uintptr_t floor = std::max(code->first + 1, address > 0x10000 ? address - 0x10000 : 0);
             for (uintptr_t a = address & ~uintptr_t(15); a >= floor; a -= 16)
             {
                 auto before = *(const uint8_t*)(a - 1);
                 if (before == 0xCC || before == 0xC3)
                 {
-                    start = a;
+                    found = a;
                     break;
                 }
             }
+            if (!module->game)
+            {
+                auto it = std::upper_bound(module->exports.begin(), module->exports.end(), address,
+                    [](uintptr_t a, const std::pair<uintptr_t, std::string>& e) { return a < e.first; });
+                if (it != module->exports.begin() && std::prev(it)->first >= code->first && std::prev(it)->first > found)
+                    found = std::prev(it)->first;
+            }
+            if (found)
+                start = found;
         }
         functionStarts.emplace(address, start);
         return start;
@@ -839,7 +869,7 @@ public:
         {
             CIniReader iniReader("");
             nRate = std::clamp(iniReader.ReadInteger("MISC", "Profiler", 0), 0, 4000);
-            nThreads = std::clamp(iniReader.ReadInteger("MISC", "ProfilerThreads", 6), 1, 32);
+            nThreads = std::clamp(iniReader.ReadInteger("MISC", "ProfilerThreads", 4), 1, 32);
             nInterval = std::clamp(iniReader.ReadInteger("MISC", "ProfilerInterval", 30), 5, 600);
             nSpikeMs = std::clamp(iniReader.ReadInteger("MISC", "ProfilerSpikeMs", 50), 0, 2000);
             if (!nRate)
