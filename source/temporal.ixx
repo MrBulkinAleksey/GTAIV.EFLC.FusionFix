@@ -2238,6 +2238,40 @@ export namespace TemporalAA
         return Temporal::MotionFrame == SceneFrame && Temporal::MotionRT;
     }
 
+    // Render thread, after the G-buffer pass: the world matrix this frame's G-buffer drew the entity with, in CEntity's
+    // layout (right, forward, up, position rows). Of its draws, the one standing nearest `near` (the entity's position
+    // as known), within `reach` metres. False when object motion vectors are off or the entity was not drawn.
+    bool DrawnWorldMatrix(void* entity, const float near[3], float reach, float out[16])
+    {
+        // Swapped at the G-buffer's end: the draws just made are the "previous" ones until the next scene
+        auto it = Temporal::EntitiesPrevious.find(entity);
+        if (it == Temporal::EntitiesPrevious.end())
+            return false;
+        float best = reach * reach;
+        bool found = false;
+        for (auto& draw : it->second.Draws)
+        {
+            const float* w = draw.World;
+            // The registers hold the matrix either as it is or transposed: the translation is in the last row or column
+            const bool rows = std::abs(w[12]) + std::abs(w[13]) + std::abs(w[14]) >= std::abs(w[3]) + std::abs(w[7]) + std::abs(w[11]);
+            float m[16];
+            for (int r = 0; r < 4; ++r)
+                for (int c = 0; c < 4; ++c)
+                    m[r * 4 + c] = rows ? w[r * 4 + c] : w[c * 4 + r];
+            if (!std::isfinite(m[12]) || !std::isfinite(m[13]) || !std::isfinite(m[14]))
+                continue;
+            const float dx = m[12] - near[0], dy = m[13] - near[1], dz = m[14] - near[2];
+            const float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < best)
+            {
+                best = d2;
+                std::copy_n(m, 16, out);
+                found = true;
+            }
+        }
+        return found;
+    }
+
     IDirect3DTexture9* GetMotionVectors()
     {
         return Temporal::MotionRT ? Temporal::MotionRT->mD3DTexture : nullptr;

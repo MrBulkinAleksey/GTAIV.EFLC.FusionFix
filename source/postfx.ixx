@@ -8651,7 +8651,7 @@ private:
         // the car. Ctrl+Shift+F7 or F12 put a mark where you saw something. Render thread; written every quarter second.
         static inline std::string traceText;
         static inline DWORD traceFlushed = 0, traceSecond = 0;
-        static inline uint32_t traceStaleWatched = 0, traceLampsOnWatched = 0, traceLampsSeen = 0;
+        static inline uint32_t traceStaleWatched = 0, traceLampsOnWatched = 0, traceLampsSeen = 0, traceDrawnWatched = 0, traceLeadWatched = 0;
         static inline float traceStrongest = 0.0f;
         static inline bool traceMarkDown = false, traceShotDown = false;
         static void Trace(const char* format, ...)
@@ -8680,10 +8680,10 @@ private:
             if (now - traceSecond >= 1000)
             {
                 if (traceSecond)
-                    Trace("S in the last second: %u lamp draws shaded the watched car (strongest %.2f), %u lamps with boxes, %u times its box stood where it was handed over",
-                        traceLampsOnWatched, traceStrongest, traceLampsSeen, traceStaleWatched);
+                    Trace("S in the last second: %u lamp draws shaded the watched car (strongest %.2f), %u lamps with boxes, %u times its box stood where it was handed over, %u where it was drawn, %u moved ahead by its speed",
+                        traceLampsOnWatched, traceStrongest, traceLampsSeen, traceStaleWatched, traceDrawnWatched, traceLeadWatched);
                 traceSecond = now;
-                traceLampsOnWatched = traceLampsSeen = traceStaleWatched = 0;
+                traceLampsOnWatched = traceLampsSeen = traceStaleWatched = traceDrawnWatched = traceLeadWatched = 0;
                 traceStrongest = 0.0f;
             }
             if (!traceText.empty() && now - traceFlushed >= 250)
@@ -8732,6 +8732,38 @@ private:
             state.hadWatched = rank >= 0;
             state.wasMapped = mapped;
             state.watchedLow = low;
+        }
+
+        // The car where this frame's G-buffer drew it: object motion vectors record each draw's world matrix, and the
+        // lights are drawn after the G-buffer, so the box stands exactly where the car and its contact shadow are.
+        // Handed over earlier and moved ahead by the car's speed, the box ran ahead of and behind the car by turns, as
+        // the game moves cars in steps of its own, and the shadow's front and back flickered.
+        static bool FromDrawn(Box& box)
+        {
+            // The car's own position from the box: its right is its forward turned a quarter
+            const float right[2] = { box.forward[1], -box.forward[0] };
+            const float near[3] = { box.centre[0] - right[0] * box.local[0] - box.forward[0] * box.local[1],
+                                    box.centre[1] - right[1] * box.local[0] - box.forward[1] * box.local[1],
+                                    box.centre[2] - box.local[2] };
+            float m[16];
+            // Within a metre, and facing the car's way: wheels and doors are drawn with their own matrices
+            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), near, 1.0f, m))
+                return false;
+            const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
+            if (!(flat > 0.5f))
+                return false;
+            const float fx = m[4] / flat, fy = m[5] / flat;
+            if (fx * box.forward[0] + fy * box.forward[1] < 0.9f)
+                return false;
+            float centre[3];
+            for (int i = 0; i < 3; ++i)
+                centre[i] = m[12 + i] + m[i] * box.local[0] + m[4 + i] * box.local[1] + m[8 + i] * box.local[2];
+            if (!std::isfinite(centre[0]) || !std::isfinite(centre[1]) || !std::isfinite(centre[2]))
+                return false;
+            std::copy_n(centre, 3, box.centre);
+            box.forward[0] = fx;
+            box.forward[1] = fy;
+            return true;
         }
 
         // VehicleBoxShadowsLive: the cars are drawn where they stand when the render thread draws them, which can be
@@ -8932,13 +8964,21 @@ private:
                         if (!Refresh(box) && drawn && box.vehicle == drawn->watched)
                             ++traceStaleWatched;
                     }
+                    else if (drawn && FromDrawn(box))
+                    {
+                        if (box.vehicle == drawn->watched)
+                            ++traceDrawnWatched;
+                    }
                     else if (drawn)
                     {
-                        // The lights are drawn a frame after the cars stood where the boxes were taken: ahead by the
-                        // car's own speed, so the shadow neither lags nor jerks as a read of the moving car did.
+                        // Without object motion vectors: the lights are drawn a frame after the cars stood where the
+                        // boxes were taken, ahead by the car's own speed, so the shadow neither lags nor jerks as a
+                        // read of the moving car did.
                         const float lead = R.fVehicleBoxShadowLeadFrames * (std::min)(drawn->frameSeconds, 0.1f);
                         for (int k = 0; k < 3; ++k)
                             box.centre[k] += box.velocity[k] * lead;
+                        if (box.vehicle == drawn->watched)
+                            ++traceLeadWatched;
                     }
                     boxStrength[i] = state.boxes[i].strength;
                     // The lower the light, the longer the shadow, and the plainer its box's square shape. The box's top
