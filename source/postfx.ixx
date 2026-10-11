@@ -777,6 +777,7 @@ public:
     }
     float fVehicleBoxShadowLightSize = 0.5f;
     float fVehicleBoxShadowRounding = 0.3f;
+    float fVehicleBoxShadowEndRounding = 0.4f; // metres the box's front and back draw in at the sides, like a car's nose
     float fVehicleBoxShadowScale[3] = { 1.0f, 0.95f, 0.9f }; // length, width, height, of the model's bounds
     // How far a box's shadow follows the light: 1 away from it, 0 straight down under the car whatever the light's way.
     float fVehicleBoxShadowFollowLight = 1.0f;
@@ -1650,7 +1651,8 @@ public:
         fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
         fLocalContactShadowUnshadowed = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsWithoutShadowMap", 0.0f), 0.0f, 1.0f);
         fVehicleBoxShadowLightSize = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLightSize", 0.5f), 0.0f, 4.0f);
-        fVehicleBoxShadowRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsRounding", 0.3f), 0.0f, 1.0f);
+        fVehicleBoxShadowRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsRounding", 0.3f), 0.0f, 0.99f);
+        fVehicleBoxShadowEndRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsEndRounding", 0.4f), 0.0f, 2.0f);
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
         bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 1) != 0;
@@ -8767,7 +8769,8 @@ private:
             }
             auto& lamp = constants[kPerLight * 2];
             lamp[0] = R.fVehicleBoxShadowLightSize;
-            lamp[1] = rounding;
+            // The ends' rounding in 5 cm steps, two apart above the edges' (which stays under 1)
+            lamp[1] = (std::min)(rounding, 0.99f) + 2.0f * std::round(std::clamp(R.fVehicleBoxShadowEndRounding, 0.0f, 2.0f) / 0.05f);
             lamp[2] = R.fVehicleBoxShadowFollowLight;
             lamp[3] = (std::min)(strength, 1.0f);
             pDevice->SetPixelShaderConstantF(143, constants[0], 6);

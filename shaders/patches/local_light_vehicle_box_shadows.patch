@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 330784b..91a9595 100644
+index 330784b..3afe171 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -92,6 +92,12 @@
@@ -15,7 +15,7 @@ index 330784b..91a9595 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -520,6 +526,66 @@
+@@ -520,6 +526,72 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -43,6 +43,12 @@ index 330784b..91a9595 100644
 +      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
 +      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
 +      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
 +      mad r17.x, r17.x, c185.z, c185.w
 +      frc r17.x, r17.x
 +      mad r17.x, r17.x, c186.x, c186.y
@@ -82,7 +88,7 @@ index 330784b..91a9595 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -606,4 +672,102 @@
+@@ -606,4 +678,108 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -174,6 +180,12 @@ index 330784b..91a9595 100644
 +    rcp r25.x, r25.x
 +    rcp r25.y, r25.y
 +    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
 +    add r20.xyz, r20_abs, -r23
 +    max r20.w, r20.x, r20.y
 +    max r20.w, r20.w, r20.z
@@ -187,7 +199,7 @@ index 330784b..91a9595 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 4a1bc51..b50d404 100644
+index 4a1bc51..636b384 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -63,6 +63,12 @@
@@ -203,7 +215,7 @@ index 4a1bc51..b50d404 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -350,6 +356,66 @@
+@@ -350,6 +356,72 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -231,6 +243,12 @@ index 4a1bc51..b50d404 100644
 +      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
 +      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
 +      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
 +      mad r17.x, r17.x, c185.z, c185.w
 +      frc r17.x, r17.x
 +      mad r17.x, r17.x, c186.x, c186.y
@@ -270,7 +288,7 @@ index 4a1bc51..b50d404 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -436,4 +502,102 @@
+@@ -436,4 +508,108 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -362,6 +380,12 @@ index 4a1bc51..b50d404 100644
 +    rcp r25.x, r25.x
 +    rcp r25.y, r25.y
 +    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
 +    add r20.xyz, r20_abs, -r23
 +    max r20.w, r20.x, r20.y
 +    max r20.w, r20.w, r20.z
@@ -375,7 +399,7 @@ index 4a1bc51..b50d404 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 543de39..c48aa40 100644
+index 543de39..8fd08fa 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -94,6 +94,12 @@
@@ -391,7 +415,7 @@ index 543de39..c48aa40 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -536,6 +542,66 @@
+@@ -536,6 +542,72 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -419,6 +443,12 @@ index 543de39..c48aa40 100644
 +      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
 +      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
 +      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
 +      mad r17.x, r17.x, c185.z, c185.w
 +      frc r17.x, r17.x
 +      mad r17.x, r17.x, c186.x, c186.y
@@ -458,7 +488,7 @@ index 543de39..c48aa40 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -622,4 +688,102 @@
+@@ -622,4 +694,108 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -550,6 +580,12 @@ index 543de39..c48aa40 100644
 +    rcp r25.x, r25.x
 +    rcp r25.y, r25.y
 +    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
 +    add r20.xyz, r20_abs, -r23
 +    max r20.w, r20.x, r20.y
 +    max r20.w, r20.w, r20.z
@@ -563,7 +599,7 @@ index 543de39..c48aa40 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 0879030..530d7b8 100644
+index 0879030..d870f1c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -58,6 +58,12 @@
@@ -579,7 +615,7 @@ index 0879030..530d7b8 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -316,6 +322,66 @@
+@@ -316,6 +322,72 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -607,6 +643,12 @@ index 0879030..530d7b8 100644
 +      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
 +      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
 +      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
 +      mad r17.x, r17.x, c185.z, c185.w
 +      frc r17.x, r17.x
 +      mad r17.x, r17.x, c186.x, c186.y
@@ -646,7 +688,7 @@ index 0879030..530d7b8 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -402,4 +468,102 @@
+@@ -402,4 +474,108 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -738,6 +780,12 @@ index 0879030..530d7b8 100644
 +    rcp r25.x, r25.x
 +    rcp r25.y, r25.y
 +    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
 +    add r20.xyz, r20_abs, -r23
 +    max r20.w, r20.x, r20.y
 +    max r20.w, r20.w, r20.z
@@ -751,7 +799,7 @@ index 0879030..530d7b8 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 36f1262..4554a51 100644
+index 36f1262..2544974 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -61,6 +61,12 @@
@@ -767,7 +815,7 @@ index 36f1262..4554a51 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -325,6 +331,66 @@
+@@ -325,6 +331,72 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -795,6 +843,12 @@ index 36f1262..4554a51 100644
 +      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
 +      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
 +      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
 +      mad r17.x, r17.x, c185.z, c185.w
 +      frc r17.x, r17.x
 +      mad r17.x, r17.x, c186.x, c186.y
@@ -834,7 +888,7 @@ index 36f1262..4554a51 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -411,4 +477,102 @@
+@@ -411,4 +483,108 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -926,6 +980,12 @@ index 36f1262..4554a51 100644
 +    rcp r25.x, r25.x
 +    rcp r25.y, r25.y
 +    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
 +    add r20.xyz, r20_abs, -r23
 +    max r20.w, r20.x, r20.y
 +    max r20.w, r20.w, r20.z
@@ -939,7 +999,7 @@ index 36f1262..4554a51 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 679b5e2..4113676 100644
+index 679b5e2..5a24f6e 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -61,6 +61,12 @@
@@ -955,7 +1015,7 @@ index 679b5e2..4113676 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -327,6 +333,66 @@
+@@ -327,6 +333,72 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -983,6 +1043,12 @@ index 679b5e2..4113676 100644
 +      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
 +      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
 +      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
 +      mad r17.x, r17.x, c185.z, c185.w
 +      frc r17.x, r17.x
 +      mad r17.x, r17.x, c186.x, c186.y
@@ -1022,7 +1088,7 @@ index 679b5e2..4113676 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -413,4 +479,102 @@
+@@ -413,4 +485,108 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -1114,6 +1180,12 @@ index 679b5e2..4113676 100644
 +    rcp r25.x, r25.x
 +    rcp r25.y, r25.y
 +    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
 +    add r20.xyz, r20_abs, -r23
 +    max r20.w, r20.x, r20.y
 +    max r20.w, r20.w, r20.z
@@ -1127,7 +1199,7 @@ index 679b5e2..4113676 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 9721f18..2822842 100644
+index 9721f18..c529504 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -61,6 +61,12 @@
@@ -1143,7 +1215,7 @@ index 9721f18..2822842 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -329,6 +335,66 @@
+@@ -329,6 +335,72 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -1171,6 +1243,12 @@ index 9721f18..2822842 100644
 +      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
 +      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
 +      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
 +      mad r17.x, r17.x, c185.z, c185.w
 +      frc r17.x, r17.x
 +      mad r17.x, r17.x, c186.x, c186.y
@@ -1210,7 +1288,7 @@ index 9721f18..2822842 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -415,4 +481,102 @@
+@@ -415,4 +487,108 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -1302,6 +1380,12 @@ index 9721f18..2822842 100644
 +    rcp r25.x, r25.x
 +    rcp r25.y, r25.y
 +    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
 +    add r20.xyz, r20_abs, -r23
 +    max r20.w, r20.x, r20.y
 +    max r20.w, r20.w, r20.z
