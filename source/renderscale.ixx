@@ -119,6 +119,14 @@ namespace
             return;
         fScale = DesiredScale();
         bScaleDecided = true;
+        // What the scale was decided from: a scale decided before the upscaler's answer or the settings had to be
+        // put right with a device reset, which in the menu made the next loading much longer
+        static auto antialiasing = FusionFixSettings.GetRef("PREF_ANTIALIASING");
+        static auto quality = FusionFixSettings.GetRef("PREF_UPSCALER_QUALITY");
+        Log("scale %.3f decided: antialiasing %d, quality %d, upscaler %s, FSR %s, DLSS %s, thread %lu", fScale,
+            antialiasing ? antialiasing->get() : -1, quality ? quality->get() : -1, Upscaler::IsSettled() ? "settled" : "starting",
+            Upscaler::IsAvailable(Upscaler::Backend::FSR) ? "yes" : "no", Upscaler::IsAvailable(Upscaler::Backend::DLSS) ? "yes" : "no",
+            GetCurrentThreadId());
     }
 
     uint32_t Scaled(uint32_t size)
