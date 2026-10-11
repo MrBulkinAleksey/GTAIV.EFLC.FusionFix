@@ -2146,10 +2146,13 @@ public:
                 case FusionFixSettings.AntialiasingText.eTAA:
                     // resolved by Fusion Fix post processing
                     return GetD3DX9_43DLL() != nullptr;
+                // While the helper starts they count as there, as for the render scale: moved to TAA meanwhile, the
+                // scale was decided at 1.0 and put right with a device reset in the menu once the helper answered,
+                // which made the next loading much longer
                 case FusionFixSettings.AntialiasingText.eDLAA:
-                    return Upscaler::IsAvailable(Upscaler::Backend::DLSS);
+                    return Upscaler::MayBeAvailable(Upscaler::Backend::DLSS);
                 case FusionFixSettings.AntialiasingText.eFSR:
-                    return Upscaler::IsAvailable(Upscaler::Backend::FSR);
+                    return Upscaler::MayBeAvailable(Upscaler::Backend::FSR);
                 default:
                     return true;
                 }
