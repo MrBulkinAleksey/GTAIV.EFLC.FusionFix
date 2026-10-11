@@ -474,11 +474,6 @@ public:
                 {
                     if (!PlayerShadowAllocation::Install(allocationMode == 2))
                         OutputDebugStringW(L"FusionFix experimental shadows: allocation adapter unavailable; original engine selection retained.\n");
-                    else
-                    {
-                        PlayerShadowAllocation::cacheWithCarsInside = iniReader.ReadInteger("SHADOWS", "CacheWithCarsInside", 0) != 0;
-                        PlayerShadowAllocation::InstallCacheWithCars(iniReader.ReadInteger("SHADOWS", "CacheWithCars", 0) != 0);
-                    }
                 }
                 // After the allocation adapter, which checks the selection's bytes this hooks.
                 HeadlightEnhancement::InstallShadowOrigin(

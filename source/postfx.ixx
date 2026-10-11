@@ -9109,9 +9109,7 @@ private:
     // [0x1036780]; buffer [0x1174794]; a cached map where (buffer * 16 + cache index) * 0x100 + 0x119d1d0 is set;
     // a dynamic one in the 7 keys at 0x119fc08 + buffer * 0x880, 0x110 apart. Without the layout, by the flags alone
     static inline uintptr_t ShadowLookupBase = 0;
-    // Only a dynamic slot counts. A cached map holds the static world only; with CacheWithCars it holds cars too, but
-    // it is redrawn by turns, so a car that just drove under the lamp is not in it yet, and its contact shadow stood
-    // alone under street lamps all the same.
+    // Only a dynamic slot counts: a cached map holds the static world only.
     static bool HasShadowMap(const rage::CLightSource& light)
     {
         if (!(light.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW)))
