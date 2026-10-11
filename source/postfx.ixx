@@ -9166,12 +9166,17 @@ private:
             // the box's shadow under it had faded in, and stayed after it had faded out, a blink behind the car. Only
             // VehicleBoxShadowsContact of it: its sharp edge along the car's own outline did not meet the box's softer,
             // rounder shadow.
+            // A light inside that boxes a car gives it up as the boxes come in too: tunnel lamps are such lights, and
+            // a tunnel counts as a room scene.
             const float unshadowed = R.fLocalContactShadowUnshadowed;
-            const float fromBoxes = (std::min)(boxed, 1.0f) * R.fVehicleBoxShadowContact;
+            const float box = (std::min)(boxed, 1.0f);
+            const float fromBoxes = box * R.fVehicleBoxShadowContact;
             const float intensity = (light.mFlags & 0x200) ? 0.0f
-                : unshadowed >= 1.0f || insideOnly || mapped
+                : unshadowed >= 1.0f || mapped
                     ? R.fLocalContactShadowIntensity
-                    : R.fLocalContactShadowIntensity * (unshadowed + (1.0f - unshadowed) * fromBoxes);
+                    : insideOnly
+                        ? R.fLocalContactShadowIntensity * (1.0f - box * (1.0f - R.fVehicleBoxShadowContact))
+                        : R.fLocalContactShadowIntensity * (unshadowed + (1.0f - unshadowed) * fromBoxes);
             const bool off = intensity <= 0.0f;
             if (!off && intensity != R.fLocalContactLightIntensity)
             {
