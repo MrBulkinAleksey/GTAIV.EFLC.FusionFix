@@ -779,7 +779,8 @@ public:
         return !p || p->get() != 0;
     }
     float fVehicleBoxShadowLightSize = 0.5f;
-    float fVehicleBoxShadowRounding = 0.3f;
+    float fVehicleBoxShadowRounding = 0.2f;
+    float fVehicleBoxShadowContact = 0.0f;  // VehicleBoxShadowsContact
     float fVehicleBoxShadowEndRounding = 0.4f; // metres the box's front and back draw in at the sides, like a car's nose
     float fVehicleBoxShadowScale[3] = { 1.0f, 0.95f, 0.9f }; // length, width, height, of the model's bounds
     // How far a box's shadow follows the light: 1 away from it, 0 straight down under the car whatever the light's way.
@@ -1763,6 +1764,7 @@ public:
         fLocalContactShadowUnshadowed = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsWithoutShadowMap", 0.0f), 0.0f, 1.0f);
         fVehicleBoxShadowLightSize = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLightSize", 0.5f), 0.0f, 4.0f);
         fVehicleBoxShadowRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsRounding", 0.2f), 0.0f, 0.99f);
+        fVehicleBoxShadowContact = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsContact", 0.0f), 0.0f, 1.0f);
         fVehicleBoxShadowEndRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsEndRounding", 0.3f), 0.0f, 2.0f);
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
@@ -9161,12 +9163,15 @@ private:
             const bool insideOnly = R.bInteriorScene && (light.mFlags & 0x60) == 0x20 &&
                 !(light.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW));
             // With boxes it comes in and goes out with them: at full at once, its frame showed round the car before
-            // the box's shadow under it had faded in, and stayed after it had faded out, a blink behind the car.
+            // the box's shadow under it had faded in, and stayed after it had faded out, a blink behind the car. Only
+            // VehicleBoxShadowsContact of it: its sharp edge along the car's own outline did not meet the box's softer,
+            // rounder shadow.
             const float unshadowed = R.fLocalContactShadowUnshadowed;
+            const float fromBoxes = (std::min)(boxed, 1.0f) * R.fVehicleBoxShadowContact;
             const float intensity = (light.mFlags & 0x200) ? 0.0f
                 : unshadowed >= 1.0f || insideOnly || mapped
                     ? R.fLocalContactShadowIntensity
-                    : R.fLocalContactShadowIntensity * (unshadowed + (1.0f - unshadowed) * (std::min)(boxed, 1.0f));
+                    : R.fLocalContactShadowIntensity * (unshadowed + (1.0f - unshadowed) * fromBoxes);
             const bool off = intensity <= 0.0f;
             if (!off && intensity != R.fLocalContactLightIntensity)
             {
