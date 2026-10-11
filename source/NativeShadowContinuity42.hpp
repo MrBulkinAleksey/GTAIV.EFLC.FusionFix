@@ -92,8 +92,11 @@ public:
         if(challenger.fresh!=incumbent.fresh) return Rule::Fresh;
         if(challenger.gain!=incumbent.gain) return Rule::Gain;
         if(challenger.inReach!=incumbent.inReach) return Rule::Reach;
-        if(challenger.claim!=incumbent.claim)
-            return NearerThanClaim(challenger,incumbent) || NearerThanClaim(incumbent,challenger) ? Rule::Nearer : Rule::Claim;
+        if(challenger.claim!=incumbent.claim) {
+            if(NearerThanClaim(challenger,incumbent) || NearerThanClaim(incumbent,challenger)) return Rule::Nearer;
+            if(challenger.claim!=Unclaimed && incumbent.claim!=Unclaimed) return Rule::Native;
+            return Rule::Claim;
+        }
         return Rule::Native;
     }
     static int Compare(int native,const Candidate& challenger,const Candidate& incumbent) noexcept {
@@ -106,6 +109,11 @@ public:
         if(challenger.claim!=incumbent.claim) {
             if(NearerThanClaim(challenger,incumbent)) return 0;
             if(NearerThanClaim(incumbent,challenger)) return 2;
+            // Both held a slot: neither has the better right, and the slot each had says nothing. Ranked by that,
+            // which the commit renumbers every frame, the one left out for a newcomer changed frame by frame, and
+            // the held set turned round, each lamp's shadow gone for a frame (a trace: claim losses back in 11 ms).
+            // By distance, the same one gives way each time.
+            if(challenger.claim!=Unclaimed && incumbent.claim!=Unclaimed) return native;
             return challenger.claim<incumbent.claim?0:2;
         }
         return native;
