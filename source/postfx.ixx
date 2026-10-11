@@ -8742,12 +8742,12 @@ private:
         {
             // The car's own position from the box: its right is its forward turned a quarter
             const float right[2] = { box.forward[1], -box.forward[0] };
-            const float near[3] = { box.centre[0] - right[0] * box.local[0] - box.forward[0] * box.local[1],
+            const float around[3] = { box.centre[0] - right[0] * box.local[0] - box.forward[0] * box.local[1],
                                     box.centre[1] - right[1] * box.local[0] - box.forward[1] * box.local[1],
                                     box.centre[2] - box.local[2] };
             float m[16];
             // Within a metre, and facing the car's way: wheels and doors are drawn with their own matrices
-            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), near, 1.0f, m))
+            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 1.0f, m))
                 return false;
             const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
             if (!(flat > 0.5f))
