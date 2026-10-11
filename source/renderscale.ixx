@@ -106,9 +106,9 @@ namespace
         auto mode = antialiasing->get();
         if (mode != FusionFixSettings.AntialiasingText.eDLAA && mode != FusionFixSettings.AntialiasingText.eFSR)
             return 1.0f;
-        // Until the helper has started the upscaler counts as there
+        // While the helper starts the upscaler counts as there
         auto backend = mode == FusionFixSettings.AntialiasingText.eDLAA ? Upscaler::Backend::DLSS : Upscaler::Backend::FSR;
-        if (Upscaler::IsSettled() && !Upscaler::IsAvailable(backend))
+        if (!Upscaler::MayBeAvailable(backend))
             return 1.0f;
         return QualityScales[std::clamp(quality->get(), 0, static_cast<int32_t>(std::size(QualityScales)) - 1)];
     }
@@ -491,7 +491,7 @@ export namespace RenderScale
         if (mode != FusionFixSettings.AntialiasingText.eDLAA && mode != FusionFixSettings.AntialiasingText.eFSR)
             return false;
         auto backend = mode == FusionFixSettings.AntialiasingText.eDLAA ? Upscaler::Backend::DLSS : Upscaler::Backend::FSR;
-        return !Upscaler::IsSettled() || Upscaler::IsAvailable(backend);
+        return Upscaler::MayBeAvailable(backend);
     }
 
     uint32_t GetRenderWidth() { return bActive ? RenderWidth : 0; }

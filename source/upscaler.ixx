@@ -1573,6 +1573,16 @@ export namespace Upscaler
         return state == State::Ready || state == State::Failed;
     }
 
+    // Available, or may still be: the helper is starting, or has not been started yet and its file is there. DLAA or
+    // FSR stays chosen and the scene is sized for it meanwhile, so no device reset follows once the helper answers.
+    bool MayBeAvailable(Backend backend)
+    {
+        if (IsSettled())
+            return IsAvailable(backend);
+        static const bool helperPresent = std::filesystem::exists(HelperPath());
+        return helperPresent;
+    }
+
     // Changes whenever the availability does
     uint32_t Generation()
     {
