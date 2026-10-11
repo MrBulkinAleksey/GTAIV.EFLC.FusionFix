@@ -1385,6 +1385,7 @@ namespace
     };
 
     State state = State::Idle;
+    uint64_t startedAt = 0; // GetTickCount64 when the helper was started, for the log
     DXVKBridge dxvkBridge;
     D3D12Bridge d3d12Bridge;
     Bridge* bridge = nullptr;
@@ -1469,6 +1470,7 @@ namespace
             return;
         }
         state = State::Starting;
+        startedAt = GetTickCount64();
     }
 
     const char* CommandName(Protocol::Command command)
@@ -1613,6 +1615,7 @@ export namespace Upscaler
                 return;
             }
             state = State::Starting;
+            startedAt = GetTickCount64();
         }
 
         if (state == State::Starting)
@@ -1626,7 +1629,7 @@ export namespace Upscaler
                 Fail();
                 return;
             }
-            Log("Helper: %s", helper.shared->Message);
+            Log("Helper started in %llu ms: %s", GetTickCount64() - startedAt, helper.shared->Message);
             dlssAvailable = helper.shared->DLSSAvailable != 0;
             fsrAvailable = helper.shared->FSRAvailable != 0;
             frameGenerationAvailable = helper.shared->FrameGenerationAvailable != 0;
@@ -1686,11 +1689,12 @@ export namespace Upscaler
             shared.FenceHandle = 0;
             if (bridge->PrepareGameFence(shared, helper.process))
                 shared.Flags |= Protocol::ConfigureFlags::GameFence;
+            const auto configureStart = GetTickCount64();
             if (!helper.Request(Protocol::Command::Configure, 15000))
             {
                 bool exited = WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0;
-                Log("Configure %ux%u -> %ux%u failed%s: %s", frame.Width, frame.Height, outputWidth, outputHeight,
-                    exited ? ", the helper exited" : "", shared.Message);
+                Log("Configure %ux%u -> %ux%u failed after %llu ms%s: %s", frame.Width, frame.Height, outputWidth, outputHeight,
+                    GetTickCount64() - configureStart, exited ? ", the helper exited" : "", shared.Message);
                 if (exited)
                     Lost();
                 return false;
@@ -1705,7 +1709,9 @@ export namespace Upscaler
                 Log("Configure %ux%u -> %ux%u: the shared resources could not be imported", frame.Width, frame.Height, outputWidth, outputHeight);
                 return false;
             }
-            Log("Configured: %s", shared.Message);
+            // The render thread waits for it: a long one holds the game, as the end of loading
+            Log("Configured %ux%u -> %ux%u in %llu ms: %s", frame.Width, frame.Height, outputWidth, outputHeight,
+                GetTickCount64() - configureStart, shared.Message);
 
             configureFailed = false;
             generationFailed = false;
