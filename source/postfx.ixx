@@ -788,6 +788,7 @@ public:
     // shadow under a car does not jump between the two; WithSlots keeps them under its real shadow for good.
     bool bVehicleBoxShadowsWithSlots = false;
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
+    bool bVehicleBoxShadowsLive = true;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
@@ -1648,6 +1649,7 @@ public:
         fVehicleBoxShadowRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsRounding", 0.3f), 0.0f, 1.0f);
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
+        bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 1) != 0;
         nVehicleBoxShadowSlotFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsSlotFade", 600), 0, 5000));
         fVehicleBoxShadowScale[0] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLength", 1.0f), 0.3f, 1.2f);
         fVehicleBoxShadowScale[1] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsWidth", 0.95f), 0.3f, 1.2f);
@@ -8275,6 +8277,9 @@ private:
             float centre[3], halfLength;
             float forward[2], halfWidth, halfHeight;
             uintptr_t vehicle;
+            float local[3];   // the box's middle in the car's own axes
+            int32_t slot;     // the car's place in the vehicle pool and its flags then, to tell it is still the same car
+            uint8_t flags;
         };
         static constexpr int kBoxes = 160, kPerLight = 3, kLists = 8;
         struct List
@@ -8325,6 +8330,7 @@ private:
                 return;
             static std::array<std::pair<float, Box>, 256> found{};
             int n = 0;
+            const auto pool = CVehicle::GetCheckedVehiclePool();
             float nearest = 1.0e30f;
             CVehicle::ForEachVehicle([&](uintptr_t vehicle)
             {
@@ -8363,6 +8369,17 @@ private:
                 box.halfWidth = halfWidth;
                 box.halfHeight = halfHeight;
                 box.vehicle = vehicle;
+                std::copy_n(local, 3, box.local);
+                box.slot = -1;
+                if (pool && vehicle >= uintptr_t(pool->m_aStorage))
+                {
+                    const auto offset = vehicle - uintptr_t(pool->m_aStorage);
+                    if (offset % pool->m_nStorageSize == 0 && offset / pool->m_nStorageSize < uint32_t(pool->m_nSize))
+                    {
+                        box.slot = int32_t(offset / pool->m_nStorageSize);
+                        box.flags = pool->m_aFlags[box.slot];
+                    }
+                }
                 const float x = box.centre[0] - focus[0], y = box.centre[1] - focus[1], z = box.centre[2] - focus[2];
                 const float d2 = x * x + y * y + z * z;
                 if (d2 < nearest)
@@ -8398,6 +8415,29 @@ private:
             lightListDrawn = *drawnPattern.get_first<uintptr_t*>(8);
             modelInfos = GameBase() + 0xE95CD8;
             shHandOver = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&) { Capture(); });
+        }
+
+        // VehicleBoxShadowsLive: the cars are drawn where they stand when the render thread draws them, which can be
+        // ahead of where they stood when the light list was handed over, and the box shadows lagged the moving cars.
+        // The box takes the car's matrix now, while its place in the pool still holds the same car.
+        static void Refresh(Box& box)
+        {
+            const auto pool = CVehicle::GetCheckedVehiclePool();
+            if (!pool || box.slot < 0 || box.slot >= pool->m_nSize || pool->m_aFlags[box.slot] != box.flags ||
+                uintptr_t(pool->m_aStorage) + uintptr_t(box.slot) * pool->m_nStorageSize != box.vehicle)
+                return;
+            const float* m = CEntity::GetMatrix(box.vehicle);
+            if (!m)
+                return;
+            float centre[3];
+            for (int i = 0; i < 3; ++i)
+                centre[i] = m[12 + i] + m[i] * box.local[0] + m[4 + i] * box.local[1] + m[8 + i] * box.local[2];
+            const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
+            if (!(flat > 0.5f) || !std::isfinite(centre[0]) || !std::isfinite(centre[1]) || !std::isfinite(centre[2]))
+                return;
+            std::copy_n(centre, 3, box.centre);
+            box.forward[0] = m[4] / flat;
+            box.forward[1] = m[5] / flat;
         }
 
         // Render thread, for the light about to be drawn: up to three cars its light reaches, the nearest the light first,
@@ -8497,7 +8537,9 @@ private:
                 const auto& scale = R.fVehicleBoxShadowScale;
                 for (int i = 0; i < used; ++i)
                 {
-                    const auto& box = *nearest[i].second;
+                    Box box = *nearest[i].second;
+                    if (R.bVehicleBoxShadowsLive)
+                        Refresh(box);
                     // The lower the light, the longer the shadow, and the plainer its box's square shape. The box's top
                     // comes down to VehicleBoxShadowsLowLightHeight of its height, which shortens the shadow while its
                     // foot keeps the car's size, where the contact shadow is; across the way the light comes it may also
