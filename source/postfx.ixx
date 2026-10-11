@@ -650,6 +650,7 @@ public:
     // Whether the camera is in an interior, taken on the main thread as the frame's draw list is built:
     // there the G-buffer's vertex colour says nothing of the sky, and tunnels and rooms got puddles.
     bool bInteriorScene = false;
+    bool bPlayerInCar = false; // set with bInteriorScene, as the lights' render list is built
     const char* szWetGroundStatus = "not run yet";
     void ReleaseWetCopies()
     {
@@ -9160,7 +9161,9 @@ private:
             // room scene, lights inside only (0x20 without 0x40) that cast no shadows at all keep theirs, as most in
             // buildings do. Tunnel lamps are flagged inside too, and there the frame ran along the car from back to front
             // under every lamp it passed.
-            const bool insideOnly = R.bInteriorScene && (light.mFlags & 0x60) == 0x20 &&
+            // Not while you drive: a tunnel counts as a room scene, its lamps are lights inside that cast no shadows,
+            // and their contact shadows showed only as outlines round the cars, box shadows or not.
+            const bool insideOnly = R.bInteriorScene && !R.bPlayerInCar && (light.mFlags & 0x60) == 0x20 &&
                 !(light.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW));
             // With boxes it comes in and goes out with them: at full at once, its frame showed round the car before
             // the box's shadow under it had faded in, and stayed after it had faded out, a blink behind the car. Only
@@ -9764,6 +9767,7 @@ public:
                     CRenderPhaseDeferredLighting_LightsToScreen::OnBuildRenderList() += []()
                     {
                         PostFxResources.bInteriorScene = Natives::IsInteriorScene();
+                        PostFxResources.bPlayerInCar = CPlayer::findPlayerCar && CPlayer::findPlayerCar() != 0;
                         auto cb = new T_CB_Generic_NoArgs(BindSSRTexture);
                         if (cb)
                             cb->Append();
