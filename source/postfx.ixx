@@ -790,6 +790,7 @@ public:
     bool bVehicleBoxShadowsWithSlots = false;
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
     uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300;
+    int32_t nVehicleBoxShadowsPerLamp = 3; // cars a lamp shadows as boxes, up to five; each costs its lit pixels about as much again
     bool bVehicleBoxShadowsLive = true;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
@@ -1652,6 +1653,7 @@ public:
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
         bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 1) != 0;
+        nVehicleBoxShadowsPerLamp = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerLamp", 3), 1, 5);
         nVehicleBoxShadowFadeInMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeIn", 300), 0, 5000));
         nVehicleBoxShadowFadeOutMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeOut", 300), 0, 5000));
         nVehicleBoxShadowSlotFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsSlotFade", 600), 0, 5000));
@@ -8285,7 +8287,7 @@ private:
             int32_t slot;     // the car's place in the vehicle pool and its flags then, to tell it is still the same car
             uint8_t flags;
         };
-        static constexpr int kBoxes = 160, kPerLight = 3, kLists = 8;
+        static constexpr int kBoxes = 160, kPerLight = 5, kLists = 8;
         struct List
         {
             std::atomic<uintptr_t> lights{0}; // the light list these boxes go with
@@ -8457,7 +8459,8 @@ private:
         static bool SetForLight(IDirect3DDevice9* pDevice, const rage::CLightSource& light, bool mapHasCars)
         {
             auto& R = PostFxResources;
-            float constants[7][4] = {};
+            // Boxes 0-2 at c143-c148 with the lamp's own at c149, boxes 3 and 4 at c121-c124.
+            float constants[kPerLight * 2 + 1][4] = {};
             int used = 0;
             float strength = 0.0f, rounding = R.fVehicleBoxShadowRounding;
             float boxStrength[kPerLight] = {};
@@ -8519,6 +8522,7 @@ private:
                     state.slotStrength = (std::min)(state.slotStrength + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
                 strength = state.slotStrength;
                 int taken = 0;
+                const int perLamp = std::clamp(R.nVehicleBoxShadowsPerLamp, 1, kPerLight);
                 std::pair<float, const Box*> nearest[kPerLight] = {};
                 for (int i = 0; drawn && i < drawn->count; ++i)
                 {
@@ -8532,7 +8536,7 @@ private:
                     float score = d2 * (1.0f + (fx * fx + fy * fy + fz * fz) / 400.0f);
                     if (std::find(last.begin(), last.end(), box.vehicle) != last.end())
                         score *= 0.25f;
-                    if (taken == kPerLight && score >= nearest[kPerLight - 1].first)
+                    if (taken == perLamp && score >= nearest[perLamp - 1].first)
                         continue;
                     // A lamp no higher than the car's roof: real lamps stand above cars, but some in tunnels light from
                     // the road or walls with no lamp there, and a box's shadow from them spread over the whole road.
@@ -8545,7 +8549,7 @@ private:
                     const float along = dx * box.forward[0] + dy * box.forward[1], across = dx * box.forward[1] - dy * box.forward[0];
                     if (std::abs(along) < box.halfLength + 0.5f && std::abs(across) < box.halfWidth + 0.5f && std::abs(dz) < box.halfHeight + 0.5f)
                         continue;
-                    int at = taken < kPerLight ? taken++ : kPerLight - 1;
+                    int at = taken < perLamp ? taken++ : perLamp - 1;
                     for (; at > 0 && nearest[at - 1].first > score; --at)
                         nearest[at] = nearest[at - 1];
                     nearest[at] = { score, &box };
@@ -8568,7 +8572,7 @@ private:
                             f.strength += state.boxes[j].strength;
                     f.strength = (std::min)(f.strength, 1.0f);
                 }
-                for (int j = 0; j < state.count && nextCount < kPerLight; ++j)
+                for (int j = 0; j < state.count && nextCount < perLamp; ++j)
                 {
                     const auto& old = state.boxes[j];
                     if (std::find(last.begin(), last.end(), old.box.vehicle) != last.end())
@@ -8651,11 +8655,14 @@ private:
                 c[3] = c[6] = c[7] = 0.05f;
                 c[4] = 1.0f;
             }
-            constants[6][0] = R.fVehicleBoxShadowLightSize;
-            constants[6][1] = rounding;
-            constants[6][2] = R.fVehicleBoxShadowFollowLight;
-            constants[6][3] = (std::min)(strength, 1.0f);
-            pDevice->SetPixelShaderConstantF(143, constants[0], 7);
+            auto& lamp = constants[kPerLight * 2];
+            lamp[0] = R.fVehicleBoxShadowLightSize;
+            lamp[1] = rounding;
+            lamp[2] = R.fVehicleBoxShadowFollowLight;
+            lamp[3] = (std::min)(strength, 1.0f);
+            pDevice->SetPixelShaderConstantF(143, constants[0], 6);
+            pDevice->SetPixelShaderConstantF(149, lamp, 1);
+            pDevice->SetPixelShaderConstantF(121, constants[6], 4);
             constantsOn = true;
             return true;
         }

@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 330784b..997c608 100644
+index 330784b..91a9595 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -92,6 +92,12 @@
@@ -15,11 +15,11 @@ index 330784b..997c608 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -520,6 +526,49 @@
+@@ -520,6 +526,66 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
-+    // --- FusionFix vehicle box shadows (c143-c149, VehicleBoxShadows in postfx.ixx): up to three cars near this light,
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
@@ -48,15 +48,32 @@ index 330784b..997c608 100644
 +      mad r17.x, r17.x, c186.x, c186.y
 +      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
 +      mov r18, c143
-+      mov r19, c144
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
 +      mov r18, c145
-+      mov r19, c146
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
 +      mov r18, c147
-+      mov r19, c148
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
 +      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
 +      add r17.w, r17.w, -c138.y
 +      mad r17.w, r17.w, r12.w, c138.y
@@ -65,7 +82,7 @@ index 330784b..997c608 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -606,4 +655,102 @@
+@@ -606,4 +672,102 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -170,7 +187,7 @@ index 330784b..997c608 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 4a1bc51..e7e1170 100644
+index 4a1bc51..b50d404 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -63,6 +63,12 @@
@@ -186,11 +203,11 @@ index 4a1bc51..e7e1170 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -350,6 +356,49 @@
+@@ -350,6 +356,66 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
-+    // --- FusionFix vehicle box shadows (c143-c149, VehicleBoxShadows in postfx.ixx): up to three cars near this light,
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
@@ -219,15 +236,32 @@ index 4a1bc51..e7e1170 100644
 +      mad r17.x, r17.x, c186.x, c186.y
 +      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
 +      mov r18, c143
-+      mov r19, c144
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
 +      mov r18, c145
-+      mov r19, c146
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
 +      mov r18, c147
-+      mov r19, c148
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
 +      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
 +      add r17.w, r17.w, -c138.y
 +      mad r17.w, r17.w, r12.w, c138.y
@@ -236,7 +270,7 @@ index 4a1bc51..e7e1170 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -436,4 +485,102 @@
+@@ -436,4 +502,102 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -341,7 +375,7 @@ index 4a1bc51..e7e1170 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 543de39..739fd22 100644
+index 543de39..c48aa40 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -94,6 +94,12 @@
@@ -357,11 +391,11 @@ index 543de39..739fd22 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -536,6 +542,49 @@
+@@ -536,6 +542,66 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
-+    // --- FusionFix vehicle box shadows (c143-c149, VehicleBoxShadows in postfx.ixx): up to three cars near this light,
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
@@ -390,15 +424,32 @@ index 543de39..739fd22 100644
 +      mad r17.x, r17.x, c186.x, c186.y
 +      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
 +      mov r18, c143
-+      mov r19, c144
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
 +      mov r18, c145
-+      mov r19, c146
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
 +      mov r18, c147
-+      mov r19, c148
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
 +      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
 +      add r17.w, r17.w, -c138.y
 +      mad r17.w, r17.w, r12.w, c138.y
@@ -407,7 +458,7 @@ index 543de39..739fd22 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -622,4 +671,102 @@
+@@ -622,4 +688,102 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -512,7 +563,7 @@ index 543de39..739fd22 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 0879030..35e13c7 100644
+index 0879030..530d7b8 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -58,6 +58,12 @@
@@ -528,11 +579,11 @@ index 0879030..35e13c7 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -316,6 +322,49 @@
+@@ -316,6 +322,66 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
-+    // --- FusionFix vehicle box shadows (c143-c149, VehicleBoxShadows in postfx.ixx): up to three cars near this light,
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
@@ -561,15 +612,32 @@ index 0879030..35e13c7 100644
 +      mad r17.x, r17.x, c186.x, c186.y
 +      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
 +      mov r18, c143
-+      mov r19, c144
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
 +      mov r18, c145
-+      mov r19, c146
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
 +      mov r18, c147
-+      mov r19, c148
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
 +      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
 +      add r17.w, r17.w, -c138.y
 +      mad r17.w, r17.w, r12.w, c138.y
@@ -578,7 +646,7 @@ index 0879030..35e13c7 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -402,4 +451,102 @@
+@@ -402,4 +468,102 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -683,7 +751,7 @@ index 0879030..35e13c7 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 36f1262..fa1e80f 100644
+index 36f1262..4554a51 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -61,6 +61,12 @@
@@ -699,11 +767,11 @@ index 36f1262..fa1e80f 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -325,6 +331,49 @@
+@@ -325,6 +331,66 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
-+    // --- FusionFix vehicle box shadows (c143-c149, VehicleBoxShadows in postfx.ixx): up to three cars near this light,
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
@@ -732,15 +800,32 @@ index 36f1262..fa1e80f 100644
 +      mad r17.x, r17.x, c186.x, c186.y
 +      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
 +      mov r18, c143
-+      mov r19, c144
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
 +      mov r18, c145
-+      mov r19, c146
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
 +      mov r18, c147
-+      mov r19, c148
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
 +      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
 +      add r17.w, r17.w, -c138.y
 +      mad r17.w, r17.w, r12.w, c138.y
@@ -749,7 +834,7 @@ index 36f1262..fa1e80f 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -411,4 +460,102 @@
+@@ -411,4 +477,102 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -854,7 +939,7 @@ index 36f1262..fa1e80f 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 679b5e2..7c58cef 100644
+index 679b5e2..4113676 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -61,6 +61,12 @@
@@ -870,11 +955,11 @@ index 679b5e2..7c58cef 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -327,6 +333,49 @@
+@@ -327,6 +333,66 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
-+    // --- FusionFix vehicle box shadows (c143-c149, VehicleBoxShadows in postfx.ixx): up to three cars near this light,
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
@@ -903,15 +988,32 @@ index 679b5e2..7c58cef 100644
 +      mad r17.x, r17.x, c186.x, c186.y
 +      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
 +      mov r18, c143
-+      mov r19, c144
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
 +      mov r18, c145
-+      mov r19, c146
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
 +      mov r18, c147
-+      mov r19, c148
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
 +      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
 +      add r17.w, r17.w, -c138.y
 +      mad r17.w, r17.w, r12.w, c138.y
@@ -920,7 +1022,7 @@ index 679b5e2..7c58cef 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -413,4 +462,102 @@
+@@ -413,4 +479,102 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
@@ -1025,7 +1127,7 @@ index 679b5e2..7c58cef 100644
      ret
 \ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 9721f18..ea2d1af 100644
+index 9721f18..2822842 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -61,6 +61,12 @@
@@ -1041,11 +1143,11 @@ index 9721f18..ea2d1af 100644
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -329,6 +335,49 @@
+@@ -329,6 +335,66 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
-+    // --- FusionFix vehicle box shadows (c143-c149, VehicleBoxShadows in postfx.ixx): up to three cars near this light,
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
 +    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
 +    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
 +    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
@@ -1074,15 +1176,32 @@ index 9721f18..ea2d1af 100644
 +      mad r17.x, r17.x, c186.x, c186.y
 +      add r17.x, -r17_abs.x, c186.z // not below 0 on them
 +      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
 +      mov r18, c143
-+      mov r19, c144
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
 +      mov r18, c145
-+      mov r19, c146
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
 +      mov r18, c147
-+      mov r19, c148
-+      call l3
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
 +      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
 +      add r17.w, r17.w, -c138.y
 +      mad r17.w, r17.w, r12.w, c138.y
@@ -1091,7 +1210,7 @@ index 9721f18..ea2d1af 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -415,4 +464,102 @@
+@@ -415,4 +481,102 @@
      mul r17.x, r17.x, r17.x
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
