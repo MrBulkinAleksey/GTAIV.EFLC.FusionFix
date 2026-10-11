@@ -8334,6 +8334,7 @@ private:
             int count = 0;
             float slotStrength = 0.0f;               // all its boxes, fading out while its own map shows the cars
             float rounding = -1.0f;                  // the edges' rounding it gave its boxes, easing to the limit
+            bool wasMappedForFade = false;           // its own map showed the cars last frame
             DWORD lastTick = 0;
             // VehicleBoxShadowsLog: what it last did with the watched car
             bool hadWatched = false, wasMapped = false, watchedLow = false;
@@ -8675,10 +8676,16 @@ private:
                 // A lamp whose own map shows the cars (a shadow slot) has the real shadow: its boxes fade out over
                 // VehicleBoxShadowsSlotFade after it takes the slot, so the shadow does not jump, and come back over
                 // FadeIn when it loses it. VehicleBoxShadowsWithSlots keeps them.
+                // When it loses the slot its real shadow is gone at once, so the boxes are back at once too: faded in
+                // (VehicleBoxShadowsFadeIn) the car had neither shadow for a moment, a blink each time the lamp's slot
+                // went (a trace: every few seconds in a tunnel). A lamp just seen still fades its boxes in.
                 if (mapHasCars && !R.bVehicleBoxShadowsWithSlots)
                     state.slotStrength = (std::max)(state.slotStrength - step(R.nVehicleBoxShadowSlotFadeMs), 0.0f);
+                else if (state.wasMappedForFade)
+                    state.slotStrength = 1.0f;
                 else
                     state.slotStrength = (std::min)(state.slotStrength + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
+                state.wasMappedForFade = mapHasCars && !R.bVehicleBoxShadowsWithSlots;
                 strength = state.slotStrength;
                 int taken = 0;
                 bool watchedLow = false;
@@ -8688,13 +8695,16 @@ private:
                 {
                     const auto& box = drawn->boxes[i];
                     const float dx = light.mPosition.x - box.centre[0], dy = light.mPosition.y - box.centre[1], dz = light.mPosition.z - box.centre[2];
-                    const float reach = light.mRadius + box.halfLength + box.halfWidth + box.halfHeight;
+                    // A car the lamp holds goes only a little further out, so one at the edge of its light is not taken
+                    // and left frame by frame
+                    const bool holding = std::find(last.begin(), last.end(), box.vehicle) != last.end();
+                    const float reach = (light.mRadius + box.halfLength + box.halfWidth + box.halfHeight) * (holding ? 1.15f : 1.0f);
                     const float d2 = dx * dx + dy * dy + dz * dz;
                     if (d2 > reach * reach)
                         continue;
                     const float fx = box.centre[0] - drawn->focus[0], fy = box.centre[1] - drawn->focus[1], fz = box.centre[2] - drawn->focus[2];
                     float score = d2 * (1.0f + (fx * fx + fy * fy + fz * fz) / 400.0f);
-                    if (std::find(last.begin(), last.end(), box.vehicle) != last.end())
+                    if (holding)
                         score *= 0.25f;
                     if (taken == perLamp && score >= nearest[perLamp - 1].first)
                         continue;
