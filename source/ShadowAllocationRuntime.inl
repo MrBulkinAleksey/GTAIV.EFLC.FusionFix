@@ -133,6 +133,7 @@ namespace PlayerShadowAllocation
     static uint32_t slotMinHoldMs = 0;
     static float behindLampReach = 12.0f; // BehindLampReach
     static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
+    static std::atomic<uint32_t> lightsFlickering{0}; // lights ranked off screen as they flicker out of the list, for the status line
     // CacheWithCars, for the status line
     static std::atomic<uint32_t> cacheCarRefreshes{0}, cacheRefreshes{0}, slotsDrawnWhole{0};
 
@@ -313,12 +314,12 @@ namespace PlayerShadowAllocation
         try {
             slotTrace.Status(std::format("ready={} install={} thread_ok={} night_shadows={} headlight_shadows={} vehicle_night_shadows={} "
                 "publication={} lamp_priority={} in the last second: applied={} observed={} fallback={} adapter_rejects={} reasons:{} "
-                "lamps_behind_walls={} sight_probes={} hits={} cache_refreshes={} for_cars={} slots_drawn_whole={}",
+                "lamps_behind_walls={} sight_probes={} hits={} cache_refreshes={} for_cars={} slots_drawn_whole={} flickering={}",
                 ready.load() ? 1 : 0, ready.load() ? std::string("enabled") : "[" + installStatus + "]", unsupportedThread.load() ? 0 : 1, bExtraNightShadows ? 1 : 0, bHeadlightShadows ? 1 : 0,
                 bVehicleNightShadows ? 1 : 0, publicationEnabled ? 1 : 0, nativeLampPriority ? 1 : 0,
                 a - applied, o - observed, f - fallback, r - adapter, why.empty() ? " -" : why,
                 lampsHidden.exchange(0), sightProbes.exchange(0), sightHits.exchange(0),
-                cacheRefreshes.exchange(0), cacheCarRefreshes.exchange(0), slotsDrawnWhole.exchange(0)));
+                cacheRefreshes.exchange(0), cacheCarRefreshes.exchange(0), slotsDrawnWhole.exchange(0), lightsFlickering.exchange(0)));
         } catch (...) {}
         applied = a; observed = o; fallback = f; adapter = r;
     }
@@ -407,6 +408,22 @@ namespace PlayerShadowAllocation
     static bool lampsBehindWalls = false;
     static uint32_t sightFlags = 6; // the ground probe's: the map, not vehicles
     static uintptr_t probeFunction = 0, probeLevel = 0, probeFar = 0;
+
+    // Lights seen with a frame or more missing in between, by key: when they came back, and until when they count as flickering.
+    struct LightPresence { uint32_t lastFrame{}, returned[2]{}, flickeringUntil{}; };
+    static std::unordered_map<uint32_t, LightPresence> lightPresence;
+    static bool FlickeringLight(uint32_t key, uint32_t frame, uint32_t now) noexcept
+    {
+        if (!key) return false;
+        if (lightPresence.size() > 4096) lightPresence.clear();
+        auto& p = lightPresence[key];
+        if (p.lastFrame && frame > p.lastFrame + 1 && frame - p.lastFrame < 30) {
+            p.returned[1] = p.returned[0]; p.returned[0] = now;
+            if (p.returned[1] && now - p.returned[1] < 2000) p.flickeringUntil = now + 3000;
+        }
+        p.lastFrame = frame;
+        return p.flickeringUntil && int32_t(p.flickeringUntil - now) > 0;
+    }
 
     static bool LampBehindWall(uint32_t key, Vec3 position) noexcept
     {
@@ -782,6 +799,11 @@ namespace PlayerShadowAllocation
                 static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
             const bool spacedOut=lampSpacing.spacing>0 && kind==budget::Kind::Lamp && lampSpacing.SpacedOut(index);
             if(spacedOut && gain==SlotGain::InView) { gain=SlotGain::OffScreen; ++lampsSpacedOut; }
+            // A light the game leaves out of its list every other frame (flickering fittings, some in tunnels) gave
+            // its slot to another light each time it went and took it back as it came, both shadows blinking. Back
+            // twice within 2 s, it ranks off screen for 3 s: it takes no slot from lights that are there.
+            if(kind!=budget::Kind::PlayerBeam && FlickeringLight(key,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds)) &&
+               gain==SlotGain::InView) { gain=SlotGain::OffScreen; ++lightsFlickering; }
             if(slotTrace.enabled)
                 try {
                     fusionfix::shadows::ShadowSlotTrace::Light traced{key,static_cast<uint8_t>(kind),rawGain,gain,cached,volumeVisible,
