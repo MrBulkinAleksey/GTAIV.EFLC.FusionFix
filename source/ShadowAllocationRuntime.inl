@@ -798,7 +798,9 @@ namespace PlayerShadowAllocation
             if(casterPriority) gain=state.gainHold.Apply(key,kind==budget::Kind::Lamp?LampGeometry(light):0,gain,
                 static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
             const bool spacedOut=lampSpacing.spacing>0 && kind==budget::Kind::Lamp && lampSpacing.SpacedOut(index);
-            if(spacedOut && gain==SlotGain::InView) { gain=SlotGain::OffScreen; ++lampsSpacedOut; }
+            // Spacing thins rows of alike lamps (tunnels); a cached lamp whose worth comes from a car or ped in its
+            // light is not one of them: spaced out, it lost its slot to a lamp 60 m off for a frame (a slot trace).
+            if(spacedOut && gain==SlotGain::InView && !(cached && caster>=0)) { gain=SlotGain::OffScreen; ++lampsSpacedOut; }
             // A light the game leaves out of its list every other frame (flickering fittings, some in tunnels) gave
             // its slot to another light each time it went and took it back as it came, both shadows blinking. Back
             // twice within 2 s, it ranks off screen for 3 s: it takes no slot from lights that are there.
