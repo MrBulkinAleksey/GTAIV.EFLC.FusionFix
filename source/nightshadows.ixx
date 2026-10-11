@@ -18,6 +18,9 @@ module;
 #include "NativeLampContinuity41.hpp"
 #include "NativeShadowContinuity42.hpp"
 #include "ShadowVolumeVisibility43.hpp"
+#include "ShadowCasterPresence.hpp"
+#include "ShadowSlotTrace.hpp"
+#include "ShadowLampSpacing.hpp"
 #include "NativeCacheDependencies44.hpp"
 #include "ShadowInactiveSlots.hpp"
 #include "ShadowViewPriority.hpp"
@@ -39,6 +42,7 @@ module;
 #include "PoolDescriptorSnapshots.hpp"
 #include <fstream>
 #include <atomic>
+#include <mutex>
 #include <intrin.h>
 
 export module nightshadows;
@@ -390,11 +394,15 @@ public:
                 // range. This remains diagnostic only: no guard bypass.
                 ShadowDiagnostics::startupGuardDetails = fusionfix::shadows::ce::diagnostics::Describe(
                     image, fusionfix::shadows::ce::ImageSize, reinterpret_cast<uintptr_t>(image));
+                // The allocation adapter installs from the async initializers; its guard is taken here.
+                PlayerShadowAllocation::guardAtLoad = fusionfix::shadows::ce::allocation::ValidateMappedImage(
+                    image, fusionfix::shadows::ce::ImageSize, reinterpret_cast<uintptr_t>(image));
+                PlayerShadowAllocation::guardDetailsAtLoad = ShadowDiagnostics::startupGuardDetails;
             }
         }
 
         // Registered before game callbacks start, independent of async init.
-        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); EmergencyTrafficShadows::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
+        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); PlayerShadowAllocation::CaptureCasters(); PlayerShadowAllocation::SlotTraceStatus(); PlayerShadowAllocation::FlushSlotTrace(); EmergencyTrafficShadows::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
@@ -442,6 +450,19 @@ public:
                 if (PlayerShadowAllocation::cameraPriority)
                     PlayerShadowAllocation::cameraPriority = PlayerShadowAllocation::InstallCameraCapture();
                 PlayerShadowAllocation::nativeLampPriority = iniReader.ReadInteger("SHADOWS", "NativeLampViewPriority", 0) != 0;
+                PlayerShadowAllocation::casterPriority = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriority", 0) != 0;
+                PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityHold", 750), 0, 2000));
+                PlayerShadowAllocation::slotTrace.enabled = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityLog", 0) != 0;
+                PlayerShadowAllocation::lampSpacing.base = std::clamp(iniReader.ReadFloat("SHADOWS", "LampSpacing", 0.0f), 0.0f, 40.0f);
+                PlayerShadowAllocation::lampSpacing.spacing = PlayerShadowAllocation::lampSpacing.base;
+                PlayerShadowAllocation::lampSpacing.seconds = std::clamp(iniReader.ReadFloat("SHADOWS", "LampSpacingSeconds", 0.5f), 0.0f, 5.0f);
+                PlayerShadowAllocation::lampSpacing.alongRoad = iniReader.ReadInteger("SHADOWS", "LampSpacingAlongRoad", 0) != 0;
+                PlayerShadowAllocation::InstallLampSight(iniReader.ReadInteger("SHADOWS", "LampsBehindWalls", 1) != 0,
+                    static_cast<uint32_t>(iniReader.ReadInteger("SHADOWS", "LampsBehindWallsFlags", 6)));
+                PlayerShadowAllocation::behindLampReach = std::clamp(iniReader.ReadFloat("SHADOWS", "BehindLampReach", 12.0f), 0.0f, 100.0f);
+                PlayerShadowAllocation::slotMinHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "SlotMinHold", 1000), 0, 5000));
+                fusionfix::shadows::NativeShadowContinuity42::claimDistanceRatio =
+                    std::clamp(iniReader.ReadFloat("SHADOWS", "ClaimDistanceRatio", 1.5f), 0.0f, 10.0f);
                 const int allocationMode = iniReader.ReadInteger("SHADOWS", "ExperimentalPlayerShadowAllocation", 0);
                 ShadowDiagnostics::allocationMode = allocationMode;
                 if (shadowDiagnostics)
@@ -453,6 +474,11 @@ public:
                 {
                     if (!PlayerShadowAllocation::Install(allocationMode == 2))
                         OutputDebugStringW(L"FusionFix experimental shadows: allocation adapter unavailable; original engine selection retained.\n");
+                    else
+                    {
+                        PlayerShadowAllocation::cacheWithCarsInside = iniReader.ReadInteger("SHADOWS", "CacheWithCarsInside", 0) != 0;
+                        PlayerShadowAllocation::InstallCacheWithCars(iniReader.ReadInteger("SHADOWS", "CacheWithCars", 0) != 0);
+                    }
                 }
                 // After the allocation adapter, which checks the selection's bytes this hooks.
                 HeadlightEnhancement::InstallShadowOrigin(

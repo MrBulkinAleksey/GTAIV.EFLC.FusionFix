@@ -12,7 +12,10 @@ inline constexpr uint8_t Original[]{0x80,0x3D,0x80,0x67,0x03,0x01,0x00,0x75,0x04
 inline constexpr unsigned Relocs[]{2,15,60,90,134};
 inline bool Validate(uintptr_t base) noexcept {
     const auto* p=reinterpret_cast<const uint8_t*>(base+0x525DB0);
-    for(unsigned i=0;i<sizeof(Original);) {
+    // Our own inline hook on it (night shadows) puts a jump over the first instruction (cmp byte [flag],0, 7 bytes);
+    // the rest still shows the layout.
+    const unsigned start=p[0]==0xE9?7u:0u;
+    for(unsigned i=start;i<sizeof(Original);) {
         bool reloc=false;
         for(auto offset:Relocs) if(i==offset) {reloc=true;break;}
         if(reloc) {

@@ -17,6 +17,9 @@ class ShadowDrivingFocus {
     bool ready{};
 public:
     void Reset() noexcept { previous={};velocity={};focus={};owner=0;lastTime=0;ready=false; }
+    // The car's speed over the ground in m/s, smoothed over about 0.3 s; 0 on foot.
+    float Speed() const noexcept { return ready ? std::sqrt(velocity.x*velocity.x+velocity.y*velocity.y) : 0.0f; }
+    Vec3 Velocity() const noexcept { return ready ? velocity : Vec3{}; }
     Vec3 Update(Vec3 position,std::uintptr_t vehicle,std::uint32_t time) noexcept {
         focus=position;
         if(!vehicle || !std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)) {
@@ -38,9 +41,13 @@ public:
             }
             previous=position;lastTime=time;
         }
+        // From MinSpeed up, so it grows from nothing. Above 1 m/s, driving slowly back and forth moved the focus
+        // a few metres the other way at each turn, two lamps near the car swapped their slots, and its shadow
+        // jumped between the lamp's own map and its box.
+        constexpr float MinSpeed=4.0f;
         const float speed=std::sqrt(velocity.x*velocity.x+velocity.y*velocity.y);
-        if(speed>1.0f) {
-            const float advance=std::min(18.0f,(speed-1.0f)*0.8f);
+        if(speed>MinSpeed) {
+            const float advance=std::min(18.0f,(speed-MinSpeed)*0.8f);
             focus.x+=velocity.x*advance/speed;focus.y+=velocity.y*advance/speed;
         }
         return focus;

@@ -248,8 +248,9 @@ namespace EmergencyTrafficShadows
             const auto* pos = reinterpret_cast<const float*>(args[6]); const auto* rgb = reinterpret_cast<const float*>(args[7]);
             for (unsigned i = 0; i < 3; ++i) if (!std::isfinite(pos[i]) || !std::isfinite(rgb[i])) return;
             const auto frame = Frame();
-            // CE 1.8 measures the signals' reach in metres of the lamp reach step.
-            const auto reach = float(std::clamp(ShadowReachStep(false), 0, 100));
+            // As far as lamps' shadows reach (the step is 5 ft, as for lamps); CE 1.8 took the step for metres,
+            // two thirds of the lamps' reach, so a signal's shadow came in well after you could see the signal.
+            const auto reach = float(fusionfix::shadows::ShadowReachFeet(ShadowReachStep(false))) * 0.3048f;
             if (traffic_signal::RejectUntrackedFar(regs.esi, frame, pos, reach, playerPositionSnapshot,
                 [] { return Enabled(); }, [](uint32_t owner) { return registry.TracksOwner(owner); })) return;
             Match value{}; if (!MatchOwner(regs.esi, value)) return;
