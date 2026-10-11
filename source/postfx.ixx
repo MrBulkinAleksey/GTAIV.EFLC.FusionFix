@@ -8710,7 +8710,9 @@ private:
                         continue;
                     // A lamp no higher than the car's roof: real lamps stand above cars, but some in tunnels light from
                     // the road or walls with no lamp there, and a box's shadow from them spread over the whole road.
-                    if (!(light.mFlags & rage::LF_VEHICLE) && dz < box.halfHeight + 0.3f)
+                    // A car the lamp holds is left only 0.2 m under that, one it does not is taken only 0.2 m over it: on
+                    // a slope a lamp at the line was left and taken by turns, and its shadow went and came.
+                    if (!(light.mFlags & rage::LF_VEHICLE) && dz < box.halfHeight + (holding ? 0.1f : 0.5f))
                     {
                         NoteLowLight(light, box, dz);
                         if (box.vehicle == drawn->watched)
