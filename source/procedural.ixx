@@ -72,7 +72,7 @@ namespace Procedural
     int32_t nPool = 4096;
     int32_t nMatrixLimit = 4096;
     int32_t nMatrixPool = 28000;
-    int32_t nDrawableRefs = 100000;
+    int32_t nDrawableRefs = 40000;
     int32_t nRenderCache = 32768;
     float fDensity = 1.0f;
     float fDistance = 1.0f;
@@ -212,7 +212,8 @@ namespace Procedural
     // back to the queue once the camera turns to them. Its radius is the gathering radius within ProceduralConeFullAngle
     // of where the camera looks and this behind, easing down between them. A turning camera is followed
     // ProceduralConeTurnLead ahead (45 degrees at most): a position is inside if it is inside the cone now or the one the
-    // camera turns to. Made props stay where they are: the generator lets go of them only with their ground triangle
+    // camera turns to. Made props stay until their ground triangle goes, or with ProceduralConeRelease until they are
+    // well outside the cone
     float fConeBack = 70.0f;
     float fConeFullCos = 0.2588f;           // cos of ProceduralConeFullAngle, 75 degrees
     float fConeTurnLead = 0.3f;             // seconds
@@ -294,23 +295,35 @@ namespace Procedural
         return facing;
     }
 
-    bool InCone(const float* position)
+    // slack: metres the cone is taken wider all round, so a made prop goes only once well outside
+    bool InCone(const float* position, float slack = 0.0f)
     {
         if (!cone.active)
             return true;
+        float back = fConeBack + slack, ahead = cone.ahead + slack;
         float dx = position[0] - cone.position[0], dy = position[1] - cone.position[1], dz = position[2] - cone.position[2];
         float distanceSquared = dx * dx + dy * dy + dz * dz;
-        if (!(distanceSquared > fConeBack * fConeBack))
+        if (!(distanceSquared > back * back))
             return true;
-        if (distanceSquared > cone.ahead * cone.ahead)
+        if (distanceSquared > ahead * ahead)
             return false;
         float distance = std::sqrt(distanceSquared);
         float facing = ConeFacing(dx, dy, dz, distance);
         if (facing >= fConeFullCos)
             return true;
         float t = std::clamp((facing + 1.0f) / (fConeFullCos + 1.0f), 0.0f, 1.0f);
-        return distance <= fConeBack + (cone.ahead - fConeBack) * t * t * (3.0f - 2.0f * t);
+        return distance <= back + (ahead - back) * t * t * (3.0f - 2.0f * t);
     }
+
+    // ProceduralConeRelease: the queue entry each surface prop was made from (by its record), so a prop the cone has left
+    // behind goes and its position waits in the parked store like the others. A dump at x3 had 55% of the props behind
+    // the camera, holding their models, records and places in the game's list of buildings with models
+    bool bConeRelease = true;
+    constexpr float ReleaseSlack = 25.0f;
+    constexpr uint32_t ReleasesPerUpdate = 256;
+    struct MadeFrom { uint8_t entry[QueueEntrySize]; };
+    std::unordered_map<uint8_t*, MadeFrom> madeFrom;
+    uint32_t nConeReleased = 0;
 
     // Statistics for the log
     uint32_t nUsedMax = 0;
@@ -365,6 +378,7 @@ namespace Procedural
         nCarried = 0;
         waiting.clear();
         parked.clear();
+        madeFrom.clear();
         coneLastTime = 0;
         queuedAt.clear();
         Trace(std::format("I {} generator init, records {}", When(), Records()));
@@ -401,6 +415,7 @@ namespace Procedural
             *(uint32_t*)(generator + 0x5220) = VanillaRecords;
             pGameQueue = nullptr;
         }
+        madeFrom.clear();
     }
 
     // ProceduralGatherPriority: the manager takes ground triangles in the order of the collision it walks (CE 0xc87b00),
@@ -545,6 +560,14 @@ namespace Procedural
                     queued ? Where((float*)entry) : std::string(), waited));
             }
         }
+        if (record && bConeRelease && pGenerator)
+        {
+            // Made from the queue (a1 its entry; the caller sets the record's provider, +0xc, right after)
+            auto queue = *(uint8_t**)(pGenerator + 0x5224);
+            auto entry = (uint8_t*)a1;
+            if (queue && entry >= queue && entry < queue + size_t(*(uint32_t*)(pGenerator + 0x5220)) * QueueEntrySize)
+                memcpy(madeFrom[record].entry, entry, QueueEntrySize);
+        }
         if (record)
         {
             if (auto entity = *(uint8_t**)(record + 8))
@@ -572,6 +595,7 @@ namespace Procedural
     SafetyHookInline shRelease;
     void __fastcall Release(uint8_t* generator, void* edx, uint8_t* record, void* list)
     {
+        madeFrom.erase(record);
         if (auto entity = *(uintptr_t*)(record + 8))
         {
             float position[3] = {};
@@ -582,6 +606,31 @@ namespace Procedural
             ReleaseSRWLockExclusive(&propsLock);
         }
         shRelease.unsafe_fastcall(generator, edx, record, list);
+    }
+
+    // Props made from the queue that are now well outside the cone go as the game lets them go (CE 0xc0a920, from the
+    // list of their procedural.dat record, +0x38 of the record the entry's +0xc points to), and their entries are parked
+    void ReleaseOutsideCone(uint8_t* generator)
+    {
+        std::vector<std::pair<uint8_t*, MadeFrom>> outside;
+        for (auto& [record, from] : madeFrom)
+        {
+            if (outside.size() >= ReleasesPerUpdate || parked.size() + (outside.size() + 1) * QueueEntrySize > ParkedLimit * QueueEntrySize)
+                break;
+            // The game's own removal clears the provider before it lets a record go
+            if (!*(uintptr_t*)(record + 8) || *(uintptr_t*)(record + 0xC) != *(uintptr_t*)(from.entry + 0x1C))
+                continue;
+            if (!InCone((float*)from.entry, ReleaseSlack))
+                outside.emplace_back(record, from);
+        }
+        for (auto& [record, from] : outside)
+        {
+            if (bTrace)
+                Trace(std::format("B {}{}", When(), Where((float*)from.entry)));
+            Release(generator, nullptr, record, *(uint8_t**)(from.entry + 0xC) + 0x38);
+            parked.insert(parked.end(), from.entry, from.entry + QueueEntrySize);
+            nConeReleased++;
+        }
     }
 
     // Before the queue's props are made (the game's lock held, the providers it removed already done)
@@ -635,6 +684,8 @@ namespace Procedural
         UpdateCone();
         if (cone.active)
         {
+            if (bConeRelease)
+                ReleaseOutsideCone(generator);
             uint32_t capacity = *(uint32_t*)(generator + 0x5220);
             std::vector<uint8_t> keep;
             keep.reserve(parked.size());
@@ -948,7 +999,7 @@ public:
             // models for a frame or more. More of them, from our memory. The game frees the array in the session's
             // shutdown (CE 0xaf4b80 from 0xb1e970, on exit too); left to the game's free, our block stopped the game
             // there or broke its heap, so that free is ours as well
-            nDrawableRefs = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawableRefs", 100000), 13000, 200000);
+            nDrawableRefs = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawableRefs", 40000), 13000, 200000);
             if (auto size = hook::pattern("68 ? ? ? ? E8 ? FF FF FF C3"); !size.empty())
             {
                 auto init = injector::GetBranchDestination(size.get_first(5)).as_int();
@@ -1021,6 +1072,7 @@ public:
             fConeBack = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeBack", 70.0f), 0.0f, 1000.0f);
             fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
             fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
+            bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
             nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
 
             // With the trace on, the game out of drawable references: mov ecx, 0x1173750; call CE 0xa8a990 in CE 0xaf4710
@@ -1266,14 +1318,15 @@ public:
             auto alive = props.size();
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}; reflections skipped {}; box full {}, candidates capped {}",
+                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}; box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
-                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nReflectionsSkipped, nEntitiesCapped, nCandidatesCapped));
+                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nEntitiesCapped, nCandidatesCapped));
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
             nReflectionsSkipped = 0;
             nConeFull = 0;
+            nConeReleased = 0;
         };
     }
 } ProceduralProps;
