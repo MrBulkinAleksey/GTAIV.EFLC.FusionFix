@@ -792,7 +792,8 @@ public:
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
     uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300, nVehicleBoxShadowSizeFadeMs = 300;
     int32_t nVehicleBoxShadowsPerLamp = 3; // cars a lamp shadows as boxes, up to five; each costs its lit pixels about as much again
-    bool bVehicleBoxShadowsLive = true;
+    bool bVehicleBoxShadowsLive = false;
+    float fVehicleBoxShadowLeadFrames = 1.0f;
     bool bVehicleBoxShadowsLog = false; // VehicleBoxShadowsLog, see VehicleBoxShadows::Trace
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
@@ -1655,7 +1656,8 @@ public:
         fVehicleBoxShadowEndRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsEndRounding", 0.4f), 0.0f, 2.0f);
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
-        bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 1) != 0;
+        bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 0) != 0;
+        fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", 1.0f), -3.0f, 5.0f);
         bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;
         nVehicleBoxShadowsPerLamp = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerLamp", 3), 1, 5);
         nVehicleBoxShadowSizeFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsSizeFade", 300), 0, 5000));
@@ -8291,6 +8293,7 @@ private:
             float local[3];   // the box's middle in the car's own axes
             int32_t slot;     // the car's place in the vehicle pool and its flags then, to tell it is still the same car
             uint8_t flags;
+            float velocity[3]; // m/s, from the last hand over
         };
         static constexpr int kBoxes = 160, kPerLight = 5, kLists = 8;
         struct List
@@ -8300,6 +8303,7 @@ private:
             int count = 0;
             float focus[3] = {};              // the player, where the boxes' shadows are seen
             uintptr_t watched = 0;            // the car nearest the player, which VehicleBoxShadowsLog follows
+            float frameSeconds = 0.0f;        // since the hand over before
             Box boxes[kBoxes];
         };
         static inline List lists[kLists]{};
@@ -8423,6 +8427,49 @@ private:
                     [](const auto& a, const auto& b) { return a.first < b.first; });
             nearestDistance = n ? std::sqrt(nearest) : -1.0f;
             std::copy_n(focus, 3, list.focus);
+            // Each car's speed since the last hand over, which VehicleBoxShadowsLeadFrames moves its box ahead by. A
+            // second hand over in the same frame (CE 0xac507b) keeps the speeds it had.
+            {
+                struct Seen { float centre[3], velocity[3]; };
+                static std::unordered_map<uintptr_t, Seen> previous;
+                static LARGE_INTEGER frequency{}, before{};
+                LARGE_INTEGER time{};
+                QueryPerformanceCounter(&time);
+                if (!frequency.QuadPart)
+                    QueryPerformanceFrequency(&frequency);
+                const float dt = before.QuadPart ? float(time.QuadPart - before.QuadPart) / float(frequency.QuadPart) : 0.0f;
+                const bool step = dt > 0.002f && dt < 0.25f;
+                std::unordered_map<uintptr_t, Seen> current;
+                current.reserve(size_t(n));
+                for (int i = 0; i < n; ++i)
+                {
+                    auto& box = found[i].second;
+                    const auto it = previous.find(box.vehicle);
+                    Seen seen{};
+                    std::copy_n(box.centre, 3, seen.centre);
+                    if (it != previous.end())
+                    {
+                        if (step)
+                            for (int k = 0; k < 3; ++k)
+                                seen.velocity[k] = std::clamp((box.centre[k] - it->second.centre[k]) / dt, -80.0f, 80.0f);
+                        else
+                        {
+                            std::copy_n(it->second.centre, 3, seen.centre);
+                            std::copy_n(it->second.velocity, 3, seen.velocity);
+                        }
+                    }
+                    std::copy_n(seen.velocity, 3, box.velocity);
+                    current.emplace(box.vehicle, seen);
+                }
+                if (step || !before.QuadPart)
+                {
+                    previous.swap(current);
+                    before = time;
+                    list.frameSeconds = dt;
+                }
+                else
+                    list.frameSeconds = 0.0f;
+            }
             list.count = (std::min)(n, kBoxes);
             for (int i = 0; i < list.count; ++i)
                 list.boxes[i] = found[i].second;
@@ -8597,6 +8644,8 @@ private:
                         std::copy_n(found->boxes, found->count, lastFound.boxes);
                         std::copy_n(found->focus, 3, lastFound.focus);
                         lastFound.watched = found->watched;
+                        if (found->frameSeconds > 0.0f)
+                            lastFound.frameSeconds = found->frameSeconds;
                         drawn = &lastFound;
                     }
                 }
@@ -8712,8 +8761,19 @@ private:
                 for (int i = 0; i < used; ++i)
                 {
                     Box box = state.boxes[i].box;
-                    if (R.bVehicleBoxShadowsLive && !Refresh(box) && drawn && box.vehicle == drawn->watched)
-                        ++traceStaleWatched;
+                    if (R.bVehicleBoxShadowsLive)
+                    {
+                        if (!Refresh(box) && drawn && box.vehicle == drawn->watched)
+                            ++traceStaleWatched;
+                    }
+                    else if (drawn)
+                    {
+                        // The lights are drawn a frame after the cars stood where the boxes were taken: ahead by the
+                        // car's own speed, so the shadow neither lags nor jerks as a read of the moving car did.
+                        const float lead = R.fVehicleBoxShadowLeadFrames * (std::min)(drawn->frameSeconds, 0.1f);
+                        for (int k = 0; k < 3; ++k)
+                            box.centre[k] += box.velocity[k] * lead;
+                    }
                     boxStrength[i] = state.boxes[i].strength;
                     // The lower the light, the longer the shadow, and the plainer its box's square shape. The box's top
                     // comes down to VehicleBoxShadowsLowLightHeight of its height, which shortens the shadow while its
