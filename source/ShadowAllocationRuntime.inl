@@ -782,11 +782,18 @@ namespace PlayerShadowAllocation
                         {light.mDirection.x,light.mDirection.y,light.mDirection.z},
                         static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle,&caster)
                     : volumeVisible ? SlotGain::InView : SlotGain::OffScreen;
+            // An uncached lamp whose light reaches you or your car throws its shadow round you, in view whichever
+            // way the camera looks. Ranked by where it stood from the camera, the lamp next to the car in a tunnel
+            // took and lost its slot as the camera turned or the car went back and forth, and the car's shadow
+            // jumped between the lamp's map and its box.
+            const bool lightsPlayer=casterPriority && kind==budget::Kind::Lamp && !cached &&
+                std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=light.mRadius*light.mRadius;
+            if(lightsPlayer) gain=SlotGain::InView;
             // An uncached lamp out of the frame (behind or beside the camera, view weight 1) whose light still
             // reaches it counted as a shadow in view, and in tunnels lamps 15-20 m behind took slots from those
             // ahead. Close behind it throws your car's shadow forward into view, so it keeps that within
             // BehindLampReach; further away it ranks as off screen.
-            if(casterPriority && kind==budget::Kind::Lamp && !cached && gain==SlotGain::InView && behindLampReach>0 &&
+            if(casterPriority && kind==budget::Kind::Lamp && !cached && !lightsPlayer && gain==SlotGain::InView && behindLampReach>0 &&
                state.view.valid && viewWeight<=1.01f && geometry.distanceSquared>behindLampReach*behindLampReach)
                 gain=SlotGain::OffScreen;
             if(casterPriority && kind==budget::Kind::Lamp && !cached && gain==SlotGain::InView &&
