@@ -26,6 +26,12 @@ import common;
 // Game functions are named by their address in the Complete Edition exe (base 0x400000), whatever base it got;
 // others by their module and the nearest export.
 //
+// Two more things are kept over the whole session:
+//  - every call stack sampled, with its count, written with each report to GTAIV.EFLC.FusionFix.Profiler.folded
+//    (one line a stack, "thread;outermost;...;innermost count", the input of flame graph tools);
+//  - the main thread's samples of the last seconds: a frame (from one CGame::Process to the next) longer than
+//    ProfilerSpikeMs gets a block of its own in the log, where the main thread was in that frame.
+//
 // While a thread is stopped only its context and a copy of the top of its stack are taken: nothing is allocated
 // or locked then, as the stopped thread may hold the heap's lock or the loader's.
 namespace Profiler
@@ -37,8 +43,29 @@ namespace Profiler
     int32_t nRate = 0;                      // samples a second of each sampled thread, 0: off
     int32_t nThreads = 6;                   // how many of the busiest threads are sampled
     int32_t nInterval = 30;                 // seconds a report
-    DWORD nMainThread = 0;
+    int32_t nSpikeMs = 50;                  // a frame longer than this is reported on its own, 0: off
+    std::atomic<DWORD> nMainThread = 0;      // the thread of CGame::Process, from its first frame
     std::atomic<bool> bRunning = false;
+
+    constexpr LONGLONG SpikeLongestMs = 3000;   // a longer gap between frames is a pause or a load
+    constexpr uint32_t SpikesPerReport = 20;
+    constexpr size_t FoldedLimit = 200000;      // different stacks kept, the rest counted as one
+
+    // The frames: when each CGame::Process started, written by the main thread only
+    constexpr uint32_t FrameRing = 256;
+    LONGLONG frameTimes[FrameRing] = {};
+    std::atomic<uint32_t> frameCount = 0;
+
+    // The main thread's last samples, by the sampler only
+    struct MainSample
+    {
+        LONGLONG time = 0;
+        uint32_t count = 0;
+        uintptr_t frames[MaxFrames + 1] = {};
+    };
+    constexpr size_t MainRing = 8192;
+    std::vector<MainSample> mainSamples;
+    uint64_t mainSampled = 0;
 
     // Executable ranges of the loaded modules, and their exports
     struct Module
@@ -142,17 +169,23 @@ namespace Profiler
         return nullptr;
     }
 
-    // Whether the instruction before address is a call: E8 rel32, or FF /2 as call reg, [reg], [reg+disp8],
-    // [reg+disp32], [disp32] and with a SIB byte
-    bool IsReturnAddress(uintptr_t address)
+    // Whether the instruction before address is a call: 1 for E8 rel32, 2 for FF /2 as call reg, [reg], [reg+disp8],
+    // [reg+disp32], [disp32] and with a SIB byte, 0 for none
+    bool IsIndirectCall(const uint8_t* p);
+    int CallBefore(uintptr_t address)
     {
         auto module = FindModule(address);
         auto code = FindCode(module, address);
         if (!code || address < code->first + 8)
-            return false;
+            return 0;
         auto p = (const uint8_t*)address;
         if (p[-5] == 0xE8)
-            return true;
+            return 1;
+        return IsIndirectCall(p) ? 2 : 0;
+    }
+
+    bool IsIndirectCall(const uint8_t* p)
+    {
         auto isCall = [](uint8_t modrm) { return ((modrm >> 3) & 7) == 2; };
         if (p[-2] == 0xFF && isCall(p[-1]) && (p[-1] >> 6) == 3)
             return true;
@@ -197,6 +230,30 @@ namespace Profiler
         return start;
     }
 
+    // The function a direct call reaches, through a jmp rel32 or jmp [import] thunk
+    uintptr_t CallTarget(uintptr_t target)
+    {
+        for (int hop = 0; hop < 2; hop++)
+        {
+            if (!FindCode(FindModule(target), target))
+                break;
+            auto p = (const uint8_t*)target;
+            if (p[0] == 0xE9)
+                target = target + 5 + *(const int32_t*)(p + 1);
+            else if (p[0] == 0xFF && p[1] == 0x25)
+            {
+                auto slot = *(const uintptr_t*)(p + 2);
+                auto module = FindModule(slot);
+                if (!module)
+                    break;
+                target = *(const uintptr_t*)slot;
+            }
+            else
+                break;
+        }
+        return FunctionStart(target);
+    }
+
     std::string Name(uintptr_t function)
     {
         auto module = FindModule(function);
@@ -228,11 +285,16 @@ namespace Profiler
         HANDLE handle = nullptr;
         std::string name;
         uint64_t cpuLast = 0, cpuSecond = 0, cpuInterval = 0;
-        bool alive = false, sampled = false;
+        bool alive = false, sampled = false, main = false;
         uintptr_t stackLow = 0, stackHigh = 0;  // the committed region the stack was last found in
         uint32_t samples = 0;
         std::unordered_map<uintptr_t, uint32_t> self, total;
     };
+
+    // The session's stacks: thread id and frames, innermost first, as bytes
+    std::unordered_map<std::string, uint64_t> folded;
+    std::unordered_map<DWORD, std::string> foldedNames;
+    uint64_t foldedOther = 0;
     std::unordered_map<DWORD, Thread> threads;
 
     uint64_t CpuTime(HANDLE handle)
@@ -294,6 +356,11 @@ namespace Profiler
                     thread.cpuLast = CpuTime(thread.handle);
                 }
                 thread.alive = true;
+                if (!thread.main && thread.id == nMainThread)
+                {
+                    thread.main = true;
+                    thread.name = ThreadName(thread.id, thread.handle);
+                }
                 auto cpu = CpuTime(thread.handle);
                 thread.cpuSecond = cpu - std::min(cpu, thread.cpuLast);
                 thread.cpuInterval += thread.cpuSecond;
@@ -322,6 +389,9 @@ namespace Profiler
         std::sort(busiest.begin(), busiest.end(), [](auto a, auto b) { return a->cpuSecond > b->cpuSecond; });
         for (size_t i = 0; i < busiest.size() && i < size_t(nThreads); i++)
             busiest[i]->sampled = true;
+        // The main thread always, for its frames
+        if (auto main = threads.find(nMainThread); nSpikeMs > 0 && main != threads.end() && main->second.alive)
+            main->second.sampled = true;
     }
 
     // One sample of a thread: stopped, its instruction and the top of its stack copied, let go
@@ -331,9 +401,11 @@ namespace Profiler
         uint32_t copied = 0;
         CONTEXT context{};
         context.ContextFlags = CONTEXT_CONTROL;
+        LARGE_INTEGER time;
         if (SuspendThread(thread.handle) == DWORD(-1))
             return;
         bool ok = GetThreadContext(thread.handle, &context) != FALSE;
+        QueryPerformanceCounter(&time);
         if (ok)
         {
             uintptr_t esp = context.Esp;
@@ -361,11 +433,23 @@ namespace Profiler
         uintptr_t frames[MaxFrames + 1];
         uint32_t count = 0;
         frames[count++] = FunctionStart(context.Eip);
+        // A return address after a direct call counts only if that call goes to the function found below it: older
+        // return addresses left deeper on the stack fail that. Three refused in a row (a tail call breaks the chain)
+        // and the next one is taken anyway. Indirect calls can't be checked and are taken
+        uint32_t refused = 0;
         for (uint32_t offset = 0; offset + 4 <= copied && count <= MaxFrames; offset += 4)
         {
             uintptr_t value = *(uint32_t*)(stack + offset);
-            if (IsReturnAddress(value))
-                frames[count++] = FunctionStart(value);
+            int call = CallBefore(value);
+            if (!call)
+                continue;
+            if (call == 1 && refused < 3 && CallTarget(value + *(const int32_t*)(value - 4)) != frames[count - 1])
+            {
+                refused++;
+                continue;
+            }
+            refused = 0;
+            frames[count++] = FunctionStart(value);
         }
         thread.samples++;
         thread.self[frames[0]]++;
@@ -377,6 +461,134 @@ namespace Profiler
             if (!seen)
                 thread.total[frames[i]]++;
         }
+
+        std::string key((const char*)&thread.id, sizeof(thread.id));
+        key.append((const char*)frames, count * sizeof(uintptr_t));
+        if (auto it = folded.find(key); it != folded.end())
+            it->second++;
+        else if (folded.size() < FoldedLimit)
+            folded.emplace(std::move(key), 1);
+        else
+            foldedOther++;
+        if (!foldedNames.contains(thread.id))
+            foldedNames.emplace(thread.id, thread.name);
+
+        if (thread.id == nMainThread && nSpikeMs > 0)
+        {
+            if (mainSamples.empty())
+                mainSamples.resize(MainRing);
+            auto& sample = mainSamples[mainSampled++ % MainRing];
+            sample.time = time.QuadPart;
+            sample.count = count;
+            std::copy_n(frames, count, sample.frames);
+        }
+    }
+
+    std::string Stack(const uintptr_t* frames, uint32_t count, const char* separator)
+    {
+        std::string text;
+        for (uint32_t i = 0; i < count; i++)
+        {
+            if (i)
+                text += separator;
+            text += Name(frames[i]);
+        }
+        return text;
+    }
+
+    // The session's stacks to the .folded file, outermost first; the file is written whole each time
+    void WriteFolded()
+    {
+        auto path = FusionLog::PathFor("Profiler", L".folded");
+        FILE* file = nullptr;
+        if (_wfopen_s(&file, path.c_str(), L"wb") || !file)
+            return;
+        std::unordered_map<uintptr_t, std::string> names;
+        auto name = [&](uintptr_t function) -> const std::string&
+        {
+            auto it = names.find(function);
+            if (it == names.end())
+                it = names.emplace(function, Name(function)).first;
+            return it->second;
+        };
+        for (auto& [key, count] : folded)
+        {
+            DWORD id = *(const DWORD*)key.data();
+            auto frames = (const uintptr_t*)(key.data() + sizeof(DWORD));
+            uint32_t n = uint32_t((key.size() - sizeof(DWORD)) / sizeof(uintptr_t));
+            std::string line = std::format("tid {} {}", id, foldedNames[id]);
+            for (uint32_t i = n; i-- > 0;)
+            {
+                line += ';';
+                line += name(frames[i]);
+            }
+            line += std::format(" {}\n", count);
+            fwrite(line.data(), 1, line.size(), file);
+        }
+        if (foldedOther)
+        {
+            auto line = std::format("[stacks past {}] {}\n", FoldedLimit, foldedOther);
+            fwrite(line.data(), 1, line.size(), file);
+        }
+        fclose(file);
+    }
+
+    // A long frame: where the main thread was between its start and end
+    uint32_t nSpikes = 0, nSpikesSkipped = 0;
+    void ReportSpike(LONGLONG start, LONGLONG end, LONGLONG frequency)
+    {
+        if (nSpikes >= SpikesPerReport)
+        {
+            nSpikesSkipped++;
+            return;
+        }
+        nSpikes++;
+        std::unordered_map<uintptr_t, uint32_t> self;
+        std::unordered_map<std::string, uint32_t> stacks;
+        uint32_t samples = 0;
+        uint64_t first = mainSampled > MainRing ? mainSampled - MainRing : 0;
+        for (uint64_t i = first; i < mainSampled; i++)
+        {
+            auto& sample = mainSamples[i % MainRing];
+            if (sample.time < start || sample.time > end || !sample.count)
+                continue;
+            samples++;
+            self[sample.frames[0]]++;
+            stacks[std::string((const char*)sample.frames, sample.count * sizeof(uintptr_t))]++;
+        }
+        std::string text = std::format("frame of {:.1f} ms, {} samples of the main thread in it\n",
+            double(end - start) * 1000.0 / double(frequency), samples);
+        if (samples)
+        {
+            std::vector<std::pair<uintptr_t, uint32_t>> top(self.begin(), self.end());
+            std::sort(top.begin(), top.end(), [](auto& a, auto& b) { return a.second > b.second; });
+            text += "  in (self):\n";
+            for (size_t i = 0; i < top.size() && i < 10; i++)
+                text += std::format("    {:5.1f}%  {}\n", top[i].second * 100.0 / samples, Name(top[i].first));
+            std::vector<std::pair<std::string, uint32_t>> paths(stacks.begin(), stacks.end());
+            std::sort(paths.begin(), paths.end(), [](auto& a, auto& b) { return a.second > b.second; });
+            text += "  stacks (innermost first):\n";
+            for (size_t i = 0; i < paths.size() && i < 5; i++)
+                text += std::format("    {:5.1f}%  {}\n", paths[i].second * 100.0 / samples,
+                    Stack((const uintptr_t*)paths[i].first.data(), uint32_t(paths[i].first.size() / sizeof(uintptr_t)), " < "));
+        }
+        FusionLog::WriteText("Profiler", "Spike", text);
+    }
+
+    // Frames that ended since the last look, the long ones reported
+    uint32_t framesSeen = 0;
+    void CheckFrames(LONGLONG frequency)
+    {
+        uint32_t count = frameCount.load(std::memory_order_acquire);
+        uint32_t from = std::max<uint32_t>({ framesSeen, 1u, count > FrameRing - 1 ? count - (FrameRing - 1) : 0u });
+        for (uint32_t i = from; i < count; i++)
+        {
+            LONGLONG start = frameTimes[(i - 1) % FrameRing], end = frameTimes[i % FrameRing];
+            LONGLONG ms = (end - start) * 1000 / frequency;
+            if (ms >= nSpikeMs && ms < SpikeLongestMs)
+                ReportSpike(start, end, frequency);
+        }
+        framesSeen = count;
     }
 
     uint64_t selfCpuLast = 0;
@@ -415,7 +627,12 @@ namespace Profiler
             top(thread->self, thread->samples, "in (self)");
             top(thread->total, thread->samples, "on the stack (total)");
         }
+        if (nSpikeMs > 0)
+            text += std::format("frames over {} ms: {} reported{}\n", nSpikeMs, nSpikes,
+                nSpikesSkipped ? std::format(", {} more not ({} at most a report)", nSpikesSkipped, SpikesPerReport) : std::string());
+        nSpikes = nSpikesSkipped = 0;
         FusionLog::WriteText("Profiler", "Report", text);
+        WriteFolded();
 
         for (auto& [id, thread] : threads)
         {
@@ -451,6 +668,8 @@ namespace Profiler
             for (auto& [id, thread] : threads)
                 if (thread.sampled && thread.alive)
                     Sample(thread);
+            if (nSpikeMs > 0)
+                CheckFrames(frequency.QuadPart);
 
             // Sleep takes whole milliseconds (1 to 2 with timeBeginPeriod), so at 1000 a second and more the rate is
             // what the timer gives; the report counts the samples taken
@@ -495,13 +714,29 @@ public:
             nRate = std::clamp(iniReader.ReadInteger("MISC", "Profiler", 0), 0, 4000);
             nThreads = std::clamp(iniReader.ReadInteger("MISC", "ProfilerThreads", 6), 1, 32);
             nInterval = std::clamp(iniReader.ReadInteger("MISC", "ProfilerInterval", 30), 5, 600);
+            nSpikeMs = std::clamp(iniReader.ReadInteger("MISC", "ProfilerSpikeMs", 50), 0, 2000);
             if (!nRate)
                 return;
-            nMainThread = GetCurrentThreadId();
             bRunning = true;
             std::thread(Run).detach();
-            FusionLog::Write("Profiler", "Settings", "%d samples a second of the %d busiest threads, a report every %d s; main thread %u\n",
-                nRate, nThreads, nInterval, nMainThread);
+            FusionLog::Write("Profiler", "Settings", "%d samples a second of the %d busiest threads, a report every %d s, frames over %d ms on their own\n",
+                nRate, nThreads, nInterval, nSpikeMs);
+        };
+
+        // Each frame of the main thread starts here
+        FusionFix::onGameProcessEvent() += []()
+        {
+            if (!Profiler::bRunning)
+                return;
+            if (!Profiler::nMainThread)
+                Profiler::nMainThread = GetCurrentThreadId();
+            if (Profiler::nSpikeMs <= 0)
+                return;
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+            auto n = Profiler::frameCount.load(std::memory_order_relaxed);
+            Profiler::frameTimes[n % Profiler::FrameRing] = now.QuadPart;
+            Profiler::frameCount.store(n + 1, std::memory_order_release);
         };
 
         FusionFix::onShutdownEvent() += []()
