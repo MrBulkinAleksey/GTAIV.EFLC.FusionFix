@@ -4,6 +4,7 @@ module;
 #include "FusionLog.hpp"
 #include <psapi.h>
 #include <tlhelp32.h>
+#include <mmsystem.h>
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -13,7 +14,7 @@ module;
 #include <unordered_set>
 #include <vector>
 
-#pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "winmm.lib") // timeBeginPeriod()/timeEndPeriod()
 
 export module profiler;
 
