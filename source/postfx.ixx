@@ -2742,6 +2742,7 @@ private:
 
     static void __fastcall OnDeviceLost()
     {
+        FusionLog::Write("PostFx", "Device", "lost, thread %lu", GetCurrentThreadId());
         PostFxResources.ReleaseTextures();
         PostFxResources.ReleaseWaterMask();
         UnbindGlassReflections();
@@ -3037,11 +3038,16 @@ private:
             }
         }
 
-        for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
-            PostFxResources.AOCamDepthTex->mD3DTexture->GetSurfaceLevel(i, &PostFxResources.AOCamDepthSurf[i]);
-
-        PostFxResources.AOTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.AOSurf);
-        PostFxResources.AOBlurTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.AOBlurSurf);
+        auto& R = PostFxResources;
+        if (R.AOCamDepthTex && R.AOCamDepthTex->mD3DTexture)
+            for (auto i = 0; i < R.nAmbientOcclusionMaxMipLevel; ++i)
+                R.AOCamDepthTex->mD3DTexture->GetSurfaceLevel(i, &R.AOCamDepthSurf[i]);
+        if (R.AOTex && R.AOTex->mD3DTexture)
+            R.AOTex->mD3DTexture->GetSurfaceLevel(0, &R.AOSurf);
+        if (R.AOBlurTex && R.AOBlurTex->mD3DTexture)
+            R.AOBlurTex->mD3DTexture->GetSurfaceLevel(0, &R.AOBlurSurf);
+        FusionLog::Write("PostFx", "Device", "reset %dx%d, scene %dx%d, thread %lu, AO targets %s", int(*rage::grcDevice::ms_nActiveWidth),
+                         int(*rage::grcDevice::ms_nActiveHeight), int(width), int(height), GetCurrentThreadId(), R.AOCamDepthSurf[0] && R.AOSurf && R.AOBlurSurf ? "made" : "MISSING");
     }
 
     static void Init()
@@ -6734,10 +6740,31 @@ private:
         R.bWaterMaskCaptured = false;
     }
 
+    // AO's targets all exist. Loading a game from the menu once drew a frame after OnDeviceLost released them and before
+    // OnDeviceReset made them again, and crashed on AOCamDepthTex
+    static bool AOTargetsReady()
+    {
+        auto& R = PostFxResources;
+        bool ready = R.mSpecularRT && R.mSpecularRT->mD3DTexture && R.AOCamDepthTex &&
+                     R.AOCamDepthTex->mD3DTexture && R.AOTex && R.AOTex->mD3DTexture && R.AOBlurTex && R.AOBlurTex->mD3DTexture &&
+                     R.AOSurf && R.AOBlurSurf;
+        for (auto i = 0; ready && i < R.nAmbientOcclusionMaxMipLevel; ++i)
+            ready = R.AOCamDepthSurf[i] != nullptr;
+        static bool wasReady = true;
+        if (ready != wasReady)
+        {
+            wasReady = ready;
+            FusionLog::Write("PostFx", "AO", ready ? "targets back, AO drawn again"
+                                                   : "a target is missing (cam depth %p, ao %p, blur %p, specular %p), thread %lu: AO skipped",
+                             (void*)R.AOCamDepthTex, (void*)R.AOTex, (void*)R.AOBlurTex, (void*)R.mSpecularRT, GetCurrentThreadId());
+        }
+        return ready;
+    }
+
     static void RenderAmbientOcclusion()
     {
         static auto AO = FusionFixSettings.GetRef("PREF_SAO");
-        if (PostFxResources.AOEffect && PostFxResources.AOEnabled && AO->get())
+        if (PostFxResources.AOEffect && PostFxResources.AOEnabled && AO->get() && AOTargetsReady())
         { // AO
             IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
             // Nothing saved by D3DX (see SavedShaders): textures, samplers, constants, the passes' render states and the
