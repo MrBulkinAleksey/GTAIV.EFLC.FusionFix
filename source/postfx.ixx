@@ -8607,7 +8607,8 @@ private:
 
         // Render thread, for the light about to be drawn: up to three cars its light reaches, the nearest the light first,
         // without the car the light belongs to; none where the light's own map shows the cars.
-        static bool SetForLight(IDirect3DDevice9* pDevice, const rage::CLightSource& light, bool mapHasCars)
+        // Returns how much of a shadow its boxes give: the strongest box times the lamp's strength, 0 for none.
+        static float SetForLight(IDirect3DDevice9* pDevice, const rage::CLightSource& light, bool mapHasCars)
         {
             auto& R = PostFxResources;
             // Boxes 0-2 at c143-c148 with the lamp's own at c149, boxes 3 and 4 at c121-c124.
@@ -8860,7 +8861,7 @@ private:
             {
                 if (constantsOn)
                     Off(pDevice);
-                return false;
+                return 0.0f;
             }
             lightsWithBoxes.fetch_add(1, std::memory_order_relaxed);
             // The boxes left over stand far away, small.
@@ -8881,7 +8882,10 @@ private:
             pDevice->SetPixelShaderConstantF(149, lamp, 1);
             pDevice->SetPixelShaderConstantF(121, constants[6], 4);
             constantsOn = true;
-            return true;
+            float strongest = 0.0f;
+            for (int i = 0; i < used; ++i)
+                strongest = (std::max)(strongest, boxStrength[i]);
+            return strongest * lamp[3];
         }
 
         // For the log: lamps whose boxes were left out as they stand no higher than the roof, and the last of them.
@@ -8952,7 +8956,7 @@ private:
             if (!pDevice)
                 return;
             const bool mapped = HasShadowMap(light);
-            const bool boxed = VehicleBoxShadows::SetForLight(pDevice, light, mapped);
+            const float boxed = VehicleBoxShadows::SetForLight(pDevice, light, mapped);
             if (R.LocalContactShadowConsts[7] == 0.0f)
                 return;
             // A contact shadow only belongs where a shadow shows the car: the light's own map in a dynamic slot, or
@@ -8963,10 +8967,13 @@ private:
             // under every lamp it passed.
             const bool insideOnly = R.bInteriorScene && (light.mFlags & 0x60) == 0x20 &&
                 !(light.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW));
+            // With boxes it comes in and goes out with them: at full at once, its frame showed round the car before
+            // the box's shadow under it had faded in, and stayed after it had faded out, a blink behind the car.
+            const float unshadowed = R.fLocalContactShadowUnshadowed;
             const float intensity = (light.mFlags & 0x200) ? 0.0f
-                : R.fLocalContactShadowUnshadowed >= 1.0f || insideOnly || mapped || boxed
+                : unshadowed >= 1.0f || insideOnly || mapped
                     ? R.fLocalContactShadowIntensity
-                    : R.fLocalContactShadowIntensity * R.fLocalContactShadowUnshadowed;
+                    : R.fLocalContactShadowIntensity * (unshadowed + (1.0f - unshadowed) * (std::min)(boxed, 1.0f));
             const bool off = intensity <= 0.0f;
             if (!off && intensity != R.fLocalContactLightIntensity)
             {
