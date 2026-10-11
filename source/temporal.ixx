@@ -7,6 +7,7 @@ export module temporal;
 
 import common;
 import comvars;
+import coronas;
 import d3dx9_43;
 import framegeneration;
 import hdr;
@@ -1792,7 +1793,8 @@ public:
             own = depthRT->mD3DTexture;
             depthRT->mD3DTexture = steady;
         }
-        shRenderCoronas.unsafe_ccall();
+        if (!CoronaRender::Draw())
+            shRenderCoronas.unsafe_ccall();
         if (own)
             depthRT->mD3DTexture = own;
     }
