@@ -778,7 +778,8 @@ public:
     float fVehicleBoxShadowLightSize = 0.5f;
     float fVehicleBoxShadowRounding = 0.3f;
     float fVehicleBoxShadowScale[3] = { 1.0f, 0.95f, 0.9f }; // length, width, height, of the model's bounds
-    float fVehicleBoxShadowSelfMargin = 0.6f;
+    // How far a box's shadow follows the light: 1 away from it, 0 straight down under the car whatever the light's way.
+    float fVehicleBoxShadowFollowLight = 1.0f;
     float fVehicleBoxShadowLowLightNarrow = 1.0f;
     float fVehicleBoxShadowLowLightHeight = 0.6f;
     // Car lights (headlights, tail lights) shine low and close, so a box's shadow from them spreads over the whole road
@@ -1654,7 +1655,7 @@ public:
         fVehicleBoxShadowScale[0] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLength", 1.0f), 0.3f, 1.2f);
         fVehicleBoxShadowScale[1] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsWidth", 0.95f), 0.3f, 1.2f);
         fVehicleBoxShadowScale[2] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsHeight", 0.9f), 0.3f, 1.2f);
-        fVehicleBoxShadowSelfMargin = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsSelfMargin", 0.6f), 0.0f, 2.0f);
+        fVehicleBoxShadowFollowLight = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsFollowLight", 1.0f), 0.0f, 1.0f);
         fVehicleBoxShadowLowLightNarrow = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLowLightNarrow", 1.0f), 0.2f, 1.0f);
         fVehicleBoxShadowLowLightHeight = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLowLightHeight", 0.6f), 0.2f, 1.0f);
         fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
@@ -7113,11 +7114,11 @@ private:
                         R.szGlintsStatus, R.HeadlightGlintsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrHeadlightGlintsEffect),
                         R.nGlintsLastLights, R.GlintsLastIntensity[0], R.GlintsLastIntensity[1], R.GlintsLastCone[0], R.GlintsLastCone[1]);
                 log.Component("VehicleBoxShadows");
-                log.Printf("vehicle box shadows: %s, hook %s; since the last log %u frames drawn with their boxes, %u without, %u lights shaded with boxes; light size %.2f, rounding %.2f, from car lights %d, with slots %d, size %.2f %.2f %.2f of the bounds, self margin %.2f, low light narrow %.2f\n",
+                log.Printf("vehicle box shadows: %s, hook %s; since the last log %u frames drawn with their boxes, %u without, %u lights shaded with boxes; light size %.2f, rounding %.2f, from car lights %d, with slots %d, size %.2f %.2f %.2f of the bounds, follow light %.2f, low light narrow %.2f\n",
                         R.VehicleBoxShadowsEnabled() ? "on" : "off", VehicleBoxShadows::lightListBuilt ? "installed" : "missing",
                         VehicleBoxShadows::framesMatched.exchange(0), VehicleBoxShadows::framesUnmatched.exchange(0), VehicleBoxShadows::lightsWithBoxes.exchange(0),
                         R.fVehicleBoxShadowLightSize, R.fVehicleBoxShadowRounding, int(R.bVehicleBoxShadowsFromCarLights), int(R.bVehicleBoxShadowsWithSlots),
-                        R.fVehicleBoxShadowScale[0], R.fVehicleBoxShadowScale[1], R.fVehicleBoxShadowScale[2], R.fVehicleBoxShadowSelfMargin,
+                        R.fVehicleBoxShadowScale[0], R.fVehicleBoxShadowScale[1], R.fVehicleBoxShadowScale[2], R.fVehicleBoxShadowFollowLight,
                         R.fVehicleBoxShadowLowLightNarrow);
                 {
                     const auto& l = VehicleBoxShadows::lastLowLight;
@@ -8552,7 +8553,8 @@ private:
                         if (flat > 0.01f && d > 0.01f)
                         {
                             const float t = std::clamp((dz / d - 0.3f) / 0.6f, 0.0f, 1.0f);
-                            const float low = 1.0f - t * t * (3.0f - 2.0f * t); // 0 overhead, 1 at 17 degrees and below
+                            // 0 overhead, 1 at 17 degrees and below; a shadow that does not follow the light stays short anyway
+                            const float low = (1.0f - t * t * (3.0f - 2.0f * t)) * R.fVehicleBoxShadowFollowLight;
                             const float narrow = 1.0f - (1.0f - R.fVehicleBoxShadowLowLightNarrow) * low;
                             const float a = std::abs(dx * box.forward[0] + dy * box.forward[1]) / flat; // 1: ahead or behind
                             along = 1.0f + (narrow - 1.0f) * (1.0f - a);
@@ -8601,9 +8603,7 @@ private:
             }
             constants[6][0] = R.fVehicleBoxShadowLightSize;
             constants[6][1] = rounding;
-            // A car's or ped's pixel nearer a box than this is on that car or in it, which its box does not shadow: the
-            // box is smaller than the car and rounded, so roof, bonnet and spoiler stand out of it.
-            constants[6][2] = R.fVehicleBoxShadowSelfMargin;
+            constants[6][2] = R.fVehicleBoxShadowFollowLight;
             constants[6][3] = (std::min)(strength, 1.0f);
             pDevice->SetPixelShaderConstantF(143, constants[0], 7);
             constantsOn = true;
