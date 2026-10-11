@@ -29,6 +29,36 @@ namespace PlayerShadowAllocation
     static std::atomic<DWORD> ownerThread{0};
     static uintptr_t gameBase = 0;
     static bool cameraPriority = false;
+    static bool casterPriority = false;
+    static uint32_t casterHoldMs = 0;
+    // Copied on the game-process callback, read by selection on the render side.
+    static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
+    static fusionfix::shadows::ShadowCasterPresence casters{};
+    static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0}, lightsOffScreen{0};
+    // CasterAwareLampPriorityLog: filled by selection, written out from the game's thread.
+    static fusionfix::shadows::ShadowSlotTrace slotTrace;
+    // LampSpacing: lamps beside a nearer one in view give way to lamps further along
+    static fusionfix::shadows::ShadowLampSpacing lampSpacing;
+    static std::atomic<uint32_t> lampsSpacedOut{0};
+    static void FlushSlotTrace() noexcept
+    {
+        // A mark in the trace where something was seen: Ctrl+Shift+F7, or F12, the usual screenshot key.
+        if (slotTrace.enabled && CTimer::m_snTimeInMilliseconds && CTimer::m_frameCount) {
+            static bool markWasDown = false, shotWasDown = false;
+            const bool mark = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+                (GetAsyncKeyState(VK_F7) & 0x8000);
+            const bool shot = (GetAsyncKeyState(VK_F12) & 0x8000) != 0;
+            try {
+                if (mark && !markWasDown) slotTrace.Mark(static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds), *CTimer::m_frameCount, "key");
+                if (shot && !shotWasDown) slotTrace.Mark(static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds), *CTimer::m_frameCount, "screenshot");
+            } catch (...) {}
+            markWasDown = mark; shotWasDown = shot;
+        }
+        static ULONGLONG last = 0;
+        if (!slotTrace.enabled || GetTickCount64() - last < 1000) return;
+        last = GetTickCount64();
+        try { slotTrace.Flush(); } catch (...) {}
+    }
     static std::atomic<uint32_t> cameraPasses{0}, cameraFallbacks{0};
     static std::atomic<uint32_t> auxiliaryViewsRejected{0}, sceneCameraReads{0};
     static bool publicationEnabled = false; // Immutable after ready is published.
@@ -48,7 +78,10 @@ namespace PlayerShadowAllocation
         std::array<fusionfix::shadows::NativeShadowContinuity42::Candidate,4096> nativeCandidates{};
         bool continuityActive=false;
         bool tracedComparison=false;
+        unsigned claimsReset=0; // NativeShadowContinuity42::Begin, for the slot trace
         fusionfix::shadows::ShadowView view{};
+        fusionfix::shadows::ShadowCasterPresence casters{};
+        fusionfix::shadows::SlotGainHold gainHold;
         uintptr_t ped = 0, occupiedCar = 0;
         uint32_t frame = 0, viewFrame = 0;
         uintptr_t stackAnchor = 0;
@@ -67,9 +100,16 @@ namespace PlayerShadowAllocation
     static std::atomic<uint32_t> lampRemoved{0}, lampMissingInput{0}, lampDroppedPresent{0};
     static std::array<std::atomic<uint32_t>,8> rejectedPassReasons{};
     static std::atomic<uint32_t> rejectedAdapterChecks{0};
+    static void TraceRejected(unsigned code) noexcept
+    {
+        if (slotTrace.enabled && CTimer::m_snTimeInMilliseconds && CTimer::m_frameCount)
+            try { slotTrace.Rejected(code, static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds), *CTimer::m_frameCount); }
+            catch (...) { slotTrace.enabled = false; }
+    }
+
     static void RejectPass() noexcept
     {
-        if (state.pass.Active()) { ++fallbackPasses; ++rejectedAdapterChecks; }
+        if (state.pass.Active()) { ++fallbackPasses; ++rejectedAdapterChecks; TraceRejected(0); }
         state.pass.Cancel();
     }
 
@@ -85,6 +125,67 @@ namespace PlayerShadowAllocation
     {
         return ready.load(std::memory_order_acquire) && !unsupportedThread.load(std::memory_order_relaxed) &&
             bExtraNightShadows && bHeadlightShadows && bVehicleNightShadows;
+    }
+
+    // SlotMinHold: each slot remembers when its light took it. Render thread, like selection.
+    struct HoldEntry { uint32_t key{}; uint32_t since{}; };
+    static std::array<HoldEntry,7> holdEntries{};
+    static uint32_t slotMinHoldMs = 0;
+    static float behindLampReach = 12.0f; // BehindLampReach
+    static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
+    static std::atomic<uint32_t> lightsFlickering{0}; // lights ranked off screen as they flicker out of the list, for the status line
+
+    static void NoteSlotAcquires(const budget::PlayerShadowBudget::Selection& selection) noexcept
+    {
+        if (!slotMinHoldMs) return;
+        const auto now = GetTickCount();
+        std::array<HoldEntry,7> next{};
+        for (unsigned i = 0; i < 7; ++i) {
+            if (!(selection.validMask & (1u << i))) continue;
+            const auto key = static_cast<uint32_t>(selection.slots[i].key);
+            if (!key) continue;
+            const HoldEntry* held = nullptr;
+            for (const auto& e : holdEntries) if (e.key == key) { held = &e; break; }
+            if (held) { next[i] = *held; continue; }
+            next[i] = {key, now};
+        }
+        holdEntries = next;
+    }
+
+    // Whether a light took its slot less than SlotMinHold ago.
+    static bool SlotIsFresh(uint32_t key) noexcept
+    {
+        if (!slotMinHoldMs || !key) return false;
+        for (const auto& e : holdEntries)
+            if (e.key == key) return GetTickCount() - e.since < slotMinHoldMs;
+        return false;
+    }
+
+    // Game thread, once a second with the slot trace: whether selection runs at all, and how passes end.
+    static void SlotTraceStatus() noexcept
+    {
+        static ULONGLONG last = 0;
+        if (!slotTrace.enabled || GetTickCount64() - last < 1000) return;
+        last = GetTickCount64();
+        static uint32_t applied = 0, observed = 0, fallback = 0, adapter = 0;
+        static std::array<uint32_t, 8> reasons{};
+        const uint32_t a = appliedPasses.load(), o = observedPasses.load(), f = fallbackPasses.load(), r = rejectedAdapterChecks.load();
+        std::string why;
+        for (unsigned i = 0; i < 8; ++i) {
+            const uint32_t now = rejectedPassReasons[i].load();
+            if (now != reasons[i]) why += std::format(" {}:{}", i, now - reasons[i]);
+            reasons[i] = now;
+        }
+        try {
+            slotTrace.Status(std::format("ready={} install={} thread_ok={} night_shadows={} headlight_shadows={} vehicle_night_shadows={} "
+                "publication={} lamp_priority={} in the last second: applied={} observed={} fallback={} adapter_rejects={} reasons:{} "
+                "lamps_behind_walls={} sight_probes={} hits={} flickering={}",
+                ready.load() ? 1 : 0, ready.load() ? std::string("enabled") : "[" + installStatus + "]", unsupportedThread.load() ? 0 : 1, bExtraNightShadows ? 1 : 0, bHeadlightShadows ? 1 : 0,
+                bVehicleNightShadows ? 1 : 0, publicationEnabled ? 1 : 0, nativeLampPriority ? 1 : 0,
+                a - applied, o - observed, f - fallback, r - adapter, why.empty() ? " -" : why,
+                lampsHidden.exchange(0), sightProbes.exchange(0), sightHits.exchange(0), lightsFlickering.exchange(0)));
+        } catch (...) {}
+        applied = a; observed = o; fallback = f; adapter = r;
     }
     static std::atomic<uint32_t> captureCalls{0}, captureValid{0}, perspectiveCalls{0};
     static std::atomic<int> captureWidth{0}, captureHeight{0}, activeWidth{0}, activeHeight{0};
@@ -159,6 +260,146 @@ namespace PlayerShadowAllocation
         });
         return static_cast<bool>(cameraCaptureHook);
     }
+    // LampsBehindWalls: whether a light reaches the frame is told by its volume against the view, which
+    // walls do not stop, so in a tunnel the lamps of the bore beside it, as bright and never seen, took
+    // slots from those over the cars in front. An uncached lamp in view within its reach is checked by a
+    // segment from it to the camera against the map's collision, the way the game's ground probe tests
+    // it (CE 0x738880 on [0x12B9C78]); one that hits something counts as off screen. Selection (render
+    // thread) only reads the answers and asks for stale ones; the game thread probes a few a frame.
+    struct LampSight { Vec3 position{}; uint32_t checked{}, asked{}; bool hidden{}, pending{}, known{}; };
+    static std::mutex sightMutex;
+    static std::unordered_map<uint32_t, LampSight> lampSight;
+    static bool lampsBehindWalls = false;
+    static uint32_t sightFlags = 6; // the ground probe's: the map, not vehicles
+    static uintptr_t probeFunction = 0, probeLevel = 0, probeFar = 0;
+
+    // Lights seen with a frame or more missing in between, by key: when they came back, and until when they count as flickering.
+    struct LightPresence { uint32_t lastFrame{}, returned[2]{}, flickeringUntil{}; };
+    static std::unordered_map<uint32_t, LightPresence> lightPresence;
+    static bool FlickeringLight(uint32_t key, uint32_t frame, uint32_t now) noexcept
+    {
+        if (!key) return false;
+        if (lightPresence.size() > 4096) lightPresence.clear();
+        auto& p = lightPresence[key];
+        if (p.lastFrame && frame > p.lastFrame + 1 && frame - p.lastFrame < 30) {
+            p.returned[1] = p.returned[0]; p.returned[0] = now;
+            if (p.returned[1] && now - p.returned[1] < 2000) p.flickeringUntil = now + 3000;
+        }
+        p.lastFrame = frame;
+        return p.flickeringUntil && int32_t(p.flickeringUntil - now) > 0;
+    }
+
+    static bool LampBehindWall(uint32_t key, Vec3 position) noexcept
+    {
+        if (!lampsBehindWalls || !key) return false;
+        const auto now = GetTickCount();
+        std::lock_guard lock(sightMutex);
+        auto& s = lampSight[key];
+        const float x = s.position.x - position.x, y = s.position.y - position.y, z = s.position.z - position.z;
+        if (!s.asked || x * x + y * y + z * z > 0.25f) s = { position }; // new, or the key moved to another lamp
+        s.asked = now;
+        if (!s.pending && (!s.known || now - s.checked > 300)) s.pending = true;
+        return s.known && s.hidden && now - s.checked < 1500;
+    }
+
+    struct alignas(16) SightSegment { float a[4]; float b[4]; };
+    struct alignas(16) SightResult { uint8_t bytes[0x60]; };
+    using SightProbe = int(__thiscall*)(void* level, const SightSegment*, SightResult*, void* exclude,
+        uint32_t includeFlags, uint32_t typeFlags, uint32_t stateFlags, uint32_t maxResults, uint32_t unknown);
+
+    // The physics instance of an entity, as the ground probe takes one: its vtable +0xA0, else +0x38.
+    static void* EntityInstance(uintptr_t entity) noexcept
+    {
+        if (!entity) return nullptr;
+        const auto vtable = *reinterpret_cast<const uintptr_t*>(entity);
+        auto inst = reinterpret_cast<void*(__thiscall*)(uintptr_t)>(*reinterpret_cast<const uintptr_t*>(vtable + 0xA0))(entity);
+        return inst ? inst : *reinterpret_cast<void* const*>(entity + 0x38);
+    }
+
+    // Game thread, every frame: up to eight lamps asked about, oldest first.
+    static void ProbeLampSight(uintptr_t exclude) noexcept
+    {
+        if (!lampsBehindWalls || !probeFunction) return;
+        float camera[3];
+        if (!GameCamera::Position(camera)) return;
+        std::array<std::pair<uint32_t, Vec3>, 8> work{};
+        unsigned n = 0;
+        const auto now = GetTickCount();
+        {
+            std::lock_guard lock(sightMutex);
+            std::erase_if(lampSight, [&](const auto& e) { return now - e.second.asked > 5000; });
+            for (auto& [key, s] : lampSight)
+                if (s.pending && n < work.size()) work[n++] = { key, s.position };
+        }
+        const auto level = *reinterpret_cast<void* const*>(probeLevel);
+        if (!level) return;
+        void* skip = EntityInstance(exclude);
+        for (unsigned i = 0; i < n; ++i) {
+            const auto& p = work[i].second;
+            float d[3] = { camera[0] - p.x, camera[1] - p.y, camera[2] - p.z };
+            const float length = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            bool hidden = false;
+            if (length > 1.0f) {
+                // From half a metre off the lamp, so its own fitting in the ceiling is not the wall
+                const float k = 0.5f / length;
+                SightSegment segment{ { p.x + d[0] * k, p.y + d[1] * k, p.z + d[2] * k, 0.0f }, { camera[0], camera[1], camera[2], 0.0f } };
+                SightResult result{};
+                const auto farPoint = reinterpret_cast<const float*>(probeFar);
+                for (uint32_t at : { 0x10u, 0x20u, 0x30u }) std::memcpy(result.bytes + at, farPoint, 12);
+                *reinterpret_cast<uint32_t*>(result.bytes + 0x4C) = 0xFFFF;
+                hidden = reinterpret_cast<SightProbe>(probeFunction)(level, &segment, &result, skip, sightFlags, 0xFFFFFFFF, 7, 1, 0) != 0;
+                ++sightProbes;
+                if (hidden) ++sightHits;
+            }
+            std::lock_guard lock(sightMutex);
+            if (auto it = lampSight.find(work[i].first); it != lampSight.end()) {
+                it->second.hidden = hidden; it->second.known = true; it->second.pending = false; it->second.checked = GetTickCount();
+            }
+        }
+    }
+
+    // At install: the ground probe's call (CE 0xA54570 mov ecx, [level] ... 0xA5458A call 0x738880).
+    static void InstallLampSight(bool enabled, uint32_t flags) noexcept
+    {
+        if (!enabled) return;
+        const auto base = GameBase();
+        const auto at = reinterpret_cast<const uint8_t*>(base + 0x654570);
+        const auto call = reinterpret_cast<const uint8_t*>(base + 0x65458A);
+        if (at[0] != 0x8B || at[1] != 0x0D || *reinterpret_cast<const uint32_t*>(at + 2) != base + 0xEB9C78 ||
+            call[0] != 0xE8 || base + 0x65458A + 5 + *reinterpret_cast<const int32_t*>(call + 1) != base + 0x338880)
+            return;
+        probeLevel = base + 0xEB9C78;
+        probeFunction = base + 0x338880;
+        probeFar = base + 0x174B320;
+        sightFlags = flags;
+        lampsBehindWalls = true;
+    }
+
+    static void CaptureCasters() noexcept
+    {
+        using fusionfix::shadows::ShadowCasterPresence;
+        if (!casterPriority || !Enabled() || !CTimer::m_snTimeInMilliseconds) return;
+        PlayerCar::Focus focus;
+        ShadowCasterPresence next{};
+        next.timeMs = static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds);
+        const bool focused = PlayerCar::ReadFocus(focus);
+        if (focused) {
+            const auto add = [&](uintptr_t entity, float extent) {
+                float p[3];
+                if (!CEntity::GetPosition(entity, p)) return;
+                const float x = p[0] - focus.position[0], y = p[1] - focus.position[1], z = p[2] - focus.position[2];
+                if (x * x + y * y + z * z <= ShadowCasterPresence::Range * ShadowCasterPresence::Range)
+                    next.Add({p[0], p[1], p[2]}, extent);
+            };
+            next.valid = CVehicle::ForEachVehicle([&](uintptr_t v) { add(v, ShadowCasterPresence::VehicleExtent); }) &&
+                CPed::ForEachPed([&](uintptr_t p) { add(p, ShadowCasterPresence::PedExtent); });
+        }
+        if (!castersLock.test_and_set(std::memory_order_acquire)) {
+            casters = next; ++casterCaptures; castersLock.clear(std::memory_order_release);
+        }
+        if (focused) try { ProbeLampSight(focus.car); } catch (...) {}
+    }
+
     static bool Prepare() noexcept
     {
         if (!Enabled() || !CTimer::m_frameCount || !CTimer::m_snTimeInMilliseconds ||
@@ -170,15 +411,24 @@ namespace PlayerShadowAllocation
         if (ped != state.ped) {
             state.view = {};
             state.previousSelection = {}; state.previousSelectionFrame = 0;
+            state.gainHold.Reset();
         }
+        state.gainHold.holdMs = casterHoldMs;
         state.ped = ped;
         state.player = {focus.position[0], focus.position[1], focus.position[2]};
         state.occupiedCar = focus.car;
         state.drivingFocus=state.motionFocus.Update(state.player,state.occupiedCar,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
         state.frame = *CTimer::m_frameCount;
         state.lampContinuity.Begin(ped,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
-        state.continuity.Begin(ped,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
+        state.claimsReset=state.continuity.Begin(ped,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
         state.nativeCandidates.fill({}); labRelevant.fill(0);
+        if (casterPriority && !castersLock.test_and_set(std::memory_order_acquire)) {
+            state.casters = casters; castersLock.clear(std::memory_order_release);
+        }
+        // A contended copy keeps the last one; a stale one, from a pause or a
+        // load, makes every lamp count as lighting someone.
+        if (static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds) - state.casters.timeMs > 250u)
+            state.casters.valid = false;
         state.continuityActive=false;
         state.tracedComparison=false;
         state.stackAnchor = 0;
@@ -194,10 +444,38 @@ namespace PlayerShadowAllocation
             }
             if (state.view.valid) ++cameraPasses; else ++cameraFallbacks;
         }
+        if (casterPriority) state.casters.Look(state.view);
         if (reinterpret_cast<uintptr_t>(CurrentLights()) < 0x10000) return false;
         state.pass.Begin({state.frame, static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),
                           ped, state.occupiedCar != 0}, CurrentLights(), CurrentCount());
         state.continuityActive=publicationEnabled && nativeLampPriority && state.pass.Active();
+        lampSpacing.Update(state.motionFocus.Speed(),state.occupiedCar!=0,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
+        if(slotTrace.enabled) slotTrace.spacing=lampSpacing.spacing;
+        if(lampSpacing.spacing>0 && state.continuityActive) {
+            try {
+                const auto* lights=CurrentLights();
+                const auto count=CurrentCount();
+                lampSpacing.Begin(count);
+                for(uint32_t i=0;i<count && i<4096;++i) {
+                    const auto& light=lights[i];
+                    if(!(light.mFlags&rage::LF_DYNAMIC_SHADOW) || (light.mFlags&rage::LF_VEHICLE)) continue;
+                    const Vec3 position{light.mPosition.x,light.mPosition.y,light.mPosition.z};
+                    const float x=position.x-state.player.x,y=position.y-state.player.y,z=position.z-state.player.z;
+                    const float distanceSquared=x*x+y*y+z*z;
+                    if(!std::isfinite(distanceSquared) || distanceSquared>90.0f*90.0f ||
+                       !fusionfix::shadows::ShadowVolumeMayReachView(state.view,position,light.mRadius)) continue;
+                    lampSpacing.Add({i,position,{light.mDirection.x,light.mDirection.y,light.mDirection.z},
+                        static_cast<int>(light.mType)==2,distanceSquared,static_cast<uint32_t>(light.mCastShadows)});
+                }
+                lampSpacing.Direction(state.occupiedCar ? state.motionFocus.Velocity() : fusionfix::shadows::Vec3{});
+                lampSpacing.Resolve();
+            } catch(...) { lampSpacing.spacing=lampSpacing.base=lampSpacing.seconds=0; }
+        }
+        if(slotTrace.enabled && state.continuityActive)
+            try { slotTrace.Begin(state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),state.player,
+                state.occupiedCar!=0,state.view,CurrentCount());
+                if(state.claimsReset) slotTrace.ClaimsReset(state.claimsReset,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),state.frame); }
+            catch(...) { slotTrace.enabled=false; }
         if(state.continuityActive && ShadowTrace34::enabled.load(std::memory_order_relaxed)) {
             const auto tick=GetTickCount();
             for(int row=0;row<4;++row) {
@@ -271,8 +549,16 @@ namespace PlayerShadowAllocation
         // Keep the softer on-foot acquisition preference, but do not halve an
         // incumbent's visibility merely because the player is walking.
         const float effectiveWeight=retained ? visibleWeight : viewWeight;
-        const float adjusted=fusionfix::shadows::NativeLampPriorityDistance(original,
+        float adjusted=fusionfix::shadows::NativeLampPriorityDistance(original,
             distanceSquared,effectiveWeight,reach,retained);
+        // Driving, rank a visible lamp by how close the car is about to be, so
+        // the lamps over the traffic ahead take their slots before it is near.
+        if(casterPriority && state.occupiedCar && std::isfinite(distanceSquared) && distanceSquared>1.0f) {
+            const float anticipated=fusionfix::shadows::DrivingLampPriorityDistance(state.player,state.drivingFocus,
+                position,distanceSquared,visibleWeight);
+            if(std::isfinite(anticipated) && anticipated>=0 && anticipated<distanceSquared)
+                adjusted*=std::sqrt(anticipated/distanceSquared);
+        }
         if(adjusted!=original && std::isfinite(adjusted) && adjusted>=0) {
             regs.xmm0.f32[0]=adjusted; ++lampDistanceAdjusted;
         }
@@ -338,21 +624,93 @@ namespace PlayerShadowAllocation
             // Protect the whole visible influence volume, not screen center.
             const bool volumeVisible=fusionfix::shadows::ShadowVolumeMayReachView(state.view,
                 {light.mPosition.x,light.mPosition.y,light.mPosition.z},light.mRadius);
-            const bool relevant=std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=reach*reach &&
-                (volumeVisible || kind==budget::Kind::PlayerBeam);
+            // A light holding a slot keeps its claim a quarter further out than a newcomer may take one,
+            // so lights right at the reach do not drop it and win it back by turns.
+            bool holder=false;
+            for(const auto& old:state.previousSelection) if(old.key==key) { holder=true; break; }
+            const float claimReach=holder ? reach*1.25f : reach;
+            // Beyond the reach a light used to hold no claim at all, so the far lamps that got slots when nothing
+            // nearer wanted them handed them back and forth by distance; now its claim stands against others beyond
+            // it, and any light within the reach goes ahead of it (Candidate::inReach).
+            const bool inReach=std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=claimReach*claimReach;
+            const bool relevant=std::isfinite(geometry.distanceSquared) && (volumeVisible || kind==budget::Kind::PlayerBeam);
+            // A cached lamp with nobody in its light looks the same from its cache;
+            // beams and uncached lamps shadow the world wherever they shine.
+            using fusionfix::shadows::SlotGain;
+            const bool cached=(flags&rage::LF_STATIC_SHADOW) && light.mShadowCacheIndex>=0;
+            auto gain=SlotGain::InView;
+            int caster=-1;
+            if(casterPriority && kind!=budget::Kind::PlayerBeam)
+                gain=kind==budget::Kind::Lamp && cached
+                    ? state.casters.Lights({light.mPosition.x,light.mPosition.y,light.mPosition.z},
+                        {light.mDirection.x,light.mDirection.y,light.mDirection.z},
+                        static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle,&caster)
+                    : volumeVisible ? SlotGain::InView : SlotGain::OffScreen;
+            // An uncached lamp whose light reaches you or your car throws its shadow round you, in view whichever
+            // way the camera looks. Ranked by where it stood from the camera, the lamp next to the car in a tunnel
+            // took and lost its slot as the camera turned or the car went back and forth, and the car's shadow
+            // jumped between the lamp's map and its box.
+            const bool lightsPlayer=casterPriority && kind==budget::Kind::Lamp && !cached &&
+                std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=light.mRadius*light.mRadius;
+            if(lightsPlayer) gain=SlotGain::InView;
+            // An uncached lamp out of the frame (behind or beside the camera, view weight 1) whose light still
+            // reaches it counted as a shadow in view, and in tunnels lamps 15-20 m behind took slots from those
+            // ahead. Close behind it throws your car's shadow forward into view, so it keeps that within
+            // BehindLampReach; further away it ranks as off screen.
+            if(casterPriority && kind==budget::Kind::Lamp && !cached && !lightsPlayer && gain==SlotGain::InView && behindLampReach>0 &&
+               state.view.valid && viewWeight<=1.01f && geometry.distanceSquared>behindLampReach*behindLampReach)
+                gain=SlotGain::OffScreen;
+            if(casterPriority && kind==budget::Kind::Lamp && !cached && gain==SlotGain::InView &&
+               geometry.distanceSquared<=reach*reach &&
+               LampBehindWall(key,{light.mPosition.x,light.mPosition.y,light.mPosition.z})) {
+                gain=SlotGain::OffScreen; ++lampsHidden;
+            }
+            const auto rawGain=gain;
+            if(casterPriority) gain=state.gainHold.Apply(key,kind==budget::Kind::Lamp?LampGeometry(light):0,gain,
+                static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
+            const bool spacedOut=lampSpacing.spacing>0 && kind==budget::Kind::Lamp && lampSpacing.SpacedOut(index);
+            // Spacing thins rows of alike lamps (tunnels); a cached lamp whose worth comes from a car or ped in its
+            // light is not one of them: spaced out, it lost its slot to a lamp 60 m off for a frame (a slot trace).
+            if(spacedOut && gain==SlotGain::InView && !(cached && caster>=0)) { gain=SlotGain::OffScreen; ++lampsSpacedOut; }
+            // A light the game leaves out of its list every other frame (flickering fittings, some in tunnels) gave
+            // its slot to another light each time it went and took it back as it came, both shadows blinking. Back
+            // twice within 2 s, it ranks off screen for 3 s: it takes no slot from lights that are there.
+            if(kind!=budget::Kind::PlayerBeam && FlickeringLight(key,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds)) &&
+               gain==SlotGain::InView) { gain=SlotGain::OffScreen; ++lightsFlickering; }
+            if(slotTrace.enabled)
+                try {
+                    fusionfix::shadows::ShadowSlotTrace::Light traced{key,static_cast<uint8_t>(kind),rawGain,gain,cached,volumeVisible,
+                        {light.mPosition.x,light.mPosition.y,light.mPosition.z},geometry.distanceSquared,viewWeight,priorityDistance,spacedOut};
+                    traced.reachSquared=reach*reach;
+                    if(caster>=0 && static_cast<unsigned>(caster)<state.casters.count) {
+                        const auto& p=state.casters.points[caster];
+                        traced.caster=state.casters.extents[caster]>=fusionfix::shadows::ShadowCasterPresence::VehicleExtent?1:2;
+                        traced.casterInView=state.casters.inView[caster];
+                        traced.casterDistance=std::sqrt((p.x-light.mPosition.x)*(p.x-light.mPosition.x)+
+                            (p.y-light.mPosition.y)*(p.y-light.mPosition.y)+(p.z-light.mPosition.z)*(p.z-light.mPosition.z));
+                    }
+                    slotTrace.Observe(index,traced); }
+                catch(...) { slotTrace.enabled=false; }
+            if(gain==SlotGain::None) ++lampsWithoutCasters;
+            else if(gain==SlotGain::OffScreen) ++lightsOffScreen;
             labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(
-                {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam);
+                {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam,gain,
+                priorityDistance>=0?priorityDistance:geometry.distanceSquared,caster>=0 && rawGain!=SlotGain::None,
+                kind!=budget::Kind::PlayerBeam && SlotIsFresh(key),inReach);
             // Record why a prior choice loses its claim, independently of
             // whether native sorting eventually drops it. Bounded to 7/pass.
             for(const auto& old:state.previousSelection) if(old.key==key) {
                 const bool sameGeneration=old.generation==(kind==budget::Kind::Lamp?LampGeometry(light):0);
+                if(slotTrace.enabled)
+                    try { slotTrace.Claim(key,sameGeneration,geometry.distanceSquared,3.4e38f,volumeVisible,kind==budget::Kind::PlayerBeam); }
+                    catch(...) { slotTrace.enabled=false; }
                 ShadowTrace34::Emit({7,state.frame,GetTickCount(),key,relevant?1:0,sameGeneration?1:0,
                     static_cast<int>(flags | (volumeVisible?0x10000u:0)),static_cast<int>(state.nativeCandidates[index].claim),
                     viewWeight,geometry.distanceSquared,reach,light.mRadius});
                 break;
             }
         }
-        if (!state.pass.Active()) { ++fallbackPasses; ++rejectedPassReasons[state.pass.FailureCode() & 7]; }
+        if (!state.pass.Active()) { ++fallbackPasses; ++rejectedPassReasons[state.pass.FailureCode() & 7]; TraceRejected(state.pass.FailureCode()); }
     }
 
     static void CompareNativeCandidates(SafetyHookContext& regs) noexcept
@@ -376,7 +734,23 @@ namespace PlayerShadowAllocation
         ++continuityComparisons;
         const int original=static_cast<int>(regs.eax);
         int result=fusionfix::shadows::NativeShadowContinuity42::Compare(original,a,b);
+        const int ours=result;
         if(labCompareGrace)result=labCompareGrace(original,result,challenger,incumbent);
+        if(slotTrace.enabled) {
+            using Trace=fusionfix::shadows::ShadowSlotTrace;
+            using Rule=fusionfix::shadows::NativeShadowContinuity42::Rule;
+            const auto decider=fusionfix::shadows::NativeShadowContinuity42::Decider(original,a,b);
+            auto rule=result!=ours ? Trace::Rule::Grace
+                : decider==Rule::Special ? Trace::Rule::Special : decider==Rule::OwnBeam ? Trace::Rule::OwnBeam
+                : decider==Rule::Gain ? Trace::Rule::Gain : decider==Rule::Claim ? Trace::Rule::Claim
+                : decider==Rule::Nearer ? Trace::Rule::Nearer : decider==Rule::Fresh ? Trace::Rule::Fresh
+                : decider==Rule::Reach ? Trace::Rule::Reach
+                : result==1 ? Trace::Rule::Distance : Trace::Rule::Native;
+            const auto* lights=CurrentLights();
+            try { slotTrace.Compared(static_cast<uint32_t>(lights[challenger].mCastShadows),
+                static_cast<uint32_t>(lights[incumbent].mCastShadows),rule,result); }
+            catch(...) { slotTrace.enabled=false; }
+        }
         if(result!=original) {
             regs.eax=static_cast<uint32_t>(result); ++continuityOverrides;
             // Decisions only, not render completion. No allocations/file I/O.
@@ -444,6 +818,13 @@ namespace PlayerShadowAllocation
                 }
                 for(const auto& slot:selection.slots)
                     if(slot.key && slot.kind==budget::Kind::PlayerBeam) BeamTrace::Mark(BeamTrace::Selected);
+                if(slotTrace.enabled && state.continuityActive) {
+                    std::array<fusionfix::shadows::ShadowSlotTrace::Selected,7> traced{};
+                    for(unsigned i=0;i<7;++i) if(selection.validMask&(1u<<i))
+                        traced[i]={static_cast<uint32_t>(selection.slots[i].key),static_cast<int>(selection.slots[i].index)};
+                    try { slotTrace.Commit(traced); } catch(...) { slotTrace.enabled=false; }
+                }
+                NoteSlotAcquires(selection);
                 state.previousSelection=selection.slots;
                 state.previousSelectionFrame=state.frame;
                 std::array<fusionfix::shadows::NativeShadowContinuity42::Identity,7> identities{};
@@ -455,7 +836,7 @@ namespace PlayerShadowAllocation
             }
             else ++observedPasses;
         }
-        else { ++fallbackPasses; ++rejectedPassReasons[state.pass.FailureCode() & 7]; }
+        else { ++fallbackPasses; ++rejectedPassReasons[state.pass.FailureCode() & 7]; TraceRejected(state.pass.FailureCode()); }
     }
 
     static void __cdecl Select()
@@ -484,15 +865,19 @@ namespace PlayerShadowAllocation
         }
     }
 
+    // The guard as the image was when the ASI loaded, before any module hooked anything: install
+    // runs from the async initializers, where framelimit.ixx hooks the frame counter increment
+    // the guard checks, and whichever ran first decided whether night shadow selection worked.
+    static bool guardAtLoad = false;
+    static std::string guardDetailsAtLoad;
+
     static bool Install(bool publish)
     {
         gameBase = GameBase();
         publicationEnabled = publish;
-        if (!allocation::ValidateMappedImage(reinterpret_cast<const uint8_t*>(gameBase),
-                fusionfix::shadows::ce::ImageSize, gameBase))
+        if (!guardAtLoad)
         {
-            installStatus = "guard_failed " + fusionfix::shadows::ce::diagnostics::Describe(
-                reinterpret_cast<const uint8_t*>(gameBase), fusionfix::shadows::ce::ImageSize, gameBase);
+            installStatus = "guard_failed " + guardDetailsAtLoad;
             return false;
         }
         // Prepare all trampolines before any write. Mid hooks are inert until

@@ -262,6 +262,9 @@ Logitech LightSync RGB
 [WetWeather]
 Мокрая погода
 
+[VehBoxShadows]
+Тени машин от всех фонарей
+
 [VolumeClouds]
 Объёмные облака
 

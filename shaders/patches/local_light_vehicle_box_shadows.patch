@@ -1,0 +1,1400 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index 330784b..3afe171 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -92,6 +92,12 @@
+     def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
++    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, -0.100000001 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie; the waist below the middle
++    def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
++    def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
++    def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -520,6 +526,72 @@
+         add r31.w, c157.y, -r18.w
+       endif
+     endif
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
++    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
++    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
++    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
++    // --- down, under the car), the boxes' strength for this light, 0 for none.
++    mov r12, c149
++    max r13.x, r26_abs.x, r26_abs.y
++    max r13.x, r13.x, r26_abs.z
++    cmp r13.x, -r13.x, c138.x, r12.w // off where this light adds nothing
++    if_lt c138.x, r13.x
++      add r13.xy, vPos, c138.z
++      mul r13.xy, r13, c84.zw
++      mov r13.zw, c138.x
++      texldl r14, r13, s4
++      pow r19.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r19.x, c209.w
++      rcp r14.y, v0.w
++      mul r14.y, r14.y, r14.x
++      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
++      add r16.xyz, c78, -r15 // and the way to the light
++      mul r16.xy, r16, r12.z // c149.z, how far the shadow follows the light: 0 straight down, under the car
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
++      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
++      mov r18, c143
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
++      mov r18, c145
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
++      mov r18, c147
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
++      mul r31.w, r31.w, r17.w
++    endif
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+@@ -606,4 +678,108 @@
+     mul r17.x, r17.x, r17.x
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
++    ret
++    // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
++    label l3
++    add r20.xyz, r15, -r18
++    // in the box's own axes: x along the car, y across it, z up
++    mul r21.x, r20.x, r19.x
++    mad r21.x, r20.y, r19.y, r21.x
++    mul r21.y, r20.x, r19.y
++    mad r21.y, r20.y, -r19.x, r21.y
++    mov r21.z, r20.z
++    mul r22.x, r16.x, r19.x
++    mad r22.x, r16.y, r19.y, r22.x
++    mul r22.y, r16.x, r19.y
++    mad r22.y, r16.y, -r19.x, r22.y
++    mov r22.z, r16.z
++    // c143.w carries the box's strength above its half length: (strength * 15 whole) * 16 + half length
++    mul r17.y, r18.w, c189.x
++    frc r17.z, r17.y
++    mul r23.x, r17.z, c189.y
++    add r17.y, r17.y, -r17.z
++    mul r17.y, r17.y, c189.z
++    mov r23.yz, r19.xzww
++    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
++    add r24.xyz, r23, r12.y
++    mul r24.xyz, r24, r24
++    rcp r25.x, r24.x
++    rcp r25.y, r24.y
++    rcp r25.z, r24.z
++    mul r24.xyz, r21, r22
++    dp3 r24.x, r24, r25
++    mul r20.xyz, r22, r22
++    dp3 r24.y, r20, r25
++    rcp r24.y, r24.y
++    mul_sat r24.x, -r24.x, r24.y
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    mov r24.z, r24.y
++    // and where the way crosses the box's waist, its widest: a light from high above sees that part's outline, while
++    // the point nearest the middle may lie up in the narrower cabin
++    add r24.y, r23.z, r12.y
++    mul r24.y, r24.y, c186.w
++    add r24.y, r24.y, -r21.z
++    rcp r24.w, r22.z
++    mul_sat r24.x, r24.y, r24.w
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    min r24.z, r24.z, r24.y
++    mov r20.xyz, r21
++    call l2 // how far this pixel is from the box
++    add r20.w, r20.w, c188.x
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
++    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
++    add r24.z, r24.z, -c138.y
++    mad r24.z, r24.z, r17.y, c138.y // as strong as the box is, fading in or out
++    mul r17.w, r17.w, r24.z
++    ret
++    // --- FusionFix vehicle box shadows: the light a box leaves, r24.y, from how far the way passes outside it, r20.w, and the
++    // part of the way where it stands, r24.x: the penumbra is the light's size times that part
++    label l4
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
++    ret
++    // --- FusionFix vehicle box shadows: how far r20.xyz lies outside the box of half edges r23.xyz rounded by r12.y, in r20.w
++    label l2
++    // the box narrows above its waist like a car's cabin, to 0.55 of its length and 0.75 of its width at the roof
++    add r25.w, r23.z, r12.y
++    rcp r25.w, r25.w
++    mul r25.w, r20.z, r25.w
++    mad_sat r25.w, r25.w, c187.z, c187.w
++    mul r25.xy, r25.w, c187.xy
++    add r25.xy, r25, c138.y
++    rcp r25.x, r25.x
++    rcp r25.y, r25.y
++    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
++    add r20.xyz, r20_abs, -r23
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z
++    min r20.w, r20.w, c138.x
++    max r20.xyz, r20, c138.x
++    dp3 r20.x, r20, r20
++    rsq r20.x, r20.x
++    rcp r20.x, r20.x
++    add r20.w, r20.w, r20.x
++    add r20.w, r20.w, -r12.y
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+index 4a1bc51..636b384 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -63,6 +63,12 @@
+     def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
++    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, -0.100000001 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie; the waist below the middle
++    def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
++    def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
++    def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -350,6 +356,72 @@
+         add r31.w, c157.y, -r18.w
+       endif
+     endif
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
++    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
++    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
++    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
++    // --- down, under the car), the boxes' strength for this light, 0 for none.
++    mov r12, c149
++    max r13.x, r26_abs.x, r26_abs.y
++    max r13.x, r13.x, r26_abs.z
++    cmp r13.x, -r13.x, c138.x, r12.w // off where this light adds nothing
++    if_lt c138.x, r13.x
++      add r13.xy, vPos, c138.z
++      mul r13.xy, r13, c79.zw
++      mov r13.zw, c138.x
++      texldl r14, r13, s5
++      pow r19.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r19.x, c209.w
++      rcp r14.y, v0.w
++      mul r14.y, r14.y, r14.x
++      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
++      add r16.xyz, c72, -r15 // and the way to the light
++      mul r16.xy, r16, r12.z // c149.z, how far the shadow follows the light: 0 straight down, under the car
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
++      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
++      mov r18, c143
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
++      mov r18, c145
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
++      mov r18, c147
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
++      mul r31.w, r31.w, r17.w
++    endif
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+@@ -436,4 +508,108 @@
+     mul r17.x, r17.x, r17.x
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
++    ret
++    // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
++    label l3
++    add r20.xyz, r15, -r18
++    // in the box's own axes: x along the car, y across it, z up
++    mul r21.x, r20.x, r19.x
++    mad r21.x, r20.y, r19.y, r21.x
++    mul r21.y, r20.x, r19.y
++    mad r21.y, r20.y, -r19.x, r21.y
++    mov r21.z, r20.z
++    mul r22.x, r16.x, r19.x
++    mad r22.x, r16.y, r19.y, r22.x
++    mul r22.y, r16.x, r19.y
++    mad r22.y, r16.y, -r19.x, r22.y
++    mov r22.z, r16.z
++    // c143.w carries the box's strength above its half length: (strength * 15 whole) * 16 + half length
++    mul r17.y, r18.w, c189.x
++    frc r17.z, r17.y
++    mul r23.x, r17.z, c189.y
++    add r17.y, r17.y, -r17.z
++    mul r17.y, r17.y, c189.z
++    mov r23.yz, r19.xzww
++    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
++    add r24.xyz, r23, r12.y
++    mul r24.xyz, r24, r24
++    rcp r25.x, r24.x
++    rcp r25.y, r24.y
++    rcp r25.z, r24.z
++    mul r24.xyz, r21, r22
++    dp3 r24.x, r24, r25
++    mul r20.xyz, r22, r22
++    dp3 r24.y, r20, r25
++    rcp r24.y, r24.y
++    mul_sat r24.x, -r24.x, r24.y
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    mov r24.z, r24.y
++    // and where the way crosses the box's waist, its widest: a light from high above sees that part's outline, while
++    // the point nearest the middle may lie up in the narrower cabin
++    add r24.y, r23.z, r12.y
++    mul r24.y, r24.y, c186.w
++    add r24.y, r24.y, -r21.z
++    rcp r24.w, r22.z
++    mul_sat r24.x, r24.y, r24.w
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    min r24.z, r24.z, r24.y
++    mov r20.xyz, r21
++    call l2 // how far this pixel is from the box
++    add r20.w, r20.w, c188.x
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
++    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
++    add r24.z, r24.z, -c138.y
++    mad r24.z, r24.z, r17.y, c138.y // as strong as the box is, fading in or out
++    mul r17.w, r17.w, r24.z
++    ret
++    // --- FusionFix vehicle box shadows: the light a box leaves, r24.y, from how far the way passes outside it, r20.w, and the
++    // part of the way where it stands, r24.x: the penumbra is the light's size times that part
++    label l4
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
++    ret
++    // --- FusionFix vehicle box shadows: how far r20.xyz lies outside the box of half edges r23.xyz rounded by r12.y, in r20.w
++    label l2
++    // the box narrows above its waist like a car's cabin, to 0.55 of its length and 0.75 of its width at the roof
++    add r25.w, r23.z, r12.y
++    rcp r25.w, r25.w
++    mul r25.w, r20.z, r25.w
++    mad_sat r25.w, r25.w, c187.z, c187.w
++    mul r25.xy, r25.w, c187.xy
++    add r25.xy, r25, c138.y
++    rcp r25.x, r25.x
++    rcp r25.y, r25.y
++    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
++    add r20.xyz, r20_abs, -r23
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z
++    min r20.w, r20.w, c138.x
++    max r20.xyz, r20, c138.x
++    dp3 r20.x, r20, r20
++    rsq r20.x, r20.x
++    rcp r20.x, r20.x
++    add r20.w, r20.w, r20.x
++    add r20.w, r20.w, -r12.y
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index 543de39..8fd08fa 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -94,6 +94,12 @@
+     def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
++    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, -0.100000001 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie; the waist below the middle
++    def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
++    def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
++    def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -536,6 +542,72 @@
+         add r31.w, c157.y, -r18.w
+       endif
+     endif
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
++    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
++    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
++    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
++    // --- down, under the car), the boxes' strength for this light, 0 for none.
++    mov r12, c149
++    max r13.x, r26_abs.x, r26_abs.y
++    max r13.x, r13.x, r26_abs.z
++    cmp r13.x, -r13.x, c138.x, r12.w // off where this light adds nothing
++    if_lt c138.x, r13.x
++      add r13.xy, vPos, c138.z
++      mul r13.xy, r13, c86.zw
++      mov r13.zw, c138.x
++      texldl r14, r13, s5
++      pow r19.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r19.x, c209.w
++      rcp r14.y, v0.w
++      mul r14.y, r14.y, r14.x
++      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
++      add r16.xyz, c79, -r15 // and the way to the light
++      mul r16.xy, r16, r12.z // c149.z, how far the shadow follows the light: 0 straight down, under the car
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
++      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
++      mov r18, c143
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
++      mov r18, c145
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
++      mov r18, c147
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
++      mul r31.w, r31.w, r17.w
++    endif
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+@@ -622,4 +694,108 @@
+     mul r17.x, r17.x, r17.x
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
++    ret
++    // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
++    label l3
++    add r20.xyz, r15, -r18
++    // in the box's own axes: x along the car, y across it, z up
++    mul r21.x, r20.x, r19.x
++    mad r21.x, r20.y, r19.y, r21.x
++    mul r21.y, r20.x, r19.y
++    mad r21.y, r20.y, -r19.x, r21.y
++    mov r21.z, r20.z
++    mul r22.x, r16.x, r19.x
++    mad r22.x, r16.y, r19.y, r22.x
++    mul r22.y, r16.x, r19.y
++    mad r22.y, r16.y, -r19.x, r22.y
++    mov r22.z, r16.z
++    // c143.w carries the box's strength above its half length: (strength * 15 whole) * 16 + half length
++    mul r17.y, r18.w, c189.x
++    frc r17.z, r17.y
++    mul r23.x, r17.z, c189.y
++    add r17.y, r17.y, -r17.z
++    mul r17.y, r17.y, c189.z
++    mov r23.yz, r19.xzww
++    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
++    add r24.xyz, r23, r12.y
++    mul r24.xyz, r24, r24
++    rcp r25.x, r24.x
++    rcp r25.y, r24.y
++    rcp r25.z, r24.z
++    mul r24.xyz, r21, r22
++    dp3 r24.x, r24, r25
++    mul r20.xyz, r22, r22
++    dp3 r24.y, r20, r25
++    rcp r24.y, r24.y
++    mul_sat r24.x, -r24.x, r24.y
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    mov r24.z, r24.y
++    // and where the way crosses the box's waist, its widest: a light from high above sees that part's outline, while
++    // the point nearest the middle may lie up in the narrower cabin
++    add r24.y, r23.z, r12.y
++    mul r24.y, r24.y, c186.w
++    add r24.y, r24.y, -r21.z
++    rcp r24.w, r22.z
++    mul_sat r24.x, r24.y, r24.w
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    min r24.z, r24.z, r24.y
++    mov r20.xyz, r21
++    call l2 // how far this pixel is from the box
++    add r20.w, r20.w, c188.x
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
++    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
++    add r24.z, r24.z, -c138.y
++    mad r24.z, r24.z, r17.y, c138.y // as strong as the box is, fading in or out
++    mul r17.w, r17.w, r24.z
++    ret
++    // --- FusionFix vehicle box shadows: the light a box leaves, r24.y, from how far the way passes outside it, r20.w, and the
++    // part of the way where it stands, r24.x: the penumbra is the light's size times that part
++    label l4
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
++    ret
++    // --- FusionFix vehicle box shadows: how far r20.xyz lies outside the box of half edges r23.xyz rounded by r12.y, in r20.w
++    label l2
++    // the box narrows above its waist like a car's cabin, to 0.55 of its length and 0.75 of its width at the roof
++    add r25.w, r23.z, r12.y
++    rcp r25.w, r25.w
++    mul r25.w, r20.z, r25.w
++    mad_sat r25.w, r25.w, c187.z, c187.w
++    mul r25.xy, r25.w, c187.xy
++    add r25.xy, r25, c138.y
++    rcp r25.x, r25.x
++    rcp r25.y, r25.y
++    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
++    add r20.xyz, r20_abs, -r23
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z
++    min r20.w, r20.w, c138.x
++    max r20.xyz, r20, c138.x
++    dp3 r20.x, r20, r20
++    rsq r20.x, r20.x
++    rcp r20.x, r20.x
++    add r20.w, r20.w, r20.x
++    add r20.w, r20.w, -r12.y
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+index 0879030..d870f1c 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -58,6 +58,12 @@
+     def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
++    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, -0.100000001 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie; the waist below the middle
++    def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
++    def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
++    def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -316,6 +322,72 @@
+         add r31.w, c157.y, -r18.w
+       endif
+     endif
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
++    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
++    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
++    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
++    // --- down, under the car), the boxes' strength for this light, 0 for none.
++    mov r12, c149
++    max r13.x, r26_abs.x, r26_abs.y
++    max r13.x, r13.x, r26_abs.z
++    cmp r13.x, -r13.x, c138.x, r12.w // off where this light adds nothing
++    if_lt c138.x, r13.x
++      add r13.xy, vPos, c138.z
++      mul r13.xy, r13, c77.zw
++      mov r13.zw, c138.x
++      texldl r14, r13, s4
++      pow r19.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r19.x, c209.w
++      rcp r14.y, v0.w
++      mul r14.y, r14.y, r14.x
++      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
++      add r16.xyz, c66, -r15 // and the way to the light
++      mul r16.xy, r16, r12.z // c149.z, how far the shadow follows the light: 0 straight down, under the car
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
++      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
++      mov r18, c143
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
++      mov r18, c145
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
++      mov r18, c147
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
++      mul r31.w, r31.w, r17.w
++    endif
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+@@ -402,4 +474,108 @@
+     mul r17.x, r17.x, r17.x
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
++    ret
++    // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
++    label l3
++    add r20.xyz, r15, -r18
++    // in the box's own axes: x along the car, y across it, z up
++    mul r21.x, r20.x, r19.x
++    mad r21.x, r20.y, r19.y, r21.x
++    mul r21.y, r20.x, r19.y
++    mad r21.y, r20.y, -r19.x, r21.y
++    mov r21.z, r20.z
++    mul r22.x, r16.x, r19.x
++    mad r22.x, r16.y, r19.y, r22.x
++    mul r22.y, r16.x, r19.y
++    mad r22.y, r16.y, -r19.x, r22.y
++    mov r22.z, r16.z
++    // c143.w carries the box's strength above its half length: (strength * 15 whole) * 16 + half length
++    mul r17.y, r18.w, c189.x
++    frc r17.z, r17.y
++    mul r23.x, r17.z, c189.y
++    add r17.y, r17.y, -r17.z
++    mul r17.y, r17.y, c189.z
++    mov r23.yz, r19.xzww
++    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
++    add r24.xyz, r23, r12.y
++    mul r24.xyz, r24, r24
++    rcp r25.x, r24.x
++    rcp r25.y, r24.y
++    rcp r25.z, r24.z
++    mul r24.xyz, r21, r22
++    dp3 r24.x, r24, r25
++    mul r20.xyz, r22, r22
++    dp3 r24.y, r20, r25
++    rcp r24.y, r24.y
++    mul_sat r24.x, -r24.x, r24.y
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    mov r24.z, r24.y
++    // and where the way crosses the box's waist, its widest: a light from high above sees that part's outline, while
++    // the point nearest the middle may lie up in the narrower cabin
++    add r24.y, r23.z, r12.y
++    mul r24.y, r24.y, c186.w
++    add r24.y, r24.y, -r21.z
++    rcp r24.w, r22.z
++    mul_sat r24.x, r24.y, r24.w
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    min r24.z, r24.z, r24.y
++    mov r20.xyz, r21
++    call l2 // how far this pixel is from the box
++    add r20.w, r20.w, c188.x
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
++    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
++    add r24.z, r24.z, -c138.y
++    mad r24.z, r24.z, r17.y, c138.y // as strong as the box is, fading in or out
++    mul r17.w, r17.w, r24.z
++    ret
++    // --- FusionFix vehicle box shadows: the light a box leaves, r24.y, from how far the way passes outside it, r20.w, and the
++    // part of the way where it stands, r24.x: the penumbra is the light's size times that part
++    label l4
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
++    ret
++    // --- FusionFix vehicle box shadows: how far r20.xyz lies outside the box of half edges r23.xyz rounded by r12.y, in r20.w
++    label l2
++    // the box narrows above its waist like a car's cabin, to 0.55 of its length and 0.75 of its width at the roof
++    add r25.w, r23.z, r12.y
++    rcp r25.w, r25.w
++    mul r25.w, r20.z, r25.w
++    mad_sat r25.w, r25.w, c187.z, c187.w
++    mul r25.xy, r25.w, c187.xy
++    add r25.xy, r25, c138.y
++    rcp r25.x, r25.x
++    rcp r25.y, r25.y
++    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
++    add r20.xyz, r20_abs, -r23
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z
++    min r20.w, r20.w, c138.x
++    max r20.xyz, r20, c138.x
++    dp3 r20.x, r20, r20
++    rsq r20.x, r20.x
++    rcp r20.x, r20.x
++    add r20.w, r20.w, r20.x
++    add r20.w, r20.w, -r12.y
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+index 36f1262..2544974 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -61,6 +61,12 @@
+     def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
++    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, -0.100000001 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie; the waist below the middle
++    def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
++    def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
++    def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -325,6 +331,72 @@
+         add r31.w, c157.y, -r18.w
+       endif
+     endif
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
++    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
++    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
++    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
++    // --- down, under the car), the boxes' strength for this light, 0 for none.
++    mov r12, c149
++    max r13.x, r26_abs.x, r26_abs.y
++    max r13.x, r13.x, r26_abs.z
++    cmp r13.x, -r13.x, c138.x, r12.w // off where this light adds nothing
++    if_lt c138.x, r13.x
++      add r13.xy, vPos, c138.z
++      mul r13.xy, r13, c77.zw
++      mov r13.zw, c138.x
++      texldl r14, r13, s4
++      pow r19.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r19.x, c209.w
++      rcp r14.y, v0.w
++      mul r14.y, r14.y, r14.x
++      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
++      add r16.xyz, c66, -r15 // and the way to the light
++      mul r16.xy, r16, r12.z // c149.z, how far the shadow follows the light: 0 straight down, under the car
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
++      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
++      mov r18, c143
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
++      mov r18, c145
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
++      mov r18, c147
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
++      mul r31.w, r31.w, r17.w
++    endif
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+@@ -411,4 +483,108 @@
+     mul r17.x, r17.x, r17.x
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
++    ret
++    // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
++    label l3
++    add r20.xyz, r15, -r18
++    // in the box's own axes: x along the car, y across it, z up
++    mul r21.x, r20.x, r19.x
++    mad r21.x, r20.y, r19.y, r21.x
++    mul r21.y, r20.x, r19.y
++    mad r21.y, r20.y, -r19.x, r21.y
++    mov r21.z, r20.z
++    mul r22.x, r16.x, r19.x
++    mad r22.x, r16.y, r19.y, r22.x
++    mul r22.y, r16.x, r19.y
++    mad r22.y, r16.y, -r19.x, r22.y
++    mov r22.z, r16.z
++    // c143.w carries the box's strength above its half length: (strength * 15 whole) * 16 + half length
++    mul r17.y, r18.w, c189.x
++    frc r17.z, r17.y
++    mul r23.x, r17.z, c189.y
++    add r17.y, r17.y, -r17.z
++    mul r17.y, r17.y, c189.z
++    mov r23.yz, r19.xzww
++    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
++    add r24.xyz, r23, r12.y
++    mul r24.xyz, r24, r24
++    rcp r25.x, r24.x
++    rcp r25.y, r24.y
++    rcp r25.z, r24.z
++    mul r24.xyz, r21, r22
++    dp3 r24.x, r24, r25
++    mul r20.xyz, r22, r22
++    dp3 r24.y, r20, r25
++    rcp r24.y, r24.y
++    mul_sat r24.x, -r24.x, r24.y
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    mov r24.z, r24.y
++    // and where the way crosses the box's waist, its widest: a light from high above sees that part's outline, while
++    // the point nearest the middle may lie up in the narrower cabin
++    add r24.y, r23.z, r12.y
++    mul r24.y, r24.y, c186.w
++    add r24.y, r24.y, -r21.z
++    rcp r24.w, r22.z
++    mul_sat r24.x, r24.y, r24.w
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    min r24.z, r24.z, r24.y
++    mov r20.xyz, r21
++    call l2 // how far this pixel is from the box
++    add r20.w, r20.w, c188.x
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
++    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
++    add r24.z, r24.z, -c138.y
++    mad r24.z, r24.z, r17.y, c138.y // as strong as the box is, fading in or out
++    mul r17.w, r17.w, r24.z
++    ret
++    // --- FusionFix vehicle box shadows: the light a box leaves, r24.y, from how far the way passes outside it, r20.w, and the
++    // part of the way where it stands, r24.x: the penumbra is the light's size times that part
++    label l4
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
++    ret
++    // --- FusionFix vehicle box shadows: how far r20.xyz lies outside the box of half edges r23.xyz rounded by r12.y, in r20.w
++    label l2
++    // the box narrows above its waist like a car's cabin, to 0.55 of its length and 0.75 of its width at the roof
++    add r25.w, r23.z, r12.y
++    rcp r25.w, r25.w
++    mul r25.w, r20.z, r25.w
++    mad_sat r25.w, r25.w, c187.z, c187.w
++    mul r25.xy, r25.w, c187.xy
++    add r25.xy, r25, c138.y
++    rcp r25.x, r25.x
++    rcp r25.y, r25.y
++    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
++    add r20.xyz, r20_abs, -r23
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z
++    min r20.w, r20.w, c138.x
++    max r20.xyz, r20, c138.x
++    dp3 r20.x, r20, r20
++    rsq r20.x, r20.x
++    rcp r20.x, r20.x
++    add r20.w, r20.w, r20.x
++    add r20.w, r20.w, -r12.y
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+index 679b5e2..5a24f6e 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -61,6 +61,12 @@
+     def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
++    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, -0.100000001 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie; the waist below the middle
++    def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
++    def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
++    def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -327,6 +333,72 @@
+         add r31.w, c157.y, -r18.w
+       endif
+     endif
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
++    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
++    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
++    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
++    // --- down, under the car), the boxes' strength for this light, 0 for none.
++    mov r12, c149
++    max r13.x, r26_abs.x, r26_abs.y
++    max r13.x, r13.x, r26_abs.z
++    cmp r13.x, -r13.x, c138.x, r12.w // off where this light adds nothing
++    if_lt c138.x, r13.x
++      add r13.xy, vPos, c138.z
++      mul r13.xy, r13, c77.zw
++      mov r13.zw, c138.x
++      texldl r14, r13, s4
++      pow r19.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r19.x, c209.w
++      rcp r14.y, v0.w
++      mul r14.y, r14.y, r14.x
++      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
++      add r16.xyz, c66, -r15 // and the way to the light
++      mul r16.xy, r16, r12.z // c149.z, how far the shadow follows the light: 0 straight down, under the car
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
++      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
++      mov r18, c143
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
++      mov r18, c145
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
++      mov r18, c147
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
++      mul r31.w, r31.w, r17.w
++    endif
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+@@ -413,4 +485,108 @@
+     mul r17.x, r17.x, r17.x
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
++    ret
++    // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
++    label l3
++    add r20.xyz, r15, -r18
++    // in the box's own axes: x along the car, y across it, z up
++    mul r21.x, r20.x, r19.x
++    mad r21.x, r20.y, r19.y, r21.x
++    mul r21.y, r20.x, r19.y
++    mad r21.y, r20.y, -r19.x, r21.y
++    mov r21.z, r20.z
++    mul r22.x, r16.x, r19.x
++    mad r22.x, r16.y, r19.y, r22.x
++    mul r22.y, r16.x, r19.y
++    mad r22.y, r16.y, -r19.x, r22.y
++    mov r22.z, r16.z
++    // c143.w carries the box's strength above its half length: (strength * 15 whole) * 16 + half length
++    mul r17.y, r18.w, c189.x
++    frc r17.z, r17.y
++    mul r23.x, r17.z, c189.y
++    add r17.y, r17.y, -r17.z
++    mul r17.y, r17.y, c189.z
++    mov r23.yz, r19.xzww
++    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
++    add r24.xyz, r23, r12.y
++    mul r24.xyz, r24, r24
++    rcp r25.x, r24.x
++    rcp r25.y, r24.y
++    rcp r25.z, r24.z
++    mul r24.xyz, r21, r22
++    dp3 r24.x, r24, r25
++    mul r20.xyz, r22, r22
++    dp3 r24.y, r20, r25
++    rcp r24.y, r24.y
++    mul_sat r24.x, -r24.x, r24.y
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    mov r24.z, r24.y
++    // and where the way crosses the box's waist, its widest: a light from high above sees that part's outline, while
++    // the point nearest the middle may lie up in the narrower cabin
++    add r24.y, r23.z, r12.y
++    mul r24.y, r24.y, c186.w
++    add r24.y, r24.y, -r21.z
++    rcp r24.w, r22.z
++    mul_sat r24.x, r24.y, r24.w
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    min r24.z, r24.z, r24.y
++    mov r20.xyz, r21
++    call l2 // how far this pixel is from the box
++    add r20.w, r20.w, c188.x
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
++    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
++    add r24.z, r24.z, -c138.y
++    mad r24.z, r24.z, r17.y, c138.y // as strong as the box is, fading in or out
++    mul r17.w, r17.w, r24.z
++    ret
++    // --- FusionFix vehicle box shadows: the light a box leaves, r24.y, from how far the way passes outside it, r20.w, and the
++    // part of the way where it stands, r24.x: the penumbra is the light's size times that part
++    label l4
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
++    ret
++    // --- FusionFix vehicle box shadows: how far r20.xyz lies outside the box of half edges r23.xyz rounded by r12.y, in r20.w
++    label l2
++    // the box narrows above its waist like a car's cabin, to 0.55 of its length and 0.75 of its width at the roof
++    add r25.w, r23.z, r12.y
++    rcp r25.w, r25.w
++    mul r25.w, r20.z, r25.w
++    mad_sat r25.w, r25.w, c187.z, c187.w
++    mul r25.xy, r25.w, c187.xy
++    add r25.xy, r25, c138.y
++    rcp r25.x, r25.x
++    rcp r25.y, r25.y
++    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
++    add r20.xyz, r20_abs, -r23
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z
++    min r20.w, r20.w, c138.x
++    max r20.xyz, r20, c138.x
++    dp3 r20.x, r20, r20
++    rsq r20.x, r20.x
++    rcp r20.x, r20.x
++    add r20.w, r20.w, r20.x
++    add r20.w, r20.w, -r12.y
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+index 9721f18..c529504 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -61,6 +61,12 @@
+     def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
++    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, -0.100000001 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie; the waist below the middle
++    def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
++    def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
++    def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -329,6 +335,72 @@
+         add r31.w, c157.y, -r18.w
+       endif
+     endif
++    // --- FusionFix vehicle box shadows (c143-c149, c121-c124, VehicleBoxShadows in postfx.ixx): up to five cars near this light,
++    // --- each a box with rounded edges, shadow it as far as it reaches, also where its shadow map holds no cars or it has
++    // --- none. c143 + 2i: the box's centre and half length, c144 + 2i: its forward xy, half width and half height, the
++    // --- three less the rounding. c149: the light's size, the rounding, how far the shadow follows the light (0 straight
++    // --- down, under the car), the boxes' strength for this light, 0 for none.
++    mov r12, c149
++    max r13.x, r26_abs.x, r26_abs.y
++    max r13.x, r13.x, r26_abs.z
++    cmp r13.x, -r13.x, c138.x, r12.w // off where this light adds nothing
++    if_lt c138.x, r13.x
++      add r13.xy, vPos, c138.z
++      mul r13.xy, r13, c77.zw
++      mov r13.zw, c138.x
++      texldl r14, r13, s4
++      pow r19.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r19.x, c209.w
++      rcp r14.y, v0.w
++      mul r14.y, r14.y, r14.x
++      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
++      add r16.xyz, c66, -r15 // and the way to the light
++      mul r16.xy, r16, r12.z // c149.z, how far the shadow follows the light: 0 straight down, under the car
++      // peds (1), vehicles (2) and the player (3) by the material ID's category (as WetGround.fx reads it): only on them is a
++      // pixel close to a box its own car's, or someone in it, which that box does not shadow; the ground never is
++      texldl r17, r13, s11
++      // c149.y carries the ends' rounding above the edges': (ends in 5 cm steps) * 2 + edges
++      mul r13.w, r12.y, c138.z
++      frc r12.y, r13.w
++      add r13.w, r13.w, -r12.y
++      add r12.y, r12.y, r12.y
++      mul r13.w, r13.w, c185.w
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
++      mov r17.w, c138.y // the light the boxes leave
++      // five boxes: c143-c148 and c121-c124; one with no strength (c143.w under 16) is passed over
++      mov r18, c143
++      if_lt c189.y, r18.w
++        mov r19, c144
++        call l3
++      endif
++      mov r18, c145
++      if_lt c189.y, r18.w
++        mov r19, c146
++        call l3
++      endif
++      mov r18, c147
++      if_lt c189.y, r18.w
++        mov r19, c148
++        call l3
++      endif
++      mov r18, c121
++      if_lt c189.y, r18.w
++        mov r19, c122
++        call l3
++      endif
++      mov r18, c123
++      if_lt c189.y, r18.w
++        mov r19, c124
++        call l3
++      endif
++      // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
++      add r17.w, r17.w, -c138.y
++      mad r17.w, r17.w, r12.w, c138.y
++      mul r31.w, r31.w, r17.w
++    endif
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+@@ -415,4 +487,108 @@
+     mul r17.x, r17.x, r17.x
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
++    ret
++    // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
++    label l3
++    add r20.xyz, r15, -r18
++    // in the box's own axes: x along the car, y across it, z up
++    mul r21.x, r20.x, r19.x
++    mad r21.x, r20.y, r19.y, r21.x
++    mul r21.y, r20.x, r19.y
++    mad r21.y, r20.y, -r19.x, r21.y
++    mov r21.z, r20.z
++    mul r22.x, r16.x, r19.x
++    mad r22.x, r16.y, r19.y, r22.x
++    mul r22.y, r16.x, r19.y
++    mad r22.y, r16.y, -r19.x, r22.y
++    mov r22.z, r16.z
++    // c143.w carries the box's strength above its half length: (strength * 15 whole) * 16 + half length
++    mul r17.y, r18.w, c189.x
++    frc r17.z, r17.y
++    mul r23.x, r17.z, c189.y
++    add r17.y, r17.y, -r17.z
++    mul r17.y, r17.y, c189.z
++    mov r23.yz, r19.xzww
++    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
++    add r24.xyz, r23, r12.y
++    mul r24.xyz, r24, r24
++    rcp r25.x, r24.x
++    rcp r25.y, r24.y
++    rcp r25.z, r24.z
++    mul r24.xyz, r21, r22
++    dp3 r24.x, r24, r25
++    mul r20.xyz, r22, r22
++    dp3 r24.y, r20, r25
++    rcp r24.y, r24.y
++    mul_sat r24.x, -r24.x, r24.y
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    mov r24.z, r24.y
++    // and where the way crosses the box's waist, its widest: a light from high above sees that part's outline, while
++    // the point nearest the middle may lie up in the narrower cabin
++    add r24.y, r23.z, r12.y
++    mul r24.y, r24.y, c186.w
++    add r24.y, r24.y, -r21.z
++    rcp r24.w, r22.z
++    mul_sat r24.x, r24.y, r24.w
++    mad r20.xyz, r22, r24.x, r21
++    call l2
++    call l4
++    min r24.z, r24.z, r24.y
++    mov r20.xyz, r21
++    call l2 // how far this pixel is from the box
++    add r20.w, r20.w, c188.x
++    cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
++    // and only above the box's foot: the ground there is never the car, even where the material IDs say so, a pixel
++    // off at the car's outline once upscaled
++    add r25.x, r23.z, r12.y
++    add r25.x, r21.z, r25.x
++    add r25.x, r25.x, c186.w
++    cmp r20.w, r25.x, r20.w, c138.y
++    cmp r24.z, r20.w, r24.z, c138.y // a pixel on the car itself keeps its light
++    add r24.z, r24.z, -c138.y
++    mad r24.z, r24.z, r17.y, c138.y // as strong as the box is, fading in or out
++    mul r17.w, r17.w, r24.z
++    ret
++    // --- FusionFix vehicle box shadows: the light a box leaves, r24.y, from how far the way passes outside it, r20.w, and the
++    // part of the way where it stands, r24.x: the penumbra is the light's size times that part
++    label l4
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
++    ret
++    // --- FusionFix vehicle box shadows: how far r20.xyz lies outside the box of half edges r23.xyz rounded by r12.y, in r20.w
++    label l2
++    // the box narrows above its waist like a car's cabin, to 0.55 of its length and 0.75 of its width at the roof
++    add r25.w, r23.z, r12.y
++    rcp r25.w, r25.w
++    mul r25.w, r20.z, r25.w
++    mad_sat r25.w, r25.w, c187.z, c187.w
++    mul r25.xy, r25.w, c187.xy
++    add r25.xy, r25, c138.y
++    rcp r25.x, r25.x
++    rcp r25.y, r25.y
++    mul r20.xy, r20, r25
++    // the ends round in plan like a car's nose: towards the sides the box is shorter by up to r13.w
++    add r25.z, r23.y, r12.y
++    rcp r25.z, r25.z
++    mul r25.z, r20.y, r25.z
++    mul r25.z, r25.z, r25.z
++    mad r20.x, r25.z, r13.w, r20_abs.x
++    add r20.xyz, r20_abs, -r23
++    max r20.w, r20.x, r20.y
++    max r20.w, r20.w, r20.z
++    min r20.w, r20.w, c138.x
++    max r20.xyz, r20, c138.x
++    dp3 r20.x, r20, r20
++    rsq r20.x, r20.x
++    rcp r20.x, r20.x
++    add r20.w, r20.w, r20.x
++    add r20.w, r20.w, -r12.y
+     ret
+\ No newline at end of file
