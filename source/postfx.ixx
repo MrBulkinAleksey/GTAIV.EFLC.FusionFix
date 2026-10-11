@@ -790,7 +790,7 @@ public:
     // shadow under a car does not jump between the two; WithSlots keeps them under its real shadow for good.
     bool bVehicleBoxShadowsWithSlots = false;
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
-    uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300;
+    uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300, nVehicleBoxShadowSizeFadeMs = 300;
     int32_t nVehicleBoxShadowsPerLamp = 3; // cars a lamp shadows as boxes, up to five; each costs its lit pixels about as much again
     bool bVehicleBoxShadowsLive = true;
     bool bVehicleBoxShadowsLog = false; // VehicleBoxShadowsLog, see VehicleBoxShadows::Trace
@@ -1658,6 +1658,7 @@ public:
         bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 1) != 0;
         bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;
         nVehicleBoxShadowsPerLamp = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerLamp", 3), 1, 5);
+        nVehicleBoxShadowSizeFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsSizeFade", 300), 0, 5000));
         nVehicleBoxShadowFadeInMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeIn", 300), 0, 5000));
         nVehicleBoxShadowFadeOutMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeOut", 300), 0, 5000));
         nVehicleBoxShadowSlotFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsSlotFade", 600), 0, 5000));
@@ -8327,6 +8328,7 @@ private:
             std::array<Fading, kPerLight> boxes{};   // the boxes it draws, fading in (taken) or out (left)
             int count = 0;
             float slotStrength = 0.0f;               // all its boxes, fading out while its own map shows the cars
+            float rounding = -1.0f;                  // the edges' rounding it gave its boxes, easing to the limit
             DWORD lastTick = 0;
             // VehicleBoxShadowsLog: what it last did with the watched car
             bool hadWatched = false, wasMapped = false, watchedLow = false;
@@ -8742,12 +8744,23 @@ private:
                     rounding = (std::min)(rounding, (std::min)({ c[3], c[6], c[7] }) - 0.05f);
                 }
                 rounding = (std::max)(rounding, 0.0f);
+                // That limit changed at once as a small car came to the lamp or left it, and every shadow under the lamp
+                // changed its shape with it; it eases to it over VehicleBoxShadowsSizeFade instead, the smallest box a
+                // little large meanwhile.
+                if (used)
+                {
+                    if (fresh || state.rounding < 0.0f || !R.nVehicleBoxShadowSizeFadeMs)
+                        state.rounding = rounding;
+                    else
+                        state.rounding += (rounding - state.rounding) * (std::min)(dt / float(R.nVehicleBoxShadowSizeFadeMs), 1.0f);
+                    rounding = state.rounding;
+                }
                 for (int i = 0; i < used; ++i)
                 {
                     float* c = constants[i * 2];
-                    c[3] -= rounding;
-                    c[6] -= rounding;
-                    c[7] -= rounding;
+                    c[3] = (std::max)(c[3] - rounding, 0.05f);
+                    c[6] = (std::max)(c[6] - rounding, 0.05f);
+                    c[7] = (std::max)(c[7] - rounding, 0.05f);
                     // The strength in fifteenths, sixteen apart above the half length (which stays under 16)
                     c[3] = (std::min)(c[3], 15.9f) + 16.0f * std::round(std::clamp(boxStrength[i], 0.0f, 1.0f) * 15.0f);
                 }
