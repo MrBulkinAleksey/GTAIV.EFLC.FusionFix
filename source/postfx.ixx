@@ -8321,6 +8321,7 @@ private:
             Box box{};
             float strength = 0.0f;
             bool chosen = false;
+            float shape[3] = { -1.0f, -1.0f, -1.0f }; // along, across and height shares from the light's angle, eased
         };
         struct LampState
         {
@@ -8681,7 +8682,10 @@ private:
                     f.strength = step(R.nVehicleBoxShadowFadeInMs);
                     for (int j = 0; j < state.count; ++j)
                         if (state.boxes[j].box.vehicle == f.box.vehicle)
+                        {
                             f.strength += state.boxes[j].strength;
+                            std::copy_n(state.boxes[j].shape, 3, f.shape);
+                        }
                     f.strength = (std::min)(f.strength, 1.0f);
                 }
                 for (int j = 0; j < state.count && nextCount < perLamp; ++j)
@@ -8691,7 +8695,11 @@ private:
                         continue;
                     const float left = old.strength - step(R.nVehicleBoxShadowFadeOutMs);
                     if (left > 0.0f)
-                        next[nextCount++] = { old.box, left, false };
+                    {
+                        next[nextCount] = old;
+                        next[nextCount].strength = left;
+                        next[nextCount++].chosen = false;
+                    }
                 }
                 state.boxes = next;
                 state.count = nextCount;
@@ -8727,6 +8735,17 @@ private:
                             across = 1.0f + (narrow - 1.0f) * a;
                             lower = 1.0f - (1.0f - R.fVehicleBoxShadowLowLightHeight) * low;
                         }
+                    }
+                    // Eased over VehicleBoxShadowsSizeFade, so the shadow's length does not jump with the angle
+                    {
+                        auto& shape = state.boxes[i].shape;
+                        const float target[3] = { along, across, lower };
+                        const float k = R.nVehicleBoxShadowSizeFadeMs ? (std::min)(dt / float(R.nVehicleBoxShadowSizeFadeMs), 1.0f) : 1.0f;
+                        for (int j = 0; j < 3; ++j)
+                            shape[j] = shape[j] < 0.0f ? target[j] : shape[j] + (target[j] - shape[j]) * k;
+                        along = shape[0];
+                        across = shape[1];
+                        lower = shape[2];
                     }
                     const float halfHeight = box.halfHeight * scale[2] * lower;
                     float* c = constants[i * 2];
