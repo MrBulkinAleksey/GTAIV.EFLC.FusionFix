@@ -41,9 +41,13 @@ public:
             }
             previous=position;lastTime=time;
         }
+        // From MinSpeed up, so it grows from nothing. Above 1 m/s, driving slowly back and forth moved the focus
+        // a few metres the other way at each turn, two lamps near the car swapped their slots, and its shadow
+        // jumped between the lamp's own map and its box.
+        constexpr float MinSpeed=4.0f;
         const float speed=std::sqrt(velocity.x*velocity.x+velocity.y*velocity.y);
-        if(speed>1.0f) {
-            const float advance=std::min(18.0f,(speed-1.0f)*0.8f);
+        if(speed>MinSpeed) {
+            const float advance=std::min(18.0f,(speed-MinSpeed)*0.8f);
             focus.x+=velocity.x*advance/speed;focus.y+=velocity.y*advance/speed;
         }
         return focus;
