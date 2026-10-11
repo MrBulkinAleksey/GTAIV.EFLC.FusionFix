@@ -1,10 +1,16 @@
 module;
 
 #include <common.hxx>
+#include "FusionLog.hpp"
+#include <algorithm>
+#include <cmath>
+#include <initializer_list>
+#include <vector>
 
 export module coronas;
 
 import common;
+import settings;
 
 static constexpr auto NewLimitExponent = 14;
 
@@ -213,6 +219,266 @@ void IncreaseCoronaLimitEFLC()
     WriteMemory<uint32_t>(pattern.get(0).get<uintptr_t>(1), nCoronasLimit * 64, true);
 }
 
+// The coronas' quads (CE 0xc1f170): for each corona of the frame's list the game made six calls to its vertex function
+// (CE 0x4462e0, 0x24 bytes a vertex: the corner's position, the corona's centre in the normal, the colour with one
+// corner in its alpha, u the other, v the brightness), about 7% of the render thread in a profile. The same quads are
+// written here straight into the buffer the game's Begin locked, and with CoronaRenderer = 1 those wholly behind the
+// camera are left out of a pass from the game camera (the game drew them for the card to clip). Every address comes
+// from the game's function at its first frame, checked against its opcodes, so the larger list IncreaseCoronaLimit
+// made is read as it is then; a function that doesn't match is left to the game. Its start is TemporalAA's hook
+// (the steady depth while it draws), which calls Draw in its place
+namespace CoronaRender
+{
+    struct Vertex { float x, y, z, nx, ny, nz; uint32_t colour; float u, v; };
+    static_assert(sizeof(Vertex) == 0x24);
+
+    int32_t nMode = 1;                      // 0: the game's, 1: ours without what is behind, 2: ours, all of them
+    float* pCamera = nullptr;               // CE 0x128e340, the game camera's position, where it looks 8 floats before
+    uint8_t* pFunction = nullptr;
+
+    bool bReady = false, bFailed = false;
+    uint32_t* (__cdecl* GetRenderFlags)() = nullptr;
+    uint32_t* pBufferIndex = nullptr;
+    int32_t* pCounts = nullptr;
+    uint8_t* pShift = nullptr;              // the list's size exponent in the game's own code
+    uint32_t* pFlagAddress = nullptr;       // the list + 0x1b, as the game's compare has it
+    void** ppTexture = nullptr;
+    void(__cdecl* PushStates)() = nullptr;
+    void(__cdecl* SetState)(int, int) = nullptr;
+    uint8_t** ppViewport = nullptr;
+    void* pIdentity = nullptr;
+    void(__fastcall* SetWorld)(void* viewport, void* edx, void* matrix) = nullptr;
+    void(__cdecl* ApplyStates)() = nullptr;
+    void(__cdecl* SetTexture)(void*) = nullptr;
+    void(__cdecl* SetTechnique)(int, int) = nullptr;
+    void(__cdecl* Begin)(int primitive, int vertices) = nullptr;
+    void(__cdecl* End)() = nullptr;
+    void(__cdecl* Finish)() = nullptr;
+    void(__cdecl* SetFinal)(float) = nullptr;
+    float* pReflectSize = nullptr;
+    uint8_t* pReflectBase = nullptr;        // a float at + buffer * 0x210
+    float* pReflectScale = nullptr;
+    float* pReflectLimit = nullptr;
+    float* pDimScale = nullptr;
+    float* pOne = nullptr;
+    uint32_t* pVertexLimit = nullptr;
+    Vertex** ppVertex = nullptr;
+    uint32_t* pVertexCount = nullptr;
+
+    template <typename T> T Operand(uint8_t* at) { return *(T*)at; }
+    template <typename T> T CallTarget(uint8_t* call) { return (T)(call + 5 + *(int32_t*)(call + 1)); }
+
+    bool Read()
+    {
+        auto f = pFunction;
+        auto is = [&](uint32_t offset, std::initializer_list<uint8_t> bytes)
+        {
+            uint32_t i = 0;
+            for (auto b : bytes)
+                if (f[offset + i++] != b)
+                    return false;
+            return true;
+        };
+        if (!is(0x28, { 0xE8 }) || !is(0x44, { 0x8B, 0x3D }) || !is(0x4D, { 0x8B, 0x34, 0xBD }) || !is(0x9C, { 0xC1, 0xE0 }) ||
+            !is(0xA4, { 0x80, 0xB8 }) || !is(0xCE, { 0x8B, 0x35 }) || !is(0xD4, { 0xE8 }) || !is(0xDD, { 0xE8 }) ||
+            !is(0xEB, { 0x8B, 0x0D }) || !is(0xF4, { 0x68 }) || !is(0xF9, { 0xE8 }) || !is(0xFE, { 0xE8 }) || !is(0x104, { 0xE8 }) ||
+            !is(0x1B7, { 0xE8 }) || !is(0x1DC, { 0xE8 }) || !is(0x2E1, { 0xF3, 0x0F, 0x10, 0x05 }) || !is(0x2EF, { 0xF3, 0x0F, 0x10, 0x88 }) ||
+            !is(0x2F7, { 0xF3, 0x0F, 0x59, 0x0D }) || !is(0x317, { 0xF3, 0x0F, 0x10, 0x05 }) || !is(0x379, { 0xF3, 0x0F, 0x10, 0x05 }) ||
+            !is(0x409, { 0xF3, 0x0F, 0x10, 0x0D }) || !is(0x53D, { 0xE8 }) || !is(0x7D0, { 0xE8 }) || !is(0x7E3, { 0xE8 }) || !is(0x7F0, { 0xE8 }))
+            return false;
+
+        // The vertex function: cmp [limit], 0 / mov eax, [pointer] / inc [count]
+        auto vertex = CallTarget<uint8_t*>(f + 0x53D);
+        if (vertex[0] != 0x83 || vertex[1] != 0x3D || vertex[9] != 0xA1 || vertex[0x1D] != 0xFF || vertex[0x1E] != 0x05)
+            return false;
+
+        GetRenderFlags = CallTarget<decltype(GetRenderFlags)>(f + 0x28);
+        pBufferIndex = Operand<uint32_t*>(f + 0x46);
+        pCounts = Operand<int32_t*>(f + 0x50);
+        pShift = f + 0x9E;
+        pFlagAddress = (uint32_t*)(f + 0xA6);
+        ppTexture = Operand<void**>(f + 0xD0);
+        PushStates = CallTarget<decltype(PushStates)>(f + 0xD4);
+        SetState = CallTarget<decltype(SetState)>(f + 0xDD);
+        ppViewport = Operand<uint8_t**>(f + 0xED);
+        pIdentity = Operand<void*>(f + 0xF5);
+        SetWorld = CallTarget<decltype(SetWorld)>(f + 0xF9);
+        ApplyStates = CallTarget<decltype(ApplyStates)>(f + 0xFE);
+        SetTexture = CallTarget<decltype(SetTexture)>(f + 0x104);
+        SetTechnique = CallTarget<decltype(SetTechnique)>(f + 0x1B7);
+        Begin = CallTarget<decltype(Begin)>(f + 0x1DC);
+        pReflectSize = Operand<float*>(f + 0x2E5);
+        pReflectBase = Operand<uint8_t*>(f + 0x2F3);
+        pReflectScale = Operand<float*>(f + 0x2FB);
+        pReflectLimit = Operand<float*>(f + 0x31B);
+        pDimScale = Operand<float*>(f + 0x37D);
+        pOne = Operand<float*>(f + 0x40D);
+        End = CallTarget<decltype(End)>(f + 0x7D0);
+        Finish = CallTarget<decltype(Finish)>(f + 0x7E3);
+        SetFinal = CallTarget<decltype(SetFinal)>(f + 0x7F0);
+        pVertexLimit = Operand<uint32_t*>(vertex + 2);
+        ppVertex = Operand<Vertex**>(vertex + 0xA);
+        pVertexCount = Operand<uint32_t*>(vertex + 0x1F);
+        return true;
+    }
+
+    // In place of CCoronas::Render; false when the game's own is to run
+    export bool Draw()
+    {
+        if (!nMode || !pFunction)
+            return false;
+        if (!bReady && !bFailed)
+        {
+            bReady = Read();
+            bFailed = !bReady;
+            FusionLog::Write("Coronas", "Renderer", bReady ? "the coronas' quads are written by Fusion Fix\n"
+                                                           : "the game's corona function is not as expected, it draws them itself\n");
+        }
+        if (!bReady)
+            return false;
+
+        static auto distantLights = FusionFixSettings.GetRef("PREF_DISTANTLIGHTS");
+        bool bDistantLights = distantLights && distantLights->get();
+        uint32_t flags = *GetRenderFlags();
+        bool reflection = (flags >> 0x12) & 1;  // technique 0xf, and coronas with +0x1b set left out
+        bool dim = (flags >> 0x11) & 1;
+        uint32_t buffer = *pBufferIndex;
+        int32_t count = pCounts[buffer];
+        if (count <= 0)
+            return true;
+        auto list = (uint8_t*)(uintptr_t(*pFlagAddress) - 0x1B) + (size_t(buffer) * (3u << *pShift)) * 0x20;
+
+        // Behind the camera, only in a pass from the game camera itself: reflections and other views keep them all
+        auto viewport = *ppViewport;
+        auto eye = (const float*)(viewport + 0x70);
+        float forward[3] = {};
+        bool skipBehind = false;
+        if (nMode == 1 && !reflection && pCamera)
+        {
+            auto right = (const float*)(viewport + 0x40), up = (const float*)(viewport + 0x50);
+            const float* look = pCamera - 8;
+            float dx = eye[0] - pCamera[0], dy = eye[1] - pCamera[1], dz = eye[2] - pCamera[2];
+            float length = std::sqrt(look[0] * look[0] + look[1] * look[1] + look[2] * look[2]);
+            if (dx * dx + dy * dy + dz * dz < 0.25f && length > 0.5f && length < 2.0f)
+            {
+                for (int i = 0; i < 3; i++)
+                    forward[i] = look[i] / length;
+                // The view's own axes must agree that this is where it looks
+                float cross[3] = { right[1] * up[2] - right[2] * up[1], right[2] * up[0] - right[0] * up[2], right[0] * up[1] - right[1] * up[0] };
+                skipBehind = std::fabs(cross[0] * forward[0] + cross[1] * forward[1] + cross[2] * forward[2]) > 0.95f;
+            }
+        }
+
+        static std::vector<uint32_t> drawn;
+        drawn.clear();
+        for (int32_t i = 0; i < count; i++)
+        {
+            auto item = list + size_t(i) * 0x20;
+            if (reflection && item[0x1B])
+                continue;
+            if (skipBehind)
+            {
+                auto pos = (const float*)item;
+                float size = std::fabs(*(const float*)(item + 0xC));
+                float ahead = (pos[0] - eye[0]) * forward[0] + (pos[1] - eye[1]) * forward[1] + (pos[2] - eye[2]) * forward[2];
+                if (ahead < -2.0f * size - 1.0f)
+                    continue;
+            }
+            drawn.push_back(uint32_t(i));
+        }
+        if (drawn.empty())
+            return true;
+
+        auto texture = *ppTexture;
+        PushStates();
+        SetState(2, 1);
+        SetState(6, 0);
+        SetWorld(*ppViewport, nullptr, pIdentity);
+        ApplyStates();
+        SetTexture(texture);
+
+        viewport = *ppViewport;
+        const float axisRight[3] = { ((float*)(viewport + 0x40))[0], ((float*)(viewport + 0x40))[1], ((float*)(viewport + 0x40))[2] };
+        const float axisUp[3] = { -((float*)(viewport + 0x50))[0], -((float*)(viewport + 0x50))[1], -((float*)(viewport + 0x50))[2] };
+        const float camera[3] = { ((float*)(viewport + 0x70))[0], ((float*)(viewport + 0x70))[1], ((float*)(viewport + 0x70))[2] };
+        SetTechnique(reflection ? 0xF : 0xE, reflection ? 0 : (dim ? 1 : 0));
+
+        for (size_t first = 0; first < drawn.size();)
+        {
+            size_t n = std::min<size_t>(drawn.size() - first, 0xAAA);
+            Begin(3, int(n * 6));
+            for (size_t k = first; k < first + n; k++)
+            {
+                auto item = list + size_t(drawn[k]) * 0x20;
+                auto pos = (const float*)item;
+                float size = *(const float*)(item + 0xC);
+                float brightness = *(const float*)(item + 0x10);
+                float toward = *(const float*)(item + 0x14);
+                uint32_t colour = 0xFF000000u | uint32_t(item[0x18]) << 16 | uint32_t(item[0x19]) << 8 | uint32_t(item[0x1A]);
+
+                float R[3], U[3];
+                for (int i = 0; i < 3; i++)
+                {
+                    R[i] = axisRight[i] * size;
+                    U[i] = axisUp[i] * size;
+                }
+                if (reflection)
+                {
+                    for (int i = 0; i < 3; i++)
+                    {
+                        R[i] *= *pReflectSize;
+                        U[i] *= *pReflectSize;
+                    }
+                    float t = *(const float*)(pReflectBase + size_t(buffer) * 0x210) * *pReflectScale;
+                    float limit = *pReflectLimit * *pReflectLimit;
+                    brightness = t > limit ? limit : t;
+                }
+                else if (dim)
+                    brightness *= bDistantLights ? 1.0f : *pDimScale;   // as lodlights' WaterMultiplierHook has it
+
+                // Moved toward the camera by +0x14
+                float d[3] = { pos[0] - camera[0], pos[1] - camera[1], pos[2] - camera[2] };
+                float lengthSquared = d[1] * d[1] + d[0] * d[0] + d[2] * d[2];
+                float inverse = lengthSquared == 0.0f ? 0.0f : *pOne / std::sqrt(lengthSquared);
+                float P[3];
+                for (int i = 0; i < 3; i++)
+                    P[i] = pos[i] - d[i] * inverse * toward;
+
+                *pVertexCount += 6;
+                auto v = *ppVertex;
+                if (!*pVertexLimit || !v)
+                    continue;
+                auto corner = [&](Vertex& out, bool plusRight, bool plusUp, uint32_t c, float u)
+                {
+                    float p[3];
+                    for (int i = 0; i < 3; i++)
+                    {
+                        float side = plusRight ? P[i] + R[i] : P[i] - R[i];
+                        p[i] = plusUp ? side + U[i] : side - U[i];
+                    }
+                    out = { p[0], p[1], p[2], P[0], P[1], P[2], c, u, brightness };
+                };
+                uint32_t clear = colour & 0xFFFFFFu;
+                corner(v[0], false, true, colour, 0.0f);
+                corner(v[1], true, true, colour, 1.0f);
+                corner(v[2], true, false, clear, 1.0f);
+                v[3] = v[2];
+                corner(v[4], false, false, clear, 0.0f);
+                v[5] = v[0];
+                *ppVertex = v + 6;
+            }
+            End();
+            first += n;
+        }
+
+        Finish();
+        SetFinal(1.0f);
+        SetState(2, 0);
+        SetState(6, 1);
+        return true;
+    }
+}
+
 class Coronas
 {
 public:
@@ -234,6 +500,23 @@ public:
                 if (i == 768)
                     IncreaseCoronaLimitEFLC();
             }
+        };
+
+        FusionFix::onInitEvent() += []()
+        {
+            using namespace CoronaRender;
+            CIniReader iniReader("");
+            nMode = std::clamp(iniReader.ReadInteger("PROJECT2DFX", "CoronaRenderer", 1), 0, 2);
+            if (!nMode)
+                return;
+            // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
+            if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
+                pCamera = *camera.get_first<float*>(12);
+            // Inside it: lea eax, [edi + edi*2] / shl eax, exponent / add eax, edx / shl eax, 5 / cmp byte [eax + list + 0x1b], 0
+            auto inside = hook::pattern("8D 04 7F C1 E0 ? 03 C2 C1 E0 05 80 B8 ? ? ? ? 00 74");
+            if (inside.empty())
+                return;
+            pFunction = inside.get_first<uint8_t>(-0x99);
         };
     }
 } Coronas;
