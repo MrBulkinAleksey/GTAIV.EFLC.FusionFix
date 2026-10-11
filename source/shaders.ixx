@@ -2,6 +2,7 @@ module;
 
 #include <common.hxx>
 #include <concepts>
+#include <cstring>
 
 export module shaders;
 
@@ -51,6 +52,12 @@ int GetFusionShaderID(T pShader)
 
 class Shaders
 {
+    // The depth constants of the z-fighting fix (vs c227, ps c209) as last sent. The viewport's transform is updated
+    // for every entity drawn, and sending the same two constants each time was about 2% of the render thread in a
+    // profile; no game shader has a constant there, so they go only when changed, to another device, or in a new frame
+    static inline float DepthConstantsSent[4] = {};
+    static inline IDirect3DDevice9* DepthConstantsDevice = nullptr;
+
     static void OnBeforeLighting()
     {
         auto pDevice = rage::grcDevice::GetD3DDevice();
@@ -365,8 +372,13 @@ public:
                             arr[2] = viewport->mFarClip / viewport->mNearClip;
                             arr[3] = viewport->mNearClip;
 
-                            pDevice->SetVertexShaderConstantF(227, &arr[0], 1);
-                            pDevice->SetPixelShaderConstantF(209, &arr[0], 1);
+                            if (pDevice != DepthConstantsDevice || memcmp(arr, DepthConstantsSent, sizeof(arr)) != 0)
+                            {
+                                pDevice->SetVertexShaderConstantF(227, &arr[0], 1);
+                                pDevice->SetPixelShaderConstantF(209, &arr[0], 1);
+                                memcpy(DepthConstantsSent, arr, sizeof(arr));
+                                DepthConstantsDevice = pDevice;
+                            }
                         }
                     }
                 });
@@ -379,6 +391,7 @@ public:
             static auto grcSetup_BeginDraw_Hook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
             {
                 auto pDevice = rage::grcDevice::GetD3DDevice();
+                DepthConstantsDevice = nullptr;
 
                 // Setup variables for shaders
                 static auto dw103E49C = *find_pattern("8B 0D ? ? ? ? 8B 01 FF 50 ? B9 ? ? ? ? E9", "8B 0D ? ? ? ? 8B 11 8B 42 ? FF D0 B9").get_first<void**>(2);
@@ -658,6 +671,7 @@ public:
             FusionFix::onBeforeReset() += []()
             {
                 pHDRTexQuarter = nullptr;
+                DepthConstantsDevice = nullptr;
             };
 
             if (GetD3DX9_43DLL())

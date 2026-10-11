@@ -437,8 +437,10 @@ namespace Procedural
         uint32_t capacity = *(uint32_t*)(pManager + 0x18);
         if (!records || !capacity)
             return;
+        // Only whether fewer than 1/32 or more than 1/8 are free matters, so the walk stops past 1/8: a whole walk of
+        // the free list each update, cache misses at 0x60 apart, was about 3% of the main thread in a profile
         uint32_t free = 0;
-        for (uint32_t index = *(uint16_t*)(pManager + 4); index && index <= capacity && free <= capacity; free++)
+        for (uint32_t index = *(uint16_t*)(pManager + 4); index && index <= capacity && free <= capacity / 8; free++)
             index = *(uint16_t*)(records + size_t(index - 1) * 0x60 + 0x56);
         float low = std::min(GatherMin, fGatherFull);
         if (fGatherNow <= 0.0f)
