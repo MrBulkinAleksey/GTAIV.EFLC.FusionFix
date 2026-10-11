@@ -209,26 +209,107 @@ namespace Procedural
     uint32_t nCarried = 0;
 
     // ProceduralConeBack: positions outside a cone around where the camera looks are kept here, not made, and go
-    // back to the queue once the camera turns to them. Its radius is the gathering radius straight ahead, this behind,
-    // between them as ((1 + cos) / 2)^2, about a third of the way at the sides. Made props stay where they are: the
-    // generator lets go of them only with their ground triangle
+    // back to the queue once the camera turns to them. Its radius is the gathering radius within ProceduralConeFullAngle
+    // of where the camera looks and this behind, easing down between them. A turning camera is followed
+    // ProceduralConeTurnLead ahead (45 degrees at most): a position is inside if it is inside the cone now or the one the
+    // camera turns to. Made props stay where they are: the generator lets go of them only with their ground triangle
     float fConeBack = 70.0f;
-    constexpr size_t ParkedLimit = 65536;   // positions kept at most, the oldest go first
+    float fConeFullCos = 0.2588f;           // cos of ProceduralConeFullAngle, 75 degrees
+    float fConeTurnLead = 0.3f;             // seconds
+    constexpr size_t ParkedLimit = 65536;   // positions kept at most, past it new ones are made at once
     std::vector<uint8_t> parked;
+
+    // The cone of one pass over the queue
+    struct Cone
+    {
+        bool active = false;
+        bool turning = false;
+        float position[3] = {}, forward[3] = {}, turnedTo[3] = {};
+        float ahead = 0.0f;
+    } cone;
+    float coneLastForward[3] = {};
+    int64_t coneLastTime = 0;
+
+    void UpdateCone()
+    {
+        cone.active = cone.turning = false;
+        if (fConeBack <= 0.0f || !pCamera)
+            return;
+        const float* forward = pCamera - 8;
+        float length = std::sqrt(forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]);
+        // A camera not set up yet: everything is inside
+        if (!(length > 0.5f && length < 2.0f) || !std::isfinite(pCamera[0] + pCamera[1] + pCamera[2]))
+        {
+            coneLastTime = 0;
+            return;
+        }
+        for (int i = 0; i < 3; i++)
+        {
+            cone.position[i] = pCamera[i];
+            cone.forward[i] = forward[i] / length;
+        }
+        cone.ahead = pManager ? std::max(*(float*)(pManager + 0x1C), fConeBack) : 1.0e9f;
+
+        LARGE_INTEGER now, frequency;
+        QueryPerformanceCounter(&now);
+        QueryPerformanceFrequency(&frequency);
+        if (coneLastTime && fConeTurnLead > 0.0f)
+        {
+            float seconds = float(double(now.QuadPart - coneLastTime) / double(frequency.QuadPart));
+            float turn[3], turnSquared = 0.0f;
+            for (int i = 0; i < 3; i++)
+            {
+                turn[i] = cone.forward[i] - coneLastForward[i];
+                turnSquared += turn[i] * turn[i];
+            }
+            // A cut, or more than about 50 degrees since the last update, is no turn to follow
+            if (seconds > 0.0005f && seconds < 0.25f && turnSquared > 1.0e-8f && turnSquared < 0.7f)
+            {
+                float k = std::min(fConeTurnLead / seconds, 1.0f / std::sqrt(turnSquared));
+                float to[3], toSquared = 0.0f;
+                for (int i = 0; i < 3; i++)
+                {
+                    to[i] = cone.forward[i] + turn[i] * k;
+                    toSquared += to[i] * to[i];
+                }
+                if (toSquared > 1.0e-6f)
+                {
+                    for (int i = 0; i < 3; i++)
+                        cone.turnedTo[i] = to[i] / std::sqrt(toSquared);
+                    cone.turning = true;
+                }
+            }
+        }
+        coneLastTime = now.QuadPart;
+        std::copy_n(cone.forward, 3, coneLastForward);
+        cone.active = true;
+    }
+
+    // How much a position faces the camera's view, the one it turns to as well
+    float ConeFacing(float dx, float dy, float dz, float distance)
+    {
+        float facing = (dx * cone.forward[0] + dy * cone.forward[1] + dz * cone.forward[2]) / distance;
+        if (cone.turning)
+            facing = std::max(facing, (dx * cone.turnedTo[0] + dy * cone.turnedTo[1] + dz * cone.turnedTo[2]) / distance);
+        return facing;
+    }
 
     bool InCone(const float* position)
     {
-        if (fConeBack <= 0.0f || !pCamera)
+        if (!cone.active)
             return true;
-        const float* forward = pCamera - 8;
-        float dx = position[0] - pCamera[0], dy = position[1] - pCamera[1], dz = position[2] - pCamera[2];
-        float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-        if (distance <= fConeBack)
+        float dx = position[0] - cone.position[0], dy = position[1] - cone.position[1], dz = position[2] - cone.position[2];
+        float distanceSquared = dx * dx + dy * dy + dz * dz;
+        if (!(distanceSquared > fConeBack * fConeBack))
             return true;
-        float facing = distance > 0.001f ? std::clamp((dx * forward[0] + dy * forward[1] + dz * forward[2]) / distance, -1.0f, 1.0f) : 1.0f;
-        float ahead = pManager ? std::max(*(float*)(pManager + 0x1C), fConeBack) : 1.0e9f;
-        float t = (1.0f + facing) * 0.5f;
-        return distance <= fConeBack + (ahead - fConeBack) * t * t;
+        if (distanceSquared > cone.ahead * cone.ahead)
+            return false;
+        float distance = std::sqrt(distanceSquared);
+        float facing = ConeFacing(dx, dy, dz, distance);
+        if (facing >= fConeFullCos)
+            return true;
+        float t = std::clamp((facing + 1.0f) / (fConeFullCos + 1.0f), 0.0f, 1.0f);
+        return distance <= fConeBack + (cone.ahead - fConeBack) * t * t * (3.0f - 2.0f * t);
     }
 
     // Statistics for the log
@@ -236,6 +317,7 @@ namespace Procedural
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
     uint32_t nQueueMax = 0, nWaitingMax = 0, nDropped = 0;
     uint32_t nReflectionsSkipped = 0;
+    uint32_t nConeFull = 0, nParkedNow = 0;
     uint32_t nUpdates = 0;
     double fUpdateMs = 0.0, fUpdateMaxMs = 0.0;
 
@@ -283,6 +365,7 @@ namespace Procedural
         nCarried = 0;
         waiting.clear();
         parked.clear();
+        coneLastTime = 0;
         queuedAt.clear();
         Trace(std::format("I {} generator init, records {}", When(), Records()));
         AcquireSRWLockExclusive(&propsLock);
@@ -548,8 +631,9 @@ namespace Procedural
         nCarried = 0;
 
         // The cone: kept positions of a removed provider go, those now inside come back (nearest first is the sort
-        // below), and those outside are kept
-        if (fConeBack > 0.0f && pCamera)
+        // below), and those outside are kept, while there is room; past it they are made
+        UpdateCone();
+        if (cone.active)
         {
             uint32_t capacity = *(uint32_t*)(generator + 0x5220);
             std::vector<uint8_t> keep;
@@ -583,8 +667,12 @@ namespace Procedural
                 auto entry = queue + size_t(i) * QueueEntrySize;
                 if (!InCone((float*)entry))
                 {
-                    keep.insert(keep.end(), entry, entry + QueueEntrySize);
-                    continue;
+                    if (keep.size() < ParkedLimit * QueueEntrySize)
+                    {
+                        keep.insert(keep.end(), entry, entry + QueueEntrySize);
+                        continue;
+                    }
+                    nConeFull++;
                 }
                 if (write != i)
                     memcpy(queue + size_t(write) * QueueEntrySize, entry, QueueEntrySize);
@@ -592,9 +680,8 @@ namespace Procedural
             }
             carriedLeft = std::min(carriedLeft, write);
             count = uint16_t(write);
-            if (keep.size() > ParkedLimit * QueueEntrySize)
-                keep.erase(keep.begin(), keep.end() - ParkedLimit * QueueEntrySize);
             parked.swap(keep);
+            nParkedNow = uint32_t(parked.size() / QueueEntrySize);
         }
         nQueueMax = std::max<uint32_t>(nQueueMax, count);
         lastQueue = count;
@@ -617,8 +704,8 @@ namespace Procedural
             return;
 
         // Nearest first, those ahead before those behind (a prop ahead counts as at its distance, one to the
-        // side as twice as far, one behind as three times), and all close to the camera now, so nothing
-        // appears late where one already is or is looking
+        // side as twice as far, one behind as three times; ahead is also where a turning camera turns to), and all
+        // close to the camera now, so nothing appears late where one already is or is looking
         uint32_t made = uint32_t(nSpawnsPerUpdate);
         if (pCamera)
         {
@@ -632,6 +719,8 @@ namespace Procedural
                 float distanceSquared = dx * dx + dy * dy + dz * dz;
                 float distance = std::sqrt(distanceSquared);
                 float facing = distance > 0.001f ? (dx * forward[0] + dy * forward[1] + dz * forward[2]) / distance : 1.0f;
+                if (cone.turning && distance > 0.001f)
+                    facing = std::max(facing, (dx * cone.turnedTo[0] + dy * cone.turnedTo[1] + dz * cone.turnedTo[2]) / distance);
                 float weight = 2.0f - std::clamp(facing, -1.0f, 1.0f);
                 order[i] = { distanceSquared * weight * weight, distanceSquared, i };
             }
@@ -922,6 +1011,8 @@ public:
             bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
             bGatherPriority = iniReader.ReadInteger("PROCEDURAL", "ProceduralGatherPriority", 1) != 0;
             fConeBack = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeBack", 70.0f), 0.0f, 1000.0f);
+            fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
+            fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
             nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
 
             // With the trace on, the game out of drawable references: mov ecx, 0x1173750; call CE 0xa8a990 in CE 0xaf4710
@@ -1163,13 +1254,14 @@ public:
             auto alive = props.size();
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; reflections skipped {}; box full {}, candidates capped {}",
+                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}; reflections skipped {}; box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
-                nQueueMax, nWaitingMax, nDropped, nReflectionsSkipped, nEntitiesCapped, nCandidatesCapped));
+                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nReflectionsSkipped, nEntitiesCapped, nCandidatesCapped));
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
             nReflectionsSkipped = 0;
+            nConeFull = 0;
         };
     }
 } ProceduralProps;
