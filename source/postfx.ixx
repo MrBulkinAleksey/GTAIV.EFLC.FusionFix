@@ -14,6 +14,9 @@ module;
 #include <regex>
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <filesystem>
+#include <vector>
 #include <unordered_map>
 #include "FusionLog.hpp"
 
@@ -1028,6 +1031,118 @@ public:
         D3DXHANDLE iPreviousMip;
     } AOEffectHandles = {};
 
+    // D3DXCreateEffectFromResourceW, with the compiled effect kept in FusionFixShaderCache next to the plugin. D3DX took
+    // seconds compiling the larger effects from their HLSL on the first frame of the world, each time the game started.
+    // The file's name holds hashes of the source and of the defines with the flags: a new build or other settings
+    // compile again, and the files of this effect for another source (other builds) are removed.
+    static HRESULT CreateEffectCached(IDirect3DDevice9* pDevice, HMODULE hm, int resource, const char* name, const D3DXMACRO* defines,
+                                      ID3DXEffect** effect, ID3DXBuffer** errors)
+    {
+        constexpr DWORD flags = 0;
+        const auto start = std::chrono::steady_clock::now();
+        auto elapsedMs = [&] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); };
+
+        HRSRC info = FindResourceW(hm, MAKEINTRESOURCEW(resource), RT_RCDATA);
+        HGLOBAL handle = info ? LoadResource(hm, info) : nullptr;
+        const void* source = handle ? LockResource(handle) : nullptr;
+        const DWORD sourceSize = info ? SizeofResource(hm, info) : 0;
+        if (!source || !sourceSize)
+            return D3DXCreateEffectFromResourceW(pDevice, hm, MAKEINTRESOURCEW(resource), defines, nullptr, flags, nullptr, effect, errors);
+
+        auto fnv = [](uint64_t h, const void* data, size_t size)
+        {
+            for (size_t i = 0; i < size; ++i)
+                h = (h ^ static_cast<const uint8_t*>(data)[i]) * 0x100000001B3ull;
+            return h;
+        };
+        const uint64_t sourceHash = fnv(0xCBF29CE484222325ull, source, sourceSize);
+        uint64_t defineHash = fnv(0xCBF29CE484222325ull, &flags, sizeof(flags));
+        for (auto d = defines; d && d->Name; ++d)
+        {
+            const char* value = d->Definition ? d->Definition : "";
+            defineHash = fnv(defineHash, d->Name, strlen(d->Name) + 1);
+            defineHash = fnv(defineHash, value, strlen(value) + 1);
+        }
+
+        std::error_code ec;
+        const auto directory = FusionLog::Directory() / L"FusionFixShaderCache";
+        char sourceTag[24];
+        sprintf_s(sourceTag, "%016llX", sourceHash);
+        char fileName[128];
+        sprintf_s(fileName, "%s_%s_%016llX.fxo", name, sourceTag, defineHash);
+        const auto path = directory / fileName;
+
+        if (FILE* file = nullptr; !_wfopen_s(&file, path.c_str(), L"rb") && file)
+        {
+            std::vector<uint8_t> compiled;
+            fseek(file, 0, SEEK_END);
+            const long size = ftell(file);
+            fseek(file, 0, SEEK_SET);
+            if (size > 0)
+            {
+                compiled.resize(size_t(size));
+                if (fread(compiled.data(), 1, compiled.size(), file) != compiled.size())
+                    compiled.clear();
+            }
+            fclose(file);
+            if (!compiled.empty() &&
+                D3DXCreateEffect(pDevice, compiled.data(), UINT(compiled.size()), nullptr, nullptr, flags, nullptr, effect, nullptr) == S_OK)
+            {
+                FusionLog::Write("PostFx", "Shaders", "%s: from the cache in %.0f ms", name, elapsedMs());
+                return S_OK;
+            }
+            FusionLog::Write("PostFx", "Shaders", "%s: the cached file did not load, compiling again", name);
+            std::filesystem::remove(path, ec);
+        }
+
+        ID3DXEffectCompiler* compiler = nullptr;
+        ID3DXBuffer* compiled = nullptr;
+        HRESULT hr = D3DXCreateEffectCompiler(static_cast<LPCSTR>(source), UINT(sourceSize), defines, nullptr, flags, &compiler, errors);
+        if (hr == S_OK)
+        {
+            if (errors)
+                SAFE_RELEASE(*errors);
+            hr = compiler->CompileEffect(flags, &compiled, errors);
+            compiler->Release();
+        }
+        if (hr != S_OK || !compiled)
+        {
+            SAFE_RELEASE(compiled);
+            FusionLog::Write("PostFx", "Shaders", "%s: compiling failed, 0x%08lX", name, hr);
+            return hr != S_OK ? hr : E_FAIL;
+        }
+        const double compileMs = elapsedMs();
+
+        hr = D3DXCreateEffect(pDevice, compiled->GetBufferPointer(), compiled->GetBufferSize(), nullptr, nullptr, flags, nullptr, effect, nullptr);
+        if (hr == S_OK)
+        {
+            const std::string prefix = std::string(name) + "_";
+            for (auto& entry : std::filesystem::directory_iterator(directory, ec))
+            {
+                const auto other = entry.path().filename().string();
+                if (other.starts_with(prefix) && other.compare(prefix.size(), 16, sourceTag) != 0)
+                    std::filesystem::remove(entry.path(), ec);
+            }
+            std::filesystem::create_directories(directory, ec);
+            auto temp = path;
+            temp += L".tmp";
+            bool written = false;
+            if (FILE* file = nullptr; !_wfopen_s(&file, temp.c_str(), L"wb") && file)
+            {
+                written = fwrite(compiled->GetBufferPointer(), 1, compiled->GetBufferSize(), file) == compiled->GetBufferSize();
+                written = fclose(file) == 0 && written;
+            }
+            written = written && MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+            if (!written)
+                std::filesystem::remove(temp, ec);
+            FusionLog::Write("PostFx", "Shaders", "%s: compiled in %.0f ms, %s", name, compileMs, written ? "cached" : "NOT cached, writing failed");
+        }
+        else
+            FusionLog::Write("PostFx", "Shaders", "%s: the compiled effect did not load, 0x%08lX", name, hr);
+        compiled->Release();
+        return hr;
+    }
+
     bool loadShaders(LPDIRECT3DDEVICE9 pDevice, HMODULE hm)
     {
         ID3DXBuffer* bf1 = nullptr;
@@ -1322,8 +1437,7 @@ public:
                 {"FAR_CLIP", farClip.c_str()},
                 {} // last must be empty
             };
-            if (D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
-                hm, MAKEINTRESOURCEW(IDR_AO_FX), defines, nullptr, 0, nullptr, &AOEffect, &errors) != S_OK)
+            if (CreateEffectCached(rage::grcDevice::GetD3DDevice(), hm, IDR_AO_FX, "AO", defines, &AOEffect, &errors) != S_OK)
             {
                 if (errors)
                     MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
@@ -1376,8 +1490,7 @@ public:
                 {"GI_STEPS", giSteps.c_str()},
                 {} // last must be empty
             };
-            if (D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
-                hm, MAKEINTRESOURCEW(IDR_SSR_FX), defines, nullptr, 0, nullptr, &SSREffect, &errors) != S_OK)
+            if (CreateEffectCached(rage::grcDevice::GetD3DDevice(), hm, IDR_SSR_FX, "SSR", defines, &SSREffect, &errors) != S_OK)
             {
                 if (errors)
                     MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
@@ -1488,8 +1601,7 @@ public:
         {
             wetGroundEffectTried = true;
             ID3DXBuffer* errors = nullptr;
-            hrWetGroundEffect = D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
-                hm, MAKEINTRESOURCEW(IDR_WETGROUND_FX), nullptr, nullptr, 0, nullptr, &WetGroundEffect, &errors);
+            hrWetGroundEffect = CreateEffectCached(rage::grcDevice::GetD3DDevice(), hm, IDR_WETGROUND_FX, "WetGround", nullptr, &WetGroundEffect, &errors);
             if (hrWetGroundEffect != S_OK)
             {
                 WetGroundEffect = nullptr;
@@ -1505,8 +1617,7 @@ public:
         {
             headlightGlintsEffectTried = true;
             ID3DXBuffer* errors = nullptr;
-            hrHeadlightGlintsEffect = D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
-                hm, MAKEINTRESOURCEW(IDR_HEADLIGHTGLINTS_FX), nullptr, nullptr, 0, nullptr, &HeadlightGlintsEffect, &errors);
+            hrHeadlightGlintsEffect = CreateEffectCached(rage::grcDevice::GetD3DDevice(), hm, IDR_HEADLIGHTGLINTS_FX, "HeadlightGlints", nullptr, &HeadlightGlintsEffect, &errors);
             if (hrHeadlightGlintsEffect != S_OK)
             {
                 HeadlightGlintsEffect = nullptr;
@@ -1523,8 +1634,7 @@ public:
         {
             cloudsEffectTried = true;
             ID3DXBuffer* errors = nullptr;
-            hrCloudsEffect = D3DXCreateEffectFromResourceW(rage::grcDevice::GetD3DDevice(),
-                hm, MAKEINTRESOURCEW(IDR_CLOUDS_FX), nullptr, nullptr, 0, nullptr, &CloudsEffect, &errors);
+            hrCloudsEffect = CreateEffectCached(rage::grcDevice::GetD3DDevice(), hm, IDR_CLOUDS_FX, "Clouds", nullptr, &CloudsEffect, &errors);
             if (hrCloudsEffect != S_OK)
             {
                 CloudsEffect = nullptr;
@@ -2794,8 +2904,14 @@ private:
         PostFxResources.bSSRReprojValid = false;
     }
 
+    // From OnDeviceLost until OnDeviceReset has made the targets again. The game resets the device on the main thread
+    // while the render thread still draws: a frame drawn in between found AO's targets released and crashed. Each hook
+    // that starts our passes leaves them out meanwhile; it narrows the window, the passes still check their targets.
+    static inline std::atomic<bool> bDeviceLost = false;
+
     static void __fastcall OnDeviceLost()
     {
+        bDeviceLost = true;
         FusionLog::Write("PostFx", "Device", "lost, thread %lu", GetCurrentThreadId());
         PostFxResources.ReleaseTextures();
         PostFxResources.ReleaseWaterMask();
@@ -3102,6 +3218,7 @@ private:
             R.AOBlurTex->mD3DTexture->GetSurfaceLevel(0, &R.AOBlurSurf);
         FusionLog::Write("PostFx", "Device", "reset %dx%d, scene %dx%d, thread %lu, AO targets %s", int(*rage::grcDevice::ms_nActiveWidth),
                          int(*rage::grcDevice::ms_nActiveHeight), int(width), int(height), GetCurrentThreadId(), R.AOCamDepthSurf[0] && R.AOSurf && R.AOBlurSurf ? "made" : "MISSING");
+        bDeviceLost = false;
     }
 
     static void Init()
@@ -6777,7 +6894,7 @@ private:
         // took two full screen copies and a full screen pass, and a target of another size
         // had both mask copies released and created again, even with no water on screen.
         // Only the main scene's water gets reflections, once a frame.
-        const bool mainScene = R.SSREnabled() && R.SSREffect && R.fSSRWaterIntensity > 0.0f &&
+        const bool mainScene = !bDeviceLost && R.SSREnabled() && R.SSREffect && R.fSSRWaterIntensity > 0.0f &&
                                !R.bWaterDoneThisFrame && RenderTargetIsScreenSized();
         R.bWaterMaskCaptured = mainScene && CopyRenderTargetToWaterMask(0);
         ProfilerMark(pProfileDevice, kProfWaterGame, true);
@@ -7086,7 +7203,8 @@ private:
         bInsteadDrawPrimitivePostFX = true;
         hbDrawCallPostFX.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitivePostFX = false;
-        DrawSSRDebugOverlay();
+        if (!bDeviceLost)
+            DrawSSRDebugOverlay();
         SSRTrace::Tick();
         TickIniReload();
     }
@@ -7440,15 +7558,21 @@ private:
         {
             bInsteadDrawPrimitiveFog = false;
             // Do not initialize shaders, RTs etc. here or we get a device reset error for some reason
-            NewFog();
-            // Transparent geometry and visual effects come next: the reactive mask of temporal AA starts here
-            TemporalAA::OnFogDrawn();
+            if (!bDeviceLost)
+            {
+                NewFog();
+                // Transparent geometry and visual effects come next: the reactive mask of temporal AA starts here
+                TemporalAA::OnFogDrawn();
+            }
         }
         else if (bInsteadDrawPrimitivePostFX)
         {
             bInsteadDrawPrimitivePostFX = false;
-            Init();
-            NewPostFX();
+            if (!bDeviceLost)
+            {
+                Init();
+                NewPostFX();
+            }
         }
         else if (bInsteadDrawPrimitiveDownsample)
         {
@@ -7487,7 +7611,7 @@ private:
     {
         auto pDevice = rage::grcDevice::GetD3DDevice();
         const int result = DrawSkyMain(_this, edx, a2, a3, a4, a5, a6, a7);
-        if (pDevice && IsWaterReflectionTarget(pDevice))
+        if (pDevice && !bDeviceLost && IsWaterReflectionTarget(pDevice))
         {
             ++PostFxResources.nCloudWaterReflectionCalls;
             RenderVolumetricClouds(pDevice, nullptr, true, kProfCloudReflectionWater);
@@ -7553,7 +7677,7 @@ private:
     {
         const int result = hbDrawSkyReflection.fun(_this, edx, a2, a3, a4, a5, a6, a7);
         ++PostFxResources.nCloudReflectionCalls;
-        if (auto pDevice = rage::grcDevice::GetD3DDevice())
+        if (auto pDevice = rage::grcDevice::GetD3DDevice(); pDevice && !bDeviceLost)
             RenderVolumetricClouds(pDevice, nullptr, true);
         return result;
     }
@@ -7562,6 +7686,8 @@ private:
     static DWORD __cdecl RenderPedAndVehicleFakeShadows(DWORD a1)
     {
         DWORD result = RenderPedAndVehicleFakeShadowsInlineHook.unsafe_ccall<DWORD>(a1);
+        if (bDeviceLost)
+            return result;
         RefreshGBufferTargets();
         TraceLightingInputs(rage::grcDevice::GetD3DDevice());
 
@@ -9418,7 +9544,7 @@ public:
     // RenderPedAndVehicleFakeShadows binds this frame's once they are done.
     static void BindSSRTexture()
     {
-        if (auto pDevice = rage::grcDevice::GetD3DDevice())
+        if (auto pDevice = rage::grcDevice::GetD3DDevice(); pDevice && !bDeviceLost)
         {
             nLightingStage = 0; // a frame that never closed its lighting leaves nothing open here
             ProfilerMark(pDevice, kProfLighting, true);
@@ -9446,6 +9572,8 @@ public:
         if (!pDevice)
             return;
         SetLightingStage(pDevice, 0);
+        if (bDeviceLost)
+            return;
         ProfilerMark(pDevice, kProfLighting, false);
 
         if (R.bContactBound)
