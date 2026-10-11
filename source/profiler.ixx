@@ -7,6 +7,7 @@ module;
 #include <mmsystem.h>
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstring>
 #include <format>
 #include <string>
@@ -34,7 +35,10 @@ import common;
 //    ProfilerSpikeMs gets a block of its own in the log, where the main thread was in that frame.
 //
 // While a thread is stopped only its context and a copy of the top of its stack are taken: nothing is allocated
-// or locked then, as the stopped thread may hold the heap's lock or the loader's.
+// or locked then, as the stopped thread may hold the heap's lock or the loader's. Every read of memory that isn't
+// ours (stacks, code, module headers) goes through a structured exception handler, so a bad one costs a sample, not
+// the game, and an exception in the profiler's thread stops the profiler with a line in its log. Threads of the
+// Social Club, Steam and overlays are never stopped: their own protection may end the game when one is.
 namespace Profiler
 {
     constexpr uint32_t StackCopy = 1024;    // bytes of a stopped thread's stack looked at for return addresses
@@ -106,6 +110,19 @@ namespace Profiler
         std::sort(module.exports.begin(), module.exports.end());
     }
 
+    bool SafeLoadExports(Module& module)
+    {
+        __try
+        {
+            LoadExports(module);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
     void LoadModules()
     {
         modules.clear();
@@ -143,8 +160,8 @@ namespace Profiler
                 }
                 address = regionEnd;
             }
-            if (!module.game)
-                LoadExports(module);
+            if (!module.game && !SafeLoadExports(module))
+                module.exports.clear();
             modules.push_back(std::move(module));
         }
         std::sort(modules.begin(), modules.end(), [](auto& a, auto& b) { return a.base < b.base; });
@@ -286,7 +303,7 @@ namespace Profiler
         HANDLE handle = nullptr;
         std::string name;
         uint64_t cpuLast = 0, cpuSecond = 0, cpuInterval = 0;
-        bool alive = false, sampled = false, main = false;
+        bool alive = false, sampled = false, main = false, excluded = false;
         uintptr_t stackLow = 0, stackHigh = 0;  // the committed region the stack was last found in
         uint32_t samples = 0;
         std::unordered_map<uintptr_t, uint32_t> self, total;
@@ -304,6 +321,25 @@ namespace Profiler
         if (!GetThreadTimes(handle, &creation, &exit, &kernel, &user))
             return 0;
         return (uint64_t(kernel.dwHighDateTime) << 32 | kernel.dwLowDateTime) + (uint64_t(user.dwHighDateTime) << 32 | user.dwLowDateTime);
+    }
+
+    // Threads that are never stopped, by the module they started in
+    bool Excluded(HANDLE handle)
+    {
+        uintptr_t start = 0;
+        if (!pNtQueryInformationThread || pNtQueryInformationThread(handle, 9, &start, sizeof(start), nullptr) < 0)
+            return false;
+        auto module = FindModule(start);
+        if (!module)
+            return false;
+        std::string name = module->name;
+        std::transform(name.begin(), name.end(), name.begin(), [](char c) { return char(std::tolower((unsigned char)c)); });
+        if (name.find("overlay") != std::string::npos)
+            return true;
+        for (auto prefix : { "socialclub", "steam", "mtlx", "rgsc", "discord", "rtss", "nvspcap" })
+            if (name.starts_with(prefix))
+                return true;
+        return false;
     }
 
     std::string ThreadName(DWORD id, HANDLE handle)
@@ -354,6 +390,9 @@ namespace Profiler
                         continue;
                     }
                     thread.name = ThreadName(thread.id, thread.handle);
+                    thread.excluded = Excluded(thread.handle);
+                    if (thread.excluded)
+                        thread.name += " (not sampled)";
                     thread.cpuLast = CpuTime(thread.handle);
                 }
                 thread.alive = true;
@@ -384,7 +423,7 @@ namespace Profiler
         for (auto& [id, thread] : threads)
         {
             thread.sampled = false;
-            if (thread.alive && thread.cpuSecond > 100000) // 10 ms of the last second
+            if (thread.alive && !thread.excluded && thread.cpuSecond > 100000) // 10 ms of the last second
                 busiest.push_back(&thread);
         }
         std::sort(busiest.begin(), busiest.end(), [](auto a, auto b) { return a->cpuSecond > b->cpuSecond; });
@@ -395,6 +434,61 @@ namespace Profiler
             main->second.sampled = true;
     }
 
+    // Reads of memory that isn't ours: false when it faulted
+    bool SafeCopy(void* to, const void* from, size_t size)
+    {
+        __try
+        {
+            memcpy(to, from, size);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    // The function the thread is in and its callers from the copy of its stack. A return address after a direct
+    // call counts only if that call goes to the function found below it: older return addresses left deeper on the
+    // stack fail that. Three refused in a row (a tail call breaks the chain) and the next one is taken anyway.
+    // Indirect calls can't be checked and are taken
+    uint32_t Walk(uintptr_t eip, const uint8_t* stack, uint32_t copied, uintptr_t* frames)
+    {
+        uint32_t count = 0;
+        frames[count++] = FunctionStart(eip);
+        uint32_t refused = 0;
+        for (uint32_t offset = 0; offset + 4 <= copied && count <= MaxFrames; offset += 4)
+        {
+            uintptr_t value = *(const uint32_t*)(stack + offset);
+            int call = CallBefore(value);
+            if (!call)
+                continue;
+            if (call == 1 && refused < 3 && CallTarget(value + *(const int32_t*)(value - 4)) != frames[count - 1])
+            {
+                refused++;
+                continue;
+            }
+            refused = 0;
+            frames[count++] = FunctionStart(value);
+        }
+        return count;
+    }
+
+    // 0 when reading the code faulted
+    uint32_t SafeWalk(uintptr_t eip, const uint8_t* stack, uint32_t copied, uintptr_t* frames)
+    {
+        __try
+        {
+            return Walk(eip, stack, copied, frames);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return 0;
+        }
+    }
+
+    uint32_t nFaults = 0;
+
     // One sample of a thread: stopped, its instruction and the top of its stack copied, let go
     void Sample(Thread& thread)
     {
@@ -404,7 +498,18 @@ namespace Profiler
         context.ContextFlags = CONTEXT_CONTROL;
         LARGE_INTEGER time;
         if (SuspendThread(thread.handle) == DWORD(-1))
+        {
+            thread.alive = false;
             return;
+        }
+        // A thread that ended since the last look: its stack may be gone
+        DWORD exitCode = 0;
+        if (!GetExitCodeThread(thread.handle, &exitCode) || exitCode != STILL_ACTIVE)
+        {
+            ResumeThread(thread.handle);
+            thread.alive = false;
+            return;
+        }
         bool ok = GetThreadContext(thread.handle, &context) != FALSE;
         QueryPerformanceCounter(&time);
         if (ok)
@@ -424,7 +529,12 @@ namespace Profiler
             if (esp >= thread.stackLow && esp < thread.stackHigh)
             {
                 copied = uint32_t(std::min<uintptr_t>(StackCopy, thread.stackHigh - esp)) & ~3u;
-                memcpy(stack, (void*)esp, copied);
+                if (!SafeCopy(stack, (void*)esp, copied))
+                {
+                    copied = 0;
+                    thread.stackLow = thread.stackHigh = 0;
+                    nFaults++;
+                }
             }
         }
         ResumeThread(thread.handle);
@@ -432,25 +542,11 @@ namespace Profiler
             return;
 
         uintptr_t frames[MaxFrames + 1];
-        uint32_t count = 0;
-        frames[count++] = FunctionStart(context.Eip);
-        // A return address after a direct call counts only if that call goes to the function found below it: older
-        // return addresses left deeper on the stack fail that. Three refused in a row (a tail call breaks the chain)
-        // and the next one is taken anyway. Indirect calls can't be checked and are taken
-        uint32_t refused = 0;
-        for (uint32_t offset = 0; offset + 4 <= copied && count <= MaxFrames; offset += 4)
+        uint32_t count = SafeWalk(context.Eip, stack, copied, frames);
+        if (!count)
         {
-            uintptr_t value = *(uint32_t*)(stack + offset);
-            int call = CallBefore(value);
-            if (!call)
-                continue;
-            if (call == 1 && refused < 3 && CallTarget(value + *(const int32_t*)(value - 4)) != frames[count - 1])
-            {
-                refused++;
-                continue;
-            }
-            refused = 0;
-            frames[count++] = FunctionStart(value);
+            nFaults++;
+            return;
         }
         thread.samples++;
         thread.self[frames[0]]++;
@@ -632,6 +728,9 @@ namespace Profiler
             text += std::format("frames over {} ms: {} reported{}\n", nSpikeMs, nSpikes,
                 nSpikesSkipped ? std::format(", {} more not ({} at most a report)", nSpikesSkipped, SpikesPerReport) : std::string());
         nSpikes = nSpikesSkipped = 0;
+        if (nFaults)
+            text += std::format("samples dropped on a fault reading memory: {}\n", nFaults);
+        nFaults = 0;
         FusionLog::WriteText("Profiler", "Report", text);
         WriteFolded();
 
@@ -644,9 +743,31 @@ namespace Profiler
         }
     }
 
+    void Loop();
+
+    // The profiler's thread: an exception here would end the game without a word (std::terminate), so it ends the
+    // profiler instead, said in its log
     void Run()
     {
         timeBeginPeriod(1);
+        try
+        {
+            Loop();
+        }
+        catch (const std::exception& e)
+        {
+            FusionLog::Write("Profiler", "Stopped", "exception: %s\n", e.what());
+        }
+        catch (...)
+        {
+            FusionLog::Write("Profiler", "Stopped", "unknown exception\n");
+        }
+        timeEndPeriod(1);
+        bRunning = false;
+    }
+
+    void Loop()
+    {
         LoadModules();
         auto ntdll = GetModuleHandleW(L"ntdll.dll");
         pNtQueryInformationThread = ntdll ? (NtQueryInformationThread_t)GetProcAddress(ntdll, "NtQueryInformationThread") : nullptr;
@@ -655,6 +776,7 @@ namespace Profiler
         if (!pGetThreadDescription)
             pGetThreadDescription = (GetThreadDescription_t)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetThreadDescription");
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+        FusionLog::Write("Profiler", "Settings", "sampler running, %u modules\n", uint32_t(modules.size()));
 
         LARGE_INTEGER frequency, now, lastRefresh, lastReport, next;
         QueryPerformanceFrequency(&frequency);
@@ -698,7 +820,6 @@ namespace Profiler
                 lastReport = now;
             }
         }
-        timeEndPeriod(1);
     }
 }
 
