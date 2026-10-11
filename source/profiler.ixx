@@ -487,7 +487,10 @@ namespace Profiler
         }
     }
 
+    // A fault reading code is most likely a module unloaded since the list was taken (the WMI ones come and go in
+    // the menu): the list is taken again before the next samples
     uint32_t nFaults = 0;
+    bool bModulesStale = false;
 
     // One sample of a thread: stopped, its instruction and the top of its stack copied, let go
     void Sample(Thread& thread)
@@ -546,6 +549,7 @@ namespace Profiler
         if (!count)
         {
             nFaults++;
+            bModulesStale = true;
             return;
         }
         thread.samples++;
@@ -808,8 +812,9 @@ namespace Profiler
                 lastRefresh = now;
                 RefreshThreads();
                 // Modules loaded later (plugins, the driver) are named too
-                if (++moduleRefresh % 10 == 0)
+                if (++moduleRefresh % 10 == 0 || bModulesStale)
                 {
+                    bModulesStale = false;
                     LoadModules();
                     functionStarts.clear();
                 }
