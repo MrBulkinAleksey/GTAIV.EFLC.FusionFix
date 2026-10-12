@@ -805,6 +805,7 @@ public:
     // A lamp that takes a shadow slot, whose map then shows the cars, fades its boxes out over SlotFade ms, so the
     // shadow under a car does not jump between the two; WithSlots keeps them under its real shadow for good.
     bool bVehicleBoxShadowsWithSlots = false;
+    bool bVehicleBoxShadowsReplaceMaps = false; // VehicleBoxShadowsReplaceMaps, see VehicleBoxShadows::BoxedCars
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
     uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300, nVehicleBoxShadowSizeFadeMs = 300;
     float fVehicleBoxShadowsMaxDistance = 60.0f; // metres from the camera to a lamp's light past which it has no boxes
@@ -1789,6 +1790,7 @@ public:
         fVehicleBoxShadowEndRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsEndRounding", 0.3f), 0.0f, 2.0f);
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
+        bVehicleBoxShadowsReplaceMaps = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsReplaceMaps", 0) != 0;
         bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 0) != 0;
         fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", 1.0f), -3.0f, 5.0f);
         bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;
@@ -8641,9 +8643,9 @@ private:
             static uint32_t handOvers = 0;
             list.sequence = ++handOvers;
             const bool enabled = PostFxResources.VehicleBoxShadowsEnabled() && lightListBuilt && modelInfos;
-            // The night shadow slots: up to this many cars in a lamp's light need no slot
-            VehicleBoxShadowsBridge::perLamp.store(enabled ? std::clamp(PostFxResources.nVehicleBoxShadowsPerLamp, 1, kPerLight) : 0,
-                std::memory_order_relaxed);
+            // The night shadow slots (VehicleBoxShadowsReplaceMaps): up to this many cars in a lamp's light need no slot
+            VehicleBoxShadowsBridge::perLamp.store(enabled && PostFxResources.bVehicleBoxShadowsReplaceMaps
+                ? std::clamp(PostFxResources.nVehicleBoxShadowsPerLamp, 1, kPerLight) : 0, std::memory_order_relaxed);
             if (!enabled)
                 return;
             float focus[3] = {};
@@ -8944,7 +8946,10 @@ private:
         // between box and map by turns.
         static int BoxedCars(const float position[3], uintptr_t* cars, int max)
         {
-            if (!PostFxResources.VehicleBoxShadowsEnabled() || PostFxResources.bVehicleBoxShadowsWithSlots || !std::isfinite(position[0]))
+            // VehicleBoxShadowsReplaceMaps; otherwise a car under a lamp with a slot has the map's real shadow, and
+            // its box only where the lamp has none
+            if (!PostFxResources.VehicleBoxShadowsEnabled() || !PostFxResources.bVehicleBoxShadowsReplaceMaps ||
+                PostFxResources.bVehicleBoxShadowsWithSlots || !std::isfinite(position[0]))
                 return 0;
             const DWORD now = GetTickCount();
             const int64_t x = Cell(position[0]), y = Cell(position[1]), z = Cell(position[2]);
