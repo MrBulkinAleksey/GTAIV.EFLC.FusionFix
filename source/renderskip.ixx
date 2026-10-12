@@ -45,6 +45,7 @@ export namespace RenderSkip
     bool bMidCascadeHalfRate = false;
     bool bTrace = false;
     uint32_t nCascadeSize = 0;  // a cascade's side in texels, CASCADE_TARGET_R32's, once the game has drawn one
+    float* pCamera = nullptr;   // CE 0x128e340, the game camera's position, where it looks 8 floats before
 }
 
 namespace RenderSkip
@@ -66,7 +67,6 @@ namespace RenderSkip
     };
     HalfRate halfRates[Kinds];
 
-    float* pCamera = nullptr;               // CE 0x128e340, the game camera's position, where it looks 8 floats before
 
     bool CameraMovedSince(const float* position, const float* lastForward, float moveSquared, float turnCos)
     {
