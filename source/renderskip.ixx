@@ -2,6 +2,7 @@ module;
 
 #include <common.hxx>
 #include "FusionLog.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -46,6 +47,14 @@ export namespace RenderSkip
     bool bFarCascadesHalfRate = true;
     bool bMidCascadeHalfRate = false;
     bool bTrace = false;
+    // CascadeSunElevation: degrees of the sun above the horizon below which its cascades are left out, by the sky's
+    // SunDirection; below -90 (or before the sky has been drawn) by the clock instead, from 22:00 to 05:00
+    float fSunLowBelow = 3.0f;
+
+    float SunElevation();   // degrees, NaN while the sky has given none
+    bool SunIsLow();        // the sun's shadows too faint to draw: the cascades and the clouds in reflections go
+    bool SunShadowsDrawn(); // the game drew the sun's cascades in the last few frames, which it does only outside, and they
+                            // weren't left out for a low sun
 }
 
 namespace RenderSkip
@@ -118,8 +127,19 @@ namespace RenderSkip
         return h.skip;
     }
 
+    // The sky's sun (gta_atmoscatt_clouds' SunDirection, y up): unlike gDirectionalLight it stays the sun at night
+    size_t nSunDirectionIdx = SIZE_MAX;
+    bool bSunLow = false;
+
     bool IsNight()
     {
+        float elevation = SunElevation();
+        if (fSunLowBelow > -90.0f && !std::isnan(elevation))
+        {
+            // Half a degree of hysteresis, so the cascades don't come and go on the threshold
+            bSunLow = elevation < fSunLowBelow + (bSunLow ? 0.5f : 0.0f);
+            return bSunLow;
+        }
         if (!CClock::ms_nGameClockHours)
             return false;
         auto hours = CClock::GetHours();
@@ -601,6 +621,31 @@ namespace RenderSkip
     }
 }
 
+namespace RenderSkip
+{
+    float SunElevation()
+    {
+        if (nSunDirectionIdx == SIZE_MAX)
+            return NAN;
+        const auto& sun = rage::grmShaderInfo::getShaderParamData(nSunDirectionIdx);
+        float length = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]);
+        if (!(length > 0.5f))
+            return NAN;
+        return std::asin(std::clamp(sun[1] / length, -1.0f, 1.0f)) * 57.29578f;
+    }
+
+    bool SunIsLow()
+    {
+        return IsNight();
+    }
+
+    bool SunShadowsDrawn()
+    {
+        // cascadeFrame moves on only past CascadeDrop's night check
+        return cascadeFrame != ~0u && TemporalAA::SceneFrame - cascadeFrame <= 3;
+    }
+}
+
 class RenderSkipFeature
 {
 public:
@@ -616,6 +661,9 @@ public:
             bFarCascadesHalfRate = iniReader.ReadInteger("SHADOWS", "FarCascadesHalfRate", 1) != 0;
             bMidCascadeHalfRate = iniReader.ReadInteger("SHADOWS", "MidCascadeHalfRate", 0) != 0;
             bTrace = iniReader.ReadInteger("MISC", "RenderSkipTrace", 0) != 0;
+            fSunLowBelow = iniReader.ReadFloat("SHADOWS", "CascadeSunElevation", 3.0f);
+            // At init: the hook that fills the parameters walks the same vector
+            nSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
             if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
                 pCamera = *camera.get_first<float*>(12);
@@ -652,7 +700,7 @@ public:
             bool installed = Install();
             FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, the far ones by day %s, reflections %s\n",
                 installed ? "in place" : "no device or texture factory yet, nothing is left out",
-                bCascadesAtNight ? "drawn at night" : "not drawn from 22:00 to 05:00",
+                bCascadesAtNight ? "drawn at night" : fSunLowBelow > -90.0f ? "not drawn while the sun is low" : "not drawn from 22:00 to 05:00",
                 bFarCascadesHalfRate ? (bFollow ? "in turns, following the camera" : "in turns while the camera keeps still") : "every frame",
                 bReflectionsHalfRate ? "every other frame" : "every frame");
         };
@@ -669,6 +717,16 @@ public:
             }
             if (bMatrixTrace && bFollow && frames == 1200)
                 matrixTraceFrom = passSeq + 2;
+            // The sun's height at each hour of the game's clock, to set CascadeSunElevation by
+            static int lastHour = -1;
+            if (CClock::ms_nGameClockHours && CClock::GetHours() != lastHour)
+            {
+                lastHour = CClock::GetHours();
+                float elevation = SunElevation();
+                if (!std::isnan(elevation))
+                    FusionLog::Write("RenderSkip", "Sun", "%02d:00 the sun %.1f degrees above the horizon, its shadows %s\n", lastHour, elevation,
+                        IsNight() ? "left out" : "drawn");
+            }
             if (frames % 3600)
                 return;
             std::string text;
