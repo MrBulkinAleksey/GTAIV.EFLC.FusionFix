@@ -884,6 +884,22 @@ technique CloudsSkyRef
     }
 }
 
+// The reflections' clouds, worked out at half size by Clouds_PS into a target of their own (bound as HistoryTex,
+// filtered) and laid over the reflection at its size: premultiplied light and transmittance filter as they are.
+float4 CloudsUpscale_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    return tex2Dlod(HistoryTex, float4(uv, 0, 0));
+}
+
+technique CloudsUpscale
+{
+    pass Upscale
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 CloudsUpscale_PS();
+    }
+}
+
 technique CloudsComposite
 {
     pass Composite
