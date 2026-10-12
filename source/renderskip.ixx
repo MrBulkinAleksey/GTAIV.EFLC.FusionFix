@@ -43,6 +43,7 @@ export namespace RenderSkip
     bool bReflectionsHalfRate = true;
     bool bFarCascadesHalfRate = true;
     bool bTrace = false;
+    float* pCamera = nullptr;   // CE 0x128e340, the game camera's position, where it looks 8 floats before
 }
 
 namespace RenderSkip
@@ -64,7 +65,6 @@ namespace RenderSkip
     };
     HalfRate halfRates[Kinds];
 
-    float* pCamera = nullptr;               // CE 0x128e340, the game camera's position, where it looks 8 floats before
 
     bool CameraMovedSince(const float* position, const float* lastForward, float moveSquared, float turnCos)
     {
