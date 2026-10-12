@@ -27,7 +27,7 @@ namespace ModelRelease
     uintptr_t delta = 0;
     std::mutex mutex;
     std::map<std::pair<uintptr_t, uintptr_t>, uint32_t> callers;
-    uint32_t released = 0, nearMap = 0;
+    uint32_t released = 0, nearMap = 0, inMenu = 0;
     float* pCamera = nullptr;   // CE 0x128e340
     SafetyHookMid releaseHook;
 
@@ -74,17 +74,19 @@ namespace ModelRelease
         callers[{ from, outer }]++;
         released++;
         nearMap += nearby;
+        inMenu += CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive;
     }
 
     void Write()
     {
         std::vector<std::pair<uint32_t, std::pair<uintptr_t, uintptr_t>>> top;
-        uint32_t count, nearby;
+        uint32_t count, nearby, menu;
         {
             std::lock_guard lock(mutex);
             count = released;
             nearby = nearMap;
-            released = nearMap = 0;
+            menu = inMenu;
+            released = nearMap = inMenu = 0;
             for (auto& [where, n] : callers)
                 top.push_back({ n, where });
             callers.clear();
@@ -92,8 +94,8 @@ namespace ModelRelease
         if (!count)
             return;
         std::sort(top.rbegin(), top.rend());
-        std::string text = std::format("{} entities let go of their models, {} of them the map's within 100 m{}", count, nearby,
-            CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive ? " (menu open)" : "");
+        // While the menu is open the game's frame doesn't run, and what went then comes in one line after it
+        std::string text = std::format("{} entities let go of their models, {} of them the map's within 100 m, {} with the menu open", count, nearby, menu);
         for (size_t i = 0; i < top.size() && i < 6; i++)
             text += std::format("; {} from {:#x} (in {:#x})", top[i].first, top[i].second.first, top[i].second.second);
         if (auto info = CStreamingEngine::ms_info)
