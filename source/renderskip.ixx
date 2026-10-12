@@ -190,6 +190,8 @@ namespace RenderSkip
     uint32_t passSeq = 0;       // the cascades' passes, one a scene frame by day
     bool skippedInPass[4]{};
     bool bAtlasLeftOut = false;
+    bool bNightCascade = false;     // the cascade just locked was the night's, its draws left out
+    uint32_t nightAtlasFrame = ~0u;  // the scene frame the night's atlas was last cleared in
 
     // A cascade left out is read with the matrix it was drawn with. The shaders take the cascades as one matrix
     // (gShadowMatrix: light x, y and depth of a world position) and, for each cascade, a scale and an offset of x and y
@@ -277,8 +279,9 @@ namespace RenderSkip
     Drop CascadeDrop()
     {
         bAtlasLeftOut = false;
-        if (!bCascadesAtNight && IsNight())
-            return Drop::Draws;     // cleared by LockTarget instead
+        bNightCascade = !bCascadesAtNight && IsNight();
+        if (bNightCascade)
+            return Drop::Draws;     // its quarter of the atlas is cleared by LockTarget instead
         uint32_t frame = TemporalAA::SceneFrame;
         if (frame != cascadeFrame)
         {
@@ -413,8 +416,8 @@ namespace RenderSkip
         case CascadeTarget: return CascadeDrop();
         case CascadeAtlas:
         {
-            // The draw that puts the cascade just drawn into its quarter
-            bool leftOut = bAtlasLeftOut;
+            // The draw that puts the cascade just drawn into its quarter; the night's quarter is cleared by LockTarget
+            bool leftOut = bAtlasLeftOut || bNightCascade;
             bAtlasLeftOut = false;
             return leftOut ? Drop::Everything : Drop::Nothing;
         }
@@ -506,10 +509,34 @@ namespace RenderSkip
                     drop == Drop::Nothing ? "" : drop == Drop::Draws ? ", draws left out" : ", left out"));
         }
         pfnLock(factory, index, color, depthTarget, a5, a6, mip);
-        // The night's cascade, bound now: its colour to 1.0, for the game's draw into the atlas to take
-        if (index == 0 && depth > 0 && stack[depth - 1].kind == CascadeTarget && stack[depth - 1].drop == Drop::Draws && RealClear)
-            if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
+        // The night's quarter of the atlas, bound now: 1.0 in it, which the lighting takes as lit for any depth. The atlas
+        // holds 0.5 - 0.0005 z of the casters (cascadeConvert) and a point is lit where that is no less than its own; the
+        // cascade cleared to 1.0 and copied there as before was a caster at z 1, which shadowed everything on one side of
+        // that plane through the light's space: one long straight shadow over walls and roofs, moving with the camera
+        if (index == 0 && depth > 0 && stack[depth - 1].kind == CascadeAtlas && stack[depth - 1].drop == Drop::Everything &&
+            bNightCascade && RealClear)
+        {
+            bNightCascade = false;
+            // All of it, once a frame: a clear takes only the viewport, which may still be the cascade's
+            auto device = RageDirect3DDevice9::GetRuntimeDevice();
+            IDirect3DSurface9* surface = nullptr;
+            D3DSURFACE_DESC desc{};
+            if (device && nightAtlasFrame != TemporalAA::SceneFrame && SUCCEEDED(device->GetRenderTarget(0, &surface)) && surface)
+            {
+                surface->GetDesc(&desc);
+                surface->Release();
+                nightAtlasFrame = TemporalAA::SceneFrame;
+                D3DVIEWPORT9 saved{}, whole{ 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
+                DWORD scissor = FALSE;
+                device->GetViewport(&saved);
+                device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissor);
+                device->SetViewport(&whole);
+                device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
                 RealClear(device, 0, nullptr, D3DCLEAR_TARGET, 0xFFFFFFFF, 1.0f, 0);
+                device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissor);
+                device->SetViewport(&saved);
+            }
+        }
     }
 
     // Unlocked while still counted: a resolve the game makes then goes with its pass
