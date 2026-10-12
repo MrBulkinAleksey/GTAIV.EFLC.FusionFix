@@ -168,6 +168,7 @@ decltype(D3DXGetImageInfoFromResourceA)* pD3DXGetImageInfoFromResourceA;
 decltype(D3DXGetImageInfoFromResourceW)* pD3DXGetImageInfoFromResourceW;
 decltype(D3DXGetPixelShaderProfile)* pD3DXGetPixelShaderProfile;
 decltype(D3DXGetShaderConstantTable)* pD3DXGetShaderConstantTable;
+decltype(D3DXGetShaderConstantTableEx)* pD3DXGetShaderConstantTableEx;
 decltype(D3DXGetShaderInputSemantics)* pD3DXGetShaderInputSemantics;
 decltype(D3DXGetShaderOutputSemantics)* pD3DXGetShaderOutputSemantics;
 decltype(D3DXGetShaderSamplers)* pD3DXGetShaderSamplers;
@@ -2015,6 +2016,14 @@ HRESULT WINAPI D3DXGetShaderConstantTable(
     LPD3DXCONSTANTTABLE* ppConstantTable)
 {
     return (*pD3DXGetShaderConstantTable)(pFunction, ppConstantTable);
+}
+
+HRESULT WINAPI D3DXGetShaderConstantTableEx(
+    CONST DWORD* pFunction,
+    DWORD Flags,
+    LPD3DXCONSTANTTABLE* ppConstantTable)
+{
+    return (*pD3DXGetShaderConstantTableEx)(pFunction, Flags, ppConstantTable);
 }
 
 HRESULT WINAPI D3DXGetShaderInputSemantics(
@@ -3921,6 +3930,7 @@ public:
         pD3DXGetImageInfoFromResourceW = (decltype(D3DXGetImageInfoFromResourceW)*)(GetProcAddress(dll, "D3DXGetImageInfoFromResourceW"));
         pD3DXGetPixelShaderProfile = (decltype(D3DXGetPixelShaderProfile)*)(GetProcAddress(dll, "D3DXGetPixelShaderProfile"));
         pD3DXGetShaderConstantTable = (decltype(D3DXGetShaderConstantTable)*)(GetProcAddress(dll, "D3DXGetShaderConstantTable"));
+        pD3DXGetShaderConstantTableEx = (decltype(D3DXGetShaderConstantTableEx)*)(GetProcAddress(dll, "D3DXGetShaderConstantTableEx"));
         pD3DXGetShaderInputSemantics = (decltype(D3DXGetShaderInputSemantics)*)(GetProcAddress(dll, "D3DXGetShaderInputSemantics"));
         pD3DXGetShaderOutputSemantics = (decltype(D3DXGetShaderOutputSemantics)*)(GetProcAddress(dll, "D3DXGetShaderOutputSemantics"));
         pD3DXGetShaderSamplers = (decltype(D3DXGetShaderSamplers)*)(GetProcAddress(dll, "D3DXGetShaderSamplers"));

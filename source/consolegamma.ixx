@@ -99,7 +99,7 @@ private:
         }
 
         ID3DXBuffer* errors = nullptr;
-        HRESULT hResult = D3DXCreateEffect(device, pData, dataSize, nullptr, nullptr, 0, nullptr, &pEffect, &errors);
+        HRESULT hResult = D3DXCreateEffect(device, pData, dataSize, nullptr, nullptr, D3DXFX_LARGEADDRESSAWARE, nullptr, &pEffect, &errors);
         if (FAILED(hResult) || !pEffect)
         {
             if (errors)
