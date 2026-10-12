@@ -244,7 +244,7 @@ private:
             bDetailTexFailed = true;
             return nullptr;
         }
-        if (FAILED(pDevice->CreateTexture(kDetailSize, kDetailSize, static_cast<UINT>(levels.size()), 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, nullptr)) || !tex)
+        if (FAILED(RageDirect3DDevice9::RealDevice(pDevice)->CreateTexture(kDetailSize, kDetailSize, static_cast<UINT>(levels.size()), 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, nullptr)) || !tex)
         {
             bDetailTexFailed = true;
             return nullptr;

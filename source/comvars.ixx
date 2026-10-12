@@ -2651,6 +2651,8 @@ export namespace RageDirect3DDevice9
     // real device behind it, so a texture set through the wrapper alone could be dropped while the device held
     // another. These set through the wrapper, so its record stays true and later restores are passed on, and through
     // the real device, so it takes now.
+    // Textures and buffers of our own are made on the real device too: the wrapper books whatever it makes in the
+    // game's video memory count, which a plain Release never takes off, and streaming then drops the world to make room.
     IDirect3DDevice9* RealDevice(IDirect3DDevice9* wrapper)
     {
         auto real = GetRuntimeDevice();
