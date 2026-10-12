@@ -26,7 +26,7 @@ namespace ModelRelease
     std::mutex mutex;
     std::map<std::pair<uintptr_t, uintptr_t>, uint32_t> callers;
     uint32_t released = 0;
-    SafetyHookMid hook;
+    SafetyHookMid releaseHook;
 
     uintptr_t InGame(uintptr_t address)
     {
@@ -101,7 +101,7 @@ public:
                 FusionLog::Write("ModelRelease", "Settings", "the release of a model not found, nothing logged\n");
                 return;
             }
-            hook = safetyhook::create_mid(pattern.get_first(0), Released);
+            releaseHook = safetyhook::create_mid(pattern.get_first(0), Released);
             FusionLog::Write("ModelRelease", "Settings", "logging every second the entities that let go of their models\n");
         };
 
