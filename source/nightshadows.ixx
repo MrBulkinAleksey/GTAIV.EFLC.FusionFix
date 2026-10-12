@@ -323,7 +323,7 @@ static int __cdecl sub_925DB0(int a1, int a2, int flags)
     }
 
     const int buffer = ShadowLookupGuard::ReadBuffer();
-    const int result = shsub_925DB0.ccall<int>(a1, a2, flags);
+    const int result = shsub_925DB0.unsafe_ccall<int>(a1, a2, flags);
     return ShadowLookupGuard::Filter(result, static_cast<uint32_t>(a1), a2, buffer);
 }
 

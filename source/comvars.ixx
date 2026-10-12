@@ -2739,7 +2739,7 @@ public:
     static void __fastcall BuildRenderList(CBaseDC* _this, void* edx)
     {
         OnBuildRenderList().executeAll();
-        shBuildRenderList.fastcall<void*>(_this, edx);
+        shBuildRenderList.unsafe_fastcall<void*>(_this, edx);
         OnAfterBuildRenderList().executeAll();
     }
 };
@@ -2776,7 +2776,7 @@ public:
 
     static rage::CLightSource* __fastcall CopyLight(void* _this, void* edx, void* a2)
     {
-        auto ret = shCopyLight.fastcall<rage::CLightSource*>(_this, edx, a2);
+        auto ret = shCopyLight.unsafe_fastcall<rage::CLightSource*>(_this, edx, a2);
         OnAfterCopyLight().executeAll(ret);
         return ret;
     }
@@ -2795,7 +2795,7 @@ public:
     static void __fastcall BuildRenderList(CBaseDC* _this, void* edx)
     {
         OnBuildRenderList().executeAll();
-        shBuildRenderList.fastcall<void*>(_this, edx);
+        shBuildRenderList.unsafe_fastcall<void*>(_this, edx);
     }
 };
 
