@@ -595,7 +595,12 @@ public:
     float fVolumetricCloudsReflectionBrightness = 1.0f;
     // VolumetricCloudsReflectionsHalfResolution: the reflections' clouds worked out at half size and laid over at full
     bool bVolumetricCloudsReflectionsHalfRes = true;
-    IDirect3DTexture9* CloudReflectionHalfTex = nullptr;
+    // One a size: the water's reflection (1280x512) and the reflection map (1024x1024) take turns every frame, and one
+    // target made again for each had the game's books of its video memory (made through the device wrapper, freed
+    // past them) grow by a gigabyte in 10 s, until the streaming let the whole world go
+    struct CloudReflectionTarget { IDirect3DTexture9* tex = nullptr; IDirect3DSurface9* surf = nullptr; UINT width = 0, height = 0; uint32_t used = 0; };
+    CloudReflectionTarget CloudReflectionHalf[3];
+    IDirect3DTexture9* CloudReflectionHalfTex = nullptr;    // the one for this reflection, set by ReflectionHalfTarget
     IDirect3DSurface9* CloudReflectionHalfSurf = nullptr;
 
     // The cloud layer this frame (UpdateCloudLayer): from the weather's preset, blended through the
@@ -2886,8 +2891,14 @@ private:
             }
         }
         PostFxResources.nCloudAccumFrame = 0;
-        SAFE_RELEASE(PostFxResources.CloudReflectionHalfSurf);
-        SAFE_RELEASE(PostFxResources.CloudReflectionHalfTex);
+        for (auto& target : PostFxResources.CloudReflectionHalf)
+        {
+            SAFE_RELEASE(target.surf);
+            SAFE_RELEASE(target.tex);
+            target = {};
+        }
+        PostFxResources.CloudReflectionHalfSurf = nullptr;
+        PostFxResources.CloudReflectionHalfTex = nullptr;
         SAFE_RELEASE(PostFxResources.CloudSkyRefSurf);
         if (PostFxResources.CloudSkyRefTex)
         {
@@ -6126,24 +6137,38 @@ private:
     {
         auto& R = PostFxResources;
         const UINT w = (std::max)(1u, UINT(width) / 2), h = (std::max)(1u, UINT(height) / 2);
-        if (R.CloudReflectionHalfSurf)
+        static uint32_t uses = 0;
+        uses++;
+        CloudReflectionTarget* slot = nullptr;
+        for (auto& target : R.CloudReflectionHalf)
+            if (target.surf && target.width == w && target.height == h)
+                slot = &target;
+        if (!slot)
         {
-            D3DSURFACE_DESC desc = {};
-            R.CloudReflectionHalfSurf->GetDesc(&desc);
-            if (desc.Width == w && desc.Height == h)
-                return true;
-            SAFE_RELEASE(R.CloudReflectionHalfSurf);
-            SAFE_RELEASE(R.CloudReflectionHalfTex);
+            // The emptiest or least lately used slot is made again; made on the real device, past the game's books,
+            // as FusionFix's other textures of its own
+            slot = &R.CloudReflectionHalf[0];
+            for (auto& target : R.CloudReflectionHalf)
+                if (!target.surf || target.used < slot->used)
+                    slot = &target;
+            SAFE_RELEASE(slot->surf);
+            SAFE_RELEASE(slot->tex);
+            *slot = {};
+            auto device = RageDirect3DDevice9::RealDevice(pDevice);
+            if (FAILED(device->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &slot->tex, nullptr)) || !slot->tex)
+            {
+                slot->tex = nullptr;
+                R.bVolumetricCloudsReflectionsHalfRes = false;
+                return false;
+            }
+            slot->tex->GetSurfaceLevel(0, &slot->surf);
+            slot->width = w;
+            slot->height = h;
         }
-        if (FAILED(pDevice->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &R.CloudReflectionHalfTex, nullptr)) ||
-            !R.CloudReflectionHalfTex)
-        {
-            R.CloudReflectionHalfTex = nullptr;
-            R.bVolumetricCloudsReflectionsHalfRes = false;
-            return false;
-        }
-        R.CloudReflectionHalfTex->GetSurfaceLevel(0, &R.CloudReflectionHalfSurf);
-        return R.CloudReflectionHalfSurf != nullptr;
+        slot->used = uses;
+        R.CloudReflectionHalfTex = slot->tex;
+        R.CloudReflectionHalfSurf = slot->surf;
+        return slot->surf != nullptr;
     }
 
     // Blends the volumetric clouds (Clouds.fx) into the lit scene, from the fog pass before it reads
