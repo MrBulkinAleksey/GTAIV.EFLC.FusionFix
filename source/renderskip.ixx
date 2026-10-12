@@ -285,6 +285,8 @@ namespace RenderSkip
         surface->Release();
         return bound;
     }
+    bool bNightCascade = false;     // the cascade just locked was the night's, its draws left out
+    uint32_t nightAtlasFrame = ~0u;  // the scene frame the night's atlas was last cleared in
 
     // A cascade left out is read with the matrix it was drawn with. The shaders take the cascades as one matrix
     // (gShadowMatrix: light x, y and depth of a world position) and, for each cascade, a scale and an offset of x and y
@@ -372,8 +374,9 @@ namespace RenderSkip
     {
         bAtlasLeftOut = false;
         lastCascade = -1;
-        if (!bCascadesAtNight && IsNight())
-            return Drop::Draws;     // cleared by LockTarget instead
+        bNightCascade = !bCascadesAtNight && IsNight();
+        if (bNightCascade)
+            return Drop::Draws;     // its quarter of the atlas is cleared by LockTarget instead
         uint32_t frame = TemporalAA::SceneFrame;
         if (frame != cascadeFrame)
         {
@@ -509,8 +512,9 @@ namespace RenderSkip
         case CascadeTarget: return CascadeDrop();
         case CascadeAtlas:
         {
-            // The draw that puts the cascade just drawn into its quarter (drawn there already with CascadesIntoAtlas)
-            bool leftOut = bAtlasLeftOut;
+            // The draw that puts the cascade just drawn into its quarter (drawn there already with CascadesIntoAtlas); the
+            // night's quarter is cleared by LockTarget
+            bool leftOut = bAtlasLeftOut || bNightCascade;
             bAtlasLeftOut = false;
             return leftOut ? Drop::Everything : Drop::Nothing;
         }
@@ -612,7 +616,7 @@ namespace RenderSkip
             if (lock.drop == Drop::Everything)
                 bAtlasLeftOut = true;
             else if (lock.drop != Drop::Nothing)
-                ;   // the night's, cleared and copied the game's way
+                ;   // the night's: its quarter of the atlas is cleared below
             else if (BindAtlas(RageDirect3DDevice9::GetRuntimeDevice()))
             {
                 lock.intoAtlas = int8_t(lastCascade);
@@ -637,10 +641,34 @@ namespace RenderSkip
                 bCascadesIntoAtlas = false;
             }
         }
-        // The night's cascade, bound now: its colour to 1.0, for the game's draw into the atlas to take
-        if (index == 0 && depth > 0 && stack[depth - 1].kind == CascadeTarget && stack[depth - 1].drop == Drop::Draws && RealClear)
-            if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
+        // The night's quarter of the atlas, bound now: 1.0 in it, which the lighting takes as lit for any depth. The atlas
+        // holds 0.5 - 0.0005 z of the casters (cascadeConvert) and a point is lit where that is no less than its own; the
+        // cascade cleared to 1.0 and copied there as before was a caster at z 1, which shadowed everything on one side of
+        // that plane through the light's space: one long straight shadow over walls and roofs, moving with the camera
+        if (index == 0 && depth > 0 && stack[depth - 1].kind == CascadeAtlas && stack[depth - 1].drop == Drop::Everything &&
+            bNightCascade && RealClear)
+        {
+            bNightCascade = false;
+            // All of it, once a frame: a clear takes only the viewport, which may still be the cascade's
+            auto device = RageDirect3DDevice9::GetRuntimeDevice();
+            IDirect3DSurface9* surface = nullptr;
+            D3DSURFACE_DESC desc{};
+            if (device && nightAtlasFrame != TemporalAA::SceneFrame && SUCCEEDED(device->GetRenderTarget(0, &surface)) && surface)
+            {
+                surface->GetDesc(&desc);
+                surface->Release();
+                nightAtlasFrame = TemporalAA::SceneFrame;
+                D3DVIEWPORT9 saved{}, whole{ 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
+                DWORD scissor = FALSE;
+                device->GetViewport(&saved);
+                device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissor);
+                device->SetViewport(&whole);
+                device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
                 RealClear(device, 0, nullptr, D3DCLEAR_TARGET, 0xFFFFFFFF, 1.0f, 0);
+                device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissor);
+                device->SetViewport(&saved);
+            }
+        }
     }
 
     // Unlocked while still counted: a resolve the game makes then goes with its pass
