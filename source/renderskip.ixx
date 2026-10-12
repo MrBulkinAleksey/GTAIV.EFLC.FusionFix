@@ -45,6 +45,7 @@ export namespace RenderSkip
     bool bReflectionsHalfRate = true;
     bool bFarCascadesHalfRate = true;
     bool bMidCascadeHalfRate = false;
+    bool bCascadesIntoAtlas = true;
     bool bTrace = false;
 }
 
@@ -151,7 +152,7 @@ namespace RenderSkip
     Drop drop = Drop::Nothing;
 
     // The locks of target index 0, innermost last, and what each drops
-    struct Lock { Kind kind; Drop drop; rage::grcRenderTargetPC* target; };
+    struct Lock { Kind kind; Drop drop; rage::grcRenderTargetPC* target; int8_t intoAtlas = -1; };
     Lock stack[16]{};
     int depth = 0;
     uint32_t dropped[Kinds]{};
@@ -170,6 +171,62 @@ namespace RenderSkip
     uint32_t passSeq = 0;       // the cascades' passes, one a scene frame by day
     bool skippedInPass[4]{};
     bool bAtlasLeftOut = false;
+    int lastCascade = -1;       // the index of the cascade CascadeDrop decided last, -1 at night
+
+    // CascadesIntoAtlas: each cascade is drawn straight into its quarter of CASCADE_ATLAS instead of into
+    // CASCADE_TARGET_R32 and then copied there by one draw of cascadeConvert's convert pass 1 (CE 0x92cb30, some 1.5 ms
+    // on an integrated GPU for the four 2048x2048 quarters). That pass stores 0.5 - 0.0005 x of the depth x the casters
+    // write (their vertex shaders put gShadowMatrix's w column in a texcoord, the pixel shaders write it out), and the
+    // shaders that read the atlas convert their own depth the same way (c139). So for the cascades' draws the matrix's
+    // w column becomes 0.5 - 0.0005 w (in CE 0x92dd20 called from the cascade's own callback, CE 0x92dd70), the target
+    // becomes the atlas with a depth buffer of its size, the viewport moves to the quarter, the game's fill of the target
+    // with -3.4e38 (no caster, convert pass 0 in CE 0x92c740) becomes a clear to 1.0 (above any converted depth within
+    // 1000 m), and the copy is left out.
+    uintptr_t cascadeMatrixReturn = 0;      // where CE 0x92dd20 returns to in the cascade's callback
+    bool pendingIntoAtlas[4]{};             // the cascade's matrix was made for the atlas
+    rage::grcRenderTargetPC* atlasTarget = nullptr;
+    IDirect3DSurface9* atlasDepth = nullptr;
+    bool bFillPending = false;
+    uint32_t intoAtlas = 0, intoAtlasFailed = 0;
+
+    bool IntoAtlasReady()
+    {
+        return bCascadesIntoAtlas && atlasTarget && atlasTarget->mD3DTexture && (bCascadesAtNight || !IsNight());
+    }
+
+    // 0.5 - 0.0005 of the depth the casters write
+    void MatrixForAtlas(float* matrix)
+    {
+        matrix[3] *= -0.0005f;
+        matrix[7] *= -0.0005f;
+        matrix[11] *= -0.0005f;
+        matrix[15] = 0.5f - 0.0005f * matrix[15];
+    }
+
+    // The game's lock just bound CASCADE_TARGET_R32: the atlas and a depth buffer of its size instead
+    bool BindAtlas(IDirect3DDevice9* device)
+    {
+        IDirect3DSurface9* surface = nullptr;
+        if (!device || !atlasTarget || !atlasTarget->mD3DTexture || FAILED(atlasTarget->mD3DTexture->GetSurfaceLevel(0, &surface)))
+            return false;
+        D3DSURFACE_DESC desc{}, depthDesc{};
+        surface->GetDesc(&desc);
+        if (atlasDepth)
+        {
+            atlasDepth->GetDesc(&depthDesc);
+            if (depthDesc.Width != desc.Width || depthDesc.Height != desc.Height)
+            {
+                atlasDepth->Release();
+                atlasDepth = nullptr;
+            }
+        }
+        if (!atlasDepth)
+            device->CreateDepthStencilSurface(desc.Width, desc.Height, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, FALSE, &atlasDepth, nullptr);
+        bool bound = atlasDepth && desc.Width == cascadeSide * 4 && desc.Height == cascadeSide
+            && SUCCEEDED(device->SetRenderTarget(0, surface)) && SUCCEEDED(device->SetDepthStencilSurface(atlasDepth));
+        surface->Release();
+        return bound;
+    }
 
     // A cascade left out is read with the matrix it was drawn with. The shaders take the cascades as one matrix
     // (gShadowMatrix: light x, y and depth of a world position) and, for each cascade, a scale and an offset of x and y
@@ -257,6 +314,7 @@ namespace RenderSkip
     Drop CascadeDrop()
     {
         bAtlasLeftOut = false;
+        lastCascade = -1;
         if (!bCascadesAtNight && IsNight())
             return Drop::Draws;     // cleared by LockTarget instead
         uint32_t frame = TemporalAA::SceneFrame;
@@ -269,6 +327,7 @@ namespace RenderSkip
                 s = false;
         }
         uint32_t index = cascadeCount++;
+        lastCascade = index < 4 ? int(index) : -1;
         // MidCascadeHalfRate: the second joins them, left out in the frames the fourth is drawn in
         bool farOne = bFarCascadesHalfRate && (index == 2 || index == 3);
         bool midOne = bMidCascadeHalfRate && index == 1;
@@ -393,7 +452,7 @@ namespace RenderSkip
         case CascadeTarget: return CascadeDrop();
         case CascadeAtlas:
         {
-            // The draw that puts the cascade just drawn into its quarter
+            // The draw that puts the cascade just drawn into its quarter (drawn there already with CascadesIntoAtlas)
             bool leftOut = bAtlasLeftOut;
             bAtlasLeftOut = false;
             return leftOut ? Drop::Everything : Drop::Nothing;
@@ -479,6 +538,8 @@ namespace RenderSkip
             auto kind = KindOf(target);
             if (kind == CascadeTarget && target->mWidth)
                 cascadeSide = target->mWidth;
+            if (kind == CascadeAtlas)
+                atlasTarget = target;
             stack[depth++] = { kind, DropFor(kind), target };
             Refresh();
             if (Tracing())
@@ -486,6 +547,28 @@ namespace RenderSkip
                     drop == Drop::Nothing ? "" : drop == Drop::Draws ? ", draws left out" : ", left out"));
         }
         pfnLock(factory, index, color, depthTarget, a5, a6, mip);
+        // A cascade whose matrix was made for the atlas is drawn there; one left out this frame needs no target
+        if (index == 0 && depth > 0 && stack[depth - 1].kind == CascadeTarget && lastCascade >= 0 && pendingIntoAtlas[lastCascade])
+        {
+            auto& lock = stack[depth - 1];
+            if (lock.drop == Drop::Everything)
+                bAtlasLeftOut = true;
+            else if (lock.drop != Drop::Nothing)
+                ;   // the night's, cleared and copied the game's way
+            else if (BindAtlas(RageDirect3DDevice9::GetRuntimeDevice()))
+            {
+                lock.intoAtlas = int8_t(lastCascade);
+                bAtlasLeftOut = true;
+                intoAtlas++;
+            }
+            else
+            {
+                // Its casters wrote converted depths into the target, which the copy would convert again: this frame's
+                // cascade is wrong, the next ones go the game's way
+                intoAtlasFailed++;
+                bCascadesIntoAtlas = false;
+            }
+        }
         // The night's cascade, bound now: its colour to 1.0, for the game's draw into the atlas to take
         if (index == 0 && depth > 0 && stack[depth - 1].kind == CascadeTarget && stack[depth - 1].drop == Drop::Draws && RealClear)
             if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
@@ -509,6 +592,17 @@ namespace RenderSkip
     {
         if (Tracing())
             traceDraws++;
+        // The game's fill of a cascade drawn into the atlas: a clear of its quarter to 1.0 instead
+        if (bFillPending)
+        {
+            bFillPending = false;
+            if (drop == Drop::Nothing && depth > 0 && stack[depth - 1].intoAtlas >= 0 && RealClear)
+                if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
+                {
+                    RealClear(device, 0, nullptr, D3DCLEAR_TARGET, 0xFFFFFFFF, 1.0f, 0);
+                    return true;
+                }
+        }
         if (drop == Drop::Nothing)
             return false;
         dropped[stack[depth - 1].kind]++;
@@ -567,6 +661,14 @@ namespace RenderSkip
     {
         if (viewport && Tracing())
             TraceEvent(std::format("viewport {} {} {}x{}", viewport->X, viewport->Y, viewport->Width, viewport->Height));
+        // The cascade's viewport, moved to its quarter of the atlas
+        if (viewport && depth > 0 && stack[depth - 1].intoAtlas >= 0 && viewport->X == 0 && viewport->Y == 0 && viewport->Width == cascadeSide
+            && viewport->Height == cascadeSide)
+        {
+            D3DVIEWPORT9 quarter = *viewport;
+            quarter.X = DWORD(stack[depth - 1].intoAtlas) * cascadeSide;
+            return RealSetViewport(device, &quarter);
+        }
         return RealSetViewport(device, viewport);
     }
 
@@ -621,40 +723,85 @@ public:
                 pCamera = *camera.get_first<float*>(12);
             bMatrixTrace = iniReader.ReadInteger("SHADOWS", "CascadeMatrixTrace", 0) != 0;
 
-            // The cascades left out follow the camera: the setter's matrix (CE 0x92dd5d: eax the matrix, push eax for
-            // the matrix's global) and its scales and offsets (CE 0x92d856: esi the frame's copy, push esi for the first)
-            if (!bFarCascadesHalfRate && !bMidCascadeHalfRate)
-                return;
+            bCascadesIntoAtlas = iniReader.ReadInteger("SHADOWS", "CascadesIntoAtlas", 1) != 0;
+
+            // The matrix as CE 0x92dd20 hands it to its global (CE 0x92dd5d: eax the matrix, push eax), called from the
+            // setter of the shaders' cascades (CE 0x92d856 returned to, esi the frame's copy there) and from each cascade's
+            // own callback (CE 0x92e04f returned to, its index the callback's first argument)
             auto matrix = hook::pattern("50 FF 35 ? ? ? ? E8 ? ? ? ? 83 C4 18 8B E5 5D C3");
             auto setter = hook::pattern("56 FF 35 ? ? ? ? E8 ? ? ? ? 8D 46 10 50 FF 35");
-            if (matrix.empty() || setter.empty())
+            auto cascadeMatrix = hook::pattern("F3 0F 11 04 24 50 56 E8 ? ? ? ? 83 C4 0C 5E");
+            auto fill = hook::pattern("51 56 6A 07 6A 01 51 C7 04 24 00 00 80 3F 6A 01 6A 00 6A 00 E8");
+            bool follow = (bFarCascadesHalfRate || bMidCascadeHalfRate) && !setter.empty();
+            if (cascadeMatrix.empty() || fill.empty())
+                bCascadesIntoAtlas = false;
+            if (matrix.empty() || (!follow && !bCascadesIntoAtlas))
+            {
+                bCascadesIntoAtlas = false;
                 return;
-            setterReturn = reinterpret_cast<uintptr_t>(setter.get_first(0));
+            }
+            if (follow)
+                setterReturn = reinterpret_cast<uintptr_t>(setter.get_first(0));
+            if (bCascadesIntoAtlas)
+                cascadeMatrixReturn = reinterpret_cast<uintptr_t>(cascadeMatrix.get_first(12));
             static auto MatrixHook = safetyhook::create_mid(matrix.get_first(0), [](SafetyHookContext& regs)
             {
-                // Only the setter's: the cascades' own draws set the matrix through here too
-                if (*(uintptr_t*)(regs.ebp + 4) != setterReturn)
-                    return;
-                memcpy(caughtMatrix, (const void*)regs.eax, sizeof(caughtMatrix));
-                matrixCaught = true;
+                uintptr_t from = *(uintptr_t*)(regs.ebp + 4);
+                if (from == setterReturn)
+                {
+                    memcpy(caughtMatrix, (const void*)regs.eax, sizeof(caughtMatrix));
+                    matrixCaught = true;
+                }
+                else if (from == cascadeMatrixReturn)
+                {
+                    int32_t index = *(int32_t*)(*(uintptr_t*)regs.ebp + 8);
+                    if (index >= 0 && index < 4)
+                    {
+                        pendingIntoAtlas[index] = IntoAtlasReady();
+                        if (pendingIntoAtlas[index])
+                            MatrixForAtlas((float*)regs.eax);
+                    }
+                }
             });
-            static auto SetterHook = safetyhook::create_mid(setter.get_first(0), [](SafetyHookContext& regs)
+            if (follow)
             {
-                FollowCascades((float*)regs.esi);
-            });
-            bFollow = true;
+                static auto SetterHook = safetyhook::create_mid(setter.get_first(0), [](SafetyHookContext& regs)
+                {
+                    FollowCascades((float*)regs.esi);
+                });
+                bFollow = true;
+            }
+            if (bCascadesIntoAtlas)
+            {
+                static auto FillHook = safetyhook::create_mid(fill.get_first(0), [](SafetyHookContext&)
+                {
+                    bFillPending = true;
+                });
+            }
+        };
+
+        // The atlas's depth buffer goes with the device's other default-pool resources; the targets are found anew
+        FusionFix::onBeforeReset() += []()
+        {
+            if (atlasDepth)
+                atlasDepth->Release();
+            atlasDepth = nullptr;
+            atlasTarget = nullptr;
+            for (auto& p : pendingIntoAtlas)
+                p = false;
         };
 
         FusionFix::onGameInitEvent() += []()
         {
-            if (bCascadesAtNight && !bReflectionsHalfRate && !bFarCascadesHalfRate && !bMidCascadeHalfRate && !bTrace)
+            if (bCascadesAtNight && !bReflectionsHalfRate && !bFarCascadesHalfRate && !bMidCascadeHalfRate && !bCascadesIntoAtlas && !bTrace)
                 return;
             bool installed = Install();
             FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, the far ones by day %s, reflections %s\n",
                 installed ? "in place" : "no device or texture factory yet, nothing is left out",
                 bCascadesAtNight ? "drawn at night" : "not drawn from 22:00 to 05:00",
-                bFarCascadesHalfRate ? (bFollow ? "in turns, following the camera" : "in turns while the camera keeps still") : "every frame",
+                bFarCascadesHalfRate ? "in turns while the camera keeps still" : "every frame",
                 bReflectionsHalfRate ? "every other frame" : "every frame");
+            FusionLog::Write("RenderSkip", "Settings", "cascades %s\n", bCascadesIntoAtlas ? "drawn straight into the atlas" : "copied into the atlas");
         };
 
         // A trace starts some 20 seconds into the game; and every 3600 frames, what was left out
@@ -682,6 +829,9 @@ public:
                     folded, FoldTexels, FoldDepth, misses, largestTexels, largestDepth);
             folded = misses = 0;
             largestTexels = largestDepth = 0.0f;
+            if (intoAtlas || intoAtlasFailed)
+                text += std::format("cascades drawn into the atlas: {}{}; ", intoAtlas, intoAtlasFailed ? ", then could not bind it and stopped" : "");
+            intoAtlas = 0;
             for (int kind = CascadeTarget; kind < Kinds; kind++)
                 if (dropped[kind] || halfRates[kind].skipped || halfRates[kind].kept)
                     text += std::format("{}: {} calls left out, {} frames left out, {} drawn; ", KindNames[kind], dropped[kind],
