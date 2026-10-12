@@ -24,7 +24,8 @@ import temporal;
 //    REFLECTION_MAP_COLOUR, some 2.3 ms with what is drawn into them) are drawn every other frame; in between their
 //    targets keep the last one, nothing drawn, cleared or resolved into them. They are drawn every frame while the
 //    camera turns or moves fast, where one frame behind would show.
-//  - LampShadowsHalfRate = 1: the same for the lamps' shadow maps (SHADOW_MAP_COLOUR_POINT, some 3.8 ms at night).
+// The lamps' shadow maps (SHADOW_MAP_COLOUR_POINT, some 3.8 ms at night) can't be left out so: the game hands its tiles
+// to other lamps from one frame to the next, and a tile kept from the frame before lit a lamp with another's shadow.
 //  - RenderSkipTrace = 1: once, a little after the world is in, two frames of locks, clears, viewports, draws and
 //    copies to GTAIV.EFLC.FusionFix.RenderSkip.log, to tell how the game draws its passes.
 // The slots are taken over as the other hooks of them do, each passing on to what was there before.
@@ -32,7 +33,6 @@ export namespace RenderSkip
 {
     bool bCascadesAtNight = false;
     bool bReflectionsHalfRate = true;
-    bool bLampShadowsHalfRate = false;
     bool bTrace = false;
 }
 
@@ -42,8 +42,8 @@ namespace RenderSkip
     constexpr float TurnCos = 0.99966f;     // 1.5 degrees
     constexpr float MoveSquared = 1.0f;     // metres
 
-    enum Kind : uint8_t { None, Cascade, WaterReflection, ReflectionMap, LampShadow, Kinds };
-    constexpr const char* KindNames[Kinds] = { "other", "cascades", "water reflection", "reflection map", "lamp shadows" };
+    enum Kind : uint8_t { None, Cascade, WaterReflection, ReflectionMap, Kinds };
+    constexpr const char* KindNames[Kinds] = { "other", "cascades", "water reflection", "reflection map" };
 
     // A pass drawn every other frame: the scene frame it was decided for, and where the camera was when it was drawn
     struct HalfRate
@@ -124,8 +124,6 @@ namespace RenderSkip
                 kind = WaterReflection;
             else if (!strcmp(name, "REFLECTION_MAP_COLOUR"))
                 kind = ReflectionMap;
-            else if (!strcmp(name, "SHADOW_MAP_COLOUR_POINT"))
-                kind = LampShadow;
         }
         return kind;
     }
@@ -147,7 +145,6 @@ namespace RenderSkip
         case Cascade: return !bCascadesAtNight && IsNight() ? Drop::Draws : Drop::Nothing;
         case WaterReflection:
         case ReflectionMap: return bReflectionsHalfRate && SkipThisFrame(kind) ? Drop::Everything : Drop::Nothing;
-        case LampShadow: return bLampShadowsHalfRate && SkipThisFrame(kind) ? Drop::Everything : Drop::Nothing;
         default: return Drop::Nothing;
         }
     }
@@ -353,7 +350,6 @@ public:
         {
             CIniReader iniReader("");
             bCascadesAtNight = iniReader.ReadInteger("SHADOWS", "CascadeShadowsAtNight", 0) != 0;
-            bLampShadowsHalfRate = iniReader.ReadInteger("SHADOWS", "LampShadowsHalfRate", 0) != 0;
             bReflectionsHalfRate = iniReader.ReadInteger("MISC", "ReflectionsHalfRate", 1) != 0;
             bTrace = iniReader.ReadInteger("MISC", "RenderSkipTrace", 0) != 0;
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
@@ -363,13 +359,13 @@ public:
 
         FusionFix::onGameInitEvent() += []()
         {
-            if (bCascadesAtNight && !bReflectionsHalfRate && !bLampShadowsHalfRate && !bTrace)
+            if (bCascadesAtNight && !bReflectionsHalfRate && !bTrace)
                 return;
             bool installed = Install();
-            FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, reflections %s, lamp shadows %s\n",
+            FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, reflections %s\n",
                 installed ? "in place" : "no device or texture factory yet, nothing is left out",
                 bCascadesAtNight ? "drawn at night" : "not drawn from 22:00 to 05:00",
-                bReflectionsHalfRate ? "every other frame" : "every frame", bLampShadowsHalfRate ? "every other frame" : "every frame");
+                bReflectionsHalfRate ? "every other frame" : "every frame");
         };
 
         // A trace starts some 20 seconds into the game; and every 3600 frames, what was left out
