@@ -961,7 +961,7 @@ public:
     {
         if (!TransparentTexture)
         {
-            auto pDevice = rage::grcDevice::GetD3DDevice();
+            auto pDevice = RealDevice(rage::grcDevice::GetD3DDevice());
             if (pDevice && SUCCEEDED(pDevice->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &TransparentTexture, nullptr)))
             {
                 D3DLOCKED_RECT locked = {};
@@ -1991,9 +1991,9 @@ public:
 
 
         if (!SMAA_areaTex)
-            D3DXCreateTextureFromResourceExW(pDevice, hm, MAKEINTRESOURCEW(IDR_AreaTex), 160, 560, 1, 0, D3DFMT_UNKNOWN, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_LINEAR, 0, NULL, NULL, &SMAA_areaTex);
+            D3DXCreateTextureFromResourceExW(RealDevice(pDevice), hm, MAKEINTRESOURCEW(IDR_AreaTex), 160, 560, 1, 0, D3DFMT_UNKNOWN, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_LINEAR, 0, NULL, NULL, &SMAA_areaTex);
         if (!SMAA_searchTex)
-            D3DXCreateTextureFromResourceExW(pDevice, hm, MAKEINTRESOURCEW(IDR_SearchTex), 64, 16, 1, 0, D3DFMT_UNKNOWN, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_LINEAR, 0, NULL, NULL, &SMAA_searchTex);
+            D3DXCreateTextureFromResourceExW(RealDevice(pDevice), hm, MAKEINTRESOURCEW(IDR_SearchTex), 64, 16, 1, 0, D3DFMT_UNKNOWN, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_LINEAR, 0, NULL, NULL, &SMAA_searchTex);
     }
 };
 
@@ -2091,8 +2091,8 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
 
     // 16 bits: the volumetric clouds stretch the coverage several times over near their edges, and
     // the 8 bit steps showed as terraces and streaks down their sides.
-    bool wide = SUCCEEDED(pDevice->CreateTexture(size, size, 0, 0, D3DFMT_L16, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr));
-    if (!wide && FAILED(pDevice->CreateTexture(size, size, 0, 0, D3DFMT_L8, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr)))
+    bool wide = SUCCEEDED(RealDevice(pDevice)->CreateTexture(size, size, 0, 0, D3DFMT_L16, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr));
+    if (!wide && FAILED(RealDevice(pDevice)->CreateTexture(size, size, 0, 0, D3DFMT_L8, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr)))
     {
         CloudNoiseTexture = nullptr;
         return nullptr;
@@ -2191,8 +2191,8 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
     }
 
     // 16 bits a channel for the same reason as the coverage; 8 where G16R16 volumes are missing.
-    bool wide = SUCCEEDED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_G16R16, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr));
-    if (!wide && FAILED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr)))
+    bool wide = SUCCEEDED(RealDevice(pDevice)->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_G16R16, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr));
+    if (!wide && FAILED(RealDevice(pDevice)->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr)))
     {
         CloudDetailTexture = nullptr;
         return nullptr;
@@ -3032,7 +3032,7 @@ private:
 
         rage::grcDevice::GetD3DDevice()->CreateVertexDeclaration(vertexDeclElements, &mQuadVertexDecl);
 
-        rage::grcDevice::GetD3DDevice()->CreateVertexBuffer(6 * sizeof(VertexFormat), 0, 0, D3DPOOL_DEFAULT, &mQuadVertexBuffer, NULL);
+        RealDevice(rage::grcDevice::GetD3DDevice())->CreateVertexBuffer(6 * sizeof(VertexFormat), 0, 0, D3DPOOL_DEFAULT, &mQuadVertexBuffer, NULL);
 
         VertexFormat* vertexData = 0;
         D3DXVECTOR2 pixelSize = D3DXVECTOR2(1.0f / width, 1.0f / height);
@@ -3340,7 +3340,7 @@ private:
                 SAFE_RELEASE(R.WetCopyTex[i]);
             }
             if (!R.WetCopyTex[i])
-                ok = SUCCEEDED(pDevice->CreateTexture(desc[i].Width, desc[i].Height, 1, D3DUSAGE_RENDERTARGET, desc[i].Format,
+                ok = SUCCEEDED(RealDevice(pDevice)->CreateTexture(desc[i].Width, desc[i].Height, 1, D3DUSAGE_RENDERTARGET, desc[i].Format,
                                                       D3DPOOL_DEFAULT, &R.WetCopyTex[i], nullptr)) &&
                      SUCCEEDED(R.WetCopyTex[i]->GetSurfaceLevel(0, &R.WetCopySurf[i]));
             if (ok)
@@ -6836,7 +6836,7 @@ private:
         for (int i = 0; i < 2 && ok; ++i)
         {
             if (!R.WaterMaskTex[i])
-                ok = SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format,
+                ok = SUCCEEDED(RealDevice(pDevice)->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format,
                                                       D3DPOOL_DEFAULT, &R.WaterMaskTex[i], nullptr));
         }
         if (ok)
@@ -9687,7 +9687,7 @@ public:
         R.bGlassFrameValid = false;
 
         if (ok && !R.GlassParamsTex)
-            ok = SUCCEEDED(pDevice->CreateTexture(5, 1, 1, D3DUSAGE_DYNAMIC, D3DFMT_A32B32G32R32F, D3DPOOL_DEFAULT, &R.GlassParamsTex, nullptr));
+            ok = SUCCEEDED(RealDevice(pDevice)->CreateTexture(5, 1, 1, D3DUSAGE_DYNAMIC, D3DFMT_A32B32G32R32F, D3DPOOL_DEFAULT, &R.GlassParamsTex, nullptr));
         if (ok)
         {
             D3DLOCKED_RECT locked = {};
