@@ -32,6 +32,7 @@ import natives;
 import settings;
 import shaders;
 import renderscale;
+import renderskip;
 import temporal;
 import upscaler;
 
@@ -6179,9 +6180,9 @@ private:
         if (reflection && !R.bVolumetricCloudsReflections)
             return skip("VolumetricCloudsReflections 0");
         // At night the clouds are black against a black sky and their reflections showed nothing, at some 2.6 GPU
-        // milliseconds a frame in a profile: from 22:00 to 05:00 the reflections keep the game's sky
-        if (reflection && !R.bVolumetricCloudsReflectionsAtNight && CClock::ms_nGameClockHours &&
-            (CClock::GetHours() >= 22 || CClock::GetHours() < 5))
+        // milliseconds a frame in a profile: while the sun is low (RenderSkip's CascadeSunElevation, or 22:00 to 05:00)
+        // the reflections keep the game's sky
+        if (reflection && !R.bVolumetricCloudsReflectionsAtNight && RenderSkip::SunIsLow())
             return skip("night, VolumetricCloudsReflectionsAtNight 0");
         if (!R.mDepthRT || !R.mDepthRT->mD3DTexture)
             return skip("no depth texture");
