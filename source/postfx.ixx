@@ -797,6 +797,7 @@ public:
     bool bVehicleBoxShadowsWithSlots = false;
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
     uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300, nVehicleBoxShadowSizeFadeMs = 300;
+    float fVehicleBoxShadowsMaxDistance = 60.0f; // metres from the camera to a lamp's light past which it has no boxes
     int32_t nVehicleBoxShadowsPerLamp = 3; // cars a lamp shadows as boxes, up to five; each costs its lit pixels about as much again
     bool bVehicleBoxShadowsLive = false;
     float fVehicleBoxShadowLeadFrames = 1.0f;
@@ -1777,6 +1778,7 @@ public:
         fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", 1.0f), -3.0f, 5.0f);
         bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;
         nVehicleBoxShadowsPerLamp = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerLamp", 3), 1, 5);
+        fVehicleBoxShadowsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsMaxDistance", 60.0f), 0.0f, 1000.0f);
         nVehicleBoxShadowSizeFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsSizeFade", 300), 0, 5000));
         nVehicleBoxShadowFadeInMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeIn", 300), 0, 5000));
         nVehicleBoxShadowFadeOutMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeOut", 300), 0, 5000));
@@ -8888,6 +8890,18 @@ private:
                     state.slotStrength = (std::min)(state.slotStrength + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
                 state.wasMappedForFade = mapHasCars && !R.bVehicleBoxShadowsWithSlots;
                 strength = state.slotStrength;
+                // VehicleBoxShadowsMaxDistance: a lamp whose light ends that far from the camera has no boxes, faded out
+                // over the last 20 m. Its shader then leaves them all out; one with any box works all five of them, and
+                // the boxes were some 3 GPU ms of the lamps at night in a profile
+                if (R.fVehicleBoxShadowsMaxDistance > 0.0f)
+                    if (auto* vp = rage::GetCurrentViewport())
+                    {
+                        const float* eye = vp->mCameraMatrix[3];
+                        const float ex = light.mPosition.x - eye[0], ey = light.mPosition.y - eye[1], ez = light.mPosition.z - eye[2];
+                        const float away = std::sqrt(ex * ex + ey * ey + ez * ez) - light.mRadius;
+                        const float fadeFrom = (std::max)(R.fVehicleBoxShadowsMaxDistance - 20.0f, 0.0f);
+                        strength *= std::clamp((R.fVehicleBoxShadowsMaxDistance - away) / (std::max)(R.fVehicleBoxShadowsMaxDistance - fadeFrom, 1.0f), 0.0f, 1.0f);
+                    }
                 int taken = 0;
                 bool watchedLow = false;
                 const int perLamp = std::clamp(R.nVehicleBoxShadowsPerLamp, 1, kPerLight);
