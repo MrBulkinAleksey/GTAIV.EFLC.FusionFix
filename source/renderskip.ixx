@@ -51,7 +51,7 @@ export namespace RenderSkip
     bool bTrace = false;
     // CascadeSunElevation: degrees of the sun above the horizon below which its cascades are left out, by the sky's
     // SunDirection; below -90 (or before the sky has been drawn) by the clock instead, from 22:00 to 05:00
-    float fSunLowBelow = 3.0f;
+    float fSunLowBelow = 8.0f;
 
     float SunElevation();   // degrees, NaN while the sky has given none
     bool SunIsLow();        // the sun's shadows too faint to draw: the cascades and the clouds in reflections go
@@ -878,7 +878,7 @@ public:
             bMidCascadeHalfRate = iniReader.ReadInteger("SHADOWS", "MidCascadeHalfRate", 0) != 0;
             bTrace = iniReader.ReadInteger("MISC", "RenderSkipTrace", 0) != 0;
             bDrawLog = iniReader.ReadInteger("MISC", "RenderSkipDrawLog", 0) != 0;
-            fSunLowBelow = iniReader.ReadFloat("SHADOWS", "CascadeSunElevation", 3.0f);
+            fSunLowBelow = iniReader.ReadFloat("SHADOWS", "CascadeSunElevation", 8.0f);
             // At init: the hook that fills the parameters walks the same vector
             nSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
