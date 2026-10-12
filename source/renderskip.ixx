@@ -46,7 +46,6 @@ export namespace RenderSkip
     bool bFarCascadesHalfRate = true;
     bool bMidCascadeHalfRate = false;
     bool bTrace = false;
-    uint32_t nCascadeSize = 0;  // a cascade's side in texels, CASCADE_TARGET_R32's, once the game has drawn one
 }
 
 namespace RenderSkip
@@ -445,8 +444,6 @@ namespace RenderSkip
                 depth = 0;
             auto target = color ? color : depthTarget;
             auto kind = KindOf(target);
-            if (kind == CascadeTarget)
-                nCascadeSize = target->mWidth;
             stack[depth++] = { kind, DropFor(kind), target };
             Refresh();
             if (Tracing())

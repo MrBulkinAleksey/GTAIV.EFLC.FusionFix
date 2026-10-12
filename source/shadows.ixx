@@ -10,9 +10,6 @@ import settings;
 
 import <bitset>;
 
-// The far edges of the sun's four cascades in metres, nearest first, for every shadow quality
-export constexpr float CascadeRanges[4] = { 10.0f, 30.0f, 85.0f, 256.0f };
-
 injector::memory_pointer_raw CModelInfoStore__allocateBaseModel = nullptr;
 injector::memory_pointer_raw CModelInfoStore__allocateInstanceModel = nullptr;
 injector::memory_pointer_raw CBaseModelInfo__setFlags = nullptr;
@@ -297,15 +294,15 @@ public:
                     injector::scoped_unprotect(&pCascadeRange1[i], sizeof(CascadeRange));
                     injector::scoped_unprotect(&pCascadeRange2[i], sizeof(CascadeRange));
 
-                    pCascadeRange1[i].CascadeRange1 = CascadeRanges[0];
-                    pCascadeRange1[i].CascadeRange2 = CascadeRanges[1];
-                    pCascadeRange1[i].CascadeRange3 = CascadeRanges[2];
-                    pCascadeRange1[i].CascadeRange4 = CascadeRanges[3];
+                    pCascadeRange1[i].CascadeRange1 = 10.0f;
+                    pCascadeRange1[i].CascadeRange2 = 30.0f;
+                    pCascadeRange1[i].CascadeRange3 = 85.0f;
+                    pCascadeRange1[i].CascadeRange4 = 256.0f;
 
-                    pCascadeRange2[i].CascadeRange1 = CascadeRanges[0];
-                    pCascadeRange2[i].CascadeRange2 = CascadeRanges[1];
-                    pCascadeRange2[i].CascadeRange3 = CascadeRanges[2];
-                    pCascadeRange2[i].CascadeRange4 = CascadeRanges[3];
+                    pCascadeRange2[i].CascadeRange1 = 10.0f;
+                    pCascadeRange2[i].CascadeRange2 = 30.0f;
+                    pCascadeRange2[i].CascadeRange3 = 85.0f;
+                    pCascadeRange2[i].CascadeRange4 = 256.0f;
                 }
 
                 // Override shadow matrix
