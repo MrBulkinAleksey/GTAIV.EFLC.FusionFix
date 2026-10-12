@@ -45,7 +45,7 @@ export namespace RenderSkip
     bool bReflectionsHalfRate = true;
     bool bFarCascadesHalfRate = true;
     bool bMidCascadeHalfRate = false;
-    bool bCascadesIntoAtlas = true;
+    bool bCascadesIntoAtlas = false;
     bool bTrace = false;
 }
 
@@ -193,6 +193,13 @@ namespace RenderSkip
     bool IntoAtlasReady()
     {
         return bCascadesIntoAtlas && atlasTarget && atlasTarget->mD3DTexture && (bCascadesAtNight || !IsNight());
+    }
+
+    // The quarter of the atlas a cascade drawn into it takes: clears and scissor go by it explicitly, as a clear by the
+    // viewport alone or a scissor rectangle the game set for its own target would land in the first quarter
+    D3DRECT Quarter(int index)
+    {
+        return { LONG(index) * LONG(cascadeSide), 0, LONG(index + 1) * LONG(cascadeSide), LONG(cascadeSide) };
     }
 
     // 0.5 - 0.0005 of the depth the casters write
@@ -537,6 +544,7 @@ namespace RenderSkip
     HRESULT(__stdcall* RealStretchRect)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, IDirect3DSurface9*, const RECT*, D3DTEXTUREFILTERTYPE) = nullptr;
     HRESULT(__stdcall* RealColorFill)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, D3DCOLOR) = nullptr;
     HRESULT(__stdcall* RealSetViewport)(IDirect3DDevice9*, const D3DVIEWPORT9*) = nullptr;
+    HRESULT(__stdcall* RealSetScissorRect)(IDirect3DDevice9*, const RECT*) = nullptr;
 
     using LockFn = void(__thiscall*)(void*, uint32_t, rage::grcRenderTargetPC*, rage::grcRenderTargetPC*, uint32_t, bool, uint32_t);
     using UnlockFn = void(__thiscall*)(void*, uint32_t, void*, int32_t);
@@ -577,6 +585,16 @@ namespace RenderSkip
                 lock.intoAtlas = int8_t(lastCascade);
                 bAtlasLeftOut = true;
                 intoAtlas++;
+                if (Tracing())
+                {
+                    auto device = RageDirect3DDevice9::GetRuntimeDevice();
+                    DWORD scissor = 0;
+                    RECT rect{};
+                    device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissor);
+                    device->GetScissorRect(&rect);
+                    TraceEvent(std::format("cascade {} drawn into the atlas, quarter {}; scissor {} {} {} {} {}", lastCascade + 1, lastCascade,
+                        scissor ? "on" : "off", rect.left, rect.top, rect.right, rect.bottom));
+                }
             }
             else
             {
@@ -616,7 +634,10 @@ namespace RenderSkip
             if (drop == Drop::Nothing && depth > 0 && stack[depth - 1].intoAtlas >= 0 && RealClear)
                 if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
                 {
-                    RealClear(device, 0, nullptr, D3DCLEAR_TARGET, 0xFFFFFFFF, 1.0f, 0);
+                    auto quarter = Quarter(stack[depth - 1].intoAtlas);
+                    RealClear(device, 1, &quarter, D3DCLEAR_TARGET, 0xFFFFFFFF, 1.0f, 0);
+                    if (Tracing())
+                        TraceEvent(std::format("fill of quarter {} cleared to 1.0", stack[depth - 1].intoAtlas));
                     return true;
                 }
         }
@@ -651,7 +672,30 @@ namespace RenderSkip
     {
         if (Tracing())
             TraceEvent(std::format("clear flags {:#x}, {} rects, colour {:#010x}, z {}{}", flags, count, colour, z, drop == Drop::Everything ? " (left out)" : ""));
-        return drop == Drop::Everything ? D3D_OK : RealClear(device, count, rects, flags, colour, z, stencil);
+        if (drop == Drop::Everything)
+            return D3D_OK;
+        if (count == 0 && depth > 0 && stack[depth - 1].intoAtlas >= 0)
+        {
+            auto quarter = Quarter(stack[depth - 1].intoAtlas);
+            return RealClear(device, 1, &quarter, flags, colour, z, stencil);
+        }
+        return RealClear(device, count, rects, flags, colour, z, stencil);
+    }
+
+    HRESULT __stdcall SetScissorRect(IDirect3DDevice9* device, const RECT* rect)
+    {
+        if (rect && Tracing())
+            TraceEvent(std::format("scissor {} {} {} {}", rect->left, rect->top, rect->right, rect->bottom));
+        // A cascade's own scissor, moved to its quarter like its viewport
+        if (rect && depth > 0 && stack[depth - 1].intoAtlas >= 0 && rect->right <= LONG(cascadeSide) && rect->bottom <= LONG(cascadeSide))
+        {
+            RECT moved = *rect;
+            LONG x = LONG(stack[depth - 1].intoAtlas) * LONG(cascadeSide);
+            moved.left += x;
+            moved.right += x;
+            return RealSetScissorRect(device, &moved);
+        }
+        return RealSetScissorRect(device, rect);
     }
 
     HRESULT __stdcall StretchRect(IDirect3DDevice9* device, IDirect3DSurface9* source, const RECT* sourceRect, IDirect3DSurface9* target, const RECT* targetRect,
@@ -712,6 +756,7 @@ namespace RenderSkip
         Patch(vtable, 35, RealColorFill, &ColorFill);
         Patch(vtable, 43, RealClear, &Clear);
         Patch(vtable, 47, RealSetViewport, &SetViewport);
+        Patch(vtable, 75, RealSetScissorRect, &SetScissorRect);
         Patch(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
         Patch(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
         Patch(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
@@ -740,7 +785,7 @@ public:
                 pCamera = *camera.get_first<float*>(12);
             bMatrixTrace = iniReader.ReadInteger("SHADOWS", "CascadeMatrixTrace", 0) != 0;
 
-            bCascadesIntoAtlas = iniReader.ReadInteger("SHADOWS", "CascadesIntoAtlas", 1) != 0;
+            bCascadesIntoAtlas = iniReader.ReadInteger("SHADOWS", "CascadesIntoAtlas", 0) != 0;
 
             // The matrix as CE 0x92dd20 hands it to its global (CE 0x92dd5d: eax the matrix, push eax), called from the
             // setter of the shaders' cascades (CE 0x92d856 returned to, esi the frame's copy there) and from each cascade's
