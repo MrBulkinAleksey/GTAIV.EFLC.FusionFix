@@ -87,7 +87,7 @@ private:
         // Create and fill the fullscreen-quad VB
         if (!mQuadVertexBuffer)
         {
-            if (FAILED(pDevice->CreateVertexBuffer(6 * sizeof(VertexFormat), 0, 0, D3DPOOL_DEFAULT, &mQuadVertexBuffer, nullptr)) || !mQuadVertexBuffer)
+            if (FAILED(RageDirect3DDevice9::RealDevice(pDevice)->CreateVertexBuffer(6 * sizeof(VertexFormat), 0, 0, D3DPOOL_DEFAULT, &mQuadVertexBuffer, nullptr)) || !mQuadVertexBuffer)
             {
                 mQuadVertexBuffer = nullptr;
                 return;
