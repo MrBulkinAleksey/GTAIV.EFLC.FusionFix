@@ -236,8 +236,10 @@ namespace RenderSkip
         // device wrapper and the device both, so the wrapper binds it again for the lighting.
         if (fits)
             if (auto wrapper = rage::grcDevice::GetD3DDevice())
-                for (DWORD stage : { 0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u, 12u, 13u, 14u, 15u,
-                                     D3DVERTEXTEXTURESAMPLER0, D3DVERTEXTEXTURESAMPLER1, D3DVERTEXTEXTURESAMPLER2, D3DVERTEXTEXTURESAMPLER3 })
+            {
+                static constexpr DWORD stages[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                    D3DVERTEXTEXTURESAMPLER0, D3DVERTEXTEXTURESAMPLER1, D3DVERTEXTEXTURESAMPLER2, D3DVERTEXTEXTURESAMPLER3 };
+                for (DWORD stage : stages)
                 {
                     IDirect3DBaseTexture9* bound = nullptr;
                     device->GetTexture(stage, &bound);
@@ -248,6 +250,7 @@ namespace RenderSkip
                     if (atlas)
                         RageDirect3DDevice9::SetTextureBoth(wrapper, stage, nullptr);
                 }
+            }
         bool bound = fits && SUCCEEDED(device->SetRenderTarget(0, surface)) && SUCCEEDED(device->SetDepthStencilSurface(atlasDepth));
         surface->Release();
         return bound;
