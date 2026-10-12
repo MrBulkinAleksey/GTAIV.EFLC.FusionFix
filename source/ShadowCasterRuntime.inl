@@ -15,6 +15,7 @@ namespace OwnHeadlightCaster
     static std::atomic<uint32_t> passes{0}, deferredPasses{0}, ownPasses{0};
     static std::atomic<uint32_t> casterVisits{0}, carExcluded{0}, occupantsExcluded{0};
     static std::atomic<uint32_t> trafficCarExcluded{0};
+    static std::atomic<uint32_t> boxedPasses{0}, boxedCarExcluded{0};
 
     static policy::Context Capture(void* renderPass) noexcept
     {
@@ -40,6 +41,14 @@ namespace OwnHeadlightCaster
         const bool active = *reinterpret_cast<const uint8_t*>(base + guard::SlotActiveRva + offset) == 1;
         ShadowTrace34::Emit({5,CTimer::m_frameCount?*CTimer::m_frameCount:0,GetTickCount(),key,
             static_cast<int>(slot),static_cast<int>(kind),active?1:0,0,0,0,0,0});
+        // A lamp whose cars are shadowed as boxes leaves them out of its map, so a car under it has the one shadow
+        // whether the lamp holds a slot or not. The slot record holds the light's position at +0xC0.
+        if (VehicleBoxShadowsBridge::BoxedCars)
+        {
+            const auto position = reinterpret_cast<const float*>(base + guard::SlotKeyRva - 0xF8 + 0xC0 + offset);
+            result.boxedCount = VehicleBoxShadowsBridge::BoxedCars(position, result.boxed.data(), int(result.boxed.size()));
+            if (result.boxedCount) ++boxedPasses;
+        }
         const auto car = CPlayer::findPlayerCar();
         // Exclude only the source vehicle from its own immediate
         // headlight pass. Confirm the opaque key was recently accepted by our submission
@@ -63,7 +72,9 @@ namespace OwnHeadlightCaster
         ++casterVisits;
         if (!bHeadlightShadows || !bVehicleNightShadows ||
             !policy::Exclude(context, entity, type, artificial)) return false;
-        if (type == 2) { ++carExcluded; if (context.trafficBeamKey) ++trafficCarExcluded; }
+        if (type == 2 && std::find(context.boxed.begin(), context.boxed.begin() + context.boxedCount, entity) != context.boxed.begin() + context.boxedCount)
+            ++boxedCarExcluded;
+        else if (type == 2) { ++carExcluded; if (context.trafficBeamKey) ++trafficCarExcluded; }
         else ++occupantsExcluded;
         return true;
     }
@@ -153,6 +164,8 @@ namespace ShadowDiagnostics
                 << " caster_visits=" << OwnHeadlightCaster::casterVisits.load()
                 << " car_excluded=" << OwnHeadlightCaster::carExcluded.load()
                 << " occupants_excluded=" << OwnHeadlightCaster::occupantsExcluded.load()
+                << " boxed_lamp_passes=" << OwnHeadlightCaster::boxedPasses.load()
+                << " boxed_cars_excluded=" << OwnHeadlightCaster::boxedCarExcluded.load()
                 << " driving_beam_yes=" << CShadows::drivingBeamAccepted.load()
                 << " driving_beam_no=" << CShadows::drivingBeamRejected.load() << '\n';
         });

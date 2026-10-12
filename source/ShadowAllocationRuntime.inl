@@ -384,15 +384,31 @@ namespace PlayerShadowAllocation
         next.timeMs = static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds);
         const bool focused = PlayerCar::ReadFocus(focus);
         if (focused) {
-            const auto add = [&](uintptr_t entity, float extent) {
+            // With vehicle box shadows a lamp's cars are boxes, left out of its map: they need no slot, nor do the
+            // people sitting in them, inside the box.
+            next.boxedVehicles = static_cast<unsigned>((std::max)(VehicleBoxShadowsBridge::perLamp.load(std::memory_order_relaxed), 0));
+            static std::vector<uintptr_t> occupants;
+            occupants.clear();
+            const auto add = [&](uintptr_t entity, float extent, bool isVehicle) {
                 float p[3];
                 if (!CEntity::GetPosition(entity, p)) return;
                 const float x = p[0] - focus.position[0], y = p[1] - focus.position[1], z = p[2] - focus.position[2];
                 if (x * x + y * y + z * z <= ShadowCasterPresence::Range * ShadowCasterPresence::Range)
-                    next.Add({p[0], p[1], p[2]}, extent);
+                    next.Add({p[0], p[1], p[2]}, extent, isVehicle);
             };
-            next.valid = CVehicle::ForEachVehicle([&](uintptr_t v) { add(v, ShadowCasterPresence::VehicleExtent); }) &&
-                CPed::ForEachPed([&](uintptr_t p) { add(p, ShadowCasterPresence::PedExtent); });
+            next.valid = CVehicle::ForEachVehicle([&](uintptr_t v) {
+                add(v, ShadowCasterPresence::VehicleExtent, true);
+                // CE: the driver followed by eight passengers
+                if (next.boxedVehicles && PlayerCar::driverOffset)
+                    for (int i = 0; i < 9; ++i)
+                        if (const auto ped = reinterpret_cast<const uintptr_t*>(v + PlayerCar::driverOffset)[i])
+                            occupants.push_back(ped);
+            });
+            std::sort(occupants.begin(), occupants.end());
+            next.valid = next.valid && CPed::ForEachPed([&](uintptr_t p) {
+                if (!std::binary_search(occupants.begin(), occupants.end(), p))
+                    add(p, ShadowCasterPresence::PedExtent, false);
+            });
         }
         if (!castersLock.test_and_set(std::memory_order_acquire)) {
             casters = next; ++casterCaptures; castersLock.clear(std::memory_order_release);
