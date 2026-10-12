@@ -223,17 +223,17 @@ void IncreaseCoronaLimitEFLC()
 // The coronas' quads (CE 0xc1f170): for each corona of the frame's list the game made six calls to its vertex function
 // (CE 0x4462e0, 0x24 bytes a vertex: the corner's position, the corona's centre in the normal, the colour with one
 // corner in its alpha, u the other, v the brightness), about 7% of the render thread in a profile. The same quads are
-// written here straight into the buffer the game's Begin locked, and with CoronaRenderer = 1 those wholly behind the
-// camera are left out of a pass from the game camera (the game drew them for the card to clip). Every address comes
-// from the game's function at its first frame, checked against its opcodes, so the larger list IncreaseCoronaLimit
-// made is read as it is then; a function that doesn't match is left to the game. Its start is TemporalAA's hook
-// (the steady depth while it draws), which calls Draw in its place
+// written here straight into the buffer the game's Begin locked, and with CoronaRenderer = 1 those wholly out of view
+// (behind the camera or off the frame's sides) are left out of a pass from the game camera (the game drew them for the
+// card to clip). Every address comes from the game's function at its first frame, checked against its opcodes, so the
+// larger list IncreaseCoronaLimit made is read as it is then; a function that doesn't match is left to the game. Its
+// start is TemporalAA's hook (the steady depth while it draws), which calls Draw in its place
 namespace CoronaRender
 {
     struct Vertex { float x, y, z, nx, ny, nz; uint32_t colour; float u, v; };
     static_assert(sizeof(Vertex) == 0x24);
 
-    int32_t nMode = 1;                      // 0: the game's, 1: ours without what is behind, 2: ours, all of them
+    int32_t nMode = 1;                      // 0: the game's, 1: ours without what is out of view, 2: ours, all of them
     float* pCamera = nullptr;               // CE 0x128e340, the game camera's position, where it looks 8 floats before
     uint8_t* pFunction = nullptr;
 
@@ -370,6 +370,25 @@ namespace CoronaRender
             }
         }
 
+        // Outside the view as well: a cone round where the camera looks, as wide as the projection's corner and a tenth
+        // more (grcViewport +0x1c0, its x and y scales), each corona a ball 1.5 times its size (its quad's corners are
+        // at most 1.42 times out); the shift toward the camera keeps a corona on its line of sight
+        float coneCos = 0.0f, coneSin = 0.0f;
+        bool skipOutside = false;
+        if (skipBehind && viewport[0x2F0])
+        {
+            auto projection = (const float*)(viewport + 0x1C0);
+            float scaleX = std::fabs(projection[0]), scaleY = std::fabs(projection[5]);
+            if (scaleX > 0.05f && scaleY > 0.05f && scaleX < 100.0f && scaleY < 100.0f)
+            {
+                float tanCorner = std::sqrt(1.0f / (scaleX * scaleX) + 1.0f / (scaleY * scaleY)) * 1.1f;
+                float hypotenuse = std::sqrt(1.0f + tanCorner * tanCorner);
+                coneCos = 1.0f / hypotenuse;
+                coneSin = tanCorner / hypotenuse;
+                skipOutside = true;
+            }
+        }
+
         static std::vector<uint32_t> drawn;
         drawn.clear();
         for (int32_t i = 0; i < count; i++)
@@ -381,9 +400,20 @@ namespace CoronaRender
             {
                 auto pos = (const float*)item;
                 float size = std::fabs(*(const float*)(item + 0xC));
-                float ahead = (pos[0] - eye[0]) * forward[0] + (pos[1] - eye[1]) * forward[1] + (pos[2] - eye[2]) * forward[2];
+                // No size, no pixels: its two triangles have none
+                if (size == 0.0f)
+                    continue;
+                float d[3] = { pos[0] - eye[0], pos[1] - eye[1], pos[2] - eye[2] };
+                float ahead = d[0] * forward[0] + d[1] * forward[1] + d[2] * forward[2];
                 if (ahead < -2.0f * size - 1.0f)
                     continue;
+                if (skipOutside)
+                {
+                    // The distance from the cone's surface, never more than the true one (also behind its tip)
+                    float lateral = std::sqrt(std::max(0.0f, d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - ahead * ahead));
+                    if (lateral * coneCos - ahead * coneSin > 1.5f * size + 0.5f)
+                        continue;
+                }
             }
             drawn.push_back(uint32_t(i));
         }
