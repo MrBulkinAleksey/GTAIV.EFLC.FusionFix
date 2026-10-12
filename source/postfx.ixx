@@ -6551,7 +6551,7 @@ private:
             }
         };
         // The passes are timed apart only in the scene's clouds, not in the reflection map's.
-        auto drawPass = [&](const char* technique, IDirect3DSurface9* target, float w, float h, bool blend, int profile)
+        auto drawPass = [&](const char* techniqueName, IDirect3DSurface9* target, float w, float h, bool blend, int profile)
         {
             // Only the reflection's own viewport starts away from the target's corner.
             const float x0 = target == sceneSurface ? originX : 0.0f, y0 = target == sceneSurface ? originY : 0.0f;
@@ -6573,7 +6573,8 @@ private:
                 { x0 + w - 0.5f,  y0 + h - 0.5f, quadZ, 1.0f, 1.0f, 1.0f }
             };
             UINT passes = 0;
-            effect->SetTechnique(technique);
+            // By handle: the effect is large address aware, a name would be taken for one.
+            effect->SetTechnique(effect->GetTechniqueByName(techniqueName));
             effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
             effect->BeginPass(0);
             effect->CommitChanges();
