@@ -3,6 +3,8 @@ module;
 #include <common.hxx>
 #include "FusionLog.hpp"
 #include <algorithm>
+#include <climits>
+#include <cstdint>
 #include <format>
 #include <map>
 #include <mutex>
@@ -29,7 +31,14 @@ namespace ModelRelease
     std::map<std::pair<uintptr_t, uintptr_t>, uint32_t> callers;
     uint32_t released = 0, nearMap = 0, inMenu = 0;
     float* pCamera = nullptr;   // CE 0x128e340
-    SafetyHookMid releaseHook;
+    SafetyHookMid releaseHook, reclaimEntryHook, reclaimLoopHook;
+
+    // The streaming's reclaim (CE 0xa8ad20, from 0x8d858d): it lets entities go of their models in stages (CE 0xa8a520,
+    // the near and visible ones too in the later stages) while the resources' virtual heap has less room than asked for
+    // (0x103e8f4 used against 0x103e8f0 at most) or the free physical memory it is told of (CE 0x4276b0 with 0.9) is
+    // under what was asked for. Its calls, turns of its loop, the most asked for and the least free it saw
+    uint32_t reclaims = 0, reclaimTurns = 0;
+    int64_t mostVirtualAsked = 0, mostPhysicalAsked = 0, leastPhysicalFree = INT64_MAX;
 
     uintptr_t InGame(uintptr_t address)
     {
@@ -77,12 +86,31 @@ namespace ModelRelease
         inMenu += CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive;
     }
 
+    void ReclaimTurn(SafetyHookContext& regs)
+    {
+        int64_t virtualAsked = int32_t(regs.ebp), physicalAsked = *(int32_t*)(regs.esp + 0x18), physicalFree = int32_t(regs.esi);
+        std::lock_guard lock(mutex);
+        reclaimTurns++;
+        mostVirtualAsked = std::max(mostVirtualAsked, virtualAsked);
+        mostPhysicalAsked = std::max(mostPhysicalAsked, physicalAsked);
+        leastPhysicalFree = std::min(leastPhysicalFree, physicalFree);
+    }
+
     void Write()
     {
         std::vector<std::pair<uint32_t, std::pair<uintptr_t, uintptr_t>>> top;
-        uint32_t count, nearby, menu;
+        uint32_t count, nearby, menu, calls, turns;
+        int64_t virtualAsked, physicalAsked, physicalFree;
         {
             std::lock_guard lock(mutex);
+            calls = reclaims;
+            turns = reclaimTurns;
+            virtualAsked = mostVirtualAsked;
+            physicalAsked = mostPhysicalAsked;
+            physicalFree = leastPhysicalFree;
+            reclaims = reclaimTurns = 0;
+            mostVirtualAsked = mostPhysicalAsked = 0;
+            leastPhysicalFree = INT64_MAX;
             count = released;
             nearby = nearMap;
             menu = inMenu;
@@ -91,7 +119,7 @@ namespace ModelRelease
                 top.push_back({ n, where });
             callers.clear();
         }
-        if (!count)
+        if (!count && !calls)
             return;
         std::sort(top.rbegin(), top.rend());
         // While the menu is open the game's frame doesn't run, and what went then comes in one line after it
@@ -99,7 +127,11 @@ namespace ModelRelease
         for (size_t i = 0; i < top.size() && i < 6; i++)
             text += std::format("; {} from {:#x} (in {:#x})", top[i].first, top[i].second.first, top[i].second.second);
         if (auto info = CStreamingEngine::ms_info)
-            text += std::format("; streaming {} MB in use, {} requests", info->m_PhysicalUsed >> 20, info->m_NumRequests);
+            text += std::format("; streaming {} MB in use, {} requests; virtual heap {} of {} MB", info->m_PhysicalUsed >> 20, info->m_NumRequests,
+                info->m_VirtualUsed >> 20, info->m_ResourceVirtualMax >> 20);
+        if (calls)
+            text += std::format("; reclaim called {} times, {} turns, asked at most {} KB virtual and {} KB physical, saw {} KB physical free at least",
+                calls, turns, virtualAsked >> 10, physicalAsked >> 10, physicalFree == INT64_MAX ? -1 : physicalFree >> 10);
         FusionLog::WriteText("ModelRelease", "Stats", text);
     }
 }
@@ -127,6 +159,17 @@ public:
                 return;
             }
             releaseHook = safetyhook::create_mid(pattern.get_first(0), Released);
+            auto entry = hook::pattern("53 55 56 57 8B F9 E8 ? ? ? ? 51 C7 47 04 00 00 00 00 C7 04 24 66 66 66 3F");
+            auto loop = hook::pattern("A1 ? ? ? ? 2B C5 39 05 ? ? ? ? 77 06 3B 74 24 18 7D");
+            if (!entry.empty() && !loop.empty())
+            {
+                reclaimEntryHook = safetyhook::create_mid(entry.get_first(0), [](SafetyHookContext&)
+                {
+                    std::lock_guard lock(mutex);
+                    reclaims++;
+                });
+                reclaimLoopHook = safetyhook::create_mid(loop.get_first(0), ReclaimTurn);
+            }
             FusionLog::Write("ModelRelease", "Settings", "logging every second the entities that let go of their models\n");
         };
 
