@@ -19,13 +19,21 @@ import temporal;
 // clears and copies (its vtable) are dropped while a target is locked whose pass is to be left out. In a profile at
 // night on an integrated GPU, the frame took some 39 GPU milliseconds and these passes:
 //  - CascadeShadowsAtNight = 0: the sun's cascades (CASCADE_TARGET_R32, CASCADE_ATLAS, some 7.5 ms) are not drawn from
-//    22:00 to 05:00, when the moon casts no shadows to see. Only the draws go, the clears stay: the maps are empty.
+//    22:00 to 05:00, when the moon casts no shadows to see. Their casters go; the game clears only the depth of
+//    CASCADE_TARGET_R32 and none of the atlas, so its colour is cleared here to 1.0 (nothing in the light's way) and
+//    the game's own draw puts that into the atlas: no shadows, instead of the last ones of the day.
 //  - ReflectionsHalfRate = 1: the water's reflection and the reflection map (WATER_REFLECTION_COLOUR,
 //    REFLECTION_MAP_COLOUR, some 2.3 ms with what is drawn into them) are drawn every other frame; in between their
 //    targets keep the last one, nothing drawn, cleared or resolved into them. They are drawn every frame while the
 //    camera turns or moves fast, where one frame behind would show.
 // The lamps' shadow maps (SHADOW_MAP_COLOUR_POINT, some 3.8 ms at night) can't be left out so: the game hands its tiles
 // to other lamps from one frame to the next, and a tile kept from the frame before lit a lamp with another's shadow.
+//  - FarCascadesHalfRate = 1: by day the two far cascades of the four, three in four of the cascades' draws, take turns:
+//    the third is drawn in one frame, the fourth in the next, while the camera keeps still since that cascade was drawn
+//    (turned under half a degree, moved under 30 cm). Each cascade is drawn into CASCADE_TARGET_R32 (cleared, its
+//    casters drawn) and put into its quarter of CASCADE_ATLAS by one draw, nearest first; left out, both go and its
+//    quarter keeps the frame before. The game makes the cascades' matrices anew each frame, so a moving camera has them
+//    drawn every frame.
 //  - RenderSkipTrace = 1: once, a little after the world is in, two frames of locks, clears, viewports, draws and
 //    copies to GTAIV.EFLC.FusionFix.RenderSkip.log, to tell how the game draws its passes.
 // The slots are taken over as the other hooks of them do, each passing on to what was there before.
@@ -33,6 +41,7 @@ export namespace RenderSkip
 {
     bool bCascadesAtNight = false;
     bool bReflectionsHalfRate = true;
+    bool bFarCascadesHalfRate = true;
     bool bTrace = false;
 }
 
@@ -42,8 +51,8 @@ namespace RenderSkip
     constexpr float TurnCos = 0.99966f;     // 1.5 degrees
     constexpr float MoveSquared = 1.0f;     // metres
 
-    enum Kind : uint8_t { None, Cascade, WaterReflection, ReflectionMap, Kinds };
-    constexpr const char* KindNames[Kinds] = { "other", "cascades", "water reflection", "reflection map" };
+    enum Kind : uint8_t { None, CascadeTarget, CascadeAtlas, WaterReflection, ReflectionMap, Kinds };
+    constexpr const char* KindNames[Kinds] = { "other", "cascades", "cascade atlas", "water reflection", "reflection map" };
 
     // A pass drawn every other frame: the scene frame it was decided for, and where the camera was when it was drawn
     struct HalfRate
@@ -57,17 +66,30 @@ namespace RenderSkip
 
     float* pCamera = nullptr;               // CE 0x128e340, the game camera's position, where it looks 8 floats before
 
-    bool CameraMovedSince(const HalfRate& h)
+    bool CameraMovedSince(const float* position, const float* lastForward, float moveSquared, float turnCos)
     {
         if (!pCamera)
             return true;
         const float* forward = pCamera - 8;
-        float dx = pCamera[0] - h.position[0], dy = pCamera[1] - h.position[1], dz = pCamera[2] - h.position[2];
+        float dx = pCamera[0] - position[0], dy = pCamera[1] - position[1], dz = pCamera[2] - position[2];
         float length = std::sqrt(forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]);
         if (!(length > 0.5f))
             return true;
-        float facing = (forward[0] * h.forward[0] + forward[1] * h.forward[1] + forward[2] * h.forward[2]) / length;
-        return dx * dx + dy * dy + dz * dz > MoveSquared || facing < TurnCos;
+        float facing = (forward[0] * lastForward[0] + forward[1] * lastForward[1] + forward[2] * lastForward[2]) / length;
+        return dx * dx + dy * dy + dz * dz > moveSquared || facing < turnCos;
+    }
+
+    void KeepCamera(float* position, float* lastForward)
+    {
+        if (!pCamera)
+            return;
+        const float* forward = pCamera - 8;
+        float length = std::sqrt(forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]);
+        for (int i = 0; i < 3; i++)
+        {
+            position[i] = pCamera[i];
+            lastForward[i] = length > 0.0f ? forward[i] / length : 0.0f;
+        }
     }
 
     // Once a scene frame for each kind: left out when it was drawn the frame before and the camera hardly moved since
@@ -80,23 +102,14 @@ namespace RenderSkip
         if (h.decided != frame)
         {
             h.decided = frame;
-            h.skip = h.drawn + 1 == frame && !CameraMovedSince(h);
+            h.skip = h.drawn + 1 == frame && !CameraMovedSince(h.position, h.forward, MoveSquared, TurnCos);
             if (h.skip)
                 h.skipped++;
             else
             {
                 h.kept++;
                 h.drawn = frame;
-                if (pCamera)
-                {
-                    const float* forward = pCamera - 8;
-                    float length = std::sqrt(forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]);
-                    for (int i = 0; i < 3; i++)
-                    {
-                        h.position[i] = pCamera[i];
-                        h.forward[i] = length > 0.0f ? forward[i] / length : 0.0f;
-                    }
-                }
+                KeepCamera(h.position, h.forward);
             }
         }
         return h.skip;
@@ -118,8 +131,10 @@ namespace RenderSkip
         Kind kind = None;
         if (auto name = rt->mName)
         {
-            if (!strcmp(name, "CASCADE_TARGET_R32") || !strcmp(name, "CASCADE_ATLAS"))
-                kind = Cascade;
+            if (!strcmp(name, "CASCADE_TARGET_R32"))
+                kind = CascadeTarget;
+            else if (!strcmp(name, "CASCADE_ATLAS"))
+                kind = CascadeAtlas;
             else if (!strcmp(name, "WATER_REFLECTION_COLOUR"))
                 kind = WaterReflection;
             else if (!strcmp(name, "REFLECTION_MAP_COLOUR"))
@@ -138,11 +153,61 @@ namespace RenderSkip
     int depth = 0;
     uint32_t dropped[Kinds]{};
 
+    // The far cascades by day: the scene frame of the cascades counted, and where the camera was at each one's last draw
+    constexpr float CascadeMoveSquared = 0.3f * 0.3f;
+    constexpr float CascadeTurnCos = 0.99996f;  // half a degree
+    struct FarCascade
+    {
+        uint32_t drawn = ~0u;
+        float position[3]{}, forward[3]{};
+        uint32_t skipped = 0, kept = 0;
+    };
+    FarCascade farCascades[2];
+    uint32_t cascadeFrame = ~0u, cascadeCount = 0;
+    bool bAtlasLeftOut = false;
+
+    Drop CascadeDrop()
+    {
+        bAtlasLeftOut = false;
+        if (!bCascadesAtNight && IsNight())
+            return Drop::Draws;     // cleared by LockTarget instead
+        uint32_t frame = TemporalAA::SceneFrame;
+        if (frame != cascadeFrame)
+        {
+            cascadeFrame = frame;
+            cascadeCount = 0;
+        }
+        uint32_t index = cascadeCount++;
+        if (!bFarCascadesHalfRate || !frame || (index != 2 && index != 3))
+            return Drop::Nothing;
+        // The third left out in even frames, the fourth in odd ones, each only right after a frame it was drawn in
+        auto& c = farCascades[index - 2];
+        bool turn = ((frame + index) & 1) == 0;
+        bool skip = turn && c.drawn + 1 == frame && !CameraMovedSince(c.position, c.forward, CascadeMoveSquared, CascadeTurnCos);
+        if (skip)
+            c.skipped++;
+        else
+        {
+            c.kept++;
+            c.drawn = frame;
+            KeepCamera(c.position, c.forward);
+        }
+        bAtlasLeftOut = skip;
+        return skip ? Drop::Everything : Drop::Nothing;
+    }
+
     Drop DropFor(Kind kind)
     {
         switch (kind)
         {
-        case Cascade: return !bCascadesAtNight && IsNight() ? Drop::Draws : Drop::Nothing;
+        case CascadeTarget: return CascadeDrop();
+        case CascadeAtlas:
+        {
+            // The draw that puts the cascade just drawn into its quarter
+            bool leftOut = bAtlasLeftOut;
+            bAtlasLeftOut = false;
+            return leftOut ? Drop::Everything : Drop::Nothing;
+        }
         case WaterReflection:
         case ReflectionMap: return bReflectionsHalfRate && SkipThisFrame(kind) ? Drop::Everything : Drop::Nothing;
         default: return Drop::Nothing;
@@ -198,6 +263,15 @@ namespace RenderSkip
         return rt ? (rt->mName ? rt->mName : "unnamed") : "none";
     }
 
+    HRESULT(__stdcall* RealDrawPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT) = nullptr;
+    HRESULT(__stdcall* RealDrawIndexedPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT) = nullptr;
+    HRESULT(__stdcall* RealDrawPrimitiveUP)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, const void*, UINT) = nullptr;
+    HRESULT(__stdcall* RealDrawIndexedPrimitiveUP)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT, UINT, const void*, D3DFORMAT, const void*, UINT) = nullptr;
+    HRESULT(__stdcall* RealClear)(IDirect3DDevice9*, DWORD, const D3DRECT*, DWORD, D3DCOLOR, float, DWORD) = nullptr;
+    HRESULT(__stdcall* RealStretchRect)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, IDirect3DSurface9*, const RECT*, D3DTEXTUREFILTERTYPE) = nullptr;
+    HRESULT(__stdcall* RealColorFill)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, D3DCOLOR) = nullptr;
+    HRESULT(__stdcall* RealSetViewport)(IDirect3DDevice9*, const D3DVIEWPORT9*) = nullptr;
+
     using LockFn = void(__thiscall*)(void*, uint32_t, rage::grcRenderTargetPC*, rage::grcRenderTargetPC*, uint32_t, bool, uint32_t);
     using UnlockFn = void(__thiscall*)(void*, uint32_t, void*, int32_t);
     LockFn pfnLock = nullptr;
@@ -220,6 +294,10 @@ namespace RenderSkip
                     drop == Drop::Nothing ? "" : drop == Drop::Draws ? ", draws left out" : ", left out"));
         }
         pfnLock(factory, index, color, depthTarget, a5, a6, mip);
+        // The night's cascade, bound now: its colour to 1.0, for the game's draw into the atlas to take
+        if (index == 0 && depth > 0 && stack[depth - 1].kind == CascadeTarget && stack[depth - 1].drop == Drop::Draws && RealClear)
+            if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
+                RealClear(device, 0, nullptr, D3DCLEAR_TARGET, 0xFFFFFFFF, 1.0f, 0);
     }
 
     // Unlocked while still counted: a resolve the game makes then goes with its pass
@@ -234,14 +312,6 @@ namespace RenderSkip
         Refresh();
     }
 
-    HRESULT(__stdcall* RealDrawPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT) = nullptr;
-    HRESULT(__stdcall* RealDrawIndexedPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT) = nullptr;
-    HRESULT(__stdcall* RealDrawPrimitiveUP)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, const void*, UINT) = nullptr;
-    HRESULT(__stdcall* RealDrawIndexedPrimitiveUP)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT, UINT, const void*, D3DFORMAT, const void*, UINT) = nullptr;
-    HRESULT(__stdcall* RealClear)(IDirect3DDevice9*, DWORD, const D3DRECT*, DWORD, D3DCOLOR, float, DWORD) = nullptr;
-    HRESULT(__stdcall* RealStretchRect)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, IDirect3DSurface9*, const RECT*, D3DTEXTUREFILTERTYPE) = nullptr;
-    HRESULT(__stdcall* RealColorFill)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, D3DCOLOR) = nullptr;
-    HRESULT(__stdcall* RealSetViewport)(IDirect3DDevice9*, const D3DVIEWPORT9*) = nullptr;
 
     bool DropDraw()
     {
@@ -351,6 +421,7 @@ public:
             CIniReader iniReader("");
             bCascadesAtNight = iniReader.ReadInteger("SHADOWS", "CascadeShadowsAtNight", 0) != 0;
             bReflectionsHalfRate = iniReader.ReadInteger("MISC", "ReflectionsHalfRate", 1) != 0;
+            bFarCascadesHalfRate = iniReader.ReadInteger("SHADOWS", "FarCascadesHalfRate", 1) != 0;
             bTrace = iniReader.ReadInteger("MISC", "RenderSkipTrace", 0) != 0;
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
             if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
@@ -359,12 +430,13 @@ public:
 
         FusionFix::onGameInitEvent() += []()
         {
-            if (bCascadesAtNight && !bReflectionsHalfRate && !bTrace)
+            if (bCascadesAtNight && !bReflectionsHalfRate && !bFarCascadesHalfRate && !bTrace)
                 return;
             bool installed = Install();
-            FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, reflections %s\n",
+            FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, the far ones by day %s, reflections %s\n",
                 installed ? "in place" : "no device or texture factory yet, nothing is left out",
                 bCascadesAtNight ? "drawn at night" : "not drawn from 22:00 to 05:00",
+                bFarCascadesHalfRate ? "in turns while the camera keeps still" : "every frame",
                 bReflectionsHalfRate ? "every other frame" : "every frame");
         };
 
@@ -381,7 +453,12 @@ public:
             if (frames % 3600)
                 return;
             std::string text;
-            for (int kind = Cascade; kind < Kinds; kind++)
+            for (int i = 0; i < 2; i++)
+                if (farCascades[i].skipped || farCascades[i].kept)
+                    text += std::format("cascade {}: {} frames left out, {} drawn; ", i + 3, farCascades[i].skipped, farCascades[i].kept);
+            for (int i = 0; i < 2; i++)
+                farCascades[i].skipped = farCascades[i].kept = 0;
+            for (int kind = CascadeTarget; kind < Kinds; kind++)
                 if (dropped[kind] || halfRates[kind].skipped || halfRates[kind].kept)
                     text += std::format("{}: {} calls left out, {} frames left out, {} drawn; ", KindNames[kind], dropped[kind],
                         halfRates[kind].skipped, halfRates[kind].kept);
