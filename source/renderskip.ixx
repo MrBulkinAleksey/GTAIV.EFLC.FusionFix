@@ -172,6 +172,7 @@ namespace RenderSkip
     bool skippedInPass[4]{};
     bool bAtlasLeftOut = false;
     int lastCascade = -1;       // the index of the cascade CascadeDrop decided last, -1 at night
+    uint32_t cascadeSide = 2048;                // CASCADE_TARGET_R32's, texels
 
     // CascadesIntoAtlas: each cascade is drawn straight into its quarter of CASCADE_ATLAS instead of into
     // CASCADE_TARGET_R32 and then copied there by one draw of cascadeConvert's convert pass 1 (CE 0x92cb30, some 1.5 ms
@@ -244,7 +245,6 @@ namespace RenderSkip
     constexpr float CascadeReach[4] = { 10.0f, 30.0f, 85.0f, 256.0f };  // metres from the camera, as shadows.ixx sets them
     bool bFollow = false;                       // both hooks in place
     bool bMatrixTrace = false;
-    uint32_t cascadeSide = 2048;                // CASCADE_TARGET_R32's, texels
     struct CascadeLook
     {
         uint32_t seq = ~0u;
