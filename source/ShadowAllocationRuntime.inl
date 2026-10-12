@@ -384,22 +384,27 @@ namespace PlayerShadowAllocation
         next.timeMs = static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds);
         const bool focused = PlayerCar::ReadFocus(focus);
         if (focused) {
-            // With vehicle box shadows a lamp's cars are boxes, left out of its map: they need no slot, nor do the
-            // people sitting in them, inside the box.
-            next.boxedVehicles = static_cast<unsigned>((std::max)(VehicleBoxShadowsBridge::perLamp.load(std::memory_order_relaxed), 0));
+            // With vehicle box shadows, cars that keep a box from a lamp until they leave it need no slot from it;
+            // nor do people sitting in cars, inside the car's own shadow.
+            if (VehicleBoxShadowsBridge::CopyBoxedPairs) {
+                static std::array<VehicleBoxShadowsBridge::BoxedPair, ShadowCasterPresence::BoxedCapacity> pairs{};
+                const int n = VehicleBoxShadowsBridge::CopyBoxedPairs(pairs.data(), int(pairs.size()));
+                for (int i = 0; i < n; ++i)
+                    next.boxed[next.boxedCount++] = {{pairs[i].position[0], pairs[i].position[1], pairs[i].position[2]}, pairs[i].car};
+            }
             static std::vector<uintptr_t> occupants;
             occupants.clear();
-            const auto add = [&](uintptr_t entity, float extent, bool isVehicle) {
+            const auto add = [&](uintptr_t entity, float extent, uintptr_t car) {
                 float p[3];
                 if (!CEntity::GetPosition(entity, p)) return;
                 const float x = p[0] - focus.position[0], y = p[1] - focus.position[1], z = p[2] - focus.position[2];
                 if (x * x + y * y + z * z <= ShadowCasterPresence::Range * ShadowCasterPresence::Range)
-                    next.Add({p[0], p[1], p[2]}, extent, isVehicle);
+                    next.Add({p[0], p[1], p[2]}, extent, car);
             };
             next.valid = CVehicle::ForEachVehicle([&](uintptr_t v) {
-                add(v, ShadowCasterPresence::VehicleExtent, true);
+                add(v, ShadowCasterPresence::VehicleExtent, v);
                 // CE: the driver followed by eight passengers
-                if (next.boxedVehicles && PlayerCar::driverOffset)
+                if (VehicleBoxShadowsBridge::CopyBoxedPairs && PlayerCar::driverOffset)
                     for (int i = 0; i < 9; ++i)
                         if (const auto ped = reinterpret_cast<const uintptr_t*>(v + PlayerCar::driverOffset)[i])
                             occupants.push_back(ped);
@@ -407,7 +412,7 @@ namespace PlayerShadowAllocation
             std::sort(occupants.begin(), occupants.end());
             next.valid = next.valid && CPed::ForEachPed([&](uintptr_t p) {
                 if (!std::binary_search(occupants.begin(), occupants.end(), p))
-                    add(p, ShadowCasterPresence::PedExtent, false);
+                    add(p, ShadowCasterPresence::PedExtent, 0);
             });
         }
         if (!castersLock.test_and_set(std::memory_order_acquire)) {

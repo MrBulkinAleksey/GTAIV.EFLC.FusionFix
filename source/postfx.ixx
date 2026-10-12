@@ -805,7 +805,7 @@ public:
     // A lamp that takes a shadow slot, whose map then shows the cars, fades its boxes out over SlotFade ms, so the
     // shadow under a car does not jump between the two; WithSlots keeps them under its real shadow for good.
     bool bVehicleBoxShadowsWithSlots = false;
-    bool bVehicleBoxShadowsReplaceMaps = false; // VehicleBoxShadowsReplaceMaps, see VehicleBoxShadows::BoxedCars
+    bool bVehicleBoxShadowsUntilLeaving = true; // VehicleBoxShadowsUntilLeaving, see VehicleBoxShadows::SetForLight
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
     uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300, nVehicleBoxShadowSizeFadeMs = 300;
     float fVehicleBoxShadowsMaxDistance = 60.0f; // metres from the camera to a lamp's light past which it has no boxes
@@ -1790,7 +1790,7 @@ public:
         fVehicleBoxShadowEndRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsEndRounding", 0.3f), 0.0f, 2.0f);
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
-        bVehicleBoxShadowsReplaceMaps = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsReplaceMaps", 0) != 0;
+        bVehicleBoxShadowsUntilLeaving = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsUntilLeaving", 1) != 0;
         bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 0) != 0;
         fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", 1.0f), -3.0f, 5.0f);
         bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;
@@ -8607,12 +8607,17 @@ private:
         static inline bool constantsOn = true;
         // The cars each lamp took last, render thread.
         // What each lamp took last, render thread: its cars, and since when its own map shows them.
+        static constexpr uint8_t kPending = 0, kReal = 1, kBox = 2;
+        static constexpr DWORD kDecideMs = 500; // a car coming under a lamp without a slot waits this long for one
         struct Fading
         {
             Box box{};
             float strength = 0.0f;
             bool chosen = false;
             float shape[3] = { -1.0f, -1.0f, -1.0f }; // along, across and height shares from the light's angle, eased
+            // VehicleBoxShadowsUntilLeaving: which shadow the car has from the lamp until it leaves, decided as it came
+            uint8_t latch = kPending;
+            DWORD takenTick = 0;
         };
         struct LampState
         {
@@ -8626,8 +8631,33 @@ private:
             DWORD leftOutTick = 0;                   // its slot's map last left its boxed cars out (BoxedCars)
             // VehicleBoxShadowsLog: what it last did with the watched car
             bool hadWatched = false, wasMapped = false, watchedLow = false;
+            uint8_t watchedLatch = 0xFF;
         };
         static inline std::unordered_map<uint64_t, LampState> held;
+        // The lamps and the cars they keep boxes for (VehicleBoxShadowsUntilLeaving), gathered as a frame's lights are
+        // drawn and handed to the night shadow slots on the next; render thread, main thread copies.
+        static constexpr int kPairs = 256;
+        static inline std::array<VehicleBoxShadowsBridge::BoxedPair, kPairs> pairsBuilding{}, pairsPublished{};
+        static inline int pairsBuildingCount = 0, pairsPublishedCount = 0;
+        static inline DWORD pairsPublishedTick = 0;
+        static inline std::mutex pairsLock;
+        static void PublishPairs()
+        {
+            std::lock_guard lock(pairsLock);
+            std::copy_n(pairsBuilding.begin(), pairsBuildingCount, pairsPublished.begin());
+            pairsPublishedCount = pairsBuildingCount;
+            pairsPublishedTick = GetTickCount();
+            pairsBuildingCount = 0;
+        }
+        static int CopyBoxedPairs(VehicleBoxShadowsBridge::BoxedPair* pairs, int max)
+        {
+            std::lock_guard lock(pairsLock);
+            if (!PostFxResources.VehicleBoxShadowsEnabled() || GetTickCount() - pairsPublishedTick > 500)
+                return 0;
+            const int n = (std::min)(pairsPublishedCount, max);
+            std::copy_n(pairsPublished.begin(), n, pairs);
+            return n;
+        }
         // For the log: lamps whose slot drew its map without its boxed cars, and those cars.
         static inline std::atomic<uint32_t> mapsWithoutBoxed{0}, carsLeftOut{0};
         // For the log: the nearest car's model bounds (least, most) and its box, as taken.
@@ -8642,11 +8672,7 @@ private:
             list.count = 0;
             static uint32_t handOvers = 0;
             list.sequence = ++handOvers;
-            const bool enabled = PostFxResources.VehicleBoxShadowsEnabled() && lightListBuilt && modelInfos;
-            // The night shadow slots (VehicleBoxShadowsReplaceMaps): up to this many cars in a lamp's light need no slot
-            VehicleBoxShadowsBridge::perLamp.store(enabled && PostFxResources.bVehicleBoxShadowsReplaceMaps
-                ? std::clamp(PostFxResources.nVehicleBoxShadowsPerLamp, 1, kPerLight) : 0, std::memory_order_relaxed);
-            if (!enabled)
+            if (!PostFxResources.VehicleBoxShadowsEnabled() || !lightListBuilt || !modelInfos)
                 return;
             float focus[3] = {};
             if (!CPlayer::getLocalPlayerPed || !CEntity::GetPosition(CPlayer::getLocalPlayerPed(), focus))
@@ -8784,6 +8810,7 @@ private:
             modelInfos = GameBase() + 0xE95CD8;
             shHandOver = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&) { Capture(); });
             VehicleBoxShadowsBridge::BoxedCars = BoxedCars;
+            VehicleBoxShadowsBridge::CopyBoxedPairs = CopyBoxedPairs;
         }
 
         // VehicleBoxShadowsLog: what happens to the shadows of the car nearest the player, to catch a flicker, written to
@@ -8870,6 +8897,13 @@ private:
             if (mapped != state.wasMapped && (rank >= 0 || state.hadWatched))
                 Trace("%c %s %s its shadow slot%s, lamp strength %.2f", mapped ? 'P' : 'U', where.c_str(), mapped ? "took" : "lost",
                     leftOut ? " (its map leaves its boxed cars out)" : "", state.slotStrength);
+            uint8_t latch = 0xFF;
+            for (int i = 0; i < state.count; ++i)
+                if (state.boxes[i].box.vehicle == watched && state.boxes[i].chosen)
+                    latch = state.boxes[i].latch;
+            if (latch != state.watchedLatch && latch != 0xFF)
+                Trace("K %s gives the car %s", where.c_str(), latch == kReal ? "its map's shadow" : latch == kBox ? "a box until it leaves" : "a box while it waits for a slot");
+            state.watchedLatch = latch;
             if (low != state.watchedLow)
                 Trace("L %s %s", where.c_str(), low ? "is no higher than the car's roof, left out" : "is above the car's roof again");
             state.hadWatched = rank >= 0;
@@ -8941,14 +8975,12 @@ private:
         }
 
         // VehicleBoxShadowsBridge::BoxedCars, render thread, as a lamp's shadow slot is drawn (before its light): the
-        // cars the lamp shadows as boxes, its map then leaves them out. A lamp that took a slot faded its boxes out
-        // for its map's shadows and back in when it lost the slot, and with two lamps over a car the shadows jumped
-        // between box and map by turns.
+        // cars the lamp keeps boxes for until they leave (VehicleBoxShadowsUntilLeaving), its map then leaves them
+        // out. A lamp that took a slot faded its boxes out for its map's shadows and back in when it lost the slot,
+        // and with two lamps over a car the shadows jumped between box and map by turns.
         static int BoxedCars(const float position[3], uintptr_t* cars, int max)
         {
-            // VehicleBoxShadowsReplaceMaps; otherwise a car under a lamp with a slot has the map's real shadow, and
-            // its box only where the lamp has none
-            if (!PostFxResources.VehicleBoxShadowsEnabled() || !PostFxResources.bVehicleBoxShadowsReplaceMaps ||
+            if (!PostFxResources.VehicleBoxShadowsEnabled() || !PostFxResources.bVehicleBoxShadowsUntilLeaving ||
                 PostFxResources.bVehicleBoxShadowsWithSlots || !std::isfinite(position[0]))
                 return 0;
             const DWORD now = GetTickCount();
@@ -8962,11 +8994,12 @@ private:
                         if (it == held.end() || !it->second.lastTick || now - it->second.lastTick > 500)
                             continue;
                         auto& state = it->second;
-                        state.leftOutTick = now;
                         int n = 0;
                         for (int i = 0; i < state.count && n < max; ++i)
-                            if (state.boxes[i].chosen && state.boxes[i].box.vehicle)
+                            if (state.boxes[i].chosen && state.boxes[i].latch == kBox && state.boxes[i].box.vehicle)
                                 cars[n++] = state.boxes[i].box.vehicle;
+                        if (n)
+                            state.leftOutTick = now;
                         mapsWithoutBoxed.fetch_add(1, std::memory_order_relaxed);
                         carsLeftOut.fetch_add(uint32_t(n), std::memory_order_relaxed);
                         return n;
@@ -8995,6 +9028,7 @@ private:
                 if (list != drawnFor)
                 {
                     drawnFor = list;
+                    PublishPairs();
                     // The newest with this list: the ring holds more hand overs than the game has lists, so an older
                     // one with the same list, three or six frames old, made the shadows lag the cars by fits
                     const List* found = nullptr;
@@ -9036,6 +9070,12 @@ private:
                 // Its slot's map was drawn without its boxed cars this frame: its boxes are their only shadow.
                 const bool leftOut = mapHasCars && state.leftOutTick && now - state.leftOutTick < 200;
                 const bool mapped = mapHasCars;
+                // VehicleBoxShadowsUntilLeaving: each car's shadow from the lamp is chosen as it comes under it, the
+                // map's if the lamp has a slot (or gets one within kDecideMs), else its box, which it keeps until it
+                // leaves, the lamp's map leaving it out should the lamp take a slot meanwhile. A lamp's slot coming
+                // and going no longer moves its cars' shadows between box and map. Only a lamp losing its slot turns
+                // its cars with the map's shadow to boxes, at once.
+                const bool until = R.bVehicleBoxShadowsUntilLeaving && !R.bVehicleBoxShadowsWithSlots;
                 if (leftOut)
                     mapHasCars = false;
                 const bool fresh = !state.lastTick || now - state.lastTick > 1000;
@@ -9053,13 +9093,14 @@ private:
                 // When it loses the slot its real shadow is gone at once, so the boxes are back at once too: faded in
                 // (VehicleBoxShadowsFadeIn) the car had neither shadow for a moment, a blink each time the lamp's slot
                 // went (a trace: every few seconds in a tunnel). A lamp just seen still fades its boxes in.
-                if (mapHasCars && !R.bVehicleBoxShadowsWithSlots)
+                const bool lampFades = mapHasCars && !R.bVehicleBoxShadowsWithSlots && !until;
+                if (lampFades)
                     state.slotStrength = (std::max)(state.slotStrength - step(R.nVehicleBoxShadowSlotFadeMs), 0.0f);
                 else if (state.wasMappedForFade)
                     state.slotStrength = 1.0f;
                 else
                     state.slotStrength = (std::min)(state.slotStrength + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
-                state.wasMappedForFade = mapHasCars && !R.bVehicleBoxShadowsWithSlots;
+                state.wasMappedForFade = lampFades;
                 strength = state.slotStrength;
                 // VehicleBoxShadowsMaxDistance: a lamp whose light ends that far from the camera has no boxes, faded out
                 // over the last 20 m. Its shader then leaves them all out; one with any box works all five of them. The
@@ -9126,16 +9167,33 @@ private:
                     auto& f = next[nextCount++];
                     f.box = *nearest[i].second;
                     f.chosen = true;
-                    // A car new to a lamp whose map leaves its boxed cars out is in this frame's map, and gone from
-                    // the next: its box comes in whole at once.
-                    f.strength = leftOut ? 1.0f : step(R.nVehicleBoxShadowFadeInMs);
+                    const Fading* before = nullptr;
                     for (int j = 0; j < state.count; ++j)
                         if (state.boxes[j].box.vehicle == f.box.vehicle)
                         {
-                            f.strength += state.boxes[j].strength;
-                            std::copy_n(state.boxes[j].shape, 3, f.shape);
+                            before = &state.boxes[j];
+                            std::copy_n(before->shape, 3, f.shape);
                         }
-                    f.strength = (std::min)(f.strength, 1.0f);
+                    const float had = before ? before->strength : 0.0f;
+                    if (!until)
+                    {
+                        f.strength = (std::min)(had + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
+                        continue;
+                    }
+                    f.latch = before ? before->latch : mapped ? kReal : kPending;
+                    f.takenTick = before ? before->takenTick : now;
+                    if (f.latch == kPending)
+                        f.latch = mapped ? kReal : now - f.takenTick >= kDecideMs ? kBox : kPending;
+                    if (f.latch == kReal && !mapped)
+                    {
+                        // The lamp lost its slot and with it the car's shadow: the box at once, and kept
+                        f.latch = kBox;
+                        f.strength = 1.0f;
+                    }
+                    else if (f.latch == kReal)
+                        f.strength = (std::max)(had - step(R.nVehicleBoxShadowSlotFadeMs), 0.0f);
+                    else
+                        f.strength = (std::min)(had + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
                 }
                 for (int j = 0; j < state.count && nextCount < perLamp; ++j)
                 {
@@ -9145,7 +9203,7 @@ private:
                     // Under a lamp whose map leaves its boxed cars out, a car it leaves keeps its box this frame, as
                     // this frame's map left it out, and is in the map from the next on (BoxedCars takes only the
                     // chosen); faded out, it would have had both shadows at once after a frame without either.
-                    if (leftOut)
+                    if (until && mapped && old.latch == kBox)
                     {
                         if (old.chosen)
                         {
@@ -9164,6 +9222,10 @@ private:
                 }
                 state.boxes = next;
                 state.count = nextCount;
+                if (until)
+                    for (int i = 0; i < nextCount; ++i)
+                        if (next[i].chosen && next[i].latch == kBox && pairsBuildingCount < kPairs)
+                            pairsBuilding[pairsBuildingCount++] = { { light.mPosition.x, light.mPosition.y, light.mPosition.z }, next[i].box.vehicle };
                 used = strength > 0.0f ? nextCount : 0;
                 if (R.bVehicleBoxShadowsLog && drawn && drawn->watched)
                     TraceLamp(light, state, mapped, leftOut, watchedLow, taken, nearest);
