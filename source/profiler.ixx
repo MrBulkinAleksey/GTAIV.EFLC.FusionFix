@@ -31,8 +31,9 @@ import common;
 // Two more things are kept over the whole session:
 //  - every call stack sampled, with its count, written with each report to GTAIV.EFLC.FusionFix.Profiler.folded
 //    (one line a stack, "thread;outermost;...;innermost count", the input of flame graph tools);
-//  - the main thread's samples of the last seconds: a frame (from one CGame::Process to the next) longer than
-//    ProfilerSpikeMs gets a block of its own in the log, where the main thread was in that frame.
+//  - each sampled thread's samples of the last seconds: a frame (from one CGame::Process to the next) longer than
+//    ProfilerSpikeMs gets a block of its own in the log, where the main thread was in that frame and what the two
+//    threads that worked most meanwhile worked on (the main thread mostly waits for the render thread then).
 //
 // While a thread is stopped only its context and a copy of the top of its stack are taken: nothing is allocated
 // or locked then, as the stopped thread may hold the heap's lock or the loader's. Every read of memory that isn't
@@ -62,16 +63,24 @@ namespace Profiler
     LONGLONG frameTimes[FrameRing] = {};
     std::atomic<uint32_t> frameCount = 0;
 
-    // The main thread's last samples, by the sampler only
-    struct MainSample
+    // Each sampled thread's last samples (about 16 s at 500 a second), by the sampler only: a long frame of the main
+    // thread is told with what the others did meanwhile, the render thread it waited for above all
+    struct RingSample
     {
         LONGLONG time = 0;
         uint32_t count = 0;
         uintptr_t frames[MaxFrames + 1] = {};
     };
-    constexpr size_t MainRing = 8192;
-    std::vector<MainSample> mainSamples;
-    uint64_t mainSampled = 0;
+    constexpr size_t RingSize = 8192;
+
+    // System calls a thread waits in (ntdll's and win32u's exports with Wait, Delay or RemoveIoCompletion in their
+    // name): a sample there is a thread waiting, not working
+    std::unordered_set<uintptr_t> waitFunctions;
+    bool IsWait(uintptr_t function) { return waitFunctions.contains(function); }
+
+    // What the sampling costs the game: how long a thread is held stopped, and the work on each sample after
+    uint64_t nCostSamples = 0;
+    LONGLONG nHeldTicks = 0, nWorkTicks = 0;
 
     // Executable ranges of the loaded modules, and their exports
     struct Module
@@ -171,6 +180,19 @@ namespace Profiler
         for (auto& module : modules)
             codeRanges.insert(codeRanges.end(), module.code.begin(), module.code.end());
         std::sort(codeRanges.begin(), codeRanges.end());
+
+        waitFunctions.clear();
+        for (auto& module : modules)
+        {
+            std::string name = module.name;
+            std::transform(name.begin(), name.end(), name.begin(), [](char c) { return char(std::tolower((unsigned char)c)); });
+            if (name != "ntdll.dll" && name != "win32u.dll")
+                continue;
+            for (auto& [address, exported] : module.exports)
+                if (exported.find("Wait") != std::string::npos || exported.find("DelayExecution") != std::string::npos ||
+                    exported.find("RemoveIoCompletion") != std::string::npos)
+                    waitFunctions.insert(address);
+        }
     }
 
     const Module* FindModule(uintptr_t address)
@@ -337,6 +359,8 @@ namespace Profiler
         uintptr_t stackLow = 0, stackHigh = 0;  // the committed region the stack was last found in
         uint32_t samples = 0;
         std::unordered_map<uintptr_t, uint32_t> self, total;
+        std::vector<RingSample> ring;
+        uint64_t ringCount = 0;
     };
 
     // The session's stacks: thread id and frames, innermost first, as bytes
@@ -529,7 +553,8 @@ namespace Profiler
         uint32_t copied = 0;
         CONTEXT context{};
         context.ContextFlags = CONTEXT_CONTROL;
-        LARGE_INTEGER time;
+        LARGE_INTEGER time, held, resumed, done;
+        QueryPerformanceCounter(&held);
         if (SuspendThread(thread.handle) == DWORD(-1))
         {
             thread.alive = false;
@@ -571,6 +596,8 @@ namespace Profiler
             }
         }
         ResumeThread(thread.handle);
+        QueryPerformanceCounter(&resumed);
+        nHeldTicks += resumed.QuadPart - held.QuadPart;
         if (!ok)
             return;
 
@@ -604,15 +631,18 @@ namespace Profiler
         if (!foldedNames.contains(thread.id))
             foldedNames.emplace(thread.id, thread.name);
 
-        if (thread.id == nMainThread && nSpikeMs > 0)
+        if (nSpikeMs > 0)
         {
-            if (mainSamples.empty())
-                mainSamples.resize(MainRing);
-            auto& sample = mainSamples[mainSampled++ % MainRing];
+            if (thread.ring.empty())
+                thread.ring.resize(RingSize);
+            auto& sample = thread.ring[thread.ringCount++ % RingSize];
             sample.time = time.QuadPart;
             sample.count = count;
             std::copy_n(frames, count, sample.frames);
         }
+        QueryPerformanceCounter(&done);
+        nWorkTicks += done.QuadPart - resumed.QuadPart;
+        nCostSamples++;
     }
 
     std::string Stack(const uintptr_t* frames, uint32_t count, const char* separator)
@@ -664,8 +694,54 @@ namespace Profiler
         fclose(file);
     }
 
-    // A long frame: where the main thread was between its start and end
+    // A long frame: where the main thread was between its start and end, and the other threads busiest meanwhile
     uint32_t nSpikes = 0, nSpikesSkipped = 0;
+
+    // One thread's samples in [start, end]: how many, how many working, and what it did while working
+    struct Window
+    {
+        uint32_t samples = 0, working = 0;
+        std::unordered_map<uintptr_t, uint32_t> self;
+        std::unordered_map<std::string, uint32_t> stacks;
+    };
+
+    Window Gather(const Thread& thread, LONGLONG start, LONGLONG end, bool waitsToo)
+    {
+        Window window;
+        if (thread.ring.empty())
+            return window;
+        uint64_t first = thread.ringCount > RingSize ? thread.ringCount - RingSize : 0;
+        for (uint64_t i = first; i < thread.ringCount; i++)
+        {
+            auto& sample = thread.ring[i % RingSize];
+            if (sample.time < start || sample.time > end || !sample.count)
+                continue;
+            window.samples++;
+            bool waiting = IsWait(sample.frames[0]);
+            window.working += !waiting;
+            if (waiting && !waitsToo)
+                continue;
+            window.self[sample.frames[0]]++;
+            window.stacks[std::string((const char*)sample.frames, sample.count * sizeof(uintptr_t))]++;
+        }
+        return window;
+    }
+
+    void Describe(std::string& text, const Window& window, uint32_t of, size_t functions, size_t paths)
+    {
+        std::vector<std::pair<uintptr_t, uint32_t>> top(window.self.begin(), window.self.end());
+        std::sort(top.begin(), top.end(), [](auto& a, auto& b) { return a.second > b.second; });
+        text += "    in (self):\n";
+        for (size_t i = 0; i < top.size() && i < functions; i++)
+            text += std::format("      {:5.1f}%  {}\n", top[i].second * 100.0 / of, Name(top[i].first));
+        std::vector<std::pair<std::string, uint32_t>> sorted(window.stacks.begin(), window.stacks.end());
+        std::sort(sorted.begin(), sorted.end(), [](auto& a, auto& b) { return a.second > b.second; });
+        text += "    stacks (innermost first):\n";
+        for (size_t i = 0; i < sorted.size() && i < paths; i++)
+            text += std::format("      {:5.1f}%  {}\n", sorted[i].second * 100.0 / of,
+                Stack((const uintptr_t*)sorted[i].first.data(), uint32_t(sorted[i].first.size() / sizeof(uintptr_t)), " < "));
+    }
+
     void ReportSpike(LONGLONG start, LONGLONG end, LONGLONG frequency)
     {
         if (nSpikes >= SpikesPerReport)
@@ -674,34 +750,28 @@ namespace Profiler
             return;
         }
         nSpikes++;
-        std::unordered_map<uintptr_t, uint32_t> self;
-        std::unordered_map<std::string, uint32_t> stacks;
-        uint32_t samples = 0;
-        uint64_t first = mainSampled > MainRing ? mainSampled - MainRing : 0;
-        for (uint64_t i = first; i < mainSampled; i++)
+        std::string text = std::format("frame of {:.1f} ms\n", double(end - start) * 1000.0 / double(frequency));
+        if (auto main = threads.find(nMainThread); main != threads.end())
         {
-            auto& sample = mainSamples[i % MainRing];
-            if (sample.time < start || sample.time > end || !sample.count)
-                continue;
-            samples++;
-            self[sample.frames[0]]++;
-            stacks[std::string((const char*)sample.frames, sample.count * sizeof(uintptr_t))]++;
+            auto window = Gather(main->second, start, end, true);
+            text += std::format("  main thread: {} samples, working {:.0f}%\n", window.samples,
+                window.samples ? window.working * 100.0 / window.samples : 0.0);
+            if (window.samples)
+                Describe(text, window, window.samples, 10, 5);
         }
-        std::string text = std::format("frame of {:.1f} ms, {} samples of the main thread in it\n",
-            double(end - start) * 1000.0 / double(frequency), samples);
-        if (samples)
+        // The others by their work in it, waits left out: the two that worked most
+        std::vector<std::pair<const Thread*, Window>> others;
+        for (auto& [id, thread] : threads)
+            if (id != nMainThread)
+                if (auto window = Gather(thread, start, end, false); window.working >= 3)
+                    others.emplace_back(&thread, std::move(window));
+        std::sort(others.begin(), others.end(), [](auto& a, auto& b) { return a.second.working > b.second.working; });
+        for (size_t i = 0; i < others.size() && i < 2; i++)
         {
-            std::vector<std::pair<uintptr_t, uint32_t>> top(self.begin(), self.end());
-            std::sort(top.begin(), top.end(), [](auto& a, auto& b) { return a.second > b.second; });
-            text += "  in (self):\n";
-            for (size_t i = 0; i < top.size() && i < 10; i++)
-                text += std::format("    {:5.1f}%  {}\n", top[i].second * 100.0 / samples, Name(top[i].first));
-            std::vector<std::pair<std::string, uint32_t>> paths(stacks.begin(), stacks.end());
-            std::sort(paths.begin(), paths.end(), [](auto& a, auto& b) { return a.second > b.second; });
-            text += "  stacks (innermost first):\n";
-            for (size_t i = 0; i < paths.size() && i < 5; i++)
-                text += std::format("    {:5.1f}%  {}\n", paths[i].second * 100.0 / samples,
-                    Stack((const uintptr_t*)paths[i].first.data(), uint32_t(paths[i].first.size() / sizeof(uintptr_t)), " < "));
+            auto& [thread, window] = others[i];
+            text += std::format("  tid {} ({}): {} samples, working {:.0f}%, what it worked on:\n", thread->id, thread->name,
+                window.samples, window.working * 100.0 / window.samples);
+            Describe(text, window, window.samples, 6, 3);
         }
         FusionLog::WriteText("Profiler", "Spike", text);
     }
@@ -727,9 +797,15 @@ namespace Profiler
     void Report(double seconds)
     {
         auto selfCpu = CpuTime(GetCurrentThread());
-        std::string text = std::format("{:.1f} s, {} samples a second of the {} busiest threads; the profiler itself took {:.1f}% of a core\n",
-            seconds, nRate, nThreads, (selfCpu - selfCpuLast) * 100.0 / (seconds * 1.0e7));
+        LARGE_INTEGER frequency;
+        QueryPerformanceFrequency(&frequency);
+        double perSample = nCostSamples ? 1.0e6 / double(frequency.QuadPart) / double(nCostSamples) : 0.0;
+        std::string text = std::format("{:.1f} s, {} samples a second of the {} busiest threads; the profiler itself took {:.1f}% of a core, "
+            "a thread held stopped {:.1f} us a sample, {:.1f} us of work on it after\n",
+            seconds, nRate, nThreads, (selfCpu - selfCpuLast) * 100.0 / (seconds * 1.0e7), double(nHeldTicks) * perSample, double(nWorkTicks) * perSample);
         selfCpuLast = selfCpu;
+        nCostSamples = 0;
+        nHeldTicks = nWorkTicks = 0;
         std::vector<Thread*> order;
         for (auto& [id, thread] : threads)
             if (thread.cpuInterval || thread.samples)
