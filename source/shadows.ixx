@@ -1,6 +1,9 @@
 module;
 
 #include <common.hxx>
+#include "FusionLog.hpp"
+#include <cstring>
+#include <unordered_map>
 
 export module shadows;
 
@@ -81,6 +84,139 @@ void __cdecl CBaseModelInfo__setFlagsHook(void* pModel, int dwFlags, int a3)
     return injector::cstd<void(void*, int, int)>::call(CBaseModelInfo__setFlags, pModel, dwFlags, a3);
 }
 
+// CascadeShadowsAtNight = 0: the sun's cascaded shadow maps are not drawn between 22:00 and 05:00 on the game's clock.
+// The moon's shadows don't show, yet the cascades took some 7.5 of the 39 GPU milliseconds of a frame at night in a
+// profile. The game still runs its cascade phase, its matrices and its clears; only the draws into the cascade targets
+// (CASCADE_TARGET_R32, CASCADE_ATLAS, as grcTextureFactoryPC::LockRenderTarget has them, its vtable slots 15 and 16) are
+// dropped on the device (its vtable slots 81 to 84), so the maps stay cleared: lit everywhere
+namespace NightCascades
+{
+    bool bSkipAtNight = true;
+    constexpr uint8_t NightFrom = 22, NightTo = 5;
+
+    using LockFn = void(__thiscall*)(void*, uint32_t, rage::grcRenderTargetPC*, rage::grcRenderTargetPC*, uint32_t, bool, uint32_t);
+    using UnlockFn = void(__thiscall*)(void*, uint32_t, void*, int32_t);
+    LockFn pfnLock = nullptr;
+    UnlockFn pfnUnlock = nullptr;
+
+    // The locks of target index 0, innermost last: whether each is a cascade target
+    bool stack[16] = {};
+    int depth = 0;
+    bool bDropping = false;
+    uint32_t nDropped = 0, nNights = 0;
+
+    bool IsCascadeTarget(rage::grcRenderTargetPC* rt)
+    {
+        static std::unordered_map<rage::grcRenderTargetPC*, bool> known;
+        if (!rt)
+            return false;
+        if (auto it = known.find(rt); it != known.end())
+            return it->second;
+        bool cascade = rt->mName && (!strcmp(rt->mName, "CASCADE_TARGET_R32") || !strcmp(rt->mName, "CASCADE_ATLAS"));
+        known.emplace(rt, cascade);
+        return cascade;
+    }
+
+    bool IsNight()
+    {
+        if (!CClock::ms_nGameClockHours)
+            return false;
+        auto hours = CClock::GetHours();
+        return hours >= NightFrom || hours < NightTo;
+    }
+
+    void Update()
+    {
+        bool dropping = bSkipAtNight && depth > 0 && stack[depth - 1] && IsNight();
+        if (dropping && !bDropping)
+            nNights++;
+        bDropping = dropping;
+    }
+
+    void __fastcall Lock(void* factory, void*, uint32_t index, rage::grcRenderTargetPC* color, rage::grcRenderTargetPC* depthTarget, uint32_t a5, bool a6, uint32_t mip)
+    {
+        pfnLock(factory, index, color, depthTarget, a5, a6, mip);
+        if (index != 0)
+            return;
+        // A lock the game never undid would grow it for good; deeper than any nesting it uses, it starts over
+        if (depth >= int(std::size(stack)))
+            depth = 0;
+        stack[depth++] = IsCascadeTarget(color ? color : depthTarget);
+        Update();
+    }
+
+    void __fastcall Unlock(void* factory, void*, uint32_t index, void* resolveFlags, int32_t unused)
+    {
+        pfnUnlock(factory, index, resolveFlags, unused);
+        if (index != 0 || depth == 0)
+            return;
+        depth--;
+        Update();
+    }
+
+    HRESULT(__stdcall* RealDrawPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT) = nullptr;
+    HRESULT(__stdcall* RealDrawIndexedPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT) = nullptr;
+    HRESULT(__stdcall* RealDrawPrimitiveUP)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, const void*, UINT) = nullptr;
+    HRESULT(__stdcall* RealDrawIndexedPrimitiveUP)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT, UINT, const void*, D3DFORMAT, const void*, UINT) = nullptr;
+
+    HRESULT __stdcall DrawPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT start, UINT count)
+    {
+        if (bDropping)
+            return nDropped++, D3D_OK;
+        return RealDrawPrimitive(device, type, start, count);
+    }
+
+    HRESULT __stdcall DrawIndexedPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count)
+    {
+        if (bDropping)
+            return nDropped++, D3D_OK;
+        return RealDrawIndexedPrimitive(device, type, base, minIndex, vertices, start, count);
+    }
+
+    HRESULT __stdcall DrawPrimitiveUP(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT count, const void* data, UINT stride)
+    {
+        if (bDropping)
+            return nDropped++, D3D_OK;
+        return RealDrawPrimitiveUP(device, type, count, data, stride);
+    }
+
+    HRESULT __stdcall DrawIndexedPrimitiveUP(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT minIndex, UINT vertices, UINT count, const void* indices,
+        D3DFORMAT format, const void* data, UINT stride)
+    {
+        if (bDropping)
+            return nDropped++, D3D_OK;
+        return RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
+    }
+
+    template <class F>
+    void Patch(void** vtable, int index, F& real, F hook)
+    {
+        if (vtable[index] == reinterpret_cast<void*>(hook))
+            return;
+        real = reinterpret_cast<F>(vtable[index]);
+        injector::WriteMemory(&vtable[index], reinterpret_cast<void*>(hook), true);
+    }
+
+    // Once the game has its device and texture factory; the slots are taken over as the other hooks of them do, each
+    // passing on to what was there before
+    bool Install()
+    {
+        auto device = RageDirect3DDevice9::GetRuntimeDevice();
+        auto factory = rage::grcTextureFactory::g_pTextureFactory ? rage::grcTextureFactoryPC::GetInstance() : nullptr;
+        if (!device || !factory)
+            return false;
+        auto vft = *reinterpret_cast<void***>(factory);
+        Patch(vft, 15, pfnLock, reinterpret_cast<LockFn>(&Lock));
+        Patch(vft, 16, pfnUnlock, reinterpret_cast<UnlockFn>(&Unlock));
+        auto vtable = *reinterpret_cast<void***>(device);
+        Patch(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
+        Patch(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
+        Patch(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
+        Patch(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
+        return true;
+    }
+}
+
 class Shadows
 {
 public:
@@ -94,6 +230,7 @@ public:
             bExtraDynamicShadows    = iniReader.ReadInteger("SHADOWS", "ExtraDynamicShadows",    2);
             bDynamicShadowsForTrees = iniReader.ReadInteger("SHADOWS", "DynamicShadowsForTrees", 1) != 0;
             bHighResolutionShadows  = iniReader.ReadInteger("SHADOWS", "HighResolutionShadows",  0) != 0;
+            NightCascades::bSkipAtNight = iniReader.ReadInteger("SHADOWS", "CascadeShadowsAtNight", 0) == 0;
 
             // Dynamic shadows for trees
             if (bDynamicShadowsForTrees)
@@ -328,6 +465,25 @@ public:
                     pShadowMatrix[i].ShadowMatrix3 = 0.0f;
                 }
             }
+        };
+
+        FusionFix::onGameInitEvent() += []()
+        {
+            if (NightCascades::bSkipAtNight)
+                FusionLog::Write("Shadows", "Night", NightCascades::Install() ? "the cascades are not drawn from %02u:00 to %02u:00\n"
+                                                                               : "no device or texture factory yet, the cascades are drawn at night\n",
+                    NightCascades::NightFrom, NightCascades::NightTo);
+        };
+
+        // Every 3600 frames, how many draws went
+        FusionFix::onGameProcessEvent() += []()
+        {
+            static uint32_t frames = 0;
+            if (!NightCascades::bSkipAtNight || ++frames % 3600)
+                return;
+            if (NightCascades::nDropped)
+                FusionLog::Write("Shadows", "Night", "cascade draws left out: %u, over %u cascade passes\n", NightCascades::nDropped, NightCascades::nNights);
+            NightCascades::nDropped = NightCascades::nNights = 0;
         };
     }
 } Shadows;
