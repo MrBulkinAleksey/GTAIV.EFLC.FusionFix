@@ -152,7 +152,7 @@ namespace RenderSkip
     Drop drop = Drop::Nothing;
 
     // The locks of target index 0, innermost last, and what each drops
-    struct Lock { Kind kind; Drop drop; rage::grcRenderTargetPC* target; int8_t intoAtlas = -1; };
+    struct Lock { Kind kind; Drop drop; rage::grcRenderTargetPC* target; int8_t intoAtlas = -1; bool statesTraced = false; };
     Lock stack[16]{};
     int depth = 0;
     uint32_t dropped[Kinds]{};
@@ -631,7 +631,36 @@ namespace RenderSkip
         if (Tracing())
             traceDraws++;
         // The game's fill of a cascade drawn into the atlas: a clear of its quarter to 1.0 instead
-        if (bFillPending)
+        bool fill = bFillPending;
+        if (!fill && depth > 0 && stack[depth - 1].kind == CascadeTarget && !stack[depth - 1].statesTraced && Tracing())
+        {
+            // The states and the shadow matrix's depth column the first caster of a cascade is drawn with, whether into
+            // the atlas or the game's way, to tell the two apart
+            stack[depth - 1].statesTraced = true;
+            if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
+            {
+                DWORD z = 0, zWrite = 0, zFunc = 0, blend = 0, op = 0, src = 0, dst = 0, mask = 0, scissor = 0;
+                device->GetRenderState(D3DRS_ZENABLE, &z);
+                device->GetRenderState(D3DRS_ZWRITEENABLE, &zWrite);
+                device->GetRenderState(D3DRS_ZFUNC, &zFunc);
+                device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
+                device->GetRenderState(D3DRS_BLENDOP, &op);
+                device->GetRenderState(D3DRS_SRCBLEND, &src);
+                device->GetRenderState(D3DRS_DESTBLEND, &dst);
+                device->GetRenderState(D3DRS_COLORWRITEENABLE, &mask);
+                device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissor);
+                float m[16]{};
+                device->GetVertexShaderConstantF(60, m, 4);
+                D3DVIEWPORT9 vp{};
+                device->GetViewport(&vp);
+                TraceEvent(std::format("first caster{}: z {} write {} func {}, blend {} op {} {} {}, mask {:#x}, scissor {}, viewport {} {} {}x{}; "
+                    "c60-63 w {:.6g} {:.6g} {:.6g} {:.6g}, x {:.6g} {:.6g} {:.6g} {:.6g}",
+                    stack[depth - 1].intoAtlas >= 0 ? std::format(" into quarter {}", stack[depth - 1].intoAtlas) : std::string(" the game's way"),
+                    z, zWrite, zFunc, blend, op, src, dst, mask, scissor, vp.X, vp.Y, vp.Width, vp.Height,
+                    m[3], m[7], m[11], m[15], m[0], m[4], m[8], m[12]));
+            }
+        }
+        if (fill)
         {
             bFillPending = false;
             if (drop == Drop::Nothing && depth > 0 && stack[depth - 1].intoAtlas >= 0 && RealClear)
