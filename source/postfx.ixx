@@ -1041,6 +1041,9 @@ public:
                                       ID3DXEffect** effect, ID3DXBuffer** errors)
     {
         constexpr DWORD flags = 0;
+        // The effects are large address aware, as the game is: without it D3DX took a parameter's handle above 2 GB for
+        // its name and read it as a string. With it a name is no handle: parameters are set through their handles only
+        constexpr DWORD createFlags = D3DXFX_LARGEADDRESSAWARE;
         const auto start = std::chrono::steady_clock::now();
         auto elapsedMs = [&] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); };
 
@@ -1049,7 +1052,7 @@ public:
         const void* source = handle ? LockResource(handle) : nullptr;
         const DWORD sourceSize = info ? SizeofResource(hm, info) : 0;
         if (!source || !sourceSize)
-            return D3DXCreateEffectFromResourceW(pDevice, hm, MAKEINTRESOURCEW(resource), defines, nullptr, flags, nullptr, effect, errors);
+            return D3DXCreateEffectFromResourceW(pDevice, hm, MAKEINTRESOURCEW(resource), defines, nullptr, flags | createFlags, nullptr, effect, errors);
 
         auto fnv = [](uint64_t h, const void* data, size_t size)
         {
@@ -1088,7 +1091,7 @@ public:
             }
             fclose(file);
             if (!compiled.empty() &&
-                D3DXCreateEffect(pDevice, compiled.data(), UINT(compiled.size()), nullptr, nullptr, flags, nullptr, effect, nullptr) == S_OK)
+                D3DXCreateEffect(pDevice, compiled.data(), UINT(compiled.size()), nullptr, nullptr, createFlags, nullptr, effect, nullptr) == S_OK)
             {
                 FusionLog::Write("PostFx", "Shaders", "%s: from the cache in %.0f ms", name, elapsedMs());
                 return S_OK;
@@ -1115,7 +1118,7 @@ public:
         }
         const double compileMs = elapsedMs();
 
-        hr = D3DXCreateEffect(pDevice, compiled->GetBufferPointer(), compiled->GetBufferSize(), nullptr, nullptr, flags, nullptr, effect, nullptr);
+        hr = D3DXCreateEffect(pDevice, compiled->GetBufferPointer(), compiled->GetBufferSize(), nullptr, nullptr, createFlags, nullptr, effect, nullptr);
         if (hr == S_OK)
         {
             const std::string prefix = std::string(name) + "_";
@@ -3354,9 +3357,9 @@ private:
         const float width = float(desc[0].Width), height = float(desc[0].Height);
         const D3DMATRIX& proj = *(const D3DMATRIX*)vp->mProjectionMatrix;
         const D3DXVECTOR4 projInfo = ProjInfo(proj, width, height);
-        effect->SetVector("vec4ProjInfo", &projInfo);
-        effect->SetFloat("fNearPlane", vp->mNearClip);
-        effect->SetFloat("fFarDivNear", vp->mFarClip / vp->mNearClip);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4ProjInfo"), &projInfo);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fNearPlane"), vp->mNearClip);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fFarDivNear"), vp->mFarClip / vp->mNearClip);
         {
             const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
             D3DXVECTOR4 toView[3];
@@ -3364,21 +3367,21 @@ private:
             const D3DXVECTOR4 worldX(toView[0].x, toView[1].x, toView[2].x, viewInv.m[3][0]);
             const D3DXVECTOR4 worldY(toView[0].y, toView[1].y, toView[2].y, viewInv.m[3][1]);
             const D3DXVECTOR4 worldZ(toView[0].z, toView[1].z, toView[2].z, viewInv.m[3][2]);
-            effect->SetVector("vec4WorldX", &worldX);
-            effect->SetVector("vec4WorldY", &worldY);
-            effect->SetVector("vec4WorldZ", &worldZ);
+            effect->SetVector(effect->GetParameterByName(nullptr, "vec4WorldX"), &worldX);
+            effect->SetVector(effect->GetParameterByName(nullptr, "vec4WorldY"), &worldY);
+            effect->SetVector(effect->GetParameterByName(nullptr, "vec4WorldZ"), &worldZ);
         }
         // The rings' clock wraps every 1000 s, where a frame's jump goes unseen among the rings.
         const D3DXVECTOR4 wet(R.fWetness * R.fWetGround, R.fWetGroundPuddles, rain, float(std::fmod(seconds, 1000.0)));
-        effect->SetVector("vec4Wet", &wet);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4Wet"), &wet);
         const D3DXVECTOR4 shape(1.0f / R.fWetGroundPuddleSize, R.fWetGroundRipples, 15.0f, R.fWetGroundDarkening);
-        effect->SetVector("vec4Shape", &shape);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4Shape"), &shape);
         const int mask = R.nWetGroundMaterials;
         const D3DXVECTOR4 allow0(float(mask & 1), float((mask >> 1) & 1), float((mask >> 2) & 1), float((mask >> 3) & 1));
         const D3DXVECTOR4 allow1(float((mask >> 4) & 1), float((mask >> 5) & 1), float((mask >> 6) & 1), float((mask >> 7) & 1));
-        effect->SetVector("vec4Allow0", &allow0);
-        effect->SetVector("vec4Allow1", &allow1);
-        effect->SetFloat("fDebug", float(R.nWetGroundDebug));
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4Allow0"), &allow0);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4Allow1"), &allow1);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fDebug"), float(R.nWetGroundDebug));
 
         // Saved besides what StateBackup keeps around OnGBufferEnd: the textures, sampler states and
         // constants the pass sets.
@@ -3420,7 +3423,7 @@ private:
 
         ProfilerScope timedPass(pDevice, kProfWetGroundPass);
         UINT passes = 0;
-        effect->SetTechnique("Wet");
+        effect->SetTechnique(effect->GetTechniqueByName("Wet"));
         effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
         effect->BeginPass(0);
         effect->CommitChanges();
@@ -3534,28 +3537,28 @@ private:
         const float width = float(desc.Width), height = float(desc.Height);
         const D3DMATRIX& proj = *(const D3DMATRIX*)vp->mProjectionMatrix;
         const D3DXVECTOR4 projInfo = ProjInfo(proj, width, height);
-        effect->SetVector("vec4ProjInfo", &projInfo);
-        effect->SetFloat("fNearPlane", vp->mNearClip);
-        effect->SetFloat("fFarDivNear", vp->mFarClip / vp->mNearClip);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4ProjInfo"), &projInfo);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fNearPlane"), vp->mNearClip);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fFarDivNear"), vp->mFarClip / vp->mNearClip);
         {
             D3DXVECTOR4 toView[3];
             WorldToViewRows(vp, toView);
             const D3DXVECTOR4 worldX(toView[0].x, toView[1].x, toView[2].x, viewInv.m[3][0]);
             const D3DXVECTOR4 worldY(toView[0].y, toView[1].y, toView[2].y, viewInv.m[3][1]);
             const D3DXVECTOR4 worldZ(toView[0].z, toView[1].z, toView[2].z, viewInv.m[3][2]);
-            effect->SetVector("vec4WorldX", &worldX);
-            effect->SetVector("vec4WorldY", &worldY);
-            effect->SetVector("vec4WorldZ", &worldZ);
+            effect->SetVector(effect->GetParameterByName(nullptr, "vec4WorldX"), &worldX);
+            effect->SetVector(effect->GetParameterByName(nullptr, "vec4WorldY"), &worldY);
+            effect->SetVector(effect->GetParameterByName(nullptr, "vec4WorldZ"), &worldZ);
         }
         const float invSize[2] = { 1.0f / width, 1.0f / height };
-        effect->SetFloatArray("vec2InvSize", invSize, 2);
+        effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2InvSize"), invSize, 2);
         const D3DXVECTOR4 glint(R.fLightsGGXGlints, R.fLightsGGXGlintsGloss, R.fLightsGGXGlintsSize, R.fLightsGGXGlintsMax);
-        effect->SetVector("vec4Glint", &glint);
-        effect->SetFloat("fLightCount", float(count));
-        effect->SetVectorArray("vec4LightPos", position, kLights);
-        effect->SetVectorArray("vec4LightDir", direction, kLights);
-        effect->SetVectorArray("vec4LightRight", right, kLights);
-        effect->SetVectorArray("vec4LightColour", colour, kLights);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4Glint"), &glint);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fLightCount"), float(count));
+        effect->SetVectorArray(effect->GetParameterByName(nullptr, "vec4LightPos"), position, kLights);
+        effect->SetVectorArray(effect->GetParameterByName(nullptr, "vec4LightDir"), direction, kLights);
+        effect->SetVectorArray(effect->GetParameterByName(nullptr, "vec4LightRight"), right, kLights);
+        effect->SetVectorArray(effect->GetParameterByName(nullptr, "vec4LightColour"), colour, kLights);
 
         // Saved: the textures, sampler states, constants, shaders, render states and geometry the pass sets.
         static constexpr DWORD kSlots = 3;
@@ -3604,7 +3607,7 @@ private:
         pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
 
         UINT passes = 0;
-        effect->SetTechnique("Glints");
+        effect->SetTechnique(effect->GetTechniqueByName("Glints"));
         effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
         effect->BeginPass(0);
         effect->CommitChanges();
@@ -5316,8 +5319,10 @@ private:
             if (FAILED(ps->GetFunction(function.data(), &size)))
                 function.clear();
         }
+        // Large address aware, as the game is: without it D3DX takes a handle of a table above 2 GB for the name of a
+        // constant and reads it as a string, which crashed in GetConstantDesc
         ID3DXConstantTable* table = nullptr;
-        if (function.empty() || FAILED(D3DXGetShaderConstantTable(function.data(), &table)) || !table)
+        if (function.empty() || FAILED(D3DXGetShaderConstantTableEx(function.data(), D3DXCONSTTABLE_LARGEADDRESSAWARE, &table)) || !table)
             return samplers;
 
         D3DXCONSTANTTABLE_DESC tableDesc = {};
@@ -6233,10 +6238,10 @@ private:
         const D3DMATRIX& proj = *(const D3DMATRIX*)vp->mProjectionMatrix;
         const D3DXVECTOR4 projInfo = ProjInfo(proj, width, height);
         const float invViewportSize[] = { 1.0f / width, 1.0f / height };
-        effect->SetFloatArray("vec2InvViewportSize", invViewportSize, 2);
-        effect->SetVector("vec4ProjInfo", &projInfo);
-        effect->SetFloat("fNearPlane", vp->mNearClip);
-        effect->SetFloat("fFarDivNear", vp->mFarClip / vp->mNearClip);
+        effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2InvViewportSize"), invViewportSize, 2);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4ProjInfo"), &projInfo);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fNearPlane"), vp->mNearClip);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fFarDivNear"), vp->mFarClip / vp->mNearClip);
 
         const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
         D3DXVECTOR4 toView[3];
@@ -6244,9 +6249,9 @@ private:
         const D3DXVECTOR4 worldX(toView[0].x, toView[1].x, toView[2].x, viewInv.m[3][0]);
         const D3DXVECTOR4 worldY(toView[0].y, toView[1].y, toView[2].y, viewInv.m[3][1]);
         const D3DXVECTOR4 worldZ(toView[0].z, toView[1].z, toView[2].z, viewInv.m[3][2]);
-        effect->SetVector("vec4WorldX", &worldX);
-        effect->SetVector("vec4WorldY", &worldY);
-        effect->SetVector("vec4WorldZ", &worldZ);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4WorldX"), &worldX);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4WorldY"), &worldY);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4WorldZ"), &worldZ);
 
         if (!reflection)
             std::memcpy(R.CloudLastSkySun, &sun.x, sizeof(R.CloudLastSkySun));
@@ -6269,7 +6274,7 @@ private:
         // VolumetricCloudsDebug 15: the sun straight overhead, to test the sun's direction.
         if (R.nVolumetricCloudsDebug == 15)
             sun = D3DXVECTOR4(0.0f, 0.0f, 1.0f, 0.0f);
-        effect->SetFloatArray("vec3SunDir", &sun.x, 3);
+        effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3SunDir"), &sun.x, 3);
         float litColour[3], shadeColour[3], sunsetLit[3];
         for (int i = 0; i < 3; ++i)
         {
@@ -6291,7 +6296,7 @@ private:
         {
             const float skyHue[3] = { skyRefRecent ? R.fVolumetricCloudsSkyLight : 0.0f, skyRefRecent ? kCloudLitSkyHue : 0.0f,
                                       R.fVolumetricCloudsSaturation };
-            effect->SetFloatArray("vec3SkyHue", skyHue, 3);
+            effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3SkyHue"), skyHue, 3);
         }
         if (!skyRefRecent)
         {
@@ -6345,30 +6350,30 @@ private:
                 R.bCloudLastMoonlit = moonlit;
             }
         }
-        effect->SetFloatArray("vec3LitColour", litColour, 3);
-        effect->SetFloatArray("vec3ShadeColour", shadeColour, 3);
-        effect->SetFloatArray("vec3SunsetColour", sunsetLit, 3);
-        effect->SetFloat("fSilver", inscattering);
-        effect->SetFloat("fCeiling", ceiling);
+        effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3LitColour"), litColour, 3);
+        effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3ShadeColour"), shadeColour, 3);
+        effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3SunsetColour"), sunsetLit, 3);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fSilver"), inscattering);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fCeiling"), ceiling);
         {
             const float litLuma = 0.2126f * litColour[0] + 0.7152f * litColour[1] + 0.0722f * litColour[2];
-            effect->SetFloat("fSkyMatch", canReadScene && litLuma > 1e-4f ? R.fVolumetricCloudsSkyMatch * R.Cloud.skyMatch / litLuma : 0.0f);
+            effect->SetFloat(effect->GetParameterByName(nullptr, "fSkyMatch"), canReadScene && litLuma > 1e-4f ? R.fVolumetricCloudsSkyMatch * R.Cloud.skyMatch / litLuma : 0.0f);
         }
-        effect->SetFloat("fLightStrength", lightStrength);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fLightStrength"), lightStrength);
         // How high the sun (or the moon) stands: 0 up to 5 degrees, 1 from 35 up. With it low, the clouds
         // towards it are lit from behind: their bodies darker than the sky, down to 0.3 of their light
         // straight towards it, and the glow of their edges three times as strong. Through the day
         // nothing changes; nor across the sky from a low sun, where the clouds face its light. The
         // least of the light inside them stays: lowered with the sun, it darkened the sides the sun
         // lights too, grey where they should take its colour.
-        effect->SetFloat("fMinLight", R.fVolumetricCloudsMinLight);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fMinLight"), R.fVolumetricCloudsMinLight);
         {
             const float lowSun = std::clamp((sun.z - 0.0872f) / (0.5736f - 0.0872f), 0.0f, 1.0f);
             const float day = lowSun * lowSun * (3.0f - 2.0f * lowSun);
-            effect->SetFloat("fBacklight", 0.3f + 0.7f * day);
-            effect->SetFloat("fGlowBoost", 1.0f + 2.0f * (1.0f - day));
+            effect->SetFloat(effect->GetParameterByName(nullptr, "fBacklight"), 0.3f + 0.7f * day);
+            effect->SetFloat(effect->GetParameterByName(nullptr, "fGlowBoost"), 1.0f + 2.0f * (1.0f - day));
         }
-        effect->SetFloat("fMottle", R.fVolumetricCloudsMottle);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fMottle"), R.fVolumetricCloudsMottle);
         // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
         // towards white by VolumetricCloudsSunTint. The moon's is a cool white.
         {
@@ -6379,57 +6384,57 @@ private:
             if (luma > 1e-4f)
                 for (int i = 0; i < 3; ++i)
                     tint[i] = 1.0f + (std::clamp(sunColour[i] / luma, 0.0f, 2.0f) - 1.0f) * R.fVolumetricCloudsSunTint;
-            effect->SetFloatArray("vec3SunTint", tint, 3);
+            effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3SunTint"), tint, 3);
             // The glow is the sunlight straight through the cloud's edges: it takes the sun's hue
             // whole, gold in the evening, whatever VolumetricCloudsSunTint does to the lit sides.
             float glow[3];
             for (int i = 0; i < 3; ++i)
                 glow[i] = litColour[i] * (luma > 1e-4f ? std::clamp(sunColour[i] / luma, 0.0f, 2.0f) : 1.0f);
-            effect->SetFloatArray("vec3GlowColour", glow, 3);
+            effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3GlowColour"), glow, 3);
         }
         const D3DXVECTOR4 layer(R.Cloud.base, R.Cloud.thickness, 1.0f / R.fCloudShadowsScale, R.Cloud.coverage);
-        effect->SetVector("vec4Layer", &layer);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4Layer"), &layer);
         // The detail drifts with the wind too, half as fast, so the billows change as they go.
         const D3DXVECTOR4 wind(R.fCloudWindX, R.fCloudWindY, float(std::fmod(R.fCloudDetailDrift * 0.93, 1.0)),
                                float(std::fmod(R.fCloudDetailDrift * 0.37, 1.0)));
-        effect->SetVector("vec4Wind", &wind);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4Wind"), &wind);
         const D3DXVECTOR4 shape(R.fVolumetricCloudsDensity * R.Cloud.density, 1.0f / R.fVolumetricCloudsDetailScale,
                                 (std::min)(R.fVolumetricCloudsDetail * R.Cloud.detail, 1.5f),
                                 R.fVolumetricCloudsHaze * (1.0f - 0.6f * R.Cloud.stratus));
-        effect->SetVector("vec4Shape", &shape);
-        effect->SetFloat("fStratus", R.Cloud.stratus);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4Shape"), &shape);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fStratus"), R.Cloud.stratus);
         // The density's soft compressor, d (1 + k) / (1 + k d), its k from the base to the top: 3 to 12,
         // or 1 to 3 where the weather wants smoky edges.
         {
             const float compress[2] = { 3.0f - 2.0f * R.Cloud.softness, 12.0f - 9.0f * R.Cloud.softness };
-            effect->SetFloatArray("vec2Compress", compress, 2);
+            effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2Compress"), compress, 2);
         }
-        effect->SetFloat("fEvolution", float(std::fmod(R.fCloudEvolution, 1.0)));
-        effect->SetFloat("fTranslucency", (std::min)(R.fVolumetricCloudsTranslucency * R.Cloud.translucency, 0.9f));
-        effect->SetFloat("fLightAbsorption", R.fVolumetricCloudsAbsorption * R.Cloud.absorption);
-        effect->SetFloat("fGlow", R.Cloud.glow);
-        effect->SetFloat("fSunPower", R.Cloud.sunPower);
-        effect->SetFloat("fBaseRound", R.Cloud.baseRound);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fEvolution"), float(std::fmod(R.fCloudEvolution, 1.0)));
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fTranslucency"), (std::min)(R.fVolumetricCloudsTranslucency * R.Cloud.translucency, 0.9f));
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fLightAbsorption"), R.fVolumetricCloudsAbsorption * R.Cloud.absorption);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fGlow"), R.Cloud.glow);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fSunPower"), R.Cloud.sunPower);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fBaseRound"), R.Cloud.baseRound);
         // How far the billows are swept along the coarse noise at the tops, in their own size: more
         // in the wind. Up to 3 in a strong wind they drew out into parallel brush strokes.
-        effect->SetFloat("fCurl", std::clamp(0.8f + 0.4f * R.Cloud.wind, 1.0f, 1.8f));
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fCurl"), std::clamp(0.8f + 0.4f * R.Cloud.wind, 1.0f, 1.8f));
         // The wind's shear: a heap's top lies up to 120 m downwind of its base at the weather's
         // wind, at most 200 m; at 200 m, up to 300, the tops trailed off in streaks. The wind carries the map along (0.93, 0.37), so the clouds drift the
         // other way and their tops lean that way.
         {
             const float lean = (std::min)(120.0f * R.Cloud.wind, 200.0f) / R.fCloudShadowsScale;
             const float shear[2] = { 0.9293f * lean, 0.3697f * lean };
-            effect->SetFloatArray("vec2Shear", shear, 2);
+            effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2Shear"), shear, 2);
         }
-        effect->SetFloat("fDebug", float(R.nVolumetricCloudsDebug));
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fDebug"), float(R.nVolumetricCloudsDebug));
         // The golden ratio's fraction per frame: each frame's march noise falls between the last
         // ones', and temporal anti-aliasing averages it away.
-        effect->SetFloat("fFrameJitter", static_cast<float>(std::fmod(FrameHistory::Frame() * 0.6180339887, 1.0)));
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fFrameJitter"), static_cast<float>(std::fmod(FrameHistory::Frame() * 0.6180339887, 1.0)));
         // The outline wanders by up to 150 metres.
-        effect->SetFloat("fWarp", 150.0f / R.fCloudShadowsScale);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fWarp"), 150.0f / R.fCloudShadowsScale);
         const D3DXVECTOR4 morph(R.CloudMorphPhase(), R.kCloudMorphReach / R.fCloudShadowsScale, R.kCloudWeatherScale, R.kCloudWeatherReach);
-        effect->SetVector("vec4Morph", &morph);
-        effect->SetFloat("fMaxDistance", R.fVolumetricCloudsMaxDistance);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4Morph"), &morph);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fMaxDistance"), R.fVolumetricCloudsMaxDistance);
 
         IDirect3DSurface9* oldTarget = nullptr;
         IDirect3DSurface9* oldTarget1 = nullptr;
@@ -6491,20 +6496,20 @@ private:
             R.CloudSurf[0]->GetDesc(&halfDesc);
         const float halfWidth = halfSize ? float(halfDesc.Width) : width, halfHeight = halfSize ? float(halfDesc.Height) : height;
         const float depthTexel[2] = { 1.0f / width, 1.0f / height };
-        effect->SetFloatArray("vec2DepthTexel", depthTexel, 2);
+        effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2DepthTexel"), depthTexel, 2);
 
         // Last frame's view projection by columns: a direction (w 0) leaves its translation out.
         const bool history = halfSize && FrameHistory::CanReproject(R.nCloudAccumFrame);
         {
             const D3DXMATRIX& m = FrameHistory::Previous().ViewProjectionNoJitter;
             const D3DXVECTOR4 prevX(m._11, m._21, m._31, 0.0f), prevY(m._12, m._22, m._32, 0.0f), prevW(m._14, m._24, m._34, 0.0f);
-            effect->SetVector("vec4PrevX", &prevX);
-            effect->SetVector("vec4PrevY", &prevY);
-            effect->SetVector("vec4PrevW", &prevW);
+            effect->SetVector(effect->GetParameterByName(nullptr, "vec4PrevX"), &prevX);
+            effect->SetVector(effect->GetParameterByName(nullptr, "vec4PrevY"), &prevY);
+            effect->SetVector(effect->GetParameterByName(nullptr, "vec4PrevW"), &prevW);
             // A sixth of each frame: with the march's offset moving on every frame, its noise
             // averages out over about a dozen frames.
             const D3DXVECTOR4 historyInfo(history ? 1.0f : 0.0f, 0.15f, 1.0f / halfWidth, 1.0f / halfHeight);
-            effect->SetVector("vec4History", &historyInfo);
+            effect->SetVector(effect->GetParameterByName(nullptr, "vec4History"), &historyInfo);
         }
 
         struct ScreenVertex { float x, y, z, rhw; float u, v; };
@@ -6550,7 +6555,7 @@ private:
             D3DXVECTOR4 info = ProjInfo(proj, w, h);
             info.z -= x0 * info.x;
             info.w -= y0 * info.y;
-            effect->SetVector("vec4ProjInfo", &info);
+            effect->SetVector(effect->GetParameterByName(nullptr, "vec4ProjInfo"), &info);
             const ScreenVertex screenVertices[4] =
             {
                 { x0 - 0.5f,      y0 - 0.5f,     quadZ, 1.0f, 0.0f, 0.0f },
@@ -6578,7 +6583,7 @@ private:
             if (R.CloudSkyRefSurf)
             {
                 const D3DXVECTOR4 skyRefProj = ProjInfo(proj, 1.0f, 1.0f);
-                effect->SetVector("vec4SkyRefProj", &skyRefProj);
+                effect->SetVector(effect->GetParameterByName(nullptr, "vec4SkyRefProj"), &skyRefProj);
                 drawPass("CloudsSkyRef", R.CloudSkyRefSurf, 1.0f, 1.0f, true, kProfCloudsSkyRef);
                 R.nCloudSkyRefFrame = FrameHistory::Frame();
             }
