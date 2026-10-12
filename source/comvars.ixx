@@ -2351,6 +2351,17 @@ export namespace CPlayer
     uintptr_t (*findPlayerCar)() = nullptr;
 }
 
+// Vehicle box shadows (postfx) and the night shadow slots (nightshadows): a car a lamp shadows as a box is left out of
+// that lamp's shadow map, and does not make the lamp take a slot.
+export namespace VehicleBoxShadowsBridge
+{
+    // Render thread, as a lamp's slot is drawn: the cars the lamp at that position shadows as boxes, up to max. From
+    // then its boxes stay while it holds the slot, as its map no longer shows them.
+    int (*BoxedCars)(const float position[3], uintptr_t* cars, int max) = nullptr;
+    // How many cars a lamp shadows as boxes, 0 while box shadows are off.
+    std::atomic<int> perLamp{ 0 };
+}
+
 export namespace CPlayerPed
 {
     uintptr_t (__thiscall* GetControlFromPlayer)(uintptr_t playerPed) = nullptr;

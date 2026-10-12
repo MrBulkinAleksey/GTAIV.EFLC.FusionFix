@@ -40,7 +40,9 @@ module;
 #include "TrafficSignalNativeQueue.hpp"
 #include "FreshPageReadable.hpp"
 #include "PoolDescriptorSnapshots.hpp"
+#include <algorithm>
 #include <fstream>
+#include <vector>
 #include <atomic>
 #include <mutex>
 #include <intrin.h>
