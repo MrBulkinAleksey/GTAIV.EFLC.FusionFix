@@ -1012,12 +1012,16 @@ public:
     float fAmbientOcclusionGTAOThinOccluders = 0.5f;
     float fAmbientOcclusionTemporal = 0.9f;  // share of last frames' GTAO kept, 0 turns accumulation off
     bool bAmbientOcclusionMultiBounce = true;
+    // AmbientOcclusionHalfResolution: AO is worked out, accumulated and blurred at half the size and read back by
+    // depth when it is put on the screen
+    bool bAmbientOcclusionHalfRes = true;
 
     struct
     {
         D3DXHANDLE AOTexture2D, AOCamDepthTexture2D, DepthTex2D, NormalTex2D;
         D3DXHANDLE vec4WorldToView, fUseNormals, fGTAOStrength, fThinOccluders, vec2NoiseOffset, fMultiBounce, AlbedoTex2D;
         D3DXHANDLE AOHistoryTex2D, PrevDepthTex2D, MotionTex2D, vec4ViewToPrevClip, fUseMotion, vec2MotionJitter, fUsePrevDepth, vec2PrevDepthRange, fTemporalBlend;
+        D3DXHANDLE vec2AOTexelSize, fUpsample, fUpsampleMip;
 
         D3DXHANDLE vec2InvViewportSize;
         D3DXHANDLE fNearPlane;
@@ -1464,7 +1468,8 @@ public:
                          { &AOEffectHandles.MotionTex2D, "MotionTex2D" }, { &AOEffectHandles.vec4ViewToPrevClip, "vec4ViewToPrevClip" },
                          { &AOEffectHandles.fUseMotion, "fUseMotion" }, { &AOEffectHandles.vec2MotionJitter, "vec2MotionJitter" },
                          { &AOEffectHandles.fUsePrevDepth, "fUsePrevDepth" }, { &AOEffectHandles.vec2PrevDepthRange, "vec2PrevDepthRange" },
-                         { &AOEffectHandles.fTemporalBlend, "fTemporalBlend" } })
+                         { &AOEffectHandles.fTemporalBlend, "fTemporalBlend" }, { &AOEffectHandles.vec2AOTexelSize, "vec2AOTexelSize" },
+                         { &AOEffectHandles.fUpsample, "fUpsample" }, { &AOEffectHandles.fUpsampleMip, "fUpsampleMip" } })
                     *handle = AOEffect->GetParameterByName(nullptr, name);
                 AOEffectHandles.vec2InvViewportSize = AOEffect->GetParameterByName(nullptr, "vec2InvViewportSize");
                 AOEffectHandles.fNearPlane = AOEffect->GetParameterByName(nullptr, "fNearPlane");
@@ -1933,6 +1938,7 @@ public:
         fAmbientOcclusionGTAOThinOccluders = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOThinOccluders", 0.5f), 0.0f, 1.0f);
         fAmbientOcclusionTemporal = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOTemporal", 0.9f), 0.0f, 0.98f);
         bAmbientOcclusionMultiBounce = iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOMultiBounce", 1) != 0;
+        bAmbientOcclusionHalfRes = iniReader.ReadInteger("POSTFX", "AmbientOcclusionHalfResolution", 1) != 0;
 
         nAmbientOcclusionBlurPasses = std::max(0, nAmbientOcclusionBlurPasses);
         nAmbientOcclusionSamples = std::clamp(nAmbientOcclusionSamples, 0, 128);
@@ -3099,15 +3105,18 @@ private:
 
         aoDesc.mFormat = rage::GRCFMT_L8;
         aoDesc.mLevels = 1;
-        PostFxResources.AOTex = rage::CreateEmptyRenderTarget("AOTex", width, height, 8, aoDesc);
-        PostFxResources.AOBlurTex = rage::CreateEmptyRenderTarget("AOBlurTex", width, height, 8, aoDesc);
+        // At half size, the size of AOCamDepthTex's first mip
+        const auto aoWidth = PostFxResources.bAmbientOcclusionHalfRes ? std::max(1, int(width) >> 1) : int(width);
+        const auto aoHeight = PostFxResources.bAmbientOcclusionHalfRes ? std::max(1, int(height) >> 1) : int(height);
+        PostFxResources.AOTex = rage::CreateEmptyRenderTarget("AOTex", aoWidth, aoHeight, 8, aoDesc);
+        PostFxResources.AOBlurTex = rage::CreateEmptyRenderTarget("AOBlurTex", aoWidth, aoHeight, 8, aoDesc);
         if (PostFxResources.fAmbientOcclusionTemporal > 0.0f)
         {
             // 16-bit: blending a small share of each frame into 8 bits gets stuck on its steps.
             aoDesc.mFormat = rage::GRCFMT_R16F;
             static const char* names[2] = { "AOAccumTex0", "AOAccumTex1" };
             for (int i = 0; i < 2; ++i)
-                PostFxResources.AOAccumTex[i] = rage::CreateEmptyRenderTarget(names[i], width, height, 16, aoDesc, PostFxResources.AOAccumSurf[i]);
+                PostFxResources.AOAccumTex[i] = rage::CreateEmptyRenderTarget(names[i], aoWidth, aoHeight, 16, aoDesc, PostFxResources.AOAccumSurf[i]);
         }
 
         {
@@ -7064,6 +7073,28 @@ private:
                 effect->EndPass();
                 ProfilerMark(pDevice, kProfAODepth, false);
 
+                // From here to the output, at the size of the AO targets: half with AmbientOcclusionHalfResolution
+                D3DSURFACE_DESC aoDesc{};
+                aoSurf->GetDesc(&aoDesc);
+                const bool half = aoDesc.Width < UINT(width);
+                const float aoWidth = half ? float(aoDesc.Width) : width, aoHeight = half ? float(aoDesc.Height) : height;
+                ScreenVertex aoVertices[4] =
+                {
+                    { -0.5f,           -0.5f,            0.0f, 1.0f, 0.0f, 0.0f },
+                    { -0.5f,           aoHeight - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+                    { aoWidth - 0.5f, -0.5f,            0.0f, 1.0f, 1.0f, 0.0f },
+                    { aoWidth - 0.5f, aoHeight - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+                };
+                const float aoTexel[] = { 1.0f / aoWidth, 1.0f / aoHeight };
+                if (half)
+                {
+                    D3DVIEWPORT9 aoVp = vp;
+                    aoVp.Width = DWORD(aoWidth);
+                    aoVp.Height = DWORD(aoHeight);
+                    pDevice->SetViewport(&aoVp);
+                    SetTargetSize(effect, h, *(const D3DMATRIX*)currGrcViewport->mProjectionMatrix, aoWidth, aoHeight);
+                }
+
                 pDevice->SetRenderTarget(0, aoSurf);
                 pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_COLORVALUE(1.0, 0.0, 0, 1.0), 1.0f, 0);
 
@@ -7094,14 +7125,14 @@ private:
                 }
                 effect->SetFloat(h.fBias, PostFxResources.fAmbientOcclusionBias);
                 effect->SetFloat(h.fIntensity, PostFxResources.fAmbientOcclusionIntensity);
-                effect->SetFloat(h.fProjScale, proj._22 * 0.5f * height);
+                effect->SetFloat(h.fProjScale, proj._22 * 0.5f * aoHeight);
 
                 effect->CommitChanges();
 
                 ProfilerMark(pDevice, kProfAOMain, true);
                 effect->BeginPass(gtao ? 5 : 2); // 1 SAO, 2 GTAO
                 BindEffectSamplers(pDevice, effect);
-                pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, aoVertices, sizeof(ScreenVertex));
                 effect->EndPass();
                 ProfilerMark(pDevice, kProfAOMain, false);
 
@@ -7138,7 +7169,7 @@ private:
                     ProfilerMark(pDevice, kProfAOTemporal, true);
                     effect->BeginPass(6);
                     BindEffectSamplers(pDevice, effect);
-                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, aoVertices, sizeof(ScreenVertex));
                     effect->EndPass();
                     ProfilerMark(pDevice, kProfAOTemporal, false);
 
@@ -7149,8 +7180,8 @@ private:
                 else
                     R.nAOAccumFrame = 0;
 
-                float hor[2] = { invViewportSize[0] * PostFxResources.fAmbientOcclusionBlurRadius, 0.0 };
-                float ver[2] = { 0.0, invViewportSize[1] * PostFxResources.fAmbientOcclusionBlurRadius };
+                float hor[2] = { aoTexel[0] * PostFxResources.fAmbientOcclusionBlurRadius, 0.0 };
+                float ver[2] = { 0.0, aoTexel[1] * PostFxResources.fAmbientOcclusionBlurRadius };
                 ProfilerMark(pDevice, kProfAOBlur, true);
                 effect->BeginPass(3);
                 for (auto i = 0; i < PostFxResources.nAmbientOcclusionBlurPasses; ++i)
@@ -7161,7 +7192,7 @@ private:
                     effect->CommitChanges();
 
                     BindEffectSamplers(pDevice, effect);
-                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, aoVertices, sizeof(ScreenVertex));
 
                     pDevice->SetRenderTarget(0, aoSurf);
                     effect->SetTexture(h.AOTexture2D, aoBlurTex); // blur pass 2
@@ -7169,14 +7200,23 @@ private:
                     effect->CommitChanges();
 
                     BindEffectSamplers(pDevice, effect);
-                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, aoVertices, sizeof(ScreenVertex));
                 }
                 effect->EndPass();
                 ProfilerMark(pDevice, kProfAOBlur, false);
 
-                // final output
+                // final output, at the screen's size again
                 pDevice->SetRenderTarget(0, SpecularRT);
                 effect->SetTexture(h.AOTexture2D, PostFxResources.nAmbientOcclusionBlurPasses > 0 ? aoTex : blurSource);
+                effect->SetFloatArray(h.vec2AOTexelSize, aoTexel, 2);
+                effect->SetFloat(h.fUpsample, half ? 1.0f : 0.0f);
+                effect->SetFloat(h.fUpsampleMip, half && PostFxResources.nAmbientOcclusionMaxMipLevel > 1 ? 1.0f : 0.0f);
+                if (half)
+                {
+                    pDevice->SetViewport(&vp);
+                    SetTargetSize(effect, h, *(const D3DMATRIX*)currGrcViewport->mProjectionMatrix, width, height);
+                }
+                effect->CommitChanges();
 
                 ProfilerMark(pDevice, kProfAOApply, true);
                 effect->BeginPass(4);

@@ -123,6 +123,11 @@ uniform float2 vec2MotionJitter;
 uniform float fUsePrevDepth;
 uniform float2 vec2PrevDepthRange; // fNearPlane and fFarDivNear of the scene PrevDepthTex was drawn in
 uniform float fTemporalBlend;      // share of last frame's GTAO kept, 0 while there is none to keep
+// AmbientOcclusionHalfResolution: AOTexture is half the size of the screen OutputAO draws to, read back by
+// depth (see UpsampleAO); vec2AOTexelSize its texel, fUpsampleMip the mip of AOCamDepthTexture of its size.
+uniform float2 vec2AOTexelSize;
+uniform float fUpsample;
+uniform float fUpsampleMip;
 
 #ifndef NUM_SAMPLES
 #define NUM_SAMPLES 9
@@ -516,9 +521,33 @@ float4 BlurAOToBuffer_PS(float2 uv : TEXCOORD0) : COLOR0
     return float4(blur.x, blur.x, blur.x, 1);
 }
 
+// The four half-size texels around a pixel, each weighed by how near its depth is to the pixel's own, so
+// occlusion doesn't bleed across edges as a bilinear read would; plain bilinear where none is near.
+float UpsampleAO(float2 uv)
+{
+    float z = tex2Dlod(AOCamDepthTexture, float4(uv, 0, 0)).r;
+    float2 pos = uv / vec2AOTexelSize - 0.5;
+    float2 base = (floor(pos) + 0.5) * vec2AOTexelSize;
+    float2 f = frac(pos);
+    float4 bilinear = float4((1 - f.x) * (1 - f.y), f.x * (1 - f.y), (1 - f.x) * f.y, f.x * f.y);
+    float2 offsets[4] = { float2(0, 0), float2(1, 0), float2(0, 1), float2(1, 1) };
+    float sum = 0, weights = 0;
+    [unroll]
+    for (int i = 0; i < 4; i++)
+    {
+        float2 tap = base + offsets[i] * vec2AOTexelSize;
+        float a = tex2Dlod(AOTexture, float4(tap, 0, 0)).r;
+        float zt = tex2Dlod(AOCamDepthTexture, float4(tap, 0, fUpsampleMip)).r;
+        float w = bilinear[i] / (abs(zt - z) / max(abs(z), 0.01) * 50.0 + 0.001);
+        sum += a * w;
+        weights += w;
+    }
+    return weights > 0 ? sum / weights : tex2Dlod(AOTexture, float4(uv, 0, 0)).r;
+}
+
 float4 OutputAO_PS(float2 uv : TEXCOORD0) : COLOR0
 {
-    float ao = tex2D(AOTexture, uv).r;
+    float ao = fUpsample > 0.0 ? UpsampleAO(uv) : tex2D(AOTexture, uv).r;
     [branch]
     if (fMultiBounce > 0.0)
         ao = MultiBounce(ao, dot(tex2Dlod(AlbedoTex, float4(uv, 0, 0)).rgb, float3(0.2126, 0.7152, 0.0722)));
