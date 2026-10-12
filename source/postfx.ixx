@@ -591,6 +591,7 @@ public:
     int nVolumetricCloudsDebug = 0;
     // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
     bool bVolumetricCloudsReflections = true;
+    bool bVolumetricCloudsReflectionsAtNight = false;
     float fVolumetricCloudsReflectionBrightness = 1.0f;
 
     // The cloud layer this frame (UpdateCloudLayer): from the weather's preset, blended through the
@@ -1852,6 +1853,7 @@ public:
         fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.35f), 0.05f, 3.0f);
         nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 15);
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
+        bVolumetricCloudsReflectionsAtNight = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflectionsAtNight", 0) != 0;
         fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
     }
 
@@ -6128,6 +6130,11 @@ private:
             return skip("no scene texture");
         if (reflection && !R.bVolumetricCloudsReflections)
             return skip("VolumetricCloudsReflections 0");
+        // At night the clouds are black against a black sky and their reflections showed nothing, at some 2.6 GPU
+        // milliseconds a frame in a profile: from 22:00 to 05:00 the reflections keep the game's sky
+        if (reflection && !R.bVolumetricCloudsReflectionsAtNight && CClock::ms_nGameClockHours &&
+            (CClock::GetHours() >= 22 || CClock::GetHours() < 5))
+            return skip("night, VolumetricCloudsReflectionsAtNight 0");
         if (!R.mDepthRT || !R.mDepthRT->mD3DTexture)
             return skip("no depth texture");
         rage::grcViewport* vp = rage::GetCurrentViewport();
