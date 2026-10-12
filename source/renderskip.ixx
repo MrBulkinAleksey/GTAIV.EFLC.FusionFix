@@ -53,6 +53,8 @@ export namespace RenderSkip
 
     float SunElevation();   // degrees, NaN while the sky has given none
     bool SunIsLow();        // the sun's shadows too faint to draw: the cascades and the clouds in reflections go
+    bool SunShadowsDrawn(); // the game drew the sun's cascades in the last few frames, which it does only outside, and they
+                            // weren't left out for a low sun
 }
 
 namespace RenderSkip
@@ -635,6 +637,12 @@ namespace RenderSkip
     bool SunIsLow()
     {
         return IsNight();
+    }
+
+    bool SunShadowsDrawn()
+    {
+        // cascadeFrame moves on only past CascadeDrop's night check
+        return cascadeFrame != ~0u && TemporalAA::SceneFrame - cascadeFrame <= 3;
     }
 }
 

@@ -51,6 +51,7 @@ import common;
 import comvars;
 import natives;
 import settings;
+import renderskip;
 
 bool bHighResolutionNightShadows = false;
 static bool bCloseHeadlightRelevance = false;
@@ -340,6 +341,17 @@ static void __fastcall sub_D77A00(void* _this, void* edx)
     return shsub_D77A00.unsafe_fastcall(_this, edx);
 }
 
+// LampShadowsInDaylight = 0: the map's lamps (their 2dfx lights, in CE 0xc1e615 where their shadow bits are made) cast no
+// shadows while the sun's cascades are drawn, outside by day: at dusk and dawn the lamps' shadows took some 4 GPU ms on
+// top of the sun's 6, where the sun's light washed them out. Inside, where the game draws no cascades, and once the sun is
+// under CascadeSunElevation, the lamps keep theirs; headlights are not the map's lamps and keep theirs too.
+static bool bLampShadowsInDaylight = false;
+
+static bool LampShadowsOffBySun()
+{
+    return !bLampShadowsInDaylight && RenderSkip::SunShadowsDrawn();
+}
+
 int GetNightShadowQuality()
 {
     static auto NightShadows = FusionFixSettings.GetRef("PREF_SHADOW_DENSITY");
@@ -406,6 +418,7 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
+            bLampShadowsInDaylight = iniReader.ReadInteger("SHADOWS", "LampShadowsInDaylight", 0) != 0;
             if (iniReader.ReadInteger("SHADOWS", "ExperimentalCrashDiagnostics", 0) != 0)
             {
                 const auto crashPath = iniReader.GetIniPath().parent_path() /
@@ -662,9 +675,9 @@ public:
                 {
                     static auto FlagsHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
                     {
-                        if (!bExtraNightShadows)
+                        if (!bExtraNightShadows || LampShadowsOffBySun())
                         {
-                            if ((*(uint32_t*)(regs.edi + 0x4C) & 0x8000000) != 0) // Check if flag 134217728 exists
+                            if (LampShadowsOffBySun() || (*(uint32_t*)(regs.edi + 0x4C) & 0x8000000) != 0) // Check if flag 134217728 exists
                             {
                                 regs.ecx &= ~2; // Subtract static shadows
                                 regs.ecx &= ~4; // Subtract dynamic shadows
@@ -678,9 +691,9 @@ public:
                     pattern = hook::pattern("E8 ? ? ? ? 0F B6 46 ? F3 0F 10 44 24");
                     static auto FlagsHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
                     {
-                        if (!bExtraNightShadows)
+                        if (!bExtraNightShadows || LampShadowsOffBySun())
                         {
-                            if ((*(uint32_t*)(regs.esi + 0x4C) & 0x8000000) != 0) // Check if flag 134217728 exists
+                            if (LampShadowsOffBySun() || (*(uint32_t*)(regs.esi + 0x4C) & 0x8000000) != 0) // Check if flag 134217728 exists
                             {
                                 regs.ebx &= ~2; // Subtract static shadows
                                 regs.ebx &= ~4; // Subtract dynamic shadows
