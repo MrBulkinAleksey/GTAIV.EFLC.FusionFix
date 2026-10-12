@@ -2,6 +2,7 @@ module;
 
 #include <common.hxx>
 #include "FusionLog.hpp"
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -54,8 +55,9 @@ namespace RenderSkip
     constexpr float TurnCos = 0.99966f;     // 1.5 degrees
     constexpr float MoveSquared = 1.0f;     // metres
 
-    enum Kind : uint8_t { None, CascadeTarget, CascadeAtlas, WaterReflection, ReflectionMap, Kinds };
-    constexpr const char* KindNames[Kinds] = { "other", "cascades", "cascade atlas", "water reflection", "reflection map" };
+    enum Kind : uint8_t { None, CascadeTarget, CascadeAtlas, WaterReflection, ReflectionMap, GBuffer, LampShadows, LitScene, Mirror, Kinds };
+    constexpr const char* KindNames[Kinds] = { "other", "cascades", "cascade atlas", "water reflection", "reflection map", "g-buffer",
+        "lamp shadows", "lit scene", "mirror" };
 
     // A pass drawn every other frame: the scene frame it was decided for, and where the camera was when it was drawn
     struct HalfRate
@@ -142,6 +144,14 @@ namespace RenderSkip
                 kind = WaterReflection;
             else if (!strcmp(name, "REFLECTION_MAP_COLOUR"))
                 kind = ReflectionMap;
+            else if (!strcmp(name, "_DEFERRED_GBUFFER_0_") || !strcmp(name, "_DEFERRED_GBUFFER_2_"))
+                kind = GBuffer;
+            else if (!strcmp(name, "SHADOW_MAP_COLOUR_POINT"))
+                kind = LampShadows;
+            else if (!strcmp(name, "FullScreenCopy"))
+                kind = LitScene;
+            else if (!strcmp(name, "MIRROR_RT"))
+                kind = Mirror;
         }
         return kind;
     }
@@ -505,10 +515,20 @@ namespace RenderSkip
     }
 
 
-    bool DropDraw()
+    // RenderSkipDrawLog: the draws and primitives each pass takes, summed until the log takes them
+    bool bDrawLog = false;
+    std::atomic<uint32_t> drawsBy[Kinds]{}, primitivesBy[Kinds]{};
+
+    bool DropDraw(UINT primitives)
     {
         if (Tracing())
             traceDraws++;
+        if (bDrawLog)
+        {
+            Kind kind = depth > 0 ? stack[depth - 1].kind : None;
+            drawsBy[kind].fetch_add(1, std::memory_order_relaxed);
+            primitivesBy[kind].fetch_add(primitives, std::memory_order_relaxed);
+        }
         if (drop == Drop::Nothing)
             return false;
         dropped[stack[depth - 1].kind]++;
@@ -517,23 +537,23 @@ namespace RenderSkip
 
     HRESULT __stdcall DrawPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT start, UINT count)
     {
-        return DropDraw() ? D3D_OK : RealDrawPrimitive(device, type, start, count);
+        return DropDraw(count) ? D3D_OK : RealDrawPrimitive(device, type, start, count);
     }
 
     HRESULT __stdcall DrawIndexedPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count)
     {
-        return DropDraw() ? D3D_OK : RealDrawIndexedPrimitive(device, type, base, minIndex, vertices, start, count);
+        return DropDraw(count) ? D3D_OK : RealDrawIndexedPrimitive(device, type, base, minIndex, vertices, start, count);
     }
 
     HRESULT __stdcall DrawPrimitiveUP(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT count, const void* data, UINT stride)
     {
-        return DropDraw() ? D3D_OK : RealDrawPrimitiveUP(device, type, count, data, stride);
+        return DropDraw(count) ? D3D_OK : RealDrawPrimitiveUP(device, type, count, data, stride);
     }
 
     HRESULT __stdcall DrawIndexedPrimitiveUP(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT minIndex, UINT vertices, UINT count, const void* indices,
         D3DFORMAT format, const void* data, UINT stride)
     {
-        return DropDraw() ? D3D_OK : RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
+        return DropDraw(count) ? D3D_OK : RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
     }
 
     HRESULT __stdcall Clear(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR colour, float z, DWORD stencil)
@@ -616,6 +636,7 @@ public:
             bFarCascadesHalfRate = iniReader.ReadInteger("SHADOWS", "FarCascadesHalfRate", 1) != 0;
             bMidCascadeHalfRate = iniReader.ReadInteger("SHADOWS", "MidCascadeHalfRate", 0) != 0;
             bTrace = iniReader.ReadInteger("MISC", "RenderSkipTrace", 0) != 0;
+            bDrawLog = iniReader.ReadInteger("MISC", "RenderSkipDrawLog", 0) != 0;
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
             if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
                 pCamera = *camera.get_first<float*>(12);
@@ -647,7 +668,7 @@ public:
 
         FusionFix::onGameInitEvent() += []()
         {
-            if (bCascadesAtNight && !bReflectionsHalfRate && !bFarCascadesHalfRate && !bMidCascadeHalfRate && !bTrace)
+            if (bCascadesAtNight && !bReflectionsHalfRate && !bFarCascadesHalfRate && !bMidCascadeHalfRate && !bTrace && !bDrawLog)
                 return;
             bool installed = Install();
             FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, the far ones by day %s, reflections %s\n",
@@ -669,6 +690,20 @@ public:
             }
             if (bMatrixTrace && bFollow && frames == 1200)
                 matrixTraceFrom = passSeq + 2;
+            // Every 60 frames: draws and thousands of primitives a frame by pass, and where the camera is, to see what grows
+            if (bDrawLog && frames % 60 == 0)
+            {
+                std::string line;
+                for (int kind = 0; kind < Kinds; kind++)
+                {
+                    uint32_t draws = drawsBy[kind].exchange(0), primitives = primitivesBy[kind].exchange(0);
+                    if (draws)
+                        line += std::format("{} {}/{}k; ", KindNames[kind], draws / 60, primitives / 60 / 1000);
+                }
+                if (pCamera)
+                    line += std::format("camera {:.0f} {:.0f} {:.0f}", pCamera[0], pCamera[1], pCamera[2]);
+                FusionLog::WriteText("RenderSkip", "Draws", line);
+            }
             if (frames % 3600)
                 return;
             std::string text;
