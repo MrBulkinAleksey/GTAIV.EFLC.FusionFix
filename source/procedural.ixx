@@ -19,7 +19,6 @@ export module procedural;
 import common;
 import comvars;
 import settings;
-import reflectioncull;
 
 // Grass and procedural props ([PROCEDURAL] in the ini, Grass & Props Distance in Display > Advanced).
 //
@@ -1263,7 +1262,7 @@ public:
             }
 
             // Render lists, where the shadow phases are dropped for entities with 0x10000: esi the entity,
-            // ecx its phases (the second also keeps them at [esp+0x28]); the small and far lose the reflections there too
+            // ecx its phases (the second also keeps them at [esp+0x28])
             pattern = hook::pattern("85 0D ? ? ? ? 75 ? 0F B6 46 63 3D EF 00 00 00");
             auto listA = hook::pattern("F7 43 40 00 01 00 00 F3 0F 10 47 04");
             auto listB = hook::pattern("89 4C 24 28 A9 00 00 00 08");
@@ -1273,11 +1272,11 @@ public:
                 pScenePhase = *listB.get_first<uint32_t*>(0xD); // test [0x159af24], edx after the je
                 static auto ListAHook = safetyhook::create_mid(listA.get_first(0), [](SafetyHookContext& regs)
                 {
-                    regs.ecx = ReflectionCull::Drop(regs.esi, DropReflections(regs.esi, uint32_t(regs.ecx)));
+                    regs.ecx = DropReflections(regs.esi, uint32_t(regs.ecx));
                 });
                 static auto ListBHook = safetyhook::create_mid(listB.get_first(4), [](SafetyHookContext& regs)
                 {
-                    regs.ecx = ReflectionCull::Drop(regs.esi, DropReflections(regs.esi, uint32_t(regs.ecx)));
+                    regs.ecx = DropReflections(regs.esi, uint32_t(regs.ecx));
                     *(uint32_t*)(regs.esp + 0x28) = uint32_t(regs.ecx);
                 });
             }
