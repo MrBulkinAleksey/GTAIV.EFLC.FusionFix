@@ -870,7 +870,7 @@ public:
     float fSSRTowardCamera = 0.0f;
     float fSSRReflectionBlur = 0.0f;
     // ScreenSpaceReflectionsStepPixels: pixels of a ray on the march's target per step, 2 by default.
-    float fSSRStepPixels = 2.0f;
+    float fSSRStepPixels = 3.0f;
     // ScreenSpaceReflectionsMarchFullDepth (temporary, live): the march steps through the full size
     // depth instead of SSRMarchDepthTex, to compare the two.
     bool bSSRMarchFullDepth = false;
@@ -975,7 +975,7 @@ public:
         }
         return TransparentTexture;
     }
-    int nSSRSteps = 32;
+    int nSSRSteps = 24;
     int nSSRRefineSteps = 8;
     float fSSRMaxDistance = 24.0f;
     float fSSRThickness = 0.3f;
@@ -1007,7 +1007,7 @@ public:
     float fAmbientOcclusionBlurRadius = 2.0f;
     // GTAO (AO.fx, Ambient Occlusion: GTAO in the graphics menu): slices through the view
     // direction and steps per side.
-    int nAmbientOcclusionGTAOSlices = 3;
+    int nAmbientOcclusionGTAOSlices = 2;
     int nAmbientOcclusionGTAOSteps = 4;
     float fAmbientOcclusionGTAOStrength = 1.0f;
     float fAmbientOcclusionGTAOThinOccluders = 0.5f;
@@ -1802,7 +1802,7 @@ public:
         fLightsGGXMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXMax", 2.0f), 0.1f, 16.0f);
         fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 1.5f), 0.0f, 8.0f);
-        fSSRStepPixels = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStepPixels", 2.0f), 1.0f, 8.0f);
+        fSSRStepPixels = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStepPixels", 3.0f), 1.0f, 8.0f);
         fSSRDenoiseRadius = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsSmoothing", 2.0f), 0.0f, 8.0f);
         bSSRPassThinObjects = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsPastThinObjects", 1) != 0;
         bSSRStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsStepJitter", 1) != 0;
@@ -1871,7 +1871,7 @@ public:
 
         bEnablePreAlphaDepth = iniReader.ReadInteger("POSTFX", "EnablePreAlphaDepth", 1) != 0;
 
-        nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 32), 4, 128);
+        nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 24), 4, 128);
         nSSRRefineSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsRefineSteps", 8), 0, 16);
         fSSRMaxDistance = std::max(1.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsMaxDistance", 24.0f));
         fSSRThickness = std::max(0.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsThickness", 0.3f));
@@ -1929,7 +1929,7 @@ public:
         nAmbientOcclusionMaxMipLevel = iniReader.ReadInteger("POSTFX", "AmbientOcclusionMaxMipLevel", 5);
         fAmbientOcclusionFarClip = iniReader.ReadFloat("POSTFX", "AmbientOcclusionFarClip", 150.0f);
         fAmbientOcclusionBlurRadius = iniReader.ReadFloat("POSTFX", "AmbientOcclusionBlurRadius", 2.0f);
-        nAmbientOcclusionGTAOSlices = std::clamp(iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOSlices", 3), 1, 8);
+        nAmbientOcclusionGTAOSlices = std::clamp(iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOSlices", 2), 1, 8);
         nAmbientOcclusionGTAOSteps = std::clamp(iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOSteps", 4), 1, 16);
         fAmbientOcclusionGTAOStrength = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOStrength", 1.0f), 0.0f, 4.0f);
         fAmbientOcclusionGTAOThinOccluders = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOThinOccluders", 0.5f), 0.0f, 1.0f);
