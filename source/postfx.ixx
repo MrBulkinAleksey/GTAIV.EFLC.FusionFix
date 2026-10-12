@@ -593,6 +593,10 @@ public:
     bool bVolumetricCloudsReflections = true;
     bool bVolumetricCloudsReflectionsAtNight = false;
     float fVolumetricCloudsReflectionBrightness = 1.0f;
+    // VolumetricCloudsReflectionsHalfResolution: the reflections' clouds worked out at half size and laid over at full
+    bool bVolumetricCloudsReflectionsHalfRes = true;
+    IDirect3DTexture9* CloudReflectionHalfTex = nullptr;
+    IDirect3DSurface9* CloudReflectionHalfSurf = nullptr;
 
     // The cloud layer this frame (UpdateCloudLayer): from the weather's preset, blended through the
     // game's weather change, or from the VolumetricClouds* settings with VolumetricCloudsWeather 0.
@@ -1865,6 +1869,7 @@ public:
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
         bVolumetricCloudsReflectionsAtNight = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflectionsAtNight", 0) != 0;
         fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
+        bVolumetricCloudsReflectionsHalfRes = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflectionsHalfResolution", 1) != 0;
     }
 
     void Readini()
@@ -2889,6 +2894,8 @@ private:
             }
         }
         PostFxResources.nCloudAccumFrame = 0;
+        SAFE_RELEASE(PostFxResources.CloudReflectionHalfSurf);
+        SAFE_RELEASE(PostFxResources.CloudReflectionHalfTex);
         SAFE_RELEASE(PostFxResources.CloudSkyRefSurf);
         if (PostFxResources.CloudSkyRefTex)
         {
@@ -6125,6 +6132,31 @@ private:
         { D3DRS_COLORWRITEENABLE1, 0xF },
     };
 
+    // The reflections' half size target, made for the reflection's viewport and made again when that changes size
+    static bool ReflectionHalfTarget(IDirect3DDevice9* pDevice, float width, float height)
+    {
+        auto& R = PostFxResources;
+        const UINT w = (std::max)(1u, UINT(width) / 2), h = (std::max)(1u, UINT(height) / 2);
+        if (R.CloudReflectionHalfSurf)
+        {
+            D3DSURFACE_DESC desc = {};
+            R.CloudReflectionHalfSurf->GetDesc(&desc);
+            if (desc.Width == w && desc.Height == h)
+                return true;
+            SAFE_RELEASE(R.CloudReflectionHalfSurf);
+            SAFE_RELEASE(R.CloudReflectionHalfTex);
+        }
+        if (FAILED(pDevice->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &R.CloudReflectionHalfTex, nullptr)) ||
+            !R.CloudReflectionHalfTex)
+        {
+            R.CloudReflectionHalfTex = nullptr;
+            R.bVolumetricCloudsReflectionsHalfRes = false;
+            return false;
+        }
+        R.CloudReflectionHalfTex->GetSurfaceLevel(0, &R.CloudReflectionHalfSurf);
+        return R.CloudReflectionHalfSurf != nullptr;
+    }
+
     // Blends the volumetric clouds (Clouds.fx) into the lit scene, from the fog pass before it reads
     // the scene; with reflection, into the reflection map's target right after its sky
     // (DrawSkyReflection), at full size, on the sky only by the depth test, at the brightness of
@@ -6531,6 +6563,7 @@ private:
         }
 
         struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        IDirect3DTexture9* reflectionHalf = nullptr;    // while CloudsUpscale lays it over the reflection
         auto bindTextures = [&](bool readScene, bool readSkyRef, bool readMarch)
         {
             // The samplers have fixed registers: s0 depth, s1 coverage, s2 detail, s3 this frame's
@@ -6541,7 +6574,7 @@ private:
             SetTextureBoth(pDevice, 1, coverage);
             SetTextureBoth(pDevice, 2, detail);
             SetTextureBoth(pDevice, 3, halfSize && !readMarch ? R.CloudTex[0]->mD3DTexture : nullptr);
-            SetTextureBoth(pDevice, 4, halfSize ? R.CloudTex[prevAccum]->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 4, halfSize ? R.CloudTex[prevAccum]->mD3DTexture : reflectionHalf);
             SetTextureBoth(pDevice, 5, halfSize ? R.CloudTex[nextAccum]->mD3DTexture : nullptr);
             SetTextureBoth(pDevice, 6, readScene ? sceneBase : nullptr);
             SetTextureBoth(pDevice, 7, readSkyRef && R.CloudSkyRefTex ? R.CloudSkyRefTex->mD3DTexture : nullptr);
@@ -6615,6 +6648,19 @@ private:
             drawPass("CloudsComposite", sceneSurface, width, height, true, kProfCloudsComposite);
             R.nCloudAccumIndex ^= 1;
             R.nCloudAccumFrame = FrameHistory::Frame();
+        }
+        else if (reflection && R.bVolumetricCloudsReflectionsHalfRes && ReflectionHalfTarget(pDevice, width, height))
+        {
+            // Into the half size target on its own, every pixel (the reflection's depth buffer is of its own size),
+            // then over the reflection where its depth is the sky's
+            D3DSURFACE_DESC halfDesc = {};
+            R.CloudReflectionHalfSurf->GetDesc(&halfDesc);
+            pDevice->SetRenderState(D3DRS_ZENABLE, D3DZB_FALSE);
+            drawPass("Clouds", R.CloudReflectionHalfSurf, float(halfDesc.Width), float(halfDesc.Height), false, kProfCloudsMarch);
+            pDevice->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+            reflectionHalf = R.CloudReflectionHalfTex;
+            drawPass("CloudsUpscale", sceneSurface, width, height, true, kProfCloudsComposite);
+            reflectionHalf = nullptr;
         }
         else
             drawPass("Clouds", sceneSurface, width, height, true, kProfCloudsMarch);
