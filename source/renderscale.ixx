@@ -392,16 +392,17 @@ namespace
 
     SafetyHookInline shSetGlobalScreenSize{};
 
-    // globalScreenSize = (width, height, 1 / width, 1 / height)
+    // globalScreenSize = (width, height, 1 / width, 1 / height). Set for every entity drawn: the original is called
+    // without SafetyHook's lock, which took some 2% of the render thread in a profile
     void __cdecl SetGlobalScreenSize(const float* size)
     {
         if (bActive && bInScene && size && size[0] == static_cast<float>(DisplayWidth) && size[1] == static_cast<float>(DisplayHeight))
         {
             float scaled[2] = { static_cast<float>(RenderWidth), static_cast<float>(RenderHeight) };
-            shSetGlobalScreenSize.ccall(scaled);
+            shSetGlobalScreenSize.unsafe_ccall(scaled);
             return;
         }
-        shSetGlobalScreenSize.ccall(size);
+        shSetGlobalScreenSize.unsafe_ccall(size);
     }
 
     void ApplyGlobalScreenSize(bool scene)
@@ -409,7 +410,7 @@ namespace
         if (!shSetGlobalScreenSize)
             return;
         float size[2] = { static_cast<float>(scene ? RenderWidth : DisplayWidth), static_cast<float>(scene ? RenderHeight : DisplayHeight) };
-        shSetGlobalScreenSize.ccall(size);
+        shSetGlobalScreenSize.unsafe_ccall(size);
     }
 
     // ---------------------------------------------------------------------------------------------
