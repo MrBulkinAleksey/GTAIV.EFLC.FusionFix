@@ -8891,8 +8891,8 @@ private:
                 state.wasMappedForFade = mapHasCars && !R.bVehicleBoxShadowsWithSlots;
                 strength = state.slotStrength;
                 // VehicleBoxShadowsMaxDistance: a lamp whose light ends that far from the camera has no boxes, faded out
-                // over the last 20 m. Its shader then leaves them all out; one with any box works all five of them, and
-                // the boxes were some 3 GPU ms of the lamps at night in a profile
+                // over the last 20 m. Its shader then leaves them all out; one with any box works all five of them. The
+                // lamps took some 3.4 GPU ms a frame at night in a profile, the boxes a share of it
                 if (R.fVehicleBoxShadowsMaxDistance > 0.0f)
                     if (auto* vp = rage::GetCurrentViewport())
                     {
