@@ -42,6 +42,7 @@ export namespace RenderSkip
     bool bCascadesAtNight = false;
     bool bReflectionsHalfRate = true;
     bool bFarCascadesHalfRate = true;
+    bool bMidCascadeHalfRate = false;
     bool bTrace = false;
 }
 
@@ -162,7 +163,7 @@ namespace RenderSkip
         float position[3]{}, forward[3]{};
         uint32_t skipped = 0, kept = 0;
     };
-    FarCascade farCascades[2];
+    FarCascade farCascades[3];  // the second, third and fourth
     uint32_t cascadeFrame = ~0u, cascadeCount = 0;
     bool bAtlasLeftOut = false;
 
@@ -178,11 +179,15 @@ namespace RenderSkip
             cascadeCount = 0;
         }
         uint32_t index = cascadeCount++;
-        if (!bFarCascadesHalfRate || !frame || (index != 2 && index != 3))
+        // MidCascadeHalfRate: the second joins them, left out in the frames the fourth is drawn in
+        bool farOne = bFarCascadesHalfRate && (index == 2 || index == 3);
+        bool midOne = bMidCascadeHalfRate && index == 1;
+        if (!frame || (!farOne && !midOne))
             return Drop::Nothing;
-        // The third left out in even frames, the fourth in odd ones, each only right after a frame it was drawn in
-        auto& c = farCascades[index - 2];
-        bool turn = ((frame + index) & 1) == 0;
+        // The third left out in even frames, the fourth in odd ones (the second in even ones), each only right after a
+        // frame it was drawn in
+        auto& c = farCascades[index - 1];
+        bool turn = ((frame + index + (index == 1 ? 1 : 0)) & 1) == 0;
         bool skip = turn && c.drawn + 1 == frame && !CameraMovedSince(c.position, c.forward, CascadeMoveSquared, CascadeTurnCos);
         if (skip)
             c.skipped++;
@@ -422,6 +427,7 @@ public:
             bCascadesAtNight = iniReader.ReadInteger("SHADOWS", "CascadeShadowsAtNight", 0) != 0;
             bReflectionsHalfRate = iniReader.ReadInteger("MISC", "ReflectionsHalfRate", 1) != 0;
             bFarCascadesHalfRate = iniReader.ReadInteger("SHADOWS", "FarCascadesHalfRate", 1) != 0;
+            bMidCascadeHalfRate = iniReader.ReadInteger("SHADOWS", "MidCascadeHalfRate", 0) != 0;
             bTrace = iniReader.ReadInteger("MISC", "RenderSkipTrace", 0) != 0;
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
             if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
@@ -430,7 +436,7 @@ public:
 
         FusionFix::onGameInitEvent() += []()
         {
-            if (bCascadesAtNight && !bReflectionsHalfRate && !bFarCascadesHalfRate && !bTrace)
+            if (bCascadesAtNight && !bReflectionsHalfRate && !bFarCascadesHalfRate && !bMidCascadeHalfRate && !bTrace)
                 return;
             bool installed = Install();
             FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, the far ones by day %s, reflections %s\n",
@@ -453,10 +459,10 @@ public:
             if (frames % 3600)
                 return;
             std::string text;
-            for (int i = 0; i < 2; i++)
+            for (int i = 0; i < 3; i++)
                 if (farCascades[i].skipped || farCascades[i].kept)
-                    text += std::format("cascade {}: {} frames left out, {} drawn; ", i + 3, farCascades[i].skipped, farCascades[i].kept);
-            for (int i = 0; i < 2; i++)
+                    text += std::format("cascade {}: {} frames left out, {} drawn; ", i + 2, farCascades[i].skipped, farCascades[i].kept);
+            for (int i = 0; i < 3; i++)
                 farCascades[i].skipped = farCascades[i].kept = 0;
             for (int kind = CascadeTarget; kind < Kinds; kind++)
                 if (dropped[kind] || halfRates[kind].skipped || halfRates[kind].kept)
