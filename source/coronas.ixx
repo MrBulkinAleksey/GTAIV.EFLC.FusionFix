@@ -4,6 +4,7 @@ module;
 #include "FusionLog.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <initializer_list>
 #include <vector>
 
@@ -448,6 +449,8 @@ namespace CoronaRender
                 auto v = *ppVertex;
                 if (!*pVertexLimit || !v)
                     continue;
+                // The buffer is the card's write-combined memory: it is only written, in one go. Copying a vertex
+                // within it (v[3] = v[2]) read it back uncached, and made the coronas far slower than the game's
                 auto corner = [&](Vertex& out, bool plusRight, bool plusUp, uint32_t c, float u)
                 {
                     float p[3];
@@ -459,12 +462,14 @@ namespace CoronaRender
                     out = { p[0], p[1], p[2], P[0], P[1], P[2], c, u, brightness };
                 };
                 uint32_t clear = colour & 0xFFFFFFu;
-                corner(v[0], false, true, colour, 0.0f);
-                corner(v[1], true, true, colour, 1.0f);
-                corner(v[2], true, false, clear, 1.0f);
-                v[3] = v[2];
-                corner(v[4], false, false, clear, 0.0f);
-                v[5] = v[0];
+                Vertex quad[6];
+                corner(quad[0], false, true, colour, 0.0f);
+                corner(quad[1], true, true, colour, 1.0f);
+                corner(quad[2], true, false, clear, 1.0f);
+                quad[3] = quad[2];
+                corner(quad[4], false, false, clear, 0.0f);
+                quad[5] = quad[0];
+                memcpy(v, quad, sizeof(quad));
                 *ppVertex = v + 6;
             }
             End();
