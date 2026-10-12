@@ -10,6 +10,8 @@ module;
 #include <mutex>
 #include <string>
 #include <vector>
+#include <intrin.h>
+#include <unordered_map>
 
 export module modelrelease;
 
@@ -136,6 +138,186 @@ namespace ModelRelease
     }
 }
 
+
+// TextureAccountTrace = 1: the game's own count of the video memory its resources take (the resource cache's +0x40268,
+// what CE 0x4276b0 takes off its budget for the free memory the streaming reclaims for) grew to 114 GB in a dump while
+// some 5500 resources were on its books: textures freed past its books leave their size counted for good, and then
+// every reclaim (the pause menu, a change of settings, streaming while driving) lets the whole world go. A resource is
+// put on its books in CE 0x4292d0 (created: its record +4 type, +0x34 size, +0x40 the D3D object; the size added at CE
+// 0x42946f) or taken back on in CE 0x429042 (record in esi), and off them in CE 0x429900 (the D3D object the argument;
+// skipped when not on its books). This keeps its own list of the textures on the books, and finds each texture whose
+// D3D object goes (its Release to 0) while still on them, with who made it and who let it go; and releases the game
+// asked for of objects it doesn't know of. Every 10 s to GTAIV.EFLC.FusionFix.TextureAccount.log
+namespace TextureAccount
+{
+    bool bTrace = false;
+    uintptr_t delta = 0;
+    std::mutex mutex;
+    struct Entry { uint32_t type, size, width, height, format; uintptr_t creator; bool taken; };
+    std::unordered_map<uintptr_t, Entry> live;
+    uint8_t* cache = nullptr;
+    thread_local uintptr_t creatorReturn = 0;
+    uint64_t liveBytes = 0;
+    uint32_t created = 0, retaken = 0, released = 0, unknownReleases = 0, duplicates = 0, bypassed = 0;
+    uint64_t bypassedBytes = 0;
+    std::map<std::pair<std::string, std::string>, std::pair<uint32_t, uint64_t>> bypassBy;  // creator, releaser: count, bytes
+    std::map<std::string, uint32_t> unknownBy;
+    std::vector<std::string> details;
+    SafetyHookMid entryHook, addHook, retakeHook, releaseHook;
+    ULONG(__stdcall* RealRelease)(IUnknown*) = nullptr;
+
+    std::string Where(uintptr_t address)
+    {
+        if (!address)
+            return "?";
+        uintptr_t ce = address - delta;
+        if (ce >= 0x401000 && ce < 0x1400000)
+            return std::format("GTAIV {:#x}", ce);
+        HMODULE module = nullptr;
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)address, &module) && module)
+        {
+            wchar_t path[MAX_PATH]{};
+            GetModuleFileNameW(module, path, MAX_PATH);
+            std::wstring name = path;
+            name = name.substr(name.find_last_of(L"\\/") + 1);
+            std::string narrow;
+            for (wchar_t c : name)
+                narrow.push_back(c < 128 ? char(c) : '?');
+            return std::format("{}+{:#x}", narrow, address - uintptr_t(module));
+        }
+        return std::format("{:#x}", address);
+    }
+
+    void OnBooks(uint8_t* record, uint8_t* books, uintptr_t creator, bool retake)
+    {
+        uint32_t type = *(uint32_t*)(record + 4), size = *(uint32_t*)(record + 0x34);
+        uintptr_t object = *(uintptr_t*)(record + 0x40);
+        if (!object)
+            return;
+        Entry entry{ type, size, 0, 0, 0, creator, retake };
+        if (type == 0)
+        {
+            D3DSURFACE_DESC desc{};
+            if (SUCCEEDED(((IDirect3DTexture9*)object)->GetLevelDesc(0, &desc)))
+            {
+                entry.width = desc.Width;
+                entry.height = desc.Height;
+                entry.format = desc.Format;
+            }
+        }
+        std::lock_guard lock(mutex);
+        cache = books;
+        (retake ? retaken : created)++;
+        auto [it, inserted] = live.try_emplace(object, entry);
+        if (!inserted)
+        {
+            duplicates++;
+            liveBytes -= it->second.size;
+            it->second = entry;
+        }
+        liveBytes += size;
+    }
+
+    void OffBooks(uintptr_t object, uintptr_t caller)
+    {
+        std::lock_guard lock(mutex);
+        auto it = live.find(object);
+        if (it == live.end())
+        {
+            unknownReleases++;
+            unknownBy[Where(caller)]++;
+            return;
+        }
+        released++;
+        liveBytes -= it->second.size;
+        live.erase(it);
+    }
+
+    ULONG __stdcall Release(IUnknown* object)
+    {
+        uintptr_t caller = uintptr_t(_ReturnAddress());
+        ULONG left = RealRelease(object);
+        if (left)
+            return left;
+        std::lock_guard lock(mutex);
+        auto it = live.find(uintptr_t(object));
+        if (it == live.end())
+            return left;
+        // Gone while still on the game's books: its size stays counted
+        auto& e = it->second;
+        auto key = std::make_pair(e.taken ? "taken back on" : Where(e.creator), Where(caller));
+        auto& by = bypassBy[key];
+        by.first++;
+        by.second += e.size;
+        bypassed++;
+        bypassedBytes += e.size;
+        if (details.size() < 40)
+            details.push_back(std::format("  {}x{} format {} ({} KB), put on the books from {}, let go by {}", e.width, e.height, e.format, e.size >> 10,
+                key.first, key.second));
+        liveBytes -= e.size;
+        live.erase(it);
+        return left;
+    }
+
+    void Write()
+    {
+        std::lock_guard lock(mutex);
+        uint64_t counted = cache ? *(uint64_t*)(cache + 0x40268) : 0;
+        std::string text = std::format("the game counts {} MB, its books as kept here {} MB in {} resources; since the last: {} put on, {} taken back on, {} taken off, "
+            "{} of objects it never had, {} put on twice; textures gone while on its books: {} ({} MB in all)",
+            counted >> 20, liveBytes >> 20, live.size(), created, retaken, released, unknownReleases, duplicates, bypassed, bypassedBytes >> 20);
+        created = retaken = released = unknownReleases = duplicates = 0;
+        for (auto& [key, by] : bypassBy)
+            text += std::format("\n  gone while on the books: {} from {}, let go by {}: {} ({} MB)", by.first, key.first, key.second, by.first, by.second >> 20);
+        for (auto& [where, n] : unknownBy)
+            text += std::format("\n  release asked for an object not on the books, by {}: {}", where, n);
+        for (auto& line : details)
+            text += "\n" + line;
+        details.clear();
+        bypassBy.clear();
+        unknownBy.clear();
+        FusionLog::WriteText("TextureAccount", "Stats", text);
+    }
+
+    void Install()
+    {
+        delta = GameBase() - 0x400000;
+        auto entry = hook::pattern("83 EC 18 53 55 8B 6C 24 24 56 8D 75 04 8B D9 8B 0E B8 6C 08 76 88");
+        auto add = hook::pattern("8B 45 34 01 83 68 02 04 00 83 93 6C 02 04 00 00 8B 0E 8B 45 38");
+        auto retake = hook::pattern("8B 46 34 01 83 68 02 04 00 83 93 6C 02 04 00 00");
+        auto release = hook::pattern("83 EC 10 53 55 8B D9 56 8B 43 0C 57 8D 7B 08 8B CF 85 C0 74");
+        if (entry.empty() || add.empty() || retake.empty() || release.empty())
+        {
+            FusionLog::Write("TextureAccount", "Settings", "the resource cache's books not found, nothing traced\n");
+            bTrace = false;
+            return;
+        }
+        entryHook = safetyhook::create_mid(entry.get_first(0), [](SafetyHookContext& regs) { creatorReturn = *(uintptr_t*)regs.esp; });
+        addHook = safetyhook::create_mid(add.get_first(0), [](SafetyHookContext& regs) { OnBooks((uint8_t*)regs.ebp, (uint8_t*)regs.ebx, creatorReturn, false); });
+        retakeHook = safetyhook::create_mid(retake.get_first(0), [](SafetyHookContext& regs) { OnBooks((uint8_t*)regs.esi, (uint8_t*)regs.ebx, 0, true); });
+        releaseHook = safetyhook::create_mid(release.get_first(0), [](SafetyHookContext& regs) { OffBooks(*(uintptr_t*)(regs.esp + 4), *(uintptr_t*)regs.esp); });
+        FusionLog::Write("TextureAccount", "Settings", "tracing the resource cache's books\n");
+    }
+
+    // The textures' Release, from one of the device's own (all its 2D textures share the class)
+    void HookRelease()
+    {
+        auto device = RageDirect3DDevice9::GetRuntimeDevice();
+        IDirect3DTexture9* probe = nullptr;
+        if (!device || FAILED(device->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &probe, nullptr)) || !probe)
+        {
+            FusionLog::Write("TextureAccount", "Settings", "no texture to take Release from, textures freed past the books not traced\n");
+            return;
+        }
+        auto vtable = *(void***)probe;
+        probe->Release();
+        if (vtable[2] == (void*)&Release)
+            return;
+        RealRelease = (decltype(RealRelease))vtable[2];
+        injector::WriteMemory(&vtable[2], (void*)&Release, true);
+    }
+}
+
 class ModelReleaseFeature
 {
 public:
@@ -171,6 +353,31 @@ public:
                 reclaimLoopHook = safetyhook::create_mid(loop.get_first(0), ReclaimTurn);
             }
             FusionLog::Write("ModelRelease", "Settings", "logging every second the entities that let go of their models\n");
+        };
+
+        // TextureAccountTrace: in the init, as other hooks in the game's encrypted code are (memory.ixx)
+        FusionFix::onInitEvent() += []()
+        {
+            CIniReader iniReader("");
+            TextureAccount::bTrace = iniReader.ReadInteger("MISC", "TextureAccountTrace", 0) != 0;
+            if (TextureAccount::bTrace)
+                TextureAccount::Install();
+        };
+
+        FusionFix::onGameInitEvent() += []()
+        {
+            if (TextureAccount::bTrace)
+                TextureAccount::HookRelease();
+        };
+
+        FusionFix::onGameProcessEvent() += []()
+        {
+            static uint64_t lastBooks = 0;
+            if (TextureAccount::bTrace && GetTickCount64() - lastBooks >= 10000)
+            {
+                lastBooks = GetTickCount64();
+                TextureAccount::Write();
+            }
         };
 
         FusionFix::onGameProcessEvent() += []()
