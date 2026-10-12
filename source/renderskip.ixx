@@ -32,9 +32,9 @@ import temporal;
 //    the third is drawn in one frame, the fourth in the next, while the camera keeps still since that cascade was drawn
 //    (turned under half a degree, moved under 30 cm). Each cascade is drawn into CASCADE_TARGET_R32 (cleared, its
 //    casters drawn) and put into its quarter of CASCADE_ATLAS by one draw, nearest first; left out, both go and its
-//    quarter keeps the frame before. The game makes the cascades' matrices anew each frame; a cascade left out is read
-//    with the matrix it was drawn with (FollowCascades), so it is left out while the camera moves too, as long as the
-//    matrix keeps its direction and its depth moves under 5 cm a frame, and the camera turns under 2 degrees a frame.
+//    quarter keeps the frame before. The game fits the cascades to the view anew each frame, turning them with the
+//    camera's heading, so a cascade is left out only while the one kept can be matched to this frame's fit (FoldCascade):
+//    in practice while the camera keeps still, where the game still moves the fit by a few texels a frame.
 //  - CascadeMatrixTrace = 1: once, some 20 s in, 300 passes of the cascades' matrix, scales and offsets to the log.
 //  - RenderSkipTrace = 1: once, a little after the world is in, two frames of locks, clears, viewports, draws and
 //    copies to GTAIV.EFLC.FusionFix.RenderSkip.log, to tell how the game draws its passes.
@@ -159,8 +159,6 @@ namespace RenderSkip
     // The far cascades by day: the cascades' passes counted, and where the camera was at each one's last draw
     constexpr float CascadeMoveSquared = 0.3f * 0.3f;
     constexpr float CascadeTurnCos = 0.99996f;  // half a degree
-    constexpr float FollowTurnCos = 0.99939f;   // 2 degrees a frame: further, the view leaves what the kept cascade covers
-    constexpr float RotationTolerance = 5e-4f;  // of the matrix's largest term, some 0.03 degrees
     struct FarCascade
     {
         uint32_t drawn = ~0u;
@@ -178,13 +176,18 @@ namespace RenderSkip
     // (gShadowParam0123, 4567, 891113 and 14151617, c57, c58, c59 and c56 in deferred_lighting: x and y scales, x and y
     // offsets, each four running sums over the cascades, the nearest first). The render thread sets them from the frame's
     // copy of the cascades (CE 0x11a1c50 + 0x270 a copy) in CE 0x92d7f0, after the cascades' pass: the matrix from it in
-    // CE 0x92dd20, then the rest. While the matrix only moves (its x, y and depth rows keep their direction), a kept
-    // cascade's x and y are this frame's plus how far the matrix moved, so its offsets take that in; its depth can't be
-    // moved so (the shaders' per-cascade biases are constants of their own), so the cascades follow a moving camera only
-    // while the matrix's depth moves under DepthTolerance a frame.
-    constexpr float DepthTolerance = 0.05f;     // metres
+    // CE 0x92dd20, then the rest. The game fits the matrix to the view anew every frame: x and y turn with the camera's
+    // heading, the depth moves with the camera, and even a still camera has it rescaled and moved by a few texels of the
+    // fourth cascade from one frame to the next (a trace of 300 frames, CascadeMatrixTrace). A kept cascade is read
+    // with this frame's matrix scaled and moved to match the one it was drawn with at the camera; what can't be matched
+    // so (a turn, which needs a rotation the shaders don't have, and the depth, whose per-cascade biases are constants
+    // of the shaders) has to stay under FoldTexels at the cascade's far edge and FoldDepth, or it is drawn.
+    constexpr float FoldTexels = 0.5f;
+    constexpr float FoldDepth = 0.05f;          // metres
+    constexpr float CascadeReach[4] = { 10.0f, 30.0f, 85.0f, 256.0f };  // metres from the camera, as shadows.ixx sets them
     bool bFollow = false;                       // both hooks in place
     bool bMatrixTrace = false;
+    uint32_t cascadeSide = 2048;                // CASCADE_TARGET_R32's, texels
     struct CascadeLook
     {
         uint32_t seq = ~0u;
@@ -195,36 +198,60 @@ namespace RenderSkip
     float caughtMatrix[16]{};
     bool matrixCaught = false;
     float lastMatrix[16]{}, previousMatrix[16]{};
+    float lastValues[4][4]{}, previousValues[4][4]{};   // the game's, a cascade each
     uint32_t matricesSeen = 0, processedSeq = ~0u;
     uintptr_t setterReturn = 0;     // where CE 0x92dd20 returns to in the setter
     uint32_t folded = 0, misses = 0;
-    float largestDepthStep = 0.0f;
+    float largestTexels = 0.0f, largestDepth = 0.0f;
 
-    bool SameRotation(const float* a, const float* b)
+    float Dot(const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+    // Cascade k drawn with matrix am and scales and offsets av, read through matrix bm: the scales and offsets that
+    // match it at the camera, and how far it is off at the cascade's reach in texels and in depth in metres
+    struct Fold { float values[4]; float texels; float depth; };
+    Fold FoldCascade(int k, const float* am, const float* av, const float* bm)
     {
-        constexpr int terms[] = { 0, 1, 3, 4, 5, 7, 8, 9, 11 };
-        float scale = 0.0f;
-        for (int i : terms)
-            scale = std::max(scale, std::abs(a[i]));
-        if (!(scale > 0.0f))
-            return false;
-        for (int i : terms)
-            if (std::abs(a[i] - b[i]) > RotationTolerance * scale)
-                return false;
-        return true;
+        Fold f{ { av[0], av[1], av[2], av[3] }, 1e9f, 1e9f };
+        if (!pCamera)
+            return f;
+        const float* camera = pCamera;
+        f.texels = 0.0f;
+        for (int axis = 0; axis < 2; axis++)
+        {
+            float A[3] = { am[axis], am[4 + axis], am[8 + axis] }, B[3] = { bm[axis], bm[4 + axis], bm[8 + axis] };
+            float bb = Dot(B, B);
+            if (!(bb > 0.0f))
+            {
+                f.texels = 1e9f;
+                return f;
+            }
+            float scale = av[axis] * Dot(A, B) / bb;
+            float atA = Dot(A, camera) + am[12 + axis], atB = Dot(B, camera) + bm[12 + axis];
+            f.values[axis] = scale;
+            f.values[2 + axis] = av[2 + axis] + atA * av[axis] - atB * scale;
+            float r[3] = { A[0] * av[axis] - B[0] * scale, A[1] * av[axis] - B[1] * scale, A[2] * av[axis] - B[2] * scale };
+            // uv a metre the two still differ by; x spans the atlas's four cascades, y one
+            float texelsPerUV = float(cascadeSide) * (axis == 0 ? 4.0f : 1.0f);
+            f.texels = std::max(f.texels, std::sqrt(Dot(r, r)) * CascadeReach[k] * texelsPerUV);
+        }
+        float A[3] = { am[3], am[7], am[11] }, B[3] = { bm[3], bm[7], bm[11] };
+        float perMetre = std::sqrt(Dot(B, B));
+        if (!(perMetre > 0.0f))
+            return f;
+        float d[3] = { A[0] - B[0], A[1] - B[1], A[2] - B[2] };
+        f.depth = (std::abs(Dot(A, camera) + am[15] - Dot(B, camera) - bm[15]) + std::sqrt(Dot(d, d)) * CascadeReach[k]) / perMetre;
+        return f;
     }
 
-    // How far the matrix's depth moved between two of them, in metres
-    float DepthStep(const float* a, const float* b)
+    bool FoldFits(const Fold& f)
     {
-        float perMetre = std::sqrt(a[3] * a[3] + a[7] * a[7] + a[11] * a[11]);
-        return perMetre > 0.0f ? std::abs(a[15] - b[15]) / perMetre : 1e9f;
+        return f.texels <= FoldTexels && f.depth <= FoldDepth;
     }
 
-    // From the last two passes: the matrix keeps its direction and its depth hardly moves, so this one will likely too
-    bool Followable()
+    // From the last two passes: cascade k kept from the one before would have fitted the last, so it likely will this one
+    bool Followable(int k)
     {
-        return bFollow && matricesSeen >= 2 && SameRotation(lastMatrix, previousMatrix) && DepthStep(lastMatrix, previousMatrix) <= DepthTolerance;
+        return bFollow && matricesSeen >= 2 && FoldFits(FoldCascade(k, previousMatrix, previousValues[k], lastMatrix));
     }
 
     Drop CascadeDrop()
@@ -251,9 +278,9 @@ namespace RenderSkip
         // pass it was drawn in, and while the camera keeps still or the kept one can follow it
         auto& c = farCascades[index - 1];
         bool turn = ((frame + index + (index == 1 ? 1 : 0)) & 1) == 0;
-        bool still = !CameraMovedSince(c.position, c.forward, CascadeMoveSquared, CascadeTurnCos);
-        bool follows = Followable() && !CameraMovedSince(c.position, c.forward, 1e12f, FollowTurnCos);
-        bool skip = turn && c.drawn + 1 == passSeq && (still || follows);
+        // Without the setter's hooks, only while the camera keeps still
+        bool fits = bFollow ? Followable(index) : !CameraMovedSince(c.position, c.forward, CascadeMoveSquared, CascadeTurnCos);
+        bool skip = turn && c.drawn + 1 == passSeq && fits;
         skippedInPass[index] = skip;
         if (skip)
             c.skipped++;
@@ -272,13 +299,13 @@ namespace RenderSkip
     uint32_t matrixTraceFrom = 0;
     constexpr uint32_t MatrixTracePasses = 300;
 
-    void TraceMatrix(const float (&values)[4][4], const float* matrix, float depthStep)
+    void TraceMatrix(const float (&values)[4][4], const float* matrix, float texels, float depth)
     {
         if (!matrixTraceFrom || passSeq < matrixTraceFrom)
             return;
         if (passSeq >= matrixTraceFrom + MatrixTracePasses)
         {
-            std::string text = "pass, camera position and forward, gShadowMatrix rows, then for each cascade x/y scale and offset (* left out, f followed)\n";
+            std::string text = "pass, camera position and forward, gShadowMatrix rows, how far the kept cascades are off at their reach, then for each cascade x/y scale and offset (* left out)\n";
             for (auto& line : matrixTrace)
                 text += line + "\n";
             FusionLog::WriteText("RenderSkip", "Matrix", text);
@@ -292,7 +319,7 @@ namespace RenderSkip
         line += " M";
         for (int i = 0; i < 16; i++)
             line += std::format("{}{:.6g}", i % 4 ? " " : " | ", matrix[i]);
-        line += std::format(" | depth step {:.3f} m;", depthStep);
+        line += std::format(" | kept ones off {:.2f} texels, {:.3f} m deep;", texels, depth);
         for (int k = 0; k < 4; k++)
             line += std::format(" c{}{} {:.6g} {:.6g} {:.6g} {:.6g};", k + 1, skippedInPass[k] ? "*" : "", values[k][0], values[k][1], values[k][2], values[k][3]);
         matrixTrace.push_back(std::move(line));
@@ -311,9 +338,6 @@ namespace RenderSkip
         memcpy(previousMatrix, lastMatrix, sizeof(lastMatrix));
         memcpy(lastMatrix, caughtMatrix, sizeof(lastMatrix));
         matricesSeen++;
-        float depthStep = matricesSeen >= 2 ? DepthStep(lastMatrix, previousMatrix) : 0.0f;
-        if (depthStep < 1e8f)
-            largestDepthStep = std::max(largestDepthStep, depthStep);
 
         // Four vectors of running sums: value of cascade k = the sum of the first k + 1 terms
         float values[4][4];
@@ -326,6 +350,9 @@ namespace RenderSkip
                 values[k][v] = sum;
             }
         }
+        memcpy(previousValues, lastValues, sizeof(lastValues));
+        memcpy(lastValues, values, sizeof(lastValues));
+        float passTexels = 0.0f, passDepth = 0.0f;
         for (int k = 0; k < 4; k++)
         {
             auto& look = looks[k];
@@ -336,21 +363,27 @@ namespace RenderSkip
                 memcpy(look.values, values[k], sizeof(look.values));
                 continue;
             }
-            if (look.seq + 1 != passSeq || !SameRotation(look.matrix, lastMatrix))
+            if (look.seq + 1 != passSeq)
             {
                 misses++;
                 continue;
             }
-            values[k][0] = look.values[0];
-            values[k][1] = look.values[1];
-            values[k][2] = look.values[2] + (look.matrix[12] - lastMatrix[12]) * look.values[0];
-            values[k][3] = look.values[3] + (look.matrix[13] - lastMatrix[13]) * look.values[1];
-            folded++;
+            // Matched as well as it goes even when it is off more than it should: the game's own values are further off
+            auto fold = FoldCascade(k, look.matrix, look.values, lastMatrix);
+            memcpy(values[k], fold.values, sizeof(fold.values));
+            passTexels = std::max(passTexels, fold.texels);
+            passDepth = std::max(passDepth, fold.depth);
+            if (FoldFits(fold))
+                folded++;
+            else
+                misses++;
         }
+        largestTexels = std::max(largestTexels, passTexels);
+        largestDepth = std::max(largestDepth, passDepth);
         for (int v = 0; v < 4; v++)
             for (int k = 0; k < 4; k++)
                 frameCopy[v * 4 + k] = values[k][v] - (k ? values[k - 1][v] : 0.0f);
-        TraceMatrix(values, lastMatrix, depthStep);
+        TraceMatrix(values, lastMatrix, passTexels, passDepth);
     }
 
     Drop DropFor(Kind kind)
@@ -444,6 +477,8 @@ namespace RenderSkip
                 depth = 0;
             auto target = color ? color : depthTarget;
             auto kind = KindOf(target);
+            if (kind == CascadeTarget && target->mWidth)
+                cascadeSide = target->mWidth;
             stack[depth++] = { kind, DropFor(kind), target };
             Refresh();
             if (Tracing())
@@ -643,10 +678,10 @@ public:
             for (int i = 0; i < 3; i++)
                 farCascades[i].skipped = farCascades[i].kept = 0;
             if (bFollow)
-                text += std::format("cascades left out read with their own matrix: {}, not (it turned): {}; largest depth step a frame {:.3f} m; ",
-                    folded, misses, largestDepthStep);
+                text += std::format("cascades left out matched to their matrix: {}, off more than {} texels or {} m: {} (worst {:.1f} texels, {:.3f} m); ",
+                    folded, FoldTexels, FoldDepth, misses, largestTexels, largestDepth);
             folded = misses = 0;
-            largestDepthStep = 0.0f;
+            largestTexels = largestDepth = 0.0f;
             for (int kind = CascadeTarget; kind < Kinds; kind++)
                 if (dropped[kind] || halfRates[kind].skipped || halfRates[kind].kept)
                     text += std::format("{}: {} calls left out, {} frames left out, {} drawn; ", KindNames[kind], dropped[kind],
