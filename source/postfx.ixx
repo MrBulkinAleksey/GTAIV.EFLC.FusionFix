@@ -598,8 +598,8 @@ public:
     // One a size: the water's reflection (1280x512) and the reflection map (1024x1024) take turns every frame, and one
     // target made again for each had the game's books of its video memory (made through the device wrapper, freed
     // past them) grow by a gigabyte in 10 s, until the streaming let the whole world go
-    struct CloudReflectionTarget { IDirect3DTexture9* tex = nullptr; IDirect3DSurface9* surf = nullptr; UINT width = 0, height = 0; uint32_t used = 0; };
-    CloudReflectionTarget CloudReflectionHalf[3];
+    struct CloudReflectionHalfTarget { IDirect3DTexture9* tex = nullptr; IDirect3DSurface9* surf = nullptr; UINT width = 0, height = 0; uint32_t used = 0; };
+    CloudReflectionHalfTarget CloudReflectionHalf[3];
     IDirect3DTexture9* CloudReflectionHalfTex = nullptr;    // the one for this reflection, set by ReflectionHalfTarget
     IDirect3DSurface9* CloudReflectionHalfSurf = nullptr;
 
@@ -6139,7 +6139,7 @@ private:
         const UINT w = (std::max)(1u, UINT(width) / 2), h = (std::max)(1u, UINT(height) / 2);
         static uint32_t uses = 0;
         uses++;
-        CloudReflectionTarget* slot = nullptr;
+        PostFxResource::CloudReflectionHalfTarget* slot = nullptr;
         for (auto& target : R.CloudReflectionHalf)
             if (target.surf && target.width == w && target.height == h)
                 slot = &target;
