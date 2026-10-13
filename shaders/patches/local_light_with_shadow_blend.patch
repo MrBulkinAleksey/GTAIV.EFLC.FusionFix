@@ -1,7 +1,16 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 3afe171c..561065b1 100644
+index 3afe171c..99577afb 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -96,7 +96,7 @@
+     def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
+     def c186, 8, -2.4, 1.5, -0.100000001 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie; the waist below the middle
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+-    def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
++    def c188, -0.600000024, -3.33333325, 0.150000006, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it; FusionFix: local_light_with_shadow_blend.patch: -1 over the skirt's height (0.3 m), its width (0.15 m)
+     def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+     dcl_texcoord v0
+     dcl vPos.xy
 @@ -303,6 +303,7 @@
      mul_sat r1.w, r1.w, c82.x
      mul r1.xyz, r1, r1.w
@@ -25,8 +34,45 @@ index 3afe171c..561065b1 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
+@@ -681,6 +687,7 @@
+     ret
+     // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
+     label l3
++    mov r13.z, c188.z // FusionFix: local_light_with_shadow_blend.patch: the skirt, for the way to the light
+     add r20.xyz, r15, -r18
+     // in the box's own axes: x along the car, y across it, z up
+     mul r21.x, r20.x, r19.x
+@@ -728,6 +735,7 @@
+     call l4
+     min r24.z, r24.z, r24.y
+     mov r20.xyz, r21
++    mov r13.z, c138.x // FusionFix: local_light_with_shadow_blend.patch: no skirt for the pixel itself
+     call l2 // how far this pixel is from the box
+     add r20.w, r20.w, c188.x
+     cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
+@@ -756,6 +764,13 @@
+     ret
+     // --- FusionFix vehicle box shadows: how far r20.xyz lies outside the box of half edges r23.xyz rounded by r12.y, in r20.w
+     label l2
++    // --- FusionFix: local_light_with_shadow_blend.patch: the skirt. Near the ground the box reaches out by r13.z (0.15 m) more, full at its foot, none from 0.3 m
++    // --- up: a box smaller and rounder than the car left a lit strip between its shadow and the contact shadow at the car
++    add r24.w, r20.z, r23.z
++    add r24.w, r24.w, r12.y // height above the foot
++    mul r24.w, r24.w, c188.y
++    add_sat r24.w, r24.w, c138.y
++    mul r24.w, r24.w, r13.z
+     // the box narrows above its waist like a car's cabin, to 0.55 of its length and 0.75 of its width at the roof
+     add r25.w, r23.z, r12.y
+     rcp r25.w, r25.w
+@@ -782,4 +797,5 @@
+     rcp r20.x, r20.x
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
++    add r20.w, r20.w, -r24.w // FusionFix: local_light_with_shadow_blend.patch: the skirt
+     ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index bbd04281..2cc6a6a5 100644
+index bbd04281..1b8e33e9 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 @@ -312,6 +312,7 @@
@@ -50,9 +96,18 @@ index bbd04281..2cc6a6a5 100644
      mov oC0, r26
      
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 636b3847..9e58fcd6 100644
+index 636b3847..0314e109 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -67,7 +67,7 @@
+     def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
+     def c186, 8, -2.4, 1.5, -0.100000001 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie; the waist below the middle
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+-    def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
++    def c188, -0.600000024, -3.33333325, 0.150000006, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it; FusionFix: local_light_with_shadow_blend.patch: -1 over the skirt's height (0.3 m), its width (0.15 m)
+     def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+     dcl_texcoord v0
+     dcl vPos.xy
 @@ -420,7 +420,7 @@
        // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
        add r17.w, r17.w, -c138.y
@@ -62,10 +117,56 @@ index 636b3847..9e58fcd6 100644
      endif
      mul r26.xyz, r26, r31.w
      mov oC0, r26
+@@ -511,6 +511,7 @@
+     ret
+     // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
+     label l3
++    mov r13.z, c188.z // FusionFix: local_light_with_shadow_blend.patch: the skirt, for the way to the light
+     add r20.xyz, r15, -r18
+     // in the box's own axes: x along the car, y across it, z up
+     mul r21.x, r20.x, r19.x
+@@ -558,6 +559,7 @@
+     call l4
+     min r24.z, r24.z, r24.y
+     mov r20.xyz, r21
++    mov r13.z, c138.x // FusionFix: local_light_with_shadow_blend.patch: no skirt for the pixel itself
+     call l2 // how far this pixel is from the box
+     add r20.w, r20.w, c188.x
+     cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
+@@ -586,6 +588,13 @@
+     ret
+     // --- FusionFix vehicle box shadows: how far r20.xyz lies outside the box of half edges r23.xyz rounded by r12.y, in r20.w
+     label l2
++    // --- FusionFix: local_light_with_shadow_blend.patch: the skirt. Near the ground the box reaches out by r13.z (0.15 m) more, full at its foot, none from 0.3 m
++    // --- up: a box smaller and rounder than the car left a lit strip between its shadow and the contact shadow at the car
++    add r24.w, r20.z, r23.z
++    add r24.w, r24.w, r12.y // height above the foot
++    mul r24.w, r24.w, c188.y
++    add_sat r24.w, r24.w, c138.y
++    mul r24.w, r24.w, r13.z
+     // the box narrows above its waist like a car's cabin, to 0.55 of its length and 0.75 of its width at the roof
+     add r25.w, r23.z, r12.y
+     rcp r25.w, r25.w
+@@ -612,4 +621,5 @@
+     rcp r20.x, r20.x
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
++    add r20.w, r20.w, -r24.w // FusionFix: local_light_with_shadow_blend.patch: the skirt
+     ret
+\ No newline at end of file
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index 8fd08fa6..2d44246e 100644
+index 8fd08fa6..fbc00985 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -98,7 +98,7 @@
+     def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
+     def c186, 8, -2.4, 1.5, -0.100000001 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie; the waist below the middle
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+-    def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
++    def c188, -0.600000024, -3.33333325, 0.150000006, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it; FusionFix: local_light_with_shadow_blend.patch: -1 over the skirt's height (0.3 m), its width (0.15 m)
+     def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+     dcl_texcoord v0
+     dcl vPos.xy
 @@ -205,6 +205,7 @@
      mad r0.w, r0.w, r0.w, c2.x
      mul r1.x, r0.w, c2.y
@@ -89,3 +190,40 @@ index 8fd08fa6..2d44246e 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
+@@ -697,6 +703,7 @@
+     ret
+     // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
+     label l3
++    mov r13.z, c188.z // FusionFix: local_light_with_shadow_blend.patch: the skirt, for the way to the light
+     add r20.xyz, r15, -r18
+     // in the box's own axes: x along the car, y across it, z up
+     mul r21.x, r20.x, r19.x
+@@ -744,6 +751,7 @@
+     call l4
+     min r24.z, r24.z, r24.y
+     mov r20.xyz, r21
++    mov r13.z, c138.x // FusionFix: local_light_with_shadow_blend.patch: no skirt for the pixel itself
+     call l2 // how far this pixel is from the box
+     add r20.w, r20.w, c188.x
+     cmp r20.w, r17.x, r20.w, c138.y // only a car, ped or the player may be on the car
+@@ -772,6 +780,13 @@
+     ret
+     // --- FusionFix vehicle box shadows: how far r20.xyz lies outside the box of half edges r23.xyz rounded by r12.y, in r20.w
+     label l2
++    // --- FusionFix: local_light_with_shadow_blend.patch: the skirt. Near the ground the box reaches out by r13.z (0.15 m) more, full at its foot, none from 0.3 m
++    // --- up: a box smaller and rounder than the car left a lit strip between its shadow and the contact shadow at the car
++    add r24.w, r20.z, r23.z
++    add r24.w, r24.w, r12.y // height above the foot
++    mul r24.w, r24.w, c188.y
++    add_sat r24.w, r24.w, c138.y
++    mul r24.w, r24.w, r13.z
+     // the box narrows above its waist like a car's cabin, to 0.55 of its length and 0.75 of its width at the roof
+     add r25.w, r23.z, r12.y
+     rcp r25.w, r25.w
+@@ -798,4 +813,5 @@
+     rcp r20.x, r20.x
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
++    add r20.w, r20.w, -r24.w // FusionFix: local_light_with_shadow_blend.patch: the skirt
+     ret
+\ No newline at end of file
