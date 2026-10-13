@@ -2271,8 +2271,9 @@ export namespace TemporalAA
     // draw's matrix stood from around, for the box shadows' log
     // heading, where given (x, y of the forward expected): only draws facing within about 25 degrees of it count, the
     // car's own parts drawn with its rotation (a skinned body may carry none of its own; wheels turn and doors swing)
+    // skinned, where given: whether the draw taken was skinned, its matrix the entity's own (a car's body by its chassis)
     bool DrawnWorldMatrix(void* entity, const float around[3], float reach, float out[16], int* drawCount, float* nearest,
-        const float* heading)
+        const float* heading, bool* skinned)
     {
         // Swapped at the G-buffer's end: the draws just made are the "previous" ones until the next scene
         auto it = Temporal::EntitiesPrevious.find(entity);
@@ -2304,6 +2305,8 @@ export namespace TemporalAA
                 best = d2;
                 std::copy_n(m, 16, out);
                 found = true;
+                if (skinned)
+                    *skinned = draw.Bones >= 0;
             }
         }
         return found;

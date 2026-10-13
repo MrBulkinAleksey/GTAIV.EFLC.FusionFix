@@ -9056,7 +9056,8 @@ private:
             // the one moved on by speed.
             int draws = 0;
             float nearest = -1.0f, m[16];
-            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 3.0f + (std::min)(speed * 0.05f, 2.0f), m, &draws, &nearest, box.forward))
+            bool body = false;
+            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 3.0f + (std::min)(speed * 0.05f, 2.0f), m, &draws, &nearest, box.forward, &body))
             {
                 if (watched)
                 {
@@ -9081,7 +9082,10 @@ private:
             }
             const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
             const float fx = m[4] / flat, fy = m[5] / flat;
-            const bool atCar = nearest >= 0.0f && nearest < 0.3f;
+            // The body (skinned, turned by its chassis) stands where the car was drawn: its position is taken however far
+            // from the one moved on by speed, which is what was off when driven fast (0.3 to 1.9 m in a log), the box
+            // then running ahead of and behind the car and its contact shadow. Another part only where it stands at the car
+            const bool atCar = body || (nearest >= 0.0f && nearest < 0.3f);
             float centre[3];
             if (atCar)
                 for (int i = 0; i < 3; ++i)
