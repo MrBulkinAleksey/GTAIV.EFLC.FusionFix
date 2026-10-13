@@ -761,6 +761,7 @@ public:
     // near and far clip; all 0 until the lighting phase has run.
     float SkinCamera[4] = {};
     float fContactShadowMaxDistance = 60.0f;
+    bool bContactShadowsMoon = true; // ContactShadowsMoon
     float fContactShadowIntensity = 1.0f;
     bool bContactShadowStepJitter = true;
     // ContactShadowsHalfResolution: the march runs at half size into ContactRawHalfTex and
@@ -1917,6 +1918,7 @@ public:
         fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 0.3f), 0.05f, 10.0f);
         fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.15f), 0.01f, 10.0f);
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
+        bContactShadowsMoon = iniReader.ReadInteger("POSTFX", "ContactShadowsMoon", 1) != 0;
         bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
         bContactShadowsHalfRes = iniReader.ReadInteger("POSTFX", "ContactShadowsHalfResolution", 1) != 0;
         fContactTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsTemporal", 0.8f), 0.0f, 0.95f);
@@ -7963,10 +7965,10 @@ private:
         // is no test: here it can still hold another shader's constant, and skipped the pass by day.
         if (-light[2] / lightLen <= 0.0f)
             return;
-        // At night c17 is the moon's, which casts no shadow while its cascades are left out (CascadeShadowsAtNight 0,
-        // the sun below CascadeSunElevation): its contact shadows alone were a faint dark rim at the foot of cars and
-        // peds with no shadow beyond it, for a whole screen pass. They go with the cascades.
-        if (!RenderSkip::bCascadesAtNight && RenderSkip::SunIsLow())
+        // At night c17 is the moon's. ContactShadowsMoon 0: no contact shadows while its cascades are left out
+        // (CascadeShadowsAtNight 0, the sun below CascadeSunElevation), which saves the screen pass; 1 (default)
+        // keeps them, the moon's only shading of what stands on the ground then.
+        if (!R.bContactShadowsMoon && !RenderSkip::bCascadesAtNight && RenderSkip::SunIsLow())
             return;
 
         const float width = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
