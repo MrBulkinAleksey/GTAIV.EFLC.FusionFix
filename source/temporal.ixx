@@ -2272,8 +2272,12 @@ export namespace TemporalAA
     // heading, where given (x, y of the forward expected): only draws facing within about 25 degrees of it count, the
     // car's own parts drawn with its rotation (a skinned body may carry none of its own; wheels turn and doors swing)
     // skinned, where given: whether the draw taken was skinned, its matrix the entity's own (a car's body by its chassis)
+    // bodyReach: how far a skinned draw may stand from around. All the draws are the entity's own, the reach kept other
+    // parts out; a log found the body 3 to 9 m from the place moved on by speed when driven fast. Of the skinned draws
+    // the one with the most primitives is taken, the body: not every draw's first bone is the chassis (a small one's
+    // stood turned and 0.3 m off)
     bool DrawnWorldMatrix(void* entity, const float around[3], float reach, float out[16], int* drawCount, float* nearest,
-        const float* heading, bool* skinned)
+        const float* heading, bool* skinned, float bodyReach)
     {
         // Swapped at the G-buffer's end: the draws just made are the "previous" ones until the next scene
         auto it = Temporal::EntitiesPrevious.find(entity);
@@ -2285,6 +2289,7 @@ export namespace TemporalAA
             return false;
         float best = reach * reach;
         bool found = false;
+        UINT bodyPrimitives = 0;
         for (auto& draw : it->second.Draws)
         {
             float m[16];
@@ -2300,7 +2305,19 @@ export namespace TemporalAA
             const float d2 = dx * dx + dy * dy + dz * dz;
             if (nearest && (*nearest < 0.0f || d2 < *nearest * *nearest))
                 *nearest = std::sqrt(d2);
-            if (d2 < best)
+            if (draw.Bones >= 0 && d2 < bodyReach * bodyReach)
+            {
+                if (draw.PrimitiveCount > bodyPrimitives)
+                {
+                    bodyPrimitives = draw.PrimitiveCount;
+                    std::copy_n(m, 16, out);
+                    found = true;
+                    if (skinned)
+                        *skinned = true;
+                }
+                continue;
+            }
+            if (!bodyPrimitives && d2 < best)
             {
                 best = d2;
                 std::copy_n(m, 16, out);

@@ -9057,7 +9057,7 @@ private:
             int draws = 0;
             float nearest = -1.0f, m[16];
             bool body = false;
-            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 3.0f + (std::min)(speed * 0.05f, 2.0f), m, &draws, &nearest, box.forward, &body))
+            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 3.0f + (std::min)(speed * 0.05f, 2.0f), m, &draws, &nearest, box.forward, &body, 25.0f))
             {
                 if (watched)
                 {
