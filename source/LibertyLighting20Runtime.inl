@@ -248,6 +248,49 @@ namespace Lighting20
         }
     }
 
+    // The keys of the lights this plugin made or gave a shadow this frame (corona lights, model lights), so the
+    // selection can tell them from the game's own: a fixed table, written by the 2dfx light code and read before the
+    // slots are picked a frame or two later.
+    namespace Ours
+    {
+        enum Kind : uint8_t { None, CoronaLight, ModelLight };
+        struct Mark { std::atomic<uint32_t> key{0}, frame{0}; std::atomic<uint8_t> kind{None}; };
+        static constexpr uint32_t Cells = 1024;
+        static Mark marks[Cells];
+
+        static uint32_t Cell(uint32_t key) noexcept { return (key * 0x9E3779B1u) >> 22; }
+
+        static void Add(uint32_t key, Kind kind) noexcept
+        {
+            const auto now = Frame();
+            for (uint32_t i = 0, c = Cell(key); i < 8; ++i, c = (c + 1) & (Cells - 1))
+            {
+                auto& m = marks[c];
+                const auto k = m.key.load(std::memory_order_relaxed);
+                if (k == key || !k || now - m.frame.load(std::memory_order_relaxed) > 8)
+                {
+                    m.key.store(key, std::memory_order_relaxed);
+                    m.kind.store(kind, std::memory_order_relaxed);
+                    m.frame.store(now, std::memory_order_release);
+                    return;
+                }
+            }
+        }
+
+        static Kind Of(uint32_t key) noexcept
+        {
+            if (!key) return None;
+            const auto now = Frame();
+            for (uint32_t i = 0, c = Cell(key); i < 8; ++i, c = (c + 1) & (Cells - 1))
+            {
+                const auto& m = marks[c];
+                if (m.key.load(std::memory_order_relaxed) == key)
+                    return now - m.frame.load(std::memory_order_acquire) <= 4 ? Kind(m.kind.load(std::memory_order_relaxed)) : None;
+            }
+            return None;
+        }
+    }
+
     // ---------------------------------------------------------------- world lights
     namespace World
     {
@@ -256,6 +299,8 @@ namespace Lighting20
         static bool cachedLamps = true, modelLights = true, coronas = true;
         static SafetyHookMid coronaHook;
         static std::atomic<uint32_t> lampsPromoted{0}, modelLightsPromoted{0}, coronaLights{0}, coronasRefused{0}, coronasCapped{0};
+        static std::atomic<uint32_t> coronasMerged{0}, modelLightsMerged{0};
+        static float mergeDistance = 1.5f; // ExtraLightMergeDistance
 
         struct CoronaSettings
         {
@@ -293,12 +338,13 @@ namespace Lighting20
         // From the 2dfx light flags hook (CE 0xC1E615): a point or spot light the map authored without shadows
         // (flags & 6 == 0) gets a dynamic one. Its key stays the game's (the entity + the effect's ordinal), which
         // the game clears right after for lights without shadow flags.
-        static bool PromoteModelLight(uint32_t flags, uintptr_t descriptor) noexcept
+        static bool PromoteModelLight(uint32_t flags, uintptr_t descriptor, uint32_t key) noexcept
         {
             if (!On() || !modelLights || (flags & 6) || !descriptor) return false;
             const auto type = *reinterpret_cast<const uint8_t*>(descriptor + 0x5B);
             const float radius = *reinterpret_cast<const float*>(descriptor + 0x38);
-            if ((type != 1 && type != 2) || !std::isfinite(radius) || radius <= 0) return false;
+            if ((type != 1 && type != 2) || !std::isfinite(radius) || radius <= 0 || !key || key == UINT32_MAX) return false;
+            Ours::Add(key, Ours::ModelLight);
             ++modelLightsPromoted;
             return true;
         }
@@ -360,6 +406,7 @@ namespace Lighting20
                 static_cast<int>(reinterpret_cast<uintptr_t>(at)), static_cast<int>(reinterpret_cast<uintptr_t>(colour)),
                 bits(intensity), 0, static_cast<int>(frame[11]), bits(radius), 0, 0,
                 static_cast<int>(frame[9]), static_cast<int>(frame[10]), static_cast<int>(key));
+            Ours::Add(key, Ours::CoronaLight);
             ++coronaLights;
         }
 
@@ -378,6 +425,7 @@ namespace Lighting20
             corona.maxIntensity = std::clamp(ini.ReadFloat("SHADOWS", "CoronaMaxIntensity", 64.0f), 0.01f, 1024.0f);
             corona.distance = std::clamp(ini.ReadFloat("SHADOWS", "CoronaLightDistance", 100.0f), 0.0f, 1000.0f);
             corona.perFrame = static_cast<uint32_t>(std::clamp(ini.ReadInteger("SHADOWS", "CoronaLightsPerFrame", 48), 0, 256));
+            mergeDistance = std::clamp(ini.ReadFloat("SHADOWS", "ExtraLightMergeDistance", 1.5f), 0.0f, 10.0f);
             installed = true;
             if (coronas)
             {
@@ -476,6 +524,63 @@ namespace Lighting20
         }
     }
 
+    // A light of ours next to one the game already has would light and shadow the same spot twice: a lamp whose
+    // glow is an effect of its own beside its light got a second light in the glow's colour, and a model's second
+    // light half a metre from its shadowed first one a second shadow; under the lamp a car had two shadows of two
+    // colours (one a box, VehicleBoxShadows, the other the map's). Within ExtraLightMergeDistance of a light of the
+    // game's (or of a corona light of ours before it in the list), a corona light goes dark and loses its shadow, and a
+    // model light near a shadowed one keeps the game's no shadow.
+    static void MergeWithNative(rage::CLightSource* lights, uint32_t count) noexcept
+    {
+        const float merge = World::mergeDistance;
+        if (merge <= 0) return;
+        std::array<uint16_t, 256> ours;
+        std::array<uint8_t, 256> kinds;
+        unsigned n = 0;
+        for (uint32_t i = 0; i < count && n < ours.size(); ++i)
+        {
+            const auto& l = lights[i];
+            if (!(l.mFlags & rage::LF_DYNAMIC_SHADOW) || (l.mFlags & rage::LF_VEHICLE)) continue;
+            if (const auto kind = Ours::Of(static_cast<uint32_t>(l.mCastShadows)))
+            {
+                ours[n] = static_cast<uint16_t>(i);
+                kinds[n++] = kind;
+            }
+        }
+        if (!n) return;
+        std::array<bool, 4096> isOurs{};
+        for (unsigned k = 0; k < n; ++k) isOurs[ours[k]] = true;
+        for (unsigned k = 0; k < n; ++k)
+        {
+            auto& o = lights[ours[k]];
+            const bool corona = kinds[k] == Ours::CoronaLight;
+            for (uint32_t j = 0; j < count; ++j)
+            {
+                if (j == ours[k]) continue;
+                const auto& other = lights[j];
+                if ((other.mFlags & rage::LF_VEHICLE) || (other.mType != rage::LT_POINT && other.mType != rage::LT_SPOT) ||
+                    !(other.mIntensity > 0) || !(other.mRadius > 0))
+                    continue;
+                if (isOurs[j] && !(corona && j < ours[k] && (other.mFlags & 6))) continue;
+                if (!corona && !(other.mFlags & 6)) continue;
+                const float dx = o.mPosition.x - other.mPosition.x, dy = o.mPosition.y - other.mPosition.y, dz = o.mPosition.z - other.mPosition.z;
+                if (dx * dx + dy * dy + dz * dz > merge * merge) continue;
+                if (corona)
+                {
+                    o.mIntensity = 0;
+                    o.mFlags &= ~6u;
+                    ++World::coronasMerged;
+                }
+                else
+                {
+                    o.mFlags &= ~rage::LF_DYNAMIC_SHADOW;
+                    ++World::modelLightsMerged;
+                }
+                break;
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- shared maps
     // SharedShadowMaps (Liberty's Shadows 2.0 aliases projections the same way): lights with a dynamic shadow only
     // that stand at one point with the same direction, type, range, cone, interior and room would each take a slot
@@ -541,6 +646,7 @@ namespace Lighting20
                 light.mFlags &= ~rage::LF_DYNAMIC_SHADOW;
         }
         World::PromoteCachedLamps(lights, count);
+        MergeWithNative(lights, count);
         Sharing::Apply(lights, count);
     }
 
@@ -571,6 +677,7 @@ namespace Lighting20
                 << " | world " << (World::On() ? "on" : "off") << " cached_lamps=" << World::lampsPromoted.load()
                 << " model_lights=" << World::modelLightsPromoted.load() << " corona_lights=" << World::coronaLights.load()
                 << " corona_refused=" << World::coronasRefused.load() << " corona_capped=" << World::coronasCapped.load()
+                << " merged: coronas=" << World::coronasMerged.load() << " model_lights=" << World::modelLightsMerged.load()
                 << " | buildings " << (Buildings::On() ? "on" : "off") << " passes=" << Buildings::passes.load()
                 << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load()
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()

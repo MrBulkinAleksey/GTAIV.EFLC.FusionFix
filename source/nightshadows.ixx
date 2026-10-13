@@ -729,7 +729,7 @@ public:
                             }
                         }
                         // World light shadows: a model light the map authored without shadows gets a dynamic one
-                        else if (Lighting20::World::PromoteModelLight(regs.ecx, regs.edi))
+                        else if (Lighting20::World::PromoteModelLight(regs.ecx, regs.edi, *(uint32_t*)(regs.ebp + 0x20)))
                         {
                             regs.ecx |= 4;
                             *(uint32_t*)(regs.esp + 0x18) = regs.ecx;
