@@ -59,6 +59,9 @@ import renderskip;
 bool bHighResolutionNightShadows = false;
 static bool bCloseHeadlightRelevance = false;
 static bool bTrafficSelfShadowFix = false;
+// TailLightShadowDistance: metres from the player within which a car's rear lamps cast a shadow, 0 everywhere the game
+// lights them
+static float fTailLightShadowDistance = 25.0f;
 #include "PlayerCarRuntime.inl"
 #include "BeamTraceRuntime.inl"
 #include "HeadlightEnhancementRuntime.inl"
@@ -152,6 +155,20 @@ namespace CShadows
             return true;
         }
 
+        // A rear lamp within TailLightShadowDistance of the player: a log found the rear lamps of cars 70 to 80 m off
+        // taking 4 or 5 of the seven slots while driving, the street lamps ahead without one
+        bool TailInReach(int positionAddress)
+        {
+            if (fTailLightShadowDistance <= 0.0f)
+                return true;
+            const std::lock_guard<std::mutex> lock(stateMutex);
+            if (!PrepareFrame() || !positionAddress)
+                return false;
+            const auto position = reinterpret_cast<const float*>(positionAddress);
+            const float dx = position[0] - playerPosition.x, dy = position[1] - playerPosition.y, dz = position[2] - playerPosition.z;
+            return dx * dx + dy * dy + dz * dz <= fTailLightShadowDistance * fTailLightShadowDistance;
+        }
+
         bool IsSubmittedBeam(uintptr_t key)
         {
             const std::lock_guard<std::mutex> lock(stateMutex);
@@ -230,6 +247,8 @@ namespace CShadows
     {
         if (Lighting20::Tail::IsKey(static_cast<uint32_t>(stableKey)))
         {
+            if (!gStableHeadlightShadow.TailInReach(position))
+                flags &= ~rage::LF_DYNAMIC_SHADOW;
             hbStoreStaticShadow.fun(a1, a2, flags & ~0x400u, direction, tangent, position,
                                     a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey);
             return;
@@ -521,6 +540,7 @@ public:
                 PlayerShadowAllocation::InstallLampSight(iniReader.ReadInteger("SHADOWS", "LampsBehindWalls", 1) != 0,
                     static_cast<uint32_t>(iniReader.ReadInteger("SHADOWS", "LampsBehindWallsFlags", 6)));
                 PlayerShadowAllocation::behindLampReach = std::clamp(iniReader.ReadFloat("SHADOWS", "BehindLampReach", 12.0f), 0.0f, 100.0f);
+                fTailLightShadowDistance = std::clamp(iniReader.ReadFloat("SHADOWS", "TailLightShadowDistance", 25.0f), 0.0f, 500.0f);
                 PlayerShadowAllocation::slotMinHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "SlotMinHold", 1000), 0, 5000));
                 fusionfix::shadows::NativeShadowContinuity42::claimDistanceRatio =
                     std::clamp(iniReader.ReadFloat("SHADOWS", "ClaimDistanceRatio", 1.5f), 0.0f, 10.0f);
