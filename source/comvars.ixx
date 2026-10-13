@@ -2363,6 +2363,8 @@ export namespace VehicleBoxShadowsBridge
     int (*CopyBoxedPairs)(BoxedPair* pairs, int max) = nullptr;
     // Render thread: the key whose shadow map a light's key uses (the other lamp of its pair on one post), 0 for none.
     uint32_t (*SharedMapKey)(uint32_t key) = nullptr;
+    // Render thread: for either lamp of a pair on one post, the point between them and their spacing; false otherwise.
+    bool (*LampPair)(uint32_t key, float between[3], float& spacing) = nullptr;
 }
 
 export namespace CPlayerPed

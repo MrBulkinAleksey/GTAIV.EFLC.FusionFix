@@ -9165,6 +9165,8 @@ private:
             int used = 0;
             float strength = 0.0f, rounding = R.fVehicleBoxShadowRounding;
             float boxStrength[kPerLight] = {};
+            float pairBetween[3] = {}, pairSpacing = 0.0f; // the lamp's pair on one post, if any (set below)
+            bool paired = false;
             if (R.VehicleBoxShadowsEnabled() && lightListDrawn &&
                 (R.bVehicleBoxShadowsFromCarLights || !(light.mFlags & rage::LF_VEHICLE)) &&
                 (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
@@ -9207,6 +9209,12 @@ private:
                 // not push a standing one out, and its shadow from that lamp flickered. Lamps are told apart by where
                 // they stand, a quarter metre apart.
                 const uint64_t lightKey = LightKey(Cell(light.mPosition.x), Cell(light.mPosition.y), Cell(light.mPosition.z));
+                // A lamp of a pair on one post (PairedLampDistance): in the ranking of the lamps on a car both are one
+                // lamp, standing between them, so they give their boxes to the same cars and take one of the car's
+                // places, not both; and their boxes soften by half their spacing, the two shadows one soft shadow.
+                paired = VehicleBoxShadowsBridge::LampPair &&
+                    VehicleBoxShadowsBridge::LampPair(uint32_t(light.mCastShadows), pairBetween, pairSpacing);
+                const uint64_t rankKey = paired ? LightKey(Cell(pairBetween[0]), Cell(pairBetween[1]), Cell(pairBetween[2])) : lightKey;
                 if (R.nVehicleBoxShadowsPerCar > 0 && TemporalAA::SceneFrame != carLampsFrame)
                 {
                     carLampsFrame = TemporalAA::SceneFrame;
@@ -9306,9 +9314,9 @@ private:
                     if (R.nVehicleBoxShadowsPerCar > 0)
                     {
                         const float falloff = std::clamp(1.0f - std::sqrt(d2) / (std::max)(light.mRadius, 0.1f), 0.0f, 1.0f);
-                        NoteCarLamp(box.vehicle, lightKey, (std::max)(light.mIntensity, 0.0f) * falloff * falloff);
+                        NoteCarLamp(box.vehicle, rankKey, (std::max)(light.mIntensity, 0.0f) * falloff * falloff);
                         const auto car = carLamps.find(box.vehicle);
-                        if (car != carLamps.end() && car->second.ranked && !LampAllowed(car->second, lightKey))
+                        if (car != carLamps.end() && car->second.ranked && !LampAllowed(car->second, rankKey))
                             continue;
                     }
                     int at = taken < perLamp ? taken++ : perLamp - 1;
@@ -9509,7 +9517,7 @@ private:
                 c[4] = 1.0f;
             }
             auto& lamp = constants[kPerLight * 2];
-            lamp[0] = R.fVehicleBoxShadowLightSize;
+            lamp[0] = R.fVehicleBoxShadowLightSize + (paired ? pairSpacing * 0.5f : 0.0f);
             // The ends' rounding in 5 cm steps, two apart above the edges' (which stays under 1)
             lamp[1] = (std::min)(rounding, 0.99f) + 2.0f * std::round(std::clamp(R.fVehicleBoxShadowEndRounding, 0.0f, 2.0f) / 0.05f);
             lamp[2] = R.fVehicleBoxShadowFollowLight;

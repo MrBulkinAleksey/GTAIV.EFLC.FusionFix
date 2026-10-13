@@ -677,6 +677,25 @@ namespace Lighting20
             return false;
         }
 
+        // VehicleBoxShadowsBridge::LampPair: either lamp of a pair, the point between them and their spacing.
+        static bool PairOf(uint32_t key, float between[3], float& spacing) noexcept
+        {
+            if (distance <= 0 || !key) return false;
+            const uint32_t first = FirstOf(key);
+            const uint32_t want = first ? first : key;
+            const auto now = Frame();
+            for (uint32_t i = 0, c = Cell(want); i < 8; ++i, c = (c + 1) & (Cells - 1))
+            {
+                const auto& o = origins[c];
+                if (o.first != want) continue;
+                if (now - o.frame > 6) return false;
+                std::copy_n(o.between, 3, between);
+                spacing = o.grow * 2.0f;
+                return true;
+            }
+            return false;
+        }
+
         static void Find(rage::CLightSource* lights, uint32_t count) noexcept
         {
             if (distance <= 0) return;
@@ -868,6 +887,7 @@ namespace Lighting20
         {
             HeadlightEnhancement::slotOrigin = Pairs::OriginOf;
             VehicleBoxShadowsBridge::SharedMapKey = Pairs::FirstOf;
+            VehicleBoxShadowsBridge::LampPair = Pairs::PairOf;
         }
         PlayerShadowAllocation::prepareSources = PrepareSources;
         OwnHeadlightCaster::lampOwner = LampOwner;
