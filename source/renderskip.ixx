@@ -55,6 +55,7 @@ export namespace RenderSkip
     bool SunIsLow();        // the sun's shadows too faint to draw: the cascades and the clouds in reflections go
     bool SunShadowsDrawn(); // the game drew the sun's cascades in the last few frames, which it does only outside, and they
                             // weren't left out for a low sun
+    bool SunShadowsDrawnByDay(); // and the sun is up: not the moon's cascades drawn with CascadeShadowsAtNight
 }
 
 namespace RenderSkip
@@ -130,6 +131,7 @@ namespace RenderSkip
     // The sky's sun (gta_atmoscatt_clouds' SunDirection, y up): unlike gDirectionalLight it stays the sun at night
     size_t nSunDirectionIdx = SIZE_MAX;
     bool bSunLow = false;
+    bool bCascadeAtNight = false; // IsNight() at the last cascade drawn
 
     bool IsNight()
     {
@@ -279,7 +281,8 @@ namespace RenderSkip
     Drop CascadeDrop()
     {
         bAtlasLeftOut = false;
-        bNightCascade = !bCascadesAtNight && IsNight();
+        bCascadeAtNight = IsNight();
+        bNightCascade = !bCascadesAtNight && bCascadeAtNight;
         if (bNightCascade)
             return Drop::Draws;     // its quarter of the atlas is cleared by LockTarget instead
         uint32_t frame = TemporalAA::SceneFrame;
@@ -670,6 +673,12 @@ namespace RenderSkip
     {
         // cascadeFrame moves on only past CascadeDrop's night check
         return cascadeFrame != ~0u && TemporalAA::SceneFrame - cascadeFrame <= 3;
+    }
+
+    // The same with the sun up: with CascadeShadowsAtNight the cascades are drawn at night too, the moon's
+    bool SunShadowsDrawnByDay()
+    {
+        return SunShadowsDrawn() && !bCascadeAtNight;
     }
 }
 

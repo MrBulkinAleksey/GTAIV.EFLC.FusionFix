@@ -362,12 +362,13 @@ namespace CShadows
 // LampShadowsInDaylight = 0: the map's lamps (their 2dfx lights, in CE 0xc1e615 where their shadow bits are made) cast no
 // shadows while the sun's cascades are drawn, outside by day: at dusk and dawn the lamps' shadows took some 4 GPU ms on
 // top of the sun's 6, where the sun's light washed them out. Inside, where the game draws no cascades, and once the sun is
-// under CascadeSunElevation, the lamps keep theirs; headlights are not the map's lamps and keep theirs too.
+// under CascadeSunElevation, the lamps keep theirs (with CascadeShadowsAtNight the cascades are drawn at night too, so
+// the sun's height decides); headlights are not the map's lamps and keep theirs too.
 static bool bLampShadowsInDaylight = false;
 
 static bool LampShadowsOffBySun()
 {
-    return !bLampShadowsInDaylight && RenderSkip::SunShadowsDrawn();
+    return !bLampShadowsInDaylight && RenderSkip::SunShadowsDrawnByDay();
 }
 
 #include "LibertyLighting20Runtime.inl"
