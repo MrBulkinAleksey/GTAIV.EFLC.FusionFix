@@ -231,8 +231,11 @@ namespace RenderSkip
         matrix[15] = 0.5f - 0.0005f * matrix[15];
     }
 
+    HRESULT(__stdcall* RealSetViewport)(IDirect3DDevice9*, const D3DVIEWPORT9*) = nullptr;
+    HRESULT(__stdcall* RealSetScissorRect)(IDirect3DDevice9*, const RECT*) = nullptr;
+
     // The game's lock just bound CASCADE_TARGET_R32: the atlas and a depth buffer of its size instead
-    bool BindAtlas(IDirect3DDevice9* device)
+    bool BindAtlas(IDirect3DDevice9* device, int index)
     {
         IDirect3DSurface9* surface = nullptr;
         if (!device || !atlasTarget || !atlasTarget->mD3DTexture || FAILED(atlasTarget->mD3DTexture->GetSurfaceLevel(0, &surface)))
@@ -271,8 +274,20 @@ namespace RenderSkip
                         RageDirect3DDevice9::SetTextureBoth(wrapper, stage, nullptr);
                 }
             }
+        // The viewport the game's lock set for its own target (its depth range is kept)
+        D3DVIEWPORT9 viewport{};
+        device->GetViewport(&viewport);
         bool bound = fits && SUCCEEDED(device->SetRenderTarget(0, surface)) && SUCCEEDED(device->SetDepthStencilSurface(atlasDepth));
         surface->Release();
+        // SetRenderTarget left the viewport and the scissor on the whole atlas, and the game's device wrapper does not
+        // send again the viewport it takes as set already: the cascade was drawn over all four quarters
+        if (bound && RealSetViewport && RealSetScissorRect)
+        {
+            D3DVIEWPORT9 quarter{ DWORD(index) * cascadeSide, 0, cascadeSide, cascadeSide, viewport.MinZ, viewport.MaxZ };
+            RealSetViewport(device, &quarter);
+            RECT rect{ LONG(index) * LONG(cascadeSide), 0, LONG(index + 1) * LONG(cascadeSide), LONG(cascadeSide) };
+            RealSetScissorRect(device, &rect);
+        }
         return bound;
     }
     bool bNightCascade = false;     // the cascade just locked was the night's, its draws left out
@@ -570,8 +585,6 @@ namespace RenderSkip
     HRESULT(__stdcall* RealClear)(IDirect3DDevice9*, DWORD, const D3DRECT*, DWORD, D3DCOLOR, float, DWORD) = nullptr;
     HRESULT(__stdcall* RealStretchRect)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, IDirect3DSurface9*, const RECT*, D3DTEXTUREFILTERTYPE) = nullptr;
     HRESULT(__stdcall* RealColorFill)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, D3DCOLOR) = nullptr;
-    HRESULT(__stdcall* RealSetViewport)(IDirect3DDevice9*, const D3DVIEWPORT9*) = nullptr;
-    HRESULT(__stdcall* RealSetScissorRect)(IDirect3DDevice9*, const RECT*) = nullptr;
 
     using LockFn = void(__thiscall*)(void*, uint32_t, rage::grcRenderTargetPC*, rage::grcRenderTargetPC*, uint32_t, bool, uint32_t);
     using UnlockFn = void(__thiscall*)(void*, uint32_t, void*, int32_t);
@@ -607,7 +620,7 @@ namespace RenderSkip
                 bAtlasLeftOut = true;
             else if (lock.drop != Drop::Nothing)
                 ;   // the night's: its quarter of the atlas is cleared below
-            else if (BindAtlas(RageDirect3DDevice9::GetRuntimeDevice()))
+            else if (BindAtlas(RageDirect3DDevice9::GetRuntimeDevice(), lastCascade))
             {
                 lock.intoAtlas = int8_t(lastCascade);
                 bAtlasLeftOut = true;
@@ -979,7 +992,8 @@ public:
         {
             static uint32_t frames = 0;
             ++frames;
-            if (bTrace && !traceFrom && frames == 1200)
+            // In a frame the cascades are drawn in, if there is one before frame 6000
+            if (bTrace && !traceFrom && frames >= 1200 && (cascadeFrame + 2 >= TemporalAA::SceneFrame || frames >= 6000))
             {
                 traceFrom = TemporalAA::SceneFrame + 2;
                 traceUntil = traceFrom + 2;
