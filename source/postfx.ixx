@@ -8941,6 +8941,7 @@ private:
         // Why the watched car's drawn matrix was not taken: not among the G-buffer's draws, none near enough (and how
         // far the nearest stood, its matrix's translation, and how many draws it had), facing another way
         static inline uint32_t traceDrawnNone = 0, traceDrawnFar = 0, traceDrawnHeading = 0, traceDrawnCount = 0, traceDrawnHeadingOnly = 0;
+        static inline bool traceDrawsDescribed = false;
         static inline float traceDrawnNearest = -1.0f;
         static inline float traceStrongest = 0.0f;
         static inline bool traceMarkDown = false, traceShotDown = false;
@@ -8978,6 +8979,7 @@ private:
                 traceDrawnNone = traceDrawnFar = traceDrawnHeading = traceDrawnCount = traceDrawnHeadingOnly = 0;
                 traceDrawnNearest = -1.0f;
                 traceStrongest = 0.0f;
+                traceDrawsDescribed = false;
             }
             if (!traceText.empty() && now - traceFlushed >= 250)
             {
@@ -9068,6 +9070,12 @@ private:
                     }
                     else
                         ++traceDrawnHeading;
+                    // Once a second, what the car's draws were (a log found none facing the car's way)
+                    if (!traceDrawsDescribed)
+                    {
+                        traceDrawsDescribed = true;
+                        traceText += std::format("t={} D {}\n", GetTickCount(), TemporalAA::DescribeDraws(reinterpret_cast<void*>(box.vehicle), around, box.forward));
+                    }
                 }
                 return false;
             }

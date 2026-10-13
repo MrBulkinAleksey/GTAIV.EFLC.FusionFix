@@ -2291,6 +2291,46 @@ export namespace TemporalAA
         return found;
     }
 
+    // The box shadows' log: the entity's draws from the last G-buffer, nearest `around` first, at most 12, each with its
+    // distance, whether skinned, how its registers held the matrix and its axes (x y z of right, forward and up), and
+    // the cosine between its forward on the ground and `heading`
+    std::string DescribeDraws(void* entity, const float around[3], const float* heading)
+    {
+        auto it = Temporal::EntitiesPrevious.find(entity);
+        if (it == Temporal::EntitiesPrevious.end())
+            return "no draws";
+        struct Line { float d; std::string text; };
+        std::vector<Line> lines;
+        for (auto& draw : it->second.Draws)
+        {
+            const float* w = draw.World;
+            const bool rows = std::abs(w[12]) + std::abs(w[13]) + std::abs(w[14]) >= std::abs(w[3]) + std::abs(w[7]) + std::abs(w[11]);
+            float m[16];
+            for (int r = 0; r < 4; ++r)
+                for (int c = 0; c < 4; ++c)
+                    m[r * 4 + c] = rows ? w[r * 4 + c] : w[c * 4 + r];
+            const float dx = m[12] - around[0], dy = m[13] - around[1], dz = m[14] - around[2];
+            const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
+            const float cosine = heading && flat > 0.0f ? (m[4] * heading[0] + m[5] * heading[1]) / flat : 0.0f;
+            char text[256];
+            std::snprintf(text, sizeof(text), "%.2fm %s%s r(%.2f %.2f %.2f) f(%.2f %.2f %.2f) u(%.2f %.2f %.2f) cos %.2f prims %u",
+                d, draw.Bones >= 0 ? "skinned " : "", rows ? "rows" : "cols", m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10],
+                cosine, draw.PrimitiveCount);
+            lines.push_back({ std::isfinite(d) ? d : 1e9f, text });
+        }
+        std::sort(lines.begin(), lines.end(), [](const Line& a, const Line& b) { return a.d < b.d; });
+        char head[96];
+        std::snprintf(head, sizeof(head), "%zu draws, heading %.2f %.2f:", lines.size(), heading ? heading[0] : 0.0f, heading ? heading[1] : 0.0f);
+        std::string out = head;
+        for (size_t i = 0; i < lines.size() && i < 12; ++i)
+        {
+            out += " | ";
+            out += lines[i].text;
+        }
+        return out;
+    }
+
     IDirect3DTexture9* GetMotionVectors()
     {
         return Temporal::MotionRT ? Temporal::MotionRT->mD3DTexture : nullptr;
