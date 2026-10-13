@@ -228,6 +228,8 @@ namespace RenderSkip
     uint32_t folded = 0, misses = 0;
     float largestTexels = 0.0f, largestDepth = 0.0f;
 
+    float Dot(const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
     // CascadeHeadingStep, CascadeDepthAnchor: a fit that holds still while the camera moves. The game builds the light's
     // x and y from the sun's direction and the camera's (CE 0x92b6c0, the only call from the fit CE 0x92bb50, which
     // takes the camera's z axis at grcViewport +0x160), so the cascades turn with every turn and tilt of the camera, and
@@ -248,6 +250,26 @@ namespace RenderSkip
     bool bFitChangedPass = false;
     uint32_t headingSteps = 0, anchorMoves = 0, refusedTurn = 0, refusedEdge = 0, refusedStep = 0;
     float largestEdge = 0.0f;
+    uint32_t headingEpoch = 0;      // heading steps since the start, never reset
+
+    // CascadeStableWindows: the game fits each cascade's window tightly around its part of the view anew every frame, so
+    // its size and place change by a few texels even with a still camera, and by many with a turn or a tilt. Its
+    // texels then fall on a new grid each frame (the edges of the shadows crawl as you move), and a cascade kept from
+    // the frame before sits on another grid than the one drawn in this frame (they shook in turns). Here, right after
+    // the fit (CE 0x928bb2, the main thread building the cascades' draw list, before any is drawn), each window keeps
+    // its size (5 % more than the game's, held until the game's grows past it, shrinks under 4/5 of it or the heading
+    // steps) and its centre goes to whole texels from the depth's anchor in the light's axes, which stay put between
+    // the steps; the frame copy's bounds (+0x1f0 min x, +0x200 min y, +0x210 max x, +0x220 max y, a float a cascade),
+    // from which the game makes the casters' matrices, and the shaders' scales and offsets are both set by it.
+    bool bStableWindows = true;
+    uintptr_t fitMatrixReturn = 0;  // where CE 0x92dd20 returns to in CE 0x928a90, the fit's own copy's matrix
+    const uint32_t* pFitIndex = nullptr;
+    uintptr_t frameCopies = 0;
+    float fitMatrix[16]{};
+    bool fitMatrixCaught = false;
+    float heldSize[4][2]{};         // metres across, x and y
+    uint32_t heldEpoch[4] = { ~0u, ~0u, ~0u, ~0u };
+    uint32_t windowResizes = 0;
 
     // The fit's call of CE 0x92b6c0 (render thread, before the pass's cascades are locked): the camera's z axis the
     // light's axes are built from (xmm3, xmm2, xmm1 = grcViewport +0x160, +0x164, +0x168, negated after) in steps
@@ -268,6 +290,7 @@ namespace RenderSkip
                     stableHeading = std::remainder(std::round(heading / fHeadingStep) * fHeadingStep, 360.0f);
                     fitChangedPasses = 2;
                     headingSteps++;
+                    headingEpoch++;
                 }
                 float radians = stableHeading / 57.29578f;
                 regs.xmm3.f32[0] = std::cos(radians);
@@ -289,6 +312,73 @@ namespace RenderSkip
         }
     }
 
+    // Right after the fit: the windows held and put on whole texels (see bStableWindows)
+    void StableWindows()
+    {
+        if (!fitMatrixCaught || !pFitIndex || !frameCopies)
+            return;
+        fitMatrixCaught = false;
+        float* frame = (float*)(frameCopies + *pFitIndex * 0x270);
+        // Four vectors of running sums: value of cascade k = the sum of the first k + 1 terms
+        float values[4][4];
+        for (int v = 0; v < 4; v++)
+        {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; k++)
+            {
+                sum += frame[v * 4 + k];
+                values[k][v] = sum;
+            }
+        }
+        for (int k = 0; k < 4; k++)
+        {
+            bool resize = heldEpoch[k] != headingEpoch;
+            float size[2]{}, perMetre[2]{};
+            for (int axis = 0; axis < 2; axis++)
+            {
+                float A[3] = { fitMatrix[axis], fitMatrix[4 + axis], fitMatrix[8 + axis] };
+                perMetre[axis] = std::sqrt(Dot(A, A));
+                float mn = frame[(axis ? 0x200 : 0x1f0) / 4 + k], mx = frame[(axis ? 0x220 : 0x210) / 4 + k];
+                size[axis] = perMetre[axis] > 0.0f ? (mx - mn) / perMetre[axis] : 0.0f;
+                if (!(size[axis] > 0.0f) || !std::isfinite(size[axis]) || values[k][axis] == 0.0f)
+                    goto next;
+                if (size[axis] > heldSize[k][axis] || size[axis] < heldSize[k][axis] * 0.8f)
+                    resize = true;
+            }
+            if (resize)
+            {
+                for (int axis = 0; axis < 2; axis++)
+                    heldSize[k][axis] = size[axis] * 1.05f;
+                heldEpoch[k] = headingEpoch;
+                windowResizes++;
+            }
+            for (int axis = 0; axis < 2; axis++)
+            {
+                float A[3] = { fitMatrix[axis], fitMatrix[4 + axis], fitMatrix[8 + axis] };
+                float& mn = frame[(axis ? 0x200 : 0x1f0) / 4 + k];
+                float& mx = frame[(axis ? 0x220 : 0x210) / 4 + k];
+                float held = heldSize[k][axis], texel = held / float(cascadeSide);
+                // Whole texels from the anchor (t is the matrix's x or y, the bounds' and the shaders' alike)
+                float origin = bAnchored ? Dot(A, depthAnchor) + fitMatrix[12 + axis] : 0.0f;
+                float centre = std::round(((mn + mx) * 0.5f - origin) / perMetre[axis] / texel) * texel;
+                float newMn = origin + (centre - held * 0.5f) * perMetre[axis];
+                float newMx = origin + (centre + held * 0.5f) * perMetre[axis];
+                // The same edge of the quarter at the new bounds: u = t * scale + offset
+                float scale = values[k][axis], offset = values[k][2 + axis];
+                float edge = mn * scale + offset;
+                float newScale = scale * (mx - mn) / (newMx - newMn);
+                values[k][axis] = newScale;
+                values[k][2 + axis] = edge - newMn * newScale;
+                mn = newMn;
+                mx = newMx;
+            }
+        next:;
+        }
+        for (int v = 0; v < 4; v++)
+            for (int k = 0; k < 4; k++)
+                frame[v * 4 + k] = values[k][v] - (k ? values[k - 1][v] : 0.0f);
+    }
+
     // CE 0x92dd5d, the matrix made from a frame copy (its pointer the caller's first argument), for the casters and for
     // the shaders that read the cascades alike: the depth from the anchor instead of the copy's origin
     void AnchorDepth(SafetyHookContext& regs)
@@ -304,7 +394,14 @@ namespace RenderSkip
         matrix[15] += (depthAnchor[0] - origin[0]) * sun[0] + (depthAnchor[1] - origin[1]) * sun[1] + (depthAnchor[2] - origin[2]) * sun[2];
     }
 
-    float Dot(const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+    // The same hook, the matrix of the fit's own copy (CE 0x928a90): for StableWindows right after it
+    void CatchFitMatrix(SafetyHookContext& regs)
+    {
+        if (!fitMatrixReturn || *(uintptr_t*)(regs.ebp + 4) != fitMatrixReturn)
+            return;
+        memcpy(fitMatrix, (const void*)regs.eax, sizeof(fitMatrix));
+        fitMatrixCaught = true;
+    }
 
     // Cascade k drawn with matrix am and scales and offsets av, read through matrix bm: the scales and offsets that
     // match it at the camera, and how far it is off at the cascade's reach in texels and in depth in metres
@@ -824,7 +921,21 @@ public:
             {
                 static auto AxesHook = safetyhook::create_mid(axes.get_first(24), StableAxes);
             }
-            if (!bFarCascadesHalfRate && !bMidCascadeHalfRate && !(fDepthAnchor > 0.0f))
+            // The windows: the fit's own matrix (CE 0x928a90: index [0x1174790], copies at 0x11a1c50, returns to +0x24)
+            // and right after its call (CE 0x928bb2, xor esi, esi)
+            bStableWindows = iniReader.ReadInteger("SHADOWS", "CascadeStableWindows", 1) != 0 && fHeadingStep > 0.0f;
+            auto fitCopy = hook::pattern("8B 0D ? ? ? ? 69 C9 70 02 00 00 81 C1 ? ? ? ? 51 8D 41 60 C7 04 24 00 00 00 00 50 51 E8");
+            auto afterFit = hook::pattern("83 C4 08 E8 ? ? ? ? 33 F6 89 74 24 10 EB");
+            if (fitCopy.empty() || afterFit.empty() || matrix.empty())
+                bStableWindows = false;
+            if (bStableWindows)
+            {
+                pFitIndex = *fitCopy.get_first<const uint32_t*>(2);
+                frameCopies = *fitCopy.get_first<uintptr_t>(14);
+                fitMatrixReturn = reinterpret_cast<uintptr_t>(fitCopy.get_first(0x24));
+                static auto WindowsHook = safetyhook::create_mid(afterFit.get_first(8), [](SafetyHookContext&) { StableWindows(); });
+            }
+            if (!bFarCascadesHalfRate && !bMidCascadeHalfRate && !(fDepthAnchor > 0.0f) && !bStableWindows)
                 return;
             auto setter = hook::pattern("56 FF 35 ? ? ? ? E8 ? ? ? ? 8D 46 10 50 FF 35");
             if (matrix.empty())
@@ -834,6 +945,7 @@ public:
             static auto MatrixHook = safetyhook::create_mid(matrix.get_first(0), [](SafetyHookContext& regs)
             {
                 AnchorDepth(regs);
+                CatchFitMatrix(regs);
                 // Only the setter's: the cascades' own draws set the matrix through here too
                 if (!setterReturn || *(uintptr_t*)(regs.ebp + 4) != setterReturn)
                     return;
@@ -862,6 +974,7 @@ public:
             FusionLog::Write("RenderSkip", "Settings", "cascades' fit: heading %s, depth %s\n",
                 fHeadingStep > 0.0f ? std::format("in steps of {} degrees", fHeadingStep).c_str() : "the camera's",
                 fDepthAnchor > 0.0f ? std::format("from a point moved on every {} m", fDepthAnchor).c_str() : "from the camera");
+            FusionLog::Write("RenderSkip", "Settings", "cascades' windows: %s\n", bStableWindows ? "held in size, on whole texels" : "the game's");
         };
 
         // A trace starts some 20 seconds into the game; and every 3600 frames, what was left out
@@ -899,8 +1012,9 @@ public:
                     "not left out: turned or moved in depth {}, window past the kept one {} (worst {:.1f} texels), a step of the fit {}; ",
                     folded, FoldTexels, FoldDepth, misses, largestTexels, largestDepth, refusedTurn, refusedEdge, largestEdge, refusedStep);
             if (fHeadingStep > 0.0f || fDepthAnchor > 0.0f)
-                text += std::format("fit: {} heading steps of {} degrees, depth anchor moved {} times; ", headingSteps, fHeadingStep, anchorMoves);
-            folded = misses = refusedTurn = refusedEdge = refusedStep = headingSteps = anchorMoves = 0;
+                text += std::format("fit: {} heading steps of {} degrees, depth anchor moved {} times, windows resized {} times; ", headingSteps,
+                    fHeadingStep, anchorMoves, windowResizes);
+            folded = misses = refusedTurn = refusedEdge = refusedStep = headingSteps = anchorMoves = windowResizes = 0;
             largestTexels = largestDepth = largestEdge = 0.0f;
             for (int kind = CascadeTarget; kind < Kinds; kind++)
                 if (dropped[kind] || halfRates[kind].skipped || halfRates[kind].kept)
