@@ -589,7 +589,7 @@ namespace Lighting20
     namespace Sharing
     {
         static bool enabled = true;
-        static std::atomic<uint32_t> shared{0}, mostInFrame{0};
+        static std::atomic<uint32_t> shared{0}, mostInFrame{0}, duplicates{0}, duplicatesUnshadowed{0};
 
         static bool SameProjection(const rage::CLightSource& a, const rage::CLightSource& b) noexcept
         {
@@ -597,6 +597,38 @@ namespace Lighting20
                 !std::memcmp(&a.mDirection, &b.mDirection, sizeof(a.mDirection)) &&
                 a.mType == b.mType && a.mRadius == b.mRadius && a.mInnerConeAngle == b.mInnerConeAngle &&
                 a.mOuterConeAngle == b.mOuterConeAngle && a.mInteriorIndex == b.mInteriorIndex && a.mRoomIndex == b.mRoomIndex;
+        }
+
+        // The same key twice in one list (a light the game hands over twice in a frame, as some model lights and
+        // headlights are) made the allocation pass reject the whole pass (rejected_duplicate, a quarter of the passes
+        // in a log) and leave the slots to the game. A light the same as the first with its key uses its map; one
+        // elsewhere with the same key would find the first's map, so it casts none.
+        static void Duplicates(rage::CLightSource* lights, uint32_t count) noexcept
+        {
+            constexpr uint32_t Cells = 2048;
+            std::array<uint16_t, Cells> table{}; // light index + 1
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                auto& light = lights[i];
+                const auto key = static_cast<uint32_t>(light.mCastShadows);
+                if (!(light.mFlags & rage::LF_DYNAMIC_SHADOW) || !key || key == UINT32_MAX || PlayerShadowAllocation::IsSharedMap(i)) continue;
+                uint32_t cell = (key * 0x9E3779B1u) >> 21;
+                for (; table[cell]; cell = (cell + 1) & (Cells - 1))
+                {
+                    const auto& first = lights[table[cell] - 1];
+                    if (static_cast<uint32_t>(first.mCastShadows) != key) continue;
+                    if (SameProjection(light, first))
+                        PlayerShadowAllocation::MarkSharedMap(i);
+                    else
+                    {
+                        light.mFlags &= ~rage::LF_DYNAMIC_SHADOW;
+                        ++duplicatesUnshadowed;
+                    }
+                    ++duplicates;
+                    break;
+                }
+                if (!table[cell]) table[cell] = static_cast<uint16_t>(i + 1);
+            }
         }
 
         static void Apply(rage::CLightSource* lights, uint32_t count) noexcept
@@ -620,7 +652,7 @@ namespace Lighting20
                     if (isShared[b]) continue;
                     auto& light = lights[candidates[a]];
                     const auto& first = lights[candidates[b]];
-                    if (light.mCastShadows == first.mCastShadows || !SameProjection(light, first)) continue;
+                    if (light.mCastShadows == first.mCastShadows || !SameProjection(light, first)) continue; // the same key: Duplicates
                     light.mCastShadows = first.mCastShadows;
                     PlayerShadowAllocation::MarkSharedMap(candidates[a]);
                     isShared[a] = true;
@@ -648,6 +680,7 @@ namespace Lighting20
         World::PromoteCachedLamps(lights, count);
         MergeWithNative(lights, count);
         Sharing::Apply(lights, count);
+        Sharing::Duplicates(lights, count);
     }
 
     // The car whose lamp (headlight of a pair or rear lamp) a slot's key is, so its own map leaves it out.
@@ -681,6 +714,7 @@ namespace Lighting20
                 << " | buildings " << (Buildings::On() ? "on" : "off") << " passes=" << Buildings::passes.load()
                 << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load()
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
+                << " duplicates=" << Sharing::duplicates.load() << " duplicates_unshadowed=" << Sharing::duplicatesUnshadowed.load()
                 << " most_in_frame=" << Sharing::mostInFrame.load() << " not_inserted=" << PlayerShadowAllocation::sharedMapsSkipped.load()
                 << " | stable map slots " << (PlayerShadowAllocation::preCacheHook ? (PlayerShadowAllocation::stableOrdinals ? "on" : "vacancy only") : "off")
                 << " passes=" << PlayerShadowAllocation::stableOrdinalPasses.load() << " moves=" << PlayerShadowAllocation::stableOrdinalMoves.load()

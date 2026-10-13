@@ -102,6 +102,7 @@ namespace PlayerShadowAllocation
     static thread_local State state;
     // A light of this pass sharing another's map: the game does not insert it among the candidates.
     static void MarkSharedMap(uint32_t index) noexcept { if (index < state.sharedMap.size()) state.sharedMap[index] = state.passSerial; }
+    static bool IsSharedMap(uint32_t index) noexcept { return index < state.sharedMap.size() && state.passSerial && state.sharedMap[index] == state.passSerial; }
 
     struct Invocation
     {

@@ -8594,6 +8594,7 @@ private:
             int32_t slot;     // the car's place in the vehicle pool and its flags then, to tell it is still the same car
             uint8_t flags;
             float velocity[3]; // m/s, from the last hand over
+            float turning;     // radians a second about the vertical, from the last hand over
         };
         static constexpr int kBoxes = 160, kPerLight = 5, kLists = 8;
         struct List
@@ -8764,7 +8765,7 @@ private:
             // Each car's speed since the last hand over, which VehicleBoxShadowsLeadFrames moves its box ahead by. A
             // second hand over in the same frame (CE 0xac507b) keeps the speeds it had.
             {
-                struct Seen { float centre[3], velocity[3]; };
+                struct Seen { float centre[3], velocity[3], forward[2], turning; };
                 static std::unordered_map<uintptr_t, Seen> previous;
                 static LARGE_INTEGER frequency{}, before{};
                 LARGE_INTEGER time{};
@@ -8781,18 +8782,28 @@ private:
                     const auto it = previous.find(box.vehicle);
                     Seen seen{};
                     std::copy_n(box.centre, 3, seen.centre);
+                    std::copy_n(box.forward, 2, seen.forward);
                     if (it != previous.end())
                     {
                         if (step)
+                        {
                             for (int k = 0; k < 3; ++k)
                                 seen.velocity[k] = std::clamp((box.centre[k] - it->second.centre[k]) / dt, -80.0f, 80.0f);
+                            // the signed angle from the forward then to the forward now
+                            const float* f0 = it->second.forward;
+                            const float angle = std::atan2(f0[0] * box.forward[1] - f0[1] * box.forward[0], f0[0] * box.forward[0] + f0[1] * box.forward[1]);
+                            seen.turning = std::clamp(angle / dt, -10.0f, 10.0f);
+                        }
                         else
                         {
                             std::copy_n(it->second.centre, 3, seen.centre);
                             std::copy_n(it->second.velocity, 3, seen.velocity);
+                            std::copy_n(it->second.forward, 2, seen.forward);
+                            seen.turning = it->second.turning;
                         }
                     }
                     std::copy_n(seen.velocity, 3, box.velocity);
+                    box.turning = seen.turning;
                     current.emplace(box.vehicle, seen);
                 }
                 if (step || !before.QuadPart)
@@ -9266,6 +9277,12 @@ private:
                         const float lead = R.fVehicleBoxShadowLeadFrames * (std::min)(drawn->frameSeconds, 0.1f);
                         for (int k = 0; k < 3; ++k)
                             box.centre[k] += box.velocity[k] * lead;
+                        // and turned on by the way it turns: moved only, the box of a car turning or spun kept the
+                        // heading it had when handed over, and its shadow did not turn with the car
+                        const float turn = box.turning * lead, c = std::cos(turn), s = std::sin(turn);
+                        const float fx = box.forward[0] * c - box.forward[1] * s, fy = box.forward[0] * s + box.forward[1] * c;
+                        box.forward[0] = fx;
+                        box.forward[1] = fy;
                         if (box.vehicle == drawn->watched)
                             ++traceLeadWatched;
                     }
