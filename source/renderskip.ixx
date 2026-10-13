@@ -269,7 +269,10 @@ namespace RenderSkip
     bool fitMatrixCaught = false;
     float heldSize[4][2]{};         // metres across, x and y
     uint32_t heldEpoch[4] = { ~0u, ~0u, ~0u, ~0u };
-    uint32_t windowResizes = 0;
+    uint32_t windowResizes = 0, ballWindows = 0, uncovered = 0;
+    bool bSphereWindows = true;
+    const float* fitViewport = nullptr;     // grcViewport the fit was given (CE 0x11a2500)
+    const float* pSplits = nullptr;         // the fit's five split distances (CE 0x103693c), cascade k from k to k + 1
 
     // The fit's call of CE 0x92b6c0 (render thread, before the pass's cascades are locked): the camera's z axis the
     // light's axes are built from (xmm3, xmm2, xmm1 = grcViewport +0x160, +0x164, +0x168, negated after) in steps
@@ -278,6 +281,7 @@ namespace RenderSkip
         const float* viewport = *(const float**)(regs.ebp + 8);
         if (!viewport)
             return;
+        fitViewport = viewport;
         if (fHeadingStep > 0.0f)
         {
             float x = viewport[0x160 / 4], y = viewport[0x164 / 4];
@@ -330,49 +334,132 @@ namespace RenderSkip
                 values[k][v] = sum;
             }
         }
+        const float* A[2] = { nullptr, nullptr };
+        float rows[2][3], perMetre[2];
+        for (int axis = 0; axis < 2; axis++)
+        {
+            rows[axis][0] = fitMatrix[axis];
+            rows[axis][1] = fitMatrix[4 + axis];
+            rows[axis][2] = fitMatrix[8 + axis];
+            A[axis] = rows[axis];
+            perMetre[axis] = std::sqrt(Dot(A[axis], A[axis]));
+            if (!(perMetre[axis] > 0.0f))
+                return;
+        }
         for (int k = 0; k < 4; k++)
         {
-            bool resize = heldEpoch[k] != headingEpoch;
-            float size[2]{}, perMetre[2]{};
+            float mn[2], mx[2], size[2];
+            bool usable = true;
             for (int axis = 0; axis < 2; axis++)
             {
-                float A[3] = { fitMatrix[axis], fitMatrix[4 + axis], fitMatrix[8 + axis] };
-                perMetre[axis] = std::sqrt(Dot(A, A));
-                float mn = frame[(axis ? 0x200 : 0x1f0) / 4 + k], mx = frame[(axis ? 0x220 : 0x210) / 4 + k];
-                size[axis] = perMetre[axis] > 0.0f ? (mx - mn) / perMetre[axis] : 0.0f;
-                if (!(size[axis] > 0.0f) || !std::isfinite(size[axis]) || values[k][axis] == 0.0f)
-                    goto next;
-                if (size[axis] > heldSize[k][axis] || size[axis] < heldSize[k][axis] * 0.8f)
-                    resize = true;
+                mn[axis] = frame[(axis ? 0x200 : 0x1f0) / 4 + k];
+                mx[axis] = frame[(axis ? 0x220 : 0x210) / 4 + k];
+                size[axis] = (mx[axis] - mn[axis]) / perMetre[axis];
+                usable = usable && size[axis] > 0.0f && std::isfinite(size[axis]) && values[k][axis] != 0.0f;
             }
+            if (!usable)
+                continue;
+            // CascadeSphereWindows: the ball around the cascade's part of the view (from split k to split k + 1 of the
+            // fit's table, the view's half widths from its projection) is the same whichever way the camera looks, so
+            // a window of its width, square, round its centre needs no new size as the camera turns or tilts
+            float want[2] = { size[0], size[1] }, centre[2] = { (mn[0] + mx[0]) * 0.5f, (mn[1] + mx[1]) * 0.5f };
+            bool ball = false;
+            if (bSphereWindows && fitViewport && pSplits)
+            {
+                const float* projection = fitViewport + 0x1c0 / 4;
+                const float* inverse = fitViewport + 0x140 / 4;
+                float tx = projection[0] != 0.0f ? 1.0f / std::abs(projection[0]) : 0.0f;
+                float ty = projection[5] != 0.0f ? 1.0f / std::abs(projection[5]) : 0.0f;
+                float n = pSplits[k], f = pSplits[k + 1];
+                if (tx > 0.0f && ty > 0.0f && tx < 10.0f && ty < 10.0f && n >= 0.0f && f > n)
+                {
+                    float spread = tx * tx + ty * ty;
+                    float along = 0.5f * (f + n) * (1.0f + spread), radius;
+                    if (along >= f)
+                    {
+                        along = f;
+                        radius = f * std::sqrt(spread);
+                    }
+                    else
+                        radius = std::sqrt((f - along) * (f - along) + f * f * spread);
+                    // The camera looks along its z axis or against it: the ball's centre nearer the game's window
+                    float best[2]{}, bestOff = INFINITY;
+                    for (float sign : { -1.0f, 1.0f })
+                    {
+                        float at[3] = { inverse[12] + sign * inverse[8] * along, inverse[13] + sign * inverse[9] * along,
+                            inverse[14] + sign * inverse[10] * along };
+                        float c[2], off = 0.0f;
+                        for (int axis = 0; axis < 2; axis++)
+                        {
+                            c[axis] = Dot(A[axis], at) + fitMatrix[12 + axis];
+                            off += std::abs(c[axis] - centre[axis]) / perMetre[axis];
+                        }
+                        if (off < bestOff)
+                        {
+                            bestOff = off;
+                            best[0] = c[0];
+                            best[1] = c[1];
+                        }
+                    }
+                    if (bestOff < radius)
+                    {
+                        ball = true;
+                        for (int axis = 0; axis < 2; axis++)
+                        {
+                            want[axis] = 2.0f * radius * 1.01f;
+                            centre[axis] = best[axis];
+                        }
+                        ballWindows++;
+                    }
+                }
+            }
+            bool resize = heldEpoch[k] != headingEpoch;
+            for (int axis = 0; axis < 2; axis++)
+                if (want[axis] > heldSize[k][axis] || want[axis] < heldSize[k][axis] * (ball ? 0.96f : 0.8f))
+                    resize = true;
             if (resize)
             {
                 for (int axis = 0; axis < 2; axis++)
-                    heldSize[k][axis] = size[axis] * 1.05f;
+                    heldSize[k][axis] = want[axis] * (ball ? 1.02f : 1.05f);
                 heldEpoch[k] = headingEpoch;
                 windowResizes++;
             }
+            float newMn[2], newMx[2];
+            bool covers = true;
+            for (int pass = 0; pass < 2; pass++)
+            {
+                covers = true;
+                for (int axis = 0; axis < 2; axis++)
+                {
+                    float held = heldSize[k][axis], texel = held / float(cascadeSide);
+                    // Whole texels from the anchor (t is the matrix's x or y, the bounds' and the shaders' alike)
+                    float origin = bAnchored ? Dot(A[axis], depthAnchor) + fitMatrix[12 + axis] : 0.0f;
+                    float at = std::round((centre[axis] - origin) / perMetre[axis] / texel) * texel;
+                    newMn[axis] = origin + (at - held * 0.5f) * perMetre[axis];
+                    newMx[axis] = origin + (at + held * 0.5f) * perMetre[axis];
+                    covers = covers && newMn[axis] <= mn[axis] && newMx[axis] >= mx[axis];
+                }
+                if (covers)
+                    break;
+                // The game's window sticks out of the ball's: round the game's own centre, as large as both
+                for (int axis = 0; axis < 2; axis++)
+                {
+                    centre[axis] = (mn[axis] + mx[axis]) * 0.5f;
+                    heldSize[k][axis] = std::max(heldSize[k][axis], size[axis] * 1.05f);
+                }
+                uncovered++;
+            }
             for (int axis = 0; axis < 2; axis++)
             {
-                float A[3] = { fitMatrix[axis], fitMatrix[4 + axis], fitMatrix[8 + axis] };
-                float& mn = frame[(axis ? 0x200 : 0x1f0) / 4 + k];
-                float& mx = frame[(axis ? 0x220 : 0x210) / 4 + k];
-                float held = heldSize[k][axis], texel = held / float(cascadeSide);
-                // Whole texels from the anchor (t is the matrix's x or y, the bounds' and the shaders' alike)
-                float origin = bAnchored ? Dot(A, depthAnchor) + fitMatrix[12 + axis] : 0.0f;
-                float centre = std::round(((mn + mx) * 0.5f - origin) / perMetre[axis] / texel) * texel;
-                float newMn = origin + (centre - held * 0.5f) * perMetre[axis];
-                float newMx = origin + (centre + held * 0.5f) * perMetre[axis];
                 // The same edge of the quarter at the new bounds: u = t * scale + offset
                 float scale = values[k][axis], offset = values[k][2 + axis];
-                float edge = mn * scale + offset;
-                float newScale = scale * (mx - mn) / (newMx - newMn);
+                float edge = mn[axis] * scale + offset;
+                float newScale = scale * (mx[axis] - mn[axis]) / (newMx[axis] - newMn[axis]);
                 values[k][axis] = newScale;
-                values[k][2 + axis] = edge - newMn * newScale;
-                mn = newMn;
-                mx = newMx;
+                values[k][2 + axis] = edge - newMn[axis] * newScale;
+                frame[(axis ? 0x200 : 0x1f0) / 4 + k] = newMn[axis];
+                frame[(axis ? 0x220 : 0x210) / 4 + k] = newMx[axis];
             }
-        next:;
         }
         for (int v = 0; v < 4; v++)
             for (int k = 0; k < 4; k++)
@@ -909,7 +996,7 @@ public:
 
             // The cascades left out follow the camera: the setter's matrix (CE 0x92dd5d: eax the matrix, push eax for
             // the matrix's global) and its scales and offsets (CE 0x92d856: esi the frame's copy, push esi for the first)
-            fHeadingStep = std::clamp(iniReader.ReadFloat("SHADOWS", "CascadeHeadingStep", 15.0f), 0.0f, 90.0f);
+            fHeadingStep = std::clamp(iniReader.ReadFloat("SHADOWS", "CascadeHeadingStep", 360.0f), 0.0f, 360.0f);
             fDepthAnchor = std::clamp(iniReader.ReadFloat("SHADOWS", "CascadeDepthAnchor", 100.0f), 0.0f, 500.0f);
             fEdgeTexels = std::clamp(iniReader.ReadFloat("SHADOWS", "CascadeEdgeTexels", 4.0f), 0.0f, 256.0f);
             auto matrix = hook::pattern("50 FF 35 ? ? ? ? E8 ? ? ? ? 83 C4 18 8B E5 5D C3");
@@ -924,6 +1011,11 @@ public:
             // The windows: the fit's own matrix (CE 0x928a90: index [0x1174790], copies at 0x11a1c50, returns to +0x24)
             // and right after its call (CE 0x928bb2, xor esi, esi)
             bStableWindows = iniReader.ReadInteger("SHADOWS", "CascadeStableWindows", 1) != 0 && fHeadingStep > 0.0f;
+            bSphereWindows = iniReader.ReadInteger("SHADOWS", "CascadeSphereWindows", 1) != 0;
+            // The split table the fit reads for each cascade's part of the view (CE 0x92c00e: movss xmm0, [esi*4+0x1036940]
+            // ... movss xmm0, [esi*4+0x103693c])
+            if (auto splits = hook::pattern("F3 0F 10 04 B5 ? ? ? ? 51 F3 0F 11 44 24 10 F3 0F 10 04 B5"); !splits.empty())
+                pSplits = *splits.get_first<const float*>(21);
             auto fitCopy = hook::pattern("8B 0D ? ? ? ? 69 C9 70 02 00 00 81 C1 ? ? ? ? 51 8D 41 60 C7 04 24 00 00 00 00 50 51 E8");
             auto afterFit = hook::pattern("83 C4 08 E8 ? ? ? ? 33 F6 89 74 24 10 EB");
             if (fitCopy.empty() || afterFit.empty() || matrix.empty())
@@ -972,9 +1064,9 @@ public:
                 bFarCascadesHalfRate ? (bFollow ? "in turns, following the camera" : "in turns while the camera keeps still") : "every frame",
                 bReflectionsHalfRate ? "every other frame" : "every frame");
             FusionLog::Write("RenderSkip", "Settings", "cascades' fit: heading %s, depth %s\n",
-                fHeadingStep > 0.0f ? std::format("in steps of {} degrees", fHeadingStep).c_str() : "the camera's",
+                fHeadingStep >= 360.0f ? "fixed in the world" : fHeadingStep > 0.0f ? std::format("in steps of {} degrees", fHeadingStep).c_str() : "the camera's",
                 fDepthAnchor > 0.0f ? std::format("from a point moved on every {} m", fDepthAnchor).c_str() : "from the camera");
-            FusionLog::Write("RenderSkip", "Settings", "cascades' windows: %s\n", bStableWindows ? "held in size, on whole texels" : "the game's");
+            FusionLog::Write("RenderSkip", "Settings", "cascades' windows: %s\n", bStableWindows ? (bSphereWindows ? "round the ball of the view's part, on whole texels" : "held in size, on whole texels") : "the game's");
         };
 
         // A trace starts some 20 seconds into the game; and every 3600 frames, what was left out
@@ -1012,9 +1104,9 @@ public:
                     "not left out: turned or moved in depth {}, window past the kept one {} (worst {:.1f} texels), a step of the fit {}; ",
                     folded, FoldTexels, FoldDepth, misses, largestTexels, largestDepth, refusedTurn, refusedEdge, largestEdge, refusedStep);
             if (fHeadingStep > 0.0f || fDepthAnchor > 0.0f)
-                text += std::format("fit: {} heading steps of {} degrees, depth anchor moved {} times, windows resized {} times; ", headingSteps,
-                    fHeadingStep, anchorMoves, windowResizes);
-            folded = misses = refusedTurn = refusedEdge = refusedStep = headingSteps = anchorMoves = windowResizes = 0;
+                text += std::format("fit: {} heading steps of {} degrees, depth anchor moved {} times, windows resized {} times, {} round the ball, "
+                    "{} too small for the game's; ", headingSteps, fHeadingStep, anchorMoves, windowResizes, ballWindows, uncovered);
+            folded = misses = refusedTurn = refusedEdge = refusedStep = headingSteps = anchorMoves = windowResizes = ballWindows = uncovered = 0;
             largestTexels = largestDepth = largestEdge = 0.0f;
             for (int kind = CascadeTarget; kind < Kinds; kind++)
                 if (dropped[kind] || halfRates[kind].skipped || halfRates[kind].kept)
