@@ -43,7 +43,7 @@ import temporal;
 // The slots are taken over as the other hooks of them do, each passing on to what was there before.
 export namespace RenderSkip
 {
-    bool bCascadesAtNight = false;
+    bool bCascadesAtNight = true;
     bool bReflectionsHalfRate = true;
     bool bFarCascadesHalfRate = true;
     bool bMidCascadeHalfRate = false;
@@ -900,7 +900,7 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
-            bCascadesAtNight = iniReader.ReadInteger("SHADOWS", "CascadeShadowsAtNight", 0) != 0;
+            bCascadesAtNight = iniReader.ReadInteger("SHADOWS", "CascadeShadowsAtNight", 1) != 0;
             bReflectionsHalfRate = iniReader.ReadInteger("MISC", "ReflectionsHalfRate", 1) != 0;
             bFarCascadesHalfRate = iniReader.ReadInteger("SHADOWS", "FarCascadesHalfRate", 1) != 0;
             bMidCascadeHalfRate = iniReader.ReadInteger("SHADOWS", "MidCascadeHalfRate", 0) != 0;

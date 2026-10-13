@@ -46,7 +46,9 @@ namespace fusionfix::shadows::budget
     {
     public:
         static constexpr std::size_t SlotCount = 7;
-        static constexpr std::size_t InputCapacity = 512;
+        // The game's own light list limit: cmp eax, 0x280 at CE 0xABD2CA. The candidates are not
+        // the seven maps; 512 rejected the whole pass in busy scenes and left the game to choose.
+        static constexpr std::size_t InputCapacity = 640;
         static constexpr std::uint32_t InvalidIndex = (std::numeric_limits<std::uint32_t>::max)();
 
         struct Policy
@@ -116,6 +118,21 @@ namespace fusionfix::shadows::budget
         // key/index ownership rejects every involved record at Finalize.
         bool Add(Candidate candidate) noexcept
         {
+            return AddImpl(candidate, false);
+        }
+
+        // For the allocation pass, which checked every key and index of this pass in its own tables:
+        // skips the search for duplicates over all candidates added so far.
+        bool AddUnique(Candidate candidate) noexcept { return AddImpl(candidate, true); }
+        bool UniqueInputSafe() const noexcept
+        {
+            return begun_ && !finalized_ && !overflow_ &&
+                !selection_.unsupportedIdentity && !selection_.invalidInput;
+        }
+
+    private:
+        bool AddImpl(Candidate candidate, bool unique) noexcept
+        {
             if (!begun_ || finalized_ || !candidate.engineEligible) return false;
             if (!candidate.key)
             {
@@ -135,7 +152,7 @@ namespace fusionfix::shadows::budget
             if (!Eligible(candidate)) return false;
             bool ambiguous = false;
             std::size_t same = InputCapacity;
-            for (std::size_t i = 0; i < count_; ++i)
+            for (std::size_t i = 0; !unique && i < count_; ++i)
             {
                 auto& record = input_[i];
                 const bool identical = SameIdentity(record.candidate, candidate) &&
@@ -170,6 +187,8 @@ namespace fusionfix::shadows::budget
             input_[count_++] = {candidate, ambiguous};
             return !ambiguous;
         }
+
+    public:
 
         const Selection& Finalize() noexcept
         {

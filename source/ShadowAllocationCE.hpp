@@ -31,6 +31,11 @@ namespace fusionfix::shadows::ce::allocation
     inline constexpr std::uint32_t SceneCameraTableRva = 0x00D8D818;
     inline constexpr std::uint32_t SceneViewportOffset = 0x10;
     inline constexpr std::uint32_t CacheResultRva = 0x00527E29;
+    // The selection's sort is over and the cache pick not begun (MOV DL, [0x119D011]): the seven chosen indices
+    // at esp+0x7C are final but for their order. Shared by the emergency vacancy and the stable map ordinals.
+    inline constexpr std::uint32_t PreCacheRva = 0x00527DFC;
+    // The candidate loop's continuation for a light the game does not insert (EDI list, ESI byte offset kept).
+    inline constexpr std::uint32_t CollectSkipRva = 0x00527DDC;
     inline constexpr std::uint32_t CachePickerRva = 0x00525D40;
     inline constexpr std::uint32_t CacheAge0Rva = 0x00DA0BEC;
     inline constexpr std::uint32_t FinalizeRva = 0x0052805D;

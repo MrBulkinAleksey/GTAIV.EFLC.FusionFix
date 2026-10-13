@@ -2351,15 +2351,20 @@ export namespace CPlayer
     uintptr_t (*findPlayerCar)() = nullptr;
 }
 
-// Vehicle box shadows (postfx) and the night shadow slots (nightshadows): a car a lamp shadows as a box is left out of
-// that lamp's shadow map, and does not make the lamp take a slot.
+// Vehicle box shadows (postfx) and the night shadow slots (nightshadows): a car that came under a lamp while the lamp
+// had no shadow slot keeps its box shadow from that lamp until it leaves; the lamp's map leaves it out, and it does
+// not make the lamp take a slot.
 export namespace VehicleBoxShadowsBridge
 {
-    // Render thread, as a lamp's slot is drawn: the cars the lamp at that position shadows as boxes, up to max. From
-    // then its boxes stay while it holds the slot, as its map no longer shows them.
+    struct BoxedPair { float position[3]; uintptr_t car; };
+    // Render thread, as a lamp's slot is drawn: the cars the lamp at that position keeps boxes for, up to max.
     int (*BoxedCars)(const float position[3], uintptr_t* cars, int max) = nullptr;
-    // How many cars a lamp shadows as boxes, 0 while box shadows are off.
-    std::atomic<int> perLamp{ 0 };
+    // Main thread: those lamps and cars as of the last frame drawn, up to max.
+    int (*CopyBoxedPairs)(BoxedPair* pairs, int max) = nullptr;
+    // Render thread: the key whose shadow map a light's key uses (the other lamp of its pair on one post), 0 for none.
+    uint32_t (*SharedMapKey)(uint32_t key) = nullptr;
+    // Render thread: for either lamp of a pair on one post, the point between them and their spacing; false otherwise.
+    bool (*LampPair)(uint32_t key, float between[3], float& spacing) = nullptr;
 }
 
 export namespace CPlayerPed
