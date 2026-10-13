@@ -265,6 +265,18 @@ Wet Weather
 [VehBoxShadows]
 Car Shadows From All Lamps
 
+[DualHeadlights]
+Dual headlight shadows
+
+[TailLightShad]
+Tail light shadows
+
+[WorldLightShad]
+Building light shadows
+
+[BuildingShad]
+Walls block headlights
+
 [VolumeClouds]
 Volumetric Clouds
 

@@ -16,6 +16,8 @@ namespace OwnHeadlightCaster
     static std::atomic<uint32_t> casterVisits{0}, carExcluded{0}, occupantsExcluded{0};
     static std::atomic<uint32_t> trafficCarExcluded{0};
     static std::atomic<uint32_t> boxedPasses{0}, boxedCarExcluded{0};
+    // Lighting20: the car whose lamp a key of ours is (dual headlights, tail lights), 0 for other keys.
+    static uintptr_t (*lampOwner)(uint32_t key) noexcept = nullptr;
 
     static policy::Context Capture(void* renderPass) noexcept
     {
@@ -63,6 +65,8 @@ namespace OwnHeadlightCaster
         if (bTrafficSelfShadowFix && kind == 4 && active &&
             CShadows::gStableHeadlightShadow.IsSubmittedBeam(key))
             result.trafficBeamKey = key;
+        if (lampOwner && kind == 4 && active)
+            result.lampOwner = lampOwner(key);
         if (!policy::OwnBeam(slot, kind, active, key, car)) return result;
         result.car = car;
         result.ownBeam = true;

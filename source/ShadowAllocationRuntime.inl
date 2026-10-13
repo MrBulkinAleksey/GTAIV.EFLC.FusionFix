@@ -20,6 +20,8 @@ namespace PlayerShadowAllocation
     static uint64_t (*labLampGeneration)(const rage::CLightSource&) noexcept=nullptr;
     static void (*observeShadowResult)() noexcept=nullptr;
     static void (*observeSubmittedLights)(const rage::CLightSource*,uint32_t) noexcept = nullptr;
+    // Changes the frame's lights before the game picks the slots (Lighting20: stale lamp keys, cached lamps).
+    static void (*prepareSources)(rage::CLightSource*,uint32_t) noexcept = nullptr;
     static SafetyHookMid collectHook, finalizeHook, lampDistanceHook, compareResultHook, cacheResultHook;
     static bool nativeLampPriority=false;
     static std::atomic<uint32_t> lampDistanceAdjusted{0};
@@ -872,6 +874,9 @@ namespace PlayerShadowAllocation
             ownerThread.compare_exchange_strong(expected, current, std::memory_order_relaxed);
             if (ownerThread.load(std::memory_order_relaxed) != current)
                 unsupportedThread.store(true, std::memory_order_relaxed);
+            if (state.depth == 1 && Enabled() && prepareSources && !unsupportedThread.load(std::memory_order_relaxed) &&
+                reinterpret_cast<uintptr_t>(CurrentLights()) >= 0x10000)
+                prepareSources(CurrentLights(), CurrentCount());
             if (state.depth != 1 || !Prepare()) RejectPass();
             else if(observeSubmittedLights && !unsupportedThread.load(std::memory_order_relaxed)) observeSubmittedLights(CurrentLights(),CurrentCount());
         }

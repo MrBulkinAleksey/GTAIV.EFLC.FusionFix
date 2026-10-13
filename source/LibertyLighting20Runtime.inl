@@ -1,0 +1,524 @@
+// Light families ported from Liberty's Shadows 2.0 (OnyxOak, https://www.nexusmods.com/gta4/mods/1459), GPL-3.0,
+// rewritten for this plugin: the same hook sites in CE 1.2.0.59 and the same rules, without its standalone checks
+// of official FusionFix builds.
+//
+// - Dual headlights: a car's two working headlights, one beam from the point between them, become two beams of half
+//   the intensity from the lamps themselves, each with its own shadow.
+// - Tail light shadows: the rear lamps' light (the game's own colour, switching and damage) casts shadows.
+// - World light shadows: lamps the game keeps cached take dynamic slots too, so cars and peds shadow from them;
+//   model lights the map authored without shadows get dynamic ones; lamps that are only a corona get a point light
+//   with a shadow.
+// - Building shadows: lights with no cached map (headlights, sirens, the lights above) draw the map's buildings into
+//   their dynamic maps, so their light no longer goes through walls. Needs the wd_local techniques the world shaders
+//   get from shaders/patches/world_local_shadow_depth.patch.
+//
+// Each family has its graphics menu toggle (Graphics > Lighting) and works while the night shadow allocation adapter
+// does (ExperimentalPlayerShadowAllocation=2 and the top Extra Night Shadows choice).
+namespace Lighting20
+{
+    static fusionfix::DiagnosticsLog log;
+    static std::string installStatus = "not installed";
+    static uintptr_t game = 0;
+
+    static bool Pref(std::optional<std::reference_wrapper<int32_t>>& ref) noexcept
+    {
+        return ref && ref->get() != 0;
+    }
+
+    static uint32_t Frame() noexcept { return CTimer::m_frameCount ? *CTimer::m_frameCount : 0; }
+
+    // A call instruction at site whose target is target, both image offsets.
+    static bool CallsTo(uint32_t site, uint32_t target) noexcept
+    {
+        const auto at = reinterpret_cast<const uint8_t*>(game + site);
+        return at[0] == 0xE8 && site + 5 + *reinterpret_cast<const int32_t*>(at + 1) == target;
+    }
+
+    static bool BytesAt(uint32_t site, std::initializer_list<uint8_t> bytes) noexcept
+    {
+        auto at = reinterpret_cast<const uint8_t*>(game + site);
+        for (auto b : bytes) if (*at++ != b) return false;
+        return true;
+    }
+
+    // Keys for lamps the game gives no key of their own: addresses in this block, so never a game object's pointer
+    // nor one of its owner + ordinal keys. A key stands for a vehicle pool slot and a lamp of the car in it; a new car
+    // in the slot takes the same keys, which only matters for the frame it is seen first.
+    namespace LampKeys
+    {
+        enum Channel : uint32_t { LeftHeadlight, RightHeadlight, TailLight0, TailLight1, Channels };
+        static constexpr uint32_t MaxVehicles = 4096;
+        alignas(16) static uint32_t block[MaxVehicles * Channels];
+        static std::atomic<uintptr_t> owners[MaxVehicles * Channels];
+        static std::atomic<uint32_t> frames[MaxVehicles * Channels];
+
+        static uint32_t Base() noexcept { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(block)); }
+
+        static bool Contains(uint32_t key) noexcept
+        {
+            return key >= Base() && key - Base() < sizeof(block) && !((key - Base()) & 3);
+        }
+
+        static uint32_t ChannelOf(uint32_t key) noexcept { return ((key - Base()) / 4) % Channels; }
+
+        // The key of a car's lamp this frame, 0 where the car is not in the vehicle pool.
+        static uint32_t Key(uintptr_t vehicle, uint32_t channel) noexcept
+        {
+            const auto pool = CVehicle::GetCheckedVehiclePool();
+            if (!pool || channel >= Channels) return 0;
+            const auto storage = reinterpret_cast<uintptr_t>(pool->m_aStorage);
+            if (vehicle < storage) return 0;
+            const auto offset = vehicle - storage, stride = static_cast<uintptr_t>(pool->m_nStorageSize);
+            const auto index = offset / stride;
+            if (offset % stride || index >= static_cast<uintptr_t>(pool->m_nSize) || index >= MaxVehicles ||
+                (pool->m_aFlags[index] & 0x80))
+                return 0;
+            const auto cell = index * Channels + channel;
+            owners[cell].store(vehicle, std::memory_order_relaxed);
+            frames[cell].store(Frame(), std::memory_order_release);
+            return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&block[cell]));
+        }
+
+        // The car whose lamp has this key, where it was submitted within the last two frames; 0 otherwise.
+        static uintptr_t Owner(uint32_t key) noexcept
+        {
+            if (!Contains(key)) return 0;
+            const auto cell = (key - Base()) / 4;
+            if (Frame() - frames[cell].load(std::memory_order_acquire) > 2) return 0;
+            return owners[cell].load(std::memory_order_relaxed);
+        }
+
+        static uintptr_t HeadlightOwner(uintptr_t key) noexcept
+        {
+            return key <= UINT32_MAX && Contains(static_cast<uint32_t>(key)) &&
+                ChannelOf(static_cast<uint32_t>(key)) <= RightHeadlight ? Owner(static_cast<uint32_t>(key)) : 0;
+        }
+    }
+
+    // ---------------------------------------------------------------- dual headlights
+    namespace Dual
+    {
+        static bool installed = false;
+        static std::optional<std::reference_wrapper<int32_t>> pref;
+        static SafetyHookMid pre, post;
+        static std::atomic<uint32_t> pairs{0}, fallbacks{0};
+
+        // The combined beam call 0xA3FE11 -> 0xA3E070 in progress: the car and its two lamps in the world.
+        struct Invocation { bool valid = false; uintptr_t car = 0; uint32_t frame = 0; float lamps[2][3]{}; };
+        static thread_local Invocation invocation;
+
+        static bool On() noexcept { return installed && Pref(pref) && bHeadlightShadows && bVehicleNightShadows; }
+
+        // At the call: [esp] the car's matrix, and the lamps' bone positions in the car's space at esp+0xA0 (the
+        // first lamp, bone edi) and esp+0x90 (the second), from 0xC65EA0 at 0xA3FCC1 / 0xA3FCD2.
+        static void Pre(SafetyHookContext& regs) noexcept
+        {
+            invocation = {};
+            if (!On()) return;
+            const auto matrix = *reinterpret_cast<const float* const*>(regs.esp);
+            const auto car = static_cast<uintptr_t>(regs.esi);
+            if (!matrix || !car || *reinterpret_cast<const uintptr_t*>(regs.esp + 0x28) != car) { ++fallbacks; return; }
+            const float* local[2] = { reinterpret_cast<const float*>(regs.esp + 0xA0), reinterpret_cast<const float*>(regs.esp + 0x90) };
+            for (int side = 0; side < 2; ++side)
+                for (int axis = 0; axis < 3; ++axis)
+                {
+                    const float* p = local[side];
+                    invocation.lamps[side][axis] = p[0] * matrix[axis] + p[1] * matrix[4 + axis] + p[2] * matrix[8 + axis] + matrix[12 + axis];
+                    if (!std::isfinite(invocation.lamps[side][axis])) { ++fallbacks; return; }
+                }
+            float apart = 0;
+            for (int axis = 0; axis < 3; ++axis)
+                apart += (invocation.lamps[0][axis] - invocation.lamps[1][axis]) * (invocation.lamps[0][axis] - invocation.lamps[1][axis]);
+            // Lamps at one point or metres apart are not a pair of headlights.
+            if (!(apart > 0.0001f && apart < 400.0f)) { ++fallbacks; return; }
+            invocation.valid = true;
+            invocation.car = car;
+            invocation.frame = Frame();
+        }
+
+        static void Post(SafetyHookContext&) noexcept { invocation = {}; }
+
+        // In the submission wrappers: the combined beam of the car in the call above becomes its two lamps' beams,
+        // each at half the intensity, with the cone, colour, range, room and flags of the combined one. False leaves
+        // the combined beam to the caller.
+        static bool Split(int a1, int a2, uint32_t flags, int direction, int tangent, int position, int a7, int a8,
+            int a9, int a10, int a11, int a12, int a13, int a14, int a15, int stableKey, bool shadow) noexcept
+        {
+            if (!invocation.valid || invocation.frame != Frame() || static_cast<uintptr_t>(static_cast<uint32_t>(stableKey)) != invocation.car ||
+                a2 != 2 || (flags != 0x504 && flags != 0x104))
+                return false;
+            uint32_t keys[2];
+            for (uint32_t side = 0; side < 2; ++side)
+                if (!(keys[side] = LampKeys::Key(invocation.car, LampKeys::LeftHeadlight + side))) { ++fallbacks; return false; }
+            float intensity;
+            std::memcpy(&intensity, &a8, 4);
+            if (!std::isfinite(intensity) || intensity < 0) { ++fallbacks; return false; }
+            const float half = intensity * 0.5f;
+            int halfBits;
+            std::memcpy(&halfBits, &half, 4);
+            if (!shadow) flags &= ~rage::LF_DYNAMIC_SHADOW;
+            for (int side = 0; side < 2; ++side)
+            {
+                CShadows::hbStoreStaticShadow.fun(a1, a2, flags, direction, tangent,
+                    static_cast<int>(reinterpret_cast<uintptr_t>(invocation.lamps[side])), a7, halfBits,
+                    a9, a10, a11, a12, a13, a14, a15, static_cast<int>(keys[side]));
+                const std::lock_guard<std::mutex> lock(CShadows::gStableHeadlightShadow.stateMutex);
+                CShadows::gStableHeadlightShadow.submitted.Record(keys[side], invocation.frame);
+            }
+            ++pairs;
+            return true;
+        }
+
+        static void Install() noexcept
+        {
+            pref = FusionFixSettings.GetRef("PREF_DUAL_HEADLIGHTS");
+            if (!CallsTo(0x63FE11, 0x63E070) || !BytesAt(0x63FE16, { 0x83, 0xC4, 0x30 }))
+            {
+                installStatus += " dual=code_differs";
+                return;
+            }
+            pre = safetyhook::create_mid(game + 0x63FE11, Pre);
+            post = safetyhook::create_mid(game + 0x63FE16, Post);
+            installed = pre && post;
+            fusionfix::shadows::ce::AdditionalVehicleBeamOwner = LampKeys::HeadlightOwner;
+            installStatus += installed ? " dual=1" : " dual=hook_failed";
+        }
+    }
+
+    // ---------------------------------------------------------------- tail lights
+    namespace Tail
+    {
+        static bool installed = false;
+        static std::optional<std::reference_wrapper<int32_t>> pref;
+        static SafetyHookMid combined, single;
+        static std::atomic<uint32_t> promoted{0}, refused{0};
+        static constexpr uint32_t NativeColorRva = 0xEE2340; // the rear lamps' colour the game passes
+
+        static bool On() noexcept
+        {
+            return installed && Pref(pref) && bHeadlightShadows && bVehicleNightShadows && PlayerShadowAllocation::Enabled();
+        }
+
+        // At the calls 0xA43376 / 0xA4342D -> 0xA3DE90 (the beam of one or both rear lamps), ESI the car. The words:
+        // [0] matrix, [1] position, [2] direction (0, -1, 0), [3] colour, [4..7] intensity and range, [10] key (the car,
+        // or the car + 1 for the second lamp alone), [11] cast a shadow (0 from the game).
+        static void Submit(SafetyHookContext& regs) noexcept
+        {
+            if (!On()) return;
+            auto words = reinterpret_cast<uint32_t*>(regs.esp);
+            const auto car = static_cast<uint32_t>(regs.esi);
+            const auto direction = reinterpret_cast<const float*>(static_cast<uintptr_t>(words[2]));
+            if (!car || !words[0] || !words[1] || !direction || words[3] != game + NativeColorRva ||
+                (words[10] != car && words[10] != car + 1) || words[11] || words[12] ||
+                direction[0] != 0.0f || direction[1] != -1.0f || direction[2] != 0.0f)
+            {
+                ++refused;
+                return;
+            }
+            float intensity, range;
+            std::memcpy(&intensity, &words[4], 4);
+            std::memcpy(&range, &words[5], 4);
+            if (!std::isfinite(intensity) || !std::isfinite(range) || intensity <= 0 || range <= 0) { ++refused; return; }
+            const auto key = LampKeys::Key(car, words[10] == car ? LampKeys::TailLight0 : LampKeys::TailLight1);
+            if (!key) { ++refused; return; }
+            words[10] = key;
+            words[11] = 1;
+            ++promoted;
+        }
+
+        // Rear lamp beams take no part in the headlight selection; the player's own lose the player flag 0x400,
+        // which would rank them above every other light.
+        static bool IsKey(uint32_t key) noexcept
+        {
+            return LampKeys::Contains(key) && LampKeys::ChannelOf(key) >= LampKeys::TailLight0;
+        }
+
+        static void Install() noexcept
+        {
+            pref = FusionFixSettings.GetRef("PREF_TAIL_LIGHT_SHADOWS");
+            if (!CallsTo(0x643376, 0x63DE90) || !CallsTo(0x64342D, 0x63DE90))
+            {
+                installStatus += " tail=code_differs";
+                return;
+            }
+            combined = safetyhook::create_mid(game + 0x643376, Submit);
+            single = safetyhook::create_mid(game + 0x64342D, Submit);
+            installed = combined && single;
+            installStatus += installed ? " tail=1" : " tail=hook_failed";
+        }
+    }
+
+    // ---------------------------------------------------------------- world lights
+    namespace World
+    {
+        static bool installed = false;
+        static std::optional<std::reference_wrapper<int32_t>> pref;
+        static bool cachedLamps = true, modelLights = true, coronas = true;
+        static SafetyHookMid coronaHook;
+        static std::atomic<uint32_t> lampsPromoted{0}, modelLightsPromoted{0}, coronaLights{0}, coronasRefused{0}, coronasCapped{0};
+
+        struct CoronaSettings
+        {
+            bool approximate = true;
+            float radiusPerSize = 12.0f, fallbackIntensity = 1.0f, intensityScale = 1.0f;
+            float minRadius = 0.1f, maxRadius = 128.0f, maxIntensity = 64.0f;
+            float distance = 100.0f;
+            uint32_t perFrame = 48;
+        };
+        static CoronaSettings corona;
+        static uint32_t coronaFrame = 0, coronaCount = 0;
+
+        static bool On() noexcept { return installed && Pref(pref) && bExtraNightShadows && !LampShadowsOffBySun(); }
+
+        // Lamps the game shadows from their cache alone (flags 2, cache entry with their key) race for the dynamic
+        // slots as well: the cache holds the static world only, so a car or ped under them cast no shadow.
+        static void PromoteCachedLamps(rage::CLightSource* lights, uint32_t count) noexcept
+        {
+            if (!On() || !cachedLamps || !lights || count > 4096) return;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                auto& light = lights[i];
+                if ((light.mType != rage::LT_POINT && light.mType != rage::LT_SPOT) || (light.mFlags & 6) != rage::LF_STATIC_SHADOW ||
+                    (light.mFlags & rage::LF_VEHICLE) || !light.mCastShadows || light.mCastShadows == -1 ||
+                    light.mShadowCacheIndex < 0 || light.mShadowCacheIndex >= 8 || !std::isfinite(light.mRadius) || light.mRadius <= 0)
+                    continue;
+                const auto cached = *reinterpret_cast<const uint32_t*>(game + fusionfix::shadows::ce::allocation::CacheAge0Rva +
+                    static_cast<uint32_t>(light.mShadowCacheIndex) * 0x100 + 4);
+                if (cached != static_cast<uint32_t>(light.mCastShadows)) continue;
+                light.mFlags |= rage::LF_DYNAMIC_SHADOW;
+                ++lampsPromoted;
+            }
+        }
+
+        // From the 2dfx light flags hook (CE 0xC1E615): a point or spot light the map authored without shadows
+        // (flags & 6 == 0) gets a dynamic one. Its key stays the game's (the entity + the effect's ordinal), which
+        // the game clears right after for lights without shadow flags.
+        static bool PromoteModelLight(uint32_t flags, uintptr_t descriptor) noexcept
+        {
+            if (!On() || !modelLights || (flags & 6) || !descriptor) return false;
+            const auto type = *reinterpret_cast<const uint8_t*>(descriptor + 0x5B);
+            const float radius = *reinterpret_cast<const float*>(descriptor + 0x38);
+            if ((type != 1 && type != 2) || !std::isfinite(radius) || radius <= 0) return false;
+            ++modelLightsPromoted;
+            return true;
+        }
+
+        // At 0xC1EB27, the call registering a 2dfx effect's corona (0xC1F020): a corona-only effect (light type 0)
+        // gets a point light with a dynamic shadow at the corona, in its colour (with its fade), its authored range
+        // and intensity, or ones from its size where the map left them 0. The corona itself is untouched.
+        // Words: [0] key, [1..3] RGB, [4] size, [5] position, [13] 0, [14] 1. EDI the effect's light data, EBP the frame
+        // of 0xC1E200: +8 effect, +0x10 brightness, +0x14 fade, +0x20 key, +0x24 interior, +0x28 room, +0x2C texture.
+        static void Corona(SafetyHookContext& regs) noexcept
+        {
+            if (!On() || !coronas) return;
+            const auto descriptor = static_cast<uintptr_t>(regs.edi);
+            const auto frame = reinterpret_cast<const uint32_t*>(regs.ebp);
+            const auto words = reinterpret_cast<const uint32_t*>(regs.esp);
+            if (!descriptor || *reinterpret_cast<const uint8_t*>(descriptor + 0x5B) != 0) return;
+            const uint32_t key = frame[8];
+            const auto position = reinterpret_cast<const float*>(static_cast<uintptr_t>(words[5]));
+            float brightness, fade, size, authoredRadius, authoredIntensity;
+            std::memcpy(&brightness, &frame[4], 4);
+            std::memcpy(&fade, &frame[5], 4);
+            std::memcpy(&size, reinterpret_cast<const void*>(descriptor + 0x5C), 4);
+            std::memcpy(&authoredRadius, reinterpret_cast<const void*>(descriptor + 0x38), 4);
+            std::memcpy(&authoredIntensity, reinterpret_cast<const void*>(descriptor + 0x3C), 4);
+            if (!key || key == UINT32_MAX || words[0] != key || words[13] || words[14] != 1 || !position ||
+                words[1] > 255 || words[2] > 255 || words[3] > 255 || !(words[1] | words[2] | words[3]) ||
+                !std::isfinite(brightness) || brightness <= 0 || !std::isfinite(size) || size <= 0 ||
+                !std::isfinite(authoredRadius) || authoredRadius < 0 || !std::isfinite(authoredIntensity) || authoredIntensity < 0 ||
+                // The game's own gate for the light of type 1 and 2 effects (0xC1E2B3)
+                !*reinterpret_cast<const uint8_t*>(game + 0xC48244) || !(brightness >= 0.01f || (std::isfinite(fade) && fade >= 0.01f)) ||
+                !std::isfinite(position[0]) || !std::isfinite(position[1]) || !std::isfinite(position[2]))
+            {
+                ++coronasRefused;
+                return;
+            }
+            const bool radiusMissing = authoredRadius == 0, intensityMissing = authoredIntensity == 0;
+            if (!corona.approximate && (radiusMissing || intensityMissing)) { ++coronasRefused; return; }
+            float radius = radiusMissing ? std::clamp(size * corona.radiusPerSize, corona.minRadius, corona.maxRadius) : authoredRadius;
+            float intensity = (intensityMissing ? corona.fallbackIntensity : authoredIntensity) * brightness * corona.intensityScale;
+            if (intensityMissing) intensity = (std::min)(intensity, corona.maxIntensity);
+            if (!std::isfinite(radius) || !std::isfinite(intensity) || radius <= 0 || intensity <= 0) { ++coronasRefused; return; }
+            // Far coronas would fill the frame's light list (640) with lights nobody sees.
+            float player[3];
+            if (!CPlayer::getLocalPlayerPed || !CEntity::GetPosition(CPlayer::getLocalPlayerPed(), player)) return;
+            const float dx = position[0] - player[0], dy = position[1] - player[1], dz = position[2] - player[2];
+            const float reach = corona.distance + radius;
+            if (dx * dx + dy * dy + dz * dz > reach * reach) return;
+            const auto now = Frame();
+            if (now != coronaFrame) { coronaFrame = now; coronaCount = 0; }
+            if (coronaCount >= corona.perFrame) { ++coronasCapped; return; }
+            ++coronaCount;
+            alignas(16) const float direction[4] = { 0, 0, -1, 0 }, up[4] = { 0, 1, 0, 0 };
+            alignas(16) const float at[4] = { position[0], position[1], position[2], 1 };
+            alignas(16) const float colour[4] = { words[1] / 255.0f, words[2] / 255.0f, words[3] / 255.0f, 1 };
+            auto bits = [](float f) { int i; std::memcpy(&i, &f, 4); return i; };
+            // The game's wrapper copies the vectors at once; a point light (type 0), dynamic shadow only (4).
+            CShadows::hbStoreStaticShadow.fun(static_cast<int>(frame[2]), 0, rage::LF_DYNAMIC_SHADOW,
+                static_cast<int>(reinterpret_cast<uintptr_t>(direction)), static_cast<int>(reinterpret_cast<uintptr_t>(up)),
+                static_cast<int>(reinterpret_cast<uintptr_t>(at)), static_cast<int>(reinterpret_cast<uintptr_t>(colour)),
+                bits(intensity), 0, static_cast<int>(frame[11]), bits(radius), 0, 0,
+                static_cast<int>(frame[9]), static_cast<int>(frame[10]), static_cast<int>(key));
+            ++coronaLights;
+        }
+
+        static void Install(CIniReader& ini) noexcept
+        {
+            pref = FusionFixSettings.GetRef("PREF_WORLD_LIGHT_SHADOWS");
+            cachedLamps = ini.ReadInteger("SHADOWS", "CachedLampShadows", 1) != 0;
+            modelLights = ini.ReadInteger("SHADOWS", "ModelLightShadows", 1) != 0;
+            coronas = ini.ReadInteger("SHADOWS", "CoronaLightShadows", 1) != 0;
+            corona.approximate = ini.ReadInteger("SHADOWS", "CoronaApproximation", 1) != 0;
+            corona.radiusPerSize = std::clamp(ini.ReadFloat("SHADOWS", "CoronaRadiusPerSize", 12.0f), 0.1f, 1024.0f);
+            corona.fallbackIntensity = std::clamp(ini.ReadFloat("SHADOWS", "CoronaFallbackIntensity", 1.0f), 0.01f, 64.0f);
+            corona.intensityScale = std::clamp(ini.ReadFloat("SHADOWS", "CoronaIntensityScale", 1.0f), 0.01f, 64.0f);
+            corona.minRadius = std::clamp(ini.ReadFloat("SHADOWS", "CoronaMinRadius", 0.1f), 0.01f, 4096.0f);
+            corona.maxRadius = std::clamp(ini.ReadFloat("SHADOWS", "CoronaMaxRadius", 128.0f), corona.minRadius, 4096.0f);
+            corona.maxIntensity = std::clamp(ini.ReadFloat("SHADOWS", "CoronaMaxIntensity", 64.0f), 0.01f, 1024.0f);
+            corona.distance = std::clamp(ini.ReadFloat("SHADOWS", "CoronaLightDistance", 100.0f), 0.0f, 1000.0f);
+            corona.perFrame = static_cast<uint32_t>(std::clamp(ini.ReadInteger("SHADOWS", "CoronaLightsPerFrame", 48), 0, 256));
+            installed = true;
+            if (coronas)
+            {
+                if (CallsTo(0x81EB27, 0x81F020) && BytesAt(0x81EB24, { 0xFF, 0x75, 0x20 }))
+                    coronaHook = safetyhook::create_mid(game + 0x81EB27, Corona);
+                installStatus += coronaHook ? " coronas=1" : " coronas=code_differs";
+            }
+            installStatus += std::string(" world=1 cached_lamps=") + (cachedLamps ? "1" : "0") + " model_lights=" + (modelLights ? "1" : "0");
+        }
+    }
+
+    // ---------------------------------------------------------------- buildings in dynamic maps
+    namespace Buildings
+    {
+        static bool installed = false;
+        static std::optional<std::reference_wrapper<int32_t>> pref;
+        static SafetyHookMid collect, mask, draw;
+        static thread_local bool scope = false;
+        static std::atomic<uint32_t> passes{0}, masks{0}, draws{0};
+
+        static bool On() noexcept { return installed && Pref(pref) && bExtraNightShadows; }
+
+        // A render phase (CE 0xD77990 object) drawing slot 1-7 of a light with no cached map: render mode 4 (dynamic
+        // only) and cache index -1 in the slot record 0x119F100 + slot * 0x110. Mode 4 with a cache index copies the
+        // cache's static world in, so drawing it again would only cost.
+        static bool UncachedDynamicPass(uintptr_t phase) noexcept
+        {
+            if (!phase) return false;
+            const auto slot = *reinterpret_cast<const uint32_t*>(phase + 0x940);
+            if (slot < 1 || slot > 7) return false;
+            const auto record = game + 0xD9F100 + slot * 0x110;
+            const auto key = *reinterpret_cast<const uint32_t*>(record + 0xF8);
+            return *reinterpret_cast<const uint8_t*>(record + 0xED) == 1 && *reinterpret_cast<const uint32_t*>(record + 0xFC) == 4 &&
+                *reinterpret_cast<const int32_t*>(record + 0xF0) < 0 && key && key != UINT32_MAX &&
+                !*reinterpret_cast<const uint8_t*>(game + fusionfix::shadows::ce::casterguard::DeferredFlagRva);
+        }
+
+        // BuildRenderList 0xD782E0 just set phase +0x15/+0x16 (static, dynamic) to 0/1 for mode 4: collect the static
+        // entities too, as mode 5 does.
+        static void Collect(SafetyHookContext& regs) noexcept
+        {
+            if (!On() || !UncachedDynamicPass(regs.esi)) return;
+            auto flags = reinterpret_cast<uint16_t*>(regs.esi + 0x15);
+            if (*flags != 0x100) return;
+            *flags = 0x101;
+            ++passes;
+        }
+
+        // 0xD784AE stores the phase's entity mask (+0x8D0): mode 4 leaves out 0x80, which regular buildings need
+        // (0xAE7914 drops a building from a view whose mask lacks it); mode 5 has it.
+        static void Mask(SafetyHookContext& regs) noexcept
+        {
+            if (!On() || regs.eax != 0x1800007 || !UncachedDynamicPass(regs.edi)) return;
+            regs.eax |= 0x80;
+            ++masks;
+        }
+
+        // 0xAE4265: a phase drawing with the light's own technique (EBX -1) skips the static geometry bucket 7;
+        // in the passes above it is drawn, as for cached maps.
+        static void Draw(SafetyHookContext& regs) noexcept
+        {
+            if (!scope || regs.ebx != UINT32_MAX) return;
+            regs.eip = game + 0x6E426A;
+            ++draws;
+        }
+
+        // Around the phase's render (0xD77A00, the lamppost shadows workaround 2 hook in nightshadows).
+        class Scope
+        {
+            bool previous;
+        public:
+            explicit Scope(void* phase) noexcept : previous(scope)
+            {
+                scope = On() && UncachedDynamicPass(reinterpret_cast<uintptr_t>(phase));
+            }
+            ~Scope() noexcept { scope = previous; }
+            Scope(const Scope&) = delete;
+            Scope& operator=(const Scope&) = delete;
+        };
+
+        static void Install() noexcept
+        {
+            pref = FusionFixSettings.GetRef("PREF_BUILDING_SHADOWS");
+            if (!BytesAt(0x97833E, { 0x0F, 0xB6, 0x05 }) || !BytesAt(0x978338, { 0x66, 0xC7, 0x46, 0x15, 0x00, 0x01 }) ||
+                !BytesAt(0x9784AE, { 0x89, 0x87, 0xD0, 0x08, 0x00, 0x00 }) || !BytesAt(0x6E4265, { 0x83, 0xFB, 0xFF, 0x74, 0x10 }) ||
+                !CallsTo(0x6E4272, 0x6E3310))
+            {
+                installStatus += " buildings=code_differs";
+                return;
+            }
+            collect = safetyhook::create_mid(game + 0x97833E, Collect);
+            mask = safetyhook::create_mid(game + 0x9784AE, Mask);
+            draw = safetyhook::create_mid(game + 0x6E4265, Draw);
+            installed = collect && mask && draw;
+            installStatus += installed ? " buildings=1" : " buildings=hook_failed";
+        }
+    }
+
+    // Before the game picks the night shadow slots (PlayerShadowAllocation::prepareSources): rear lamp and headlight
+    // keys whose car went lose their shadow, and the cached lamps join the dynamic slots.
+    static void PrepareSources(rage::CLightSource* lights, uint32_t count) noexcept
+    {
+        if (!lights || count > 4096) return;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            auto& light = lights[i];
+            const auto key = static_cast<uint32_t>(light.mCastShadows);
+            if ((light.mFlags & rage::LF_DYNAMIC_SHADOW) && LampKeys::Contains(key) && !LampKeys::Owner(key))
+                light.mFlags &= ~rage::LF_DYNAMIC_SHADOW;
+        }
+        World::PromoteCachedLamps(lights, count);
+    }
+
+    // The car whose lamp (headlight of a pair or rear lamp) a slot's key is, so its own map leaves it out.
+    static uintptr_t LampOwner(uint32_t key) noexcept { return LampKeys::Owner(key); }
+
+    static void Install(CIniReader& ini) noexcept
+    {
+        game = GameBase();
+        installStatus.clear();
+        Dual::Install();
+        Tail::Install();
+        World::Install(ini);
+        Buildings::Install();
+        PlayerShadowAllocation::prepareSources = PrepareSources;
+        OwnHeadlightCaster::lampOwner = LampOwner;
+        log.Name("NightShadows", "Lighting20");
+    }
+
+    static void Update() noexcept
+    {
+        log.Write(std::ios::app, [](std::ostream& out, uint64_t now)
+        {
+            out << "tick=" << now << installStatus
+                << " | dual " << (Dual::On() ? "on" : "off") << " pairs=" << Dual::pairs.load() << " fallbacks=" << Dual::fallbacks.load()
+                << " | tail " << (Tail::On() ? "on" : "off") << " promoted=" << Tail::promoted.load() << " refused=" << Tail::refused.load()
+                << " | world " << (World::On() ? "on" : "off") << " cached_lamps=" << World::lampsPromoted.load()
+                << " model_lights=" << World::modelLightsPromoted.load() << " corona_lights=" << World::coronaLights.load()
+                << " corona_refused=" << World::coronasRefused.load() << " corona_capped=" << World::coronasCapped.load()
+                << " | buildings " << (Buildings::On() ? "on" : "off") << " passes=" << Buildings::passes.load()
+                << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load() << '\n';
+        });
+    }
+}

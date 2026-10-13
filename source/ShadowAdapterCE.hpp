@@ -28,9 +28,14 @@ namespace fusionfix::shadows::ce
     // Audited A3F5E0 vehicle submissions: both working headlights produce a
     // combined beam keyed by the vehicle; a single working lamp uses vehicle+1.
     // A selector entry therefore represents a beam request, not a physical lamp.
+    // The car whose headlight a key of our own is (dual headlights give each lamp a key, Liberty's Shadows 2.0),
+    // 0 for any other key. Never dereferences the key.
+    inline std::uintptr_t (*AdditionalVehicleBeamOwner)(std::uintptr_t) noexcept = nullptr;
+
     inline bool IsVehicleBeam(std::uintptr_t key, std::uintptr_t vehicle) noexcept
     {
-        return vehicle && (key == vehicle || (vehicle < UINTPTR_MAX && key == vehicle + 1));
+        return vehicle && (key == vehicle || (vehicle < UINTPTR_MAX && key == vehicle + 1) ||
+            (AdditionalVehicleBeamOwner && AdditionalVehicleBeamOwner(key) == vehicle));
     }
 
     inline bool Match(const std::uint8_t* image, std::size_t size, std::size_t offset,

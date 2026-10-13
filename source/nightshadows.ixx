@@ -81,6 +81,17 @@ namespace NearbyVehicleLighting36 {
         fusionfix::shadows::Vec3 direction,float outerCos,float radius,uintptr_t key) noexcept;
 }
 
+// Liberty's Shadows 2.0 light families (LibertyLighting20Runtime.inl), called from the submission wrappers below.
+namespace Lighting20
+{
+    namespace Dual
+    {
+        static bool Split(int a1, int a2, uint32_t flags, int direction, int tangent, int position, int a7, int a8,
+            int a9, int a10, int a11, int a12, int a13, int a14, int a15, int stableKey, bool shadow) noexcept;
+    }
+    namespace Tail { static bool IsKey(uint32_t key) noexcept; }
+}
+
 namespace CShadows
 {
     // CE's submission adapter takes 16 stack words. Its final word is an opaque
@@ -208,24 +219,44 @@ namespace CShadows
     };
     static StableHeadlightShadow gStableHeadlightShadow;
 
+    // Both wrappers: a rear lamp beam with a key of ours (tail light shadows) takes no part in the headlight
+    // selection, and the player's own loses the player flag 0x400, which would rank it above every other light.
+    // A combined headlight beam may become the beams of its two lamps (dual headlights), shadowed as the
+    // combined one would have been.
+    static void StoreStaticShadowBeam(int a1, int a2, uint32_t flags,
+        int direction, int tangent, int position, int a7, int a8, int a9, int a10,
+        int a11, int a12, int a13, int a14, int a15, int stableKey)
+    {
+        if (Lighting20::Tail::IsKey(static_cast<uint32_t>(stableKey)))
+        {
+            hbStoreStaticShadow.fun(a1, a2, flags & ~0x400u, direction, tangent, position,
+                                    a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey);
+            return;
+        }
+        const bool shadow = gStableHeadlightShadow.ShouldCast(direction, position, stableKey, a11);
+        if (Lighting20::Dual::Split(a1, a2, flags, direction, tangent, position,
+                a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey, shadow))
+            return;
+        if (!shadow)
+            flags &= ~rage::LF_DYNAMIC_SHADOW;
+        hbStoreStaticShadow.fun(a1, a2, flags, direction, tangent, position,
+                                a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey);
+    }
+
     void __cdecl StoreStaticShadowPlayerDriving(int a1, int a2, uint32_t flags,
         int direction, int tangent, int position, int a7, int a8, int a9, int a10,
         int a11, int a12, int a13, int a14, int a15, int stableKey)
     {
-        if (!gStableHeadlightShadow.ShouldCast(direction, position, stableKey, a11))
-            flags &= ~rage::LF_DYNAMIC_SHADOW;
-        hbStoreStaticShadow.fun(a1, a2, flags, direction, tangent, position,
-                                a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey);
+        StoreStaticShadowBeam(a1, a2, flags, direction, tangent, position,
+                              a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey);
     }
 
     void __cdecl StoreStaticShadowNPC(int a1, int a2, uint32_t flags,
         int direction, int tangent, int position, int a7, int a8, int a9, int a10,
         int a11, int a12, int a13, int a14, int a15, int stableKey)
     {
-        if (!gStableHeadlightShadow.ShouldCast(direction, position, stableKey, a11))
-            flags &= ~rage::LF_DYNAMIC_SHADOW;
-        hbStoreStaticShadow.fun(a1, a2, flags, direction, tangent, position,
-                                a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey);
+        StoreStaticShadowBeam(a1, a2, flags, direction, tangent, position,
+                              a7, a8, a9, a10, a11, a12, a13, a14, a15, stableKey);
     }
 
     static bool ValidateAdapter()
@@ -308,6 +339,19 @@ namespace CShadows
 #include "NightShadowAdmissionRuntime.inl"
 #include "EmergencyTrafficShadowsRuntime.inl"
 
+// LampShadowsInDaylight = 0: the map's lamps (their 2dfx lights, in CE 0xc1e615 where their shadow bits are made) cast no
+// shadows while the sun's cascades are drawn, outside by day: at dusk and dawn the lamps' shadows took some 4 GPU ms on
+// top of the sun's 6, where the sun's light washed them out. Inside, where the game draws no cascades, and once the sun is
+// under CascadeSunElevation, the lamps keep theirs; headlights are not the map's lamps and keep theirs too.
+static bool bLampShadowsInDaylight = false;
+
+static bool LampShadowsOffBySun()
+{
+    return !bLampShadowsInDaylight && RenderSkip::SunShadowsDrawn();
+}
+
+#include "LibertyLighting20Runtime.inl"
+
 static inline SafetyHookInline shsub_925DB0{};
 static inline SafetyHookInline shsub_D77A00{};
 
@@ -340,18 +384,8 @@ static void __fastcall sub_D77A00(void* _this, void* edx)
 
     const fusionfix::shadows::caster::Scope scope(OwnHeadlightCaster::context,
                                                 OwnHeadlightCaster::Capture(_this));
+    const Lighting20::Buildings::Scope buildings(_this);
     return shsub_D77A00.unsafe_fastcall(_this, edx);
-}
-
-// LampShadowsInDaylight = 0: the map's lamps (their 2dfx lights, in CE 0xc1e615 where their shadow bits are made) cast no
-// shadows while the sun's cascades are drawn, outside by day: at dusk and dawn the lamps' shadows took some 4 GPU ms on
-// top of the sun's 6, where the sun's light washed them out. Inside, where the game draws no cascades, and once the sun is
-// under CascadeSunElevation, the lamps keep theirs; headlights are not the map's lamps and keep theirs too.
-static bool bLampShadowsInDaylight = false;
-
-static bool LampShadowsOffBySun()
-{
-    return !bLampShadowsInDaylight && RenderSkip::SunShadowsDrawn();
 }
 
 int GetNightShadowQuality()
@@ -416,7 +450,7 @@ public:
         }
 
         // Registered before game callbacks start, independent of async init.
-        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); PlayerShadowAllocation::CaptureCasters(); PlayerShadowAllocation::SlotTraceStatus(); PlayerShadowAllocation::FlushSlotTrace(); EmergencyTrafficShadows::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
+        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); PlayerShadowAllocation::CaptureCasters(); PlayerShadowAllocation::SlotTraceStatus(); PlayerShadowAllocation::FlushSlotTrace(); EmergencyTrafficShadows::Update(); Lighting20::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
@@ -497,6 +531,9 @@ public:
                 EmergencyTrafficShadows::log.Name("NightShadows", "EmergencyTraffic");
                 EmergencyTrafficShadows::Install(static_cast<unsigned>(std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalShadows", 2), 0, 7)),
                     iniReader.ReadInteger("SHADOWS", "EmergencyLightShadows", 1) != 0);
+                // Liberty's Shadows 2.0: dual headlights, tail lights, world lights, buildings in dynamic maps.
+                // Each family is switched in the graphics menu; its hooks stay in place.
+                Lighting20::Install(iniReader);
             }
             else
             {
@@ -686,6 +723,12 @@ public:
                                 *(uint32_t*)(regs.esp + 0x18) = regs.ecx;
                             }
                         }
+                        // World light shadows: a model light the map authored without shadows gets a dynamic one
+                        else if (Lighting20::World::PromoteModelLight(regs.ecx, regs.edi))
+                        {
+                            regs.ecx |= 4;
+                            *(uint32_t*)(regs.esp + 0x18) = regs.ecx;
+                        }
                     });
                 }
                 else
@@ -734,6 +777,7 @@ public:
                 static_cast<bool>(shsub_D77A00), std::memory_order_release);
             HeadlightEnhancement::log.ready.store(ceAdapter && shadowDiagnostics, std::memory_order_release);
             EmergencyTrafficShadows::log.ready.store(ceAdapter && shadowDiagnostics, std::memory_order_release);
+            Lighting20::log.ready.store(ceAdapter && shadowDiagnostics, std::memory_order_release);
             // Written on every executable, so a missing adapter shows up with its reason.
             ShadowDiagnostics::log.ready.store(shadowDiagnostics, std::memory_order_release);
         };
