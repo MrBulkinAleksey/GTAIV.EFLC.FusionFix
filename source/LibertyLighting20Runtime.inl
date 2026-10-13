@@ -879,6 +879,7 @@ namespace Lighting20
         installStatus.clear();
         Dual::Install();
         Tail::Install();
+        PlayerShadowAllocation::isTailLightKey = Tail::IsKey;
         World::Install(ini);
         Buildings::Install();
         Sharing::enabled = ini.ReadInteger("SHADOWS", "SharedShadowMaps", 1) != 0;

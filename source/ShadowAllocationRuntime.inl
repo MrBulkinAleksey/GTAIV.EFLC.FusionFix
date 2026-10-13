@@ -148,6 +148,9 @@ namespace PlayerShadowAllocation
     static float behindLampReach = 12.0f; // BehindLampReach
     static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
     static std::atomic<uint32_t> lightsFlickering{0}; // lights ranked off screen as they flicker out of the list, for the status line
+    // Rear lamp keys (Liberty's Shadows 2.0 tail light shadows), set by Lighting20, which comes after
+    static bool (*isTailLightKey)(uint32_t) = nullptr;
+    static std::atomic<uint32_t> tailLightsYielded{0};
 
     static void NoteSlotAcquires(const budget::PlayerShadowBudget::Selection& selection) noexcept
     {
@@ -193,11 +196,11 @@ namespace PlayerShadowAllocation
         try {
             slotTrace.Status(std::format("ready={} install={} thread_ok={} night_shadows={} headlight_shadows={} vehicle_night_shadows={} "
                 "publication={} lamp_priority={} in the last second: applied={} observed={} fallback={} adapter_rejects={} reasons:{} "
-                "lamps_behind_walls={} sight_probes={} hits={} flickering={}",
+                "lamps_behind_walls={} sight_probes={} hits={} flickering={} tail_lights_yielded={}",
                 ready.load() ? 1 : 0, ready.load() ? std::string("enabled") : "[" + installStatus + "]", unsupportedThread.load() ? 0 : 1, bExtraNightShadows ? 1 : 0, bHeadlightShadows ? 1 : 0,
                 bVehicleNightShadows ? 1 : 0, publicationEnabled ? 1 : 0, nativeLampPriority ? 1 : 0,
                 a - applied, o - observed, f - fallback, r - adapter, why.empty() ? " -" : why,
-                lampsHidden.exchange(0), sightProbes.exchange(0), sightHits.exchange(0), lightsFlickering.exchange(0)));
+                lampsHidden.exchange(0), sightProbes.exchange(0), sightHits.exchange(0), lightsFlickering.exchange(0), tailLightsYielded.exchange(0)));
         } catch (...) {}
         applied = a; observed = o; fallback = f; adapter = r;
     }
@@ -722,6 +725,10 @@ namespace PlayerShadowAllocation
             // twice within 2 s, it ranks off screen for 3 s: it takes no slot from lights that are there.
             if(kind!=budget::Kind::PlayerBeam && FlickeringLight(key,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds)) &&
                gain==SlotGain::InView) { gain=SlotGain::OffScreen; ++lightsFlickering; }
+            // A car's rear lamp ranks as off screen: it takes a slot only no lamp or headlight in view wants. A slot trace
+            // while driving: rear lamps within 25 m took 123 slots to the street lamps' 137, the lamps 1.4 of 7 on average
+            // with 14 lights waiting
+            if(isTailLightKey && gain==SlotGain::InView && isTailLightKey(key)) { gain=SlotGain::OffScreen; ++tailLightsYielded; }
             if(slotTrace.enabled)
                 try {
                     fusionfix::shadows::ShadowSlotTrace::Light traced{key,static_cast<uint8_t>(kind),rawGain,gain,cached,volumeVisible,
