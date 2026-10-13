@@ -811,6 +811,7 @@ public:
     uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300, nVehicleBoxShadowSizeFadeMs = 300;
     float fVehicleBoxShadowsMaxDistance = 60.0f; // metres from the camera to a lamp's light past which it has no boxes
     int32_t nVehicleBoxShadowsPerLamp = 3; // cars a lamp shadows as boxes, up to five; each costs its lit pixels about as much again
+    int32_t nVehicleBoxShadowsPerCar = 2;  // lamps that may shadow one car as a box, the strongest on it; 0 any number
     bool bVehicleBoxShadowsLive = false;
     float fVehicleBoxShadowLeadFrames = 1.0f;
     bool bVehicleBoxShadowsLog = false; // VehicleBoxShadowsLog, see VehicleBoxShadows::Trace
@@ -1803,6 +1804,7 @@ public:
         fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", 1.0f), -3.0f, 5.0f);
         bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;
         nVehicleBoxShadowsPerLamp = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerLamp", 3), 1, 5);
+        nVehicleBoxShadowsPerCar = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerCar", 2), 0, 8);
         fVehicleBoxShadowsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsMaxDistance", 60.0f), 0.0f, 1000.0f);
         nVehicleBoxShadowSizeFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsSizeFade", 300), 0, 5000));
         nVehicleBoxShadowFadeInMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeIn", 300), 0, 5000));
@@ -8677,6 +8679,73 @@ private:
         // For the log: the nearest car's model bounds (least, most) and its box, as taken.
         static inline float nearestBounds[6] = {}, nearestBox[4] = {}, nearestDistance = -1.0f;
 
+        // VehicleBoxShadowsPerCar: under a row of lamps a car had a box shadow from every one that reached it, some
+        // ten in a log, many of them lamps the game gives no shadow at all, each shadow faint but together a fan of
+        // them. Each lamp drawn notes how much it lights each car it reaches; on the next frame only the strongest
+        // few on a car may give it a box. Render thread.
+        struct CarLamps
+        {
+            static constexpr int kKept = 8;
+            std::array<std::pair<uint64_t, float>, kKept> seen{};    // this frame: lamp and how much it lights the car
+            int seenCount = 0;
+            std::array<uint64_t, kKept> allowed{};                    // from the last frame: those that may give a box
+            int allowedCount = 0;
+            bool ranked = false;                                      // allowed holds a ranking (not the car's first frame)
+        };
+        static inline std::unordered_map<uintptr_t, CarLamps> carLamps;
+
+        static bool LampAllowed(const CarLamps& car, uint64_t lamp)
+        {
+            return std::find(car.allowed.begin(), car.allowed.begin() + car.allowedCount, lamp) != car.allowed.begin() + car.allowedCount;
+        }
+
+        // The light a lamp gives a car: its intensity times a falloff over its radius.
+        static void NoteCarLamp(uintptr_t vehicle, uint64_t lamp, float light)
+        {
+            auto& car = carLamps[vehicle];
+            // A lamp giving the car a box now keeps it against one up to a third stronger, so two alike lamps do not
+            // take the box from each other frame by frame
+            if (LampAllowed(car, lamp))
+                light *= 1.33f;
+            for (int i = 0; i < car.seenCount; ++i)
+                if (car.seen[i].first == lamp)
+                {
+                    car.seen[i].second = (std::max)(car.seen[i].second, light);
+                    return;
+                }
+            if (car.seenCount < CarLamps::kKept)
+                car.seen[car.seenCount++] = { lamp, light };
+            else
+            {
+                auto weakest = std::min_element(car.seen.begin(), car.seen.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+                if (weakest->second < light)
+                    *weakest = { lamp, light };
+            }
+        }
+
+        // At a new frame's lights: each car's strongest lamps of the last frame may give it a box in this one.
+        static void RankCarLamps(int perCar)
+        {
+            if (carLamps.size() > 1024)
+                carLamps.clear();
+            for (auto it = carLamps.begin(); it != carLamps.end();)
+            {
+                auto& car = it->second;
+                if (!car.seenCount)
+                {
+                    it = carLamps.erase(it);
+                    continue;
+                }
+                std::sort(car.seen.begin(), car.seen.begin() + car.seenCount, [](const auto& a, const auto& b) { return a.second > b.second; });
+                car.allowedCount = (std::min)(car.seenCount, perCar);
+                for (int i = 0; i < car.allowedCount; ++i)
+                    car.allowed[i] = car.seen[i].first;
+                car.ranked = true;
+                car.seenCount = 0;
+                ++it;
+            }
+        }
+
         // Main thread: every car's box, the nearest the player first when there are more than fit.
         static void Capture()
         {
@@ -9058,6 +9127,8 @@ private:
                 {
                     drawnFor = list;
                     PublishPairs();
+                    if (R.nVehicleBoxShadowsPerCar > 0)
+                        RankCarLamps(R.nVehicleBoxShadowsPerCar);
                     // The newest with this list: the ring holds more hand overs than the game has lists, so an older
                     // one with the same list, three or six frames old, made the shadows lag the cars by fits
                     const List* found = nullptr;
@@ -9179,6 +9250,15 @@ private:
                     const float along = dx * box.forward[0] + dy * box.forward[1], across = dx * box.forward[1] - dy * box.forward[0];
                     if (std::abs(along) < box.halfLength + 0.5f && std::abs(across) < box.halfWidth + 0.5f && std::abs(dz) < box.halfHeight + 0.5f)
                         continue;
+                    // VehicleBoxShadowsPerCar: only the strongest lamps on the car give it a box
+                    if (R.nVehicleBoxShadowsPerCar > 0)
+                    {
+                        const float falloff = std::clamp(1.0f - std::sqrt(d2) / (std::max)(light.mRadius, 0.1f), 0.0f, 1.0f);
+                        NoteCarLamp(box.vehicle, lightKey, (std::max)(light.mIntensity, 0.0f) * falloff * falloff);
+                        const auto car = carLamps.find(box.vehicle);
+                        if (car != carLamps.end() && car->second.ranked && !LampAllowed(car->second, lightKey))
+                            continue;
+                    }
                     int at = taken < perLamp ? taken++ : perLamp - 1;
                     for (; at > 0 && nearest[at - 1].first > score; --at)
                         nearest[at] = nearest[at - 1];
