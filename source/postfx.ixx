@@ -885,7 +885,7 @@ public:
     float fSSRTowardCamera = 0.0f;
     float fSSRReflectionBlur = 0.0f;
     // ScreenSpaceReflectionsStepPixels: pixels of a ray on the march's target per step, 2 by default.
-    float fSSRStepPixels = 3.0f;
+    float fSSRStepPixels = 2.0f;
     // ScreenSpaceReflectionsMarchFullDepth (temporary, live): the march steps through the full size
     // depth instead of SSRMarchDepthTex, to compare the two.
     bool bSSRMarchFullDepth = false;
@@ -990,7 +990,7 @@ public:
         }
         return TransparentTexture;
     }
-    int nSSRSteps = 24;
+    int nSSRSteps = 32;
     int nSSRRefineSteps = 8;
     float fSSRMaxDistance = 24.0f;
     float fSSRThickness = 0.3f;
@@ -1832,7 +1832,7 @@ public:
         fLightsGGXMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXMax", 2.0f), 0.1f, 16.0f);
         fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 1.5f), 0.0f, 8.0f);
-        fSSRStepPixels = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStepPixels", 3.0f), 1.0f, 8.0f);
+        fSSRStepPixels = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStepPixels", 2.0f), 1.0f, 8.0f);
         fSSRDenoiseRadius = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsSmoothing", 2.0f), 0.0f, 8.0f);
         bSSRPassThinObjects = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsPastThinObjects", 1) != 0;
         bSSRStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsStepJitter", 1) != 0;
@@ -1902,7 +1902,7 @@ public:
 
         bEnablePreAlphaDepth = iniReader.ReadInteger("POSTFX", "EnablePreAlphaDepth", 1) != 0;
 
-        nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 24), 4, 128);
+        nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 32), 4, 128);
         nSSRRefineSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsRefineSteps", 8), 0, 16);
         fSSRMaxDistance = std::max(1.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsMaxDistance", 24.0f));
         fSSRThickness = std::max(0.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsThickness", 0.3f));
