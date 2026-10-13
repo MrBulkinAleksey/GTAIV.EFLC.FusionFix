@@ -27,8 +27,6 @@ namespace PlayerShadowAllocation
     static SafetyHookMid preCacheHook;
     static bool stableOrdinals = false;
     static std::atomic<uint32_t> stableOrdinalPasses{0}, stableOrdinalMoves{0}, stableOrdinalRejected{0}, sharedMapsSkipped{0};
-    // A light of this pass sharing another's map: the game does not insert it among the candidates.
-    static void MarkSharedMap(uint32_t index) noexcept { if (index < state.sharedMap.size()) state.sharedMap[index] = state.passSerial; }
     static SafetyHookMid collectHook, finalizeHook, lampDistanceHook, compareResultHook, cacheResultHook;
     static bool nativeLampPriority=false;
     static std::atomic<uint32_t> lampDistanceAdjusted{0};
@@ -102,6 +100,8 @@ namespace PlayerShadowAllocation
         std::array<uint32_t,4096> sharedMap{};
     };
     static thread_local State state;
+    // A light of this pass sharing another's map: the game does not insert it among the candidates.
+    static void MarkSharedMap(uint32_t index) noexcept { if (index < state.sharedMap.size()) state.sharedMap[index] = state.passSerial; }
 
     struct Invocation
     {
