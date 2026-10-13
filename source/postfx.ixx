@@ -813,6 +813,7 @@ public:
     float fVehicleBoxShadowsMaxDistance = 60.0f; // metres from the camera to a lamp's light past which it has no boxes
     int32_t nVehicleBoxShadowsPerLamp = 3; // cars a lamp shadows as boxes, up to five; each costs its lit pixels about as much again
     int32_t nVehicleBoxShadowsPerCar = 2;  // lamps that may shadow one car as a box, the strongest on it; 0 any number
+    float fVehicleBoxShadowsMinLight = 0.04f; // the least share of a lamp's light at the car, (1 - distance / radius)^2, for a box
     bool bVehicleBoxShadowsLive = false;
     float fVehicleBoxShadowLeadFrames = 1.0f;
     bool bVehicleBoxShadowsLog = false; // VehicleBoxShadowsLog, see VehicleBoxShadows::Trace
@@ -1806,6 +1807,7 @@ public:
         bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;
         nVehicleBoxShadowsPerLamp = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerLamp", 3), 1, 5);
         nVehicleBoxShadowsPerCar = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerCar", 2), 0, 8);
+        fVehicleBoxShadowsMinLight = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsMinLight", 0.04f), 0.0f, 1.0f);
         fVehicleBoxShadowsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsMaxDistance", 60.0f), 0.0f, 1000.0f);
         nVehicleBoxShadowSizeFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsSizeFade", 300), 0, 5000));
         nVehicleBoxShadowFadeInMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeIn", 300), 0, 5000));
@@ -8938,7 +8940,7 @@ private:
         static inline uint32_t traceStaleWatched = 0, traceLampsOnWatched = 0, traceLampsSeen = 0, traceDrawnWatched = 0, traceLeadWatched = 0;
         // Why the watched car's drawn matrix was not taken: not among the G-buffer's draws, none near enough (and how
         // far the nearest stood, its matrix's translation, and how many draws it had), facing another way
-        static inline uint32_t traceDrawnNone = 0, traceDrawnFar = 0, traceDrawnHeading = 0, traceDrawnCount = 0;
+        static inline uint32_t traceDrawnNone = 0, traceDrawnFar = 0, traceDrawnHeading = 0, traceDrawnCount = 0, traceDrawnHeadingOnly = 0;
         static inline float traceDrawnNearest = -1.0f;
         static inline float traceStrongest = 0.0f;
         static inline bool traceMarkDown = false, traceShotDown = false;
@@ -8968,12 +8970,12 @@ private:
             if (now - traceSecond >= 1000)
             {
                 if (traceSecond)
-                    Trace("S in the last second: %u lamp draws shaded the watched car (strongest %.2f), %u lamps with boxes, %u times its box stood where it was handed over, %u where it was drawn, %u moved ahead by its speed; not drawn: %u not among the draws, %u none near (nearest %.2f m of %u draws), %u facing away",
-                        traceLampsOnWatched, traceStrongest, traceLampsSeen, traceStaleWatched, traceDrawnWatched, traceLeadWatched,
+                    Trace("S in the last second: %u lamp draws shaded the watched car (strongest %.2f), %u lamps with boxes, %u times its box stood where it was handed over, %u where it was drawn, %u moved ahead by its speed; drawn: %u with the heading only; not drawn: %u not among the draws, %u none near (nearest %.2f m of %u draws), %u none facing its way",
+                        traceLampsOnWatched, traceStrongest, traceLampsSeen, traceStaleWatched, traceDrawnWatched, traceLeadWatched, traceDrawnHeadingOnly,
                         traceDrawnNone, traceDrawnFar, traceDrawnNearest, traceDrawnCount, traceDrawnHeading);
                 traceSecond = now;
                 traceLampsOnWatched = traceLampsSeen = traceStaleWatched = traceDrawnWatched = traceLeadWatched = 0;
-                traceDrawnNone = traceDrawnFar = traceDrawnHeading = traceDrawnCount = 0;
+                traceDrawnNone = traceDrawnFar = traceDrawnHeading = traceDrawnCount = traceDrawnHeadingOnly = 0;
                 traceDrawnNearest = -1.0f;
                 traceStrongest = 0.0f;
             }
@@ -9040,47 +9042,52 @@ private:
         static bool FromDrawn(Box& box, float lead, bool watched)
         {
             // The car's own position from the box: its right is its forward turned a quarter. Moved on by its speed
-            // to when it is drawn: handed over two or three frames before, a car driven fast had gone more than the
-            // metre the search allows, and its box kept the heading of the hand over (a log in a car: no box found
-            // where it was drawn).
+            // to when it is drawn: handed over two or three frames before, a car driven fast had gone further.
             const float right[2] = { box.forward[1], -box.forward[0] };
             const float around[3] = { box.centre[0] - right[0] * box.local[0] - box.forward[0] * box.local[1] + box.velocity[0] * lead,
                                     box.centre[1] - right[1] * box.local[0] - box.forward[1] * box.local[1] + box.velocity[1] * lead,
                                     box.centre[2] - box.local[2] + box.velocity[2] * lead };
             const float speed = std::sqrt(box.velocity[0] * box.velocity[0] + box.velocity[1] * box.velocity[1] + box.velocity[2] * box.velocity[2]);
-            float m[16];
-            // Within a metre, more as fast as it goes, and facing the car's way: wheels and doors are drawn with their
-            // own matrices
+            // Of the car's draws, the nearest facing its way, within 3 m (its parts: a log found the nearest draw always
+            // facing away, a wheel or a door, the body drawn skinned with no matrix of its own at the car). Its
+            // rotation is the car's as drawn; its position only where it stands at the car's own, else the box keeps
+            // the one moved on by speed.
             int draws = 0;
-            float nearest = -1.0f;
-            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 1.0f + (std::min)(speed * 0.05f, 2.0f), m, &draws, &nearest))
+            float nearest = -1.0f, m[16];
+            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 3.0f + (std::min)(speed * 0.05f, 2.0f), m, &draws, &nearest, box.forward))
             {
                 if (watched)
                 {
                     if (draws < 0)
                         ++traceDrawnNone;
-                    else
+                    else if (nearest >= 0.0f)
                     {
                         ++traceDrawnFar;
                         traceDrawnNearest = nearest;
                         traceDrawnCount = uint32_t(draws);
                     }
+                    else
+                        ++traceDrawnHeading;
                 }
                 return false;
             }
             const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
-            if (!(flat > 0.5f))
-                return false;
             const float fx = m[4] / flat, fy = m[5] / flat;
-            if (fx * box.forward[0] + fy * box.forward[1] < 0.9f)
-            {
-                if (watched)
-                    ++traceDrawnHeading;
-                return false;
-            }
+            const bool atCar = nearest >= 0.0f && nearest < 0.3f;
             float centre[3];
-            for (int i = 0; i < 3; ++i)
-                centre[i] = m[12 + i] + m[i] * box.local[0] + m[4 + i] * box.local[1] + m[8 + i] * box.local[2];
+            if (atCar)
+                for (int i = 0; i < 3; ++i)
+                    centre[i] = m[12 + i] + m[i] * box.local[0] + m[4 + i] * box.local[1] + m[8 + i] * box.local[2];
+            else
+            {
+                // turned to the drawn heading about the car's own position, moved on by speed
+                const float r[2] = { fy, -fx };
+                centre[0] = around[0] + r[0] * box.local[0] + fx * box.local[1];
+                centre[1] = around[1] + r[1] * box.local[0] + fy * box.local[1];
+                centre[2] = around[2] + box.local[2];
+                if (watched)
+                    ++traceDrawnHeadingOnly;
+            }
             if (!std::isfinite(centre[0]) || !std::isfinite(centre[1]) || !std::isfinite(centre[2]))
                 return false;
             std::copy_n(centre, 3, box.centre);
@@ -9310,10 +9317,14 @@ private:
                     const float along = dx * box.forward[0] + dy * box.forward[1], across = dx * box.forward[1] - dy * box.forward[0];
                     if (std::abs(along) < box.halfLength + 0.5f && std::abs(across) < box.halfWidth + 0.5f && std::abs(dz) < box.halfHeight + 0.5f)
                         continue;
+                    // VehicleBoxShadowsMinLight: a car at the edge of a lamp's light (33 m from one of 40 in a log) took a
+                    // box of a few hundredths and left it again as it drove; one it holds goes at half that
+                    const float falloff = std::clamp(1.0f - std::sqrt(d2) / (std::max)(light.mRadius, 0.1f), 0.0f, 1.0f);
+                    if (falloff * falloff < R.fVehicleBoxShadowsMinLight * (holding ? 0.5f : 1.0f))
+                        continue;
                     // VehicleBoxShadowsPerCar: only the strongest lamps on the car give it a box
                     if (R.nVehicleBoxShadowsPerCar > 0)
                     {
-                        const float falloff = std::clamp(1.0f - std::sqrt(d2) / (std::max)(light.mRadius, 0.1f), 0.0f, 1.0f);
                         NoteCarLamp(box.vehicle, rankKey, (std::max)(light.mIntensity, 0.0f) * falloff * falloff);
                         const auto car = carLamps.find(box.vehicle);
                         if (car != carLamps.end() && car->second.ranked && !LampAllowed(car->second, rankKey))

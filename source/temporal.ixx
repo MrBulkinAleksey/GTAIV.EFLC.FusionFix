@@ -2245,7 +2245,10 @@ export namespace TemporalAA
     // as known), within `reach` metres. False when object motion vectors are off or the entity was not drawn.
     // drawCount and nearest, where given: how many draws the entity had (-1 none recorded) and how far the nearest
     // draw's matrix stood from around, for the box shadows' log
-    bool DrawnWorldMatrix(void* entity, const float around[3], float reach, float out[16], int* drawCount, float* nearest)
+    // heading, where given (x, y of the forward expected): only draws facing within about 25 degrees of it count, the
+    // car's own parts drawn with its rotation (a skinned body may carry none of its own; wheels turn and doors swing)
+    bool DrawnWorldMatrix(void* entity, const float around[3], float reach, float out[16], int* drawCount, float* nearest,
+        const float* heading)
     {
         // Swapped at the G-buffer's end: the draws just made are the "previous" ones until the next scene
         auto it = Temporal::EntitiesPrevious.find(entity);
@@ -2268,6 +2271,12 @@ export namespace TemporalAA
                     m[r * 4 + c] = rows ? w[r * 4 + c] : w[c * 4 + r];
             if (!std::isfinite(m[12]) || !std::isfinite(m[13]) || !std::isfinite(m[14]))
                 continue;
+            if (heading)
+            {
+                const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
+                if (!(flat > 0.5f) || (m[4] * heading[0] + m[5] * heading[1]) / flat < 0.9f)
+                    continue;
+            }
             const float dx = m[12] - around[0], dy = m[13] - around[1], dz = m[14] - around[2];
             const float d2 = dx * dx + dy * dy + dz * dz;
             if (nearest && (*nearest < 0.0f || d2 < *nearest * *nearest))
