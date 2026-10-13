@@ -147,6 +147,7 @@ namespace PlayerShadowAllocation
     static std::array<HoldEntry,7> holdEntries{};
     static uint32_t slotMinHoldMs = 0;
     static float behindLampReach = 12.0f; // BehindLampReach
+    static float uncachedLampAdvantage = 1.5f; // UncachedLampAdvantage
     static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
     static std::atomic<uint32_t> lightsFlickering{0}; // lights ranked off screen as they flicker out of the list, for the status line
     // Rear lamp keys (Liberty's Shadows 2.0 tail light shadows), set by Lighting20, which comes after
@@ -765,11 +766,20 @@ namespace PlayerShadowAllocation
                     }
                     slotTrace.Observe(index,traced); }
                 catch(...) { slotTrace.enabled=false; }
+            // UncachedLampAdvantage: an uncached lamp in view casts no shadow at all without a slot, a cached one
+            // still its cache's of the static world, so the one's whole shadow went behind the other's of a ped. A
+            // newcomer without a car or ped in its light could take no held slot short of the reach (ClaimClass), and
+            // the lamp you drove up to, uncached, waited 7 s behind cached lamps 30-50 m off and lit with no shadow
+            // until 17 m. It now claims as a caster's lamp does, ranked as if this many times nearer.
+            const bool wholeShadow=casterPriority && uncachedLampAdvantage>0 && kind==budget::Kind::Lamp && !cached &&
+                rawGain==SlotGain::InView;
+            float rankedSquared=priorityDistance>=0?priorityDistance:geometry.distanceSquared;
+            if(wholeShadow && rankedSquared>=0) rankedSquared/=uncachedLampAdvantage*uncachedLampAdvantage;
             if(gain==SlotGain::None) ++lampsWithoutCasters;
             else if(gain==SlotGain::OffScreen) ++lightsOffScreen;
             labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(
                 {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam,gain,
-                priorityDistance>=0?priorityDistance:geometry.distanceSquared,caster>=0 && rawGain!=SlotGain::None,
+                rankedSquared,(caster>=0 && rawGain!=SlotGain::None) || wholeShadow,
                 kind!=budget::Kind::PlayerBeam && SlotIsFresh(key),inReach);
             // Record why a prior choice loses its claim, independently of
             // whether native sorting eventually drops it. Bounded to 7/pass.

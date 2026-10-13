@@ -542,6 +542,7 @@ public:
                 PlayerShadowAllocation::InstallLampSight(iniReader.ReadInteger("SHADOWS", "LampsBehindWalls", 1) != 0,
                     static_cast<uint32_t>(iniReader.ReadInteger("SHADOWS", "LampsBehindWallsFlags", 6)));
                 PlayerShadowAllocation::behindLampReach = std::clamp(iniReader.ReadFloat("SHADOWS", "BehindLampReach", 12.0f), 0.0f, 100.0f);
+                PlayerShadowAllocation::uncachedLampAdvantage = std::clamp(iniReader.ReadFloat("SHADOWS", "UncachedLampAdvantage", 1.5f), 0.0f, 10.0f);
                 fTailLightShadowDistance = std::clamp(iniReader.ReadFloat("SHADOWS", "TailLightShadowDistance", 25.0f), 0.0f, 500.0f);
                 PlayerShadowAllocation::slotMinHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "SlotMinHold", 1000), 0, 5000));
                 fusionfix::shadows::NativeShadowContinuity42::claimDistanceRatio =
