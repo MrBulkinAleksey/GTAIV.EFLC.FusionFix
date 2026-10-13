@@ -589,7 +589,7 @@ namespace Lighting20
     namespace Sharing
     {
         static bool enabled = true;
-        static std::atomic<uint32_t> shared{0}, mostInFrame{0}, duplicates{0}, duplicatesUnshadowed{0};
+        static std::atomic<uint32_t> shared{0}, mostInFrame{0}, duplicates{0}, duplicatesUnshadowed{0}, duplicatesVehicle{0}, duplicatesOurs{0};
 
         static bool SameProjection(const rage::CLightSource& a, const rage::CLightSource& b) noexcept
         {
@@ -625,6 +625,8 @@ namespace Lighting20
                         ++duplicatesUnshadowed;
                     }
                     ++duplicates;
+                    if (light.mFlags & rage::LF_VEHICLE) ++duplicatesVehicle;
+                    if (Ours::Of(key)) ++duplicatesOurs;
                     break;
                 }
                 if (!table[cell]) table[cell] = static_cast<uint16_t>(i + 1);
@@ -715,6 +717,7 @@ namespace Lighting20
                 << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load()
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
                 << " duplicates=" << Sharing::duplicates.load() << " duplicates_unshadowed=" << Sharing::duplicatesUnshadowed.load()
+                << " (vehicle " << Sharing::duplicatesVehicle.load() << ", model lights " << Sharing::duplicatesOurs.load() << ')'
                 << " most_in_frame=" << Sharing::mostInFrame.load() << " not_inserted=" << PlayerShadowAllocation::sharedMapsSkipped.load()
                 << " | stable map slots " << (PlayerShadowAllocation::preCacheHook ? (PlayerShadowAllocation::stableOrdinals ? "on" : "vacancy only") : "off")
                 << " passes=" << PlayerShadowAllocation::stableOrdinalPasses.load() << " moves=" << PlayerShadowAllocation::stableOrdinalMoves.load()

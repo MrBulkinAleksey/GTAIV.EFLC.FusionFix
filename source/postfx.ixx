@@ -8914,6 +8914,10 @@ private:
         static inline std::string traceText;
         static inline DWORD traceFlushed = 0, traceSecond = 0;
         static inline uint32_t traceStaleWatched = 0, traceLampsOnWatched = 0, traceLampsSeen = 0, traceDrawnWatched = 0, traceLeadWatched = 0;
+        // Why the watched car's drawn matrix was not taken: not among the G-buffer's draws, none near enough (and how
+        // far the nearest stood, its matrix's translation, and how many draws it had), facing another way
+        static inline uint32_t traceDrawnNone = 0, traceDrawnFar = 0, traceDrawnHeading = 0, traceDrawnCount = 0;
+        static inline float traceDrawnNearest = -1.0f;
         static inline float traceStrongest = 0.0f;
         static inline bool traceMarkDown = false, traceShotDown = false;
         static void Trace(const char* format, ...)
@@ -8942,10 +8946,13 @@ private:
             if (now - traceSecond >= 1000)
             {
                 if (traceSecond)
-                    Trace("S in the last second: %u lamp draws shaded the watched car (strongest %.2f), %u lamps with boxes, %u times its box stood where it was handed over, %u where it was drawn, %u moved ahead by its speed",
-                        traceLampsOnWatched, traceStrongest, traceLampsSeen, traceStaleWatched, traceDrawnWatched, traceLeadWatched);
+                    Trace("S in the last second: %u lamp draws shaded the watched car (strongest %.2f), %u lamps with boxes, %u times its box stood where it was handed over, %u where it was drawn, %u moved ahead by its speed; not drawn: %u not among the draws, %u none near (nearest %.2f m of %u draws), %u facing away",
+                        traceLampsOnWatched, traceStrongest, traceLampsSeen, traceStaleWatched, traceDrawnWatched, traceLeadWatched,
+                        traceDrawnNone, traceDrawnFar, traceDrawnNearest, traceDrawnCount, traceDrawnHeading);
                 traceSecond = now;
                 traceLampsOnWatched = traceLampsSeen = traceStaleWatched = traceDrawnWatched = traceLeadWatched = 0;
+                traceDrawnNone = traceDrawnFar = traceDrawnHeading = traceDrawnCount = 0;
+                traceDrawnNearest = -1.0f;
                 traceStrongest = 0.0f;
             }
             if (!traceText.empty() && now - traceFlushed >= 250)
@@ -9008,7 +9015,7 @@ private:
         // lights are drawn after the G-buffer, so the box stands exactly where the car and its contact shadow are.
         // Handed over earlier and moved ahead by the car's speed, the box ran ahead of and behind the car by turns, as
         // the game moves cars in steps of its own, and the shadow's front and back flickered.
-        static bool FromDrawn(Box& box, float lead)
+        static bool FromDrawn(Box& box, float lead, bool watched)
         {
             // The car's own position from the box: its right is its forward turned a quarter. Moved on by its speed
             // to when it is drawn: handed over two or three frames before, a car driven fast had gone more than the
@@ -9022,14 +9029,33 @@ private:
             float m[16];
             // Within a metre, more as fast as it goes, and facing the car's way: wheels and doors are drawn with their
             // own matrices
-            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 1.0f + (std::min)(speed * 0.05f, 2.0f), m))
+            int draws = 0;
+            float nearest = -1.0f;
+            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 1.0f + (std::min)(speed * 0.05f, 2.0f), m, &draws, &nearest))
+            {
+                if (watched)
+                {
+                    if (draws < 0)
+                        ++traceDrawnNone;
+                    else
+                    {
+                        ++traceDrawnFar;
+                        traceDrawnNearest = nearest;
+                        traceDrawnCount = uint32_t(draws);
+                    }
+                }
                 return false;
+            }
             const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
             if (!(flat > 0.5f))
                 return false;
             const float fx = m[4] / flat, fy = m[5] / flat;
             if (fx * box.forward[0] + fy * box.forward[1] < 0.9f)
+            {
+                if (watched)
+                    ++traceDrawnHeading;
                 return false;
+            }
             float centre[3];
             for (int i = 0; i < 3; ++i)
                 centre[i] = m[12 + i] + m[i] * box.local[0] + m[4 + i] * box.local[1] + m[8 + i] * box.local[2];
@@ -9349,7 +9375,7 @@ private:
                         if (!Refresh(box) && drawn && box.vehicle == drawn->watched)
                             ++traceStaleWatched;
                     }
-                    else if (drawn && FromDrawn(box, R.fVehicleBoxShadowLeadFrames * (std::min)(drawn->frameSeconds, 0.1f)))
+                    else if (drawn && FromDrawn(box, R.fVehicleBoxShadowLeadFrames * (std::min)(drawn->frameSeconds, 0.1f), box.vehicle == drawn->watched))
                     {
                         if (box.vehicle == drawn->watched)
                             ++traceDrawnWatched;
