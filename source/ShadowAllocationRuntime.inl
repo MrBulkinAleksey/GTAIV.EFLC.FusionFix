@@ -38,6 +38,7 @@ namespace PlayerShadowAllocation
     static bool cameraPriority = false;
     static bool casterPriority = false;
     static uint32_t casterHoldMs = 0;
+    static float casterLeadSeconds = 1.0f; // CasterAwareLampPriorityLead
     // Copied on the game-process callback, read by selection on the render side.
     static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
     static fusionfix::shadows::ShadowCasterPresence casters{};
@@ -146,6 +147,7 @@ namespace PlayerShadowAllocation
     static std::array<HoldEntry,7> holdEntries{};
     static uint32_t slotMinHoldMs = 0;
     static float behindLampReach = 12.0f; // BehindLampReach
+    static float uncachedLampAdvantage = 1.5f; // UncachedLampAdvantage
     static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
     static std::atomic<uint32_t> lightsFlickering{0}; // lights ranked off screen as they flicker out of the list, for the status line
     // Rear lamp keys (Liberty's Shadows 2.0 tail light shadows), set by Lighting20, which comes after
@@ -426,6 +428,27 @@ namespace PlayerShadowAllocation
                         if (const auto ped = reinterpret_cast<const uintptr_t*>(v + PlayerCar::driverOffset)[i])
                             occupants.push_back(ped);
             });
+            // Your car also counts where its speed takes it in CasterAwareLampPriorityLead: driving up to a cached lamp,
+            // the lamp's slot went once the ped in its light had left and came back 0.4 s later as the car came in, a
+            // blink of its shadow.
+            static uintptr_t lastCar = 0;
+            static uint32_t lastMs = 0;
+            static float lastAt[3]{};
+            float carAt[3];
+            if (focus.car && casterLeadSeconds > 0 && CEntity::GetPosition(focus.car, carAt)) {
+                const uint32_t dt = next.timeMs - lastMs;
+                if (focus.car == lastCar && dt > 0 && dt < 500) {
+                    const float k = casterLeadSeconds * 1000.0f / float(dt);
+                    const fusionfix::shadows::Vec3 ahead{carAt[0] + (carAt[0] - lastAt[0]) * k,
+                        carAt[1] + (carAt[1] - lastAt[1]) * k, carAt[2] + (carAt[2] - lastAt[2]) * k};
+                    const float x = ahead.x - carAt[0], y = ahead.y - carAt[1], z = ahead.z - carAt[2];
+                    if (std::isfinite(x + y + z) && x * x + y * y + z * z > 1.0f && x * x + y * y + z * z < 60.0f * 60.0f)
+                        next.Add(ahead, ShadowCasterPresence::VehicleExtent, focus.car);
+                }
+                if (focus.car != lastCar || dt >= 50) {
+                    lastCar = focus.car; lastMs = next.timeMs; std::copy_n(carAt, 3, lastAt);
+                }
+            }
             std::sort(occupants.begin(), occupants.end());
             next.valid = next.valid && CPed::ForEachPed([&](uintptr_t p) {
                 if (!std::binary_search(occupants.begin(), occupants.end(), p))
@@ -743,11 +766,20 @@ namespace PlayerShadowAllocation
                     }
                     slotTrace.Observe(index,traced); }
                 catch(...) { slotTrace.enabled=false; }
+            // UncachedLampAdvantage: an uncached lamp in view casts no shadow at all without a slot, a cached one
+            // still its cache's of the static world, so the one's whole shadow went behind the other's of a ped. A
+            // newcomer without a car or ped in its light could take no held slot short of the reach (ClaimClass), and
+            // the lamp you drove up to, uncached, waited 7 s behind cached lamps 30-50 m off and lit with no shadow
+            // until 17 m. It now claims as a caster's lamp does, ranked as if this many times nearer.
+            const bool wholeShadow=casterPriority && uncachedLampAdvantage>0 && kind==budget::Kind::Lamp && !cached &&
+                rawGain==SlotGain::InView;
+            float rankedSquared=priorityDistance>=0?priorityDistance:geometry.distanceSquared;
+            if(wholeShadow && rankedSquared>=0) rankedSquared/=uncachedLampAdvantage*uncachedLampAdvantage;
             if(gain==SlotGain::None) ++lampsWithoutCasters;
             else if(gain==SlotGain::OffScreen) ++lightsOffScreen;
             labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(
                 {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam,gain,
-                priorityDistance>=0?priorityDistance:geometry.distanceSquared,caster>=0 && rawGain!=SlotGain::None,
+                rankedSquared,(caster>=0 && rawGain!=SlotGain::None) || wholeShadow,
                 kind!=budget::Kind::PlayerBeam && SlotIsFresh(key),inReach);
             // Record why a prior choice loses its claim, independently of
             // whether native sorting eventually drops it. Bounded to 7/pass.

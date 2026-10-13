@@ -362,12 +362,13 @@ namespace CShadows
 // LampShadowsInDaylight = 0: the map's lamps (their 2dfx lights, in CE 0xc1e615 where their shadow bits are made) cast no
 // shadows while the sun's cascades are drawn, outside by day: at dusk and dawn the lamps' shadows took some 4 GPU ms on
 // top of the sun's 6, where the sun's light washed them out. Inside, where the game draws no cascades, and once the sun is
-// under CascadeSunElevation, the lamps keep theirs; headlights are not the map's lamps and keep theirs too.
+// under CascadeSunElevation, the lamps keep theirs (with CascadeShadowsAtNight the cascades are drawn at night too, so
+// the sun's height decides); headlights are not the map's lamps and keep theirs too.
 static bool bLampShadowsInDaylight = false;
 
 static bool LampShadowsOffBySun()
 {
-    return !bLampShadowsInDaylight && RenderSkip::SunShadowsDrawn();
+    return !bLampShadowsInDaylight && RenderSkip::SunShadowsDrawnByDay();
 }
 
 #include "LibertyLighting20Runtime.inl"
@@ -532,6 +533,7 @@ public:
                 PlayerShadowAllocation::nativeLampPriority = iniReader.ReadInteger("SHADOWS", "NativeLampViewPriority", 0) != 0;
                 PlayerShadowAllocation::casterPriority = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriority", 0) != 0;
                 PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityHold", 750), 0, 2000));
+                PlayerShadowAllocation::casterLeadSeconds = std::clamp(iniReader.ReadFloat("SHADOWS", "CasterAwareLampPriorityLead", 1.0f), 0.0f, 3.0f);
                 PlayerShadowAllocation::slotTrace.enabled = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityLog", 0) != 0;
                 PlayerShadowAllocation::lampSpacing.base = std::clamp(iniReader.ReadFloat("SHADOWS", "LampSpacing", 0.0f), 0.0f, 40.0f);
                 PlayerShadowAllocation::lampSpacing.spacing = PlayerShadowAllocation::lampSpacing.base;
@@ -540,6 +542,7 @@ public:
                 PlayerShadowAllocation::InstallLampSight(iniReader.ReadInteger("SHADOWS", "LampsBehindWalls", 1) != 0,
                     static_cast<uint32_t>(iniReader.ReadInteger("SHADOWS", "LampsBehindWallsFlags", 6)));
                 PlayerShadowAllocation::behindLampReach = std::clamp(iniReader.ReadFloat("SHADOWS", "BehindLampReach", 12.0f), 0.0f, 100.0f);
+                PlayerShadowAllocation::uncachedLampAdvantage = std::clamp(iniReader.ReadFloat("SHADOWS", "UncachedLampAdvantage", 1.5f), 0.0f, 10.0f);
                 fTailLightShadowDistance = std::clamp(iniReader.ReadFloat("SHADOWS", "TailLightShadowDistance", 25.0f), 0.0f, 500.0f);
                 PlayerShadowAllocation::slotMinHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "SlotMinHold", 1000), 0, 5000));
                 fusionfix::shadows::NativeShadowContinuity42::claimDistanceRatio =
