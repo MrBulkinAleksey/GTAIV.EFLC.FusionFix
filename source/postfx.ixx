@@ -8866,7 +8866,11 @@ private:
                 if (!frequency.QuadPart)
                     QueryPerformanceFrequency(&frequency);
                 const float dt = before.QuadPart ? float(time.QuadPart - before.QuadPart) / float(frequency.QuadPart) : 0.0f;
-                const bool step = dt > 0.002f && dt < 0.25f;
+                // A new frame's hand over; one after a pause (a load, the menu) gives no speeds, but is the time the
+                // next is measured from: kept only on a step, the time stuck at the first pause over 0.25 s and every
+                // car had no speed from then on (a log: speed 0 in every line, the guess 1 to 8 m behind the drawn car)
+                const bool fresh = !before.QuadPart || dt > 0.002f;
+                const bool step = fresh && before.QuadPart && dt < 0.25f;
                 std::unordered_map<uintptr_t, Seen> current;
                 current.reserve(size_t(n));
                 for (int i = 0; i < n; ++i)
@@ -8876,7 +8880,7 @@ private:
                     Seen seen{};
                     std::copy_n(box.centre, 3, seen.centre);
                     std::copy_n(box.forward, 2, seen.forward);
-                    if (it != previous.end())
+                    if (it != previous.end() && (step || !fresh))
                     {
                         if (step)
                         {
@@ -8899,14 +8903,15 @@ private:
                     box.turning = seen.turning;
                     current.emplace(box.vehicle, seen);
                 }
-                if (step || !before.QuadPart)
+                // a second hand over in the frame keeps the frame's time too, its boxes moved on as the first's
+                static float frameSeconds = 0.0f;
+                if (fresh)
                 {
                     previous.swap(current);
                     before = time;
-                    list.frameSeconds = dt;
+                    frameSeconds = step ? dt : 0.0f;
                 }
-                else
-                    list.frameSeconds = 0.0f;
+                list.frameSeconds = frameSeconds;
             }
             list.count = (std::min)(n, kBoxes);
             for (int i = 0; i < list.count; ++i)
