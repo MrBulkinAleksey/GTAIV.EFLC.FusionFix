@@ -8688,11 +8688,14 @@ private:
             static constexpr int kKept = 8;
             std::array<std::pair<uint64_t, float>, kKept> seen{};    // this frame: lamp and how much it lights the car
             int seenCount = 0;
+            std::array<std::pair<uint64_t, float>, kKept> before{};  // the frame before, for lamps not drawn in this one
+            int beforeCount = 0;
             std::array<uint64_t, kKept> allowed{};                    // from the last frame: those that may give a box
             int allowedCount = 0;
             bool ranked = false;                                      // allowed holds a ranking (not the car's first frame)
         };
         static inline std::unordered_map<uintptr_t, CarLamps> carLamps;
+        static inline uint32_t carLampsFrame = 0; // TemporalAA::SceneFrame of the last ranking
 
         static bool LampAllowed(const CarLamps& car, uint64_t lamp)
         {
@@ -8723,7 +8726,10 @@ private:
             }
         }
 
-        // At a new frame's lights: each car's strongest lamps of the last frame may give it a box in this one.
+        // At a new scene's lights: each car's strongest lamps of the last two frames may give it a box in this one. By
+        // the scene frame, not by the light list drawn: lights drawn from more than one list in a frame ranked the cars
+        // from part of their lamps each time, and a lamp took and left a car every other frame (a log: 49 times in a
+        // few seconds, its box never faded in). A lamp not drawn in one frame keeps its place from the one before.
         static void RankCarLamps(int perCar)
         {
             if (carLamps.size() > 1024)
@@ -8731,16 +8737,30 @@ private:
             for (auto it = carLamps.begin(); it != carLamps.end();)
             {
                 auto& car = it->second;
-                if (!car.seenCount)
+                if (!car.seenCount && !car.beforeCount)
                 {
                     it = carLamps.erase(it);
                     continue;
                 }
-                std::sort(car.seen.begin(), car.seen.begin() + car.seenCount, [](const auto& a, const auto& b) { return a.second > b.second; });
-                car.allowedCount = (std::min)(car.seenCount, perCar);
+                std::array<std::pair<uint64_t, float>, CarLamps::kKept * 2> both{};
+                int n = 0;
+                for (int i = 0; i < car.seenCount; ++i)
+                    both[n++] = car.seen[i];
+                for (int i = 0; i < car.beforeCount; ++i)
+                {
+                    bool again = false;
+                    for (int j = 0; j < car.seenCount; ++j)
+                        again |= car.seen[j].first == car.before[i].first;
+                    if (!again)
+                        both[n++] = car.before[i];
+                }
+                std::sort(both.begin(), both.begin() + n, [](const auto& a, const auto& b) { return a.second > b.second; });
+                car.allowedCount = (std::min)(n, perCar);
                 for (int i = 0; i < car.allowedCount; ++i)
-                    car.allowed[i] = car.seen[i].first;
+                    car.allowed[i] = both[i].first;
                 car.ranked = true;
+                car.before = car.seen;
+                car.beforeCount = car.seenCount;
                 car.seenCount = 0;
                 ++it;
             }
@@ -9153,8 +9173,7 @@ private:
                 {
                     drawnFor = list;
                     PublishPairs();
-                    if (R.nVehicleBoxShadowsPerCar > 0)
-                        RankCarLamps(R.nVehicleBoxShadowsPerCar);
+
                     // The newest with this list: the ring holds more hand overs than the game has lists, so an older
                     // one with the same list, three or six frames old, made the shadows lag the cars by fits
                     const List* found = nullptr;
@@ -9186,6 +9205,11 @@ private:
                 // not push a standing one out, and its shadow from that lamp flickered. Lamps are told apart by where
                 // they stand, a quarter metre apart.
                 const uint64_t lightKey = LightKey(Cell(light.mPosition.x), Cell(light.mPosition.y), Cell(light.mPosition.z));
+                if (R.nVehicleBoxShadowsPerCar > 0 && TemporalAA::SceneFrame != carLampsFrame)
+                {
+                    carLampsFrame = TemporalAA::SceneFrame;
+                    RankCarLamps(R.nVehicleBoxShadowsPerCar);
+                }
                 if (held.size() > 4096)
                     held.clear();
                 auto& state = held[lightKey];
