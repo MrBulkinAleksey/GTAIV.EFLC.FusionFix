@@ -2385,7 +2385,6 @@ public:
             AddRow(category, "GGXLighting", "PREF_GGX_LIGHTING", 2, toggle);
             AddRow(category, "WetWeather", "PREF_WET_WEATHER", 2, toggle);
             AddRow(category, "VehBoxShadows", "PREF_VEHICLE_BOX_SHADOWS", 2, toggle);
-            AddRow(category, "DualHeadlights", "PREF_DUAL_HEADLIGHTS", 2, toggle);
             AddRow(category, "TailLightShad", "PREF_TAIL_LIGHT_SHADOWS", 2, toggle);
             AddRow(category, "WorldLightShad", "PREF_WORLD_LIGHT_SHADOWS", 2, toggle);
             AddRow(category, "BuildingShad", "PREF_BUILDING_SHADOWS", 2, toggle);
