@@ -8939,16 +8939,21 @@ private:
         // lights are drawn after the G-buffer, so the box stands exactly where the car and its contact shadow are.
         // Handed over earlier and moved ahead by the car's speed, the box ran ahead of and behind the car by turns, as
         // the game moves cars in steps of its own, and the shadow's front and back flickered.
-        static bool FromDrawn(Box& box)
+        static bool FromDrawn(Box& box, float lead)
         {
-            // The car's own position from the box: its right is its forward turned a quarter
+            // The car's own position from the box: its right is its forward turned a quarter. Moved on by its speed
+            // to when it is drawn: handed over two or three frames before, a car driven fast had gone more than the
+            // metre the search allows, and its box kept the heading of the hand over (a log in a car: no box found
+            // where it was drawn).
             const float right[2] = { box.forward[1], -box.forward[0] };
-            const float around[3] = { box.centre[0] - right[0] * box.local[0] - box.forward[0] * box.local[1],
-                                    box.centre[1] - right[1] * box.local[0] - box.forward[1] * box.local[1],
-                                    box.centre[2] - box.local[2] };
+            const float around[3] = { box.centre[0] - right[0] * box.local[0] - box.forward[0] * box.local[1] + box.velocity[0] * lead,
+                                    box.centre[1] - right[1] * box.local[0] - box.forward[1] * box.local[1] + box.velocity[1] * lead,
+                                    box.centre[2] - box.local[2] + box.velocity[2] * lead };
+            const float speed = std::sqrt(box.velocity[0] * box.velocity[0] + box.velocity[1] * box.velocity[1] + box.velocity[2] * box.velocity[2]);
             float m[16];
-            // Within a metre, and facing the car's way: wheels and doors are drawn with their own matrices
-            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 1.0f, m))
+            // Within a metre, more as fast as it goes, and facing the car's way: wheels and doors are drawn with their
+            // own matrices
+            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 1.0f + (std::min)(speed * 0.05f, 2.0f), m))
                 return false;
             const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
             if (!(flat > 0.5f))
@@ -9264,7 +9269,7 @@ private:
                         if (!Refresh(box) && drawn && box.vehicle == drawn->watched)
                             ++traceStaleWatched;
                     }
-                    else if (drawn && FromDrawn(box))
+                    else if (drawn && FromDrawn(box, R.fVehicleBoxShadowLeadFrames * (std::min)(drawn->frameSeconds, 0.1f)))
                     {
                         if (box.vehicle == drawn->watched)
                             ++traceDrawnWatched;
