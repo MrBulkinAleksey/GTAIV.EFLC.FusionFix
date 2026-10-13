@@ -273,6 +273,13 @@ namespace RenderSkip
     bool bSphereWindows = true;
     const float* fitViewport = nullptr;     // grcViewport the fit was given (CE 0x11a2500)
     const float* pSplits = nullptr;         // the fit's five split distances (CE 0x103693c), cascade k from k to k + 1
+    // The fit runs on the main thread into the copy [0x1174790] while the render thread draws from [0x1174794] (CE
+    // 0x92dd7f in the cascades' callback); the matrix of each copy as the fit left it, so the render thread can tell
+    // from this frame's own windows whether a kept cascade still fits, instead of from the two frames before, which
+    // missed at the start of every turn (some 150 kept cascades a minute were off and showed)
+    const uint32_t* pRenderIndex = nullptr;
+    float bufferMatrix[4][16]{};
+    uint32_t bufferMatrices = 0;            // a bit for each copy whose matrix is there
 
     // The fit's call of CE 0x92b6c0 (render thread, before the pass's cascades are locked): the camera's z axis the
     // light's axes are built from (xmm3, xmm2, xmm1 = grcViewport +0x160, +0x164, +0x168, negated after) in steps
@@ -323,6 +330,8 @@ namespace RenderSkip
             return;
         fitMatrixCaught = false;
         float* frame = (float*)(frameCopies + *pFitIndex * 0x270);
+        memcpy(bufferMatrix[*pFitIndex & 3], fitMatrix, sizeof(fitMatrix));
+        bufferMatrices |= 1u << (*pFitIndex & 3);
         // Four vectors of running sums: value of cascade k = the sum of the first k + 1 terms
         float values[4][4];
         for (int v = 0; v < 4; v++)
@@ -415,12 +424,12 @@ namespace RenderSkip
             }
             bool resize = heldEpoch[k] != headingEpoch;
             for (int axis = 0; axis < 2; axis++)
-                if (want[axis] > heldSize[k][axis] || want[axis] < heldSize[k][axis] * (ball ? 0.96f : 0.8f))
+                if (want[axis] > heldSize[k][axis] || want[axis] < heldSize[k][axis] * (ball ? 0.92f : 0.8f))
                     resize = true;
             if (resize)
             {
                 for (int axis = 0; axis < 2; axis++)
-                    heldSize[k][axis] = want[axis] * (ball ? 1.02f : 1.05f);
+                    heldSize[k][axis] = want[axis] * (ball ? 1.04f : 1.05f);
                 heldEpoch[k] = headingEpoch;
                 windowResizes++;
             }
@@ -561,6 +570,38 @@ namespace RenderSkip
         return false;
     }
 
+    // From this frame's own windows (see pRenderIndex): the cascade kept from the pass before against this one's
+    bool FitsThisFrame(int k, bool& known)
+    {
+        known = false;
+        if (!pRenderIndex || !frameCopies)
+            return false;
+        uint32_t index = *pRenderIndex;
+        if (!(bufferMatrices & (1u << (index & 3))))
+            return false;
+        auto& look = looks[k];
+        known = true;
+        if (look.seq + 1 != passSeq)
+            return false;
+        const float* frame = (const float*)(frameCopies + index * 0x270);
+        float values[4];
+        for (int v = 0; v < 4; v++)
+        {
+            values[v] = 0.0f;
+            for (int i = 0; i <= k; i++)
+                values[v] += frame[v * 4 + i];
+        }
+        auto fold = FoldCascade(k, look.matrix, look.values, bufferMatrix[index & 3], values);
+        if (FoldFits(fold))
+            return true;
+        if (fold.texels > FoldTexels || fold.depth > FoldDepth)
+            refusedTurn++;
+        else
+            refusedEdge++;
+        largestEdge = std::max(largestEdge, fold.edge);
+        return false;
+    }
+
     Drop CascadeDrop()
     {
         bAtlasLeftOut = false;
@@ -592,7 +633,11 @@ namespace RenderSkip
         auto& c = farCascades[index - 1];
         bool turn = ((frame + index + (index == 1 ? 1 : 0)) & 1) == 0;
         // Without the setter's hooks, only while the camera keeps still
-        bool fits = bFollow ? Followable(index) : !CameraMovedSince(c.position, c.forward, CascadeMoveSquared, CascadeTurnCos);
+        bool known = false, fits = false;
+        if (bFollow)
+            fits = FitsThisFrame(int(index), known);
+        if (!known)
+            fits = bFollow ? Followable(index) : !CameraMovedSince(c.position, c.forward, CascadeMoveSquared, CascadeTurnCos);
         if (turn && c.drawn + 1 == passSeq && fits && bFitChangedPass)
             refusedStep++;
         bool skip = turn && c.drawn + 1 == passSeq && fits && !bFitChangedPass;
@@ -1025,6 +1070,8 @@ public:
                 pFitIndex = *fitCopy.get_first<const uint32_t*>(2);
                 frameCopies = *fitCopy.get_first<uintptr_t>(14);
                 fitMatrixReturn = reinterpret_cast<uintptr_t>(fitCopy.get_first(0x24));
+                if (auto render = hook::pattern("56 8B 35 ? ? ? ? 69 F6 70 02 00 00 81 C6 ? ? ? ? 33 C0 85 C9"); !render.empty())
+                    pRenderIndex = *render.get_first<const uint32_t*>(3);
                 static auto WindowsHook = safetyhook::create_mid(afterFit.get_first(8), [](SafetyHookContext&) { StableWindows(); });
             }
             if (!bFarCascadesHalfRate && !bMidCascadeHalfRate && !(fDepthAnchor > 0.0f) && !bStableWindows)
