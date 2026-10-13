@@ -992,8 +992,9 @@ public:
         {
             static uint32_t frames = 0;
             ++frames;
-            // In a frame the cascades are drawn in, if there is one before frame 6000
-            if (bTrace && !traceFrom && frames >= 1200 && (cascadeFrame + 2 >= TemporalAA::SceneFrame || frames >= 6000))
+            // In a frame the cascades are drawn in: a save is loaded at night before the clock is set to day, so with
+            // CascadesIntoAtlas it waits for them however long it takes, otherwise until frame 6000
+            if (bTrace && !traceFrom && frames >= 1200 && (cascadeFrame + 2 >= TemporalAA::SceneFrame || (!bCascadesIntoAtlas && frames >= 6000)))
             {
                 traceFrom = TemporalAA::SceneFrame + 2;
                 traceUntil = traceFrom + 2;
