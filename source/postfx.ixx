@@ -815,7 +815,7 @@ public:
     int32_t nVehicleBoxShadowsPerCar = 2;  // lamps that may shadow one car as a box, the strongest on it; 0 any number
     float fVehicleBoxShadowsMinLight = 0.04f; // the least share of a lamp's light at the car, (1 - distance / radius)^2, for a box
     bool bVehicleBoxShadowsLive = false;
-    float fVehicleBoxShadowLeadFrames = 1.0f;
+    float fVehicleBoxShadowLeadFrames = -1.0f;
     bool bVehicleBoxShadowsLog = false; // VehicleBoxShadowsLog, see VehicleBoxShadows::Trace
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
@@ -1803,7 +1803,7 @@ public:
         if (bVehicleBoxShadowsBlend)
             fVehicleBoxShadowContact = 1.0f;
         bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 0) != 0;
-        fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", 1.0f), -3.0f, 5.0f);
+        fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", -1.0f), -3.0f, 5.0f);
         bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;
         nVehicleBoxShadowsPerLamp = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerLamp", 3), 1, 5);
         nVehicleBoxShadowsPerCar = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerCar", 2), 0, 8);
@@ -8611,6 +8611,7 @@ private:
             float focus[3] = {};              // the player, where the boxes' shadows are seen
             uintptr_t watched = 0;            // the car nearest the player, which VehicleBoxShadowsLog follows
             float frameSeconds = 0.0f;        // since the hand over before
+            LARGE_INTEGER handedAt{};         // when, for the log
             Box boxes[kBoxes];
         };
         static inline List lists[kLists]{};
@@ -8624,6 +8625,7 @@ private:
         static inline const List* drawn = nullptr;
         static inline List lastFound{}; // a copy, render thread: the ring's entry may be reused while it is drawn
         static inline uintptr_t drawnFor = 0;
+        static inline std::atomic<uint32_t> latestHandOver{0}; // the last hand over's sequence, for the log
         static inline bool constantsOn = true;
         // The cars each lamp took last, render thread.
         // What each lamp took last, render thread: its cars, and since when its own map shows them.
@@ -8779,6 +8781,8 @@ private:
             list.count = 0;
             static uint32_t handOvers = 0;
             list.sequence = ++handOvers;
+            QueryPerformanceCounter(&list.handedAt);
+            latestHandOver.store(handOvers, std::memory_order_relaxed);
             if (!PostFxResources.VehicleBoxShadowsEnabled() || !lightListBuilt || !modelInfos)
                 return;
             float focus[3] = {};
@@ -9102,9 +9106,15 @@ private:
                 const float dx = m[12] - handed[0], dy = m[13] - handed[1], dz = m[14] - handed[2];
                 const float along = dx * box.forward[0] + dy * box.forward[1], across = dx * box.forward[1] - dy * box.forward[0];
                 const float vAlong = box.velocity[0] * box.forward[0] + box.velocity[1] * box.forward[1];
-                Trace("V drawn from handed over: %.2f m along (%.3f s at its speed), %.2f across, %.2f up; speed %.1f m/s (%.1f along), lead %.3f s, frame %.3f s, guess off by %.2f m",
+                // and how old the hand over its boxes came from was: hand overs since, and milliseconds
+                LARGE_INTEGER now{}, frequency{};
+                QueryPerformanceCounter(&now);
+                QueryPerformanceFrequency(&frequency);
+                const float ageMs = lastFound.handedAt.QuadPart ? float(now.QuadPart - lastFound.handedAt.QuadPart) * 1000.0f / float(frequency.QuadPart) : -1.0f;
+                Trace("V drawn from handed over: %.2f m along (%.3f s at its speed), %.2f across, %.2f up; speed %.1f m/s (%.1f along), lead %.3f s, frame %.3f s, guess off by %.2f m; boxes from %u hand overs back, %.1f ms ago",
                     along, speed > 0.5f ? along / speed : 0.0f, across, dz, speed, vAlong, lead,
-                    PostFxResources.fVehicleBoxShadowLeadFrames != 0.0f ? lead / PostFxResources.fVehicleBoxShadowLeadFrames : 0.0f, nearest);
+                    PostFxResources.fVehicleBoxShadowLeadFrames != 0.0f ? lead / PostFxResources.fVehicleBoxShadowLeadFrames : 0.0f, nearest,
+                    latestHandOver.load(std::memory_order_relaxed) - lastFound.sequence, ageMs);
             }
             float centre[3];
             if (atCar)
@@ -9238,6 +9248,8 @@ private:
                         std::copy_n(found->boxes, found->count, lastFound.boxes);
                         std::copy_n(found->focus, 3, lastFound.focus);
                         lastFound.watched = found->watched;
+                        lastFound.sequence = found->sequence;
+                        lastFound.handedAt = found->handedAt;
                         if (found->frameSeconds > 0.0f)
                             lastFound.frameSeconds = found->frameSeconds;
                         drawn = &lastFound;
