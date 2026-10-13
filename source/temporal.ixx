@@ -2297,8 +2297,11 @@ export namespace TemporalAA
                 continue;
             if (heading)
             {
+                // A skinned draw is turned by its root bone, the car's own heading: within 60 degrees of the one
+                // expected, which a car spun or turned sharply had left by 27 degrees (the expected lagging it). Another
+                // part within 25 degrees, wheels and doors turned their own way
                 const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
-                if (!(flat > 0.5f) || (m[4] * heading[0] + m[5] * heading[1]) / flat < 0.9f)
+                if (!(flat > 0.5f) || (m[4] * heading[0] + m[5] * heading[1]) / flat < (draw.Bones >= 0 ? 0.5f : 0.9f))
                     continue;
             }
             const float dx = m[12] - around[0], dy = m[13] - around[1], dz = m[14] - around[2];
