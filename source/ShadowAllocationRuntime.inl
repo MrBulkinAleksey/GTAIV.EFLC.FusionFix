@@ -38,6 +38,7 @@ namespace PlayerShadowAllocation
     static bool cameraPriority = false;
     static bool casterPriority = false;
     static uint32_t casterHoldMs = 0;
+    static float casterLeadSeconds = 1.0f; // CasterAwareLampPriorityLead
     // Copied on the game-process callback, read by selection on the render side.
     static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
     static fusionfix::shadows::ShadowCasterPresence casters{};
@@ -426,6 +427,27 @@ namespace PlayerShadowAllocation
                         if (const auto ped = reinterpret_cast<const uintptr_t*>(v + PlayerCar::driverOffset)[i])
                             occupants.push_back(ped);
             });
+            // Your car also counts where its speed takes it in CasterAwareLampPriorityLead: driving up to a cached lamp,
+            // the lamp's slot went once the ped in its light had left and came back 0.4 s later as the car came in, a
+            // blink of its shadow.
+            static uintptr_t lastCar = 0;
+            static uint32_t lastMs = 0;
+            static float lastAt[3]{};
+            float carAt[3];
+            if (focus.car && casterLeadSeconds > 0 && CEntity::GetPosition(focus.car, carAt)) {
+                const uint32_t dt = next.timeMs - lastMs;
+                if (focus.car == lastCar && dt > 0 && dt < 500) {
+                    const float k = casterLeadSeconds * 1000.0f / float(dt);
+                    const fusionfix::shadows::Vec3 ahead{carAt[0] + (carAt[0] - lastAt[0]) * k,
+                        carAt[1] + (carAt[1] - lastAt[1]) * k, carAt[2] + (carAt[2] - lastAt[2]) * k};
+                    const float x = ahead.x - carAt[0], y = ahead.y - carAt[1], z = ahead.z - carAt[2];
+                    if (std::isfinite(x + y + z) && x * x + y * y + z * z > 1.0f && x * x + y * y + z * z < 60.0f * 60.0f)
+                        next.Add(ahead, ShadowCasterPresence::VehicleExtent, focus.car);
+                }
+                if (focus.car != lastCar || dt >= 50) {
+                    lastCar = focus.car; lastMs = next.timeMs; std::copy_n(carAt, 3, lastAt);
+                }
+            }
             std::sort(occupants.begin(), occupants.end());
             next.valid = next.valid && CPed::ForEachPed([&](uintptr_t p) {
                 if (!std::binary_search(occupants.begin(), occupants.end(), p))
