@@ -769,8 +769,27 @@ namespace RenderSkip
             return D3D_OK;
         if (count == 0 && depth > 0 && stack[depth - 1].intoAtlas >= 0)
         {
-            auto quarter = Quarter(stack[depth - 1].intoAtlas);
-            return RealClear(device, 1, &quarter, flags, colour, z, stencil);
+            HRESULT result = D3D_OK;
+            // The depth all over: the other quarters' depth is never read again, and a clear of a whole surface is a
+            // fast one (one of a rectangle of the big buffer took the cascades about as long as the copy it saves)
+            if (DWORD depthFlags = flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL))
+            {
+                D3DVIEWPORT9 saved{}, whole{ 0, 0, cascadeSide * 4, cascadeSide, 0.0f, 1.0f };
+                DWORD scissor = FALSE;
+                device->GetViewport(&saved);
+                device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissor);
+                RealSetViewport(device, &whole);
+                device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+                result = RealClear(device, 0, nullptr, depthFlags, colour, z, stencil);
+                device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissor);
+                RealSetViewport(device, &saved);
+            }
+            if (flags & D3DCLEAR_TARGET)
+            {
+                auto quarter = Quarter(stack[depth - 1].intoAtlas);
+                result = RealClear(device, 1, &quarter, D3DCLEAR_TARGET, colour, z, stencil);
+            }
+            return result;
         }
         return RealClear(device, count, rects, flags, colour, z, stencil);
     }
