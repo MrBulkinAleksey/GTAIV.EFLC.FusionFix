@@ -2117,8 +2117,8 @@ public:
             { 0, "PREF_CONTACTSHADOWS",         "POSTFX",     "ContactShadows",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSGI",                   "POSTFX",     "ScreenSpaceIndirectLight",           "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SKIN_SSS",               "POSTFX",     "SkinScattering",                     "",                           1, nullptr, 0, 1 },
-            { 0, "PREF_HEADLIGHT_REACH",        "SHADOWS",    "HeadlightShadowReach",               "",                           10, nullptr, 0, 40 },
-            { 0, "PREF_LAMP_REACH",             "SHADOWS",    "LamppostShadowReach",                "",                           10, nullptr, 0, 40 },
+            { 0, "PREF_HEADLIGHT_REACH",        "SHADOWS",    "HeadlightShadowReach",               "",                           10, nullptr, 0, 100 },
+            { 0, "PREF_LAMP_REACH",             "SHADOWS",    "LamppostShadowReach",                "",                           10, nullptr, 0, 100 },
             { 0, "PREF_SHARPENING",             "TEXTURES",   "Sharpening",                         "MENU_DISPLAY_SHARPENING",    0, nullptr, 0, 3 },
             { 0, "PREF_TEXTURE_LOD_BIAS",       "TEXTURES",   "TextureLodBias",                     "MENU_DISPLAY_TEXTURE_LOD_BIAS", 0, nullptr, 0, 4 },
             { 0, "PREF_ANISO_ALL_MAPS",         "TEXTURES",   "AnisotropicAllMaps",                 "",                           0, nullptr, 0, 1 },
@@ -2133,6 +2133,11 @@ public:
             { 0, "PREF_GROUND_SURFACES",        "TEXTURES",   "GroundSurfaces",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_PROCEDURAL_DISTANCE",    "PROCEDURAL", "ProceduralDistance",                 "",                           0, nullptr, 0, 8 },
             { 0, "PREF_VEHICLE_BOX_SHADOWS",    "POSTFX",     "VehicleBoxShadows",                  "",                           1, nullptr, 0, 1 },
+            // Liberty's Shadows 2.0 light families (nightshadows, LibertyLighting20Runtime.inl)
+            { 0, "PREF_DUAL_HEADLIGHTS",        "SHADOWS",    "DualHeadlights",                     "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_TAIL_LIGHT_SHADOWS",     "SHADOWS",    "TailLightShadows",                   "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_WORLD_LIGHT_SHADOWS",    "SHADOWS",    "WorldLightShadows",                  "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_BUILDING_SHADOWS",       "SHADOWS",    "BuildingShadows",                    "",                           1, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2380,14 +2385,17 @@ public:
             AddRow(category, "GGXLighting", "PREF_GGX_LIGHTING", 2, toggle);
             AddRow(category, "WetWeather", "PREF_WET_WEATHER", 2, toggle);
             AddRow(category, "VehBoxShadows", "PREF_VEHICLE_BOX_SHADOWS", 2, toggle);
+            AddRow(category, "TailLightShad", "PREF_TAIL_LIGHT_SHADOWS", 2, toggle);
+            AddRow(category, "WorldLightShad", "PREF_WORLD_LIGHT_SHADOWS", 2, toggle);
+            AddRow(category, "BuildingShad", "PREF_BUILDING_SHADOWS", 2, toggle);
             AddEmptyLine(category);
             // The number next to the slider is the reach in feet, 0 keeps the game's own
             for (auto [label, preference] : { std::pair{ "FF_HREACH", "PREF_HEADLIGHT_REACH" }, std::pair{ "FF_LREACH", "PREF_LAMP_REACH" } })
             {
                 auto id = GetPrefIDByName(preference);
                 if (id && valueTextHook)
-                    valueTexts[*id] = [this, id = *id] { auto step = std::clamp(Get(id), 0, 40); return step ? std::format(L"{} ft", step * 5) : std::wstring(CText::getText("MO_DEF")); };
-                AddRow(category, label, preference, 41, valueTextHook ? "MENU_DISPLAY_VALUE_SLIDERBAR" : slider);
+                    valueTexts[*id] = [this, id = *id] { auto step = std::clamp(Get(id), 0, 100); return step ? std::format(L"{} ft", step * 5) : std::wstring(CText::getText("MO_DEF")); };
+                AddRow(category, label, preference, 101, valueTextHook ? "MENU_DISPLAY_VALUE_SLIDERBAR" : slider);
             }
             AddEmptyLine(category);
             AddRow(category, "SSR Debug", "PREF_SSR_DEBUG", 11, "MENU_DISPLAY_SSR_DEBUG");

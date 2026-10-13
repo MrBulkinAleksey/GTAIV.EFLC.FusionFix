@@ -15,6 +15,7 @@ namespace fusionfix::shadows::caster
         std::array<std::uintptr_t, 9> occupants{};
         bool ownBeam = false;
         std::uintptr_t trafficBeamKey = 0; // Validated submitted beam; never dereferenced.
+        std::uintptr_t lampOwner = 0; // The car whose lamp (one of a headlight pair, a rear lamp) has the slot.
         // A lamp's slot: the cars it keeps box shadows for and the people in them, which its map leaves out.
         std::array<std::uintptr_t, 5> boxed{};
         int boxedCount = 0;
@@ -41,6 +42,8 @@ namespace fusionfix::shadows::caster
                 if (context.boxedOccupants[i] == entity) return true;
         if (!artificial) return false;
         if (type == 2 && ce::IsVehicleBeam(context.trafficBeamKey, entity)) return true;
+        // A lamp inside the car's body would see the car all round it.
+        if (type == 2 && context.lampOwner && entity == context.lampOwner) return true;
         if (!context.ownBeam || !context.car) return false;
         if (type == 2) return entity == context.car;
         if (type == 3)

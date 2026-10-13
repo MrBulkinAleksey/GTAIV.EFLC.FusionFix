@@ -20,6 +20,13 @@ namespace PlayerShadowAllocation
     static uint64_t (*labLampGeneration)(const rage::CLightSource&) noexcept=nullptr;
     static void (*observeShadowResult)() noexcept=nullptr;
     static void (*observeSubmittedLights)(const rage::CLightSource*,uint32_t) noexcept = nullptr;
+    // Changes the frame's lights before the game picks the slots (Lighting20: stale lamp keys, cached lamps).
+    static void (*prepareSources)(rage::CLightSource*,uint32_t) noexcept = nullptr;
+    // At the pre-cache boundary (PreCacheRva), before the stable map ordinals: the emergency vacancy.
+    static void (*preCacheVacancy)(SafetyHookContext&) noexcept = nullptr;
+    static SafetyHookMid preCacheHook;
+    static bool stableOrdinals = false;
+    static std::atomic<uint32_t> stableOrdinalPasses{0}, stableOrdinalMoves{0}, stableOrdinalRejected{0}, sharedMapsSkipped{0};
     static SafetyHookMid collectHook, finalizeHook, lampDistanceHook, compareResultHook, cacheResultHook;
     static bool nativeLampPriority=false;
     static std::atomic<uint32_t> lampDistanceAdjusted{0};
@@ -80,6 +87,7 @@ namespace PlayerShadowAllocation
         bool tracedComparison=false;
         unsigned claimsReset=0; // NativeShadowContinuity42::Begin, for the slot trace
         fusionfix::shadows::ShadowView view{};
+        fusionfix::shadows::ShadowVolumeFrustum20 frustum{}; // the view's planes, worked out once a pass
         fusionfix::shadows::ShadowCasterPresence casters{};
         fusionfix::shadows::SlotGainHold gainHold;
         uintptr_t ped = 0, occupiedCar = 0;
@@ -87,8 +95,14 @@ namespace PlayerShadowAllocation
         uintptr_t stackAnchor = 0;
         unsigned depth = 0;
         bool committed = false;
+        // SharedShadowMaps: lights of this pass that use another's map, marked with the pass's serial.
+        uint32_t passSerial = 0;
+        std::array<uint32_t,4096> sharedMap{};
     };
     static thread_local State state;
+    // A light of this pass sharing another's map: the game does not insert it among the candidates.
+    static void MarkSharedMap(uint32_t index) noexcept { if (index < state.sharedMap.size()) state.sharedMap[index] = state.passSerial; }
+    static bool IsSharedMap(uint32_t index) noexcept { return index < state.sharedMap.size() && state.passSerial && state.sharedMap[index] == state.passSerial; }
 
     struct Invocation
     {
@@ -134,6 +148,9 @@ namespace PlayerShadowAllocation
     static float behindLampReach = 12.0f; // BehindLampReach
     static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
     static std::atomic<uint32_t> lightsFlickering{0}; // lights ranked off screen as they flicker out of the list, for the status line
+    // Rear lamp keys (Liberty's Shadows 2.0 tail light shadows), set by Lighting20, which comes after
+    static bool (*isTailLightKey)(uint32_t) = nullptr;
+    static std::atomic<uint32_t> tailLightsYielded{0};
 
     static void NoteSlotAcquires(const budget::PlayerShadowBudget::Selection& selection) noexcept
     {
@@ -179,11 +196,11 @@ namespace PlayerShadowAllocation
         try {
             slotTrace.Status(std::format("ready={} install={} thread_ok={} night_shadows={} headlight_shadows={} vehicle_night_shadows={} "
                 "publication={} lamp_priority={} in the last second: applied={} observed={} fallback={} adapter_rejects={} reasons:{} "
-                "lamps_behind_walls={} sight_probes={} hits={} flickering={}",
+                "lamps_behind_walls={} sight_probes={} hits={} flickering={} tail_lights_yielded={}",
                 ready.load() ? 1 : 0, ready.load() ? std::string("enabled") : "[" + installStatus + "]", unsupportedThread.load() ? 0 : 1, bExtraNightShadows ? 1 : 0, bHeadlightShadows ? 1 : 0,
                 bVehicleNightShadows ? 1 : 0, publicationEnabled ? 1 : 0, nativeLampPriority ? 1 : 0,
                 a - applied, o - observed, f - fallback, r - adapter, why.empty() ? " -" : why,
-                lampsHidden.exchange(0), sightProbes.exchange(0), sightHits.exchange(0), lightsFlickering.exchange(0)));
+                lampsHidden.exchange(0), sightProbes.exchange(0), sightHits.exchange(0), lightsFlickering.exchange(0), tailLightsYielded.exchange(0)));
         } catch (...) {}
         applied = a; observed = o; fallback = f; adapter = r;
     }
@@ -466,6 +483,7 @@ namespace PlayerShadowAllocation
             if (state.view.valid) ++cameraPasses; else ++cameraFallbacks;
         }
         if (casterPriority) state.casters.Look(state.view);
+        state.frustum = fusionfix::shadows::PrepareShadowVolumeFrustum20(state.view);
         if (reinterpret_cast<uintptr_t>(CurrentLights()) < 0x10000) return false;
         state.pass.Begin({state.frame, static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),
                           ped, state.occupiedCar != 0}, CurrentLights(), CurrentCount());
@@ -484,7 +502,7 @@ namespace PlayerShadowAllocation
                     const float x=position.x-state.player.x,y=position.y-state.player.y,z=position.z-state.player.z;
                     const float distanceSquared=x*x+y*y+z*z;
                     if(!std::isfinite(distanceSquared) || distanceSquared>90.0f*90.0f ||
-                       !fusionfix::shadows::ShadowVolumeMayReachView(state.view,position,light.mRadius)) continue;
+                       !fusionfix::shadows::ShadowVolumeMayReachView(state.frustum,position,light.mRadius)) continue;
                     lampSpacing.Add({i,position,{light.mDirection.x,light.mDirection.y,light.mDirection.z},
                         static_cast<int>(light.mType)==2,distanceSquared,static_cast<uint32_t>(light.mCastShadows)});
                 }
@@ -588,6 +606,15 @@ namespace PlayerShadowAllocation
     static void Collect(SafetyHookContext& regs) noexcept
     {
         const FloatingPointState fp;
+        // A light drawn with another's map (the same projection, its key changed to that light's) is not
+        // inserted: it would take a slot to draw the same map again.
+        if (state.depth == 1 && regs.edx < state.sharedMap.size() && state.sharedMap[regs.edx] == state.passSerial &&
+            state.passSerial && regs.edi == reinterpret_cast<uintptr_t>(CurrentLights()) && regs.esi == regs.edx * sizeof(rage::CLightSource))
+        {
+            regs.eip = gameBase + allocation::CollectSkipRva;
+            ++sharedMapsSkipped;
+            return;
+        }
         if (!Enabled() || state.depth != 1 || !state.pass.Active()) return;
         if (!state.stackAnchor) state.stackAnchor = regs.esp;
         if (state.stackAnchor != regs.esp) { RejectPass(); return; }
@@ -643,7 +670,7 @@ namespace PlayerShadowAllocation
         if(state.continuityActive && state.pass.Active()) {
             // Eligibility/cache checks above are native and current-frame.
             // Protect the whole visible influence volume, not screen center.
-            const bool volumeVisible=fusionfix::shadows::ShadowVolumeMayReachView(state.view,
+            const bool volumeVisible=fusionfix::shadows::ShadowVolumeMayReachView(state.frustum,
                 {light.mPosition.x,light.mPosition.y,light.mPosition.z},light.mRadius);
             // A light holding a slot keeps its claim a quarter further out than a newcomer may take one,
             // so lights right at the reach do not drop it and win it back by turns.
@@ -698,6 +725,10 @@ namespace PlayerShadowAllocation
             // twice within 2 s, it ranks off screen for 3 s: it takes no slot from lights that are there.
             if(kind!=budget::Kind::PlayerBeam && FlickeringLight(key,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds)) &&
                gain==SlotGain::InView) { gain=SlotGain::OffScreen; ++lightsFlickering; }
+            // A car's rear lamp ranks as off screen: it takes a slot only no lamp or headlight in view wants. A slot trace
+            // while driving: rear lamps within 25 m took 123 slots to the street lamps' 137, the lamps 1.4 of 7 on average
+            // with 14 lights waiting
+            if(isTailLightKey && gain==SlotGain::InView && isTailLightKey(key)) { gain=SlotGain::OffScreen; ++tailLightsYielded; }
             if(slotTrace.enabled)
                 try {
                     fusionfix::shadows::ShadowSlotTrace::Light traced{key,static_cast<uint8_t>(kind),rawGain,gain,cached,volumeVisible,
@@ -787,6 +818,48 @@ namespace PlayerShadowAllocation
 
 #include "ShadowCacheDependenciesRuntime44.inl"
 
+    // StableShadowMapSlots (Liberty's Shadows 2.0): a light that keeps its slot keeps its map's place in the atlas;
+    // newcomers take the places left. The game's sort renumbers the seven every frame, so a lamp kept from one
+    // frame to the next moved between tiles and slot records. Lights with the player flag 0x400 stay first, as the
+    // game puts them. Run before the cache pick; the cache dependency check and Finalize see the same order.
+    static void StabilizeMapOrdinals(SafetyHookContext& regs) noexcept {
+        const FloatingPointState fp;
+        if(!stableOrdinals || !Enabled() || state.depth!=1 || !state.pass.Active() || !state.continuityActive) return;
+        const auto* lights=CurrentLights(); const auto count=CurrentCount();
+        if(!state.stackAnchor || regs.esp!=state.stackAnchor || !CTimer::m_frameCount || *CTimer::m_frameCount!=state.frame ||
+           !state.pass.InputsUnchanged(lights,count)) { ++stableOrdinalRejected; return; }
+        auto* indices=reinterpret_cast<int32_t*>(regs.esp+allocation::SelectedIndicesStackOffset);
+        std::array<fusionfix::shadows::ShadowMapOrdinal20,7> chosen{};
+        for(unsigned i=0;i<7;++i) {
+            const auto index=indices[i]; chosen[i].index=index;
+            if(index==-1) continue;
+            if(index<0 || static_cast<uint32_t>(index)>=count || !state.nativeCandidates[index].observed ||
+               state.nativeCandidates[index].flags!=lights[index].mFlags) { ++stableOrdinalRejected; return; }
+            chosen[i].claim=state.nativeCandidates[index].claim;
+            chosen[i].flags=lights[index].mFlags;
+        }
+        std::array<int32_t,7> output{};
+        if(!fusionfix::shadows::RestoreShadowMapOrdinals20(chosen,output)) { ++stableOrdinalRejected; return; }
+        ++stableOrdinalPasses;
+        for(unsigned i=0;i<7;++i) if(output[i]!=indices[i]) ++stableOrdinalMoves;
+        std::memcpy(indices,output.data(),sizeof(output));
+    }
+
+    static void PreCache(SafetyHookContext& regs) noexcept {
+        if(preCacheVacancy) preCacheVacancy(regs);
+        StabilizeMapOrdinals(regs);
+    }
+
+    // One hook at the pre-cache boundary for the vacancy and the ordinals, after both were configured.
+    static bool InstallPreCache() noexcept {
+        if(preCacheHook || (!preCacheVacancy && !stableOrdinals) || !ready.load(std::memory_order_acquire)) return bool(preCacheHook);
+        const auto at=reinterpret_cast<const uint8_t*>(gameBase+allocation::PreCacheRva);
+        const auto skip=reinterpret_cast<const uint8_t*>(gameBase+allocation::CollectSkipRva);
+        if(at[0]!=0x8A || at[1]!=0x15 || skip[0]!=0x8B || skip[1]!=0x54 || skip[2]!=0x24 || skip[3]!=0x14) return false;
+        preCacheHook=safetyhook::create_mid(gameBase+allocation::PreCacheRva,PreCache);
+        return bool(preCacheHook);
+    }
+
     static void Finalize(SafetyHookContext& regs) noexcept
     {
         const FloatingPointState fp;
@@ -870,6 +943,10 @@ namespace PlayerShadowAllocation
             ownerThread.compare_exchange_strong(expected, current, std::memory_order_relaxed);
             if (ownerThread.load(std::memory_order_relaxed) != current)
                 unsupportedThread.store(true, std::memory_order_relaxed);
+            if (state.depth == 1) ++state.passSerial;
+            if (state.depth == 1 && Enabled() && prepareSources && !unsupportedThread.load(std::memory_order_relaxed) &&
+                reinterpret_cast<uintptr_t>(CurrentLights()) >= 0x10000)
+                prepareSources(CurrentLights(), CurrentCount());
             if (state.depth != 1 || !Prepare()) RejectPass();
             else if(observeSubmittedLights && !unsupportedThread.load(std::memory_order_relaxed)) observeSubmittedLights(CurrentLights(),CurrentCount());
         }

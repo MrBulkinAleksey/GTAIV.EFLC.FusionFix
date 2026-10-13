@@ -265,6 +265,18 @@ Logitech LightSync RGB
 [VehBoxShadows]
 Тени машин от всех фонарей
 
+[DualHeadlights]
+Две тени от фар
+
+[TailLightShad]
+Тени от задних фонарей
+
+[WorldLightShad]
+Тени от огней зданий
+
+[BuildingShad]
+Здания в тенях фар
+
 [VolumeClouds]
 Объёмные облака
 

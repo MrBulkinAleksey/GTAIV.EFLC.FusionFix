@@ -761,6 +761,7 @@ public:
     // near and far clip; all 0 until the lighting phase has run.
     float SkinCamera[4] = {};
     float fContactShadowMaxDistance = 60.0f;
+    bool bContactShadowsMoon = true; // ContactShadowsMoon
     float fContactShadowIntensity = 1.0f;
     bool bContactShadowStepJitter = true;
     // ContactShadowsHalfResolution: the march runs at half size into ContactRawHalfTex and
@@ -806,12 +807,15 @@ public:
     // shadow under a car does not jump between the two; WithSlots keeps them under its real shadow for good.
     bool bVehicleBoxShadowsWithSlots = false;
     bool bVehicleBoxShadowsUntilLeaving = true; // VehicleBoxShadowsUntilLeaving, see VehicleBoxShadows::SetForLight
+    bool bVehicleBoxShadowsBlend = true; // VehicleBoxShadowsBlend, read with the others
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
     uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300, nVehicleBoxShadowSizeFadeMs = 300;
     float fVehicleBoxShadowsMaxDistance = 60.0f; // metres from the camera to a lamp's light past which it has no boxes
     int32_t nVehicleBoxShadowsPerLamp = 3; // cars a lamp shadows as boxes, up to five; each costs its lit pixels about as much again
+    int32_t nVehicleBoxShadowsPerCar = 2;  // lamps that may shadow one car as a box, the strongest on it; 0 any number
+    float fVehicleBoxShadowsMinLight = 0.04f; // the least share of a lamp's light at the car, (1 - distance / radius)^2, for a box
     bool bVehicleBoxShadowsLive = false;
-    float fVehicleBoxShadowLeadFrames = 1.0f;
+    float fVehicleBoxShadowLeadFrames = -1.0f;
     bool bVehicleBoxShadowsLog = false; // VehicleBoxShadowsLog, see VehicleBoxShadows::Trace
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
@@ -1791,10 +1795,19 @@ public:
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
         bVehicleBoxShadowsUntilLeaving = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsUntilLeaving", 1) != 0;
+        // VehicleBoxShadowsBlend: the light shaders take the darkest of a light's shadow map, contact shadow and boxes
+        // (local_light_with_shadow_blend.patch) instead of all three multiplied, so the contact shadow goes with the
+        // boxes whole. Each car still has one kind of shadow from a lamp, its map's or its box (UntilLeaving): kept with
+        // a slot too, the box and the map's shadow showed side by side, two shadows from one lamp.
+        bVehicleBoxShadowsBlend = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsBlend", 1) != 0;
+        if (bVehicleBoxShadowsBlend)
+            fVehicleBoxShadowContact = 1.0f;
         bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 0) != 0;
-        fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", 1.0f), -3.0f, 5.0f);
+        fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", -1.0f), -3.0f, 5.0f);
         bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;
         nVehicleBoxShadowsPerLamp = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerLamp", 3), 1, 5);
+        nVehicleBoxShadowsPerCar = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerCar", 2), 0, 8);
+        fVehicleBoxShadowsMinLight = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsMinLight", 0.04f), 0.0f, 1.0f);
         fVehicleBoxShadowsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsMaxDistance", 60.0f), 0.0f, 1000.0f);
         nVehicleBoxShadowSizeFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsSizeFade", 300), 0, 5000));
         nVehicleBoxShadowFadeInMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeIn", 300), 0, 5000));
@@ -1907,6 +1920,7 @@ public:
         fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 0.3f), 0.05f, 10.0f);
         fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.15f), 0.01f, 10.0f);
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
+        bContactShadowsMoon = iniReader.ReadInteger("POSTFX", "ContactShadowsMoon", 1) != 0;
         bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
         bContactShadowsHalfRes = iniReader.ReadInteger("POSTFX", "ContactShadowsHalfResolution", 1) != 0;
         fContactTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsTemporal", 0.8f), 0.0f, 0.95f);
@@ -7953,6 +7967,11 @@ private:
         // is no test: here it can still hold another shader's constant, and skipped the pass by day.
         if (-light[2] / lightLen <= 0.0f)
             return;
+        // At night c17 is the moon's. ContactShadowsMoon 0: no contact shadows while its cascades are left out
+        // (CascadeShadowsAtNight 0, the sun below CascadeSunElevation), which saves the screen pass; 1 (default)
+        // keeps them, the moon's only shading of what stands on the ground then.
+        if (!R.bContactShadowsMoon && !RenderSkip::bCascadesAtNight && RenderSkip::SunIsLow())
+            return;
 
         const float width = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
         const float height = float(RenderScale::ToRenderHeight(uint32_t(vp->mHeight)));
@@ -8581,6 +8600,7 @@ private:
             int32_t slot;     // the car's place in the vehicle pool and its flags then, to tell it is still the same car
             uint8_t flags;
             float velocity[3]; // m/s, from the last hand over
+            float turning;     // radians a second about the vertical, from the last hand over
         };
         static constexpr int kBoxes = 160, kPerLight = 5, kLists = 8;
         struct List
@@ -8591,6 +8611,7 @@ private:
             float focus[3] = {};              // the player, where the boxes' shadows are seen
             uintptr_t watched = 0;            // the car nearest the player, which VehicleBoxShadowsLog follows
             float frameSeconds = 0.0f;        // since the hand over before
+            LARGE_INTEGER handedAt{};         // when, for the log
             Box boxes[kBoxes];
         };
         static inline List lists[kLists]{};
@@ -8604,6 +8625,7 @@ private:
         static inline const List* drawn = nullptr;
         static inline List lastFound{}; // a copy, render thread: the ring's entry may be reused while it is drawn
         static inline uintptr_t drawnFor = 0;
+        static inline std::atomic<uint32_t> latestHandOver{0}; // the last hand over's sequence, for the log
         static inline bool constantsOn = true;
         // The cars each lamp took last, render thread.
         // What each lamp took last, render thread: its cars, and since when its own map shows them.
@@ -8663,6 +8685,93 @@ private:
         // For the log: the nearest car's model bounds (least, most) and its box, as taken.
         static inline float nearestBounds[6] = {}, nearestBox[4] = {}, nearestDistance = -1.0f;
 
+        // VehicleBoxShadowsPerCar: under a row of lamps a car had a box shadow from every one that reached it, some
+        // ten in a log, many of them lamps the game gives no shadow at all, each shadow faint but together a fan of
+        // them. Each lamp drawn notes how much it lights each car it reaches; on the next frame only the strongest
+        // few on a car may give it a box. Render thread.
+        struct CarLamps
+        {
+            static constexpr int kKept = 8;
+            std::array<std::pair<uint64_t, float>, kKept> seen{};    // this frame: lamp and how much it lights the car
+            int seenCount = 0;
+            std::array<std::pair<uint64_t, float>, kKept> before{};  // the frame before, for lamps not drawn in this one
+            int beforeCount = 0;
+            std::array<uint64_t, kKept> allowed{};                    // from the last frame: those that may give a box
+            int allowedCount = 0;
+            bool ranked = false;                                      // allowed holds a ranking (not the car's first frame)
+        };
+        static inline std::unordered_map<uintptr_t, CarLamps> carLamps;
+        static inline uint32_t carLampsFrame = 0; // TemporalAA::SceneFrame of the last ranking
+
+        static bool LampAllowed(const CarLamps& car, uint64_t lamp)
+        {
+            return std::find(car.allowed.begin(), car.allowed.begin() + car.allowedCount, lamp) != car.allowed.begin() + car.allowedCount;
+        }
+
+        // The light a lamp gives a car: its intensity times a falloff over its radius.
+        static void NoteCarLamp(uintptr_t vehicle, uint64_t lamp, float light)
+        {
+            auto& car = carLamps[vehicle];
+            // A lamp giving the car a box now keeps it against one up to a third stronger, so two alike lamps do not
+            // take the box from each other frame by frame
+            if (LampAllowed(car, lamp))
+                light *= 1.33f;
+            for (int i = 0; i < car.seenCount; ++i)
+                if (car.seen[i].first == lamp)
+                {
+                    car.seen[i].second = (std::max)(car.seen[i].second, light);
+                    return;
+                }
+            if (car.seenCount < CarLamps::kKept)
+                car.seen[car.seenCount++] = { lamp, light };
+            else
+            {
+                auto weakest = std::min_element(car.seen.begin(), car.seen.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+                if (weakest->second < light)
+                    *weakest = { lamp, light };
+            }
+        }
+
+        // At a new scene's lights: each car's strongest lamps of the last two frames may give it a box in this one. By
+        // the scene frame, not by the light list drawn: lights drawn from more than one list in a frame ranked the cars
+        // from part of their lamps each time, and a lamp took and left a car every other frame (a log: 49 times in a
+        // few seconds, its box never faded in). A lamp not drawn in one frame keeps its place from the one before.
+        static void RankCarLamps(int perCar)
+        {
+            if (carLamps.size() > 1024)
+                carLamps.clear();
+            for (auto it = carLamps.begin(); it != carLamps.end();)
+            {
+                auto& car = it->second;
+                if (!car.seenCount && !car.beforeCount)
+                {
+                    it = carLamps.erase(it);
+                    continue;
+                }
+                std::array<std::pair<uint64_t, float>, CarLamps::kKept * 2> both{};
+                int n = 0;
+                for (int i = 0; i < car.seenCount; ++i)
+                    both[n++] = car.seen[i];
+                for (int i = 0; i < car.beforeCount; ++i)
+                {
+                    bool again = false;
+                    for (int j = 0; j < car.seenCount; ++j)
+                        again |= car.seen[j].first == car.before[i].first;
+                    if (!again)
+                        both[n++] = car.before[i];
+                }
+                std::sort(both.begin(), both.begin() + n, [](const auto& a, const auto& b) { return a.second > b.second; });
+                car.allowedCount = (std::min)(n, perCar);
+                for (int i = 0; i < car.allowedCount; ++i)
+                    car.allowed[i] = both[i].first;
+                car.ranked = true;
+                car.before = car.seen;
+                car.beforeCount = car.seenCount;
+                car.seenCount = 0;
+                ++it;
+            }
+        }
+
         // Main thread: every car's box, the nearest the player first when there are more than fit.
         static void Capture()
         {
@@ -8672,6 +8781,8 @@ private:
             list.count = 0;
             static uint32_t handOvers = 0;
             list.sequence = ++handOvers;
+            QueryPerformanceCounter(&list.handedAt);
+            latestHandOver.store(handOvers, std::memory_order_relaxed);
             if (!PostFxResources.VehicleBoxShadowsEnabled() || !lightListBuilt || !modelInfos)
                 return;
             float focus[3] = {};
@@ -8751,7 +8862,7 @@ private:
             // Each car's speed since the last hand over, which VehicleBoxShadowsLeadFrames moves its box ahead by. A
             // second hand over in the same frame (CE 0xac507b) keeps the speeds it had.
             {
-                struct Seen { float centre[3], velocity[3]; };
+                struct Seen { float centre[3], velocity[3], forward[2], turning; };
                 static std::unordered_map<uintptr_t, Seen> previous;
                 static LARGE_INTEGER frequency{}, before{};
                 LARGE_INTEGER time{};
@@ -8759,7 +8870,11 @@ private:
                 if (!frequency.QuadPart)
                     QueryPerformanceFrequency(&frequency);
                 const float dt = before.QuadPart ? float(time.QuadPart - before.QuadPart) / float(frequency.QuadPart) : 0.0f;
-                const bool step = dt > 0.002f && dt < 0.25f;
+                // A new frame's hand over; one after a pause (a load, the menu) gives no speeds, but is the time the
+                // next is measured from: kept only on a step, the time stuck at the first pause over 0.25 s and every
+                // car had no speed from then on (a log: speed 0 in every line, the guess 1 to 8 m behind the drawn car)
+                const bool fresh = !before.QuadPart || dt > 0.002f;
+                const bool step = fresh && before.QuadPart && dt < 0.25f;
                 std::unordered_map<uintptr_t, Seen> current;
                 current.reserve(size_t(n));
                 for (int i = 0; i < n; ++i)
@@ -8768,28 +8883,39 @@ private:
                     const auto it = previous.find(box.vehicle);
                     Seen seen{};
                     std::copy_n(box.centre, 3, seen.centre);
-                    if (it != previous.end())
+                    std::copy_n(box.forward, 2, seen.forward);
+                    if (it != previous.end() && (step || !fresh))
                     {
                         if (step)
+                        {
                             for (int k = 0; k < 3; ++k)
                                 seen.velocity[k] = std::clamp((box.centre[k] - it->second.centre[k]) / dt, -80.0f, 80.0f);
+                            // the signed angle from the forward then to the forward now
+                            const float* f0 = it->second.forward;
+                            const float angle = std::atan2(f0[0] * box.forward[1] - f0[1] * box.forward[0], f0[0] * box.forward[0] + f0[1] * box.forward[1]);
+                            seen.turning = std::clamp(angle / dt, -10.0f, 10.0f);
+                        }
                         else
                         {
                             std::copy_n(it->second.centre, 3, seen.centre);
                             std::copy_n(it->second.velocity, 3, seen.velocity);
+                            std::copy_n(it->second.forward, 2, seen.forward);
+                            seen.turning = it->second.turning;
                         }
                     }
                     std::copy_n(seen.velocity, 3, box.velocity);
+                    box.turning = seen.turning;
                     current.emplace(box.vehicle, seen);
                 }
-                if (step || !before.QuadPart)
+                // a second hand over in the frame keeps the frame's time too, its boxes moved on as the first's
+                static float frameSeconds = 0.0f;
+                if (fresh)
                 {
                     previous.swap(current);
                     before = time;
-                    list.frameSeconds = dt;
+                    frameSeconds = step ? dt : 0.0f;
                 }
-                else
-                    list.frameSeconds = 0.0f;
+                list.frameSeconds = frameSeconds;
             }
             list.count = (std::min)(n, kBoxes);
             for (int i = 0; i < list.count; ++i)
@@ -8821,6 +8947,12 @@ private:
         static inline std::string traceText;
         static inline DWORD traceFlushed = 0, traceSecond = 0;
         static inline uint32_t traceStaleWatched = 0, traceLampsOnWatched = 0, traceLampsSeen = 0, traceDrawnWatched = 0, traceLeadWatched = 0;
+        // Why the watched car's drawn matrix was not taken: not among the G-buffer's draws, none near enough (and how
+        // far the nearest stood, its matrix's translation, and how many draws it had), facing another way
+        static inline uint32_t traceDrawnNone = 0, traceDrawnFar = 0, traceDrawnHeading = 0, traceDrawnCount = 0, traceDrawnHeadingOnly = 0;
+        static inline bool traceDrawsDescribed = false;
+        static inline DWORD traceOffsetLast = 0;
+        static inline float traceDrawnNearest = -1.0f;
         static inline float traceStrongest = 0.0f;
         static inline bool traceMarkDown = false, traceShotDown = false;
         static void Trace(const char* format, ...)
@@ -8849,11 +8981,15 @@ private:
             if (now - traceSecond >= 1000)
             {
                 if (traceSecond)
-                    Trace("S in the last second: %u lamp draws shaded the watched car (strongest %.2f), %u lamps with boxes, %u times its box stood where it was handed over, %u where it was drawn, %u moved ahead by its speed",
-                        traceLampsOnWatched, traceStrongest, traceLampsSeen, traceStaleWatched, traceDrawnWatched, traceLeadWatched);
+                    Trace("S in the last second: %u lamp draws shaded the watched car (strongest %.2f), %u lamps with boxes, %u times its box stood where it was handed over, %u where it was drawn, %u moved ahead by its speed; drawn: %u with the heading only; not drawn: %u not among the draws, %u none near (nearest %.2f m of %u draws), %u none facing its way",
+                        traceLampsOnWatched, traceStrongest, traceLampsSeen, traceStaleWatched, traceDrawnWatched, traceLeadWatched, traceDrawnHeadingOnly,
+                        traceDrawnNone, traceDrawnFar, traceDrawnNearest, traceDrawnCount, traceDrawnHeading);
                 traceSecond = now;
                 traceLampsOnWatched = traceLampsSeen = traceStaleWatched = traceDrawnWatched = traceLeadWatched = 0;
+                traceDrawnNone = traceDrawnFar = traceDrawnHeading = traceDrawnCount = traceDrawnHeadingOnly = 0;
+                traceDrawnNearest = -1.0f;
                 traceStrongest = 0.0f;
+                traceDrawsDescribed = false;
             }
             if (!traceText.empty() && now - traceFlushed >= 250)
             {
@@ -8915,26 +9051,85 @@ private:
         // lights are drawn after the G-buffer, so the box stands exactly where the car and its contact shadow are.
         // Handed over earlier and moved ahead by the car's speed, the box ran ahead of and behind the car by turns, as
         // the game moves cars in steps of its own, and the shadow's front and back flickered.
-        static bool FromDrawn(Box& box)
+        static bool FromDrawn(Box& box, float lead, bool watched)
         {
-            // The car's own position from the box: its right is its forward turned a quarter
+            // The car's own position from the box: its right is its forward turned a quarter. Moved on by its speed
+            // to when it is drawn: handed over two or three frames before, a car driven fast had gone further.
             const float right[2] = { box.forward[1], -box.forward[0] };
-            const float around[3] = { box.centre[0] - right[0] * box.local[0] - box.forward[0] * box.local[1],
-                                    box.centre[1] - right[1] * box.local[0] - box.forward[1] * box.local[1],
-                                    box.centre[2] - box.local[2] };
-            float m[16];
-            // Within a metre, and facing the car's way: wheels and doors are drawn with their own matrices
-            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 1.0f, m))
+            const float around[3] = { box.centre[0] - right[0] * box.local[0] - box.forward[0] * box.local[1] + box.velocity[0] * lead,
+                                    box.centre[1] - right[1] * box.local[0] - box.forward[1] * box.local[1] + box.velocity[1] * lead,
+                                    box.centre[2] - box.local[2] + box.velocity[2] * lead };
+            const float speed = std::sqrt(box.velocity[0] * box.velocity[0] + box.velocity[1] * box.velocity[1] + box.velocity[2] * box.velocity[2]);
+            // Of the car's draws, the nearest facing its way, within 3 m (its parts: a log found the nearest draw always
+            // facing away, a wheel or a door, the body drawn skinned with no matrix of its own at the car). Its
+            // rotation is the car's as drawn; its position only where it stands at the car's own, else the box keeps
+            // the one moved on by speed.
+            int draws = 0;
+            float nearest = -1.0f, m[16];
+            bool body = false;
+            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 3.0f + (std::min)(speed * 0.05f, 2.0f), m, &draws, &nearest, box.forward, &body, 25.0f))
+            {
+                if (watched)
+                {
+                    if (draws < 0)
+                        ++traceDrawnNone;
+                    else if (nearest >= 0.0f)
+                    {
+                        ++traceDrawnFar;
+                        traceDrawnNearest = nearest;
+                        traceDrawnCount = uint32_t(draws);
+                    }
+                    else
+                        ++traceDrawnHeading;
+                    // Once a second, what the car's draws were (a log found none facing the car's way)
+                    if (!traceDrawsDescribed)
+                    {
+                        traceDrawsDescribed = true;
+                        traceText += std::format("t={} D {}\n", GetTickCount(), TemporalAA::DescribeDraws(reinterpret_cast<void*>(box.vehicle), around, box.forward));
+                    }
+                }
                 return false;
+            }
             const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
-            if (!(flat > 0.5f))
-                return false;
             const float fx = m[4] / flat, fy = m[5] / flat;
-            if (fx * box.forward[0] + fy * box.forward[1] < 0.9f)
-                return false;
+            // The body (skinned, turned by its chassis) stands where the car was drawn: its position is taken however far
+            // from the one moved on by speed, which is what was off when driven fast (0.3 to 1.9 m in a log), the box
+            // then running ahead of and behind the car and its contact shadow. Another part only where it stands at the car
+            const bool atCar = body || (nearest >= 0.0f && nearest < 0.3f);
+            // Five times a second, where the body was drawn from where the car was handed over, along its way and
+            // across, against its speed and the lead: off-screen cars are left with the guess by speed, which a log
+            // found 3 to 9 m off when driven fast
+            if (watched && body && GetTickCount() - traceOffsetLast >= 200)
+            {
+                traceOffsetLast = GetTickCount();
+                const float handed[3] = { around[0] - box.velocity[0] * lead, around[1] - box.velocity[1] * lead, around[2] - box.velocity[2] * lead };
+                const float dx = m[12] - handed[0], dy = m[13] - handed[1], dz = m[14] - handed[2];
+                const float along = dx * box.forward[0] + dy * box.forward[1], across = dx * box.forward[1] - dy * box.forward[0];
+                const float vAlong = box.velocity[0] * box.forward[0] + box.velocity[1] * box.forward[1];
+                // and how old the hand over its boxes came from was: hand overs since, and milliseconds
+                LARGE_INTEGER now{}, frequency{};
+                QueryPerformanceCounter(&now);
+                QueryPerformanceFrequency(&frequency);
+                const float ageMs = lastFound.handedAt.QuadPart ? float(now.QuadPart - lastFound.handedAt.QuadPart) * 1000.0f / float(frequency.QuadPart) : -1.0f;
+                Trace("V drawn from handed over: %.2f m along (%.3f s at its speed), %.2f across, %.2f up; speed %.1f m/s (%.1f along), lead %.3f s, frame %.3f s, guess off by %.2f m; boxes from %u hand overs back, %.1f ms ago",
+                    along, speed > 0.5f ? along / speed : 0.0f, across, dz, speed, vAlong, lead,
+                    PostFxResources.fVehicleBoxShadowLeadFrames != 0.0f ? lead / PostFxResources.fVehicleBoxShadowLeadFrames : 0.0f, nearest,
+                    latestHandOver.load(std::memory_order_relaxed) - lastFound.sequence, ageMs);
+            }
             float centre[3];
-            for (int i = 0; i < 3; ++i)
-                centre[i] = m[12 + i] + m[i] * box.local[0] + m[4 + i] * box.local[1] + m[8 + i] * box.local[2];
+            if (atCar)
+                for (int i = 0; i < 3; ++i)
+                    centre[i] = m[12 + i] + m[i] * box.local[0] + m[4 + i] * box.local[1] + m[8 + i] * box.local[2];
+            else
+            {
+                // turned to the drawn heading about the car's own position, moved on by speed
+                const float r[2] = { fy, -fx };
+                centre[0] = around[0] + r[0] * box.local[0] + fx * box.local[1];
+                centre[1] = around[1] + r[1] * box.local[0] + fy * box.local[1];
+                centre[2] = around[2] + box.local[2];
+                if (watched)
+                    ++traceDrawnHeadingOnly;
+            }
             if (!std::isfinite(centre[0]) || !std::isfinite(centre[1]) || !std::isfinite(centre[2]))
                 return false;
             std::copy_n(centre, 3, box.centre);
@@ -9019,6 +9214,8 @@ private:
             int used = 0;
             float strength = 0.0f, rounding = R.fVehicleBoxShadowRounding;
             float boxStrength[kPerLight] = {};
+            float pairBetween[3] = {}, pairSpacing = 0.0f; // the lamp's pair on one post, if any (set below)
+            bool paired = false;
             if (R.VehicleBoxShadowsEnabled() && lightListDrawn &&
                 (R.bVehicleBoxShadowsFromCarLights || !(light.mFlags & rage::LF_VEHICLE)) &&
                 (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
@@ -9029,6 +9226,7 @@ private:
                 {
                     drawnFor = list;
                     PublishPairs();
+
                     // The newest with this list: the ring holds more hand overs than the game has lists, so an older
                     // one with the same list, three or six frames old, made the shadows lag the cars by fits
                     const List* found = nullptr;
@@ -9050,6 +9248,8 @@ private:
                         std::copy_n(found->boxes, found->count, lastFound.boxes);
                         std::copy_n(found->focus, 3, lastFound.focus);
                         lastFound.watched = found->watched;
+                        lastFound.sequence = found->sequence;
+                        lastFound.handedAt = found->handedAt;
                         if (found->frameSeconds > 0.0f)
                             lastFound.frameSeconds = found->frameSeconds;
                         drawn = &lastFound;
@@ -9060,6 +9260,17 @@ private:
                 // not push a standing one out, and its shadow from that lamp flickered. Lamps are told apart by where
                 // they stand, a quarter metre apart.
                 const uint64_t lightKey = LightKey(Cell(light.mPosition.x), Cell(light.mPosition.y), Cell(light.mPosition.z));
+                // A lamp of a pair on one post (PairedLampDistance): in the ranking of the lamps on a car both are one
+                // lamp, standing between them, so they give their boxes to the same cars and take one of the car's
+                // places, not both; and their boxes soften by half their spacing, the two shadows one soft shadow.
+                paired = VehicleBoxShadowsBridge::LampPair &&
+                    VehicleBoxShadowsBridge::LampPair(uint32_t(light.mCastShadows), pairBetween, pairSpacing);
+                const uint64_t rankKey = paired ? LightKey(Cell(pairBetween[0]), Cell(pairBetween[1]), Cell(pairBetween[2])) : lightKey;
+                if (R.nVehicleBoxShadowsPerCar > 0 && TemporalAA::SceneFrame != carLampsFrame)
+                {
+                    carLampsFrame = TemporalAA::SceneFrame;
+                    RankCarLamps(R.nVehicleBoxShadowsPerCar);
+                }
                 if (held.size() > 4096)
                     held.clear();
                 auto& state = held[lightKey];
@@ -9150,6 +9361,19 @@ private:
                     const float along = dx * box.forward[0] + dy * box.forward[1], across = dx * box.forward[1] - dy * box.forward[0];
                     if (std::abs(along) < box.halfLength + 0.5f && std::abs(across) < box.halfWidth + 0.5f && std::abs(dz) < box.halfHeight + 0.5f)
                         continue;
+                    // VehicleBoxShadowsMinLight: a car at the edge of a lamp's light (33 m from one of 40 in a log) took a
+                    // box of a few hundredths and left it again as it drove; one it holds goes at half that
+                    const float falloff = std::clamp(1.0f - std::sqrt(d2) / (std::max)(light.mRadius, 0.1f), 0.0f, 1.0f);
+                    if (falloff * falloff < R.fVehicleBoxShadowsMinLight * (holding ? 0.5f : 1.0f))
+                        continue;
+                    // VehicleBoxShadowsPerCar: only the strongest lamps on the car give it a box
+                    if (R.nVehicleBoxShadowsPerCar > 0)
+                    {
+                        NoteCarLamp(box.vehicle, rankKey, (std::max)(light.mIntensity, 0.0f) * falloff * falloff);
+                        const auto car = carLamps.find(box.vehicle);
+                        if (car != carLamps.end() && car->second.ranked && !LampAllowed(car->second, rankKey))
+                            continue;
+                    }
                     int at = taken < perLamp ? taken++ : perLamp - 1;
                     for (; at > 0 && nearest[at - 1].first > score; --at)
                         nearest[at] = nearest[at - 1];
@@ -9240,7 +9464,7 @@ private:
                         if (!Refresh(box) && drawn && box.vehicle == drawn->watched)
                             ++traceStaleWatched;
                     }
-                    else if (drawn && FromDrawn(box))
+                    else if (drawn && FromDrawn(box, R.fVehicleBoxShadowLeadFrames * (std::min)(drawn->frameSeconds, 0.1f), box.vehicle == drawn->watched))
                     {
                         if (box.vehicle == drawn->watched)
                             ++traceDrawnWatched;
@@ -9253,6 +9477,12 @@ private:
                         const float lead = R.fVehicleBoxShadowLeadFrames * (std::min)(drawn->frameSeconds, 0.1f);
                         for (int k = 0; k < 3; ++k)
                             box.centre[k] += box.velocity[k] * lead;
+                        // and turned on by the way it turns: moved only, the box of a car turning or spun kept the
+                        // heading it had when handed over, and its shadow did not turn with the car
+                        const float turn = box.turning * lead, c = std::cos(turn), s = std::sin(turn);
+                        const float fx = box.forward[0] * c - box.forward[1] * s, fy = box.forward[0] * s + box.forward[1] * c;
+                        box.forward[0] = fx;
+                        box.forward[1] = fy;
                         if (box.vehicle == drawn->watched)
                             ++traceLeadWatched;
                     }
@@ -9342,7 +9572,7 @@ private:
                 c[4] = 1.0f;
             }
             auto& lamp = constants[kPerLight * 2];
-            lamp[0] = R.fVehicleBoxShadowLightSize;
+            lamp[0] = R.fVehicleBoxShadowLightSize + (paired ? pairSpacing * 0.5f : 0.0f);
             // The ends' rounding in 5 cm steps, two apart above the edges' (which stays under 1)
             lamp[1] = (std::min)(rounding, 0.99f) + 2.0f * std::round(std::clamp(R.fVehicleBoxShadowEndRounding, 0.0f, 2.0f) / 0.05f);
             lamp[2] = R.fVehicleBoxShadowFollowLight;
@@ -9395,10 +9625,13 @@ private:
         const int buffer = *reinterpret_cast<const int*>(at(0x1174794));
         if (buffer < 0 || buffer > 1)
             return true;
+        // A lamp of a pair on one post uses the other's map (PairedLampDistance)
+        uint32_t keys[2] = { uint32_t(light.mCastShadows), VehicleBoxShadowsBridge::SharedMapKey ? VehicleBoxShadowsBridge::SharedMapKey(uint32_t(light.mCastShadows)) : 0u };
         if (light.mFlags & rage::LF_DYNAMIC_SHADOW)
             for (int i = 0; i < 7; i++)
-                if (*reinterpret_cast<const uint32_t*>(at(0x119FC08) + buffer * 0x880 + i * 0x110) == uint32_t(light.mCastShadows))
-                    return true;
+                for (const auto key : keys)
+                    if (key && *reinterpret_cast<const uint32_t*>(at(0x119FC08) + buffer * 0x880 + i * 0x110) == key)
+                        return true;
         return false;
     }
 

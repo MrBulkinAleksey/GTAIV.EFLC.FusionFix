@@ -2210,6 +2210,30 @@ public:
     }
 } Temporal;
 
+namespace TemporalDraws
+{
+    // A draw's world matrix as CEntity holds one (right, forward, up, position rows). The registers hold it either as it
+    // is or transposed: the translation is in the last row or column. A skinned draw (a car's body) has only its
+    // position there, the rotation is its bones': the first, the root (a car's chassis), turns it, its registers
+    // holding the columns of a 4x3, x y z of each axis and of an offset added to the position
+    inline bool DrawMatrix(const Temporal::DrawRecord& draw, float m[16])
+    {
+        const float* w = draw.World;
+        const bool rows = std::abs(w[12]) + std::abs(w[13]) + std::abs(w[14]) >= std::abs(w[3]) + std::abs(w[7]) + std::abs(w[11]);
+        for (int r = 0; r < 4; ++r)
+            for (int c = 0; c < 4; ++c)
+                m[r * 4 + c] = rows ? w[r * 4 + c] : w[c * 4 + r];
+        if (draw.Bones >= 0 && size_t(draw.Bones) + 12 <= Temporal::BonesPrevious.size())
+        {
+            const float* b = &Temporal::BonesPrevious[draw.Bones];
+            for (int axis = 0; axis < 4; ++axis)
+                for (int k = 0; k < 3; ++k)
+                    m[axis * 4 + k] = axis < 3 ? b[k * 4 + axis] : m[12 + k] + b[k * 4 + 3];
+        }
+        return std::isfinite(m[12]) && std::isfinite(m[13]) && std::isfinite(m[14]);
+    }
+}
+
 export namespace TemporalAA
 {
     bool IsTemporalAntialiasing(int32_t value)
@@ -2243,35 +2267,116 @@ export namespace TemporalAA
     // Render thread, after the G-buffer pass: the world matrix this frame's G-buffer drew the entity with, in CEntity's
     // layout (right, forward, up, position rows). Of its draws, the one standing nearest `around` (the entity's position
     // as known), within `reach` metres. False when object motion vectors are off or the entity was not drawn.
-    bool DrawnWorldMatrix(void* entity, const float around[3], float reach, float out[16])
+    // drawCount and nearest, where given: how many draws the entity had (-1 none recorded) and how far the nearest
+    // draw's matrix stood from around, for the box shadows' log
+    // heading, where given (x, y of the forward expected): only draws facing within about 25 degrees of it count, the
+    // car's own parts drawn with its rotation (a skinned body may carry none of its own; wheels turn and doors swing)
+    // skinned, where given: whether the draw taken was skinned, its matrix the entity's own (a car's body by its chassis)
+    // bodyReach: how far a skinned draw may stand from around. All the draws are the entity's own, the reach kept other
+    // parts out; a log found the body 3 to 9 m from the place moved on by speed when driven fast. Of the skinned draws
+    // the one with the most primitives is taken, the body: not every draw's first bone is the chassis (a small one's
+    // stood turned and 0.3 m off)
+    bool DrawnWorldMatrix(void* entity, const float around[3], float reach, float out[16], int* drawCount, float* nearest,
+        const float* heading, bool* skinned, float bodyReach)
     {
         // Swapped at the G-buffer's end: the draws just made are the "previous" ones until the next scene
         auto it = Temporal::EntitiesPrevious.find(entity);
+        if (drawCount)
+            *drawCount = it == Temporal::EntitiesPrevious.end() ? -1 : int(it->second.Draws.size());
+        if (nearest)
+            *nearest = -1.0f;
         if (it == Temporal::EntitiesPrevious.end())
             return false;
         float best = reach * reach;
         bool found = false;
+        UINT bodyPrimitives = 0;
         for (auto& draw : it->second.Draws)
         {
-            const float* w = draw.World;
-            // The registers hold the matrix either as it is or transposed: the translation is in the last row or column
-            const bool rows = std::abs(w[12]) + std::abs(w[13]) + std::abs(w[14]) >= std::abs(w[3]) + std::abs(w[7]) + std::abs(w[11]);
             float m[16];
-            for (int r = 0; r < 4; ++r)
-                for (int c = 0; c < 4; ++c)
-                    m[r * 4 + c] = rows ? w[r * 4 + c] : w[c * 4 + r];
-            if (!std::isfinite(m[12]) || !std::isfinite(m[13]) || !std::isfinite(m[14]))
+            if (!TemporalDraws::DrawMatrix(draw, m))
                 continue;
+            if (heading)
+            {
+                // A skinned draw is turned by its root bone, the car's own heading: within 60 degrees of the one
+                // expected, which a car spun or turned sharply had left by 27 degrees (the expected lagging it). Another
+                // part within 25 degrees, wheels and doors turned their own way
+                const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
+                if (!(flat > 0.5f) || (m[4] * heading[0] + m[5] * heading[1]) / flat < (draw.Bones >= 0 ? 0.5f : 0.9f))
+                    continue;
+            }
             const float dx = m[12] - around[0], dy = m[13] - around[1], dz = m[14] - around[2];
             const float d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 < best)
+            if (nearest && (*nearest < 0.0f || d2 < *nearest * *nearest))
+                *nearest = std::sqrt(d2);
+            if (draw.Bones >= 0 && d2 < bodyReach * bodyReach)
+            {
+                if (draw.PrimitiveCount > bodyPrimitives)
+                {
+                    bodyPrimitives = draw.PrimitiveCount;
+                    std::copy_n(m, 16, out);
+                    found = true;
+                    if (skinned)
+                        *skinned = true;
+                }
+                continue;
+            }
+            if (!bodyPrimitives && d2 < best)
             {
                 best = d2;
                 std::copy_n(m, 16, out);
                 found = true;
+                if (skinned)
+                    *skinned = draw.Bones >= 0;
             }
         }
         return found;
+    }
+
+    // The box shadows' log: the entity's draws from the last G-buffer, nearest `around` first, at most 12, each with its
+    // distance, whether skinned, how its registers held the matrix and its axes (x y z of right, forward and up, a
+    // skinned draw's turned by its root bone), the cosine between its forward on the ground and `heading`, and a
+    // skinned draw's root bone registers as they were
+    std::string DescribeDraws(void* entity, const float around[3], const float* heading)
+    {
+        auto it = Temporal::EntitiesPrevious.find(entity);
+        if (it == Temporal::EntitiesPrevious.end())
+            return "no draws";
+        struct Line { float d; std::string text; };
+        std::vector<Line> lines;
+        for (auto& draw : it->second.Draws)
+        {
+            const float* w = draw.World;
+            const bool rows = std::abs(w[12]) + std::abs(w[13]) + std::abs(w[14]) >= std::abs(w[3]) + std::abs(w[7]) + std::abs(w[11]);
+            float m[16];
+            TemporalDraws::DrawMatrix(draw, m);
+            const float dx = m[12] - around[0], dy = m[13] - around[1], dz = m[14] - around[2];
+            const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
+            const float cosine = heading && flat > 0.0f ? (m[4] * heading[0] + m[5] * heading[1]) / flat : 0.0f;
+            char text[256];
+            std::snprintf(text, sizeof(text), "%.2fm %s%s r(%.2f %.2f %.2f) f(%.2f %.2f %.2f) u(%.2f %.2f %.2f) cos %.2f prims %u",
+                d, draw.Bones >= 0 ? "skinned " : "", rows ? "rows" : "cols", m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10],
+                cosine, draw.PrimitiveCount);
+            std::string line = text;
+            if (draw.Bones >= 0 && size_t(draw.Bones) + 12 <= Temporal::BonesPrevious.size())
+            {
+                const float* b = &Temporal::BonesPrevious[draw.Bones];
+                std::snprintf(text, sizeof(text), " bone0 (%.2f %.2f %.2f %.2f) (%.2f %.2f %.2f %.2f) (%.2f %.2f %.2f %.2f)",
+                    b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11]);
+                line += text;
+            }
+            lines.push_back({ std::isfinite(d) ? d : 1e9f, line });
+        }
+        std::sort(lines.begin(), lines.end(), [](const Line& a, const Line& b) { return a.d < b.d; });
+        char head[96];
+        std::snprintf(head, sizeof(head), "%zu draws, heading %.2f %.2f:", lines.size(), heading ? heading[0] : 0.0f, heading ? heading[1] : 0.0f);
+        std::string out = head;
+        for (size_t i = 0; i < lines.size() && i < 12; ++i)
+        {
+            out += " | ";
+            out += lines[i].text;
+        }
+        return out;
     }
 
     IDirect3DTexture9* GetMotionVectors()

@@ -16,6 +16,8 @@ namespace OwnHeadlightCaster
     static std::atomic<uint32_t> casterVisits{0}, carExcluded{0}, occupantsExcluded{0};
     static std::atomic<uint32_t> trafficCarExcluded{0};
     static std::atomic<uint32_t> boxedPasses{0}, boxedCarExcluded{0};
+    // Lighting20: the car whose lamp a key of ours is (dual headlights, tail lights), 0 for other keys.
+    static uintptr_t (*lampOwner)(uint32_t key) noexcept = nullptr;
 
     static policy::Context Capture(void* renderPass) noexcept
     {
@@ -46,7 +48,9 @@ namespace OwnHeadlightCaster
         // light's position at +0xC0.
         if (VehicleBoxShadowsBridge::BoxedCars)
         {
-            const auto position = reinterpret_cast<const float*>(base + guard::SlotKeyRva - 0xF8 + 0xC0 + offset);
+            // The lamp's own position, where the slot was moved off it (a lamp pair's map from between them)
+            float position[3];
+            HeadlightEnhancement::SlotLightPosition(slot, reinterpret_cast<const float*>(base + guard::SlotKeyRva - 0xF8 + 0xC0 + offset), position);
             result.boxedCount = VehicleBoxShadowsBridge::BoxedCars(position, result.boxed.data(), int(result.boxed.size()));
             if (result.boxedCount) ++boxedPasses;
             // CE: the driver followed by eight passengers
@@ -63,6 +67,8 @@ namespace OwnHeadlightCaster
         if (bTrafficSelfShadowFix && kind == 4 && active &&
             CShadows::gStableHeadlightShadow.IsSubmittedBeam(key))
             result.trafficBeamKey = key;
+        if (lampOwner && kind == 4 && active)
+            result.lampOwner = lampOwner(key);
         if (!policy::OwnBeam(slot, kind, active, key, car)) return result;
         result.car = car;
         result.ownBeam = true;
