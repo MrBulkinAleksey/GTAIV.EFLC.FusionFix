@@ -1793,14 +1793,12 @@ public:
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
         bVehicleBoxShadowsUntilLeaving = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsUntilLeaving", 1) != 0;
         // VehicleBoxShadowsBlend: the light shaders take the darkest of a light's shadow map, contact shadow and boxes
-        // (local_light_with_shadow_blend.patch) instead of all three multiplied, so the boxes stay with a slot (as
-        // VehicleBoxShadowsWithSlots), no map leaves its boxed cars out, and the contact shadow goes with the boxes whole.
+        // (local_light_with_shadow_blend.patch) instead of all three multiplied, so the contact shadow goes with the
+        // boxes whole. Each car still has one kind of shadow from a lamp, its map's or its box (UntilLeaving): kept with
+        // a slot too, the box and the map's shadow showed side by side, two shadows from one lamp.
         bVehicleBoxShadowsBlend = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsBlend", 1) != 0;
         if (bVehicleBoxShadowsBlend)
-        {
-            bVehicleBoxShadowsWithSlots = true;
             fVehicleBoxShadowContact = 1.0f;
-        }
         bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 0) != 0;
         fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", 1.0f), -3.0f, 5.0f);
         bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;
