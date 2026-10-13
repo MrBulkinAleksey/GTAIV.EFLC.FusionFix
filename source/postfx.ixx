@@ -7963,6 +7963,11 @@ private:
         // is no test: here it can still hold another shader's constant, and skipped the pass by day.
         if (-light[2] / lightLen <= 0.0f)
             return;
+        // At night c17 is the moon's, which casts no shadow while its cascades are left out (CascadeShadowsAtNight 0,
+        // the sun below CascadeSunElevation): its contact shadows alone were a faint dark rim at the foot of cars and
+        // peds with no shadow beyond it, for a whole screen pass. They go with the cascades.
+        if (!RenderSkip::bCascadesAtNight && RenderSkip::SunIsLow())
+            return;
 
         const float width = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
         const float height = float(RenderScale::ToRenderHeight(uint32_t(vp->mHeight)));
