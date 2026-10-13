@@ -806,6 +806,7 @@ public:
     // shadow under a car does not jump between the two; WithSlots keeps them under its real shadow for good.
     bool bVehicleBoxShadowsWithSlots = false;
     bool bVehicleBoxShadowsUntilLeaving = true; // VehicleBoxShadowsUntilLeaving, see VehicleBoxShadows::SetForLight
+    bool bVehicleBoxShadowsBlend = true; // VehicleBoxShadowsBlend, read with the others
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
     uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300, nVehicleBoxShadowSizeFadeMs = 300;
     float fVehicleBoxShadowsMaxDistance = 60.0f; // metres from the camera to a lamp's light past which it has no boxes
@@ -1791,6 +1792,15 @@ public:
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
         bVehicleBoxShadowsUntilLeaving = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsUntilLeaving", 1) != 0;
+        // VehicleBoxShadowsBlend: the light shaders take the darkest of a light's shadow map, contact shadow and boxes
+        // (local_light_with_shadow_blend.patch) instead of all three multiplied, so the boxes stay with a slot (as
+        // VehicleBoxShadowsWithSlots), no map leaves its boxed cars out, and the contact shadow goes with the boxes whole.
+        bVehicleBoxShadowsBlend = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsBlend", 1) != 0;
+        if (bVehicleBoxShadowsBlend)
+        {
+            bVehicleBoxShadowsWithSlots = true;
+            fVehicleBoxShadowContact = 1.0f;
+        }
         bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 0) != 0;
         fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", 1.0f), -3.0f, 5.0f);
         bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;

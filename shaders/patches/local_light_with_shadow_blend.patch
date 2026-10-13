@@ -1,0 +1,91 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index 3afe171c..561065b1 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -303,6 +303,7 @@
+     mul_sat r1.w, r1.w, c82.x
+     mul r1.xyz, r1, r1.w
+     mul r1.xyz, r0.x, r1
++    mov r8.w, r0.x // FusionFix: local_light_with_shadow_blend.patch: the shadow map's light, kept for the end
+     cmp r1.xyz, r0.y, r1, c3.y
+     dp3 r0.x, r5, r3
+     add r0.x, r0.x, r0.x
+@@ -590,8 +591,13 @@
+       // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
+       add r17.w, r17.w, -c138.y
+       mad r17.w, r17.w, r12.w, c138.y
+-      mul r31.w, r31.w, r17.w
++      min r31.w, r31.w, r17.w // FusionFix: local_light_with_shadow_blend.patch: the darker of the contact shadow and the boxes, not both
+     endif
++    // --- FusionFix: local_light_with_shadow_blend.patch: the darkest of the shadow map, the contact shadow and the boxes, rather than all three
++    // --- multiplied: r26 has the map's light m in it, so it takes min(contact, boxes) / m, at most 1
++    max r8.w, r8.w, c161.x
++    rcp r8.w, r8.w
++    mul_sat r31.w, r31.w, r8.w
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+index bbd04281..2cc6a6a5 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+@@ -312,6 +312,7 @@
+     mov r11.w, r1.y
+     mul r1.y, r1.z, r1.y
+     mul r11.w, r11.w, r0.w // and the shadow
++    mov r8.w, r0.w // FusionFix: local_light_with_shadow_blend.patch: the shadow map's light, kept for the end
+     mul r0.w, r0.w, r1.y
+     mul r1.yzw, c83.w, c83.xxyz
+     mul r1.yzw, r0.w, r1
+@@ -487,6 +488,11 @@
+         add r31.w, c157.y, -r18.w
+       endif
+     endif
++    // --- FusionFix: local_light_with_shadow_blend.patch: the darkest of the shadow map, the contact shadow and the boxes, rather than all three
++    // --- multiplied: r26 has the map's light m in it, so it takes min(contact, boxes) / m, at most 1
++    max r8.w, r8.w, c161.x
++    rcp r8.w, r8.w
++    mul_sat r31.w, r31.w, r8.w
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+index 636b3847..9e58fcd6 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -420,7 +420,7 @@
+       // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
+       add r17.w, r17.w, -c138.y
+       mad r17.w, r17.w, r12.w, c138.y
+-      mul r31.w, r31.w, r17.w
++      min r31.w, r31.w, r17.w // FusionFix: local_light_with_shadow_blend.patch: the darker of the contact shadow and the boxes, not both
+     endif
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index 8fd08fa6..2d44246e 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -205,6 +205,7 @@
+     mad r0.w, r0.w, r0.w, c2.x
+     mul r1.x, r0.w, c2.y
+     mul r0.xyz, r0, r1.x
++    mov r4.w, r1.x // FusionFix: local_light_with_shadow_blend.patch: the shadow map's light, kept for the end
+     dp3 r1.x, r8, -c80
+     add r1.x, r1.x, -c83.x
+     mul_sat r1.x, r1.x, c84.x
+@@ -606,8 +607,13 @@
+       // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
+       add r17.w, r17.w, -c138.y
+       mad r17.w, r17.w, r12.w, c138.y
+-      mul r31.w, r31.w, r17.w
++      min r31.w, r31.w, r17.w // FusionFix: local_light_with_shadow_blend.patch: the darker of the contact shadow and the boxes, not both
+     endif
++    // --- FusionFix: local_light_with_shadow_blend.patch: the darkest of the shadow map, the contact shadow and the boxes, rather than all three
++    // --- multiplied: r26 has the map's light m in it, so it takes min(contact, boxes) / m, at most 1
++    max r4.w, r4.w, c161.x
++    rcp r4.w, r4.w
++    mul_sat r31.w, r31.w, r4.w
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
