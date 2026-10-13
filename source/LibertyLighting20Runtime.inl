@@ -299,7 +299,8 @@ namespace Lighting20
         static bool cachedLamps = true, modelLights = true, coronas = true;
         static SafetyHookMid coronaHook;
         static std::atomic<uint32_t> lampsPromoted{0}, modelLightsPromoted{0}, coronaLights{0}, coronasRefused{0}, coronasCapped{0};
-        static std::atomic<uint32_t> coronasMerged{0}, modelLightsMerged{0};
+        static std::atomic<uint32_t> coronasMerged{0}, modelLightsMerged{0}, modelLightsIdle{0};
+        static bool modelLightsNeedCasters = true; // ModelLightShadowsNeedCasters
         static float mergeDistance = 1.5f; // ExtraLightMergeDistance
 
         struct CoronaSettings
@@ -426,6 +427,7 @@ namespace Lighting20
             corona.distance = std::clamp(ini.ReadFloat("SHADOWS", "CoronaLightDistance", 100.0f), 0.0f, 1000.0f);
             corona.perFrame = static_cast<uint32_t>(std::clamp(ini.ReadInteger("SHADOWS", "CoronaLightsPerFrame", 48), 0, 256));
             mergeDistance = std::clamp(ini.ReadFloat("SHADOWS", "ExtraLightMergeDistance", 1.5f), 0.0f, 10.0f);
+            modelLightsNeedCasters = ini.ReadInteger("SHADOWS", "ModelLightShadowsNeedCasters", 1) != 0;
             installed = true;
             if (coronas)
             {
@@ -581,6 +583,34 @@ namespace Lighting20
         }
     }
 
+    // ModelLightShadowsNeedCasters: a log had some 127 model lights a pass given a shadow, all competing for the seven
+    // slots (some 900 comparisons a frame) with their shadows mostly of walls nobody looks at. A model light keeps its
+    // dynamic shadow only within the lamp shadow reach of you and with a car or ped in its light (the casters of the
+    // last pass); the others light as the map has them, and cars under them get box shadows.
+    static void IdleModelLights(rage::CLightSource* lights, uint32_t count) noexcept
+    {
+        if (!World::modelLightsNeedCasters) return;
+        const auto& state = PlayerShadowAllocation::state;
+        const int feet = fusionfix::shadows::ShadowReachFeet(ShadowReachStep(false));
+        const float reach = feet > 0 ? feet * 0.3048f : 60.0f;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            auto& l = lights[i];
+            if (!(l.mFlags & rage::LF_DYNAMIC_SHADOW) || (l.mFlags & rage::LF_VEHICLE) ||
+                Ours::Of(static_cast<uint32_t>(l.mCastShadows)) != Ours::ModelLight)
+                continue;
+            const float dx = l.mPosition.x - state.player.x, dy = l.mPosition.y - state.player.y, dz = l.mPosition.z - state.player.z;
+            const bool inReach = dx * dx + dy * dy + dz * dz <= reach * reach;
+            const bool lit = inReach && state.casters.Lights({ l.mPosition.x, l.mPosition.y, l.mPosition.z },
+                { l.mDirection.x, l.mDirection.y, l.mDirection.z }, static_cast<int>(l.mType), l.mRadius, l.mOuterConeAngle) != fusionfix::shadows::SlotGain::None;
+            if (!lit)
+            {
+                l.mFlags &= ~rage::LF_DYNAMIC_SHADOW;
+                ++World::modelLightsIdle;
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- shared maps
     // SharedShadowMaps (Liberty's Shadows 2.0 aliases projections the same way): lights with a dynamic shadow only
     // that stand at one point with the same direction, type, range, cone, interior and room would each take a slot
@@ -681,6 +711,7 @@ namespace Lighting20
         }
         World::PromoteCachedLamps(lights, count);
         MergeWithNative(lights, count);
+        IdleModelLights(lights, count);
         Sharing::Apply(lights, count);
         Sharing::Duplicates(lights, count);
     }
@@ -713,6 +744,7 @@ namespace Lighting20
                 << " model_lights=" << World::modelLightsPromoted.load() << " corona_lights=" << World::coronaLights.load()
                 << " corona_refused=" << World::coronasRefused.load() << " corona_capped=" << World::coronasCapped.load()
                 << " merged: coronas=" << World::coronasMerged.load() << " model_lights=" << World::modelLightsMerged.load()
+                << " model_lights_without_casters=" << World::modelLightsIdle.load()
                 << " | buildings " << (Buildings::On() ? "on" : "off") << " passes=" << Buildings::passes.load()
                 << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load()
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
