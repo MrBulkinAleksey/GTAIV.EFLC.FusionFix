@@ -80,6 +80,7 @@ namespace PlayerShadowAllocation
         bool tracedComparison=false;
         unsigned claimsReset=0; // NativeShadowContinuity42::Begin, for the slot trace
         fusionfix::shadows::ShadowView view{};
+        fusionfix::shadows::ShadowVolumeFrustum20 frustum{}; // the view's planes, worked out once a pass
         fusionfix::shadows::ShadowCasterPresence casters{};
         fusionfix::shadows::SlotGainHold gainHold;
         uintptr_t ped = 0, occupiedCar = 0;
@@ -466,6 +467,7 @@ namespace PlayerShadowAllocation
             if (state.view.valid) ++cameraPasses; else ++cameraFallbacks;
         }
         if (casterPriority) state.casters.Look(state.view);
+        state.frustum = fusionfix::shadows::PrepareShadowVolumeFrustum20(state.view);
         if (reinterpret_cast<uintptr_t>(CurrentLights()) < 0x10000) return false;
         state.pass.Begin({state.frame, static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds),
                           ped, state.occupiedCar != 0}, CurrentLights(), CurrentCount());
@@ -484,7 +486,7 @@ namespace PlayerShadowAllocation
                     const float x=position.x-state.player.x,y=position.y-state.player.y,z=position.z-state.player.z;
                     const float distanceSquared=x*x+y*y+z*z;
                     if(!std::isfinite(distanceSquared) || distanceSquared>90.0f*90.0f ||
-                       !fusionfix::shadows::ShadowVolumeMayReachView(state.view,position,light.mRadius)) continue;
+                       !fusionfix::shadows::ShadowVolumeMayReachView(state.frustum,position,light.mRadius)) continue;
                     lampSpacing.Add({i,position,{light.mDirection.x,light.mDirection.y,light.mDirection.z},
                         static_cast<int>(light.mType)==2,distanceSquared,static_cast<uint32_t>(light.mCastShadows)});
                 }
@@ -643,7 +645,7 @@ namespace PlayerShadowAllocation
         if(state.continuityActive && state.pass.Active()) {
             // Eligibility/cache checks above are native and current-frame.
             // Protect the whole visible influence volume, not screen center.
-            const bool volumeVisible=fusionfix::shadows::ShadowVolumeMayReachView(state.view,
+            const bool volumeVisible=fusionfix::shadows::ShadowVolumeMayReachView(state.frustum,
                 {light.mPosition.x,light.mPosition.y,light.mPosition.z},light.mRadius);
             // A light holding a slot keeps its claim a quarter further out than a newcomer may take one,
             // so lights right at the reach do not drop it and win it back by turns.

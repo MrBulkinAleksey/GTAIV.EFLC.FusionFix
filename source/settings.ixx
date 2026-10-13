@@ -2117,8 +2117,8 @@ public:
             { 0, "PREF_CONTACTSHADOWS",         "POSTFX",     "ContactShadows",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSGI",                   "POSTFX",     "ScreenSpaceIndirectLight",           "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SKIN_SSS",               "POSTFX",     "SkinScattering",                     "",                           1, nullptr, 0, 1 },
-            { 0, "PREF_HEADLIGHT_REACH",        "SHADOWS",    "HeadlightShadowReach",               "",                           10, nullptr, 0, 40 },
-            { 0, "PREF_LAMP_REACH",             "SHADOWS",    "LamppostShadowReach",                "",                           10, nullptr, 0, 40 },
+            { 0, "PREF_HEADLIGHT_REACH",        "SHADOWS",    "HeadlightShadowReach",               "",                           10, nullptr, 0, 100 },
+            { 0, "PREF_LAMP_REACH",             "SHADOWS",    "LamppostShadowReach",                "",                           10, nullptr, 0, 100 },
             { 0, "PREF_SHARPENING",             "TEXTURES",   "Sharpening",                         "MENU_DISPLAY_SHARPENING",    0, nullptr, 0, 3 },
             { 0, "PREF_TEXTURE_LOD_BIAS",       "TEXTURES",   "TextureLodBias",                     "MENU_DISPLAY_TEXTURE_LOD_BIAS", 0, nullptr, 0, 4 },
             { 0, "PREF_ANISO_ALL_MAPS",         "TEXTURES",   "AnisotropicAllMaps",                 "",                           0, nullptr, 0, 1 },
@@ -2386,8 +2386,8 @@ public:
             {
                 auto id = GetPrefIDByName(preference);
                 if (id && valueTextHook)
-                    valueTexts[*id] = [this, id = *id] { auto step = std::clamp(Get(id), 0, 40); return step ? std::format(L"{} ft", step * 5) : std::wstring(CText::getText("MO_DEF")); };
-                AddRow(category, label, preference, 41, valueTextHook ? "MENU_DISPLAY_VALUE_SLIDERBAR" : slider);
+                    valueTexts[*id] = [this, id = *id] { auto step = std::clamp(Get(id), 0, 100); return step ? std::format(L"{} ft", step * 5) : std::wstring(CText::getText("MO_DEF")); };
+                AddRow(category, label, preference, 101, valueTextHook ? "MENU_DISPLAY_VALUE_SLIDERBAR" : slider);
             }
             AddEmptyLine(category);
             AddRow(category, "SSR Debug", "PREF_SSR_DEBUG", 11, "MENU_DISPLAY_SSR_DEBUG");
