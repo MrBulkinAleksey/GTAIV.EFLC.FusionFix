@@ -2361,6 +2361,8 @@ export namespace VehicleBoxShadowsBridge
     int (*BoxedCars)(const float position[3], uintptr_t* cars, int max) = nullptr;
     // Main thread: those lamps and cars as of the last frame drawn, up to max.
     int (*CopyBoxedPairs)(BoxedPair* pairs, int max) = nullptr;
+    // Render thread: the key whose shadow map a light's key uses (the other lamp of its pair on one post), 0 for none.
+    uint32_t (*SharedMapKey)(uint32_t key) = nullptr;
 }
 
 export namespace CPlayerPed

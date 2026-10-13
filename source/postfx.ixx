@@ -9562,10 +9562,13 @@ private:
         const int buffer = *reinterpret_cast<const int*>(at(0x1174794));
         if (buffer < 0 || buffer > 1)
             return true;
+        // A lamp of a pair on one post uses the other's map (PairedLampDistance)
+        uint32_t keys[2] = { uint32_t(light.mCastShadows), VehicleBoxShadowsBridge::SharedMapKey ? VehicleBoxShadowsBridge::SharedMapKey(uint32_t(light.mCastShadows)) : 0u };
         if (light.mFlags & rage::LF_DYNAMIC_SHADOW)
             for (int i = 0; i < 7; i++)
-                if (*reinterpret_cast<const uint32_t*>(at(0x119FC08) + buffer * 0x880 + i * 0x110) == uint32_t(light.mCastShadows))
-                    return true;
+                for (const auto key : keys)
+                    if (key && *reinterpret_cast<const uint32_t*>(at(0x119FC08) + buffer * 0x880 + i * 0x110) == key)
+                        return true;
         return false;
     }
 

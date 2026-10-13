@@ -368,6 +368,17 @@ static int __cdecl sub_925DB0(int a1, int a2, int flags)
     }
 
     const int buffer = ShadowLookupGuard::ReadBuffer();
+    // The second lamp of a pair on one post: the first's map, drawn from between them, where the first has a slot;
+    // else its own cached one (PairedLampDistance, Lighting20::Pairs)
+    if (const uint32_t first = Lighting20::Pairs::FirstOf(static_cast<uint32_t>(a1)))
+    {
+        const int shared = ShadowLookupGuard::Filter(shsub_925DB0.unsafe_ccall<int>(static_cast<int>(first), a2, flags), first, a2, buffer);
+        if (shared > 0 && shared < 8)
+        {
+            ++Lighting20::Pairs::lookedUp;
+            return shared;
+        }
+    }
     const int result = shsub_925DB0.unsafe_ccall<int>(a1, a2, flags);
     return ShadowLookupGuard::Filter(result, static_cast<uint32_t>(a1), a2, buffer);
 }
@@ -527,7 +538,8 @@ public:
                 }
                 // After the allocation adapter, which checks the selection's bytes this hooks.
                 HeadlightEnhancement::InstallShadowOrigin(
-                    std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowBehindLamps", 0.8f), 0.0f, 2.0f));
+                    std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowBehindLamps", 0.8f), 0.0f, 2.0f),
+                    iniReader.ReadFloat("SHADOWS", "PairedLampDistance", 2.5f) > 0.0f);
                 // CE 1.8: shadows from traffic signals and emergency vehicle lights.
                 EmergencyTrafficShadows::log.Name("NightShadows", "EmergencyTraffic");
                 EmergencyTrafficShadows::Install(static_cast<unsigned>(std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalShadows", 2), 0, 7)),

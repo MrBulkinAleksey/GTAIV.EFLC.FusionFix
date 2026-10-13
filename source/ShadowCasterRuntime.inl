@@ -48,7 +48,9 @@ namespace OwnHeadlightCaster
         // light's position at +0xC0.
         if (VehicleBoxShadowsBridge::BoxedCars)
         {
-            const auto position = reinterpret_cast<const float*>(base + guard::SlotKeyRva - 0xF8 + 0xC0 + offset);
+            // The lamp's own position, where the slot was moved off it (a lamp pair's map from between them)
+            float position[3];
+            HeadlightEnhancement::SlotLightPosition(slot, reinterpret_cast<const float*>(base + guard::SlotKeyRva - 0xF8 + 0xC0 + offset), position);
             result.boxedCount = VehicleBoxShadowsBridge::BoxedCars(position, result.boxed.data(), int(result.boxed.size()));
             if (result.boxedCount) ++boxedPasses;
             // CE: the driver followed by eight passengers

@@ -311,6 +311,18 @@ namespace HeadlightEnhancement
         float moved[4]{};
     };
     static std::array<MovedSlot, 8> movedSlots{};
+    // Another origin for a slot's light, by its key (PairedLampDistance, Lighting20::Pairs: a lamp of two on one post
+    // draws the map both share from between them): out gets the position and radius from the light's own in base.
+    static bool (*slotOrigin)(uint32_t key, const float base[4], float out[4]) noexcept = nullptr;
+
+    // The light's own position for a slot moved here, else the slot's: what the lamp's state is known by elsewhere
+    // (the box shadows' lamps by where they stand).
+    static void SlotLightPosition(uint32_t n, const float* slotPosition, float out[3])
+    {
+        const auto& moved = n < movedSlots.size() ? movedSlots[n] : MovedSlot{};
+        const bool isMoved = moved.key && !std::memcmp(slotPosition, moved.moved, sizeof(float) * 3);
+        std::copy_n(isMoved ? moved.base : slotPosition, 3, out);
+    }
 
     static bool IsHeadlightBeam(uint32_t key)
     {
@@ -344,15 +356,26 @@ namespace HeadlightEnhancement
             if (moved.key && moved.key == key && !std::memcmp(now, moved.moved, sizeof(now)))
                 std::copy(std::begin(moved.base), std::end(moved.base), base);
             moved = {};
-            if (!active || !key || !IsHeadlightBeam(key))
+            float origin[4];
+            const bool beam = active && key && shadowOriginBack > 0.0f && IsHeadlightBeam(key);
+            const bool other = active && key && !beam && slotOrigin && slotOrigin(key, base, origin);
+            if (!beam && !other)
             {
                 std::copy(base, base + 3, position);
                 radius = base[3];
                 continue;
             }
-            for (int i = 0; i < 3; ++i)
-                position[i] = base[i] - direction[i] * shadowOriginBack;
-            radius = base[3] + shadowOriginBack;
+            if (beam)
+            {
+                for (int i = 0; i < 3; ++i)
+                    position[i] = base[i] - direction[i] * shadowOriginBack;
+                radius = base[3] + shadowOriginBack;
+            }
+            else
+            {
+                std::copy(origin, origin + 3, position);
+                radius = origin[3];
+            }
             moved.key = key;
             std::copy(std::begin(base), std::end(base), moved.base);
             std::copy(position, position + 3, moved.moved);
@@ -367,10 +390,11 @@ namespace HeadlightEnhancement
         }
     }
 
-    static void InstallShadowOrigin(float back)
+    // back: ShadowBehindLamps; others: another feature moves slots too (slotOrigin), so the hook goes in without it
+    static void InstallShadowOrigin(float back, bool others = false)
     {
-        if (!(back > 0.0f)) return;
-        shadowOriginBack = back;
+        if (!(back > 0.0f) && !others) return;
+        shadowOriginBack = (std::max)(back, 0.0f);
         // mov [esi-8], eax (the slot's position from the light's) at 0x92810D, the slots' bounds
         // at 0x928065 and 0x9280B9, the light list at 0x92807C, and mov ecx, [esp+BC] where the
         // selection ends

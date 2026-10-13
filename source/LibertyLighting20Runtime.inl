@@ -611,6 +611,140 @@ namespace Lighting20
         }
     }
 
+    // ---------------------------------------------------------------- lamp pairs
+    // PairedLampDistance: many posts carry two lamps a metre or three apart, each its own light, and each took a slot to
+    // draw nearly the same map; under them a car had two shadows. The second of a pair takes no part in the selection;
+    // when the first has a slot, its map is drawn from between them (the slot moved there, its radius grown by half
+    // the spacing, HeadlightEnhancement::slotOrigin, drawn without its cache, which was from the first lamp) and the
+    // second finds that map by the first's key (the lookup hook sub_925DB0, and HasShadowMap for the box shadows).
+    // Without a slot each lamp keeps its cached map.
+    namespace Pairs
+    {
+        static float distance = 2.5f;
+        static std::atomic<uint32_t> found{0}, mostInFrame{0}, lookedUp{0};
+        static constexpr uint32_t Cells = 1024;
+        struct Link { std::atomic<uint32_t> second{0}, first{0}, frame{0}; };
+        static Link links[Cells];     // by the second lamp's key: the first's
+        struct Origin { uint32_t first = 0, frame = 0; float between[3]{}; float grow = 0; };
+        static Origin origins[Cells]; // by the first lamp's key: where the map is drawn from; selection thread only
+
+        static uint32_t Cell(uint32_t key) noexcept { return (key * 0x9E3779B1u) >> 22; }
+
+        static void Link2(uint32_t second, uint32_t first, uint32_t frame) noexcept
+        {
+            for (uint32_t i = 0, c = Cell(second); i < 8; ++i, c = (c + 1) & (Cells - 1))
+            {
+                auto& l = links[c];
+                const auto k = l.second.load(std::memory_order_relaxed);
+                if (k == second || !k || frame - l.frame.load(std::memory_order_relaxed) > 8)
+                {
+                    l.second.store(second, std::memory_order_relaxed);
+                    l.first.store(first, std::memory_order_relaxed);
+                    l.frame.store(frame, std::memory_order_release);
+                    return;
+                }
+            }
+        }
+
+        // The first lamp's key for the second's, 0 for none: the light being lit may be of a list a few frames old.
+        static uint32_t FirstOf(uint32_t second) noexcept
+        {
+            if (distance <= 0 || !second) return 0;
+            const auto now = Frame();
+            for (uint32_t i = 0, c = Cell(second); i < 8; ++i, c = (c + 1) & (Cells - 1))
+            {
+                const auto& l = links[c];
+                if (l.second.load(std::memory_order_relaxed) == second)
+                    return now - l.frame.load(std::memory_order_acquire) <= 6 ? l.first.load(std::memory_order_relaxed) : 0u;
+            }
+            return 0;
+        }
+
+        // HeadlightEnhancement::slotOrigin: a first lamp's slot, drawn from between the two.
+        static bool OriginOf(uint32_t first, const float base[4], float out[4]) noexcept
+        {
+            if (distance <= 0) return false;
+            const auto now = Frame();
+            for (uint32_t i = 0, c = Cell(first); i < 8; ++i, c = (c + 1) & (Cells - 1))
+            {
+                const auto& o = origins[c];
+                if (o.first != first) continue;
+                if (now - o.frame > 6) return false;
+                std::copy_n(o.between, 3, out);
+                out[3] = base[3] + o.grow;
+                return true;
+            }
+            return false;
+        }
+
+        static void Find(rage::CLightSource* lights, uint32_t count) noexcept
+        {
+            if (distance <= 0) return;
+            const auto frame = Frame();
+            std::array<uint16_t, 256> candidates;
+            std::array<bool, 256> taken{};
+            unsigned n = 0;
+            for (uint32_t i = 0; i < count && n < candidates.size(); ++i)
+            {
+                const auto& l = lights[i];
+                if ((l.mFlags & rage::LF_DYNAMIC_SHADOW) && !(l.mFlags & (rage::LF_VEHICLE | rage::LF_TRAFFIC)) &&
+                    l.mCastShadows && l.mCastShadows != -1 && (l.mType == rage::LT_POINT || l.mType == rage::LT_SPOT) &&
+                    std::isfinite(l.mRadius) && l.mRadius > 0 && !PlayerShadowAllocation::IsSharedMap(i))
+                    candidates[n++] = static_cast<uint16_t>(i);
+            }
+            uint32_t inFrame = 0;
+            for (unsigned a = 0; a < n; ++a)
+            {
+                if (taken[a]) continue;
+                const auto& first = lights[candidates[a]];
+                int best = -1;
+                float bestD2 = distance * distance;
+                for (unsigned b = a + 1; b < n; ++b)
+                {
+                    if (taken[b]) continue;
+                    const auto& second = lights[candidates[b]];
+                    if (second.mType != first.mType || second.mInteriorIndex != first.mInteriorIndex || second.mRoomIndex != first.mRoomIndex ||
+                        second.mCastShadows == first.mCastShadows ||
+                        std::abs(second.mRadius - first.mRadius) > 0.25f * (std::max)(second.mRadius, first.mRadius))
+                        continue;
+                    if (first.mType == rage::LT_SPOT &&
+                        first.mDirection.x * second.mDirection.x + first.mDirection.y * second.mDirection.y + first.mDirection.z * second.mDirection.z < 0.5f)
+                        continue;
+                    const float dx = second.mPosition.x - first.mPosition.x, dy = second.mPosition.y - first.mPosition.y, dz = second.mPosition.z - first.mPosition.z;
+                    const float d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 < bestD2)
+                    {
+                        bestD2 = d2;
+                        best = int(b);
+                    }
+                }
+                if (best < 0) continue;
+                taken[a] = taken[best] = true;
+                const auto& second = lights[candidates[best]];
+                const auto firstKey = static_cast<uint32_t>(first.mCastShadows), secondKey = static_cast<uint32_t>(second.mCastShadows);
+                PlayerShadowAllocation::MarkSharedMap(candidates[best]);
+                Link2(secondKey, firstKey, frame);
+                for (uint32_t i = 0, c = Cell(firstKey); i < 8; ++i, c = (c + 1) & (Cells - 1))
+                {
+                    auto& o = origins[c];
+                    if (o.first == firstKey || !o.first || frame - o.frame > 8)
+                    {
+                        o.first = firstKey;
+                        o.frame = frame;
+                        o.between[0] = (first.mPosition.x + second.mPosition.x) * 0.5f;
+                        o.between[1] = (first.mPosition.y + second.mPosition.y) * 0.5f;
+                        o.between[2] = (first.mPosition.z + second.mPosition.z) * 0.5f;
+                        o.grow = std::sqrt(bestD2) * 0.5f;
+                        break;
+                    }
+                }
+                ++inFrame;
+            }
+            found += inFrame;
+            if (inFrame > mostInFrame.load(std::memory_order_relaxed)) mostInFrame.store(inFrame, std::memory_order_relaxed);
+        }
+    }
+
     // ---------------------------------------------------------------- shared maps
     // SharedShadowMaps (Liberty's Shadows 2.0 aliases projections the same way): lights with a dynamic shadow only
     // that stand at one point with the same direction, type, range, cone, interior and room would each take a slot
@@ -714,6 +848,7 @@ namespace Lighting20
         IdleModelLights(lights, count);
         Sharing::Apply(lights, count);
         Sharing::Duplicates(lights, count);
+        Pairs::Find(lights, count);
     }
 
     // The car whose lamp (headlight of a pair or rear lamp) a slot's key is, so its own map leaves it out.
@@ -728,6 +863,12 @@ namespace Lighting20
         World::Install(ini);
         Buildings::Install();
         Sharing::enabled = ini.ReadInteger("SHADOWS", "SharedShadowMaps", 1) != 0;
+        Pairs::distance = std::clamp(ini.ReadFloat("SHADOWS", "PairedLampDistance", 2.5f), 0.0f, 6.0f);
+        if (Pairs::distance > 0)
+        {
+            HeadlightEnhancement::slotOrigin = Pairs::OriginOf;
+            VehicleBoxShadowsBridge::SharedMapKey = Pairs::FirstOf;
+        }
         PlayerShadowAllocation::prepareSources = PrepareSources;
         OwnHeadlightCaster::lampOwner = LampOwner;
         log.Name("NightShadows", "Lighting20");
@@ -751,6 +892,8 @@ namespace Lighting20
                 << " duplicates=" << Sharing::duplicates.load() << " duplicates_unshadowed=" << Sharing::duplicatesUnshadowed.load()
                 << " (vehicle " << Sharing::duplicatesVehicle.load() << ", model lights " << Sharing::duplicatesOurs.load() << ')'
                 << " most_in_frame=" << Sharing::mostInFrame.load() << " not_inserted=" << PlayerShadowAllocation::sharedMapsSkipped.load()
+                << " | lamp pairs " << (Pairs::distance > 0 ? "on" : "off") << " found=" << Pairs::found.load()
+                << " most_in_frame=" << Pairs::mostInFrame.load() << " second_lamp_lookups=" << Pairs::lookedUp.load()
                 << " | stable map slots " << (PlayerShadowAllocation::preCacheHook ? (PlayerShadowAllocation::stableOrdinals ? "on" : "vacancy only") : "off")
                 << " passes=" << PlayerShadowAllocation::stableOrdinalPasses.load() << " moves=" << PlayerShadowAllocation::stableOrdinalMoves.load()
                 << " rejected=" << PlayerShadowAllocation::stableOrdinalRejected.load() << '\n';
