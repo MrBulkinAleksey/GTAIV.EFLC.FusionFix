@@ -488,7 +488,7 @@ namespace EmergencyTrafficShadows
             {
                 const auto& l = lights[i];
                 return !NearbyPoint(l) && !(l.mFlags & rage::LF_VEHICLE) && labRelevant[i] &&
-                    fusionfix::shadows::ShadowVolumeMayReachView(state.view, {l.mPosition.x, l.mPosition.y, l.mPosition.z}, l.mRadius);
+                    fusionfix::shadows::ShadowVolumeMayReachView(state.frustum, {l.mPosition.x, l.mPosition.y, l.mPosition.z}, l.mRadius);
             };
             const bool needVisible = ap != bp;
             return lab_siren::NearbyPolice::Compare(unchanged, ap, bp, ap ? a->rank : 2, bp ? b->rank : 2, ca.observed, cb.observed,
@@ -580,7 +580,8 @@ namespace EmergencyTrafficShadows
 
         if (emergency)
         {
-            vacancyHook = safetyhook::create_mid(game + VacancyRva, Emergency::ApplyVacancy);
+            // The pre-cache hook of the allocation adapter calls it, before the stable map ordinals.
+            preCacheVacancy = Emergency::ApplyVacancy;
             labPointSource = Emergency::NearbyPoint;
             labCompareGrace = Emergency::Compare;
             observeSubmittedLights = Emergency::BeginSelection;

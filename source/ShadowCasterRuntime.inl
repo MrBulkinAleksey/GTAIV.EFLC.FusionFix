@@ -15,6 +15,9 @@ namespace OwnHeadlightCaster
     static std::atomic<uint32_t> passes{0}, deferredPasses{0}, ownPasses{0};
     static std::atomic<uint32_t> casterVisits{0}, carExcluded{0}, occupantsExcluded{0};
     static std::atomic<uint32_t> trafficCarExcluded{0};
+    static std::atomic<uint32_t> boxedPasses{0}, boxedCarExcluded{0};
+    // Lighting20: the car whose lamp a key of ours is (dual headlights, tail lights), 0 for other keys.
+    static uintptr_t (*lampOwner)(uint32_t key) noexcept = nullptr;
 
     static policy::Context Capture(void* renderPass) noexcept
     {
@@ -40,6 +43,23 @@ namespace OwnHeadlightCaster
         const bool active = *reinterpret_cast<const uint8_t*>(base + guard::SlotActiveRva + offset) == 1;
         ShadowTrace34::Emit({5,CTimer::m_frameCount?*CTimer::m_frameCount:0,GetTickCount(),key,
             static_cast<int>(slot),static_cast<int>(kind),active?1:0,0,0,0,0,0});
+        // The cars that came under this lamp while it had no slot keep their box shadows from it until they leave;
+        // its map leaves them and the people in them out, so they have the one shadow. The slot record holds the
+        // light's position at +0xC0.
+        if (VehicleBoxShadowsBridge::BoxedCars)
+        {
+            // The lamp's own position, where the slot was moved off it (a lamp pair's map from between them)
+            float position[3];
+            HeadlightEnhancement::SlotLightPosition(slot, reinterpret_cast<const float*>(base + guard::SlotKeyRva - 0xF8 + 0xC0 + offset), position);
+            result.boxedCount = VehicleBoxShadowsBridge::BoxedCars(position, result.boxed.data(), int(result.boxed.size()));
+            if (result.boxedCount) ++boxedPasses;
+            // CE: the driver followed by eight passengers
+            if (PlayerCar::driverOffset)
+                for (int i = 0; i < result.boxedCount; ++i)
+                    for (int j = 0; j < 9 && result.boxedOccupantCount < int(result.boxedOccupants.size()); ++j)
+                        if (const auto ped = reinterpret_cast<const uintptr_t*>(result.boxed[i] + PlayerCar::driverOffset)[j])
+                            result.boxedOccupants[result.boxedOccupantCount++] = ped;
+        }
         const auto car = CPlayer::findPlayerCar();
         // Exclude only the source vehicle from its own immediate
         // headlight pass. Confirm the opaque key was recently accepted by our submission
@@ -47,6 +67,8 @@ namespace OwnHeadlightCaster
         if (bTrafficSelfShadowFix && kind == 4 && active &&
             CShadows::gStableHeadlightShadow.IsSubmittedBeam(key))
             result.trafficBeamKey = key;
+        if (lampOwner && kind == 4 && active)
+            result.lampOwner = lampOwner(key);
         if (!policy::OwnBeam(slot, kind, active, key, car)) return result;
         result.car = car;
         result.ownBeam = true;
@@ -63,7 +85,11 @@ namespace OwnHeadlightCaster
         ++casterVisits;
         if (!bHeadlightShadows || !bVehicleNightShadows ||
             !policy::Exclude(context, entity, type, artificial)) return false;
-        if (type == 2) { ++carExcluded; if (context.trafficBeamKey) ++trafficCarExcluded; }
+        if ((type == 2 && std::find(context.boxed.begin(), context.boxed.begin() + context.boxedCount, entity) != context.boxed.begin() + context.boxedCount) ||
+            (type == 3 && std::find(context.boxedOccupants.begin(), context.boxedOccupants.begin() + context.boxedOccupantCount, entity) !=
+                context.boxedOccupants.begin() + context.boxedOccupantCount))
+            ++boxedCarExcluded;
+        else if (type == 2) { ++carExcluded; if (context.trafficBeamKey) ++trafficCarExcluded; }
         else ++occupantsExcluded;
         return true;
     }
@@ -153,6 +179,8 @@ namespace ShadowDiagnostics
                 << " caster_visits=" << OwnHeadlightCaster::casterVisits.load()
                 << " car_excluded=" << OwnHeadlightCaster::carExcluded.load()
                 << " occupants_excluded=" << OwnHeadlightCaster::occupantsExcluded.load()
+                << " boxed_lamp_passes=" << OwnHeadlightCaster::boxedPasses.load()
+                << " boxed_cars_excluded=" << OwnHeadlightCaster::boxedCarExcluded.load()
                 << " driving_beam_yes=" << CShadows::drivingBeamAccepted.load()
                 << " driving_beam_no=" << CShadows::drivingBeamRejected.load() << '\n';
         });

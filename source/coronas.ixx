@@ -409,9 +409,12 @@ namespace CoronaRender
                     continue;
                 if (skipOutside)
                 {
-                    // The distance from the cone's surface, never more than the true one (also behind its tip)
-                    float lateral = std::sqrt(std::max(0.0f, d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - ahead * ahead));
-                    if (lateral * coneCos - ahead * coneSin > 1.5f * size + 0.5f)
+                    // The distance from the cone's surface, never more than the true one (also behind its tip):
+                    // lateral * cos - ahead * sin > margin, compared squared, as the square root of each of thousands
+                    // of coronas took 5% of the render thread in a profile
+                    float lateralSquared = std::max(0.0f, d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - ahead * ahead);
+                    float margin = 1.5f * size + 0.5f + ahead * coneSin;
+                    if (margin < 0.0f || lateralSquared * coneCos * coneCos > margin * margin)
                         continue;
                 }
             }

@@ -2351,6 +2351,22 @@ export namespace CPlayer
     uintptr_t (*findPlayerCar)() = nullptr;
 }
 
+// Vehicle box shadows (postfx) and the night shadow slots (nightshadows): a car that came under a lamp while the lamp
+// had no shadow slot keeps its box shadow from that lamp until it leaves; the lamp's map leaves it out, and it does
+// not make the lamp take a slot.
+export namespace VehicleBoxShadowsBridge
+{
+    struct BoxedPair { float position[3]; uintptr_t car; };
+    // Render thread, as a lamp's slot is drawn: the cars the lamp at that position keeps boxes for, up to max.
+    int (*BoxedCars)(const float position[3], uintptr_t* cars, int max) = nullptr;
+    // Main thread: those lamps and cars as of the last frame drawn, up to max.
+    int (*CopyBoxedPairs)(BoxedPair* pairs, int max) = nullptr;
+    // Render thread: the key whose shadow map a light's key uses (the other lamp of its pair on one post), 0 for none.
+    uint32_t (*SharedMapKey)(uint32_t key) = nullptr;
+    // Render thread: for either lamp of a pair on one post, the point between them and their spacing; false otherwise.
+    bool (*LampPair)(uint32_t key, float between[3], float& spacing) = nullptr;
+}
+
 export namespace CPlayerPed
 {
     uintptr_t (__thiscall* GetControlFromPlayer)(uintptr_t playerPed) = nullptr;
@@ -2651,6 +2667,8 @@ export namespace RageDirect3DDevice9
     // real device behind it, so a texture set through the wrapper alone could be dropped while the device held
     // another. These set through the wrapper, so its record stays true and later restores are passed on, and through
     // the real device, so it takes now.
+    // Textures and buffers of our own are made on the real device too: the wrapper books whatever it makes in the
+    // game's video memory count, which a plain Release never takes off, and streaming then drops the world to make room.
     IDirect3DDevice9* RealDevice(IDirect3DDevice9* wrapper)
     {
         auto real = GetRuntimeDevice();
@@ -2726,7 +2744,7 @@ public:
     static void __fastcall BuildRenderList(CBaseDC* _this, void* edx)
     {
         OnBuildRenderList().executeAll();
-        shBuildRenderList.fastcall<void*>(_this, edx);
+        shBuildRenderList.unsafe_fastcall<void*>(_this, edx);
         OnAfterBuildRenderList().executeAll();
     }
 };
@@ -2763,7 +2781,7 @@ public:
 
     static rage::CLightSource* __fastcall CopyLight(void* _this, void* edx, void* a2)
     {
-        auto ret = shCopyLight.fastcall<rage::CLightSource*>(_this, edx, a2);
+        auto ret = shCopyLight.unsafe_fastcall<rage::CLightSource*>(_this, edx, a2);
         OnAfterCopyLight().executeAll(ret);
         return ret;
     }
@@ -2782,7 +2800,7 @@ public:
     static void __fastcall BuildRenderList(CBaseDC* _this, void* edx)
     {
         OnBuildRenderList().executeAll();
-        shBuildRenderList.fastcall<void*>(_this, edx);
+        shBuildRenderList.unsafe_fastcall<void*>(_this, edx);
     }
 };
 

@@ -78,12 +78,24 @@ public:
     // claim only redraws what the lamp's cache already shows.
     // Which rule of Compare decided, for the slot trace.
     enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Nearer, Fresh, Reach };
-    // Whether the unclaimed one of the two is so much nearer that the claim gives way.
-    static bool NearerThanClaim(const Candidate& unclaimed,const Candidate& claimed) noexcept {
+    // Claims as one score per light rather than rules on pairs. Pairwise, a claim gave way to a newcomer with
+    // someone in its light only when that one was ClaimDistanceRatio times nearer, while it beat any other
+    // newcomer, and two newcomers went by distance: claim A at 30 m, caster newcomer B at 10 m, other newcomer
+    // C at 5 m gave B over A, A over C and C over B. The game's insertion sort then made the seven out of the
+    // order the lights came in (Liberty's Shadows 2.0 found the same with its pairwise bands).
+    // Class 1: holders of a slot and newcomers with someone in their light; class 0: other newcomers, below.
+    static unsigned ClaimClass(const Candidate& c) noexcept {
+        return c.claim!=Unclaimed || (claimDistanceRatio>0 && c.byCaster) ? 1u : 0u;
+    }
+    // Within class 1, by distance, a holder's divided by the ratio: a newcomer takes the slot only from one
+    // that many times further away; holders among themselves go by distance, as the game ranked them.
+    static float ClaimScore(const Candidate& c) noexcept {
         const float r=claimDistanceRatio;
-        return r>0 && unclaimed.byCaster && unclaimed.claim==Unclaimed && claimed.claim!=Unclaimed &&
-            unclaimed.distanceSquared>=0 && claimed.distanceSquared>=0 &&
-            unclaimed.distanceSquared*r*r<claimed.distanceSquared;
+        return c.claim!=Unclaimed && r>0 ? c.distanceSquared/(r*r) : c.distanceSquared;
+    }
+    static bool ClaimScored(const Candidate& a,const Candidate& b) noexcept {
+        return ClaimClass(a)==1 && ClaimClass(b)==1 && a.distanceSquared>=0 && b.distanceSquared>=0 &&
+            ClaimScore(a)!=ClaimScore(b);
     }
     static Rule Decider(int native,const Candidate& challenger,const Candidate& incumbent) noexcept {
         if(native<0 || native>2 || !challenger.observed || !incumbent.observed) return Rule::Native;
@@ -92,10 +104,11 @@ public:
         if(challenger.fresh!=incumbent.fresh) return Rule::Fresh;
         if(challenger.gain!=incumbent.gain) return Rule::Gain;
         if(challenger.inReach!=incumbent.inReach) return Rule::Reach;
-        if(challenger.claim!=incumbent.claim) {
-            if(NearerThanClaim(challenger,incumbent) || NearerThanClaim(incumbent,challenger)) return Rule::Nearer;
-            if(challenger.claim!=Unclaimed && incumbent.claim!=Unclaimed) return Rule::Native;
-            return Rule::Claim;
+        if(ClaimClass(challenger)!=ClaimClass(incumbent)) return Rule::Claim;
+        if(ClaimScored(challenger,incumbent)) {
+            // A newcomer against a holder: by the scaled distance; otherwise plain distance
+            if((challenger.claim==Unclaimed)!=(incumbent.claim==Unclaimed)) return Rule::Nearer;
+            return Rule::Native;
         }
         return Rule::Native;
     }
@@ -106,16 +119,13 @@ public:
         if(challenger.fresh!=incumbent.fresh) return challenger.fresh?0:2;
         if(challenger.gain!=incumbent.gain) return challenger.gain>incumbent.gain?0:2;
         if(challenger.inReach!=incumbent.inReach) return challenger.inReach?0:2;
-        if(challenger.claim!=incumbent.claim) {
-            if(NearerThanClaim(challenger,incumbent)) return 0;
-            if(NearerThanClaim(incumbent,challenger)) return 2;
-            // Both held a slot: neither has the better right, and the slot each had says nothing. Ranked by that,
-            // which the commit renumbers every frame, the one left out for a newcomer changed frame by frame, and
-            // the held set turned round, each lamp's shadow gone for a frame (a trace: claim losses back in 11 ms).
-            // By distance, the same one gives way each time.
-            if(challenger.claim!=Unclaimed && incumbent.claim!=Unclaimed) return native;
-            return challenger.claim<incumbent.claim?0:2;
-        }
+        // Both held a slot: neither has the better right, and the slot each had says nothing. Ranked by that,
+        // which the commit renumbers every frame, the one left out for a newcomer changed frame by frame, and
+        // the held set turned round, each lamp's shadow gone for a frame (a trace: claim losses back in 11 ms).
+        // By distance, the same one gives way each time.
+        const unsigned a=ClaimClass(challenger),b=ClaimClass(incumbent);
+        if(a!=b) return a>b?0:2;
+        if(ClaimScored(challenger,incumbent)) return ClaimScore(challenger)<ClaimScore(incumbent)?0:2;
         return native;
     }
 private:

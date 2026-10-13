@@ -2,6 +2,7 @@ module;
 
 #include <common.hxx>
 #include "FusionLog.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -41,12 +42,20 @@ import temporal;
 // The slots are taken over as the other hooks of them do, each passing on to what was there before.
 export namespace RenderSkip
 {
-    bool bCascadesAtNight = false;
+    bool bCascadesAtNight = true;
     bool bReflectionsHalfRate = true;
     bool bFarCascadesHalfRate = true;
     bool bMidCascadeHalfRate = false;
     bool bCascadesIntoAtlas = false;
     bool bTrace = false;
+    // CascadeSunElevation: degrees of the sun above the horizon below which its cascades are left out, by the sky's
+    // SunDirection; below -90 (or before the sky has been drawn) by the clock instead, from 22:00 to 05:00
+    float fSunLowBelow = 8.0f;
+
+    float SunElevation();   // degrees, NaN while the sky has given none
+    bool SunIsLow();        // the sun's shadows too faint to draw: the cascades and the clouds in reflections go
+    bool SunShadowsDrawn(); // the game drew the sun's cascades in the last few frames, which it does only outside, and they
+                            // weren't left out for a low sun
 }
 
 namespace RenderSkip
@@ -119,8 +128,19 @@ namespace RenderSkip
         return h.skip;
     }
 
+    // The sky's sun (gta_atmoscatt_clouds' SunDirection, y up): unlike gDirectionalLight it stays the sun at night
+    size_t nSunDirectionIdx = SIZE_MAX;
+    bool bSunLow = false;
+
     bool IsNight()
     {
+        float elevation = SunElevation();
+        if (fSunLowBelow > -90.0f && !std::isnan(elevation))
+        {
+            // Half a degree of hysteresis, so the cascades don't come and go on the threshold
+            bSunLow = elevation < fSunLowBelow + (bSunLow ? 0.5f : 0.0f);
+            return bSunLow;
+        }
         if (!CClock::ms_nGameClockHours)
             return false;
         auto hours = CClock::GetHours();
@@ -255,6 +275,8 @@ namespace RenderSkip
         surface->Release();
         return bound;
     }
+    bool bNightCascade = false;     // the cascade just locked was the night's, its draws left out
+    uint32_t nightAtlasFrame = ~0u;  // the scene frame the night's atlas was last cleared in
 
     // A cascade left out is read with the matrix it was drawn with. The shaders take the cascades as one matrix
     // (gShadowMatrix: light x, y and depth of a world position) and, for each cascade, a scale and an offset of x and y
@@ -342,8 +364,9 @@ namespace RenderSkip
     {
         bAtlasLeftOut = false;
         lastCascade = -1;
-        if (!bCascadesAtNight && IsNight())
-            return Drop::Draws;     // cleared by LockTarget instead
+        bNightCascade = !bCascadesAtNight && IsNight();
+        if (bNightCascade)
+            return Drop::Draws;     // its quarter of the atlas is cleared by LockTarget instead
         uint32_t frame = TemporalAA::SceneFrame;
         if (frame != cascadeFrame)
         {
@@ -479,8 +502,9 @@ namespace RenderSkip
         case CascadeTarget: return CascadeDrop();
         case CascadeAtlas:
         {
-            // The draw that puts the cascade just drawn into its quarter (drawn there already with CascadesIntoAtlas)
-            bool leftOut = bAtlasLeftOut;
+            // The draw that puts the cascade just drawn into its quarter (drawn there already with CascadesIntoAtlas); the
+            // night's quarter is cleared by LockTarget
+            bool leftOut = bAtlasLeftOut || bNightCascade;
             bAtlasLeftOut = false;
             return leftOut ? Drop::Everything : Drop::Nothing;
         }
@@ -582,7 +606,7 @@ namespace RenderSkip
             if (lock.drop == Drop::Everything)
                 bAtlasLeftOut = true;
             else if (lock.drop != Drop::Nothing)
-                ;   // the night's, cleared and copied the game's way
+                ;   // the night's: its quarter of the atlas is cleared below
             else if (BindAtlas(RageDirect3DDevice9::GetRuntimeDevice()))
             {
                 lock.intoAtlas = int8_t(lastCascade);
@@ -607,10 +631,34 @@ namespace RenderSkip
                 bCascadesIntoAtlas = false;
             }
         }
-        // The night's cascade, bound now: its colour to 1.0, for the game's draw into the atlas to take
-        if (index == 0 && depth > 0 && stack[depth - 1].kind == CascadeTarget && stack[depth - 1].drop == Drop::Draws && RealClear)
-            if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
+        // The night's quarter of the atlas, bound now: 1.0 in it, which the lighting takes as lit for any depth. The atlas
+        // holds 0.5 - 0.0005 z of the casters (cascadeConvert) and a point is lit where that is no less than its own; the
+        // cascade cleared to 1.0 and copied there as before was a caster at z 1, which shadowed everything on one side of
+        // that plane through the light's space: one long straight shadow over walls and roofs, moving with the camera
+        if (index == 0 && depth > 0 && stack[depth - 1].kind == CascadeAtlas && stack[depth - 1].drop == Drop::Everything &&
+            bNightCascade && RealClear)
+        {
+            bNightCascade = false;
+            // All of it, once a frame: a clear takes only the viewport, which may still be the cascade's
+            auto device = RageDirect3DDevice9::GetRuntimeDevice();
+            IDirect3DSurface9* surface = nullptr;
+            D3DSURFACE_DESC desc{};
+            if (device && nightAtlasFrame != TemporalAA::SceneFrame && SUCCEEDED(device->GetRenderTarget(0, &surface)) && surface)
+            {
+                surface->GetDesc(&desc);
+                surface->Release();
+                nightAtlasFrame = TemporalAA::SceneFrame;
+                D3DVIEWPORT9 saved{}, whole{ 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
+                DWORD scissor = FALSE;
+                device->GetViewport(&saved);
+                device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissor);
+                device->SetViewport(&whole);
+                device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
                 RealClear(device, 0, nullptr, D3DCLEAR_TARGET, 0xFFFFFFFF, 1.0f, 0);
+                device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissor);
+                device->SetViewport(&saved);
+            }
+        }
     }
 
     // Unlocked while still counted: a resolve the game makes then goes with its pass
@@ -797,6 +845,31 @@ namespace RenderSkip
     }
 }
 
+namespace RenderSkip
+{
+    float SunElevation()
+    {
+        if (nSunDirectionIdx == SIZE_MAX)
+            return NAN;
+        const auto& sun = rage::grmShaderInfo::getShaderParamData(nSunDirectionIdx);
+        float length = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]);
+        if (!(length > 0.5f))
+            return NAN;
+        return std::asin(std::clamp(sun[1] / length, -1.0f, 1.0f)) * 57.29578f;
+    }
+
+    bool SunIsLow()
+    {
+        return IsNight();
+    }
+
+    bool SunShadowsDrawn()
+    {
+        // cascadeFrame moves on only past CascadeDrop's night check
+        return cascadeFrame != ~0u && TemporalAA::SceneFrame - cascadeFrame <= 3;
+    }
+}
+
 class RenderSkipFeature
 {
 public:
@@ -807,11 +880,14 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
-            bCascadesAtNight = iniReader.ReadInteger("SHADOWS", "CascadeShadowsAtNight", 0) != 0;
+            bCascadesAtNight = iniReader.ReadInteger("SHADOWS", "CascadeShadowsAtNight", 1) != 0;
             bReflectionsHalfRate = iniReader.ReadInteger("MISC", "ReflectionsHalfRate", 1) != 0;
             bFarCascadesHalfRate = iniReader.ReadInteger("SHADOWS", "FarCascadesHalfRate", 1) != 0;
             bMidCascadeHalfRate = iniReader.ReadInteger("SHADOWS", "MidCascadeHalfRate", 0) != 0;
             bTrace = iniReader.ReadInteger("MISC", "RenderSkipTrace", 0) != 0;
+            fSunLowBelow = iniReader.ReadFloat("SHADOWS", "CascadeSunElevation", 8.0f);
+            // At init: the hook that fills the parameters walks the same vector
+            nSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
             if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
                 pCamera = *camera.get_first<float*>(12);
@@ -892,8 +968,8 @@ public:
             bool installed = Install();
             FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, the far ones by day %s, reflections %s\n",
                 installed ? "in place" : "no device or texture factory yet, nothing is left out",
-                bCascadesAtNight ? "drawn at night" : "not drawn from 22:00 to 05:00",
-                bFarCascadesHalfRate ? "in turns while the camera keeps still" : "every frame",
+                bCascadesAtNight ? "drawn at night" : fSunLowBelow > -90.0f ? "not drawn while the sun is low" : "not drawn from 22:00 to 05:00",
+                bFarCascadesHalfRate ? (bFollow ? "in turns, following the camera" : "in turns while the camera keeps still") : "every frame",
                 bReflectionsHalfRate ? "every other frame" : "every frame");
             FusionLog::Write("RenderSkip", "Settings", "cascades %s\n", bCascadesIntoAtlas ? "drawn straight into the atlas" : "copied into the atlas");
         };
@@ -910,6 +986,16 @@ public:
             }
             if (bMatrixTrace && bFollow && frames == 1200)
                 matrixTraceFrom = passSeq + 2;
+            // The sun's height at each hour of the game's clock, to set CascadeSunElevation by
+            static int lastHour = -1;
+            if (CClock::ms_nGameClockHours && CClock::GetHours() != lastHour)
+            {
+                lastHour = CClock::GetHours();
+                float elevation = SunElevation();
+                if (!std::isnan(elevation))
+                    FusionLog::Write("RenderSkip", "Sun", "%02d:00 the sun %.1f degrees above the horizon, its shadows %s\n", lastHour, elevation,
+                        IsNight() ? "left out" : "drawn");
+            }
             if (frames % 3600)
                 return;
             std::string text;

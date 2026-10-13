@@ -32,6 +32,7 @@ import natives;
 import settings;
 import shaders;
 import renderscale;
+import renderskip;
 import temporal;
 import upscaler;
 
@@ -593,6 +594,15 @@ public:
     bool bVolumetricCloudsReflections = true;
     bool bVolumetricCloudsReflectionsAtNight = false;
     float fVolumetricCloudsReflectionBrightness = 1.0f;
+    // VolumetricCloudsReflectionsHalfResolution: the reflections' clouds worked out at half size and laid over at full
+    bool bVolumetricCloudsReflectionsHalfRes = true;
+    // One a size: the water's reflection (1280x512) and the reflection map (1024x1024) take turns every frame, and one
+    // target made again for each had the game's books of its video memory (made through the device wrapper, freed
+    // past them) grow by a gigabyte in 10 s, until the streaming let the whole world go
+    struct CloudReflectionHalfTarget { IDirect3DTexture9* tex = nullptr; IDirect3DSurface9* surf = nullptr; UINT width = 0, height = 0; uint32_t used = 0; };
+    CloudReflectionHalfTarget CloudReflectionHalf[3];
+    IDirect3DTexture9* CloudReflectionHalfTex = nullptr;    // the one for this reflection, set by ReflectionHalfTarget
+    IDirect3DSurface9* CloudReflectionHalfSurf = nullptr;
 
     // The cloud layer this frame (UpdateCloudLayer): from the weather's preset, blended through the
     // game's weather change, or from the VolumetricClouds* settings with VolumetricCloudsWeather 0.
@@ -751,6 +761,7 @@ public:
     // near and far clip; all 0 until the lighting phase has run.
     float SkinCamera[4] = {};
     float fContactShadowMaxDistance = 60.0f;
+    bool bContactShadowsMoon = true; // ContactShadowsMoon
     float fContactShadowIntensity = 1.0f;
     bool bContactShadowStepJitter = true;
     // ContactShadowsHalfResolution: the march runs at half size into ContactRawHalfTex and
@@ -795,11 +806,16 @@ public:
     // A lamp that takes a shadow slot, whose map then shows the cars, fades its boxes out over SlotFade ms, so the
     // shadow under a car does not jump between the two; WithSlots keeps them under its real shadow for good.
     bool bVehicleBoxShadowsWithSlots = false;
+    bool bVehicleBoxShadowsUntilLeaving = true; // VehicleBoxShadowsUntilLeaving, see VehicleBoxShadows::SetForLight
+    bool bVehicleBoxShadowsBlend = true; // VehicleBoxShadowsBlend, read with the others
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
     uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300, nVehicleBoxShadowSizeFadeMs = 300;
+    float fVehicleBoxShadowsMaxDistance = 60.0f; // metres from the camera to a lamp's light past which it has no boxes
     int32_t nVehicleBoxShadowsPerLamp = 3; // cars a lamp shadows as boxes, up to five; each costs its lit pixels about as much again
+    int32_t nVehicleBoxShadowsPerCar = 2;  // lamps that may shadow one car as a box, the strongest on it; 0 any number
+    float fVehicleBoxShadowsMinLight = 0.04f; // the least share of a lamp's light at the car, (1 - distance / radius)^2, for a box
     bool bVehicleBoxShadowsLive = false;
-    float fVehicleBoxShadowLeadFrames = 1.0f;
+    float fVehicleBoxShadowLeadFrames = -1.0f;
     bool bVehicleBoxShadowsLog = false; // VehicleBoxShadowsLog, see VehicleBoxShadows::Trace
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
@@ -961,7 +977,7 @@ public:
     {
         if (!TransparentTexture)
         {
-            auto pDevice = rage::grcDevice::GetD3DDevice();
+            auto pDevice = RealDevice(rage::grcDevice::GetD3DDevice());
             if (pDevice && SUCCEEDED(pDevice->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &TransparentTexture, nullptr)))
             {
                 D3DLOCKED_RECT locked = {};
@@ -1006,18 +1022,22 @@ public:
     float fAmbientOcclusionBlurRadius = 2.0f;
     // GTAO (AO.fx, Ambient Occlusion: GTAO in the graphics menu): slices through the view
     // direction and steps per side.
-    int nAmbientOcclusionGTAOSlices = 3;
+    int nAmbientOcclusionGTAOSlices = 2;
     int nAmbientOcclusionGTAOSteps = 4;
     float fAmbientOcclusionGTAOStrength = 1.0f;
     float fAmbientOcclusionGTAOThinOccluders = 0.5f;
     float fAmbientOcclusionTemporal = 0.9f;  // share of last frames' GTAO kept, 0 turns accumulation off
     bool bAmbientOcclusionMultiBounce = true;
+    // AmbientOcclusionHalfResolution: AO is worked out, accumulated and blurred at half the size and read back by
+    // depth when it is put on the screen
+    bool bAmbientOcclusionHalfRes = true;
 
     struct
     {
         D3DXHANDLE AOTexture2D, AOCamDepthTexture2D, DepthTex2D, NormalTex2D;
         D3DXHANDLE vec4WorldToView, fUseNormals, fGTAOStrength, fThinOccluders, vec2NoiseOffset, fMultiBounce, AlbedoTex2D;
         D3DXHANDLE AOHistoryTex2D, PrevDepthTex2D, MotionTex2D, vec4ViewToPrevClip, fUseMotion, vec2MotionJitter, fUsePrevDepth, vec2PrevDepthRange, fTemporalBlend;
+        D3DXHANDLE vec2AOTexelSize, fUpsample, fUpsampleMip;
 
         D3DXHANDLE vec2InvViewportSize;
         D3DXHANDLE fNearPlane;
@@ -1464,7 +1484,8 @@ public:
                          { &AOEffectHandles.MotionTex2D, "MotionTex2D" }, { &AOEffectHandles.vec4ViewToPrevClip, "vec4ViewToPrevClip" },
                          { &AOEffectHandles.fUseMotion, "fUseMotion" }, { &AOEffectHandles.vec2MotionJitter, "vec2MotionJitter" },
                          { &AOEffectHandles.fUsePrevDepth, "fUsePrevDepth" }, { &AOEffectHandles.vec2PrevDepthRange, "vec2PrevDepthRange" },
-                         { &AOEffectHandles.fTemporalBlend, "fTemporalBlend" } })
+                         { &AOEffectHandles.fTemporalBlend, "fTemporalBlend" }, { &AOEffectHandles.vec2AOTexelSize, "vec2AOTexelSize" },
+                         { &AOEffectHandles.fUpsample, "fUpsample" }, { &AOEffectHandles.fUpsampleMip, "fUpsampleMip" } })
                     *handle = AOEffect->GetParameterByName(nullptr, name);
                 AOEffectHandles.vec2InvViewportSize = AOEffect->GetParameterByName(nullptr, "vec2InvViewportSize");
                 AOEffectHandles.fNearPlane = AOEffect->GetParameterByName(nullptr, "fNearPlane");
@@ -1773,10 +1794,21 @@ public:
         fVehicleBoxShadowEndRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsEndRounding", 0.3f), 0.0f, 2.0f);
         bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
         bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
+        bVehicleBoxShadowsUntilLeaving = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsUntilLeaving", 1) != 0;
+        // VehicleBoxShadowsBlend: the light shaders take the darkest of a light's shadow map, contact shadow and boxes
+        // (local_light_with_shadow_blend.patch) instead of all three multiplied, so the contact shadow goes with the
+        // boxes whole. Each car still has one kind of shadow from a lamp, its map's or its box (UntilLeaving): kept with
+        // a slot too, the box and the map's shadow showed side by side, two shadows from one lamp.
+        bVehicleBoxShadowsBlend = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsBlend", 1) != 0;
+        if (bVehicleBoxShadowsBlend)
+            fVehicleBoxShadowContact = 1.0f;
         bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 0) != 0;
-        fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", 1.0f), -3.0f, 5.0f);
+        fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", -1.0f), -3.0f, 5.0f);
         bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;
         nVehicleBoxShadowsPerLamp = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerLamp", 3), 1, 5);
+        nVehicleBoxShadowsPerCar = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerCar", 2), 0, 8);
+        fVehicleBoxShadowsMinLight = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsMinLight", 0.04f), 0.0f, 1.0f);
+        fVehicleBoxShadowsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsMaxDistance", 60.0f), 0.0f, 1000.0f);
         nVehicleBoxShadowSizeFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsSizeFade", 300), 0, 5000));
         nVehicleBoxShadowFadeInMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeIn", 300), 0, 5000));
         nVehicleBoxShadowFadeOutMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeOut", 300), 0, 5000));
@@ -1858,6 +1890,7 @@ public:
         bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
         bVolumetricCloudsReflectionsAtNight = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflectionsAtNight", 0) != 0;
         fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
+        bVolumetricCloudsReflectionsHalfRes = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflectionsHalfResolution", 1) != 0;
     }
 
     void Readini()
@@ -1887,6 +1920,7 @@ public:
         fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 0.3f), 0.05f, 10.0f);
         fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.15f), 0.01f, 10.0f);
         fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
+        bContactShadowsMoon = iniReader.ReadInteger("POSTFX", "ContactShadowsMoon", 1) != 0;
         bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
         bContactShadowsHalfRes = iniReader.ReadInteger("POSTFX", "ContactShadowsHalfResolution", 1) != 0;
         fContactTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsTemporal", 0.8f), 0.0f, 0.95f);
@@ -1927,12 +1961,13 @@ public:
         nAmbientOcclusionMaxMipLevel = iniReader.ReadInteger("POSTFX", "AmbientOcclusionMaxMipLevel", 5);
         fAmbientOcclusionFarClip = iniReader.ReadFloat("POSTFX", "AmbientOcclusionFarClip", 150.0f);
         fAmbientOcclusionBlurRadius = iniReader.ReadFloat("POSTFX", "AmbientOcclusionBlurRadius", 2.0f);
-        nAmbientOcclusionGTAOSlices = std::clamp(iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOSlices", 3), 1, 8);
+        nAmbientOcclusionGTAOSlices = std::clamp(iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOSlices", 2), 1, 8);
         nAmbientOcclusionGTAOSteps = std::clamp(iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOSteps", 4), 1, 16);
         fAmbientOcclusionGTAOStrength = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOStrength", 1.0f), 0.0f, 4.0f);
         fAmbientOcclusionGTAOThinOccluders = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOThinOccluders", 0.5f), 0.0f, 1.0f);
         fAmbientOcclusionTemporal = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOTemporal", 0.9f), 0.0f, 0.98f);
         bAmbientOcclusionMultiBounce = iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOMultiBounce", 1) != 0;
+        bAmbientOcclusionHalfRes = iniReader.ReadInteger("POSTFX", "AmbientOcclusionHalfResolution", 1) != 0;
 
         nAmbientOcclusionBlurPasses = std::max(0, nAmbientOcclusionBlurPasses);
         nAmbientOcclusionSamples = std::clamp(nAmbientOcclusionSamples, 0, 128);
@@ -1991,9 +2026,9 @@ public:
 
 
         if (!SMAA_areaTex)
-            D3DXCreateTextureFromResourceExW(pDevice, hm, MAKEINTRESOURCEW(IDR_AreaTex), 160, 560, 1, 0, D3DFMT_UNKNOWN, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_LINEAR, 0, NULL, NULL, &SMAA_areaTex);
+            D3DXCreateTextureFromResourceExW(RealDevice(pDevice), hm, MAKEINTRESOURCEW(IDR_AreaTex), 160, 560, 1, 0, D3DFMT_UNKNOWN, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_LINEAR, 0, NULL, NULL, &SMAA_areaTex);
         if (!SMAA_searchTex)
-            D3DXCreateTextureFromResourceExW(pDevice, hm, MAKEINTRESOURCEW(IDR_SearchTex), 64, 16, 1, 0, D3DFMT_UNKNOWN, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_LINEAR, 0, NULL, NULL, &SMAA_searchTex);
+            D3DXCreateTextureFromResourceExW(RealDevice(pDevice), hm, MAKEINTRESOURCEW(IDR_SearchTex), 64, 16, 1, 0, D3DFMT_UNKNOWN, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_LINEAR, 0, NULL, NULL, &SMAA_searchTex);
     }
 };
 
@@ -2091,8 +2126,8 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
 
     // 16 bits: the volumetric clouds stretch the coverage several times over near their edges, and
     // the 8 bit steps showed as terraces and streaks down their sides.
-    bool wide = SUCCEEDED(pDevice->CreateTexture(size, size, 0, 0, D3DFMT_L16, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr));
-    if (!wide && FAILED(pDevice->CreateTexture(size, size, 0, 0, D3DFMT_L8, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr)))
+    bool wide = SUCCEEDED(RealDevice(pDevice)->CreateTexture(size, size, 0, 0, D3DFMT_L16, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr));
+    if (!wide && FAILED(RealDevice(pDevice)->CreateTexture(size, size, 0, 0, D3DFMT_L8, D3DPOOL_MANAGED, &CloudNoiseTexture, nullptr)))
     {
         CloudNoiseTexture = nullptr;
         return nullptr;
@@ -2191,8 +2226,8 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
     }
 
     // 16 bits a channel for the same reason as the coverage; 8 where G16R16 volumes are missing.
-    bool wide = SUCCEEDED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_G16R16, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr));
-    if (!wide && FAILED(pDevice->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr)))
+    bool wide = SUCCEEDED(RealDevice(pDevice)->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_G16R16, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr));
+    if (!wide && FAILED(RealDevice(pDevice)->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &CloudDetailTexture, nullptr)))
     {
         CloudDetailTexture = nullptr;
         return nullptr;
@@ -2881,6 +2916,14 @@ private:
             }
         }
         PostFxResources.nCloudAccumFrame = 0;
+        for (auto& target : PostFxResources.CloudReflectionHalf)
+        {
+            SAFE_RELEASE(target.surf);
+            SAFE_RELEASE(target.tex);
+            target = {};
+        }
+        PostFxResources.CloudReflectionHalfSurf = nullptr;
+        PostFxResources.CloudReflectionHalfTex = nullptr;
         SAFE_RELEASE(PostFxResources.CloudSkyRefSurf);
         if (PostFxResources.CloudSkyRefTex)
         {
@@ -3032,7 +3075,7 @@ private:
 
         rage::grcDevice::GetD3DDevice()->CreateVertexDeclaration(vertexDeclElements, &mQuadVertexDecl);
 
-        rage::grcDevice::GetD3DDevice()->CreateVertexBuffer(6 * sizeof(VertexFormat), 0, 0, D3DPOOL_DEFAULT, &mQuadVertexBuffer, NULL);
+        RealDevice(rage::grcDevice::GetD3DDevice())->CreateVertexBuffer(6 * sizeof(VertexFormat), 0, 0, D3DPOOL_DEFAULT, &mQuadVertexBuffer, NULL);
 
         VertexFormat* vertexData = 0;
         D3DXVECTOR2 pixelSize = D3DXVECTOR2(1.0f / width, 1.0f / height);
@@ -3099,15 +3142,18 @@ private:
 
         aoDesc.mFormat = rage::GRCFMT_L8;
         aoDesc.mLevels = 1;
-        PostFxResources.AOTex = rage::CreateEmptyRenderTarget("AOTex", width, height, 8, aoDesc);
-        PostFxResources.AOBlurTex = rage::CreateEmptyRenderTarget("AOBlurTex", width, height, 8, aoDesc);
+        // At half size, the size of AOCamDepthTex's first mip
+        const auto aoWidth = PostFxResources.bAmbientOcclusionHalfRes ? std::max(1, int(width) >> 1) : int(width);
+        const auto aoHeight = PostFxResources.bAmbientOcclusionHalfRes ? std::max(1, int(height) >> 1) : int(height);
+        PostFxResources.AOTex = rage::CreateEmptyRenderTarget("AOTex", aoWidth, aoHeight, 8, aoDesc);
+        PostFxResources.AOBlurTex = rage::CreateEmptyRenderTarget("AOBlurTex", aoWidth, aoHeight, 8, aoDesc);
         if (PostFxResources.fAmbientOcclusionTemporal > 0.0f)
         {
             // 16-bit: blending a small share of each frame into 8 bits gets stuck on its steps.
             aoDesc.mFormat = rage::GRCFMT_R16F;
             static const char* names[2] = { "AOAccumTex0", "AOAccumTex1" };
             for (int i = 0; i < 2; ++i)
-                PostFxResources.AOAccumTex[i] = rage::CreateEmptyRenderTarget(names[i], width, height, 16, aoDesc, PostFxResources.AOAccumSurf[i]);
+                PostFxResources.AOAccumTex[i] = rage::CreateEmptyRenderTarget(names[i], aoWidth, aoHeight, 16, aoDesc, PostFxResources.AOAccumSurf[i]);
         }
 
         {
@@ -3340,7 +3386,7 @@ private:
                 SAFE_RELEASE(R.WetCopyTex[i]);
             }
             if (!R.WetCopyTex[i])
-                ok = SUCCEEDED(pDevice->CreateTexture(desc[i].Width, desc[i].Height, 1, D3DUSAGE_RENDERTARGET, desc[i].Format,
+                ok = SUCCEEDED(RealDevice(pDevice)->CreateTexture(desc[i].Width, desc[i].Height, 1, D3DUSAGE_RENDERTARGET, desc[i].Format,
                                                       D3DPOOL_DEFAULT, &R.WetCopyTex[i], nullptr)) &&
                      SUCCEEDED(R.WetCopyTex[i]->GetSurfaceLevel(0, &R.WetCopySurf[i]));
             if (ok)
@@ -6114,6 +6160,45 @@ private:
         { D3DRS_COLORWRITEENABLE1, 0xF },
     };
 
+    // The reflections' half size target, made for the reflection's viewport and made again when that changes size
+    static bool ReflectionHalfTarget(IDirect3DDevice9* pDevice, float width, float height)
+    {
+        auto& R = PostFxResources;
+        const UINT w = (std::max)(1u, UINT(width) / 2), h = (std::max)(1u, UINT(height) / 2);
+        static uint32_t uses = 0;
+        uses++;
+        PostFxResource::CloudReflectionHalfTarget* slot = nullptr;
+        for (auto& target : R.CloudReflectionHalf)
+            if (target.surf && target.width == w && target.height == h)
+                slot = &target;
+        if (!slot)
+        {
+            // The emptiest or least lately used slot is made again; made on the real device, past the game's books,
+            // as FusionFix's other textures of its own
+            slot = &R.CloudReflectionHalf[0];
+            for (auto& target : R.CloudReflectionHalf)
+                if (!target.surf || target.used < slot->used)
+                    slot = &target;
+            SAFE_RELEASE(slot->surf);
+            SAFE_RELEASE(slot->tex);
+            *slot = {};
+            auto device = RageDirect3DDevice9::RealDevice(pDevice);
+            if (FAILED(device->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &slot->tex, nullptr)) || !slot->tex)
+            {
+                slot->tex = nullptr;
+                R.bVolumetricCloudsReflectionsHalfRes = false;
+                return false;
+            }
+            slot->tex->GetSurfaceLevel(0, &slot->surf);
+            slot->width = w;
+            slot->height = h;
+        }
+        slot->used = uses;
+        R.CloudReflectionHalfTex = slot->tex;
+        R.CloudReflectionHalfSurf = slot->surf;
+        return slot->surf != nullptr;
+    }
+
     // Blends the volumetric clouds (Clouds.fx) into the lit scene, from the fog pass before it reads
     // the scene; with reflection, into the reflection map's target right after its sky
     // (DrawSkyReflection), at full size, on the sky only by the depth test, at the brightness of
@@ -6136,9 +6221,9 @@ private:
         if (reflection && !R.bVolumetricCloudsReflections)
             return skip("VolumetricCloudsReflections 0");
         // At night the clouds are black against a black sky and their reflections showed nothing, at some 2.6 GPU
-        // milliseconds a frame in a profile: from 22:00 to 05:00 the reflections keep the game's sky
-        if (reflection && !R.bVolumetricCloudsReflectionsAtNight && CClock::ms_nGameClockHours &&
-            (CClock::GetHours() >= 22 || CClock::GetHours() < 5))
+        // milliseconds a frame in a profile: while the sun is low (RenderSkip's CascadeSunElevation, or 22:00 to 05:00)
+        // the reflections keep the game's sky
+        if (reflection && !R.bVolumetricCloudsReflectionsAtNight && RenderSkip::SunIsLow())
             return skip("night, VolumetricCloudsReflectionsAtNight 0");
         if (!R.mDepthRT || !R.mDepthRT->mD3DTexture)
             return skip("no depth texture");
@@ -6520,6 +6605,7 @@ private:
         }
 
         struct ScreenVertex { float x, y, z, rhw; float u, v; };
+        IDirect3DTexture9* reflectionHalf = nullptr;    // while CloudsUpscale lays it over the reflection
         auto bindTextures = [&](bool readScene, bool readSkyRef, bool readMarch)
         {
             // The samplers have fixed registers: s0 depth, s1 coverage, s2 detail, s3 this frame's
@@ -6530,7 +6616,7 @@ private:
             SetTextureBoth(pDevice, 1, coverage);
             SetTextureBoth(pDevice, 2, detail);
             SetTextureBoth(pDevice, 3, halfSize && !readMarch ? R.CloudTex[0]->mD3DTexture : nullptr);
-            SetTextureBoth(pDevice, 4, halfSize ? R.CloudTex[prevAccum]->mD3DTexture : nullptr);
+            SetTextureBoth(pDevice, 4, halfSize ? R.CloudTex[prevAccum]->mD3DTexture : reflectionHalf);
             SetTextureBoth(pDevice, 5, halfSize ? R.CloudTex[nextAccum]->mD3DTexture : nullptr);
             SetTextureBoth(pDevice, 6, readScene ? sceneBase : nullptr);
             SetTextureBoth(pDevice, 7, readSkyRef && R.CloudSkyRefTex ? R.CloudSkyRefTex->mD3DTexture : nullptr);
@@ -6604,6 +6690,19 @@ private:
             drawPass("CloudsComposite", sceneSurface, width, height, true, kProfCloudsComposite);
             R.nCloudAccumIndex ^= 1;
             R.nCloudAccumFrame = FrameHistory::Frame();
+        }
+        else if (reflection && R.bVolumetricCloudsReflectionsHalfRes && ReflectionHalfTarget(pDevice, width, height))
+        {
+            // Into the half size target on its own, every pixel (the reflection's depth buffer is of its own size),
+            // then over the reflection where its depth is the sky's
+            D3DSURFACE_DESC halfDesc = {};
+            R.CloudReflectionHalfSurf->GetDesc(&halfDesc);
+            pDevice->SetRenderState(D3DRS_ZENABLE, D3DZB_FALSE);
+            drawPass("Clouds", R.CloudReflectionHalfSurf, float(halfDesc.Width), float(halfDesc.Height), false, kProfCloudsMarch);
+            pDevice->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+            reflectionHalf = R.CloudReflectionHalfTex;
+            drawPass("CloudsUpscale", sceneSurface, width, height, true, kProfCloudsComposite);
+            reflectionHalf = nullptr;
         }
         else
             drawPass("Clouds", sceneSurface, width, height, true, kProfCloudsMarch);
@@ -6836,7 +6935,7 @@ private:
         for (int i = 0; i < 2 && ok; ++i)
         {
             if (!R.WaterMaskTex[i])
-                ok = SUCCEEDED(pDevice->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format,
+                ok = SUCCEEDED(RealDevice(pDevice)->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format,
                                                       D3DPOOL_DEFAULT, &R.WaterMaskTex[i], nullptr));
         }
         if (ok)
@@ -7064,6 +7163,28 @@ private:
                 effect->EndPass();
                 ProfilerMark(pDevice, kProfAODepth, false);
 
+                // From here to the output, at the size of the AO targets: half with AmbientOcclusionHalfResolution
+                D3DSURFACE_DESC aoDesc{};
+                aoSurf->GetDesc(&aoDesc);
+                const bool half = aoDesc.Width < UINT(width);
+                const float aoWidth = half ? float(aoDesc.Width) : width, aoHeight = half ? float(aoDesc.Height) : height;
+                ScreenVertex aoVertices[4] =
+                {
+                    { -0.5f,           -0.5f,            0.0f, 1.0f, 0.0f, 0.0f },
+                    { -0.5f,           aoHeight - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+                    { aoWidth - 0.5f, -0.5f,            0.0f, 1.0f, 1.0f, 0.0f },
+                    { aoWidth - 0.5f, aoHeight - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
+                };
+                const float aoTexel[] = { 1.0f / aoWidth, 1.0f / aoHeight };
+                if (half)
+                {
+                    D3DVIEWPORT9 aoVp = vp;
+                    aoVp.Width = DWORD(aoWidth);
+                    aoVp.Height = DWORD(aoHeight);
+                    pDevice->SetViewport(&aoVp);
+                    SetTargetSize(effect, h, *(const D3DMATRIX*)currGrcViewport->mProjectionMatrix, aoWidth, aoHeight);
+                }
+
                 pDevice->SetRenderTarget(0, aoSurf);
                 pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_COLORVALUE(1.0, 0.0, 0, 1.0), 1.0f, 0);
 
@@ -7094,14 +7215,14 @@ private:
                 }
                 effect->SetFloat(h.fBias, PostFxResources.fAmbientOcclusionBias);
                 effect->SetFloat(h.fIntensity, PostFxResources.fAmbientOcclusionIntensity);
-                effect->SetFloat(h.fProjScale, proj._22 * 0.5f * height);
+                effect->SetFloat(h.fProjScale, proj._22 * 0.5f * aoHeight);
 
                 effect->CommitChanges();
 
                 ProfilerMark(pDevice, kProfAOMain, true);
                 effect->BeginPass(gtao ? 5 : 2); // 1 SAO, 2 GTAO
                 BindEffectSamplers(pDevice, effect);
-                pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, aoVertices, sizeof(ScreenVertex));
                 effect->EndPass();
                 ProfilerMark(pDevice, kProfAOMain, false);
 
@@ -7138,7 +7259,7 @@ private:
                     ProfilerMark(pDevice, kProfAOTemporal, true);
                     effect->BeginPass(6);
                     BindEffectSamplers(pDevice, effect);
-                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, aoVertices, sizeof(ScreenVertex));
                     effect->EndPass();
                     ProfilerMark(pDevice, kProfAOTemporal, false);
 
@@ -7149,8 +7270,8 @@ private:
                 else
                     R.nAOAccumFrame = 0;
 
-                float hor[2] = { invViewportSize[0] * PostFxResources.fAmbientOcclusionBlurRadius, 0.0 };
-                float ver[2] = { 0.0, invViewportSize[1] * PostFxResources.fAmbientOcclusionBlurRadius };
+                float hor[2] = { aoTexel[0] * PostFxResources.fAmbientOcclusionBlurRadius, 0.0 };
+                float ver[2] = { 0.0, aoTexel[1] * PostFxResources.fAmbientOcclusionBlurRadius };
                 ProfilerMark(pDevice, kProfAOBlur, true);
                 effect->BeginPass(3);
                 for (auto i = 0; i < PostFxResources.nAmbientOcclusionBlurPasses; ++i)
@@ -7161,7 +7282,7 @@ private:
                     effect->CommitChanges();
 
                     BindEffectSamplers(pDevice, effect);
-                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, aoVertices, sizeof(ScreenVertex));
 
                     pDevice->SetRenderTarget(0, aoSurf);
                     effect->SetTexture(h.AOTexture2D, aoBlurTex); // blur pass 2
@@ -7169,14 +7290,23 @@ private:
                     effect->CommitChanges();
 
                     BindEffectSamplers(pDevice, effect);
-                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, aoVertices, sizeof(ScreenVertex));
                 }
                 effect->EndPass();
                 ProfilerMark(pDevice, kProfAOBlur, false);
 
-                // final output
+                // final output, at the screen's size again
                 pDevice->SetRenderTarget(0, SpecularRT);
                 effect->SetTexture(h.AOTexture2D, PostFxResources.nAmbientOcclusionBlurPasses > 0 ? aoTex : blurSource);
+                effect->SetFloatArray(h.vec2AOTexelSize, aoTexel, 2);
+                effect->SetFloat(h.fUpsample, half ? 1.0f : 0.0f);
+                effect->SetFloat(h.fUpsampleMip, half && PostFxResources.nAmbientOcclusionMaxMipLevel > 1 ? 1.0f : 0.0f);
+                if (half)
+                {
+                    pDevice->SetViewport(&vp);
+                    SetTargetSize(effect, h, *(const D3DMATRIX*)currGrcViewport->mProjectionMatrix, width, height);
+                }
+                effect->CommitChanges();
 
                 ProfilerMark(pDevice, kProfAOApply, true);
                 effect->BeginPass(4);
@@ -7293,6 +7423,8 @@ private:
                         R.fVehicleBoxShadowLightSize, R.fVehicleBoxShadowRounding, int(R.bVehicleBoxShadowsFromCarLights), int(R.bVehicleBoxShadowsWithSlots),
                         R.fVehicleBoxShadowScale[0], R.fVehicleBoxShadowScale[1], R.fVehicleBoxShadowScale[2], R.fVehicleBoxShadowFollowLight,
                         R.fVehicleBoxShadowLowLightNarrow);
+                log.Printf("slot maps drawn without their lamp's boxed cars %u, cars left out %u\n",
+                        VehicleBoxShadows::mapsWithoutBoxed.exchange(0), VehicleBoxShadows::carsLeftOut.exchange(0));
                 {
                     const auto& l = VehicleBoxShadows::lastLowLight;
                     log.Printf("%u times a lamp no higher than a car's roof was left without its box; the last at %.1f %.1f %.1f, %.2f m above the box's bottom: type %d, flags 0x%X, radius %.1f, intensity %.2f, shadow key 0x%08X, cache %d\n",
@@ -7834,6 +7966,11 @@ private:
         // nothing, and the whole screen pass cost a frame or so for no shadow. The colour in c18
         // is no test: here it can still hold another shader's constant, and skipped the pass by day.
         if (-light[2] / lightLen <= 0.0f)
+            return;
+        // At night c17 is the moon's. ContactShadowsMoon 0: no contact shadows while its cascades are left out
+        // (CascadeShadowsAtNight 0, the sun below CascadeSunElevation), which saves the screen pass; 1 (default)
+        // keeps them, the moon's only shading of what stands on the ground then.
+        if (!R.bContactShadowsMoon && !RenderSkip::bCascadesAtNight && RenderSkip::SunIsLow())
             return;
 
         const float width = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
@@ -8463,6 +8600,7 @@ private:
             int32_t slot;     // the car's place in the vehicle pool and its flags then, to tell it is still the same car
             uint8_t flags;
             float velocity[3]; // m/s, from the last hand over
+            float turning;     // radians a second about the vertical, from the last hand over
         };
         static constexpr int kBoxes = 160, kPerLight = 5, kLists = 8;
         struct List
@@ -8473,6 +8611,7 @@ private:
             float focus[3] = {};              // the player, where the boxes' shadows are seen
             uintptr_t watched = 0;            // the car nearest the player, which VehicleBoxShadowsLog follows
             float frameSeconds = 0.0f;        // since the hand over before
+            LARGE_INTEGER handedAt{};         // when, for the log
             Box boxes[kBoxes];
         };
         static inline List lists[kLists]{};
@@ -8486,15 +8625,21 @@ private:
         static inline const List* drawn = nullptr;
         static inline List lastFound{}; // a copy, render thread: the ring's entry may be reused while it is drawn
         static inline uintptr_t drawnFor = 0;
+        static inline std::atomic<uint32_t> latestHandOver{0}; // the last hand over's sequence, for the log
         static inline bool constantsOn = true;
         // The cars each lamp took last, render thread.
         // What each lamp took last, render thread: its cars, and since when its own map shows them.
+        static constexpr uint8_t kPending = 0, kReal = 1, kBox = 2;
+        static constexpr DWORD kDecideMs = 500; // a car coming under a lamp without a slot waits this long for one
         struct Fading
         {
             Box box{};
             float strength = 0.0f;
             bool chosen = false;
             float shape[3] = { -1.0f, -1.0f, -1.0f }; // along, across and height shares from the light's angle, eased
+            // VehicleBoxShadowsUntilLeaving: which shadow the car has from the lamp until it leaves, decided as it came
+            uint8_t latch = kPending;
+            DWORD takenTick = 0;
         };
         struct LampState
         {
@@ -8505,12 +8650,127 @@ private:
             float rounding = -1.0f;                  // the edges' rounding it gave its boxes, easing to the limit
             bool wasMappedForFade = false;           // its own map showed the cars last frame
             DWORD lastTick = 0;
+            DWORD leftOutTick = 0;                   // its slot's map last left its boxed cars out (BoxedCars)
             // VehicleBoxShadowsLog: what it last did with the watched car
             bool hadWatched = false, wasMapped = false, watchedLow = false;
+            uint8_t watchedLatch = 0xFF;
         };
         static inline std::unordered_map<uint64_t, LampState> held;
+        // The lamps and the cars they keep boxes for (VehicleBoxShadowsUntilLeaving), gathered as a frame's lights are
+        // drawn and handed to the night shadow slots on the next; render thread, main thread copies.
+        static constexpr int kPairs = 256;
+        static inline std::array<VehicleBoxShadowsBridge::BoxedPair, kPairs> pairsBuilding{}, pairsPublished{};
+        static inline int pairsBuildingCount = 0, pairsPublishedCount = 0;
+        static inline DWORD pairsPublishedTick = 0;
+        static inline std::mutex pairsLock;
+        static void PublishPairs()
+        {
+            std::lock_guard lock(pairsLock);
+            std::copy_n(pairsBuilding.begin(), pairsBuildingCount, pairsPublished.begin());
+            pairsPublishedCount = pairsBuildingCount;
+            pairsPublishedTick = GetTickCount();
+            pairsBuildingCount = 0;
+        }
+        static int CopyBoxedPairs(VehicleBoxShadowsBridge::BoxedPair* pairs, int max)
+        {
+            std::lock_guard lock(pairsLock);
+            if (!PostFxResources.VehicleBoxShadowsEnabled() || GetTickCount() - pairsPublishedTick > 500)
+                return 0;
+            const int n = (std::min)(pairsPublishedCount, max);
+            std::copy_n(pairsPublished.begin(), n, pairs);
+            return n;
+        }
+        // For the log: lamps whose slot drew its map without its boxed cars, and those cars.
+        static inline std::atomic<uint32_t> mapsWithoutBoxed{0}, carsLeftOut{0};
         // For the log: the nearest car's model bounds (least, most) and its box, as taken.
         static inline float nearestBounds[6] = {}, nearestBox[4] = {}, nearestDistance = -1.0f;
+
+        // VehicleBoxShadowsPerCar: under a row of lamps a car had a box shadow from every one that reached it, some
+        // ten in a log, many of them lamps the game gives no shadow at all, each shadow faint but together a fan of
+        // them. Each lamp drawn notes how much it lights each car it reaches; on the next frame only the strongest
+        // few on a car may give it a box. Render thread.
+        struct CarLamps
+        {
+            static constexpr int kKept = 8;
+            std::array<std::pair<uint64_t, float>, kKept> seen{};    // this frame: lamp and how much it lights the car
+            int seenCount = 0;
+            std::array<std::pair<uint64_t, float>, kKept> before{};  // the frame before, for lamps not drawn in this one
+            int beforeCount = 0;
+            std::array<uint64_t, kKept> allowed{};                    // from the last frame: those that may give a box
+            int allowedCount = 0;
+            bool ranked = false;                                      // allowed holds a ranking (not the car's first frame)
+        };
+        static inline std::unordered_map<uintptr_t, CarLamps> carLamps;
+        static inline uint32_t carLampsFrame = 0; // TemporalAA::SceneFrame of the last ranking
+
+        static bool LampAllowed(const CarLamps& car, uint64_t lamp)
+        {
+            return std::find(car.allowed.begin(), car.allowed.begin() + car.allowedCount, lamp) != car.allowed.begin() + car.allowedCount;
+        }
+
+        // The light a lamp gives a car: its intensity times a falloff over its radius.
+        static void NoteCarLamp(uintptr_t vehicle, uint64_t lamp, float light)
+        {
+            auto& car = carLamps[vehicle];
+            // A lamp giving the car a box now keeps it against one up to a third stronger, so two alike lamps do not
+            // take the box from each other frame by frame
+            if (LampAllowed(car, lamp))
+                light *= 1.33f;
+            for (int i = 0; i < car.seenCount; ++i)
+                if (car.seen[i].first == lamp)
+                {
+                    car.seen[i].second = (std::max)(car.seen[i].second, light);
+                    return;
+                }
+            if (car.seenCount < CarLamps::kKept)
+                car.seen[car.seenCount++] = { lamp, light };
+            else
+            {
+                auto weakest = std::min_element(car.seen.begin(), car.seen.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+                if (weakest->second < light)
+                    *weakest = { lamp, light };
+            }
+        }
+
+        // At a new scene's lights: each car's strongest lamps of the last two frames may give it a box in this one. By
+        // the scene frame, not by the light list drawn: lights drawn from more than one list in a frame ranked the cars
+        // from part of their lamps each time, and a lamp took and left a car every other frame (a log: 49 times in a
+        // few seconds, its box never faded in). A lamp not drawn in one frame keeps its place from the one before.
+        static void RankCarLamps(int perCar)
+        {
+            if (carLamps.size() > 1024)
+                carLamps.clear();
+            for (auto it = carLamps.begin(); it != carLamps.end();)
+            {
+                auto& car = it->second;
+                if (!car.seenCount && !car.beforeCount)
+                {
+                    it = carLamps.erase(it);
+                    continue;
+                }
+                std::array<std::pair<uint64_t, float>, CarLamps::kKept * 2> both{};
+                int n = 0;
+                for (int i = 0; i < car.seenCount; ++i)
+                    both[n++] = car.seen[i];
+                for (int i = 0; i < car.beforeCount; ++i)
+                {
+                    bool again = false;
+                    for (int j = 0; j < car.seenCount; ++j)
+                        again |= car.seen[j].first == car.before[i].first;
+                    if (!again)
+                        both[n++] = car.before[i];
+                }
+                std::sort(both.begin(), both.begin() + n, [](const auto& a, const auto& b) { return a.second > b.second; });
+                car.allowedCount = (std::min)(n, perCar);
+                for (int i = 0; i < car.allowedCount; ++i)
+                    car.allowed[i] = both[i].first;
+                car.ranked = true;
+                car.before = car.seen;
+                car.beforeCount = car.seenCount;
+                car.seenCount = 0;
+                ++it;
+            }
+        }
 
         // Main thread: every car's box, the nearest the player first when there are more than fit.
         static void Capture()
@@ -8521,6 +8781,8 @@ private:
             list.count = 0;
             static uint32_t handOvers = 0;
             list.sequence = ++handOvers;
+            QueryPerformanceCounter(&list.handedAt);
+            latestHandOver.store(handOvers, std::memory_order_relaxed);
             if (!PostFxResources.VehicleBoxShadowsEnabled() || !lightListBuilt || !modelInfos)
                 return;
             float focus[3] = {};
@@ -8600,7 +8862,7 @@ private:
             // Each car's speed since the last hand over, which VehicleBoxShadowsLeadFrames moves its box ahead by. A
             // second hand over in the same frame (CE 0xac507b) keeps the speeds it had.
             {
-                struct Seen { float centre[3], velocity[3]; };
+                struct Seen { float centre[3], velocity[3], forward[2], turning; };
                 static std::unordered_map<uintptr_t, Seen> previous;
                 static LARGE_INTEGER frequency{}, before{};
                 LARGE_INTEGER time{};
@@ -8608,7 +8870,11 @@ private:
                 if (!frequency.QuadPart)
                     QueryPerformanceFrequency(&frequency);
                 const float dt = before.QuadPart ? float(time.QuadPart - before.QuadPart) / float(frequency.QuadPart) : 0.0f;
-                const bool step = dt > 0.002f && dt < 0.25f;
+                // A new frame's hand over; one after a pause (a load, the menu) gives no speeds, but is the time the
+                // next is measured from: kept only on a step, the time stuck at the first pause over 0.25 s and every
+                // car had no speed from then on (a log: speed 0 in every line, the guess 1 to 8 m behind the drawn car)
+                const bool fresh = !before.QuadPart || dt > 0.002f;
+                const bool step = fresh && before.QuadPart && dt < 0.25f;
                 std::unordered_map<uintptr_t, Seen> current;
                 current.reserve(size_t(n));
                 for (int i = 0; i < n; ++i)
@@ -8617,28 +8883,39 @@ private:
                     const auto it = previous.find(box.vehicle);
                     Seen seen{};
                     std::copy_n(box.centre, 3, seen.centre);
-                    if (it != previous.end())
+                    std::copy_n(box.forward, 2, seen.forward);
+                    if (it != previous.end() && (step || !fresh))
                     {
                         if (step)
+                        {
                             for (int k = 0; k < 3; ++k)
                                 seen.velocity[k] = std::clamp((box.centre[k] - it->second.centre[k]) / dt, -80.0f, 80.0f);
+                            // the signed angle from the forward then to the forward now
+                            const float* f0 = it->second.forward;
+                            const float angle = std::atan2(f0[0] * box.forward[1] - f0[1] * box.forward[0], f0[0] * box.forward[0] + f0[1] * box.forward[1]);
+                            seen.turning = std::clamp(angle / dt, -10.0f, 10.0f);
+                        }
                         else
                         {
                             std::copy_n(it->second.centre, 3, seen.centre);
                             std::copy_n(it->second.velocity, 3, seen.velocity);
+                            std::copy_n(it->second.forward, 2, seen.forward);
+                            seen.turning = it->second.turning;
                         }
                     }
                     std::copy_n(seen.velocity, 3, box.velocity);
+                    box.turning = seen.turning;
                     current.emplace(box.vehicle, seen);
                 }
-                if (step || !before.QuadPart)
+                // a second hand over in the frame keeps the frame's time too, its boxes moved on as the first's
+                static float frameSeconds = 0.0f;
+                if (fresh)
                 {
                     previous.swap(current);
                     before = time;
-                    list.frameSeconds = dt;
+                    frameSeconds = step ? dt : 0.0f;
                 }
-                else
-                    list.frameSeconds = 0.0f;
+                list.frameSeconds = frameSeconds;
             }
             list.count = (std::min)(n, kBoxes);
             for (int i = 0; i < list.count; ++i)
@@ -8658,6 +8935,8 @@ private:
             lightListDrawn = *drawnPattern.get_first<uintptr_t*>(8);
             modelInfos = GameBase() + 0xE95CD8;
             shHandOver = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&) { Capture(); });
+            VehicleBoxShadowsBridge::BoxedCars = BoxedCars;
+            VehicleBoxShadowsBridge::CopyBoxedPairs = CopyBoxedPairs;
         }
 
         // VehicleBoxShadowsLog: what happens to the shadows of the car nearest the player, to catch a flicker, written to
@@ -8668,6 +8947,12 @@ private:
         static inline std::string traceText;
         static inline DWORD traceFlushed = 0, traceSecond = 0;
         static inline uint32_t traceStaleWatched = 0, traceLampsOnWatched = 0, traceLampsSeen = 0, traceDrawnWatched = 0, traceLeadWatched = 0;
+        // Why the watched car's drawn matrix was not taken: not among the G-buffer's draws, none near enough (and how
+        // far the nearest stood, its matrix's translation, and how many draws it had), facing another way
+        static inline uint32_t traceDrawnNone = 0, traceDrawnFar = 0, traceDrawnHeading = 0, traceDrawnCount = 0, traceDrawnHeadingOnly = 0;
+        static inline bool traceDrawsDescribed = false;
+        static inline DWORD traceOffsetLast = 0;
+        static inline float traceDrawnNearest = -1.0f;
         static inline float traceStrongest = 0.0f;
         static inline bool traceMarkDown = false, traceShotDown = false;
         static void Trace(const char* format, ...)
@@ -8696,11 +8981,15 @@ private:
             if (now - traceSecond >= 1000)
             {
                 if (traceSecond)
-                    Trace("S in the last second: %u lamp draws shaded the watched car (strongest %.2f), %u lamps with boxes, %u times its box stood where it was handed over, %u where it was drawn, %u moved ahead by its speed",
-                        traceLampsOnWatched, traceStrongest, traceLampsSeen, traceStaleWatched, traceDrawnWatched, traceLeadWatched);
+                    Trace("S in the last second: %u lamp draws shaded the watched car (strongest %.2f), %u lamps with boxes, %u times its box stood where it was handed over, %u where it was drawn, %u moved ahead by its speed; drawn: %u with the heading only; not drawn: %u not among the draws, %u none near (nearest %.2f m of %u draws), %u none facing its way",
+                        traceLampsOnWatched, traceStrongest, traceLampsSeen, traceStaleWatched, traceDrawnWatched, traceLeadWatched, traceDrawnHeadingOnly,
+                        traceDrawnNone, traceDrawnFar, traceDrawnNearest, traceDrawnCount, traceDrawnHeading);
                 traceSecond = now;
                 traceLampsOnWatched = traceLampsSeen = traceStaleWatched = traceDrawnWatched = traceLeadWatched = 0;
+                traceDrawnNone = traceDrawnFar = traceDrawnHeading = traceDrawnCount = traceDrawnHeadingOnly = 0;
+                traceDrawnNearest = -1.0f;
                 traceStrongest = 0.0f;
+                traceDrawsDescribed = false;
             }
             if (!traceText.empty() && now - traceFlushed >= 250)
             {
@@ -8710,7 +8999,7 @@ private:
             }
         }
         // After a lamp has chosen: its changes for the watched car.
-        static void TraceLamp(const rage::CLightSource& light, LampState& state, bool mapped, bool low, int taken,
+        static void TraceLamp(const rage::CLightSource& light, LampState& state, bool mapped, bool leftOut, bool low, int taken,
             const std::pair<float, const Box*> (&nearest)[kPerLight])
         {
             const auto watched = drawn->watched;
@@ -8742,7 +9031,15 @@ private:
                 Trace("- %s left the car, %s, %d taken, fading %.2f", where.c_str(), low ? "no higher than its roof" : taken ? "others nearer" : "out of reach",
                     taken, strength);
             if (mapped != state.wasMapped && (rank >= 0 || state.hadWatched))
-                Trace("%c %s %s its shadow slot, lamp strength %.2f", mapped ? 'P' : 'U', where.c_str(), mapped ? "took" : "lost", state.slotStrength);
+                Trace("%c %s %s its shadow slot%s, lamp strength %.2f", mapped ? 'P' : 'U', where.c_str(), mapped ? "took" : "lost",
+                    leftOut ? " (its map leaves its boxed cars out)" : "", state.slotStrength);
+            uint8_t latch = 0xFF;
+            for (int i = 0; i < state.count; ++i)
+                if (state.boxes[i].box.vehicle == watched && state.boxes[i].chosen)
+                    latch = state.boxes[i].latch;
+            if (latch != state.watchedLatch && latch != 0xFF)
+                Trace("K %s gives the car %s", where.c_str(), latch == kReal ? "its map's shadow" : latch == kBox ? "a box until it leaves" : "a box while it waits for a slot");
+            state.watchedLatch = latch;
             if (low != state.watchedLow)
                 Trace("L %s %s", where.c_str(), low ? "is no higher than the car's roof, left out" : "is above the car's roof again");
             state.hadWatched = rank >= 0;
@@ -8754,26 +9051,85 @@ private:
         // lights are drawn after the G-buffer, so the box stands exactly where the car and its contact shadow are.
         // Handed over earlier and moved ahead by the car's speed, the box ran ahead of and behind the car by turns, as
         // the game moves cars in steps of its own, and the shadow's front and back flickered.
-        static bool FromDrawn(Box& box)
+        static bool FromDrawn(Box& box, float lead, bool watched)
         {
-            // The car's own position from the box: its right is its forward turned a quarter
+            // The car's own position from the box: its right is its forward turned a quarter. Moved on by its speed
+            // to when it is drawn: handed over two or three frames before, a car driven fast had gone further.
             const float right[2] = { box.forward[1], -box.forward[0] };
-            const float around[3] = { box.centre[0] - right[0] * box.local[0] - box.forward[0] * box.local[1],
-                                    box.centre[1] - right[1] * box.local[0] - box.forward[1] * box.local[1],
-                                    box.centre[2] - box.local[2] };
-            float m[16];
-            // Within a metre, and facing the car's way: wheels and doors are drawn with their own matrices
-            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 1.0f, m))
+            const float around[3] = { box.centre[0] - right[0] * box.local[0] - box.forward[0] * box.local[1] + box.velocity[0] * lead,
+                                    box.centre[1] - right[1] * box.local[0] - box.forward[1] * box.local[1] + box.velocity[1] * lead,
+                                    box.centre[2] - box.local[2] + box.velocity[2] * lead };
+            const float speed = std::sqrt(box.velocity[0] * box.velocity[0] + box.velocity[1] * box.velocity[1] + box.velocity[2] * box.velocity[2]);
+            // Of the car's draws, the nearest facing its way, within 3 m (its parts: a log found the nearest draw always
+            // facing away, a wheel or a door, the body drawn skinned with no matrix of its own at the car). Its
+            // rotation is the car's as drawn; its position only where it stands at the car's own, else the box keeps
+            // the one moved on by speed.
+            int draws = 0;
+            float nearest = -1.0f, m[16];
+            bool body = false;
+            if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(box.vehicle), around, 3.0f + (std::min)(speed * 0.05f, 2.0f), m, &draws, &nearest, box.forward, &body, 25.0f))
+            {
+                if (watched)
+                {
+                    if (draws < 0)
+                        ++traceDrawnNone;
+                    else if (nearest >= 0.0f)
+                    {
+                        ++traceDrawnFar;
+                        traceDrawnNearest = nearest;
+                        traceDrawnCount = uint32_t(draws);
+                    }
+                    else
+                        ++traceDrawnHeading;
+                    // Once a second, what the car's draws were (a log found none facing the car's way)
+                    if (!traceDrawsDescribed)
+                    {
+                        traceDrawsDescribed = true;
+                        traceText += std::format("t={} D {}\n", GetTickCount(), TemporalAA::DescribeDraws(reinterpret_cast<void*>(box.vehicle), around, box.forward));
+                    }
+                }
                 return false;
+            }
             const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
-            if (!(flat > 0.5f))
-                return false;
             const float fx = m[4] / flat, fy = m[5] / flat;
-            if (fx * box.forward[0] + fy * box.forward[1] < 0.9f)
-                return false;
+            // The body (skinned, turned by its chassis) stands where the car was drawn: its position is taken however far
+            // from the one moved on by speed, which is what was off when driven fast (0.3 to 1.9 m in a log), the box
+            // then running ahead of and behind the car and its contact shadow. Another part only where it stands at the car
+            const bool atCar = body || (nearest >= 0.0f && nearest < 0.3f);
+            // Five times a second, where the body was drawn from where the car was handed over, along its way and
+            // across, against its speed and the lead: off-screen cars are left with the guess by speed, which a log
+            // found 3 to 9 m off when driven fast
+            if (watched && body && GetTickCount() - traceOffsetLast >= 200)
+            {
+                traceOffsetLast = GetTickCount();
+                const float handed[3] = { around[0] - box.velocity[0] * lead, around[1] - box.velocity[1] * lead, around[2] - box.velocity[2] * lead };
+                const float dx = m[12] - handed[0], dy = m[13] - handed[1], dz = m[14] - handed[2];
+                const float along = dx * box.forward[0] + dy * box.forward[1], across = dx * box.forward[1] - dy * box.forward[0];
+                const float vAlong = box.velocity[0] * box.forward[0] + box.velocity[1] * box.forward[1];
+                // and how old the hand over its boxes came from was: hand overs since, and milliseconds
+                LARGE_INTEGER now{}, frequency{};
+                QueryPerformanceCounter(&now);
+                QueryPerformanceFrequency(&frequency);
+                const float ageMs = lastFound.handedAt.QuadPart ? float(now.QuadPart - lastFound.handedAt.QuadPart) * 1000.0f / float(frequency.QuadPart) : -1.0f;
+                Trace("V drawn from handed over: %.2f m along (%.3f s at its speed), %.2f across, %.2f up; speed %.1f m/s (%.1f along), lead %.3f s, frame %.3f s, guess off by %.2f m; boxes from %u hand overs back, %.1f ms ago",
+                    along, speed > 0.5f ? along / speed : 0.0f, across, dz, speed, vAlong, lead,
+                    PostFxResources.fVehicleBoxShadowLeadFrames != 0.0f ? lead / PostFxResources.fVehicleBoxShadowLeadFrames : 0.0f, nearest,
+                    latestHandOver.load(std::memory_order_relaxed) - lastFound.sequence, ageMs);
+            }
             float centre[3];
-            for (int i = 0; i < 3; ++i)
-                centre[i] = m[12 + i] + m[i] * box.local[0] + m[4 + i] * box.local[1] + m[8 + i] * box.local[2];
+            if (atCar)
+                for (int i = 0; i < 3; ++i)
+                    centre[i] = m[12 + i] + m[i] * box.local[0] + m[4 + i] * box.local[1] + m[8 + i] * box.local[2];
+            else
+            {
+                // turned to the drawn heading about the car's own position, moved on by speed
+                const float r[2] = { fy, -fx };
+                centre[0] = around[0] + r[0] * box.local[0] + fx * box.local[1];
+                centre[1] = around[1] + r[1] * box.local[0] + fy * box.local[1];
+                centre[2] = around[2] + box.local[2];
+                if (watched)
+                    ++traceDrawnHeadingOnly;
+            }
             if (!std::isfinite(centre[0]) || !std::isfinite(centre[1]) || !std::isfinite(centre[2]))
                 return false;
             std::copy_n(centre, 3, box.centre);
@@ -8806,10 +9162,51 @@ private:
             return true;
         }
 
+        // Lamps are told apart by where they stand, a quarter metre apart.
+        static int64_t Cell(float v) { return int64_t(std::floor(v * 4.0f)); }
+        static uint64_t LightKey(int64_t x, int64_t y, int64_t z)
+        {
+            return ((uint64_t(x) & 0x1FFFFF) << 42) | ((uint64_t(y) & 0x1FFFFF) << 21) | (uint64_t(z) & 0x1FFFFF);
+        }
+
+        // VehicleBoxShadowsBridge::BoxedCars, render thread, as a lamp's shadow slot is drawn (before its light): the
+        // cars the lamp keeps boxes for until they leave (VehicleBoxShadowsUntilLeaving), its map then leaves them
+        // out. A lamp that took a slot faded its boxes out for its map's shadows and back in when it lost the slot,
+        // and with two lamps over a car the shadows jumped between box and map by turns.
+        static int BoxedCars(const float position[3], uintptr_t* cars, int max)
+        {
+            if (!PostFxResources.VehicleBoxShadowsEnabled() || !PostFxResources.bVehicleBoxShadowsUntilLeaving ||
+                PostFxResources.bVehicleBoxShadowsWithSlots || !std::isfinite(position[0]))
+                return 0;
+            const DWORD now = GetTickCount();
+            const int64_t x = Cell(position[0]), y = Cell(position[1]), z = Cell(position[2]);
+            // The slot's copy of the position may fall into the next cell
+            for (int64_t dx = -1; dx <= 1; ++dx)
+                for (int64_t dy = -1; dy <= 1; ++dy)
+                    for (int64_t dz = -1; dz <= 1; ++dz)
+                    {
+                        const auto it = held.find(LightKey(x + dx, y + dy, z + dz));
+                        if (it == held.end() || !it->second.lastTick || now - it->second.lastTick > 500)
+                            continue;
+                        auto& state = it->second;
+                        int n = 0;
+                        for (int i = 0; i < state.count && n < max; ++i)
+                            if (state.boxes[i].chosen && state.boxes[i].latch == kBox && state.boxes[i].box.vehicle)
+                                cars[n++] = state.boxes[i].box.vehicle;
+                        if (n)
+                            state.leftOutTick = now;
+                        mapsWithoutBoxed.fetch_add(1, std::memory_order_relaxed);
+                        carsLeftOut.fetch_add(uint32_t(n), std::memory_order_relaxed);
+                        return n;
+                    }
+            return 0;
+        }
+
         // Render thread, for the light about to be drawn: up to three cars its light reaches, the nearest the light first,
         // without the car the light belongs to; none where the light's own map shows the cars.
         // Returns how much of a shadow its boxes give: the strongest box times the lamp's strength, 0 for none.
-        static float SetForLight(IDirect3DDevice9* pDevice, const rage::CLightSource& light, bool mapHasCars)
+        // mapHasCars comes back false where the light's map left its boxed cars out (BoxedCars).
+        static float SetForLight(IDirect3DDevice9* pDevice, const rage::CLightSource& light, bool& mapHasCars)
         {
             auto& R = PostFxResources;
             // Boxes 0-2 at c143-c148 with the lamp's own at c149, boxes 3 and 4 at c121-c124.
@@ -8817,6 +9214,8 @@ private:
             int used = 0;
             float strength = 0.0f, rounding = R.fVehicleBoxShadowRounding;
             float boxStrength[kPerLight] = {};
+            float pairBetween[3] = {}, pairSpacing = 0.0f; // the lamp's pair on one post, if any (set below)
+            bool paired = false;
             if (R.VehicleBoxShadowsEnabled() && lightListDrawn &&
                 (R.bVehicleBoxShadowsFromCarLights || !(light.mFlags & rage::LF_VEHICLE)) &&
                 (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
@@ -8826,6 +9225,8 @@ private:
                 if (list != drawnFor)
                 {
                     drawnFor = list;
+                    PublishPairs();
+
                     // The newest with this list: the ring holds more hand overs than the game has lists, so an older
                     // one with the same list, three or six frames old, made the shadows lag the cars by fits
                     const List* found = nullptr;
@@ -8847,6 +9248,8 @@ private:
                         std::copy_n(found->boxes, found->count, lastFound.boxes);
                         std::copy_n(found->focus, 3, lastFound.focus);
                         lastFound.watched = found->watched;
+                        lastFound.sequence = found->sequence;
+                        lastFound.handedAt = found->handedAt;
                         if (found->frameSeconds > 0.0f)
                             lastFound.frameSeconds = found->frameSeconds;
                         drawn = &lastFound;
@@ -8856,9 +9259,18 @@ private:
                 // are seen; those the light took last frame are held at a quarter of that, so a car passing by the lamp does
                 // not push a standing one out, and its shadow from that lamp flickered. Lamps are told apart by where
                 // they stand, a quarter metre apart.
-                const uint64_t lightKey = (uint64_t(uint32_t(int32_t(std::floor(light.mPosition.x * 4.0f))) & 0x1FFFFF) << 42) |
-                    (uint64_t(uint32_t(int32_t(std::floor(light.mPosition.y * 4.0f))) & 0x1FFFFF) << 21) |
-                    uint64_t(uint32_t(int32_t(std::floor(light.mPosition.z * 4.0f))) & 0x1FFFFF);
+                const uint64_t lightKey = LightKey(Cell(light.mPosition.x), Cell(light.mPosition.y), Cell(light.mPosition.z));
+                // A lamp of a pair on one post (PairedLampDistance): in the ranking of the lamps on a car both are one
+                // lamp, standing between them, so they give their boxes to the same cars and take one of the car's
+                // places, not both; and their boxes soften by half their spacing, the two shadows one soft shadow.
+                paired = VehicleBoxShadowsBridge::LampPair &&
+                    VehicleBoxShadowsBridge::LampPair(uint32_t(light.mCastShadows), pairBetween, pairSpacing);
+                const uint64_t rankKey = paired ? LightKey(Cell(pairBetween[0]), Cell(pairBetween[1]), Cell(pairBetween[2])) : lightKey;
+                if (R.nVehicleBoxShadowsPerCar > 0 && TemporalAA::SceneFrame != carLampsFrame)
+                {
+                    carLampsFrame = TemporalAA::SceneFrame;
+                    RankCarLamps(R.nVehicleBoxShadowsPerCar);
+                }
                 if (held.size() > 4096)
                     held.clear();
                 auto& state = held[lightKey];
@@ -8866,6 +9278,17 @@ private:
                 // VehicleBoxShadowsFadeIn / FadeOut: a box comes in and goes out over that many milliseconds, a car
                 // taken by the lamp or left, and a lamp just seen; 0 at once. Its strength rides in c143.w.
                 const DWORD now = GetTickCount();
+                // Its slot's map was drawn without its boxed cars this frame: its boxes are their only shadow.
+                const bool leftOut = mapHasCars && state.leftOutTick && now - state.leftOutTick < 200;
+                const bool mapped = mapHasCars;
+                // VehicleBoxShadowsUntilLeaving: each car's shadow from the lamp is chosen as it comes under it, the
+                // map's if the lamp has a slot (or gets one within kDecideMs), else its box, which it keeps until it
+                // leaves, the lamp's map leaving it out should the lamp take a slot meanwhile. A lamp's slot coming
+                // and going no longer moves its cars' shadows between box and map. Only a lamp losing its slot turns
+                // its cars with the map's shadow to boxes, at once.
+                const bool until = R.bVehicleBoxShadowsUntilLeaving && !R.bVehicleBoxShadowsWithSlots;
+                if (leftOut)
+                    mapHasCars = false;
                 const bool fresh = !state.lastTick || now - state.lastTick > 1000;
                 const float dt = fresh ? 0.0f : float(now - state.lastTick);
                 state.lastTick = now;
@@ -8881,14 +9304,27 @@ private:
                 // When it loses the slot its real shadow is gone at once, so the boxes are back at once too: faded in
                 // (VehicleBoxShadowsFadeIn) the car had neither shadow for a moment, a blink each time the lamp's slot
                 // went (a trace: every few seconds in a tunnel). A lamp just seen still fades its boxes in.
-                if (mapHasCars && !R.bVehicleBoxShadowsWithSlots)
+                const bool lampFades = mapHasCars && !R.bVehicleBoxShadowsWithSlots && !until;
+                if (lampFades)
                     state.slotStrength = (std::max)(state.slotStrength - step(R.nVehicleBoxShadowSlotFadeMs), 0.0f);
                 else if (state.wasMappedForFade)
                     state.slotStrength = 1.0f;
                 else
                     state.slotStrength = (std::min)(state.slotStrength + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
-                state.wasMappedForFade = mapHasCars && !R.bVehicleBoxShadowsWithSlots;
+                state.wasMappedForFade = lampFades;
                 strength = state.slotStrength;
+                // VehicleBoxShadowsMaxDistance: a lamp whose light ends that far from the camera has no boxes, faded out
+                // over the last 20 m. Its shader then leaves them all out; one with any box works all five of them. The
+                // lamps took some 3.4 GPU ms a frame at night in a profile, the boxes a share of it
+                if (R.fVehicleBoxShadowsMaxDistance > 0.0f)
+                    if (auto* vp = rage::GetCurrentViewport())
+                    {
+                        const float* eye = vp->mCameraMatrix[3];
+                        const float ex = light.mPosition.x - eye[0], ey = light.mPosition.y - eye[1], ez = light.mPosition.z - eye[2];
+                        const float away = std::sqrt(ex * ex + ey * ey + ez * ez) - light.mRadius;
+                        const float fadeFrom = (std::max)(R.fVehicleBoxShadowsMaxDistance - 20.0f, 0.0f);
+                        strength *= std::clamp((R.fVehicleBoxShadowsMaxDistance - away) / (std::max)(R.fVehicleBoxShadowsMaxDistance - fadeFrom, 1.0f), 0.0f, 1.0f);
+                    }
                 int taken = 0;
                 bool watchedLow = false;
                 const int perLamp = std::clamp(R.nVehicleBoxShadowsPerLamp, 1, kPerLight);
@@ -8925,6 +9361,19 @@ private:
                     const float along = dx * box.forward[0] + dy * box.forward[1], across = dx * box.forward[1] - dy * box.forward[0];
                     if (std::abs(along) < box.halfLength + 0.5f && std::abs(across) < box.halfWidth + 0.5f && std::abs(dz) < box.halfHeight + 0.5f)
                         continue;
+                    // VehicleBoxShadowsMinLight: a car at the edge of a lamp's light (33 m from one of 40 in a log) took a
+                    // box of a few hundredths and left it again as it drove; one it holds goes at half that
+                    const float falloff = std::clamp(1.0f - std::sqrt(d2) / (std::max)(light.mRadius, 0.1f), 0.0f, 1.0f);
+                    if (falloff * falloff < R.fVehicleBoxShadowsMinLight * (holding ? 0.5f : 1.0f))
+                        continue;
+                    // VehicleBoxShadowsPerCar: only the strongest lamps on the car give it a box
+                    if (R.nVehicleBoxShadowsPerCar > 0)
+                    {
+                        NoteCarLamp(box.vehicle, rankKey, (std::max)(light.mIntensity, 0.0f) * falloff * falloff);
+                        const auto car = carLamps.find(box.vehicle);
+                        if (car != carLamps.end() && car->second.ranked && !LampAllowed(car->second, rankKey))
+                            continue;
+                    }
                     int at = taken < perLamp ? taken++ : perLamp - 1;
                     for (; at > 0 && nearest[at - 1].first > score; --at)
                         nearest[at] = nearest[at - 1];
@@ -8942,20 +9391,51 @@ private:
                     auto& f = next[nextCount++];
                     f.box = *nearest[i].second;
                     f.chosen = true;
-                    f.strength = step(R.nVehicleBoxShadowFadeInMs);
+                    const Fading* before = nullptr;
                     for (int j = 0; j < state.count; ++j)
                         if (state.boxes[j].box.vehicle == f.box.vehicle)
                         {
-                            f.strength += state.boxes[j].strength;
-                            std::copy_n(state.boxes[j].shape, 3, f.shape);
+                            before = &state.boxes[j];
+                            std::copy_n(before->shape, 3, f.shape);
                         }
-                    f.strength = (std::min)(f.strength, 1.0f);
+                    const float had = before ? before->strength : 0.0f;
+                    if (!until)
+                    {
+                        f.strength = (std::min)(had + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
+                        continue;
+                    }
+                    f.latch = before ? before->latch : mapped ? kReal : kPending;
+                    f.takenTick = before ? before->takenTick : now;
+                    if (f.latch == kPending)
+                        f.latch = mapped ? kReal : now - f.takenTick >= kDecideMs ? kBox : kPending;
+                    if (f.latch == kReal && !mapped)
+                    {
+                        // The lamp lost its slot and with it the car's shadow: the box at once, and kept
+                        f.latch = kBox;
+                        f.strength = 1.0f;
+                    }
+                    else if (f.latch == kReal)
+                        f.strength = (std::max)(had - step(R.nVehicleBoxShadowSlotFadeMs), 0.0f);
+                    else
+                        f.strength = (std::min)(had + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
                 }
                 for (int j = 0; j < state.count && nextCount < perLamp; ++j)
                 {
                     const auto& old = state.boxes[j];
                     if (std::find(last.begin(), last.end(), old.box.vehicle) != last.end())
                         continue;
+                    // Under a lamp whose map leaves its boxed cars out, a car it leaves keeps its box this frame, as
+                    // this frame's map left it out, and is in the map from the next on (BoxedCars takes only the
+                    // chosen); faded out, it would have had both shadows at once after a frame without either.
+                    if (until && mapped && old.latch == kBox)
+                    {
+                        if (old.chosen)
+                        {
+                            next[nextCount] = old;
+                            next[nextCount++].chosen = false;
+                        }
+                        continue;
+                    }
                     const float left = old.strength - step(R.nVehicleBoxShadowFadeOutMs);
                     if (left > 0.0f)
                     {
@@ -8966,9 +9446,13 @@ private:
                 }
                 state.boxes = next;
                 state.count = nextCount;
+                if (until)
+                    for (int i = 0; i < nextCount; ++i)
+                        if (next[i].chosen && next[i].latch == kBox && pairsBuildingCount < kPairs)
+                            pairsBuilding[pairsBuildingCount++] = { { light.mPosition.x, light.mPosition.y, light.mPosition.z }, next[i].box.vehicle };
                 used = strength > 0.0f ? nextCount : 0;
                 if (R.bVehicleBoxShadowsLog && drawn && drawn->watched)
-                    TraceLamp(light, state, mapHasCars, watchedLow, taken, nearest);
+                    TraceLamp(light, state, mapped, leftOut, watchedLow, taken, nearest);
                 // The model's bounds take in mirrors, aerials and bumpers, and the roof's height runs over the bonnet and
                 // boot too: the box is that much smaller, its bottom kept where it is.
                 const auto& scale = R.fVehicleBoxShadowScale;
@@ -8980,7 +9464,7 @@ private:
                         if (!Refresh(box) && drawn && box.vehicle == drawn->watched)
                             ++traceStaleWatched;
                     }
-                    else if (drawn && FromDrawn(box))
+                    else if (drawn && FromDrawn(box, R.fVehicleBoxShadowLeadFrames * (std::min)(drawn->frameSeconds, 0.1f), box.vehicle == drawn->watched))
                     {
                         if (box.vehicle == drawn->watched)
                             ++traceDrawnWatched;
@@ -8993,6 +9477,12 @@ private:
                         const float lead = R.fVehicleBoxShadowLeadFrames * (std::min)(drawn->frameSeconds, 0.1f);
                         for (int k = 0; k < 3; ++k)
                             box.centre[k] += box.velocity[k] * lead;
+                        // and turned on by the way it turns: moved only, the box of a car turning or spun kept the
+                        // heading it had when handed over, and its shadow did not turn with the car
+                        const float turn = box.turning * lead, c = std::cos(turn), s = std::sin(turn);
+                        const float fx = box.forward[0] * c - box.forward[1] * s, fy = box.forward[0] * s + box.forward[1] * c;
+                        box.forward[0] = fx;
+                        box.forward[1] = fy;
                         if (box.vehicle == drawn->watched)
                             ++traceLeadWatched;
                     }
@@ -9082,7 +9572,7 @@ private:
                 c[4] = 1.0f;
             }
             auto& lamp = constants[kPerLight * 2];
-            lamp[0] = R.fVehicleBoxShadowLightSize;
+            lamp[0] = R.fVehicleBoxShadowLightSize + (paired ? pairSpacing * 0.5f : 0.0f);
             // The ends' rounding in 5 cm steps, two apart above the edges' (which stays under 1)
             lamp[1] = (std::min)(rounding, 0.99f) + 2.0f * std::round(std::clamp(R.fVehicleBoxShadowEndRounding, 0.0f, 2.0f) / 0.05f);
             lamp[2] = R.fVehicleBoxShadowFollowLight;
@@ -9135,10 +9625,13 @@ private:
         const int buffer = *reinterpret_cast<const int*>(at(0x1174794));
         if (buffer < 0 || buffer > 1)
             return true;
+        // A lamp of a pair on one post uses the other's map (PairedLampDistance)
+        uint32_t keys[2] = { uint32_t(light.mCastShadows), VehicleBoxShadowsBridge::SharedMapKey ? VehicleBoxShadowsBridge::SharedMapKey(uint32_t(light.mCastShadows)) : 0u };
         if (light.mFlags & rage::LF_DYNAMIC_SHADOW)
             for (int i = 0; i < 7; i++)
-                if (*reinterpret_cast<const uint32_t*>(at(0x119FC08) + buffer * 0x880 + i * 0x110) == uint32_t(light.mCastShadows))
-                    return true;
+                for (const auto key : keys)
+                    if (key && *reinterpret_cast<const uint32_t*>(at(0x119FC08) + buffer * 0x880 + i * 0x110) == key)
+                        return true;
         return false;
     }
 
@@ -9162,7 +9655,8 @@ private:
             auto pDevice = rage::grcDevice::GetD3DDevice();
             if (!pDevice)
                 return;
-            const bool mapped = HasShadowMap(light);
+            // False where its map leaves the cars out for their boxes: the contact shadow then goes with the boxes.
+            bool mapped = HasShadowMap(light);
             const float boxed = VehicleBoxShadows::SetForLight(pDevice, light, mapped);
             if (R.LocalContactShadowConsts[7] == 0.0f)
                 return;
@@ -9687,7 +10181,7 @@ public:
         R.bGlassFrameValid = false;
 
         if (ok && !R.GlassParamsTex)
-            ok = SUCCEEDED(pDevice->CreateTexture(5, 1, 1, D3DUSAGE_DYNAMIC, D3DFMT_A32B32G32R32F, D3DPOOL_DEFAULT, &R.GlassParamsTex, nullptr));
+            ok = SUCCEEDED(RealDevice(pDevice)->CreateTexture(5, 1, 1, D3DUSAGE_DYNAMIC, D3DFMT_A32B32G32R32F, D3DPOOL_DEFAULT, &R.GlassParamsTex, nullptr));
         if (ok)
         {
             D3DLOCKED_RECT locked = {};

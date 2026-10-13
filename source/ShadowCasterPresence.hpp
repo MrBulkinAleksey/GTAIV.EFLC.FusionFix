@@ -18,13 +18,28 @@ struct ShadowCasterPresence {
     std::array<Vec3, Capacity> points{};
     std::array<float, Capacity> extents{};
     std::array<bool, Capacity> inView{};
+    std::array<std::uintptr_t, Capacity> vehicles{}; // the car, 0 for a ped
     unsigned count = 0;
     std::uint32_t timeMs = 0;
     bool valid = false, overflow = false; // Both pools read in full, or every lamp counts as lighting a caster.
+    // Vehicle box shadows: cars that came under a lamp while it had no slot keep their box from it until they leave,
+    // and its map leaves them out; they give that lamp no reason to take a slot.
+    struct BoxedCar { Vec3 lamp; std::uintptr_t car; };
+    static constexpr unsigned BoxedCapacity = 256;
+    std::array<BoxedCar, BoxedCapacity> boxed{};
+    unsigned boxedCount = 0;
 
-    void Add(Vec3 point, float extent) noexcept {
-        if (count < Capacity) { points[count] = point; extents[count] = extent; ++count; }
+    void Add(Vec3 point, float extent, std::uintptr_t car = 0) noexcept {
+        if (count < Capacity) { points[count] = point; extents[count] = extent; vehicles[count] = car; ++count; }
         else overflow = true; // A missed caster could cost its shadow.
+    }
+    bool Boxed(std::uintptr_t car, Vec3 lamp) const noexcept {
+        for (unsigned i = 0; i < boxedCount; ++i) {
+            const auto& b = boxed[i];
+            const float x = b.lamp.x - lamp.x, y = b.lamp.y - lamp.y, z = b.lamp.z - lamp.z;
+            if (b.car == car && x * x + y * y + z * z < 0.25f) return true;
+        }
+        return false;
     }
     // Its shadow falls around it, so a caster in or just outside the frame
     // counts as looked at. Without a camera every caster does.
@@ -51,7 +66,7 @@ struct ShadowCasterPresence {
                 const float reach = radius + extents[i];
                 lit = x * x + y * y + z * z <= reach * reach;
             }
-            if (!lit) continue;
+            if (!lit || (vehicles[i] && boxedCount && Boxed(vehicles[i], source))) continue;
             if (which) *which = int(i);
             if (inView[i]) return SlotGain::InView;
             gain = SlotGain::OffScreen;
