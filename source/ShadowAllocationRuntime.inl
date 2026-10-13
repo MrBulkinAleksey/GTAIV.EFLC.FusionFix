@@ -22,6 +22,13 @@ namespace PlayerShadowAllocation
     static void (*observeSubmittedLights)(const rage::CLightSource*,uint32_t) noexcept = nullptr;
     // Changes the frame's lights before the game picks the slots (Lighting20: stale lamp keys, cached lamps).
     static void (*prepareSources)(rage::CLightSource*,uint32_t) noexcept = nullptr;
+    // At the pre-cache boundary (PreCacheRva), before the stable map ordinals: the emergency vacancy.
+    static void (*preCacheVacancy)(SafetyHookContext&) noexcept = nullptr;
+    static SafetyHookMid preCacheHook;
+    static bool stableOrdinals = false;
+    static std::atomic<uint32_t> stableOrdinalPasses{0}, stableOrdinalMoves{0}, stableOrdinalRejected{0}, sharedMapsSkipped{0};
+    // A light of this pass sharing another's map: the game does not insert it among the candidates.
+    static void MarkSharedMap(uint32_t index) noexcept { if (index < state.sharedMap.size()) state.sharedMap[index] = state.passSerial; }
     static SafetyHookMid collectHook, finalizeHook, lampDistanceHook, compareResultHook, cacheResultHook;
     static bool nativeLampPriority=false;
     static std::atomic<uint32_t> lampDistanceAdjusted{0};
@@ -90,6 +97,9 @@ namespace PlayerShadowAllocation
         uintptr_t stackAnchor = 0;
         unsigned depth = 0;
         bool committed = false;
+        // SharedShadowMaps: lights of this pass that use another's map, marked with the pass's serial.
+        uint32_t passSerial = 0;
+        std::array<uint32_t,4096> sharedMap{};
     };
     static thread_local State state;
 
@@ -592,6 +602,15 @@ namespace PlayerShadowAllocation
     static void Collect(SafetyHookContext& regs) noexcept
     {
         const FloatingPointState fp;
+        // A light drawn with another's map (the same projection, its key changed to that light's) is not
+        // inserted: it would take a slot to draw the same map again.
+        if (state.depth == 1 && regs.edx < state.sharedMap.size() && state.sharedMap[regs.edx] == state.passSerial &&
+            state.passSerial && regs.edi == reinterpret_cast<uintptr_t>(CurrentLights()) && regs.esi == regs.edx * sizeof(rage::CLightSource))
+        {
+            regs.eip = gameBase + allocation::CollectSkipRva;
+            ++sharedMapsSkipped;
+            return;
+        }
         if (!Enabled() || state.depth != 1 || !state.pass.Active()) return;
         if (!state.stackAnchor) state.stackAnchor = regs.esp;
         if (state.stackAnchor != regs.esp) { RejectPass(); return; }
@@ -791,6 +810,48 @@ namespace PlayerShadowAllocation
 
 #include "ShadowCacheDependenciesRuntime44.inl"
 
+    // StableShadowMapSlots (Liberty's Shadows 2.0): a light that keeps its slot keeps its map's place in the atlas;
+    // newcomers take the places left. The game's sort renumbers the seven every frame, so a lamp kept from one
+    // frame to the next moved between tiles and slot records. Lights with the player flag 0x400 stay first, as the
+    // game puts them. Run before the cache pick; the cache dependency check and Finalize see the same order.
+    static void StabilizeMapOrdinals(SafetyHookContext& regs) noexcept {
+        const FloatingPointState fp;
+        if(!stableOrdinals || !Enabled() || state.depth!=1 || !state.pass.Active() || !state.continuityActive) return;
+        const auto* lights=CurrentLights(); const auto count=CurrentCount();
+        if(!state.stackAnchor || regs.esp!=state.stackAnchor || !CTimer::m_frameCount || *CTimer::m_frameCount!=state.frame ||
+           !state.pass.InputsUnchanged(lights,count)) { ++stableOrdinalRejected; return; }
+        auto* indices=reinterpret_cast<int32_t*>(regs.esp+allocation::SelectedIndicesStackOffset);
+        std::array<fusionfix::shadows::ShadowMapOrdinal20,7> chosen{};
+        for(unsigned i=0;i<7;++i) {
+            const auto index=indices[i]; chosen[i].index=index;
+            if(index==-1) continue;
+            if(index<0 || static_cast<uint32_t>(index)>=count || !state.nativeCandidates[index].observed ||
+               state.nativeCandidates[index].flags!=lights[index].mFlags) { ++stableOrdinalRejected; return; }
+            chosen[i].claim=state.nativeCandidates[index].claim;
+            chosen[i].flags=lights[index].mFlags;
+        }
+        std::array<int32_t,7> output{};
+        if(!fusionfix::shadows::RestoreShadowMapOrdinals20(chosen,output)) { ++stableOrdinalRejected; return; }
+        ++stableOrdinalPasses;
+        for(unsigned i=0;i<7;++i) if(output[i]!=indices[i]) ++stableOrdinalMoves;
+        std::memcpy(indices,output.data(),sizeof(output));
+    }
+
+    static void PreCache(SafetyHookContext& regs) noexcept {
+        if(preCacheVacancy) preCacheVacancy(regs);
+        StabilizeMapOrdinals(regs);
+    }
+
+    // One hook at the pre-cache boundary for the vacancy and the ordinals, after both were configured.
+    static bool InstallPreCache() noexcept {
+        if(preCacheHook || (!preCacheVacancy && !stableOrdinals) || !ready.load(std::memory_order_acquire)) return bool(preCacheHook);
+        const auto at=reinterpret_cast<const uint8_t*>(gameBase+allocation::PreCacheRva);
+        const auto skip=reinterpret_cast<const uint8_t*>(gameBase+allocation::CollectSkipRva);
+        if(at[0]!=0x8A || at[1]!=0x15 || skip[0]!=0x8B || skip[1]!=0x54 || skip[2]!=0x24 || skip[3]!=0x14) return false;
+        preCacheHook=safetyhook::create_mid(gameBase+allocation::PreCacheRva,PreCache);
+        return bool(preCacheHook);
+    }
+
     static void Finalize(SafetyHookContext& regs) noexcept
     {
         const FloatingPointState fp;
@@ -874,6 +935,7 @@ namespace PlayerShadowAllocation
             ownerThread.compare_exchange_strong(expected, current, std::memory_order_relaxed);
             if (ownerThread.load(std::memory_order_relaxed) != current)
                 unsupportedThread.store(true, std::memory_order_relaxed);
+            if (state.depth == 1) ++state.passSerial;
             if (state.depth == 1 && Enabled() && prepareSources && !unsupportedThread.load(std::memory_order_relaxed) &&
                 reinterpret_cast<uintptr_t>(CurrentLights()) >= 0x10000)
                 prepareSources(CurrentLights(), CurrentCount());

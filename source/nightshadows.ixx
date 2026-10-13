@@ -5,6 +5,7 @@ module;
 #include "ShadowAdapterCE.hpp"
 #include "ShadowAllocationCE.hpp"
 #include "ShadowAllocationPass.hpp"
+#include "ShadowMapOrdinals20.hpp"
 #include "ShadowFloatingPointState.hpp"
 #include "ShadowLightGeometry.hpp"
 #include "HeadlightCasterPolicy.hpp"
@@ -534,6 +535,10 @@ public:
                 // Liberty's Shadows 2.0: dual headlights, tail lights, world lights, buildings in dynamic maps.
                 // Each family is switched in the graphics menu; its hooks stay in place.
                 Lighting20::Install(iniReader);
+                // After the emergency lights, whose vacancy runs from the same hook first.
+                PlayerShadowAllocation::stableOrdinals = iniReader.ReadInteger("SHADOWS", "StableShadowMapSlots", 1) != 0;
+                if (!PlayerShadowAllocation::InstallPreCache() && (PlayerShadowAllocation::stableOrdinals || PlayerShadowAllocation::preCacheVacancy))
+                    PlayerShadowAllocation::installStatus += " pre_cache_hook_failed";
             }
             else
             {

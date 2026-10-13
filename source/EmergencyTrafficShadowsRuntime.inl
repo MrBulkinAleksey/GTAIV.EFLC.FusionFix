@@ -580,7 +580,8 @@ namespace EmergencyTrafficShadows
 
         if (emergency)
         {
-            vacancyHook = safetyhook::create_mid(game + VacancyRva, Emergency::ApplyVacancy);
+            // The pre-cache hook of the allocation adapter calls it, before the stable map ordinals.
+            preCacheVacancy = Emergency::ApplyVacancy;
             labPointSource = Emergency::NearbyPoint;
             labCompareGrace = Emergency::Compare;
             observeSubmittedLights = Emergency::BeginSelection;

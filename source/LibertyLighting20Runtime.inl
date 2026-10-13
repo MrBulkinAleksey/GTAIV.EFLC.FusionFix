@@ -476,8 +476,60 @@ namespace Lighting20
         }
     }
 
+    // ---------------------------------------------------------------- shared maps
+    // SharedShadowMaps (Liberty's Shadows 2.0 aliases projections the same way): lights with a dynamic shadow only
+    // that stand at one point with the same direction, type, range, cone, interior and room would each take a slot
+    // to draw the same map, as models with a 2dfx light written twice do. The later ones take the first one's key,
+    // so the lighting finds its map, and the game does not insert them among the candidates (the Collect hook).
+    namespace Sharing
+    {
+        static bool enabled = true;
+        static std::atomic<uint32_t> shared{0}, mostInFrame{0};
+
+        static bool SameProjection(const rage::CLightSource& a, const rage::CLightSource& b) noexcept
+        {
+            return !std::memcmp(&a.mPosition, &b.mPosition, sizeof(a.mPosition)) &&
+                !std::memcmp(&a.mDirection, &b.mDirection, sizeof(a.mDirection)) &&
+                a.mType == b.mType && a.mRadius == b.mRadius && a.mInnerConeAngle == b.mInnerConeAngle &&
+                a.mOuterConeAngle == b.mOuterConeAngle && a.mInteriorIndex == b.mInteriorIndex && a.mRoomIndex == b.mRoomIndex;
+        }
+
+        static void Apply(rage::CLightSource* lights, uint32_t count) noexcept
+        {
+            if (!enabled) return;
+            std::array<uint16_t, 256> candidates;
+            std::array<bool, 256> isShared{};
+            unsigned n = 0;
+            for (uint32_t i = 0; i < count && n < candidates.size(); ++i)
+            {
+                const auto& l = lights[i];
+                if ((l.mFlags & 6) == rage::LF_DYNAMIC_SHADOW && !(l.mFlags & (rage::LF_VEHICLE | rage::LF_TRAFFIC)) &&
+                    l.mCastShadows && l.mCastShadows != -1 && l.mShadowCacheIndex < 0 &&
+                    (l.mType == rage::LT_POINT || l.mType == rage::LT_SPOT) && std::isfinite(l.mRadius) && l.mRadius > 0)
+                    candidates[n++] = static_cast<uint16_t>(i);
+            }
+            uint32_t inFrame = 0;
+            for (unsigned a = 1; a < n; ++a)
+                for (unsigned b = 0; b < a; ++b)
+                {
+                    if (isShared[b]) continue;
+                    auto& light = lights[candidates[a]];
+                    const auto& first = lights[candidates[b]];
+                    if (light.mCastShadows == first.mCastShadows || !SameProjection(light, first)) continue;
+                    light.mCastShadows = first.mCastShadows;
+                    PlayerShadowAllocation::MarkSharedMap(candidates[a]);
+                    isShared[a] = true;
+                    ++inFrame;
+                    break;
+                }
+            shared += inFrame;
+            if (inFrame > mostInFrame.load(std::memory_order_relaxed)) mostInFrame.store(inFrame, std::memory_order_relaxed);
+        }
+    }
+
     // Before the game picks the night shadow slots (PlayerShadowAllocation::prepareSources): rear lamp and headlight
-    // keys whose car went lose their shadow, and the cached lamps join the dynamic slots.
+    // keys whose car went lose their shadow, the cached lamps join the dynamic slots, and lights at one point share
+    // a map.
     static void PrepareSources(rage::CLightSource* lights, uint32_t count) noexcept
     {
         if (!lights || count > 4096) return;
@@ -489,6 +541,7 @@ namespace Lighting20
                 light.mFlags &= ~rage::LF_DYNAMIC_SHADOW;
         }
         World::PromoteCachedLamps(lights, count);
+        Sharing::Apply(lights, count);
     }
 
     // The car whose lamp (headlight of a pair or rear lamp) a slot's key is, so its own map leaves it out.
@@ -502,6 +555,7 @@ namespace Lighting20
         Tail::Install();
         World::Install(ini);
         Buildings::Install();
+        Sharing::enabled = ini.ReadInteger("SHADOWS", "SharedShadowMaps", 1) != 0;
         PlayerShadowAllocation::prepareSources = PrepareSources;
         OwnHeadlightCaster::lampOwner = LampOwner;
         log.Name("NightShadows", "Lighting20");
@@ -518,7 +572,12 @@ namespace Lighting20
                 << " model_lights=" << World::modelLightsPromoted.load() << " corona_lights=" << World::coronaLights.load()
                 << " corona_refused=" << World::coronasRefused.load() << " corona_capped=" << World::coronasCapped.load()
                 << " | buildings " << (Buildings::On() ? "on" : "off") << " passes=" << Buildings::passes.load()
-                << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load() << '\n';
+                << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load()
+                << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
+                << " most_in_frame=" << Sharing::mostInFrame.load() << " not_inserted=" << PlayerShadowAllocation::sharedMapsSkipped.load()
+                << " | stable map slots " << (PlayerShadowAllocation::preCacheHook ? (PlayerShadowAllocation::stableOrdinals ? "on" : "vacancy only") : "off")
+                << " passes=" << PlayerShadowAllocation::stableOrdinalPasses.load() << " moves=" << PlayerShadowAllocation::stableOrdinalMoves.load()
+                << " rejected=" << PlayerShadowAllocation::stableOrdinalRejected.load() << '\n';
         });
     }
 }

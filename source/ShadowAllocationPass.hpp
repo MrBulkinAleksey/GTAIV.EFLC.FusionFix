@@ -152,6 +152,17 @@ namespace fusionfix::shadows::budget
             return true;
         }
 
+        // The lights observed this pass are as they were: the list, its count and each light's bytes.
+        bool InputsUnchanged(const void* list, std::uint32_t count) const noexcept
+        {
+            if (!Active() || list != list_ || count != listCount_) return false;
+            for (std::size_t i = 0; i < count_; ++i)
+                if (std::memcmp(records_[i].snapshot.data(),
+                        static_cast<const std::uint8_t*>(list) + records_[i].candidate.index * LightBytes, LightBytes))
+                    return false;
+            return true;
+        }
+
         const PlayerShadowBudget::Selection& LastSelection() const noexcept { return publishedSelection_; }
         bool WasObserved(std::uint64_t key,std::uint64_t generation) const noexcept {
             for(std::size_t i=0;i<count_;++i)
