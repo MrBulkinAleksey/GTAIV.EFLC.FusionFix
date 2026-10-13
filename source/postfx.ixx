@@ -8942,6 +8942,7 @@ private:
         // far the nearest stood, its matrix's translation, and how many draws it had), facing another way
         static inline uint32_t traceDrawnNone = 0, traceDrawnFar = 0, traceDrawnHeading = 0, traceDrawnCount = 0, traceDrawnHeadingOnly = 0;
         static inline bool traceDrawsDescribed = false;
+        static inline DWORD traceOffsetLast = 0;
         static inline float traceDrawnNearest = -1.0f;
         static inline float traceStrongest = 0.0f;
         static inline bool traceMarkDown = false, traceShotDown = false;
@@ -9086,6 +9087,20 @@ private:
             // from the one moved on by speed, which is what was off when driven fast (0.3 to 1.9 m in a log), the box
             // then running ahead of and behind the car and its contact shadow. Another part only where it stands at the car
             const bool atCar = body || (nearest >= 0.0f && nearest < 0.3f);
+            // Five times a second, where the body was drawn from where the car was handed over, along its way and
+            // across, against its speed and the lead: off-screen cars are left with the guess by speed, which a log
+            // found 3 to 9 m off when driven fast
+            if (watched && body && GetTickCount() - traceOffsetLast >= 200)
+            {
+                traceOffsetLast = GetTickCount();
+                const float handed[3] = { around[0] - box.velocity[0] * lead, around[1] - box.velocity[1] * lead, around[2] - box.velocity[2] * lead };
+                const float dx = m[12] - handed[0], dy = m[13] - handed[1], dz = m[14] - handed[2];
+                const float along = dx * box.forward[0] + dy * box.forward[1], across = dx * box.forward[1] - dy * box.forward[0];
+                const float vAlong = box.velocity[0] * box.forward[0] + box.velocity[1] * box.forward[1];
+                Trace("V drawn from handed over: %.2f m along (%.3f s at its speed), %.2f across, %.2f up; speed %.1f m/s (%.1f along), lead %.3f s, frame %.3f s, guess off by %.2f m",
+                    along, speed > 0.5f ? along / speed : 0.0f, across, dz, speed, vAlong, lead,
+                    PostFxResources.fVehicleBoxShadowLeadFrames != 0.0f ? lead / PostFxResources.fVehicleBoxShadowLeadFrames : 0.0f, nearest);
+            }
             float centre[3];
             if (atCar)
                 for (int i = 0; i < 3; ++i)
