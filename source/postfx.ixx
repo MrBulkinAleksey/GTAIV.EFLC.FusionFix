@@ -3943,6 +3943,7 @@ private:
         effect->SetFloat(effect->GetParameterByName(nullptr, "fNearPlane"), camera.Near);
         effect->SetFloat(effect->GetParameterByName(nullptr, "fFarDivNear"), camera.Far / camera.Near);
         effect->SetFloat(effect->GetParameterByName(nullptr, "fNothing"), 1.0e9f);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fOccluders"), float(Occlusion::nOccluderCategories));
 
         for (int level = 0; level < R.nHiZLevels; ++level)
         {

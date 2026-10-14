@@ -42,6 +42,9 @@ export namespace Occlusion
     int nMode = 2;
     // [SHADOWS] LampShadowsOcclusion: lights whose whole reach is hidden draw no shadow map (nightshadows)
     bool bLampShadows = true;
+    // HiZOccluderCategories: a bit per material category (the material ID less its 128 and 8 bits, as WetGround takes
+    // it) whose pixels hide what is behind them; the rest count as nothing in the way
+    int nOccluderCategories = 1;
     // The grid is built while anything tests against it
     bool Enabled() { return nMode != 0 || bLampShadows; }
 
@@ -576,8 +579,10 @@ namespace Occlusion
                         outcome = TestBox(frameProbe, axes, origin, model + 8, model + 12, radius, &atEdge);
                         ++stats.boxes;
                         stats.boxHidden += outcome == Hidden;
-                        // What the sphere alone would have said, for the log
-                        stats.boxSphereHidden += Test(frameProbe, centre, radius) == Hidden;
+                        // What the sphere alone would have said, for the log: the box lies inside it, so only a hidden box
+                        // can have a hidden sphere
+                        if (outcome == Hidden)
+                            stats.boxSphereHidden += Test(frameProbe, centre, radius) == Hidden;
                     }
                     else
                         outcome = Test(frameProbe, centre, radius, &atEdge);
@@ -674,6 +679,7 @@ public:
             nFrames = std::clamp(iniReader.ReadInteger("MISC", "HiZOcclusionFrames", 2), 1, 60);
             fMinRadius = std::clamp(iniReader.ReadFloat("MISC", "HiZOcclusionMinRadius", 0.0f), 0.0f, 100.0f);
             bLampShadows = iniReader.ReadInteger("SHADOWS", "LampShadowsOcclusion", 1) != 0;
+            nOccluderCategories = iniReader.ReadInteger("MISC", "HiZOccluderCategories", 1) & 0xFF;
             QueryPerformanceFrequency(&qpcFrequency);
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
             if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
