@@ -55,6 +55,7 @@ import comvars;
 import natives;
 import settings;
 import renderskip;
+import inireload;
 
 bool bHighResolutionNightShadows = false;
 static bool bCloseHeadlightRelevance = false;
@@ -362,7 +363,7 @@ namespace CShadows
 // LampShadowsInDaylight = 0: the map's lamps (their 2dfx lights, in CE 0xc1e615 where their shadow bits are made) cast no
 // shadows while the sun's cascades are drawn, outside by day: at dusk and dawn the lamps' shadows took some 4 GPU ms on
 // top of the sun's 6, where the sun's light washed them out. Inside, where the game draws no cascades, and once the sun is
-// under CascadeSunElevation, the lamps keep theirs (with CascadeShadowsAtNight the cascades are drawn at night too, so
+// under SunShadowsMinElevation, the lamps keep theirs (with SunShadowsAtNight the cascades are drawn at night too, so
 // the sun's height decides); headlights are not the map's lamps and keep theirs too.
 static bool bLampShadowsInDaylight = false;
 
@@ -454,6 +455,32 @@ class NightShadows
     static inline bool ceAdapter = false;
     static inline bool casterGuard = false;
 
+    // At startup and on Ctrl+Shift+F10 (IniReload): what the choice of lights looks at as it runs. What installs hooks
+    // (slot allocation, lamps behind walls, traffic signals and emergency lights, the headlight modes, the dual, tail and
+    // world lights) is read at startup only.
+    static void ReadLiveSettings(CIniReader& iniReader)
+    {
+        bLampShadowsInDaylight = iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowsInDaylight", 0) != 0;
+        if (!ceAdapter)
+            return;
+        bCloseHeadlightRelevance = iniReader.ReadInteger("NIGHTSHADOWS", "CloseHeadlightRelevance", 0) != 0;
+        bTrafficSelfShadowFix = iniReader.ReadInteger("NIGHTSHADOWS", "TrafficSelfShadowFix", 0) != 0;
+        NearbyVehicleLighting36::enabled.store(iniReader.ReadInteger("NIGHTSHADOWS", "NearbyVehicleReceivers", 0) != 0, std::memory_order_release);
+        PlayerShadowAllocation::nativeLampPriority = iniReader.ReadInteger("NIGHTSHADOWS", "LampViewPriority", 0) != 0;
+        PlayerShadowAllocation::casterPriority = iniReader.ReadInteger("NIGHTSHADOWS", "CasterAwarePriority", 0) != 0;
+        PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "CasterAwarePriorityHold", 750), 0, 2000));
+        PlayerShadowAllocation::casterLeadSeconds = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "CasterAwarePriorityLead", 1.0f), 0.0f, 3.0f);
+        PlayerShadowAllocation::lampSpacing.base = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "LampSpacing", 0.0f), 0.0f, 40.0f);
+        PlayerShadowAllocation::lampSpacing.seconds = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "LampSpacingSeconds", 0.5f), 0.0f, 5.0f);
+        PlayerShadowAllocation::lampSpacing.alongRoad = iniReader.ReadInteger("NIGHTSHADOWS", "LampSpacingAlongRoad", 0) != 0;
+        PlayerShadowAllocation::behindLampReach = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "BehindLampReach", 12.0f), 0.0f, 100.0f);
+        PlayerShadowAllocation::uncachedLampAdvantage = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "UncachedLampAdvantage", 1.5f), 0.0f, 10.0f);
+        fTailLightShadowDistance = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "TailLightShadowDistance", 25.0f), 0.0f, 500.0f);
+        PlayerShadowAllocation::slotMinHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "SlotMinHold", 1000), 0, 5000));
+        fusionfix::shadows::NativeShadowContinuity42::claimDistanceRatio =
+            std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "ClaimDistanceRatio", 1.5f), 0.0f, 10.0f);
+    }
+
 public:
     NightShadows()
     {
@@ -487,8 +514,9 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
-            bLampShadowsInDaylight = iniReader.ReadInteger("SHADOWS", "LampShadowsInDaylight", 0) != 0;
-            if (iniReader.ReadInteger("SHADOWS", "ExperimentalCrashDiagnostics", 0) != 0)
+            ReadLiveSettings(iniReader);
+            IniReload::Add(ReadLiveSettings);
+            if (iniReader.ReadInteger("DEBUG", "NightShadowsCrashDiagnostics", 0) != 0)
             {
                 const auto crashPath = iniReader.GetIniPath().parent_path() /
                     (L"GTAIV-shadow-crash-" + std::to_wstring(GetCurrentProcessId()) + L".bin");
@@ -499,8 +527,8 @@ public:
             }
 
             // [NIGHTSHADOWS]
-            bHighResolutionNightShadows = iniReader.ReadInteger("SHADOWS", "HighResolutionNightShadows", 0) != 0;
-            const bool shadowDiagnostics = iniReader.ReadInteger("SHADOWS", "ExperimentalShadowDiagnostics", 0) != 0;
+            bHighResolutionNightShadows = iniReader.ReadInteger("NIGHTSHADOWS", "HighResolution", 0) != 0;
+            const bool shadowDiagnostics = iniReader.ReadInteger("DEBUG", "NightShadowsDiagnostics", 0) != 0;
 
             // The experimental adapter has only been audited for CE 1.2.0.59. Any other
             // layout skips it and keeps the official FusionFix night shadow behaviour.
@@ -516,11 +544,8 @@ public:
                 HeadlightEnhancement::InstallLightModes(iniReader.ReadInteger("HEADLIGHTS", "LightModes", 0) != 0);
                 HeadlightEnhancement::InstallOffscreenLights(iniReader.ReadInteger("HEADLIGHTS", "OffscreenLights", 1),
                     std::clamp(iniReader.ReadFloat("HEADLIGHTS", "OffscreenLightsDistance", 100.0f), 0.0f, 500.0f));
-                bCloseHeadlightRelevance = iniReader.ReadInteger("SHADOWS", "ExperimentalCloseHeadlightRelevance", 0) != 0;
-                bTrafficSelfShadowFix = iniReader.ReadInteger("SHADOWS", "ExperimentalTrafficSelfShadowFix", 0) != 0;
-                NearbyVehicleLighting36::enabled.store(iniReader.ReadInteger("SHADOWS", "NearbyVehicleHeadlightReceivers", 0) != 0, std::memory_order_release);
 
-                casterMode = iniReader.ReadInteger("SHADOWS", "ExperimentalOwnHeadlightCasterFix", 0);
+                casterMode = iniReader.ReadInteger("NIGHTSHADOWS", "OwnHeadlightCasterFix", 0);
                 OwnHeadlightCaster::base = GameBase();
                 // Publication happens after all hooks are installed below.
                 ShadowDiagnostics::guardPassed = casterGuard;
@@ -528,27 +553,14 @@ public:
 
                 // Offline-reviewed prototype; never turn this on silently for an
                 // existing installation. A later controlled launch must opt in.
-                PlayerShadowAllocation::cameraPriority = iniReader.ReadInteger("SHADOWS", "CameraAwareShadowPriority", 0) != 0;
+                PlayerShadowAllocation::cameraPriority = iniReader.ReadInteger("NIGHTSHADOWS", "CameraAwarePriority", 0) != 0;
                 if (PlayerShadowAllocation::cameraPriority)
                     PlayerShadowAllocation::cameraPriority = PlayerShadowAllocation::InstallCameraCapture();
-                PlayerShadowAllocation::nativeLampPriority = iniReader.ReadInteger("SHADOWS", "NativeLampViewPriority", 0) != 0;
-                PlayerShadowAllocation::casterPriority = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriority", 0) != 0;
-                PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityHold", 750), 0, 2000));
-                PlayerShadowAllocation::casterLeadSeconds = std::clamp(iniReader.ReadFloat("SHADOWS", "CasterAwareLampPriorityLead", 1.0f), 0.0f, 3.0f);
-                PlayerShadowAllocation::slotTrace.enabled = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityLog", 0) != 0;
-                PlayerShadowAllocation::lampSpacing.base = std::clamp(iniReader.ReadFloat("SHADOWS", "LampSpacing", 0.0f), 0.0f, 40.0f);
+                PlayerShadowAllocation::slotTrace.enabled = iniReader.ReadInteger("DEBUG", "NightShadowsSlotLog", 0) != 0;
                 PlayerShadowAllocation::lampSpacing.spacing = PlayerShadowAllocation::lampSpacing.base;
-                PlayerShadowAllocation::lampSpacing.seconds = std::clamp(iniReader.ReadFloat("SHADOWS", "LampSpacingSeconds", 0.5f), 0.0f, 5.0f);
-                PlayerShadowAllocation::lampSpacing.alongRoad = iniReader.ReadInteger("SHADOWS", "LampSpacingAlongRoad", 0) != 0;
-                PlayerShadowAllocation::InstallLampSight(iniReader.ReadInteger("SHADOWS", "LampsBehindWalls", 1) != 0,
-                    static_cast<uint32_t>(iniReader.ReadInteger("SHADOWS", "LampsBehindWallsFlags", 6)));
-                PlayerShadowAllocation::behindLampReach = std::clamp(iniReader.ReadFloat("SHADOWS", "BehindLampReach", 12.0f), 0.0f, 100.0f);
-                PlayerShadowAllocation::uncachedLampAdvantage = std::clamp(iniReader.ReadFloat("SHADOWS", "UncachedLampAdvantage", 1.5f), 0.0f, 10.0f);
-                fTailLightShadowDistance = std::clamp(iniReader.ReadFloat("SHADOWS", "TailLightShadowDistance", 25.0f), 0.0f, 500.0f);
-                PlayerShadowAllocation::slotMinHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "SlotMinHold", 1000), 0, 5000));
-                fusionfix::shadows::NativeShadowContinuity42::claimDistanceRatio =
-                    std::clamp(iniReader.ReadFloat("SHADOWS", "ClaimDistanceRatio", 1.5f), 0.0f, 10.0f);
-                const int allocationMode = iniReader.ReadInteger("SHADOWS", "ExperimentalPlayerShadowAllocation", 0);
+                PlayerShadowAllocation::InstallLampSight(iniReader.ReadInteger("NIGHTSHADOWS", "LampsBehindWalls", 1) != 0,
+                    static_cast<uint32_t>(iniReader.ReadInteger("NIGHTSHADOWS", "LampsBehindWallsFlags", 6)));
+                const int allocationMode = iniReader.ReadInteger("NIGHTSHADOWS", "SlotAllocation", 0);
                 ShadowDiagnostics::allocationMode = allocationMode;
                 if (shadowDiagnostics)
                     ShadowTrace34::Start(FusionLog::PathFor("NightShadows.LightTrace-mode" + std::to_string(allocationMode) + "-" +
@@ -563,16 +575,16 @@ public:
                 // After the allocation adapter, which checks the selection's bytes this hooks.
                 HeadlightEnhancement::InstallShadowOrigin(
                     std::clamp(iniReader.ReadFloat("HEADLIGHTS", "ShadowBehindLamps", 0.8f), 0.0f, 2.0f),
-                    iniReader.ReadFloat("SHADOWS", "PairedLampDistance", 2.5f) > 0.0f);
+                    iniReader.ReadFloat("NIGHTSHADOWS", "PairedLampDistance", 2.5f) > 0.0f);
                 // CE 1.8: shadows from traffic signals and emergency vehicle lights.
                 EmergencyTrafficShadows::log.Name("NightShadows", "EmergencyTraffic");
-                EmergencyTrafficShadows::Install(static_cast<unsigned>(std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalShadows", 2), 0, 7)),
-                    iniReader.ReadInteger("SHADOWS", "EmergencyLightShadows", 1) != 0);
+                EmergencyTrafficShadows::Install(static_cast<unsigned>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "TrafficSignalShadows", 2), 0, 7)),
+                    iniReader.ReadInteger("NIGHTSHADOWS", "EmergencyLightShadows", 1) != 0);
                 // Liberty's Shadows 2.0: dual headlights, tail lights, world lights, buildings in dynamic maps.
                 // Each family is switched in the graphics menu; its hooks stay in place.
                 Lighting20::Install(iniReader);
                 // After the emergency lights, whose vacancy runs from the same hook first.
-                PlayerShadowAllocation::stableOrdinals = iniReader.ReadInteger("SHADOWS", "StableShadowMapSlots", 1) != 0;
+                PlayerShadowAllocation::stableOrdinals = iniReader.ReadInteger("NIGHTSHADOWS", "StableMapSlots", 1) != 0;
                 if (!PlayerShadowAllocation::InstallPreCache() && (PlayerShadowAllocation::stableOrdinals || PlayerShadowAllocation::preCacheVacancy))
                     PlayerShadowAllocation::installStatus += " pre_cache_hook_failed";
             }

@@ -3,7 +3,7 @@
 #
 # - wd_local_drawskinned / wd_local_masked_drawskinned for the world shaders that have wd_local_draw, so skinned world
 #   models (fragments: lamp posts, signs, hydrants) can be drawn into the dynamic (paraboloid) shadow maps of lights
-#   (Prop Shadows, source/LibertyLighting20Runtime.inl). The vertex shader is gta_vehicle_basic's skinned local shadow
+#   (Prop Shadows, source/nightshadows/LibertyLighting20Runtime.inl). The vertex shader is gta_vehicle_basic's skinned local shadow
 #   one (VS10, as VS9 is for wd_local_draw) with the texture coordinates passed on; the pixel shaders are the ones
 #   wd_local_draw / wd_local_masked_draw already use.
 # - Those pixel shaders drop what is nearer to the light than NEAR metres, so a lamp's own head and glass don't cover

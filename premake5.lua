@@ -100,6 +100,7 @@ workspace "GTAIV.EFLC.FusionFix"
    libdirs { "source/ledsdk" }
    libdirs { "source/dxsdk" }
    files { "source/**.h", "source/*.hpp", "source/*.cpp", "source/*.hxx", "source/**.ixx" }
+   files { "source/nightshadows/*.hpp", "source/nightshadows/*.inl" }
    files { "source/resources/Versioninfo.rc" }
    files { "source/resources/Shaders.rc" }
    files { "source/resources/LODLights.rc" }
@@ -208,6 +209,28 @@ project "GTAIV.EFLC.FusionFixInstaller"
    removefiles { "source/**" }
    removefiles { "external/**" }
    files { "source/resources/Versioninfo.rc" }
+
+   filter "configurations:Debug"
+      defines { "DEBUG" }
+      symbols "On"
+
+   filter "configurations:Release"
+      defines { "NDEBUG" }
+      optimize "On"
+
+-- Tests of the logic that needs no game (tests/*.cpp on the headers in source), run by CI after the build.
+-- Built under build/tests so the packages never take it.
+project "GTAIV.EFLC.FusionFix.Tests"
+   kind "ConsoleApp"
+   language "C++"
+   targetdir "build/tests/%{cfg.buildcfg}"
+   targetextension ".exe"
+   staticruntime "On"
+
+   removefiles { "source/**" }
+   removefiles { "external/**" }
+   removefiles { "data/**" }
+   files { "tests/*.hpp", "tests/*.cpp" }
 
    filter "configurations:Debug"
       defines { "DEBUG" }

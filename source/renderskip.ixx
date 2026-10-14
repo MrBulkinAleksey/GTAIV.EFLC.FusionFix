@@ -14,12 +14,14 @@ export module renderskip;
 import common;
 import comvars;
 import temporal;
+import vtablepatch;
+import inireload;
 
 // Passes of the game left out on the GPU, by the target they draw into. grcTextureFactoryPC::LockRenderTarget and
 // UnlockRenderTarget (its vtable slots 15 and 16, index 0) say which target the game draws into; the device's draws,
 // clears and copies (its vtable) are dropped while a target is locked whose pass is to be left out. In a profile at
 // night on an integrated GPU, the frame took some 39 GPU milliseconds and these passes:
-//  - CascadeShadowsAtNight = 0: the sun's cascades (CASCADE_TARGET_R32, CASCADE_ATLAS, some 7.5 ms) are not drawn from
+//  - SunShadowsAtNight = 0: the sun's cascades (CASCADE_TARGET_R32, CASCADE_ATLAS, some 7.5 ms) are not drawn from
 //    22:00 to 05:00, when the moon casts no shadows to see. Their casters go; the game clears only the depth of
 //    CASCADE_TARGET_R32 and none of the atlas, so its colour is cleared here to 1.0 (nothing in the light's way) and
 //    the game's own draw puts that into the atlas: no shadows, instead of the last ones of the day.
@@ -47,7 +49,7 @@ export namespace RenderSkip
     bool bFarCascadesHalfRate = true;
     bool bMidCascadeHalfRate = false;
     bool bTrace = false;
-    // CascadeSunElevation: degrees of the sun above the horizon below which its cascades are left out, by the sky's
+    // SunShadowsMinElevation: degrees of the sun above the horizon below which its cascades are left out, by the sky's
     // SunDirection; below -90 (or before the sky has been drawn) by the clock instead, from 22:00 to 05:00
     float fSunLowBelow = 8.0f;
 
@@ -55,7 +57,7 @@ export namespace RenderSkip
     bool SunIsLow();        // the sun's shadows too faint to draw: the cascades and the clouds in reflections go
     bool SunShadowsDrawn(); // the game drew the sun's cascades in the last few frames, which it does only outside, and they
                             // weren't left out for a low sun
-    bool SunShadowsDrawnByDay(); // and the sun is up: not the moon's cascades drawn with CascadeShadowsAtNight
+    bool SunShadowsDrawnByDay(); // and the sun is up: not the moon's cascades drawn with SunShadowsAtNight
 }
 
 namespace RenderSkip
@@ -620,15 +622,6 @@ namespace RenderSkip
         return RealSetViewport(device, viewport);
     }
 
-    template <class F>
-    void Patch(void** vtable, int index, F& real, F hook)
-    {
-        if (vtable[index] == reinterpret_cast<void*>(hook))
-            return;
-        real = reinterpret_cast<F>(vtable[index]);
-        injector::WriteMemory(&vtable[index], reinterpret_cast<void*>(hook), true);
-    }
-
     bool Install()
     {
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
@@ -636,17 +629,17 @@ namespace RenderSkip
         if (!device || !factory)
             return false;
         auto vft = *reinterpret_cast<void***>(factory);
-        Patch(vft, 15, pfnLock, reinterpret_cast<LockFn>(&LockTarget));
-        Patch(vft, 16, pfnUnlock, reinterpret_cast<UnlockFn>(&UnlockTarget));
+        PatchVTable(vft, 15, pfnLock, reinterpret_cast<LockFn>(&LockTarget));
+        PatchVTable(vft, 16, pfnUnlock, reinterpret_cast<UnlockFn>(&UnlockTarget));
         auto vtable = *reinterpret_cast<void***>(device);
-        Patch(vtable, 34, RealStretchRect, &StretchRect);
-        Patch(vtable, 35, RealColorFill, &ColorFill);
-        Patch(vtable, 43, RealClear, &Clear);
-        Patch(vtable, 47, RealSetViewport, &SetViewport);
-        Patch(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
-        Patch(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
-        Patch(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
-        Patch(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
+        PatchVTable(vtable, 34, RealStretchRect, &StretchRect);
+        PatchVTable(vtable, 35, RealColorFill, &ColorFill);
+        PatchVTable(vtable, 43, RealClear, &Clear);
+        PatchVTable(vtable, 47, RealSetViewport, &SetViewport);
+        PatchVTable(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
+        PatchVTable(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
+        PatchVTable(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
+        PatchVTable(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
         return true;
     }
 }
@@ -675,7 +668,7 @@ namespace RenderSkip
         return cascadeFrame != ~0u && TemporalAA::SceneFrame - cascadeFrame <= 3;
     }
 
-    // The same with the sun up: with CascadeShadowsAtNight the cascades are drawn at night too, the moon's
+    // The same with the sun up: with SunShadowsAtNight the cascades are drawn at night too, the moon's
     bool SunShadowsDrawnByDay()
     {
         return SunShadowsDrawn() && !bCascadeAtNight;
@@ -692,18 +685,28 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
-            bCascadesAtNight = iniReader.ReadInteger("SHADOWS", "CascadeShadowsAtNight", 1) != 0;
-            bReflectionsHalfRate = iniReader.ReadInteger("MISC", "ReflectionsHalfRate", 1) != 0;
-            bFarCascadesHalfRate = iniReader.ReadInteger("SHADOWS", "FarCascadesHalfRate", 1) != 0;
-            bMidCascadeHalfRate = iniReader.ReadInteger("SHADOWS", "MidCascadeHalfRate", 0) != 0;
-            bTrace = iniReader.ReadInteger("MISC", "RenderSkipTrace", 0) != 0;
-            fSunLowBelow = iniReader.ReadFloat("SHADOWS", "CascadeSunElevation", 8.0f);
+            bCascadesAtNight = iniReader.ReadInteger("PERFORMANCE", "SunShadowsAtNight", 1) != 0;
+            bReflectionsHalfRate = iniReader.ReadInteger("PERFORMANCE", "ReflectionsHalfRate", 1) != 0;
+            bFarCascadesHalfRate = iniReader.ReadInteger("PERFORMANCE", "FarCascadesHalfRate", 1) != 0;
+            bMidCascadeHalfRate = iniReader.ReadInteger("PERFORMANCE", "MidCascadeHalfRate", 0) != 0;
+            bTrace = iniReader.ReadInteger("DEBUG", "RenderSkipTrace", 0) != 0;
+            fSunLowBelow = iniReader.ReadFloat("PERFORMANCE", "SunShadowsMinElevation", 8.0f);
             // At init: the hook that fills the parameters walks the same vector
             nSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
             if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
                 pCamera = *camera.get_first<float*>(12);
-            bMatrixTrace = iniReader.ReadInteger("SHADOWS", "CascadeMatrixTrace", 0) != 0;
+            bMatrixTrace = iniReader.ReadInteger("DEBUG", "CascadeMatrixTrace", 0) != 0;
+            // Ctrl+Shift+F10 (IniReload). Half rate cascades turned on in game without the hooks below (put in when one
+            // of them is on at startup) take turns only while the camera keeps still.
+            IniReload::Add([](CIniReader& ini)
+            {
+                bCascadesAtNight = ini.ReadInteger("PERFORMANCE", "SunShadowsAtNight", 1) != 0;
+                bReflectionsHalfRate = ini.ReadInteger("PERFORMANCE", "ReflectionsHalfRate", 1) != 0;
+                bFarCascadesHalfRate = ini.ReadInteger("PERFORMANCE", "FarCascadesHalfRate", 1) != 0;
+                bMidCascadeHalfRate = ini.ReadInteger("PERFORMANCE", "MidCascadeHalfRate", 0) != 0;
+                fSunLowBelow = ini.ReadFloat("PERFORMANCE", "SunShadowsMinElevation", 8.0f);
+            });
 
             // The cascades left out follow the camera: the setter's matrix (CE 0x92dd5d: eax the matrix, push eax for
             // the matrix's global) and its scales and offsets (CE 0x92d856: esi the frame's copy, push esi for the first)
@@ -753,7 +756,7 @@ public:
             }
             if (bMatrixTrace && bFollow && frames == 1200)
                 matrixTraceFrom = passSeq + 2;
-            // The sun's height at each hour of the game's clock, to set CascadeSunElevation by
+            // The sun's height at each hour of the game's clock, to set SunShadowsMinElevation by
             static int lastHour = -1;
             if (CClock::ms_nGameClockHours && CClock::GetHours() != lastHour)
             {

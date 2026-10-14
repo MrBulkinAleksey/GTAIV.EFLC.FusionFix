@@ -13,7 +13,7 @@
 //   get from shaders/patches/world_local_shadow_depth.patch.
 //
 // Each family has its graphics menu toggle (Graphics > Lighting) and works while the night shadow allocation adapter
-// does (ExperimentalPlayerShadowAllocation=2 and the top Extra Night Shadows choice).
+// does (SlotAllocation=2 and the top Extra Night Shadows choice).
 namespace Lighting20
 {
     static fusionfix::DiagnosticsLog log;
@@ -414,20 +414,20 @@ namespace Lighting20
         static void Install(CIniReader& ini) noexcept
         {
             pref = FusionFixSettings.GetRef("PREF_WORLD_LIGHT_SHADOWS");
-            cachedLamps = ini.ReadInteger("SHADOWS", "CachedLampShadows", 1) != 0;
-            modelLights = ini.ReadInteger("SHADOWS", "ModelLightShadows", 1) != 0;
-            coronas = ini.ReadInteger("SHADOWS", "CoronaLightShadows", 1) != 0;
-            corona.approximate = ini.ReadInteger("SHADOWS", "CoronaApproximation", 1) != 0;
-            corona.radiusPerSize = std::clamp(ini.ReadFloat("SHADOWS", "CoronaRadiusPerSize", 12.0f), 0.1f, 1024.0f);
-            corona.fallbackIntensity = std::clamp(ini.ReadFloat("SHADOWS", "CoronaFallbackIntensity", 1.0f), 0.01f, 64.0f);
-            corona.intensityScale = std::clamp(ini.ReadFloat("SHADOWS", "CoronaIntensityScale", 1.0f), 0.01f, 64.0f);
-            corona.minRadius = std::clamp(ini.ReadFloat("SHADOWS", "CoronaMinRadius", 0.1f), 0.01f, 4096.0f);
-            corona.maxRadius = std::clamp(ini.ReadFloat("SHADOWS", "CoronaMaxRadius", 128.0f), corona.minRadius, 4096.0f);
-            corona.maxIntensity = std::clamp(ini.ReadFloat("SHADOWS", "CoronaMaxIntensity", 64.0f), 0.01f, 1024.0f);
-            corona.distance = std::clamp(ini.ReadFloat("SHADOWS", "CoronaLightDistance", 100.0f), 0.0f, 1000.0f);
-            corona.perFrame = static_cast<uint32_t>(std::clamp(ini.ReadInteger("SHADOWS", "CoronaLightsPerFrame", 48), 0, 256));
-            mergeDistance = std::clamp(ini.ReadFloat("SHADOWS", "ExtraLightMergeDistance", 1.5f), 0.0f, 10.0f);
-            modelLightsNeedCasters = ini.ReadInteger("SHADOWS", "ModelLightShadowsNeedCasters", 1) != 0;
+            cachedLamps = ini.ReadInteger("NIGHTSHADOWS", "CachedLampShadows", 1) != 0;
+            modelLights = ini.ReadInteger("NIGHTSHADOWS", "ModelLightShadows", 1) != 0;
+            coronas = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightShadows", 1) != 0;
+            corona.approximate = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightApproximation", 1) != 0;
+            corona.radiusPerSize = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightRadiusPerSize", 12.0f), 0.1f, 1024.0f);
+            corona.fallbackIntensity = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightFallbackIntensity", 1.0f), 0.01f, 64.0f);
+            corona.intensityScale = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightIntensityScale", 1.0f), 0.01f, 64.0f);
+            corona.minRadius = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightMinRadius", 0.1f), 0.01f, 4096.0f);
+            corona.maxRadius = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightMaxRadius", 128.0f), corona.minRadius, 4096.0f);
+            corona.maxIntensity = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightMaxIntensity", 64.0f), 0.01f, 1024.0f);
+            corona.distance = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightDistance", 100.0f), 0.0f, 1000.0f);
+            corona.perFrame = static_cast<uint32_t>(std::clamp(ini.ReadInteger("NIGHTSHADOWS", "CoronaLightMaxCount", 48), 0, 256));
+            mergeDistance = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "ExtraLightMergeDistance", 1.5f), 0.0f, 10.0f);
+            modelLightsNeedCasters = ini.ReadInteger("NIGHTSHADOWS", "ModelLightShadowsNeedCasters", 1) != 0;
             installed = true;
             if (coronas)
             {
@@ -640,7 +640,7 @@ namespace Lighting20
 
         static void Install(CIniReader& ini) noexcept
         {
-            level = std::clamp(ini.ReadInteger("SHADOWS", "PropShadows", 1), 0, 2);
+            level = std::clamp(ini.ReadInteger("NIGHTSHADOWS", "PropShadows", 1), 0, 2);
             if (!level)
             {
                 installStatus += " props=0";
@@ -756,7 +756,7 @@ namespace Lighting20
     namespace Pairs
     {
         static float distance = 2.5f;
-        static std::atomic<uint32_t> found{0}, mostInFrame{0}, lookedUp{0};
+        static std::atomic<uint32_t> found{0}, mostInFrame{0}, lookedUp{0}, mostCandidates{0};
         static constexpr uint32_t Cells = 1024;
         struct Link { std::atomic<uint32_t> second{0}, first{0}, frame{0}; };
         static Link links[Cells];     // by the second lamp's key: the first's
@@ -831,40 +831,138 @@ namespace Lighting20
             return false;
         }
 
+        // NightShadowsSlotLog: Q lines, each light within TraceReach of you near another shadow light, paired or the
+        // first rule of Find that kept it from its nearest neighbour, when that changes.
+        static constexpr float TraceReach = 40.0f;
+        static std::unordered_map<uint32_t, std::string> traced;
+
+        static void Trace(const rage::CLightSource* lights, uint32_t count, const std::vector<int>& partner,
+            const std::vector<bool>& candidate, const std::vector<bool>& first) noexcept
+        {
+            auto& trace = PlayerShadowAllocation::slotTrace;
+            if (!trace.enabled || !CTimer::m_snTimeInMilliseconds) return;
+            try
+            {
+                const auto player = PlayerShadowAllocation::state.player;
+                const auto shadowed = [](const rage::CLightSource& l)
+                {
+                    return (l.mFlags & 6) && !(l.mFlags & (rage::LF_VEHICLE | rage::LF_TRAFFIC)) && l.mCastShadows && l.mCastShadows != -1;
+                };
+                const auto d2 = [](const rage::CLightSource& a, const rage::CLightSource& b)
+                {
+                    const float dx = a.mPosition.x - b.mPosition.x, dy = a.mPosition.y - b.mPosition.y, dz = a.mPosition.z - b.mPosition.z;
+                    return dx * dx + dy * dy + dz * dz;
+                };
+                if (traced.size() > 4096) traced.clear();
+                for (uint32_t i = 0; i < count; ++i)
+                {
+                    const auto& l = lights[i];
+                    if (!shadowed(l)) continue;
+                    const float px = l.mPosition.x - player.x, py = l.mPosition.y - player.y, pz = l.mPosition.z - player.z;
+                    if (!(px * px + py * py + pz * pz <= TraceReach * TraceReach)) continue;
+                    int nearest = partner[i];
+                    if (nearest < 0)
+                    {
+                        float best = (distance * 1.5f) * (distance * 1.5f);
+                        for (uint32_t j = 0; j < count; ++j)
+                            if (j != i && shadowed(lights[j]) && d2(l, lights[j]) < best) { best = d2(l, lights[j]); nearest = int(j); }
+                    }
+                    const auto key = static_cast<uint32_t>(l.mCastShadows);
+                    if (nearest < 0)
+                    {
+                        if (auto it = traced.find(key); it != traced.end() && it->second != "alone") { it->second = "alone"; trace.Pair(std::format("t={} f={} key={:08x} alone", *CTimer::m_snTimeInMilliseconds, Frame(), key)); }
+                        continue;
+                    }
+                    const auto& o = lights[nearest];
+                    const char* status;
+                    if (partner[i] >= 0) status = first[i] ? "first" : "second";
+                    else if (!(l.mFlags & rage::LF_DYNAMIC_SHADOW)) status = "not_dynamic";
+                    else if (!(o.mFlags & rage::LF_DYNAMIC_SHADOW)) status = "other_not_dynamic";
+                    else if (!candidate[i]) status = PlayerShadowAllocation::IsSharedMap(i) ? "shared_map" : "not_candidate";
+                    else if (!candidate[nearest]) status = PlayerShadowAllocation::IsSharedMap(nearest) ? "other_shared_map" : "other_not_candidate";
+                    else if (o.mType != l.mType) status = "type";
+                    else if (o.mInteriorIndex != l.mInteriorIndex || o.mRoomIndex != l.mRoomIndex) status = "room";
+                    else if (o.mCastShadows == l.mCastShadows) status = "same_key";
+                    else if (std::abs(o.mRadius - l.mRadius) > 0.25f * (std::max)(o.mRadius, l.mRadius)) status = "radius";
+                    else if (l.mType == rage::LT_SPOT && l.mDirection.x * o.mDirection.x + l.mDirection.y * o.mDirection.y + l.mDirection.z * o.mDirection.z < 0.5f) status = "direction";
+                    else if (d2(l, o) >= distance * distance) status = "distance";
+                    else if (partner[nearest] >= 0) status = "other_taken";
+                    else status = "unknown";
+                    const auto otherKey = static_cast<uint32_t>(o.mCastShadows);
+                    auto now = std::format("{} {:08x}", status, otherKey);
+                    auto& last = traced[key];
+                    if (last == now) continue;
+                    last = std::move(now);
+                    const float dot = l.mDirection.x * o.mDirection.x + l.mDirection.y * o.mDirection.y + l.mDirection.z * o.mDirection.z;
+                    trace.Pair(std::format("t={} f={} key={:08x} {} other={:08x} apart={:.2f} pos={:.1f},{:.1f},{:.1f} d={:.1f} "
+                        "flags={:x}/{:x} type={}/{} cache={}/{} r={:.1f}/{:.1f} room={}.{}/{}.{} dot={:.2f} other_partner={:08x}",
+                        *CTimer::m_snTimeInMilliseconds, Frame(), key, status, otherKey, std::sqrt(d2(l, o)),
+                        l.mPosition.x, l.mPosition.y, l.mPosition.z, std::sqrt(px * px + py * py + pz * pz),
+                        l.mFlags, o.mFlags, int(l.mType), int(o.mType), int(l.mShadowCacheIndex), int(o.mShadowCacheIndex),
+                        l.mRadius, o.mRadius, int(l.mInteriorIndex), int(l.mRoomIndex), int(o.mInteriorIndex), int(o.mRoomIndex), dot,
+                        partner[nearest] >= 0 && partner[nearest] != int(i) ? static_cast<uint32_t>(lights[partner[nearest]].mCastShadows) : 0u));
+                }
+            }
+            catch (...) { trace.enabled = false; }
+        }
+
         static void Find(rage::CLightSource* lights, uint32_t count) noexcept
         {
             if (distance <= 0) return;
             const auto frame = Frame();
-            std::array<uint16_t, 256> candidates;
-            std::array<bool, 256> taken{};
-            unsigned n = 0;
-            for (uint32_t i = 0; i < count && n < candidates.size(); ++i)
+            const bool tracing = PlayerShadowAllocation::slotTrace.enabled;
+            static std::vector<int> partner;
+            static std::vector<bool> candidate, firstOf;
+            if (tracing)
+            {
+                partner.assign(count, -1);
+                candidate.assign(count, false);
+                firstOf.assign(count, false);
+            }
+            // All of them, by x: the pairs were found only among the first 256 of the list, whose order and length
+            // change as the camera turns, so a post near you paired and came apart by turns (its second lamp taking a
+            // slot of its own for a frame or two, two shadows under a car); sorted, they depend on where lamps stand.
+            static std::vector<uint16_t> candidates;
+            static std::vector<bool> taken;
+            candidates.clear();
+            for (uint32_t i = 0; i < count; ++i)
             {
                 const auto& l = lights[i];
                 if ((l.mFlags & rage::LF_DYNAMIC_SHADOW) && !(l.mFlags & (rage::LF_VEHICLE | rage::LF_TRAFFIC)) &&
                     l.mCastShadows && l.mCastShadows != -1 && (l.mType == rage::LT_POINT || l.mType == rage::LT_SPOT) &&
-                    std::isfinite(l.mRadius) && l.mRadius > 0 && !PlayerShadowAllocation::IsSharedMap(i))
-                    candidates[n++] = static_cast<uint16_t>(i);
+                    std::isfinite(l.mRadius) && l.mRadius > 0 && std::isfinite(l.mPosition.x) && !PlayerShadowAllocation::IsSharedMap(i))
+                {
+                    if (tracing) candidate[i] = true;
+                    candidates.push_back(static_cast<uint16_t>(i));
+                }
             }
+            const auto n = static_cast<unsigned>(candidates.size());
+            if (n > mostCandidates.load(std::memory_order_relaxed)) mostCandidates.store(n, std::memory_order_relaxed);
+            std::sort(candidates.begin(), candidates.end(), [lights](uint16_t a, uint16_t b)
+            {
+                return lights[a].mPosition.x < lights[b].mPosition.x ||
+                    (lights[a].mPosition.x == lights[b].mPosition.x && static_cast<uint32_t>(lights[a].mCastShadows) < static_cast<uint32_t>(lights[b].mCastShadows));
+            });
+            taken.assign(n, false);
             uint32_t inFrame = 0;
             for (unsigned a = 0; a < n; ++a)
             {
                 if (taken[a]) continue;
-                const auto& first = lights[candidates[a]];
+                const auto& one = lights[candidates[a]];
                 int best = -1;
                 float bestD2 = distance * distance;
-                for (unsigned b = a + 1; b < n; ++b)
+                for (unsigned b = a + 1; b < n && lights[candidates[b]].mPosition.x - one.mPosition.x < distance; ++b)
                 {
                     if (taken[b]) continue;
-                    const auto& second = lights[candidates[b]];
-                    if (second.mType != first.mType || second.mInteriorIndex != first.mInteriorIndex || second.mRoomIndex != first.mRoomIndex ||
-                        second.mCastShadows == first.mCastShadows ||
-                        std::abs(second.mRadius - first.mRadius) > 0.25f * (std::max)(second.mRadius, first.mRadius))
+                    const auto& other = lights[candidates[b]];
+                    if (other.mType != one.mType || other.mInteriorIndex != one.mInteriorIndex || other.mRoomIndex != one.mRoomIndex ||
+                        other.mCastShadows == one.mCastShadows ||
+                        std::abs(other.mRadius - one.mRadius) > 0.25f * (std::max)(other.mRadius, one.mRadius))
                         continue;
-                    if (first.mType == rage::LT_SPOT &&
-                        first.mDirection.x * second.mDirection.x + first.mDirection.y * second.mDirection.y + first.mDirection.z * second.mDirection.z < 0.5f)
+                    if (one.mType == rage::LT_SPOT &&
+                        one.mDirection.x * other.mDirection.x + one.mDirection.y * other.mDirection.y + one.mDirection.z * other.mDirection.z < 0.5f)
                         continue;
-                    const float dx = second.mPosition.x - first.mPosition.x, dy = second.mPosition.y - first.mPosition.y, dz = second.mPosition.z - first.mPosition.z;
+                    const float dx = other.mPosition.x - one.mPosition.x, dy = other.mPosition.y - one.mPosition.y, dz = other.mPosition.z - one.mPosition.z;
                     const float d2 = dx * dx + dy * dy + dz * dz;
                     if (d2 < bestD2)
                     {
@@ -874,9 +972,20 @@ namespace Lighting20
                 }
                 if (best < 0) continue;
                 taken[a] = taken[best] = true;
-                const auto& second = lights[candidates[best]];
+                // The lamp with the lower key draws the map, whichever comes first in the list, so the slot keeps its key.
+                uint16_t firstIndex = candidates[a], secondIndex = candidates[best];
+                if (static_cast<uint32_t>(lights[secondIndex].mCastShadows) < static_cast<uint32_t>(lights[firstIndex].mCastShadows))
+                    std::swap(firstIndex, secondIndex);
+                const auto& first = lights[firstIndex];
+                const auto& second = lights[secondIndex];
                 const auto firstKey = static_cast<uint32_t>(first.mCastShadows), secondKey = static_cast<uint32_t>(second.mCastShadows);
-                PlayerShadowAllocation::MarkSharedMap(candidates[best]);
+                PlayerShadowAllocation::MarkSharedMap(secondIndex);
+                if (tracing)
+                {
+                    partner[firstIndex] = secondIndex;
+                    partner[secondIndex] = firstIndex;
+                    firstOf[firstIndex] = true;
+                }
                 Link2(secondKey, firstKey, frame);
                 for (uint32_t i = 0, c = Cell(firstKey); i < 8; ++i, c = (c + 1) & (Cells - 1))
                 {
@@ -896,11 +1005,12 @@ namespace Lighting20
             }
             found += inFrame;
             if (inFrame > mostInFrame.load(std::memory_order_relaxed)) mostInFrame.store(inFrame, std::memory_order_relaxed);
+            if (tracing) Trace(lights, count, partner, candidate, firstOf);
         }
     }
 
     // ---------------------------------------------------------------- shared maps
-    // SharedShadowMaps (Liberty's Shadows 2.0 aliases projections the same way): lights with a dynamic shadow only
+    // SharedMaps (Liberty's Shadows 2.0 aliases projections the same way): lights with a dynamic shadow only
     // that stand at one point with the same direction, type, range, cone, interior and room would each take a slot
     // to draw the same map, as models with a 2dfx light written twice do. The later ones take the first one's key,
     // so the lighting finds its map, and the game does not insert them among the candidates (the Collect hook).
@@ -1018,8 +1128,8 @@ namespace Lighting20
         World::Install(ini);
         Buildings::Install();
         Props::Install(ini);
-        Sharing::enabled = ini.ReadInteger("SHADOWS", "SharedShadowMaps", 1) != 0;
-        Pairs::distance = std::clamp(ini.ReadFloat("SHADOWS", "PairedLampDistance", 2.5f), 0.0f, 6.0f);
+        Sharing::enabled = ini.ReadInteger("NIGHTSHADOWS", "SharedMaps", 1) != 0;
+        Pairs::distance = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "PairedLampDistance", 2.5f), 0.0f, 6.0f);
         if (Pairs::distance > 0)
         {
             HeadlightEnhancement::slotOrigin = Pairs::OriginOf;
@@ -1056,7 +1166,8 @@ namespace Lighting20
                 << " (vehicle " << Sharing::duplicatesVehicle.load() << ", model lights " << Sharing::duplicatesOurs.load() << ')'
                 << " most_in_frame=" << Sharing::mostInFrame.load() << " not_inserted=" << PlayerShadowAllocation::sharedMapsSkipped.load()
                 << " | lamp pairs " << (Pairs::distance > 0 ? "on" : "off") << " found=" << Pairs::found.load()
-                << " most_in_frame=" << Pairs::mostInFrame.load() << " second_lamp_lookups=" << Pairs::lookedUp.load()
+                << " most_in_frame=" << Pairs::mostInFrame.load() << " most_candidates=" << Pairs::mostCandidates.load()
+                << " second_lamp_lookups=" << Pairs::lookedUp.load()
                 << " | stable map slots " << (PlayerShadowAllocation::preCacheHook ? (PlayerShadowAllocation::stableOrdinals ? "on" : "vacancy only") : "off")
                 << " passes=" << PlayerShadowAllocation::stableOrdinalPasses.load() << " moves=" << PlayerShadowAllocation::stableOrdinalMoves.load()
                 << " rejected=" << PlayerShadowAllocation::stableOrdinalRejected.load() << '\n';

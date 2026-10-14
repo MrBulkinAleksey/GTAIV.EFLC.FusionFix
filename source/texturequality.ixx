@@ -18,6 +18,7 @@ import common;
 import comvars;
 import renderscale;
 import settings;
+import inireload;
 
 // Texture quality options for the G-buffer pass, each turned on and off on its own in the
 // graphics menu ([TEXTURES] in the ini has their tuning):
@@ -327,9 +328,15 @@ private:
     // as AMD and NVIDIA advise: the upscaler resolves the detail over the jittered frames that one frame would alias
     static inline float fUpscalerLodBias = -1.0f;
 
-    static void ReadGroundIni(CIniReader& iniReader)
+    // At startup and on Ctrl+Shift+F10 (IniReload): all of these go to the shaders every frame.
+    static void ReadIni(CIniReader& iniReader)
     {
-        fUpscalerLodBias = std::clamp(iniReader.ReadFloat("TEMPORAL", "UpscalerLodBias", -1.0f), -2.0f, 0.0f);
+        fDetailTiling = std::clamp(iniReader.ReadFloat("TEXTURES", "DetailTexturesTiling", 8.0f), 1.0f, 64.0f);
+        fDetailAlbedo = std::clamp(iniReader.ReadFloat("TEXTURES", "DetailTexturesAlbedo", 0.15f), 0.0f, 1.0f);
+        fDetailNormal = std::clamp(iniReader.ReadFloat("TEXTURES", "DetailTexturesNormal", 0.5f), 0.0f, 2.0f);
+        fSpecularAAStrength = std::clamp(iniReader.ReadFloat("TEXTURES", "SpecularAntiAliasingStrength", 1.0f), 0.0f, 4.0f);
+        fSpecularAAMax = std::clamp(iniReader.ReadFloat("TEXTURES", "SpecularAntiAliasingMax", 0.18f), 0.0f, 1.0f);
+        fUpscalerLodBias = std::clamp(iniReader.ReadFloat("ANTIALIASING", "UpscalerLodBias", -1.0f), -2.0f, 0.0f);
         fGroundHeightBlend = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundHeightBlend", 1.0f), 0.0f, 1.0f);
         fGroundHeightBlendDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundHeightBlendDepth", 0.2f), 0.01f, 1.0f);
         fGroundAntiTiling = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTiling", 1.0f), 0.0f, 1.0f);
@@ -354,7 +361,7 @@ private:
         fParallaxMinSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMinSteps", 8.0f), 2.0f, 32.0f);
         fParallaxMaxSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMaxSteps", 32.0f), fParallaxMinSteps, 32.0f);
         fParallaxDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionDepth", 1.0f), 0.0f, 4.0f);
-        nGroundDebug = std::clamp(iniReader.ReadInteger("TEXTURES", "GroundSurfacesDebug", 0), 0, 1);
+        nGroundDebug = std::clamp(iniReader.ReadInteger("DEBUG", "GroundSurfacesDebug", 0), 0, 1);
     }
 
     // Kind 0 for any other shader, 1 for the terrain, 2 for gta_parallax*, 3 for the generic world
@@ -395,17 +402,12 @@ private:
         return shSetPixelShader.unsafe_stdcall<HRESULT>(pDevice, shader);
     }
 
-    // Ctrl+Shift+F10, which reads the post fx's live settings again, reads the ground's too, and
-    // with GroundSurfacesDebug on writes what the G-buffer pass drew with to GTAIV.EFLC.FusionFix.Ground.log.
-    static void TickGroundIniReload(IDirect3DDevice9* pDevice)
+    // Ctrl+Shift+F10 (IniReload): the settings read again, and with GroundSurfacesDebug on what the G-buffer pass drew
+    // with written to GTAIV.EFLC.FusionFix.Ground.log.
+    static void OnIniReload(CIniReader& iniReader)
     {
-        static bool keyWasDown = false;
-        const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
-            (GetAsyncKeyState(VK_F10) & 0x8000);
-        if (down && !keyWasDown)
         {
-            CIniReader iniReader("");
-            ReadGroundIni(iniReader);
+            ReadIni(iniReader);
             const double frames = groundFrames ? double(groundFrames) : 1.0;
             FusionLog::Write("Ground", "Draws", "Ground Surfaces %s, detail texture %s, debug %d, set-pixel-shader hook %s; per frame over %u frames: "
                     "terrain shaders %.1f, parallax shaders %.1f, world shaders with ground %.1f, other shaders %.1f; %zu shaders seen\n",
@@ -428,8 +430,11 @@ private:
             memset(groundBinds, 0, sizeof(groundBinds));
             groundFrames = 0;
         }
-        keyWasDown = down;
+    }
 
+    // Every G-buffer pass: what GroundSurfacesDebug counts.
+    static void TickGroundDebug(IDirect3DDevice9* pDevice)
+    {
         if (nGroundDebug && !bPixelShaderHookTried)
         {
             bPixelShaderHookTried = true;
@@ -446,7 +451,7 @@ private:
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
-        TickGroundIniReload(pDevice);
+        TickGroundDebug(pDevice);
 
         static auto lodBiasPref = FusionFixSettings.GetRef("PREF_TEXTURE_LOD_BIAS");
         static auto anisoPref = FusionFixSettings.GetRef("PREF_ANISO_ALL_MAPS");
@@ -611,12 +616,8 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
-            fDetailTiling = std::clamp(iniReader.ReadFloat("TEXTURES", "DetailTexturesTiling", 8.0f), 1.0f, 64.0f);
-            fDetailAlbedo = std::clamp(iniReader.ReadFloat("TEXTURES", "DetailTexturesAlbedo", 0.15f), 0.0f, 1.0f);
-            fDetailNormal = std::clamp(iniReader.ReadFloat("TEXTURES", "DetailTexturesNormal", 0.5f), 0.0f, 2.0f);
-            fSpecularAAStrength = std::clamp(iniReader.ReadFloat("TEXTURES", "SpecularAntiAliasingStrength", 1.0f), 0.0f, 4.0f);
-            fSpecularAAMax = std::clamp(iniReader.ReadFloat("TEXTURES", "SpecularAntiAliasingMax", 0.18f), 0.0f, 1.0f);
-            ReadGroundIni(iniReader);
+            ReadIni(iniReader);
+            IniReload::Add(OnIniReload);
             detailLevels = MakeDetailLevels();
         };
 

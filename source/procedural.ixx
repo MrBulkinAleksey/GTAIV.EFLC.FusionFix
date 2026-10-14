@@ -19,6 +19,7 @@ export module procedural;
 import common;
 import comvars;
 import settings;
+import inireload;
 
 // Grass and procedural props ([PROCEDURAL] in the ini, Grass & Props Distance in Display > Advanced).
 //
@@ -467,6 +468,19 @@ namespace Procedural
         *(float*)(manager + 0x20) = farDistance * farDistance;
         fGatherFull = farDistance;
         fGatherNow = std::min(fGatherNow > 0.0f ? fGatherNow : farDistance, farDistance);
+    }
+
+    // At startup and on Ctrl+Shift+F10 (IniReload): what the generator looks at as it runs. The pools, the density
+    // and the ground triangles are sized at startup.
+    void ReadLiveSettings(CIniReader& iniReader)
+    {
+        bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
+        bGatherPriority = iniReader.ReadInteger("PROCEDURAL", "ProceduralGatherPriority", 1) != 0;
+        fConeBack = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeBack", 70.0f), 0.0f, 1000.0f);
+        fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
+        fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
+        bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
+        nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
     }
 
     void ApplyDefinitions()
@@ -929,7 +943,7 @@ public:
             CIniReader iniReader("");
 
             // [PROCEDURAL]
-            auto logLevel = iniReader.ReadInteger("PROCEDURAL", "ProceduralLog", 0);
+            auto logLevel = iniReader.ReadInteger("DEBUG", "ProceduralLog", 0);
             bLog = logLevel >= 1;
             bTrace = logLevel >= 2;
             nPool = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralPool", 16384), int32_t(VanillaRecords), 65535);
@@ -1069,13 +1083,8 @@ public:
                 pBuildingPool = *pool.get_first<uint8_t**>(2);
                 pBuildingReserve = pool.get_first<uint32_t>(12);
             }
-            bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
-            bGatherPriority = iniReader.ReadInteger("PROCEDURAL", "ProceduralGatherPriority", 1) != 0;
-            fConeBack = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeBack", 70.0f), 0.0f, 1000.0f);
-            fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
-            fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
-            bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
-            nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
+            ReadLiveSettings(iniReader);
+            IniReload::Add(ReadLiveSettings);
 
             // With the trace on, the game out of drawable references: mov ecx, 0x1173750; call CE 0xa8a990 in CE 0xaf4710
             if (bTrace)
