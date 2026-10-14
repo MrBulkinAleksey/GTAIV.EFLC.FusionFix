@@ -656,6 +656,26 @@ namespace PlayerShadowAllocation
         }
     }
 
+    // CasterMinLightHeight: whether a light of the list other than skip, with a shadow, at least that high above the
+    // caster at p, reaches it (see ShadowCasterPresence::MinLightAbove).
+    static bool CoveredByHigherLight(const rage::CLightSource* lights, uint32_t count, uint32_t skip, Vec3 p, float extent) noexcept
+    {
+        for (uint32_t j = 0; j < count; ++j)
+        {
+            const auto& o = lights[j];
+            if (j == skip || !(o.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW)) || (o.mFlags & rage::LF_VEHICLE) ||
+                o.mPosition.z - p.z < fusionfix::shadows::ShadowCasterPresence::MinLightAbove)
+                continue;
+            const Vec3 source{o.mPosition.x, o.mPosition.y, o.mPosition.z};
+            if (o.mType == rage::LT_SPOT
+                ? fusionfix::shadows::BeamTouchesReceiver(p, extent, source, {o.mDirection.x, o.mDirection.y, o.mDirection.z}, o.mOuterConeAngle, o.mRadius)
+                : (p.x - source.x) * (p.x - source.x) + (p.y - source.y) * (p.y - source.y) + (p.z - source.z) * (p.z - source.z) <=
+                    (o.mRadius + extent) * (o.mRadius + extent))
+                return true;
+        }
+        return false;
+    }
+
     static void Collect(SafetyHookContext& regs) noexcept
     {
         const FloatingPointState fp;
@@ -745,7 +765,8 @@ namespace PlayerShadowAllocation
                 gain=kind==budget::Kind::Lamp && cached
                     ? state.casters.Lights({light.mPosition.x,light.mPosition.y,light.mPosition.z},
                         {light.mDirection.x,light.mDirection.y,light.mDirection.z},
-                        static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle,&caster)
+                        static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle,&caster,
+                        [&](unsigned c) { return CoveredByHigherLight(lights,count,index,state.casters.points[c],state.casters.extents[c]); })
                     : volumeVisible ? SlotGain::InView : SlotGain::OffScreen;
             // An uncached lamp whose light reaches you or your car throws its shadow round you, in view whichever
             // way the camera looks. Ranked by where it stood from the camera, the lamp next to the car in a tunnel
