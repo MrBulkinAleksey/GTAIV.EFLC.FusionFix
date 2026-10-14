@@ -246,6 +246,12 @@ namespace RenderSkip
     float stableHeading = NAN;      // degrees
     float depthAnchor[3]{};
     bool bAnchored = false;
+    // The anchor each frame copy was fitted with: the fit (main thread) moves the anchor for the next frame while the
+    // render thread still makes this one's matrices, for its casters and then for its lighting, so one taken from
+    // depthAnchor could be the next frame's halfway through and the depth of the casters and of the lighting then
+    // differed by up to the anchor's step (shadows flashed onto buildings for a frame, now and then while walking)
+    float copyAnchor[4][3]{};
+    uint32_t copyAnchors = 0;       // a bit for each copy whose anchor is there
     int fitChangedPasses = 0;       // passes from now in which no cascade is left out
     bool bFitChangedPass = false;
     uint32_t headingSteps = 0, anchorMoves = 0, refusedTurn = 0, refusedEdge = 0, refusedStep = 0;
@@ -321,6 +327,11 @@ namespace RenderSkip
                 bAnchored = true;
                 fitChangedPasses = 2;
                 anchorMoves++;
+            }
+            if (pFitIndex)
+            {
+                memcpy(copyAnchor[*pFitIndex & 3], depthAnchor, sizeof(depthAnchor));
+                copyAnchors |= 1u << (*pFitIndex & 3);
             }
         }
     }
@@ -488,8 +499,13 @@ namespace RenderSkip
             return;
         const float* sun = frame + 0x250 / 4;
         const float* origin = frame + 0x260 / 4;
+        // The anchor of the copy the matrix is made from
+        const float* anchor = depthAnchor;
+        uintptr_t offset = reinterpret_cast<uintptr_t>(frame) - frameCopies;
+        if (frameCopies && offset % 0x270 == 0 && offset / 0x270 < 16 && (copyAnchors & (1u << (offset / 0x270 & 3))))
+            anchor = copyAnchor[offset / 0x270 & 3];
         float* matrix = (float*)regs.eax;
-        matrix[15] += (depthAnchor[0] - origin[0]) * sun[0] + (depthAnchor[1] - origin[1]) * sun[1] + (depthAnchor[2] - origin[2]) * sun[2];
+        matrix[15] += (anchor[0] - origin[0]) * sun[0] + (anchor[1] - origin[1]) * sun[1] + (anchor[2] - origin[2]) * sun[2];
     }
 
     // The same hook, the matrix of the fit's own copy (CE 0x928a90): for StableWindows right after it
@@ -1141,10 +1157,14 @@ public:
             auto afterFit = hook::pattern("83 C4 08 E8 ? ? ? ? 33 F6 89 74 24 10 EB");
             if (fitCopy.empty() || afterFit.empty() || matrix.empty())
                 bStableWindows = false;
-            if (bStableWindows)
+            // The copies and the fit's index, for the anchor of each copy too
+            if (!fitCopy.empty())
             {
                 pFitIndex = *fitCopy.get_first<const uint32_t*>(2);
                 frameCopies = *fitCopy.get_first<uintptr_t>(14);
+            }
+            if (bStableWindows)
+            {
                 fitMatrixReturn = reinterpret_cast<uintptr_t>(fitCopy.get_first(0x24));
                 if (auto render = hook::pattern("56 8B 35 ? ? ? ? 69 F6 70 02 00 00 81 C6 ? ? ? ? 33 C0 85 C9"); !render.empty())
                     pRenderIndex = *render.get_first<const uint32_t*>(3);
