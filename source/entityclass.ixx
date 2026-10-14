@@ -24,9 +24,10 @@ import temporal;
 // The game thread marks the entity's kind in a spare byte of each draw command as it is made:
 // CDrawEntityDC +0x37 (made only by CEntity's draw list add, 0xa2fe70), CDrawFragDC and
 // CDrawFragTypeDC +0x5f (made by it and by CDynamicEntity's, 0xb10360, which vehicles and objects
-// with fragments go through). On the render thread the execute (vtable slot 1) of those and of
-// CDrawSkinnedEntityDC (always a prop) calls the hooks added here before and after the draw, in every
-// render phase.
+// with fragments go through). On the render thread the execute (vtable slot 1) of those, of
+// CDrawSkinnedEntityDC (always a prop) and of the peds' own commands (CDrawPedDC, CDrawPlayerDC,
+// CDrawPedPropsDC, CDrawPedPropDC, CDrawSLODPedDC) calls the hooks added here before and after the
+// draw, in every render phase.
 //
 // EntityDrawLog = 1 ([DEBUG]): every 600 scene frames, the draws of each kind and the CPU time their
 // execute took, per frame and per target the game had locked (RenderSkip::CurrentTarget), to
@@ -66,6 +67,9 @@ namespace
     DrawExecute drawFragExecute = nullptr;
     DrawExecute drawFragTypeExecute = nullptr;
     DrawExecute drawSkinnedExecute = nullptr;
+    // CDrawPedDC, CDrawPlayerDC, CDrawPedPropsDC, CDrawPedPropDC, CDrawSLODPedDC
+    constexpr size_t kPedCommands = 5;
+    DrawExecute drawPedExecute[kPedCommands] = {};
     bool bInstalled = false;
 
     std::vector<std::pair<EntityClass::DrawHook, EntityClass::DrawHook>>& Hooks()
@@ -75,8 +79,8 @@ namespace
     }
 
     // Which draw command a draw came from
-    enum Source : uint8_t { FromEntity, FromFrag, FromFragType, FromSkinned, Sources };
-    constexpr const char* SourceNames[Sources] = { "entity", "fragment", "fragment type", "skinned" };
+    enum Source : uint8_t { FromEntity, FromFrag, FromFragType, FromSkinned, FromPed, Sources };
+    constexpr const char* SourceNames[Sources] = { "entity", "fragment", "fragment type", "skinned", "ped" };
     constexpr const char* KindNames[size_t(Kind::Kinds)] = { "unmarked", "buildings", "props", "vehicles", "peds" };
 
     // EntityDrawLog: render thread only, but for the switch
@@ -192,6 +196,12 @@ namespace
         Execute(drawSkinnedExecute, dc, Kind::Prop, FromSkinned);
     }
 
+    template <size_t command>
+    void __fastcall DrawPedExecute(void* dc, void*)
+    {
+        Execute(drawPedExecute[command], dc, Kind::Ped, FromPed);
+    }
+
     void Mark(uintptr_t dc, ptrdiff_t at, uintptr_t entity)
     {
         if (dc && entity)
@@ -208,6 +218,16 @@ namespace
         auto fragVtable = hook::pattern("C7 07 ? ? ? ? E8 ? ? ? ? 8B 5C 24 18 66 89 77 46");
         auto fragTypeVtable = hook::pattern("C7 07 ? ? ? ? E8 ? ? ? ? 8B 4C 24 1C 66 89 77");
         auto skinnedVtable = hook::pattern("C7 06 ? ? ? ? 66 89 7E 08 89 46 1C");
+        hook::pattern pedVtables[kPedCommands] = {
+            hook::pattern("C7 03 ? ? ? ? E8 ? ? ? ? 8A 44 24 2C"),
+            hook::pattern("C7 03 ? ? ? ? E8 ? ? ? ? 8A 44 24 20"),
+            hook::pattern("C7 07 ? ? ? ? E8 ? ? ? ? 8A 44 24 2C"),
+            hook::pattern("C7 06 ? ? ? ? E8 ? ? ? ? 8B 4C 24 0C 8B 01 89 86 A0 00 00 00"),
+            hook::pattern("C7 06 ? ? ? ? E8 ? ? ? ? 83 C4 20 8B C6"),
+        };
+        for (auto& ped : pedVtables)
+            if (ped.empty())
+                return;
         if (pattern.empty() || fragTypeEntity.empty() || fragTypeDynamic.empty() || fragDynamic.empty() ||
             entityVtable.empty() || fragVtable.empty() || fragTypeVtable.empty() || skinnedVtable.empty())
             return;
@@ -228,6 +248,11 @@ namespace
         hookExecute(fragVtable, drawFragExecute, reinterpret_cast<void*>(&DrawMarkedExecute<&drawFragExecute, FromFrag, kDrawFragKindByte>));
         hookExecute(fragTypeVtable, drawFragTypeExecute, reinterpret_cast<void*>(&DrawMarkedExecute<&drawFragTypeExecute, FromFragType, kDrawFragKindByte>));
         hookExecute(skinnedVtable, drawSkinnedExecute, reinterpret_cast<void*>(&DrawSkinnedExecute));
+        hookExecute(pedVtables[0], drawPedExecute[0], reinterpret_cast<void*>(&DrawPedExecute<0>));
+        hookExecute(pedVtables[1], drawPedExecute[1], reinterpret_cast<void*>(&DrawPedExecute<1>));
+        hookExecute(pedVtables[2], drawPedExecute[2], reinterpret_cast<void*>(&DrawPedExecute<2>));
+        hookExecute(pedVtables[3], drawPedExecute[3], reinterpret_cast<void*>(&DrawPedExecute<3>));
+        hookExecute(pedVtables[4], drawPedExecute[4], reinterpret_cast<void*>(&DrawPedExecute<4>));
         bInstalled = true;
     }
 
@@ -265,10 +290,16 @@ namespace EntityClass
 
     Kind OfEntity(void* entity)
     {
+        // Entities of one class mostly come in runs: the last one is checked before the map
+        thread_local uintptr_t lastVtable = 0;
+        thread_local Kind lastKind = Kind::Unknown;
         thread_local std::unordered_map<uintptr_t, Kind> byVtable;
         const auto vtable = *reinterpret_cast<uintptr_t*>(entity);
+        if (vtable == lastVtable)
+            return lastKind;
+        lastVtable = vtable;
         if (auto it = byVtable.find(vtable); it != byVtable.end())
-            return it->second;
+            return lastKind = it->second;
         // The complete object locator: +16 the class hierarchy, whose +8 base count and +12 base array hold
         // base class descriptors, each with its type descriptor first (the class itself among them)
         const auto locator = *reinterpret_cast<uintptr_t*>(vtable - 4);
@@ -290,6 +321,6 @@ namespace EntityClass
                         kind = Kind::Building;
         }
         byVtable.emplace(vtable, kind);
-        return kind;
+        return lastKind = kind;
     }
 }
