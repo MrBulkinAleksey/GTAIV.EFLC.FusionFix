@@ -40,10 +40,11 @@ namespace PlayerShadowAllocation
     static uint32_t casterHoldMs = 0;
     static float casterLeadSeconds = 1.0f; // CasterAwarePriorityLead
     static float boxedCarCasterDistance = 25.0f; // BoxedCarCasterDistance
+    static float pedCasterDistance = 35.0f; // PedCasterDistance
     // Copied on the game-process callback, read by selection on the render side.
     static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
     static fusionfix::shadows::ShadowCasterPresence casters{};
-    static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0}, lightsOffScreen{0}, carsLeftToBoxes{0};
+    static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0}, lightsOffScreen{0}, carsLeftToBoxes{0}, pedsLeftOut{0};
     // NightShadowsSlotLog: filled by selection, written out from the game's thread.
     static fusionfix::shadows::ShadowSlotTrace slotTrace;
     // LampSpacing: lamps beside a nearer one in view give way to lamps further along
@@ -466,11 +467,23 @@ namespace PlayerShadowAllocation
                     lastCar = focus.car; lastMs = next.timeMs; std::copy_n(carAt, 3, lastAt);
                 }
             }
+            // PedCasterDistance: a ped further from you than this gives no lamp a claim to a slot either (they have
+            // no box shadow, so there they cast none). With the far cars left to their boxes, a slot trace had lamps
+            // 40-65 m off take slots for a ped 4-8 m from them, the lamp you stood under handing its slot round.
             std::sort(occupants.begin(), occupants.end());
+            uint32_t pedsOut = 0;
             next.valid = next.valid && CPed::ForEachPed([&](uintptr_t p) {
-                if (!std::binary_search(occupants.begin(), occupants.end(), p))
-                    add(p, ShadowCasterPresence::PedExtent, 0);
+                if (std::binary_search(occupants.begin(), occupants.end(), p)) return;
+                float at[3];
+                if (pedCasterDistance > 0 && p != focus.ped && CEntity::GetPosition(p, at) &&
+                    (at[0] - focus.position[0]) * (at[0] - focus.position[0]) + (at[1] - focus.position[1]) * (at[1] - focus.position[1]) +
+                    (at[2] - focus.position[2]) * (at[2] - focus.position[2]) > pedCasterDistance * pedCasterDistance) {
+                    ++pedsOut;
+                    return;
+                }
+                add(p, ShadowCasterPresence::PedExtent, 0);
             });
+            pedsLeftOut.store(pedsOut, std::memory_order_relaxed);
         }
         if (!castersLock.test_and_set(std::memory_order_acquire)) {
             casters = next; ++casterCaptures; castersLock.clear(std::memory_order_release);
