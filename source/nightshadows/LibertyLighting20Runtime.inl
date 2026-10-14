@@ -621,7 +621,7 @@ namespace Lighting20
     namespace Pairs
     {
         static float distance = 2.5f;
-        static std::atomic<uint32_t> found{0}, mostInFrame{0}, lookedUp{0};
+        static std::atomic<uint32_t> found{0}, mostInFrame{0}, lookedUp{0}, mostCandidates{0};
         static constexpr uint32_t Cells = 1024;
         struct Link { std::atomic<uint32_t> second{0}, first{0}, frame{0}; };
         static Link links[Cells];     // by the second lamp's key: the first's
@@ -784,39 +784,50 @@ namespace Lighting20
                 candidate.assign(count, false);
                 firstOf.assign(count, false);
             }
-            std::array<uint16_t, 256> candidates;
-            std::array<bool, 256> taken{};
-            unsigned n = 0;
-            for (uint32_t i = 0; i < count && n < candidates.size(); ++i)
+            // All of them, by x: the pairs were found only among the first 256 of the list, whose order and length
+            // change as the camera turns, so a post near you paired and came apart by turns (its second lamp taking a
+            // slot of its own for a frame or two, two shadows under a car); sorted, they depend on where lamps stand.
+            static std::vector<uint16_t> candidates;
+            static std::vector<bool> taken;
+            candidates.clear();
+            for (uint32_t i = 0; i < count; ++i)
             {
                 const auto& l = lights[i];
                 if ((l.mFlags & rage::LF_DYNAMIC_SHADOW) && !(l.mFlags & (rage::LF_VEHICLE | rage::LF_TRAFFIC)) &&
                     l.mCastShadows && l.mCastShadows != -1 && (l.mType == rage::LT_POINT || l.mType == rage::LT_SPOT) &&
-                    std::isfinite(l.mRadius) && l.mRadius > 0 && !PlayerShadowAllocation::IsSharedMap(i))
+                    std::isfinite(l.mRadius) && l.mRadius > 0 && std::isfinite(l.mPosition.x) && !PlayerShadowAllocation::IsSharedMap(i))
                 {
                     if (tracing) candidate[i] = true;
-                    candidates[n++] = static_cast<uint16_t>(i);
+                    candidates.push_back(static_cast<uint16_t>(i));
                 }
             }
+            const auto n = static_cast<unsigned>(candidates.size());
+            if (n > mostCandidates.load(std::memory_order_relaxed)) mostCandidates.store(n, std::memory_order_relaxed);
+            std::sort(candidates.begin(), candidates.end(), [lights](uint16_t a, uint16_t b)
+            {
+                return lights[a].mPosition.x < lights[b].mPosition.x ||
+                    (lights[a].mPosition.x == lights[b].mPosition.x && static_cast<uint32_t>(lights[a].mCastShadows) < static_cast<uint32_t>(lights[b].mCastShadows));
+            });
+            taken.assign(n, false);
             uint32_t inFrame = 0;
             for (unsigned a = 0; a < n; ++a)
             {
                 if (taken[a]) continue;
-                const auto& first = lights[candidates[a]];
+                const auto& one = lights[candidates[a]];
                 int best = -1;
                 float bestD2 = distance * distance;
-                for (unsigned b = a + 1; b < n; ++b)
+                for (unsigned b = a + 1; b < n && lights[candidates[b]].mPosition.x - one.mPosition.x < distance; ++b)
                 {
                     if (taken[b]) continue;
-                    const auto& second = lights[candidates[b]];
-                    if (second.mType != first.mType || second.mInteriorIndex != first.mInteriorIndex || second.mRoomIndex != first.mRoomIndex ||
-                        second.mCastShadows == first.mCastShadows ||
-                        std::abs(second.mRadius - first.mRadius) > 0.25f * (std::max)(second.mRadius, first.mRadius))
+                    const auto& other = lights[candidates[b]];
+                    if (other.mType != one.mType || other.mInteriorIndex != one.mInteriorIndex || other.mRoomIndex != one.mRoomIndex ||
+                        other.mCastShadows == one.mCastShadows ||
+                        std::abs(other.mRadius - one.mRadius) > 0.25f * (std::max)(other.mRadius, one.mRadius))
                         continue;
-                    if (first.mType == rage::LT_SPOT &&
-                        first.mDirection.x * second.mDirection.x + first.mDirection.y * second.mDirection.y + first.mDirection.z * second.mDirection.z < 0.5f)
+                    if (one.mType == rage::LT_SPOT &&
+                        one.mDirection.x * other.mDirection.x + one.mDirection.y * other.mDirection.y + one.mDirection.z * other.mDirection.z < 0.5f)
                         continue;
-                    const float dx = second.mPosition.x - first.mPosition.x, dy = second.mPosition.y - first.mPosition.y, dz = second.mPosition.z - first.mPosition.z;
+                    const float dx = other.mPosition.x - one.mPosition.x, dy = other.mPosition.y - one.mPosition.y, dz = other.mPosition.z - one.mPosition.z;
                     const float d2 = dx * dx + dy * dy + dz * dz;
                     if (d2 < bestD2)
                     {
@@ -826,14 +837,19 @@ namespace Lighting20
                 }
                 if (best < 0) continue;
                 taken[a] = taken[best] = true;
-                const auto& second = lights[candidates[best]];
+                // The lamp with the lower key draws the map, whichever comes first in the list, so the slot keeps its key.
+                uint16_t firstIndex = candidates[a], secondIndex = candidates[best];
+                if (static_cast<uint32_t>(lights[secondIndex].mCastShadows) < static_cast<uint32_t>(lights[firstIndex].mCastShadows))
+                    std::swap(firstIndex, secondIndex);
+                const auto& first = lights[firstIndex];
+                const auto& second = lights[secondIndex];
                 const auto firstKey = static_cast<uint32_t>(first.mCastShadows), secondKey = static_cast<uint32_t>(second.mCastShadows);
-                PlayerShadowAllocation::MarkSharedMap(candidates[best]);
+                PlayerShadowAllocation::MarkSharedMap(secondIndex);
                 if (tracing)
                 {
-                    partner[candidates[a]] = candidates[best];
-                    partner[candidates[best]] = candidates[a];
-                    firstOf[candidates[a]] = true;
+                    partner[firstIndex] = secondIndex;
+                    partner[secondIndex] = firstIndex;
+                    firstOf[firstIndex] = true;
                 }
                 Link2(secondKey, firstKey, frame);
                 for (uint32_t i = 0, c = Cell(firstKey); i < 8; ++i, c = (c + 1) & (Cells - 1))
@@ -1008,7 +1024,8 @@ namespace Lighting20
                 << " (vehicle " << Sharing::duplicatesVehicle.load() << ", model lights " << Sharing::duplicatesOurs.load() << ')'
                 << " most_in_frame=" << Sharing::mostInFrame.load() << " not_inserted=" << PlayerShadowAllocation::sharedMapsSkipped.load()
                 << " | lamp pairs " << (Pairs::distance > 0 ? "on" : "off") << " found=" << Pairs::found.load()
-                << " most_in_frame=" << Pairs::mostInFrame.load() << " second_lamp_lookups=" << Pairs::lookedUp.load()
+                << " most_in_frame=" << Pairs::mostInFrame.load() << " most_candidates=" << Pairs::mostCandidates.load()
+                << " second_lamp_lookups=" << Pairs::lookedUp.load()
                 << " | stable map slots " << (PlayerShadowAllocation::preCacheHook ? (PlayerShadowAllocation::stableOrdinals ? "on" : "vacancy only") : "off")
                 << " passes=" << PlayerShadowAllocation::stableOrdinalPasses.load() << " moves=" << PlayerShadowAllocation::stableOrdinalMoves.load()
                 << " rejected=" << PlayerShadowAllocation::stableOrdinalRejected.load() << '\n';
