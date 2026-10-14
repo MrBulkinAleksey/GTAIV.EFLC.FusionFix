@@ -793,6 +793,20 @@ namespace RenderSkip
         line += std::format(" | kept ones off {:.2f} texels, {:.3f} m deep;", texels, depth);
         for (int k = 0; k < 4; k++)
             line += std::format(" c{}{} {:.6g} {:.6g} {:.6g} {:.6g};", k + 1, skippedInPass[k] ? "*" : "", values[k][0], values[k][1], values[k][2], values[k][3]);
+        // Where the depth's anchor falls in the atlas, in texels, worked out in double: with the windows on whole texels
+        // its fraction stays put from frame to frame (but for the sun's slow turn), whatever the camera does
+        if (bAnchored)
+        {
+            line += " anchor texels";
+            for (int k = 0; k < 4; k++)
+            {
+                double t[2];
+                for (int axis = 0; axis < 2; axis++)
+                    t[axis] = double(matrix[axis]) * depthAnchor[0] + double(matrix[4 + axis]) * depthAnchor[1] + double(matrix[8 + axis]) * depthAnchor[2] + matrix[12 + axis];
+                double u = (t[0] * values[k][0] + values[k][2]) * cascadeSide * 4.0, v = (t[1] * values[k][1] + values[k][3]) * cascadeSide;
+                line += std::format(" c{} {:.3f} {:.3f};", k + 1, u, v);
+            }
+        }
         matrixTrace.push_back(std::move(line));
     }
 
