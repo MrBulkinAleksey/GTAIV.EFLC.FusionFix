@@ -769,6 +769,9 @@ namespace RenderSkip
     std::vector<std::string> matrixTrace;
     uint32_t matrixTraceFrom = 0;
     constexpr uint32_t MatrixTracePasses = 300;
+    // The casters' matrix of each cascade (cascadeMatrixReturn) and the pass it was made in, for the trace
+    float casterMatrix[4][16]{};
+    uint32_t casterSeq[4]{};
 
     void TraceMatrix(const float (&values)[4][4], const float* matrix, float texels, float depth)
     {
@@ -805,6 +808,22 @@ namespace RenderSkip
                     t[axis] = double(matrix[axis]) * depthAnchor[0] + double(matrix[4 + axis]) * depthAnchor[1] + double(matrix[8 + axis]) * depthAnchor[2] + matrix[12 + axis];
                 double u = (t[0] * values[k][0] + values[k][2]) * cascadeSide * 4.0, v = (t[1] * values[k][1] + values[k][3]) * cascadeSide;
                 line += std::format(" c{} {:.3f} {:.3f};", k + 1, u, v);
+            }
+            // And where the casters' own matrix of each cascade drawn in this pass put it (x and y of the matrix as
+            // made in the cascade's callback, then as texels of its target taking them for -1 to 1 across it): the
+            // texels the lighting reads and the ones drawn must keep the same fraction between them, frame to frame
+            line += " casters";
+            for (int k = 0; k < 4; k++)
+            {
+                if (casterSeq[k] != passSeq)
+                {
+                    line += std::format(" c{} -;", k + 1);
+                    continue;
+                }
+                const float* m = casterMatrix[k];
+                double x = double(m[0]) * depthAnchor[0] + double(m[4]) * depthAnchor[1] + double(m[8]) * depthAnchor[2] + m[12];
+                double y = double(m[1]) * depthAnchor[0] + double(m[5]) * depthAnchor[1] + double(m[9]) * depthAnchor[2] + m[13];
+                line += std::format(" c{} {:.7g} {:.7g} = {:.3f} {:.3f};", k + 1, x, y, (x * 0.5 + 0.5) * cascadeSide, (0.5 - y * 0.5) * cascadeSide);
             }
         }
         matrixTrace.push_back(std::move(line));
@@ -1354,7 +1373,7 @@ public:
             }
             if (follow)
                 setterReturn = reinterpret_cast<uintptr_t>(setter.get_first(0));
-            if (bCascadesIntoAtlas)
+            if (!cascadeMatrix.empty() && (bCascadesIntoAtlas || bMatrixTrace))
                 cascadeMatrixReturn = reinterpret_cast<uintptr_t>(cascadeMatrix.get_first(12));
             static auto MatrixHook = safetyhook::create_mid(matrix.get_first(0), [](SafetyHookContext& regs)
             {
@@ -1375,6 +1394,11 @@ public:
                         pendingIntoAtlas[index] = IntoAtlasReady();
                         if (pendingIntoAtlas[index])
                             MatrixForAtlas((float*)regs.eax);
+                        if (matrixTraceFrom)
+                        {
+                            memcpy(casterMatrix[index], (const void*)regs.eax, sizeof(casterMatrix[index]));
+                            casterSeq[index] = passSeq;
+                        }
                     }
                 }
             });
