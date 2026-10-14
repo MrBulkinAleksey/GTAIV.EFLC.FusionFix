@@ -16,6 +16,7 @@ import comvars;
 import hdr;
 import settings;
 import upscaler;
+import vtablepatch;
 
 // Render scale: the scene renders at a fraction of the screen size and DLSS or FSR upscales it.
 //
@@ -362,15 +363,6 @@ namespace
         return RealSetScissorRect(device, rect);
     }
 
-    template <class F>
-    void Patch(void** vtable, int index, F& real, F hook)
-    {
-        if (vtable[index] == reinterpret_cast<void*>(hook))
-            return;
-        real = reinterpret_cast<F>(vtable[index]);
-        injector::WriteMemory(&vtable[index], reinterpret_cast<void*>(hook), true);
-    }
-
     void InstallHooks()
     {
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
@@ -379,11 +371,11 @@ namespace
         auto vtable = *reinterpret_cast<void***>(device);
         if (vtable == HookedVTable)
             return;
-        Patch(vtable, SetRenderTargetIndex, RealSetRenderTarget, &SetRenderTarget);
-        Patch(vtable, SetDepthStencilSurfaceIndex, RealSetDepthStencilSurface, &SetDepthStencilSurface);
-        Patch(vtable, ClearIndex, RealClear, &Clear);
-        Patch(vtable, SetViewportIndex, RealSetViewport, &SetViewport);
-        Patch(vtable, SetScissorRectIndex, RealSetScissorRect, &SetScissorRect);
+        PatchVTable(vtable, SetRenderTargetIndex, RealSetRenderTarget, &SetRenderTarget);
+        PatchVTable(vtable, SetDepthStencilSurfaceIndex, RealSetDepthStencilSurface, &SetDepthStencilSurface);
+        PatchVTable(vtable, ClearIndex, RealClear, &Clear);
+        PatchVTable(vtable, SetViewportIndex, RealSetViewport, &SetViewport);
+        PatchVTable(vtable, SetScissorRectIndex, RealSetScissorRect, &SetScissorRect);
         HookedVTable = vtable;
     }
 

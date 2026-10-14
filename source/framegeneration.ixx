@@ -18,6 +18,7 @@ import consolegamma;
 import hdr;
 import settings;
 import upscaler;
+import vtablepatch;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -801,15 +802,6 @@ namespace
         return RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
     }
 
-    template <class F>
-    void Patch(void** vtable, int index, F& real, F hook)
-    {
-        if (vtable[index] == reinterpret_cast<void*>(hook))
-            return;
-        real = reinterpret_cast<F>(vtable[index]);
-        injector::WriteMemory(&vtable[index], reinterpret_cast<void*>(hook), true);
-    }
-
     // On the D3D9 runtime's own device, as the render scale's hooks
     void InstallHooks(IDirect3DDevice9* device)
     {
@@ -817,10 +809,10 @@ namespace
         auto vtable = *reinterpret_cast<void***>(device);
         if (vtable == hooked)
             return;
-        Patch(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
-        Patch(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
-        Patch(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
-        Patch(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
+        PatchVTable(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
+        PatchVTable(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
+        PatchVTable(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
+        PatchVTable(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
         hooked = vtable;
         Log("Draw call hooks installed");
 

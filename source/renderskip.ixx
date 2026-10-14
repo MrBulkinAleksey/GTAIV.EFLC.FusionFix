@@ -14,6 +14,7 @@ export module renderskip;
 import common;
 import comvars;
 import temporal;
+import vtablepatch;
 
 // Passes of the game left out on the GPU, by the target they draw into. grcTextureFactoryPC::LockRenderTarget and
 // UnlockRenderTarget (its vtable slots 15 and 16, index 0) say which target the game draws into; the device's draws,
@@ -620,15 +621,6 @@ namespace RenderSkip
         return RealSetViewport(device, viewport);
     }
 
-    template <class F>
-    void Patch(void** vtable, int index, F& real, F hook)
-    {
-        if (vtable[index] == reinterpret_cast<void*>(hook))
-            return;
-        real = reinterpret_cast<F>(vtable[index]);
-        injector::WriteMemory(&vtable[index], reinterpret_cast<void*>(hook), true);
-    }
-
     bool Install()
     {
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
@@ -636,17 +628,17 @@ namespace RenderSkip
         if (!device || !factory)
             return false;
         auto vft = *reinterpret_cast<void***>(factory);
-        Patch(vft, 15, pfnLock, reinterpret_cast<LockFn>(&LockTarget));
-        Patch(vft, 16, pfnUnlock, reinterpret_cast<UnlockFn>(&UnlockTarget));
+        PatchVTable(vft, 15, pfnLock, reinterpret_cast<LockFn>(&LockTarget));
+        PatchVTable(vft, 16, pfnUnlock, reinterpret_cast<UnlockFn>(&UnlockTarget));
         auto vtable = *reinterpret_cast<void***>(device);
-        Patch(vtable, 34, RealStretchRect, &StretchRect);
-        Patch(vtable, 35, RealColorFill, &ColorFill);
-        Patch(vtable, 43, RealClear, &Clear);
-        Patch(vtable, 47, RealSetViewport, &SetViewport);
-        Patch(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
-        Patch(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
-        Patch(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
-        Patch(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
+        PatchVTable(vtable, 34, RealStretchRect, &StretchRect);
+        PatchVTable(vtable, 35, RealColorFill, &ColorFill);
+        PatchVTable(vtable, 43, RealClear, &Clear);
+        PatchVTable(vtable, 47, RealSetViewport, &SetViewport);
+        PatchVTable(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
+        PatchVTable(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
+        PatchVTable(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
+        PatchVTable(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
         return true;
     }
 }

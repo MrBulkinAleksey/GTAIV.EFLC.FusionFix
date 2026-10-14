@@ -15,6 +15,7 @@ import hdr;
 import renderscale;
 import settings;
 import upscaler;
+import vtablepatch;
 
 #define IDR_TEMPORAL_VS_RIGID           3001
 #define IDR_TEMPORAL_VS_SKINNED         3002
@@ -848,11 +849,9 @@ public:
 
         auto vtable = *reinterpret_cast<void***>(device);
         constexpr auto DrawIndexedPrimitiveIndex = 82;
-        if (vtable == HookedVTable || vtable[DrawIndexedPrimitiveIndex] == reinterpret_cast<void*>(&DrawIndexedPrimitive))
+        if (vtable == HookedVTable)
             return;
-
-        RealDrawIndexedPrimitive = reinterpret_cast<decltype(RealDrawIndexedPrimitive)>(vtable[DrawIndexedPrimitiveIndex]);
-        injector::WriteMemory(&vtable[DrawIndexedPrimitiveIndex], &DrawIndexedPrimitive, true);
+        PatchVTable(vtable, DrawIndexedPrimitiveIndex, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
         HookedVTable = vtable;
     }
 

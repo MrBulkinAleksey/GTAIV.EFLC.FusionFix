@@ -9,6 +9,7 @@ import common;
 import comvars;
 import screenquad;
 import settings;
+import vtablepatch;
 
 #define IDR_HDR_OUTPUT_PS 3101
 
@@ -206,11 +207,7 @@ public:
 
         auto vtable = *reinterpret_cast<void***>(d3d);
         constexpr auto CreateDeviceIndex = 16;
-        if (vtable[CreateDeviceIndex] != reinterpret_cast<void*>(&CreateDevice))
-        {
-            RealCreateDevice = reinterpret_cast<decltype(RealCreateDevice)>(vtable[CreateDeviceIndex]);
-            injector::WriteMemory(&vtable[CreateDeviceIndex], &CreateDevice, true);
-        }
+        PatchVTable(vtable, CreateDeviceIndex, RealCreateDevice, &CreateDevice);
     }
 
     // ---------------------------------------------------------------------------------------------
