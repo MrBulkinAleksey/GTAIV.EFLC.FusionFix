@@ -551,6 +551,11 @@ namespace Lighting20
         static std::array<std::atomic<uint32_t>, 3> near{};
         static std::atomic<uint32_t> nearPasses{0};
         static thread_local bool nearCounted = false;
+        // The light's own entity: a 2dfx light's key is its entity's address plus an offset (0xC1E183)
+        static thread_local uint32_t scopeKey = 0;
+        static thread_local bool ownerCounted = false;
+        static std::array<std::atomic<uint32_t>, 3> owner{};
+        static std::atomic<uint32_t> ownerPasses{0}, keyedPasses{0};
 
         // Diagnostics of the draw: the fragment draw command 0x8DD0B0 (model +0x58) run while the wd_local technique
         // group is forced ([0x106B308]), and its child dispatch 0xAEC7B0 choosing the drawable's skinned draw
@@ -581,6 +586,15 @@ namespace Lighting20
             if (!scope || type != 4 || !entity) return false;
             ++objects;
             if (scopeKind >= 3 && scopeKind <= 5 && mode <= 2) ++seen[scopeKind - 3][mode];
+            if (mode <= 2 && scopeKey - static_cast<uint32_t>(entity) < 0x320)
+            {
+                ++owner[mode];
+                if (!ownerCounted)
+                {
+                    ownerCounted = true;
+                    ++ownerPasses;
+                }
+            }
             if (mode <= 2)
             {
                 const auto matrix = *reinterpret_cast<const float* const*>(entity + 0x20);
@@ -651,6 +665,9 @@ namespace Lighting20
                     scopeLight[1] = light[1];
                     scopeLight[2] = light[2];
                     nearCounted = false;
+                    scopeKey = *reinterpret_cast<const uint32_t*>(game + 0xD9F100 + slot * 0x110 + 0xF8);
+                    ownerCounted = false;
+                    ++keyedPasses;
                     if (scopeKind >= 3 && scopeKind <= 5) ++kindPasses[scopeKind - 3];
                 }
             }
@@ -1070,6 +1087,8 @@ namespace Lighting20
                 << " prop_children_plain=" << Props::propPlain.load() << " skinned=" << Props::propSkinned.load()
                 << " passes_with_objects_within_5m=" << Props::nearPasses.load() << " within_5m(mode0,1,2)=" << Props::near[0].load()
                 << ',' << Props::near[1].load() << ',' << Props::near[2].load()
+                << " passes_with_own_entity=" << Props::ownerPasses.load() << " of " << Props::keyedPasses.load()
+                << " own_entity(mode0,1,2)=" << Props::owner[0].load() << ',' << Props::owner[1].load() << ',' << Props::owner[2].load()
                 << " objects_by_map(passes; mode0,1,2):";
             for (int k = 0; k < 3; ++k)
                 out << " kind" << k + 3 << "(" << Props::kindPasses[k].load() << "; " << Props::seen[k][0].load() << ','
