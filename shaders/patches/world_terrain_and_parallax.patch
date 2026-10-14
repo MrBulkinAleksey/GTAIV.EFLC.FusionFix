@@ -1,11 +1,12 @@
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS3.asm b/win32_30_nv8/gta_default/gta_defaultPS3.asm
-index ff566cc..22dbb40 100644
+index ff566cc..37ea8d0 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS3.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS3.asm
-@@ -21,6 +21,15 @@
+@@ -21,6 +21,16 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.1019476965e-43 // 150
++    def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
 +    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
 +    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
 +    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
@@ -18,7 +19,7 @@ index ff566cc..22dbb40 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -34,23 +43,178 @@
+@@ -34,23 +44,191 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -38,6 +39,19 @@ index ff566cc..22dbb40 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x
++      dsx r7.xyz, v5
++      dsy r8.xyz, v5
++      crs r9.xyz, r7, r8
++      dp3 r9.w, r9, r9
++      max r9.w, r9.w, c180.z
++      rsq r9.w, r9.w // per square metre of the surface
++      dsx r7.xy, v0.xyxy
++      dsy r7.zw, v0.xyxy
++      mul r8.x, r7.x, r7.w
++      mad r8.x, r7.y, -r7.z, r8.x
++      mul r9.w, r8_abs.x, r9.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r9.w, r9.w, c180.x, c180.y
++      mul r4.w, r4.w, r9.w // ground, not a prop lying on it
 +      mov r7.xy, v0
 +      mov r7.zw, c184.x
 +      texldl r7, r7, s0
@@ -201,7 +215,7 @@ index ff566cc..22dbb40 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -104,10 +268,81 @@
+@@ -104,10 +282,94 @@
          mov r0.xyz, r25
        endif
      endif
@@ -214,6 +228,19 @@ index ff566cc..22dbb40 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      dsx r5.xyz, v5
++      dsy r6.xyz, v5
++      crs r7.xyz, r5, r6
++      dp3 r7.w, r7, r7
++      max r7.w, r7.w, c180.z
++      rsq r7.w, r7.w // per square metre of the surface
++      dsx r5.xy, v0.xyxy
++      dsy r5.zw, v0.xyxy
++      mul r6.x, r5.x, r5.w
++      mad r6.x, r5.y, -r5.z, r6.x
++      mul r7.w, r6_abs.x, r7.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r21.z, r7.w, c180.x, c180.y
++      mul r4.w, r4.w, r21.z // ground, not a prop lying on it (kept for the bumps)
 +      mul r5.xy, v5, c167.x
 +      mov r5.w, c167.z
 +      texldb r5, r5, s12
@@ -284,7 +311,7 @@ index ff566cc..22dbb40 100644
        texld r24, r24, s12
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
-@@ -129,7 +364,44 @@
+@@ -129,7 +391,45 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -308,6 +335,7 @@ index ff566cc..22dbb40 100644
 +      mul r13.x, r13.x, r13.y
 +      add r13.y, r16.z, -c184.w
 +      mul_sat r13.y, r13.y, c183.x
++      mul r13.y, r13.y, r21.z
 +      mul r13.x, r13.x, r13.y
 +      dsx r14.xyz, v5
 +      dsy r15.xyz, v5
@@ -330,7 +358,7 @@ index ff566cc..22dbb40 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
-@@ -137,7 +409,9 @@
+@@ -137,7 +437,9 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -342,13 +370,14 @@ index ff566cc..22dbb40 100644
      // mov oC2.w, r1.x
      add r20.x, -c152.w, r1.x
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS4.asm b/win32_30_nv8/gta_default/gta_defaultPS4.asm
-index 3c1f0f3..b0797cd 100644
+index 3c1f0f3..5f3db10 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS4.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS4.asm
-@@ -21,6 +21,15 @@
+@@ -21,6 +21,16 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.1159606811e-43 // 151
++    def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
 +    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
 +    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
 +    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
@@ -361,7 +390,7 @@ index 3c1f0f3..b0797cd 100644
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      def c2, 0.5, 0, 1, 0.25
-@@ -32,23 +41,178 @@
+@@ -32,23 +42,191 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -381,6 +410,19 @@ index 3c1f0f3..b0797cd 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x
++      dsx r7.xyz, v5
++      dsy r8.xyz, v5
++      crs r9.xyz, r7, r8
++      dp3 r9.w, r9, r9
++      max r9.w, r9.w, c180.z
++      rsq r9.w, r9.w // per square metre of the surface
++      dsx r7.xy, v0.xyxy
++      dsy r7.zw, v0.xyxy
++      mul r8.x, r7.x, r7.w
++      mad r8.x, r7.y, -r7.z, r8.x
++      mul r9.w, r8_abs.x, r9.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r9.w, r9.w, c180.x, c180.y
++      mul r4.w, r4.w, r9.w // ground, not a prop lying on it
 +      mov r7.xy, v0
 +      mov r7.zw, c184.x
 +      texldl r7, r7, s0
@@ -544,7 +586,7 @@ index 3c1f0f3..b0797cd 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -102,15 +266,123 @@
+@@ -102,15 +280,137 @@
          mov r0.xyz, r25
        endif
      endif
@@ -557,6 +599,19 @@ index 3c1f0f3..b0797cd 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      dsx r5.xyz, v5
++      dsy r6.xyz, v5
++      crs r7.xyz, r5, r6
++      dp3 r7.w, r7, r7
++      max r7.w, r7.w, c180.z
++      rsq r7.w, r7.w // per square metre of the surface
++      dsx r5.xy, v0.xyxy
++      dsy r5.zw, v0.xyxy
++      mul r6.x, r5.x, r5.w
++      mad r6.x, r5.y, -r5.z, r6.x
++      mul r7.w, r6_abs.x, r7.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r21.z, r7.w, c180.x, c180.y
++      mul r4.w, r4.w, r21.z // ground, not a prop lying on it (kept for the bumps)
 +      mul r5.xy, v5, c167.x
 +      mov r5.w, c167.z
 +      texldb r5, r5, s12
@@ -648,6 +703,7 @@ index 3c1f0f3..b0797cd 100644
 +      mul r13.x, r13.x, r13.y
 +      add r13.y, r16.z, -c184.w
 +      mul_sat r13.y, r13.y, c183.x
++      mul r13.y, r13.y, r21.z
 +      mul r13.x, r13.x, r13.y
 +      dsx r14.xyz, v5
 +      dsy r15.xyz, v5
@@ -670,7 +726,7 @@ index 3c1f0f3..b0797cd 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      mul r0.w, r0.w, v2.w
-@@ -119,7 +391,9 @@
+@@ -119,7 +419,9 @@
      mul r0.w, r0.w, c39.x
      mov oC0, r0
      mov oC1.w, r0.w
@@ -682,13 +738,14 @@ index 3c1f0f3..b0797cd 100644
      mov oC2.w, r0.w
      mov r0.yz, c0
 diff --git a/win32_30_nv8/gta_normal/gta_normalPS3.asm b/win32_30_nv8/gta_normal/gta_normalPS3.asm
-index 6155923..eef654c 100644
+index 6155923..ab1f51f 100644
 --- a/win32_30_nv8/gta_normal/gta_normalPS3.asm
 +++ b/win32_30_nv8/gta_normal/gta_normalPS3.asm
-@@ -27,6 +27,12 @@
+@@ -27,6 +27,13 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.9835444427e-43 // 427
++    def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
 +    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
 +    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
 +    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
@@ -698,7 +755,7 @@ index 6155923..eef654c 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -40,6 +46,7 @@
+@@ -40,6 +47,7 @@
      dcl_texcoord4 v2.xyz
      dcl_texcoord5 v3.xyz
      dcl_color v4.xw
@@ -706,7 +763,7 @@ index 6155923..eef654c 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -111,6 +118,76 @@
+@@ -111,6 +119,89 @@
          mov r0.xyz, r25
        endif
      endif
@@ -719,6 +776,19 @@ index 6155923..eef654c 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      dsx r5.xyz, v5
++      dsy r6.xyz, v5
++      crs r7.xyz, r5, r6
++      dp3 r7.w, r7, r7
++      max r7.w, r7.w, c180.z
++      rsq r7.w, r7.w // per square metre of the surface
++      dsx r5.xy, v0.xyxy
++      dsy r5.zw, v0.xyxy
++      mul r6.x, r5.x, r5.w
++      mad r6.x, r5.y, -r5.z, r6.x
++      mul r7.w, r6_abs.x, r7.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r21.z, r7.w, c180.x, c180.y
++      mul r4.w, r4.w, r21.z // ground, not a prop lying on it (kept for the bumps)
 +      mul r5.xy, v5, c167.x
 +      mov r5.w, c167.z
 +      texldb r5, r5, s12
@@ -783,7 +853,7 @@ index 6155923..eef654c 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -184,7 +261,7 @@
+@@ -184,7 +275,7 @@
      mov oC1.w, r1.x
      mul r30.w, r1.z, c72.x
      mul oC2.x, r30.w, r29.x // FusionFix specular anti-aliasing: lowered with the wider highlight
@@ -793,13 +863,14 @@ index 6155923..eef654c 100644
      add r20.x, -c152.w, r1.x
      cmp oC2.w, r20.x, c1.z, -c1.y
 diff --git a/win32_30_nv8/gta_normal/gta_normalPS4.asm b/win32_30_nv8/gta_normal/gta_normalPS4.asm
-index cef7cdb..bfdedcb 100644
+index cef7cdb..13744f5 100644
 --- a/win32_30_nv8/gta_normal/gta_normalPS4.asm
 +++ b/win32_30_nv8/gta_normal/gta_normalPS4.asm
-@@ -29,6 +29,12 @@
+@@ -29,6 +29,13 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.9975574273e-43 // 428
++    def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
 +    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
 +    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
 +    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
@@ -809,7 +880,7 @@ index cef7cdb..bfdedcb 100644
      def c0, -0.5, 9.99999975e-006, 0.5, 0.001953125
      def c1, 3.99600005, 4, 0.125, 0.25
      def c2, 0, -1, -0, 1
-@@ -41,6 +47,7 @@
+@@ -41,6 +48,7 @@
      dcl_texcoord5 v3.xyz
      dcl_color v4.xw
      dcl vPos.xy
@@ -817,7 +888,7 @@ index cef7cdb..bfdedcb 100644
      dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s1
-@@ -116,6 +123,76 @@
+@@ -116,6 +124,89 @@
          mov r1.xyz, r25
        endif
      endif
@@ -830,6 +901,19 @@ index cef7cdb..bfdedcb 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      dsx r5.xyz, v5
++      dsy r6.xyz, v5
++      crs r7.xyz, r5, r6
++      dp3 r7.w, r7, r7
++      max r7.w, r7.w, c180.z
++      rsq r7.w, r7.w // per square metre of the surface
++      dsx r5.xy, v0.xyxy
++      dsy r5.zw, v0.xyxy
++      mul r6.x, r5.x, r5.w
++      mad r6.x, r5.y, -r5.z, r6.x
++      mul r7.w, r6_abs.x, r7.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r21.z, r7.w, c180.x, c180.y
++      mul r4.w, r4.w, r21.z // ground, not a prop lying on it (kept for the bumps)
 +      mul r5.xy, v5, c167.x
 +      mov r5.w, c167.z
 +      texldb r5, r5, s12
@@ -894,7 +978,7 @@ index cef7cdb..bfdedcb 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -175,7 +252,7 @@
+@@ -175,7 +266,7 @@
      mov oC1.w, r0.x
      mul r30.w, r0.z, c72.x
      mul oC2.x, r30.w, r29.x // FusionFix specular anti-aliasing: lowered with the wider highlight
@@ -904,13 +988,14 @@ index cef7cdb..bfdedcb 100644
      mov r0.xw, c2
      mul oC3, r0.wxxx, c52.x
 diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
-index 95f58df..f777c46 100644
+index 95f58df..67e8364 100644
 --- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
 +++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
-@@ -31,6 +31,12 @@
+@@ -31,6 +31,13 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.8153886269e-43 // 415
++    def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
 +    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
 +    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
 +    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
@@ -920,7 +1005,7 @@ index 95f58df..f777c46 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -44,6 +50,7 @@
+@@ -44,6 +51,7 @@
      dcl_texcoord4 v2.xyz
      dcl_texcoord5 v3.xyz
      dcl_color v4.xw
@@ -928,7 +1013,7 @@ index 95f58df..f777c46 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -116,6 +123,76 @@
+@@ -116,6 +124,89 @@
          mov r0.xyz, r25
        endif
      endif
@@ -941,6 +1026,19 @@ index 95f58df..f777c46 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      dsx r5.xyz, v5
++      dsy r6.xyz, v5
++      crs r7.xyz, r5, r6
++      dp3 r7.w, r7, r7
++      max r7.w, r7.w, c180.z
++      rsq r7.w, r7.w // per square metre of the surface
++      dsx r5.xy, v0.xyxy
++      dsy r5.zw, v0.xyxy
++      mul r6.x, r5.x, r5.w
++      mad r6.x, r5.y, -r5.z, r6.x
++      mul r7.w, r6_abs.x, r7.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r21.z, r7.w, c180.x, c180.y
++      mul r4.w, r4.w, r21.z // ground, not a prop lying on it (kept for the bumps)
 +      mul r5.xy, v5, c167.x
 +      mov r5.w, c167.z
 +      texldb r5, r5, s12
@@ -1005,7 +1103,7 @@ index 95f58df..f777c46 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -192,7 +269,7 @@
+@@ -192,7 +283,7 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -1015,13 +1113,14 @@ index 95f58df..f777c46 100644
      add r20.x, -c152.w, r1.x
      cmp oC2.w, r20.x, c1.z, -c1.y
 diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
-index 5bdd4d9..5d4ddf4 100644
+index 5bdd4d9..28fe345 100644
 --- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
 +++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
-@@ -33,6 +33,12 @@
+@@ -33,6 +33,13 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.8294016116e-43 // 416
++    def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
 +    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
 +    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
 +    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
@@ -1031,7 +1130,7 @@ index 5bdd4d9..5d4ddf4 100644
      def c0, -0.5, 9.99999975e-006, 0.5, 0.001953125
      def c1, 3.99600005, 4, 0.125, 0.25
      def c2, 0, -1, -0, 1
-@@ -45,6 +51,7 @@
+@@ -45,6 +52,7 @@
      dcl_texcoord5 v3.xyz
      dcl_color v4.xw
      dcl vPos.xy
@@ -1039,7 +1138,7 @@ index 5bdd4d9..5d4ddf4 100644
      dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s1
-@@ -121,6 +128,76 @@
+@@ -121,6 +129,89 @@
          mov r1.xyz, r25
        endif
      endif
@@ -1052,6 +1151,19 @@ index 5bdd4d9..5d4ddf4 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      dsx r5.xyz, v5
++      dsy r6.xyz, v5
++      crs r7.xyz, r5, r6
++      dp3 r7.w, r7, r7
++      max r7.w, r7.w, c180.z
++      rsq r7.w, r7.w // per square metre of the surface
++      dsx r5.xy, v0.xyxy
++      dsy r5.zw, v0.xyxy
++      mul r6.x, r5.x, r5.w
++      mad r6.x, r5.y, -r5.z, r6.x
++      mul r7.w, r6_abs.x, r7.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r21.z, r7.w, c180.x, c180.y
++      mul r4.w, r4.w, r21.z // ground, not a prop lying on it (kept for the bumps)
 +      mul r5.xy, v5, c167.x
 +      mov r5.w, c167.z
 +      texldb r5, r5, s12
@@ -1116,7 +1228,7 @@ index 5bdd4d9..5d4ddf4 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -183,7 +260,7 @@
+@@ -183,7 +274,7 @@
      mov oC0.xyz, r1
      mov oC0.w, r0.x
      mov oC1.w, r0.x
@@ -1564,13 +1676,14 @@ index 7d9644a..22ff627 100644
      mul oC2.z, r2.x, v4.x
      mul r0.x, r2.x, c73.x
 diff --git a/win32_30_nv8/gta_spec/gta_specPS3.asm b/win32_30_nv8/gta_spec/gta_specPS3.asm
-index d721e6d..e3cb356 100644
+index d721e6d..c70b59b 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS3.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS3.asm
-@@ -27,6 +27,15 @@
+@@ -27,6 +27,16 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.2676609395e-43 // 590
++    def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
 +    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
 +    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
 +    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
@@ -1583,7 +1696,7 @@ index d721e6d..e3cb356 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -38,24 +47,179 @@
+@@ -38,24 +48,192 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -1604,6 +1717,19 @@ index d721e6d..e3cb356 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x
++      dsx r7.xyz, v5
++      dsy r8.xyz, v5
++      crs r9.xyz, r7, r8
++      dp3 r9.w, r9, r9
++      max r9.w, r9.w, c180.z
++      rsq r9.w, r9.w // per square metre of the surface
++      dsx r7.xy, v0.xyxy
++      dsy r7.zw, v0.xyxy
++      mul r8.x, r7.x, r7.w
++      mad r8.x, r7.y, -r7.z, r8.x
++      mul r9.w, r8_abs.x, r9.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r9.w, r9.w, c180.x, c180.y
++      mul r4.w, r4.w, r9.w // ground, not a prop lying on it
 +      mov r7.xy, v0
 +      mov r7.zw, c184.x
 +      texldl r7, r7, s0
@@ -1767,7 +1893,7 @@ index d721e6d..e3cb356 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -109,10 +273,81 @@
+@@ -109,10 +287,94 @@
          mov r0.xyz, r25
        endif
      endif
@@ -1780,6 +1906,19 @@ index d721e6d..e3cb356 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      dsx r5.xyz, v5
++      dsy r6.xyz, v5
++      crs r7.xyz, r5, r6
++      dp3 r7.w, r7, r7
++      max r7.w, r7.w, c180.z
++      rsq r7.w, r7.w // per square metre of the surface
++      dsx r5.xy, v0.xyxy
++      dsy r5.zw, v0.xyxy
++      mul r6.x, r5.x, r5.w
++      mad r6.x, r5.y, -r5.z, r6.x
++      mul r7.w, r6_abs.x, r7.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r21.z, r7.w, c180.x, c180.y
++      mul r4.w, r4.w, r21.z // ground, not a prop lying on it (kept for the bumps)
 +      mul r5.xy, v5, c167.x
 +      mov r5.w, c167.z
 +      texldb r5, r5, s12
@@ -1850,7 +1989,7 @@ index d721e6d..e3cb356 100644
        texld r24, r24, s12
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
-@@ -128,10 +363,47 @@
+@@ -128,10 +390,48 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -1874,6 +2013,7 @@ index d721e6d..e3cb356 100644
 +      mul r13.x, r13.x, r13.y
 +      add r13.y, r16.z, -c184.w
 +      mul_sat r13.y, r13.y, c183.x
++      mul r13.y, r13.y, r21.z
 +      mul r13.x, r13.x, r13.y
 +      dsx r14.xyz, v5
 +      dsy r15.xyz, v5
@@ -1900,7 +2040,7 @@ index d721e6d..e3cb356 100644
      mul r2.x, r3.w, c66.x
      dp3 r2.w, r3, c73
      mul r2.w, r2.w, c72.x
-@@ -144,7 +416,7 @@
+@@ -144,7 +444,7 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -1910,13 +2050,14 @@ index d721e6d..e3cb356 100644
      add r20.x, -c152.w, r1.x
      cmp oC2.w, r20.x, c0.z, -c0.y
 diff --git a/win32_30_nv8/gta_spec/gta_specPS4.asm b/win32_30_nv8/gta_spec/gta_specPS4.asm
-index 3067a70..a0caa86 100644
+index 3067a70..9dc9731 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS4.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS4.asm
-@@ -29,6 +29,15 @@
+@@ -29,6 +29,16 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.2816739242e-43 // 591
++    def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
 +    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
 +    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
 +    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
@@ -1929,7 +2070,7 @@ index 3067a70..a0caa86 100644
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      def c2, 0.5, 0.001953125, 0, 0
-@@ -39,24 +48,179 @@
+@@ -39,24 +49,192 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -1950,6 +2091,19 @@ index 3067a70..a0caa86 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x
++      dsx r7.xyz, v5
++      dsy r8.xyz, v5
++      crs r9.xyz, r7, r8
++      dp3 r9.w, r9, r9
++      max r9.w, r9.w, c180.z
++      rsq r9.w, r9.w // per square metre of the surface
++      dsx r7.xy, v0.xyxy
++      dsy r7.zw, v0.xyxy
++      mul r8.x, r7.x, r7.w
++      mad r8.x, r7.y, -r7.z, r8.x
++      mul r9.w, r8_abs.x, r9.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r9.w, r9.w, c180.x, c180.y
++      mul r4.w, r4.w, r9.w // ground, not a prop lying on it
 +      mov r7.xy, v0
 +      mov r7.zw, c184.x
 +      texldl r7, r7, s0
@@ -2113,7 +2267,7 @@ index 3067a70..a0caa86 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -110,18 +274,126 @@
+@@ -110,18 +288,140 @@
          mov r0.xyz, r25
        endif
      endif
@@ -2126,6 +2280,19 @@ index 3067a70..a0caa86 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      dsx r5.xyz, v5
++      dsy r6.xyz, v5
++      crs r7.xyz, r5, r6
++      dp3 r7.w, r7, r7
++      max r7.w, r7.w, c180.z
++      rsq r7.w, r7.w // per square metre of the surface
++      dsx r5.xy, v0.xyxy
++      dsy r5.zw, v0.xyxy
++      mul r6.x, r5.x, r5.w
++      mad r6.x, r5.y, -r5.z, r6.x
++      mul r7.w, r6_abs.x, r7.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r21.z, r7.w, c180.x, c180.y
++      mul r4.w, r4.w, r21.z // ground, not a prop lying on it (kept for the bumps)
 +      mul r5.xy, v5, c167.x
 +      mov r5.w, c167.z
 +      texldb r5, r5, s12
@@ -2217,6 +2384,7 @@ index 3067a70..a0caa86 100644
 +      mul r13.x, r13.x, r13.y
 +      add r13.y, r16.z, -c184.w
 +      mul_sat r13.y, r13.y, c183.x
++      mul r13.y, r13.y, r21.z
 +      mul r13.x, r13.x, r13.y
 +      dsx r14.xyz, v5
 +      dsy r15.xyz, v5
@@ -2243,7 +2411,7 @@ index 3067a70..a0caa86 100644
      mul r2.w, r2.w, c66.x
      dp3 r2.x, r2, c73
      mul r2.x, r2.x, c72.x
-@@ -135,7 +407,7 @@
+@@ -135,7 +435,7 @@
      mul r0.w, r0.w, c39.x
      mov oC0, r0
      mov oC1.w, r0.w
@@ -2793,13 +2961,14 @@ index 10dd3b6..9ba3dfc 100644
      mad oC2.xz, v4.w, c0.yyzw, c0.ywyw
      mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS3.asm b/win32_30_nv8/rage_default/rage_defaultPS3.asm
-index 3a528b5..74760ff 100644
+index 3a528b5..1668b82 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS3.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS3.asm
-@@ -23,6 +23,15 @@
+@@ -23,6 +23,16 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0958153991e-42 // 782
++    def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
 +    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
 +    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
 +    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
@@ -2812,7 +2981,7 @@ index 3a528b5..74760ff 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -32,10 +41,237 @@
+@@ -32,10 +42,263 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -2832,6 +3001,19 @@ index 3a528b5..74760ff 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x
++      dsx r7.xyz, v5
++      dsy r8.xyz, v5
++      crs r9.xyz, r7, r8
++      dp3 r9.w, r9, r9
++      max r9.w, r9.w, c180.z
++      rsq r9.w, r9.w // per square metre of the surface
++      dsx r7.xy, v0.xyxy
++      dsy r7.zw, v0.xyxy
++      mul r8.x, r7.x, r7.w
++      mad r8.x, r7.y, -r7.z, r8.x
++      mul r9.w, r8_abs.x, r9.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r9.w, r9.w, c180.x, c180.y
++      mul r4.w, r4.w, r9.w // ground, not a prop lying on it
 +      mov r7.xy, v0
 +      mov r7.zw, c184.x
 +      texldl r7, r7, s0
@@ -2986,6 +3168,19 @@ index 3a528b5..74760ff 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      dsx r5.xyz, v5
++      dsy r6.xyz, v5
++      crs r7.xyz, r5, r6
++      dp3 r7.w, r7, r7
++      max r7.w, r7.w, c180.z
++      rsq r7.w, r7.w // per square metre of the surface
++      dsx r5.xy, v0.xyxy
++      dsy r5.zw, v0.xyxy
++      mul r6.x, r5.x, r5.w
++      mad r6.x, r5.y, -r5.z, r6.x
++      mul r7.w, r6_abs.x, r7.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r21.z, r7.w, c180.x, c180.y
++      mul r4.w, r4.w, r21.z // ground, not a prop lying on it (kept for the bumps)
 +      mul r5.xy, v5, c167.x
 +      mov r5.w, c167.z
 +      texldb r5, r5, s12
@@ -3051,7 +3246,7 @@ index 3a528b5..74760ff 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v2.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -47,7 +283,40 @@
+@@ -47,7 +310,41 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -3071,6 +3266,7 @@ index 3a528b5..74760ff 100644
 +      mul r13.x, r13.x, r13.y
 +      add r13.y, r16.z, -c184.w
 +      mul_sat r13.y, r13.y, c183.x
++      mul r13.y, r13.y, r21.z
 +      mul r13.x, r13.x, r13.y
 +      dsx r14.xyz, v5
 +      dsy r15.xyz, v5
@@ -3093,7 +3289,7 @@ index 3a528b5..74760ff 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
-@@ -55,7 +324,9 @@
+@@ -55,7 +352,9 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -3105,13 +3301,14 @@ index 3a528b5..74760ff 100644
      // mov oC2.w, r1.x
      add r20.x, -c152.w, r1.x
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS4.asm b/win32_30_nv8/rage_default/rage_defaultPS4.asm
-index 657ce1d..dfcd6e3 100644
+index 657ce1d..57354fc 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS4.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS4.asm
-@@ -25,6 +25,15 @@
+@@ -25,6 +25,16 @@
  
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0972166976e-42 // 783
++    def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
 +    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
 +    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
 +    def c186, 0.37, 0.61, 1e-12, 3 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
@@ -3124,7 +3321,7 @@ index 657ce1d..dfcd6e3 100644
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      // def c2, 0.5, 0.001953125, 0, 0
-@@ -34,11 +43,271 @@
+@@ -34,11 +44,298 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -3145,6 +3342,19 @@ index 657ce1d..dfcd6e3 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x
++      dsx r7.xyz, v5
++      dsy r8.xyz, v5
++      crs r9.xyz, r7, r8
++      dp3 r9.w, r9, r9
++      max r9.w, r9.w, c180.z
++      rsq r9.w, r9.w // per square metre of the surface
++      dsx r7.xy, v0.xyxy
++      dsy r7.zw, v0.xyxy
++      mul r8.x, r7.x, r7.w
++      mad r8.x, r7.y, -r7.z, r8.x
++      mul r9.w, r8_abs.x, r9.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r9.w, r9.w, c180.x, c180.y
++      mul r4.w, r4.w, r9.w // ground, not a prop lying on it
 +      mov r7.xy, v0
 +      mov r7.zw, c184.x
 +      texldl r7, r7, s0
@@ -3299,6 +3509,19 @@ index 657ce1d..dfcd6e3 100644
 +      nrm r4.xyz, v1
 +      add r4.w, r4.z, -c184.w
 +      mul_sat r4.w, r4.w, c183.x // how much this faces up
++      dsx r5.xyz, v5
++      dsy r6.xyz, v5
++      crs r7.xyz, r5, r6
++      dp3 r7.w, r7, r7
++      max r7.w, r7.w, c180.z
++      rsq r7.w, r7.w // per square metre of the surface
++      dsx r5.xy, v0.xyxy
++      dsy r5.zw, v0.xyxy
++      mul r6.x, r5.x, r5.w
++      mad r6.x, r5.y, -r5.z, r6.x
++      mul r7.w, r6_abs.x, r7.w // the texture's repeats per square metre: boxes, bags and leaves have a small one
++      mad_sat r21.z, r7.w, c180.x, c180.y
++      mul r4.w, r4.w, r21.z // ground, not a prop lying on it (kept for the bumps)
 +      mul r5.xy, v5, c167.x
 +      mov r5.w, c167.z
 +      texldb r5, r5, s12
@@ -3376,6 +3599,7 @@ index 657ce1d..dfcd6e3 100644
 +      mul r13.x, r13.x, r13.y
 +      add r13.y, r16.z, -c184.w
 +      mul_sat r13.y, r13.y, c183.x
++      mul r13.y, r13.y, r21.z
 +      mul r13.x, r13.x, r13.y
 +      dsx r14.xyz, v5
 +      dsy r15.xyz, v5
@@ -3398,7 +3622,7 @@ index 657ce1d..dfcd6e3 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      mul r0.w, r0.w, v2.w
-@@ -53,7 +322,9 @@
+@@ -53,7 +350,9 @@
      mov oC1.w, r0.w
      // mul oC2.x, r1.x, c72.x
      // mov oC2.z, v2.x

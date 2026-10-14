@@ -150,6 +150,7 @@ namespace ShadowDiagnostics
                 << " lamp_distance_adjusted=" << PlayerShadowAllocation::lampDistanceAdjusted.load()
                 << " caster_priority=" << PlayerShadowAllocation::casterPriority
                 << " caster_captures=" << PlayerShadowAllocation::casterCaptures.load()
+                << " cars_left_to_boxes=" << PlayerShadowAllocation::carsLeftToBoxes.load()
                 << " lamps_without_casters=" << PlayerShadowAllocation::lampsWithoutCasters.load()
                 << " lights_off_screen=" << PlayerShadowAllocation::lightsOffScreen.load()
                 << " nearby_receivers=" << NearbyVehicleLighting36::enabled.load()

@@ -19,6 +19,7 @@ import comvars;
 import renderscale;
 import settings;
 import inireload;
+import entityclass;
 
 // Texture quality options for the G-buffer pass, each turned on and off on its own in the
 // graphics menu ([TEXTURES] in the ini has their tuning):
@@ -92,6 +93,13 @@ class TextureQuality
     static inline uint64_t groundBinds[4] = {};
     static inline uint32_t groundFrames = 0;
     static inline bool bLastGround = false;
+
+    // Props lying on the ground (boxes, bags, bins) are drawn with the same world shaders and
+    // materials as the ground, so Ground Surfaces is kept to the map's own geometry: b15 is turned
+    // off around the draws of props (entityclass.ixx). What b15 holds within the G-buffer pass,
+    // and the draws it was turned off for.
+    static inline bool bGroundBound = true;
+    static inline uint64_t propDraws = 0;
 
     // Made during the asynchronous init, which is over before the G-buffer hooks are added.
     static inline std::vector<std::vector<uint32_t>> detailLevels;
@@ -402,6 +410,32 @@ private:
         return shSetPixelShader.unsafe_stdcall<HRESULT>(pDevice, shader);
     }
 
+    static void BindGround(bool ground)
+    {
+        if (!bInGBuffer || !bLastGround || ground == bGroundBound)
+            return;
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+        const BOOL flag = ground;
+        pDevice->SetPixelShaderConstantB(15, &flag, 1);
+        bGroundBound = ground;
+    }
+
+    static void BeforeEntityDraw(EntityClass::Kind kind)
+    {
+        if (kind != EntityClass::Kind::Prop)
+            return;
+        BindGround(false);
+        ++propDraws;
+    }
+
+    static void AfterEntityDraw(EntityClass::Kind kind)
+    {
+        if (kind == EntityClass::Kind::Prop)
+            BindGround(true);
+    }
+
     // Ctrl+Shift+F10 (IniReload): the settings read again, and with GroundSurfacesDebug on what the G-buffer pass drew
     // with written to GTAIV.EFLC.FusionFix.Ground.log.
     static void OnIniReload(CIniReader& iniReader)
@@ -409,11 +443,11 @@ private:
         {
             ReadIni(iniReader);
             const double frames = groundFrames ? double(groundFrames) : 1.0;
-            FusionLog::Write("Ground", "Draws", "Ground Surfaces %s, detail texture %s, debug %d, set-pixel-shader hook %s; per frame over %u frames: "
-                    "terrain shaders %.1f, parallax shaders %.1f, world shaders with ground %.1f, other shaders %.1f; %zu shaders seen\n",
+            FusionLog::Write("Ground", "Draws", "Ground Surfaces %s, detail texture %s, debug %d, set-pixel-shader hook %s, prop hooks %s; per frame over %u frames: "
+                    "terrain shaders %.1f, parallax shaders %.1f, world shaders with ground %.1f, other shaders %.1f, prop draws without ground %.1f; %zu shaders seen\n",
                     bLastGround ? "on" : "off", pDetailTex ? "made" : (bDetailTexFailed ? "failed" : "not made"), nGroundDebug,
-                    shSetPixelShader ? "on" : (bPixelShaderHookTried ? "failed" : "not tried"), groundFrames,
-                    groundBinds[1] / frames, groundBinds[2] / frames, groundBinds[3] / frames, groundBinds[0] / frames, shaderKinds.size());
+                    shSetPixelShader ? "on" : (bPixelShaderHookTried ? "failed" : "not tried"), EntityClass::Installed() ? "on" : "failed", groundFrames,
+                    groundBinds[1] / frames, groundBinds[2] / frames, groundBinds[3] / frames, groundBinds[0] / frames, propDraws / frames, shaderKinds.size());
             // Which shaders those were, the most bound first, by their number in the pack
             std::vector<const SeenShader*> seen;
             for (const auto& [ptr, info] : shaderKinds)
@@ -428,6 +462,7 @@ private:
             for (auto& [ptr, info] : shaderKinds)
                 info.binds = 0;
             memset(groundBinds, 0, sizeof(groundBinds));
+            propDraws = 0;
             groundFrames = 0;
         }
     }
@@ -470,6 +505,7 @@ private:
         const bool ground = Pref(groundPref) != 0 && GetDetailTexture(pDevice);
         bLastGround = ground;
         bInGBuffer = true;
+        bGroundBound = true;
 
         // Menu steps of -0.25, and the render scale's: textures as sharp as they'd be at the screen size, which DLSS
         // and FSR keep through the upscale, and UpscalerLodBias more with them
@@ -620,6 +656,8 @@ public:
             IniReload::Add(OnIniReload);
             detailLevels = MakeDetailLevels();
         };
+
+        EntityClass::AddDrawHooks(BeforeEntityDraw, AfterEntityDraw);
 
         // Added once all the other modules have hooked the G-buffer pass, so that what they draw
         // at its start (the reflection mips) runs before the bias and the flags are set.

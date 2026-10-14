@@ -2361,6 +2361,10 @@ export namespace VehicleBoxShadowsBridge
     int (*BoxedCars)(const float position[3], uintptr_t* cars, int max) = nullptr;
     // Main thread: those lamps and cars as of the last frame drawn, up to max.
     int (*CopyBoxedPairs)(BoxedPair* pairs, int max) = nullptr;
+    // Whether cars get box shadows (VehicleBoxShadows in the menu) and how far from the camera, in metres, lamps keep
+    // them before they fade out.
+    bool (*Enabled)() = nullptr;
+    float (*MaxDistance)() = nullptr;
     // Render thread: the key whose shadow map a light's key uses (the other lamp of its pair on one post), 0 for none.
     uint32_t (*SharedMapKey)(uint32_t key) = nullptr;
     // Render thread: for either lamp of a pair on one post, the point between them and their spacing; false otherwise.
@@ -2646,6 +2650,9 @@ export namespace RageDirect3DDevice9
     // into the D3D9 runtime with the proxy for the device crash, so these always go by this one.
     IDirect3DDevice9* RuntimeDevice = nullptr;
 
+    // Called with the device as the game stores it, right after creating it
+    void (*OnDeviceStored)(IDirect3DDevice9* device) = nullptr;
+
     IDirect3DDevice9* GetRuntimeDevice()
     {
         if (!RuntimeDevice && m_pRealDevice)
@@ -2697,6 +2704,8 @@ namespace RageDirect3DDevice9
     void __stdcall StoreDevice(IDirect3DDevice9* device)
     {
         RuntimeDevice = device;
+        if (OnDeviceStored && device)
+            OnDeviceStored(device);
     }
 
     // Takes the place of the call right after the game stores its device, eax still holds it. The call's offset is
