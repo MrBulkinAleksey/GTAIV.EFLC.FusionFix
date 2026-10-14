@@ -696,10 +696,94 @@ namespace Lighting20
             return false;
         }
 
+        // NightShadowsSlotLog: Q lines, each light within TraceReach of you near another shadow light, paired or the
+        // first rule of Find that kept it from its nearest neighbour, when that changes.
+        static constexpr float TraceReach = 40.0f;
+        static std::unordered_map<uint32_t, std::string> traced;
+
+        static void Trace(const rage::CLightSource* lights, uint32_t count, const std::vector<int>& partner,
+            const std::vector<bool>& candidate, const std::vector<bool>& first) noexcept
+        {
+            auto& trace = PlayerShadowAllocation::slotTrace;
+            if (!trace.enabled || !CTimer::m_snTimeInMilliseconds) return;
+            try
+            {
+                const auto player = PlayerShadowAllocation::state.player;
+                const auto shadowed = [](const rage::CLightSource& l)
+                {
+                    return (l.mFlags & 6) && !(l.mFlags & (rage::LF_VEHICLE | rage::LF_TRAFFIC)) && l.mCastShadows && l.mCastShadows != -1;
+                };
+                const auto d2 = [](const rage::CLightSource& a, const rage::CLightSource& b)
+                {
+                    const float dx = a.mPosition.x - b.mPosition.x, dy = a.mPosition.y - b.mPosition.y, dz = a.mPosition.z - b.mPosition.z;
+                    return dx * dx + dy * dy + dz * dz;
+                };
+                if (traced.size() > 4096) traced.clear();
+                for (uint32_t i = 0; i < count; ++i)
+                {
+                    const auto& l = lights[i];
+                    if (!shadowed(l)) continue;
+                    const float px = l.mPosition.x - player.x, py = l.mPosition.y - player.y, pz = l.mPosition.z - player.z;
+                    if (!(px * px + py * py + pz * pz <= TraceReach * TraceReach)) continue;
+                    int nearest = partner[i];
+                    if (nearest < 0)
+                    {
+                        float best = (distance * 1.5f) * (distance * 1.5f);
+                        for (uint32_t j = 0; j < count; ++j)
+                            if (j != i && shadowed(lights[j]) && d2(l, lights[j]) < best) { best = d2(l, lights[j]); nearest = int(j); }
+                    }
+                    const auto key = static_cast<uint32_t>(l.mCastShadows);
+                    if (nearest < 0)
+                    {
+                        if (auto it = traced.find(key); it != traced.end() && it->second != "alone") { it->second = "alone"; trace.Pair(std::format("t={} f={} key={:08x} alone", *CTimer::m_snTimeInMilliseconds, Frame(), key)); }
+                        continue;
+                    }
+                    const auto& o = lights[nearest];
+                    const char* status;
+                    if (partner[i] >= 0) status = first[i] ? "first" : "second";
+                    else if (!(l.mFlags & rage::LF_DYNAMIC_SHADOW)) status = "not_dynamic";
+                    else if (!(o.mFlags & rage::LF_DYNAMIC_SHADOW)) status = "other_not_dynamic";
+                    else if (!candidate[i]) status = PlayerShadowAllocation::IsSharedMap(i) ? "shared_map" : "not_candidate";
+                    else if (!candidate[nearest]) status = PlayerShadowAllocation::IsSharedMap(nearest) ? "other_shared_map" : "other_not_candidate";
+                    else if (o.mType != l.mType) status = "type";
+                    else if (o.mInteriorIndex != l.mInteriorIndex || o.mRoomIndex != l.mRoomIndex) status = "room";
+                    else if (o.mCastShadows == l.mCastShadows) status = "same_key";
+                    else if (std::abs(o.mRadius - l.mRadius) > 0.25f * (std::max)(o.mRadius, l.mRadius)) status = "radius";
+                    else if (l.mType == rage::LT_SPOT && l.mDirection.x * o.mDirection.x + l.mDirection.y * o.mDirection.y + l.mDirection.z * o.mDirection.z < 0.5f) status = "direction";
+                    else if (d2(l, o) >= distance * distance) status = "distance";
+                    else if (partner[nearest] >= 0) status = "other_taken";
+                    else status = "unknown";
+                    const auto otherKey = static_cast<uint32_t>(o.mCastShadows);
+                    auto now = std::format("{} {:08x}", status, otherKey);
+                    auto& last = traced[key];
+                    if (last == now) continue;
+                    last = std::move(now);
+                    const float dot = l.mDirection.x * o.mDirection.x + l.mDirection.y * o.mDirection.y + l.mDirection.z * o.mDirection.z;
+                    trace.Pair(std::format("t={} f={} key={:08x} {} other={:08x} apart={:.2f} pos={:.1f},{:.1f},{:.1f} d={:.1f} "
+                        "flags={:x}/{:x} type={}/{} cache={}/{} r={:.1f}/{:.1f} room={}.{}/{}.{} dot={:.2f} other_partner={:08x}",
+                        *CTimer::m_snTimeInMilliseconds, Frame(), key, status, otherKey, std::sqrt(d2(l, o)),
+                        l.mPosition.x, l.mPosition.y, l.mPosition.z, std::sqrt(px * px + py * py + pz * pz),
+                        l.mFlags, o.mFlags, int(l.mType), int(o.mType), int(l.mShadowCacheIndex), int(o.mShadowCacheIndex),
+                        l.mRadius, o.mRadius, int(l.mInteriorIndex), int(l.mRoomIndex), int(o.mInteriorIndex), int(o.mRoomIndex), dot,
+                        partner[nearest] >= 0 && partner[nearest] != int(i) ? static_cast<uint32_t>(lights[partner[nearest]].mCastShadows) : 0u));
+                }
+            }
+            catch (...) { trace.enabled = false; }
+        }
+
         static void Find(rage::CLightSource* lights, uint32_t count) noexcept
         {
             if (distance <= 0) return;
             const auto frame = Frame();
+            const bool tracing = PlayerShadowAllocation::slotTrace.enabled;
+            static std::vector<int> partner;
+            static std::vector<bool> candidate, firstOf;
+            if (tracing)
+            {
+                partner.assign(count, -1);
+                candidate.assign(count, false);
+                firstOf.assign(count, false);
+            }
             std::array<uint16_t, 256> candidates;
             std::array<bool, 256> taken{};
             unsigned n = 0;
@@ -709,7 +793,10 @@ namespace Lighting20
                 if ((l.mFlags & rage::LF_DYNAMIC_SHADOW) && !(l.mFlags & (rage::LF_VEHICLE | rage::LF_TRAFFIC)) &&
                     l.mCastShadows && l.mCastShadows != -1 && (l.mType == rage::LT_POINT || l.mType == rage::LT_SPOT) &&
                     std::isfinite(l.mRadius) && l.mRadius > 0 && !PlayerShadowAllocation::IsSharedMap(i))
+                {
+                    if (tracing) candidate[i] = true;
                     candidates[n++] = static_cast<uint16_t>(i);
+                }
             }
             uint32_t inFrame = 0;
             for (unsigned a = 0; a < n; ++a)
@@ -742,6 +829,12 @@ namespace Lighting20
                 const auto& second = lights[candidates[best]];
                 const auto firstKey = static_cast<uint32_t>(first.mCastShadows), secondKey = static_cast<uint32_t>(second.mCastShadows);
                 PlayerShadowAllocation::MarkSharedMap(candidates[best]);
+                if (tracing)
+                {
+                    partner[candidates[a]] = candidates[best];
+                    partner[candidates[best]] = candidates[a];
+                    firstOf[candidates[a]] = true;
+                }
                 Link2(secondKey, firstKey, frame);
                 for (uint32_t i = 0, c = Cell(firstKey); i < 8; ++i, c = (c + 1) & (Cells - 1))
                 {
@@ -761,6 +854,7 @@ namespace Lighting20
             }
             found += inFrame;
             if (inFrame > mostInFrame.load(std::memory_order_relaxed)) mostInFrame.store(inFrame, std::memory_order_relaxed);
+            if (tracing) Trace(lights, count, partner, candidate, firstOf);
         }
     }
 

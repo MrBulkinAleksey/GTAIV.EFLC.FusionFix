@@ -23,7 +23,8 @@ namespace fusionfix::shadows {
 // stopped counting (reach, view, gen, nan), C held claims were dropped all at once,
 // X a pass left to the game's own choice, S once a second whether selection runs at all,
 // M a mark (Ctrl+Shift+F7 or F12), W a light
-// that would add a shadow in view started waiting without a slot, and who kept it out.
+// that would add a shadow in view started waiting without a slot, and who kept it out,
+// Q a lamp within 40 m paired with another on its post (PairedLampDistance) or why not.
 class ShadowSlotTrace {
 public:
     struct Light {
@@ -119,6 +120,11 @@ public:
     // Game thread: whether selection runs and how its passes end (ShadowAllocationRuntime).
     void Status(const std::string& text) {
         Line("S " + text);
+    }
+
+    // Selection side: a lamp near you paired with another on its post or why not (PairedLampDistance), when it changes.
+    void Pair(const std::string& text) {
+        Line("Q " + text);
     }
 
     // Game thread: a mark where something was seen.
