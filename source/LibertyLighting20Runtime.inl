@@ -531,15 +531,26 @@ namespace Lighting20
     // (entity type 4) into the map only with bit 0x800 of +0x210. 0xB1884B sets it when the object's source (+0x280)
     // is a map dummy (type 2): map props made from their dummy (bins and the like) have it and cast already. Objects
     // with no dummy source don't: lamp posts (Liberty's Shadows found +0x280 0 on all 26 post models), objects
-    // spawned by scripts, pieces broken off. No lamp shadowed them, not even its own post. PropShadows lets them in: the caster hook in nightshadows resumes at 0xAE3767 with that bit as if set. Posts
-    // and many props are skinned fragments: world_wd_local_shadow_skinned.patch gives the world shaders
-    // wd_local_drawskinned and drops what is within half a metre of the light, so a lamp's head and glass don't
-    // cover its own light.
+    // spawned by scripts, pieces broken off. No lamp shadowed them, not even its own post. PropShadows lets them in:
+    // the caster hook in nightshadows resumes at 0xAE3767 with that bit as if set. Posts and many props are skinned
+    // fragments: world_wd_local_shadow_skinned.patch gives the world shaders wd_local_drawskinned and drops what is
+    // within half a metre of the light, so a lamp's head and glass don't cover its own light.
     namespace Props
     {
         static bool enabled = false;
         static thread_local bool scope = false;
-        static std::atomic<uint32_t> passes{0}, promoted{0};
+        static std::atomic<uint32_t> passes{0}, objects{0}, withBit{0}, promoted{0};
+
+        // Diagnostics of the draw: the fragment draw command 0x8DD0B0 (model +0x58) run while the wd_local technique
+        // group is forced ([0x106B308]), and its child dispatch 0xAEC7B0 choosing the drawable's skinned draw
+        // (+0x30, [esp+0x30] at 0xAEC84A) or the plain one (+0x28). Promoted props' models are kept in a small table
+        // (main thread writes, render thread reads; a stale entry only miscounts).
+        static std::array<std::atomic<uint16_t>, 64> models{};
+        static int32_t localTechnique = -1;
+        static thread_local bool propDraw = false;
+        static std::atomic<uint32_t> localFragments{0}, propFragments{0}, propPlain{0}, propSkinned{0};
+        static SafetyHookInline consumer;
+        static SafetyHookMid dispatch;
 
         static bool On() noexcept { return enabled && bExtraNightShadows; }
 
@@ -553,13 +564,45 @@ namespace Lighting20
                 !*reinterpret_cast<const uint8_t*>(game + fusionfix::shadows::ce::casterguard::DeferredFlagRva);
         }
 
-        // From the caster hook: type and render mode as the loop has them (EAX, EDX).
-        static bool Cast(uintptr_t entity, uint32_t type, uint32_t mode) noexcept
+        // From the caster hook: type and render mode as the loop has them (EAX, EDX); artificial: a light's pass.
+        static bool Cast(uintptr_t entity, uint32_t type, uint32_t mode, bool artificial) noexcept
         {
-            if (!scope || type != 4 || mode != 0 || !entity) return false;
-            if (*reinterpret_cast<const uint32_t*>(entity + 0x210) & 0x800) return false;
+            if (!scope || type != 4 || !entity) return false;
+            ++objects;
+            if (*reinterpret_cast<const uint32_t*>(entity + 0x210) & 0x800)
+            {
+                ++withBit;
+                return false;
+            }
+            if (mode != 0 || !artificial) return false;
+            const auto model = *reinterpret_cast<const uint16_t*>(entity + 0x2E);
+            models[model % models.size()].store(model, std::memory_order_relaxed);
             ++promoted;
             return true;
+        }
+
+        static uint32_t __fastcall Consumer(void* command, void*)
+        {
+            bool prop = false;
+            if (localTechnique >= 0 && *reinterpret_cast<const int32_t*>(game + 0xC6B308) == localTechnique)
+            {
+                ++localFragments;
+                const auto model = *reinterpret_cast<const uint16_t*>(reinterpret_cast<uintptr_t>(command) + 0x58);
+                prop = model && models[model % models.size()].load(std::memory_order_relaxed) == model;
+                if (prop) ++propFragments;
+            }
+            const bool previous = propDraw;
+            propDraw = prop;
+            const auto result = consumer.unsafe_thiscall<uint32_t>(command);
+            propDraw = previous;
+            return result;
+        }
+
+        static void Dispatch(SafetyHookContext& regs) noexcept
+        {
+            if (!propDraw) return;
+            if (*reinterpret_cast<const uint8_t*>(regs.esp + 0x30)) ++propSkinned;
+            else ++propPlain;
         }
 
         // Around the phase's render (0xD77A00), as Buildings::Scope.
@@ -587,6 +630,14 @@ namespace Lighting20
             }
             enabled = ini.ReadInteger("SHADOWS", "PropShadows", 1) != 0;
             installStatus += enabled ? " props=1" : " props=0";
+            if (enabled && ini.ReadInteger("SHADOWS", "ExperimentalShadowDiagnostics", 0) != 0 &&
+                BytesAt(0x4DD0B0, { 0x51, 0x56, 0x8B, 0xF1, 0x0F, 0xB7, 0x46, 0x58 }) &&
+                BytesAt(0x6EC84A, { 0x8B, 0x54, 0x24, 0x10, 0x8B, 0x4C, 0x24, 0x28 }))
+            {
+                consumer = safetyhook::create_inline(game + 0x4DD0B0, Consumer);
+                dispatch = safetyhook::create_mid(game + 0x6EC84A, Dispatch);
+                installStatus += consumer && dispatch ? " prop_draw_trace=1" : " prop_draw_trace=hook_failed";
+            }
         }
     }
 
@@ -975,7 +1026,9 @@ namespace Lighting20
                 << " | buildings " << (Buildings::On() ? "on" : "off") << " passes=" << Buildings::passes.load()
                 << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load()
                 << " | props " << (Props::On() ? "on" : "off") << " passes=" << Props::passes.load()
-                << " promoted=" << Props::promoted.load()
+                << " objects=" << Props::objects.load() << " with_0x800=" << Props::withBit.load() << " promoted=" << Props::promoted.load()
+                << " wd_local_fragments=" << Props::localFragments.load() << " of_props=" << Props::propFragments.load()
+                << " prop_children_plain=" << Props::propPlain.load() << " skinned=" << Props::propSkinned.load()
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
                 << " duplicates=" << Sharing::duplicates.load() << " duplicates_unshadowed=" << Sharing::duplicatesUnshadowed.load()
                 << " (vehicle " << Sharing::duplicatesVehicle.load() << ", model lights " << Sharing::duplicatesOurs.load() << ')'
