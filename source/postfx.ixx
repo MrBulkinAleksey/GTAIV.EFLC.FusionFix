@@ -23,6 +23,7 @@ module;
 export module postfx;
 
 import common;
+import screenquad;
 import comvars;
 import d3dx9_43;
 import framegeneration;
@@ -3467,7 +3468,7 @@ private:
         D3DVIEWPORT9 viewport = { 0, 0, desc[0].Width, desc[0].Height, 0.0f, 1.0f };
         pDevice->SetViewport(&viewport);
         pDevice->SetVertexShader(nullptr);
-        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        pDevice->SetFVF(kScreenVertexFVF);
 
         ProfilerScope timedPass(pDevice, kProfWetGroundPass);
         UINT passes = 0;
@@ -3489,15 +3490,8 @@ private:
             SetSamplerStateBoth(pDevice, slot, D3DSAMP_SRGBTEXTURE, FALSE);
         }
         BindEffectConstantsOnly(pDevice, effect);
-        struct ScreenVertex { float x, y, z, rhw; float u, v; };
-        const ScreenVertex quad[4] =
-        {
-            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,         height - 0.5f,  0.0f, 1.0f, 0.0f, 1.0f },
-            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
-            { width - 0.5f,  height - 0.5f,  0.0f, 1.0f, 1.0f, 1.0f },
-        };
-        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(ScreenVertex));
+        const ScreenQuad quad = ScreenQuad::Full(width, height);
+        quad.Draw(pDevice);
         effect->EndPass();
         effect->End();
 
@@ -3652,7 +3646,7 @@ private:
         D3DVIEWPORT9 viewport = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
         pDevice->SetViewport(&viewport);
         pDevice->SetVertexShader(nullptr);
-        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        pDevice->SetFVF(kScreenVertexFVF);
 
         UINT passes = 0;
         effect->SetTechnique(effect->GetTechniqueByName("Glints"));
@@ -3671,15 +3665,8 @@ private:
             SetSamplerStateBoth(pDevice, slot, D3DSAMP_SRGBTEXTURE, FALSE);
         }
         BindEffectConstantsOnly(pDevice, effect);
-        struct ScreenVertex { float x, y, z, rhw; float u, v; };
-        const ScreenVertex quad[4] =
-        {
-            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,         height - 0.5f,  0.0f, 1.0f, 0.0f, 1.0f },
-            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
-            { width - 0.5f,  height - 0.5f,  0.0f, 1.0f, 1.0f, 1.0f },
-        };
-        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(ScreenVertex));
+        const ScreenQuad quad = ScreenQuad::Full(width, height);
+        quad.Draw(pDevice);
         effect->EndPass();
         effect->End();
         R.szGlintsStatus = "drawn";
@@ -3819,18 +3806,11 @@ private:
         D3DVIEWPORT9 vp = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
         pDevice->SetViewport(&vp);
         pDevice->SetVertexShader(nullptr);
-        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        pDevice->SetFVF(kScreenVertexFVF);
         const float w = float(desc.Width), h = float(desc.Height);
-        struct Vertex { float x, y, z, rhw, u, v; };
-        const Vertex quad[4] =
-        {
-            { -0.5f,     -0.5f,     0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,     h - 0.5f,  0.0f, 1.0f, 0.0f, 1.0f },
-            { w - 0.5f,  -0.5f,     0.0f, 1.0f, 1.0f, 0.0f },
-            { w - 0.5f,  h - 0.5f,  0.0f, 1.0f, 1.0f, 1.0f },
-        };
+        const ScreenQuad quad = ScreenQuad::Full(w, h);
         pDevice->SetPixelShader(PostFxResources.Blit_PS);
-        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(Vertex));
+        quad.Draw(pDevice);
 
         pDevice->SetVertexShader(oldVS);
         pDevice->SetFVF(oldFVF);
@@ -4221,16 +4201,9 @@ private:
         device->SetPixelShaderConstantF(201, masked, 1);
         device->SetPixelShader(R.CASMasked_PS);
         device->SetVertexShader(nullptr);
-        device->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
-        struct Vertex { float x, y, z, rhw, u, v; };
-        const Vertex quad[4] =
-        {
-            { -0.5f,     -0.5f,     0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,     h - 0.5f,  0.0f, 1.0f, 0.0f, 1.0f },
-            { w - 0.5f,  -0.5f,     0.0f, 1.0f, 1.0f, 0.0f },
-            { w - 0.5f,  h - 0.5f,  0.0f, 1.0f, 1.0f, 1.0f },
-        };
-        bool drawn = SUCCEEDED(device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(Vertex)));
+        device->SetFVF(kScreenVertexFVF);
+        const ScreenQuad quad = ScreenQuad::Full(w, h);
+        bool drawn = SUCCEEDED(quad.Draw(device));
 
         for (DWORD i = 0; i < 4; ++i)
             if (oldTargets[i] || i > 0)
@@ -5750,7 +5723,7 @@ private:
         pDevice->SetDepthStencilSurface(nullptr);
         pDevice->SetStreamSource(0, nullptr, 0, 0);
         pDevice->SetVertexDeclaration(nullptr);
-        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        pDevice->SetFVF(kScreenVertexFVF);
 
         float width = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
         float height = float(RenderScale::ToRenderHeight(uint32_t(vp->mHeight)));
@@ -5768,8 +5741,7 @@ private:
         ID3DXEffect* effect = R.SSREffect;
         D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
 
-        struct ScreenVertex { float x, y, z, rhw; float u, v; };
-        ScreenVertex screenVertices[4] = {};
+        ScreenQuad screenQuad = {};
         // Viewport, quad and the effect's pixel size and reconstruction basis for a w x h target.
         auto setPassSize = [&](float w, float hgt)
         {
@@ -5779,14 +5751,7 @@ private:
             vpDesc.Height = DWORD(hgt);
             pDevice->SetViewport(&vpDesc);
 
-            const ScreenVertex quad[4] =
-            {
-                { -0.5f,      -0.5f,       0.0f, 1.0f, 0.0f, 0.0f },
-                { -0.5f,       hgt - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-                { w - 0.5f,   -0.5f,       0.0f, 1.0f, 1.0f, 0.0f },
-                { w - 0.5f,    hgt - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
-            };
-            memcpy(screenVertices, quad, sizeof(quad));
+            screenQuad = ScreenQuad::Full(w, hgt);
             SetTargetSize(effect, h, proj, w, hgt);
         };
         setPassSize(half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height);
@@ -5905,7 +5870,7 @@ private:
                 effect->CommitChanges();
                 BindEffectSamplers(pDevice, effect);
                 SSRTrace::State(pDevice, "ssr pass");
-                const HRESULT drawHr = pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                const HRESULT drawHr = screenQuad.Draw(pDevice);
                 effect->EndPass();
                 if (SSRTrace::Active())
                 {
@@ -5985,7 +5950,7 @@ private:
             SSRTrace::State(pDevice, "ssr denoise");
             SSRTrace::Contents(pDevice, "denoise input", ssrTex);
             ProfilerMark(pDevice, kProfSSRDenoise, true);
-            const HRESULT drawHr = pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            const HRESULT drawHr = screenQuad.Draw(pDevice);
             ProfilerMark(pDevice, kProfSSRDenoise, false);
             effect->EndPass();
             effect->End();
@@ -6026,7 +5991,7 @@ private:
             BindEffectSamplers(pDevice, effect);
             SSRTrace::State(pDevice, "ssr temporal");
             ProfilerMark(pDevice, kProfSSRTemporal, true);
-            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            screenQuad.Draw(pDevice);
             ProfilerMark(pDevice, kProfSSRTemporal, false);
             effect->EndPass();
             effect->End();
@@ -6064,7 +6029,7 @@ private:
             effect->CommitChanges();
             BindEffectSamplers(pDevice, effect);
             ProfilerScope timed(pDevice, kProfSSRDebug);
-            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            screenQuad.Draw(pDevice);
             effect->EndPass();
             effect->End();
             R.bSSRDebugValid = true;
@@ -6575,7 +6540,7 @@ private:
             pDevice->SetDepthStencilSurface(nullptr);
         pDevice->SetStreamSource(0, nullptr, 0, 0);
         pDevice->SetVertexDeclaration(nullptr);
-        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        pDevice->SetFVF(kScreenVertexFVF);
         const float quadZ = reflection ? 1.0f : 0.0f;
 
         // Half size, accumulated, laid over the scene at full size; one full size pass straight into
@@ -6604,7 +6569,6 @@ private:
             effect->SetVector(effect->GetParameterByName(nullptr, "vec4History"), &historyInfo);
         }
 
-        struct ScreenVertex { float x, y, z, rhw; float u, v; };
         IDirect3DTexture9* reflectionHalf = nullptr;    // while CloudsUpscale lays it over the reflection
         auto bindTextures = [&](bool readScene, bool readSkyRef, bool readMarch)
         {
@@ -6649,13 +6613,7 @@ private:
             info.z -= x0 * info.x;
             info.w -= y0 * info.y;
             effect->SetVector(effect->GetParameterByName(nullptr, "vec4ProjInfo"), &info);
-            const ScreenVertex screenVertices[4] =
-            {
-                { x0 - 0.5f,      y0 - 0.5f,     quadZ, 1.0f, 0.0f, 0.0f },
-                { x0 - 0.5f,      y0 + h - 0.5f, quadZ, 1.0f, 0.0f, 1.0f },
-                { x0 + w - 0.5f,  y0 - 0.5f,     quadZ, 1.0f, 1.0f, 0.0f },
-                { x0 + w - 0.5f,  y0 + h - 0.5f, quadZ, 1.0f, 1.0f, 1.0f }
-            };
+            const ScreenQuad screenQuad = ScreenQuad::Rect(x0, y0, w, h, quadZ);
             UINT passes = 0;
             // By handle: the effect is large address aware, a name would be taken for one.
             effect->SetTechnique(effect->GetTechniqueByName(techniqueName));
@@ -6666,7 +6624,7 @@ private:
             bindTextures(halfSize && target != sceneSurface, target != R.CloudSkyRefSurf, halfSize && target == R.CloudSurf[0]);
             BindEffectConstantsOnly(pDevice, effect);
             ProfilerScope timedPass(pDevice, reflection ? -1 : profile);
-            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+            screenQuad.Draw(pDevice);
             effect->EndPass();
             effect->End();
         };
@@ -6830,16 +6788,9 @@ private:
         pDevice->SetDepthStencilSurface(nullptr);
         pDevice->SetStreamSource(0, nullptr, 0, 0);
         pDevice->SetVertexDeclaration(nullptr);
-        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        pDevice->SetFVF(kScreenVertexFVF);
 
-        struct ScreenVertex { float x, y, z, rhw; float u, v; };
-        ScreenVertex screenVertices[4] =
-        {
-            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
-            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
-        };
+        const ScreenQuad screenQuad = ScreenQuad::Full(width, height);
 
         UINT passes = 0;
         IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
@@ -6884,7 +6835,7 @@ private:
         effect->BeginPass(0);
         effect->CommitChanges();
         BindEffectSamplers(pDevice, effect);
-        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+        screenQuad.Draw(pDevice);
         effect->EndPass();
         effect->End();
 
@@ -7079,7 +7030,7 @@ private:
             pDevice->SetDepthStencilSurface(nullptr);
             pDevice->SetStreamSource(0, nullptr, 0, 0);
             pDevice->SetVertexDeclaration(nullptr);
-            pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1); // fullscreen fvf
+            pDevice->SetFVF(kScreenVertexFVF); // fullscreen fvf
 
             PostFxResources.SpecularTex = PostFxResources.mSpecularRT->mD3DTexture;
             PostFxResources.DepthTex = LightingDepth();
@@ -7110,14 +7061,7 @@ private:
 
                 auto& h = PostFxResources.AOEffectHandles;
 
-                struct ScreenVertex { float x, y, z, rhw; float u, v; };
-                ScreenVertex screenVertices[4] =
-                {
-                    { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
-                    { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-                    { width - 0.5f, -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
-                    { width - 0.5f, height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
-                };
+                const ScreenQuad screenQuad = ScreenQuad::Full(width, height);
 
                 float invViewportSize[] = { 1.0f / width, 1.0f / height };
 
@@ -7130,7 +7074,7 @@ private:
                 pDevice->SetRenderTarget(0, camDepthSurf[0]);
                 effect->BeginPass(0);
                 BindEffectSamplers(pDevice, effect);
-                pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                screenQuad.Draw(pDevice);
                 effect->EndPass();
 
                 effect->SetTexture(h.AOCamDepthTexture2D, camDepthTex);
@@ -7146,19 +7090,13 @@ private:
                     effect->SetFloatArray(h.vec2PrevMipTexel, prevMipTexel, 2);
                     effect->SetInt(h.iPreviousMip, i - 1);
 
-                    ScreenVertex mipVertices[4] =
-                    {
-                        { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
-                        { -0.5f,          curMipHeight - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-                        { curMipWidth - 0.5f, -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
-                        { curMipWidth - 0.5f, curMipHeight - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
-                    };
+                    const ScreenQuad mipQuad = ScreenQuad::Full(curMipWidth, curMipHeight);
 
                     effect->CommitChanges();
 
                     pDevice->SetRenderTarget(0, PostFxResources.AOCamDepthSurf[i]);
                     BindEffectSamplers(pDevice, effect);
-                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, mipVertices, sizeof(ScreenVertex));
+                    mipQuad.Draw(pDevice);
                 }
                 effect->EndPass();
                 ProfilerMark(pDevice, kProfAODepth, false);
@@ -7168,13 +7106,7 @@ private:
                 aoSurf->GetDesc(&aoDesc);
                 const bool half = aoDesc.Width < UINT(width);
                 const float aoWidth = half ? float(aoDesc.Width) : width, aoHeight = half ? float(aoDesc.Height) : height;
-                ScreenVertex aoVertices[4] =
-                {
-                    { -0.5f,           -0.5f,            0.0f, 1.0f, 0.0f, 0.0f },
-                    { -0.5f,           aoHeight - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-                    { aoWidth - 0.5f, -0.5f,            0.0f, 1.0f, 1.0f, 0.0f },
-                    { aoWidth - 0.5f, aoHeight - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
-                };
+                const ScreenQuad aoQuad = ScreenQuad::Full(aoWidth, aoHeight);
                 const float aoTexel[] = { 1.0f / aoWidth, 1.0f / aoHeight };
                 if (half)
                 {
@@ -7222,7 +7154,7 @@ private:
                 ProfilerMark(pDevice, kProfAOMain, true);
                 effect->BeginPass(gtao ? 5 : 2); // 1 SAO, 2 GTAO
                 BindEffectSamplers(pDevice, effect);
-                pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, aoVertices, sizeof(ScreenVertex));
+                aoQuad.Draw(pDevice);
                 effect->EndPass();
                 ProfilerMark(pDevice, kProfAOMain, false);
 
@@ -7259,7 +7191,7 @@ private:
                     ProfilerMark(pDevice, kProfAOTemporal, true);
                     effect->BeginPass(6);
                     BindEffectSamplers(pDevice, effect);
-                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, aoVertices, sizeof(ScreenVertex));
+                    aoQuad.Draw(pDevice);
                     effect->EndPass();
                     ProfilerMark(pDevice, kProfAOTemporal, false);
 
@@ -7282,7 +7214,7 @@ private:
                     effect->CommitChanges();
 
                     BindEffectSamplers(pDevice, effect);
-                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, aoVertices, sizeof(ScreenVertex));
+                    aoQuad.Draw(pDevice);
 
                     pDevice->SetRenderTarget(0, aoSurf);
                     effect->SetTexture(h.AOTexture2D, aoBlurTex); // blur pass 2
@@ -7290,7 +7222,7 @@ private:
                     effect->CommitChanges();
 
                     BindEffectSamplers(pDevice, effect);
-                    pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, aoVertices, sizeof(ScreenVertex));
+                    aoQuad.Draw(pDevice);
                 }
                 effect->EndPass();
                 ProfilerMark(pDevice, kProfAOBlur, false);
@@ -7311,7 +7243,7 @@ private:
                 ProfilerMark(pDevice, kProfAOApply, true);
                 effect->BeginPass(4);
                 BindEffectSamplers(pDevice, effect);
-                pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+                screenQuad.Draw(pDevice);
                 effect->EndPass();
                 ProfilerMark(pDevice, kProfAOApply, false);
             }
@@ -7548,21 +7480,14 @@ private:
         pDevice->SetDepthStencilSurface(nullptr);
         pDevice->SetStreamSource(0, nullptr, 0, 0);
         pDevice->SetVertexDeclaration(nullptr);
-        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        pDevice->SetFVF(kScreenVertexFVF);
         D3DVIEWPORT9 vpDesc = {};
         vpDesc.Width = desc.Width;
         vpDesc.Height = desc.Height;
         vpDesc.MaxZ = 1.0f;
         pDevice->SetViewport(&vpDesc);
 
-        struct ScreenVertex { float x, y, z, rhw; float u, v; };
-        ScreenVertex screenVertices[4] =
-        {
-            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
-            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
-        };
+        const ScreenQuad screenQuad = ScreenQuad::Full(width, height);
 
         auto& h = R.SSREffectHandles;
         ID3DXEffect* effect = R.SSREffect;
@@ -7573,7 +7498,7 @@ private:
         effect->BeginPass(0);
         effect->CommitChanges();
         BindEffectSamplers(pDevice, effect);
-        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+        screenQuad.Draw(pDevice);
         effect->EndPass();
         effect->End();
 
@@ -7875,14 +7800,7 @@ private:
     static void DrawEffectPass(IDirect3DDevice9* pDevice, ID3DXEffect* effect, D3DXHANDLE technique, IDirect3DSurface9* target, float width, float height,
                                int profile = -1)
     {
-        struct ScreenVertex { float x, y, z, rhw; float u, v; };
-        const ScreenVertex screenVertices[4] =
-        {
-            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
-            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
-        };
+        const ScreenQuad screenQuad = ScreenQuad::Full(width, height);
         pDevice->SetRenderTarget(0, target);
 
         // No state saving by D3DX (see SavedShaders): the callers save and restore textures, samplers, render states
@@ -7910,7 +7828,7 @@ private:
                 desc.Width, desc.Height, unsigned(view.Width), unsigned(view.Height), unsigned(view.X), unsigned(view.Y), width, height);
         }
         ProfilerScope timed(pDevice, profile);
-        pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, screenVertices, sizeof(ScreenVertex));
+        screenQuad.Draw(pDevice);
         effect->EndPass();
         effect->End();
     }
@@ -8036,7 +7954,7 @@ private:
         pDevice->SetDepthStencilSurface(nullptr);
         pDevice->SetStreamSource(0, nullptr, 0, 0);
         pDevice->SetVertexDeclaration(nullptr);
-        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        pDevice->SetFVF(kScreenVertexFVF);
         D3DVIEWPORT9 vpDesc = {};
         vpDesc.Width = DWORD(width);
         vpDesc.Height = DWORD(height);
@@ -8277,7 +8195,7 @@ private:
         pDevice->SetDepthStencilSurface(nullptr);
         pDevice->SetStreamSource(0, nullptr, 0, 0);
         pDevice->SetVertexDeclaration(nullptr);
-        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        pDevice->SetFVF(kScreenVertexFVF);
         D3DVIEWPORT9 vpDesc = {};
         vpDesc.Width = DWORD(width);
         vpDesc.Height = DWORD(height);
@@ -8435,7 +8353,7 @@ private:
         pDevice->SetDepthStencilSurface(nullptr);
         pDevice->SetStreamSource(0, nullptr, 0, 0);
         pDevice->SetVertexDeclaration(nullptr);
-        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        pDevice->SetFVF(kScreenVertexFVF);
         D3DVIEWPORT9 vpDesc = {};
         vpDesc.Width = DWORD(width);
         vpDesc.Height = DWORD(height);

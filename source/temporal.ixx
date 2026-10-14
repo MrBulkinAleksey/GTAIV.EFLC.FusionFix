@@ -9,6 +9,7 @@ import common;
 import comvars;
 import coronas;
 import d3dx9_43;
+import screenquad;
 import framegeneration;
 import hdr;
 import renderscale;
@@ -1000,24 +1001,11 @@ public:
         device->SetSamplerState(sampler, D3DSAMP_SRGBTEXTURE, FALSE);
     }
 
-    struct ScreenVertex
-    {
-        float x, y, z, rhw;
-        float u, v;
-    };
-
     static void DrawFullscreen(IDirect3DDevice9* device, float width, float height)
     {
-        ScreenVertex vertices[4] =
-        {
-            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
-            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f },
-        };
         device->SetVertexShader(nullptr);
-        device->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
-        device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(ScreenVertex));
+        device->SetFVF(kScreenVertexFVF);
+        ScreenQuad::Full(width, height).Draw(device);
     }
 
     // Render states of a plain fullscreen pass, StateBackup restores them
