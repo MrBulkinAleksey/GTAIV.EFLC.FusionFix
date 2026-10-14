@@ -61,6 +61,8 @@ export namespace RenderSkip
     // Render thread: the name of the target the game has locked (index 0, innermost), "" with none locked, nullptr while
     // the lock hooks are not in place (everything above off at startup)
     const char* CurrentTarget();
+    // Render thread: how many locks of target index 0 there have been, to tell one lock of a target from the next
+    uint32_t LockCount();
 }
 
 namespace RenderSkip
@@ -182,6 +184,7 @@ namespace RenderSkip
     Lock stack[16]{};
     int depth = 0;
     bool bLockHooked = false;
+    uint32_t nLocks = 0;
     uint32_t dropped[Kinds]{};
 
     // The far cascades by day: the cascades' passes counted, and where the camera was at each one's last draw
@@ -512,6 +515,7 @@ namespace RenderSkip
             if (kind == CascadeTarget && target->mWidth)
                 cascadeSide = target->mWidth;
             stack[depth++] = { kind, DropFor(kind), target };
+            ++nLocks;
             Refresh();
             if (Tracing())
                 TraceEvent(std::format("lock {} (colour {}, depth {}){}", TargetName(target), TargetName(color), TargetName(depthTarget),
@@ -659,6 +663,11 @@ namespace RenderSkip
             return "";
         auto name = stack[depth - 1].target->mName;
         return name ? name : "unnamed";
+    }
+
+    uint32_t LockCount()
+    {
+        return nLocks;
     }
 
     float SunElevation()

@@ -7,6 +7,7 @@ module;
 #include <format>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -92,6 +93,13 @@ namespace
         uint64_t draws[size_t(Kind::Kinds)]{};
         int64_t ticks[size_t(Kind::Kinds)]{};
         uint64_t sourceDraws[Sources]{};
+        // Locks of the target that had draws; and per scene frame the entities drawn into it, by model and place
+        // (entity and fragment type commands), to tell how often one entity is drawn into it, as into each face
+        // of a lamp's cube map
+        uint64_t locks = 0;
+        uint64_t keyedDraws = 0, entities = 0;
+        uint32_t keysFrame = 0;
+        std::unordered_set<uint64_t> keys;
         int64_t Total() const
         {
             int64_t total = 0;
@@ -104,6 +112,7 @@ namespace
     const char* lastTargetName = nullptr;
     size_t lastTarget = 0;
     uint32_t statsFrom = 0;
+    uint32_t lastLock = ~0u;
     int64_t qpcFrequency = 0;
 
     TargetStats& StatsFor(const char* name)
@@ -137,6 +146,8 @@ namespace
                 if (kind || s.draws[kind])
                     text += std::format(" {} {:.1f} ({:.3f} ms),", KindNames[kind], s.draws[kind] * perFrame, s.ticks[kind] * msPerFrame);
             }
+            if (s.keyedDraws)
+                text += std::format(" locks {:.1f}, draws per entity {:.2f},", s.locks * perFrame, double(s.keyedDraws) / double(s.entities));
             text += " by command";
             for (int i = 0; i < Sources; ++i)
                 text += std::format("{} {} {:.1f}", i ? "," : "", SourceNames[i], s.sourceDraws[i] * perFrame);
@@ -173,6 +184,33 @@ namespace
             stats.draws[size_t(kind)]++;
             stats.ticks[size_t(kind)] += end.QuadPart - start.QuadPart;
             stats.sourceDraws[source]++;
+            if (const auto lock = RenderSkip::LockCount(); lock != lastLock)
+            {
+                lastLock = lock;
+                stats.locks++;
+            }
+            // The model index and the position the command keeps: CDrawEntityDC +0x30 and +0x20, CDrawFragTypeDC
+            // +0x58 and +0x40
+            const auto* bytes = reinterpret_cast<const uint8_t*>(dc);
+            ptrdiff_t model = -1, place = 0;
+            if (source == FromEntity)
+                model = 0x30, place = 0x20;
+            else if (source == FromFragType)
+                model = 0x58, place = 0x40;
+            if (model >= 0)
+            {
+                uint64_t key = *reinterpret_cast<const uint16_t*>(bytes + model);
+                for (int i = 0; i < 3; ++i)
+                    key = key * 0x9E3779B97F4A7C15ull ^ *reinterpret_cast<const uint32_t*>(bytes + place + 4 * i);
+                if (stats.keysFrame != frame)
+                {
+                    stats.keysFrame = frame;
+                    stats.keys.clear();
+                }
+                stats.keyedDraws++;
+                if (stats.keys.insert(key).second)
+                    stats.entities++;
+            }
         }
         for (auto it = hooks.rbegin(); it != hooks.rend(); ++it)
             if (it->second)
