@@ -580,6 +580,12 @@ namespace Lighting20
         // a light's map (none of the four lookups saw a prop draw inside 0x8DD0B0 in a run)
         static std::atomic<uint32_t> localFound{0}, localMissing{0};
         static std::array<std::atomic<uintptr_t>, 16> localMissingEffects{};
+        // The model's draw loop (0x69EC90) reached in a prop's fragment command, and its test of each geometry's
+        // shader bucket (0x69ECEC: EAX the shader's byte +9, [ESP+0x38] the bucket drawn): a geometry of another
+        // bucket is passed over before its technique is looked up, so the post may draw nothing
+        static SafetyHookMid modelLoop, bucketTest;
+        static std::atomic<uint32_t> propModelDraws{0};
+        static std::array<std::atomic<uint32_t>, 256> propBuckets{}; // shader bucket * 16 + bucket drawn
 
         static bool On() noexcept { return level > 0 && bExtraNightShadows; }
 
@@ -700,6 +706,15 @@ namespace Lighting20
                 uintptr_t empty = 0;
                 if (seen.load(std::memory_order_relaxed) == effect || seen.compare_exchange_strong(empty, effect)) break;
             }
+        }
+
+        static std::string Buckets()
+        {
+            std::string list;
+            for (size_t i = 0; i < propBuckets.size(); ++i)
+                if (const auto n = propBuckets[i].load())
+                    list += (list.empty() ? "" : ",") + std::to_string(i >> 4) + '>' + std::to_string(i & 15) + ':' + std::to_string(n);
+            return list.empty() ? "-" : list;
         }
 
         // Bytes readable from address in its committed region, at most limit.
@@ -851,7 +866,9 @@ namespace Lighting20
                 BytesAt(0x22E197, { 0x85, 0xC9, 0x75, 0x12, 0x8D, 0x0C, 0x40 }) &&
                 BytesAt(0x29ED1A, { 0x8D, 0x0C, 0x40, 0x8B, 0x43, 0x40 }) &&
                 BytesAt(0x2188F4, { 0x8D, 0x0C, 0x40, 0x8B, 0x47, 0x40 }) &&
-                BytesAt(0x25E46C, { 0x8D, 0x0C, 0x40, 0x8B, 0x46, 0x40 }))
+                BytesAt(0x25E46C, { 0x8D, 0x0C, 0x40, 0x8B, 0x46, 0x40 }) &&
+                BytesAt(0x29EC90, { 0x83, 0xEC, 0x18, 0x55, 0x57 }) &&
+                BytesAt(0x29ECEC, { 0x3B, 0x44, 0x24, 0x38, 0x0F, 0x85 }))
             {
                 consumer = safetyhook::create_inline(game + 0x4DD0B0, Consumer);
                 lookup = safetyhook::create_mid(game + 0x229157, [](SafetyHookContext& regs) { Lookup(regs.edi, regs.eax, regs.edx); });
@@ -859,6 +876,12 @@ namespace Lighting20
                 lookupModel = safetyhook::create_mid(game + 0x29ED1A, [](SafetyHookContext& regs) { Lookup(regs.ebx, regs.eax, 0); });
                 lookupFragment = safetyhook::create_mid(game + 0x2188F4, [](SafetyHookContext& regs) { Lookup(regs.edi, regs.eax, 0); });
                 lookupOther = safetyhook::create_mid(game + 0x25E46C, [](SafetyHookContext& regs) { Lookup(regs.esi, regs.eax, 0); });
+                modelLoop = safetyhook::create_mid(game + 0x29EC90, [](SafetyHookContext&) { if (propDraw) ++propModelDraws; });
+                bucketTest = safetyhook::create_mid(game + 0x29ECEC, [](SafetyHookContext& regs)
+                {
+                    if (propDraw)
+                        ++propBuckets[((regs.eax & 15) << 4) | (*reinterpret_cast<const uint32_t*>(regs.esp + 0x38) & 15)];
+                });
                 installStatus += consumer && lookup && lookupSkinned && lookupModel && lookupFragment && lookupOther ? " prop_draw_trace=1" : " prop_draw_trace=hook_failed";
             }
             else
@@ -1374,6 +1397,7 @@ namespace Lighting20
                 << " technique_found(group:n)=" << Props::ByGroup(Props::foundByGroup)
                 << " missing=" << Props::ByGroup(Props::missingByGroup) << " missing_in=" << Props::Effects(Props::missingEffects)
                 << " found_in=" << Props::Effects(Props::foundEffects)
+                << " prop_model_draws=" << Props::propModelDraws.load() << " prop_buckets(shader>drawn:n)=" << Props::Buckets()
                 << " all_under_wd_local: found=" << Props::localFound.load() << " missing=" << Props::localMissing.load()
                 << " missing_in=" << Props::Effects(Props::localMissingEffects)
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
