@@ -147,6 +147,8 @@ static void ReadSamplerStates(HMODULE hm, int resource, std::unordered_map<std::
 }
 
 
+export constexpr int PostfxTextureCount = 15;
+
 export class PostFxResource
 {
 public:
@@ -1676,7 +1678,6 @@ public:
         return ShadersFinishedLoading();
     }
 
-    #define PostfxTextureCount 15
     IDirect3DBaseTexture9* prePostFx[PostfxTextureCount] = { 0 };
     DWORD Samplers[PostfxTextureCount] = { D3DTEXF_LINEAR };
 
