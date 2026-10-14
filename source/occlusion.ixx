@@ -64,7 +64,7 @@ export namespace Occlusion
     // scaleU / scaleV how many texels of the grid one width / height of the screen takes (a texel covers 4^n pixels
     // where the screen took no whole number of them: the last one is cut short)
     void Publish(const uint8_t* texels, uint32_t pitchBytes, int width, int height, float scaleU, float scaleV,
-                 const float viewProjection[16], const float position[3], float nearPlane, uint32_t renderFrame);
+                 const float viewProjection[16], const float position[3], float nearPlane, float farPlane, uint32_t renderFrame);
 }
 
 namespace Occlusion
@@ -96,6 +96,9 @@ namespace Occlusion
     std::mutex latestMutex;
     std::shared_ptr<const Grid> latest;
     std::atomic<uint32_t> publishedCount{ 0 };
+    // What the grids held, summed over the texels of their first level: nothing in the way (other materials than the
+    // world's), sky (at the far plane), the world within 50 m
+    std::atomic<uint64_t> texelsAll{ 0 }, texelsNothing{ 0 }, texelsSky{ 0 }, texelsNear{ 0 };
 
     uint32_t* pScenePhase = nullptr;    // CE 0x159af24
     float* pCamera = nullptr;           // CE 0x128e340, the game camera's position (main thread)
@@ -191,7 +194,7 @@ namespace Occlusion
     LARGE_INTEGER qpcFrequency{};
 
     void Publish(const uint8_t* texels, uint32_t pitchBytes, int width, int height, float scaleU, float scaleV,
-                 const float viewProjection[16], const float position[3], float nearPlane, uint32_t renderFrame)
+                 const float viewProjection[16], const float position[3], float nearPlane, float farPlane, uint32_t renderFrame)
     {
         if (!texels || width <= 0 || height <= 0)
             return;
@@ -201,6 +204,17 @@ namespace Occlusion
         g->data[0].resize(size_t(width) * height);
         for (int y = 0; y < height; ++y)
             memcpy(&g->data[0][size_t(y) * width], texels + size_t(y) * pitchBytes, size_t(width) * sizeof(float));
+        uint64_t nothing = 0, sky = 0, nearby = 0;
+        for (float depth : g->data[0])
+        {
+            nothing += depth >= 1.0e8f;
+            sky += depth < 1.0e8f && depth >= farPlane * 0.9f;
+            nearby += depth < 50.0f;
+        }
+        texelsAll.fetch_add(g->data[0].size(), std::memory_order_relaxed);
+        texelsNothing.fetch_add(nothing, std::memory_order_relaxed);
+        texelsSky.fetch_add(sky, std::memory_order_relaxed);
+        texelsNear.fetch_add(nearby, std::memory_order_relaxed);
         // Each level the farthest of 2 x 2 of the one before; an odd last row or column is cut short
         int level = 0;
         while (level + 1 < MaxLevels && (g->width[level] > 1 || g->height[level] > 1))
@@ -476,6 +490,8 @@ namespace Occlusion
         windowQpc = nowQpc;
         const auto& s = stats;
         const double perFrame = 1.0 / double(s.frames);
+        const uint64_t all = texelsAll.exchange(0);
+        auto share = [all](std::atomic<uint64_t>& part) { return all ? 100.0 * double(part.exchange(0)) / double(all) : 0.0; };
         std::string outcomes;
         for (int i = 0; i < Outcomes; ++i)
             if (s.outcomes[i])
@@ -483,12 +499,14 @@ namespace Occlusion
         FusionLog::Write("Occlusion", "Stats",
             "%s, per frame over %u frames: %.0f entities of the scene tested (%s; hidden at the screen's edge %.0f); %.0f props, %.0f of them hidden; "
             "%.0f %s (%.1f%%), %.0f of %.0f list adds; test %.3f ms a frame, worst %.3f; grids published %u, "
-            "%.1f render frames old when taken; "
+            "%.1f render frames old when taken; grid texels: %.0f%% nothing in the way (cars, people, other materials), %.0f%% sky, "
+            "%.0f%% world within 50 m; "
             "threads: lists %lu, game %lu, adds from other threads %u; %zu entities kept\n",
             nMode == 1 ? "left out" : "counted only", s.frames, s.entities * perFrame, outcomes.c_str(), s.hiddenAtEdge * perFrame, s.props * perFrame,
             s.propsHidden * perFrame, s.left * perFrame, nMode == 1 ? "left out" : "would be left out",
             s.entities ? 100.0 * s.left / s.entities : 0.0, s.addsLeft * perFrame, s.adds * perFrame, double(ticks) * msPerTick * perFrame,
-            double(maxFrameTicks) * msPerTick, publishedCount.load(), s.grids ? double(s.ageFrames) / s.grids : 0.0, hookThread, gameThread, otherThreads.exchange(0), tableUsed);
+            double(maxFrameTicks) * msPerTick, publishedCount.load(), s.grids ? double(s.ageFrames) / s.grids : 0.0,
+            share(texelsNothing), share(texelsSky), share(texelsNear), hookThread, gameThread, otherThreads.exchange(0), tableUsed);
         stats = {};
         ticks = maxFrameTicks = 0;
     }

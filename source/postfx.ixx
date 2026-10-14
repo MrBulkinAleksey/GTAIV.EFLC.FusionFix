@@ -687,7 +687,7 @@ public:
         float scaleU = 0.0f, scaleV = 0.0f;
         float viewProjection[16] = {};
         float position[3] = {};
-        float nearPlane = 0.0f;
+        float nearPlane = 0.0f, farPlane = 0.0f;
         uint32_t frame = 0;
     } HiZReadbacks[kHiZReadbacks];
     void ReleaseHiZ()
@@ -3840,7 +3840,7 @@ private:
             {
                 Occlusion::Publish((const uint8_t*)locked.pBits, UINT(locked.Pitch), int(oldest->width), int(oldest->height),
                                    oldest->scaleU, oldest->scaleV, oldest->viewProjection, oldest->position, oldest->nearPlane,
-                                   oldest->frame);
+                                   oldest->farPlane, oldest->frame);
                 oldest->memory->UnlockRect();
             }
         }
@@ -4008,6 +4008,7 @@ private:
             else
                 slot->pending = false;
             slot->nearPlane = camera.Near;
+            slot->farPlane = camera.Far;
         }
 
         for (DWORD s = 0; s < kSlots; ++s)
