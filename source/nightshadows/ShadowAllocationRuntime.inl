@@ -965,6 +965,75 @@ namespace PlayerShadowAllocation
         else { ++fallbackPasses; ++rejectedPassReasons[state.pass.FailureCode() & 7]; TraceRejected(state.pass.FailureCode()); }
     }
 
+    // LampShadowsOcclusion: before the game picks the slots, a light whose whole reach (a sphere of its radius round
+    // it) lies behind the world drawn, by the grid of occlusion.ixx, two passes running, loses its dynamic shadow as
+    // the lamp keys whose car went do: nothing it lights shows, so its map is not drawn and its slot goes to a light
+    // in view. Cars and people count as nothing in the way there, so a lamp lighting one in view keeps its shadow; a
+    // cached lamp keeps its cache, and is not made a dynamic one (Lighting20's cached lamps, after this: the lights
+    // found hidden lose a dynamic shadow they got there too). The grid lags a frame or two: the sphere grows by how far
+    // the camera moved since.
+    struct OccludedLight { uint32_t pass = 0; uint16_t running = 0; };
+    static std::unordered_map<uint32_t, OccludedLight> occludedLights;
+    static std::array<uint32_t, 4096> occludedIndex{}; // the pass a light by its index was found hidden long enough
+    static uint32_t occlusionPass = 0;
+    static uint32_t occlusionTested = 0, occlusionHidden = 0, occlusionDropped = 0, occlusionNoGrid = 0, occlusionPasses = 0;
+    static uint32_t occlusionKeptCached = 0;
+    static void DropOccludedShadows(rage::CLightSource* lights, uint32_t count) noexcept
+    {
+        if (!Occlusion::bLampShadows || !lights || count > 4096) return;
+        try {
+            ++occlusionPass;
+            ++occlusionPasses;
+            const auto probe = Occlusion::Take();
+            if (!probe.usable) ++occlusionNoGrid;
+            else
+                for (uint32_t i = 0; i < count; ++i)
+                {
+                    auto& light = lights[i];
+                    if (!(light.mFlags & (rage::LF_DYNAMIC_SHADOW | rage::LF_STATIC_SHADOW)) || (light.mFlags & 0x400u)) continue;
+                    const float centre[3] = { light.mPosition.x, light.mPosition.y, light.mPosition.z };
+                    if (!(light.mRadius > 0.0f)) continue;
+                    ++occlusionTested;
+                    const auto key = static_cast<uint32_t>(light.mCastShadows);
+                    auto& entry = occludedLights[key];
+                    const bool hidden = Occlusion::SphereHidden(probe, centre, light.mRadius);
+                    entry.running = hidden ? static_cast<uint16_t>(entry.pass + 1 == occlusionPass ? std::min(entry.running + 1, 0xFFFF) : 1) : 0;
+                    entry.pass = occlusionPass;
+                    if (!hidden) continue;
+                    ++occlusionHidden;
+                    if (entry.running < 2) continue;
+                    occludedIndex[i] = occlusionPass;
+                    if (!(light.mFlags & rage::LF_DYNAMIC_SHADOW)) continue;
+                    light.mFlags &= ~rage::LF_DYNAMIC_SHADOW;
+                    ++occlusionDropped;
+                }
+            if (occlusionPasses >= 600)
+            {
+                for (auto it = occludedLights.begin(); it != occludedLights.end();)
+                    it = occlusionPass - it->second.pass > 60 ? occludedLights.erase(it) : std::next(it);
+                const double perPass = 1.0 / occlusionPasses;
+                FusionLog::Write("Occlusion", "Lamps", "per pass over %u passes: %.1f lights with a shadow tested, %.1f hidden, "
+                    "%.1f lost their dynamic shadow (hidden 2 passes running), %.1f cached ones not made dynamic; no grid or the camera "
+                    "moved too far in %u passes\n",
+                    occlusionPasses, occlusionTested * perPass, occlusionHidden * perPass, occlusionDropped * perPass,
+                    occlusionKeptCached * perPass, occlusionNoGrid);
+                occlusionPasses = occlusionTested = occlusionHidden = occlusionDropped = occlusionNoGrid = occlusionKeptCached = 0;
+            }
+        } catch (...) {}
+    }
+
+    // After PrepareSources: the hidden lights it gave a dynamic shadow lose it
+    static void DropPromotedOccluded(rage::CLightSource* lights, uint32_t count) noexcept
+    {
+        if (!Occlusion::bLampShadows || !lights || count > 4096) return;
+        for (uint32_t i = 0; i < count; ++i)
+            if (occludedIndex[i] == occlusionPass && (lights[i].mFlags & rage::LF_DYNAMIC_SHADOW))
+            {
+                lights[i].mFlags &= ~rage::LF_DYNAMIC_SHADOW;
+                ++occlusionKeptCached;
+            }
+    }
+
     static void __cdecl Select()
     {
         const Invocation invocation;
@@ -976,9 +1045,17 @@ namespace PlayerShadowAllocation
             if (ownerThread.load(std::memory_order_relaxed) != current)
                 unsupportedThread.store(true, std::memory_order_relaxed);
             if (state.depth == 1) ++state.passSerial;
-            if (state.depth == 1 && Enabled() && prepareSources && !unsupportedThread.load(std::memory_order_relaxed) &&
+            if (state.depth == 1 && Enabled() && !unsupportedThread.load(std::memory_order_relaxed) &&
                 reinterpret_cast<uintptr_t>(CurrentLights()) >= 0x10000)
-                prepareSources(CurrentLights(), CurrentCount());
+            {
+                // First, so the sharing and pairs of PrepareSources see which lights still have a shadow
+                DropOccludedShadows(CurrentLights(), CurrentCount());
+                if (prepareSources)
+                {
+                    prepareSources(CurrentLights(), CurrentCount());
+                    DropPromotedOccluded(CurrentLights(), CurrentCount());
+                }
+            }
             if (state.depth != 1 || !Prepare()) RejectPass();
             else if(observeSubmittedLights && !unsupportedThread.load(std::memory_order_relaxed)) observeSubmittedLights(CurrentLights(),CurrentCount());
         }

@@ -46,6 +46,7 @@ module;
 #include <vector>
 #include <atomic>
 #include <mutex>
+#include <unordered_map>
 #include <intrin.h>
 
 export module nightshadows;
@@ -55,6 +56,7 @@ import comvars;
 import natives;
 import settings;
 import renderskip;
+import occlusion;
 
 bool bHighResolutionNightShadows = false;
 static bool bCloseHeadlightRelevance = false;

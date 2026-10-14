@@ -28,6 +28,7 @@ import framegeneration;
 import framehistory;
 import hdr;
 import natives;
+import occlusion;
 import settings;
 import shaders;
 import renderscale;
@@ -64,6 +65,7 @@ import postfxprofiler;
 #define IDR_CLOUDS_FX                            138
 #define IDR_WETGROUND_FX                         139
 #define IDR_HEADLIGHTGLINTS_FX                   140
+#define IDR_HIZ_FX                               141
 
 #define IDR_SSDraw_PS_compiled                   2127
 #define IDR_SSPrepass_PS_compiled                2128
@@ -666,6 +668,47 @@ public:
     bool bInteriorScene = false;
     bool bPlayerInCar = false; // set with bInteriorScene, as the lights' render list is built
     const char* szWetGroundStatus = "not run yet";
+    // Hi-Z for occlusion culling (HiZ.fx, BuildHiZ): the levels of 4 x 4 pixels at the end of the G-buffer pass, made
+    // afresh whenever the depth copy's size changes, and a ring of copies in system memory being read back, each with
+    // the query that says the GPU is done with it and the camera it was drawn with
+    ID3DXEffect* HiZEffect = nullptr;
+    HRESULT hrHiZEffect = S_OK;
+    static constexpr int kHiZLevels = 4;
+    static constexpr int kHiZReadbacks = 3;
+    static constexpr int kHiZMaxWidth = 320;
+    IDirect3DTexture9* HiZTex[kHiZLevels] = {};
+    IDirect3DSurface9* HiZSurf[kHiZLevels] = {};
+    UINT HiZWidth[kHiZLevels] = {}, HiZHeight[kHiZLevels] = {};
+    int nHiZLevels = 0;
+    UINT nHiZSourceWidth = 0, nHiZSourceHeight = 0;
+    struct HiZReadback
+    {
+        IDirect3DSurface9* memory = nullptr;
+        IDirect3DQuery9* query = nullptr;
+        bool pending = false;
+        UINT width = 0, height = 0;
+        float scaleU = 0.0f, scaleV = 0.0f;
+        float viewProjection[16] = {};
+        float position[3] = {};
+        float nearPlane = 0.0f, farPlane = 0.0f;
+        uint32_t frame = 0;
+    } HiZReadbacks[kHiZReadbacks];
+    void ReleaseHiZ()
+    {
+        for (int i = 0; i < kHiZLevels; ++i)
+        {
+            SAFE_RELEASE(HiZSurf[i]);
+            SAFE_RELEASE(HiZTex[i]);
+        }
+        for (auto& r : HiZReadbacks)
+        {
+            SAFE_RELEASE(r.memory);
+            SAFE_RELEASE(r.query);
+            r.pending = false;
+        }
+        nHiZLevels = 0;
+        nHiZSourceWidth = nHiZSourceHeight = 0;
+    }
     void ReleaseWetCopies()
     {
         for (int i = 0; i < 3; ++i)
@@ -1633,6 +1676,22 @@ public:
             if (hrWetGroundEffect != S_OK)
             {
                 WetGroundEffect = nullptr;
+                if (errors)
+                    MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
+            }
+            SAFE_RELEASE(errors);
+        }
+
+        // Without it nothing is culled by occlusion.
+        static bool hiZEffectTried = false;
+        if (!HiZEffect && !hiZEffectTried && Occlusion::Enabled())
+        {
+            hiZEffectTried = true;
+            ID3DXBuffer* errors = nullptr;
+            hrHiZEffect = CreateEffectCached(rage::grcDevice::GetD3DDevice(), hm, IDR_HIZ_FX, "HiZ", nullptr, &HiZEffect, &errors);
+            if (hrHiZEffect != S_OK)
+            {
+                HiZEffect = nullptr;
                 if (errors)
                     MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
             }
