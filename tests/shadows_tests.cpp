@@ -1,12 +1,12 @@
 // The night shadow logic that needs no game: slot keys, lamp spacing, lifetimes of siren and signal lights,
 // and the check of the game's shadow lookup before it is patched.
 #include "check.hpp"
-#include "LabSirenLifetime.hpp"
-#include "ShadowInactiveSlots.hpp"
-#include "ShadowLampSpacing.hpp"
-#include "ShadowLookupLayout.hpp"
-#include "ShadowReach.hpp"
-#include "TrafficSignalIdentity.hpp"
+#include "nightshadows/LabSirenLifetime.hpp"
+#include "nightshadows/ShadowInactiveSlots.hpp"
+#include "nightshadows/ShadowLampSpacing.hpp"
+#include "nightshadows/ShadowLookupLayout.hpp"
+#include "nightshadows/ShadowReach.hpp"
+#include "nightshadows/TrafficSignalIdentity.hpp"
 #include <cmath>
 #include <cstring>
 #include <limits>

@@ -1,7 +1,7 @@
 module;
 
 #include <common.hxx>
-#include "ShadowLookupLayout.hpp"
+#include "nightshadows/ShadowLookupLayout.hpp"
 #include <d3dx9tex.h>
 #include <algorithm>
 #include <bit>
