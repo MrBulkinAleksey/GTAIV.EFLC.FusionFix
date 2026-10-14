@@ -41,6 +41,13 @@ namespace PlayerShadowAllocation
     static float casterLeadSeconds = 1.0f; // CasterAwarePriorityLead
     static float boxedCarCasterDistance = 25.0f; // BoxedCarCasterDistance
     static float pedCasterDistance = 35.0f; // PedCasterDistance
+    // InteriorLightsYieldOutside: while the scene is not an interior (IS_INTERIOR_SCENE, read once a frame in
+    // CaptureCasters), a light of an interior (mInteriorIndex set) gets no claim to a slot from a car or ped, and an
+    // uncached one ranks as off screen: room lights shining out through a door took slots from the street lamps,
+    // and with them threw a second shadow of the cars and lamp posts outside.
+    static bool interiorLightsYield = true;
+    static std::atomic<bool> interiorScene{false};
+    static std::atomic<uint32_t> interiorLightsYielded{0};
     // Copied on the game-process callback, read by selection on the render side.
     static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
     static fusionfix::shadows::ShadowCasterPresence casters{};
@@ -400,6 +407,7 @@ namespace PlayerShadowAllocation
     {
         using fusionfix::shadows::ShadowCasterPresence;
         if (!casterPriority || !Enabled() || !CTimer::m_snTimeInMilliseconds) return;
+        if (interiorLightsYield) interiorScene.store(Natives::IsInteriorScene(), std::memory_order_relaxed);
         PlayerCar::Focus focus;
         ShadowCasterPresence next{};
         next.timeMs = static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds);
@@ -768,6 +776,10 @@ namespace PlayerShadowAllocation
                         static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle,&caster,
                         [&](unsigned c) { return CoveredByHigherLight(lights,count,index,state.casters.points[c],state.casters.extents[c]); })
                     : volumeVisible ? SlotGain::InView : SlotGain::OffScreen;
+            if(casterPriority && interiorLightsYield && kind==budget::Kind::Lamp && light.mInteriorIndex>=0 &&
+               gain!=SlotGain::None && !interiorScene.load(std::memory_order_relaxed)) {
+                gain=cached ? SlotGain::None : SlotGain::OffScreen; caster=-1; ++interiorLightsYielded;
+            }
             // An uncached lamp whose light reaches you or your car throws its shadow round you, in view whichever
             // way the camera looks. Ranked by where it stood from the camera, the lamp next to the car in a tunnel
             // took and lost its slot as the camera turned or the car went back and forth, and the car's shadow
