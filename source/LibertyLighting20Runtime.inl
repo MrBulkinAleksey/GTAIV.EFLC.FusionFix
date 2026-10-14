@@ -528,9 +528,10 @@ namespace Lighting20
 
     // ---------------------------------------------------------------- props in lamp maps
     // The caster loop 0xAE3713 (AddEntityListToDrawList 0xAE3310, render mode 0 of a light's pass) lets an object
-    // (entity type 4) into the map only with bit 0x800 of +0x210, which 0xB1884B sets for objects made from a
-    // building. Lamp posts, signs, hydrants, bins never had it, so no lamp shadowed them, not even its own post.
-    // PropShadows lets them in: the caster hook in nightshadows resumes at 0xAE3767 with that bit as if set. Posts
+    // (entity type 4) into the map only with bit 0x800 of +0x210. 0xB1884B sets it when the object's source (+0x280)
+    // is a map dummy (type 2): map props made from their dummy (bins and the like) have it and cast already. Objects
+    // with no dummy source don't: lamp posts (Liberty's Shadows found +0x280 0 on all 26 post models), objects
+    // spawned by scripts, pieces broken off. No lamp shadowed them, not even its own post. PropShadows lets them in: the caster hook in nightshadows resumes at 0xAE3767 with that bit as if set. Posts
     // and many props are skinned fragments: world_wd_local_shadow_skinned.patch gives the world shaders
     // wd_local_drawskinned and drops what is within half a metre of the light, so a lamp's head and glass don't
     // cover its own light.
