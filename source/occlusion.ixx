@@ -7,10 +7,10 @@ module;
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <intrin.h>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 export module occlusion;
@@ -68,6 +68,8 @@ namespace Occlusion
         float position[3]{};
         float nearPlane = 0.0f;
         float wLength = 1.0f;       // length of the w column's xyz: w of a point moves by this per metre along the view
+        float forward[3]{};         // where the camera looked: the w column, normalised
+        float turnU = 0.0f, turnV = 0.0f; // how far the screen slides, in widths / heights, per radian the camera turns
         uint32_t renderFrame = 0;
         uint64_t published = 0;     // GetTickCount64
 
@@ -87,6 +89,7 @@ namespace Occlusion
     DWORD gameThread = 0;
     uint32_t mainFrame = 0;
     std::shared_ptr<const Grid> grid;
+    bool gridStale = false;     // published over half a second ago: the game stopped drawing, or the GPU fell behind
     struct EntityState
     {
         uint32_t frame = 0;
@@ -94,7 +97,61 @@ namespace Occlusion
         bool hidden = false;    // this frame's test
         bool left = false;      // left out of the scene this frame
     };
-    std::unordered_map<uintptr_t, EntityState> entities;
+    // Each entity's state by its address, open addressing: the lists add some 2000 a frame, each looked up once a call
+    struct Slot
+    {
+        uintptr_t entity = 0;
+        EntityState state;
+    };
+    std::vector<Slot> table(1 << 14);
+    size_t tableUsed = 0;
+    void Rebuild(size_t capacity)
+    {
+        std::vector<Slot> old(capacity);
+        old.swap(table);
+        tableUsed = 0;
+        const size_t mask = table.size() - 1;
+        for (const auto& slot : old)
+        {
+            // Entities not seen for a while go, so a freed one's address starts afresh
+            if (!slot.entity || mainFrame - slot.state.frame > 60)
+                continue;
+            size_t i = (slot.entity >> 3) * 2654435761u & mask;
+            while (table[i].entity)
+                i = (i + 1) & mask;
+            table[i] = slot;
+            ++tableUsed;
+        }
+    }
+    EntityState& StateOf(uintptr_t entity)
+    {
+        size_t mask = table.size() - 1;
+        size_t i = (entity >> 3) * 2654435761u & mask;
+        while (table[i].entity)
+        {
+            if (table[i].entity == entity)
+                return table[i].state;
+            i = (i + 1) & mask;
+        }
+        if (tableUsed + 1 > table.size() * 3 / 4)
+        {
+            Rebuild(table.size());
+            if (tableUsed + 1 > table.size() / 2)
+                Rebuild(table.size() * 2);
+            return StateOf(entity);
+        }
+        table[i].entity = entity;
+        table[i].state = {};
+        ++tableUsed;
+        return table[i].state;
+    }
+
+    // This frame: how far the screen slid past the edges of the grid's screen with the camera's turn since, in widths
+    // and heights. Up to EdgeBand, a sphere reaching out of the grid's screen is tested on its part inside, the edge
+    // standing for the band (what lies beyond is off the screen now); turned farther, it is drawn
+    constexpr float EdgeBand = 0.03f;
+    float bandU = 1.0f, bandV = 1.0f;
+    bool testAtEdge = false;    // the last test took a sphere out of the grid's screen at its edge
 
     enum Outcome : uint8_t { Visible, Hidden, NoGrid, Stale, Moved, NearCamera, OffScreen, Small, Outcomes };
     constexpr const char* OutcomeNames[Outcomes] = { "visible", "hidden", "no grid", "grid too old", "camera moved too far",
@@ -105,16 +162,17 @@ namespace Occlusion
         uint32_t entities = 0;          // tested, once a frame each
         uint32_t outcomes[Outcomes]{};
         uint32_t props = 0, propsHidden = 0;
+        uint32_t hiddenAtEdge = 0;      // hidden, though reaching out of the grid's screen
         uint32_t left = 0;              // left out (or would be, mode 2)
         uint32_t adds = 0, addsLeft = 0; // calls into the lists with the scene's phase, and of those left out
         uint32_t grids = 0;             // grids taken
         uint64_t ageFrames = 0;         // render frames from the grid's to the render thread's when taken, summed
-        double testMs = 0.0;
-        double maxFrameMs = 0.0;
     } stats;
     DWORD hookThread = 0;
     std::atomic<uint32_t> otherThreads{ 0 };
-    double frameMs = 0.0;
+    uint64_t frameTicks = 0, maxFrameTicks = 0, ticks = 0; // __rdtsc: the test's time this frame, worst, this block
+    LARGE_INTEGER windowQpc{};
+    uint64_t windowTsc = 0;
     LARGE_INTEGER qpcFrequency{};
 
     void Publish(const uint8_t* texels, uint32_t pitchBytes, int width, int height, float scaleU, float scaleV,
@@ -159,6 +217,10 @@ namespace Occlusion
         g->nearPlane = nearPlane;
         const float* m = viewProjection;
         g->wLength = std::sqrt(m[3] * m[3] + m[7] * m[7] + m[11] * m[11]);
+        for (int i = 0; i < 3; ++i)
+            g->forward[i] = m[3 + 4 * i] / g->wLength;
+        g->turnU = 0.5f * std::sqrt(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]) / g->wLength;
+        g->turnV = 0.5f * std::sqrt(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]) / g->wLength;
         g->renderFrame = renderFrame;
         g->published = GetTickCount64();
         {
@@ -206,8 +268,17 @@ namespace Occlusion
             minV = std::min(minV, v);
             maxV = std::max(maxV, v);
         }
-        if (minU < 0.0f || minV < 0.0f || maxU > 1.0f || maxV > 1.0f)
-            return OffScreen;
+        // Beyond the band it's off the screen now; within, the grid's edge stands for it
+        if (bandU > EdgeBand || bandV > EdgeBand)
+        {
+            if (minU < 0.0f || minV < 0.0f || maxU > 1.0f || maxV > 1.0f)
+                return OffScreen;
+        }
+        testAtEdge = minU < 0.0f || minV < 0.0f || maxU > 1.0f || maxV > 1.0f;
+        minU = std::max(minU, 0.0f);
+        minV = std::max(minV, 0.0f);
+        maxU = std::min(maxU, 1.0f);
+        maxV = std::min(maxV, 1.0f);
 
         // The level where it covers no more than 4 x 4 texels
         const float x0 = minU * g.scaleU, x1 = maxU * g.scaleU, y0 = minV * g.scaleV, y1 = maxV * g.scaleV;
@@ -255,8 +326,7 @@ namespace Occlusion
             otherThreads.fetch_add(1, std::memory_order_relaxed);
             return phases;
         }
-        LARGE_INTEGER start, end;
-        QueryPerformanceCounter(&start);
+        const uint64_t start = __rdtsc();
         ++stats.adds;
 
         // A new frame: the last one counted, and a new grid if there's one
@@ -269,21 +339,36 @@ namespace Occlusion
                 std::lock_guard lock(latestMutex);
                 grid = latest;
             }
+            bandU = bandV = 1.0f;
+            gridStale = grid && GetTickCount64() - grid->published > 500;
             if (grid)
             {
                 ++stats.grids;
                 stats.ageFrames += FrameHistory::Frame() - grid->renderFrame;
+                // The camera's turn since: where it looks now, the second row of its matrix (CE 0x128e320)
+                if (pCamera)
+                {
+                    const float* f = pCamera - 8;
+                    const float length = std::sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+                    if (length > 0.5f)
+                    {
+                        const float cosTurn = (f[0] * grid->forward[0] + f[1] * grid->forward[1] + f[2] * grid->forward[2]) / length;
+                        const float turn = std::acos(std::clamp(cosTurn, -1.0f, 1.0f));
+                        bandU = turn * grid->turnU + 0.002f;
+                        bandV = turn * grid->turnV + 0.002f;
+                    }
+                }
             }
         }
 
-        auto& state = entities[entity];
+        auto& state = StateOf(entity);
         if (state.frame != mainFrame)
         {
             // Once a frame: the entity may be added to several buckets
             const bool repeat = state.frame + 1 == mainFrame;
             state.frame = mainFrame;
             Outcome outcome = NoGrid;
-            if (grid && GetTickCount64() - grid->published > 500)
+            if (gridStale)
                 outcome = Stale;
             else if (grid)
             {
@@ -294,6 +379,7 @@ namespace Occlusion
                 outcome = std::isfinite(radius) && std::isfinite(centre[0] + centre[1] + centre[2]) ? Test(*grid, centre, radius) : Visible;
             }
             state.hidden = outcome == Hidden;
+            stats.hiddenAtEdge += state.hidden && testAtEdge;
             state.hiddenRunning = state.hidden ? uint16_t(std::min<int>(repeat ? state.hiddenRunning + 1 : 1, 0xFFFF)) : 0;
             state.left = state.hidden && state.hiddenRunning >= nFrames;
             ++stats.entities;
@@ -312,8 +398,7 @@ namespace Occlusion
                 phases &= ~scene;
         }
 
-        QueryPerformanceCounter(&end);
-        frameMs += double(end.QuadPart - start.QuadPart) * 1000.0 / double(qpcFrequency.QuadPart);
+        frameTicks += __rdtsc() - start;
         return phases;
     }
 
@@ -321,15 +406,26 @@ namespace Occlusion
     void EndFrame()
     {
         ++stats.frames;
-        stats.testMs += frameMs;
-        stats.maxFrameMs = std::max(stats.maxFrameMs, frameMs);
-        frameMs = 0.0;
+        ticks += frameTicks;
+        maxFrameTicks = std::max(maxFrameTicks, frameTicks);
+        frameTicks = 0;
+        if (!windowTsc)
+        {
+            windowTsc = __rdtsc();
+            QueryPerformanceCounter(&windowQpc);
+        }
 
         if (stats.frames < 600)
             return;
-        // Entities not seen for a while go, so a freed one's address starts afresh
-        for (auto it = entities.begin(); it != entities.end();)
-            it = mainFrame - it->second.frame > 60 ? entities.erase(it) : std::next(it);
+        Rebuild(table.size());
+        // The time stamp counter's rate over the block, from the performance counter
+        LARGE_INTEGER nowQpc;
+        QueryPerformanceCounter(&nowQpc);
+        const uint64_t nowTsc = __rdtsc();
+        const double seconds = double(nowQpc.QuadPart - windowQpc.QuadPart) / double(qpcFrequency.QuadPart);
+        const double msPerTick = seconds > 0.0 && nowTsc > windowTsc ? seconds * 1000.0 / double(nowTsc - windowTsc) : 0.0;
+        windowTsc = nowTsc;
+        windowQpc = nowQpc;
         const auto& s = stats;
         const double perFrame = 1.0 / double(s.frames);
         std::string outcomes;
@@ -337,15 +433,16 @@ namespace Occlusion
             if (s.outcomes[i])
                 outcomes += std::format("{}{} {:.0f}", outcomes.empty() ? "" : ", ", OutcomeNames[i], s.outcomes[i] * perFrame);
         FusionLog::Write("Occlusion", "Stats",
-            "%s, per frame over %u frames: %.0f entities of the scene tested (%s); %.0f props, %.0f of them hidden; "
+            "%s, per frame over %u frames: %.0f entities of the scene tested (%s; hidden at the screen's edge %.0f); %.0f props, %.0f of them hidden; "
             "%.0f %s (%.1f%%), %.0f of %.0f list adds; test %.3f ms a frame, worst %.3f; grids published %u, "
             "%.1f render frames old when taken; "
             "threads: lists %lu, game %lu, adds from other threads %u; %zu entities kept\n",
-            nMode == 1 ? "left out" : "counted only", s.frames, s.entities * perFrame, outcomes.c_str(), s.props * perFrame,
+            nMode == 1 ? "left out" : "counted only", s.frames, s.entities * perFrame, outcomes.c_str(), s.hiddenAtEdge * perFrame, s.props * perFrame,
             s.propsHidden * perFrame, s.left * perFrame, nMode == 1 ? "left out" : "would be left out",
-            s.entities ? 100.0 * s.left / s.entities : 0.0, s.addsLeft * perFrame, s.adds * perFrame, s.testMs * perFrame,
-            s.maxFrameMs, publishedCount.load(), s.grids ? double(s.ageFrames) / s.grids : 0.0, hookThread, gameThread, otherThreads.exchange(0), entities.size());
+            s.entities ? 100.0 * s.left / s.entities : 0.0, s.addsLeft * perFrame, s.adds * perFrame, double(ticks) * msPerTick * perFrame,
+            double(maxFrameTicks) * msPerTick, publishedCount.load(), s.grids ? double(s.ageFrames) / s.grids : 0.0, hookThread, gameThread, otherThreads.exchange(0), tableUsed);
         stats = {};
+        ticks = maxFrameTicks = 0;
     }
 }
 
