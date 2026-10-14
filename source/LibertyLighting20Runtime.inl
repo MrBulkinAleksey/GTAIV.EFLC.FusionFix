@@ -546,6 +546,11 @@ namespace Lighting20
         // 5 no cache) and the loop's mode (EDX 0-2)
         static std::array<std::array<std::atomic<uint32_t>, 3>, 3> seen{};
         static std::array<std::atomic<uint32_t>, 3> kindPasses{};
+        // Objects within 3 m (across) of the slot's light (record +0xC0) by loop mode: a lamp's own post
+        static thread_local float scopeLight[3]{};
+        static std::array<std::atomic<uint32_t>, 3> near{};
+        static std::atomic<uint32_t> nearPasses{0};
+        static thread_local bool nearCounted = false;
 
         // Diagnostics of the draw: the fragment draw command 0x8DD0B0 (model +0x58) run while the wd_local technique
         // group is forced ([0x106B308]), and its child dispatch 0xAEC7B0 choosing the drawable's skinned draw
@@ -576,6 +581,21 @@ namespace Lighting20
             if (!scope || type != 4 || !entity) return false;
             ++objects;
             if (scopeKind >= 3 && scopeKind <= 5 && mode <= 2) ++seen[scopeKind - 3][mode];
+            if (mode <= 2)
+            {
+                const auto matrix = *reinterpret_cast<const float* const*>(entity + 0x20);
+                const float* at = matrix ? matrix + 12 : reinterpret_cast<const float*>(entity + 0x10);
+                const float dx = at[0] - scopeLight[0], dy = at[1] - scopeLight[1];
+                if (dx * dx + dy * dy < 9.0f)
+                {
+                    ++near[mode];
+                    if (!nearCounted)
+                    {
+                        nearCounted = true;
+                        ++nearPasses;
+                    }
+                }
+            }
             if (*reinterpret_cast<const uint32_t*>(entity + 0x210) & 0x800)
             {
                 ++withBit;
@@ -626,6 +646,11 @@ namespace Lighting20
                     ++passes;
                     const auto slot = *reinterpret_cast<const uint32_t*>(reinterpret_cast<uintptr_t>(phase) + 0x940);
                     scopeKind = *reinterpret_cast<const uint32_t*>(game + 0xD9F100 + slot * 0x110 + 0xFC);
+                    const auto light = reinterpret_cast<const float*>(game + 0xD9F100 + slot * 0x110 + 0xC0);
+                    scopeLight[0] = light[0];
+                    scopeLight[1] = light[1];
+                    scopeLight[2] = light[2];
+                    nearCounted = false;
                     if (scopeKind >= 3 && scopeKind <= 5) ++kindPasses[scopeKind - 3];
                 }
             }
@@ -1043,6 +1068,8 @@ namespace Lighting20
                 << " objects=" << Props::objects.load() << " with_0x800=" << Props::withBit.load() << " promoted=" << Props::promoted.load()
                 << " wd_local_fragments=" << Props::localFragments.load() << " of_props=" << Props::propFragments.load()
                 << " prop_children_plain=" << Props::propPlain.load() << " skinned=" << Props::propSkinned.load()
+                << " passes_with_objects_within_3m=" << Props::nearPasses.load() << " within_3m(mode0,1,2)=" << Props::near[0].load()
+                << ',' << Props::near[1].load() << ',' << Props::near[2].load()
                 << " objects_by_map(passes; mode0,1,2):";
             for (int k = 0; k < 3; ++k)
                 out << " kind" << k + 3 << "(" << Props::kindPasses[k].load() << "; " << Props::seen[k][0].load() << ','
