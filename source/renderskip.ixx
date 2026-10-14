@@ -775,6 +775,33 @@ namespace RenderSkip
     // frame, as the first one's is made before its lock starts the pass)
     float casterMatrix[4][16]{};
     uint32_t casterFrame[4]{};
+    // Every caller of CE 0x92dd20 while tracing: where it returns to, how often, the first argument of the caller's
+    // own frame (the cascade's index for the callback) and its last matrix, to find where the first cascade's is made
+    struct MatrixCaller { uintptr_t from = 0; uint32_t count = 0; int32_t argument = 0; uint32_t frame = 0; float matrix[16]{}; };
+    MatrixCaller matrixCallers[8];
+
+    void NoteMatrixCall(SafetyHookContext& regs)
+    {
+        if (!matrixTraceFrom)
+            return;
+        uintptr_t from = *(uintptr_t*)(regs.ebp + 4);
+        int32_t argument = *(int32_t*)(*(uintptr_t*)regs.ebp + 8);
+        for (auto& c : matrixCallers)
+            if (c.from == from || !c.from)
+            {
+                c.from = from;
+                c.count++;
+                c.argument = argument;
+                c.frame = TemporalAA::SceneFrame;
+                memcpy(c.matrix, (const void*)regs.eax, sizeof(c.matrix));
+                break;
+            }
+        if (cascadeMatrixReturn && from == cascadeMatrixReturn && argument >= 0 && argument < 4)
+        {
+            memcpy(casterMatrix[argument], (const void*)regs.eax, sizeof(casterMatrix[argument]));
+            casterFrame[argument] = TemporalAA::SceneFrame;
+        }
+    }
 
     void TraceMatrix(const float (&values)[4][4], const float* matrix, float texels, float depth)
     {
@@ -827,6 +854,18 @@ namespace RenderSkip
                 double x = double(m[0]) * depthAnchor[0] + double(m[4]) * depthAnchor[1] + double(m[8]) * depthAnchor[2] + m[12];
                 double y = double(m[1]) * depthAnchor[0] + double(m[5]) * depthAnchor[1] + double(m[9]) * depthAnchor[2] + m[13];
                 line += std::format(" c{} {:.7g} {:.7g} = {:.3f} {:.3f};", k + 1, x, y, (x * 0.5 + 0.5) * cascadeSide, (0.5 - y * 0.5) * cascadeSide);
+            }
+            // The other callers' matrices made in this frame, the anchor's x and y through them
+            line += " callers";
+            auto base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+            for (auto& c : matrixCallers)
+            {
+                if (!c.from || c.frame != cascadeFrame || c.from == cascadeMatrixReturn)
+                    continue;
+                const float* m = c.matrix;
+                double x = double(m[0]) * depthAnchor[0] + double(m[4]) * depthAnchor[1] + double(m[8]) * depthAnchor[2] + m[12];
+                double y = double(m[1]) * depthAnchor[0] + double(m[5]) * depthAnchor[1] + double(m[9]) * depthAnchor[2] + m[13];
+                line += std::format(" +{:x} ({} calls, argument {}) {:.7g} {:.7g};", c.from - base, c.count, c.argument, x, y);
             }
         }
         matrixTrace.push_back(std::move(line));
@@ -1383,6 +1422,7 @@ public:
                 // The depth from the anchor first: the atlas's conversion below takes the depth as it is then
                 AnchorDepth(regs);
                 CatchFitMatrix(regs);
+                NoteMatrixCall(regs);
                 uintptr_t from = *(uintptr_t*)(regs.ebp + 4);
                 if (setterReturn && from == setterReturn)
                 {
@@ -1397,11 +1437,6 @@ public:
                         pendingIntoAtlas[index] = IntoAtlasReady();
                         if (pendingIntoAtlas[index])
                             MatrixForAtlas((float*)regs.eax);
-                        if (matrixTraceFrom)
-                        {
-                            memcpy(casterMatrix[index], (const void*)regs.eax, sizeof(casterMatrix[index]));
-                            casterFrame[index] = TemporalAA::SceneFrame;
-                        }
                     }
                 }
             });
