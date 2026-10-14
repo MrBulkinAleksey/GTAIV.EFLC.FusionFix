@@ -7,6 +7,7 @@ export module firstperson;
 import common;
 import comvars;
 import natives;
+import inireload;
 
 // First person on foot, as a fourth step of the on-foot camera views. INPUT_NEXT_CAMERA steps the
 // zoom of CCamFollowPed (+0x360) through 1, 2 and 3 (CE 0xA21A1C); after 3 the view now goes to
@@ -124,8 +125,14 @@ public:
             CIniReader iniReader("");
             if (iniReader.ReadInteger("MISC", "FirstPersonOnFoot", 1) == 0)
                 return;
-            FirstPerson::forwardOffset = std::clamp(iniReader.ReadFloat("MISC", "FirstPersonForward", 0.1f), -0.5f, 0.5f);
-            FirstPerson::upOffset = std::clamp(iniReader.ReadFloat("MISC", "FirstPersonUp", 0.05f), -0.5f, 0.5f);
+            // At startup and on Ctrl+Shift+F10 (IniReload)
+            static auto readOffsets = [](CIniReader& ini)
+            {
+                FirstPerson::forwardOffset = std::clamp(ini.ReadFloat("MISC", "FirstPersonForward", 0.1f), -0.5f, 0.5f);
+                FirstPerson::upOffset = std::clamp(ini.ReadFloat("MISC", "FirstPersonUp", 0.05f), -0.5f, 0.5f);
+            };
+            readOffsets(iniReader);
+            IniReload::Add(readOffsets);
 
             // inc [ecx+360] / pop ebx / mov eax, [ecx+360] / test eax, eax / jg
             auto zoom = hook::pattern("FF 81 60 03 00 00 5B 8B 81 60 03 00 00 85 C0 7F");

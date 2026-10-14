@@ -12,7 +12,7 @@
 #include <vector>
 
 namespace fusionfix::shadows {
-// Text trace of who gets the seven dynamic slots (CasterAwareLampPriorityLog = 1),
+// Text trace of who gets the seven dynamic slots (NightShadowsSlotLog = 1),
 // to GTAIV.EFLC.FusionFix.NightShadows.SlotTrace.log next to the plugin, for
 // tuning the caster aware priority: how far and how long after a lamp has a
 // caster in view it takes a slot, how long it holds it, how often gains flip.

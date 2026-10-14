@@ -236,7 +236,7 @@ export void RenderScreenSpaceReflections()
         effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
     }
     {
-        // The march, the guess for its misses (skipped while ScreenSpaceReflectionsFallback is
+        // The march, the guess for its misses (skipped while SSRFallback is
         // 0, SSR_PS then does not read it), and the two together. Each draws every pixel of
         // the viewport, no blending, nothing discarded: nothing is cleared first.
         auto draw = [&](UINT pass, IDirect3DSurface9* target)

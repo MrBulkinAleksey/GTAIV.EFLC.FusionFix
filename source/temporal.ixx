@@ -16,6 +16,7 @@ import renderscale;
 import settings;
 import upscaler;
 import vtablepatch;
+import inireload;
 
 #define IDR_TEMPORAL_VS_RIGID           3001
 #define IDR_TEMPORAL_VS_SKINNED         3002
@@ -2058,28 +2059,37 @@ public:
         return dot < 0.5;
     }
 
+    // At startup and on Ctrl+Shift+F10 (IniReload): each of these is looked at every frame; the ones that decide which
+    // targets are made are read at startup alone.
+    static void ReadSettings(CIniReader& iniReader)
+    {
+        nJitterPhases = std::clamp(iniReader.ReadInteger("ANTIALIASING", "JitterPhases", 8), 2, 128);
+        fCurrentWeightMin = std::clamp(iniReader.ReadFloat("ANTIALIASING", "CurrentFrameWeightMin", 0.08f), 0.01f, 1.0f);
+        fCurrentWeightMax = std::clamp(iniReader.ReadFloat("ANTIALIASING", "CurrentFrameWeightMax", 0.2f), fCurrentWeightMin, 1.0f);
+        fCurrentWeightPerPixel = std::max(iniReader.ReadFloat("ANTIALIASING", "CurrentFrameWeightPerPixelOfMotion", 0.1f), 0.0f);
+        fVarianceClipGamma = std::clamp(iniReader.ReadFloat("ANTIALIASING", "VarianceClipGamma", 1.25f), 0.5f, 4.0f);
+        fLumaWeight = std::clamp(iniReader.ReadFloat("ANTIALIASING", "LumaWeight", 1.0f), 0.0f, 16.0f);
+        fObjectDepthBias = std::clamp(iniReader.ReadFloat("ANTIALIASING", "ObjectDepthBias", 0.00002f), 0.0f, 0.01f);
+        bObjectMotionVectors = iniReader.ReadInteger("ANTIALIASING", "ObjectMotionVectors", 1) != 0;
+        fCameraCutDistance = std::max(iniReader.ReadFloat("ANTIALIASING", "CameraCutDistance", 25.0f), 1.0f);
+        nDLSSPreset = std::clamp(iniReader.ReadInteger("ANTIALIASING", "DLSSPreset", 0), 0, 15);
+        fFSRSharpness = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FSRSharpness", 0.0f), 0.0f, 1.0f);
+        fReactiveScale = std::clamp(iniReader.ReadFloat("ANTIALIASING", "ReactiveMaskScale", 2.0f), 0.0f, 64.0f);
+        fReactiveMax = std::clamp(iniReader.ReadFloat("ANTIALIASING", "ReactiveMaskMaximum", 0.75f), 0.0f, 1.0f);
+        bRainLayer = iniReader.ReadInteger("ANTIALIASING", "RainAfterAntialiasing", 1) != 0;
+    }
+
     Temporal()
     {
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
-            nJitterPhases = std::clamp(iniReader.ReadInteger("TEMPORAL", "JitterPhases", 8), 2, 128);
-            fCurrentWeightMin = std::clamp(iniReader.ReadFloat("TEMPORAL", "CurrentFrameWeightMin", 0.08f), 0.01f, 1.0f);
-            fCurrentWeightMax = std::clamp(iniReader.ReadFloat("TEMPORAL", "CurrentFrameWeightMax", 0.2f), fCurrentWeightMin, 1.0f);
-            fCurrentWeightPerPixel = std::max(iniReader.ReadFloat("TEMPORAL", "CurrentFrameWeightPerPixelOfMotion", 0.1f), 0.0f);
-            fVarianceClipGamma = std::clamp(iniReader.ReadFloat("TEMPORAL", "VarianceClipGamma", 1.25f), 0.5f, 4.0f);
-            fLumaWeight = std::clamp(iniReader.ReadFloat("TEMPORAL", "LumaWeight", 1.0f), 0.0f, 16.0f);
-            fObjectDepthBias = std::clamp(iniReader.ReadFloat("TEMPORAL", "ObjectDepthBias", 0.00002f), 0.0f, 0.01f);
-            bObjectMotionVectors = iniReader.ReadInteger("TEMPORAL", "ObjectMotionVectors", 1) != 0;
-            bSkinnedMotionVectors = iniReader.ReadInteger("TEMPORAL", "SkinnedMotionVectors", 1) != 0;
-            fCameraCutDistance = std::max(iniReader.ReadFloat("TEMPORAL", "CameraCutDistance", 25.0f), 1.0f);
-            nDLSSPreset = std::clamp(iniReader.ReadInteger("TEMPORAL", "DLSSPreset", 0), 0, 15);
-            fFSRSharpness = std::clamp(iniReader.ReadFloat("TEMPORAL", "FSRSharpness", 0.0f), 0.0f, 1.0f);
-            bReactiveMask = iniReader.ReadInteger("TEMPORAL", "ReactiveMask", 1) != 0;
-            fReactiveScale = std::clamp(iniReader.ReadFloat("TEMPORAL", "ReactiveMaskScale", 2.0f), 0.0f, 64.0f);
-            fReactiveMax = std::clamp(iniReader.ReadFloat("TEMPORAL", "ReactiveMaskMaximum", 0.75f), 0.0f, 1.0f);
-            bRainLayer = iniReader.ReadInteger("TEMPORAL", "RainAfterAntialiasing", 1) != 0;
-            bSteadyDepth = iniReader.ReadInteger("TEMPORAL", "SteadyDepth", 1) != 0;
+            // These size the targets (CreateResources): read at startup only
+            bSkinnedMotionVectors = iniReader.ReadInteger("ANTIALIASING", "SkinnedMotionVectors", 1) != 0;
+            bReactiveMask = iniReader.ReadInteger("ANTIALIASING", "ReactiveMask", 1) != 0;
+            bSteadyDepth = iniReader.ReadInteger("ANTIALIASING", "SteadyDepth", 1) != 0;
+            ReadSettings(iniReader);
+            IniReload::Add(ReadSettings);
 
             GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&Resolve, &hm);
 

@@ -13,7 +13,7 @@
 //   get from shaders/patches/world_local_shadow_depth.patch.
 //
 // Each family has its graphics menu toggle (Graphics > Lighting) and works while the night shadow allocation adapter
-// does (ExperimentalPlayerShadowAllocation=2 and the top Extra Night Shadows choice).
+// does (SlotAllocation=2 and the top Extra Night Shadows choice).
 namespace Lighting20
 {
     static fusionfix::DiagnosticsLog log;
@@ -414,20 +414,20 @@ namespace Lighting20
         static void Install(CIniReader& ini) noexcept
         {
             pref = FusionFixSettings.GetRef("PREF_WORLD_LIGHT_SHADOWS");
-            cachedLamps = ini.ReadInteger("SHADOWS", "CachedLampShadows", 1) != 0;
-            modelLights = ini.ReadInteger("SHADOWS", "ModelLightShadows", 1) != 0;
-            coronas = ini.ReadInteger("SHADOWS", "CoronaLightShadows", 1) != 0;
-            corona.approximate = ini.ReadInteger("SHADOWS", "CoronaApproximation", 1) != 0;
-            corona.radiusPerSize = std::clamp(ini.ReadFloat("SHADOWS", "CoronaRadiusPerSize", 12.0f), 0.1f, 1024.0f);
-            corona.fallbackIntensity = std::clamp(ini.ReadFloat("SHADOWS", "CoronaFallbackIntensity", 1.0f), 0.01f, 64.0f);
-            corona.intensityScale = std::clamp(ini.ReadFloat("SHADOWS", "CoronaIntensityScale", 1.0f), 0.01f, 64.0f);
-            corona.minRadius = std::clamp(ini.ReadFloat("SHADOWS", "CoronaMinRadius", 0.1f), 0.01f, 4096.0f);
-            corona.maxRadius = std::clamp(ini.ReadFloat("SHADOWS", "CoronaMaxRadius", 128.0f), corona.minRadius, 4096.0f);
-            corona.maxIntensity = std::clamp(ini.ReadFloat("SHADOWS", "CoronaMaxIntensity", 64.0f), 0.01f, 1024.0f);
-            corona.distance = std::clamp(ini.ReadFloat("SHADOWS", "CoronaLightDistance", 100.0f), 0.0f, 1000.0f);
-            corona.perFrame = static_cast<uint32_t>(std::clamp(ini.ReadInteger("SHADOWS", "CoronaLightsPerFrame", 48), 0, 256));
-            mergeDistance = std::clamp(ini.ReadFloat("SHADOWS", "ExtraLightMergeDistance", 1.5f), 0.0f, 10.0f);
-            modelLightsNeedCasters = ini.ReadInteger("SHADOWS", "ModelLightShadowsNeedCasters", 1) != 0;
+            cachedLamps = ini.ReadInteger("NIGHTSHADOWS", "CachedLampShadows", 1) != 0;
+            modelLights = ini.ReadInteger("NIGHTSHADOWS", "ModelLightShadows", 1) != 0;
+            coronas = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightShadows", 1) != 0;
+            corona.approximate = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightApproximation", 1) != 0;
+            corona.radiusPerSize = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightRadiusPerSize", 12.0f), 0.1f, 1024.0f);
+            corona.fallbackIntensity = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightFallbackIntensity", 1.0f), 0.01f, 64.0f);
+            corona.intensityScale = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightIntensityScale", 1.0f), 0.01f, 64.0f);
+            corona.minRadius = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightMinRadius", 0.1f), 0.01f, 4096.0f);
+            corona.maxRadius = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightMaxRadius", 128.0f), corona.minRadius, 4096.0f);
+            corona.maxIntensity = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightMaxIntensity", 64.0f), 0.01f, 1024.0f);
+            corona.distance = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightDistance", 100.0f), 0.0f, 1000.0f);
+            corona.perFrame = static_cast<uint32_t>(std::clamp(ini.ReadInteger("NIGHTSHADOWS", "CoronaLightMaxCount", 48), 0, 256));
+            mergeDistance = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "ExtraLightMergeDistance", 1.5f), 0.0f, 10.0f);
+            modelLightsNeedCasters = ini.ReadInteger("NIGHTSHADOWS", "ModelLightShadowsNeedCasters", 1) != 0;
             installed = true;
             if (coronas)
             {
@@ -765,7 +765,7 @@ namespace Lighting20
     }
 
     // ---------------------------------------------------------------- shared maps
-    // SharedShadowMaps (Liberty's Shadows 2.0 aliases projections the same way): lights with a dynamic shadow only
+    // SharedMaps (Liberty's Shadows 2.0 aliases projections the same way): lights with a dynamic shadow only
     // that stand at one point with the same direction, type, range, cone, interior and room would each take a slot
     // to draw the same map, as models with a 2dfx light written twice do. The later ones take the first one's key,
     // so the lighting finds its map, and the game does not insert them among the candidates (the Collect hook).
@@ -882,8 +882,8 @@ namespace Lighting20
         PlayerShadowAllocation::isTailLightKey = Tail::IsKey;
         World::Install(ini);
         Buildings::Install();
-        Sharing::enabled = ini.ReadInteger("SHADOWS", "SharedShadowMaps", 1) != 0;
-        Pairs::distance = std::clamp(ini.ReadFloat("SHADOWS", "PairedLampDistance", 2.5f), 0.0f, 6.0f);
+        Sharing::enabled = ini.ReadInteger("NIGHTSHADOWS", "SharedMaps", 1) != 0;
+        Pairs::distance = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "PairedLampDistance", 2.5f), 0.0f, 6.0f);
         if (Pairs::distance > 0)
         {
             HeadlightEnhancement::slotOrigin = Pairs::OriginOf;

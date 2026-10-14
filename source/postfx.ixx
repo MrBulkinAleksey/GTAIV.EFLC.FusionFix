@@ -51,6 +51,7 @@ import wetground;
 import headlightglints;
 import waterreflections;
 import sharpening;
+import inireload;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -620,6 +621,7 @@ private:
 
         // none, fxaa, smaa, blend, edge
         UsePostFxAA = FusionFixSettings.GetRef("PREF_ANTIALIASING");
+        IniReload::Add(OnIniReload);
 
         auto onLostCB = rage::grcDevice::Functor0(NULL, OnDeviceLost, NULL, 0);
         auto onResetCB = rage::grcDevice::Functor0(NULL, OnDeviceReset, NULL, 0);
@@ -1488,18 +1490,11 @@ private:
         TickIniReload();
     }
 
-    // Once a frame, from the post fx pass, which runs in the pause menu too: Ctrl+Shift+F10 reads
-    // the live settings (ReadLiveIni) again from the ini, with a beep to say it did, and adds the
-    // cloud values the shadows use to GTAIV.EFLC.FusionFix.PostFx.log next to the plugin; Ctrl+Shift+F9
-    // moves the clouds somewhere else.
-    static void TickIniReload()
+    // Ctrl+Shift+F10 (IniReload): the live settings (ReadLiveIni) read again, and the cloud values the shadows use
+    // added to GTAIV.EFLC.FusionFix.PostFx.log next to the plugin.
+    static void OnIniReload(CIniReader& iniReader)
     {
-        static bool keyWasDown = false;
-        const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
-            (GetAsyncKeyState(VK_F10) & 0x8000);
-        if (down && !keyWasDown)
         {
-            CIniReader iniReader("");
             auto& R = PostFxResources;
             const bool profiling = PostFxProfiler::bEnabled;
             R.ReadLiveIni(iniReader);
@@ -1606,9 +1601,14 @@ private:
                             name(CWeather::OldWeatherType), name(CWeather::NewWeatherType), k, c.coverage, c.base, c.thickness, c.stratus, c.wind);
                 }
             }
-            MessageBeep(MB_OK);
         }
-        keyWasDown = down;
+    }
+
+    // Once a frame, from the post fx pass, which runs in the pause menu too: Ctrl+Shift+F10 reads the ini again
+    // (IniReload), Ctrl+Shift+F9 moves the clouds somewhere else.
+    static void TickIniReload()
+    {
+        IniReload::Poll();
 
         // Ctrl+Shift+F9: the clouds start somewhere else, as at a new game (a new place on the
         // map, a new phase of its morph and of the billows), to look at other skies without

@@ -137,7 +137,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     if (reflection && !R.bVolumetricCloudsReflections)
         return skip("VolumetricCloudsReflections 0");
     // At night the clouds are black against a black sky and their reflections showed nothing, at some 2.6 GPU
-    // milliseconds a frame in a profile: while the sun is low (RenderSkip's CascadeSunElevation, or 22:00 to 05:00)
+    // milliseconds a frame in a profile: while the sun is low (RenderSkip's SunShadowsMinElevation, or 22:00 to 05:00)
     // the reflections keep the game's sky
     if (reflection && !R.bVolumetricCloudsReflectionsAtNight && RenderSkip::SunIsLow())
         return skip("night, VolumetricCloudsReflectionsAtNight 0");

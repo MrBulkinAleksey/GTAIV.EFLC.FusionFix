@@ -19,6 +19,7 @@ import hdr;
 import settings;
 import upscaler;
 import vtablepatch;
+import inireload;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -835,24 +836,16 @@ namespace
         }
     }
 
-    // The settings of [TEMPORAL], read again whenever the ini changes while the game runs
-    std::filesystem::path IniPath;
-    std::filesystem::file_time_type IniTime{};
-
-    void ReadSettings()
+    // The frame generation's settings, at startup and on Ctrl+Shift+F10 (IniReload)
+    void ReadSettings(CIniReader& iniReader)
     {
-        CIniReader iniReader("");
-        IniPath = iniReader.GetIniPath();
-        std::error_code error;
-        IniTime = std::filesystem::last_write_time(IniPath, error);
-
-        fDelay = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
-        Upscaler::SetTimingLog(iniReader.ReadInteger("TEMPORAL", "UpscalerTimingLog", 0) != 0);
-        nDebug = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDebug", 0);
-        nPacing = std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGenerationPacing", 2), 0, 2);
-        bDeferredSetting = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDeferred", 1) != 0;
-        bAsyncCompute = iniReader.ReadInteger("TEMPORAL", "FrameGenerationAsyncCompute", 1) != 0;
-        fShowGeneratedAt = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationShowGeneratedAt", 0.2f), 0.0f, 0.9f);
+        fDelay = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
+        Upscaler::SetTimingLog(iniReader.ReadInteger("DEBUG", "UpscalerTimingLog", 0) != 0);
+        nDebug = iniReader.ReadInteger("DEBUG", "FrameGenerationDebug", 0);
+        nPacing = std::clamp(iniReader.ReadInteger("ANTIALIASING", "FrameGenerationPacing", 2), 0, 2);
+        bDeferredSetting = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationDeferred", 1) != 0;
+        bAsyncCompute = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationAsyncCompute", 1) != 0;
+        fShowGeneratedAt = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FrameGenerationShowGeneratedAt", 0.2f), 0.0f, 0.9f);
         // The aims may have changed
         TargetDraws[0] = TargetDraws[1] = 0.0;
         Log("Frame generation settings: delay %.2f, pacing %d, deferred %d (generated frame at %.2f), compute queue %d, debug %d", fDelay, nPacing,
@@ -861,19 +854,6 @@ namespace
         // A fresh start for the statistics
         Stats = {};
         GpuStats = {};
-    }
-
-    void CheckSettings()
-    {
-        static ULONGLONG checked = 0;
-        auto now = GetTickCount64();
-        if (now - checked < 1000)
-            return;
-        checked = now;
-        std::error_code error;
-        auto time = std::filesystem::last_write_time(IniPath, error);
-        if (!error && time != IniTime)
-            ReadSettings();
     }
 
     // DLSS-IV, another DLSS and FSR for the game, records the D3D9 calls of the render thread and replays them on a thread
@@ -978,7 +958,6 @@ namespace
     void OnBeforePresent()
     {
         ++FrameNumber;
-        CheckSettings();
         UpdateMode();
         bool hudLess = bHudLessCaptured;
         bHudLessCaptured = false;
@@ -1274,7 +1253,9 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             QueryPerformanceFrequency(&Frequency);
-            ReadSettings();
+            CIniReader iniReader("");
+            ReadSettings(iniReader);
+            IniReload::Add([](CIniReader& reader) { ReadSettings(reader); });
 
             // Offered once the helper found AMD's frame generation library, and not with DLSS-IV. The choice comes back
             // with them: the cfg keeps it.

@@ -105,7 +105,7 @@ export void RenderContactShadows()
     if (-light[2] / lightLen <= 0.0f)
         return;
     // At night c17 is the moon's. ContactShadowsMoon 0: no contact shadows while its cascades are left out
-    // (CascadeShadowsAtNight 0, the sun below CascadeSunElevation), which saves the screen pass; 1 (default)
+    // (SunShadowsAtNight 0, the sun below SunShadowsMinElevation), which saves the screen pass; 1 (default)
     // keeps them, the moon's only shading of what stands on the ground then.
     if (!R.bContactShadowsMoon && !RenderSkip::bCascadesAtNight && RenderSkip::SunIsLow())
         return;
