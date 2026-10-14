@@ -1,6 +1,7 @@
 module;
 
 #include <common.hxx>
+#include <bit>
 #include "StableHeadlightSelector.hpp"
 #include "ShadowAdapterCE.hpp"
 #include "ShadowAllocationCE.hpp"
@@ -25,6 +26,7 @@ module;
 #include "NativeCacheDependencies44.hpp"
 #include "ShadowInactiveSlots.hpp"
 #include "ShadowViewPriority.hpp"
+#include "VisibleReceiverRanking133.hpp"
 #include "ShadowDrivingFocus.hpp"
 #include "ShadowLookupValidation.hpp"
 #include "ShadowTrace34.hpp"
@@ -65,6 +67,7 @@ static float fTailLightShadowDistance = 25.0f;
 #include "PlayerCarRuntime.inl"
 #include "BeamTraceRuntime.inl"
 #include "HeadlightEnhancementRuntime.inl"
+#include "LampShadowSizeGateRuntime.inl"
 
 // Queried for every light on every frame; a lookup by name scans the whole preference table.
 static int32_t ShadowReachStep(bool headlight)
@@ -511,7 +514,8 @@ public:
                 BeamTrace::enabled = true;
                 HeadlightEnhancement::log.Name("Headlights", "Status");
                 HeadlightEnhancement::brightnessInstalled = HeadlightEnhancement::InstallBrightness(
-                    iniReader.ReadInteger("HEADLIGHTS", "ConsistentBrightness", 0) != 0);
+                    iniReader.ReadInteger("HEADLIGHTS", "ConsistentBrightness", 0) != 0,
+                    iniReader.ReadFloat("HEADLIGHTS", "Intensity", 1.0f));
                 HeadlightEnhancement::InstallLightModes(iniReader.ReadInteger("HEADLIGHTS", "LightModes", 0) != 0);
                 HeadlightEnhancement::InstallOffscreenLights(iniReader.ReadInteger("HEADLIGHTS", "OffscreenLights", 1),
                     std::clamp(iniReader.ReadFloat("HEADLIGHTS", "OffscreenLightsDistance", 100.0f), 0.0f, 500.0f));
@@ -531,6 +535,7 @@ public:
                 if (PlayerShadowAllocation::cameraPriority)
                     PlayerShadowAllocation::cameraPriority = PlayerShadowAllocation::InstallCameraCapture();
                 PlayerShadowAllocation::nativeLampPriority = iniReader.ReadInteger("SHADOWS", "NativeLampViewPriority", 0) != 0;
+                PlayerShadowAllocation::visibleReceiverRanking = iniReader.ReadInteger("SHADOWS", "VisibleReceiverRanking", 1) != 0;
                 PlayerShadowAllocation::casterPriority = iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriority", 0) != 0;
                 PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("SHADOWS", "CasterAwareLampPriorityHold", 750), 0, 2000));
                 PlayerShadowAllocation::casterLeadSeconds = std::clamp(iniReader.ReadFloat("SHADOWS", "CasterAwareLampPriorityLead", 1.0f), 0.0f, 3.0f);
@@ -566,7 +571,9 @@ public:
                 // CE 1.8: shadows from traffic signals and emergency vehicle lights.
                 EmergencyTrafficShadows::log.Name("NightShadows", "EmergencyTraffic");
                 EmergencyTrafficShadows::Install(static_cast<unsigned>(std::clamp(iniReader.ReadInteger("SHADOWS", "TrafficSignalShadows", 2), 0, 7)),
-                    iniReader.ReadInteger("SHADOWS", "EmergencyLightShadows", 1) != 0);
+                    iniReader.ReadInteger("SHADOWS", "EmergencyLightShadows", 1) != 0,
+                    iniReader.ReadFloat("SHADOWS", "TrafficSignalIntensity", 1.05f));
+                LampShadowSizeGate::Install(iniReader.ReadFloat("SHADOWS", "LampShadowSizeReach", 1.3f));
                 // Liberty's Shadows 2.0: dual headlights, tail lights, world lights, buildings in dynamic maps.
                 // Each family is switched in the graphics menu; its hooks stay in place.
                 Lighting20::Install(iniReader);

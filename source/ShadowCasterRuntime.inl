@@ -119,6 +119,7 @@ namespace ShadowDiagnostics
                 if (log.good()) startupWritten = true;
             }
             log << "tick=" << now << " admission_installed=" << admissionInstalled
+                << " lamp_size_gate=" << LampShadowSizeGate::status << " lamp_size_gate_kept=" << LampShadowSizeGate::kept.load()
                 << " traffic_self_shadow_fix=" << bTrafficSelfShadowFix
                 << " traffic_car_excluded=" << OwnHeadlightCaster::trafficCarExcluded.load()
                 << " close_headlight_relevance=" << bCloseHeadlightRelevance << " caster_guard=" << guardPassed
@@ -148,6 +149,7 @@ namespace ShadowDiagnostics
                 << " continuity_overrides=" << PlayerShadowAllocation::continuityOverrides.load()
                 << " continuity_rejected=" << PlayerShadowAllocation::continuityRejected.load()
                 << " lamp_distance_adjusted=" << PlayerShadowAllocation::lampDistanceAdjusted.load()
+                << " receiver_ranked=" << PlayerShadowAllocation::receiverRanked.load()
                 << " caster_priority=" << PlayerShadowAllocation::casterPriority
                 << " caster_captures=" << PlayerShadowAllocation::casterCaptures.load()
                 << " lamps_without_casters=" << PlayerShadowAllocation::lampsWithoutCasters.load()

@@ -29,6 +29,8 @@ namespace PlayerShadowAllocation
     static std::atomic<uint32_t> stableOrdinalPasses{0}, stableOrdinalMoves{0}, stableOrdinalRejected{0}, sharedMapsSkipped{0};
     static SafetyHookMid collectHook, finalizeHook, lampDistanceHook, compareResultHook, cacheResultHook;
     static bool nativeLampPriority=false;
+    static bool visibleReceiverRanking=false;
+    static std::atomic<uint32_t> receiverRanked{0};
     static std::atomic<uint32_t> lampDistanceAdjusted{0};
     static std::atomic<uint32_t> cacheDependencyChecks{0}, cacheDependencyRedirected{0}, cacheDependencyDeferred{0}, cacheDependencyRejected{0};
     static std::atomic<uint32_t> continuityComparisons{0}, continuityOverrides{0}, continuityRejected{0};
@@ -599,20 +601,37 @@ namespace PlayerShadowAllocation
         if(!(light.mFlags&(rage::LF_STATIC_SHADOW|rage::LF_DYNAMIC_SHADOW)) || (light.mFlags&rage::LF_VEHICLE) ||
             *reinterpret_cast<const uint32_t*>(regs.esp+0x1C)!=light.mFlags) return;
         const Vec3 position{light.mPosition.x,light.mPosition.y,light.mPosition.z};
-        const float visibleWeight=fusionfix::shadows::ShadowViewWeight(state.view,position,
-            {light.mDirection.x,light.mDirection.y,light.mDirection.z},light.mRadius,false);
-        const float viewWeight=1.0f+(visibleWeight-1.0f)*(state.occupiedCar?1.0f:0.5f);
+        const Vec3 direction{light.mDirection.x,light.mDirection.y,light.mDirection.z};
+        float visibleWeight=fusionfix::shadows::ShadowViewWeight(state.view,position,direction,light.mRadius,false);
+        float viewWeight=1.0f+(visibleWeight-1.0f)*(state.occupiedCar?1.0f:0.5f);
         const int feet=fusionfix::shadows::ShadowReachFeet(ShadowReachStep(false));
         const float reach=feet>0?feet*0.3048f:60.0f;
         const float original=regs.xmm0.f32[0];
         const float distanceSquared=fusionfix::shadows::EvaluateGeometry(state.player,position).distanceSquared;
+        // VisibleReceiverRanking (Liberty's Shadows 2.0.1): a lamp whose light reaches the view counts as
+        // relevant past the reach too, ranks up to 1.15 times nearer, and its view preference leans to the
+        // middle of the frame.
+        float receiverBenefit=0.0f;
+        if(visibleReceiverRanking &&
+           fusionfix::shadows::VisibleReceiverEmission133(light.mIntensity,{light.mColor.x,light.mColor.y,light.mColor.z}))
+            receiverBenefit=fusionfix::shadows::VisibleReceiverBenefit133(state.view.valid,
+                fusionfix::shadows::ShadowVolumeMayReachView(state.frustum,position,light.mRadius),
+                distanceSquared,light.mRadius,reach,visibleWeight,static_cast<uint32_t>(light.mType),light.mOuterConeAngle);
+        if(receiverBenefit>0) {
+            const float forward=fusionfix::shadows::SceneryReceiverFactor163(state.view,position,direction,
+                light.mRadius,static_cast<uint32_t>(light.mType));
+            visibleWeight=1.0f+(visibleWeight-1.0f)*forward;
+            viewWeight=1.0f+(visibleWeight-1.0f)*(state.occupiedCar?1.0f:0.5f);
+        }
         const bool retained=state.lampContinuity.Retained(static_cast<uint32_t>(light.mCastShadows),
-            LampGeometry(light),visibleWeight>1.1f && std::isfinite(distanceSquared) && distanceSquared<reach*reach);
+            LampGeometry(light),visibleWeight>1.1f && std::isfinite(distanceSquared) &&
+            (distanceSquared<reach*reach || receiverBenefit>0));
         // Keep the softer on-foot acquisition preference, but do not halve an
         // incumbent's visibility merely because the player is walking.
         const float effectiveWeight=retained ? visibleWeight : viewWeight;
         float adjusted=fusionfix::shadows::NativeLampPriorityDistance(original,
             distanceSquared,effectiveWeight,reach,retained);
+        if(receiverBenefit>0) { adjusted=fusionfix::shadows::VisibleReceiverNativeDistance133(adjusted,receiverBenefit); ++receiverRanked; }
         // Driving, rank a visible lamp by how close the car is about to be, so
         // the lamps over the traffic ahead take their slots before it is near.
         if(casterPriority && state.occupiedCar && std::isfinite(distanceSquared) && distanceSquared>1.0f) {
