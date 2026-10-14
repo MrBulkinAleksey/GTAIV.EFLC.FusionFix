@@ -1781,35 +1781,162 @@ public:
         return false;
     }
 
+    // A setting of the ini read straight into a field: a float or an integer clamped to [lo, hi], or a flag (not 0).
+    // The settings read otherwise, or that depend on others, follow their table in ReadLiveIni and Readini.
+    struct IniSetting
+    {
+        enum class Kind : uint8_t { Float, Int, Flag } kind;
+        const char* section;
+        const char* key;
+        float PostFxResource::* floatField;
+        int32_t PostFxResource::* intField;
+        bool PostFxResource::* flagField;
+        float floatDefault, floatMin, floatMax;
+        int32_t intDefault, intMin, intMax;
+    };
+
+    static constexpr IniSetting IniFloat(const char* section, const char* key, float PostFxResource::* field, float def, float lo, float hi)
+    {
+        return { IniSetting::Kind::Float, section, key, field, nullptr, nullptr, def, lo, hi, 0, 0, 0 };
+    }
+
+    static constexpr IniSetting IniInt(const char* section, const char* key, int32_t PostFxResource::* field, int32_t def, int32_t lo, int32_t hi)
+    {
+        return { IniSetting::Kind::Int, section, key, nullptr, field, nullptr, 0.0f, 0.0f, 0.0f, def, lo, hi };
+    }
+
+    static constexpr IniSetting IniFlag(const char* section, const char* key, bool PostFxResource::* field, int32_t def)
+    {
+        return { IniSetting::Kind::Flag, section, key, nullptr, nullptr, field, 0.0f, 0.0f, 0.0f, def, 0, 0 };
+    }
+
+    template <size_t N>
+    void ReadIniSettings(CIniReader& iniReader, const IniSetting (&settings)[N])
+    {
+        for (const auto& s : settings)
+        {
+            switch (s.kind)
+            {
+            case IniSetting::Kind::Float:
+                this->*s.floatField = std::clamp(iniReader.ReadFloat(s.section, s.key, s.floatDefault), s.floatMin, s.floatMax);
+                break;
+            case IniSetting::Kind::Int:
+                this->*s.intField = std::clamp(iniReader.ReadInteger(s.section, s.key, s.intDefault), s.intMin, s.intMax);
+                break;
+            case IniSetting::Kind::Flag:
+                this->*s.flagField = iniReader.ReadInteger(s.section, s.key, s.intDefault) != 0;
+                break;
+            }
+        }
+    }
+
     // The settings used afresh every frame, which Ctrl+Shift+F10 reads again from the ini while the
     // game runs (TickIniReload). Anything that sizes targets or builds shaders stays in Readini.
     void ReadLiveIni(CIniReader& iniReader)
     {
-        fContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
-        fGIOcclusion = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightOcclusion", 1.0f), 0.0f, 1.0f);
-        fLocalContactShadowIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsIntensity", 1.0f), 0.0f, 1.0f);
-        fLocalContactShadowUnshadowed = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsWithoutShadowMap", 0.0f), 0.0f, 1.0f);
-        fVehicleBoxShadowLightSize = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLightSize", 0.5f), 0.0f, 4.0f);
-        fVehicleBoxShadowRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsRounding", 0.2f), 0.0f, 0.99f);
-        fVehicleBoxShadowContact = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsContact", 0.0f), 0.0f, 1.0f);
-        fVehicleBoxShadowEndRounding = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsEndRounding", 0.3f), 0.0f, 2.0f);
-        bVehicleBoxShadowsFromCarLights = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFromCarLights", 0) != 0;
-        bVehicleBoxShadowsWithSlots = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsWithSlots", 0) != 0;
-        bVehicleBoxShadowsUntilLeaving = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsUntilLeaving", 1) != 0;
-        // VehicleBoxShadowsBlend: the light shaders take the darkest of a light's shadow map, contact shadow and boxes
-        // (local_light_with_shadow_blend.patch) instead of all three multiplied, so the contact shadow goes with the
-        // boxes whole. Each car still has one kind of shadow from a lamp, its map's or its box (UntilLeaving): kept with
-        // a slot too, the box and the map's shadow showed side by side, two shadows from one lamp.
-        bVehicleBoxShadowsBlend = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsBlend", 1) != 0;
+        static constexpr IniSetting kSettings[] =
+        {
+            IniFloat("POSTFX", "ContactShadowsIntensity", &PostFxResource::fContactShadowIntensity, 1.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "ScreenSpaceIndirectLightOcclusion", &PostFxResource::fGIOcclusion, 1.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "LocalContactShadowsIntensity", &PostFxResource::fLocalContactShadowIntensity, 1.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "LocalContactShadowsWithoutShadowMap", &PostFxResource::fLocalContactShadowUnshadowed, 0.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "VehicleBoxShadowsLightSize", &PostFxResource::fVehicleBoxShadowLightSize, 0.5f, 0.0f, 4.0f),
+            IniFloat("POSTFX", "VehicleBoxShadowsRounding", &PostFxResource::fVehicleBoxShadowRounding, 0.2f, 0.0f, 0.99f),
+            IniFloat("POSTFX", "VehicleBoxShadowsContact", &PostFxResource::fVehicleBoxShadowContact, 0.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "VehicleBoxShadowsEndRounding", &PostFxResource::fVehicleBoxShadowEndRounding, 0.3f, 0.0f, 2.0f),
+            IniFlag("POSTFX", "VehicleBoxShadowsFromCarLights", &PostFxResource::bVehicleBoxShadowsFromCarLights, 0),
+            IniFlag("POSTFX", "VehicleBoxShadowsWithSlots", &PostFxResource::bVehicleBoxShadowsWithSlots, 0),
+            IniFlag("POSTFX", "VehicleBoxShadowsUntilLeaving", &PostFxResource::bVehicleBoxShadowsUntilLeaving, 1),
+            // VehicleBoxShadowsBlend: the light shaders take the darkest of a light's shadow map, contact shadow and boxes
+            // (local_light_with_shadow_blend.patch) instead of all three multiplied, so the contact shadow goes with the
+            // boxes whole. Each car still has one kind of shadow from a lamp, its map's or its box (UntilLeaving): kept with
+            // a slot too, the box and the map's shadow showed side by side, two shadows from one lamp.
+            IniFlag("POSTFX", "VehicleBoxShadowsBlend", &PostFxResource::bVehicleBoxShadowsBlend, 1),
+            IniFlag("POSTFX", "VehicleBoxShadowsLive", &PostFxResource::bVehicleBoxShadowsLive, 0),
+            IniFloat("POSTFX", "VehicleBoxShadowsLeadFrames", &PostFxResource::fVehicleBoxShadowLeadFrames, -1.0f, -3.0f, 5.0f),
+            IniFlag("POSTFX", "VehicleBoxShadowsLog", &PostFxResource::bVehicleBoxShadowsLog, 0),
+            IniInt("POSTFX", "VehicleBoxShadowsPerLamp", &PostFxResource::nVehicleBoxShadowsPerLamp, 3, 1, 5),
+            IniInt("POSTFX", "VehicleBoxShadowsPerCar", &PostFxResource::nVehicleBoxShadowsPerCar, 2, 0, 8),
+            IniFloat("POSTFX", "VehicleBoxShadowsMinLight", &PostFxResource::fVehicleBoxShadowsMinLight, 0.04f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "VehicleBoxShadowsMaxDistance", &PostFxResource::fVehicleBoxShadowsMaxDistance, 60.0f, 0.0f, 1000.0f),
+            IniFloat("POSTFX", "VehicleBoxShadowsFollowLight", &PostFxResource::fVehicleBoxShadowFollowLight, 1.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "VehicleBoxShadowsLowLightNarrow", &PostFxResource::fVehicleBoxShadowLowLightNarrow, 1.0f, 0.2f, 1.0f),
+            IniFloat("POSTFX", "VehicleBoxShadowsLowLightHeight", &PostFxResource::fVehicleBoxShadowLowLightHeight, 0.6f, 0.2f, 1.0f),
+            IniFloat("POSTFX", "SkinLighting", &PostFxResource::fSkinLighting, 1.0f, 0.0f, 2.0f),
+            IniFloat("POSTFX", "SpecularSheen", &PostFxResource::fSpecularSheen, 0.1f, 0.0f, 50.0f),
+            IniFloat("POSTFX", "LightsGGX", &PostFxResource::fLightsGGX, 1.0f, 0.0f, 4.0f),
+            IniFloat("POSTFX", "LightsGGXFresnel", &PostFxResource::fLightsGGXFresnel, 0.5f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "LightsGGXSize", &PostFxResource::fLightsGGXSize, 0.05f, 0.0f, 2.0f),
+            IniFloat("POSTFX", "LightsGGXStretch", &PostFxResource::fLightsGGXStretch, 0.5f, 0.0f, 4.0f),
+            IniFloat("POSTFX", "LightsGGXHeadlights", &PostFxResource::fLightsGGXHeadlights, 0.65f, 0.0f, 2.0f),
+            IniFloat("POSTFX", "LightsGGXFillLights", &PostFxResource::fLightsGGXFillLights, 0.5f, 0.0f, 2.0f),
+            IniFloat("POSTFX", "LightsGGXSun", &PostFxResource::fLightsGGXSun, 1.0f, 0.0f, 4.0f),
+            IniFloat("POSTFX", "LightsGGXEnvironment", &PostFxResource::fLightsGGXEnvironment, 1.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "LightsGGXMax", &PostFxResource::fLightsGGXMax, 2.0f, 0.1f, 16.0f),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsIntensity", &PostFxResource::fSSRIntensity, 1.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsWetGround", &PostFxResource::fSSRWetGround, 1.5f, 0.0f, 8.0f),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsStepPixels", &PostFxResource::fSSRStepPixels, 2.0f, 1.0f, 8.0f),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsSmoothing", &PostFxResource::fSSRDenoiseRadius, 2.0f, 0.0f, 8.0f),
+            IniFlag("POSTFX", "ScreenSpaceReflectionsPastThinObjects", &PostFxResource::bSSRPassThinObjects, 1),
+            IniFlag("POSTFX", "ScreenSpaceReflectionsStepJitter", &PostFxResource::bSSRStepJitter, 1),
+            IniFlag("POSTFX", "ScreenSpaceReflectionsTemporalJitter", &PostFxResource::bSSRTemporalJitter, 1),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsTemporal", &PostFxResource::fSSRTemporalBlend, 0.85f, 0.0f, 0.97f),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsFallback", &PostFxResource::fSSRFallback, 0.8f, 0.0f, 1.0f),
+            IniFlag("POSTFX", "ScreenSpaceReflectionsMarchFullDepth", &PostFxResource::bSSRMarchFullDepth, 0),
+            IniFloat("POSTFX", "LightsGGXSoft", &PostFxResource::fLightsGGXSoft, 0.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "LightsGGXStretchView", &PostFxResource::fLightsGGXStretchView, 1.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "LightsGGXGlints", &PostFxResource::fLightsGGXGlints, 1.0f, 0.0f, 8.0f),
+            IniFloat("POSTFX", "LightsGGXGlintsSize", &PostFxResource::fLightsGGXGlintsSize, 0.1f, 0.01f, 1.0f),
+            IniFloat("POSTFX", "LightsGGXGlintsGloss", &PostFxResource::fLightsGGXGlintsGloss, 0.5f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "LightsGGXGlintsMax", &PostFxResource::fLightsGGXGlintsMax, 64.0f, 1.0f, 1000.0f),
+            IniFloat("POSTFX", "WetGround", &PostFxResource::fWetGround, 1.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "WetGroundPuddles", &PostFxResource::fWetGroundPuddles, 0.35f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "WetGroundPuddleSize", &PostFxResource::fWetGroundPuddleSize, 24.0f, 2.0f, 500.0f),
+            IniFloat("POSTFX", "WetGroundRipples", &PostFxResource::fWetGroundRipples, 1.0f, 0.0f, 3.0f),
+            IniFloat("POSTFX", "WetGroundDarkening", &PostFxResource::fWetGroundDarkening, 1.0f, 0.0f, 2.0f),
+            IniFloat("POSTFX", "WetGroundWetting", &PostFxResource::fWetGroundWetting, 30.0f, 0.0f, 3600.0f),
+            IniFloat("POSTFX", "WetGroundDrying", &PostFxResource::fWetGroundDrying, 240.0f, 0.0f, 3600.0f),
+            IniInt("POSTFX", "WetGroundDebug", &PostFxResource::nWetGroundDebug, 0, 0, 2),
+            IniFloat("POSTFX", "CloudShadows", &PostFxResource::fCloudShadows, 0.6f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "CloudShadowsHeight", &PostFxResource::fCloudShadowsHeight, 1200.0f, 100.0f, 10000.0f),
+            IniFloat("POSTFX", "CloudShadowsScale", &PostFxResource::fCloudShadowsScale, 16000.0f, 100.0f, 50000.0f),
+            IniFloat("POSTFX", "CloudShadowsWind", &PostFxResource::fCloudShadowsWind, 6.0f, 0.0f, 100.0f),
+            IniFloat("POSTFX", "CloudShadowsSoftness", &PostFxResource::fCloudShadowsSoftness, 3.0f, 0.0f, 8.0f),
+            IniFloat("POSTFX", "CloudShadowsCoverage", &PostFxResource::fCloudShadowsCoverage, 0.0f, -1.0f, 1.0f),
+            IniInt("POSTFX", "CloudShadowsDebug", &PostFxResource::nCloudShadowsDebug, 0, 0, 2),
+            IniFlag("POSTFX", "VolumetricClouds", &PostFxResource::bVolumetricClouds, 1),
+            IniFloat("POSTFX", "VolumetricCloudsCoverage", &PostFxResource::fVolumetricCloudsCoverage, 0.4f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "VolumetricCloudsBase", &PostFxResource::fVolumetricCloudsBase, 800.0f, 50.0f, 10000.0f),
+            IniFloat("POSTFX", "VolumetricCloudsThickness", &PostFxResource::fVolumetricCloudsThickness, 600.0f, 50.0f, 5000.0f),
+            IniFloat("POSTFX", "VolumetricCloudsDensity", &PostFxResource::fVolumetricCloudsDensity, 0.03f, 0.0005f, 1.0f),
+            IniFloat("POSTFX", "VolumetricCloudsDetail", &PostFxResource::fVolumetricCloudsDetail, 0.6f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "VolumetricCloudsDetailScale", &PostFxResource::fVolumetricCloudsDetailScale, 1300.0f, 20.0f, 10000.0f),
+            IniFloat("POSTFX", "VolumetricCloudsHaze", &PostFxResource::fVolumetricCloudsHaze, 25000.0f, 1000.0f, 200000.0f),
+            IniFloat("POSTFX", "VolumetricCloudsMaxDistance", &PostFxResource::fVolumetricCloudsMaxDistance, 40000.0f, 1000.0f, 200000.0f),
+            IniFloat("POSTFX", "VolumetricCloudsBrightness", &PostFxResource::fVolumetricCloudsBrightness, 1.0f, 0.0f, 4.0f),
+            IniFloat("POSTFX", "VolumetricCloudsSunTint", &PostFxResource::fVolumetricCloudsSunTint, 0.6f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "VolumetricCloudsMoonlight", &PostFxResource::fVolumetricCloudsMoonlight, 0.2f, 0.0f, 2.0f),
+            IniFloat("POSTFX", "VolumetricCloudsSkyLight", &PostFxResource::fVolumetricCloudsSkyLight, 0.5f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.25f, 0.0f, 0.9f),
+            IniFloat("POSTFX", "VolumetricCloudsSkyMatch", &PostFxResource::fVolumetricCloudsSkyMatch, 2.0f, 0.0f, 20.0f),
+            IniFlag("POSTFX", "VolumetricCloudsWeather", &PostFxResource::bVolumetricCloudsWeather, 1),
+            IniFloat("POSTFX", "VolumetricCloudsVanilla", &PostFxResource::fVolumetricCloudsVanilla, 0.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "VolumetricCloudsTranslucency", &PostFxResource::fVolumetricCloudsTranslucency, 0.25f, 0.0f, 0.9f),
+            IniFloat("POSTFX", "VolumetricCloudsEvolution", &PostFxResource::fVolumetricCloudsEvolution, 1.0f, 0.0f, 10.0f),
+            IniFloat("POSTFX", "VolumetricCloudsSaturation", &PostFxResource::fVolumetricCloudsSaturation, 1.0f, 0.0f, 2.0f),
+            IniFloat("POSTFX", "VolumetricCloudsMottle", &PostFxResource::fVolumetricCloudsMottle, 0.4f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "VolumetricCloudsShade", &PostFxResource::fVolumetricCloudsShade, 0.65f, 0.0f, 2.0f),
+            IniFloat("POSTFX", "VolumetricCloudsAbsorption", &PostFxResource::fVolumetricCloudsAbsorption, 0.35f, 0.05f, 3.0f),
+            IniInt("POSTFX", "VolumetricCloudsDebug", &PostFxResource::nVolumetricCloudsDebug, 0, 0, 15),
+            IniFlag("POSTFX", "VolumetricCloudsReflections", &PostFxResource::bVolumetricCloudsReflections, 1),
+            IniFlag("POSTFX", "VolumetricCloudsReflectionsAtNight", &PostFxResource::bVolumetricCloudsReflectionsAtNight, 0),
+            IniFloat("POSTFX", "VolumetricCloudsReflectionBrightness", &PostFxResource::fVolumetricCloudsReflectionBrightness, 1.0f, 0.0f, 10.0f),
+            IniFlag("POSTFX", "VolumetricCloudsReflectionsHalfResolution", &PostFxResource::bVolumetricCloudsReflectionsHalfRes, 1),
+        };
+        ReadIniSettings(iniReader, kSettings);
+
         if (bVehicleBoxShadowsBlend)
             fVehicleBoxShadowContact = 1.0f;
-        bVehicleBoxShadowsLive = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLive", 0) != 0;
-        fVehicleBoxShadowLeadFrames = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLeadFrames", -1.0f), -3.0f, 5.0f);
-        bVehicleBoxShadowsLog = iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsLog", 0) != 0;
-        nVehicleBoxShadowsPerLamp = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerLamp", 3), 1, 5);
-        nVehicleBoxShadowsPerCar = std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsPerCar", 2), 0, 8);
-        fVehicleBoxShadowsMinLight = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsMinLight", 0.04f), 0.0f, 1.0f);
-        fVehicleBoxShadowsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsMaxDistance", 60.0f), 0.0f, 1000.0f);
         nVehicleBoxShadowSizeFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsSizeFade", 300), 0, 5000));
         nVehicleBoxShadowFadeInMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeIn", 300), 0, 5000));
         nVehicleBoxShadowFadeOutMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("POSTFX", "VehicleBoxShadowsFadeOut", 300), 0, 5000));
@@ -1817,144 +1944,83 @@ public:
         fVehicleBoxShadowScale[0] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLength", 1.0f), 0.3f, 1.2f);
         fVehicleBoxShadowScale[1] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsWidth", 0.95f), 0.3f, 1.2f);
         fVehicleBoxShadowScale[2] = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsHeight", 0.95f), 0.3f, 1.2f);
-        fVehicleBoxShadowFollowLight = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsFollowLight", 1.0f), 0.0f, 1.0f);
-        fVehicleBoxShadowLowLightNarrow = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLowLightNarrow", 1.0f), 0.2f, 1.0f);
-        fVehicleBoxShadowLowLightHeight = std::clamp(iniReader.ReadFloat("POSTFX", "VehicleBoxShadowsLowLightHeight", 0.6f), 0.2f, 1.0f);
-        fSkinLighting = std::clamp(iniReader.ReadFloat("POSTFX", "SkinLighting", 1.0f), 0.0f, 2.0f);
-        fSpecularSheen = std::clamp(iniReader.ReadFloat("POSTFX", "SpecularSheen", 0.1f), 0.0f, 50.0f);
-        fLightsGGX = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGX", 1.0f), 0.0f, 4.0f);
-        fLightsGGXFresnel = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXFresnel", 0.5f), 0.0f, 1.0f);
-        fLightsGGXSize = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSize", 0.05f), 0.0f, 2.0f);
-        fLightsGGXStretch = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXStretch", 0.5f), 0.0f, 4.0f);
-        fLightsGGXHeadlights = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXHeadlights", 0.65f), 0.0f, 2.0f);
-        fLightsGGXFillLights = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXFillLights", 0.5f), 0.0f, 2.0f);
-        fLightsGGXSun = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSun", 1.0f), 0.0f, 4.0f);
-        fLightsGGXEnvironment = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXEnvironment", 1.0f), 0.0f, 1.0f);
-        fLightsGGXMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXMax", 2.0f), 0.1f, 16.0f);
-        fSSRIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsIntensity", 1.0f), 0.0f, 1.0f);
-        fSSRWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWetGround", 1.5f), 0.0f, 8.0f);
-        fSSRStepPixels = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsStepPixels", 2.0f), 1.0f, 8.0f);
-        fSSRDenoiseRadius = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsSmoothing", 2.0f), 0.0f, 8.0f);
-        bSSRPassThinObjects = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsPastThinObjects", 1) != 0;
-        bSSRStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsStepJitter", 1) != 0;
-        bSSRTemporalJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsTemporalJitter", 1) != 0;
-        fSSRTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTemporal", 0.85f), 0.0f, 0.97f);
-        fSSRFallback = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsFallback", 0.8f), 0.0f, 1.0f);
-        bSSRMarchFullDepth = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsMarchFullDepth", 0) != 0;
         PostFxProfiler::bEnabled = iniReader.ReadInteger("POSTFX", "PostFxProfiler", 0) != 0;
-        fLightsGGXSoft = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXSoft", 0.0f), 0.0f, 1.0f);
-        fLightsGGXStretchView = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXStretchView", 1.0f), 0.0f, 1.0f);
-        fLightsGGXGlints = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlints", 1.0f), 0.0f, 8.0f);
-        fLightsGGXGlintsSize = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlintsSize", 0.1f), 0.01f, 1.0f);
-        fLightsGGXGlintsGloss = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlintsGloss", 0.5f), 0.0f, 1.0f);
-        fLightsGGXGlintsMax = std::clamp(iniReader.ReadFloat("POSTFX", "LightsGGXGlintsMax", 64.0f), 1.0f, 1000.0f);
-        fWetGround = std::clamp(iniReader.ReadFloat("POSTFX", "WetGround", 1.0f), 0.0f, 1.0f);
-        fWetGroundPuddles = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddles", 0.35f), 0.0f, 1.0f);
-        fWetGroundPuddleSize = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundPuddleSize", 24.0f), 2.0f, 500.0f);
-        fWetGroundRipples = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundRipples", 1.0f), 0.0f, 3.0f);
-        fWetGroundDarkening = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundDarkening", 1.0f), 0.0f, 2.0f);
-        fWetGroundWetting = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundWetting", 30.0f), 0.0f, 3600.0f);
-        fWetGroundDrying = std::clamp(iniReader.ReadFloat("POSTFX", "WetGroundDrying", 240.0f), 0.0f, 3600.0f);
         nWetGroundMaterials = iniReader.ReadInteger("POSTFX", "WetGroundMaterials", 1) & 0xFF;
-        nWetGroundDebug = std::clamp(iniReader.ReadInteger("POSTFX", "WetGroundDebug", 0), 0, 2);
-        fCloudShadows = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadows", 0.6f), 0.0f, 1.0f);
-        fCloudShadowsHeight = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsHeight", 1200.0f), 100.0f, 10000.0f);
-        fCloudShadowsScale = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsScale", 16000.0f), 100.0f, 50000.0f);
-        fCloudShadowsWind = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsWind", 6.0f), 0.0f, 100.0f);
-        fCloudShadowsSoftness = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsSoftness", 3.0f), 0.0f, 8.0f);
-        fCloudShadowsCoverage = std::clamp(iniReader.ReadFloat("POSTFX", "CloudShadowsCoverage", 0.0f), -1.0f, 1.0f);
-        nCloudShadowsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "CloudShadowsDebug", 0), 0, 2);
-        bVolumetricClouds = iniReader.ReadInteger("POSTFX", "VolumetricClouds", 1) != 0;
-        fVolumetricCloudsCoverage = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsCoverage", 0.4f), 0.0f, 1.0f);
-        fVolumetricCloudsBase = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBase", 800.0f), 50.0f, 10000.0f);
-        fVolumetricCloudsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsThickness", 600.0f), 50.0f, 5000.0f);
-        fVolumetricCloudsDensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDensity", 0.03f), 0.0005f, 1.0f);
-        fVolumetricCloudsDetail = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetail", 0.6f), 0.0f, 1.0f);
-        fVolumetricCloudsDetailScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsDetailScale", 1300.0f), 20.0f, 10000.0f);
-        fVolumetricCloudsHaze = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsHaze", 25000.0f), 1000.0f, 200000.0f);
-        fVolumetricCloudsMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMaxDistance", 40000.0f), 1000.0f, 200000.0f);
-        fVolumetricCloudsBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsBrightness", 1.0f), 0.0f, 4.0f);
-        fVolumetricCloudsSunTint = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSunTint", 0.6f), 0.0f, 1.0f);
-        fVolumetricCloudsMoonlight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMoonlight", 0.2f), 0.0f, 2.0f);
-        fVolumetricCloudsSkyLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyLight", 0.5f), 0.0f, 1.0f);
-        fVolumetricCloudsMinLight = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMinLight", 0.25f), 0.0f, 0.9f);
-        fVolumetricCloudsSkyMatch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSkyMatch", 2.0f), 0.0f, 20.0f);
-        bVolumetricCloudsWeather = iniReader.ReadInteger("POSTFX", "VolumetricCloudsWeather", 1) != 0;
-        fVolumetricCloudsVanilla = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsVanilla", 0.0f), 0.0f, 1.0f);
-        fVolumetricCloudsTranslucency = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsTranslucency", 0.25f), 0.0f, 0.9f);
-        fVolumetricCloudsEvolution = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsEvolution", 1.0f), 0.0f, 10.0f);
-        fVolumetricCloudsSaturation = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsSaturation", 1.0f), 0.0f, 2.0f);
-        fVolumetricCloudsMottle = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsMottle", 0.4f), 0.0f, 1.0f);
-        fVolumetricCloudsShade = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsShade", 0.65f), 0.0f, 2.0f);
-        fVolumetricCloudsAbsorption = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsAbsorption", 0.35f), 0.05f, 3.0f);
-        nVolumetricCloudsDebug = std::clamp(iniReader.ReadInteger("POSTFX", "VolumetricCloudsDebug", 0), 0, 15);
-        bVolumetricCloudsReflections = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflections", 1) != 0;
-        bVolumetricCloudsReflectionsAtNight = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflectionsAtNight", 0) != 0;
-        fVolumetricCloudsReflectionBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricCloudsReflectionBrightness", 1.0f), 0.0f, 10.0f);
-        bVolumetricCloudsReflectionsHalfRes = iniReader.ReadInteger("POSTFX", "VolumetricCloudsReflectionsHalfResolution", 1) != 0;
     }
 
     void Readini()
     {
         CIniReader iniReader("");
+        static constexpr IniSetting kSettings[] =
+        {
+            IniFlag("SRF", "StippleFilter", &PostFxResource::useStippleFilter, 1),
+            IniFlag("POSTFX", "EnablePreAlphaDepth", &PostFxResource::bEnablePreAlphaDepth, 1),
+            IniInt("POSTFX", "ScreenSpaceReflectionsSteps", &PostFxResource::nSSRSteps, 32, 4, 128),
+            IniInt("POSTFX", "ScreenSpaceReflectionsRefineSteps", &PostFxResource::nSSRRefineSteps, 8, 0, 16),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsEdgeFade", &PostFxResource::fSSREdgeFade, 0.1f, 0.001f, 0.5f),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsGlossBoost", &PostFxResource::fSSRGlossBoost, 2.0f, 0.0f, 8.0f),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsGlossCutoff", &PostFxResource::fSSRGlossCutoff, 0.5f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsWaterIntensity", &PostFxResource::fSSRWaterIntensity, 1.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsWaterBlur", &PostFxResource::fSSRWaterBlur, 3.0f, 0.0f, 32.0f),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsWaterRipple", &PostFxResource::fSSRWaterNormalStrength, 1.0f, 0.0f, 4.0f),
+            IniFlag("POSTFX", "ScreenSpaceReflectionsGBufferNormals", &PostFxResource::bSSRGBufferNormals, 1),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", &PostFxResource::fSSRTowardCamera, 0.0f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsBlur", &PostFxResource::fSSRReflectionBlur, 0.0f, 0.0f, 32.0f),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsDistanceFade", &PostFxResource::fSSRDistanceFade, 0.0f, 0.0f, 100.0f),
+            IniFloat("POSTFX", "ContactShadowsLength", &PostFxResource::fContactShadowLength, 0.3f, 0.05f, 10.0f),
+            IniFloat("POSTFX", "ContactShadowsThickness", &PostFxResource::fContactShadowThickness, 0.15f, 0.01f, 10.0f),
+            IniFloat("POSTFX", "ContactShadowsMaxDistance", &PostFxResource::fContactShadowMaxDistance, 60.0f, 1.0f, 1000.0f),
+            IniFlag("POSTFX", "ContactShadowsMoon", &PostFxResource::bContactShadowsMoon, 1),
+            IniFlag("POSTFX", "ContactShadowsStepJitter", &PostFxResource::bContactShadowStepJitter, 1),
+            IniFlag("POSTFX", "ContactShadowsHalfResolution", &PostFxResource::bContactShadowsHalfRes, 1),
+            IniFloat("POSTFX", "ContactShadowsTemporal", &PostFxResource::fContactTemporalBlend, 0.8f, 0.0f, 0.95f),
+            IniFloat("POSTFX", "ScreenSpaceIndirectLightIntensity", &PostFxResource::fGIIntensity, 1.5f, 0.0f, 8.0f),
+            IniFloat("POSTFX", "ScreenSpaceIndirectLightMaxBrightness", &PostFxResource::fGIMaxBrightness, 4.0f, 0.05f, 8.0f),
+            IniFloat("POSTFX", "SkinScatteringWidth", &PostFxResource::fSkinScatteringWidth, 0.03f, 0.001f, 0.1f),
+            IniFloat("POSTFX", "SkinScatteringStrength", &PostFxResource::fSkinScatteringStrength, 1.0f, 0.0f, 2.0f),
+            IniFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", &PostFxResource::fGIRayLength, 4.0f, 0.1f, 20.0f),
+            IniFloat("POSTFX", "ScreenSpaceIndirectLightThickness", &PostFxResource::fGIThickness, 0.5f, 0.01f, 10.0f),
+            IniFloat("POSTFX", "ScreenSpaceIndirectLightMaxDistance", &PostFxResource::fGIMaxDistance, 60.0f, 1.0f, 1000.0f),
+            IniFloat("POSTFX", "ScreenSpaceIndirectLightTemporal", &PostFxResource::fGITemporalBlend, 0.9f, 0.0f, 0.97f),
+            IniInt("POSTFX", "ScreenSpaceIndirectLightRays", &PostFxResource::nGIRays, 4, 1, 16),
+            IniInt("POSTFX", "ScreenSpaceIndirectLightSteps", &PostFxResource::nGISteps, 8, 2, 32),
+            IniFlag("POSTFX", "LocalContactShadows", &PostFxResource::bLocalContactShadows, 1),
+            IniFloat("POSTFX", "LocalContactShadowsLength", &PostFxResource::fLocalContactShadowLength, 0.5f, 0.05f, 10.0f),
+            IniFloat("POSTFX", "LocalContactShadowsThickness", &PostFxResource::fLocalContactShadowThickness, 0.2f, 0.01f, 5.0f),
+            IniFloat("POSTFX", "LocalContactShadowsMaxDistance", &PostFxResource::fLocalContactShadowMaxDistance, 40.0f, 1.0f, 1000.0f),
+            IniFloat("POSTFX", "VolumetricLightIntensity", &PostFxResource::fVolumetricLightIntensity, 4.0f, 0.0f, 20.0f),
+            IniFloat("POSTFX", "VolumetricLightScale", &PostFxResource::fVolumetricLightScale, 0.25f, 0.0f, 2.0f),
+            IniFloat("POSTFX", "VolumetricLightMaxDistance", &PostFxResource::fVolumetricLightMaxDistance, 100.0f, 10.0f, 1000.0f),
+            IniFloat("POSTFX", "VolumetricLightHeadlightIntensity", &PostFxResource::fVolumetricLightHeadlightIntensity, 2.0f, 0.0f, 20.0f),
+            IniFloat("POSTFX", "VolumetricLightHeadlightLength", &PostFxResource::fVolumetricLightHeadlightLength, 25.0f, 1.0f, 200.0f),
+            IniFlag("POSTFX", "FillLights", &PostFxResource::bFillLights, 0),
+            IniFloat("POSTFX", "FillLightsMinRadius", &PostFxResource::fFillLightsMinRadius, 30.0f, 0.0f, 1000.0f),
+            IniFlag("POSTFX", "VolumetricLightHeadlightShadow", &PostFxResource::bVolumetricLightHeadlightShadow, 0),
+            IniFloat("POSTFX", "VolumetricLightHeadlightPitch", &PostFxResource::fVolumetricLightHeadlightPitch, 6.0f, -45.0f, 45.0f),
+            IniFlag("POSTFX", "ScreenSpaceReflectionsGlass", &PostFxResource::bGlassReflections, 1),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", &PostFxResource::fGlassReflectionsLength, 15.0f, 1.0f, 100.0f),
+            IniFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", &PostFxResource::fGlassReflectionsThickness, 0.5f, 0.05f, 10.0f),
+            IniFlag("POSTFX", "ScreenSpaceReflectionsGlassStepJitter", &PostFxResource::bGlassStepJitter, 1),
+            IniInt("POSTFX", "AmbientOcclusionGTAOSlices", &PostFxResource::nAmbientOcclusionGTAOSlices, 2, 1, 8),
+            IniInt("POSTFX", "AmbientOcclusionGTAOSteps", &PostFxResource::nAmbientOcclusionGTAOSteps, 4, 1, 16),
+            IniFloat("POSTFX", "AmbientOcclusionGTAOStrength", &PostFxResource::fAmbientOcclusionGTAOStrength, 1.0f, 0.0f, 4.0f),
+            IniFloat("POSTFX", "AmbientOcclusionGTAOThinOccluders", &PostFxResource::fAmbientOcclusionGTAOThinOccluders, 0.5f, 0.0f, 1.0f),
+            IniFloat("POSTFX", "AmbientOcclusionGTAOTemporal", &PostFxResource::fAmbientOcclusionTemporal, 0.9f, 0.0f, 0.98f),
+            IniFlag("POSTFX", "AmbientOcclusionGTAOMultiBounce", &PostFxResource::bAmbientOcclusionMultiBounce, 1),
+            IniFlag("POSTFX", "AmbientOcclusionHalfResolution", &PostFxResource::bAmbientOcclusionHalfRes, 1),
+        };
+        ReadIniSettings(iniReader, kSettings);
+
         EnablePostfx = iniReader.ReadInteger("SRF", "EnablePostfx", 1);
 
-        useStippleFilter = iniReader.ReadInteger("SRF", "StippleFilter", 1) != 0;
 
-        bEnablePreAlphaDepth = iniReader.ReadInteger("POSTFX", "EnablePreAlphaDepth", 1) != 0;
 
-        nSSRSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsSteps", 32), 4, 128);
-        nSSRRefineSteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsRefineSteps", 8), 0, 16);
         fSSRMaxDistance = std::max(1.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsMaxDistance", 24.0f));
         fSSRThickness = std::max(0.0f, iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsThickness", 0.3f));
-        fSSREdgeFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsEdgeFade", 0.1f), 0.001f, 0.5f);
-        fSSRGlossBoost = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossBoost", 2.0f), 0.0f, 8.0f);
-        fSSRGlossCutoff = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlossCutoff", 0.5f), 0.0f, 1.0f);
-        fSSRWaterIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterIntensity", 1.0f), 0.0f, 1.0f);
         fSSRWaterLevelOffset = iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterLevelOffset", 0.0f);
-        fSSRWaterBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterBlur", 3.0f), 0.0f, 32.0f);
-        fSSRWaterNormalStrength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsWaterRipple", 1.0f), 0.0f, 4.0f);
-        bSSRGBufferNormals = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGBufferNormals", 1) != 0;
-        fSSRTowardCamera = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsTowardCamera", 0.0f), 0.0f, 1.0f);
-        fSSRReflectionBlur = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsBlur", 0.0f), 0.0f, 32.0f);
-        fSSRDistanceFade = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsDistanceFade", 0.0f), 0.0f, 100.0f);
-        fContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsLength", 0.3f), 0.05f, 10.0f);
-        fContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsThickness", 0.15f), 0.01f, 10.0f);
-        fContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsMaxDistance", 60.0f), 1.0f, 1000.0f);
-        bContactShadowsMoon = iniReader.ReadInteger("POSTFX", "ContactShadowsMoon", 1) != 0;
-        bContactShadowStepJitter = iniReader.ReadInteger("POSTFX", "ContactShadowsStepJitter", 1) != 0;
-        bContactShadowsHalfRes = iniReader.ReadInteger("POSTFX", "ContactShadowsHalfResolution", 1) != 0;
-        fContactTemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ContactShadowsTemporal", 0.8f), 0.0f, 0.95f);
-        fGIIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightIntensity", 1.5f), 0.0f, 8.0f);
-        fGIMaxBrightness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxBrightness", 4.0f), 0.05f, 8.0f);
-        fSkinScatteringWidth = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringWidth", 0.03f), 0.001f, 0.1f);
-        fSkinScatteringStrength = std::clamp(iniReader.ReadFloat("POSTFX", "SkinScatteringStrength", 1.0f), 0.0f, 2.0f);
         ReadLiveIni(iniReader);
-        fGIRayLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightRayLength", 4.0f), 0.1f, 20.0f);
-        fGIThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightThickness", 0.5f), 0.01f, 10.0f);
-        fGIMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightMaxDistance", 60.0f), 1.0f, 1000.0f);
-        fGITemporalBlend = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceIndirectLightTemporal", 0.9f), 0.0f, 0.97f);
-        nGIRays = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceIndirectLightRays", 4), 1, 16);
-        nGISteps = std::clamp(iniReader.ReadInteger("POSTFX", "ScreenSpaceIndirectLightSteps", 8), 2, 32);
-        bLocalContactShadows = iniReader.ReadInteger("POSTFX", "LocalContactShadows", 1) != 0;
-        fLocalContactShadowLength = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsLength", 0.5f), 0.05f, 10.0f);
-        fLocalContactShadowThickness = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsThickness", 0.2f), 0.01f, 5.0f);
-        fLocalContactShadowMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "LocalContactShadowsMaxDistance", 40.0f), 1.0f, 1000.0f);
-        fVolumetricLightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightIntensity", 4.0f), 0.0f, 20.0f);
-        fVolumetricLightScale = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightScale", 0.25f), 0.0f, 2.0f);
-        fVolumetricLightMaxDistance = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightMaxDistance", 100.0f), 10.0f, 1000.0f);
         nVolumetricLightHeadlightFlag = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightFlag", rage::LF_VEHICLE));
-        fVolumetricLightHeadlightIntensity = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightIntensity", 2.0f), 0.0f, 20.0f);
-        fVolumetricLightHeadlightLength = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightLength", 25.0f), 1.0f, 200.0f);
         nVolumetricLightHeadlightAddFlags = uint32_t(iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightAddFlags", 0));
-        bFillLights = iniReader.ReadInteger("POSTFX", "FillLights", 0) != 0;
-        fFillLightsMinRadius = std::clamp(iniReader.ReadFloat("POSTFX", "FillLightsMinRadius", 30.0f), 0.0f, 1000.0f);
-        bVolumetricLightHeadlightShadow = iniReader.ReadInteger("POSTFX", "VolumetricLightHeadlightShadow", 0) != 0;
-        fVolumetricLightHeadlightPitch = std::clamp(iniReader.ReadFloat("POSTFX", "VolumetricLightHeadlightPitch", 6.0f), -45.0f, 45.0f);
-        bGlassReflections = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlass", 1) != 0;
-        fGlassReflectionsLength = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassLength", 15.0f), 1.0f, 100.0f);
-        fGlassReflectionsThickness = std::clamp(iniReader.ReadFloat("POSTFX", "ScreenSpaceReflectionsGlassThickness", 0.5f), 0.05f, 10.0f);
-        bGlassStepJitter = iniReader.ReadInteger("POSTFX", "ScreenSpaceReflectionsGlassStepJitter", 1) != 0;
 
         nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
         nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
@@ -1962,13 +2028,6 @@ public:
         nAmbientOcclusionMaxMipLevel = iniReader.ReadInteger("POSTFX", "AmbientOcclusionMaxMipLevel", 5);
         fAmbientOcclusionFarClip = iniReader.ReadFloat("POSTFX", "AmbientOcclusionFarClip", 150.0f);
         fAmbientOcclusionBlurRadius = iniReader.ReadFloat("POSTFX", "AmbientOcclusionBlurRadius", 2.0f);
-        nAmbientOcclusionGTAOSlices = std::clamp(iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOSlices", 2), 1, 8);
-        nAmbientOcclusionGTAOSteps = std::clamp(iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOSteps", 4), 1, 16);
-        fAmbientOcclusionGTAOStrength = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOStrength", 1.0f), 0.0f, 4.0f);
-        fAmbientOcclusionGTAOThinOccluders = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOThinOccluders", 0.5f), 0.0f, 1.0f);
-        fAmbientOcclusionTemporal = std::clamp(iniReader.ReadFloat("POSTFX", "AmbientOcclusionGTAOTemporal", 0.9f), 0.0f, 0.98f);
-        bAmbientOcclusionMultiBounce = iniReader.ReadInteger("POSTFX", "AmbientOcclusionGTAOMultiBounce", 1) != 0;
-        bAmbientOcclusionHalfRes = iniReader.ReadInteger("POSTFX", "AmbientOcclusionHalfResolution", 1) != 0;
 
         nAmbientOcclusionBlurPasses = std::max(0, nAmbientOcclusionBlurPasses);
         nAmbientOcclusionSamples = std::clamp(nAmbientOcclusionSamples, 0, 128);
