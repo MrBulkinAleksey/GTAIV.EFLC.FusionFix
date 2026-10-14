@@ -29,6 +29,7 @@ import framegeneration;
 import framehistory;
 import hdr;
 import natives;
+import occlusion;
 import settings;
 import shaders;
 import renderscale;
@@ -64,6 +65,7 @@ import upscaler;
 #define IDR_CLOUDS_FX                            138
 #define IDR_WETGROUND_FX                         139
 #define IDR_HEADLIGHTGLINTS_FX                   140
+#define IDR_HIZ_FX                               141
 
 #define IDR_SSDraw_PS_compiled                   2127
 #define IDR_SSPrepass_PS_compiled                2128
@@ -663,6 +665,47 @@ public:
     bool bInteriorScene = false;
     bool bPlayerInCar = false; // set with bInteriorScene, as the lights' render list is built
     const char* szWetGroundStatus = "not run yet";
+    // Hi-Z for occlusion culling (HiZ.fx, BuildHiZ): the levels of 4 x 4 pixels at the end of the G-buffer pass, made
+    // afresh whenever the depth copy's size changes, and a ring of copies in system memory being read back, each with
+    // the query that says the GPU is done with it and the camera it was drawn with
+    ID3DXEffect* HiZEffect = nullptr;
+    HRESULT hrHiZEffect = S_OK;
+    static constexpr int kHiZLevels = 4;
+    static constexpr int kHiZReadbacks = 3;
+    static constexpr int kHiZMaxWidth = 320;
+    IDirect3DTexture9* HiZTex[kHiZLevels] = {};
+    IDirect3DSurface9* HiZSurf[kHiZLevels] = {};
+    UINT HiZWidth[kHiZLevels] = {}, HiZHeight[kHiZLevels] = {};
+    int nHiZLevels = 0;
+    UINT nHiZSourceWidth = 0, nHiZSourceHeight = 0;
+    struct HiZReadback
+    {
+        IDirect3DSurface9* memory = nullptr;
+        IDirect3DQuery9* query = nullptr;
+        bool pending = false;
+        UINT width = 0, height = 0;
+        float scaleU = 0.0f, scaleV = 0.0f;
+        float viewProjection[16] = {};
+        float position[3] = {};
+        float nearPlane = 0.0f;
+        uint32_t frame = 0;
+    } HiZReadbacks[kHiZReadbacks];
+    void ReleaseHiZ()
+    {
+        for (int i = 0; i < kHiZLevels; ++i)
+        {
+            SAFE_RELEASE(HiZSurf[i]);
+            SAFE_RELEASE(HiZTex[i]);
+        }
+        for (auto& r : HiZReadbacks)
+        {
+            SAFE_RELEASE(r.memory);
+            SAFE_RELEASE(r.query);
+            r.pending = false;
+        }
+        nHiZLevels = 0;
+        nHiZSourceWidth = nHiZSourceHeight = 0;
+    }
     void ReleaseWetCopies()
     {
         for (int i = 0; i < 3; ++i)
@@ -1632,6 +1675,22 @@ public:
             if (hrWetGroundEffect != S_OK)
             {
                 WetGroundEffect = nullptr;
+                if (errors)
+                    MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
+            }
+            SAFE_RELEASE(errors);
+        }
+
+        // Without it nothing is culled by occlusion.
+        static bool hiZEffectTried = false;
+        if (!HiZEffect && !hiZEffectTried && Occlusion::Enabled())
+        {
+            hiZEffectTried = true;
+            ID3DXBuffer* errors = nullptr;
+            hrHiZEffect = CreateEffectCached(rage::grcDevice::GetD3DDevice(), hm, IDR_HIZ_FX, "HiZ", nullptr, &HiZEffect, &errors);
+            if (hrHiZEffect != S_OK)
+            {
+                HiZEffect = nullptr;
                 if (errors)
                     MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
             }
@@ -3007,6 +3066,9 @@ private:
             PostFxResources.WetGroundEffect->OnLostDevice();
         if (PostFxResources.HeadlightGlintsEffect)
             PostFxResources.HeadlightGlintsEffect->OnLostDevice();
+        if (PostFxResources.HiZEffect)
+            PostFxResources.HiZEffect->OnLostDevice();
+        PostFxResources.ReleaseHiZ();
         PostFxResources.ReleaseWetCopies();
         ReleaseProfiler();
 
@@ -3105,6 +3167,8 @@ private:
             PostFxResources.WetGroundEffect->OnResetDevice();
         if (PostFxResources.HeadlightGlintsEffect)
             PostFxResources.HeadlightGlintsEffect->OnResetDevice();
+        if (PostFxResources.HiZEffect)
+            PostFxResources.HiZEffect->OnResetDevice();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             SAFE_RELEASE(PostFxResources.AOCamDepthSurf[i]);
@@ -3310,6 +3374,7 @@ private:
         TemporalAA::OnGBufferEnd = [](IDirect3DDevice9* device)
         {
             CopySceneDepth(device);
+            BuildHiZ(device);
             RenderWetGround(device);
         };
         RenderScale::TraceDepth = [](const char* what, IDirect3DSurface9* depth, IDirect3DSurface9* target, DWORD flags)
@@ -3747,6 +3812,219 @@ private:
             const auto& camera = FrameHistory::Current();
             SSRTrace::DepthProbe(pDevice, "G-buffer end depth copy", R.SceneDepthTex->mD3DTexture, camera.Near, camera.Far);
         }
+    }
+
+    // Hi-Z for occlusion culling (occlusion.ixx), right after CopySceneDepth: the farthest depth of every 4 x 4 pixels of
+    // the world into HiZTex[0], of every 4 x 4 of those into the next, until it's no wider than kHiZMaxWidth; the last
+    // copied to system memory with an event query after it. A copy the GPU is done with goes to Occlusion::Publish,
+    // oldest first. Nothing is waited for: with every copy still in flight, this frame has no grid.
+    static void BuildHiZ(IDirect3DDevice9* pDevice)
+    {
+        auto& R = PostFxResources;
+        if (!pDevice)
+            return;
+        for (;;)
+        {
+            PostFxResource::HiZReadback* oldest = nullptr;
+            for (auto& r : R.HiZReadbacks)
+                if (r.pending && (!oldest || r.frame < oldest->frame))
+                    oldest = &r;
+            if (!oldest)
+                break;
+            const HRESULT hr = oldest->query->GetData(nullptr, 0, 0);
+            if (hr == S_FALSE)
+                break;
+            oldest->pending = false;
+            D3DLOCKED_RECT locked = {};
+            if (hr == S_OK && SUCCEEDED(oldest->memory->LockRect(&locked, nullptr, D3DLOCK_READONLY)))
+            {
+                Occlusion::Publish((const uint8_t*)locked.pBits, UINT(locked.Pitch), int(oldest->width), int(oldest->height),
+                                   oldest->scaleU, oldest->scaleV, oldest->viewProjection, oldest->position, oldest->nearPlane,
+                                   oldest->frame);
+                oldest->memory->UnlockRect();
+            }
+        }
+
+        static bool failed = false;
+        if (failed || !Occlusion::Enabled() || !R.HiZEffect || !R.SceneDepthTex || !R.SceneDepthTex->mD3DTexture || !R.SceneDepthSurf ||
+            R.nSceneDepthFrame != FrameHistory::Frame() || !R.mMaterialIdRT || !R.mMaterialIdRT->mD3DTexture)
+            return;
+        const auto& camera = FrameHistory::Current();
+        if (!camera.Valid || camera.Near <= 0.0f || camera.Far <= camera.Near)
+            return;
+        D3DSURFACE_DESC source = {};
+        if (FAILED(R.SceneDepthSurf->GetDesc(&source)))
+            return;
+
+        // The levels and the copies, at this size
+        if (!R.nHiZLevels || source.Width != R.nHiZSourceWidth || source.Height != R.nHiZSourceHeight)
+        {
+            R.ReleaseHiZ();
+            auto real = RealDevice(pDevice);
+            UINT w = source.Width, h = source.Height;
+            int n = 0;
+            bool ok = true;
+            do
+            {
+                w = (w + 3) / 4;
+                h = (h + 3) / 4;
+                ok = SUCCEEDED(real->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_R32F, D3DPOOL_DEFAULT, &R.HiZTex[n], nullptr)) &&
+                     SUCCEEDED(R.HiZTex[n]->GetSurfaceLevel(0, &R.HiZSurf[n]));
+                R.HiZWidth[n] = w;
+                R.HiZHeight[n] = h;
+                ++n;
+            } while (ok && w > UINT(R.kHiZMaxWidth) && n < R.kHiZLevels);
+            for (auto& r : R.HiZReadbacks)
+            {
+                ok = ok && SUCCEEDED(real->CreateOffscreenPlainSurface(w, h, D3DFMT_R32F, D3DPOOL_SYSTEMMEM, &r.memory, nullptr)) &&
+                     SUCCEEDED(real->CreateQuery(D3DQUERYTYPE_EVENT, &r.query));
+            }
+            FusionLog::Write("Occlusion", "Grid", "from the depth at %ux%u: %d levels, the last %ux%u read back%s\n", source.Width,
+                             source.Height, n, w, h, ok ? "" : "; the targets, copies or queries could not be made, nothing is culled");
+            if (!ok)
+            {
+                R.ReleaseHiZ();
+                failed = true;
+                return;
+            }
+            R.nHiZLevels = n;
+            R.nHiZSourceWidth = source.Width;
+            R.nHiZSourceHeight = source.Height;
+        }
+        PostFxResource::HiZReadback* slot = nullptr;
+        for (auto& r : R.HiZReadbacks)
+            if (!r.pending)
+            {
+                slot = &r;
+                break;
+            }
+        if (!slot)
+            return;
+
+        ProfilerScope timed(pDevice, kProfHiZ);
+        ID3DXEffect* effect = R.HiZEffect;
+        // Saved besides what StateBackup keeps around OnGBufferEnd (the targets, the viewport, the render states)
+        static constexpr DWORD kSlots = 2;
+        static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER,
+                                                                   D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
+        IDirect3DBaseTexture9* oldTextures[kSlots] = {};
+        DWORD savedSamplerStates[kSlots][std::size(kSamplerStates)] = {};
+        for (DWORD s = 0; s < kSlots; ++s)
+        {
+            pDevice->GetTexture(s, &oldTextures[s]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                pDevice->GetSamplerState(s, kSamplerStates[i], &savedSamplerStates[s][i]);
+        }
+        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        IDirect3DVertexShader9* oldVS = nullptr;
+        IDirect3DVertexDeclaration9* oldDecl = nullptr;
+        IDirect3DVertexBuffer9* oldVB = nullptr;
+        UINT oldOffset = 0, oldStride = 0;
+        DWORD oldFVF = 0;
+        pDevice->GetVertexShader(&oldVS);
+        pDevice->GetVertexDeclaration(&oldDecl);
+        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        pDevice->GetFVF(&oldFVF);
+
+        static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kStates[] =
+        {
+            { D3DRS_ZENABLE, FALSE }, { D3DRS_ZWRITEENABLE, FALSE }, { D3DRS_ALPHABLENDENABLE, FALSE }, { D3DRS_ALPHATESTENABLE, FALSE },
+            { D3DRS_STENCILENABLE, FALSE }, { D3DRS_CULLMODE, D3DCULL_NONE }, { D3DRS_COLORWRITEENABLE, 0x0F },
+            { D3DRS_SCISSORTESTENABLE, FALSE }, { D3DRS_SRGBWRITEENABLE, FALSE }, { D3DRS_FILLMODE, D3DFILL_SOLID },
+            { D3DRS_CLIPPLANEENABLE, 0 }, { D3DRS_FOGENABLE, FALSE },
+        };
+        for (auto [state, value] : kStates)
+            pDevice->SetRenderState(state, value);
+        for (DWORD i = 1; i < 4; ++i)
+            pDevice->SetRenderTarget(i, nullptr);
+        pDevice->SetDepthStencilSurface(nullptr);
+        pDevice->SetVertexShader(nullptr);
+        pDevice->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fNearPlane"), camera.Near);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fFarDivNear"), camera.Far / camera.Near);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fNothing"), 1.0e9f);
+
+        for (int level = 0; level < R.nHiZLevels; ++level)
+        {
+            const bool first = level == 0;
+            const float srcWidth = first ? float(source.Width) : float(R.HiZWidth[level - 1]);
+            const float srcHeight = first ? float(source.Height) : float(R.HiZHeight[level - 1]);
+            const float width = float(R.HiZWidth[level]), height = float(R.HiZHeight[level]);
+            pDevice->SetRenderTarget(0, R.HiZSurf[level]);
+            D3DVIEWPORT9 viewport = { 0, 0, R.HiZWidth[level], R.HiZHeight[level], 0.0f, 1.0f };
+            pDevice->SetViewport(&viewport);
+            const D3DXVECTOR4 srcSize(srcWidth, srcHeight, 0.0f, 0.0f);
+            effect->SetVector(effect->GetParameterByName(nullptr, "vec2SrcSize"), &srcSize);
+            UINT passes = 0;
+            effect->SetTechnique(effect->GetTechniqueByName(first ? "First" : "Reduce"));
+            effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
+            effect->BeginPass(0);
+            effect->CommitChanges();
+            IDirect3DBaseTexture9* textures[kSlots] = { first ? (IDirect3DBaseTexture9*)R.SceneDepthTex->mD3DTexture : R.HiZTex[level - 1],
+                                                        first ? (IDirect3DBaseTexture9*)R.mMaterialIdRT->mD3DTexture : nullptr };
+            for (DWORD s = 0; s < kSlots; ++s)
+            {
+                SetTextureBoth(pDevice, s, textures[s]);
+                SetSamplerStateBoth(pDevice, s, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+                SetSamplerStateBoth(pDevice, s, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+                SetSamplerStateBoth(pDevice, s, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+                SetSamplerStateBoth(pDevice, s, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+                SetSamplerStateBoth(pDevice, s, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+                SetSamplerStateBoth(pDevice, s, D3DSAMP_SRGBTEXTURE, FALSE);
+            }
+            BindEffectConstantsOnly(pDevice, effect);
+            struct ScreenVertex { float x, y, z, rhw; float u, v; };
+            const ScreenVertex quad[4] =
+            {
+                { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
+                { -0.5f,         height - 0.5f,  0.0f, 1.0f, 0.0f, 1.0f },
+                { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
+                { width - 0.5f,  height - 0.5f,  0.0f, 1.0f, 1.0f, 1.0f },
+            };
+            pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(ScreenVertex));
+            effect->EndPass();
+            effect->End();
+        }
+
+        const int last = R.nHiZLevels - 1;
+        if (SUCCEEDED(pDevice->GetRenderTargetData(R.HiZSurf[last], slot->memory)) && SUCCEEDED(slot->query->Issue(D3DISSUE_END)))
+        {
+            slot->pending = true;
+            slot->frame = FrameHistory::Frame();
+            slot->width = R.HiZWidth[last];
+            slot->height = R.HiZHeight[last];
+            // A texel of the last level covers 4^levels pixels of the depth
+            const float pixels = float(1 << (2 * R.nHiZLevels));
+            slot->scaleU = float(source.Width) / pixels;
+            slot->scaleV = float(source.Height) / pixels;
+            memcpy(slot->viewProjection, &camera.ViewProjectionNoJitter._11, sizeof(slot->viewProjection));
+            D3DXMATRIX viewInverse;
+            if (D3DXMatrixInverse(&viewInverse, nullptr, &camera.View))
+            {
+                slot->position[0] = viewInverse._41;
+                slot->position[1] = viewInverse._42;
+                slot->position[2] = viewInverse._43;
+            }
+            else
+                slot->pending = false;
+            slot->nearPlane = camera.Near;
+        }
+
+        for (DWORD s = 0; s < kSlots; ++s)
+        {
+            SetTextureBoth(pDevice, s, oldTextures[s]);
+            SAFE_RELEASE(oldTextures[s]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                SetSamplerStateBoth(pDevice, s, kSamplerStates[i], savedSamplerStates[s][i]);
+        }
+        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
+        pDevice->SetVertexShader(oldVS);
+        pDevice->SetFVF(oldFVF);
+        pDevice->SetVertexDeclaration(oldDecl);
+        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
+        SAFE_RELEASE(oldVS);
+        SAFE_RELEASE(oldDecl);
+        SAFE_RELEASE(oldVB);
     }
 
     // The depth the passes of the lighting phase read: the copy from the end of this frame's G-buffer pass, or
@@ -4877,6 +5155,7 @@ private:
             kProfGI, kProfGIMarch, kProfGIDenoise, kProfGITemporal, kProfGIUpsample,
             kProfLightSun, kProfLightLocal, kProfLightShafts, kProfGlints,
         kProfDepthCopy,
+        kProfHiZ,
         kProfMotion,
         kProfWetGround, kProfWetGroundCopies, kProfWetGroundPass,
         kProfWaterAll, kProfWaterGame, kProfWater,
@@ -4910,6 +5189,7 @@ private:
             { "the game's sun and ambient", kProfLighting }, { "the game's lamps and headlights", kProfLighting },
             { "the game's light shafts", kProfLighting }, { "headlight glints", kProfLightShafts },
         { "depth copy at the G-buffer's end", -1 },
+        { "Hi-Z for occlusion culling", -1 },
         { "motion vectors (temporal AA, upscaling)", -1 },
         { "wet ground", -1 }, { "copies of the G-buffer", kProfWetGround }, { "wet pass", kProfWetGround },
         { "water", -1 }, { "the game's water", kProfWaterAll }, { "SSR on the water", kProfWaterAll },
