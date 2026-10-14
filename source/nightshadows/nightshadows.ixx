@@ -687,6 +687,12 @@ public:
                                 if (OwnHeadlightCaster::Exclude(regs.esi, regs.eax, artificial))
                                     return_to(loc_AE3867);
                                 Lighting20::Props::Visit(regs.esi, regs.eax, regs.edx);
+                                // Props in lamp maps (PropShadows): as if bit 0x800 of +0x210 were set
+                                if (artificial && Lighting20::Props::Cast(regs.esi, regs.eax, regs.edx))
+                                {
+                                    regs.eax = 1;
+                                    return_to(loc_AE374F + 0x18);
+                                }
                             }
                             else if (bHeadlightShadows && bVehicleNightShadows)
                             {

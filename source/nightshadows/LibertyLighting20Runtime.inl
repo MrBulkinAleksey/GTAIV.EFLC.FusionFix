@@ -533,7 +533,8 @@ namespace Lighting20
     // 5 and 7 in modes 1 and 2 and lists 0, 1, 2, 7 in mode 0. Lamp posts carry only 0x8000: they cast the sun's
     // shadow by day but are in no list of a lamp's phase, not even their own lamp's (a dump of 2026-10-12: all 18 posts
     // round the camera had 0x8000 and 0x800000, their model has lights, and none of 0x1000/0x2000/0x4000).
-    // PropShadows puts such entities also into list 2 of the lamps' phases (drawn in mode 0 by 0xAE3310's plain loop):
+    // PropShadows puts such entities also into list 2 of the lamps' phases (drawn in mode 0 by 0xAE3310's plain loop
+    // at 0xAE34AF while byte 0x103F738 is set) and lets them through the mode 0 gate of its caster loop (Cast):
     // 1 those with lights (0x800000: posts, wall lamps), 2 every sun-only object. world_wd_local_shadow_skinned.patch
     // drops what is within half a metre of a light in the world shaders' local depth, so a lamp's head and glass
     // don't cover its own light.
@@ -568,7 +569,8 @@ namespace Lighting20
         static std::array<std::atomic<uint16_t>, 64> models{};
         static int32_t localTechnique = -1;
         static thread_local bool propDraw = false;
-        static std::atomic<uint32_t> propFragments{0}, techniqueFound{0}, techniqueMissing{0};
+        static std::atomic<uint32_t> propFragments{0}, propFragmentsLocal{0}, cast{0};
+        static std::array<std::atomic<uint32_t>, 64> foundByGroup{}, missingByGroup{};
         static std::array<std::atomic<uintptr_t>, 8> foundEffects{}, missingEffects{};
         static SafetyHookInline consumer;
         static SafetyHookMid lookup, lookupSkinned;
@@ -653,12 +655,12 @@ namespace Lighting20
 
         static uint32_t __fastcall Consumer(void* command, void*)
         {
-            bool prop = false;
-            if (localTechnique >= 0 && *reinterpret_cast<const int32_t*>(game + 0xC6B308) == localTechnique)
+            const auto model = *reinterpret_cast<const uint16_t*>(reinterpret_cast<uintptr_t>(command) + 0x58);
+            const bool prop = model && models[model % models.size()].load(std::memory_order_relaxed) == model;
+            if (prop)
             {
-                const auto model = *reinterpret_cast<const uint16_t*>(reinterpret_cast<uintptr_t>(command) + 0x58);
-                prop = model && models[model % models.size()].load(std::memory_order_relaxed) == model;
-                if (prop) ++propFragments;
+                ++propFragments;
+                if (localTechnique >= 0 && *reinterpret_cast<const int32_t*>(game + 0xC6B308) == localTechnique) ++propFragmentsLocal;
             }
             const bool previous = propDraw;
             propDraw = prop;
@@ -669,11 +671,11 @@ namespace Lighting20
 
         static void Lookup(uintptr_t effect, uint32_t group, uint32_t technique) noexcept
         {
-            if (!propDraw || localTechnique < 0 || group != static_cast<uint32_t>(localTechnique) || !effect) return;
+            if (!propDraw || !effect || group >= foundByGroup.size()) return;
             if (!technique)
                 if (const auto table = *reinterpret_cast<const uint8_t* const*>(effect + 0x40))
                     technique = table[group * 3];
-            ++(technique ? techniqueFound : techniqueMissing);
+            ++(technique ? foundByGroup : missingByGroup)[group];
             for (auto& seen : technique ? foundEffects : missingEffects)
             {
                 uintptr_t empty = 0;
@@ -721,12 +723,37 @@ namespace Lighting20
             return list.empty() ? "-" : list;
         }
 
+        // Groups with a count, as group:count.
+        static std::string ByGroup(const std::array<std::atomic<uint32_t>, 64>& counts)
+        {
+            std::string list;
+            for (size_t i = 0; i < counts.size(); ++i)
+                if (const auto n = counts[i].load())
+                    list += (list.empty() ? "" : ",") + std::to_string(i) + ':' + std::to_string(n);
+            return list.empty() ? "-" : list;
+        }
+
         template <size_t N>
         static std::string Counts(const std::array<std::atomic<uint32_t>, N>& counts)
         {
             std::string list;
             for (const auto& c : counts) list += (list.empty() ? "" : ",") + std::to_string(c.load());
             return list;
+        }
+
+        // The caster loop (0xAE3713) draws a type-4 object in mode 0, the one forcing wd_local (the static part, and
+        // the cache of a cached lamp), only with bit 0x800 of +0x210 (0xAE3759); modes 1 and 2 draw it without, but
+        // not under wd_local, and posts never reached a lamp's map that way. The objects Collect adds go in as if
+        // they had the bit: the hook resumes at 0xAE3767 with EAX 1.
+        static bool Cast(uintptr_t entity, uint32_t type, uint32_t mode) noexcept
+        {
+            if (!scope || mode != 0 || type != 4 || !entity || !On()) return false;
+            const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
+            if ((flags & 0xC000) != 0x8000 || (level < 2 && !(flags & 0x800000)) ||
+                (*reinterpret_cast<const uint32_t*>(entity + 0x210) & 0x800))
+                return false;
+            ++cast;
+            return true;
         }
 
         // Around the phase's render (0xD77A00), as Buildings::Scope.
@@ -1315,8 +1342,11 @@ namespace Lighting20
                 << " within_5m(mode0,1,2)=" << Props::nearLamp[0].load() << ',' << Props::nearLamp[1].load() << ',' << Props::nearLamp[2].load()
                 << " objects_from_you(<10,<20,<30,<45,<60,60+)=" << Props::Counts(Props::objectsAt)
                 << " passes_by_lamp_from_you=" << Props::Counts(Props::passesAt) << " their_objects=" << Props::Counts(Props::passObjectsAt)
-                << " prop_fragments_wd_local=" << Props::propFragments.load() << " technique_found=" << Props::techniqueFound.load()
-                << " missing=" << Props::techniqueMissing.load() << " missing_in=" << Props::Effects(Props::missingEffects)
+                << " list2_draw_switch=" << int(*reinterpret_cast<const uint8_t*>(game + 0xC3F738))
+                << " cast_in_mode0=" << Props::cast.load() << " prop_fragments=" << Props::propFragments.load()
+                << " under_wd_local(group " << Props::localTechnique << ")=" << Props::propFragmentsLocal.load()
+                << " technique_found(group:n)=" << Props::ByGroup(Props::foundByGroup)
+                << " missing=" << Props::ByGroup(Props::missingByGroup) << " missing_in=" << Props::Effects(Props::missingEffects)
                 << " found_in=" << Props::Effects(Props::foundEffects)
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
                 << " duplicates=" << Sharing::duplicates.load() << " duplicates_unshadowed=" << Sharing::duplicatesUnshadowed.load()
