@@ -158,6 +158,8 @@ namespace ShadowDiagnostics
                 << " caster_captures=" << PlayerShadowAllocation::casterCaptures.load()
                 << " cars_left_to_boxes=" << PlayerShadowAllocation::carsLeftToBoxes.load()
                 << " peds_left_out=" << PlayerShadowAllocation::pedsLeftOut.load()
+                << " interior_lights_yielded=" << PlayerShadowAllocation::interiorLightsYielded.load()
+                << " interior_scene=" << PlayerShadowAllocation::interiorScene.load()
                 << " lamps_without_casters=" << PlayerShadowAllocation::lampsWithoutCasters.load()
                 << " lights_off_screen=" << PlayerShadowAllocation::lightsOffScreen.load()
                 << " nearby_receivers=" << NearbyVehicleLighting36::enabled.load()
