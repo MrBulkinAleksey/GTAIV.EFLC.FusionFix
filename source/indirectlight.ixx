@@ -153,32 +153,13 @@ export void RenderIndirectLight()
     effect->SetFloat(h.fGIRespectAO, specular ? 1.0f : 0.0f);
     effect->SetFloat(h.fGIFeedback, (albedo && prevGI) ? (std::max)(1.0f - 1.0f / R.fGIIntensity, 0.0f) : 0.0f);
 
-    IDirect3DSurface9* rt0 = nullptr;
-    IDirect3DSurface9* ds = nullptr;
-    D3DVIEWPORT9 oldViewport;
+    // Put back in the reverse order as the function ends.
     SavedVertexInput savedVertexInput(pDevice);
-    pDevice->GetRenderTarget(0, &rt0);
-    pDevice->GetDepthStencilSurface(&ds);
-    pDevice->GetViewport(&oldViewport);
-
-    IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
-    DWORD savedRenderStates[std::size(kSSRRenderStates)] = {};
-    DWORD savedSamplerStates[kSSRSamplerSlots][std::size(kSSRSamplerStates)] = {};
-    for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
-        pDevice->GetTexture(slot, &oldTextures[slot]);
-    pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
-    pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-    for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
-    {
-        pDevice->GetRenderState(kSSRRenderStates[i].state, &savedRenderStates[i]);
-        pDevice->SetRenderState(kSSRRenderStates[i].state, kSSRRenderStates[i].value);
-    }
-    for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
-        for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
-        {
-            pDevice->GetSamplerState(slot, kSSRSamplerStates[i].state, &savedSamplerStates[slot][i]);
-            pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
-        }
+    SavedTargets savedTargets(pDevice);
+    SavedTextures savedTextures(pDevice);
+    SavedShaderConstants savedConstants(pDevice);
+    AppliedRenderStates renderStates(pDevice, kSSRRenderStates);
+    AppliedSamplerStates samplerStates(pDevice);
 
     pDevice->SetDepthStencilSurface(nullptr);
     pDevice->SetStreamSource(0, nullptr, 0, 0);
@@ -251,21 +232,4 @@ export void RenderIndirectLight()
         R.bSSRDebugValid = true;
     }
 
-    for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
-        pDevice->SetRenderState(kSSRRenderStates[i].state, savedRenderStates[i]);
-    for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
-        for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
-            pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, savedSamplerStates[slot][i]);
-    pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
-    pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-    for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
-    {
-        SetTextureBoth(pDevice, slot, oldTextures[slot]);
-        SAFE_RELEASE(oldTextures[slot]);
-    }
-    pDevice->SetRenderTarget(0, rt0);
-    pDevice->SetDepthStencilSurface(ds);
-    pDevice->SetViewport(&oldViewport);
-    SAFE_RELEASE(rt0);
-    SAFE_RELEASE(ds);
 }

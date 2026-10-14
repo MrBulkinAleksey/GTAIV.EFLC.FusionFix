@@ -109,14 +109,9 @@ export void RenderScreenSpaceReflections()
         return;
     }
 
-    IDirect3DSurface9* rt0 = nullptr;
-    IDirect3DSurface9* ds = nullptr;
-    D3DVIEWPORT9 oldViewport;
-
+    // Put back in the reverse order as the function ends.
     SavedVertexInput savedVertexInput(pDevice);
-    pDevice->GetRenderTarget(0, &rt0);
-    pDevice->GetDepthStencilSurface(&ds);
-    pDevice->GetViewport(&oldViewport);
+    SavedTargets savedTargets(pDevice);
 
     pDevice->SetDepthStencilSurface(nullptr);
     pDevice->SetStreamSource(0, nullptr, 0, 0);
@@ -227,29 +222,12 @@ export void RenderScreenSpaceReflections()
     effect->SetFloat(h.fWetGroundBoost, R.fSSRWetGround);
 
     UINT passes = 0;
-    IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
-    DWORD savedRenderStates[std::size(kSSRRenderStates)] = {};
-    DWORD savedSamplerStates[kSSRSamplerSlots][std::size(kSSRSamplerStates)] = {};
+    SavedTextures savedTextures(pDevice);
+    SavedShaderConstants savedConstants(pDevice);
+    AppliedRenderStates renderStates(pDevice, kSSRRenderStates);
+    AppliedSamplerStates samplerStates(pDevice);
     {
-        for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
-            pDevice->GetTexture(slot, &oldTextures[slot]);
         SetTextureBoth(pDevice, 3, nullptr);
-
-        pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
-        pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-
-        for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
-        {
-            pDevice->GetRenderState(kSSRRenderStates[i].state, &savedRenderStates[i]);
-            pDevice->SetRenderState(kSSRRenderStates[i].state, kSSRRenderStates[i].value);
-        }
-
-        for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
-            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
-            {
-                pDevice->GetSamplerState(slot, kSSRSamplerStates[i].state, &savedSamplerStates[slot][i]);
-                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
-            }
 
         // D3DX saving the state it changes, through state blocks, left the smoothing and the
         // accumulation in play drawing with what the game had bound: the textures they set
@@ -447,33 +425,7 @@ export void RenderScreenSpaceReflections()
         memcpy(R.GlassParams, params, sizeof(params));
         R.bGlassFrameValid = true;
     }
-    {
-
-        for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
-            pDevice->SetRenderState(kSSRRenderStates[i].state, savedRenderStates[i]);
-
-        for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
-            for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
-                pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, savedSamplerStates[slot][i]);
-
-        pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
-        pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-
-        for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
-        {
-            SetTextureBoth(pDevice, slot, oldTextures[slot]);
-            SAFE_RELEASE(oldTextures[slot]);
-        }
-    }
-
     R.bSSRValidThisFrame = true;
-
-    pDevice->SetRenderTarget(0, rt0);
-    pDevice->SetDepthStencilSurface(ds);
-    pDevice->SetViewport(&oldViewport);
-
-    SAFE_RELEASE(rt0);
-    SAFE_RELEASE(ds);
 }
 
 // Replaces the finished frame with the SSR debug view chosen in the graphics menu.
@@ -497,30 +449,13 @@ export void DrawSSRDebugOverlay()
     const float width = float(desc.Width);
     const float height = float(desc.Height);
 
-    IDirect3DSurface9* ds = nullptr;
-    D3DVIEWPORT9 oldViewport;
+    // Put back in the reverse order as the function ends; the overlay draws into the target it found.
     SavedVertexInput savedVertexInput(pDevice);
-    pDevice->GetDepthStencilSurface(&ds);
-    pDevice->GetViewport(&oldViewport);
-
-    IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
-    DWORD savedRenderStates[std::size(kSSRRenderStates)] = {};
-    DWORD savedSamplerStates[kSSRSamplerSlots][std::size(kSSRSamplerStates)] = {};
-    for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
-        pDevice->GetTexture(slot, &oldTextures[slot]);
-    pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
-    pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-    for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
-    {
-        pDevice->GetRenderState(kSSRRenderStates[i].state, &savedRenderStates[i]);
-        pDevice->SetRenderState(kSSRRenderStates[i].state, kSSRRenderStates[i].value);
-    }
-    for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
-        for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
-        {
-            pDevice->GetSamplerState(slot, kSSRSamplerStates[i].state, &savedSamplerStates[slot][i]);
-            pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
-        }
+    SavedTargets savedTargets(pDevice, false);
+    SavedTextures savedTextures(pDevice);
+    SavedShaderConstants savedConstants(pDevice);
+    AppliedRenderStates renderStates(pDevice, kSSRRenderStates);
+    AppliedSamplerStates samplerStates(pDevice);
 
     pDevice->SetDepthStencilSurface(nullptr);
     pDevice->SetStreamSource(0, nullptr, 0, 0);
@@ -547,21 +482,5 @@ export void DrawSSRDebugOverlay()
     effect->EndPass();
     effect->End();
 
-    for (size_t i = 0; i < std::size(kSSRRenderStates); ++i)
-        pDevice->SetRenderState(kSSRRenderStates[i].state, savedRenderStates[i]);
-    for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
-        for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
-            pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, savedSamplerStates[slot][i]);
-    pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
-    pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-    for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
-    {
-        SetTextureBoth(pDevice, slot, oldTextures[slot]);
-        SAFE_RELEASE(oldTextures[slot]);
-    }
-
-    pDevice->SetDepthStencilSurface(ds);
-    pDevice->SetViewport(&oldViewport);
     SAFE_RELEASE(rt0);
-    SAFE_RELEASE(ds);
 }

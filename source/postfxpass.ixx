@@ -212,6 +212,126 @@ namespace PostFxPass
         SavedShaderConstants& operator=(const SavedShaderConstants&) = delete;
     };
 
+    // Render target 0 (unless renderTarget is false), the depth buffer and the viewport, put back on destruction:
+    // the target first, as setting it resets the viewport.
+    export class SavedTargets
+    {
+    public:
+        explicit SavedTargets(IDirect3DDevice9* device, bool renderTarget = true) : device(device), renderTarget(renderTarget)
+        {
+            if (renderTarget)
+                device->GetRenderTarget(0, &rt0);
+            device->GetDepthStencilSurface(&ds);
+            device->GetViewport(&viewport);
+        }
+
+        ~SavedTargets()
+        {
+            if (renderTarget)
+                device->SetRenderTarget(0, rt0);
+            device->SetDepthStencilSurface(ds);
+            device->SetViewport(&viewport);
+            SAFE_RELEASE(rt0);
+            SAFE_RELEASE(ds);
+        }
+
+        SavedTargets(const SavedTargets&) = delete;
+        SavedTargets& operator=(const SavedTargets&) = delete;
+
+    private:
+        IDirect3DDevice9* device;
+        bool renderTarget;
+        IDirect3DSurface9* rt0 = nullptr;
+        IDirect3DSurface9* ds = nullptr;
+        D3DVIEWPORT9 viewport = {};
+    };
+
+    // The textures of the first kSSRTextureSlots samplers, put back through the game's wrapper and the device both
+    // (SetTextureBoth) on destruction.
+    export class SavedTextures
+    {
+    public:
+        explicit SavedTextures(IDirect3DDevice9* device) : device(device)
+        {
+            for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+                device->GetTexture(slot, &textures[slot]);
+        }
+
+        ~SavedTextures()
+        {
+            for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+            {
+                SetTextureBoth(device, slot, textures[slot]);
+                SAFE_RELEASE(textures[slot]);
+            }
+        }
+
+        SavedTextures(const SavedTextures&) = delete;
+        SavedTextures& operator=(const SavedTextures&) = delete;
+
+    private:
+        IDirect3DDevice9* device;
+        IDirect3DBaseTexture9* textures[kSSRTextureSlots] = {};
+    };
+
+    // Sets the render states of a table (kSSRRenderStates and the like) and puts back what they were on destruction.
+    export template <size_t N>
+    class AppliedRenderStates
+    {
+    public:
+        AppliedRenderStates(IDirect3DDevice9* device, const RenderStateValue (&states)[N]) : device(device), states(states)
+        {
+            for (size_t i = 0; i < N; ++i)
+            {
+                device->GetRenderState(states[i].state, &saved[i]);
+                device->SetRenderState(states[i].state, states[i].value);
+            }
+        }
+
+        ~AppliedRenderStates()
+        {
+            for (size_t i = 0; i < N; ++i)
+                device->SetRenderState(states[i].state, saved[i]);
+        }
+
+        AppliedRenderStates(const AppliedRenderStates&) = delete;
+        AppliedRenderStates& operator=(const AppliedRenderStates&) = delete;
+
+    private:
+        IDirect3DDevice9* device;
+        const RenderStateValue (&states)[N];
+        DWORD saved[N] = {};
+    };
+
+    // Sets kSSRSamplerStates on the first kSSRSamplerSlots samplers and puts back what they were on destruction.
+    export class AppliedSamplerStates
+    {
+    public:
+        explicit AppliedSamplerStates(IDirect3DDevice9* device) : device(device)
+        {
+            for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+                for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+                {
+                    device->GetSamplerState(slot, kSSRSamplerStates[i].state, &saved[slot][i]);
+                    device->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
+                }
+        }
+
+        ~AppliedSamplerStates()
+        {
+            for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
+                for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
+                    device->SetSamplerState(slot, kSSRSamplerStates[i].state, saved[slot][i]);
+        }
+
+        AppliedSamplerStates(const AppliedSamplerStates&) = delete;
+        AppliedSamplerStates& operator=(const AppliedSamplerStates&) = delete;
+
+    private:
+        IDirect3DDevice9* device;
+        DWORD saved[kSSRSamplerSlots][std::size(kSSRSamplerStates)] = {};
+    };
+
     export void MatrixMultiply(D3DXMATRIX& out, const D3DXMATRIX& a, const D3DXMATRIX& b)
     {
         D3DXMATRIX r;
