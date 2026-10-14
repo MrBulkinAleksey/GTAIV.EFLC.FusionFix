@@ -546,7 +546,7 @@ namespace Lighting20
         // 5 no cache) and the loop's mode (EDX 0-2)
         static std::array<std::array<std::atomic<uint32_t>, 3>, 3> seen{};
         static std::array<std::atomic<uint32_t>, 3> kindPasses{};
-        // Objects within 3 m (across) of the slot's light (record +0xC0) by loop mode: a lamp's own post
+        // Objects within 5 m (across; a cobra head arm is some 4 m) of the slot's light (record +0xC0) by loop mode: a lamp's own post
         static thread_local float scopeLight[3]{};
         static std::array<std::atomic<uint32_t>, 3> near{};
         static std::atomic<uint32_t> nearPasses{0};
@@ -586,7 +586,7 @@ namespace Lighting20
                 const auto matrix = *reinterpret_cast<const float* const*>(entity + 0x20);
                 const float* at = matrix ? matrix + 12 : reinterpret_cast<const float*>(entity + 0x10);
                 const float dx = at[0] - scopeLight[0], dy = at[1] - scopeLight[1];
-                if (dx * dx + dy * dy < 9.0f)
+                if (dx * dx + dy * dy < 25.0f)
                 {
                     ++near[mode];
                     if (!nearCounted)
@@ -1068,7 +1068,7 @@ namespace Lighting20
                 << " objects=" << Props::objects.load() << " with_0x800=" << Props::withBit.load() << " promoted=" << Props::promoted.load()
                 << " wd_local_fragments=" << Props::localFragments.load() << " of_props=" << Props::propFragments.load()
                 << " prop_children_plain=" << Props::propPlain.load() << " skinned=" << Props::propSkinned.load()
-                << " passes_with_objects_within_3m=" << Props::nearPasses.load() << " within_3m(mode0,1,2)=" << Props::near[0].load()
+                << " passes_with_objects_within_5m=" << Props::nearPasses.load() << " within_5m(mode0,1,2)=" << Props::near[0].load()
                 << ',' << Props::near[1].load() << ',' << Props::near[2].load()
                 << " objects_by_map(passes; mode0,1,2):";
             for (int k = 0; k < 3; ++k)
