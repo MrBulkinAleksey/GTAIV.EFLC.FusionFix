@@ -540,7 +540,12 @@ namespace Lighting20
     {
         static bool enabled = false;
         static thread_local bool scope = false;
+        static thread_local uint32_t scopeKind = 0;
         static std::atomic<uint32_t> passes{0}, objects{0}, withBit{0}, promoted{0};
+        // Objects seen by the slot's render mode (+0xFC of the slot record: 3 static cache, 4 cache and dynamic,
+        // 5 no cache) and the loop's mode (EDX 0-2)
+        static std::array<std::array<std::atomic<uint32_t>, 3>, 3> seen{};
+        static std::array<std::atomic<uint32_t>, 3> kindPasses{};
 
         // Diagnostics of the draw: the fragment draw command 0x8DD0B0 (model +0x58) run while the wd_local technique
         // group is forced ([0x106B308]), and its child dispatch 0xAEC7B0 choosing the drawable's skinned draw
@@ -570,6 +575,7 @@ namespace Lighting20
         {
             if (!scope || type != 4 || !entity) return false;
             ++objects;
+            if (scopeKind >= 3 && scopeKind <= 5 && mode <= 2) ++seen[scopeKind - 3][mode];
             if (*reinterpret_cast<const uint32_t*>(entity + 0x210) & 0x800)
             {
                 ++withBit;
@@ -614,7 +620,14 @@ namespace Lighting20
             explicit Scope(void* phase) noexcept : previous(scope)
             {
                 scope = On() && LampPass(reinterpret_cast<uintptr_t>(phase));
-                if (scope) ++passes;
+                scopeKind = 0;
+                if (scope)
+                {
+                    ++passes;
+                    const auto slot = *reinterpret_cast<const uint32_t*>(reinterpret_cast<uintptr_t>(phase) + 0x940);
+                    scopeKind = *reinterpret_cast<const uint32_t*>(game + 0xD9F100 + slot * 0x110 + 0xFC);
+                    if (scopeKind >= 3 && scopeKind <= 5) ++kindPasses[scopeKind - 3];
+                }
             }
             ~Scope() noexcept { scope = previous; }
             Scope(const Scope&) = delete;
@@ -1030,6 +1043,11 @@ namespace Lighting20
                 << " objects=" << Props::objects.load() << " with_0x800=" << Props::withBit.load() << " promoted=" << Props::promoted.load()
                 << " wd_local_fragments=" << Props::localFragments.load() << " of_props=" << Props::propFragments.load()
                 << " prop_children_plain=" << Props::propPlain.load() << " skinned=" << Props::propSkinned.load()
+                << " objects_by_map(passes; mode0,1,2):";
+            for (int k = 0; k < 3; ++k)
+                out << " kind" << k + 3 << "(" << Props::kindPasses[k].load() << "; " << Props::seen[k][0].load() << ','
+                    << Props::seen[k][1].load() << ',' << Props::seen[k][2].load() << ')';
+            out
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
                 << " duplicates=" << Sharing::duplicates.load() << " duplicates_unshadowed=" << Sharing::duplicatesUnshadowed.load()
                 << " (vehicle " << Sharing::duplicatesVehicle.load() << ", model lights " << Sharing::duplicatesOurs.load() << ')'
