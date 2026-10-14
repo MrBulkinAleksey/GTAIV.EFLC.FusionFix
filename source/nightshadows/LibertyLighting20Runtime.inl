@@ -564,6 +564,10 @@ namespace Lighting20
         // the same with EDI / ESI the effect; [effect+0x40] its table, three bytes a group): a 0 there and the shader
         // draws nothing into the map.
         static bool diagnostics = false;
+        // PropAllBuckets: a prop's geometry drawn into a lamp's map under wd_local passes the model loop's bucket test
+        // (0x69ECEC), whatever bucket its shader is in; the posts drew nothing there with every other gate passed
+        static bool allBuckets = false;
+        static std::atomic<uint32_t> bucketsForced{0};
         static constexpr float distanceEdges[] = { 10.0f, 20.0f, 30.0f, 45.0f, 60.0f };
         static std::array<std::atomic<uint32_t>, 6> objectsAt{}, passesAt{}, passObjectsAt{};
         static thread_local uint32_t passObjects = 0;
@@ -626,7 +630,7 @@ namespace Lighting20
             if (!phases) return;
             addToList(phases, entity, 0.0f, 2);
             ++added;
-            if (diagnostics) Remember(entity);
+            if (diagnostics || allBuckets) Remember(entity);
         }
 
         // Diagnostics from the caster hook: type and loop mode as the loop has them (EAX, EDX).
@@ -643,7 +647,7 @@ namespace Lighting20
             }
             if (scopeKey - static_cast<uint32_t>(entity) < 0x320)
             {
-                if (diagnostics) Remember(entity);
+                if (diagnostics || allBuckets) Remember(entity);
                 ++owner[mode];
                 if (!ownerCounted)
                 {
@@ -705,6 +709,20 @@ namespace Lighting20
             {
                 uintptr_t empty = 0;
                 if (seen.load(std::memory_order_relaxed) == effect || seen.compare_exchange_strong(empty, effect)) break;
+            }
+        }
+
+        // 0x69ECEC: cmp eax, [esp+38h] (the shader's bucket against the one drawn); EAX is not read after the jump
+        static void BucketTest(SafetyHookContext& regs) noexcept
+        {
+            if (!propDraw) return;
+            const auto drawn = *reinterpret_cast<const uint32_t*>(regs.esp + 0x38);
+            if (diagnostics) ++propBuckets[((regs.eax & 15) << 4) | (drawn & 15)];
+            if (allBuckets && regs.eax != drawn && localTechnique >= 0 &&
+                *reinterpret_cast<const int32_t*>(game + 0xC6B308) == localTechnique)
+            {
+                regs.eax = drawn;
+                ++bucketsForced;
             }
         }
 
@@ -857,8 +875,10 @@ namespace Lighting20
             collect = safetyhook::create_mid(game + 0x6E73B1, Collect);
             if (!collect) level = 0;
             installStatus += collect ? " props=" + std::to_string(level) : " props=hook_failed";
-            if (!collect || !ini.ReadInteger("DEBUG", "NightShadowsDiagnostics", 0)) return;
-            diagnostics = true;
+            if (!collect) return;
+            allBuckets = ini.ReadInteger("NIGHTSHADOWS", "PropAllBuckets", 1) != 0;
+            diagnostics = ini.ReadInteger("DEBUG", "NightShadowsDiagnostics", 0) != 0;
+            if (!diagnostics && !allBuckets) return;
             // push ecx; push esi; mov esi, ecx; movzx eax, word ptr [esi+58h] / test edx, edx; jnz; lea ecx, [eax+eax*2]
             // / test ecx, ecx; jnz; lea ecx, [eax+eax*2]
             if (BytesAt(0x4DD0B0, { 0x51, 0x56, 0x8B, 0xF1, 0x0F, 0xB7, 0x46, 0x58 }) &&
@@ -871,17 +891,15 @@ namespace Lighting20
                 BytesAt(0x29ECEC, { 0x3B, 0x44, 0x24, 0x38, 0x0F, 0x85 }))
             {
                 consumer = safetyhook::create_inline(game + 0x4DD0B0, Consumer);
+                bucketTest = safetyhook::create_mid(game + 0x29ECEC, BucketTest);
+                installStatus += consumer && bucketTest ? (allBuckets ? " prop_all_buckets=1" : " prop_all_buckets=0") : " prop_all_buckets=hook_failed";
+                if (!diagnostics) return;
                 lookup = safetyhook::create_mid(game + 0x229157, [](SafetyHookContext& regs) { Lookup(regs.edi, regs.eax, regs.edx); });
                 lookupSkinned = safetyhook::create_mid(game + 0x22E197, [](SafetyHookContext& regs) { Lookup(regs.edi, regs.eax, regs.ecx); });
                 lookupModel = safetyhook::create_mid(game + 0x29ED1A, [](SafetyHookContext& regs) { Lookup(regs.ebx, regs.eax, 0); });
                 lookupFragment = safetyhook::create_mid(game + 0x2188F4, [](SafetyHookContext& regs) { Lookup(regs.edi, regs.eax, 0); });
                 lookupOther = safetyhook::create_mid(game + 0x25E46C, [](SafetyHookContext& regs) { Lookup(regs.esi, regs.eax, 0); });
                 modelLoop = safetyhook::create_mid(game + 0x29EC90, [](SafetyHookContext&) { if (propDraw) ++propModelDraws; });
-                bucketTest = safetyhook::create_mid(game + 0x29ECEC, [](SafetyHookContext& regs)
-                {
-                    if (propDraw)
-                        ++propBuckets[((regs.eax & 15) << 4) | (*reinterpret_cast<const uint32_t*>(regs.esp + 0x38) & 15)];
-                });
                 installStatus += consumer && lookup && lookupSkinned && lookupModel && lookupFragment && lookupOther ? " prop_draw_trace=1" : " prop_draw_trace=hook_failed";
             }
             else
@@ -1397,6 +1415,7 @@ namespace Lighting20
                 << " technique_found(group:n)=" << Props::ByGroup(Props::foundByGroup)
                 << " missing=" << Props::ByGroup(Props::missingByGroup) << " missing_in=" << Props::Effects(Props::missingEffects)
                 << " found_in=" << Props::Effects(Props::foundEffects)
+                << " all_buckets=" << Props::allBuckets << " buckets_forced=" << Props::bucketsForced.load()
                 << " prop_model_draws=" << Props::propModelDraws.load() << " prop_buckets(shader>drawn:n)=" << Props::Buckets()
                 << " all_under_wd_local: found=" << Props::localFound.load() << " missing=" << Props::localMissing.load()
                 << " missing_in=" << Props::Effects(Props::localMissingEffects)
