@@ -208,6 +208,72 @@ Skin Scattering
 [SSRDbgGIHistory]
 Indirect Light History
 
+[GroundDebug]
+Ground Surfaces Debug View
+
+[WetGroundDebug]
+Wet Ground Debug View
+
+[CloudShDebug]
+Cloud Shadows Debug View
+
+[CloudsDebug]
+Volumetric Clouds Debug View
+
+[WetDbgMaterial]
+Material Categories
+
+[WetDbgWetness]
+Wetness, Puddles, Rings
+
+[CloudShDbgAll]
+Ground All in Shadow
+
+[CloudShDbgNoise]
+Raw Cloud Noise
+
+[CloudDbgSky]
+Sky Brightness Match
+
+[CloudDbgBase]
+Shade and Sun
+
+[CloudDbgSilver]
+Silver Lining
+
+[CloudDbgSunset]
+Sunset Colour
+
+[CloudDbgGlow]
+Glow
+
+[CloudDbgPower]
+Sun Power
+
+[CloudDbgTops]
+Tops
+
+[CloudDbgRim]
+Rim Against the Sun
+
+[CloudDbgHaze]
+Haze
+
+[CloudDbgSun]
+Sun Share Inside
+
+[CloudDbgMarch]
+Cloud Towards the Sun
+
+[CloudDbgExtinct]
+Extinction
+
+[CloudDbgAbsorb]
+Absorption
+
+[CloudDbgOverhd]
+Sun Overhead
+
 [Contact Shadows]
 Contact Shadows
 

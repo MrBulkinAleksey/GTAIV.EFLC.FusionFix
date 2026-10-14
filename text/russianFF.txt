@@ -208,6 +208,72 @@ Logitech LightSync RGB
 [SSRDbgGIHistory]
 История непрямого света
 
+[GroundDebug]
+Отладка поверхностей земли
+
+[WetGroundDebug]
+Отладка мокрой земли
+
+[CloudShDebug]
+Отладка теней облаков
+
+[CloudsDebug]
+Отладка объёмных облаков
+
+[WetDbgMaterial]
+Категории материалов
+
+[WetDbgWetness]
+Влажность, лужи, круги
+
+[CloudShDbgAll]
+Вся земля в тени
+
+[CloudShDbgNoise]
+Шум облаков
+
+[CloudDbgSky]
+Яркость неба
+
+[CloudDbgBase]
+Тень и солнце
+
+[CloudDbgSilver]
+Серебристая кайма
+
+[CloudDbgSunset]
+Цвет заката
+
+[CloudDbgGlow]
+Свечение
+
+[CloudDbgPower]
+Сила солнца
+
+[CloudDbgTops]
+Вершины
+
+[CloudDbgRim]
+Кайма против солнца
+
+[CloudDbgHaze]
+Дымка
+
+[CloudDbgSun]
+Доля солнца внутри
+
+[CloudDbgMarch]
+Облако к солнцу
+
+[CloudDbgExtinct]
+Ослабление
+
+[CloudDbgAbsorb]
+Поглощение
+
+[CloudDbgOverhd]
+Солнце в зените
+
 [Contact Shadows]
 Контактные тени
 

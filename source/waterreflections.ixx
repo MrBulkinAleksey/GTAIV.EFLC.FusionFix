@@ -136,7 +136,7 @@ static std::array<float, 4> WaterRainRings()
     const double seconds = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds * 0.001 : 0.0;
     const float rain = CWeather::Rain ? std::clamp(*CWeather::Rain / 0.7f, 0.0f, 1.0f) : 0.0f;
     float rings = R.fWetGround > 0.0f && R.WetWeatherEnabled() ? rain * R.fWetGroundRipples : 0.0f;
-    if (R.nWetGroundDebug == 2)
+    if (R.WetGroundDebug() == 2)
         rings = 4.0f; // unmissable, in any weather
     return { rings, float(std::fmod(seconds, 1000.0)), -1.0f / 15.0f, 40.0f / 15.0f };
 }

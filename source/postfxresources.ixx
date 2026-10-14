@@ -526,7 +526,8 @@ public:
     float fWetGroundWetting = 30.0f;
     float fWetGroundDrying = 240.0f;
     int nWetGroundMaterials = 1;
-    int nWetGroundDebug = 0;
+    // WetGroundDebug (graphics menu, Lighting): 1 material categories in colours, 2 wetness red, puddles green, rings blue
+    static int WetGroundDebug() { static auto p = FusionFixSettings.GetRef("PREF_WET_GROUND_DEBUG"); return p ? p->get() : 0; }
     // c206 as last set for a light, so lights of the same shape set nothing; the headlights found
     // since the last Ctrl+Shift+F10 log, and the lights looked at.
     float LightGGXShape[4] = {};
@@ -547,8 +548,8 @@ public:
     // casts a shadow, below 0 less.
     float fCloudShadowsCoverage = 0.0f;
     // CloudShadowsDebug: 1 the whole ground in cloud shadow, to see whether the shadows reach the
-    // sun light at all; 2 the raw noise as the coverage, to see whether the sun reads the noise.
-    int nCloudShadowsDebug = 0;
+    // sun light at all; 2 the raw noise as the coverage, to see whether the sun reads the noise (graphics menu, Lighting).
+    static int CloudShadowsDebug() { static auto p = FusionFixSettings.GetRef("PREF_CLOUD_SHADOWS_DEBUG"); return p ? p->get() : 0; }
     float CloudShadowConsts[12] = {};
     // The game's cloud values the last lighting pass used, for the log Ctrl+Shift+F10 writes.
     float fCloudLastThreshold = 0.0f, fCloudLastBias = 0.0f, fCloudLastThickness = 0.0f;
@@ -592,7 +593,8 @@ public:
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
     float fVolumetricCloudsShade = 0.65f;
     float fVolumetricCloudsAbsorption = 0.35f;
-    int nVolumetricCloudsDebug = 0;
+    // VolumetricCloudsDebug (graphics menu, Lighting): the view Clouds.fx shows, 2 to 15, from menu steps 1 to 14; 0 off.
+    static int VolumetricCloudsDebug() { static auto p = FusionFixSettings.GetRef("PREF_CLOUDS_DEBUG"); const int step = p ? p->get() : 0; return step > 0 ? step + 1 : 0; }
     // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
     bool bVolumetricCloudsReflections = true;
     bool bVolumetricCloudsReflectionsAtNight = false;
@@ -1895,14 +1897,12 @@ public:
             IniFloat("WEATHER", "WetGroundDarkening", &PostFxResource::fWetGroundDarkening, 1.0f, 0.0f, 2.0f),
             IniFloat("WEATHER", "WetGroundWetting", &PostFxResource::fWetGroundWetting, 30.0f, 0.0f, 3600.0f),
             IniFloat("WEATHER", "WetGroundDrying", &PostFxResource::fWetGroundDrying, 240.0f, 0.0f, 3600.0f),
-            IniInt("DEBUG", "WetGroundDebug", &PostFxResource::nWetGroundDebug, 0, 0, 2),
             IniFloat("WEATHER", "CloudShadows", &PostFxResource::fCloudShadows, 0.6f, 0.0f, 1.0f),
             IniFloat("WEATHER", "CloudShadowsHeight", &PostFxResource::fCloudShadowsHeight, 1200.0f, 100.0f, 10000.0f),
             IniFloat("WEATHER", "CloudShadowsScale", &PostFxResource::fCloudShadowsScale, 16000.0f, 100.0f, 50000.0f),
             IniFloat("WEATHER", "CloudShadowsWind", &PostFxResource::fCloudShadowsWind, 6.0f, 0.0f, 100.0f),
             IniFloat("WEATHER", "CloudShadowsSoftness", &PostFxResource::fCloudShadowsSoftness, 3.0f, 0.0f, 8.0f),
             IniFloat("WEATHER", "CloudShadowsCoverage", &PostFxResource::fCloudShadowsCoverage, 0.0f, -1.0f, 1.0f),
-            IniInt("DEBUG", "CloudShadowsDebug", &PostFxResource::nCloudShadowsDebug, 0, 0, 2),
             IniFlag("WEATHER", "VolumetricClouds", &PostFxResource::bVolumetricClouds, 1),
             IniFloat("WEATHER", "VolumetricCloudsCoverage", &PostFxResource::fVolumetricCloudsCoverage, 0.4f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsBase", &PostFxResource::fVolumetricCloudsBase, 800.0f, 50.0f, 10000.0f),
@@ -1926,7 +1926,6 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsMottle", &PostFxResource::fVolumetricCloudsMottle, 0.4f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsShade", &PostFxResource::fVolumetricCloudsShade, 0.65f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsAbsorption", &PostFxResource::fVolumetricCloudsAbsorption, 0.35f, 0.05f, 3.0f),
-            IniInt("DEBUG", "VolumetricCloudsDebug", &PostFxResource::nVolumetricCloudsDebug, 0, 0, 15),
             IniFlag("REFLECTIONS", "CloudReflections", &PostFxResource::bVolumetricCloudsReflections, 1),
             IniFlag("PERFORMANCE", "CloudReflectionsAtNight", &PostFxResource::bVolumetricCloudsReflectionsAtNight, 0),
             IniFloat("REFLECTIONS", "CloudReflectionsBrightness", &PostFxResource::fVolumetricCloudsReflectionBrightness, 1.0f, 0.0f, 10.0f),

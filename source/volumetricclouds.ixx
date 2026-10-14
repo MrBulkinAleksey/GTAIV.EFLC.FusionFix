@@ -280,7 +280,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     if (!reflection)
         std::memcpy(R.CloudLastUsedSun, &sun.x, sizeof(R.CloudLastUsedSun));
     // VolumetricCloudsDebug 15: the sun straight overhead, to test the sun's direction.
-    if (R.nVolumetricCloudsDebug == 15)
+    if (R.VolumetricCloudsDebug() == 15)
         sun = D3DXVECTOR4(0.0f, 0.0f, 1.0f, 0.0f);
     effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3SunDir"), &sun.x, 3);
     float litColour[3], shadeColour[3], sunsetLit[3];
@@ -434,7 +434,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         const float shear[2] = { 0.9293f * lean, 0.3697f * lean };
         effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2Shear"), shear, 2);
     }
-    effect->SetFloat(effect->GetParameterByName(nullptr, "fDebug"), float(R.nVolumetricCloudsDebug));
+    effect->SetFloat(effect->GetParameterByName(nullptr, "fDebug"), float(R.VolumetricCloudsDebug()));
     // The golden ratio's fraction per frame: each frame's march noise falls between the last
     // ones', and temporal anti-aliasing averages it away.
     effect->SetFloat(effect->GetParameterByName(nullptr, "fFrameJitter"), static_cast<float>(std::fmod(FrameHistory::Frame() * 0.6180339887, 1.0)));

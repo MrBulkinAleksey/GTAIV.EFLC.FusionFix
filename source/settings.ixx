@@ -2113,6 +2113,10 @@ public:
             { 0, "PREF_ACTIONCAM",              "MISC",       "ActionCamera",                       "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSR",                    "REFLECTIONS", "SSR",                               "MENU_DISPLAY_SSR_QUALITY",   0, nullptr, 0, 2 },
             { 0, "PREF_SSR_DEBUG",              "DEBUG",      "SSRDebug",                           "MENU_DISPLAY_SSR_DEBUG",     0, nullptr, 0, 10 },
+            { 0, "PREF_GROUND_DEBUG",           "DEBUG",      "GroundSurfacesDebug",                "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_WET_GROUND_DEBUG",       "DEBUG",      "WetGroundDebug",                     "MENU_DISPLAY_WET_DEBUG",     0, nullptr, 0, 2 },
+            { 0, "PREF_CLOUD_SHADOWS_DEBUG",    "DEBUG",      "CloudShadowsDebug",                  "MENU_DISPLAY_CLOUD_SH_DEBUG", 0, nullptr, 0, 2 },
+            { 0, "PREF_CLOUDS_DEBUG",           "DEBUG",      "VolumetricCloudsDebug",              "MENU_DISPLAY_CLOUDS_DEBUG",  0, nullptr, 0, 14 },
             { 0, "PREF_VOLUMETRIC_LIGHT",       "LIGHTING",   "VolumetricLight",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_CONTACTSHADOWS",         "LIGHTING",   "ContactShadows",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSGI",                   "LIGHTING",   "IndirectLight",                      "",                           1, nullptr, 0, 1 },
@@ -2188,6 +2192,11 @@ public:
         DefineDisplay("MENU_DISPLAY_SSR_QUALITY", { "MO_OFF", "SSRHalf", "SSRFull" });
         DefineDisplay("MENU_DISPLAY_AO", { "MO_OFF", "SAO", "GTAO" });
         DefineDisplay("MENU_DISPLAY_SSR_DEBUG", { "MO_OFF", "SSRDbgColour", "SSRDbgHits", "SSRDbgNormals", "SSRDbgHorizon", "SSRDbgSpecular", "SSRDbgGlass", "SSRDbgContact", "SSRDbgGI", "SSRDbgSkin", "SSRDbgGIHistory" });
+        DefineDisplay("MENU_DISPLAY_WET_DEBUG", { "MO_OFF", "WetDbgMaterial", "WetDbgWetness" });
+        DefineDisplay("MENU_DISPLAY_CLOUD_SH_DEBUG", { "MO_OFF", "CloudShDbgAll", "CloudShDbgNoise" });
+        // VolumetricCloudsDebug: menu step n is the shader's view n + 1 (see Clouds.fx)
+        DefineDisplay("MENU_DISPLAY_CLOUDS_DEBUG", { "MO_OFF", "CloudDbgSky", "CloudDbgBase", "CloudDbgSilver", "CloudDbgSunset", "CloudDbgGlow", "CloudDbgPower",
+                                                     "CloudDbgTops", "CloudDbgRim", "CloudDbgHaze", "CloudDbgSun", "CloudDbgMarch", "CloudDbgExtinct", "CloudDbgAbsorb", "CloudDbgOverhd" });
 
         constexpr auto toggle = "MENU_DISPLAY_ON_OFF";
         constexpr auto slider = "MENU_DISPLAY_SLIDERBAR";
@@ -2397,6 +2406,10 @@ public:
             }
             AddEmptyLine(category);
             AddRow(category, "SSR Debug", "PREF_SSR_DEBUG", 11, "MENU_DISPLAY_SSR_DEBUG");
+            AddRow(category, "GroundDebug", "PREF_GROUND_DEBUG", 2, toggle);
+            AddRow(category, "WetGroundDebug", "PREF_WET_GROUND_DEBUG", 3, "MENU_DISPLAY_WET_DEBUG");
+            AddRow(category, "CloudShDebug", "PREF_CLOUD_SHADOWS_DEBUG", 3, "MENU_DISPLAY_CLOUD_SH_DEBUG");
+            AddRow(category, "CloudsDebug", "PREF_CLOUDS_DEBUG", 15, "MENU_DISPLAY_CLOUDS_DEBUG");
         }
 
         // Graphics: a Textures category for the sharpness and filtering of surfaces (texturequality.ixx)
