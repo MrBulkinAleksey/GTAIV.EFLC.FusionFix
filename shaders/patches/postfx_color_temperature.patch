@@ -1,0 +1,96 @@
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS11.asm b/win32_30_nv8/rage_postfx/rage_postfxPS11.asm
+index 21ff0ee..9df2dfb 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS11.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS11.asm
+@@ -222,6 +222,11 @@
+     //   cmp r0.xyz, r0, r2, r1
+     // endif
+     
++    // FusionFix colour temperature (c187, ColorTemperature in shaders.ixx): the picture lit as if by light of
++    // another temperature, its brightness kept; c187.xyz is the factor per channel less 1, taken to the 1/2.2 power
++    // for this gamma space colour, so 0 leaves it as it is.
++    mad r0.xyz, r0, c187, r0
++    
+     // Tone mapping
+     if_ne -c217_abs.z, c217_abs.z
+       // Assume that input is gamma 2.2
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS12.asm b/win32_30_nv8/rage_postfx/rage_postfxPS12.asm
+index 2a2e7aa..b487dab 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS12.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS12.asm
+@@ -231,6 +231,11 @@
+     //   cmp r0.xyz, r0, r2, r1
+     // endif
+     
++    // FusionFix colour temperature (c187, ColorTemperature in shaders.ixx): the picture lit as if by light of
++    // another temperature, its brightness kept; c187.xyz is the factor per channel less 1, taken to the 1/2.2 power
++    // for this gamma space colour, so 0 leaves it as it is.
++    mad r0.xyz, r0, c187, r0
++    
+     // Tone mapping
+     if_ne -c217_abs.z, c217_abs.z
+       // Assume that input is gamma 2.2
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS14.asm b/win32_30_nv8/rage_postfx/rage_postfxPS14.asm
+index 7f001ff..a86ecb7 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS14.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS14.asm
+@@ -231,6 +231,11 @@
+     //   cmp r0.xyz, r0, r2, r1
+     // endif
+     
++    // FusionFix colour temperature (c187, ColorTemperature in shaders.ixx): the picture lit as if by light of
++    // another temperature, its brightness kept; c187.xyz is the factor per channel less 1, taken to the 1/2.2 power
++    // for this gamma space colour, so 0 leaves it as it is.
++    mad r0.xyz, r0, c187, r0
++    
+     // Tone mapping
+     if_ne -c217_abs.z, c217_abs.z
+       // Assume that input is gamma 2.2
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS24.asm b/win32_30_nv8/rage_postfx/rage_postfxPS24.asm
+index 19b348a..8b6e227 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS24.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS24.asm
+@@ -242,6 +242,11 @@
+     //   cmp r0.xyz, r0, r2, r1
+     // endif
+     
++    // FusionFix colour temperature (c187, ColorTemperature in shaders.ixx): the picture lit as if by light of
++    // another temperature, its brightness kept; c187.xyz is the factor per channel less 1, taken to the 1/2.2 power
++    // for this gamma space colour, so 0 leaves it as it is.
++    mad r0.xyz, r0, c187, r0
++    
+     // Tone mapping
+     if_ne -c217_abs.z, c217_abs.z
+       // Assume that input is gamma 2.2
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS26.asm b/win32_30_nv8/rage_postfx/rage_postfxPS26.asm
+index e14da88..733135c 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS26.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS26.asm
+@@ -242,6 +242,11 @@
+     //   cmp r0.xyz, r0, r2, r1
+     // endif
+     
++    // FusionFix colour temperature (c187, ColorTemperature in shaders.ixx): the picture lit as if by light of
++    // another temperature, its brightness kept; c187.xyz is the factor per channel less 1, taken to the 1/2.2 power
++    // for this gamma space colour, so 0 leaves it as it is.
++    mad r0.xyz, r0, c187, r0
++    
+     // Tone mapping
+     if_ne -c217_abs.z, c217_abs.z
+       // Assume that input is gamma 2.2
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS28.asm b/win32_30_nv8/rage_postfx/rage_postfxPS28.asm
+index eb6f430..70d1167 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS28.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS28.asm
+@@ -207,6 +207,11 @@
+     //   cmp r0.xyz, r0, r2, r1
+     // endif
+     
++    // FusionFix colour temperature (c187, ColorTemperature in shaders.ixx): the picture lit as if by light of
++    // another temperature, its brightness kept; c187.xyz is the factor per channel less 1, taken to the 1/2.2 power
++    // for this gamma space colour, so 0 leaves it as it is.
++    mad r0.xyz, r0, c187, r0
++    
+     // Tone mapping
+     if_ne -c217_abs.z, c217_abs.z
+       // Assume that input is gamma 2.2

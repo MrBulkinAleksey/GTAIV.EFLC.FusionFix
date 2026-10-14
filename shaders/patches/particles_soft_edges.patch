@@ -1,0 +1,76 @@
+diff --git a/win32_30_nv8/gta_rmptfx_litsprite/gta_rmptfx_litspritePS1.asm b/win32_30_nv8/gta_rmptfx_litsprite/gta_rmptfx_litspritePS1.asm
+index 816f502..389a329 100644
+--- a/win32_30_nv8/gta_rmptfx_litsprite/gta_rmptfx_litspritePS1.asm
++++ b/win32_30_nv8/gta_rmptfx_litsprite/gta_rmptfx_litspritePS1.asm
+@@ -27,6 +27,8 @@
+     dcl_texcoord4 v4.xy
+     dcl_texcoord9 v9
+     dcl_2d s0
++    dcl vPos.xy
++    dcl_2d s14 // FusionFix soft particles: the opaque depth, bound by FusionFix for the main view's alpha
+     texld r0, v1, s0
+     texld r1, v1.zwzw, s0
+     mov_sat r3.x, v5.x
+@@ -36,6 +38,24 @@
+     dp3 r1.x, r1, c0.yzww
+     mad r1.yzw, r0.xxyz, v4.y, -r1.x
+     mov_sat r0.w, r0.w
++    // --- FusionFix soft particles (c186, s14: SoftParticles in postfx.ixx): fades the particle out as it nears the
++    // --- opaque scene behind it, so smoke, dust and steam meet the ground and walls without a hard line. s14 holds
++    // --- the opaque depth (the fog pass's copy, the game's log depth decoded with c209), c186.x one over the fade
++    // --- distance, y on or off, zw one over the target's size. Particles with no depth of their own (v9.w 0, the
++    // --- screen space ones) keep their alpha.
++    add r20.xy, vPos, c0.x
++    mul r20.xy, r20, c186.zwzw
++    texld r20, r20, s14
++    pow r19.x, c209_abs.z, r20.x
++    mul r20.x, r19.x, c209.w // the scene's view depth
++    add r20.x, r20.x, -v9.w // less the particle's
++    mul_sat r20.x, r20.x, c186.x
++    mul r20.x, r20.x, r20.x
++    add r20.x, r20.x, c1.x
++    mul r20.x, r20.x, c186.y
++    add r20.x, r20.x, c1.y // 1 + (fade - 1) while on
++    cmp r20.x, -v9.w, c1.y, r20.x
++    mul r0.w, r0.w, r20.x
+     mad r1.yzw, v2.z, r1, r1.x
+     add r2.x, c1.x, v2.w
+     pow r3.x, r1_abs.x, r2.x
+diff --git a/win32_30_nv8/gta_rmptfx_litsprite/gta_rmptfx_litspritePS3.asm b/win32_30_nv8/gta_rmptfx_litsprite/gta_rmptfx_litspritePS3.asm
+index fbefb6e..e28e64f 100644
+--- a/win32_30_nv8/gta_rmptfx_litsprite/gta_rmptfx_litspritePS3.asm
++++ b/win32_30_nv8/gta_rmptfx_litsprite/gta_rmptfx_litspritePS3.asm
+@@ -29,6 +29,8 @@
+     dcl_texcoord4 v4.xy
+     dcl_texcoord9 v9
+     dcl_2d s0
++    dcl vPos.xy
++    dcl_2d s14 // FusionFix soft particles: the opaque depth, bound by FusionFix for the main view's alpha
+     texld r0, v1, s0
+     texld r1, v1.zwzw, s0
+     mov_sat r3.x, v5.x
+@@ -39,6 +41,24 @@
+     dp3 r1.y, r1.yzww, c0.yzww
+     mad r1.xzw, r0.xyyz, r1.x, -r1.y
+     mov_sat r0.w, r0.w
++    // --- FusionFix soft particles (c186, s14: SoftParticles in postfx.ixx): fades the particle out as it nears the
++    // --- opaque scene behind it, so smoke, dust and steam meet the ground and walls without a hard line. s14 holds
++    // --- the opaque depth (the fog pass's copy, the game's log depth decoded with c209), c186.x one over the fade
++    // --- distance, y on or off, zw one over the target's size. Particles with no depth of their own (v9.w 0, the
++    // --- screen space ones) keep their alpha.
++    add r20.xy, vPos, c0.x
++    mul r20.xy, r20, c186.zwzw
++    texld r20, r20, s14
++    pow r19.x, c209_abs.z, r20.x
++    mul r20.x, r19.x, c209.w // the scene's view depth
++    add r20.x, r20.x, -v9.w // less the particle's
++    mul_sat r20.x, r20.x, c186.x
++    mul r20.x, r20.x, r20.x
++    add r20.x, r20.x, c1.x
++    mul r20.x, r20.x, c186.y
++    add r20.x, r20.x, c1.y // 1 + (fade - 1) while on
++    cmp r20.x, -v9.w, c1.y, r20.x
++    mul r0.w, r0.w, r20.x
+     mad r1.xzw, v2.z, r1, r1.y
+     add r2.x, c1.x, v2.w
+     pow r3.x, r1_abs.y, r2.x

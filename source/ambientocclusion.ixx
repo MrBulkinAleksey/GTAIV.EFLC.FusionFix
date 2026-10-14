@@ -297,7 +297,10 @@ export void RenderAmbientOcclusion()
 
             // final output, at the screen's size again
             pDevice->SetRenderTarget(0, SpecularRT);
-            effect->SetTexture(h.AOTexture2D, PostFxResources.nAmbientOcclusionBlurPasses > 0 ? aoTex : blurSource);
+            IDirect3DTexture9* finalAO = PostFxResources.nAmbientOcclusionBlurPasses > 0 ? aoTex : blurSource;
+            effect->SetTexture(h.AOTexture2D, finalAO);
+            PostFxResources.AOLightingTex = finalAO;
+            PostFxResources.nAOLightingFrame = FrameHistory::Frame();
             effect->SetFloatArray(h.vec2AOTexelSize, aoTexel, 2);
             effect->SetFloat(h.fUpsample, half ? 1.0f : 0.0f);
             effect->SetFloat(h.fUpsampleMip, half && PostFxResources.nAmbientOcclusionMaxMipLevel > 1 ? 1.0f : 0.0f);

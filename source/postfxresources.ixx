@@ -1029,6 +1029,22 @@ public:
     float fAmbientOcclusionGTAOThinOccluders = 0.5f;
     float fAmbientOcclusionTemporal = 0.9f;  // share of last frames' GTAO kept, 0 turns accumulation off
     bool bAmbientOcclusionMultiBounce = true;
+    // How much the AO darkens the game's fill lights (fillerVolumePoint, fillerVolumeShadowPoint): they
+    // stand in for bounced light, so corners and the ground under cars lose them as they lose the ambient.
+    // The AO's last result and the frame it was drawn in, bound on s7 while the lights are drawn.
+    float fAmbientOcclusionFillLights = 1.0f;
+    IDirect3DTexture9* AOLightingTex = nullptr;
+    uint32_t nAOLightingFrame = 0;
+    bool bAOLightingBound = false;
+    // Soft particles (shaders/patches/particles_soft_edges.patch): the game's sprite particles without a depth
+    // fade of their own fade out over this many metres in front of the opaque scene. The opaque depth goes on
+    // s14 and c186 from the end of the main view's lighting to its post processing.
+    bool bSoftParticles = true;
+    float fSoftParticlesDistance = 1.5f;
+    bool bSoftParticlesBound = false;
+    // The picture as if lit by light of this temperature in kelvin, its brightness kept; 6500 leaves it as the
+    // game draws it (shaders/patches/postfx_color_temperature.patch, c187).
+    float fColorTemperature = 6500.0f;
     // AmbientOcclusionHalfResolution: AO is worked out, accumulated and blurred at half the size and read back by
     // depth when it is put on the screen
     bool bAmbientOcclusionHalfRes = true;
@@ -1872,6 +1888,10 @@ public:
             IniFloat("POSTFX", "LightsGGXSun", &PostFxResource::fLightsGGXSun, 1.0f, 0.0f, 4.0f),
             IniFloat("POSTFX", "LightsGGXEnvironment", &PostFxResource::fLightsGGXEnvironment, 1.0f, 0.0f, 1.0f),
             IniFloat("POSTFX", "LightsGGXMax", &PostFxResource::fLightsGGXMax, 2.0f, 0.1f, 16.0f),
+            IniFloat("POSTFX", "AmbientOcclusionFillLights", &PostFxResource::fAmbientOcclusionFillLights, 1.0f, 0.0f, 1.0f),
+            IniFlag("POSTFX", "SoftParticles", &PostFxResource::bSoftParticles, 1),
+            IniFloat("POSTFX", "ColorTemperature", &PostFxResource::fColorTemperature, 6500.0f, 1700.0f, 20000.0f),
+            IniFloat("POSTFX", "SoftParticlesDistance", &PostFxResource::fSoftParticlesDistance, 1.5f, 0.1f, 10.0f),
             IniFloat("POSTFX", "ScreenSpaceReflectionsIntensity", &PostFxResource::fSSRIntensity, 1.0f, 0.0f, 1.0f),
             IniFloat("POSTFX", "ScreenSpaceReflectionsWetGround", &PostFxResource::fSSRWetGround, 1.5f, 0.0f, 8.0f),
             IniFloat("POSTFX", "ScreenSpaceReflectionsStepPixels", &PostFxResource::fSSRStepPixels, 2.0f, 1.0f, 8.0f),
