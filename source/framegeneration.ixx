@@ -40,7 +40,7 @@ import upscaler;
 //   the rendered frame goes from a draw call FrameGenerationDelay into the next frame. A frame that ends before its
 //   waiting frames went presents them first.
 // - Sharpening (CAS) is left out of the post processing and drawn over the frames as they are shown, the rendered and
-//   the generated one, with the HUD left as it is (SharpenShownFrame in postfx.ixx). Sharpened before the generation,
+//   the generated one, with the HUD left as it is (SharpenShownFrame in sharpening.ixx). Sharpened before the generation,
 //   the shadow under a moving car went along with the ground in the generated frames and was shown twice.
 // - Not in the menus, where nothing moves, nor with DLSS-IV loaded, which replays the game's D3D9 calls on a thread of
 //   its own and so runs ahead of what the helper is handed.
@@ -83,7 +83,7 @@ namespace
     rage::grcRenderTargetPC* SavedRT = nullptr;     // the back buffer while the rendered frame is presented
     bool bHudLessCaptured = false;  // this frame
 
-    // Sharpening: the post processing leaves it to the frames as they are shown (SharpenShownFrame in postfx.ixx), from
+    // Sharpening: the post processing leaves it to the frames as they are shown (SharpenShownFrame in sharpening.ixx), from
     // a frame into a target, with the finished frame and the one before the HUD to tell the HUD
     using Sharpener = bool (*)(IDirect3DDevice9* device, IDirect3DTexture9* frame, IDirect3DTexture9* present, IDirect3DTexture9* hudLess,
         IDirect3DSurface9* target);
