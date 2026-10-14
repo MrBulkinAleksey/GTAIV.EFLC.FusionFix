@@ -266,6 +266,9 @@ namespace PostFxPass
             }
         }
 
+        // What was on a sampler as the pass began
+        IDirect3DBaseTexture9* Texture(DWORD slot) const { return textures[slot]; }
+
         SavedTextures(const SavedTextures&) = delete;
         SavedTextures& operator=(const SavedTextures&) = delete;
 

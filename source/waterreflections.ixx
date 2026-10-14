@@ -52,7 +52,7 @@ using namespace PostFxPass;
 
 // SSR on the water, its mask and the rain's rings on it.
 
-static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kWaterSSRRenderStates[] =
+static constexpr RenderStateValue kWaterSSRRenderStates[] =
 {
     { D3DRS_ZENABLE,          FALSE },
     { D3DRS_ZWRITEENABLE,     FALSE },
@@ -232,10 +232,9 @@ export void RenderWaterReflections()
     effect->SetFloat(h.fWaterIntensity, R.fSSRWaterIntensity);
     effect->SetFloat(h.fWaterBlur, R.fSSRWaterBlur);
 
-    IDirect3DSurface9* ds = nullptr;
-
+    // Put back in the reverse order as the function ends; the reflection draws into the target it found.
     SavedVertexInput savedVertexInput(pDevice);
-    pDevice->GetDepthStencilSurface(&ds);
+    SavedTargets savedTargets(pDevice, false);
 
     pDevice->SetDepthStencilSurface(nullptr);
     pDevice->SetStreamSource(0, nullptr, 0, 0);
@@ -245,40 +244,25 @@ export void RenderWaterReflections()
     const ScreenQuad screenQuad = ScreenQuad::Full(width, height);
 
     UINT passes = 0;
-    IDirect3DBaseTexture9* oldTextures[kSSRTextureSlots] = {};
-    DWORD savedRenderStates[std::size(kWaterSSRRenderStates)] = {};
-    DWORD savedSamplerStates[kSSRSamplerSlots][std::size(kSSRSamplerStates)] = {};
-
-    for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
-        pDevice->GetTexture(slot, &oldTextures[slot]);
+    SavedTextures savedTextures(pDevice);
     SetTextureBoth(pDevice, 3, nullptr);
 
-    effect->SetTexture(h.SurfaceTex2D, oldTextures[0]);
-    effect->SetFloat(h.fWaterNormalStrength, oldTextures[0] ? R.fSSRWaterNormalStrength : 0.0f);
+    // The water's surface, as the game's water shader had it on s0
+    IDirect3DBaseTexture9* surface = savedTextures.Texture(0);
+    effect->SetTexture(h.SurfaceTex2D, surface);
+    effect->SetFloat(h.fWaterNormalStrength, surface ? R.fSSRWaterNormalStrength : 0.0f);
     // The rain's rings, as the game's water shader takes them (WaterRainRings): its reflection is
     // drawn over by this one, which hid them.
     {
         const auto rings = WaterRainRings();
-        R.nWaterSsrSurface = oldTextures[0] ? 1 : 0;
-        const D3DXVECTOR4 v(oldTextures[0] ? rings[0] : 0.0f, rings[1], rings[2], rings[3]);
+        R.nWaterSsrSurface = surface ? 1 : 0;
+        const D3DXVECTOR4 v(surface ? rings[0] : 0.0f, rings[1], rings[2], rings[3]);
         effect->SetVector(h.vec4WaterRings, &v);
     }
 
-    pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
-    pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-
-    for (size_t i = 0; i < std::size(kWaterSSRRenderStates); ++i)
-    {
-        pDevice->GetRenderState(kWaterSSRRenderStates[i].state, &savedRenderStates[i]);
-        pDevice->SetRenderState(kWaterSSRRenderStates[i].state, kWaterSSRRenderStates[i].value);
-    }
-
-    for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
-        for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
-        {
-            pDevice->GetSamplerState(slot, kSSRSamplerStates[i].state, &savedSamplerStates[slot][i]);
-            pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, kSSRSamplerStates[i].value);
-        }
+    SavedShaderConstants savedConstants(pDevice);
+    AppliedRenderStates renderStates(pDevice, kWaterSSRRenderStates);
+    AppliedSamplerStates samplerStates(pDevice);
 
     // The shaders back on both devices, D3DX saves nothing (see SavedShaders); the rest is saved above
     SavedShaders shaders(pDevice);
@@ -290,24 +274,4 @@ export void RenderWaterReflections()
     screenQuad.Draw(pDevice);
     effect->EndPass();
     effect->End();
-
-    for (size_t i = 0; i < std::size(kWaterSSRRenderStates); ++i)
-        pDevice->SetRenderState(kWaterSSRRenderStates[i].state, savedRenderStates[i]);
-
-    for (DWORD slot = 0; slot < kSSRSamplerSlots; ++slot)
-        for (size_t i = 0; i < std::size(kSSRSamplerStates); ++i)
-            pDevice->SetSamplerState(slot, kSSRSamplerStates[i].state, savedSamplerStates[slot][i]);
-
-    pDevice->SetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
-    pDevice->SetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-
-    for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
-    {
-        SetTextureBoth(pDevice, slot, oldTextures[slot]);
-        SAFE_RELEASE(oldTextures[slot]);
-    }
-
-    pDevice->SetDepthStencilSurface(ds);
-
-    SAFE_RELEASE(ds);
 }
