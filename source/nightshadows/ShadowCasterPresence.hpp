@@ -16,9 +16,12 @@ struct ShadowCasterPresence {
     static constexpr float VehicleExtent = 4.0f, PedExtent = 1.0f; // Bounding radii with a margin; a bus is longer.
     static constexpr float Range = 150.0f; // Around the player; lamp reach stays well inside.
     // CasterMinLightHeight: a light less than this many metres above a car's or ped's position (some 3 m over the
-    // ground) gets no claim from it. A game lamp over a door, 2 m above the pavement, took slots for cars 10 m off
-    // and threw their shadows, long and low, across the street; their boxes shadow them there. 0: any height.
+    // ground) gets no claim from it where a higher light with a shadow reaches it too (covered, from the caller): a
+    // lamp over a door, 2 m above the pavement, took slots for cars 10 m off under the street lamps and threw a
+    // second, long and low shadow of them and of the lamp posts. A low light with no lamp above the caster keeps
+    // its claim. 0: any height.
     static inline float MinLightAbove = 0.0f;
+    struct NoCover { bool operator()(unsigned) const noexcept { return false; } };
     std::array<Vec3, Capacity> points{};
     std::array<float, Capacity> extents{};
     std::array<bool, Capacity> inView{};
@@ -53,7 +56,9 @@ struct ShadowCasterPresence {
     // The best caster a point or spot light's volume reaches: one in view
     // over one off screen.
     // which: the caster that decided, -1 for none (or when every lamp counts).
-    SlotGain Lights(Vec3 source, Vec3 direction, int type, float radius, float outerCos, int* which = nullptr) const noexcept {
+    template <typename Covered = NoCover>
+    SlotGain Lights(Vec3 source, Vec3 direction, int type, float radius, float outerCos, int* which = nullptr,
+                    Covered covered = {}) const noexcept {
         if (which) *which = -1;
         if (!valid || overflow || !std::isfinite(radius) || radius <= 0) return SlotGain::InView;
         auto gain = SlotGain::None;
@@ -70,7 +75,8 @@ struct ShadowCasterPresence {
                 const float reach = radius + extents[i];
                 lit = x * x + y * y + z * z <= reach * reach;
             }
-            if (!lit || (vehicles[i] && boxedCount && Boxed(vehicles[i], source)) || source.z - p.z < MinLightAbove) continue;
+            if (!lit || (vehicles[i] && boxedCount && Boxed(vehicles[i], source)) ||
+                (source.z - p.z < MinLightAbove && covered(i))) continue;
             if (which) *which = int(i);
             if (inView[i]) return SlotGain::InView;
             gain = SlotGain::OffScreen;
