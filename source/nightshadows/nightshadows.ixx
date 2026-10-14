@@ -475,6 +475,7 @@ class NightShadows
         PlayerShadowAllocation::casterPriority = iniReader.ReadInteger("NIGHTSHADOWS", "CasterAwarePriority", 0) != 0;
         PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "CasterAwarePriorityHold", 750), 0, 2000));
         PlayerShadowAllocation::casterLeadSeconds = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "CasterAwarePriorityLead", 1.0f), 0.0f, 3.0f);
+        PlayerShadowAllocation::boxedCarCasterDistance = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "BoxedCarCasterDistance", 25.0f), 0.0f, 150.0f);
         PlayerShadowAllocation::lampSpacing.base = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "LampSpacing", 0.0f), 0.0f, 40.0f);
         PlayerShadowAllocation::lampSpacing.seconds = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "LampSpacingSeconds", 0.5f), 0.0f, 5.0f);
         PlayerShadowAllocation::lampSpacing.alongRoad = iniReader.ReadInteger("NIGHTSHADOWS", "LampSpacingAlongRoad", 0) != 0;
