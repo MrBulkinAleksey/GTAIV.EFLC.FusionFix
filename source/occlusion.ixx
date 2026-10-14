@@ -40,7 +40,24 @@ export namespace Occlusion
 {
     // HiZOcclusion: 0 off, 1 hidden entities left out of the scene, 2 tested and counted only
     int nMode = 2;
-    bool Enabled() { return nMode != 0; }
+    // [SHADOWS] LampShadowsOcclusion: lights whose whole reach is hidden draw no shadow map (nightshadows)
+    bool bLampShadows = true;
+    // The grid is built while anything tests against it
+    bool Enabled() { return nMode != 0 || bLampShadows; }
+
+    // The latest grid with what this moment needs to test against it: how far the camera has moved and turned since.
+    // Taken once for a batch of tests, on any thread.
+    struct Grid;
+    struct Probe
+    {
+        std::shared_ptr<const Grid> grid;
+        float bandU = 1.0f, bandV = 1.0f;   // how far the screen slid past the grid's edges with the camera's turn
+        float move = 0.0f;                  // metres the camera moved
+        bool usable = false;                // a grid, recent, the camera not moved too far
+    };
+    Probe Take();
+    // The sphere lies wholly behind the world drawn into the grid
+    bool SphereHidden(const Probe& probe, const float centre[3], float radius);
 
     // Render thread, a frame's grid read back: the farthest view depth (metres) of each texel, rows pitchBytes apart;
     // viewProjection the camera it was drawn with (rows, clip = [x y z 1] * M, no jitter), position the camera's, and
@@ -88,8 +105,8 @@ namespace Occlusion
     std::atomic<uint32_t> gameFrame{ 1 };
     DWORD gameThread = 0;
     uint32_t mainFrame = 0;
-    std::shared_ptr<const Grid> grid;
-    bool gridStale = false;     // published over half a second ago: the game stopped drawing, or the GPU fell behind
+    Probe frameProbe;           // taken at the first entity of each frame
+    uint8_t frameOutcome = 0;   // its Precheck
     struct EntityState
     {
         uint32_t frame = 0;
@@ -150,8 +167,6 @@ namespace Occlusion
     // and heights. Up to EdgeBand, a sphere reaching out of the grid's screen is tested on its part inside, the edge
     // standing for the band (what lies beyond is off the screen now); turned farther, it is drawn
     constexpr float EdgeBand = 0.03f;
-    float bandU = 1.0f, bandV = 1.0f;
-    bool testAtEdge = false;    // the last test took a sphere out of the grid's screen at its edge
 
     enum Outcome : uint8_t { Visible, Hidden, NoGrid, Stale, Moved, NearCamera, OffScreen, Small, Outcomes };
     constexpr const char* OutcomeNames[Outcomes] = { "visible", "hidden", "no grid", "grid too old", "camera moved too far",
@@ -230,20 +245,54 @@ namespace Occlusion
         publishedCount.fetch_add(1, std::memory_order_release);
     }
 
-    // The sphere against the grid, as above
-    Outcome Test(const Grid& g, const float centre[3], float radius)
+    // A grid published longer ago than this: the game stopped drawing, or the GPU fell behind
+    constexpr uint64_t StaleMs = 500;
+
+    Probe MakeProbe(std::shared_ptr<const Grid> grid)
     {
-        if (radius < fMinRadius)
-            return Small;
-        float move = 0.0f;
+        Probe p;
+        p.grid = std::move(grid);
+        if (!p.grid || GetTickCount64() - p.grid->published > StaleMs)
+            return p;
+        const auto& g = *p.grid;
         if (pCamera)
         {
             const float dx = pCamera[0] - g.position[0], dy = pCamera[1] - g.position[1], dz = pCamera[2] - g.position[2];
-            move = std::sqrt(dx * dx + dy * dy + dz * dz);
-            if (move > fMaxMove)
-                return Moved;
+            p.move = std::sqrt(dx * dx + dy * dy + dz * dz);
+            // The camera's turn since: where it looks now, the second row of its matrix (CE 0x128e320)
+            const float* f = pCamera - 8;
+            const float length = std::sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+            if (length > 0.5f)
+            {
+                const float cosTurn = (f[0] * g.forward[0] + f[1] * g.forward[1] + f[2] * g.forward[2]) / length;
+                const float turn = std::acos(std::clamp(cosTurn, -1.0f, 1.0f));
+                p.bandU = turn * g.turnU + 0.002f;
+                p.bandV = turn * g.turnV + 0.002f;
+            }
         }
-        const float r = radius + move * fMoveGrowth;
+        p.usable = pCamera && p.move <= fMaxMove;
+        return p;
+    }
+
+    // Whether the probe can tell anything at all: Visible when it can
+    Outcome Precheck(const Probe& p)
+    {
+        if (!p.grid)
+            return NoGrid;
+        if (GetTickCount64() - p.grid->published > StaleMs)
+            return Stale;
+        if (p.move > fMaxMove)
+            return Moved;
+        return Visible;
+    }
+
+    // The sphere against the grid, as above; after Precheck
+    Outcome Test(const Probe& p, const float centre[3], float radius, bool* atEdge = nullptr)
+    {
+        if (radius < fMinRadius)
+            return Small;
+        const Grid& g = *p.grid;
+        const float r = radius + p.move * fMoveGrowth;
         const float* m = g.viewProjection;
         float clip[4];
         for (int c = 0; c < 4; ++c)
@@ -269,12 +318,13 @@ namespace Occlusion
             maxV = std::max(maxV, v);
         }
         // Beyond the band it's off the screen now; within, the grid's edge stands for it
-        if (bandU > EdgeBand || bandV > EdgeBand)
+        if (p.bandU > EdgeBand || p.bandV > EdgeBand)
         {
             if (minU < 0.0f || minV < 0.0f || maxU > 1.0f || maxV > 1.0f)
                 return OffScreen;
         }
-        testAtEdge = minU < 0.0f || minV < 0.0f || maxU > 1.0f || maxV > 1.0f;
+        if (atEdge)
+            *atEdge = minU < 0.0f || minV < 0.0f || maxU > 1.0f || maxV > 1.0f;
         minU = std::max(minU, 0.0f);
         minV = std::max(minV, 0.0f);
         maxU = std::min(maxU, 1.0f);
@@ -298,6 +348,22 @@ namespace Occlusion
                 if (g.At(level, x, y) >= nearest)
                     return Visible;
         return Hidden;
+    }
+
+    Probe Take()
+    {
+        std::shared_ptr<const Grid> g;
+        {
+            std::lock_guard lock(latestMutex);
+            g = latest;
+        }
+        return MakeProbe(std::move(g));
+    }
+
+    bool SphereHidden(const Probe& probe, const float centre[3], float radius)
+    {
+        return probe.usable && Precheck(probe) == Visible && std::isfinite(radius) &&
+               std::isfinite(centre[0] + centre[1] + centre[2]) && Test(probe, centre, radius) == Hidden;
     }
 
     bool IsProp(uintptr_t entity)
@@ -335,29 +401,12 @@ namespace Occlusion
             if (mainFrame)
                 EndFrame();
             mainFrame = frame;
-            {
-                std::lock_guard lock(latestMutex);
-                grid = latest;
-            }
-            bandU = bandV = 1.0f;
-            gridStale = grid && GetTickCount64() - grid->published > 500;
-            if (grid)
+            frameProbe = Take();
+            frameOutcome = Precheck(frameProbe);
+            if (frameProbe.grid)
             {
                 ++stats.grids;
-                stats.ageFrames += FrameHistory::Frame() - grid->renderFrame;
-                // The camera's turn since: where it looks now, the second row of its matrix (CE 0x128e320)
-                if (pCamera)
-                {
-                    const float* f = pCamera - 8;
-                    const float length = std::sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
-                    if (length > 0.5f)
-                    {
-                        const float cosTurn = (f[0] * grid->forward[0] + f[1] * grid->forward[1] + f[2] * grid->forward[2]) / length;
-                        const float turn = std::acos(std::clamp(cosTurn, -1.0f, 1.0f));
-                        bandU = turn * grid->turnU + 0.002f;
-                        bandV = turn * grid->turnV + 0.002f;
-                    }
-                }
+                stats.ageFrames += FrameHistory::Frame() - frameProbe.grid->renderFrame;
             }
         }
 
@@ -367,19 +416,18 @@ namespace Occlusion
             // Once a frame: the entity may be added to several buckets
             const bool repeat = state.frame + 1 == mainFrame;
             state.frame = mainFrame;
-            Outcome outcome = NoGrid;
-            if (gridStale)
-                outcome = Stale;
-            else if (grid)
+            Outcome outcome = Outcome(frameOutcome);
+            bool atEdge = false;
+            if (outcome == Visible)
             {
                 alignas(16) float centre[4]{};
                 auto vtable = *(void***)entity;
                 reinterpret_cast<void(__thiscall*)(uintptr_t, float*)>(vtable[0x50 / 4])(entity, centre);
                 const float radius = reinterpret_cast<float(__thiscall*)(uintptr_t)>(vtable[0x58 / 4])(entity);
-                outcome = std::isfinite(radius) && std::isfinite(centre[0] + centre[1] + centre[2]) ? Test(*grid, centre, radius) : Visible;
+                outcome = std::isfinite(radius) && std::isfinite(centre[0] + centre[1] + centre[2]) ? Test(frameProbe, centre, radius, &atEdge) : Visible;
             }
             state.hidden = outcome == Hidden;
-            stats.hiddenAtEdge += state.hidden && testAtEdge;
+            stats.hiddenAtEdge += state.hidden && atEdge;
             state.hiddenRunning = state.hidden ? uint16_t(std::min<int>(repeat ? state.hiddenRunning + 1 : 1, 0xFFFF)) : 0;
             state.left = state.hidden && state.hiddenRunning >= nFrames;
             ++stats.entities;
@@ -460,7 +508,11 @@ public:
             fMaxMove = std::clamp(iniReader.ReadFloat("MISC", "HiZOcclusionMaxMove", 4.0f), 0.0f, 50.0f);
             nFrames = std::clamp(iniReader.ReadInteger("MISC", "HiZOcclusionFrames", 2), 1, 60);
             fMinRadius = std::clamp(iniReader.ReadFloat("MISC", "HiZOcclusionMinRadius", 0.0f), 0.0f, 100.0f);
+            bLampShadows = iniReader.ReadInteger("SHADOWS", "LampShadowsOcclusion", 1) != 0;
             QueryPerformanceFrequency(&qpcFrequency);
+            // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
+            if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
+                pCamera = *camera.get_first<float*>(12);
             if (!nMode)
                 return;
 
@@ -468,7 +520,6 @@ public:
             auto scene = hook::pattern("89 4C 24 28 A9 00 00 00 08");
             // The lists' entry (CE 0xae43a0): sub esp, 0x10; push ebx; mov ebx, [esp+0x18] the phases
             auto add = hook::pattern("83 EC 10 53 8B 5C 24 18 85 DB 0F 84 ? ? ? ? 33 C9 8B C3 85 DB 78");
-            auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C");
             if (scene.empty() || add.empty())
             {
                 nMode = 0;
@@ -476,8 +527,6 @@ public:
                 return;
             }
             pScenePhase = *scene.get_first<uint32_t*>(0xD);
-            if (!camera.empty())
-                pCamera = *camera.get_first<float*>(12);
             // At the entry, before anything is pushed: [esp+4] the phases, [esp+8] the entity
             static auto AddHook = safetyhook::create_mid(add.get_first(0), [](SafetyHookContext& regs)
             {
