@@ -551,7 +551,7 @@ namespace Lighting20
         static thread_local uint32_t scopeKey = 0;
         static thread_local float scopeLight[2]{};
         static thread_local bool ownerCounted = false, nearCounted = false;
-        static std::array<std::atomic<uint32_t>, 3> owner{}, near{};
+        static std::array<std::atomic<uint32_t>, 3> owner{}, nearLamp{};
         static std::atomic<uint32_t> ownerPasses{0}, nearPasses{0};
 
         static bool On() noexcept { return level > 0 && bExtraNightShadows; }
@@ -599,7 +599,7 @@ namespace Lighting20
             const float dx = at[0] - scopeLight[0], dy = at[1] - scopeLight[1];
             if (dx * dx + dy * dy < 25.0f)
             {
-                ++near[mode];
+                ++nearLamp[mode];
                 if (!nearCounted)
                 {
                     nearCounted = true;
@@ -1050,7 +1050,7 @@ namespace Lighting20
                 << " passes_in_sun_list_mask=" << Props::inSunMask.load() << " in_list2_mask=" << Props::inList2Mask.load()
                 << " passes_with_own_entity=" << Props::ownerPasses.load() << " own_entity(mode0,1,2)=" << Props::owner[0].load()
                 << ',' << Props::owner[1].load() << ',' << Props::owner[2].load() << " passes_with_objects_within_5m=" << Props::nearPasses.load()
-                << " within_5m(mode0,1,2)=" << Props::near[0].load() << ',' << Props::near[1].load() << ',' << Props::near[2].load()
+                << " within_5m(mode0,1,2)=" << Props::nearLamp[0].load() << ',' << Props::nearLamp[1].load() << ',' << Props::nearLamp[2].load()
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
                 << " duplicates=" << Sharing::duplicates.load() << " duplicates_unshadowed=" << Sharing::duplicatesUnshadowed.load()
                 << " (vehicle " << Sharing::duplicatesVehicle.load() << ", model lights " << Sharing::duplicatesOurs.load() << ')'
