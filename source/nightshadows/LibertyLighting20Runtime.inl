@@ -560,8 +560,9 @@ namespace Lighting20
         // (bins shadowing only once you come near). Draws: the fragment draw command 0x8DD0B0 (model +0x58) of a prop
         // added to a lamp list or of a lamp's own post under the forced wd_local group, and the shader's technique
         // lookup in it (0x629157 / 0x62E197: EAX the group, EDX / ECX a technique given outright, EDI the effect;
-        // 0x69ED1A in the model's draw loop over its geometries: EAX the group, EBX the effect; [effect+0x40] its
-        // table, three bytes a group): a 0 there and the shader draws nothing into the map.
+        // 0x69ED1A in the model's draw loop over its geometries: EAX the group, EBX the effect; 0x6188F4 and 0x65E46C
+        // the same with EDI / ESI the effect; [effect+0x40] its table, three bytes a group): a 0 there and the shader
+        // draws nothing into the map.
         static bool diagnostics = false;
         static constexpr float distanceEdges[] = { 10.0f, 20.0f, 30.0f, 45.0f, 60.0f };
         static std::array<std::atomic<uint32_t>, 6> objectsAt{}, passesAt{}, passObjectsAt{};
@@ -574,7 +575,11 @@ namespace Lighting20
         static std::array<std::atomic<uint32_t>, 64> foundByGroup{}, missingByGroup{};
         static std::array<std::atomic<uintptr_t>, 8> foundEffects{}, missingEffects{};
         static SafetyHookInline consumer;
-        static SafetyHookMid lookup, lookupSkinned, lookupModel;
+        static SafetyHookMid lookup, lookupSkinned, lookupModel, lookupFragment, lookupOther;
+        // Every lookup under the wd_local group, prop or not: the effects without the technique draw nothing into
+        // a light's map (none of the four lookups saw a prop draw inside 0x8DD0B0 in a run)
+        static std::atomic<uint32_t> localFound{0}, localMissing{0};
+        static std::array<std::atomic<uintptr_t>, 16> localMissingEffects{};
 
         static bool On() noexcept { return level > 0 && bExtraNightShadows; }
 
@@ -672,10 +677,23 @@ namespace Lighting20
 
         static void Lookup(uintptr_t effect, uint32_t group, uint32_t technique) noexcept
         {
-            if (!propDraw || !effect || group >= foundByGroup.size()) return;
+            if (!effect || group >= foundByGroup.size()) return;
+            const bool local = localTechnique >= 0 && group == static_cast<uint32_t>(localTechnique);
+            if (!propDraw && !local) return;
             if (!technique)
                 if (const auto table = *reinterpret_cast<const uint8_t* const*>(effect + 0x40))
                     technique = table[group * 3];
+            if (local)
+            {
+                ++(technique ? localFound : localMissing);
+                if (!technique)
+                    for (auto& seen : localMissingEffects)
+                    {
+                        uintptr_t empty = 0;
+                        if (seen.load(std::memory_order_relaxed) == effect || seen.compare_exchange_strong(empty, effect)) break;
+                    }
+            }
+            if (!propDraw) return;
             ++(technique ? foundByGroup : missingByGroup)[group];
             for (auto& seen : technique ? foundEffects : missingEffects)
             {
@@ -715,7 +733,8 @@ namespace Lighting20
             return out.str();
         }
 
-        static std::string Effects(const std::array<std::atomic<uintptr_t>, 8>& effects)
+        template <size_t N>
+        static std::string Effects(const std::array<std::atomic<uintptr_t>, N>& effects)
         {
             std::string list;
             for (const auto& e : effects)
@@ -830,13 +849,17 @@ namespace Lighting20
             if (BytesAt(0x4DD0B0, { 0x51, 0x56, 0x8B, 0xF1, 0x0F, 0xB7, 0x46, 0x58 }) &&
                 BytesAt(0x229157, { 0x85, 0xD2, 0x75, 0x0E, 0x8D, 0x0C, 0x40 }) &&
                 BytesAt(0x22E197, { 0x85, 0xC9, 0x75, 0x12, 0x8D, 0x0C, 0x40 }) &&
-                BytesAt(0x29ED1A, { 0x8D, 0x0C, 0x40, 0x8B, 0x43, 0x40 }))
+                BytesAt(0x29ED1A, { 0x8D, 0x0C, 0x40, 0x8B, 0x43, 0x40 }) &&
+                BytesAt(0x2188F4, { 0x8D, 0x0C, 0x40, 0x8B, 0x47, 0x40 }) &&
+                BytesAt(0x25E46C, { 0x8D, 0x0C, 0x40, 0x8B, 0x46, 0x40 }))
             {
                 consumer = safetyhook::create_inline(game + 0x4DD0B0, Consumer);
                 lookup = safetyhook::create_mid(game + 0x229157, [](SafetyHookContext& regs) { Lookup(regs.edi, regs.eax, regs.edx); });
                 lookupSkinned = safetyhook::create_mid(game + 0x22E197, [](SafetyHookContext& regs) { Lookup(regs.edi, regs.eax, regs.ecx); });
                 lookupModel = safetyhook::create_mid(game + 0x29ED1A, [](SafetyHookContext& regs) { Lookup(regs.ebx, regs.eax, 0); });
-                installStatus += consumer && lookup && lookupSkinned && lookupModel ? " prop_draw_trace=1" : " prop_draw_trace=hook_failed";
+                lookupFragment = safetyhook::create_mid(game + 0x2188F4, [](SafetyHookContext& regs) { Lookup(regs.edi, regs.eax, 0); });
+                lookupOther = safetyhook::create_mid(game + 0x25E46C, [](SafetyHookContext& regs) { Lookup(regs.esi, regs.eax, 0); });
+                installStatus += consumer && lookup && lookupSkinned && lookupModel && lookupFragment && lookupOther ? " prop_draw_trace=1" : " prop_draw_trace=hook_failed";
             }
             else
                 installStatus += " prop_draw_trace=code_differs";
@@ -1351,6 +1374,8 @@ namespace Lighting20
                 << " technique_found(group:n)=" << Props::ByGroup(Props::foundByGroup)
                 << " missing=" << Props::ByGroup(Props::missingByGroup) << " missing_in=" << Props::Effects(Props::missingEffects)
                 << " found_in=" << Props::Effects(Props::foundEffects)
+                << " all_under_wd_local: found=" << Props::localFound.load() << " missing=" << Props::localMissing.load()
+                << " missing_in=" << Props::Effects(Props::localMissingEffects)
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
                 << " duplicates=" << Sharing::duplicates.load() << " duplicates_unshadowed=" << Sharing::duplicatesUnshadowed.load()
                 << " (vehicle " << Sharing::duplicatesVehicle.load() << ", model lights " << Sharing::duplicatesOurs.load() << ')'
