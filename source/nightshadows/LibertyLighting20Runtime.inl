@@ -588,6 +588,16 @@ namespace Lighting20
         // shader bucket (0x69ECEC: EAX the shader's byte +9, [ESP+0x38] the bucket drawn): a geometry of another
         // bucket is passed over before its technique is looked up, so the post may draw nothing
         static SafetyHookMid modelLoop, bucketTest;
+        // The fragments' children draw their model through 0x444C50 (encrypted in the file, read from a dump), not the
+        // loop above: the model's bounds against the viewport (0x431F80; ECX at 0x444C89, 0 culled, 2 wholly inside,
+        // its geometries then not tested one by one), then each geometry's bucket (0x444E8B: cmp eax, [ebp+0Ch]) and
+        // the shader's draw (0x444F15). PropAllBuckets lets a prop's model and geometries through both tests in a
+        // lamp's map under wd_local. Hooked once the code is decrypted, from Update.
+        static SafetyHookMid gmEntry, gmViewport, gmBucket, gmDraw;
+        static bool gmTried = false;
+        static uint32_t gmAttempts = 0;
+        static std::atomic<uint32_t> gmModels{0}, gmCulled{0}, gmUnculled{0}, gmDraws{0};
+        static std::array<std::atomic<uint32_t>, 256> gmBuckets{}; // shader bucket * 16 + bucket drawn
         static std::atomic<uint32_t> propModelDraws{0};
         static std::array<std::atomic<uint32_t>, 256> propBuckets{}; // shader bucket * 16 + bucket drawn
 
@@ -724,6 +734,61 @@ namespace Lighting20
                 regs.eax = drawn;
                 ++bucketsForced;
             }
+        }
+
+        static bool ForcedLocal() noexcept
+        {
+            return propDraw && localTechnique >= 0 && *reinterpret_cast<const int32_t*>(game + 0xC6B308) == localTechnique;
+        }
+
+        static void InstallModelDraw() noexcept
+        {
+            if (gmTried || !(allBuckets || diagnostics) || !consumer) return;
+            // push ebp; mov ebp, esp; and esp, -8 / test ecx, ecx; jz / cmp eax, [ebp+0Ch]; jnz / call
+            if (!BytesAt(0x44C50, { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8 }) || !BytesAt(0x44C89, { 0x85, 0xC9, 0x0F, 0x84 }) ||
+                !BytesAt(0x44E8B, { 0x3B, 0x45, 0x0C, 0x0F, 0x85 }) || !BytesAt(0x44F15, { 0xE8 }))
+            {
+                if (++gmAttempts >= 600)
+                {
+                    gmTried = true;
+                    installStatus += " prop_model_draw=code_differs";
+                }
+                return;
+            }
+            gmTried = true;
+            gmEntry = safetyhook::create_mid(game + 0x44C50, [](SafetyHookContext&) { if (propDraw) ++gmModels; });
+            gmViewport = safetyhook::create_mid(game + 0x44C89, [](SafetyHookContext& regs)
+            {
+                if (!propDraw || regs.ecx) return;
+                ++gmCulled;
+                if (allBuckets && ForcedLocal())
+                {
+                    regs.ecx = 2;
+                    ++gmUnculled;
+                }
+            });
+            gmBucket = safetyhook::create_mid(game + 0x44E8B, [](SafetyHookContext& regs)
+            {
+                if (!propDraw) return;
+                const auto drawn = *reinterpret_cast<const uint32_t*>(regs.ebp + 0xC);
+                ++gmBuckets[((regs.eax & 15) << 4) | (drawn & 15)];
+                if (allBuckets && regs.eax != drawn && ForcedLocal())
+                {
+                    regs.eax = drawn;
+                    ++bucketsForced;
+                }
+            });
+            gmDraw = safetyhook::create_mid(game + 0x44F15, [](SafetyHookContext&) { if (propDraw) ++gmDraws; });
+            installStatus += gmEntry && gmViewport && gmBucket && gmDraw ? " prop_model_draw=1" : " prop_model_draw=hook_failed";
+        }
+
+        static std::string Buckets(const std::array<std::atomic<uint32_t>, 256>& counts)
+        {
+            std::string list;
+            for (size_t i = 0; i < counts.size(); ++i)
+                if (const auto n = counts[i].load())
+                    list += (list.empty() ? "" : ",") + std::to_string(i >> 4) + '>' + std::to_string(i & 15) + ':' + std::to_string(n);
+            return list.empty() ? "-" : list;
         }
 
         static std::string Buckets()
@@ -1389,6 +1454,7 @@ namespace Lighting20
 
     static void Update() noexcept
     {
+        Props::InstallModelDraw();
         log.Write(std::ios::app, [](std::ostream& out, uint64_t now)
         {
             out << "tick=" << now << installStatus
@@ -1416,6 +1482,9 @@ namespace Lighting20
                 << " missing=" << Props::ByGroup(Props::missingByGroup) << " missing_in=" << Props::Effects(Props::missingEffects)
                 << " found_in=" << Props::Effects(Props::foundEffects)
                 << " all_buckets=" << Props::allBuckets << " buckets_forced=" << Props::bucketsForced.load()
+                << " model_draw(0x444C50): models=" << Props::gmModels.load() << " culled=" << Props::gmCulled.load()
+                << " unculled=" << Props::gmUnculled.load() << " buckets(shader>drawn:n)=" << Props::Buckets(Props::gmBuckets)
+                << " draws=" << Props::gmDraws.load()
                 << " prop_model_draws=" << Props::propModelDraws.load() << " prop_buckets(shader>drawn:n)=" << Props::Buckets()
                 << " all_under_wd_local: found=" << Props::localFound.load() << " missing=" << Props::localMissing.load()
                 << " missing_in=" << Props::Effects(Props::localMissingEffects)
