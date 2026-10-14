@@ -820,6 +820,10 @@ public:
     bool bVehicleBoxShadowsLive = false;
     float fVehicleBoxShadowLeadFrames = -1.0f;
     bool bVehicleBoxShadowsLog = false; // VehicleBoxShadowsLog, see VehicleBoxShadows::Trace
+    // PedCapsuleShadows: people on foot under a light whose map does not show them get the shadow of a standing capsule
+    // of that radius and height, its foot that far below the ped's position (see VehicleBoxShadows)
+    bool bPedCapsuleShadows = true;
+    float fPedCapsuleRadius = 0.25f, fPedCapsuleHeight = 1.75f, fPedCapsuleFootBelow = 1.0f;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
@@ -1854,6 +1858,10 @@ public:
             IniFlag("NIGHTSHADOWS", "VehicleBoxShadowsLive", &PostFxResource::bVehicleBoxShadowsLive, 0),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLeadFrames", &PostFxResource::fVehicleBoxShadowLeadFrames, -1.0f, -3.0f, 5.0f),
             IniFlag("DEBUG", "VehicleBoxShadowsLog", &PostFxResource::bVehicleBoxShadowsLog, 0),
+            IniFlag("NIGHTSHADOWS", "PedCapsuleShadows", &PostFxResource::bPedCapsuleShadows, 1),
+            IniFloat("NIGHTSHADOWS", "PedCapsuleRadius", &PostFxResource::fPedCapsuleRadius, 0.25f, 0.05f, 1.0f),
+            IniFloat("NIGHTSHADOWS", "PedCapsuleHeight", &PostFxResource::fPedCapsuleHeight, 1.75f, 0.5f, 3.0f),
+            IniFloat("NIGHTSHADOWS", "PedCapsuleFootBelow", &PostFxResource::fPedCapsuleFootBelow, 1.0f, -1.0f, 2.0f),
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerLamp", &PostFxResource::nVehicleBoxShadowsPerLamp, 3, 1, 5),
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerCar", &PostFxResource::nVehicleBoxShadowsPerCar, 2, 0, 8),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsMinLight", &PostFxResource::fVehicleBoxShadowsMinLight, 0.04f, 0.0f, 1.0f),
