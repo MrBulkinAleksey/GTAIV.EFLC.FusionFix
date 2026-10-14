@@ -274,6 +274,21 @@ Logitech LightSync RGB
 [CloudDbgOverhd]
 Солнце в зените
 
+[SSRFullDepth]
+Шаги SSR по полной глубине
+
+[FGDebug]
+Отладка генерации кадров
+
+[FGDbgMarker]
+Метка кадров
+
+[FGDbgGenerated]
+Только сгенерированные
+
+[FGDbgBoth]
+Метка и сгенерированные
+
 [Contact Shadows]
 Контактные тени
 
@@ -417,6 +432,9 @@ Steam Controller
 
 [FF_TEXTURES]
 Текстуры
+
+[FF_DEBUG]
+Отладка
 
 [FF_HREACH]
 Дальность теней от фар

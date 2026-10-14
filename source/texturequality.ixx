@@ -75,7 +75,7 @@ class TextureQuality
     static inline float fParallaxMinSteps = 8.0f;
     static inline float fParallaxMaxSteps = 32.0f;
     static inline float fParallaxDepth = 1.0f;
-    // GroundSurfacesDebug (graphics menu, Lighting): the ground shaders in colours, and how often each is bound.
+    // GroundSurfacesDebug (graphics menu, Debug): the ground shaders in colours, and how often each is bound.
     static int GroundDebug()
     {
         static auto pref = FusionFixSettings.GetRef("PREF_GROUND_DEBUG");

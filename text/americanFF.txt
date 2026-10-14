@@ -274,6 +274,21 @@ Absorption
 [CloudDbgOverhd]
 Sun Overhead
 
+[SSRFullDepth]
+SSR March on Full Depth
+
+[FGDebug]
+Frame Generation Debug View
+
+[FGDbgMarker]
+Frame Marker
+
+[FGDbgGenerated]
+Generated Frames Only
+
+[FGDbgBoth]
+Marker and Generated Only
+
 [Contact Shadows]
 Contact Shadows
 
@@ -417,6 +432,9 @@ Lighting
 
 [FF_TEXTURES]
 Textures
+
+[FF_DEBUG]
+Debug
 
 [FF_HREACH]
 Headlight shadow reach

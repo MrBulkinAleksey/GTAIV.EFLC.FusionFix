@@ -2117,6 +2117,8 @@ public:
             { 0, "PREF_WET_GROUND_DEBUG",       "DEBUG",      "WetGroundDebug",                     "MENU_DISPLAY_WET_DEBUG",     0, nullptr, 0, 2 },
             { 0, "PREF_CLOUD_SHADOWS_DEBUG",    "DEBUG",      "CloudShadowsDebug",                  "MENU_DISPLAY_CLOUD_SH_DEBUG", 0, nullptr, 0, 2 },
             { 0, "PREF_CLOUDS_DEBUG",           "DEBUG",      "VolumetricCloudsDebug",              "MENU_DISPLAY_CLOUDS_DEBUG",  0, nullptr, 0, 14 },
+            { 0, "PREF_SSR_FULL_DEPTH",         "DEBUG",      "SSRMarchFullDepth",                  "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_FG_DEBUG_VIEW",          "DEBUG",      "FrameGenerationDebugView",           "MENU_DISPLAY_FG_DEBUG",      0, nullptr, 0, 3 },
             { 0, "PREF_VOLUMETRIC_LIGHT",       "LIGHTING",   "VolumetricLight",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_CONTACTSHADOWS",         "LIGHTING",   "ContactShadows",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSGI",                   "LIGHTING",   "IndirectLight",                      "",                           1, nullptr, 0, 1 },
@@ -2192,6 +2194,7 @@ public:
         DefineDisplay("MENU_DISPLAY_SSR_QUALITY", { "MO_OFF", "SSRHalf", "SSRFull" });
         DefineDisplay("MENU_DISPLAY_AO", { "MO_OFF", "SAO", "GTAO" });
         DefineDisplay("MENU_DISPLAY_SSR_DEBUG", { "MO_OFF", "SSRDbgColour", "SSRDbgHits", "SSRDbgNormals", "SSRDbgHorizon", "SSRDbgSpecular", "SSRDbgGlass", "SSRDbgContact", "SSRDbgGI", "SSRDbgSkin", "SSRDbgGIHistory" });
+        DefineDisplay("MENU_DISPLAY_FG_DEBUG", { "MO_OFF", "FGDbgMarker", "FGDbgGenerated", "FGDbgBoth" });
         DefineDisplay("MENU_DISPLAY_WET_DEBUG", { "MO_OFF", "WetDbgMaterial", "WetDbgWetness" });
         DefineDisplay("MENU_DISPLAY_CLOUD_SH_DEBUG", { "MO_OFF", "CloudShDbgAll", "CloudShDbgNoise" });
         // VolumetricCloudsDebug: menu step n is the shader's view n + 1 (see Clouds.fx)
@@ -2404,12 +2407,6 @@ public:
                     valueTexts[*id] = [this, id = *id] { auto step = std::clamp(Get(id), 0, 100); return step ? std::format(L"{} ft", step * 5) : std::wstring(CText::getText("MO_DEF")); };
                 AddRow(category, label, preference, 101, valueTextHook ? "MENU_DISPLAY_VALUE_SLIDERBAR" : slider);
             }
-            AddEmptyLine(category);
-            AddRow(category, "SSR Debug", "PREF_SSR_DEBUG", 11, "MENU_DISPLAY_SSR_DEBUG");
-            AddRow(category, "GroundDebug", "PREF_GROUND_DEBUG", 2, toggle);
-            AddRow(category, "WetGroundDebug", "PREF_WET_GROUND_DEBUG", 3, "MENU_DISPLAY_WET_DEBUG");
-            AddRow(category, "CloudShDebug", "PREF_CLOUD_SHADOWS_DEBUG", 3, "MENU_DISPLAY_CLOUD_SH_DEBUG");
-            AddRow(category, "CloudsDebug", "PREF_CLOUDS_DEBUG", 15, "MENU_DISPLAY_CLOUDS_DEBUG");
         }
 
         // Graphics: a Textures category for the sharpness and filtering of surfaces (texturequality.ixx)
@@ -2427,6 +2424,23 @@ public:
             AddRow(category, "DetailTex", "PREF_DETAIL_TEXTURES", 2, toggle);
             AddRow(category, "SpecularAA", "PREF_SPECULAR_AA", 2, toggle);
             AddRow(category, "GroundSurf", "PREF_GROUND_SURFACES", 2, toggle);
+        }
+
+        // Graphics: a Debug category for the debug views, all off; the logs and traces stay in [DEBUG] of the ini
+        for (auto screen : { MenuScreen::Graphics, MenuScreen::TitleGraphics })
+        {
+            auto category = AddCategory(screen, "FF_DEBUG", "MO_ANALYZER");
+            if (category == MenuScreen::Invalid)
+                continue;
+            AddRow(category, "SSR Debug", "PREF_SSR_DEBUG", 11, "MENU_DISPLAY_SSR_DEBUG");
+            AddRow(category, "SSRFullDepth", "PREF_SSR_FULL_DEPTH", 2, toggle);
+            AddEmptyLine(category);
+            AddRow(category, "GroundDebug", "PREF_GROUND_DEBUG", 2, toggle);
+            AddRow(category, "WetGroundDebug", "PREF_WET_GROUND_DEBUG", 3, "MENU_DISPLAY_WET_DEBUG");
+            AddRow(category, "CloudShDebug", "PREF_CLOUD_SHADOWS_DEBUG", 3, "MENU_DISPLAY_CLOUD_SH_DEBUG");
+            AddRow(category, "CloudsDebug", "PREF_CLOUDS_DEBUG", 15, "MENU_DISPLAY_CLOUDS_DEBUG");
+            AddEmptyLine(category);
+            AddRow(category, "FGDebug", "PREF_FG_DEBUG_VIEW", 4, "MENU_DISPLAY_FG_DEBUG");
         }
     }
 

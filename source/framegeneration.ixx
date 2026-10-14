@@ -46,9 +46,9 @@ import inireload;
 //   the shadow under a moving car went along with the ground in the generated frames and was shown twice.
 // - Not in the menus, where nothing moves, nor with DLSS-IV loaded, which replays the game's D3D9 calls on a thread of
 //   its own and so runs ahead of what the helper is handed.
-// - [TEMPORAL] in the ini: FrameGenerationDelay, FrameGenerationPacing, and FrameGenerationDebug: 1 marks which frames
-//   reach the screen, 2 logs how far between its neighbours a generated frame is (reads frames back, slow), 4 shows
-//   the generated frames in place of the rendered ones, 8 logs the pacing.
+// - [ANTIALIASING] in the ini: FrameGenerationDelay, FrameGenerationPacing; [DEBUG] FrameGenerationDebug (logs): 2 logs how
+//   far between its neighbours a generated frame is (reads frames back, slow), 8 logs the pacing. The graphics menu's Debug
+//   category (FrameGenerationDebugView) marks which frames reach the screen and shows the generated frames alone.
 
 namespace
 {
@@ -69,15 +69,26 @@ namespace
     bool bAsyncCompute = true;      // FrameGenerationAsyncCompute: the helper generates on its compute queue
     bool bDeferredBroken = false;   // the game's Present did not come through the device: not deferred any more
 
-    // FrameGenerationDebug in [TEMPORAL]
+    // FrameGenerationDebug in [DEBUG], the logs
     namespace Debug
     {
-        constexpr int32_t Marker = 1;       // a square in the corner: magenta on generated frames, green on rendered ones
         constexpr int32_t Similarity = 2;   // how much the generated frame differs from the rendered ones around it
-        constexpr int32_t ShowGenerated = 4; // only the generated frames are shown, to check the generation itself
         constexpr int32_t PacingLog = 8;    // the pacing on the CPU and the GPU, every 300 frames
     }
     int32_t nDebug = 0;
+
+    // The menu's FrameGenerationDebugView: bit 1 a square in the corner, magenta on generated frames and green on
+    // rendered ones; bit 2 only the generated frames shown, to check the generation itself
+    namespace DebugView
+    {
+        constexpr int32_t Marker = 1;
+        constexpr int32_t ShowGenerated = 2;
+    }
+    int32_t GetDebugView()
+    {
+        static auto pref = FusionFixSettings.GetRef("PREF_FG_DEBUG_VIEW");
+        return pref ? pref->get() : 0;
+    }
 
     rage::grcRenderTargetPC* PresentRT = nullptr;
     rage::grcRenderTargetPC* GeneratedRT = nullptr;
@@ -546,10 +557,10 @@ namespace
         return ok;
     }
 
-    // Debug::Marker: which of the frames reach the screen
+    // DebugView::Marker: which of the frames reach the screen
     void Mark(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer, bool generated)
     {
-        if (!(nDebug & Debug::Marker))
+        if (!(GetDebugView() & DebugView::Marker))
             return;
         RECT square{ 0, 0, 64, 64 };
         device->ColorFill(backBuffer, &square, generated ? D3DCOLOR_XRGB(255, 0, 255) : D3DCOLOR_XRGB(0, 255, 0));
@@ -841,7 +852,7 @@ namespace
     {
         fDelay = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
         Upscaler::SetTimingLog(iniReader.ReadInteger("DEBUG", "UpscalerTimingLog", 0) != 0);
-        nDebug = iniReader.ReadInteger("DEBUG", "FrameGenerationDebug", 0);
+        nDebug = iniReader.ReadInteger("DEBUG", "FrameGenerationDebug", 0) & (Debug::Similarity | Debug::PacingLog);
         nPacing = std::clamp(iniReader.ReadInteger("ANTIALIASING", "FrameGenerationPacing", 2), 0, 2);
         bDeferredSetting = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationDeferred", 1) != 0;
         bAsyncCompute = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationAsyncCompute", 1) != 0;
@@ -879,7 +890,7 @@ namespace
         static auto pref = FusionFixSettings.GetRef("PREF_FRAME_GENERATION");
         auto previous = mode;
         bool on = pref && pref->get() != 0 && Upscaler::IsFrameGenerationAvailable() && !IsDlssIvLoaded();
-        mode = !on ? Mode::Off : (nDebug & Debug::ShowGenerated) ? Mode::ShowGenerated : Mode::On;
+        mode = !on ? Mode::Off : (GetDebugView() & DebugView::ShowGenerated) ? Mode::ShowGenerated : Mode::On;
         if (mode != previous)
         {
             Log("Frame generation: %s", mode == Mode::Off ? "off" : mode == Mode::ShowGenerated ? "showing the generated frames" : "on");

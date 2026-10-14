@@ -526,7 +526,7 @@ public:
     float fWetGroundWetting = 30.0f;
     float fWetGroundDrying = 240.0f;
     int nWetGroundMaterials = 1;
-    // WetGroundDebug (graphics menu, Lighting): 1 material categories in colours, 2 wetness red, puddles green, rings blue
+    // WetGroundDebug (graphics menu, Debug): 1 material categories in colours, 2 wetness red, puddles green, rings blue
     static int WetGroundDebug() { static auto p = FusionFixSettings.GetRef("PREF_WET_GROUND_DEBUG"); return p ? p->get() : 0; }
     // c206 as last set for a light, so lights of the same shape set nothing; the headlights found
     // since the last Ctrl+Shift+F10 log, and the lights looked at.
@@ -548,7 +548,7 @@ public:
     // casts a shadow, below 0 less.
     float fCloudShadowsCoverage = 0.0f;
     // CloudShadowsDebug: 1 the whole ground in cloud shadow, to see whether the shadows reach the
-    // sun light at all; 2 the raw noise as the coverage, to see whether the sun reads the noise (graphics menu, Lighting).
+    // sun light at all; 2 the raw noise as the coverage, to see whether the sun reads the noise (graphics menu, Debug).
     static int CloudShadowsDebug() { static auto p = FusionFixSettings.GetRef("PREF_CLOUD_SHADOWS_DEBUG"); return p ? p->get() : 0; }
     float CloudShadowConsts[12] = {};
     // The game's cloud values the last lighting pass used, for the log Ctrl+Shift+F10 writes.
@@ -593,7 +593,7 @@ public:
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
     float fVolumetricCloudsShade = 0.65f;
     float fVolumetricCloudsAbsorption = 0.35f;
-    // VolumetricCloudsDebug (graphics menu, Lighting): the view Clouds.fx shows, 2 to 15, from menu steps 1 to 14; 0 off.
+    // VolumetricCloudsDebug (graphics menu, Debug): the view Clouds.fx shows, 2 to 15, from menu steps 1 to 14; 0 off.
     static int VolumetricCloudsDebug() { static auto p = FusionFixSettings.GetRef("PREF_CLOUDS_DEBUG"); const int step = p ? p->get() : 0; return step > 0 ? step + 1 : 0; }
     // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
     bool bVolumetricCloudsReflections = true;
@@ -889,9 +889,9 @@ public:
     float fSSRReflectionBlur = 0.0f;
     // SSRStepPixels: pixels of a ray on the march's target per step, 2 by default.
     float fSSRStepPixels = 2.0f;
-    // SSRMarchFullDepth (temporary, live): the march steps through the full size
+    // SSRMarchFullDepth (graphics menu, Debug): the march steps through the full size
     // depth instead of SSRMarchDepthTex, to compare the two.
-    bool bSSRMarchFullDepth = false;
+    static bool SSRMarchFullDepth() { static auto p = FusionFixSettings.GetRef("PREF_SSR_FULL_DEPTH"); return p && p->get() != 0; }
     float fSSRDistanceFade = 0.0f;
     float fSSRFallback = 0.8f;
     rage::grcRenderTargetPC* SSRDenoisedTex = nullptr;
@@ -1883,7 +1883,6 @@ public:
             IniFlag("REFLECTIONS", "SSRTemporalJitter", &PostFxResource::bSSRTemporalJitter, 1),
             IniFloat("REFLECTIONS", "SSRTemporal", &PostFxResource::fSSRTemporalBlend, 0.85f, 0.0f, 0.97f),
             IniFloat("REFLECTIONS", "SSRFallback", &PostFxResource::fSSRFallback, 0.8f, 0.0f, 1.0f),
-            IniFlag("DEBUG", "SSRMarchFullDepth", &PostFxResource::bSSRMarchFullDepth, 0),
             IniFloat("LIGHTING", "GGXSoft", &PostFxResource::fLightsGGXSoft, 0.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "GGXStretchView", &PostFxResource::fLightsGGXStretchView, 1.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "GGXGlints", &PostFxResource::fLightsGGXGlints, 1.0f, 0.0f, 8.0f),
