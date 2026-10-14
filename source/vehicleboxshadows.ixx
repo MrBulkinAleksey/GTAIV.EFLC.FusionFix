@@ -56,6 +56,9 @@ export struct VehicleBoxShadows
         float turning;     // radians a second about the vertical, from the last hand over
     };
     static constexpr int kBoxes = 160, kPerLight = 5, kLists = 8;
+    // PedCapsuleShadows: people on foot, each a standing capsule the same light shaders shadow (c150-c154,
+    // shaders/patches/ped_capsule_shadows.patch), up to kPedsPerLight a light. Their position: x, y, z of the ped.
+    static constexpr int kPeds = 96, kPedsPerLight = 4;
     struct List
     {
         std::atomic<uintptr_t> lights{0}; // the light list these boxes go with
@@ -66,6 +69,8 @@ export struct VehicleBoxShadows
         float frameSeconds = 0.0f;        // since the hand over before
         LARGE_INTEGER handedAt{};         // when, for the log
         Box boxes[kBoxes];
+        int pedCount = 0;
+        float peds[kPeds][3];
     };
     static inline List lists[kLists]{};
     static inline int nextList = 0;
@@ -74,7 +79,7 @@ export struct VehicleBoxShadows
     static inline uintptr_t modelInfos = 0;             // CE 0x1295cd8, model infos by index
     static inline SafetyHookMid shHandOver{};
     // For the log: frames drawn with their boxes found or not, lights shaded with some.
-    static inline std::atomic<uint32_t> framesMatched{0}, framesUnmatched{0}, lightsWithBoxes{0};
+    static inline std::atomic<uint32_t> framesMatched{0}, framesUnmatched{0}, lightsWithBoxes{0}, pedsWithShadows{0};
     static inline const List* drawn = nullptr;
     static inline List lastFound{}; // a copy, render thread: the ring's entry may be reused while it is drawn
     static inline uintptr_t drawnFor = 0;
@@ -373,6 +378,27 @@ export struct VehicleBoxShadows
         list.count = (std::min)(n, kBoxes);
         for (int i = 0; i < list.count; ++i)
             list.boxes[i] = found[i].second;
+        // People on foot within 80 m of the player, the player too; one inside a car's box sits in it, in its shadow.
+        list.pedCount = 0;
+        if (PostFxResources.bPedCapsuleShadows)
+            CPed::ForEachPed([&](uintptr_t ped)
+            {
+                float p[3];
+                if (list.pedCount >= kPeds || !CEntity::GetPosition(ped, p) || !std::isfinite(p[0] + p[1] + p[2]))
+                    return;
+                const float x = p[0] - focus[0], y = p[1] - focus[1], z = p[2] - focus[2];
+                if (x * x + y * y + z * z > 80.0f * 80.0f)
+                    return;
+                for (int i = 0; i < list.count; ++i)
+                {
+                    const auto& box = list.boxes[i];
+                    const float dx = p[0] - box.centre[0], dy = p[1] - box.centre[1];
+                    if (std::abs(dx * box.forward[0] + dy * box.forward[1]) < box.halfLength &&
+                        std::abs(dx * box.forward[1] - dy * box.forward[0]) < box.halfWidth && std::abs(p[2] - box.centre[2]) < box.halfHeight + 0.5f)
+                        return;
+                }
+                std::copy_n(p, 3, list.peds[list.pedCount++]);
+            });
         list.lights.store(*lightListBuilt, std::memory_order_release);
     }
 
@@ -671,6 +697,9 @@ export struct VehicleBoxShadows
         float boxStrength[kPerLight] = {};
         float pairBetween[3] = {}, pairSpacing = 0.0f; // the lamp's pair on one post, if any (set below)
         bool paired = false;
+        // c150-c153: up to four people near the light, the foot of each and its height (0 for none)
+        float peds[kPedsPerLight][4] = {};
+        int pedsUsed = 0;
         if (R.VehicleBoxShadowsEnabled() && lightListDrawn &&
             (R.bVehicleBoxShadowsFromCarLights || !(light.mFlags & rage::LF_VEHICLE)) &&
             (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
@@ -701,6 +730,8 @@ export struct VehicleBoxShadows
                 {
                     lastFound.count = found->count;
                     std::copy_n(found->boxes, found->count, lastFound.boxes);
+                    lastFound.pedCount = found->pedCount;
+                    std::copy_n(found->peds, found->pedCount, lastFound.peds);
                     std::copy_n(found->focus, 3, lastFound.focus);
                     lastFound.watched = found->watched;
                     lastFound.sequence = found->sequence;
@@ -906,6 +937,40 @@ export struct VehicleBoxShadows
                     if (next[i].chosen && next[i].latch == kBox && pairsBuildingCount < kPairs)
                         pairsBuilding[pairsBuildingCount++] = { { light.mPosition.x, light.mPosition.y, light.mPosition.z }, next[i].box.vehicle };
             used = strength > 0.0f ? nextCount : 0;
+            // PedCapsuleShadows: the people nearest the light, weighed by how near the player they stand, as the cars;
+            // not under a light whose map is drawn this frame, which shows them
+            if (R.bPedCapsuleShadows && strength > 0.0f && drawn && !mapped)
+            {
+                std::pair<float, const float*> chosen[kPedsPerLight] = {};
+                for (int i = 0; i < drawn->pedCount; ++i)
+                {
+                    const float* p = drawn->peds[i];
+                    const float foot = p[2] - R.fPedCapsuleFootBelow;
+                    const float dx = light.mPosition.x - p[0], dy = light.mPosition.y - p[1], dz = light.mPosition.z - foot;
+                    const float d2 = dx * dx + dy * dy + dz * dz, reach = light.mRadius + R.fPedCapsuleHeight;
+                    // out of its light, under the head (a light at their height would throw the shadow over the whole
+                    // road), or the light on the ped itself
+                    if (d2 > reach * reach || dz < R.fPedCapsuleHeight + 0.3f || dx * dx + dy * dy < 0.25f)
+                        continue;
+                    const float falloff = std::clamp(1.0f - std::sqrt(d2) / (std::max)(light.mRadius, 0.1f), 0.0f, 1.0f);
+                    if (falloff * falloff < R.fVehicleBoxShadowsMinLight)
+                        continue;
+                    const float fx = p[0] - drawn->focus[0], fy = p[1] - drawn->focus[1], fz = p[2] - drawn->focus[2];
+                    const float score = d2 * (1.0f + (fx * fx + fy * fy + fz * fz) / 400.0f);
+                    if (pedsUsed == kPedsPerLight && score >= chosen[kPedsPerLight - 1].first)
+                        continue;
+                    int at = pedsUsed < kPedsPerLight ? pedsUsed++ : kPedsPerLight - 1;
+                    for (; at > 0 && chosen[at - 1].first > score; --at)
+                        chosen[at] = chosen[at - 1];
+                    chosen[at] = { score, p };
+                }
+                for (int i = 0; i < pedsUsed; ++i)
+                {
+                    const float* p = chosen[i].second;
+                    peds[i][0] = p[0]; peds[i][1] = p[1]; peds[i][2] = p[2] - R.fPedCapsuleFootBelow; peds[i][3] = R.fPedCapsuleHeight;
+                }
+                pedsWithShadows.fetch_add(uint32_t(pedsUsed), std::memory_order_relaxed);
+            }
             if (R.bVehicleBoxShadowsLog && drawn && drawn->watched)
                 TraceLamp(light, state, mapped, leftOut, watchedLow, taken, nearest);
             // The model's bounds take in mirrors, aerials and bumpers, and the roof's height runs over the bonnet and
@@ -1011,7 +1076,7 @@ export struct VehicleBoxShadows
                 c[3] = (std::min)(c[3], 15.9f) + 16.0f * std::round(std::clamp(boxStrength[i], 0.0f, 1.0f) * 15.0f);
             }
         }
-        if (!used)
+        if (!used && !pedsUsed)
         {
             if (constantsOn)
                 Off(pDevice);
@@ -1035,6 +1100,9 @@ export struct VehicleBoxShadows
         pDevice->SetPixelShaderConstantF(143, constants[0], 6);
         pDevice->SetPixelShaderConstantF(149, lamp, 1);
         pDevice->SetPixelShaderConstantF(121, constants[6], 4);
+        const float capsule[4] = { R.fPedCapsuleRadius, -(R.fPedCapsuleRadius + 0.3f), 0.0f, 0.0f };
+        pDevice->SetPixelShaderConstantF(150, peds[0], kPedsPerLight);
+        pDevice->SetPixelShaderConstantF(154, capsule, 1);
         constantsOn = true;
         float strongest = 0.0f;
         for (int i = 0; i < used; ++i)

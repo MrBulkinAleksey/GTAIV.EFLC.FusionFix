@@ -1,0 +1,518 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index 99577afb..5f834fad 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -588,6 +588,24 @@
+         mov r19, c124
+         call l3
+       endif
++      // --- FusionFix ped capsule shadows (c150-c154, PedCapsuleShadows in vehicleboxshadows.ixx): up to four people on foot
++      // --- near this light, each a standing capsule: c150 + i its axis's x, y, foot and height (0 for none), c154.x its radius
++      mov r18, c150
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c151
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c152
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c153
++      if_lt c138.x, r18.w
++        call l5
++      endif
+       // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
+       add r17.w, r17.w, -c138.y
+       mad r17.w, r17.w, r12.w, c138.y
+@@ -798,4 +816,43 @@
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
+     add r20.w, r20.w, -r24.w // FusionFix: local_light_with_shadow_blend.patch: the skirt
++    ret
++    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
++    // --- (r15, the way to the light r16), into r17.w
++    label l5
++    // the point of the way to the light nearest the capsule's axis in plan, the part of the way r24.x
++    add r20.xy, r15, -r18
++    mul r21.xy, r20, r16
++    add r21.x, r21.x, r21.y
++    mul r21.yz, r16.xxyw, r16.xxyw
++    add r21.y, r21.y, r21.z
++    max r21.y, r21.y, c138.w
++    rcp r21.y, r21.y
++    mul_sat r24.x, -r21.x, r21.y
++    mad r22.xyz, r16, r24.x, r15
++    // the axis between foot and head, each a radius in
++    add r25.x, r18.z, c154.x
++    add r25.y, r18.z, r18.w
++    add r25.y, r25.y, -c154.x
++    max r23.z, r22.z, r25.x
++    min r23.z, r23.z, r25.y
++    mov r23.xy, r18
++    add r20.xyz, r22, -r23
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
++    call l4
++    // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
++    max r20.z, r15.z, r25.x
++    min r20.z, r20.z, r25.y
++    mov r20.xy, r18
++    add r20.xyz, r15, -r20
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, c154.y
++    cmp r20.w, r17.x, r20.w, c138.y
++    cmp r24.y, r20.w, r24.y, c138.y
++    mul r17.w, r17.w, r24.y
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+index 0314e109..aa86e2d6 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -417,6 +417,24 @@
+         mov r19, c124
+         call l3
+       endif
++      // --- FusionFix ped capsule shadows (c150-c154, PedCapsuleShadows in vehicleboxshadows.ixx): up to four people on foot
++      // --- near this light, each a standing capsule: c150 + i its axis's x, y, foot and height (0 for none), c154.x its radius
++      mov r18, c150
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c151
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c152
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c153
++      if_lt c138.x, r18.w
++        call l5
++      endif
+       // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
+       add r17.w, r17.w, -c138.y
+       mad r17.w, r17.w, r12.w, c138.y
+@@ -622,4 +640,43 @@
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
+     add r20.w, r20.w, -r24.w // FusionFix: local_light_with_shadow_blend.patch: the skirt
++    ret
++    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
++    // --- (r15, the way to the light r16), into r17.w
++    label l5
++    // the point of the way to the light nearest the capsule's axis in plan, the part of the way r24.x
++    add r20.xy, r15, -r18
++    mul r21.xy, r20, r16
++    add r21.x, r21.x, r21.y
++    mul r21.yz, r16.xxyw, r16.xxyw
++    add r21.y, r21.y, r21.z
++    max r21.y, r21.y, c138.w
++    rcp r21.y, r21.y
++    mul_sat r24.x, -r21.x, r21.y
++    mad r22.xyz, r16, r24.x, r15
++    // the axis between foot and head, each a radius in
++    add r25.x, r18.z, c154.x
++    add r25.y, r18.z, r18.w
++    add r25.y, r25.y, -c154.x
++    max r23.z, r22.z, r25.x
++    min r23.z, r23.z, r25.y
++    mov r23.xy, r18
++    add r20.xyz, r22, -r23
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
++    call l4
++    // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
++    max r20.z, r15.z, r25.x
++    min r20.z, r20.z, r25.y
++    mov r20.xy, r18
++    add r20.xyz, r15, -r20
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, c154.y
++    cmp r20.w, r17.x, r20.w, c138.y
++    cmp r24.y, r20.w, r24.y, c138.y
++    mul r17.w, r17.w, r24.y
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index fbc00985..d5a4da00 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -604,6 +604,24 @@
+         mov r19, c124
+         call l3
+       endif
++      // --- FusionFix ped capsule shadows (c150-c154, PedCapsuleShadows in vehicleboxshadows.ixx): up to four people on foot
++      // --- near this light, each a standing capsule: c150 + i its axis's x, y, foot and height (0 for none), c154.x its radius
++      mov r18, c150
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c151
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c152
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c153
++      if_lt c138.x, r18.w
++        call l5
++      endif
+       // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
+       add r17.w, r17.w, -c138.y
+       mad r17.w, r17.w, r12.w, c138.y
+@@ -814,4 +832,43 @@
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
+     add r20.w, r20.w, -r24.w // FusionFix: local_light_with_shadow_blend.patch: the skirt
++    ret
++    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
++    // --- (r15, the way to the light r16), into r17.w
++    label l5
++    // the point of the way to the light nearest the capsule's axis in plan, the part of the way r24.x
++    add r20.xy, r15, -r18
++    mul r21.xy, r20, r16
++    add r21.x, r21.x, r21.y
++    mul r21.yz, r16.xxyw, r16.xxyw
++    add r21.y, r21.y, r21.z
++    max r21.y, r21.y, c138.w
++    rcp r21.y, r21.y
++    mul_sat r24.x, -r21.x, r21.y
++    mad r22.xyz, r16, r24.x, r15
++    // the axis between foot and head, each a radius in
++    add r25.x, r18.z, c154.x
++    add r25.y, r18.z, r18.w
++    add r25.y, r25.y, -c154.x
++    max r23.z, r22.z, r25.x
++    min r23.z, r23.z, r25.y
++    mov r23.xy, r18
++    add r20.xyz, r22, -r23
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
++    call l4
++    // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
++    max r20.z, r15.z, r25.x
++    min r20.z, r20.z, r25.y
++    mov r20.xy, r18
++    add r20.xyz, r15, -r20
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, c154.y
++    cmp r20.w, r17.x, r20.w, c138.y
++    cmp r24.y, r20.w, r24.y, c138.y
++    mul r17.w, r17.w, r24.y
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+index d870f1ce..d9d88020 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -383,6 +383,24 @@
+         mov r19, c124
+         call l3
+       endif
++      // --- FusionFix ped capsule shadows (c150-c154, PedCapsuleShadows in vehicleboxshadows.ixx): up to four people on foot
++      // --- near this light, each a standing capsule: c150 + i its axis's x, y, foot and height (0 for none), c154.x its radius
++      mov r18, c150
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c151
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c152
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c153
++      if_lt c138.x, r18.w
++        call l5
++      endif
+       // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
+       add r17.w, r17.w, -c138.y
+       mad r17.w, r17.w, r12.w, c138.y
+@@ -578,4 +596,43 @@
+     rcp r20.x, r20.x
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
++    ret
++    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
++    // --- (r15, the way to the light r16), into r17.w
++    label l5
++    // the point of the way to the light nearest the capsule's axis in plan, the part of the way r24.x
++    add r20.xy, r15, -r18
++    mul r21.xy, r20, r16
++    add r21.x, r21.x, r21.y
++    mul r21.yz, r16.xxyw, r16.xxyw
++    add r21.y, r21.y, r21.z
++    max r21.y, r21.y, c138.w
++    rcp r21.y, r21.y
++    mul_sat r24.x, -r21.x, r21.y
++    mad r22.xyz, r16, r24.x, r15
++    // the axis between foot and head, each a radius in
++    add r25.x, r18.z, c154.x
++    add r25.y, r18.z, r18.w
++    add r25.y, r25.y, -c154.x
++    max r23.z, r22.z, r25.x
++    min r23.z, r23.z, r25.y
++    mov r23.xy, r18
++    add r20.xyz, r22, -r23
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
++    call l4
++    // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
++    max r20.z, r15.z, r25.x
++    min r20.z, r20.z, r25.y
++    mov r20.xy, r18
++    add r20.xyz, r15, -r20
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, c154.y
++    cmp r20.w, r17.x, r20.w, c138.y
++    cmp r24.y, r20.w, r24.y, c138.y
++    mul r17.w, r17.w, r24.y
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+index 2544974f..76bbb059 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -392,6 +392,24 @@
+         mov r19, c124
+         call l3
+       endif
++      // --- FusionFix ped capsule shadows (c150-c154, PedCapsuleShadows in vehicleboxshadows.ixx): up to four people on foot
++      // --- near this light, each a standing capsule: c150 + i its axis's x, y, foot and height (0 for none), c154.x its radius
++      mov r18, c150
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c151
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c152
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c153
++      if_lt c138.x, r18.w
++        call l5
++      endif
+       // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
+       add r17.w, r17.w, -c138.y
+       mad r17.w, r17.w, r12.w, c138.y
+@@ -587,4 +605,43 @@
+     rcp r20.x, r20.x
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
++    ret
++    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
++    // --- (r15, the way to the light r16), into r17.w
++    label l5
++    // the point of the way to the light nearest the capsule's axis in plan, the part of the way r24.x
++    add r20.xy, r15, -r18
++    mul r21.xy, r20, r16
++    add r21.x, r21.x, r21.y
++    mul r21.yz, r16.xxyw, r16.xxyw
++    add r21.y, r21.y, r21.z
++    max r21.y, r21.y, c138.w
++    rcp r21.y, r21.y
++    mul_sat r24.x, -r21.x, r21.y
++    mad r22.xyz, r16, r24.x, r15
++    // the axis between foot and head, each a radius in
++    add r25.x, r18.z, c154.x
++    add r25.y, r18.z, r18.w
++    add r25.y, r25.y, -c154.x
++    max r23.z, r22.z, r25.x
++    min r23.z, r23.z, r25.y
++    mov r23.xy, r18
++    add r20.xyz, r22, -r23
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
++    call l4
++    // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
++    max r20.z, r15.z, r25.x
++    min r20.z, r20.z, r25.y
++    mov r20.xy, r18
++    add r20.xyz, r15, -r20
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, c154.y
++    cmp r20.w, r17.x, r20.w, c138.y
++    cmp r24.y, r20.w, r24.y, c138.y
++    mul r17.w, r17.w, r24.y
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+index 5a24f6e8..60a97993 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -394,6 +394,24 @@
+         mov r19, c124
+         call l3
+       endif
++      // --- FusionFix ped capsule shadows (c150-c154, PedCapsuleShadows in vehicleboxshadows.ixx): up to four people on foot
++      // --- near this light, each a standing capsule: c150 + i its axis's x, y, foot and height (0 for none), c154.x its radius
++      mov r18, c150
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c151
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c152
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c153
++      if_lt c138.x, r18.w
++        call l5
++      endif
+       // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
+       add r17.w, r17.w, -c138.y
+       mad r17.w, r17.w, r12.w, c138.y
+@@ -589,4 +607,43 @@
+     rcp r20.x, r20.x
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
++    ret
++    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
++    // --- (r15, the way to the light r16), into r17.w
++    label l5
++    // the point of the way to the light nearest the capsule's axis in plan, the part of the way r24.x
++    add r20.xy, r15, -r18
++    mul r21.xy, r20, r16
++    add r21.x, r21.x, r21.y
++    mul r21.yz, r16.xxyw, r16.xxyw
++    add r21.y, r21.y, r21.z
++    max r21.y, r21.y, c138.w
++    rcp r21.y, r21.y
++    mul_sat r24.x, -r21.x, r21.y
++    mad r22.xyz, r16, r24.x, r15
++    // the axis between foot and head, each a radius in
++    add r25.x, r18.z, c154.x
++    add r25.y, r18.z, r18.w
++    add r25.y, r25.y, -c154.x
++    max r23.z, r22.z, r25.x
++    min r23.z, r23.z, r25.y
++    mov r23.xy, r18
++    add r20.xyz, r22, -r23
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
++    call l4
++    // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
++    max r20.z, r15.z, r25.x
++    min r20.z, r20.z, r25.y
++    mov r20.xy, r18
++    add r20.xyz, r15, -r20
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, c154.y
++    cmp r20.w, r17.x, r20.w, c138.y
++    cmp r24.y, r20.w, r24.y, c138.y
++    mul r17.w, r17.w, r24.y
+     ret
+\ No newline at end of file
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+index c5295049..fa28a32e 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -396,6 +396,24 @@
+         mov r19, c124
+         call l3
+       endif
++      // --- FusionFix ped capsule shadows (c150-c154, PedCapsuleShadows in vehicleboxshadows.ixx): up to four people on foot
++      // --- near this light, each a standing capsule: c150 + i its axis's x, y, foot and height (0 for none), c154.x its radius
++      mov r18, c150
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c151
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c152
++      if_lt c138.x, r18.w
++        call l5
++      endif
++      mov r18, c153
++      if_lt c138.x, r18.w
++        call l5
++      endif
+       // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
+       add r17.w, r17.w, -c138.y
+       mad r17.w, r17.w, r12.w, c138.y
+@@ -591,4 +609,43 @@
+     rcp r20.x, r20.x
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
++    ret
++    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
++    // --- (r15, the way to the light r16), into r17.w
++    label l5
++    // the point of the way to the light nearest the capsule's axis in plan, the part of the way r24.x
++    add r20.xy, r15, -r18
++    mul r21.xy, r20, r16
++    add r21.x, r21.x, r21.y
++    mul r21.yz, r16.xxyw, r16.xxyw
++    add r21.y, r21.y, r21.z
++    max r21.y, r21.y, c138.w
++    rcp r21.y, r21.y
++    mul_sat r24.x, -r21.x, r21.y
++    mad r22.xyz, r16, r24.x, r15
++    // the axis between foot and head, each a radius in
++    add r25.x, r18.z, c154.x
++    add r25.y, r18.z, r18.w
++    add r25.y, r25.y, -c154.x
++    max r23.z, r22.z, r25.x
++    min r23.z, r23.z, r25.y
++    mov r23.xy, r18
++    add r20.xyz, r22, -r23
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
++    call l4
++    // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
++    max r20.z, r15.z, r25.x
++    min r20.z, r20.z, r25.y
++    mov r20.xy, r18
++    add r20.xyz, r15, -r20
++    dp3 r20.w, r20, r20
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, c154.y
++    cmp r20.w, r17.x, r20.w, c138.y
++    cmp r24.y, r20.w, r24.y, c138.y
++    mul r17.w, r17.w, r24.y
+     ret
+\ No newline at end of file
