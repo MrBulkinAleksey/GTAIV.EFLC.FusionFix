@@ -217,6 +217,28 @@ project "GTAIV.EFLC.FusionFixInstaller"
       defines { "NDEBUG" }
       optimize "On"
 
+-- Tests of the logic that needs no game (tests/*.cpp on the headers in source), run by CI after the build.
+-- Built under build/tests so the packages never take it.
+project "GTAIV.EFLC.FusionFix.Tests"
+   kind "ConsoleApp"
+   language "C++"
+   targetdir "build/tests/%{cfg.buildcfg}"
+   targetextension ".exe"
+   staticruntime "On"
+
+   removefiles { "source/**" }
+   removefiles { "external/**" }
+   removefiles { "data/**" }
+   files { "tests/*.hpp", "tests/*.cpp" }
+
+   filter "configurations:Debug"
+      defines { "DEBUG" }
+      symbols "On"
+
+   filter "configurations:Release"
+      defines { "NDEBUG" }
+      optimize "On"
+
 project "d3d9"
    language "C++"
    targetdir "bin"

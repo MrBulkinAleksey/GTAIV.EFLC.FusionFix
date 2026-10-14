@@ -98,6 +98,11 @@ jobs:
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         msbuild -m build/GTAIV.EFLC.FusionFix.Helper.slnx /property:Configuration=Release /property:Platform=x64
 
+    - name: Run tests
+      run: |
+        ./build/tests/Release/GTAIV.EFLC.FusionFix.Tests.exe
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
     - name: Download Ultimate ASI Loader x86
       uses: robinraju/release-downloader@v1.13
       with:
