@@ -39,10 +39,11 @@ namespace PlayerShadowAllocation
     static bool casterPriority = false;
     static uint32_t casterHoldMs = 0;
     static float casterLeadSeconds = 1.0f; // CasterAwarePriorityLead
+    static float boxedCarCasterDistance = 25.0f; // BoxedCarCasterDistance
     // Copied on the game-process callback, read by selection on the render side.
     static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
     static fusionfix::shadows::ShadowCasterPresence casters{};
-    static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0}, lightsOffScreen{0};
+    static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0}, lightsOffScreen{0}, carsLeftToBoxes{0};
     // NightShadowsSlotLog: filled by selection, written out from the game's thread.
     static fusionfix::shadows::ShadowSlotTrace slotTrace;
     // LampSpacing: lamps beside a nearer one in view give way to lamps further along
@@ -420,14 +421,30 @@ namespace PlayerShadowAllocation
                 if (x * x + y * y + z * z <= ShadowCasterPresence::Range * ShadowCasterPresence::Range)
                     next.Add({p[0], p[1], p[2]}, extent, car);
             };
+            // BoxedCarCasterDistance: with box shadows, a car further from you than this gives no lamp a claim to a
+            // slot, its box shadows it there. A slot trace: lamps 30-60 m off took a slot in one grant of three for
+            // the cars under them, and the lamp you stood under gave its slot away and back, its props' shadow
+            // blinking. Your own car always counts; held under the boxes' fade-out (20 m before their end).
+            float boxedFrom = 0.0f;
+            if (boxedCarCasterDistance > 0 && VehicleBoxShadowsBridge::Enabled && VehicleBoxShadowsBridge::Enabled()) {
+                const float boxesEnd = VehicleBoxShadowsBridge::MaxDistance ? VehicleBoxShadowsBridge::MaxDistance() : 0.0f;
+                boxedFrom = boxesEnd > 0 ? (std::min)(boxedCarCasterDistance, (std::max)(boxesEnd - 20.0f, 0.0f)) : boxedCarCasterDistance;
+            }
+            uint32_t leftToBoxes = 0;
             next.valid = CVehicle::ForEachVehicle([&](uintptr_t v) {
-                add(v, ShadowCasterPresence::VehicleExtent, v);
+                float at[3];
+                const bool boxed = boxedFrom > 0 && v != focus.car && CEntity::GetPosition(v, at) &&
+                    (at[0] - focus.position[0]) * (at[0] - focus.position[0]) + (at[1] - focus.position[1]) * (at[1] - focus.position[1]) +
+                    (at[2] - focus.position[2]) * (at[2] - focus.position[2]) > boxedFrom * boxedFrom;
+                if (boxed) ++leftToBoxes;
+                else add(v, ShadowCasterPresence::VehicleExtent, v);
                 // CE: the driver followed by eight passengers
                 if (VehicleBoxShadowsBridge::CopyBoxedPairs && PlayerCar::driverOffset)
                     for (int i = 0; i < 9; ++i)
                         if (const auto ped = reinterpret_cast<const uintptr_t*>(v + PlayerCar::driverOffset)[i])
                             occupants.push_back(ped);
             });
+            carsLeftToBoxes.store(leftToBoxes, std::memory_order_relaxed);
             // Your car also counts where its speed takes it in CasterAwarePriorityLead: driving up to a cached lamp,
             // the lamp's slot went once the ped in its light had left and came back 0.4 s later as the car came in, a
             // blink of its shadow.

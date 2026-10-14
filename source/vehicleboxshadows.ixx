@@ -390,6 +390,8 @@ export struct VehicleBoxShadows
         shHandOver = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&) { Capture(); });
         VehicleBoxShadowsBridge::BoxedCars = BoxedCars;
         VehicleBoxShadowsBridge::CopyBoxedPairs = CopyBoxedPairs;
+        VehicleBoxShadowsBridge::Enabled = []() { return PostFxResources.VehicleBoxShadowsEnabled(); };
+        VehicleBoxShadowsBridge::MaxDistance = []() { return PostFxResources.fVehicleBoxShadowsMaxDistance; };
     }
 
     // VehicleBoxShadowsLog: what happens to the shadows of the car nearest the player, to catch a flicker, written to
