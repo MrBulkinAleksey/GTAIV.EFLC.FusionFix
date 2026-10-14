@@ -3617,16 +3617,10 @@ private:
         pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
         IDirect3DPixelShader9* oldPS = nullptr;
         IDirect3DVertexShader9* oldVS = nullptr;
-        IDirect3DVertexDeclaration9* oldDecl = nullptr;
-        IDirect3DVertexBuffer9* oldVB = nullptr;
-        UINT oldOffset = 0, oldStride = 0;
-        DWORD oldFVF = 0;
         D3DVIEWPORT9 oldViewport = {};
         pDevice->GetPixelShader(&oldPS);
         pDevice->GetVertexShader(&oldVS);
-        pDevice->GetVertexDeclaration(&oldDecl);
-        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
-        pDevice->GetFVF(&oldFVF);
+        SavedVertexInput savedVertexInput(pDevice);
         pDevice->GetViewport(&oldViewport);
 
         static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kStates[] =
@@ -3685,13 +3679,8 @@ private:
         pDevice->SetViewport(&oldViewport);
         pDevice->SetPixelShader(oldPS);
         pDevice->SetVertexShader(oldVS);
-        pDevice->SetFVF(oldFVF);
-        pDevice->SetVertexDeclaration(oldDecl);
-        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
         SAFE_RELEASE(oldPS);
         SAFE_RELEASE(oldVS);
-        SAFE_RELEASE(oldDecl);
-        SAFE_RELEASE(oldVB);
     }
 
     // At the end of the G-buffer pass (TemporalAA::OnGBufferEnd, the device state saved around it): this frame's
@@ -3794,14 +3783,8 @@ private:
             return;
         // DrawPrimitiveUP leaves stream 0 unbound, and the fog pass draws from it after the copies.
         IDirect3DVertexShader9* oldVS = nullptr;
-        IDirect3DVertexDeclaration9* oldDecl = nullptr;
-        IDirect3DVertexBuffer9* oldVB = nullptr;
-        UINT oldOffset = 0, oldStride = 0;
-        DWORD oldFVF = 0;
         pDevice->GetVertexShader(&oldVS);
-        pDevice->GetVertexDeclaration(&oldDecl);
-        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
-        pDevice->GetFVF(&oldFVF);
+        SavedVertexInput savedVertexInput(pDevice);
 
         D3DVIEWPORT9 vp = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
         pDevice->SetViewport(&vp);
@@ -3813,12 +3796,7 @@ private:
         quad.Draw(pDevice);
 
         pDevice->SetVertexShader(oldVS);
-        pDevice->SetFVF(oldFVF);
-        pDevice->SetVertexDeclaration(oldDecl);
-        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
         SAFE_RELEASE(oldVS);
-        SAFE_RELEASE(oldDecl);
-        SAFE_RELEASE(oldVB);
     }
 
     static void NewFog()
@@ -4144,10 +4122,6 @@ private:
         float oldConstants[2 * 4]{};
         IDirect3DPixelShader9* oldPixelShader = nullptr;
         IDirect3DVertexShader9* oldVertexShader = nullptr;
-        IDirect3DVertexDeclaration9* oldDeclaration = nullptr;
-        DWORD oldFvf = 0;
-        IDirect3DVertexBuffer9* oldStream = nullptr;   // DrawPrimitiveUP unbinds stream 0
-        UINT oldOffset = 0, oldStride = 0;
         for (DWORD i = 0; i < 4; ++i)
             device->GetRenderTarget(i, &oldTargets[i]);
         device->GetViewport(&oldViewport);
@@ -4162,9 +4136,7 @@ private:
         device->GetPixelShaderConstantF(200, oldConstants, 2);
         device->GetPixelShader(&oldPixelShader);
         device->GetVertexShader(&oldVertexShader);
-        device->GetVertexDeclaration(&oldDeclaration);
-        device->GetFVF(&oldFvf);
-        device->GetStreamSource(0, &oldStream, &oldOffset, &oldStride);
+        SavedVertexInput savedVertexInput(device);
 
         const float w = float(desc.Width), h = float(desc.Height);
         const float peak[4] = { SharpeningPeak(), 0.0f, 0.0f, 0.0f };
@@ -4220,19 +4192,12 @@ private:
         device->SetPixelShaderConstantF(200, oldConstants, 2);
         device->SetPixelShader(oldPixelShader);
         device->SetVertexShader(oldVertexShader);
-        if (oldDeclaration)
-            device->SetVertexDeclaration(oldDeclaration);
-        else
-            device->SetFVF(oldFvf);
-        device->SetStreamSource(0, oldStream, oldOffset, oldStride);
         for (auto& t : oldTargets)
             SAFE_RELEASE(t);
         for (auto& t : oldTextures)
             SAFE_RELEASE(t);
         SAFE_RELEASE(oldPixelShader);
         SAFE_RELEASE(oldVertexShader);
-        SAFE_RELEASE(oldDeclaration);
-        SAFE_RELEASE(oldStream);
         return drawn;
     }
 
@@ -5707,15 +5672,9 @@ private:
 
         IDirect3DSurface9* rt0 = nullptr;
         IDirect3DSurface9* ds = nullptr;
-        IDirect3DVertexDeclaration9* oldDecl = nullptr;
-        IDirect3DVertexBuffer9* oldVB = nullptr;
-        UINT oldOffset = 0, oldStride = 0;
-        DWORD oldFVF = 0;
         D3DVIEWPORT9 oldViewport;
 
-        pDevice->GetFVF(&oldFVF);
-        pDevice->GetVertexDeclaration(&oldDecl);
-        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        SavedVertexInput savedVertexInput(pDevice);
         pDevice->GetRenderTarget(0, &rt0);
         pDevice->GetDepthStencilSurface(&ds);
         pDevice->GetViewport(&oldViewport);
@@ -6073,14 +6032,9 @@ private:
         pDevice->SetRenderTarget(0, rt0);
         pDevice->SetDepthStencilSurface(ds);
         pDevice->SetViewport(&oldViewport);
-        pDevice->SetFVF(oldFVF);
-        pDevice->SetVertexDeclaration(oldDecl);
-        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
 
         SAFE_RELEASE(rt0);
         SAFE_RELEASE(ds);
-        SAFE_RELEASE(oldDecl);
-        SAFE_RELEASE(oldVB);
     }
 
     static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kWaterSSRRenderStates[] =
@@ -6496,13 +6450,9 @@ private:
         IDirect3DSurface9* oldTarget = nullptr;
         IDirect3DSurface9* oldTarget1 = nullptr;
         IDirect3DSurface9* oldDepth = nullptr;
-        IDirect3DVertexDeclaration9* oldDecl = nullptr;
-        IDirect3DVertexBuffer9* oldVB = nullptr;
         IDirect3DPixelShader9* oldPS = nullptr;
         IDirect3DVertexShader9* oldVS = nullptr;
         IDirect3DBaseTexture9* oldTextures[10] = {};
-        UINT oldOffset = 0, oldStride = 0;
-        DWORD oldFVF = 0;
         D3DVIEWPORT9 oldViewport = {};
         DWORD savedRenderStates[std::size(kCloudRenderStates)] = {};
         static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW,
@@ -6513,9 +6463,7 @@ private:
         pDevice->GetRenderTarget(1, &oldTarget1);
         pDevice->GetDepthStencilSurface(&oldDepth);
         pDevice->GetViewport(&oldViewport);
-        pDevice->GetFVF(&oldFVF);
-        pDevice->GetVertexDeclaration(&oldDecl);
-        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        SavedVertexInput savedVertexInput(pDevice);
         pDevice->GetPixelShader(&oldPS);
         pDevice->GetVertexShader(&oldVS);
         pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
@@ -6682,14 +6630,9 @@ private:
         pDevice->SetRenderTarget(1, oldTarget1);
         pDevice->SetDepthStencilSurface(oldDepth);
         pDevice->SetViewport(&oldViewport);
-        pDevice->SetFVF(oldFVF);
-        pDevice->SetVertexDeclaration(oldDecl);
-        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
 
         SAFE_RELEASE(oldPS);
         SAFE_RELEASE(oldVS);
-        SAFE_RELEASE(oldDecl);
-        SAFE_RELEASE(oldVB);
         SAFE_RELEASE(oldDepth);
         SAFE_RELEASE(oldTarget);
         SAFE_RELEASE(oldTarget1);
@@ -6774,15 +6717,9 @@ private:
         effect->SetFloat(h.fWaterIntensity, R.fSSRWaterIntensity);
         effect->SetFloat(h.fWaterBlur, R.fSSRWaterBlur);
 
-        IDirect3DVertexDeclaration9* oldDecl = nullptr;
-        IDirect3DVertexBuffer9* oldVB = nullptr;
         IDirect3DSurface9* ds = nullptr;
-        UINT oldOffset = 0, oldStride = 0;
-        DWORD oldFVF = 0;
 
-        pDevice->GetFVF(&oldFVF);
-        pDevice->GetVertexDeclaration(&oldDecl);
-        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        SavedVertexInput savedVertexInput(pDevice);
         pDevice->GetDepthStencilSurface(&ds);
 
         pDevice->SetDepthStencilSurface(nullptr);
@@ -6856,13 +6793,8 @@ private:
         }
 
         pDevice->SetDepthStencilSurface(ds);
-        pDevice->SetFVF(oldFVF);
-        pDevice->SetVertexDeclaration(oldDecl);
-        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
 
         SAFE_RELEASE(ds);
-        SAFE_RELEASE(oldDecl);
-        SAFE_RELEASE(oldVB);
     }
 
     static inline SafetyHookInline shWaterRender{};
@@ -7013,16 +6945,9 @@ private:
 
             IDirect3DSurface9* rt0 = nullptr;
             IDirect3DSurface9* ds = nullptr;
-            IDirect3DVertexDeclaration9* oldDecl = nullptr;
-            IDirect3DVertexBuffer9* oldVB = nullptr;
-            UINT oldOffset = 0;
-            UINT oldStride = 0;
-            DWORD oldFVF = 0;
             D3DVIEWPORT9 oldViewport;
 
-            pDevice->GetFVF(&oldFVF);
-            pDevice->GetVertexDeclaration(&oldDecl);
-            pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+            SavedVertexInput savedVertexInput(pDevice);
             pDevice->GetRenderTarget(0, &rt0);
             pDevice->GetDepthStencilSurface(&ds);
             pDevice->GetViewport(&oldViewport);
@@ -7251,16 +7176,11 @@ private:
 
             pDevice->SetRenderTarget(0, rt0);
             pDevice->SetDepthStencilSurface(ds);
-            pDevice->SetFVF(oldFVF);
-            pDevice->SetVertexDeclaration(oldDecl);
-            pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
             pDevice->SetViewport(&oldViewport);
 
             SAFE_RELEASE(SpecularRT);
             SAFE_RELEASE(rt0);
             SAFE_RELEASE(ds);
-            SAFE_RELEASE(oldDecl);
-            SAFE_RELEASE(oldVB);
         }
     }
 
@@ -7447,14 +7367,8 @@ private:
         const float height = float(desc.Height);
 
         IDirect3DSurface9* ds = nullptr;
-        IDirect3DVertexDeclaration9* oldDecl = nullptr;
-        IDirect3DVertexBuffer9* oldVB = nullptr;
-        UINT oldOffset = 0, oldStride = 0;
-        DWORD oldFVF = 0;
         D3DVIEWPORT9 oldViewport;
-        pDevice->GetFVF(&oldFVF);
-        pDevice->GetVertexDeclaration(&oldDecl);
-        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        SavedVertexInput savedVertexInput(pDevice);
         pDevice->GetDepthStencilSurface(&ds);
         pDevice->GetViewport(&oldViewport);
 
@@ -7517,13 +7431,8 @@ private:
 
         pDevice->SetDepthStencilSurface(ds);
         pDevice->SetViewport(&oldViewport);
-        pDevice->SetFVF(oldFVF);
-        pDevice->SetVertexDeclaration(oldDecl);
-        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
         SAFE_RELEASE(rt0);
         SAFE_RELEASE(ds);
-        SAFE_RELEASE(oldDecl);
-        SAFE_RELEASE(oldVB);
     }
 
     // The first pass of the game's post processing downsamples the scene for bloom and exposure
@@ -7920,14 +7829,8 @@ private:
 
         IDirect3DSurface9* rt0 = nullptr;
         IDirect3DSurface9* ds = nullptr;
-        IDirect3DVertexDeclaration9* oldDecl = nullptr;
-        IDirect3DVertexBuffer9* oldVB = nullptr;
-        UINT oldOffset = 0, oldStride = 0;
-        DWORD oldFVF = 0;
         D3DVIEWPORT9 oldViewport;
-        pDevice->GetFVF(&oldFVF);
-        pDevice->GetVertexDeclaration(&oldDecl);
-        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        SavedVertexInput savedVertexInput(pDevice);
         pDevice->GetRenderTarget(0, &rt0);
         pDevice->GetDepthStencilSurface(&ds);
         pDevice->GetViewport(&oldViewport);
@@ -8047,13 +7950,8 @@ private:
         pDevice->SetRenderTarget(0, rt0);
         pDevice->SetDepthStencilSurface(ds);
         pDevice->SetViewport(&oldViewport);
-        pDevice->SetFVF(oldFVF);
-        pDevice->SetVertexDeclaration(oldDecl);
-        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
         SAFE_RELEASE(rt0);
         SAFE_RELEASE(ds);
-        SAFE_RELEASE(oldDecl);
-        SAFE_RELEASE(oldVB);
 
         R.bContactValid = true;
     }
@@ -8161,14 +8059,8 @@ private:
 
         IDirect3DSurface9* rt0 = nullptr;
         IDirect3DSurface9* ds = nullptr;
-        IDirect3DVertexDeclaration9* oldDecl = nullptr;
-        IDirect3DVertexBuffer9* oldVB = nullptr;
-        UINT oldOffset = 0, oldStride = 0;
-        DWORD oldFVF = 0;
         D3DVIEWPORT9 oldViewport;
-        pDevice->GetFVF(&oldFVF);
-        pDevice->GetVertexDeclaration(&oldDecl);
-        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        SavedVertexInput savedVertexInput(pDevice);
         pDevice->GetRenderTarget(0, &rt0);
         pDevice->GetDepthStencilSurface(&ds);
         pDevice->GetViewport(&oldViewport);
@@ -8278,13 +8170,8 @@ private:
         pDevice->SetRenderTarget(0, rt0);
         pDevice->SetDepthStencilSurface(ds);
         pDevice->SetViewport(&oldViewport);
-        pDevice->SetFVF(oldFVF);
-        pDevice->SetVertexDeclaration(oldDecl);
-        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
         SAFE_RELEASE(rt0);
         SAFE_RELEASE(ds);
-        SAFE_RELEASE(oldDecl);
-        SAFE_RELEASE(oldVB);
     }
 
     // As the fog pass begins, once every light is drawn: scatters the light under the skin of
@@ -8319,14 +8206,8 @@ private:
 
         IDirect3DSurface9* rt0 = nullptr;
         IDirect3DSurface9* ds = nullptr;
-        IDirect3DVertexDeclaration9* oldDecl = nullptr;
-        IDirect3DVertexBuffer9* oldVB = nullptr;
-        UINT oldOffset = 0, oldStride = 0;
-        DWORD oldFVF = 0;
         D3DVIEWPORT9 oldViewport;
-        pDevice->GetFVF(&oldFVF);
-        pDevice->GetVertexDeclaration(&oldDecl);
-        pDevice->GetStreamSource(0, &oldVB, &oldOffset, &oldStride);
+        SavedVertexInput savedVertexInput(pDevice);
         pDevice->GetRenderTarget(0, &rt0);
         pDevice->GetDepthStencilSurface(&ds);
         pDevice->GetViewport(&oldViewport);
@@ -8401,13 +8282,8 @@ private:
         pDevice->SetRenderTarget(0, rt0);
         pDevice->SetDepthStencilSurface(ds);
         pDevice->SetViewport(&oldViewport);
-        pDevice->SetFVF(oldFVF);
-        pDevice->SetVertexDeclaration(oldDecl);
-        pDevice->SetStreamSource(0, oldVB, oldOffset, oldStride);
         SAFE_RELEASE(rt0);
         SAFE_RELEASE(ds);
-        SAFE_RELEASE(oldDecl);
-        SAFE_RELEASE(oldVB);
         return result;
     }
 
