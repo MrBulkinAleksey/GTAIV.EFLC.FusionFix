@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 99577afb..5f834fad 100644
+index 99577afb..ff3f97a3 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -588,6 +588,24 @@
@@ -27,11 +27,10 @@ index 99577afb..5f834fad 100644
        // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
        add r17.w, r17.w, -c138.y
        mad r17.w, r17.w, r12.w, c138.y
-@@ -798,4 +816,43 @@
-     add r20.w, r20.w, r20.x
-     add r20.w, r20.w, -r12.y
-     add r20.w, r20.w, -r24.w // FusionFix: local_light_with_shadow_blend.patch: the skirt
-+    ret
+@@ -685,6 +703,45 @@
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
+     ret
 +    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
 +    // --- (r15, the way to the light r16), into r17.w
 +    label l5
@@ -70,10 +69,12 @@ index 99577afb..5f834fad 100644
 +    cmp r20.w, r17.x, r20.w, c138.y
 +    cmp r24.y, r20.w, r24.y, c138.y
 +    mul r17.w, r17.w, r24.y
-     ret
-\ No newline at end of file
++    ret
+     // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
+     label l3
+     mov r13.z, c188.z // FusionFix: local_light_with_shadow_blend.patch: the skirt, for the way to the light
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 0314e109..aa86e2d6 100644
+index 0314e109..4ca6b053 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -417,6 +417,24 @@
@@ -101,11 +102,10 @@ index 0314e109..aa86e2d6 100644
        // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
        add r17.w, r17.w, -c138.y
        mad r17.w, r17.w, r12.w, c138.y
-@@ -622,4 +640,43 @@
-     add r20.w, r20.w, r20.x
-     add r20.w, r20.w, -r12.y
-     add r20.w, r20.w, -r24.w // FusionFix: local_light_with_shadow_blend.patch: the skirt
-+    ret
+@@ -509,6 +527,45 @@
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
+     ret
 +    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
 +    // --- (r15, the way to the light r16), into r17.w
 +    label l5
@@ -144,10 +144,12 @@ index 0314e109..aa86e2d6 100644
 +    cmp r20.w, r17.x, r20.w, c138.y
 +    cmp r24.y, r20.w, r24.y, c138.y
 +    mul r17.w, r17.w, r24.y
-     ret
-\ No newline at end of file
++    ret
+     // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
+     label l3
+     mov r13.z, c188.z // FusionFix: local_light_with_shadow_blend.patch: the skirt, for the way to the light
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index fbc00985..d5a4da00 100644
+index fbc00985..eebb4d12 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -604,6 +604,24 @@
@@ -175,11 +177,10 @@ index fbc00985..d5a4da00 100644
        // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
        add r17.w, r17.w, -c138.y
        mad r17.w, r17.w, r12.w, c138.y
-@@ -814,4 +832,43 @@
-     add r20.w, r20.w, r20.x
-     add r20.w, r20.w, -r12.y
-     add r20.w, r20.w, -r24.w // FusionFix: local_light_with_shadow_blend.patch: the skirt
-+    ret
+@@ -701,6 +719,45 @@
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
+     ret
 +    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
 +    // --- (r15, the way to the light r16), into r17.w
 +    label l5
@@ -218,10 +219,12 @@ index fbc00985..d5a4da00 100644
 +    cmp r20.w, r17.x, r20.w, c138.y
 +    cmp r24.y, r20.w, r24.y, c138.y
 +    mul r17.w, r17.w, r24.y
-     ret
-\ No newline at end of file
++    ret
+     // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
+     label l3
+     mov r13.z, c188.z // FusionFix: local_light_with_shadow_blend.patch: the skirt, for the way to the light
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index d870f1ce..d9d88020 100644
+index d870f1ce..f3b45d36 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -383,6 +383,24 @@
@@ -249,11 +252,10 @@ index d870f1ce..d9d88020 100644
        // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
        add r17.w, r17.w, -c138.y
        mad r17.w, r17.w, r12.w, c138.y
-@@ -578,4 +596,43 @@
-     rcp r20.x, r20.x
-     add r20.w, r20.w, r20.x
-     add r20.w, r20.w, -r12.y
-+    ret
+@@ -475,6 +493,45 @@
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
+     ret
 +    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
 +    // --- (r15, the way to the light r16), into r17.w
 +    label l5
@@ -292,10 +294,12 @@ index d870f1ce..d9d88020 100644
 +    cmp r20.w, r17.x, r20.w, c138.y
 +    cmp r24.y, r20.w, r24.y, c138.y
 +    mul r17.w, r17.w, r24.y
-     ret
-\ No newline at end of file
++    ret
+     // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
+     label l3
+     add r20.xyz, r15, -r18
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 2544974f..76bbb059 100644
+index 2544974f..631918c6 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -392,6 +392,24 @@
@@ -323,11 +327,10 @@ index 2544974f..76bbb059 100644
        // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
        add r17.w, r17.w, -c138.y
        mad r17.w, r17.w, r12.w, c138.y
-@@ -587,4 +605,43 @@
-     rcp r20.x, r20.x
-     add r20.w, r20.w, r20.x
-     add r20.w, r20.w, -r12.y
-+    ret
+@@ -484,6 +502,45 @@
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
+     ret
 +    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
 +    // --- (r15, the way to the light r16), into r17.w
 +    label l5
@@ -366,10 +369,12 @@ index 2544974f..76bbb059 100644
 +    cmp r20.w, r17.x, r20.w, c138.y
 +    cmp r24.y, r20.w, r24.y, c138.y
 +    mul r17.w, r17.w, r24.y
-     ret
-\ No newline at end of file
++    ret
+     // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
+     label l3
+     add r20.xyz, r15, -r18
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 5a24f6e8..60a97993 100644
+index 5a24f6e8..03685891 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -394,6 +394,24 @@
@@ -397,11 +402,10 @@ index 5a24f6e8..60a97993 100644
        // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
        add r17.w, r17.w, -c138.y
        mad r17.w, r17.w, r12.w, c138.y
-@@ -589,4 +607,43 @@
-     rcp r20.x, r20.x
-     add r20.w, r20.w, r20.x
-     add r20.w, r20.w, -r12.y
-+    ret
+@@ -486,6 +504,45 @@
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
+     ret
 +    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
 +    // --- (r15, the way to the light r16), into r17.w
 +    label l5
@@ -440,10 +444,12 @@ index 5a24f6e8..60a97993 100644
 +    cmp r20.w, r17.x, r20.w, c138.y
 +    cmp r24.y, r20.w, r24.y, c138.y
 +    mul r17.w, r17.w, r24.y
-     ret
-\ No newline at end of file
++    ret
+     // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
+     label l3
+     add r20.xyz, r15, -r18
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index c5295049..fa28a32e 100644
+index c5295049..0fe181f0 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -396,6 +396,24 @@
@@ -471,11 +477,10 @@ index c5295049..fa28a32e 100644
        // c149.w the boxes' strength: a lamp that has just taken a shadow slot fades them out, as its own map shows the cars
        add r17.w, r17.w, -c138.y
        mad r17.w, r17.w, r12.w, c138.y
-@@ -591,4 +609,43 @@
-     rcp r20.x, r20.x
-     add r20.w, r20.w, r20.x
-     add r20.w, r20.w, -r12.y
-+    ret
+@@ -488,6 +506,45 @@
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
+     ret
 +    // --- FusionFix ped capsule shadows: the light the capsule r18 (x, y, foot, height; radius c154.x) leaves this pixel
 +    // --- (r15, the way to the light r16), into r17.w
 +    label l5
@@ -514,5 +519,7 @@ index c5295049..fa28a32e 100644
 +    cmp r20.w, r17.x, r20.w, c138.y
 +    cmp r24.y, r20.w, r24.y, c138.y
 +    mul r17.w, r17.w, r24.y
-     ret
-\ No newline at end of file
++    ret
+     // --- FusionFix vehicle box shadows: the light the box r18, r19 leaves this pixel (r15, the way to the light r16), into r17.w
+     label l3
+     add r20.xyz, r15, -r18

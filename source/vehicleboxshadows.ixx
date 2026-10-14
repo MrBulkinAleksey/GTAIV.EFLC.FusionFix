@@ -731,7 +731,7 @@ export struct VehicleBoxShadows
                     lastFound.count = found->count;
                     std::copy_n(found->boxes, found->count, lastFound.boxes);
                     lastFound.pedCount = found->pedCount;
-                    std::copy_n(found->peds, found->pedCount, lastFound.peds);
+                    std::copy_n(&found->peds[0][0], found->pedCount * 3, &lastFound.peds[0][0]);
                     std::copy_n(found->focus, 3, lastFound.focus);
                     lastFound.watched = found->watched;
                     lastFound.sequence = found->sequence;
