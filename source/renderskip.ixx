@@ -658,6 +658,11 @@ namespace RenderSkip
     std::vector<std::string> matrixTrace;
     uint32_t matrixTraceFrom = 0;
     constexpr uint32_t MatrixTracePasses = 300;
+    // The casters' matrix of each cascade (CE 0x92dd20 from the cascade's callback, CE 0x92e04f returned to) and the
+    // pass it was made in, for the trace
+    uintptr_t cascadeMatrixReturn = 0;
+    float casterMatrix[4][16]{};
+    uint32_t casterSeq[4]{};
 
     void TraceMatrix(const float (&values)[4][4], const float* matrix, float texels, float depth)
     {
@@ -694,6 +699,22 @@ namespace RenderSkip
                     t[axis] = double(matrix[axis]) * depthAnchor[0] + double(matrix[4 + axis]) * depthAnchor[1] + double(matrix[8 + axis]) * depthAnchor[2] + matrix[12 + axis];
                 double u = (t[0] * values[k][0] + values[k][2]) * cascadeSide * 4.0, v = (t[1] * values[k][1] + values[k][3]) * cascadeSide;
                 line += std::format(" c{} {:.3f} {:.3f};", k + 1, u, v);
+            }
+            // And where the casters' own matrix of each cascade drawn in this pass put it (x and y of the matrix as
+            // made in the cascade's callback, then as texels of its target taking them for -1 to 1 across it): the
+            // texels the lighting reads and the ones drawn must keep the same fraction between them, frame to frame
+            line += " casters";
+            for (int k = 0; k < 4; k++)
+            {
+                if (casterSeq[k] != passSeq)
+                {
+                    line += std::format(" c{} -;", k + 1);
+                    continue;
+                }
+                const float* m = casterMatrix[k];
+                double x = double(m[0]) * depthAnchor[0] + double(m[4]) * depthAnchor[1] + double(m[8]) * depthAnchor[2] + m[12];
+                double y = double(m[1]) * depthAnchor[0] + double(m[5]) * depthAnchor[1] + double(m[9]) * depthAnchor[2] + m[13];
+                line += std::format(" c{} {:.7g} {:.7g} = {:.3f} {:.3f};", k + 1, x, y, (x * 0.5 + 0.5) * cascadeSide, (0.5 - y * 0.5) * cascadeSide);
             }
         }
         matrixTrace.push_back(std::move(line));
@@ -1095,10 +1116,21 @@ public:
                 return;
             if (!setter.empty())
                 setterReturn = reinterpret_cast<uintptr_t>(setter.get_first(0));
+            if (auto cascadeMatrix = hook::pattern("F3 0F 11 04 24 50 56 E8 ? ? ? ? 83 C4 0C 5E"); bMatrixTrace && !cascadeMatrix.empty())
+                cascadeMatrixReturn = reinterpret_cast<uintptr_t>(cascadeMatrix.get_first(12));
             static auto MatrixHook = safetyhook::create_mid(matrix.get_first(0), [](SafetyHookContext& regs)
             {
                 AnchorDepth(regs);
                 CatchFitMatrix(regs);
+                if (matrixTraceFrom && cascadeMatrixReturn && *(uintptr_t*)(regs.ebp + 4) == cascadeMatrixReturn)
+                {
+                    int32_t index = *(int32_t*)(*(uintptr_t*)regs.ebp + 8);
+                    if (index >= 0 && index < 4)
+                    {
+                        memcpy(casterMatrix[index], (const void*)regs.eax, sizeof(casterMatrix[index]));
+                        casterSeq[index] = passSeq;
+                    }
+                }
                 // Only the setter's: the cascades' own draws set the matrix through here too
                 if (!setterReturn || *(uintptr_t*)(regs.ebp + 4) != setterReturn)
                     return;
