@@ -659,10 +659,10 @@ namespace RenderSkip
     uint32_t matrixTraceFrom = 0;
     constexpr uint32_t MatrixTracePasses = 300;
     // The casters' matrix of each cascade (CE 0x92dd20 from the cascade's callback, CE 0x92e04f returned to) and the
-    // pass it was made in, for the trace
+    // scene frame it was made in, for the trace (by frame, as the first one's is made before its lock starts the pass)
     uintptr_t cascadeMatrixReturn = 0;
     float casterMatrix[4][16]{};
-    uint32_t casterSeq[4]{};
+    uint32_t casterFrame[4]{};
 
     void TraceMatrix(const float (&values)[4][4], const float* matrix, float texels, float depth)
     {
@@ -706,7 +706,7 @@ namespace RenderSkip
             line += " casters";
             for (int k = 0; k < 4; k++)
             {
-                if (casterSeq[k] != passSeq)
+                if (casterFrame[k] != cascadeFrame)
                 {
                     line += std::format(" c{} -;", k + 1);
                     continue;
@@ -1128,7 +1128,7 @@ public:
                     if (index >= 0 && index < 4)
                     {
                         memcpy(casterMatrix[index], (const void*)regs.eax, sizeof(casterMatrix[index]));
-                        casterSeq[index] = passSeq;
+                        casterFrame[index] = TemporalAA::SceneFrame;
                     }
                 }
                 // Only the setter's: the cascades' own draws set the matrix through here too
