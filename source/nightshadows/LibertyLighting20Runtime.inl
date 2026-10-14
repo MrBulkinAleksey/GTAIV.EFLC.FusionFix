@@ -550,7 +550,7 @@ namespace Lighting20
         // The slot light's own entity in its pass (a 2dfx light's key is its entity's address plus an offset,
         // 0xC1E183) and objects within 5 m across of the light (a cobra head arm is some 4 m), by loop mode
         static thread_local uint32_t scopeKey = 0;
-        static thread_local float scopeLight[2]{};
+        static thread_local float scopeLight[3]{};
         static thread_local bool ownerCounted = false, nearCounted = false;
         static std::array<std::atomic<uint32_t>, 3> owner{}, nearLamp{};
         static std::atomic<uint32_t> ownerPasses{0}, nearPasses{0};
@@ -603,6 +603,19 @@ namespace Lighting20
 
         static bool On() noexcept { return level > 0 && bExtraNightShadows; }
 
+        // PropMinLightHeight: a prop goes only into the maps of lights at least this many metres above its foot. A game
+        // lamp 2 m over the pavement 10 m from a post, taking a slot (CachedLampShadows), threw the post's shadow up a
+        // whole wall beside the one from the post's own lamp. The lights of the lamps' phases by phase index, from Scope.
+        static float minLightHeight = 3.0f;
+        static std::array<std::atomic<float>, 32> phaseLightZ{};
+        static std::atomic<uint32_t> lowLightSkips{0};
+
+        static float EntityZ(uintptr_t entity) noexcept
+        {
+            const auto matrix = *reinterpret_cast<const float* const*>(entity + 0x20);
+            return matrix ? matrix[14] : *reinterpret_cast<const float*>(entity + 0x18);
+        }
+
         static int DistanceBucket(float dx, float dy, float dz) noexcept
         {
             const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -636,7 +649,15 @@ namespace Lighting20
             if ((flags & 0xC000) != 0x8000 || (level < 2 && !(flags & 0x800000)) ||
                 ((*reinterpret_cast<const uint32_t*>(entity + 0x28) >> 6) & 15) != 4)
                 return;
-            const uint32_t phases = *reinterpret_cast<const uint32_t*>(regs.esp + 0x28) & lampPhases.load(std::memory_order_relaxed);
+            uint32_t phases = *reinterpret_cast<const uint32_t*>(regs.esp + 0x28) & lampPhases.load(std::memory_order_relaxed);
+            if (phases && minLightHeight > 0.0f)
+            {
+                const float z = EntityZ(entity);
+                for (uint32_t i = 0; i < 32; ++i)
+                    if ((phases & (1u << i)) && phaseLightZ[i].load(std::memory_order_relaxed) - z < minLightHeight)
+                        phases &= ~(1u << i);
+                if (!phases) ++lowLightSkips;
+            }
             if (!phases) return;
             addToList(phases, entity, 0.0f, 2);
             ++added;
@@ -870,6 +891,11 @@ namespace Lighting20
             if ((flags & 0xC000) != 0x8000 || (level < 2 && !(flags & 0x800000)) ||
                 (*reinterpret_cast<const uint32_t*>(entity + 0x210) & 0x800))
                 return false;
+            if (minLightHeight > 0.0f && scopeLight[2] - EntityZ(entity) < minLightHeight)
+            {
+                ++lowLightSkips;
+                return false;
+            }
             ++cast;
             return true;
         }
@@ -897,6 +923,8 @@ namespace Lighting20
                 scopeKey = *reinterpret_cast<const uint32_t*>(record + 0xF8);
                 scopeLight[0] = *reinterpret_cast<const float*>(record + 0xC0);
                 scopeLight[1] = *reinterpret_cast<const float*>(record + 0xC4);
+                scopeLight[2] = *reinterpret_cast<const float*>(record + 0xC8);
+                if (index < 32) phaseLightZ[index].store(scopeLight[2], std::memory_order_relaxed);
                 ownerCounted = nearCounted = false;
                 if (diagnostics)
                 {
@@ -923,6 +951,7 @@ namespace Lighting20
         static void Install(CIniReader& ini) noexcept
         {
             level = std::clamp(ini.ReadInteger("NIGHTSHADOWS", "PropShadows", 1), 0, 2);
+            minLightHeight = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "PropMinLightHeight", 3.0f), 0.0f, 20.0f);
             if (!level)
             {
                 installStatus += " props=0";
@@ -1475,7 +1504,7 @@ namespace Lighting20
                 << " within_5m(mode0,1,2)=" << Props::nearLamp[0].load() << ',' << Props::nearLamp[1].load() << ',' << Props::nearLamp[2].load()
                 << " objects_from_you(<10,<20,<30,<45,<60,60+)=" << Props::Counts(Props::objectsAt)
                 << " passes_by_lamp_from_you=" << Props::Counts(Props::passesAt) << " their_objects=" << Props::Counts(Props::passObjectsAt)
-                << " list2_draw_switch=" << int(*reinterpret_cast<const uint8_t*>(game + 0xC3F738))
+                << " low_light_skips=" << Props::lowLightSkips.load() << " list2_draw_switch=" << int(*reinterpret_cast<const uint8_t*>(game + 0xC3F738))
                 << " cast_in_mode0=" << Props::cast.load() << " prop_fragments=" << Props::propFragments.load()
                 << " under_wd_local(group " << Props::localTechnique << ")=" << Props::propFragmentsLocal.load()
                 << " technique_found(group:n)=" << Props::ByGroup(Props::foundByGroup)
