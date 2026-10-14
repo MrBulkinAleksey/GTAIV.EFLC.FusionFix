@@ -366,8 +366,10 @@ namespace RenderSkip
     // texels then fall on a new grid each frame (the edges of the shadows crawl as you move), and a cascade kept from
     // the frame before sits on another grid than the one drawn in this frame (they shook in turns). Here, right after
     // the fit (CE 0x928bb2, the main thread building the cascades' draw list, before any is drawn), each window keeps
-    // its size (5 % more than the game's, held until the game's grows past it, shrinks under 4/5 of it or the heading
-    // steps) and its centre goes to whole texels from the depth's anchor in the light's axes, which stay put between
+    // its size (12 % more than wanted, held until that grows past it, shrinks under 4/5 of it or the heading steps:
+    // every new size puts every shadow edge of the cascade on a new grid at once, and with 4 % held the game's splits,
+    // which follow the camera's tilt, had the near ones resized every half second while walking, each a visible
+    // shake) and its centre goes to whole texels from the depth's anchor in the light's axes, which stay put between
     // the steps; the frame copy's bounds (+0x1f0 min x, +0x200 min y, +0x210 max x, +0x220 max y, a float a cascade),
     // from which the game makes the casters' matrices, and the shaders' scales and offsets are both set by it.
     bool bStableWindows = true;
@@ -533,12 +535,12 @@ namespace RenderSkip
             }
             bool resize = heldEpoch[k] != headingEpoch;
             for (int axis = 0; axis < 2; axis++)
-                if (want[axis] > heldSize[k][axis] || want[axis] < heldSize[k][axis] * (ball ? 0.92f : 0.8f))
+                if (want[axis] > heldSize[k][axis] || want[axis] < heldSize[k][axis] * 0.8f)
                     resize = true;
             if (resize)
             {
                 for (int axis = 0; axis < 2; axis++)
-                    heldSize[k][axis] = want[axis] * (ball ? 1.04f : 1.05f);
+                    heldSize[k][axis] = want[axis] * 1.12f;
                 heldEpoch[k] = headingEpoch;
                 windowResizes++;
             }
