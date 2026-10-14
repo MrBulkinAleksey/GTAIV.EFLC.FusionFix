@@ -1,7 +1,11 @@
 module;
 
 #include <common.hxx>
+#include "FusionLog.hpp"
+#include <algorithm>
 #include <cstring>
+#include <format>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -9,6 +13,9 @@ module;
 export module entityclass;
 
 import common;
+import inireload;
+import renderskip;
+import temporal;
 
 // What kind of entity each draw of the scene belongs to: the map's own geometry, which never moves,
 // or a prop (an object, a fragment, a skinned entity), which can be pushed, knocked over or broken.
@@ -18,6 +25,10 @@ import common;
 // entity's kind in the command's spare byte +0x37. On the render thread the execute (vtable slot 1)
 // of CDrawEntityDC, CDrawFragDC, CDrawFragTypeDC and CDrawSkinnedEntityDC calls the hooks added
 // here before and after the draw, in every render phase.
+//
+// EntityDrawLog = 1 ([DEBUG]): every 600 scene frames, the draws of buildings and props and the CPU time
+// their execute took, per frame and per target the game had locked (RenderSkip::CurrentTarget), to
+// GTAIV.EFLC.FusionFix.EntityClass.log: what leaving props out of a pass would save.
 export namespace EntityClass
 {
     enum class Kind : uint8_t
@@ -56,13 +67,95 @@ namespace
         return hooks;
     }
 
-    void Execute(DrawExecute original, void* dc, EntityClass::Kind kind)
+    // Which draw command a draw came from
+    enum Source : uint8_t { FromEntity, FromFrag, FromFragType, FromSkinned, Sources };
+    constexpr const char* SourceNames[Sources] = { "objects", "fragments", "fragment types", "skinned" };
+
+    // EntityDrawLog: render thread only, but for the switch
+    bool bDrawLog = false;
+    constexpr uint32_t kDrawLogFrames = 600;
+    struct TargetStats
+    {
+        std::string name;
+        uint64_t draws[3]{};            // by Kind
+        int64_t ticks[3]{};
+        uint64_t propDraws[Sources]{};
+    };
+    std::vector<TargetStats> targetStats;
+    const char* lastTargetName = nullptr;
+    size_t lastTarget = 0;
+    uint32_t statsFrom = 0;
+    int64_t qpcFrequency = 0;
+
+    TargetStats& StatsFor(const char* name)
+    {
+        if (name == lastTargetName && lastTarget < targetStats.size())
+            return targetStats[lastTarget];
+        const char* shown = !name ? "unknown (no lock hooks)" : !*name ? "no target locked" : name;
+        auto it = std::find_if(targetStats.begin(), targetStats.end(), [&](auto& s) { return s.name == shown; });
+        if (it == targetStats.end())
+        {
+            targetStats.push_back({ shown });
+            it = targetStats.end() - 1;
+        }
+        lastTargetName = name;
+        lastTarget = size_t(it - targetStats.begin());
+        return *it;
+    }
+
+    void WriteDrawLog(uint32_t frames)
+    {
+        std::sort(targetStats.begin(), targetStats.end(), [](auto& a, auto& b)
+        {
+            return a.ticks[0] + a.ticks[1] + a.ticks[2] > b.ticks[0] + b.ticks[1] + b.ticks[2];
+        });
+        const double perFrame = 1.0 / frames;
+        const double msPerFrame = 1000.0 / double(qpcFrequency) / frames;
+        std::string text = std::format("over {} scene frames, per frame, the draws and the CPU time of their execute:\n", frames);
+        for (auto& s : targetStats)
+        {
+            text += std::format("  {:<28} buildings {:7.1f} ({:6.3f} ms), props {:7.1f} ({:6.3f} ms:", s.name,
+                s.draws[1] * perFrame, s.ticks[1] * msPerFrame, s.draws[2] * perFrame, s.ticks[2] * msPerFrame);
+            for (int i = 0; i < Sources; ++i)
+                text += std::format("{} {} {:.1f}", i ? "," : "", SourceNames[i], s.propDraws[i] * perFrame);
+            text += ")";
+            if (s.draws[0])
+                text += std::format(", unmarked {:.1f} ({:.3f} ms)", s.draws[0] * perFrame, s.ticks[0] * msPerFrame);
+            text += "\n";
+        }
+        FusionLog::WriteText("EntityClass", "Draws", text);
+        targetStats.clear();
+        lastTargetName = nullptr;
+    }
+
+    void Execute(DrawExecute original, void* dc, EntityClass::Kind kind, Source source)
     {
         const auto& hooks = Hooks();
         for (const auto& [before, after] : hooks)
             if (before)
                 before(kind);
-        original(dc);
+        if (!bDrawLog)
+            original(dc);
+        else
+        {
+            LARGE_INTEGER start, end;
+            QueryPerformanceCounter(&start);
+            original(dc);
+            QueryPerformanceCounter(&end);
+            const uint32_t frame = TemporalAA::SceneFrame;
+            if (!statsFrom || frame < statsFrom)
+                statsFrom = frame;
+            else if (frame - statsFrom >= kDrawLogFrames)
+            {
+                WriteDrawLog(frame - statsFrom);
+                statsFrom = frame;
+            }
+            auto& stats = StatsFor(RenderSkip::CurrentTarget());
+            stats.draws[size_t(kind)]++;
+            stats.ticks[size_t(kind)] += end.QuadPart - start.QuadPart;
+            if (kind == EntityClass::Kind::Prop)
+                stats.propDraws[source]++;
+        }
         for (auto it = hooks.rbegin(); it != hooks.rend(); ++it)
             if (it->second)
                 it->second(kind);
@@ -71,13 +164,13 @@ namespace
     void __fastcall DrawEntityExecute(void* dc, void*)
     {
         const auto kind = static_cast<EntityClass::Kind>(reinterpret_cast<uint8_t*>(dc)[kDrawEntityKindByte]);
-        Execute(drawEntityExecute, dc, kind <= EntityClass::Kind::Prop ? kind : EntityClass::Kind::Unknown);
+        Execute(drawEntityExecute, dc, kind <= EntityClass::Kind::Prop ? kind : EntityClass::Kind::Unknown, FromEntity);
     }
 
-    template <DrawExecute* original>
+    template <DrawExecute* original, Source source>
     void __fastcall DrawPropExecute(void* dc, void*)
     {
-        Execute(*original, dc, EntityClass::Kind::Prop);
+        Execute(*original, dc, EntityClass::Kind::Prop, source);
     }
 
     void Install()
@@ -103,9 +196,9 @@ namespace
             injector::WriteMemory(slot, replacement, true);
         };
         hookExecute(entityVtable, drawEntityExecute, reinterpret_cast<void*>(&DrawEntityExecute));
-        hookExecute(fragVtable, drawFragExecute, reinterpret_cast<void*>(&DrawPropExecute<&drawFragExecute>));
-        hookExecute(fragTypeVtable, drawFragTypeExecute, reinterpret_cast<void*>(&DrawPropExecute<&drawFragTypeExecute>));
-        hookExecute(skinnedVtable, drawSkinnedExecute, reinterpret_cast<void*>(&DrawPropExecute<&drawSkinnedExecute>));
+        hookExecute(fragVtable, drawFragExecute, reinterpret_cast<void*>(&DrawPropExecute<&drawFragExecute, FromFrag>));
+        hookExecute(fragTypeVtable, drawFragTypeExecute, reinterpret_cast<void*>(&DrawPropExecute<&drawFragTypeExecute, FromFragType>));
+        hookExecute(skinnedVtable, drawSkinnedExecute, reinterpret_cast<void*>(&DrawPropExecute<&drawSkinnedExecute, FromSkinned>));
         bInstalled = true;
     }
 
@@ -117,6 +210,13 @@ namespace
             FusionFix::onInitEvent() += []()
             {
                 Install();
+                LARGE_INTEGER frequency;
+                QueryPerformanceFrequency(&frequency);
+                qpcFrequency = frequency.QuadPart;
+                auto readIni = [](CIniReader& iniReader) { bDrawLog = iniReader.ReadInteger("DEBUG", "EntityDrawLog", 0) != 0; };
+                CIniReader iniReader("");
+                readIni(iniReader);
+                IniReload::Add(readIni);
             };
         }
     } EntityClassInit;
