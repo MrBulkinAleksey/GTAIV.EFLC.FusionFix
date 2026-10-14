@@ -616,6 +616,7 @@ public:
                 pattern = find_pattern("A1 ? ? ? ? 83 EC 40 56", "A1 ? ? ? ? 83 EC 40 85 C0");
                 auto registerTechniqueGroup = (int32_t(__cdecl*)(const char*))pattern.get_first(0);
                 static int32_t nLocalShadowTechId = registerTechniqueGroup("wd_local");
+                Lighting20::Props::localTechnique = nLocalShadowTechId;
 
                 pattern = find_pattern("E8 ? ? ? ? 6A 00 6A 14 E8 ? ? ? ? 8B F8 83 C4 44", "E8 ? ? ? ? 53 6A 14 E8 ? ? ? ? 83 C4 44");
                 static void (__cdecl* AddToDrawListEntityListShadow)(int32_t, int32_t, int32_t, int32_t, int32_t) = injector::GetBranchDestination(pattern.get_first(0)).get();

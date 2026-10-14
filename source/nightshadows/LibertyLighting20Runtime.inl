@@ -554,7 +554,40 @@ namespace Lighting20
         static std::array<std::atomic<uint32_t>, 3> owner{}, nearLamp{};
         static std::atomic<uint32_t> ownerPasses{0}, nearPasses{0};
 
+        // NightShadowsDiagnostics. Distances: the objects a lamp pass visits by how far they are from you, and the
+        // passes by how far their lamp is with the objects they had, to see whether a far lamp's map lacks the props
+        // (bins shadowing only once you come near). Draws: the fragment draw command 0x8DD0B0 (model +0x58) of a prop
+        // added to a lamp list or of a lamp's own post under the forced wd_local group, and the shader's technique
+        // lookup in it (0x629157 / 0x62E197: EAX the group, EDX / ECX a technique given outright, EDI the effect,
+        // [EDI+0x40] its table, three bytes a group): a 0 there and the shader draws nothing into the map.
+        static bool diagnostics = false;
+        static constexpr float distanceEdges[] = { 10.0f, 20.0f, 30.0f, 45.0f, 60.0f };
+        static std::array<std::atomic<uint32_t>, 6> objectsAt{}, passesAt{}, passObjectsAt{};
+        static thread_local uint32_t passObjects = 0;
+        static thread_local int passBucket = -1;
+        static std::array<std::atomic<uint16_t>, 64> models{};
+        static int32_t localTechnique = -1;
+        static thread_local bool propDraw = false;
+        static std::atomic<uint32_t> propFragments{0}, techniqueFound{0}, techniqueMissing{0};
+        static std::array<std::atomic<uintptr_t>, 8> foundEffects{}, missingEffects{};
+        static SafetyHookInline consumer;
+        static SafetyHookMid lookup, lookupSkinned;
+
         static bool On() noexcept { return level > 0 && bExtraNightShadows; }
+
+        static int DistanceBucket(float dx, float dy, float dz) noexcept
+        {
+            const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            int i = 0;
+            while (i < int(std::size(distanceEdges)) && d >= distanceEdges[i]) ++i;
+            return i;
+        }
+
+        static void Remember(uintptr_t entity) noexcept
+        {
+            const auto model = *reinterpret_cast<const uint16_t*>(entity + 0x2E);
+            models[model % models.size()].store(model, std::memory_order_relaxed);
+        }
 
         // A render phase (CE 0xD77990 object) drawing the map of an active slot 1-7, on the main thread.
         static bool LampPass(uintptr_t phase) noexcept
@@ -579,14 +612,24 @@ namespace Lighting20
             if (!phases) return;
             addToList(phases, entity, 0.0f, 2);
             ++added;
+            if (diagnostics) Remember(entity);
         }
 
         // Diagnostics from the caster hook: type and loop mode as the loop has them (EAX, EDX).
         static void Visit(uintptr_t entity, uint32_t type, uint32_t mode) noexcept
         {
             if (!scope || type != 4 || !entity || mode > 2) return;
+            if (diagnostics)
+            {
+                const auto& you = PlayerShadowAllocation::state.player;
+                const auto matrix = *reinterpret_cast<const float* const*>(entity + 0x20);
+                const float* at = matrix ? matrix + 12 : reinterpret_cast<const float*>(entity + 0x10);
+                ++objectsAt[DistanceBucket(at[0] - you.x, at[1] - you.y, at[2] - you.z)];
+                ++passObjects;
+            }
             if (scopeKey - static_cast<uint32_t>(entity) < 0x320)
             {
+                if (diagnostics) Remember(entity);
                 ++owner[mode];
                 if (!ownerCounted)
                 {
@@ -606,6 +649,84 @@ namespace Lighting20
                     ++nearPasses;
                 }
             }
+        }
+
+        static uint32_t __fastcall Consumer(void* command, void*)
+        {
+            bool prop = false;
+            if (localTechnique >= 0 && *reinterpret_cast<const int32_t*>(game + 0xC6B308) == localTechnique)
+            {
+                const auto model = *reinterpret_cast<const uint16_t*>(reinterpret_cast<uintptr_t>(command) + 0x58);
+                prop = model && models[model % models.size()].load(std::memory_order_relaxed) == model;
+                if (prop) ++propFragments;
+            }
+            const bool previous = propDraw;
+            propDraw = prop;
+            const auto result = consumer.unsafe_thiscall<uint32_t>(command);
+            propDraw = previous;
+            return result;
+        }
+
+        static void Lookup(uintptr_t effect, uint32_t group, uint32_t technique) noexcept
+        {
+            if (!propDraw || localTechnique < 0 || group != static_cast<uint32_t>(localTechnique) || !effect) return;
+            if (!technique)
+                if (const auto table = *reinterpret_cast<const uint8_t* const*>(effect + 0x40))
+                    technique = table[group * 3];
+            ++(technique ? techniqueFound : techniqueMissing);
+            for (auto& seen : technique ? foundEffects : missingEffects)
+            {
+                uintptr_t empty = 0;
+                if (seen.load(std::memory_order_relaxed) == effect || seen.compare_exchange_strong(empty, effect)) break;
+            }
+        }
+
+        // Bytes readable from address in its committed region, at most limit.
+        static size_t ReadableBytes(uintptr_t address, size_t limit) noexcept
+        {
+            MEMORY_BASIC_INFORMATION info{};
+            if (address < 0x10000 || !VirtualQuery(reinterpret_cast<void*>(address), &info, sizeof(info)) ||
+                info.State != MEM_COMMIT || (info.Protect & (PAGE_GUARD | PAGE_NOACCESS))) return 0;
+            return std::min<size_t>(limit, reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize - address);
+        }
+
+        // The first string an effect's first 0x100 bytes point at (its name or file), with its offset.
+        static std::string EffectName(uintptr_t effect)
+        {
+            std::ostringstream out;
+            out << std::hex << effect;
+            if (ReadableBytes(effect, 0x100) < 0x100) return out.str();
+            for (uint32_t offset = 0; offset < 0x100; offset += 4)
+            {
+                const auto text = *reinterpret_cast<const uintptr_t*>(effect + offset);
+                const auto bytes = ReadableBytes(text, 64);
+                const auto s = reinterpret_cast<const char*>(text);
+                size_t n = 0;
+                while (n < bytes && s[n] >= 0x20 && s[n] < 0x7F) ++n;
+                if (n >= 4 && n < bytes && !s[n])
+                {
+                    out << ':' << std::string(s, n) << "@+" << offset;
+                    break;
+                }
+            }
+            return out.str();
+        }
+
+        static std::string Effects(const std::array<std::atomic<uintptr_t>, 8>& effects)
+        {
+            std::string list;
+            for (const auto& e : effects)
+                if (const auto effect = e.load(std::memory_order_relaxed))
+                    list += (list.empty() ? "" : ",") + EffectName(effect);
+            return list.empty() ? "-" : list;
+        }
+
+        template <size_t N>
+        static std::string Counts(const std::array<std::atomic<uint32_t>, N>& counts)
+        {
+            std::string list;
+            for (const auto& c : counts) list += (list.empty() ? "" : ",") + std::to_string(c.load());
+            return list;
         }
 
         // Around the phase's render (0xD77A00), as Buildings::Scope.
@@ -632,8 +753,24 @@ namespace Lighting20
                 scopeLight[0] = *reinterpret_cast<const float*>(record + 0xC0);
                 scopeLight[1] = *reinterpret_cast<const float*>(record + 0xC4);
                 ownerCounted = nearCounted = false;
+                if (diagnostics)
+                {
+                    const auto& you = PlayerShadowAllocation::state.player;
+                    passBucket = DistanceBucket(scopeLight[0] - you.x, scopeLight[1] - you.y,
+                        *reinterpret_cast<const float*>(record + 0xC8) - you.z);
+                    passObjects = 0;
+                }
             }
-            ~Scope() noexcept { scope = previous; }
+            ~Scope() noexcept
+            {
+                if (scope && passBucket >= 0)
+                {
+                    ++passesAt[passBucket];
+                    passObjectsAt[passBucket] += passObjects;
+                    passBucket = -1;
+                }
+                scope = previous;
+            }
             Scope(const Scope&) = delete;
             Scope& operator=(const Scope&) = delete;
         };
@@ -658,6 +795,21 @@ namespace Lighting20
             collect = safetyhook::create_mid(game + 0x6E73B1, Collect);
             if (!collect) level = 0;
             installStatus += collect ? " props=" + std::to_string(level) : " props=hook_failed";
+            if (!collect || !ini.ReadInteger("DEBUG", "NightShadowsDiagnostics", 0)) return;
+            diagnostics = true;
+            // push ecx; push esi; mov esi, ecx; movzx eax, word ptr [esi+58h] / test edx, edx; jnz; lea ecx, [eax+eax*2]
+            // / test ecx, ecx; jnz; lea ecx, [eax+eax*2]
+            if (BytesAt(0x4DD0B0, { 0x51, 0x56, 0x8B, 0xF1, 0x0F, 0xB7, 0x46, 0x58 }) &&
+                BytesAt(0x229157, { 0x85, 0xD2, 0x75, 0x0E, 0x8D, 0x0C, 0x40 }) &&
+                BytesAt(0x22E197, { 0x85, 0xC9, 0x75, 0x12, 0x8D, 0x0C, 0x40 }))
+            {
+                consumer = safetyhook::create_inline(game + 0x4DD0B0, Consumer);
+                lookup = safetyhook::create_mid(game + 0x229157, [](SafetyHookContext& regs) { Lookup(regs.edi, regs.eax, regs.edx); });
+                lookupSkinned = safetyhook::create_mid(game + 0x22E197, [](SafetyHookContext& regs) { Lookup(regs.edi, regs.eax, regs.ecx); });
+                installStatus += consumer && lookup && lookupSkinned ? " prop_draw_trace=1" : " prop_draw_trace=hook_failed";
+            }
+            else
+                installStatus += " prop_draw_trace=code_differs";
         }
     }
 
@@ -1161,6 +1313,11 @@ namespace Lighting20
                 << " passes_with_own_entity=" << Props::ownerPasses.load() << " own_entity(mode0,1,2)=" << Props::owner[0].load()
                 << ',' << Props::owner[1].load() << ',' << Props::owner[2].load() << " passes_with_objects_within_5m=" << Props::nearPasses.load()
                 << " within_5m(mode0,1,2)=" << Props::nearLamp[0].load() << ',' << Props::nearLamp[1].load() << ',' << Props::nearLamp[2].load()
+                << " objects_from_you(<10,<20,<30,<45,<60,60+)=" << Props::Counts(Props::objectsAt)
+                << " passes_by_lamp_from_you=" << Props::Counts(Props::passesAt) << " their_objects=" << Props::Counts(Props::passObjectsAt)
+                << " prop_fragments_wd_local=" << Props::propFragments.load() << " technique_found=" << Props::techniqueFound.load()
+                << " missing=" << Props::techniqueMissing.load() << " missing_in=" << Props::Effects(Props::missingEffects)
+                << " found_in=" << Props::Effects(Props::foundEffects)
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
                 << " duplicates=" << Sharing::duplicates.load() << " duplicates_unshadowed=" << Sharing::duplicatesUnshadowed.load()
                 << " (vehicle " << Sharing::duplicatesVehicle.load() << ", model lights " << Sharing::duplicatesOurs.load() << ')'
