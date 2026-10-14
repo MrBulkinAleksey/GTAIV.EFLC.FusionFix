@@ -15,6 +15,10 @@ struct ShadowCasterPresence {
     static constexpr unsigned Capacity = 384;
     static constexpr float VehicleExtent = 4.0f, PedExtent = 1.0f; // Bounding radii with a margin; a bus is longer.
     static constexpr float Range = 150.0f; // Around the player; lamp reach stays well inside.
+    // CasterMinLightHeight: a light less than this many metres above a car's or ped's position (some 3 m over the
+    // ground) gets no claim from it. A game lamp over a door, 2 m above the pavement, took slots for cars 10 m off
+    // and threw their shadows, long and low, across the street; their boxes shadow them there. 0: any height.
+    static inline float MinLightAbove = 0.0f;
     std::array<Vec3, Capacity> points{};
     std::array<float, Capacity> extents{};
     std::array<bool, Capacity> inView{};
@@ -66,7 +70,7 @@ struct ShadowCasterPresence {
                 const float reach = radius + extents[i];
                 lit = x * x + y * y + z * z <= reach * reach;
             }
-            if (!lit || (vehicles[i] && boxedCount && Boxed(vehicles[i], source))) continue;
+            if (!lit || (vehicles[i] && boxedCount && Boxed(vehicles[i], source)) || source.z - p.z < MinLightAbove) continue;
             if (which) *which = int(i);
             if (inView[i]) return SlotGain::InView;
             gain = SlotGain::OffScreen;
