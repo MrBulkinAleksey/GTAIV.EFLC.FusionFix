@@ -93,6 +93,22 @@ class TextureQuality
     static inline uint32_t groundFrames = 0;
     static inline bool bLastGround = false;
 
+    // Props lying on the ground (boxes, bags, bins) are drawn with the same world shaders and
+    // materials as the ground, so Ground Surfaces is kept to the map's own geometry: CEntity's
+    // draw list add (0xa2fe70, game thread) marks in the spare byte +0x37 of its CDrawEntityDC
+    // whether the entity is a building, and on the render thread b15 is turned off around the
+    // execute of every other entity, fragment and skinned entity draw.
+    static constexpr ptrdiff_t kDrawEntityGroundByte = 0x37;
+    using DrawExecute = void(__thiscall*)(void*);
+    static inline DrawExecute drawEntityExecute = nullptr;
+    static inline DrawExecute drawFragExecute = nullptr;
+    static inline DrawExecute drawFragTypeExecute = nullptr;
+    static inline DrawExecute drawSkinnedExecute = nullptr;
+    static inline bool bPropHooks = false;
+    // What b15 holds within the G-buffer pass, and the draws it was turned off for.
+    static inline bool bGroundBound = true;
+    static inline uint64_t propDraws = 0;
+
     // Made during the asynchronous init, which is over before the G-buffer hooks are added.
     static inline std::vector<std::vector<uint32_t>> detailLevels;
     static inline IDirect3DTexture9* pDetailTex = nullptr;
@@ -402,6 +418,86 @@ private:
         return shSetPixelShader.unsafe_stdcall<HRESULT>(pDevice, shader);
     }
 
+    // Buildings, animated buildings, interiors and portals are the map's own geometry; objects,
+    // dummies and cutscene objects are props. Known by the class name in the vtable's RTTI.
+    static bool IsGroundEntity(void* entity)
+    {
+        thread_local std::unordered_map<uintptr_t, bool> byVtable;
+        const auto vtable = *reinterpret_cast<uintptr_t*>(entity);
+        if (auto it = byVtable.find(vtable); it != byVtable.end())
+            return it->second;
+        const auto locator = *reinterpret_cast<uintptr_t*>(vtable - 4);
+        const auto type = *reinterpret_cast<uintptr_t*>(locator + 12);
+        const char* name = reinterpret_cast<const char*>(type + 8);
+        bool ground = false;
+        for (auto building : { ".?AVCBuilding@@", ".?AVCAnimatedBuilding@@", ".?AVCInteriorInst@@", ".?AVCPortalInst@@" })
+            ground = ground || std::strcmp(name, building) == 0;
+        byVtable.emplace(vtable, ground);
+        return ground;
+    }
+
+    static void BindGround(bool ground)
+    {
+        if (!bInGBuffer || !bLastGround || ground == bGroundBound)
+            return;
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+        const BOOL flag = ground;
+        pDevice->SetPixelShaderConstantB(15, &flag, 1);
+        bGroundBound = ground;
+    }
+
+    static void __fastcall DrawEntityExecute(void* dc, void*)
+    {
+        const bool ground = reinterpret_cast<uint8_t*>(dc)[kDrawEntityGroundByte] != 0;
+        if (ground)
+            return drawEntityExecute(dc);
+        BindGround(false);
+        ++propDraws;
+        drawEntityExecute(dc);
+        BindGround(true);
+    }
+
+    template <DrawExecute* original>
+    static void __fastcall DrawPropExecute(void* dc, void*)
+    {
+        BindGround(false);
+        ++propDraws;
+        (*original)(dc);
+        BindGround(true);
+    }
+
+    static void InstallPropHooks()
+    {
+        auto pattern = hook::pattern("56 E8 ? ? ? ? 8B 75 0C EB 02 33 C0 50 E8");
+        auto entityVtable = hook::pattern("C7 07 ? ? ? ? 66 89 77 30 8B 41 30");
+        auto fragVtable = hook::pattern("C7 07 ? ? ? ? E8 ? ? ? ? 8B 5C 24 18 66 89 77 46");
+        auto fragTypeVtable = hook::pattern("C7 07 ? ? ? ? E8 ? ? ? ? 8B 4C 24 1C 66 89 77");
+        auto skinnedVtable = hook::pattern("C7 06 ? ? ? ? 66 89 7E 08 89 46 1C");
+        if (pattern.empty() || entityVtable.empty() || fragVtable.empty() || fragTypeVtable.empty() || skinnedVtable.empty())
+            return;
+
+        // Right after the CDrawEntityDC constructor: eax the command, edi the entity
+        static auto addHook = safetyhook::create_mid(pattern.get_first(6), [](SafetyHookContext& regs)
+        {
+            reinterpret_cast<uint8_t*>(regs.eax)[kDrawEntityGroundByte] = IsGroundEntity(reinterpret_cast<void*>(regs.edi));
+        });
+
+        // Slot 1 of each draw command's vtable is its execute
+        auto hookExecute = [](hook::pattern& ctor, DrawExecute& original, void* replacement)
+        {
+            auto slot = *ctor.get_first<void**>(2) + 1;
+            original = reinterpret_cast<DrawExecute>(*slot);
+            injector::WriteMemory(slot, replacement, true);
+        };
+        hookExecute(entityVtable, drawEntityExecute, reinterpret_cast<void*>(&DrawEntityExecute));
+        hookExecute(fragVtable, drawFragExecute, reinterpret_cast<void*>(&DrawPropExecute<&drawFragExecute>));
+        hookExecute(fragTypeVtable, drawFragTypeExecute, reinterpret_cast<void*>(&DrawPropExecute<&drawFragTypeExecute>));
+        hookExecute(skinnedVtable, drawSkinnedExecute, reinterpret_cast<void*>(&DrawPropExecute<&drawSkinnedExecute>));
+        bPropHooks = true;
+    }
+
     // Ctrl+Shift+F10 (IniReload): the settings read again, and with GroundSurfacesDebug on what the G-buffer pass drew
     // with written to GTAIV.EFLC.FusionFix.Ground.log.
     static void OnIniReload(CIniReader& iniReader)
@@ -409,11 +505,11 @@ private:
         {
             ReadIni(iniReader);
             const double frames = groundFrames ? double(groundFrames) : 1.0;
-            FusionLog::Write("Ground", "Draws", "Ground Surfaces %s, detail texture %s, debug %d, set-pixel-shader hook %s; per frame over %u frames: "
-                    "terrain shaders %.1f, parallax shaders %.1f, world shaders with ground %.1f, other shaders %.1f; %zu shaders seen\n",
+            FusionLog::Write("Ground", "Draws", "Ground Surfaces %s, detail texture %s, debug %d, set-pixel-shader hook %s, prop hooks %s; per frame over %u frames: "
+                    "terrain shaders %.1f, parallax shaders %.1f, world shaders with ground %.1f, other shaders %.1f, prop draws without ground %.1f; %zu shaders seen\n",
                     bLastGround ? "on" : "off", pDetailTex ? "made" : (bDetailTexFailed ? "failed" : "not made"), nGroundDebug,
-                    shSetPixelShader ? "on" : (bPixelShaderHookTried ? "failed" : "not tried"), groundFrames,
-                    groundBinds[1] / frames, groundBinds[2] / frames, groundBinds[3] / frames, groundBinds[0] / frames, shaderKinds.size());
+                    shSetPixelShader ? "on" : (bPixelShaderHookTried ? "failed" : "not tried"), bPropHooks ? "on" : "failed", groundFrames,
+                    groundBinds[1] / frames, groundBinds[2] / frames, groundBinds[3] / frames, groundBinds[0] / frames, propDraws / frames, shaderKinds.size());
             // Which shaders those were, the most bound first, by their number in the pack
             std::vector<const SeenShader*> seen;
             for (const auto& [ptr, info] : shaderKinds)
@@ -428,6 +524,7 @@ private:
             for (auto& [ptr, info] : shaderKinds)
                 info.binds = 0;
             memset(groundBinds, 0, sizeof(groundBinds));
+            propDraws = 0;
             groundFrames = 0;
         }
     }
@@ -470,6 +567,7 @@ private:
         const bool ground = Pref(groundPref) != 0 && GetDetailTexture(pDevice);
         bLastGround = ground;
         bInGBuffer = true;
+        bGroundBound = true;
 
         // Menu steps of -0.25, and the render scale's: textures as sharp as they'd be at the screen size, which DLSS
         // and FSR keep through the upscale, and UpscalerLodBias more with them
@@ -619,6 +717,11 @@ public:
             ReadIni(iniReader);
             IniReload::Add(OnIniReload);
             detailLevels = MakeDetailLevels();
+        };
+
+        FusionFix::onInitEvent() += []()
+        {
+            InstallPropHooks();
         };
 
         // Added once all the other modules have hooked the G-buffer pass, so that what they draw
