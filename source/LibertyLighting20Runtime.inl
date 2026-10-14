@@ -526,6 +526,69 @@ namespace Lighting20
         }
     }
 
+    // ---------------------------------------------------------------- props in lamp maps
+    // The caster loop 0xAE3713 (AddEntityListToDrawList 0xAE3310, render mode 0 of a light's pass) lets an object
+    // (entity type 4) into the map only with bit 0x800 of +0x210, which 0xB1884B sets for objects made from a
+    // building. Lamp posts, signs, hydrants, bins never had it, so no lamp shadowed them, not even its own post.
+    // PropShadows lets them in: the caster hook in nightshadows resumes at 0xAE3767 with that bit as if set. Posts
+    // and many props are skinned fragments: world_wd_local_shadow_skinned.patch gives the world shaders
+    // wd_local_drawskinned and drops what is within half a metre of the light, so a lamp's head and glass don't
+    // cover its own light.
+    namespace Props
+    {
+        static bool enabled = false;
+        static thread_local bool scope = false;
+        static std::atomic<uint32_t> passes{0}, promoted{0};
+
+        static bool On() noexcept { return enabled && bExtraNightShadows; }
+
+        // A render phase (CE 0xD77990 object) drawing the map of an active slot 1-7, on the main thread.
+        static bool LampPass(uintptr_t phase) noexcept
+        {
+            if (!phase) return false;
+            const auto slot = *reinterpret_cast<const uint32_t*>(phase + 0x940);
+            if (slot < 1 || slot > 7) return false;
+            return *reinterpret_cast<const uint8_t*>(game + 0xD9F100 + slot * 0x110 + 0xED) == 1 &&
+                !*reinterpret_cast<const uint8_t*>(game + fusionfix::shadows::ce::casterguard::DeferredFlagRva);
+        }
+
+        // From the caster hook: type and render mode as the loop has them (EAX, EDX).
+        static bool Cast(uintptr_t entity, uint32_t type, uint32_t mode) noexcept
+        {
+            if (!scope || type != 4 || mode != 0 || !entity) return false;
+            if (*reinterpret_cast<const uint32_t*>(entity + 0x210) & 0x800) return false;
+            ++promoted;
+            return true;
+        }
+
+        // Around the phase's render (0xD77A00), as Buildings::Scope.
+        class Scope
+        {
+            bool previous;
+        public:
+            explicit Scope(void* phase) noexcept : previous(scope)
+            {
+                scope = On() && LampPass(reinterpret_cast<uintptr_t>(phase));
+                if (scope) ++passes;
+            }
+            ~Scope() noexcept { scope = previous; }
+            Scope(const Scope&) = delete;
+            Scope& operator=(const Scope&) = delete;
+        };
+
+        static void Install(CIniReader& ini) noexcept
+        {
+            if (!BytesAt(0x6E374F, { 0xC6, 0x44, 0x24, 0x0C, 0x00, 0x83, 0xF8, 0x04, 0x75, 0x12 }) ||
+                !BytesAt(0x6E3767, { 0x89, 0x44, 0x24, 0x0C, 0x85, 0xD2 }))
+            {
+                installStatus += " props=code_differs";
+                return;
+            }
+            enabled = ini.ReadInteger("SHADOWS", "PropShadows", 1) != 0;
+            installStatus += enabled ? " props=1" : " props=0";
+        }
+    }
+
     // A light of ours next to one the game already has would light and shadow the same spot twice: a lamp whose
     // glow is an effect of its own beside its light got a second light in the glow's colour, and a model's second
     // light half a metre from its shadowed first one a second shadow; under the lamp a car had two shadows of two
@@ -882,6 +945,7 @@ namespace Lighting20
         PlayerShadowAllocation::isTailLightKey = Tail::IsKey;
         World::Install(ini);
         Buildings::Install();
+        Props::Install(ini);
         Sharing::enabled = ini.ReadInteger("SHADOWS", "SharedShadowMaps", 1) != 0;
         Pairs::distance = std::clamp(ini.ReadFloat("SHADOWS", "PairedLampDistance", 2.5f), 0.0f, 6.0f);
         if (Pairs::distance > 0)
@@ -909,6 +973,8 @@ namespace Lighting20
                 << " model_lights_without_casters=" << World::modelLightsIdle.load()
                 << " | buildings " << (Buildings::On() ? "on" : "off") << " passes=" << Buildings::passes.load()
                 << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load()
+                << " | props " << (Props::On() ? "on" : "off") << " passes=" << Props::passes.load()
+                << " promoted=" << Props::promoted.load()
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
                 << " duplicates=" << Sharing::duplicates.load() << " duplicates_unshadowed=" << Sharing::duplicatesUnshadowed.load()
                 << " (vehicle " << Sharing::duplicatesVehicle.load() << ", model lights " << Sharing::duplicatesOurs.load() << ')'
