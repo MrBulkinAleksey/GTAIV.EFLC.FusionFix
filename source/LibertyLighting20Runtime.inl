@@ -527,48 +527,34 @@ namespace Lighting20
     }
 
     // ---------------------------------------------------------------- props in lamp maps
-    // The caster loop 0xAE3713 (AddEntityListToDrawList 0xAE3310, render mode 0 of a light's pass) lets an object
-    // (entity type 4) into the map only with bit 0x800 of +0x210, which 0xB1884B sets when the object's source
-    // (+0x280) is a map dummy (type 2). A full dump (2026-10-12, 311 objects round the camera) had it on none: no
-    // object, lamp posts included (all 18 there fragments), was drawn into a lamp's dynamic map. PropShadows lets them
-    // in: the caster hook in nightshadows resumes at 0xAE3767 with that bit as if set. Posts and many props are skinned
-    // fragments: world_wd_local_shadow_skinned.patch gives the world shaders wd_local_drawskinned and drops what is
-    // within half a metre of the light, so a lamp's head and glass don't cover its own light. A fragment's draw
-    // (0x5FD190) picks its LOD and children by distance from the current viewport's camera and draws each child
-    // through a callback of the draw context (0x5FD5ED): the diagnostics below tell whether children reach it.
+    // The render list (0xAE6FE0 on) puts an opaque entity into a phase's lists by the bits of its +0x24, from its
+    // model's flags (0xA309FB): 0x4000 list 2 for the phases in [0x159B754], 0x2000 list 3, 0x1000 list 6, 0x8000 list 5
+    // for the phases in [0x159B750] (0xAE7294-0xAE73D7, 0xAE43A0 adds it). A lamp's pass (0xAE3DE0) draws lists 1, 0,
+    // 5 and 7 in modes 1 and 2 and lists 0, 1, 2, 7 in mode 0. Lamp posts carry only 0x8000: they cast the sun's
+    // shadow by day but are in no list of a lamp's phase, not even their own lamp's (a dump of 2026-10-12: all 18 posts
+    // round the camera had 0x8000 and 0x800000, their model has lights, and none of 0x1000/0x2000/0x4000).
+    // PropShadows puts such entities also into list 2 of the lamps' phases (drawn in mode 0 by 0xAE3310's plain loop):
+    // 1 those with lights (0x800000: posts, wall lamps), 2 every sun-only object. world_wd_local_shadow_skinned.patch
+    // drops what is within half a metre of a light in the world shaders' local depth, so a lamp's head and glass
+    // don't cover its own light.
     namespace Props
     {
-        static bool enabled = false;
+        static int level = 0;
+        static SafetyHookMid collect;
+        static void(__cdecl* addToList)(uint32_t phases, uintptr_t entity, float distance, int list) = nullptr;
         static thread_local bool scope = false;
-        static thread_local uint32_t scopeKind = 0;
-        static std::atomic<uint32_t> passes{0}, objects{0}, withBit{0}, promoted{0};
-        // Objects seen by the slot's render mode (+0xFC of the slot record: 3 static cache, 4 cache and dynamic,
-        // 5 no cache) and the loop's mode (EDX 0-2)
-        static std::array<std::array<std::atomic<uint32_t>, 3>, 3> seen{};
-        static std::array<std::atomic<uint32_t>, 3> kindPasses{};
-        // Objects within 5 m (across; a cobra head arm is some 4 m) of the slot's light (record +0xC0) by loop mode: a lamp's own post
-        static thread_local float scopeLight[3]{};
-        static std::array<std::atomic<uint32_t>, 3> near{};
-        static std::atomic<uint32_t> nearPasses{0};
-        static thread_local bool nearCounted = false;
-        // The light's own entity: a 2dfx light's key is its entity's address plus an offset (0xC1E183)
+        // Bits of the lamps' phases (phase +0x938, as 0xAE782F); the seven phase objects keep their index
+        static std::atomic<uint32_t> lampPhases{0};
+        static std::atomic<uint32_t> passes{0}, added{0}, inSunMask{0}, inList2Mask{0};
+        // The slot light's own entity in its pass (a 2dfx light's key is its entity's address plus an offset,
+        // 0xC1E183) and objects within 5 m across of the light (a cobra head arm is some 4 m), by loop mode
         static thread_local uint32_t scopeKey = 0;
-        static thread_local bool ownerCounted = false;
-        static std::array<std::atomic<uint32_t>, 3> owner{};
-        static std::atomic<uint32_t> ownerPasses{0}, keyedPasses{0};
+        static thread_local float scopeLight[2]{};
+        static thread_local bool ownerCounted = false, nearCounted = false;
+        static std::array<std::atomic<uint32_t>, 3> owner{}, near{};
+        static std::atomic<uint32_t> ownerPasses{0}, nearPasses{0};
 
-        // Diagnostics of the draw: the fragment draw command 0x8DD0B0 (model +0x58) run while the wd_local technique
-        // group is forced ([0x106B308]), and its child dispatch 0xAEC7B0 choosing the drawable's skinned draw
-        // (+0x30, [esp+0x30] at 0xAEC84A) or the plain one (+0x28). Promoted props' models are kept in a small table
-        // (main thread writes, render thread reads; a stale entry only miscounts).
-        static std::array<std::atomic<uint16_t>, 64> models{};
-        static int32_t localTechnique = -1;
-        static thread_local bool propDraw = false;
-        static std::atomic<uint32_t> localFragments{0}, propFragments{0}, propPlain{0}, propSkinned{0};
-        static SafetyHookInline consumer;
-        static SafetyHookMid dispatch;
-
-        static bool On() noexcept { return enabled && bExtraNightShadows; }
+        static bool On() noexcept { return level > 0 && bExtraNightShadows; }
 
         // A render phase (CE 0xD77990 object) drawing the map of an active slot 1-7, on the main thread.
         static bool LampPass(uintptr_t phase) noexcept
@@ -580,13 +566,26 @@ namespace Lighting20
                 !*reinterpret_cast<const uint8_t*>(game + fusionfix::shadows::ce::casterguard::DeferredFlagRva);
         }
 
-        // From the caster hook: type and render mode as the loop has them (EAX, EDX); artificial: a light's pass.
-        static bool Cast(uintptr_t entity, uint32_t type, uint32_t mode, bool artificial) noexcept
+        // 0xAE73B1, the render list's test of 0x8000 (ESI the entity, [esp+0x28] the phases it is visible in)
+        static void Collect(SafetyHookContext& regs) noexcept
         {
-            if (!scope || type != 4 || !entity) return false;
-            ++objects;
-            if (scopeKind >= 3 && scopeKind <= 5 && mode <= 2) ++seen[scopeKind - 3][mode];
-            if (mode <= 2 && scopeKey - static_cast<uint32_t>(entity) < 0x320)
+            if (!On()) return;
+            const auto entity = static_cast<uintptr_t>(regs.esi);
+            const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
+            if ((flags & 0xC000) != 0x8000 || (level < 2 && !(flags & 0x800000)) ||
+                ((*reinterpret_cast<const uint32_t*>(entity + 0x28) >> 6) & 15) != 4)
+                return;
+            const uint32_t phases = *reinterpret_cast<const uint32_t*>(regs.esp + 0x28) & lampPhases.load(std::memory_order_relaxed);
+            if (!phases) return;
+            addToList(phases, entity, 0.0f, 2);
+            ++added;
+        }
+
+        // Diagnostics from the caster hook: type and loop mode as the loop has them (EAX, EDX).
+        static void Visit(uintptr_t entity, uint32_t type, uint32_t mode) noexcept
+        {
+            if (!scope || type != 4 || !entity || mode > 2) return;
+            if (scopeKey - static_cast<uint32_t>(entity) < 0x320)
             {
                 ++owner[mode];
                 if (!ownerCounted)
@@ -595,55 +594,18 @@ namespace Lighting20
                     ++ownerPasses;
                 }
             }
-            if (mode <= 2)
+            const auto matrix = *reinterpret_cast<const float* const*>(entity + 0x20);
+            const float* at = matrix ? matrix + 12 : reinterpret_cast<const float*>(entity + 0x10);
+            const float dx = at[0] - scopeLight[0], dy = at[1] - scopeLight[1];
+            if (dx * dx + dy * dy < 25.0f)
             {
-                const auto matrix = *reinterpret_cast<const float* const*>(entity + 0x20);
-                const float* at = matrix ? matrix + 12 : reinterpret_cast<const float*>(entity + 0x10);
-                const float dx = at[0] - scopeLight[0], dy = at[1] - scopeLight[1];
-                if (dx * dx + dy * dy < 25.0f)
+                ++near[mode];
+                if (!nearCounted)
                 {
-                    ++near[mode];
-                    if (!nearCounted)
-                    {
-                        nearCounted = true;
-                        ++nearPasses;
-                    }
+                    nearCounted = true;
+                    ++nearPasses;
                 }
             }
-            if (*reinterpret_cast<const uint32_t*>(entity + 0x210) & 0x800)
-            {
-                ++withBit;
-                return false;
-            }
-            if (mode != 0 || !artificial) return false;
-            const auto model = *reinterpret_cast<const uint16_t*>(entity + 0x2E);
-            models[model % models.size()].store(model, std::memory_order_relaxed);
-            ++promoted;
-            return true;
-        }
-
-        static uint32_t __fastcall Consumer(void* command, void*)
-        {
-            bool prop = false;
-            if (localTechnique >= 0 && *reinterpret_cast<const int32_t*>(game + 0xC6B308) == localTechnique)
-            {
-                ++localFragments;
-                const auto model = *reinterpret_cast<const uint16_t*>(reinterpret_cast<uintptr_t>(command) + 0x58);
-                prop = model && models[model % models.size()].load(std::memory_order_relaxed) == model;
-                if (prop) ++propFragments;
-            }
-            const bool previous = propDraw;
-            propDraw = prop;
-            const auto result = consumer.unsafe_thiscall<uint32_t>(command);
-            propDraw = previous;
-            return result;
-        }
-
-        static void Dispatch(SafetyHookContext& regs) noexcept
-        {
-            if (!propDraw) return;
-            if (*reinterpret_cast<const uint8_t*>(regs.esp + 0x30)) ++propSkinned;
-            else ++propPlain;
         }
 
         // Around the phase's render (0xD77A00), as Buildings::Scope.
@@ -653,23 +615,23 @@ namespace Lighting20
         public:
             explicit Scope(void* phase) noexcept : previous(scope)
             {
-                scope = On() && LampPass(reinterpret_cast<uintptr_t>(phase));
-                scopeKind = 0;
-                if (scope)
+                const auto p = reinterpret_cast<uintptr_t>(phase);
+                scope = level > 0 && LampPass(p);
+                if (!scope) return;
+                ++passes;
+                const auto index = *reinterpret_cast<const uint32_t*>(p + 0x938);
+                if (index < 32)
                 {
-                    ++passes;
-                    const auto slot = *reinterpret_cast<const uint32_t*>(reinterpret_cast<uintptr_t>(phase) + 0x940);
-                    scopeKind = *reinterpret_cast<const uint32_t*>(game + 0xD9F100 + slot * 0x110 + 0xFC);
-                    const auto light = reinterpret_cast<const float*>(game + 0xD9F100 + slot * 0x110 + 0xC0);
-                    scopeLight[0] = light[0];
-                    scopeLight[1] = light[1];
-                    scopeLight[2] = light[2];
-                    nearCounted = false;
-                    scopeKey = *reinterpret_cast<const uint32_t*>(game + 0xD9F100 + slot * 0x110 + 0xF8);
-                    ownerCounted = false;
-                    ++keyedPasses;
-                    if (scopeKind >= 3 && scopeKind <= 5) ++kindPasses[scopeKind - 3];
+                    const uint32_t bit = 1u << index;
+                    lampPhases.fetch_or(bit, std::memory_order_relaxed);
+                    if (*reinterpret_cast<const uint32_t*>(game + 0x119B750) & bit) ++inSunMask;
+                    if (*reinterpret_cast<const uint32_t*>(game + 0x119B754) & bit) ++inList2Mask;
                 }
+                const auto record = game + 0xD9F100 + *reinterpret_cast<const uint32_t*>(p + 0x940) * 0x110;
+                scopeKey = *reinterpret_cast<const uint32_t*>(record + 0xF8);
+                scopeLight[0] = *reinterpret_cast<const float*>(record + 0xC0);
+                scopeLight[1] = *reinterpret_cast<const float*>(record + 0xC4);
+                ownerCounted = nearCounted = false;
             }
             ~Scope() noexcept { scope = previous; }
             Scope(const Scope&) = delete;
@@ -678,22 +640,24 @@ namespace Lighting20
 
         static void Install(CIniReader& ini) noexcept
         {
-            if (!BytesAt(0x6E374F, { 0xC6, 0x44, 0x24, 0x0C, 0x00, 0x83, 0xF8, 0x04, 0x75, 0x12 }) ||
-                !BytesAt(0x6E3767, { 0x89, 0x44, 0x24, 0x0C, 0x85, 0xD2 }))
+            level = std::clamp(ini.ReadInteger("SHADOWS", "PropShadows", 1), 0, 2);
+            if (!level)
             {
+                installStatus += " props=0";
+                return;
+            }
+            // test dword ptr [esi+24h], 8000h; the list 2 add above it: push 2 ... call 0xAE43A0
+            if (!BytesAt(0x6E73B1, { 0xF7, 0x46, 0x24, 0x00, 0x80, 0x00, 0x00 }) || !BytesAt(0x6E7399, { 0x6A, 0x02 }) ||
+                !CallsTo(0x6E73A9, 0x6E43A0))
+            {
+                level = 0;
                 installStatus += " props=code_differs";
                 return;
             }
-            enabled = ini.ReadInteger("SHADOWS", "PropShadows", 1) != 0;
-            installStatus += enabled ? " props=1" : " props=0";
-            if (enabled && ini.ReadInteger("SHADOWS", "ExperimentalShadowDiagnostics", 0) != 0 &&
-                BytesAt(0x4DD0B0, { 0x51, 0x56, 0x8B, 0xF1, 0x0F, 0xB7, 0x46, 0x58 }) &&
-                BytesAt(0x6EC84A, { 0x8B, 0x54, 0x24, 0x10, 0x8B, 0x4C, 0x24, 0x28 }))
-            {
-                consumer = safetyhook::create_inline(game + 0x4DD0B0, Consumer);
-                dispatch = safetyhook::create_mid(game + 0x6EC84A, Dispatch);
-                installStatus += consumer && dispatch ? " prop_draw_trace=1" : " prop_draw_trace=hook_failed";
-            }
+            addToList = reinterpret_cast<decltype(addToList)>(game + 0x6E43A0);
+            collect = safetyhook::create_mid(game + 0x6E73B1, Collect);
+            if (!collect) level = 0;
+            installStatus += collect ? " props=" + std::to_string(level) : " props=hook_failed";
         }
     }
 
@@ -1082,18 +1046,11 @@ namespace Lighting20
                 << " | buildings " << (Buildings::On() ? "on" : "off") << " passes=" << Buildings::passes.load()
                 << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load()
                 << " | props " << (Props::On() ? "on" : "off") << " passes=" << Props::passes.load()
-                << " objects=" << Props::objects.load() << " with_0x800=" << Props::withBit.load() << " promoted=" << Props::promoted.load()
-                << " wd_local_fragments=" << Props::localFragments.load() << " of_props=" << Props::propFragments.load()
-                << " prop_children_plain=" << Props::propPlain.load() << " skinned=" << Props::propSkinned.load()
-                << " passes_with_objects_within_5m=" << Props::nearPasses.load() << " within_5m(mode0,1,2)=" << Props::near[0].load()
-                << ',' << Props::near[1].load() << ',' << Props::near[2].load()
-                << " passes_with_own_entity=" << Props::ownerPasses.load() << " of " << Props::keyedPasses.load()
-                << " own_entity(mode0,1,2)=" << Props::owner[0].load() << ',' << Props::owner[1].load() << ',' << Props::owner[2].load()
-                << " objects_by_map(passes; mode0,1,2):";
-            for (int k = 0; k < 3; ++k)
-                out << " kind" << k + 3 << "(" << Props::kindPasses[k].load() << "; " << Props::seen[k][0].load() << ','
-                    << Props::seen[k][1].load() << ',' << Props::seen[k][2].load() << ')';
-            out
+                << " added_to_lamp_lists=" << Props::added.load() << " lamp_phases=0x" << std::hex << Props::lampPhases.load() << std::dec
+                << " passes_in_sun_list_mask=" << Props::inSunMask.load() << " in_list2_mask=" << Props::inList2Mask.load()
+                << " passes_with_own_entity=" << Props::ownerPasses.load() << " own_entity(mode0,1,2)=" << Props::owner[0].load()
+                << ',' << Props::owner[1].load() << ',' << Props::owner[2].load() << " passes_with_objects_within_5m=" << Props::nearPasses.load()
+                << " within_5m(mode0,1,2)=" << Props::near[0].load() << ',' << Props::near[1].load() << ',' << Props::near[2].load()
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
                 << " duplicates=" << Sharing::duplicates.load() << " duplicates_unshadowed=" << Sharing::duplicatesUnshadowed.load()
                 << " (vehicle " << Sharing::duplicatesVehicle.load() << ", model lights " << Sharing::duplicatesOurs.load() << ')'
