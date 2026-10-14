@@ -559,8 +559,9 @@ namespace Lighting20
         // passes by how far their lamp is with the objects they had, to see whether a far lamp's map lacks the props
         // (bins shadowing only once you come near). Draws: the fragment draw command 0x8DD0B0 (model +0x58) of a prop
         // added to a lamp list or of a lamp's own post under the forced wd_local group, and the shader's technique
-        // lookup in it (0x629157 / 0x62E197: EAX the group, EDX / ECX a technique given outright, EDI the effect,
-        // [EDI+0x40] its table, three bytes a group): a 0 there and the shader draws nothing into the map.
+        // lookup in it (0x629157 / 0x62E197: EAX the group, EDX / ECX a technique given outright, EDI the effect;
+        // 0x69ED1A in the model's draw loop over its geometries: EAX the group, EBX the effect; [effect+0x40] its
+        // table, three bytes a group): a 0 there and the shader draws nothing into the map.
         static bool diagnostics = false;
         static constexpr float distanceEdges[] = { 10.0f, 20.0f, 30.0f, 45.0f, 60.0f };
         static std::array<std::atomic<uint32_t>, 6> objectsAt{}, passesAt{}, passObjectsAt{};
@@ -573,7 +574,7 @@ namespace Lighting20
         static std::array<std::atomic<uint32_t>, 64> foundByGroup{}, missingByGroup{};
         static std::array<std::atomic<uintptr_t>, 8> foundEffects{}, missingEffects{};
         static SafetyHookInline consumer;
-        static SafetyHookMid lookup, lookupSkinned;
+        static SafetyHookMid lookup, lookupSkinned, lookupModel;
 
         static bool On() noexcept { return level > 0 && bExtraNightShadows; }
 
@@ -828,12 +829,14 @@ namespace Lighting20
             // / test ecx, ecx; jnz; lea ecx, [eax+eax*2]
             if (BytesAt(0x4DD0B0, { 0x51, 0x56, 0x8B, 0xF1, 0x0F, 0xB7, 0x46, 0x58 }) &&
                 BytesAt(0x229157, { 0x85, 0xD2, 0x75, 0x0E, 0x8D, 0x0C, 0x40 }) &&
-                BytesAt(0x22E197, { 0x85, 0xC9, 0x75, 0x12, 0x8D, 0x0C, 0x40 }))
+                BytesAt(0x22E197, { 0x85, 0xC9, 0x75, 0x12, 0x8D, 0x0C, 0x40 }) &&
+                BytesAt(0x29ED1A, { 0x8D, 0x0C, 0x40, 0x8B, 0x43, 0x40 }))
             {
                 consumer = safetyhook::create_inline(game + 0x4DD0B0, Consumer);
                 lookup = safetyhook::create_mid(game + 0x229157, [](SafetyHookContext& regs) { Lookup(regs.edi, regs.eax, regs.edx); });
                 lookupSkinned = safetyhook::create_mid(game + 0x22E197, [](SafetyHookContext& regs) { Lookup(regs.edi, regs.eax, regs.ecx); });
-                installStatus += consumer && lookup && lookupSkinned ? " prop_draw_trace=1" : " prop_draw_trace=hook_failed";
+                lookupModel = safetyhook::create_mid(game + 0x29ED1A, [](SafetyHookContext& regs) { Lookup(regs.ebx, regs.eax, 0); });
+                installStatus += consumer && lookup && lookupSkinned && lookupModel ? " prop_draw_trace=1" : " prop_draw_trace=hook_failed";
             }
             else
                 installStatus += " prop_draw_trace=code_differs";
