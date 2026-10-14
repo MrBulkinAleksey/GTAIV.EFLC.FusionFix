@@ -181,6 +181,8 @@ namespace Occlusion
         uint32_t outcomes[Outcomes]{};
         uint32_t props = 0, propsHidden = 0;
         uint32_t hiddenAtEdge = 0;      // hidden, though reaching out of the grid's screen
+        uint32_t boxes = 0, boxHidden = 0, boxSphereHidden = 0; // tested by the model's box, hidden so, and by the sphere
+        uint32_t boxByMatrix = 0, boxByHeading = 0, boxByHeadingSwapped = 0, boxMismatch = 0; // how the box was placed
         uint32_t left = 0;              // left out (or would be, mode 2)
         uint32_t adds = 0, addsLeft = 0; // calls into the lists with the scene's phase, and of those left out
         uint32_t grids = 0;             // grids taken
@@ -300,32 +302,19 @@ namespace Occlusion
         return Visible;
     }
 
-    // The sphere against the grid, as above; after Precheck
-    Outcome Test(const Probe& p, const float centre[3], float radius, bool* atEdge = nullptr)
+    // A projected box (its eight corners' clip x, y, w) against the grid: hidden when its nearest point lies behind
+    // the farthest depth of every texel its screen rectangle covers
+    Outcome TestProjected(const Probe& p, const float (&clips)[8][3], float nearest, bool* atEdge)
     {
-        if (radius < fMinRadius)
-            return Small;
         const Grid& g = *p.grid;
-        const float r = radius + p.move * fMoveGrowth;
-        const float* m = g.viewProjection;
-        float clip[4];
-        for (int c = 0; c < 4; ++c)
-            clip[c] = centre[0] * m[c] + centre[1] * m[4 + c] + centre[2] * m[8 + c] + m[12 + c];
-        const float nearest = clip[3] - r * g.wLength;
         if (nearest <= g.nearPlane * 2.0f)
             return NearCamera;
-
-        // The screen rectangle of the sphere's bounding box, all eight corners in front of the camera
         float minU = 1e30f, maxU = -1e30f, minV = 1e30f, maxV = -1e30f;
-        for (int corner = 0; corner < 8; ++corner)
+        for (const auto& c : clips)
         {
-            const float sx = (corner & 1) ? r : -r, sy = (corner & 2) ? r : -r, sz = (corner & 4) ? r : -r;
-            const float x = clip[0] + sx * m[0] + sy * m[4] + sz * m[8];
-            const float y = clip[1] + sx * m[1] + sy * m[5] + sz * m[9];
-            const float w = clip[3] + sx * m[3] + sy * m[7] + sz * m[11];
-            if (w <= g.nearPlane)
+            if (c[2] <= g.nearPlane)
                 return NearCamera;
-            const float u = x / w * 0.5f + 0.5f, v = 0.5f - y / w * 0.5f;
+            const float u = c[0] / c[2] * 0.5f + 0.5f, v = 0.5f - c[1] / c[2] * 0.5f;
             minU = std::min(minU, u);
             maxU = std::max(maxU, u);
             minV = std::min(minV, v);
@@ -364,6 +353,58 @@ namespace Occlusion
         return Hidden;
     }
 
+    // A sphere, by its bounding box along the world's axes, grown by how far the camera moved; after Precheck
+    Outcome Test(const Probe& p, const float centre[3], float radius, bool* atEdge = nullptr)
+    {
+        if (radius < fMinRadius)
+            return Small;
+        const Grid& g = *p.grid;
+        const float r = radius + p.move * fMoveGrowth;
+        const float* m = g.viewProjection;
+        float clip[4];
+        for (int c = 0; c < 4; ++c)
+            clip[c] = centre[0] * m[c] + centre[1] * m[4 + c] + centre[2] * m[8 + c] + m[12 + c];
+        float clips[8][3];
+        for (int corner = 0; corner < 8; ++corner)
+        {
+            const float sx = (corner & 1) ? r : -r, sy = (corner & 2) ? r : -r, sz = (corner & 4) ? r : -r;
+            clips[corner][0] = clip[0] + sx * m[0] + sy * m[4] + sz * m[8];
+            clips[corner][1] = clip[1] + sx * m[1] + sy * m[5] + sz * m[9];
+            clips[corner][2] = clip[3] + sx * m[3] + sy * m[7] + sz * m[11];
+        }
+        // The sphere's nearest point, nearer the truth than its box's nearest corner
+        return TestProjected(p, clips, clip[3] - r * g.wLength, atEdge);
+    }
+
+    // A box of the model (its corners boxMin, boxMax) placed by axes (right, forward, up, unit length) and origin,
+    // grown on each side by how far the camera moved; after Precheck
+    Outcome TestBox(const Probe& p, const float axes[3][3], const float origin[3], const float boxMin[3], const float boxMax[3],
+                    float radius, bool* atEdge = nullptr)
+    {
+        if (radius < fMinRadius)
+            return Small;
+        const Grid& g = *p.grid;
+        const float grow = p.move * fMoveGrowth;
+        const float* m = g.viewProjection;
+        float clips[8][3];
+        float nearest = 1e30f;
+        for (int corner = 0; corner < 8; ++corner)
+        {
+            const float local[3] = { (corner & 1) ? boxMax[0] + grow : boxMin[0] - grow, (corner & 2) ? boxMax[1] + grow : boxMin[1] - grow,
+                                     (corner & 4) ? boxMax[2] + grow : boxMin[2] - grow };
+            float world[3];
+            for (int i = 0; i < 3; ++i)
+                world[i] = origin[i] + local[0] * axes[0][i] + local[1] * axes[1][i] + local[2] * axes[2][i];
+            for (int c = 0; c < 3; ++c)
+            {
+                const int col = c == 2 ? 3 : c;
+                clips[corner][c] = world[0] * m[col] + world[1] * m[4 + col] + world[2] * m[8 + col] + m[12 + col];
+            }
+            nearest = std::min(nearest, clips[corner][2]);
+        }
+        return TestProjected(p, clips, nearest, atEdge);
+    }
+
     Probe Take()
     {
         std::shared_ptr<const Grid> g;
@@ -378,6 +419,92 @@ namespace Occlusion
     {
         return probe.usable && Precheck(probe) == Visible && std::isfinite(radius) &&
                std::isfinite(centre[0] + centre[1] + centre[2]) && Test(probe, centre, radius) == Hidden;
+    }
+
+    // The model's box for entities whose box is their model's (vtable +0x60 the base entity's, CE 0xa319c0: model info
+    // +0x20, its min at +0x20 and max at +0x30, the bounding sphere's local centre at +0x10): buildings and the like;
+    // others (objects, cars, peds, whose box comes from their fragments) go by the sphere. Placed by the entity's
+    // matrix (+0x20) or, without one, its position and heading (+0x10, +0x1c), as the game places the sphere (CE
+    // 0xa34340): which of its sine and cosine goes where is taken from whichever puts the model's sphere centre where
+    // the game's own (vtable +0x50) is. Returns the model info as floats (min at [8], max at [12]), or null.
+    void* pBaseBoundBox = nullptr;
+    uint32_t votesPlain = 0, votesSwapped = 0; // which way the heading's sine and cosine went where it could be told
+    uintptr_t* pModelInfos = nullptr;
+    bool bBoxes = true;
+    const float* PlaceModelBox(uintptr_t entity, void** vtable, const float centre[3], float axes[3][3], float origin[3])
+    {
+        if (!pBaseBoundBox || !pModelInfos || vtable[0x60 / 4] != pBaseBoundBox)
+            return nullptr;
+        const int16_t index = *(int16_t*)(entity + 0x2e);
+        if (index < 0)
+            return nullptr;
+        const float* model = (const float*)pModelInfos[index];
+        if (!model)
+            return nullptr;
+        const float* local = model + 4; // the sphere's local centre (+0x10)
+        auto matches = [&]()
+        {
+            float x = origin[0], y = origin[1], z = origin[2];
+            for (int i = 0; i < 3; ++i)
+            {
+                x += local[i] * axes[i][0];
+                y += local[i] * axes[i][1];
+                z += local[i] * axes[i][2];
+            }
+            const float dx = x - centre[0], dy = y - centre[1], dz = z - centre[2];
+            return dx * dx + dy * dy + dz * dz < 0.05f * 0.05f;
+        };
+        if (const float* matrix = *(const float**)(entity + 0x20))
+        {
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    axes[i][j] = matrix[i * 4 + j];
+            for (int j = 0; j < 3; ++j)
+                origin[j] = matrix[12 + j];
+            if (matches())
+            {
+                ++stats.boxByMatrix;
+                return model;
+            }
+            ++stats.boxMismatch;
+            return nullptr;
+        }
+        const float* placed = (const float*)(entity + 0x10);
+        const float s = std::sin(placed[3]), c = std::cos(placed[3]);
+        origin[0] = placed[0];
+        origin[1] = placed[1];
+        origin[2] = placed[2];
+        axes[2][0] = axes[2][1] = 0.0f;
+        axes[2][2] = 1.0f;
+        axes[0][2] = axes[1][2] = 0.0f;
+        // x' = x cos - y sin, y' = y cos + x sin; or sine and cosine the other way round
+        auto place = [&](bool swapped)
+        {
+            const float a = swapped ? s : c, b = swapped ? c : s;
+            axes[0][0] = a, axes[0][1] = b, axes[1][0] = -b, axes[1][1] = a;
+        };
+        // A sphere centred on the model's vertical axis sits the same either way: such a model goes by the way that
+        // matched the others, once they agree
+        const bool telling = local[0] * local[0] + local[1] * local[1] > 0.5f * 0.5f;
+        for (bool swapped : { false, true })
+        {
+            place(swapped);
+            if (!matches())
+                continue;
+            if (telling)
+            {
+                ++(swapped ? votesSwapped : votesPlain);
+                ++(swapped ? stats.boxByHeadingSwapped : stats.boxByHeading);
+                return model;
+            }
+            const uint32_t plain = votesPlain, other = votesSwapped;
+            if (plain + other < 20 || (swapped ? other * 10 < (plain + other) * 9 : plain * 10 < (plain + other) * 9))
+                continue;
+            ++(swapped ? stats.boxByHeadingSwapped : stats.boxByHeading);
+            return model;
+        }
+        ++stats.boxMismatch;
+        return nullptr;
     }
 
     bool IsProp(uintptr_t entity)
@@ -438,7 +565,23 @@ namespace Occlusion
                 auto vtable = *(void***)entity;
                 reinterpret_cast<void(__thiscall*)(uintptr_t, float*)>(vtable[0x50 / 4])(entity, centre);
                 const float radius = reinterpret_cast<float(__thiscall*)(uintptr_t)>(vtable[0x58 / 4])(entity);
-                outcome = std::isfinite(radius) && std::isfinite(centre[0] + centre[1] + centre[2]) ? Test(frameProbe, centre, radius, &atEdge) : Visible;
+                if (!std::isfinite(radius) || !std::isfinite(centre[0] + centre[1] + centre[2]))
+                    outcome = Visible;
+                else
+                {
+                    float axes[3][3], origin[3];
+                    const float* model = bBoxes ? PlaceModelBox(entity, vtable, centre, axes, origin) : nullptr;
+                    if (model)
+                    {
+                        outcome = TestBox(frameProbe, axes, origin, model + 8, model + 12, radius, &atEdge);
+                        ++stats.boxes;
+                        stats.boxHidden += outcome == Hidden;
+                        // What the sphere alone would have said, for the log
+                        stats.boxSphereHidden += Test(frameProbe, centre, radius) == Hidden;
+                    }
+                    else
+                        outcome = Test(frameProbe, centre, radius, &atEdge);
+                }
             }
             state.hidden = outcome == Hidden;
             stats.hiddenAtEdge += state.hidden && atEdge;
@@ -501,12 +644,16 @@ namespace Occlusion
             "%.0f %s (%.1f%%), %.0f of %.0f list adds; test %.3f ms a frame, worst %.3f; grids published %u, "
             "%.1f render frames old when taken; grid texels: %.0f%% nothing in the way (cars, people, other materials), %.0f%% sky, "
             "%.0f%% world within 50 m; "
-            "threads: lists %lu, game %lu, adds from other threads %u; %zu entities kept\n",
+            "threads: lists %lu, game %lu, adds from other threads %u; %zu entities kept\n"
+            "by the model's box: %.0f tested, %.0f hidden (by their sphere %.0f); placed by matrix %.0f, by heading %.0f, by heading "
+            "with sine and cosine swapped %.0f, not placed (the sphere instead) %.0f\n",
             nMode == 1 ? "left out" : "counted only", s.frames, s.entities * perFrame, outcomes.c_str(), s.hiddenAtEdge * perFrame, s.props * perFrame,
             s.propsHidden * perFrame, s.left * perFrame, nMode == 1 ? "left out" : "would be left out",
             s.entities ? 100.0 * s.left / s.entities : 0.0, s.addsLeft * perFrame, s.adds * perFrame, double(ticks) * msPerTick * perFrame,
             double(maxFrameTicks) * msPerTick, publishedCount.load(), s.grids ? double(s.ageFrames) / s.grids : 0.0,
-            share(texelsNothing), share(texelsSky), share(texelsNear), hookThread, gameThread, otherThreads.exchange(0), tableUsed);
+            share(texelsNothing), share(texelsSky), share(texelsNear), hookThread, gameThread, otherThreads.exchange(0), tableUsed,
+            s.boxes * perFrame, s.boxHidden * perFrame, s.boxSphereHidden * perFrame, s.boxByMatrix * perFrame, s.boxByHeading * perFrame,
+            s.boxByHeadingSwapped * perFrame, s.boxMismatch * perFrame);
         stats = {};
         ticks = maxFrameTicks = 0;
     }
@@ -545,6 +692,13 @@ public:
                 return;
             }
             pScenePhase = *scene.get_first<uint32_t*>(0xD);
+            // The base entity's box (CE 0xa319c0): movsx eax, word [ecx+0x2e]; mov eax, [eax*4+models]; add eax, 0x20; ret
+            bBoxes = iniReader.ReadInteger("MISC", "HiZOcclusionBoxes", 1) != 0;
+            if (auto box = hook::pattern("0F BF 41 2E 8B 04 85 ? ? ? ? 83 C0 20 C3"); !box.empty())
+            {
+                pBaseBoundBox = box.get_first(0);
+                pModelInfos = *box.get_first<uintptr_t*>(7);
+            }
             // At the entry, before anything is pushed: [esp+4] the phases, [esp+8] the entity
             static auto AddHook = safetyhook::create_mid(add.get_first(0), [](SafetyHookContext& regs)
             {
