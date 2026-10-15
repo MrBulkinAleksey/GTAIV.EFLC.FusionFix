@@ -25,7 +25,7 @@ import re
 import sys
 from pathlib import Path
 
-from vehicle_raindrops import DEFS as PS_DEFS, drops, drops_bend, drops_frame
+from vehicle_raindrops import DEFS as PS_DEFS, drops, drops_bend
 
 TAG = 'FusionFix vehicle_paint.patch'
 
@@ -40,14 +40,10 @@ VARIANTS = {
 }
 
 
-PAINT_DEFS = f'''\
-    def c194, 20, 0, 0, 0 // {TAG}: the clearcoat in full from a material specular (matDiffuseColor2.w) of 0.05
-'''
-
 PS_DCLS = f'''\
     dcl_texcoord2 v5 // {TAG}: position in the car's space
     dcl_texcoord4 v6 // {TAG}: normal in the car's space
-    dcl_texcoord5 v7 // {TAG}: world up in the car's space
+    dcl_texcoord5 v7 // {TAG}: world up in the car's space (no longer read: the drops keep to the body's own axes)
 '''
 
 
@@ -78,11 +74,10 @@ def finish_and_drops(clean):
     mul r8.x, r8.x, r20.w
     mad r0.xyz, c186, r8.x, r0 // the pearl tint towards the silhouette
     mov_sat r20.x, c177.w // how wet: 0 dry, 1 in the rain
-{drops_frame('v5', 'v6', 'v7')}\
     mov r24, c185.w // drops in x, trails in y, the drops' slope in zw
     mov r8.x, c176.z // how many cells hold a drop
     if_lt c185.w, r8.x
-{drops()}      mul r8.y, r24.y, c180.y
+{drops('v5', 'v6')}      mul r8.y, r24.y, c180.y
       max r8.x, r24.x, r8.y
       mul r8.x, r8.x, c183.y
       add r8.x, -r8.x, c187.w
@@ -154,7 +149,7 @@ def patch_ps(name, v):
     text = body(path)
     if TAG in text:
         sys.exit(f'{path} is patched already')
-    text = insert_after(text, r'def c100,', PS_DEFS + PAINT_DEFS, path)
+    text = insert_after(text, r'def c100,', PS_DEFS, path)
     text = insert_after(text, r'dcl_texcoord9 v9', PS_DCLS, path)
     # The finish and the drops right after the dirt, which leaves the albedo in r0 and the cleanliness behind
     lines = text.split('\n')

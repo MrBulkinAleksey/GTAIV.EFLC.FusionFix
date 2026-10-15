@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
 # Shared by vehicle_paint.py and vehicle_glass_reflections_wet.py: rain drops on cars, as pixel shader asm.
 #
-# The vertex shaders pass the position, normal and world up in the car's own space (the bone's for skinned parts),
-# so the drops stay on the bodywork as the car moves. On the surface a frame of (across, up) is built from the
-# normal and world up; in it:
+# The vertex shaders pass the position and normal in the car's own space (the bone's for skinned parts), so the drops
+# stay on the bodywork as the car moves; nothing of the world goes in, so they also stay put as the body pitches and
+# rolls on its springs (with world up, the frame on the near flat bonnet swung with every bit of pitch and the beads
+# swam while the car sped up). On the bodywork:
 #  - beads in two sizes: small ones (1 to 2.7 mm across their radius at the default density) in most cells of a fine
-#    grid, and fewer big ones (5 to 9 mm) on a coarse one, more of both the harder it rains;
-#  - running drops on the sides: columns some 17 mm apart, each with narrow heads (3 x 8 mm) sliding down at its own
-#    speed, a thin wet trail (1 mm, 55 mm long) above each.
+#    grid, and fewer big ones (5 to 9 mm) on a coarse one, more of both the harder it rains. The grid lies across the
+#    body's forward axis (n x y, fixed to the body and defined everywhere but on faces straight ahead or behind, where
+#    it only turns; a 3D grid of spheres was tried and left rows and empty bands on the near flat bonnet);
+#  - running drops on the sides: columns some 17 mm apart along the body's own vertical, each with narrow heads
+#    (3 x 8 mm) sliding down at its own speed and a thin wet trail (1 mm, 55 mm long) above each; none on flat tops.
 # Each drop's height is a dome whose slope is known exactly, so the normal is bent from that slope carried to the
-# screen by the derivatives of the smooth surface coordinates (Mikkelsen's surface gradient, no tangent frame): the
-# derivatives of the drops themselves, taken over 2 x 2 pixels across their edges, made them shimmer as cars moved.
-# A drop's edge is softened over a pixel, and drops under a pixel across fade into their mean cover, so far cars
-# show an even wet sheen instead of crawling dots.
+# screen by the derivatives of the smooth position (Mikkelsen's surface gradient, no tangent frame): the derivatives
+# of the drops themselves, taken over 2 x 2 pixels across their edges, made them shimmer as cars moved. A drop's edge
+# is softened over a pixel, and drops under 2 pixels across fade into their mean cover, so far cars show an even wet
+# sheen instead of crawling dots.
 #
 # Constants (source/vehiclepaint.ixx): c176.z the share of cells holding a drop, c176.w how far running drops slid
 # in metres, c177.x bead cells per metre, c177.y a drop's height in metres, c177.z the running drops' share.
 #
-# The caller puts drops_frame() outside any dynamic branch, then drops() (which may sit in one), then drops_bend()
-# outside again: ps_3_0 takes no dsx/dsy of r# in a dynamic branch (X6077). drops_frame leaves the surface
-# coordinates in r17.xy, pixels per metre in r17.z, their screen derivatives in r18 and the side's share in r8.y;
-# drops() keeps those and leaves the cover in r24.x, the trails in r24.y and the height's slope in r24.zw (zero it
-# first); drops_bend() bends r27.xyz.
+# drops() may sit in a dynamic branch: it takes its derivatives from the position, a v#, which ps_3_0 allows there
+# (of r# it does not, X6077). It leaves the cover in r24.x, the trails in r24.y and the height's screen slope (d/dx,
+# d/dy) in r24.zw (zero it first); drops_bend(), outside any branch, bends r27.xyz by it.
 
 TAG = 'FusionFix rain on cars'
 
@@ -40,6 +41,9 @@ DEFS = f'''\
     def c191, 0.800000012, 0.150000006, 0.150000006, 0.449999988 // {TAG}: big beads: cells per bead cell, radius from, radius range (cells), share
     def c192, 0.400000006, 0.300000012, 0.159999996, 1 // {TAG}: their centre's range and start, mean cover of a cell; running heads' share
     def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // {TAG}: 1 / a running head's half width and half height, its half width, a trail's (m)
+    def c194, 20, 4, 0, 0 // {TAG}: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
+    def c195, 0, 1, 0, 0 // {TAG}: the body's forward axis
+    def c196, 0.00100000005, 0, 1, 0.75 // {TAG}: the body's vertical, a little across so flat tops keep a frame
 '''
 
 
@@ -57,45 +61,18 @@ def hash3(src, dst, tmp):
 '''
 
 
-def drops_frame(pos, nrm, up):
-    """Outside any dynamic branch. Uses r8.y, r10-r18."""
-    return f'''\
-    // The surface's frame in the car's space: up along it (world up, or the car's x on flat tops) and across;
-    // the coordinates in it, in metres, and how they change from pixel to pixel
-    mov r10.xyz, {nrm}
-    mov r11.xyz, {up}
-    mov r12.xyz, {pos}
-    nrm r13.xyz, r10
-    dp3 r8.y, r13, r11
-    mad r14.xyz, r13, -r8.y, r11
-    add r14.x, r14.x, c187.z
-    nrm r15.xyz, r14
-    crs r16.xyz, r13, r15
-    dp3 r17.x, r12, r16
-    dp3 r17.y, r12, r15
-    dsx r18.xy, r17
-    dsy r18.zw, r17.xxxy
-    dp2add r17.z, r18, r18, c187.x
-    dp2add r17.w, r18.zwzw, r18.zwzw, c187.x
-    max r17.z, r17.z, r17.w
-    rsq r17.z, r17.z
-    min r17.z, r17.z, c190.w // pixels per metre
-    // Running drops on the sides only
-    add r8.y, -r8_abs.y, c187.w
-    add_sat r8.y, r8.y, r8.y
-    mul r8.y, r8.y, c177.z
-'''
-
-
-def bead_layer(sizes, place, cover, slope):
-    # One grid of beads: sizes = (cells per bead cell, radius from, radius range, share), place = (centre range,
-    # centre start, mean cover). Leaves its cover in `cover` and its height's slope (x, y) in `slope`.
+def bead_layer(pos, sizes, place, cover, slope):
+    # One grid of beads in the frame r17 (across) / r18 (up): sizes = (cells per bead cell, radius from, radius range,
+    # share), place = (centre range, centre start, mean cover). Leaves its cover in `cover` and the height's screen slope
+    # in `slope`.
     spread = '.xxxy' if slope.endswith('.zw') else ''
     return f'''\
       mov r9.x, c177.x
       mul r9.x, r9.x, {sizes}.x // cells per metre
       rcp r9.y, r9.x
-      mul r10.xy, r17, r9.x
+      dp3 r10.x, {pos}, r17
+      dp3 r10.y, {pos}, r18
+      mul r10.xy, r10, r9.x
       frc r11.xy, r10
       add r11.zw, r10.xyxy, -r11.xyxy // the cell
 {hash3('r11.zwzw', 'r12', 'r13')}\
@@ -107,7 +84,7 @@ def bead_layer(sizes, place, cover, slope):
       dp2add r14.x, r13, r13, c187.x
       add r14.y, -r14.x, c187.w // its dome
       mul r14.z, r13.z, r9.y
-      mul r14.z, r14.z, r17.z // its radius in pixels
+      mul r14.z, r14.z, r8.z // its radius in pixels
       mul r14.w, r14.y, r14.z
       mul_sat r14.w, r14.w, c180.y // its edge, softened over a pixel
       add r15.x, r14.z, -c180.z
@@ -126,31 +103,62 @@ def bead_layer(sizes, place, cover, slope):
       mul r15.z, r15.z, c177.y
       mul r13.xy, r13, r13.w
       mul r13.xy, r13, r9.x
-      mul r13.xy, r13, r15.z
-      mul {slope}, r13{spread}, c182.w // the height's slope: -2 h d / r
+      mul r13.xy, r13, r15.z // h d / r, in metres per metre along the frame
+      mul r14.xyz, r17, r13.x
+      mad r14.xyz, r18, r13.y, r14
+      dsx r13.xyz, {pos}
+      dsy r12.xyz, {pos}
+      dp3 r15.x, r14, r13
+      dp3 r15.y, r14, r12
+      mul {slope}, r15{spread}, c182.w // the height's screen slope: -2 h d / r along the position's derivatives
 '''
 
 
-def drops(pos=None, nrm=None, up=None):
-    """Expects drops_frame()'s r8.y, r17, r18, r8.x = c176.z and r24 zeroed; leaves the cover in r24.x, the trails in
-    r24.y and the height's slope in r24.zw. Uses r9-r16. May sit in a dynamic branch."""
+def drops(pos, nrm):
+    """pos and nrm are the car-space position and normal (v#), r8.x = c176.z, r24 zeroed; leaves the cover in r24.x, the
+    trails in r24.y and the height's screen slope in r24.zw. Uses r8.yzw, r9-r18. May sit in a dynamic branch."""
     return f'''\
-      // Beads: small ones in most cells of a fine grid, big ones in few of a coarse one
-{bead_layer('c189', 'c190', 'r24.x', 'r24.zw')}\
-{bead_layer('c191', 'c192', 'r16.z', 'r16.xy')}\
+      // Pixels per metre, from the position's own derivatives
+      dsx r9.xyz, {pos}
+      dsy r10.xyz, {pos}
+      dp3 r9.w, r9, r9
+      dp3 r10.w, r10, r10
+      max r9.w, r9.w, r10.w
+      rsq r9.w, r9.w
+      min r8.z, r9.w, c190.w
+      // The beads' frame: across the body's forward axis, and up the surface from there
+      nrm r13.xyz, {nrm}
+      mov r11.xyz, c195
+      crs r14.xyz, r13, r11
+      add r14.z, r14.z, c196.x
+      nrm r17.xyz, r14
+      crs r18.xyz, r13, r17
+      // Beads: small ones on a fine grid, big ones on a coarse one
+{bead_layer(pos, 'c189', 'c190', 'r24.x', 'r24.zw')}\
+{bead_layer(pos, 'c191', 'c192', 'r16.z', 'r16.xy')}\
       max r24.x, r24.x, r16.z
       add r24.zw, r24, r16.xxxy
-      // Running drops, on the sides: columns 1.5 times the bead density, narrow heads sliding at the column's speed
+      // Running drops, on the sides only (none on tops flatter than |n.z| 0.75), in a frame up the body's vertical
+      nrm r13.xyz, {nrm}
+      add r8.y, -r13_abs.z, c196.w
+      mul_sat r8.y, r8.y, c194.y
+      mul r8.y, r8.y, c177.z
+      mad r14.xyz, r13, -r13.z, c196
+      nrm r18.xyz, r14
+      crs r17.xyz, r13, r18
+      dp3 r16.z, {pos}, r17
+      dp3 r8.w, {pos}, r18
+      // columns 1.5 times the bead density, narrow heads sliding at the column's speed
       mov r9.x, c177.x
       mul r9.x, r9.x, c181.x
       rcp r9.y, r9.x
-      mul r10.x, r17.x, r9.x
+      mul r10.x, r16.z, r9.x
       frc r11.x, r10.x
       add r11.z, r10.x, -r11.x // the column
 {hash3('r11.zzzz', 'r12', 'r13')}\
       add r9.w, r12.x, c180.y
       mul r9.w, r9.w, c176.w // how far it slid: 0.5 to 1.5 times c176.w metres
-      add r9.w, r9.w, r17.y
+      add r9.w, r9.w, r8.w
       mul r9.w, r9.w, c181.y
       add r9.w, r9.w, r12.y
       frc r11.y, r9.w
@@ -163,7 +171,7 @@ def drops(pos=None, nrm=None, up=None):
       mul r14.xy, r13, c193
       dp2add r14.z, r14, r14, c187.x
       add r14.z, -r14.z, c187.w // the head's dome
-      mul r14.w, r17.z, c193.z // its half width in pixels
+      mul r14.w, r8.z, c193.z // its half width in pixels
       mul r15.x, r14.z, r14.w
       mul_sat r15.x, r15.x, c180.y
       add r15.y, r14.w, -c180.z
@@ -174,10 +182,10 @@ def drops(pos=None, nrm=None, up=None):
       cmp r12.x, r12.x, c187.x, c187.w // whether the row holds one
       mul r12.x, r12.x, r8.y
       // Its trail above it: thinner than a pixel, a pixel wide and fainter
-      mul r15.z, r17.z, c193.w
+      mul r15.z, r8.z, c193.w
       max r15.w, r15.z, c187.w
       rcp r15.w, r15.w
-      mul r15.w, r15.w, r17.z
+      mul r15.w, r15.w, r8.z
       mul r15.w, r13_abs.x, r15.w
       add_sat r15.w, -r15.w, c187.w
       min r15.z, r15.z, c187.w
@@ -196,19 +204,24 @@ def drops(pos=None, nrm=None, up=None):
       mul r16.w, r16.w, c177.y
       mul r14.xy, r14, c193
       mul r14.xy, r14, r16.w
-      mad r24.zw, r14.xxxy, c182.w, r24
+      mul r15.xyz, r17, r14.x
+      mad r15.xyz, r18, r14.y, r15
+      dsx r13.xyz, {pos}
+      dsy r12.xyz, {pos}
+      dp3 r16.x, r15, r13
+      dp3 r16.y, r15, r12 // carried to the screen
+      mad r24.zw, r16.xxxy, c182.w, r24
 '''
 
 
 def drops_bend():
-    """Expects r27.xyz = the surface's unit normal (world space), v2 = the camera minus the position, r18 from
-    drops_frame() and r24.zw the height's slope (zero where drops() did not run); leaves the bent normal in r27.xyz.
+    """Expects r27.xyz = the surface's unit normal (world space), v2 = the camera minus the position and r24.zw the
+    height's screen slope (zero where drops() did not run); leaves the bent normal in r27.xyz.
     Uses r9-r14. Outside any dynamic branch, for the derivatives."""
     return f'''\
-    // The drops' height bends the normal: Mikkelsen's surface gradient, the slope carried to the screen by the
-    // coordinates' derivatives (v2 is the camera minus the position, which flips the gradient's sign and so its sum)
-    dp2add r13.y, r24.zwzw, r18, c187.x
-    dp2add r13.z, r24.zwzw, r18.zwzw, c187.x
+    // The drops' height bends the normal: Mikkelsen's surface gradient from its screen slope (v2 is the camera minus
+    // the position, which flips the gradient's sign and so its sum)
+    mov r13.yz, r24.xzww
     dsx r9.xyz, v2
     dsy r10.xyz, v2
     crs r11.xyz, r10, r27

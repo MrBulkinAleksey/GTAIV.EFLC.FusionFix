@@ -15,7 +15,7 @@ import re
 import sys
 from pathlib import Path
 
-from vehicle_raindrops import DEFS, drops, drops_bend, drops_frame
+from vehicle_raindrops import DEFS, drops, drops_bend
 
 ROOT = Path(sys.argv[1]) / 'win32_30_nv8' / 'gta_vehicle_vehglass'
 TAG = 'FusionFix vehicle_glass_reflections_wet.patch'
@@ -36,12 +36,11 @@ COVER_AND_DROPS = f'''\
     mov r28, c185.w
     mov r30.xyz, r2
     mov r30.w, r17.w // the found reflection's share, kept from the drops' frame (r30.w is free after the march)
-{drops_frame('v6', 'v7', 'v8')}\
     mov r24, c185.w
     mov r27.xyz, r2
     mov r8.x, c176.z
     if_lt c185.w, r8.x
-{drops()}\
+{drops('v6', 'v7')}\
     endif
 {drops_bend()}\
     mov r8.x, c176.z

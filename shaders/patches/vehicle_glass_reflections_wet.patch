@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 5de051e3..68455713 100644
+index 5de051e3..bbd291bc 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-@@ -167,8 +167,23 @@
+@@ -167,8 +167,26 @@
      def c158, 0.5, -0.5, 0.5, 0
      def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
      def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
@@ -23,11 +23,14 @@ index 5de051e3..68455713 100644
 +    def c191, 0.800000012, 0.150000006, 0.150000006, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
 +    def c192, 0.400000006, 0.300000012, 0.159999996, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
 +    def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
++    def c194, 20, 4, 0, 0 // FusionFix rain on cars: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
++    def c195, 0, 1, 0, 0 // FusionFix rain on cars: the body's forward axis
++    def c196, 0.00100000005, 0, 1, 0.75 // FusionFix rain on cars: the body's vertical, a little across so flat tops keep a frame
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
-@@ -178,6 +193,9 @@
+@@ -178,6 +196,9 @@
      dcl_texcoord2 v4.xyz
      dcl_texcoord7 v5.xy
      dcl_texcoord9 v9
@@ -37,7 +40,7 @@ index 5de051e3..68455713 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -342,6 +360,8 @@
+@@ -342,6 +363,8 @@
            add r29.x, r16.w, -r31.w
            abs r29.x, r29.x
            add r29.x, r29.x, r28.y
@@ -46,7 +49,7 @@ index 5de051e3..68455713 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -428,6 +448,244 @@
+@@ -428,6 +451,266 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
@@ -55,39 +58,32 @@ index 5de051e3..68455713 100644
 +    mov r28, c185.w
 +    mov r30.xyz, r2
 +    mov r30.w, r17.w // the found reflection's share, kept from the drops' frame (r30.w is free after the march)
-+    // The surface's frame in the car's space: up along it (world up, or the car's x on flat tops) and across;
-+    // the coordinates in it, in metres, and how they change from pixel to pixel
-+    mov r10.xyz, v7
-+    mov r11.xyz, v8
-+    mov r12.xyz, v6
-+    nrm r13.xyz, r10
-+    dp3 r8.y, r13, r11
-+    mad r14.xyz, r13, -r8.y, r11
-+    add r14.x, r14.x, c187.z
-+    nrm r15.xyz, r14
-+    crs r16.xyz, r13, r15
-+    dp3 r17.x, r12, r16
-+    dp3 r17.y, r12, r15
-+    dsx r18.xy, r17
-+    dsy r18.zw, r17.xxxy
-+    dp2add r17.z, r18, r18, c187.x
-+    dp2add r17.w, r18.zwzw, r18.zwzw, c187.x
-+    max r17.z, r17.z, r17.w
-+    rsq r17.z, r17.z
-+    min r17.z, r17.z, c190.w // pixels per metre
-+    // Running drops on the sides only
-+    add r8.y, -r8_abs.y, c187.w
-+    add_sat r8.y, r8.y, r8.y
-+    mul r8.y, r8.y, c177.z
 +    mov r24, c185.w
 +    mov r27.xyz, r2
 +    mov r8.x, c176.z
 +    if_lt c185.w, r8.x
-+      // Beads: small ones in most cells of a fine grid, big ones in few of a coarse one
++      // Pixels per metre, from the position's own derivatives
++      dsx r9.xyz, v6
++      dsy r10.xyz, v6
++      dp3 r9.w, r9, r9
++      dp3 r10.w, r10, r10
++      max r9.w, r9.w, r10.w
++      rsq r9.w, r9.w
++      min r8.z, r9.w, c190.w
++      // The beads' frame: across the body's forward axis, and up the surface from there
++      nrm r13.xyz, v7
++      mov r11.xyz, c195
++      crs r14.xyz, r13, r11
++      add r14.z, r14.z, c196.x
++      nrm r17.xyz, r14
++      crs r18.xyz, r13, r17
++      // Beads: small ones on a fine grid, big ones on a coarse one
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c189.x // cells per metre
 +      rcp r9.y, r9.x
-+      mul r10.xy, r17, r9.x
++      dp3 r10.x, v6, r17
++      dp3 r10.y, v6, r18
++      mul r10.xy, r10, r9.x
 +      frc r11.xy, r10
 +      add r11.zw, r10.xyxy, -r11.xyxy // the cell
 +      mul r12.xyz, r11.zwzw, c188
@@ -106,7 +102,7 @@ index 5de051e3..68455713 100644
 +      dp2add r14.x, r13, r13, c187.x
 +      add r14.y, -r14.x, c187.w // its dome
 +      mul r14.z, r13.z, r9.y
-+      mul r14.z, r14.z, r17.z // its radius in pixels
++      mul r14.z, r14.z, r8.z // its radius in pixels
 +      mul r14.w, r14.y, r14.z
 +      mul_sat r14.w, r14.w, c180.y // its edge, softened over a pixel
 +      add r15.x, r14.z, -c180.z
@@ -125,12 +121,20 @@ index 5de051e3..68455713 100644
 +      mul r15.z, r15.z, c177.y
 +      mul r13.xy, r13, r13.w
 +      mul r13.xy, r13, r9.x
-+      mul r13.xy, r13, r15.z
-+      mul r24.zw, r13.xxxy, c182.w // the height's slope: -2 h d / r
++      mul r13.xy, r13, r15.z // h d / r, in metres per metre along the frame
++      mul r14.xyz, r17, r13.x
++      mad r14.xyz, r18, r13.y, r14
++      dsx r13.xyz, v6
++      dsy r12.xyz, v6
++      dp3 r15.x, r14, r13
++      dp3 r15.y, r14, r12
++      mul r24.zw, r15.xxxy, c182.w // the height's screen slope: -2 h d / r along the position's derivatives
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c191.x // cells per metre
 +      rcp r9.y, r9.x
-+      mul r10.xy, r17, r9.x
++      dp3 r10.x, v6, r17
++      dp3 r10.y, v6, r18
++      mul r10.xy, r10, r9.x
 +      frc r11.xy, r10
 +      add r11.zw, r10.xyxy, -r11.xyxy // the cell
 +      mul r12.xyz, r11.zwzw, c188
@@ -149,7 +153,7 @@ index 5de051e3..68455713 100644
 +      dp2add r14.x, r13, r13, c187.x
 +      add r14.y, -r14.x, c187.w // its dome
 +      mul r14.z, r13.z, r9.y
-+      mul r14.z, r14.z, r17.z // its radius in pixels
++      mul r14.z, r14.z, r8.z // its radius in pixels
 +      mul r14.w, r14.y, r14.z
 +      mul_sat r14.w, r14.w, c180.y // its edge, softened over a pixel
 +      add r15.x, r14.z, -c180.z
@@ -168,15 +172,31 @@ index 5de051e3..68455713 100644
 +      mul r15.z, r15.z, c177.y
 +      mul r13.xy, r13, r13.w
 +      mul r13.xy, r13, r9.x
-+      mul r13.xy, r13, r15.z
-+      mul r16.xy, r13, c182.w // the height's slope: -2 h d / r
++      mul r13.xy, r13, r15.z // h d / r, in metres per metre along the frame
++      mul r14.xyz, r17, r13.x
++      mad r14.xyz, r18, r13.y, r14
++      dsx r13.xyz, v6
++      dsy r12.xyz, v6
++      dp3 r15.x, r14, r13
++      dp3 r15.y, r14, r12
++      mul r16.xy, r15, c182.w // the height's screen slope: -2 h d / r along the position's derivatives
 +      max r24.x, r24.x, r16.z
 +      add r24.zw, r24, r16.xxxy
-+      // Running drops, on the sides: columns 1.5 times the bead density, narrow heads sliding at the column's speed
++      // Running drops, on the sides only (none on tops flatter than |n.z| 0.75), in a frame up the body's vertical
++      nrm r13.xyz, v7
++      add r8.y, -r13_abs.z, c196.w
++      mul_sat r8.y, r8.y, c194.y
++      mul r8.y, r8.y, c177.z
++      mad r14.xyz, r13, -r13.z, c196
++      nrm r18.xyz, r14
++      crs r17.xyz, r13, r18
++      dp3 r16.z, v6, r17
++      dp3 r8.w, v6, r18
++      // columns 1.5 times the bead density, narrow heads sliding at the column's speed
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c181.x
 +      rcp r9.y, r9.x
-+      mul r10.x, r17.x, r9.x
++      mul r10.x, r16.z, r9.x
 +      frc r11.x, r10.x
 +      add r11.z, r10.x, -r11.x // the column
 +      mul r12.xyz, r11.zzzz, c188
@@ -189,7 +209,7 @@ index 5de051e3..68455713 100644
 +      frc r12.xyz, r13
 +      add r9.w, r12.x, c180.y
 +      mul r9.w, r9.w, c176.w // how far it slid: 0.5 to 1.5 times c176.w metres
-+      add r9.w, r9.w, r17.y
++      add r9.w, r9.w, r8.w
 +      mul r9.w, r9.w, c181.y
 +      add r9.w, r9.w, r12.y
 +      frc r11.y, r9.w
@@ -202,7 +222,7 @@ index 5de051e3..68455713 100644
 +      mul r14.xy, r13, c193
 +      dp2add r14.z, r14, r14, c187.x
 +      add r14.z, -r14.z, c187.w // the head's dome
-+      mul r14.w, r17.z, c193.z // its half width in pixels
++      mul r14.w, r8.z, c193.z // its half width in pixels
 +      mul r15.x, r14.z, r14.w
 +      mul_sat r15.x, r15.x, c180.y
 +      add r15.y, r14.w, -c180.z
@@ -220,10 +240,10 @@ index 5de051e3..68455713 100644
 +      cmp r12.x, r12.x, c187.x, c187.w // whether the row holds one
 +      mul r12.x, r12.x, r8.y
 +      // Its trail above it: thinner than a pixel, a pixel wide and fainter
-+      mul r15.z, r17.z, c193.w
++      mul r15.z, r8.z, c193.w
 +      max r15.w, r15.z, c187.w
 +      rcp r15.w, r15.w
-+      mul r15.w, r15.w, r17.z
++      mul r15.w, r15.w, r8.z
 +      mul r15.w, r13_abs.x, r15.w
 +      add_sat r15.w, -r15.w, c187.w
 +      min r15.z, r15.z, c187.w
@@ -242,12 +262,17 @@ index 5de051e3..68455713 100644
 +      mul r16.w, r16.w, c177.y
 +      mul r14.xy, r14, c193
 +      mul r14.xy, r14, r16.w
-+      mad r24.zw, r14.xxxy, c182.w, r24
++      mul r15.xyz, r17, r14.x
++      mad r15.xyz, r18, r14.y, r15
++      dsx r13.xyz, v6
++      dsy r12.xyz, v6
++      dp3 r16.x, r15, r13
++      dp3 r16.y, r15, r12 // carried to the screen
++      mad r24.zw, r16.xxxy, c182.w, r24
 +    endif
-+    // The drops' height bends the normal: Mikkelsen's surface gradient, the slope carried to the screen by the
-+    // coordinates' derivatives (v2 is the camera minus the position, which flips the gradient's sign and so its sum)
-+    dp2add r13.y, r24.zwzw, r18, c187.x
-+    dp2add r13.z, r24.zwzw, r18.zwzw, c187.x
++    // The drops' height bends the normal: Mikkelsen's surface gradient from its screen slope (v2 is the camera minus
++    // the position, which flips the gradient's sign and so its sum)
++    mov r13.yz, r24.xzww
 +    dsx r9.xyz, v2
 +    dsy r10.xyz, v2
 +    crs r11.xyz, r10, r27
@@ -291,7 +316,7 @@ index 5de051e3..68455713 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -793,6 +1051,7 @@
+@@ -793,6 +1076,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -299,7 +324,7 @@ index 5de051e3..68455713 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -917,6 +1176,32 @@
+@@ -917,6 +1201,32 @@
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0
@@ -333,10 +358,10 @@ index 5de051e3..68455713 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 317652ff..c2024b53 100644
+index 317652ff..7433be1b 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-@@ -118,8 +118,23 @@
+@@ -118,8 +118,26 @@
      def c158, 0.5, -0.5, 0.5, 0
      def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
      def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
@@ -357,11 +382,14 @@ index 317652ff..c2024b53 100644
 +    def c191, 0.800000012, 0.150000006, 0.150000006, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
 +    def c192, 0.400000006, 0.300000012, 0.159999996, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
 +    def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
++    def c194, 20, 4, 0, 0 // FusionFix rain on cars: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
++    def c195, 0, 1, 0, 0 // FusionFix rain on cars: the body's forward axis
++    def c196, 0.00100000005, 0, 1, 0.75 // FusionFix rain on cars: the body's vertical, a little across so flat tops keep a frame
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
-@@ -129,6 +144,9 @@
+@@ -129,6 +147,9 @@
      dcl_texcoord2 v4.xyz
      dcl_texcoord7 v5.xy
      dcl_texcoord9 v9
@@ -371,7 +399,7 @@ index 317652ff..c2024b53 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -292,6 +310,8 @@
+@@ -292,6 +313,8 @@
            add r29.x, r16.w, -r31.w
            abs r29.x, r29.x
            add r29.x, r29.x, r28.y
@@ -380,7 +408,7 @@ index 317652ff..c2024b53 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -378,6 +398,244 @@
+@@ -378,6 +401,266 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
@@ -389,39 +417,32 @@ index 317652ff..c2024b53 100644
 +    mov r28, c185.w
 +    mov r30.xyz, r2
 +    mov r30.w, r17.w // the found reflection's share, kept from the drops' frame (r30.w is free after the march)
-+    // The surface's frame in the car's space: up along it (world up, or the car's x on flat tops) and across;
-+    // the coordinates in it, in metres, and how they change from pixel to pixel
-+    mov r10.xyz, v7
-+    mov r11.xyz, v8
-+    mov r12.xyz, v6
-+    nrm r13.xyz, r10
-+    dp3 r8.y, r13, r11
-+    mad r14.xyz, r13, -r8.y, r11
-+    add r14.x, r14.x, c187.z
-+    nrm r15.xyz, r14
-+    crs r16.xyz, r13, r15
-+    dp3 r17.x, r12, r16
-+    dp3 r17.y, r12, r15
-+    dsx r18.xy, r17
-+    dsy r18.zw, r17.xxxy
-+    dp2add r17.z, r18, r18, c187.x
-+    dp2add r17.w, r18.zwzw, r18.zwzw, c187.x
-+    max r17.z, r17.z, r17.w
-+    rsq r17.z, r17.z
-+    min r17.z, r17.z, c190.w // pixels per metre
-+    // Running drops on the sides only
-+    add r8.y, -r8_abs.y, c187.w
-+    add_sat r8.y, r8.y, r8.y
-+    mul r8.y, r8.y, c177.z
 +    mov r24, c185.w
 +    mov r27.xyz, r2
 +    mov r8.x, c176.z
 +    if_lt c185.w, r8.x
-+      // Beads: small ones in most cells of a fine grid, big ones in few of a coarse one
++      // Pixels per metre, from the position's own derivatives
++      dsx r9.xyz, v6
++      dsy r10.xyz, v6
++      dp3 r9.w, r9, r9
++      dp3 r10.w, r10, r10
++      max r9.w, r9.w, r10.w
++      rsq r9.w, r9.w
++      min r8.z, r9.w, c190.w
++      // The beads' frame: across the body's forward axis, and up the surface from there
++      nrm r13.xyz, v7
++      mov r11.xyz, c195
++      crs r14.xyz, r13, r11
++      add r14.z, r14.z, c196.x
++      nrm r17.xyz, r14
++      crs r18.xyz, r13, r17
++      // Beads: small ones on a fine grid, big ones on a coarse one
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c189.x // cells per metre
 +      rcp r9.y, r9.x
-+      mul r10.xy, r17, r9.x
++      dp3 r10.x, v6, r17
++      dp3 r10.y, v6, r18
++      mul r10.xy, r10, r9.x
 +      frc r11.xy, r10
 +      add r11.zw, r10.xyxy, -r11.xyxy // the cell
 +      mul r12.xyz, r11.zwzw, c188
@@ -440,7 +461,7 @@ index 317652ff..c2024b53 100644
 +      dp2add r14.x, r13, r13, c187.x
 +      add r14.y, -r14.x, c187.w // its dome
 +      mul r14.z, r13.z, r9.y
-+      mul r14.z, r14.z, r17.z // its radius in pixels
++      mul r14.z, r14.z, r8.z // its radius in pixels
 +      mul r14.w, r14.y, r14.z
 +      mul_sat r14.w, r14.w, c180.y // its edge, softened over a pixel
 +      add r15.x, r14.z, -c180.z
@@ -459,12 +480,20 @@ index 317652ff..c2024b53 100644
 +      mul r15.z, r15.z, c177.y
 +      mul r13.xy, r13, r13.w
 +      mul r13.xy, r13, r9.x
-+      mul r13.xy, r13, r15.z
-+      mul r24.zw, r13.xxxy, c182.w // the height's slope: -2 h d / r
++      mul r13.xy, r13, r15.z // h d / r, in metres per metre along the frame
++      mul r14.xyz, r17, r13.x
++      mad r14.xyz, r18, r13.y, r14
++      dsx r13.xyz, v6
++      dsy r12.xyz, v6
++      dp3 r15.x, r14, r13
++      dp3 r15.y, r14, r12
++      mul r24.zw, r15.xxxy, c182.w // the height's screen slope: -2 h d / r along the position's derivatives
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c191.x // cells per metre
 +      rcp r9.y, r9.x
-+      mul r10.xy, r17, r9.x
++      dp3 r10.x, v6, r17
++      dp3 r10.y, v6, r18
++      mul r10.xy, r10, r9.x
 +      frc r11.xy, r10
 +      add r11.zw, r10.xyxy, -r11.xyxy // the cell
 +      mul r12.xyz, r11.zwzw, c188
@@ -483,7 +512,7 @@ index 317652ff..c2024b53 100644
 +      dp2add r14.x, r13, r13, c187.x
 +      add r14.y, -r14.x, c187.w // its dome
 +      mul r14.z, r13.z, r9.y
-+      mul r14.z, r14.z, r17.z // its radius in pixels
++      mul r14.z, r14.z, r8.z // its radius in pixels
 +      mul r14.w, r14.y, r14.z
 +      mul_sat r14.w, r14.w, c180.y // its edge, softened over a pixel
 +      add r15.x, r14.z, -c180.z
@@ -502,15 +531,31 @@ index 317652ff..c2024b53 100644
 +      mul r15.z, r15.z, c177.y
 +      mul r13.xy, r13, r13.w
 +      mul r13.xy, r13, r9.x
-+      mul r13.xy, r13, r15.z
-+      mul r16.xy, r13, c182.w // the height's slope: -2 h d / r
++      mul r13.xy, r13, r15.z // h d / r, in metres per metre along the frame
++      mul r14.xyz, r17, r13.x
++      mad r14.xyz, r18, r13.y, r14
++      dsx r13.xyz, v6
++      dsy r12.xyz, v6
++      dp3 r15.x, r14, r13
++      dp3 r15.y, r14, r12
++      mul r16.xy, r15, c182.w // the height's screen slope: -2 h d / r along the position's derivatives
 +      max r24.x, r24.x, r16.z
 +      add r24.zw, r24, r16.xxxy
-+      // Running drops, on the sides: columns 1.5 times the bead density, narrow heads sliding at the column's speed
++      // Running drops, on the sides only (none on tops flatter than |n.z| 0.75), in a frame up the body's vertical
++      nrm r13.xyz, v7
++      add r8.y, -r13_abs.z, c196.w
++      mul_sat r8.y, r8.y, c194.y
++      mul r8.y, r8.y, c177.z
++      mad r14.xyz, r13, -r13.z, c196
++      nrm r18.xyz, r14
++      crs r17.xyz, r13, r18
++      dp3 r16.z, v6, r17
++      dp3 r8.w, v6, r18
++      // columns 1.5 times the bead density, narrow heads sliding at the column's speed
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c181.x
 +      rcp r9.y, r9.x
-+      mul r10.x, r17.x, r9.x
++      mul r10.x, r16.z, r9.x
 +      frc r11.x, r10.x
 +      add r11.z, r10.x, -r11.x // the column
 +      mul r12.xyz, r11.zzzz, c188
@@ -523,7 +568,7 @@ index 317652ff..c2024b53 100644
 +      frc r12.xyz, r13
 +      add r9.w, r12.x, c180.y
 +      mul r9.w, r9.w, c176.w // how far it slid: 0.5 to 1.5 times c176.w metres
-+      add r9.w, r9.w, r17.y
++      add r9.w, r9.w, r8.w
 +      mul r9.w, r9.w, c181.y
 +      add r9.w, r9.w, r12.y
 +      frc r11.y, r9.w
@@ -536,7 +581,7 @@ index 317652ff..c2024b53 100644
 +      mul r14.xy, r13, c193
 +      dp2add r14.z, r14, r14, c187.x
 +      add r14.z, -r14.z, c187.w // the head's dome
-+      mul r14.w, r17.z, c193.z // its half width in pixels
++      mul r14.w, r8.z, c193.z // its half width in pixels
 +      mul r15.x, r14.z, r14.w
 +      mul_sat r15.x, r15.x, c180.y
 +      add r15.y, r14.w, -c180.z
@@ -554,10 +599,10 @@ index 317652ff..c2024b53 100644
 +      cmp r12.x, r12.x, c187.x, c187.w // whether the row holds one
 +      mul r12.x, r12.x, r8.y
 +      // Its trail above it: thinner than a pixel, a pixel wide and fainter
-+      mul r15.z, r17.z, c193.w
++      mul r15.z, r8.z, c193.w
 +      max r15.w, r15.z, c187.w
 +      rcp r15.w, r15.w
-+      mul r15.w, r15.w, r17.z
++      mul r15.w, r15.w, r8.z
 +      mul r15.w, r13_abs.x, r15.w
 +      add_sat r15.w, -r15.w, c187.w
 +      min r15.z, r15.z, c187.w
@@ -576,12 +621,17 @@ index 317652ff..c2024b53 100644
 +      mul r16.w, r16.w, c177.y
 +      mul r14.xy, r14, c193
 +      mul r14.xy, r14, r16.w
-+      mad r24.zw, r14.xxxy, c182.w, r24
++      mul r15.xyz, r17, r14.x
++      mad r15.xyz, r18, r14.y, r15
++      dsx r13.xyz, v6
++      dsy r12.xyz, v6
++      dp3 r16.x, r15, r13
++      dp3 r16.y, r15, r12 // carried to the screen
++      mad r24.zw, r16.xxxy, c182.w, r24
 +    endif
-+    // The drops' height bends the normal: Mikkelsen's surface gradient, the slope carried to the screen by the
-+    // coordinates' derivatives (v2 is the camera minus the position, which flips the gradient's sign and so its sum)
-+    dp2add r13.y, r24.zwzw, r18, c187.x
-+    dp2add r13.z, r24.zwzw, r18.zwzw, c187.x
++    // The drops' height bends the normal: Mikkelsen's surface gradient from its screen slope (v2 is the camera minus
++    // the position, which flips the gradient's sign and so its sum)
++    mov r13.yz, r24.xzww
 +    dsx r9.xyz, v2
 +    dsy r10.xyz, v2
 +    crs r11.xyz, r10, r27
@@ -625,7 +675,7 @@ index 317652ff..c2024b53 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -743,6 +1001,7 @@
+@@ -743,6 +1026,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -633,7 +683,7 @@ index 317652ff..c2024b53 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r2.yzw, r6.xxyz, r3.x
      mul r2.yzw, r1.w, r2
-@@ -765,6 +1024,32 @@
+@@ -765,6 +1049,32 @@
      cmp r1.w, r1.w, r2.w, c5.w
      mad r0.yzw, r2.xxyz, r1.w, r0
      mad r0.yzw, r1.xxyz, r1.w, r0
@@ -667,10 +717,10 @@ index 317652ff..c2024b53 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 5aac5d8b..617d9744 100644
+index 5aac5d8b..c4c61706 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-@@ -143,8 +143,23 @@
+@@ -143,8 +143,26 @@
      def c158, 0.5, -0.5, 0.5, 0
      def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
      def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
@@ -691,11 +741,14 @@ index 5aac5d8b..617d9744 100644
 +    def c191, 0.800000012, 0.150000006, 0.150000006, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
 +    def c192, 0.400000006, 0.300000012, 0.159999996, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
 +    def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
++    def c194, 20, 4, 0, 0 // FusionFix rain on cars: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
++    def c195, 0, 1, 0, 0 // FusionFix rain on cars: the body's forward axis
++    def c196, 0.00100000005, 0, 1, 0.75 // FusionFix rain on cars: the body's vertical, a little across so flat tops keep a frame
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
-@@ -154,6 +169,9 @@
+@@ -154,6 +172,9 @@
      dcl_texcoord2 v4.xyz
      dcl_texcoord7 v5.xy
      dcl_texcoord9 v9
@@ -705,7 +758,7 @@ index 5aac5d8b..617d9744 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -318,6 +336,8 @@
+@@ -318,6 +339,8 @@
            add r29.x, r16.w, -r31.w
            abs r29.x, r29.x
            add r29.x, r29.x, r28.y
@@ -714,7 +767,7 @@ index 5aac5d8b..617d9744 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -404,6 +424,244 @@
+@@ -404,6 +427,266 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
@@ -723,39 +776,32 @@ index 5aac5d8b..617d9744 100644
 +    mov r28, c185.w
 +    mov r30.xyz, r2
 +    mov r30.w, r17.w // the found reflection's share, kept from the drops' frame (r30.w is free after the march)
-+    // The surface's frame in the car's space: up along it (world up, or the car's x on flat tops) and across;
-+    // the coordinates in it, in metres, and how they change from pixel to pixel
-+    mov r10.xyz, v7
-+    mov r11.xyz, v8
-+    mov r12.xyz, v6
-+    nrm r13.xyz, r10
-+    dp3 r8.y, r13, r11
-+    mad r14.xyz, r13, -r8.y, r11
-+    add r14.x, r14.x, c187.z
-+    nrm r15.xyz, r14
-+    crs r16.xyz, r13, r15
-+    dp3 r17.x, r12, r16
-+    dp3 r17.y, r12, r15
-+    dsx r18.xy, r17
-+    dsy r18.zw, r17.xxxy
-+    dp2add r17.z, r18, r18, c187.x
-+    dp2add r17.w, r18.zwzw, r18.zwzw, c187.x
-+    max r17.z, r17.z, r17.w
-+    rsq r17.z, r17.z
-+    min r17.z, r17.z, c190.w // pixels per metre
-+    // Running drops on the sides only
-+    add r8.y, -r8_abs.y, c187.w
-+    add_sat r8.y, r8.y, r8.y
-+    mul r8.y, r8.y, c177.z
 +    mov r24, c185.w
 +    mov r27.xyz, r2
 +    mov r8.x, c176.z
 +    if_lt c185.w, r8.x
-+      // Beads: small ones in most cells of a fine grid, big ones in few of a coarse one
++      // Pixels per metre, from the position's own derivatives
++      dsx r9.xyz, v6
++      dsy r10.xyz, v6
++      dp3 r9.w, r9, r9
++      dp3 r10.w, r10, r10
++      max r9.w, r9.w, r10.w
++      rsq r9.w, r9.w
++      min r8.z, r9.w, c190.w
++      // The beads' frame: across the body's forward axis, and up the surface from there
++      nrm r13.xyz, v7
++      mov r11.xyz, c195
++      crs r14.xyz, r13, r11
++      add r14.z, r14.z, c196.x
++      nrm r17.xyz, r14
++      crs r18.xyz, r13, r17
++      // Beads: small ones on a fine grid, big ones on a coarse one
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c189.x // cells per metre
 +      rcp r9.y, r9.x
-+      mul r10.xy, r17, r9.x
++      dp3 r10.x, v6, r17
++      dp3 r10.y, v6, r18
++      mul r10.xy, r10, r9.x
 +      frc r11.xy, r10
 +      add r11.zw, r10.xyxy, -r11.xyxy // the cell
 +      mul r12.xyz, r11.zwzw, c188
@@ -774,7 +820,7 @@ index 5aac5d8b..617d9744 100644
 +      dp2add r14.x, r13, r13, c187.x
 +      add r14.y, -r14.x, c187.w // its dome
 +      mul r14.z, r13.z, r9.y
-+      mul r14.z, r14.z, r17.z // its radius in pixels
++      mul r14.z, r14.z, r8.z // its radius in pixels
 +      mul r14.w, r14.y, r14.z
 +      mul_sat r14.w, r14.w, c180.y // its edge, softened over a pixel
 +      add r15.x, r14.z, -c180.z
@@ -793,12 +839,20 @@ index 5aac5d8b..617d9744 100644
 +      mul r15.z, r15.z, c177.y
 +      mul r13.xy, r13, r13.w
 +      mul r13.xy, r13, r9.x
-+      mul r13.xy, r13, r15.z
-+      mul r24.zw, r13.xxxy, c182.w // the height's slope: -2 h d / r
++      mul r13.xy, r13, r15.z // h d / r, in metres per metre along the frame
++      mul r14.xyz, r17, r13.x
++      mad r14.xyz, r18, r13.y, r14
++      dsx r13.xyz, v6
++      dsy r12.xyz, v6
++      dp3 r15.x, r14, r13
++      dp3 r15.y, r14, r12
++      mul r24.zw, r15.xxxy, c182.w // the height's screen slope: -2 h d / r along the position's derivatives
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c191.x // cells per metre
 +      rcp r9.y, r9.x
-+      mul r10.xy, r17, r9.x
++      dp3 r10.x, v6, r17
++      dp3 r10.y, v6, r18
++      mul r10.xy, r10, r9.x
 +      frc r11.xy, r10
 +      add r11.zw, r10.xyxy, -r11.xyxy // the cell
 +      mul r12.xyz, r11.zwzw, c188
@@ -817,7 +871,7 @@ index 5aac5d8b..617d9744 100644
 +      dp2add r14.x, r13, r13, c187.x
 +      add r14.y, -r14.x, c187.w // its dome
 +      mul r14.z, r13.z, r9.y
-+      mul r14.z, r14.z, r17.z // its radius in pixels
++      mul r14.z, r14.z, r8.z // its radius in pixels
 +      mul r14.w, r14.y, r14.z
 +      mul_sat r14.w, r14.w, c180.y // its edge, softened over a pixel
 +      add r15.x, r14.z, -c180.z
@@ -836,15 +890,31 @@ index 5aac5d8b..617d9744 100644
 +      mul r15.z, r15.z, c177.y
 +      mul r13.xy, r13, r13.w
 +      mul r13.xy, r13, r9.x
-+      mul r13.xy, r13, r15.z
-+      mul r16.xy, r13, c182.w // the height's slope: -2 h d / r
++      mul r13.xy, r13, r15.z // h d / r, in metres per metre along the frame
++      mul r14.xyz, r17, r13.x
++      mad r14.xyz, r18, r13.y, r14
++      dsx r13.xyz, v6
++      dsy r12.xyz, v6
++      dp3 r15.x, r14, r13
++      dp3 r15.y, r14, r12
++      mul r16.xy, r15, c182.w // the height's screen slope: -2 h d / r along the position's derivatives
 +      max r24.x, r24.x, r16.z
 +      add r24.zw, r24, r16.xxxy
-+      // Running drops, on the sides: columns 1.5 times the bead density, narrow heads sliding at the column's speed
++      // Running drops, on the sides only (none on tops flatter than |n.z| 0.75), in a frame up the body's vertical
++      nrm r13.xyz, v7
++      add r8.y, -r13_abs.z, c196.w
++      mul_sat r8.y, r8.y, c194.y
++      mul r8.y, r8.y, c177.z
++      mad r14.xyz, r13, -r13.z, c196
++      nrm r18.xyz, r14
++      crs r17.xyz, r13, r18
++      dp3 r16.z, v6, r17
++      dp3 r8.w, v6, r18
++      // columns 1.5 times the bead density, narrow heads sliding at the column's speed
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c181.x
 +      rcp r9.y, r9.x
-+      mul r10.x, r17.x, r9.x
++      mul r10.x, r16.z, r9.x
 +      frc r11.x, r10.x
 +      add r11.z, r10.x, -r11.x // the column
 +      mul r12.xyz, r11.zzzz, c188
@@ -857,7 +927,7 @@ index 5aac5d8b..617d9744 100644
 +      frc r12.xyz, r13
 +      add r9.w, r12.x, c180.y
 +      mul r9.w, r9.w, c176.w // how far it slid: 0.5 to 1.5 times c176.w metres
-+      add r9.w, r9.w, r17.y
++      add r9.w, r9.w, r8.w
 +      mul r9.w, r9.w, c181.y
 +      add r9.w, r9.w, r12.y
 +      frc r11.y, r9.w
@@ -870,7 +940,7 @@ index 5aac5d8b..617d9744 100644
 +      mul r14.xy, r13, c193
 +      dp2add r14.z, r14, r14, c187.x
 +      add r14.z, -r14.z, c187.w // the head's dome
-+      mul r14.w, r17.z, c193.z // its half width in pixels
++      mul r14.w, r8.z, c193.z // its half width in pixels
 +      mul r15.x, r14.z, r14.w
 +      mul_sat r15.x, r15.x, c180.y
 +      add r15.y, r14.w, -c180.z
@@ -888,10 +958,10 @@ index 5aac5d8b..617d9744 100644
 +      cmp r12.x, r12.x, c187.x, c187.w // whether the row holds one
 +      mul r12.x, r12.x, r8.y
 +      // Its trail above it: thinner than a pixel, a pixel wide and fainter
-+      mul r15.z, r17.z, c193.w
++      mul r15.z, r8.z, c193.w
 +      max r15.w, r15.z, c187.w
 +      rcp r15.w, r15.w
-+      mul r15.w, r15.w, r17.z
++      mul r15.w, r15.w, r8.z
 +      mul r15.w, r13_abs.x, r15.w
 +      add_sat r15.w, -r15.w, c187.w
 +      min r15.z, r15.z, c187.w
@@ -910,12 +980,17 @@ index 5aac5d8b..617d9744 100644
 +      mul r16.w, r16.w, c177.y
 +      mul r14.xy, r14, c193
 +      mul r14.xy, r14, r16.w
-+      mad r24.zw, r14.xxxy, c182.w, r24
++      mul r15.xyz, r17, r14.x
++      mad r15.xyz, r18, r14.y, r15
++      dsx r13.xyz, v6
++      dsy r12.xyz, v6
++      dp3 r16.x, r15, r13
++      dp3 r16.y, r15, r12 // carried to the screen
++      mad r24.zw, r16.xxxy, c182.w, r24
 +    endif
-+    // The drops' height bends the normal: Mikkelsen's surface gradient, the slope carried to the screen by the
-+    // coordinates' derivatives (v2 is the camera minus the position, which flips the gradient's sign and so its sum)
-+    dp2add r13.y, r24.zwzw, r18, c187.x
-+    dp2add r13.z, r24.zwzw, r18.zwzw, c187.x
++    // The drops' height bends the normal: Mikkelsen's surface gradient from its screen slope (v2 is the camera minus
++    // the position, which flips the gradient's sign and so its sum)
++    mov r13.yz, r24.xzww
 +    dsx r9.xyz, v2
 +    dsy r10.xyz, v2
 +    crs r11.xyz, r10, r27
@@ -959,7 +1034,7 @@ index 5aac5d8b..617d9744 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -769,6 +1027,7 @@
+@@ -769,6 +1052,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -967,7 +1042,7 @@ index 5aac5d8b..617d9744 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -842,6 +1101,32 @@
+@@ -842,6 +1126,32 @@
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0
