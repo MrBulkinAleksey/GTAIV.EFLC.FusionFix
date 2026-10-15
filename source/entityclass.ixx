@@ -301,9 +301,10 @@ namespace
     DrawExecute colorWriteExecute = nullptr;
     bool bFaceHooks = false;
     bool bCacheFaces = false;
-    // CacheHalvesSwapped ([NIGHTSHADOWS], test): a cache's first half taken as facing +x, the other way round from a
-    // slot's. With the slot's sign a post had a second shadow from its own lamp once props went into the caches.
-    bool bCacheSwapped = true;
+    // CacheHalvesSwapped ([NIGHTSHADOWS], test, off): a cache's first half taken as facing +x, the other way round from
+    // a slot's. A post's second shadow from its own lamp came with the props in the caches, but with the slot's sign
+    // it stood nearly in place (in both halves it had been well off), so the sign is likely the same.
+    bool bCacheSwapped = false;
     int currentFace = -1;
     FaceOrigin currentOrigin{};
 
@@ -666,7 +667,7 @@ namespace
                     bFaceCullingSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 1) != 0;
                     bFaceCulling = bFaceCullingSetting && bFaceHooks;
                     bSkipLeftOut = iniReader.ReadInteger("PERFORMANCE", "SkipLeftOutDraws", 1) != 0;
-                    bCacheSwapped = iniReader.ReadInteger("NIGHTSHADOWS", "CacheHalvesSwapped", 1) != 0;
+                    bCacheSwapped = iniReader.ReadInteger("NIGHTSHADOWS", "CacheHalvesSwapped", 0) != 0;
                     FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s), SkipLeftOutDraws %d, CacheHalvesSwapped %d\n", int(bDrawLog),
                         int(bFaceCullingSetting), !bFaceCullingSetting ? "off" : bFaceCulling ? "on" : "no hooks", int(bSkipLeftOut), int(bCacheSwapped));
                 };
