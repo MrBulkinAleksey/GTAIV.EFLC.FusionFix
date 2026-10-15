@@ -642,9 +642,10 @@ namespace Lighting20
         // differs from the one kept with the cache when it was drawn (0xD77A88 against the record's +0xF4, stored to the
         // cache's +0x10 at 0xD77D49): the props Collect puts into list 2 never changed it, so a cache drawn before they
         // were there (one a frame, most of them long ago) never got them, and they shadowed only once the lamp took a
-        // slot. The props added for this frame's cache count in too (cacheRedraw at 0xD77A88), so a prop coming into
-        // the lamp's light redraws its cache.
-        static std::atomic<uint32_t> cacheAddFrame{0}, cacheAdds{0}, cacheRedraws{0};
+        // slot. A signature of the props added for this frame's cache goes in too (cacheRedraw at 0xD77A88): a sum of
+        // a hash of each one's entity, place (quarter metres) and tilt, so a prop coming into the lamp's light, leaving
+        // it, moved (a bin knocked over) or swapped for another redraws its cache, not only a change of their count.
+        static std::atomic<uint32_t> cacheAddFrame{0}, cacheSignature{0}, cacheRedraws{0};
         static SafetyHookMid cacheRedraw;
         // The technique group forced while a prop's model is drawn (0x444C50), by group: which group the lamps' caches
         // draw with, if not wd_local
@@ -689,6 +690,17 @@ namespace Lighting20
         {
             const auto matrix = *reinterpret_cast<const float* const*>(entity + 0x20);
             return matrix ? matrix + 12 : reinterpret_cast<const float*>(entity + 0x10);
+        }
+
+        static uint32_t PropSignature(uintptr_t entity) noexcept
+        {
+            uint32_t h = static_cast<uint32_t>(entity) * 0x9E3779B1u;
+            const auto mix = [&h](int32_t v) { h ^= static_cast<uint32_t>(v) + 0x7F4A7C15u + (h << 6) + (h >> 2); };
+            const float* at = EntityAt(entity);
+            for (int i = 0; i < 3; ++i) mix(static_cast<int32_t>(std::floor(at[i] * 4.0f)));
+            if (const auto matrix = *reinterpret_cast<const float* const*>(entity + 0x20))
+                for (int i = 8; i < 11; ++i) mix(static_cast<int32_t>(std::floor(matrix[i] * 10.0f)));
+            return h | 1;
         }
 
         // Ctrl+Shift+F7: the next 120 frames of every prop within 15 m of you, to
@@ -860,8 +872,8 @@ namespace Lighting20
             {
                 ++addedForCache;
                 if (cacheAddFrame.exchange(Frame(), std::memory_order_relaxed) != Frame())
-                    cacheAdds.store(0, std::memory_order_relaxed);
-                ++cacheAdds;
+                    cacheSignature.store(0, std::memory_order_relaxed);
+                cacheSignature.fetch_add(PropSignature(entity), std::memory_order_relaxed);
             }
             addToList(phases, entity, 0.0f, 2);
             ++added;
@@ -1406,7 +1418,7 @@ namespace Lighting20
                 cacheRedraw = safetyhook::create_mid(game + 0x977A88, [](SafetyHookContext& regs)
                 {
                     if (!On() || regs.ebx != 0 || cacheAddFrame.load(std::memory_order_relaxed) != Frame()) return;
-                    const auto n = cacheAdds.load(std::memory_order_relaxed);
+                    const auto n = cacheSignature.load(std::memory_order_relaxed);
                     if (!n) return;
                     regs.edi += n;
                     *reinterpret_cast<uint32_t*>(regs.esp + 0x2C) += n;
