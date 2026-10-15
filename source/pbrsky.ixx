@@ -37,13 +37,11 @@ using namespace PostFxPass;
 constexpr UINT kStrengthRegister = 194;
 constexpr DWORD kSkyViewStage = 10;
 
-// The table is scaled to the timecycle's colours (see SkyAtmosphere.fx): its zenith takes SkyColor's brightness and
-// a share of its hue, its horizon goes half way to the timecycle's horizon, and its brightness rolls off from 1.5 to
-// at most 3 times the zenith's.
+// The table keeps the timecycle's brightness at every height (see SkyAtmosphere.fx), takes a third of its hue, and its
+// bright side towards the sun rolls off from 1.2 to at most 2 times the timecycle's colour there.
 constexpr float kPalette = 0.35f;
-constexpr float kHorizonMatch = 0.5f;
-constexpr float kKnee = 1.5f;
-constexpr float kCeiling = 3.0f;
+constexpr float kKnee = 1.2f;
+constexpr float kCeiling = 2.0f;
 // Haze: Mie phase asymmetry, ground albedo and the camera's height above the sea in km.
 constexpr float kMieG = 0.76f;
 constexpr float kGroundAlbedo = 0.3f;
@@ -91,16 +89,16 @@ export void RegisterPbrSkyParams()
 
 // The timecycle's sky as gta_atmoscatt_clouds' vertex shader makes it: SkyColor, plus the azimuth colours (west and
 // east, here their mean) towards the horizon, AzimuthStrength of them at the horizon, none from 1 / AzimuthHeight up.
-static void TimecycleSky(float height, float out[3])
+static void TimecycleSky(D3DXVECTOR4& sky, D3DXVECTOR4& azimuth)
 {
-    const auto& sky = rage::grmShaderInfo::getShaderParamData(nSkyColorIdx);
+    const auto& skyColour = rage::grmShaderInfo::getShaderParamData(nSkyColorIdx);
     const auto& west = rage::grmShaderInfo::getShaderParamData(nAzimuthColorIdx);
     const auto& east = rage::grmShaderInfo::getShaderParamData(nAzimuthColorEastIdx);
     const float strength = rage::grmShaderInfo::getShaderParamData(nAzimuthStrengthIdx)[0];
     const float azimuthHeight = rage::grmShaderInfo::getShaderParamData(nAzimuthHeightIdx)[0];
-    const float azimuth = (1.0f - std::clamp(height * azimuthHeight, 0.0f, 1.0f)) * strength;
-    for (int i = 0; i < 3; ++i)
-        out[i] = sky[i] + 0.5f * (west[i] + east[i]) * azimuth;
+    sky = D3DXVECTOR4(skyColour[0], skyColour[1], skyColour[2], 0.0f);
+    azimuth = D3DXVECTOR4(0.5f * (west[0] + east[0]) * strength, 0.5f * (west[1] + east[1]) * strength,
+                          0.5f * (west[2] + east[2]) * strength, azimuthHeight);
 }
 
 // Draws the tables the frame needs into their targets. Leaves the device as it found it.
@@ -127,13 +125,11 @@ static bool DrawTables(IDirect3DDevice9* pDevice, float sunHeight, float haze)
     const float sunCos = std::sqrt(std::max(0.0f, 1.0f - sunHeight * sunHeight));
     const D3DXVECTOR4 sun(sunCos, 0.0f, sunHeight, 0.0f);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec3Sun"), &sun);
-    float zenith[3], horizon[3];
-    TimecycleSky(1.0f, zenith);
-    TimecycleSky(0.02f, horizon);
-    const D3DXVECTOR4 zenith4(zenith[0], zenith[1], zenith[2], 0.0f), horizon4(horizon[0], horizon[1], horizon[2], 0.0f);
-    effect->SetVector(effect->GetParameterByName(nullptr, "vec3Zenith"), &zenith4);
-    effect->SetVector(effect->GetParameterByName(nullptr, "vec3Horizon"), &horizon4);
-    const D3DXVECTOR4 match(kPalette, kHorizonMatch, kKnee, kCeiling);
+    D3DXVECTOR4 skyColour, azimuth;
+    TimecycleSky(skyColour, azimuth);
+    effect->SetVector(effect->GetParameterByName(nullptr, "vec3SkyColour"), &skyColour);
+    effect->SetVector(effect->GetParameterByName(nullptr, "vec4Azimuth"), &azimuth);
+    const D3DXVECTOR4 match(kPalette, 0.0f, kKnee, kCeiling);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Match"), &match);
 
     auto draw = [&](const char* technique, IDirect3DSurface9* target, float width, float height)

@@ -4,9 +4,13 @@
 //  - SkyMultiScatter (32 x 32): the light scattered more than once, as seen from a height with the sun at an angle;
 //  - SkyView (192 x 108): the sky seen from the camera, by the angle away from the sun's side and the elevation.
 // The first two change only with the air (its haze), the third with the sun every frame. gta_atmoscatt_clouds
-// (sky_pbr.patch) reads SkyView in place of the timecycle's gradient. The table is scaled so its zenith takes the
-// timecycle's SkyColor (by brightness, and by hue as far as fPalette says), and its horizon goes some way towards
-// the timecycle's horizon colour: timecycle mods keep their sky's brightness and look, the sky gets its shape.
+// (sky_pbr.patch) reads SkyView in place of the timecycle's gradient. The table keeps the timecycle's brightness at
+// every height: each direction is scaled by what the sky at the same height a right angle from the sun needs to take
+// the timecycle's colour there (SkyColor, plus the azimuth colours towards the horizon, as the dome's vertex shader
+// makes it), by brightness and by hue as far as fPalette says. What the atmosphere adds is how the sky changes
+// around: brighter and warmer towards the sun, cooler away from it, the sunset's bands, the earth's shadow. A knee
+// keeps the bright side within twice the timecycle's colour there, so neither the sky nor the clouds matched to it
+// come out brighter than the game's.
 //
 // Units: kilometres. The tables' own frame is z up, the sun at azimuth 0.
 
@@ -38,10 +42,10 @@ sampler2D MultiScatterTex : register(s1);
 
 float4 vec4Air;       // x haze (Mie) multiplier, y camera height in km, z ground albedo, w Mie phase g
 float3 vec3Sun;       // towards the sun in the tables' frame: (cos elevation, 0, sin elevation)
-float3 vec3Zenith;    // the timecycle's SkyColor, which the zenith takes
-float3 vec3Horizon;   // the timecycle's colour at the horizon (SkyColor and the azimuth colours)
-float4 vec4Match;     // x fPalette: 0 brightness only, 1 the timecycle's hue too; y how far the horizon goes towards its own;
-                      // z, w the knee and the ceiling of the sky's brightness, in times the zenith's
+float3 vec3SkyColour;  // the timecycle's SkyColor
+float4 vec4Azimuth;    // xyz the mean of its azimuth colours times AzimuthStrength, w AzimuthHeight
+float4 vec4Match;      // x fPalette: 0 brightness only, 1 the timecycle's hue too; z, w the knee and the ceiling of the
+                       // sky's brightness, in times the timecycle's at that height
 
 struct Medium
 {
@@ -278,22 +282,24 @@ float3 MatchScale(float3 pbr, float3 target)
     return lerp(byBrightness, byChannel, vec4Match.x);
 }
 
+// The timecycle's sky at a height (the sine of the elevation), as gta_atmoscatt_clouds' vertex shader makes it with
+// the mean of its west and east azimuth colours.
+float3 TimecycleSky(float up)
+{
+    return vec3SkyColour + vec4Azimuth.xyz * (1.0 - saturate(up * vec4Azimuth.w));
+}
+
 float4 SkyView_PS(float2 uv : TEXCOORD0) : COLOR0
 {
     const float3 dir = SkyViewDir(uv);
     const float3 sky = SkyRadiance(dir);
-    // The zenith and the horizon a right angle from the sun, where the timecycle's colours are defined best.
-    const float3 zenith = SkyRadiance(float3(0.0, 0.0, 1.0));
-    const float3 horizon = SkyRadiance(float3(0.0, 1.0, 0.02));
-    const float3 zenithScale = MatchScale(zenith, vec3Zenith);
-    const float3 horizonScale = lerp(zenithScale, MatchScale(horizon, vec3Horizon), vec4Match.y);
-    // From the horizon up to the zenith; below it the horizon's.
-    const float up = saturate(dir.z);
-    const float3 matched = sky * lerp(horizonScale, zenithScale, sqrt(up));
-    // The horizon and the haze about a low sun come out up to some 25 times the zenith, where the game's sky stops at
-    // its own colour clamped to 1: past the knee the brightness rolls off towards the ceiling, keeping the hue.
-    const float zenithLuminance = max(Luminance(vec3Zenith), 1e-7);
-    const float l = Luminance(matched) / zenithLuminance;
+    // The same height a right angle from the sun takes the timecycle's colour there; below the horizon, the horizon's.
+    const float3 side = SkyRadiance(float3(0.0, sqrt(saturate(1.0 - dir.z * dir.z)), dir.z));
+    const float3 target = TimecycleSky(max(dir.z, 0.0));
+    const float3 matched = sky * MatchScale(side, target);
+    // Towards a low sun the sky comes out many times the side's: past the knee its brightness rolls off towards the
+    // ceiling, keeping the hue.
+    const float l = Luminance(matched) / max(Luminance(target), 1e-7);
     const float knee = vec4Match.z, room = vec4Match.w - vec4Match.z;
     const float rolled = l <= knee ? l : knee + room * (1.0 - exp(-(l - knee) / room));
     return float4(matched * (rolled / max(l, 1e-7)), 1.0);
