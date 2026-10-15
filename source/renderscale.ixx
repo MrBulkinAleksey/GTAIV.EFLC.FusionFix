@@ -16,6 +16,7 @@ import comvars;
 import hdr;
 import settings;
 import upscaler;
+import vtablepatch;
 
 // Render scale: the scene renders at a fraction of the screen size and DLSS or FSR upscales it.
 //
@@ -167,6 +168,24 @@ namespace
         return true;
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Device hooks
+
+    constexpr int SetRenderTargetIndex = 37;
+    constexpr int SetDepthStencilSurfaceIndex = 39;
+    constexpr int GetDepthStencilSurfaceIndex = 40;
+    constexpr int ClearIndex = 43;
+    constexpr int SetViewportIndex = 47;
+    constexpr int SetScissorRectIndex = 75;
+
+    HRESULT(__stdcall* RealSetRenderTarget)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*) = nullptr;
+    HRESULT(__stdcall* RealSetDepthStencilSurface)(IDirect3DDevice9*, IDirect3DSurface9*) = nullptr;
+    HRESULT(__stdcall* RealGetDepthStencilSurface)(IDirect3DDevice9*, IDirect3DSurface9**) = nullptr;
+    HRESULT(__stdcall* RealClear)(IDirect3DDevice9*, DWORD, const D3DRECT*, DWORD, D3DCOLOR, float, DWORD) = nullptr;
+    HRESULT(__stdcall* RealSetViewport)(IDirect3DDevice9*, const D3DVIEWPORT9*) = nullptr;
+    HRESULT(__stdcall* RealSetScissorRect)(IDirect3DDevice9*, const RECT*) = nullptr;
+    void** HookedVTable = nullptr;
+
     // The bound render target 0 and depth buffer with their sizes, kept by the device hooks so that the thousands of
     // calls a frame don't ask the device. Unknown after a reset, until the next call sets them.
     struct Bound
@@ -209,7 +228,10 @@ namespace
         if (!BoundDepth.known)
         {
             IDirect3DSurface9* ds = nullptr;
-            device->GetDepthStencilSurface(&ds);
+            if (RealGetDepthStencilSurface)
+                RealGetDepthStencilSurface(device, &ds);
+            else
+                device->GetDepthStencilSurface(&ds);
             BoundDepth.Set(ds);
             if (ds)
                 ds->Release();
@@ -221,22 +243,6 @@ namespace
     {
         return width == RenderWidth && height == RenderHeight;
     }
-
-    // ---------------------------------------------------------------------------------------------
-    // Device hooks
-
-    constexpr int SetRenderTargetIndex = 37;
-    constexpr int SetDepthStencilSurfaceIndex = 39;
-    constexpr int ClearIndex = 43;
-    constexpr int SetViewportIndex = 47;
-    constexpr int SetScissorRectIndex = 75;
-
-    HRESULT(__stdcall* RealSetRenderTarget)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*) = nullptr;
-    HRESULT(__stdcall* RealSetDepthStencilSurface)(IDirect3DDevice9*, IDirect3DSurface9*) = nullptr;
-    HRESULT(__stdcall* RealClear)(IDirect3DDevice9*, DWORD, const D3DRECT*, DWORD, D3DCOLOR, float, DWORD) = nullptr;
-    HRESULT(__stdcall* RealSetViewport)(IDirect3DDevice9*, const D3DVIEWPORT9*) = nullptr;
-    HRESULT(__stdcall* RealSetScissorRect)(IDirect3DDevice9*, const RECT*) = nullptr;
-    void** HookedVTable = nullptr;
 
     // Binds a depth buffer past the hooks, and keeps track of it
     void BindDepth(IDirect3DDevice9* device, IDirect3DSurface9* surface)
@@ -296,6 +302,22 @@ namespace
             BoundDepth.Set(surface);
             if (bActive && surface)
                 MatchDepth(device);
+        }
+        return hr;
+    }
+
+    // While the full size depth buffer stands in for the scene's, the scene's is the one bound for anyone who asks.
+    // Whoever keeps what they got (the game's render target stack, a state saved by us or another plugin) then holds
+    // the game's surface, never ours: one reference to FullDepth left after ReleaseOutput failed the next device reset
+    // with D3DERR_INVALIDCALL (DD3D80).
+    HRESULT __stdcall GetDepthStencilSurface(IDirect3DDevice9* device, IDirect3DSurface9** surface)
+    {
+        auto hr = RealGetDepthStencilSurface(device, surface);
+        if (SUCCEEDED(hr) && surface && *surface && *surface == FullDepth && SceneDepth)
+        {
+            (*surface)->Release();
+            *surface = SceneDepth;
+            SceneDepth->AddRef();
         }
         return hr;
     }
@@ -362,15 +384,6 @@ namespace
         return RealSetScissorRect(device, rect);
     }
 
-    template <class F>
-    void Patch(void** vtable, int index, F& real, F hook)
-    {
-        if (vtable[index] == reinterpret_cast<void*>(hook))
-            return;
-        real = reinterpret_cast<F>(vtable[index]);
-        injector::WriteMemory(&vtable[index], reinterpret_cast<void*>(hook), true);
-    }
-
     void InstallHooks()
     {
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
@@ -379,11 +392,12 @@ namespace
         auto vtable = *reinterpret_cast<void***>(device);
         if (vtable == HookedVTable)
             return;
-        Patch(vtable, SetRenderTargetIndex, RealSetRenderTarget, &SetRenderTarget);
-        Patch(vtable, SetDepthStencilSurfaceIndex, RealSetDepthStencilSurface, &SetDepthStencilSurface);
-        Patch(vtable, ClearIndex, RealClear, &Clear);
-        Patch(vtable, SetViewportIndex, RealSetViewport, &SetViewport);
-        Patch(vtable, SetScissorRectIndex, RealSetScissorRect, &SetScissorRect);
+        PatchVTable(vtable, SetRenderTargetIndex, RealSetRenderTarget, &SetRenderTarget);
+        PatchVTable(vtable, SetDepthStencilSurfaceIndex, RealSetDepthStencilSurface, &SetDepthStencilSurface);
+        PatchVTable(vtable, GetDepthStencilSurfaceIndex, RealGetDepthStencilSurface, &GetDepthStencilSurface);
+        PatchVTable(vtable, ClearIndex, RealClear, &Clear);
+        PatchVTable(vtable, SetViewportIndex, RealSetViewport, &SetViewport);
+        PatchVTable(vtable, SetScissorRectIndex, RealSetScissorRect, &SetScissorRect);
         HookedVTable = vtable;
     }
 
@@ -576,10 +590,10 @@ export namespace RenderScale
         // The hooked functions are the D3D9 runtime's own: they take the real device, not the game's wrapper that
         // grcDevice hands out.
         auto realDevice = RageDirect3DDevice9::GetRuntimeDevice();
-        if (FullDepth && RealSetDepthStencilSurface && RealClear && realDevice)
+        if (FullDepth && RealSetDepthStencilSurface && RealGetDepthStencilSurface && RealClear && realDevice)
         {
             IDirect3DSurface9* oldDepth = nullptr;
-            realDevice->GetDepthStencilSurface(&oldDepth);
+            RealGetDepthStencilSurface(realDevice, &oldDepth);
             RealSetDepthStencilSurface(realDevice, FullDepth);
             RealClear(realDevice, 0, nullptr, D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL, 0, 1.0f, 0);
             RealSetDepthStencilSurface(realDevice, oldDepth);

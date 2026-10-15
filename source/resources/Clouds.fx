@@ -106,7 +106,7 @@ float fBaseRound;         // how far the base's edges curl in, by the weather   
 float2 vec2Shear;
 float fCurl;              // how far the billows are swept along the coarse noise at the tops, in their own size         // the coverage's offset at the layer's top: the tops lean downwind, drawn out by the wind              // the glow's strength around the sun, by the weather
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
-float fDebug;             // VolumetricCloudsDebug: 2 the sky brightness matched to, 3 to 11 one term of the light alone (Light)
+float fDebug;             // VolumetricCloudsDebug + 1, the numbers in the comments here:2 the sky brightness matched to, 3 to 11 one term of the light alone (Light)
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach

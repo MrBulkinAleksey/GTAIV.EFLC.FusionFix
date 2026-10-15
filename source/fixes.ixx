@@ -256,7 +256,7 @@ public:
         FusionFix::onInitEvent() += []()
         {
             CIniReader iniReader("");
-            if (iniReader.ReadInteger("MISC", "UnpinMainThread", 1) == 0)
+            if (iniReader.ReadInteger("PERFORMANCE", "UnpinMainThread", 1) == 0)
                 return;
 
             // push 1 / mov esi, ecx / call GetCurrentThread / push eax / call SetThreadAffinityMask

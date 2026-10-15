@@ -40,12 +40,12 @@ namespace PlayerShadowAllocation
     static bool cameraPriority = false;
     static bool casterPriority = false;
     static uint32_t casterHoldMs = 0;
-    static float casterLeadSeconds = 1.0f; // CasterAwareLampPriorityLead
+    static float casterLeadSeconds = 1.0f; // CasterAwarePriorityLead
     // Copied on the game-process callback, read by selection on the render side.
     static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
     static fusionfix::shadows::ShadowCasterPresence casters{};
     static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0}, lightsOffScreen{0};
-    // CasterAwareLampPriorityLog: filled by selection, written out from the game's thread.
+    // NightShadowsSlotLog: filled by selection, written out from the game's thread.
     static fusionfix::shadows::ShadowSlotTrace slotTrace;
     // LampSpacing: lamps beside a nearer one in view give way to lamps further along
     static fusionfix::shadows::ShadowLampSpacing lampSpacing;
@@ -98,7 +98,7 @@ namespace PlayerShadowAllocation
         uintptr_t stackAnchor = 0;
         unsigned depth = 0;
         bool committed = false;
-        // SharedShadowMaps: lights of this pass that use another's map, marked with the pass's serial.
+        // SharedMaps: lights of this pass that use another's map, marked with the pass's serial.
         uint32_t passSerial = 0;
         std::array<uint32_t,4096> sharedMap{};
     };
@@ -430,7 +430,7 @@ namespace PlayerShadowAllocation
                         if (const auto ped = reinterpret_cast<const uintptr_t*>(v + PlayerCar::driverOffset)[i])
                             occupants.push_back(ped);
             });
-            // Your car also counts where its speed takes it in CasterAwareLampPriorityLead: driving up to a cached lamp,
+            // Your car also counts where its speed takes it in CasterAwarePriorityLead: driving up to a cached lamp,
             // the lamp's slot went once the ped in its light had left and came back 0.4 s later as the car came in, a
             // blink of its shadow.
             static uintptr_t lastCar = 0;
@@ -869,7 +869,7 @@ namespace PlayerShadowAllocation
 
 #include "ShadowCacheDependenciesRuntime44.inl"
 
-    // StableShadowMapSlots (Liberty's Shadows 2.0): a light that keeps its slot keeps its map's place in the atlas;
+    // StableMapSlots (Liberty's Shadows 2.0): a light that keeps its slot keeps its map's place in the atlas;
     // newcomers take the places left. The game's sort renumbers the seven every frame, so a lamp kept from one
     // frame to the next moved between tiles and slot records. Lights with the player flag 0x400 stay first, as the
     // game puts them. Run before the cache pick; the cache dependency check and Finalize see the same order.

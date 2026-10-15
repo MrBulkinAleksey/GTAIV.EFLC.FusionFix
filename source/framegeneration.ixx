@@ -18,6 +18,8 @@ import consolegamma;
 import hdr;
 import settings;
 import upscaler;
+import vtablepatch;
+import inireload;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -40,13 +42,13 @@ import upscaler;
 //   the rendered frame goes from a draw call FrameGenerationDelay into the next frame. A frame that ends before its
 //   waiting frames went presents them first.
 // - Sharpening (CAS) is left out of the post processing and drawn over the frames as they are shown, the rendered and
-//   the generated one, with the HUD left as it is (SharpenShownFrame in postfx.ixx). Sharpened before the generation,
+//   the generated one, with the HUD left as it is (SharpenShownFrame in sharpening.ixx). Sharpened before the generation,
 //   the shadow under a moving car went along with the ground in the generated frames and was shown twice.
 // - Not in the menus, where nothing moves, nor with DLSS-IV loaded, which replays the game's D3D9 calls on a thread of
 //   its own and so runs ahead of what the helper is handed.
-// - [TEMPORAL] in the ini: FrameGenerationDelay, FrameGenerationPacing, and FrameGenerationDebug: 1 marks which frames
-//   reach the screen, 2 logs how far between its neighbours a generated frame is (reads frames back, slow), 4 shows
-//   the generated frames in place of the rendered ones, 8 logs the pacing.
+// - [ANTIALIASING] in the ini: FrameGenerationDelay, FrameGenerationPacing; [DEBUG] FrameGenerationDebug (logs): 2 logs how
+//   far between its neighbours a generated frame is (reads frames back, slow), 8 logs the pacing. The graphics menu's Debug
+//   category (FrameGenerationDebugView) marks which frames reach the screen and shows the generated frames alone.
 
 namespace
 {
@@ -67,15 +69,26 @@ namespace
     bool bAsyncCompute = true;      // FrameGenerationAsyncCompute: the helper generates on its compute queue
     bool bDeferredBroken = false;   // the game's Present did not come through the device: not deferred any more
 
-    // FrameGenerationDebug in [TEMPORAL]
+    // FrameGenerationDebug in [DEBUG], the logs
     namespace Debug
     {
-        constexpr int32_t Marker = 1;       // a square in the corner: magenta on generated frames, green on rendered ones
         constexpr int32_t Similarity = 2;   // how much the generated frame differs from the rendered ones around it
-        constexpr int32_t ShowGenerated = 4; // only the generated frames are shown, to check the generation itself
         constexpr int32_t PacingLog = 8;    // the pacing on the CPU and the GPU, every 300 frames
     }
     int32_t nDebug = 0;
+
+    // The menu's FrameGenerationDebugView: bit 1 a square in the corner, magenta on generated frames and green on
+    // rendered ones; bit 2 only the generated frames shown, to check the generation itself
+    namespace DebugView
+    {
+        constexpr int32_t Marker = 1;
+        constexpr int32_t ShowGenerated = 2;
+    }
+    int32_t GetDebugView()
+    {
+        static auto pref = FusionFixSettings.GetRef("PREF_FG_DEBUG_VIEW");
+        return pref ? pref->get() : 0;
+    }
 
     rage::grcRenderTargetPC* PresentRT = nullptr;
     rage::grcRenderTargetPC* GeneratedRT = nullptr;
@@ -83,7 +96,7 @@ namespace
     rage::grcRenderTargetPC* SavedRT = nullptr;     // the back buffer while the rendered frame is presented
     bool bHudLessCaptured = false;  // this frame
 
-    // Sharpening: the post processing leaves it to the frames as they are shown (SharpenShownFrame in postfx.ixx), from
+    // Sharpening: the post processing leaves it to the frames as they are shown (SharpenShownFrame in sharpening.ixx), from
     // a frame into a target, with the finished frame and the one before the HUD to tell the HUD
     using Sharpener = bool (*)(IDirect3DDevice9* device, IDirect3DTexture9* frame, IDirect3DTexture9* present, IDirect3DTexture9* hudLess,
         IDirect3DSurface9* target);
@@ -544,10 +557,10 @@ namespace
         return ok;
     }
 
-    // Debug::Marker: which of the frames reach the screen
+    // DebugView::Marker: which of the frames reach the screen
     void Mark(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer, bool generated)
     {
-        if (!(nDebug & Debug::Marker))
+        if (!(GetDebugView() & DebugView::Marker))
             return;
         RECT square{ 0, 0, 64, 64 };
         device->ColorFill(backBuffer, &square, generated ? D3DCOLOR_XRGB(255, 0, 255) : D3DCOLOR_XRGB(0, 255, 0));
@@ -801,15 +814,6 @@ namespace
         return RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
     }
 
-    template <class F>
-    void Patch(void** vtable, int index, F& real, F hook)
-    {
-        if (vtable[index] == reinterpret_cast<void*>(hook))
-            return;
-        real = reinterpret_cast<F>(vtable[index]);
-        injector::WriteMemory(&vtable[index], reinterpret_cast<void*>(hook), true);
-    }
-
     // On the D3D9 runtime's own device, as the render scale's hooks
     void InstallHooks(IDirect3DDevice9* device)
     {
@@ -817,10 +821,10 @@ namespace
         auto vtable = *reinterpret_cast<void***>(device);
         if (vtable == hooked)
             return;
-        Patch(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
-        Patch(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
-        Patch(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
-        Patch(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
+        PatchVTable(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
+        PatchVTable(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
+        PatchVTable(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
+        PatchVTable(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
         hooked = vtable;
         Log("Draw call hooks installed");
 
@@ -843,24 +847,16 @@ namespace
         }
     }
 
-    // The settings of [TEMPORAL], read again whenever the ini changes while the game runs
-    std::filesystem::path IniPath;
-    std::filesystem::file_time_type IniTime{};
-
-    void ReadSettings()
+    // The frame generation's settings, at startup and on Ctrl+Shift+F10 (IniReload)
+    void ReadSettings(CIniReader& iniReader)
     {
-        CIniReader iniReader("");
-        IniPath = iniReader.GetIniPath();
-        std::error_code error;
-        IniTime = std::filesystem::last_write_time(IniPath, error);
-
-        fDelay = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
-        Upscaler::SetTimingLog(iniReader.ReadInteger("TEMPORAL", "UpscalerTimingLog", 0) != 0);
-        nDebug = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDebug", 0);
-        nPacing = std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGenerationPacing", 2), 0, 2);
-        bDeferredSetting = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDeferred", 1) != 0;
-        bAsyncCompute = iniReader.ReadInteger("TEMPORAL", "FrameGenerationAsyncCompute", 1) != 0;
-        fShowGeneratedAt = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationShowGeneratedAt", 0.2f), 0.0f, 0.9f);
+        fDelay = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
+        Upscaler::SetTimingLog(iniReader.ReadInteger("DEBUG", "UpscalerTimingLog", 0) != 0);
+        nDebug = iniReader.ReadInteger("DEBUG", "FrameGenerationDebug", 0) & (Debug::Similarity | Debug::PacingLog);
+        nPacing = std::clamp(iniReader.ReadInteger("ANTIALIASING", "FrameGenerationPacing", 2), 0, 2);
+        bDeferredSetting = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationDeferred", 1) != 0;
+        bAsyncCompute = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationAsyncCompute", 1) != 0;
+        fShowGeneratedAt = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FrameGenerationShowGeneratedAt", 0.2f), 0.0f, 0.9f);
         // The aims may have changed
         TargetDraws[0] = TargetDraws[1] = 0.0;
         Log("Frame generation settings: delay %.2f, pacing %d, deferred %d (generated frame at %.2f), compute queue %d, debug %d", fDelay, nPacing,
@@ -869,19 +865,6 @@ namespace
         // A fresh start for the statistics
         Stats = {};
         GpuStats = {};
-    }
-
-    void CheckSettings()
-    {
-        static ULONGLONG checked = 0;
-        auto now = GetTickCount64();
-        if (now - checked < 1000)
-            return;
-        checked = now;
-        std::error_code error;
-        auto time = std::filesystem::last_write_time(IniPath, error);
-        if (!error && time != IniTime)
-            ReadSettings();
     }
 
     // DLSS-IV, another DLSS and FSR for the game, records the D3D9 calls of the render thread and replays them on a thread
@@ -907,7 +890,7 @@ namespace
         static auto pref = FusionFixSettings.GetRef("PREF_FRAME_GENERATION");
         auto previous = mode;
         bool on = pref && pref->get() != 0 && Upscaler::IsFrameGenerationAvailable() && !IsDlssIvLoaded();
-        mode = !on ? Mode::Off : (nDebug & Debug::ShowGenerated) ? Mode::ShowGenerated : Mode::On;
+        mode = !on ? Mode::Off : (GetDebugView() & DebugView::ShowGenerated) ? Mode::ShowGenerated : Mode::On;
         if (mode != previous)
         {
             Log("Frame generation: %s", mode == Mode::Off ? "off" : mode == Mode::ShowGenerated ? "showing the generated frames" : "on");
@@ -986,7 +969,6 @@ namespace
     void OnBeforePresent()
     {
         ++FrameNumber;
-        CheckSettings();
         UpdateMode();
         bool hudLess = bHudLessCaptured;
         bHudLessCaptured = false;
@@ -1282,7 +1264,9 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             QueryPerformanceFrequency(&Frequency);
-            ReadSettings();
+            CIniReader iniReader("");
+            ReadSettings(iniReader);
+            IniReload::Add([](CIniReader& reader) { ReadSettings(reader); });
 
             // Offered once the helper found AMD's frame generation library, and not with DLSS-IV. The choice comes back
             // with them: the cfg keeps it.

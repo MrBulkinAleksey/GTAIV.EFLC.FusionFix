@@ -19,6 +19,7 @@ export module procedural;
 import common;
 import comvars;
 import settings;
+import inireload;
 
 // Grass and procedural props ([PROCEDURAL] in the ini, Grass & Props Distance in Display > Advanced).
 //
@@ -46,6 +47,18 @@ import settings;
 //  - ProceduralPool: more records than 512, so props don't vanish or pop where many are around.
 //  - Grass & Props Distance: grass, surface props and 2dfx props go further, and props' own draw distance.
 //  - ProceduralDensity: more or fewer props (not grass).
+//  - ProceduralFarThinning: past the game's own reach the props thin out instead of all going the whole stretched
+//    reach: each one's reach is drawn, by the hash of its position, between the two (the square of a uniform share
+//    of the way), so some 75% are left at 130 m, 45% at 200 m and 20% at 300 m with the slider and Detail Quality at
+//    their top. Thousands of weeds and plants 100-300 m out took 2-2.5 ms of CPU a frame in the G-buffer.
+//  - ProceduralSmallFarCull: a prop whose radius is under 0.5% of its distance (a 0.9 m weed past 180 m, a 0.4 m
+//    plant past 80 m) is left out of the scene's render list. The thinning alone left 3000+ weed draws, 2.5 ms of a
+//    6 ms G-buffer at night: the game's own reach is own + Detail Quality's 110 m, and it fades them over those
+//    110 m (alpha (reach - distance) / extra, CE 0xae7cac), so most far ones were a faint stipple anyway.
+//    And past 60 m small props (radius under 2 m) thin out as they are drawn: of those at distance d, a share
+//    60 / d is kept (half at 120 m, 30% at 200 m; (40 / d)^2 showed them coming in), picked by the hash of their place, so the same ones stay and nearer ones come back as you
+//    get close (skipping them when made would lose them for good: a position is offered once). With the pool at
+//    16384 instead of 512 and the slider at its top, 4000+ weed draws 50-200 m out still took 3.5 ms.
 //  - The 64 candidates of one entity's 2dfx props are capped, which the game itself never checked.
 //
 // And what keeps the cost of more props down (the game already keeps them out of shadows: it sets
@@ -76,6 +89,11 @@ namespace Procedural
     int32_t nRenderCache = 32768;
     float fDensity = 1.0f;
     float fDistance = 1.0f;
+    bool bFarThinning = true;
+    bool bSmallFarCull = true;
+    constexpr float SmallFarScreenSize = 0.005f;   // radius over distance under which a prop is left out
+    constexpr float SmallPropRadius = 2.0f;        // smaller ones thin out past SmallFarThinFrom
+    constexpr float SmallFarThinFrom = 60.0f;
     int32_t nGroundTriangles = 2048;
     volatile LONG nTriangles = 0;       // with the trace on, the triangles the manager holds
     bool bInReflections = false;
@@ -192,16 +210,21 @@ namespace Procedural
     float lastCamera[3] = {};
     uint64_t lastCameraTime = 0;
 
-    // The props that are out, for the render lists
-    std::unordered_set<uintptr_t> props;
+    // The props that are out, for the render lists, with their model's radius and the share of the way past
+    // SmallFarThinFrom they keep being drawn at (from the hash of their place)
+    struct PropInfo { float radius; float keep; };
+    std::unordered_map<uintptr_t, PropInfo> props;
     SRWLOCK propsLock = SRWLOCK_INIT;
+    uintptr_t modelInfos = 0;           // CE 0x1295cd8, model infos by index
 
-    bool IsProp(uintptr_t entity)
+    // Its radius and share when it is a prop, else a negative radius
+    PropInfo FindProp(uintptr_t entity)
     {
         AcquireSRWLockShared(&propsLock);
-        bool found = props.contains(entity);
+        auto it = props.find(entity);
+        PropInfo info = it != props.end() ? it->second : PropInfo{ -1.0f, 0.0f };
         ReleaseSRWLockShared(&propsLock);
-        return found;
+        return info;
     }
 
     // Positions held over to the next update, first in the queue then
@@ -329,7 +352,7 @@ namespace Procedural
     uint32_t nUsedMax = 0;
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
     uint32_t nQueueMax = 0, nWaitingMax = 0, nDropped = 0;
-    uint32_t nReflectionsSkipped = 0;
+    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0;
     uint32_t nConeFull = 0, nParkedNow = 0;
     uint32_t nUpdates = 0;
     double fUpdateMs = 0.0, fUpdateMaxMs = 0.0;
@@ -469,6 +492,22 @@ namespace Procedural
         fGatherNow = std::min(fGatherNow > 0.0f ? fGatherNow : farDistance, farDistance);
     }
 
+    // At startup and on Ctrl+Shift+F10 (IniReload): what the generator looks at as it runs. The pools, the density
+    // and the ground triangles are sized at startup.
+    void ReadLiveSettings(CIniReader& iniReader)
+    {
+        bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
+        bGatherPriority = iniReader.ReadInteger("PROCEDURAL", "ProceduralGatherPriority", 1) != 0;
+        fConeBack = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeBack", 70.0f), 0.0f, 1000.0f);
+        // For the props made from now on
+        bFarThinning = iniReader.ReadInteger("PROCEDURAL", "ProceduralFarThinning", 1) != 0;
+        bSmallFarCull = iniReader.ReadInteger("PROCEDURAL", "ProceduralSmallFarCull", 1) != 0;
+        fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
+        fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
+        bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
+        nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
+    }
+
     void ApplyDefinitions()
     {
         if (!pDefinitions)
@@ -574,8 +613,15 @@ namespace Procedural
         {
             if (auto entity = *(uint8_t**)(record + 8))
             {
+                const auto model = *(uint16_t*)(entity + 0x2E);
+                const auto info = modelInfos ? *(uintptr_t*)(modelInfos + model * 4) : 0;
+                const float radius = info ? *(float*)(info + 0x1C) : 0.0f;
+                // Other bits of the hash than the reach's below, so the two don't go together
+                float place[3];
+                const float keep = CEntity::GetPosition(uintptr_t(entity), place) ?
+                    float((PositionKey(place) >> 12) & 0xFFFFFF) / float(0x1000000) : 0.0f;
                 AcquireSRWLockExclusive(&propsLock);
-                props.insert(uintptr_t(entity));
+                props[uintptr_t(entity)] = { radius, keep };
                 ReleaseSRWLockExclusive(&propsLock);
 
                 // Drawn while its own distance times the phase's multiplier (about 1) plus Detail Quality's extra
@@ -584,8 +630,19 @@ namespace Procedural
                 auto& drawDistance = *(float*)(entity + 0x50);
                 if (fDistance != 1.0f && std::isfinite(drawDistance) && drawDistance > 0.0f && drawDistance < 2000.0f)
                 {
-                    float extra = pDetailExtra ? *pDetailExtra : 0.0f;
-                    drawDistance = drawDistance * fDistance + (fDistance - 1.0f) * std::max(extra, 0.0f);
+                    float extra = std::max(pDetailExtra ? *pDetailExtra : 0.0f, 0.0f);
+                    float stretched = drawDistance * fDistance + (fDistance - 1.0f) * extra;
+                    float position[3];
+                    if (bFarThinning && fDistance > 1.0f && CEntity::GetPosition(uintptr_t(entity), position))
+                    {
+                        // Its reach (own + extra) between the game's and the stretched one, the same for a prop at the
+                        // same place each time it is made
+                        const float own = drawDistance + extra, full = stretched + extra;
+                        const float share = float((PositionKey(position) >> 40) & 0xFFFFFF) / float(0x1000000);
+                        drawDistance = own + (full - own) * share * share - extra;
+                    }
+                    else
+                        drawDistance = stretched;
                 }
             }
         }
@@ -824,20 +881,34 @@ namespace Procedural
         waiting.clear();
     }
 
-    // The render lists: reflection phases off for props
-    uint32_t DropReflections(uintptr_t entity, uint32_t phases)
+    // The render lists: reflection phases off for props, and the scene for small ones far off
+    uint32_t DropPhases(uintptr_t entity, uint32_t phases, float distance)
     {
-        if (bInReflections || !pReflectionPhases || !pScenePhase)
+        if (!pReflectionPhases || !pScenePhase)
             return phases;
-        auto reflections = *pReflectionPhases & ~*pScenePhase;
-        if (!(phases & reflections))
+        const auto reflections = bInReflections ? 0 : *pReflectionPhases & ~*pScenePhase;
+        const auto scene = bSmallFarCull ? *pScenePhase : 0;
+        if (!(phases & (reflections | scene)))
             return phases;
         // Props have 0x10000 (no shadows) and 0x40000000 from the generator; few other entities have both
         constexpr uint32_t propFlags = 0x10000 | 0x40000000;
-        if ((*(uint32_t*)(entity + 0x24) & propFlags) != propFlags || !IsProp(entity))
+        if ((*(uint32_t*)(entity + 0x24) & propFlags) != propFlags)
             return phases;
-        nReflectionsSkipped++;
-        return phases & ~reflections;
+        const auto [radius, keep] = FindProp(entity);
+        if (radius < 0.0f)
+            return phases;
+        if (phases & reflections)
+        {
+            nReflectionsSkipped++;
+            phases &= ~reflections;
+        }
+        if ((phases & scene) && radius > 0.0f && (radius < distance * SmallFarScreenSize ||
+            (radius < SmallPropRadius && distance > SmallFarThinFrom && keep * distance > SmallFarThinFrom)))
+        {
+            nSmallFarCulled++;
+            phases &= ~scene;
+        }
+        return phases;
     }
 
     SafetyHookInline shUpdate;
@@ -929,7 +1000,7 @@ public:
             CIniReader iniReader("");
 
             // [PROCEDURAL]
-            auto logLevel = iniReader.ReadInteger("PROCEDURAL", "ProceduralLog", 0);
+            auto logLevel = iniReader.ReadInteger("DEBUG", "ProceduralLog", 0);
             bLog = logLevel >= 1;
             bTrace = logLevel >= 2;
             nPool = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralPool", 16384), int32_t(VanillaRecords), 65535);
@@ -1069,13 +1140,8 @@ public:
                 pBuildingPool = *pool.get_first<uint8_t**>(2);
                 pBuildingReserve = pool.get_first<uint32_t>(12);
             }
-            bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
-            bGatherPriority = iniReader.ReadInteger("PROCEDURAL", "ProceduralGatherPriority", 1) != 0;
-            fConeBack = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeBack", 70.0f), 0.0f, 1000.0f);
-            fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
-            fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
-            bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
-            nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
+            ReadLiveSettings(iniReader);
+            IniReload::Add(ReadLiveSettings);
 
             // With the trace on, the game out of drawable references: mov ecx, 0x1173750; call CE 0xa8a990 in CE 0xaf4710
             if (bTrace)
@@ -1262,21 +1328,24 @@ public:
             }
 
             // Render lists, where the shadow phases are dropped for entities with 0x10000: esi the entity,
-            // ecx its phases (the second also keeps them at [esp+0x28])
+            // ecx its phases (the second also keeps them at [esp+0x28]), edi its entry, the distance at +4
             pattern = hook::pattern("85 0D ? ? ? ? 75 ? 0F B6 46 63 3D EF 00 00 00");
             auto listA = hook::pattern("F7 43 40 00 01 00 00 F3 0F 10 47 04");
             auto listB = hook::pattern("89 4C 24 28 A9 00 00 00 08");
             if (!pattern.empty() && !listA.empty() && !listB.empty())
             {
                 pReflectionPhases = *pattern.get_first<uint32_t*>(2);
+                // CDrawEntityDC's execute: movzx eax, word [esi+0x30]; mov eax, [eax*4 + model infos]
+                if (auto infos = hook::pattern("0F B7 46 30 8B 04 85 ? ? ? ? 85 C0"); !infos.empty())
+                    modelInfos = *infos.get_first<uintptr_t>(7);
                 pScenePhase = *listB.get_first<uint32_t*>(0xD); // test [0x159af24], edx after the je
                 static auto ListAHook = safetyhook::create_mid(listA.get_first(0), [](SafetyHookContext& regs)
                 {
-                    regs.ecx = DropReflections(regs.esi, uint32_t(regs.ecx));
+                    regs.ecx = DropPhases(regs.esi, uint32_t(regs.ecx), *(float*)(regs.edi + 4));
                 });
                 static auto ListBHook = safetyhook::create_mid(listB.get_first(4), [](SafetyHookContext& regs)
                 {
-                    regs.ecx = DropReflections(regs.esi, uint32_t(regs.ecx));
+                    regs.ecx = DropPhases(regs.esi, uint32_t(regs.ecx), *(float*)(regs.edi + 4));
                     *(uint32_t*)(regs.esp + 0x28) = uint32_t(regs.ecx);
                 });
             }
@@ -1320,13 +1389,13 @@ public:
             auto alive = props.size();
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}; box full {}, candidates capped {}",
+                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}; box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
-                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nEntitiesCapped, nCandidatesCapped));
+                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nEntitiesCapped, nCandidatesCapped));
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
-            nReflectionsSkipped = 0;
+            nReflectionsSkipped = nSmallFarCulled = 0;
             nConeFull = 0;
             nConeReleased = 0;
         };

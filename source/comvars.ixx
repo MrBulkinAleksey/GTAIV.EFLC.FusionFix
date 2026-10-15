@@ -2646,6 +2646,9 @@ export namespace RageDirect3DDevice9
     // into the D3D9 runtime with the proxy for the device crash, so these always go by this one.
     IDirect3DDevice9* RuntimeDevice = nullptr;
 
+    // Called with the device as the game stores it, right after creating it
+    void (*OnDeviceStored)(IDirect3DDevice9* device) = nullptr;
+
     IDirect3DDevice9* GetRuntimeDevice()
     {
         if (!RuntimeDevice && m_pRealDevice)
@@ -2697,6 +2700,8 @@ namespace RageDirect3DDevice9
     void __stdcall StoreDevice(IDirect3DDevice9* device)
     {
         RuntimeDevice = device;
+        if (OnDeviceStored && device)
+            OnDeviceStored(device);
     }
 
     // Takes the place of the call right after the game stores its device, eax still holds it. The call's offset is

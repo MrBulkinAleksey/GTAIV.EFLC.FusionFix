@@ -15,6 +15,7 @@ import seasonal;
 import settings;
 import shadows;
 import timecycext;
+import inireload;
 
 template<typename T, typename ... U>
 concept IsAnyOf = (std::same_as<T, U> || ...);
@@ -195,7 +196,8 @@ public:
             bool bConsoleCarReflectionsAndDirt = iniReader.ReadInteger("MISC", "ConsoleCarReflectionsAndDirt", 1) != 0;
             bSmoothShorelines = iniReader.ReadInteger("MISC", "SmoothShorelines", 1) != 0;
             bSmoothLightVolumes = iniReader.ReadInteger("MISC", "SmoothLightVolumes", 1) != 0;
-            bSkyHDR = iniReader.ReadInteger("POSTFX", "SkyHDR", 1) != 0;
+            bSkyHDR = iniReader.ReadInteger("LIGHTING", "SkyHDR", 1) != 0;
+            IniReload::Add([](CIniReader& ini) { bSkyHDR = ini.ReadInteger("LIGHTING", "SkyHDR", 1) != 0; });
 
             bNoBloomColorShift = iniReader.ReadInteger("MISC", "NoBloomColorShift", 1) != 0;
             fMaxPQValue = std::max(iniReader.ReadFloat("MISC", "MaxPQValue", 100.0f), 0.0000001f);

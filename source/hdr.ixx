@@ -7,7 +7,9 @@ export module hdr;
 
 import common;
 import comvars;
+import screenquad;
 import settings;
+import vtablepatch;
 
 #define IDR_HDR_OUTPUT_PS 3101
 
@@ -205,11 +207,7 @@ public:
 
         auto vtable = *reinterpret_cast<void***>(d3d);
         constexpr auto CreateDeviceIndex = 16;
-        if (vtable[CreateDeviceIndex] != reinterpret_cast<void*>(&CreateDevice))
-        {
-            RealCreateDevice = reinterpret_cast<decltype(RealCreateDevice)>(vtable[CreateDeviceIndex]);
-            injector::WriteMemory(&vtable[CreateDeviceIndex], &CreateDevice, true);
-        }
+        PatchVTable(vtable, CreateDeviceIndex, RealCreateDevice, &CreateDevice);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -397,19 +395,9 @@ public:
         device->SetPixelShader(OutputPS);
         device->SetPixelShaderConstantF(0, constants, 1);
         device->SetVertexShader(nullptr);
-        device->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        device->SetFVF(kScreenVertexFVF);
 
-        struct ScreenVertex { float x, y, z, rhw, u, v; };
-        auto width = static_cast<float>(desc.Width);
-        auto height = static_cast<float>(desc.Height);
-        ScreenVertex vertices[4] =
-        {
-            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
-            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f },
-        };
-        device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(ScreenVertex));
+        ScreenQuad::Full(static_cast<float>(desc.Width), static_cast<float>(desc.Height)).Draw(device);
 
         // Restore
         for (size_t i = 0; i < std::size(renderStates); ++i)

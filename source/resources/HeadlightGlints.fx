@@ -6,7 +6,7 @@
 // front of it. Here each headlight is two small spheres, its lamps, seen from any side but behind,
 // and every glossy pixel takes their GGX highlight: the energy the sphere's size spreads (Karis),
 // so a mirror shows each lamp as a point of the same brightness near and far, and rough paint a
-// wider, dimmer spot. Inside the beam, where the game's own highlight (GGX too, with LightsGGX)
+// wider, dimmer spot. Inside the beam, where the game's own highlight (GGX too, with GGXLights)
 // lights the surface, this one gives way to it.
 //
 // What glints: gloss over vec4Glint.y, as SSR decides what reflects (car paint about 0.8, a wet

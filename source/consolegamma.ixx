@@ -8,6 +8,7 @@ export module consolegamma;
 import common;
 import comvars;
 import d3dx9_43;
+import screenquad;
 import settings;
 
 #define IDR_CONSOLEGAMMA 134
@@ -204,16 +205,7 @@ private:
 
     static void DrawScreenQuad(IDirect3DDevice9* device)
     {
-        struct ScreenVertex { float x, y, z, rhw, u, v; };
-        ScreenVertex vertices[4] =
-        {
-            { -0.5f,                              -0.5f,                               0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,                              float(backBufferInfo.height) - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-            { float(backBufferInfo.width) - 0.5f, -0.5f,                               0.0f, 1.0f, 1.0f, 0.0f },
-            { float(backBufferInfo.width) - 0.5f, float(backBufferInfo.height) - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f }
-        };
-
-        device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(ScreenVertex));
+        ScreenQuad::Full(float(backBufferInfo.width), float(backBufferInfo.height)).Draw(device);
     }
 
     static void Render(IDirect3DDevice9* device)
@@ -251,7 +243,7 @@ private:
 
         device->SetStreamSource(0, nullptr, 0, 0);
         device->SetVertexDeclaration(nullptr);
-        device->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+        device->SetFVF(kScreenVertexFVF);
 
         pEffect->SetTexture(hInputTex2D, pSceneTex);
         pEffect->SetTechnique(hGammaTechnique);
