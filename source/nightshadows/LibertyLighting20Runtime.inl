@@ -655,6 +655,9 @@ namespace Lighting20
         // a hash of each one's entity, place (quarter metres) and tilt, so a prop coming into the lamp's light, leaving
         // it, moved (a bin knocked over) or swapped for another redraws its cache, not only a change of their count.
         static std::atomic<uint32_t> cacheAddFrame{0}, cacheSignature{0}, cacheRedraws{0};
+        // Bumped on each ini reload (Ctrl+Shift+F10) and mixed into the signature, so every cache with props is
+        // redrawn after a switch that changes how they are drawn (CacheHalvesSwapped, PropCacheLocal, PropOneHalf)
+        static std::atomic<uint32_t> cacheEpoch{0};
         static SafetyHookMid cacheRedraw;
         // The technique group forced while a prop's model is drawn (0x444C50), by group: which group the lamps' caches
         // draw with, if not wd_local
@@ -1509,11 +1512,12 @@ namespace Lighting20
             ownLampOnly = ini.ReadInteger("NIGHTSHADOWS", "PropOwnLampOnly", 1) != 0;
             verdictsOn = ini.ReadInteger("NIGHTSHADOWS", "PropRenderVerdicts", 1) != 0;
             cacheProps = ini.ReadInteger("NIGHTSHADOWS", "PropsInCaches", 1) != 0;
-            cacheLocal = ini.ReadInteger("NIGHTSHADOWS", "PropCacheLocal", 1) != 0;
-            oneHalf = ini.ReadInteger("NIGHTSHADOWS", "PropOneHalf", 1) != 0;
             const auto readRoute = [](CIniReader& reader)
             {
                 drawRoute.store(std::clamp(reader.ReadInteger("NIGHTSHADOWS", "PropDrawRoute", 0), 0, 7), std::memory_order_relaxed);
+                cacheLocal = reader.ReadInteger("NIGHTSHADOWS", "PropCacheLocal", 1) != 0;
+                oneHalf = reader.ReadInteger("NIGHTSHADOWS", "PropOneHalf", 1) != 0;
+                ++cacheEpoch;
             };
             readRoute(ini);
             IniReload::Add(readRoute);
@@ -1541,8 +1545,9 @@ namespace Lighting20
                 cacheRedraw = safetyhook::create_mid(game + 0x977A88, [](SafetyHookContext& regs)
                 {
                     if (!On() || regs.ebx != 0 || cacheAddFrame.load(std::memory_order_relaxed) != Frame()) return;
-                    const auto n = cacheSignature.load(std::memory_order_relaxed);
+                    auto n = cacheSignature.load(std::memory_order_relaxed);
                     if (!n) return;
+                    n += cacheEpoch.load(std::memory_order_relaxed) * 0x9E3779B1u;
                     regs.edi += n;
                     *reinterpret_cast<uint32_t*>(regs.esp + 0x2C) += n;
                     if (regs.edi != *reinterpret_cast<const uint32_t*>(regs.ebp + game + 0xD9F1F4)) ++cacheRedraws;

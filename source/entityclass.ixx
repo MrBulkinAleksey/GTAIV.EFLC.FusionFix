@@ -301,6 +301,9 @@ namespace
     DrawExecute colorWriteExecute = nullptr;
     bool bFaceHooks = false;
     bool bCacheFaces = false;
+    // CacheHalvesSwapped ([NIGHTSHADOWS], test): a cache's first half taken as facing +x, the other way round from a
+    // slot's. With the slot's sign a post had a second shadow from its own lamp once props went into the caches.
+    bool bCacheSwapped = true;
     int currentFace = -1;
     FaceOrigin currentOrigin{};
 
@@ -331,8 +334,8 @@ namespace
         const int face = *reinterpret_cast<const int32_t*>(bytes + 0x10);
         if (bytes[kFaceMarkByte] == kFaceMark && (face == 0 || face == 1))
         {
-            currentFace = face;
             currentOrigin = faceOrigins[bytes[kFaceOriginByte]];
+            currentFace = currentOrigin.cache && bCacheSwapped ? face ^ 1 : face;
         }
         else
             currentFace = -1;
@@ -663,8 +666,9 @@ namespace
                     bFaceCullingSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 1) != 0;
                     bFaceCulling = bFaceCullingSetting && bFaceHooks;
                     bSkipLeftOut = iniReader.ReadInteger("PERFORMANCE", "SkipLeftOutDraws", 1) != 0;
-                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s), SkipLeftOutDraws %d\n", int(bDrawLog),
-                        int(bFaceCullingSetting), !bFaceCullingSetting ? "off" : bFaceCulling ? "on" : "no hooks", int(bSkipLeftOut));
+                    bCacheSwapped = iniReader.ReadInteger("NIGHTSHADOWS", "CacheHalvesSwapped", 1) != 0;
+                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s), SkipLeftOutDraws %d, CacheHalvesSwapped %d\n", int(bDrawLog),
+                        int(bFaceCullingSetting), !bFaceCullingSetting ? "off" : bFaceCulling ? "on" : "no hooks", int(bSkipLeftOut), int(bCacheSwapped));
                 };
                 CIniReader iniReader("");
                 readIni(iniReader);
