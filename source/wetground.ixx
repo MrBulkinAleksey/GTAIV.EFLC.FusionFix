@@ -83,9 +83,9 @@ export void RenderWetGround(IDirect3DDevice9* pDevice)
         return skip("off in the menu");
     if (!R.WetGroundEffect)
         return skip("no effect");
-    if (R.fWetness <= 0.0f && R.nWetGroundDebug != 1)
+    if (R.fWetness <= 0.0f && R.WetGroundDebug() != 1)
         return skip("dry");
-    if (R.bInteriorScene && R.nWetGroundDebug != 1)
+    if (R.bInteriorScene && R.WetGroundDebug() != 1)
         return skip("interior");
     if (!pDevice || !R.mDiffuseRT || !R.mNormalRT || !R.mSpecularRT || !R.mMaterialIdRT || !R.mDiffuseRT->mD3DTexture ||
         !R.mNormalRT->mD3DTexture || !R.mSpecularRT->mD3DTexture || !R.mMaterialIdRT->mD3DTexture)
@@ -159,7 +159,7 @@ export void RenderWetGround(IDirect3DDevice9* pDevice)
     const D3DXVECTOR4 allow1(float((mask >> 4) & 1), float((mask >> 5) & 1), float((mask >> 6) & 1), float((mask >> 7) & 1));
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Allow0"), &allow0);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Allow1"), &allow1);
-    effect->SetFloat(effect->GetParameterByName(nullptr, "fDebug"), float(R.nWetGroundDebug));
+    effect->SetFloat(effect->GetParameterByName(nullptr, "fDebug"), float(R.WetGroundDebug()));
 
     // Saved besides what StateBackup keeps around OnGBufferEnd: the textures, sampler states and
     // constants the pass sets.

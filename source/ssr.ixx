@@ -189,7 +189,7 @@ export void RenderScreenSpaceReflections()
     effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);
     effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
     effect->SetFloat(h.fStepsPerPixel, 1.0f / R.fSSRStepPixels);
-    effect->SetFloat(h.fMarchFullDepth, R.bSSRMarchFullDepth ? 1.0f : 0.0f);
+    effect->SetFloat(h.fMarchFullDepth, R.SSRMarchFullDepth() ? 1.0f : 0.0f);
     const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1] &&
                           R.SSRHitDistSurf[half];
     SetNoiseOffset(effect, temporal && R.bSSRTemporalJitter);

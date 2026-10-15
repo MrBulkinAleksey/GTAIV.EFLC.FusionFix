@@ -1529,11 +1529,11 @@ private:
                 log.Printf("clouds drawn with lit %.2f %.2f %.2f, shade %.2f %.2f %.2f, ceiling %.2f; lit by the %s at %.2f; sky clamp %.2f %.2f %.2f; volumetric fog %d; sky HDR %d; sky match %.2f; debug %d\n",
                         R.CloudLastLit[0], R.CloudLastLit[1], R.CloudLastLit[2], R.CloudLastShade[0], R.CloudLastShade[1], R.CloudLastShade[2],
                         R.CloudLastCeiling, R.bCloudLastMoonlit ? "moon" : "sun", R.CloudLastLightStrength, R.CloudLastClamp[0], R.CloudLastClamp[1], R.CloudLastClamp[2],
-                        [] { static auto fog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG"); return fog ? fog->get() : -1; }(), int(bSkyHDR), R.fVolumetricCloudsSkyMatch, R.nVolumetricCloudsDebug);
+                        [] { static auto fog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG"); return fog ? fog->get() : -1; }(), int(bSkyHDR), R.fVolumetricCloudsSkyMatch, R.VolumetricCloudsDebug());
                 log.Component("CloudShadows");
                 log.Printf("shadow constants: c197 %.3f %.3f %.1f %.6f  c198 %.3f %.3f %.3f %.3f  c199 %.3f %.3f  noise %s, %s after the lights  debug %d\n",
                         k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], R.CloudNoiseTexture ? "made" : "missing",
-                        R.bCloudNoiseSurvived ? "still bound" : "gone", R.nCloudShadowsDebug);
+                        R.bCloudNoiseSurvived ? "still bound" : "gone", R.CloudShadowsDebug());
                 log.Printf("s12 before the shadows: srgb %lu  max mip %lu  min filter %lu  lod bias %.3f\n",
                         static_cast<unsigned long>(R.CloudSamplerBefore[0]), static_cast<unsigned long>(R.CloudSamplerBefore[1]),
                         static_cast<unsigned long>(R.CloudSamplerBefore[2]), std::bit_cast<float>(R.CloudSamplerBefore[3]));
@@ -1579,7 +1579,7 @@ private:
                 log.Component("WetGround");
                 log.Printf("wet ground: %s; effect %s (hr 0x%08lX); wetness %.3f, rain %.3f, materials 0x%02X, debug %d\n",
                         R.szWetGroundStatus, R.WetGroundEffect ? "built" : "missing", static_cast<unsigned long>(R.hrWetGroundEffect), R.fWetness,
-                        CWeather::Rain ? *CWeather::Rain : -1.0f, unsigned(R.nWetGroundMaterials), R.nWetGroundDebug);
+                        CWeather::Rain ? *CWeather::Rain : -1.0f, unsigned(R.nWetGroundMaterials), R.WetGroundDebug());
                 log.Component("Clouds");
                 log.Printf("volumetric clouds: %s; effect %s (hr 0x%08lX); shadows follow them %d; HDRExposure %.3f; CloudColor %.3f %.3f %.3f; "
                              "SunsetColor %.3f %.3f %.3f; CloudInscatteringRange %.3f; SunDirection %.3f %.3f %.3f; SkyColor %.3f %.3f %.3f; MoonPosition %.3f %.3f %.3f\n",
@@ -2395,12 +2395,12 @@ public:
             float c197[4] = { R.fSpecularSheen, strength, deckHeight, invScale };
             float c198[4] = { windX, windY, cover, R.kCloudWeatherReach };
             float c199[4] = { 0.0f, R.fCloudShadowsSoftness, R.CloudMorphPhase(), R.kCloudMorphReach / R.fCloudShadowsScale };
-            if (R.nCloudShadowsDebug == 1)
+            if (R.CloudShadowsDebug() == 1)
             {
                 // Full cover everywhere.
                 c199[0] = 1.0f;
             }
-            else if (R.nCloudShadowsDebug == 2)
+            else if (R.CloudShadowsDebug() == 2)
             {
                 // Cover 1, so the coverage is close to the map itself, twenty times finer, so its
                 // blotches show around the player; at the clouds' scale they spanned hundreds of

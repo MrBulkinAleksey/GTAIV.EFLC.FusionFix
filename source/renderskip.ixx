@@ -58,6 +58,13 @@ export namespace RenderSkip
     bool SunShadowsDrawn(); // the game drew the sun's cascades in the last few frames, which it does only outside, and they
                             // weren't left out for a low sun
     bool SunShadowsDrawnByDay(); // and the sun is up: not the moon's cascades drawn with SunShadowsAtNight
+    // Render thread: the name of the target the game has locked (index 0, innermost), "" with none locked, nullptr while
+    // the lock hooks are not in place (everything above off at startup)
+    const char* CurrentTarget();
+    // Render thread: how many locks of target index 0 there have been, to tell one lock of a target from the next
+    uint32_t LockCount();
+    // Render thread: how many device viewports have been set, to tell one face of a lamp's shadow map from the next
+    uint32_t ViewportCount();
 }
 
 namespace RenderSkip
@@ -178,6 +185,9 @@ namespace RenderSkip
     struct Lock { Kind kind; Drop drop; rage::grcRenderTargetPC* target; };
     Lock stack[16]{};
     int depth = 0;
+    bool bLockHooked = false;
+    uint32_t nLocks = 0;
+    uint32_t nViewports = 0;
     uint32_t dropped[Kinds]{};
 
     // The far cascades by day: the cascades' passes counted, and where the camera was at each one's last draw
@@ -508,6 +518,7 @@ namespace RenderSkip
             if (kind == CascadeTarget && target->mWidth)
                 cascadeSide = target->mWidth;
             stack[depth++] = { kind, DropFor(kind), target };
+            ++nLocks;
             Refresh();
             if (Tracing())
                 TraceEvent(std::format("lock {} (colour {}, depth {}){}", TargetName(target), TargetName(color), TargetName(depthTarget),
@@ -617,6 +628,7 @@ namespace RenderSkip
 
     HRESULT __stdcall SetViewport(IDirect3DDevice9* device, const D3DVIEWPORT9* viewport)
     {
+        ++nViewports;
         if (viewport && Tracing())
             TraceEvent(std::format("viewport {} {} {}x{}", viewport->X, viewport->Y, viewport->Width, viewport->Height));
         return RealSetViewport(device, viewport);
@@ -631,6 +643,7 @@ namespace RenderSkip
         auto vft = *reinterpret_cast<void***>(factory);
         PatchVTable(vft, 15, pfnLock, reinterpret_cast<LockFn>(&LockTarget));
         PatchVTable(vft, 16, pfnUnlock, reinterpret_cast<UnlockFn>(&UnlockTarget));
+        bLockHooked = true;
         auto vtable = *reinterpret_cast<void***>(device);
         PatchVTable(vtable, 34, RealStretchRect, &StretchRect);
         PatchVTable(vtable, 35, RealColorFill, &ColorFill);
@@ -646,6 +659,26 @@ namespace RenderSkip
 
 namespace RenderSkip
 {
+    const char* CurrentTarget()
+    {
+        if (!bLockHooked)
+            return nullptr;
+        if (depth == 0 || !stack[depth - 1].target)
+            return "";
+        auto name = stack[depth - 1].target->mName;
+        return name ? name : "unnamed";
+    }
+
+    uint32_t LockCount()
+    {
+        return nLocks;
+    }
+
+    uint32_t ViewportCount()
+    {
+        return nViewports;
+    }
+
     float SunElevation()
     {
         if (nSunDirectionIdx == SIZE_MAX)

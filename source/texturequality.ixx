@@ -75,7 +75,12 @@ class TextureQuality
     static inline float fParallaxMinSteps = 8.0f;
     static inline float fParallaxMaxSteps = 32.0f;
     static inline float fParallaxDepth = 1.0f;
-    static inline int nGroundDebug = 0;
+    // GroundSurfacesDebug (graphics menu, Debug): the ground shaders in colours, and how often each is bound.
+    static int GroundDebug()
+    {
+        static auto pref = FusionFixSettings.GetRef("PREF_GROUND_DEBUG");
+        return Pref(pref);
+    }
 
     // GroundSurfacesDebug: how often the G-buffer pass binds the ground's shaders, which
     // world_terrain_and_parallax.patch marks with a constant (c186: 0.37, 0.61, 1e-12, kind).
@@ -369,7 +374,6 @@ private:
         fParallaxMinSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMinSteps", 8.0f), 2.0f, 32.0f);
         fParallaxMaxSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMaxSteps", 32.0f), fParallaxMinSteps, 32.0f);
         fParallaxDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionDepth", 1.0f), 0.0f, 4.0f);
-        nGroundDebug = std::clamp(iniReader.ReadInteger("DEBUG", "GroundSurfacesDebug", 0), 0, 1);
     }
 
     // Kind 0 for any other shader, 1 for the terrain, 2 for gta_parallax*, 3 for the generic world
@@ -401,7 +405,7 @@ private:
 
     static HRESULT WINAPI SetPixelShaderHook(IDirect3DDevice9* pDevice, IDirect3DPixelShader9* shader)
     {
-        if (bInGBuffer && nGroundDebug && shader)
+        if (bInGBuffer && GroundDebug() && shader)
         {
             auto& info = GroundShaderInfo(shader);
             ++info.binds;
@@ -445,7 +449,7 @@ private:
             const double frames = groundFrames ? double(groundFrames) : 1.0;
             FusionLog::Write("Ground", "Draws", "Ground Surfaces %s, detail texture %s, debug %d, set-pixel-shader hook %s, prop hooks %s; per frame over %u frames: "
                     "terrain shaders %.1f, parallax shaders %.1f, world shaders with ground %.1f, other shaders %.1f, prop draws without ground %.1f; %zu shaders seen\n",
-                    bLastGround ? "on" : "off", pDetailTex ? "made" : (bDetailTexFailed ? "failed" : "not made"), nGroundDebug,
+                    bLastGround ? "on" : "off", pDetailTex ? "made" : (bDetailTexFailed ? "failed" : "not made"), GroundDebug(),
                     shSetPixelShader ? "on" : (bPixelShaderHookTried ? "failed" : "not tried"), EntityClass::Installed() ? "on" : "failed", groundFrames,
                     groundBinds[1] / frames, groundBinds[2] / frames, groundBinds[3] / frames, groundBinds[0] / frames, propDraws / frames, shaderKinds.size());
             // Which shaders those were, the most bound first, by their number in the pack
@@ -470,13 +474,13 @@ private:
     // Every G-buffer pass: what GroundSurfacesDebug counts.
     static void TickGroundDebug(IDirect3DDevice9* pDevice)
     {
-        if (nGroundDebug && !bPixelShaderHookTried)
+        if (GroundDebug() && !bPixelShaderHookTried)
         {
             bPixelShaderHookTried = true;
             auto vtbl = *reinterpret_cast<void***>(pDevice);
             shSetPixelShader = safetyhook::create_inline(vtbl[kSetPixelShader], SetPixelShaderHook);
         }
-        if (nGroundDebug)
+        if (GroundDebug())
             ++groundFrames;
     }
 
@@ -598,7 +602,7 @@ private:
                 fGroundBumps, -1.0f / fadeRange, fGroundBumpsFadeEnd / fadeRange, fGroundDetailBumps,
                 // c170: parallax steps looking straight down, the more added flat along the surface, depth
                 // and GroundSurfacesDebug: the terrain drawn half magenta, gta_parallax* half cyan, other ground orange
-                fParallaxMinSteps, fParallaxMaxSteps - fParallaxMinSteps, fParallaxDepth, float(nGroundDebug),
+                fParallaxMinSteps, fParallaxMaxSteps - fParallaxMinSteps, fParallaxDepth, float(GroundDebug()),
                 // c171: the hollows' occlusion per unit of brightness under the local average, the part of it the
                 // colour takes, the height of the local average's lumps in metres, the mip bias that reads it
                 fGroundCavity, fGroundCavityAlbedo, fGroundBumpsCoarse, 3.0f,
