@@ -27,9 +27,18 @@ namespace PlayerShadowAllocation
     static SafetyHookMid preCacheHook;
     static bool stableOrdinals = false;
     static std::atomic<uint32_t> stableOrdinalPasses{0}, stableOrdinalMoves{0}, stableOrdinalRejected{0}, sharedMapsSkipped{0};
-    static SafetyHookMid collectHook, finalizeHook, lampDistanceHook, compareResultHook, cacheResultHook;
+    static SafetyHookMid collectHook, finalizeHook, lampDistanceHook, compareResultHook, cacheResultHook, cacheDistanceHook;
     static bool nativeLampPriority=false;
     static std::atomic<uint32_t> lampDistanceAdjusted{0};
+    // LampCacheViewPriority: the 8 static caches go to the nearest lamps without one, measured from 8 m behind the
+    // camera, so lamps behind you held them and the lamps down the street you look at had no shadow at all (no slot,
+    // no cache) until you came near. For the cache pick only, a lamp's distance is scaled by 3 / its view weight
+    // (1 out of view .. 3 in view): one out of view counts three times as far. Lamps within 10 m keep their distance.
+    // The slots' sort gets the distance back unchanged (Collect).
+    static bool cacheViewPriority=true;
+    static std::atomic<uint32_t> cacheDistanceAdjusted{0};
+    static thread_local float cacheSavedDistance=0;
+    static thread_local bool cacheDistanceSwapped=false;
     static std::atomic<uint32_t> cacheDependencyChecks{0}, cacheDependencyRedirected{0}, cacheDependencyDeferred{0}, cacheDependencyRejected{0};
     static std::atomic<uint32_t> continuityComparisons{0}, continuityOverrides{0}, continuityRejected{0};
     static std::atomic<bool> ready{false}, unsupportedThread{false};
@@ -664,6 +673,30 @@ namespace PlayerShadowAllocation
         }
     }
 
+    static void AdjustCacheDistance(SafetyHookContext& regs) noexcept {
+        cacheDistanceSwapped=false;
+        const FloatingPointState fp;
+        if(!cacheViewPriority || !publicationEnabled || !Enabled() || state.depth!=1 || !state.pass.Active() || !state.view.valid) return;
+        const auto* lights=CurrentLights(); const auto count=CurrentCount();
+        const auto address=reinterpret_cast<uintptr_t>(lights);
+        const auto index=*reinterpret_cast<const uint32_t*>(regs.esp+0x14);
+        if(address<0x10000 || count>4096 || index>=count || regs.edi!=address ||
+            regs.esi!=index*sizeof(rage::CLightSource)) return;
+        const auto& light=lights[index];
+        if(!(light.mFlags&rage::LF_STATIC_SHADOW) || (light.mFlags&rage::LF_VEHICLE)) return;
+        const Vec3 position{light.mPosition.x,light.mPosition.y,light.mPosition.z};
+        const float distanceSquared=fusionfix::shadows::EvaluateGeometry(state.player,position).distanceSquared;
+        if(!std::isfinite(distanceSquared) || distanceSquared<10.0f*10.0f) return;
+        const float weight=fusionfix::shadows::ShadowViewWeight(state.view,position,
+            {light.mDirection.x,light.mDirection.y,light.mDirection.z},light.mRadius,false);
+        const float original=regs.xmm0.f32[0];
+        if(!std::isfinite(weight) || weight<1 || weight>=3 || !std::isfinite(original) || original<=0) return;
+        cacheSavedDistance=original;
+        cacheDistanceSwapped=true;
+        regs.xmm0.f32[0]=original*3.0f/weight;
+        ++cacheDistanceAdjusted;
+    }
+
     // CasterMinLightHeight: whether a light of the list other than skip, with a shadow, at least that high above the
     // caster at p, reaches it (see ShadowCasterPresence::MinLightAbove).
     static bool CoveredByHigherLight(const rage::CLightSource* lights, uint32_t count, uint32_t skip, Vec3 p, float extent) noexcept
@@ -686,6 +719,11 @@ namespace PlayerShadowAllocation
 
     static void Collect(SafetyHookContext& regs) noexcept
     {
+        if (cacheDistanceSwapped)
+        {
+            regs.xmm0.f32[0] = cacheSavedDistance;
+            cacheDistanceSwapped = false;
+        }
         const FloatingPointState fp;
         // A light drawn with another's map (the same projection, its key changed to that light's) is not
         // inserted: it would take a slot to draw the same map again.
@@ -1102,6 +1140,8 @@ namespace PlayerShadowAllocation
             CompareNativeCandidates, safetyhook::MidHook::StartDisabled);
         auto cacheResult = safetyhook::MidHook::create(gameBase + allocation::CacheResultRva,
             ProtectCacheDependencies, safetyhook::MidHook::StartDisabled);
+        auto cacheDistance = safetyhook::MidHook::create(gameBase + allocation::CacheDistanceRva,
+            AdjustCacheDistance, safetyhook::MidHook::StartDisabled);
         if (!begin || !collect || !finish || !lampDistance || !compare || !cacheResult)
         {
             installStatus = std::string("hook_creation_failed begin=") + (begin ? "1" : "0") +
@@ -1114,6 +1154,9 @@ namespace PlayerShadowAllocation
         lampDistanceHook = std::move(*lampDistance);
         compareResultHook = std::move(*compare);
         cacheResultHook = std::move(*cacheResult);
+        // Optional: without it the caches go as the game picks them
+        if (cacheDistance && cacheDistance->enable())
+            cacheDistanceHook = std::move(*cacheDistance);
         if (!cacheResultHook.enable() || !compareResultHook.enable() || !lampDistanceHook.enable() || !collectHook.enable() || !finalizeHook.enable() || !selectionHook.enable())
         {
             installStatus = "hook_enable_failed";

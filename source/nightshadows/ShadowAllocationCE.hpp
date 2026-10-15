@@ -24,6 +24,9 @@ namespace fusionfix::shadows::ce::allocation
     inline constexpr std::uint32_t ComparatorRva = 0x005253F0;
     inline constexpr std::uint32_t LampDistanceRva = 0x00527CB8;
     inline constexpr std::uint32_t CollectRva = 0x00527D5C;
+    // After the 4 m subtraction and the clamp at 0 (MOV AL, [ESP+12h]), before XMM0 is read by the cache pick (the
+    // nearest uncached light, the cache entry's distance for the victim choice) and then by the slot sort at CollectRva.
+    inline constexpr std::uint32_t CacheDistanceRva = 0x00527CCE;
     // After the audited comparator call/add esp, before test eax, eax.
     inline constexpr std::uint32_t CompareResultRva = 0x00527D7B;
     // Same active scene camera table read by native shadow selection itself.
@@ -361,6 +364,7 @@ namespace fusionfix::shadows::ce::allocation
         static_assert(CacheResultRva >= SelectionRva && CacheResultRva-SelectionRva+9<=SelectionBytes.size());
         static_assert(ConstRead32(CachePickerBytes.data()+0x1F)==PreferredBase+CacheAge0Rva);
         static_assert(LampDistanceRva >= SelectionRva && LampDistanceRva - SelectionRva + 6 <= SelectionBytes.size());
+        static_assert(CacheDistanceRva >= SelectionRva && CacheDistanceRva - SelectionRva + 8 <= SelectionBytes.size());
         static_assert(CompareResultRva >= SelectionRva && CompareResultRva - SelectionRva + 7 <= SelectionBytes.size());
         static_assert(ConstRead32(SelectionBytes.data()+(0x5278EA-SelectionRva))==PreferredBase+SceneCameraTableRva);
         static_assert(ConstRead32(SelectionBytes.data()+(0x5278F5-SelectionRva))==PreferredBase+SceneCameraTableRva);
