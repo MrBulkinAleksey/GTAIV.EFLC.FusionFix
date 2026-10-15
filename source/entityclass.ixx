@@ -54,6 +54,12 @@ import temporal;
 // shadows in game. The sphere is the model's (model info +0x10 centre, +0x1c radius) around the command's position,
 // grown by the centre's offset so the entity's turn needs no matrix. With it 0, EntityDrawLog counts what it
 // would leave out.
+//
+// LampShadowRangeCulling ([PERFORMANCE]): the lamp's render list reaches far past its light (props 40+ m from the lamp
+// took half the pass's time), but the map's depth is the distance over the slot's radius (+0xe0), and anything wholly
+// further from the lamp than that is further than every point it lights, so it cannot shadow them. An entity or
+// fragment type draw whose sphere (as above) lies wholly outside the radius is left out of the lamp's map. With it 0,
+// EntityDrawLog counts what it would leave out.
 export namespace EntityClass
 {
     enum class Kind : uint8_t
@@ -109,6 +115,8 @@ namespace
     bool bDrawLog = false;
     bool bFaceCullingSetting = true;   // LampShadowFaceCulling
     bool bFaceCulling = false;          // and its hooks in place
+    bool bRangeCullingSetting = true;  // LampShadowRangeCulling
+    bool bRangeCulling = false;         // and the face hooks in place
     bool bSkipLeftOut = true;           // SkipLeftOutDraws
     uintptr_t modelInfos = 0;       // CE 0x1295cd8, model infos by index
     constexpr uint32_t kDrawLogFrames = 600;
@@ -132,6 +140,10 @@ namespace
         // Lamp maps: draws with the half known, and where their spheres are against the plane between the halves: on
         // the side the half drawn faces, on the other, across
         uint64_t faceKnown = 0, faceUnknown = 0, ahead = 0, behind = 0, across = 0;
+        // Lamp maps: draws wholly outside the lamp's radius (left out with LampShadowRangeCulling, else counted only),
+        // and the radius summed over the draws with the half known, drawn or left out
+        uint64_t beyond = 0, radiusDraws = 0;
+        double radiusSum = 0.0;
         // The G-buffer and the water's reflection: draws and time by distance and by size on screen (keyed draws);
         // the lamps' maps: the same from the lamp
         bool camera = false, lamp = false;
@@ -202,6 +214,9 @@ namespace
                 text += std::format(" in a pass left out {:.1f} ({}),", s.leftOutPass * perFrame, bSkipLeftOut ? "not executed" : "executed");
             if (s.outside)
                 text += std::format(" outside their face {:.1f} ({}),", s.outside * perFrame, bFaceCulling ? "left out" : "drawn");
+            if (s.radiusDraws || s.beyond)
+                text += std::format(" beyond the lamp's radius {:.1f} ({}), mean lamp radius {:.1f} m,", s.beyond * perFrame,
+                    bRangeCulling ? "left out" : "drawn", s.radiusDraws ? s.radiusSum / double(s.radiusDraws) : 0.0);
             text += " by command";
             for (int i = 0; i < Sources; ++i)
                 text += std::format("{} {} {:.1f}", i ? "," : "", SourceNames[i], s.sourceDraws[i] * perFrame);
@@ -283,6 +298,7 @@ namespace
     {
         float position[3];
         float axis[3];
+        float radius;
     };
     FaceOrigin faceOrigins[256]{};
     uint8_t nextFaceOrigin = 0;
@@ -303,6 +319,7 @@ namespace
         auto& origin = faceOrigins[nextFaceOrigin];
         std::memcpy(origin.position, reinterpret_cast<const float*>(slot + 0xc0), sizeof(origin.position));
         std::memcpy(origin.axis, reinterpret_cast<const float*>(slot + 0x60), sizeof(origin.axis));
+        origin.radius = *reinterpret_cast<const float*>(slot + 0xe0);
         auto* bytes = reinterpret_cast<uint8_t*>(dc);
         bytes[kFaceOriginByte] = nextFaceOrigin++;
         bytes[kFaceMarkByte] = kFaceMark;
@@ -329,29 +346,43 @@ namespace
         colorWriteExecute(dc);
     }
 
-    // Where the draw's bounding sphere is against the plane between the lamp's halves: -1 wholly on the side the half
-    // drawn does not face, 1 wholly on its side, 0 across or unknown. The first half faces -axis, the second +axis
-    int SphereSide(void* dc, Source source)
+    // Where the draw's bounding sphere is against the lamp of the half drawn. side: against the plane between the
+    // lamp's halves, -1 wholly on the side the half drawn does not face, 1 wholly on its side, 0 across or unknown (the
+    // first half faces -axis, the second +axis); beyond: wholly outside the lamp's radius
+    struct LampPlace
+    {
+        int side = 0;
+        bool beyond = false;
+    };
+    LampPlace SphereAtLamp(void* dc, Source source)
     {
         uint16_t model;
         const float* place;
         if (currentFace < 0 || !modelInfos || !ModelAndPlace(dc, source, model, place))
-            return 0;
+            return {};
         const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4);
         if (!info)
-            return 0;
+            return {};
         const float* centre = reinterpret_cast<const float*>(info + 0x10);
         const float radius = *reinterpret_cast<const float*>(info + 0x1c);
         if (!(radius > 0.0f))
-            return 0;
+            return {};
         const float reach = radius + std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
         const auto& o = currentOrigin;
-        float along = 0.0f;
+        float along = 0.0f, distance2 = 0.0f;
         for (int i = 0; i < 3; ++i)
-            along += (place[i] - o.position[i]) * o.axis[i];
+        {
+            const float d = place[i] - o.position[i];
+            along += d * o.axis[i];
+            distance2 += d * d;
+        }
         if (currentFace == 0)
             along = -along;
-        return along > reach ? 1 : along < -reach ? -1 : 0;
+        LampPlace result;
+        result.side = along > reach ? 1 : along < -reach ? -1 : 0;
+        const float outer = o.radius + reach;
+        result.beyond = o.radius > 0.0f && distance2 > outer * outer;
+        return result;
     }
 
     // The draw's distance from the current viewport's camera (in the lamps' maps from the lamp of the half drawn) and
@@ -398,19 +429,25 @@ namespace
                 StatsFor(RenderSkip::CurrentTarget()).leftOutPass++;
             return;
         }
-        const char* target = bDrawLog || bFaceCulling ? RenderSkip::CurrentTarget() : nullptr;
-        const bool lampMaps = (bDrawLog || bFaceCulling) && IsLampMaps(target);
-        const int side = lampMaps ? SphereSide(dc, source) : 0;
+        const char* target = bDrawLog || bFaceCulling || bRangeCulling ? RenderSkip::CurrentTarget() : nullptr;
+        const bool lampMaps = (bDrawLog || bFaceCulling || bRangeCulling) && IsLampMaps(target);
+        const auto atLamp = lampMaps ? SphereAtLamp(dc, source) : LampPlace{};
+        const int side = atLamp.side;
         // The half drawn faces away from the sphere
         const bool outside = side < 0;
-        if (outside && bFaceCulling)
+        if ((outside && bFaceCulling) || (atLamp.beyond && bRangeCulling))
         {
             if (bDrawLog)
             {
                 auto& stats = StatsFor(target);
-                stats.outside++;
+                if (outside)
+                    stats.outside++;
+                if (atLamp.beyond)
+                    stats.beyond++;
                 stats.faceKnown++;
-                (side < 0 ? stats.behind : stats.ahead)++;
+                stats.radiusDraws++;
+                stats.radiusSum += currentOrigin.radius;
+                (side < 0 ? stats.behind : side > 0 ? stats.ahead : stats.across)++;
             }
             return;
         }
@@ -441,6 +478,13 @@ namespace
             stats.sourceDraws[source]++;
             if (outside)
                 stats.outside++;
+            if (atLamp.beyond)
+                stats.beyond++;
+            if (lampMaps && currentFace >= 0)
+            {
+                stats.radiusDraws++;
+                stats.radiusSum += currentOrigin.radius;
+            }
             if (leftOutPass)
                 stats.leftOutPass++;
             if (lampMaps)
@@ -634,9 +678,12 @@ namespace
                     bDrawLog = iniReader.ReadInteger("DEBUG", "EntityDrawLog", 0) != 0;
                     bFaceCullingSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 1) != 0;
                     bFaceCulling = bFaceCullingSetting && bFaceHooks;
+                    bRangeCullingSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowRangeCulling", 1) != 0;
+                    bRangeCulling = bRangeCullingSetting && bFaceHooks;
                     bSkipLeftOut = iniReader.ReadInteger("PERFORMANCE", "SkipLeftOutDraws", 1) != 0;
-                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s), SkipLeftOutDraws %d\n", int(bDrawLog),
-                        int(bFaceCullingSetting), !bFaceCullingSetting ? "off" : bFaceCulling ? "on" : "no hooks", int(bSkipLeftOut));
+                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s), LampShadowRangeCulling %d (%s), SkipLeftOutDraws %d\n",
+                        int(bDrawLog), int(bFaceCullingSetting), !bFaceCullingSetting ? "off" : bFaceCulling ? "on" : "no hooks",
+                        int(bRangeCullingSetting), !bRangeCullingSetting ? "off" : bRangeCulling ? "on" : "no hooks", int(bSkipLeftOut));
                 };
                 CIniReader iniReader("");
                 readIni(iniReader);
