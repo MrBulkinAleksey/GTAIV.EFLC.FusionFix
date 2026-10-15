@@ -931,6 +931,29 @@ namespace Lighting20
             return true;
         }
 
+        // The caster loop draws a post in modes 1 and 2 of every lamp's pass by itself (own_entity counted alike in all
+        // three); those draws showed nothing until PropAllBuckets let the post's model through 0x444C50, and then the
+        // post had a shadow in every lamp's map whatever Cast said. So the same rules for every mode: a post (or any
+        // prop PropShadows takes) under a light lower than PropMinLightHeight above it, or not its own
+        // (PropOwnLampOnly), is left out of the pass (the hook resumes at 0xAE3867, the loop's next entity).
+        static bool Excluded(uintptr_t entity, uint32_t type) noexcept
+        {
+            if (!scope || type != 4 || !entity || !On()) return false;
+            const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
+            if ((flags & 0xC000) != 0x8000 || (level < 2 && !(flags & 0x800000))) return false;
+            if (minLightHeight > 0.0f && scopeLight[2] - EntityZ(entity) < minLightHeight)
+            {
+                ++lowLightSkips;
+                return true;
+            }
+            if (ownLampOnly && (flags & 0x800000) && scopeKey - static_cast<uint32_t>(entity) >= 0x320)
+            {
+                ++notOwnSkips;
+                return true;
+            }
+            return false;
+        }
+
         // Around the phase's render (0xD77A00), as Buildings::Scope.
         class Scope
         {
