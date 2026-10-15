@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Writes vehicle_paint.patch: a finish for car paint and rain drops on it, in the deferred pixel shader (PS5) of
-# gta_vehicle_paint1/2/3 and their deferred vertex shaders (VS3 drawn whole, VS4 skinned). source/vehiclepaint.ixx
+# gta_vehicle_paint1/2/3 and their deferred vertex shaders (VS3 drawn whole, VS4 skinned), and a mirror's gloss for
+# the car glass drawn into the G-buffer (gta_vehicle_vehglass PS5). source/vehiclepaint.ixx
 # sets c175-c177 at the start of every G-buffer pass; all zero leaves the stock paint.
 #
 # The finish, on clean paint only (dirt keeps the stock look):
@@ -194,7 +195,40 @@ def patch_vs(name, n):
     path.write_text(text)
 
 
+# Glass drawn into the G-buffer (gta_vehicle_vehglass PS5, deferred_draw) gets a mirror's gloss and a little specular
+# where clean, so SSR reflects in it as in the forward glass; c176.y is 0 with Vehicle Paint off.
+GLASS_DEFS = f'''\
+    def c184, 0.0599999987, 0.970000029, 0, 0 // {TAG}: deferred glass's specular and gloss floors
+'''
+
+GLASS_SPECULAR = f'''\
+    mul r20.x, r2.x, c1.x // {TAG}: the glass's own specular, halved as stored
+    mul r20.y, r4.x, c176.y // clean glass, with Vehicle Paint on
+    mul r20.z, r20.y, c184.x
+    max oC2.x, r20.x, r20.z
+'''
+
+GLASS_GLOSS = f'''\
+    rcp r20.x, r1.x // {TAG}: the glass's own gloss, raised to a mirror's
+    max r20.z, r20.x, c184.y
+    lrp r21.x, r20.y, r20.z, r20.x
+    mov oC2.y, r21.x
+'''
+
+
+def patch_deferred_glass():
+    path = ROOT / 'gta_vehicle_vehglass' / 'gta_vehicle_vehglassPS5.asm'
+    text = body(path)
+    if TAG in text:
+        sys.exit(f'{path} is patched already')
+    text = insert_after(text, r'def c1, 0\.5, 0\.37109375', GLASS_DEFS, path)
+    text = replace_once(text, 'mul oC2.x, r2.x, c1.x', GLASS_SPECULAR, path)
+    text = replace_once(text, 'rcp oC2.y, r1.x', GLASS_GLOSS, path)
+    path.write_text(text)
+
+
 for name, v in VARIANTS.items():
     patch_ps(name, v)
     patch_vs(name, 3)
     patch_vs(name, 4)
+patch_deferred_glass()

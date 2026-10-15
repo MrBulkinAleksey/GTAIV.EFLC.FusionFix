@@ -800,3 +800,34 @@ index e6a1fe74..732058e4 100644
      dp3 o10.xy, c10.xyw, c10.xyw
  
  // approximately 238 instruction slots used (8 texture, 230 arithmetic)
+diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS5.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS5.asm
+index 282e915a..30d9f8bb 100644
+--- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS5.asm
++++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS5.asm
+@@ -39,6 +39,7 @@
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0495725498e-42 // 749
+     def c0, 9.99999975e-006, 0.224999994, 1, 0
+     def c1, 0.5, 0.37109375, 0, 0
++    def c184, 0.0599999987, 0.970000029, 0, 0 // FusionFix vehicle_paint.patch: deferred glass's specular and gloss floors
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_color v2
+@@ -78,10 +79,16 @@
+     mul r2.x, r2.x, c72.w
+     mad r1.xyz, r1, r1.w, c0.z
+     mul oC1.xyz, r1, c1.x
+-    mul oC2.x, r2.x, c1.x
++    mul r20.x, r2.x, c1.x // FusionFix vehicle_paint.patch: the glass's own specular, halved as stored
++    mul r20.y, r4.x, c176.y // clean glass, with Vehicle Paint on
++    mul r20.z, r20.y, c184.x
++    max oC2.x, r20.x, r20.z
+     mul r1.x, r2.w, c1.y
+     rsq r1.x, r1.x
+-    rcp oC2.y, r1.x
++    rcp r20.x, r1.x // FusionFix vehicle_paint.patch: the glass's own gloss, raised to a mirror's
++    max r20.z, r20.x, c184.y
++    lrp r21.x, r20.y, r20.z, r20.x
++    mov oC2.y, r21.x
+     mul r0.w, r0.w, c39.x
+     mov oC0, r0
+     mov oC1.w, r0.w
