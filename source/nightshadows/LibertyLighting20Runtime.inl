@@ -631,8 +631,11 @@ namespace Lighting20
         // draw with, if not wd_local
         static std::array<std::atomic<uint32_t>, 16> gmGroups{};
 
+        // A car's light other than its rear lamps (Tail): those shine low and red from behind the car, and a post by a
+        // parked car had a second, long shadow from them; they follow the rules as lamps do.
         static bool VehicleLight(uint32_t key) noexcept
         {
+            if (Tail::IsKey(key)) return false;
             const auto lights = *reinterpret_cast<const rage::CLightSource* const*>(game + 0xC3EED8);
             const auto count = *reinterpret_cast<const uint32_t*>(game + 0x110E240);
             if (!lights || !key) return false;
@@ -769,6 +772,33 @@ namespace Lighting20
                 ((*reinterpret_cast<const uint32_t*>(entity + 0x28) >> 6) & 15) != 4)
                 return;
             uint32_t phases = *reinterpret_cast<const uint32_t*>(regs.esp + 0x28) & lampPhases.load(std::memory_order_relaxed);
+            // The cache's phase (slot 0) never has a prop among its visible ones (a trace: the scene walk leaves objects
+            // out of it), so a prop within the light of the lamp cached this frame (slot 0's record, mode 3, filled by
+            // the selection before the render list) goes into the cache's list 2 too; Scope keeps that phase's light.
+            if (cacheProps)
+                if (const auto cache = cachePhases.load(std::memory_order_relaxed))
+                {
+                    const auto record = game + 0xD9F100;
+                    if (*reinterpret_cast<const uint32_t*>(record + 0xFC) == 3)
+                    {
+                        const float* light = reinterpret_cast<const float*>(record + 0xC0);
+                        const float radius = *reinterpret_cast<const float*>(record + 0xE0);
+                        const float* at = EntityAt(entity);
+                        const float dx = at[0] - light[0], dy = at[1] - light[1], dz = at[2] - light[2];
+                        if (dx * dx + dy * dy + dz * dz < (radius + 5.0f) * (radius + 5.0f))
+                        {
+                            const auto key = *reinterpret_cast<const uint32_t*>(record + 0xF8);
+                            for (uint32_t i = 0; i < 32; ++i)
+                                if (cache & (1u << i))
+                                {
+                                    phases |= 1u << i;
+                                    phaseLightZ[i].store(light[2], std::memory_order_relaxed);
+                                    phaseKey[i].store(key, std::memory_order_relaxed);
+                                    phaseVehicle[i].store(false, std::memory_order_relaxed);
+                                }
+                        }
+                    }
+                }
             if (phases && minLightHeight > 0.0f)
             {
                 const float z = EntityZ(entity);
