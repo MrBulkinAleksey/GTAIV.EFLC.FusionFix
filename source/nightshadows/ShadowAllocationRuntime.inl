@@ -820,6 +820,18 @@ namespace PlayerShadowAllocation
             const bool lightsPlayer=casterPriority && kind==budget::Kind::Lamp && !cached &&
                 std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=light.mRadius*light.mRadius;
             if(lightsPlayer) gain=SlotGain::InView;
+            // A cached lamp you stand under, in view or not and up to 2 m outside its cone: a cobra head's light 28
+            // degrees off its axis took you in and lost you as you moved, and its slot came and went every second or so
+            // while you stood still, the post's and your shadow with it. Not a lamp lower above you than
+            // CasterMinLightHeight (a door's), which a street lamp above you covers.
+            if(casterPriority && kind==budget::Kind::Lamp && cached && gain!=SlotGain::InView &&
+               std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=light.mRadius*light.mRadius &&
+               light.mPosition.z-state.player.z>=fusionfix::shadows::ShadowCasterPresence::MinLightAbove) {
+                const Vec3 source{light.mPosition.x,light.mPosition.y,light.mPosition.z};
+                if(light.mType!=rage::LT_SPOT || fusionfix::shadows::BeamTouchesReceiver(state.player,2.0f,source,
+                    {light.mDirection.x,light.mDirection.y,light.mDirection.z},light.mOuterConeAngle,light.mRadius))
+                    gain=SlotGain::InView;
+            }
             // An uncached lamp out of the frame (behind or beside the camera, view weight 1) whose light still
             // reaches it counted as a shadow in view, and in tunnels lamps 15-20 m behind took slots from those
             // ahead. Close behind it throws your car's shadow forward into view, so it keeps that within
