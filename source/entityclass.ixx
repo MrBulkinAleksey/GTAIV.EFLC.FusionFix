@@ -70,6 +70,10 @@ export namespace EntityClass
 
     // By the classes in the entity's vtable RTTI (its own and its bases).
     Kind OfEntity(void* entity);
+
+    // The lamp half being drawn on the render thread (0 or 1, -1 for none) and its slot's position, for other features'
+    // traces (PropTrace in nightshadows).
+    int CurrentLampFace(float position[3]);
 }
 
 namespace
@@ -231,9 +235,7 @@ namespace
     int currentFace = -1;
     FaceOrigin currentOrigin{};
 
-    // The lamp half being drawn on the render thread (0 or 1, -1 for none) and its slot's position, for other features'
-    // traces (PropTrace in nightshadows)
-    int CurrentLampFace(float position[3])
+    int LampFace(float position[3])
     {
         if (currentFace >= 0)
             std::memcpy(position, currentOrigin.position, sizeof(currentOrigin.position));
@@ -542,6 +544,11 @@ namespace EntityClass
     bool Installed()
     {
         return bInstalled;
+    }
+
+    int CurrentLampFace(float position[3])
+    {
+        return LampFace(position);
     }
 
     Kind OfEntity(void* entity)
