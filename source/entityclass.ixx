@@ -65,6 +65,14 @@ import temporal;
 // can 20 m off) covers a few texels of the lamp's map, a shadow too faint to see under the filtering, but costs a draw
 // like any other. Such props are left out of the lamp's map; buildings never are. The same ones each time for a lamp,
 // so nothing flickers. With it 0, EntityDrawLog counts what it would leave out.
+//
+// LampShadowConeCulling ([PERFORMANCE]): a spot lamp lights nothing outside its outer cone, so an entity or fragment
+// type draw whose sphere lies wholly outside it, by a 5 degree margin, is left out of its map. The slot keeps only the
+// light's position, direction, radius and key (the selection, 0x9280fd, copies them from the light list): there the
+// light's type (+0x44), outer cone (+0x5c, a cosine: the game draws a spot whose cosine is under 0 as clamped, 0xac1437)
+// and key (+0x60) are kept by slot, and the face command takes them while the slot still holds that key. Moving a
+// headlight's map back along its beam only narrows what it sees of the cone. With it 0, EntityDrawLog counts what it
+// would leave out.
 export namespace EntityClass
 {
     enum class Kind : uint8_t
@@ -125,6 +133,10 @@ namespace
     bool bSmallCullSetting = true;     // LampShadowSmallCull
     bool bSmallCulling = false;         // and the face hooks in place
     constexpr float kLampSmallSize = 0.02f;
+    bool bConeCullSetting = true;      // LampShadowConeCulling
+    bool bConeCulling = false;          // and its hooks in place
+    bool bConeHook = false;
+    constexpr float kConeMargin = 5.0f * 3.14159265f / 180.0f;
     bool bSkipLeftOut = true;           // SkipLeftOutDraws
     uintptr_t modelInfos = 0;       // CE 0x1295cd8, model infos by index
     constexpr uint32_t kDrawLogFrames = 600;
@@ -157,6 +169,10 @@ namespace
         int64_t radiusAngleTicks[4][5]{};
         // Lamp maps: props too small from the lamp (left out with LampShadowSmallCull, else counted only)
         uint64_t tiny = 0;
+        // Lamp maps: draws outside a spot lamp's cone (left out with LampShadowConeCulling, else counted only), and
+        // the draws whose lamp was a spot, with its cone known
+        uint64_t outsideCone = 0, spotDraws = 0;
+        double spotConeSum = 0.0;
         double radiusSum = 0.0;
         // The G-buffer and the water's reflection: draws and time by distance and by size on screen (keyed draws);
         // the lamps' maps: the same from the lamp
@@ -235,6 +251,9 @@ namespace
             if (s.tiny)
                 text += std::format(" props under {:.0f}% of their distance {:.1f} ({}),", kLampSmallSize * 100.0f, s.tiny * perFrame,
                     bSmallCulling ? "left out" : "drawn");
+            if (s.outsideCone || s.spotDraws)
+                text += std::format(" outside the spot's cone {:.1f} ({}), drawn for spots {:.1f} with a mean cone of {:.0f} deg,", s.outsideCone * perFrame,
+                    bConeCulling ? "left out" : "drawn", s.spotDraws * perFrame, s.spotDraws ? s.spotConeSum / double(s.spotDraws) : 0.0);
             if (s.lamp)
             {
                 static constexpr const char* radiusNames[4] = { "under 15 m", "15-30 m", "30-50 m", "50+ m" };
@@ -337,12 +356,21 @@ namespace
         float axis[3];
         float direction[3];
         float radius;
+        float coneAngle;    // a spot's outer half angle in radians; negative when not a spot or not known
     };
     FaceOrigin faceOrigins[256]{};
     uint8_t nextFaceOrigin = 0;
     constexpr ptrdiff_t kFaceOriginByte = 0x16, kFaceMarkByte = 0x17;
     constexpr uint8_t kFaceMark = 0xA5;
     uintptr_t slotRecords = 0;      // CE 0x119f100, 0x110 bytes a slot
+    // The light each of the game's 8 slots was given last: its key (CLightSource +0x60, the slot's +0xf8), its spot
+    // cone or a negative
+    struct SlotLight
+    {
+        uint32_t key = 0;
+        float coneAngle = -1.0f;
+    };
+    SlotLight slotLights[8]{};
     DrawExecute faceExecute = nullptr;
     DrawExecute colorWriteExecute = nullptr;
     bool bFaceHooks = false;
@@ -359,9 +387,29 @@ namespace
         std::memcpy(origin.axis, reinterpret_cast<const float*>(slot + 0x60), sizeof(origin.axis));
         std::memcpy(origin.direction, reinterpret_cast<const float*>(slot + 0xd0), sizeof(origin.direction));
         origin.radius = *reinterpret_cast<const float*>(slot + 0xe0);
+        origin.coneAngle = -1.0f;
+        if (const auto index = slotOffset / 0x110; index < std::size(slotLights) && slotLights[index].key &&
+            slotLights[index].key == *reinterpret_cast<const uint32_t*>(slot + 0xf8))
+            origin.coneAngle = slotLights[index].coneAngle;
         auto* bytes = reinterpret_cast<uint8_t*>(dc);
         bytes[kFaceOriginByte] = nextFaceOrigin++;
         bytes[kFaceMarkByte] = kFaceMark;
+    }
+
+    // The selection fills a slot from a light: ecx the light list, edi the light's index * 0x80, esi the slot + 0xc8
+    void SlotFilled(uintptr_t list, uintptr_t offset, uintptr_t slotAt)
+    {
+        if (!list || !slotRecords || slotAt < slotRecords + 0xc8)
+            return;
+        const auto index = (slotAt - 0xc8 - slotRecords) / 0x110;
+        if (index >= std::size(slotLights))
+            return;
+        const auto light = list + offset;
+        auto& s = slotLights[index];
+        s.key = *reinterpret_cast<const uint32_t*>(light + 0x60);
+        const int type = *reinterpret_cast<const int32_t*>(light + 0x44);
+        const float outerCos = *reinterpret_cast<const float*>(light + 0x5c);
+        s.coneAngle = type == 2 && outerCos > 0.0f && outerCos <= 1.0f ? std::acos(outerCos) : -1.0f;
     }
 
     void __fastcall FaceExecute(void* dc, void*)
@@ -394,6 +442,7 @@ namespace
         int side = 0;
         bool beyond = false;
         bool tiny = false;
+        bool outsideCone = false;
     };
     LampPlace SphereAtLamp(void* dc, Kind kind, Source source)
     {
@@ -424,6 +473,21 @@ namespace
         const float outer = o.radius + reach;
         result.beyond = o.radius > 0.0f && distance2 > outer * outer;
         result.tiny = kind == Kind::Prop && reach * reach < kLampSmallSize * kLampSmallSize * distance2;
+        // Outside the cone: the angle off the direction past the cone's by more than the sphere's own and the margin
+        if (o.coneAngle >= 0.0f && distance2 > reach * reach)
+        {
+            const float* dir = o.direction;
+            const float dirLength = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+            if (dirLength > 0.5f)
+            {
+                float dot = 0.0f;
+                for (int i = 0; i < 3; ++i)
+                    dot += (place[i] - o.position[i]) * dir[i];
+                const float distance = std::sqrt(distance2);
+                const float off = std::acos(std::clamp(dot / (dirLength * distance), -1.0f, 1.0f));
+                result.outsideCone = off > o.coneAngle + std::asin(reach / distance) + kConeMargin;
+            }
+        }
         return result;
     }
 
@@ -471,14 +535,15 @@ namespace
                 StatsFor(RenderSkip::CurrentTarget()).leftOutPass++;
             return;
         }
-        const bool lampCulling = bFaceCulling || bRangeCulling || bSmallCulling;
+        const bool lampCulling = bFaceCulling || bRangeCulling || bSmallCulling || bConeCulling;
         const char* target = bDrawLog || lampCulling ? RenderSkip::CurrentTarget() : nullptr;
         const bool lampMaps = (bDrawLog || lampCulling) && IsLampMaps(target);
         const auto atLamp = lampMaps ? SphereAtLamp(dc, kind, source) : LampPlace{};
         const int side = atLamp.side;
         // The half drawn faces away from the sphere
         const bool outside = side < 0;
-        if ((outside && bFaceCulling) || (atLamp.beyond && bRangeCulling) || (atLamp.tiny && bSmallCulling))
+        if ((outside && bFaceCulling) || (atLamp.beyond && bRangeCulling) || (atLamp.tiny && bSmallCulling) ||
+            (atLamp.outsideCone && bConeCulling))
         {
             if (bDrawLog)
             {
@@ -489,6 +554,8 @@ namespace
                     stats.beyond++;
                 if (atLamp.tiny)
                     stats.tiny++;
+                if (atLamp.outsideCone)
+                    stats.outsideCone++;
                 stats.faceKnown++;
                 stats.radiusDraws++;
                 stats.radiusSum += currentOrigin.radius;
@@ -527,10 +594,17 @@ namespace
                 stats.beyond++;
             if (atLamp.tiny)
                 stats.tiny++;
+            if (atLamp.outsideCone)
+                stats.outsideCone++;
             if (lampMaps && currentFace >= 0)
             {
                 stats.radiusDraws++;
                 stats.radiusSum += currentOrigin.radius;
+                if (currentOrigin.coneAngle >= 0.0f)
+                {
+                    stats.spotDraws++;
+                    stats.spotConeSum += currentOrigin.coneAngle * 180.0 / 3.14159265;
+                }
                 uint16_t model;
                 const float* place;
                 if (ModelAndPlace(dc, source, model, place))
@@ -676,6 +750,16 @@ namespace
                 injector::WriteMemory(&colorWriteVtable[1], reinterpret_cast<void*>(&ColorWriteExecute), true);
                 bFaceHooks = true;
                 status = "in place";
+                // The selection copying the light into its slot: movss xmm0, [edi+ecx+24h]; movss xmm1, [edi+ecx+28h];
+                // mov eax, [edi+ecx+20h]; mov [esi-8], eax
+                auto fill = hook::pattern("F3 0F 10 44 0F 24 F3 0F 10 4C 0F 28 8B 44 0F 20 89 46 F8");
+                if (!fill.empty())
+                {
+                    static auto fillHook = safetyhook::create_mid(fill.get_first(0), [](SafetyHookContext& regs) { SlotFilled(regs.ecx, regs.edi, regs.esi); });
+                    bConeHook = bool(fillHook);
+                }
+                if (!bConeHook)
+                    status = "in place, the slots' lights not found (no cone culling)";
             }
         }
         FusionLog::Write("EntityClass", "Settings", "the lamps' paraboloid halves: %s\n", status);
@@ -753,11 +837,14 @@ namespace
                     bRangeCulling = bRangeCullingSetting && bFaceHooks;
                     bSmallCullSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowSmallCull", 1) != 0;
                     bSmallCulling = bSmallCullSetting && bFaceHooks;
+                    bConeCullSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowConeCulling", 1) != 0;
+                    bConeCulling = bConeCullSetting && bFaceHooks && bConeHook;
                     bSkipLeftOut = iniReader.ReadInteger("PERFORMANCE", "SkipLeftOutDraws", 1) != 0;
-                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s), LampShadowRangeCulling %d (%s), LampShadowSmallCull %d (%s), SkipLeftOutDraws %d\n",
+                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s), LampShadowRangeCulling %d (%s), LampShadowSmallCull %d (%s), LampShadowConeCulling %d (%s), SkipLeftOutDraws %d\n",
                         int(bDrawLog), int(bFaceCullingSetting), !bFaceCullingSetting ? "off" : bFaceCulling ? "on" : "no hooks",
                         int(bRangeCullingSetting), !bRangeCullingSetting ? "off" : bRangeCulling ? "on" : "no hooks",
-                        int(bSmallCullSetting), !bSmallCullSetting ? "off" : bSmallCulling ? "on" : "no hooks", int(bSkipLeftOut));
+                        int(bSmallCullSetting), !bSmallCullSetting ? "off" : bSmallCulling ? "on" : "no hooks",
+                        int(bConeCullSetting), !bConeCullSetting ? "off" : bConeCulling ? "on" : "no hooks", int(bSkipLeftOut));
                 };
                 CIniReader iniReader("");
                 readIni(iniReader);
