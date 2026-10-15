@@ -617,6 +617,30 @@ namespace Lighting20
         // PropsInCaches: the lamps' static caches (slot 0) take the props too
         static bool cacheProps = true;
         static std::array<std::atomic<uint32_t>, 32> phaseKey{};
+        // The rules above are for map lights: a car's own lights (headlights, rear lamps, sirens) shine low and are no
+        // prop's own, and the player's headlights stopped shadowing posts. Whether the pass's light is a car's, looked
+        // up by its key in the frame's light list, in Scope; by phase index for Collect.
+        static thread_local bool scopeVehicle = false;
+        static std::array<std::atomic<bool>, 32> phaseVehicle{};
+        static std::atomic<uint32_t> vehiclePasses{0};
+        // The caches' passes (slot 0): props let in there by Cast, added to their lists by Collect, and those passes
+        static thread_local bool scopeCache = false;
+        static std::atomic<uint32_t> cachePhases{0}; // phase index bits of slot 0
+        static std::atomic<uint32_t> cachePasses{0}, castInCache{0}, addedForCache{0};
+        // The technique group forced while a prop's model is drawn (0x444C50), by group: which group the lamps' caches
+        // draw with, if not wd_local
+        static std::array<std::atomic<uint32_t>, 16> gmGroups{};
+
+        static bool VehicleLight(uint32_t key) noexcept
+        {
+            const auto lights = *reinterpret_cast<const rage::CLightSource* const*>(game + 0xC3EED8);
+            const auto count = *reinterpret_cast<const uint32_t*>(game + 0x110E240);
+            if (!lights || !key) return false;
+            for (uint32_t i = 0; i < count && i < 0x280; ++i)
+                if (static_cast<uint32_t>(lights[i].mCastShadows) == key)
+                    return (lights[i].mFlags & rage::LF_VEHICLE) != 0;
+            return false;
+        }
         static std::atomic<uint32_t> notOwnSkips{0};
         // Every phase render (0xD77A00) by its slot (+0x940, 0-15, 15 for more) and that slot record's mode (+0xFC: 3 the
         // static cache, 4 cache and dynamic, 5 no cache; 7 for other or no record), to find where caches are drawn:
@@ -673,18 +697,21 @@ namespace Lighting20
             {
                 const float z = EntityZ(entity);
                 for (uint32_t i = 0; i < 32; ++i)
-                    if ((phases & (1u << i)) && phaseLightZ[i].load(std::memory_order_relaxed) - z < minLightHeight)
+                    if ((phases & (1u << i)) && !phaseVehicle[i].load(std::memory_order_relaxed) &&
+                        phaseLightZ[i].load(std::memory_order_relaxed) - z < minLightHeight)
                         phases &= ~(1u << i);
                 if (!phases) ++lowLightSkips;
             }
             if (phases && ownLampOnly && (flags & 0x800000))
             {
                 for (uint32_t i = 0; i < 32; ++i)
-                    if ((phases & (1u << i)) && phaseKey[i].load(std::memory_order_relaxed) - static_cast<uint32_t>(entity) >= 0x320)
+                    if ((phases & (1u << i)) && !phaseVehicle[i].load(std::memory_order_relaxed) &&
+                        phaseKey[i].load(std::memory_order_relaxed) - static_cast<uint32_t>(entity) >= 0x320)
                         phases &= ~(1u << i);
                 if (!phases) ++notOwnSkips;
             }
             if (!phases) return;
+            if (phases & cachePhases.load(std::memory_order_relaxed)) ++addedForCache;
             addToList(phases, entity, 0.0f, 2);
             ++added;
             if (diagnostics || allBuckets) Remember(entity);
@@ -803,7 +830,13 @@ namespace Lighting20
                 return;
             }
             gmTried = true;
-            gmEntry = safetyhook::create_mid(game + 0x44C50, [](SafetyHookContext&) { if (propDraw) ++gmModels; });
+            gmEntry = safetyhook::create_mid(game + 0x44C50, [](SafetyHookContext&)
+            {
+                if (!propDraw) return;
+                ++gmModels;
+                const auto group = *reinterpret_cast<const int32_t*>(game + 0xC6B308);
+                ++gmGroups[group >= 0 && group < 15 ? group : 15];
+            });
             gmViewport = safetyhook::create_mid(game + 0x44C89, [](SafetyHookContext& regs)
             {
                 if (!propDraw || regs.ecx) return;
@@ -917,17 +950,18 @@ namespace Lighting20
             if ((flags & 0xC000) != 0x8000 || (level < 2 && !(flags & 0x800000)) ||
                 (*reinterpret_cast<const uint32_t*>(entity + 0x210) & 0x800))
                 return false;
-            if (minLightHeight > 0.0f && scopeLight[2] - EntityZ(entity) < minLightHeight)
+            if (!scopeVehicle && minLightHeight > 0.0f && scopeLight[2] - EntityZ(entity) < minLightHeight)
             {
                 ++lowLightSkips;
                 return false;
             }
-            if (ownLampOnly && (flags & 0x800000) && scopeKey - static_cast<uint32_t>(entity) >= 0x320)
+            if (!scopeVehicle && ownLampOnly && (flags & 0x800000) && scopeKey - static_cast<uint32_t>(entity) >= 0x320)
             {
                 ++notOwnSkips;
                 return false;
             }
             ++cast;
+            if (scopeCache) ++castInCache;
             return true;
         }
 
@@ -938,7 +972,7 @@ namespace Lighting20
         // (PropOwnLampOnly), is left out of the pass (the hook resumes at 0xAE3867, the loop's next entity).
         static bool Excluded(uintptr_t entity, uint32_t type) noexcept
         {
-            if (!scope || type != 4 || !entity || !On()) return false;
+            if (!scope || scopeVehicle || type != 4 || !entity || !On()) return false;
             const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
             if ((flags & 0xC000) != 0x8000 || (level < 2 && !(flags & 0x800000))) return false;
             if (minLightHeight > 0.0f && scopeLight[2] - EntityZ(entity) < minLightHeight)
@@ -984,10 +1018,19 @@ namespace Lighting20
                 scopeLight[0] = *reinterpret_cast<const float*>(record + 0xC0);
                 scopeLight[1] = *reinterpret_cast<const float*>(record + 0xC4);
                 scopeLight[2] = *reinterpret_cast<const float*>(record + 0xC8);
+                scopeVehicle = VehicleLight(scopeKey);
+                scopeCache = *reinterpret_cast<const uint32_t*>(p + 0x940) == 0;
+                if (scopeCache)
+                {
+                    ++cachePasses;
+                    if (index < 32) cachePhases.fetch_or(1u << index, std::memory_order_relaxed);
+                }
+                if (scopeVehicle) ++vehiclePasses;
                 if (index < 32)
                 {
                     phaseLightZ[index].store(scopeLight[2], std::memory_order_relaxed);
                     phaseKey[index].store(scopeKey, std::memory_order_relaxed);
+                    phaseVehicle[index].store(scopeVehicle, std::memory_order_relaxed);
                 }
                 ownerCounted = nearCounted = false;
                 if (diagnostics)
@@ -1586,7 +1629,15 @@ namespace Lighting20
                 << " all_buckets=" << Props::allBuckets << " buckets_forced=" << Props::bucketsForced.load()
                 << " model_draw(0x444C50): models=" << Props::gmModels.load() << " culled=" << Props::gmCulled.load()
                 << " unculled=" << Props::gmUnculled.load() << " buckets(shader>drawn:n)=" << Props::Buckets(Props::gmBuckets)
-                << " draws=" << Props::gmDraws.load()
+                << " draws=" << Props::gmDraws.load() << " groups(forced:n)=" << [] {
+                    std::string list;
+                    for (size_t i = 0; i < Props::gmGroups.size(); ++i)
+                        if (const auto n = Props::gmGroups[i].load())
+                            list += (list.empty() ? "" : ",") + std::to_string(i == 15 ? -1 : int(i)) + ':' + std::to_string(n);
+                    return list.empty() ? std::string("-") : list;
+                }() << " vehicle_light_passes=" << Props::vehiclePasses.load()
+                << " cache: passes=" << Props::cachePasses.load() << " cast=" << Props::castInCache.load()
+                << " added=" << Props::addedForCache.load()
                 << " prop_model_draws=" << Props::propModelDraws.load() << " prop_buckets(shader>drawn:n)=" << Props::Buckets()
                 << " all_under_wd_local: found=" << Props::localFound.load() << " missing=" << Props::localMissing.load()
                 << " missing_in=" << Props::Effects(Props::localMissingEffects)
