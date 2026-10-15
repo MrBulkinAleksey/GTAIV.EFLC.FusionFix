@@ -28,6 +28,11 @@ import inireload;
 // +-74.5 degrees to the sides and -19..57 up and down (CE 0xA17131); in first person it goes to 150 to
 // the sides, over the shoulder, and 60 up and down.
 //
+// Aiming on foot in first person keeps it: the aim camera (CCamAimWeapon) still turns the view, as the
+// bullets go along its ray, but its pull over the right shoulder (a target offset it eases towards each
+// frame, x 0.475 m, CE 0xA27B71) is held at 0, so the ray runs past the head, and the eye goes on that
+// ray where it passes the head: the crosshair stays the bullet line.
+//
 // In both the head, hair and face are left out of the camera's scene, their shadows and reflections
 // kept, and the near clip is raised, which cuts away the neck and shoulders around the eye. The game
 // keeps whether a player component is drawn in a byte each (SET_DRAW_PLAYER_COMPONENT, CE 0x150E0DC):
@@ -73,6 +78,10 @@ namespace FirstPerson
     static SafetyHookInline vehicleUpdateHook;
     static SafetyHookMid componentCopyHook;
     static SafetyHookMid lookTakeHook;
+    static SafetyHookInline aimUpdateHook;
+    static SafetyHookMid aimShoulderHook;
+    static uintptr_t aimCamera = 0;   // the aim camera being updated in first person
+    static uint32_t aimFrame = 0;     // the frame it put the eye
     static SafetyHookMid lookClampHook;
     static uint8_t* drawComponents = nullptr;          // the game's 16 player component draw bytes
     static constexpr int32_t HeadComponents[] = { 0, 7, 9, 10 }; // head, hair, teeth, face
@@ -145,6 +154,9 @@ namespace FirstPerson
         const auto ped = CPlayer::getLocalPlayerPed();
         if (!ped || *reinterpret_cast<const uintptr_t*>(camera + TargetOffset) != ped)
             return result;
+        // aiming: the aim camera puts the eye this frame
+        if (aimFrame == *CTimer::m_frameCount)
+            return result;
 
         float head[3]{};
         const bool bone = HeadBonePosition(ped, head);
@@ -187,6 +199,50 @@ namespace FirstPerson
         std::copy(std::begin(eye), std::end(eye), frame + 12);
         eyeFrame = *CTimer::m_frameCount;
         return result;
+    }
+
+    // CCamAimWeapon::Update (vtable slot 4), on foot in first person: the eye goes on the aim ray where
+    // it passes the head, a little ahead along it.
+    static uint32_t __fastcall AimUpdate(uintptr_t camera, void*)
+    {
+        aimCamera = 0;
+        const auto ped = active && CPlayer::getLocalPlayerPed && CTimer::m_frameCount ? CPlayer::getLocalPlayerPed() : 0;
+        Ped handle = 0;
+        if (ped)
+            Natives::GetPlayerChar(Natives::GetPlayerId(), &handle);
+        if (handle && !Natives::IsCharInAnyCar(handle))
+            aimCamera = camera;
+        const auto result = aimUpdateHook.unsafe_thiscall<uint32_t>(camera);
+        if (aimCamera != camera)
+            return result;
+        aimCamera = 0;
+
+        float head[3]{};
+        if (!HeadBonePosition(ped, head))
+            return result;
+        auto frame = reinterpret_cast<float*>(camera + 0x10);
+        const float* front = frame + 4;
+        float* position = frame + 12;
+        float along = forwardOffset;
+        for (int i = 0; i < 3; ++i)
+            along += (head[i] - position[i]) * front[i];
+        for (int i = 0; i < 3; ++i)
+            eye[i] = position[i] + front[i] * along;
+        std::copy(std::begin(eye), std::end(eye), position);
+        eyeFrame = aimFrame = *CTimer::m_frameCount;
+        static uint32_t logFrame = 0;
+        if (LogDue(logFrame))
+            FusionLog::Write("FirstPerson", "Aim", "eye %.2f m along the aim ray, %.2f m from the head\n", along,
+                std::sqrt((eye[0] - head[0]) * (eye[0] - head[0]) + (eye[1] - head[1]) * (eye[1] - head[1]) + (eye[2] - head[2]) * (eye[2] - head[2])));
+        return result;
+    }
+
+    // Where the aim camera stores the shoulder offset it eases towards (CE 0xA27B69, x in xmm6), edi the
+    // camera: over the head instead of the right shoulder.
+    static void HoldShoulder(SafetyHookContext& regs)
+    {
+        if (aimCamera && regs.edi == aimCamera)
+            regs.xmm6.f32[0] = 0.0f;
     }
 
     // Before the vehicle camera steps its view on a press (movsx eax, byte [esi+22C]), esi the camera.
@@ -499,6 +555,16 @@ public:
                 {
                     FirstPerson::zoomHook = safetyhook::create_mid(zoom.get_first(7), FirstPerson::StepZoom);
                     FirstPerson::updateHook = safetyhook::create_inline(update.get_first(0), FirstPerson::Update);
+
+                    // CCamAimWeapon::Update: push ebp / mov ebp, esp / and esp, -10 / sub esp, 1A4 / ... / mov byte [edi+2C4], 0
+                    auto aim = hook::pattern("55 8B EC 83 E4 F0 81 EC A4 01 00 00 53 56 57 8B F9 C6 87 C4 02 00 00 00");
+                    // movss xmm0, [esp+CC] / movss [edi+1DC], xmm0 / movss [edi+1D0], xmm6 / movss [edi+1D4], xmm5
+                    auto shoulder = hook::pattern("F3 0F 10 84 24 ? ? ? ? F3 0F 11 87 DC 01 00 00 F3 0F 11 B7 D0 01 00 00 F3 0F 11 AF D4 01 00 00");
+                    if (!aim.empty() && !shoulder.empty())
+                    {
+                        FirstPerson::aimUpdateHook = safetyhook::create_inline(aim.get_first(0), FirstPerson::AimUpdate);
+                        FirstPerson::aimShoulderHook = safetyhook::create_mid(shoulder.get_first(9), FirstPerson::HoldShoulder);
+                    }
                 }
             }
 
