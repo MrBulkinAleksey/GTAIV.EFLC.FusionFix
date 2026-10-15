@@ -283,7 +283,8 @@ export float PbrSkySunExposure()
 
 // The hue of the sunlight reaching a height (km above the sea) with the sun at sunSine above the horizon, through the
 // air of SkyAtmosphere.fx at the weather's haze, at brightness 1 (Rec. 709 luma), each channel within 0 to 2. On the
-// CPU, as the transmittance table: the clouds need it at one height only. False where no sunlight gets there.
+// CPU, as the transmittance table: the clouds need it at one height only. With the sun below that height's horizon,
+// the light grazing it.
 export bool PbrSkySunHue(float heightKm, float sunSine, float hue[3])
 {
     constexpr double kGround = 6360.0, kTop = 6460.0;
@@ -293,12 +294,11 @@ export bool PbrSkySunHue(float heightKm, float sunSine, float hue[3])
     constexpr int kSteps = 40;
     const double haze = WeatherHaze();
     const double r = kGround + std::max(double(heightKm), 0.0);
-    const double mu = std::clamp(double(sunSine), -1.0, 1.0);
+    // Past the planet's edge as seen from that height, the last light that grazes it: the sky's sun goes down at
+    // the ground's horizon while the clouds above still catch it, red.
+    const double edge = -std::sqrt(std::max(0.0, 1.0 - kGround * kGround / (r * r)));
+    const double mu = std::clamp(double(sunSine), edge + 1e-4, 1.0);
     const double b = r * mu;
-    // Behind the planet's edge
-    const double groundDisc = b * b - (r * r - kGround * kGround);
-    if (groundDisc > 0.0 && -b - std::sqrt(groundDisc) > 0.0)
-        return false;
     const double tMax = -b + std::sqrt(std::max(b * b - (r * r - kTop * kTop), 0.0));
     const double dt = tMax / kSteps;
     double depth[3] = {};
@@ -315,7 +315,7 @@ export bool PbrSkySunHue(float heightKm, float sunSine, float hue[3])
     for (int c = 0; c < 3; ++c)
         transmittance[c] = std::exp(-depth[c]);
     const double luma = 0.2126 * transmittance[0] + 0.7152 * transmittance[1] + 0.0722 * transmittance[2];
-    if (luma <= 1e-6)
+    if (luma <= 1e-30)
         return false;
     for (int c = 0; c < 3; ++c)
         hue[c] = float(std::clamp(transmittance[c] / luma, 0.0, 2.0));

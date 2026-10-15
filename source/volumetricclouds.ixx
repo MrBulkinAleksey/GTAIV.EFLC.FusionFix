@@ -278,12 +278,18 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
             if (std::fabs(skyAxis) > 0.2f && std::fabs(gameAxis) > 0.2f)
                 R.CloudSkyAxisSign[axis] = (skyAxis > 0.0f) == (gameAxis > 0.0f) ? 1.0f : -1.0f;
         }
-        sun = D3DXVECTOR4(R.CloudLightDir[0], R.CloudLightDir[1], R.CloudLightDir[2], 0.0f);
+        // Its way round, at the height of the sun the sky draws: the game holds its light high, at 30
+        // degrees with the sky's sun on the horizon at 20:00, and the clouds of a sunset were lit, and
+        // took the sun's colour, as at midday.
+        const float flat = std::sqrt(R.CloudLightDir[0] * R.CloudLightDir[0] + R.CloudLightDir[1] * R.CloudLightDir[1]);
+        const float across = std::sqrt((std::max)(0.0f, 1.0f - skySun.z * skySun.z));
+        sun = flat > 1e-3f ? D3DXVECTOR4(R.CloudLightDir[0] / flat * across, R.CloudLightDir[1] / flat * across, skySun.z, 0.0f)
+                           : D3DXVECTOR4(R.CloudLightDir[0], R.CloudLightDir[1], R.CloudLightDir[2], 0.0f);
     }
     if (!reflection)
         std::memcpy(R.CloudLastUsedSun, &sun.x, sizeof(R.CloudLastUsedSun));
-    // The sun the physical sky's table was drawn about, in the world: the game's light by day, else the sky's sun
-    // with the axis signs learnt from it.
+    // The sun the physical sky's table was drawn about, in the world: the game's light's way round at the sky sun's
+    // height by day, else the sky's sun with the axis signs learnt from it.
     const D3DXVECTOR4 tableSun = gameLight ? sun : D3DXVECTOR4(skySun.x * R.CloudSkyAxisSign[0], skySun.y * R.CloudSkyAxisSign[1], skySun.z, 0.0f);
     // How much of their light the clouds take from the physical sky (pbrsky.ixx), as much as the sky took of it.
     const float pbrShare = PbrSkyShare();
@@ -410,9 +416,12 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         if (!moonlit && pbrShare > 0.0f && PbrSkySunHue((R.Cloud.base + 0.5f * R.Cloud.thickness) / 1000.0f, sun.z, pbrHue))
             for (int i = 0; i < 3; ++i)
                 hue[i] += (pbrHue[i] - hue[i]) * pbrShare;
+        // Under the physical sky most of the air's colour: at the game's 0.3 a sunset's clouds took
+        // a pale peach for its orange.
+        const float sunTint = R.fVolumetricCloudsSunTint + (0.7f - R.fVolumetricCloudsSunTint) * pbrShare;
         float tint[3];
         for (int i = 0; i < 3; ++i)
-            tint[i] = 1.0f + (hue[i] - 1.0f) * R.fVolumetricCloudsSunTint;
+            tint[i] = 1.0f + (hue[i] - 1.0f) * sunTint;
         effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3SunTint"), tint, 3);
         // The glow is the sunlight straight through the cloud's edges: it takes the sun's hue
         // whole, gold in the evening, whatever VolumetricCloudsSunTint does to the lit sides.
