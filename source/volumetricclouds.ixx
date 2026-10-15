@@ -375,7 +375,10 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     effect->SetFloat(effect->GetParameterByName(nullptr, "fCeiling"), ceiling);
     {
         const float litLuma = 0.2126f * litColour[0] + 0.7152f * litColour[1] + 0.0722f * litColour[2];
-        effect->SetFloat(effect->GetParameterByName(nullptr, "fSkyMatch"), canReadScene && litLuma > 1e-4f ? R.fVolumetricCloudsSkyMatch * R.Cloud.skyMatch / litLuma : 0.0f);
+        // Under the physical sky twice as bright against it, by its share: matched to its whole dome, a darker
+        // blue than the timecycle's teal on screen, the clouds at twice its brightness came out grey on it.
+        const float skyMatch = R.fVolumetricCloudsSkyMatch * R.Cloud.skyMatch * (1.0f + pbrShare);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fSkyMatch"), canReadScene && litLuma > 1e-4f ? skyMatch / litLuma : 0.0f);
     }
     effect->SetFloat(effect->GetParameterByName(nullptr, "fLightStrength"), lightStrength);
     // How high the sun (or the moon) stands: 0 up to 5 degrees, 1 from 35 up. With it low, the clouds
