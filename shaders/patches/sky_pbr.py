@@ -92,7 +92,13 @@ def patch(n):
         sys.exit(f'{path}: unexpected swizzle in {m.group(0).strip()}')
     into = swizzle_into(mask)
     own = ''.join(mask) + mask[-1] * (4 - len(mask))  # the destination's components read as xyz(w)
-    blend = (f'    mul r25.xyz, {factor}, r26 // {TAG}: the PBR sky, unclamped\n'
+    # Times HDRSunExposure alone, not the factor, which is (1 - the sun's glow) times it: the game's sky gives way to
+    # its sun disc there, and with the PBR sky's glow about the sun brighter than that disc, the disc came out a dull
+    # hole in it. The sun goes over the PBR sky instead.
+    exposure = re.search(r'^//\s+HDRSunExposure\s+(c\d+)', text, re.M)
+    if not exposure:
+        sys.exit(f'{path}: no HDRSunExposure register')
+    blend = (f'    mul r25.xyz, {exposure.group(1)}.x, r26 // {TAG}: the PBR sky, unclamped, at HDRSunExposure: the sun goes over it\n'
              f'    add r25.xyz, r25, -{dst}.{own}\n'
              f'    mad {dst}.{mask}, c194.x, r25.{into}, {dst}\n')
     text = text[:m.start()] + LOOKUP + m.group(0) + blend + text[m.end():]

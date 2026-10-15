@@ -58,7 +58,7 @@ index 3c09a57f..6367f059 100644
 +    mul r26.x, r25.y, c153.y // u
 +    texld r26, r26, s10
      mul_sat_pp r2.xzw, r0.x, v5.xyyz
-+    mul r25.xyz, r0.x, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped
++    mul r25.xyz, c82.x, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped, at HDRSunExposure: the sun goes over it
 +    add r25.xyz, r25, -r2.xzww
 +    mad r2.xzw, c194.x, r25.xxyz, r2
      mul r3.xyz, r1_abs, r1_abs
@@ -124,7 +124,7 @@ index a108c09b..3fb1d47b 100644
 +    mul r26.x, r25.y, c153.y // u
 +    texld r26, r26, s10
      mul_sat_pp r2.xzw, r0.x, v5.xyyz
-+    mul r25.xyz, r0.x, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped
++    mul r25.xyz, c82.x, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped, at HDRSunExposure: the sun goes over it
 +    add r25.xyz, r25, -r2.xzww
 +    mad r2.xzw, c194.x, r25.xxyz, r2
      mul r3.xyz, r1_abs, r1_abs
@@ -190,7 +190,7 @@ index 43d39117..a1c6337c 100644
 +    mul r26.x, r25.y, c153.y // u
 +    texld r26, r26, s10
      mul_sat_pp r3.xyz, r1.x, v5
-+    mul r25.xyz, r1.x, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped
++    mul r25.xyz, c89.x, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped, at HDRSunExposure: the sun goes over it
 +    add r25.xyz, r25, -r3.xyzz
 +    mad r3.xyz, c194.x, r25.xyzx, r3
      mad_pp r2.xzw, r2, c89.x, r3.xyyz
@@ -256,7 +256,7 @@ index 8805df19..af388d0e 100644
 +    mul r26.x, r25.y, c153.y // u
 +    texld r26, r26, s10
      mul_sat_pp r2.xzw, r0.w, v5.xyyz
-+    mul r25.xyz, r0.w, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped
++    mul r25.xyz, c82.x, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped, at HDRSunExposure: the sun goes over it
 +    add r25.xyz, r25, -r2.xzww
 +    mad r2.xzw, c194.x, r25.xxyz, r2
      mul r3.xzw, r1_abs.xyyz, r1_abs.xyyz
@@ -322,7 +322,7 @@ index 5f5dfee0..0c91b397 100644
 +    mul r26.x, r25.y, c153.y // u
 +    texld r26, r26, s10
      mul_sat_pp r3.xyz, r1.x, v5
-+    mul r25.xyz, r1.x, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped
++    mul r25.xyz, c89.x, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped, at HDRSunExposure: the sun goes over it
 +    add r25.xyz, r25, -r3.xyzz
 +    mad r3.xyz, c194.x, r25.xyzx, r3
      mad_pp r2.xzw, r2, c89.x, r3.xyyz
