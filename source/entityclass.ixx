@@ -36,6 +36,10 @@ import temporal;
 // execute took, per frame and per target the game had locked (RenderSkip::CurrentTarget), to
 // GTAIV.EFLC.FusionFix.EntityClass.log: what leaving a kind out of a pass would save.
 //
+// SkipLeftOutDraws = 1 ([PERFORMANCE]): RenderSkip leaves passes out on the GPU (the reflections and far cascades
+// taking turns, the night's cascades) by dropping their device draws, but the game still works through every draw
+// command of them on the render thread. In a pass it drops, the commands hooked here are not executed at all.
+//
 // LampShadowFaceCulling ([PERFORMANCE]): the lamps' shadow maps (SHADOW_MAP_COLOUR_POINT) are dual paraboloid: one
 // tile a lamp, the half facing one way written to red and the other to green (CSetColorWrite 1 and 2), and every
 // entity of the lamp is drawn into both. The slot render (0xd77a00, mode 4) makes a face command (0xd77930, face at
@@ -102,6 +106,7 @@ namespace
     bool bDrawLog = false;
     bool bFaceCullingSetting = true;   // LampShadowFaceCulling
     bool bFaceCulling = false;          // and its hooks in place
+    bool bSkipLeftOut = true;           // SkipLeftOutDraws
     uintptr_t modelInfos = 0;       // CE 0x1295cd8, model infos by index
     constexpr uint32_t kDrawLogFrames = 600;
     struct TargetStats
@@ -119,6 +124,8 @@ namespace
         std::unordered_set<uint64_t> keys;
         // Draws outside the face drawn: left out with LampShadowFaceCulling, else counted only
         uint64_t outside = 0;
+        // Draws in a pass RenderSkip left out: not executed with SkipLeftOutDraws, else timed as the rest
+        uint64_t leftOutPass = 0;
         // Lamp maps: draws with the half known, and where their spheres are against the plane between the halves: on
         // the side the half drawn faces, on the other, across
         uint64_t faceKnown = 0, faceUnknown = 0, ahead = 0, behind = 0, across = 0;
@@ -175,6 +182,8 @@ namespace
             if (s.faceKnown + s.faceUnknown)
                 text += std::format(" half known for {:.0f}%, spheres on the half's side {:.1f}, the other side {:.1f}, across {:.1f},",
                     100.0 * s.faceKnown / double(s.faceKnown + s.faceUnknown), s.ahead * perFrame, s.behind * perFrame, s.across * perFrame);
+            if (s.leftOutPass)
+                text += std::format(" in a pass left out {:.1f} ({}),", s.leftOutPass * perFrame, bSkipLeftOut ? "not executed" : "executed");
             if (s.outside)
                 text += std::format(" outside their face {:.1f} ({}),", s.outside * perFrame, bFaceCulling ? "left out" : "drawn");
             text += " by command";
@@ -292,6 +301,13 @@ namespace
 
     void Execute(DrawExecute original, void* dc, Kind kind, Source source)
     {
+        const bool leftOutPass = RenderSkip::DropsDraws();
+        if (leftOutPass && bSkipLeftOut)
+        {
+            if (bDrawLog)
+                StatsFor(RenderSkip::CurrentTarget()).leftOutPass++;
+            return;
+        }
         const char* target = bDrawLog || bFaceCulling ? RenderSkip::CurrentTarget() : nullptr;
         const bool lampMaps = (bDrawLog || bFaceCulling) && IsLampMaps(target);
         const int side = lampMaps ? SphereSide(dc, source) : 0;
@@ -335,6 +351,8 @@ namespace
             stats.sourceDraws[source]++;
             if (outside)
                 stats.outside++;
+            if (leftOutPass)
+                stats.leftOutPass++;
             if (lampMaps)
             {
                 uint16_t model;
@@ -512,8 +530,9 @@ namespace
                     bDrawLog = iniReader.ReadInteger("DEBUG", "EntityDrawLog", 0) != 0;
                     bFaceCullingSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 1) != 0;
                     bFaceCulling = bFaceCullingSetting && bFaceHooks;
-                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s)\n", int(bDrawLog), int(bFaceCullingSetting),
-                        !bFaceCullingSetting ? "off" : bFaceCulling ? "on" : "no hooks");
+                    bSkipLeftOut = iniReader.ReadInteger("PERFORMANCE", "SkipLeftOutDraws", 1) != 0;
+                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s), SkipLeftOutDraws %d\n", int(bDrawLog),
+                        int(bFaceCullingSetting), !bFaceCullingSetting ? "off" : bFaceCulling ? "on" : "no hooks", int(bSkipLeftOut));
                 };
                 CIniReader iniReader("");
                 readIni(iniReader);
