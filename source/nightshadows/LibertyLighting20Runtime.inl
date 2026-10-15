@@ -959,6 +959,43 @@ namespace Lighting20
         }
     }
 
+    // Liberty's Shadows 2.0.4 (OnyxOak, GPL-3.0): ArcadePlacement197. An arcade in Algonquin (model 0x2E73D323 at
+    // -19.29, -350.38, 16.79) has two lamp effects authored 1.4 to 1.7 m below their fittings (model 0x90507341, the
+    // same place and heading), inside the building: with ModelLightShadows their shadow maps were drawn from in there.
+    // A shadowed light of exactly theirs (position bits, colour, intensity 20, range 10, flags 0x41) moves to the
+    // fitting, 30 mm out from its nearest triangle. Its map is dynamic only, drawn from where it is each frame, so the
+    // game's key does: no cached map from the old place.
+    namespace Arcade
+    {
+        static std::atomic<uint32_t> moved{0};
+        constexpr float Origin[3] = { -19.28564453125f, -350.38043212890625f, 16.78708267211914f };
+        constexpr float Authored[2][3] = { { -34.497642517089844f, -326.367645263671875f, 15.356832504272461f },
+                                           { -26.226375579833984f, -320.151123046875f, 15.356832504272461f } };
+        constexpr float Fitting[2][3] = { { -15.074825134375509f, 24.0128f, 0.23388017289465424f },
+                                          { -6.94073f, 30.2293f, 0.2287890625f } };
+
+        static void Place(rage::CLightSource* lights, uint32_t count) noexcept
+        {
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                auto& l = lights[i];
+                if (l.mType != rage::LT_POINT || (l.mFlags & ~rage::LF_DYNAMIC_SHADOW) != 0x41 || !(l.mFlags & rage::LF_DYNAMIC_SHADOW) ||
+                    l.mIntensity != 20.0f || l.mRadius != 10.0f || l.mColor.x != 1.0f || l.mColor.y != 0.9647059440612793f ||
+                    l.mColor.z != 0.7372549176216125f)
+                    continue;
+                for (unsigned n = 0; n < 2; ++n)
+                {
+                    if (l.mPosition.x != Authored[n][0] || l.mPosition.y != Authored[n][1] || l.mPosition.z != Authored[n][2]) continue;
+                    l.mPosition.x = Origin[0] + Fitting[n][0];
+                    l.mPosition.y = Origin[1] + Fitting[n][1];
+                    l.mPosition.z = Origin[2] + Fitting[n][2];
+                    ++moved;
+                    break;
+                }
+            }
+        }
+    }
+
     // Before the game picks the night shadow slots (PlayerShadowAllocation::prepareSources): rear lamp and headlight
     // keys whose car went lose their shadow, the cached lamps join the dynamic slots, and lights at one point share
     // a map.
@@ -973,6 +1010,7 @@ namespace Lighting20
                 light.mFlags &= ~rage::LF_DYNAMIC_SHADOW;
         }
         World::PromoteCachedLamps(lights, count);
+        Arcade::Place(lights, count);
         MergeWithNative(lights, count);
         IdleModelLights(lights, count);
         Sharing::Apply(lights, count);
@@ -1015,7 +1053,7 @@ namespace Lighting20
                 << " | world " << (World::On() ? "on" : "off") << " cached_lamps=" << World::lampsPromoted.load()
                 << " model_lights=" << World::modelLightsPromoted.load() << " corona_lights=" << World::coronaLights.load()
                 << " corona_refused=" << World::coronasRefused.load() << " corona_capped=" << World::coronasCapped.load()
-                << " merged: coronas=" << World::coronasMerged.load() << " model_lights=" << World::modelLightsMerged.load()
+                << " arcade_moved=" << Arcade::moved.load() << " merged: coronas=" << World::coronasMerged.load() << " model_lights=" << World::modelLightsMerged.load()
                 << " model_lights_without_casters=" << World::modelLightsIdle.load()
                 << " | buildings " << (Buildings::On() ? "on" : "off") << " passes=" << Buildings::passes.load()
                 << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load()
