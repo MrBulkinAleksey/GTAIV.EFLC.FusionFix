@@ -151,6 +151,10 @@ namespace
         // Lamp maps: draws wholly outside the lamp's radius (left out with LampShadowRangeCulling, else counted only),
         // and the radius summed over the draws with the half known, drawn or left out
         uint64_t beyond = 0, radiusDraws = 0;
+        // Lamp maps: draws and time by the lamp's radius (under 15, 15-30, 30-50, 50+ m), and within each by the angle
+        // of the draw off the slot's direction (+0xd0): under 45, 45-90, 90-135, 135+ degrees, no direction
+        uint64_t radiusAngleDraws[4][5]{};
+        int64_t radiusAngleTicks[4][5]{};
         // Lamp maps: props too small from the lamp (left out with LampShadowSmallCull, else counted only)
         uint64_t tiny = 0;
         double radiusSum = 0.0;
@@ -208,6 +212,7 @@ namespace
         for (auto& s : targetStats)
         {
             text += std::format("  {:<28} {:6.3f} ms:", s.name, s.Total() * msPerFrame);
+            std::string lampLines;
             for (size_t k = 1; k <= size_t(Kind::Kinds); ++k)
             {
                 const size_t kind = k % size_t(Kind::Kinds);    // unmarked last, and only if any
@@ -230,10 +235,29 @@ namespace
             if (s.tiny)
                 text += std::format(" props under {:.0f}% of their distance {:.1f} ({}),", kLampSmallSize * 100.0f, s.tiny * perFrame,
                     bSmallCulling ? "left out" : "drawn");
+            if (s.lamp)
+            {
+                static constexpr const char* radiusNames[4] = { "under 15 m", "15-30 m", "30-50 m", "50+ m" };
+                for (int r = 0; r < 4; ++r)
+                {
+                    uint64_t draws = 0;
+                    int64_t ticks = 0;
+                    for (int a = 0; a < 5; ++a)
+                        draws += s.radiusAngleDraws[r][a], ticks += s.radiusAngleTicks[r][a];
+                    if (!draws)
+                        continue;
+                    lampLines += std::format("    lamps of radius {}: {:.1f} ({:.3f} ms); off their direction under 45 deg {:.1f} ({:.3f} ms), 45-90 {:.1f} ({:.3f} ms), "
+                        "90-135 {:.1f} ({:.3f} ms), 135+ {:.1f} ({:.3f} ms), no direction {:.1f} ({:.3f} ms)\n", radiusNames[r], draws * perFrame, ticks * msPerFrame,
+                        s.radiusAngleDraws[r][0] * perFrame, s.radiusAngleTicks[r][0] * msPerFrame, s.radiusAngleDraws[r][1] * perFrame,
+                        s.radiusAngleTicks[r][1] * msPerFrame, s.radiusAngleDraws[r][2] * perFrame, s.radiusAngleTicks[r][2] * msPerFrame,
+                        s.radiusAngleDraws[r][3] * perFrame, s.radiusAngleTicks[r][3] * msPerFrame, s.radiusAngleDraws[r][4] * perFrame,
+                        s.radiusAngleTicks[r][4] * msPerFrame);
+                }
+            }
             text += " by command";
             for (int i = 0; i < Sources; ++i)
                 text += std::format("{} {} {:.1f}", i ? "," : "", SourceNames[i], s.sourceDraws[i] * perFrame);
-            text += "\n";
+            text += "\n" + lampLines;
             if (s.camera)
             {
                 static constexpr const char* cameraDistances[6] = { "0-25 m", "25-50 m", "50-100 m", "100-200 m", "200-400 m", "400+ m" };
@@ -311,6 +335,7 @@ namespace
     {
         float position[3];
         float axis[3];
+        float direction[3];
         float radius;
     };
     FaceOrigin faceOrigins[256]{};
@@ -332,6 +357,7 @@ namespace
         auto& origin = faceOrigins[nextFaceOrigin];
         std::memcpy(origin.position, reinterpret_cast<const float*>(slot + 0xc0), sizeof(origin.position));
         std::memcpy(origin.axis, reinterpret_cast<const float*>(slot + 0x60), sizeof(origin.axis));
+        std::memcpy(origin.direction, reinterpret_cast<const float*>(slot + 0xd0), sizeof(origin.direction));
         origin.radius = *reinterpret_cast<const float*>(slot + 0xe0);
         auto* bytes = reinterpret_cast<uint8_t*>(dc);
         bytes[kFaceOriginByte] = nextFaceOrigin++;
@@ -505,6 +531,30 @@ namespace
             {
                 stats.radiusDraws++;
                 stats.radiusSum += currentOrigin.radius;
+                uint16_t model;
+                const float* place;
+                if (ModelAndPlace(dc, source, model, place))
+                {
+                    const auto& o = currentOrigin;
+                    const int r = o.radius < 15.0f ? 0 : o.radius < 30.0f ? 1 : o.radius < 50.0f ? 2 : 3;
+                    const float* dir = o.direction;
+                    const float dirLength = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+                    float dot = 0.0f, length2 = 0.0f;
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        const float d = place[i] - o.position[i];
+                        dot += d * dir[i];
+                        length2 += d * d;
+                    }
+                    int a = 4;
+                    if (dirLength > 0.5f && length2 > 1e-4f)
+                    {
+                        const float c = dot / (dirLength * std::sqrt(length2));
+                        a = c > 0.7071f ? 0 : c > 0.0f ? 1 : c > -0.7071f ? 2 : 3;
+                    }
+                    stats.radiusAngleDraws[r][a]++;
+                    stats.radiusAngleTicks[r][a] += end.QuadPart - start.QuadPart;
+                }
             }
             if (leftOutPass)
                 stats.leftOutPass++;
