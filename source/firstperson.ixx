@@ -23,7 +23,9 @@ import inireload;
 // look around and its rotation with the car stay and only the eye is moved to the player's head. The
 // head bone lags the car by a frame or two at speed (the skeleton is posed before the car moves), so
 // the head is kept in the ped's own frame, learned while the car nearly stands, and placed with the
-// ped's matrix as it is when the final camera is built.
+// ped's matrix as it is when the final camera is built. The hood view's look around is clamped to
+// +-74.5 degrees to the sides and -19..57 up and down (CE 0xA17131); in first person it goes to 150 to
+// the sides, over the shoulder, and 60 up and down.
 //
 // In both the head, hair and face are left out of the camera's scene, their shadows and reflections
 // kept, and the near clip is raised, which cuts away the neck and shoulders around the eye. The game
@@ -57,6 +59,10 @@ namespace FirstPerson
     static constexpr float LookDownUp = 0.03f;
     static float lookDownWeight = 0.0f;              // eases to 0 while the phone is in the hand
     static constexpr float LearnBelowSpeed = 1.5f;  // m/s: below it the head bone's lag is a few cm
+    static constexpr uintptr_t LookPitchOffset = 0x1B0, LookYawOffset = 0x1B4;
+    static constexpr float LookYawLimit = 2.618f;   // radians, 150 degrees
+    static constexpr float LookPitchLimit = 1.047f; // 60 degrees
+    static float look[2]{};                         // pitch and yaw before the hood view's clamp
 
     static SafetyHookMid zoomHook;
     static SafetyHookInline updateHook;
@@ -64,6 +70,8 @@ namespace FirstPerson
     static SafetyHookMid vehicleViewHook;
     static SafetyHookInline vehicleUpdateHook;
     static SafetyHookMid componentCopyHook;
+    static SafetyHookMid lookTakeHook;
+    static SafetyHookMid lookClampHook;
     static uint8_t* drawComponents = nullptr;          // the game's 16 player component draw bytes
     static constexpr int32_t HeadComponents[] = { 0, 7, 9, 10 }; // head, hair, teeth, face
     static bool buildingHiddenHead = false;            // the player's draws in the camera's scene are being made
@@ -167,6 +175,24 @@ namespace FirstPerson
             vehicleActive = true;
             view = HoodView - 1;
         }
+    }
+
+    // The hood view's look angles once they took this frame's mouse and stick (CE 0xA17139), before
+    // its clamp, esi the camera.
+    static void TakeLook(SafetyHookContext& regs)
+    {
+        look[0] = *reinterpret_cast<const float*>(regs.esi + LookPitchOffset);
+        look[1] = *reinterpret_cast<const float*>(regs.esi + LookYawOffset);
+    }
+
+    // After the clamp (CE 0xA1718D): the pitch is stored, the yaw in xmm1 is stored right after. In first
+    // person both are clamped again, wider.
+    static void ClampLook(SafetyHookContext& regs)
+    {
+        if (!vehicleActive || *reinterpret_cast<const int8_t*>(regs.esi + VehicleViewOffset) != HoodView)
+            return;
+        *reinterpret_cast<float*>(regs.esi + LookPitchOffset) = std::clamp(look[0], -LookPitchLimit, LookPitchLimit);
+        regs.xmm1.f32[0] = std::clamp(look[1], -LookYawLimit, LookYawLimit);
     }
 
     // Where the head sits in the ped's frame. The bone is from the last posing, a frame or two behind
@@ -431,6 +457,15 @@ public:
                 {
                     FirstPerson::vehicleViewHook = safetyhook::create_mid(view.get_first(0), FirstPerson::StepVehicleView);
                     FirstPerson::vehicleUpdateHook = safetyhook::create_inline(update.get_first(0), FirstPerson::VehicleUpdate);
+                }
+                // after the pitch is loaded (where RawInput adds the mouse): the clamp's limits, then the yaw's
+                auto take = hook::pattern("F3 0F 10 0D ? ? ? ? 0F 2F C8 76 0F F3 0F 10 0D ? ? ? ? 0F 2F C1 77 05 EB 06 0F 28 C1 0F 28 C8 F3 0F 10 86 B4 01 00 00");
+                // push ecx / lea eax, [esp+B4] / mov [esp], 1.0 / push eax / lea eax, [esp+A8] / push eax / push edi / mov ecx, esi / movss [esi+1B4], xmm1
+                auto clamp = hook::pattern("51 8D 84 24 B4 00 00 00 C7 04 24 00 00 80 3F 50 8D 84 24 A8 00 00 00 50 57 8B CE F3 0F 11 8E B4 01 00 00");
+                if (!take.empty() && !clamp.empty())
+                {
+                    FirstPerson::lookTakeHook = safetyhook::create_mid(take.get_first(0), FirstPerson::TakeLook);
+                    FirstPerson::lookClampHook = safetyhook::create_mid(clamp.get_first(0), FirstPerson::ClampLook);
                 }
             }
 
