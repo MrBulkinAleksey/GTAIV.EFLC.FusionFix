@@ -30,6 +30,7 @@ uniform float4 FusionPS208                : register(c208);
 uniform float4 FusionPS209                : register(c209);
 uniform float4 FusionPS210                : register(c210);
 uniform float4 FusionPS216                : register(c216);
+uniform float4 FlareSun                   : register(c207);    // SSAdd only: xy the sun on the screen without temporal AA's jitter, z 1 when set (-1 behind the camera).
 sampler2D pHDRDownsampleTex               : register(s11);     // Custom downsample.
 sampler2D DiffuseTex                      : register(s13);     // Diffuse; cloud mask.
 
@@ -172,48 +173,62 @@ float SunVisible(float2 uv)
     return visible;
 }
 
+// A ghost: a faint disc with a brighter rim, as a lens's aperture images the sun out of focus.
 float Ghost(float2 d, float radius)
 {
-    return smoothstep(radius, radius * 0.6f, length(d));
+    float r = length(d);
+    float disc = smoothstep(radius, radius * 0.85f, r);
+    float rim = smoothstep(radius * 0.8f, radius * 0.95f, r) * disc;
+    return disc * 0.35f + rim;
 }
 
 float3 SunFlare(float2 uv)
 {
+    // Without temporal AA's jitter: the flare is added after the resolve, and the jitter shook the star by up to a pixel
     float4 pos = mul(SunDirection, gWorldViewProj);
-    if (FlareIntensity <= 0.0f || pos.w <= 0.0f)
+    if (FlareIntensity <= 0.0f || FlareSun.z < 0.0f || (FlareSun.z == 0.0f && pos.w <= 0.0f))
         return 0.0f;
-    float2 sun = float2(pos.x, -pos.y) / pos.w * 0.5f + 0.5f;
+    float2 sun = FlareSun.z > 0.0f ? FlareSun.xy : float2(pos.x, -pos.y) / pos.w * 0.5f + 0.5f;
     float onScreen = saturate(20.0f * min(min(sun.x, 1.0f - sun.x), min(sun.y, 1.0f - sun.y)));
     if (onScreen <= 0.0f)
         return 0.0f;
 
-    // The sun's light where it shows
-    float2 spread = 4.0f * TexelSize;
+    // The sun's light where it shows, a 3x3 grid over 12 pixels so that it does not flicker as the sun's disc
+    // crosses pixels and clouds' edges pass over it
+    float2 spread = 6.0f * TexelSize;
     float3 light = 0.0f;
     float shown = 0.0f;
-    const float2 taps[5] = { float2(0, 0), float2(1, 0), float2(-1, 0), float2(0, 1), float2(0, -1) };
     [unroll]
-    for (int t = 0; t < 5; t++)
+    for (int ty = -1; ty <= 1; ty++)
     {
-        float2 at = sun + taps[t] * spread;
-        float v = SunVisible(at);
-        light += tex2Dlod(HDRSampler, float4(at, 0, 0)).rgb * v;
-        shown += v;
+        [unroll]
+        for (int tx = -1; tx <= 1; tx++)
+        {
+            float2 at = sun + float2(tx, ty) * spread;
+            float v = SunVisible(at);
+            light += tex2Dlod(HDRSampler, float4(at, 0, 0)).rgb * v;
+            shown += v;
+        }
     }
-    light *= 0.2f * onScreen * FlareIntensity;
+    if (shown <= 0.0f)
+        return 0.0f;
+    light *= (1.0f / 9.0f) * onScreen * FlareIntensity;
     #if USE_HORIZON_FADE
         light *= VolumetricFog == 1.0f ? HorizonFade() : 1.0f;
     #endif
-    if (shown <= 0.0f)
-        return 0.0f;
 
     // Distances on the screen, in heights
     float2 aspect = float2(AspectRatio.x, 1.0f);
     float2 d = (uv - sun) * aspect;
     float r = length(d);
-    float angle = atan2(d.y, d.x);
     float core = exp(-r * 40.0f) * 0.6f + exp(-r * 8.0f) * 0.08f;
-    float spikes = pow(abs(cos(angle * 4.0f)), 96.0f) * exp(-r * 9.0f) * 0.12f;
+
+    // Eight spikes: the distance to the nearest of four lines through the sun, a spike's width growing with the
+    // distance but never under a pixel and a half, its light kept as it widens (thin spikes shimmered)
+    float sector = frac(atan2(d.y, d.x) * (4.0f / 3.14159265f) + 0.5f) - 0.5f;
+    float across = r * sin(abs(sector) * (3.14159265f / 4.0f));
+    float width = max(r * 0.025f, 1.5f * TexelSize.y);
+    float spikes = exp(-across * across / (width * width)) * (r * 0.025f / width) * exp(-r * 9.0f) * 0.12f;
     float3 flare = (core + spikes) * light;
 
     // Ghosts: where along the sun's line through the centre (0 the sun, 1 the centre, 2 its mirror), radius, colour
@@ -232,8 +247,12 @@ float3 SunFlare(float2 uv)
         float3 split = float3(Ghost(gd, radius * 1.04f), Ghost(gd, radius), Ghost(gd, radius * 0.96f));
         ghostSum += split * tints[g];
     }
-    // Fainter as the sun nears the centre, where real ghosts bunch up behind its glare
-    flare += ghostSum * light * 0.01f * saturate(length(axis * aspect) * 3.0f);
+    // A wide halo around the sun, its rim split into a thin rainbow
+    float3 halo = float3(smoothstep(0.012f, 0.0f, abs(r - 0.31f)), smoothstep(0.012f, 0.0f, abs(r - 0.30f)),
+                         smoothstep(0.012f, 0.0f, abs(r - 0.29f)));
+    // Ghosts fainter as the sun nears the centre, where real ones bunch up behind its glare. A hundredth of the
+    // sun's light was lost against the sky around them: a twentieth now.
+    flare += (ghostSum * 0.05f * saturate(length(axis * aspect) * 3.0f) + halo * 0.02f) * light;
     return flare;
 }
 

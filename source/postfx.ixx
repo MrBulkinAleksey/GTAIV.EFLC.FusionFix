@@ -1208,7 +1208,28 @@ private:
                                 SetTextureBoth(pDevice, 11, PostFxResources.FullScreenDownsampleTex2->mD3DTexture);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
-                                // add sunshafts to screen
+                                // add sunshafts to screen, with the sun flare placed by the view projection without jitter
+                                {
+                                    // c207: the sun's place on the screen (xy) and 1 (z) when the camera is known, else the
+                                    // shader projects the sun with the game's matrix, jitter and all
+                                    float flare[4] = {};
+                                    if (TemporalAA::CurrentCamera.Valid)
+                                    {
+                                        auto& m = TemporalAA::CurrentCamera.ViewProjectionNoJitter.m;
+                                        float clip[4];
+                                        for (int j = 0; j < 4; ++j)
+                                            clip[j] = static_cast<float>(SunDirectionWorld[0] * m[0][j] + SunDirectionWorld[1] * m[1][j] + SunDirectionWorld[2] * m[2][j]);
+                                        if (clip[3] > 1e-6f)
+                                        {
+                                            flare[0] = clip[0] / clip[3] * 0.5f + 0.5f;
+                                            flare[1] = -clip[1] / clip[3] * 0.5f + 0.5f;
+                                            flare[2] = 1.0f;
+                                        }
+                                        else
+                                            flare[2] = -1.0f; // behind the camera
+                                    }
+                                    pDevice->SetPixelShaderConstantF(207, flare, 1);
+                                }
                                 pDevice->SetPixelShader(PostFxResources.SSAdd_PS);
                                 pDevice->SetRenderTarget(0, PostFxResources.renderTargetSurf);
                                 SetTextureBoth(pDevice, 2, PostFxResources.textureRead);

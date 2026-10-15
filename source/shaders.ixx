@@ -27,6 +27,9 @@ using remove_cvref_t = std::remove_cvref_t<std::remove_pointer_t<std::decay_t<T>
 // and the bright sky around it reach the bloom (c210.w, sky_hdr.patch).
 export inline bool bSkyHDR = true;
 
+// The sun's direction in world space as c216 carries it, for placing the sun on the screen on the CPU (the sun flare).
+export inline float SunDirectionWorld[3] = {};
+
 export template <typename T> requires IsAnyOf<remove_cvref_t<T>, IDirect3DPixelShader9, IDirect3DVertexShader9>
 int GetFusionShaderID(T pShader)
 {
@@ -138,6 +141,7 @@ class Shaders
             arr[3] = 0.0f;
 
             pDevice->SetPixelShaderConstantF(216, &arr[0], 1);
+            std::copy_n(arr, 3, SunDirectionWorld);
             pDevice->SetVertexShaderConstantF(232, &arr[0], 1);
         }
     }
