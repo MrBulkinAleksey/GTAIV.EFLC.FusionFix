@@ -177,8 +177,9 @@ namespace FirstPerson
         }
     }
 
-    // The hood view's look angles once they took this frame's mouse and stick (CE 0xA17139), before
-    // its clamp, esi the camera.
+    // The hood view's look angles once they took this frame's mouse and stick, before its clamp stores
+    // them (CE 0xA1715B, the clamped pitch in xmm1, both still as they were in the camera), esi the
+    // camera. Not earlier: RawInput looks for the bytes from 0xA17131 to 0xA17150.
     static void TakeLook(SafetyHookContext& regs)
     {
         look[0] = *reinterpret_cast<const float*>(regs.esi + LookPitchOffset);
@@ -458,8 +459,8 @@ public:
                     FirstPerson::vehicleViewHook = safetyhook::create_mid(view.get_first(0), FirstPerson::StepVehicleView);
                     FirstPerson::vehicleUpdateHook = safetyhook::create_inline(update.get_first(0), FirstPerson::VehicleUpdate);
                 }
-                // after the pitch is loaded (where RawInput adds the mouse): the clamp's limits, then the yaw's
-                auto take = hook::pattern("F3 0F 10 0D ? ? ? ? 0F 2F C8 76 0F F3 0F 10 0D ? ? ? ? 0F 2F C1 77 05 EB 06 0F 28 C1 0F 28 C8 F3 0F 10 86 B4 01 00 00");
+                // movss xmm0, [esi+1B4] / movss [esi+1B0], xmm1 / movss xmm1, [the yaw's upper limit] / comiss / jbe
+                auto take = hook::pattern("F3 0F 10 86 B4 01 00 00 F3 0F 11 8E B0 01 00 00 F3 0F 10 0D ? ? ? ? 0F 2F C8 76 0F");
                 // push ecx / lea eax, [esp+B4] / mov [esp], 1.0 / push eax / lea eax, [esp+A8] / push eax / push edi / mov ecx, esi / movss [esi+1B4], xmm1
                 auto clamp = hook::pattern("51 8D 84 24 B4 00 00 00 C7 04 24 00 00 80 3F 50 8D 84 24 A8 00 00 00 50 57 8B CE F3 0F 11 8E B4 01 00 00");
                 if (!take.empty() && !clamp.empty())
