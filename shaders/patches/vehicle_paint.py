@@ -7,7 +7,7 @@
 # The finish, on clean paint only (dirt keeps the stock look); the clearcoat and its gloss also only where the material
 # has a specular of its own (matDiffuseColor2.w, c72.w), so matte trims, plastics and the underside stay matte:
 #  - a clearcoat: Schlick's Fresnel from 0.045 head on raises the specular where it beats the paint's own (near the
-#    silhouette), and a gloss floor sharpens the sun's highlight and the reflections;
+#    silhouette), up to twice the paint's own, and a gloss floor sharpens the sun's highlight and the reflections;
 #  - the sun highlight the game bakes into the albedo (specular2, which ignores shadows: it shows in tunnels and at
 #    night) turned down; the lighting pass still draws the shadowed one;
 #  - richer colour (saturation around the luminance) and a blue-violet tint growing towards the silhouette.
@@ -100,7 +100,9 @@ SPECULAR = f'''\
     mul r25.y, r25.y, c187.y
     mul r25.y, r25.y, c175.x
     mul r25.y, r25.y, r20.z
-    max r25.x, r25.x, r25.y // the clearcoat's where stronger
+    add r25.w, r25.x, r25.x
+    min r25.y, r25.y, r25.w // no more than twice the paint's own: the game draws the sky's reflection at 20 times the
+    max r25.x, r25.x, r25.y // stored specular, and the Fresnel's 0.26 at a glance turned bonnets and roofs white
     mul r25.z, r20.x, c183.z
     max r25.x, r25.x, r25.z // a wet film
     lrp r26.x, r24.x, c183.w, r25.x // drops
