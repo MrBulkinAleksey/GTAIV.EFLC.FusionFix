@@ -133,6 +133,14 @@ Targets Wet_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS)
     float threshold = 1.0 - vec4Wet.y * wet;
     float puddle = flat * smoothstep(threshold, threshold + 0.06, n);
 
+    // Grass soaks the rain up instead of holding a film of it: green over red, saturated, blue under green
+    // (yellow road markings have red at least as high as green, so they stay wet). It keeps a fifth of the
+    // film's sheen and few puddles, so lawns do not turn to mirrors in the lights and in SSR.
+    float3 a = o.albedo.rgb;
+    float grass = smoothstep(1.0, 1.15, a.g / max(a.r, 1e-4)) * smoothstep(0.1, 0.2, 1.0 - min(a.r, a.b) / max(a.g, 1e-4)) * (a.b < a.g);
+    float soak = 1.0 - 0.8 * grass;
+    puddle *= 1.0 - 0.7 * grass;
+
     // Darker: a third on walls, all of it on the ground, more in water.
     float darken = wet * lerp(0.33, 1.0, ground) * vec4Shape.w;
     o.albedo.rgb *= 1.0 - darken * 0.4;
@@ -142,8 +150,8 @@ Targets Wet_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS)
     // to about power 150, water to about 410. The game multiplies the sky's reflection by ten times
     // twice the specular intensity, so water takes little more than the film: at 0.5 puddles at
     // night were pale grey sheets of reflected sky, and every ring sparkled.
-    float filmGloss = lerp(o.specular.y, max(o.specular.y, 0.55), wet * ground);
-    float filmSpec = lerp(o.specular.x, max(o.specular.x, 0.12), wet * ground);
+    float filmGloss = lerp(o.specular.y, max(o.specular.y, 0.55), wet * ground * soak);
+    float filmSpec = lerp(o.specular.x, max(o.specular.x, 0.12), wet * ground * soak);
     o.specular.y = lerp(filmGloss, 0.9, puddle);
     o.specular.x = lerp(filmSpec, 0.15, puddle);
 
