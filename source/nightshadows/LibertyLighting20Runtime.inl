@@ -631,7 +631,10 @@ namespace Lighting20
         // in modes 1 and 2 (no forced group) and ours in mode 0 (Cast, and list 2 from Collect, under wd_local / wd).
         // 0 both, 1 only ours (the props PropShadows takes left out of modes 1 and 2), 2 only the game's (no Cast, no
         // list 2 adds). A trace had the game's draws of a post put no geometry in and ours draw it twice, under wd_local
-        // (group 0) and under wd (group 4): 3 opens 0x444C50 to props only under wd_local, 4 only under wd.
+        // (group 0) and under wd (group 4): 3 opens 0x444C50 to props only under wd_local, 4 only under wd. 3 still
+        // gave two shadows, 4 none: both from the wd_local draws, each prop drawn into both paraboloid halves of a
+        // lamp's map. 5 and 6 are 3 into the first half (faces -x) or the second (+x) only, 7 into the half on the
+        // prop's side of the lamp only (its place against the lamp along x).
         static std::atomic<int> drawRoute{0};
         static std::atomic<uint32_t> routeSkips{0};
         // The rules above are for map lights: a car's own lights (headlights, rear lamps, sirens) shine low and are no
@@ -978,18 +981,64 @@ namespace Lighting20
             }
         }
 
+        // PropCacheLocal: the props go into a lamp's cache (no face command, so no half known) through list 2, which
+        // the lamp pass draws under wd (group 4, the sun's technique: a flat projection by gShadowMatrix and the sun's
+        // depth), and with PropDrawRoute 4 (only the wd draws) no prop had a shadow at all: what the caches held of
+        // them was no shadow, and the props shadowed from a lamp only once it took a slot (wd_local draws from Cast).
+        // Their draws in a lamp's map under wd are made under wd_local instead, the forced group swapped for the call.
+        static bool cacheLocal = true;
+        static std::atomic<uint32_t> cacheRegrouped{0};
+
+        static bool InLampMap() noexcept
+        {
+            const char* target = RenderSkip::CurrentTarget();
+            return target && !std::strcmp(target, "SHADOW_MAP_COLOUR_POINT");
+        }
+
+        // The forced group to put back after the draw, or -2 if left as it was
+        static int32_t Regroup() noexcept
+        {
+            auto& group = *reinterpret_cast<int32_t*>(game + 0xC6B308);
+            if (!cacheLocal || localTechnique < 0 || group != 4 || !InLampMap()) return -2;
+            float lamp[3];
+            if (EntityClass::CurrentLampFace(lamp) >= 0) return -2;
+            const int32_t saved = group;
+            group = localTechnique;
+            ++cacheRegrouped;
+            return saved;
+        }
+
+        static void Ungroup(int32_t saved) noexcept
+        {
+            if (saved != -2) *reinterpret_cast<int32_t*>(game + 0xC6B308) = saved;
+        }
+
+        // PropDrawRoute 5-7: whether the half of the lamp's map being drawn is one the prop goes into
+        static bool RouteFace(const float* at) noexcept
+        {
+            const int route = drawRoute.load(std::memory_order_relaxed);
+            if (route < 5) return true;
+            float lamp[3];
+            const int face = EntityClass::CurrentLampFace(lamp);
+            if (face < 0) return true;
+            if (route == 7) return face == (at[0] < lamp[0] ? 0 : 1);
+            return face == route - 5;
+        }
+
         // A prop's draw by another command than the fragment type one (0x8DD0B0): a lamp post touched by a car goes
         // over to the fragment command (CDrawFragDC) and its shadow went, the bucket and cull passes of 0x444C50 being
         // opened only in Consumer. EntityClass's draw hooks set propDraw for those too.
         static std::atomic<uint32_t> otherCommandDraws{0};
         static thread_local uint8_t otherDepth = 0;
         static thread_local uint32_t otherSaved = 0;
+        static thread_local std::array<int32_t, 32> otherGroups{};
 
         static void BeforeOtherDraw(EntityClass::Kind kind) noexcept
         {
             const bool previous = propDraw;
             if (otherDepth < 32)
                 otherSaved = (otherSaved & ~(1u << otherDepth)) | (uint32_t(previous) << otherDepth);
+            if (otherDepth < 32) otherGroups[otherDepth] = -2;
             ++otherDepth;
             if (kind != EntityClass::Kind::Prop) return;
             uint16_t model = 0;
@@ -997,8 +1046,14 @@ namespace Lighting20
             const int source = EntityClass::CurrentDraw(model, at);
             if ((source != 1 && source != 3) || !model || !(models[model >> 3].load(std::memory_order_relaxed) & (1u << (model & 7))))
                 return;
+            if (source == 1 && !RouteFace(at))
+            {
+                ++routeSkips;
+                return;
+            }
             propDraw = true;
             ++otherCommandDraws;
+            if (source == 1 && otherDepth <= 32) otherGroups[otherDepth - 1] = Regroup();
             if (Trace::Active() && (source == 3 || Trace::Near(at)))
             {
                 float lamp[3]{};
@@ -1014,7 +1069,11 @@ namespace Lighting20
         {
             if (!otherDepth) return;
             --otherDepth;
-            if (otherDepth < 32) propDraw = (otherSaved >> otherDepth) & 1;
+            if (otherDepth < 32)
+            {
+                propDraw = (otherSaved >> otherDepth) & 1;
+                Ungroup(otherGroups[otherDepth]);
+            }
         }
 
         static uint32_t __fastcall Consumer(void* command, void*)
@@ -1042,9 +1101,17 @@ namespace Lighting20
                     return 0;
                 }
             }
+            if (prop && !RouteFace(at))
+            {
+                ++routeSkips;
+                propDraw = previous;
+                return 0;
+            }
             const bool traced = prop && Trace::Active() && Trace::Near(at);
             if (traced) commandTrace = { true };
+            const int32_t savedGroup = prop ? Regroup() : -2;
             const auto result = consumer.unsafe_thiscall<uint32_t>(command);
+            Ungroup(savedGroup);
             if (traced)
             {
                 float eye[3]{}, lamp[3]{};
@@ -1111,7 +1178,7 @@ namespace Lighting20
             if (!propDraw || localTechnique < 0) return false;
             const auto group = *reinterpret_cast<const int32_t*>(game + 0xC6B308);
             const int route = drawRoute.load(std::memory_order_relaxed);
-            if (route == 3) return group == localTechnique;
+            if (route == 3 || route >= 5) return group == localTechnique;
             if (route == 4) return group == 4;
             return group == localTechnique || group == 4;
         }
@@ -1436,9 +1503,10 @@ namespace Lighting20
             ownLampOnly = ini.ReadInteger("NIGHTSHADOWS", "PropOwnLampOnly", 1) != 0;
             verdictsOn = ini.ReadInteger("NIGHTSHADOWS", "PropRenderVerdicts", 1) != 0;
             cacheProps = ini.ReadInteger("NIGHTSHADOWS", "PropsInCaches", 1) != 0;
+            cacheLocal = ini.ReadInteger("NIGHTSHADOWS", "PropCacheLocal", 1) != 0;
             const auto readRoute = [](CIniReader& reader)
             {
-                drawRoute.store(std::clamp(reader.ReadInteger("NIGHTSHADOWS", "PropDrawRoute", 0), 0, 4), std::memory_order_relaxed);
+                drawRoute.store(std::clamp(reader.ReadInteger("NIGHTSHADOWS", "PropDrawRoute", 0), 0, 7), std::memory_order_relaxed);
             };
             readRoute(ini);
             IniReload::Add(readRoute);
@@ -2040,6 +2108,7 @@ namespace Lighting20
                 << " cache: passes=" << Props::cachePasses.load() << " cast=" << Props::castInCache.load()
                 << " added=" << Props::addedForCache.load() << " redraws=" << Props::cacheRedraws.load()
                 << " other_command_draws=" << Props::otherCommandDraws.load() << " draw_route=" << Props::drawRoute.load() << " route_skips=" << Props::routeSkips.load()
+                << " cache_regrouped=" << Props::cacheRegrouped.load()
                 << " prop_model_draws=" << Props::propModelDraws.load() << " prop_buckets(shader>drawn:n)=" << Props::Buckets()
                 << " all_under_wd_local: found=" << Props::localFound.load() << " missing=" << Props::localMissing.load()
                 << " missing_in=" << Props::Effects(Props::localMissingEffects)

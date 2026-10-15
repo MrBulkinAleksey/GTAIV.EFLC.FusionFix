@@ -1,6 +1,7 @@
 module;
 
 #include <common.hxx>
+#include <cstring>
 #include "StableHeadlightSelector.hpp"
 #include "ShadowAdapterCE.hpp"
 #include "ShadowAllocationCE.hpp"
