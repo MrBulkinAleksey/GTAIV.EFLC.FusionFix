@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 5de051e..39b3cfb 100644
+index 5de051e..4768265 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-@@ -167,8 +167,26 @@
+@@ -167,8 +167,27 @@
      def c158, 0.5, -0.5, 0.5, 0
      def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
      def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
@@ -10,27 +10,28 @@ index 5de051e..39b3cfb 100644
 +    def c164, 12, 48, 9.99999997e-007, 0.0199999996 // step count limits, thickness growth a metre
      defi i0, 48, 0, 0, 0
 +    def c180, 13.6999998, 0.5, 0.699999988, 0.769230783 // FusionFix rain on cars: presence hash, a half; drops fade out under 2 pixels across
-+    def c181, 1.5, 12.5, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
-+    def c182, 0.400000006, 0.300000012, 0.0799999982, -2 // FusionFix rain on cars: the head's place across its column, a row's length in metres, -2
-+    def c183, 18, 0.100000001, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
++    def c181, 0.600000024, 3, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
++    def c182, 0.400000006, 0.300000012, 0.333333343, -2 // FusionFix rain on cars: the head's place across its column, a row's length in metres, -2
++    def c183, 4.5, 0.100000001, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
 +    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix rain on cars: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
 +    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix rain on cars: luminance, zero
 +    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix rain on cars: the pearl tint
 +    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix rain on cars: zero, flat tops, one
 +    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix rain on cars: the hash
-+    def c189, 3, 0.119999997, 0.200000003, 1.39999998 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
++    def c189, 3, 0.119999997, 0.200000003, 0.699999988 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
 +    def c190, 0.360000014, 0.319999993, 0.150000006, 100000 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; most pixels per metre
-+    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
++    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.25 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
 +    def c192, 0.680000007, 0.159999996, 0.0469999984, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
-+    def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
++    def c193, 666.666687, 250, 0.00150000001, 0.000800000038 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
 +    def c194, 20, 4, 0, 0 // FusionFix rain on cars: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
 +    def c195, 0, 1, 0, 0 // FusionFix rain on cars: the body's forward axis
 +    def c196, 0.00100000005, 0, 1, 0.75 // FusionFix rain on cars: the body's vertical, a little across so flat tops keep a frame
++    def c197, 6, 6.28318548, -3.14159274, 0.00150000001 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
-@@ -178,6 +196,9 @@
+@@ -178,6 +197,9 @@
      dcl_texcoord2 v4.xyz
      dcl_texcoord7 v5.xy
      dcl_texcoord9 v9
@@ -40,7 +41,7 @@ index 5de051e..39b3cfb 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -342,6 +363,8 @@
+@@ -342,6 +364,8 @@
            add r29.x, r16.w, -r31.w
            abs r29.x, r29.x
            add r29.x, r29.x, r28.y
@@ -49,7 +50,7 @@ index 5de051e..39b3cfb 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -428,6 +451,266 @@
+@@ -428,6 +452,277 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
@@ -192,7 +193,7 @@ index 5de051e..39b3cfb 100644
 +      crs r17.xyz, r13, r18
 +      dp3 r16.z, v6, r17
 +      dp3 r8.w, v6, r18
-+      // columns 1.5 times the bead density, narrow heads sliding at the column's speed
++      // columns 0.6 times the bead density (some 4 cm apart), narrow heads sliding at the column's speed
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c181.x
 +      rcp r9.y, r9.x
@@ -239,16 +240,27 @@ index 5de051e..39b3cfb 100644
 +      add r12.x, r12.x, -r16.x
 +      cmp r12.x, r12.x, c187.x, c187.w // whether the row holds one
 +      mul r12.x, r12.x, r8.y
-+      // Its trail above it: thinner than a pixel, a pixel wide and fainter
++      // Its trail above it meanders more the higher it goes, and runs 7 to 22 cm, by the row
++      mad r10.w, r13.y, c197.x, r12.z
++      frc r10.w, r10.w
++      mad r10.w, r10.w, c197.y, c197.z
++      sincos r16.xy, r10.w
++      mul_sat r10.w, r13.y, c183.x
++      mul r16.y, r16.y, r10.w
++      mad r10.w, r16.y, c197.w, r13.x // from the trail, across, in metres
++      // thinner than a pixel, a pixel wide and fainter
 +      mul r15.z, r8.z, c193.w
 +      max r15.w, r15.z, c187.w
 +      rcp r15.w, r15.w
 +      mul r15.w, r15.w, r8.z
-+      mul r15.w, r13_abs.x, r15.w
++      mul r15.w, r10_abs.w, r15.w
 +      add_sat r15.w, -r15.w, c187.w
 +      min r15.z, r15.z, c187.w
 +      mul r15.w, r15.w, r15.z
 +      mul r16.y, r13.y, c183.x
++      add r16.z, r12.y, r12.y
++      add r16.z, r16.z, c187.w
++      mul r16.y, r16.y, r16.z
 +      add_sat r16.y, -r16.y, c187.w
 +      cmp r16.y, r13.y, r16.y, c187.x
 +      mul r15.w, r15.w, r16.y
@@ -316,7 +328,7 @@ index 5de051e..39b3cfb 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -793,6 +1076,7 @@
+@@ -793,6 +1088,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -324,7 +336,7 @@ index 5de051e..39b3cfb 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -917,6 +1201,32 @@
+@@ -917,6 +1213,32 @@
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0
@@ -358,10 +370,10 @@ index 5de051e..39b3cfb 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 317652f..6ac5ad5 100644
+index 317652f..7e986a0 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-@@ -118,8 +118,26 @@
+@@ -118,8 +118,27 @@
      def c158, 0.5, -0.5, 0.5, 0
      def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
      def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
@@ -369,27 +381,28 @@ index 317652f..6ac5ad5 100644
 +    def c164, 12, 48, 9.99999997e-007, 0.0199999996 // step count limits, thickness growth a metre
      defi i0, 48, 0, 0, 0
 +    def c180, 13.6999998, 0.5, 0.699999988, 0.769230783 // FusionFix rain on cars: presence hash, a half; drops fade out under 2 pixels across
-+    def c181, 1.5, 12.5, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
-+    def c182, 0.400000006, 0.300000012, 0.0799999982, -2 // FusionFix rain on cars: the head's place across its column, a row's length in metres, -2
-+    def c183, 18, 0.100000001, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
++    def c181, 0.600000024, 3, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
++    def c182, 0.400000006, 0.300000012, 0.333333343, -2 // FusionFix rain on cars: the head's place across its column, a row's length in metres, -2
++    def c183, 4.5, 0.100000001, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
 +    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix rain on cars: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
 +    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix rain on cars: luminance, zero
 +    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix rain on cars: the pearl tint
 +    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix rain on cars: zero, flat tops, one
 +    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix rain on cars: the hash
-+    def c189, 3, 0.119999997, 0.200000003, 1.39999998 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
++    def c189, 3, 0.119999997, 0.200000003, 0.699999988 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
 +    def c190, 0.360000014, 0.319999993, 0.150000006, 100000 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; most pixels per metre
-+    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
++    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.25 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
 +    def c192, 0.680000007, 0.159999996, 0.0469999984, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
-+    def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
++    def c193, 666.666687, 250, 0.00150000001, 0.000800000038 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
 +    def c194, 20, 4, 0, 0 // FusionFix rain on cars: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
 +    def c195, 0, 1, 0, 0 // FusionFix rain on cars: the body's forward axis
 +    def c196, 0.00100000005, 0, 1, 0.75 // FusionFix rain on cars: the body's vertical, a little across so flat tops keep a frame
++    def c197, 6, 6.28318548, -3.14159274, 0.00150000001 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
-@@ -129,6 +147,9 @@
+@@ -129,6 +148,9 @@
      dcl_texcoord2 v4.xyz
      dcl_texcoord7 v5.xy
      dcl_texcoord9 v9
@@ -399,7 +412,7 @@ index 317652f..6ac5ad5 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -292,6 +313,8 @@
+@@ -292,6 +314,8 @@
            add r29.x, r16.w, -r31.w
            abs r29.x, r29.x
            add r29.x, r29.x, r28.y
@@ -408,7 +421,7 @@ index 317652f..6ac5ad5 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -378,6 +401,266 @@
+@@ -378,6 +402,277 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
@@ -551,7 +564,7 @@ index 317652f..6ac5ad5 100644
 +      crs r17.xyz, r13, r18
 +      dp3 r16.z, v6, r17
 +      dp3 r8.w, v6, r18
-+      // columns 1.5 times the bead density, narrow heads sliding at the column's speed
++      // columns 0.6 times the bead density (some 4 cm apart), narrow heads sliding at the column's speed
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c181.x
 +      rcp r9.y, r9.x
@@ -598,16 +611,27 @@ index 317652f..6ac5ad5 100644
 +      add r12.x, r12.x, -r16.x
 +      cmp r12.x, r12.x, c187.x, c187.w // whether the row holds one
 +      mul r12.x, r12.x, r8.y
-+      // Its trail above it: thinner than a pixel, a pixel wide and fainter
++      // Its trail above it meanders more the higher it goes, and runs 7 to 22 cm, by the row
++      mad r10.w, r13.y, c197.x, r12.z
++      frc r10.w, r10.w
++      mad r10.w, r10.w, c197.y, c197.z
++      sincos r16.xy, r10.w
++      mul_sat r10.w, r13.y, c183.x
++      mul r16.y, r16.y, r10.w
++      mad r10.w, r16.y, c197.w, r13.x // from the trail, across, in metres
++      // thinner than a pixel, a pixel wide and fainter
 +      mul r15.z, r8.z, c193.w
 +      max r15.w, r15.z, c187.w
 +      rcp r15.w, r15.w
 +      mul r15.w, r15.w, r8.z
-+      mul r15.w, r13_abs.x, r15.w
++      mul r15.w, r10_abs.w, r15.w
 +      add_sat r15.w, -r15.w, c187.w
 +      min r15.z, r15.z, c187.w
 +      mul r15.w, r15.w, r15.z
 +      mul r16.y, r13.y, c183.x
++      add r16.z, r12.y, r12.y
++      add r16.z, r16.z, c187.w
++      mul r16.y, r16.y, r16.z
 +      add_sat r16.y, -r16.y, c187.w
 +      cmp r16.y, r13.y, r16.y, c187.x
 +      mul r15.w, r15.w, r16.y
@@ -675,7 +699,7 @@ index 317652f..6ac5ad5 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -743,6 +1026,7 @@
+@@ -743,6 +1038,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -683,7 +707,7 @@ index 317652f..6ac5ad5 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r2.yzw, r6.xxyz, r3.x
      mul r2.yzw, r1.w, r2
-@@ -765,6 +1049,32 @@
+@@ -765,6 +1061,32 @@
      cmp r1.w, r1.w, r2.w, c5.w
      mad r0.yzw, r2.xxyz, r1.w, r0
      mad r0.yzw, r1.xxyz, r1.w, r0
@@ -717,10 +741,10 @@ index 317652f..6ac5ad5 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 5aac5d8..c8370a3 100644
+index 5aac5d8..a105b26 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-@@ -143,8 +143,26 @@
+@@ -143,8 +143,27 @@
      def c158, 0.5, -0.5, 0.5, 0
      def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
      def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
@@ -728,27 +752,28 @@ index 5aac5d8..c8370a3 100644
 +    def c164, 12, 48, 9.99999997e-007, 0.0199999996 // step count limits, thickness growth a metre
      defi i0, 48, 0, 0, 0
 +    def c180, 13.6999998, 0.5, 0.699999988, 0.769230783 // FusionFix rain on cars: presence hash, a half; drops fade out under 2 pixels across
-+    def c181, 1.5, 12.5, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
-+    def c182, 0.400000006, 0.300000012, 0.0799999982, -2 // FusionFix rain on cars: the head's place across its column, a row's length in metres, -2
-+    def c183, 18, 0.100000001, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
++    def c181, 0.600000024, 3, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
++    def c182, 0.400000006, 0.300000012, 0.333333343, -2 // FusionFix rain on cars: the head's place across its column, a row's length in metres, -2
++    def c183, 4.5, 0.100000001, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
 +    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix rain on cars: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
 +    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix rain on cars: luminance, zero
 +    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix rain on cars: the pearl tint
 +    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix rain on cars: zero, flat tops, one
 +    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix rain on cars: the hash
-+    def c189, 3, 0.119999997, 0.200000003, 1.39999998 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
++    def c189, 3, 0.119999997, 0.200000003, 0.699999988 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
 +    def c190, 0.360000014, 0.319999993, 0.150000006, 100000 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; most pixels per metre
-+    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
++    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.25 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
 +    def c192, 0.680000007, 0.159999996, 0.0469999984, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
-+    def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
++    def c193, 666.666687, 250, 0.00150000001, 0.000800000038 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
 +    def c194, 20, 4, 0, 0 // FusionFix rain on cars: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
 +    def c195, 0, 1, 0, 0 // FusionFix rain on cars: the body's forward axis
 +    def c196, 0.00100000005, 0, 1, 0.75 // FusionFix rain on cars: the body's vertical, a little across so flat tops keep a frame
++    def c197, 6, 6.28318548, -3.14159274, 0.00150000001 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
-@@ -154,6 +172,9 @@
+@@ -154,6 +173,9 @@
      dcl_texcoord2 v4.xyz
      dcl_texcoord7 v5.xy
      dcl_texcoord9 v9
@@ -758,7 +783,7 @@ index 5aac5d8..c8370a3 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -318,6 +339,8 @@
+@@ -318,6 +340,8 @@
            add r29.x, r16.w, -r31.w
            abs r29.x, r29.x
            add r29.x, r29.x, r28.y
@@ -767,7 +792,7 @@ index 5aac5d8..c8370a3 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -404,6 +427,266 @@
+@@ -404,6 +428,277 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
@@ -910,7 +935,7 @@ index 5aac5d8..c8370a3 100644
 +      crs r17.xyz, r13, r18
 +      dp3 r16.z, v6, r17
 +      dp3 r8.w, v6, r18
-+      // columns 1.5 times the bead density, narrow heads sliding at the column's speed
++      // columns 0.6 times the bead density (some 4 cm apart), narrow heads sliding at the column's speed
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c181.x
 +      rcp r9.y, r9.x
@@ -957,16 +982,27 @@ index 5aac5d8..c8370a3 100644
 +      add r12.x, r12.x, -r16.x
 +      cmp r12.x, r12.x, c187.x, c187.w // whether the row holds one
 +      mul r12.x, r12.x, r8.y
-+      // Its trail above it: thinner than a pixel, a pixel wide and fainter
++      // Its trail above it meanders more the higher it goes, and runs 7 to 22 cm, by the row
++      mad r10.w, r13.y, c197.x, r12.z
++      frc r10.w, r10.w
++      mad r10.w, r10.w, c197.y, c197.z
++      sincos r16.xy, r10.w
++      mul_sat r10.w, r13.y, c183.x
++      mul r16.y, r16.y, r10.w
++      mad r10.w, r16.y, c197.w, r13.x // from the trail, across, in metres
++      // thinner than a pixel, a pixel wide and fainter
 +      mul r15.z, r8.z, c193.w
 +      max r15.w, r15.z, c187.w
 +      rcp r15.w, r15.w
 +      mul r15.w, r15.w, r8.z
-+      mul r15.w, r13_abs.x, r15.w
++      mul r15.w, r10_abs.w, r15.w
 +      add_sat r15.w, -r15.w, c187.w
 +      min r15.z, r15.z, c187.w
 +      mul r15.w, r15.w, r15.z
 +      mul r16.y, r13.y, c183.x
++      add r16.z, r12.y, r12.y
++      add r16.z, r16.z, c187.w
++      mul r16.y, r16.y, r16.z
 +      add_sat r16.y, -r16.y, c187.w
 +      cmp r16.y, r13.y, r16.y, c187.x
 +      mul r15.w, r15.w, r16.y
@@ -1034,7 +1070,7 @@ index 5aac5d8..c8370a3 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -769,6 +1052,7 @@
+@@ -769,6 +1064,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -1042,7 +1078,7 @@ index 5aac5d8..c8370a3 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -842,6 +1126,32 @@
+@@ -842,6 +1138,32 @@
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0
