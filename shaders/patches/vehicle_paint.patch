@@ -1,21 +1,21 @@
 diff --git a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
-index 8e22fba1..ec001b03 100644
+index 8e22fba1..31151ef7 100644
 --- a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
 @@ -55,12 +55,25 @@
      def c3, -13.2877121, 128, 8, 4
      def c4, 32, 4, 1, 0.00392156886
      def c100, 10, 1, 0, 0
-+    def c180, 13.6999998, 0.5, 0.100000001, 0.25 // FusionFix vehicle_paint.patch: presence hash, a half, a tenth, a quarter
-+    def c181, 0.5, 0.100000001, 0.25, 0 // FusionFix vehicle_paint.patch: columns and rows of running drops per bead cell, the head's place in its cell
-+    def c182, 0.300000012, 0.349999994, 3.33333325, 14.2857141 // FusionFix vehicle_paint.patch: the head's place across its column, 1 / half width, 1 / half height
-+    def c183, 1.66666663, 0.100000001, 0.100000001, 0.5 // FusionFix vehicle_paint.patch: 1 / trail length, darkening under drops, a wet film's specular, a drop's
-+    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix vehicle_paint.patch: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
-+    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix vehicle_paint.patch: luminance, zero
-+    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix vehicle_paint.patch: the pearl tint
-+    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix vehicle_paint.patch: specular as stored, flat tops, one
-+    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix vehicle_paint.patch: the hash
-+    def c189, 0.400000006, 0.300000012, 0.180000007, 0.100000001 // FusionFix vehicle_paint.patch: a bead's centre within its cell, its radius
++    def c180, 13.6999998, 0.5, 0.100000001, 0.25 // FusionFix rain on cars: presence hash, a half, a tenth, a quarter
++    def c181, 0.5, 0.100000001, 0.25, 9.99999975e-005 // FusionFix rain on cars: columns and rows of running drops per bead cell, the head's place in its cell, a tiny alpha
++    def c182, 0.300000012, 0.349999994, 3.33333325, 14.2857141 // FusionFix rain on cars: the head's place across its column, 1 / half width, 1 / half height
++    def c183, 1.66666663, 0.100000001, 0.100000001, 0.5 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
++    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix rain on cars: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix rain on cars: luminance, zero
++    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix rain on cars: the pearl tint
++    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix rain on cars: specular as stored, flat tops, one
++    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix rain on cars: the hash
++    def c189, 0.400000006, 0.300000012, 0.180000007, 0.100000001 // FusionFix rain on cars: a bead's centre within its cell, its radius
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
@@ -267,23 +267,23 @@ index 45aef76b..6af4ae0c 100644
  
  // approximately 238 instruction slots used (8 texture, 230 arithmetic)
 diff --git a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
-index 992eb2bf..1ed53ea4 100644
+index 992eb2bf..88691458 100644
 --- a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
 @@ -55,11 +55,24 @@
      def c3, -13.2877121, 128, 8, 4
      def c4, 32, 4, 1, 0.00392156886
      def c100, 10, 1, 0, 0
-+    def c180, 13.6999998, 0.5, 0.100000001, 0.25 // FusionFix vehicle_paint.patch: presence hash, a half, a tenth, a quarter
-+    def c181, 0.5, 0.100000001, 0.25, 0 // FusionFix vehicle_paint.patch: columns and rows of running drops per bead cell, the head's place in its cell
-+    def c182, 0.300000012, 0.349999994, 3.33333325, 14.2857141 // FusionFix vehicle_paint.patch: the head's place across its column, 1 / half width, 1 / half height
-+    def c183, 1.66666663, 0.100000001, 0.100000001, 0.5 // FusionFix vehicle_paint.patch: 1 / trail length, darkening under drops, a wet film's specular, a drop's
-+    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix vehicle_paint.patch: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
-+    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix vehicle_paint.patch: luminance, zero
-+    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix vehicle_paint.patch: the pearl tint
-+    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix vehicle_paint.patch: specular as stored, flat tops, one
-+    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix vehicle_paint.patch: the hash
-+    def c189, 0.400000006, 0.300000012, 0.180000007, 0.100000001 // FusionFix vehicle_paint.patch: a bead's centre within its cell, its radius
++    def c180, 13.6999998, 0.5, 0.100000001, 0.25 // FusionFix rain on cars: presence hash, a half, a tenth, a quarter
++    def c181, 0.5, 0.100000001, 0.25, 9.99999975e-005 // FusionFix rain on cars: columns and rows of running drops per bead cell, the head's place in its cell, a tiny alpha
++    def c182, 0.300000012, 0.349999994, 3.33333325, 14.2857141 // FusionFix rain on cars: the head's place across its column, 1 / half width, 1 / half height
++    def c183, 1.66666663, 0.100000001, 0.100000001, 0.5 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
++    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix rain on cars: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix rain on cars: luminance, zero
++    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix rain on cars: the pearl tint
++    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix rain on cars: specular as stored, flat tops, one
++    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix rain on cars: the hash
++    def c189, 0.400000006, 0.300000012, 0.180000007, 0.100000001 // FusionFix rain on cars: a bead's centre within its cell, its radius
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
@@ -534,23 +534,23 @@ index cd862d20..0a1bed40 100644
  
  // approximately 237 instruction slots used (8 texture, 229 arithmetic)
 diff --git a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
-index 141b8ca2..e051a271 100644
+index 141b8ca2..1db1d1fe 100644
 --- a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
 @@ -57,11 +57,24 @@
      def c3, -13.2877121, 128, 8, 4
      def c4, 32, 4, 1, 0.00392156886
      def c100, 10, 1, 0, 0
-+    def c180, 13.6999998, 0.5, 0.100000001, 0.25 // FusionFix vehicle_paint.patch: presence hash, a half, a tenth, a quarter
-+    def c181, 0.5, 0.100000001, 0.25, 0 // FusionFix vehicle_paint.patch: columns and rows of running drops per bead cell, the head's place in its cell
-+    def c182, 0.300000012, 0.349999994, 3.33333325, 14.2857141 // FusionFix vehicle_paint.patch: the head's place across its column, 1 / half width, 1 / half height
-+    def c183, 1.66666663, 0.100000001, 0.100000001, 0.5 // FusionFix vehicle_paint.patch: 1 / trail length, darkening under drops, a wet film's specular, a drop's
-+    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix vehicle_paint.patch: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
-+    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix vehicle_paint.patch: luminance, zero
-+    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix vehicle_paint.patch: the pearl tint
-+    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix vehicle_paint.patch: specular as stored, flat tops, one
-+    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix vehicle_paint.patch: the hash
-+    def c189, 0.400000006, 0.300000012, 0.180000007, 0.100000001 // FusionFix vehicle_paint.patch: a bead's centre within its cell, its radius
++    def c180, 13.6999998, 0.5, 0.100000001, 0.25 // FusionFix rain on cars: presence hash, a half, a tenth, a quarter
++    def c181, 0.5, 0.100000001, 0.25, 9.99999975e-005 // FusionFix rain on cars: columns and rows of running drops per bead cell, the head's place in its cell, a tiny alpha
++    def c182, 0.300000012, 0.349999994, 3.33333325, 14.2857141 // FusionFix rain on cars: the head's place across its column, 1 / half width, 1 / half height
++    def c183, 1.66666663, 0.100000001, 0.100000001, 0.5 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
++    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix rain on cars: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix rain on cars: luminance, zero
++    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix rain on cars: the pearl tint
++    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix rain on cars: specular as stored, flat tops, one
++    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix rain on cars: the hash
++    def c189, 0.400000006, 0.300000012, 0.180000007, 0.100000001 // FusionFix rain on cars: a bead's centre within its cell, its radius
      dcl_texcoord v0
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
