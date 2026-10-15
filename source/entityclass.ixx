@@ -36,12 +36,17 @@ import temporal;
 // execute took, per frame and per target the game had locked (RenderSkip::CurrentTarget), to
 // GTAIV.EFLC.FusionFix.EntityClass.log: what leaving a kind out of a pass would save.
 //
-// LampShadowFaceCulling = 1 ([PERFORMANCE]): the lamps' shadow maps (SHADOW_MAP_COLOUR_POINT) are dual paraboloid,
-// two halves a lamp, and get every entity in both. An entity or fragment type draw whose bounding sphere is wholly
-// behind the half being drawn (the current grcViewport's view: behind its eye, view z > reach as RAGE looks down -z)
-// is left out; a perspective viewport is tested against its frustum instead. The sphere is the model's (model info
-// +0x10 centre, +0x1c radius) around the command's position, grown by the centre's offset so the entity's turn
-// needs no matrix. With the switch off, EntityDrawLog counts what it would leave out, and where the spheres lie.
+// LampShadowFaceCulling ([PERFORMANCE]): the lamps' shadow maps (SHADOW_MAP_COLOUR_POINT) are dual paraboloid: one
+// tile a lamp, the half facing one way written to red and the other to green (CSetColorWrite 1 and 2), and every
+// entity of the lamp is drawn into both. The slot render (0xd77a00, mode 4) makes a face command (0xd77930, face at
+// +0x10) before each half; as it is made, the slot's position (+0xc0) and the halves' axis (the third row of its
+// matrix at +0x40, world +x) go into a ring here, its index into the command's spare bytes +0x16/+0x17. On the render
+// thread that command's execute says which half and lamp the next draws are for, until CSetColorWrite 0xf. An entity
+// or fragment type draw whose bounding sphere lies wholly on the other side of the plane through the lamp across the
+// axis is left out. The first half (red, face 0) faces -x and the second +x: the other way round dropped props'
+// shadows in game. The sphere is the model's (model info +0x10 centre, +0x1c radius) around the command's position,
+// grown by the centre's offset so the entity's turn needs no matrix. With it 0, EntityDrawLog counts what it
+// would leave out.
 export namespace EntityClass
 {
     enum class Kind : uint8_t
@@ -95,7 +100,8 @@ namespace
 
     // EntityDrawLog and LampShadowFaceCulling: render thread only, but for the switches
     bool bDrawLog = false;
-    bool bFaceCulling = false;
+    bool bFaceCullingSetting = true;   // LampShadowFaceCulling
+    bool bFaceCulling = false;          // and its hooks in place
     uintptr_t modelInfos = 0;       // CE 0x1295cd8, model infos by index
     constexpr uint32_t kDrawLogFrames = 600;
     struct TargetStats
@@ -113,9 +119,9 @@ namespace
         std::unordered_set<uint64_t> keys;
         // Draws outside the face drawn: left out with LampShadowFaceCulling, else counted only
         uint64_t outside = 0;
-        // Lamp maps: the views (grcViewport view matrices) per lock, perspective or not, and where the draws' spheres
-        // are against the view: ahead of the eye, behind it, across it
-        uint64_t views = 0, perspective = 0, ahead = 0, behind = 0, across = 0;
+        // Lamp maps: draws with the half known, and where their spheres are against the plane between the halves: on
+        // the side the half drawn faces, on the other, across
+        uint64_t faceKnown = 0, faceUnknown = 0, ahead = 0, behind = 0, across = 0;
         int64_t Total() const
         {
             int64_t total = 0;
@@ -166,10 +172,9 @@ namespace
             if (s.keyedDraws)
                 text += std::format(" locks {:.1f}, faces per lock {:.2f}, draws per entity in a lock {:.2f},", s.locks * perFrame,
                     s.locks ? double(s.faces) / double(s.locks) : 0.0, double(s.keyedDraws) / double(s.entities));
-            if (s.ahead + s.behind + s.across)
-                text += std::format(" views per lock {:.2f} ({:.0f}% perspective), spheres ahead {:.1f}, behind {:.1f}, across {:.1f},",
-                    s.locks ? double(s.views) / double(s.locks) : 0.0, s.views ? 100.0 * s.perspective / s.views : 0.0,
-                    s.ahead * perFrame, s.behind * perFrame, s.across * perFrame);
+            if (s.faceKnown + s.faceUnknown)
+                text += std::format(" half known for {:.0f}%, spheres on the half's side {:.1f}, the other side {:.1f}, across {:.1f},",
+                    100.0 * s.faceKnown / double(s.faceKnown + s.faceUnknown), s.ahead * perFrame, s.behind * perFrame, s.across * perFrame);
             if (s.outside)
                 text += std::format(" outside their face {:.1f} ({}),", s.outside * perFrame, bFaceCulling ? "left out" : "drawn");
             text += " by command";
@@ -208,99 +213,89 @@ namespace
         return lastIs;
     }
 
-    // The current viewport's view, and for a perspective one its frustum as planes (x, y, z, w) with
-    // w + dot(xyz, p) >= 0 inside, from view x projection (row vectors, D3D clip z 0 to w); made again when its
-    // matrices change, which counts a view
-    float frustum[6][4]{};
-    float frustumFrom[2][4][4]{};
-    bool frustumValid = false;
-    bool viewPerspective = false;
-    bool viewChanged = false;
-
-    bool UpdateView()
+    // The halves of the lamps' maps: where each face command's lamp was as it was made (game thread), and on the
+    // render thread the half being drawn now (-1 none) with its lamp
+    struct FaceOrigin
     {
-        auto viewport = rage::GetCurrentViewport();
-        if (!viewport)
-            return false;
-        if (frustumValid && !std::memcmp(frustumFrom[0], viewport->mViewMatrix, sizeof(frustumFrom[0])) &&
-            !std::memcmp(frustumFrom[1], viewport->mProjectionMatrix, sizeof(frustumFrom[1])))
-            return true;
-        viewChanged = true;
-        std::memcpy(frustumFrom[0], viewport->mViewMatrix, sizeof(frustumFrom[0]));
-        std::memcpy(frustumFrom[1], viewport->mProjectionMatrix, sizeof(frustumFrom[1]));
-        viewPerspective = viewport->mIsPerspective;
-        frustumValid = true;
-        if (!viewPerspective)
-            return true;
-        float m[4][4];
-        for (int i = 0; i < 4; ++i)
-            for (int j = 0; j < 4; ++j)
-            {
-                m[i][j] = 0.0f;
-                for (int k = 0; k < 4; ++k)
-                    m[i][j] += frustumFrom[0][i][k] * frustumFrom[1][k][j];
-            }
-        // Columns of m: clip x, y, z, w; inside -w <= x <= w, -w <= y <= w, 0 <= z <= w
-        auto column = [&](int c, int i) { return m[i][c]; };
-        for (int i = 0; i < 4; ++i)
-        {
-            frustum[0][i] = column(3, i) + column(0, i);
-            frustum[1][i] = column(3, i) - column(0, i);
-            frustum[2][i] = column(3, i) + column(1, i);
-            frustum[3][i] = column(3, i) - column(1, i);
-            frustum[4][i] = column(2, i);
-            frustum[5][i] = column(3, i) - column(2, i);
-        }
-        for (auto& plane : frustum)
-        {
-            const float length = std::sqrt(plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]);
-            if (length > 0.0f)
-                for (auto& v : plane)
-                    v /= length;
-        }
-        return true;
+        float position[3];
+        float axis[3];
+    };
+    FaceOrigin faceOrigins[256]{};
+    uint8_t nextFaceOrigin = 0;
+    constexpr ptrdiff_t kFaceOriginByte = 0x16, kFaceMarkByte = 0x17;
+    constexpr uint8_t kFaceMark = 0xA5;
+    uintptr_t slotRecords = 0;      // CE 0x119f100, 0x110 bytes a slot
+    DrawExecute faceExecute = nullptr;
+    DrawExecute colorWriteExecute = nullptr;
+    bool bFaceHooks = false;
+    int currentFace = -1;
+    FaceOrigin currentOrigin{};
+
+    void MarkFace(uintptr_t dc, uintptr_t slotOffset)
+    {
+        if (!dc || !slotRecords)
+            return;
+        const auto slot = slotRecords + slotOffset;
+        auto& origin = faceOrigins[nextFaceOrigin];
+        std::memcpy(origin.position, reinterpret_cast<const float*>(slot + 0xc0), sizeof(origin.position));
+        std::memcpy(origin.axis, reinterpret_cast<const float*>(slot + 0x60), sizeof(origin.axis));
+        auto* bytes = reinterpret_cast<uint8_t*>(dc);
+        bytes[kFaceOriginByte] = nextFaceOrigin++;
+        bytes[kFaceMarkByte] = kFaceMark;
     }
 
-    // Where the draw's bounding sphere is against the view drawn: -1 wholly outside it (behind a paraboloid
-    // half's eye, or outside a perspective frustum), 1 wholly ahead or inside, 0 across or unknown
+    void __fastcall FaceExecute(void* dc, void*)
+    {
+        const auto* bytes = reinterpret_cast<const uint8_t*>(dc);
+        const int face = *reinterpret_cast<const int32_t*>(bytes + 0x10);
+        if (bytes[kFaceMarkByte] == kFaceMark && (face == 0 || face == 1))
+        {
+            currentFace = face;
+            currentOrigin = faceOrigins[bytes[kFaceOriginByte]];
+        }
+        else
+            currentFace = -1;
+        faceExecute(dc);
+    }
+
+    void __fastcall ColorWriteExecute(void* dc, void*)
+    {
+        if (*reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(dc) + 8) == 0xf)
+            currentFace = -1;
+        colorWriteExecute(dc);
+    }
+
+    // Where the draw's bounding sphere is against the plane between the lamp's halves: -1 wholly on the side the half
+    // drawn does not face, 1 wholly on its side, 0 across or unknown. The first half faces -axis, the second +axis
     int SphereSide(void* dc, Source source)
     {
         uint16_t model;
         const float* place;
-        if (!modelInfos || !ModelAndPlace(dc, source, model, place))
+        if (currentFace < 0 || !modelInfos || !ModelAndPlace(dc, source, model, place))
             return 0;
         const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4);
         if (!info)
             return 0;
         const float* centre = reinterpret_cast<const float*>(info + 0x10);
         const float radius = *reinterpret_cast<const float*>(info + 0x1c);
-        if (!(radius > 0.0f) || !UpdateView())
+        if (!(radius > 0.0f))
             return 0;
         const float reach = radius + std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
-        if (viewPerspective)
-        {
-            bool inside = true;
-            for (const auto& plane : frustum)
-            {
-                const float d = plane[0] * place[0] + plane[1] * place[1] + plane[2] * place[2] + plane[3];
-                if (d < -reach)
-                    return -1;
-                inside = inside && d >= reach;
-            }
-            return inside ? 1 : 0;
-        }
-        // View space z (row vectors: z = p . column 2 + m[3][2]); the eye looks down -z
-        const auto& v = frustumFrom[0];
-        const float z = place[0] * v[0][2] + place[1] * v[1][2] + place[2] * v[2][2] + v[3][2];
-        return z > reach ? -1 : z < -reach ? 1 : 0;
+        const auto& o = currentOrigin;
+        float along = 0.0f;
+        for (int i = 0; i < 3; ++i)
+            along += (place[i] - o.position[i]) * o.axis[i];
+        if (currentFace == 0)
+            along = -along;
+        return along > reach ? 1 : along < -reach ? -1 : 0;
     }
 
     void Execute(DrawExecute original, void* dc, Kind kind, Source source)
     {
         const char* target = bDrawLog || bFaceCulling ? RenderSkip::CurrentTarget() : nullptr;
         const bool lampMaps = (bDrawLog || bFaceCulling) && IsLampMaps(target);
-        viewChanged = false;
         const int side = lampMaps ? SphereSide(dc, source) : 0;
+        // The half drawn faces away from the sphere
         const bool outside = side < 0;
         if (outside && bFaceCulling)
         {
@@ -308,12 +303,8 @@ namespace
             {
                 auto& stats = StatsFor(target);
                 stats.outside++;
-                stats.behind++;
-                if (viewChanged)
-                {
-                    stats.views++;
-                    stats.perspective += viewPerspective;
-                }
+                stats.faceKnown++;
+                (side < 0 ? stats.behind : stats.ahead)++;
             }
             return;
         }
@@ -346,12 +337,12 @@ namespace
                 stats.outside++;
             if (lampMaps)
             {
-                if (viewChanged)
-                {
-                    stats.views++;
-                    stats.perspective += viewPerspective;
-                }
-                (side < 0 ? stats.behind : side > 0 ? stats.ahead : stats.across)++;
+                uint16_t model;
+                const float* place;
+                if (ModelAndPlace(dc, source, model, place))
+                    (currentFace >= 0 ? stats.faceKnown : stats.faceUnknown)++;
+                if (currentFace >= 0)
+                    (side < 0 ? stats.behind : side > 0 ? stats.ahead : stats.across)++;
             }
             const auto lock = RenderSkip::LockCount();
             if (lock != lastLock)
@@ -415,6 +406,44 @@ namespace
             reinterpret_cast<uint8_t*>(dc)[at] = uint8_t(EntityClass::OfEntity(reinterpret_cast<void*>(entity)));
     }
 
+    // The lamps' paraboloid halves (see LampShadowFaceCulling): the slot render's code is encrypted in the file, so its
+    // patterns are only found once the game has decrypted it, which it has by init
+    void InstallFaceHooks()
+    {
+        auto face0 = hook::pattern("C7 44 24 40 00 00 00 00 E8 ? ? ? ? EB 02 33 C0 50 E8");
+        auto face1 = hook::pattern("C7 44 24 40 01 00 00 00 E8 ? ? ? ? EB 02 33 C0 50 E8");
+        auto slots = hook::pattern("8D 85 ? ? ? ? 50 68 ? ? ? ? C6 44 24 27 01 C6 44 24 26 01");
+        const char* status = "patterns not found";
+        if (!face0.empty() && !face1.empty() && !slots.empty())
+        {
+            auto callTarget = [](uint8_t* call) { return call + 5 + *reinterpret_cast<int32_t*>(call + 1); };
+            auto* site = face0.get_first<uint8_t>(0);
+            auto* faceCtor = callTarget(site + 8);
+            // The CSetColorWrite of the first half after it: push 1; mov ecx, eax; call
+            auto* colorWriteCall = site + 0x27;
+            const bool colorWriteFound = !std::memcmp(colorWriteCall, "\x6A\x01\x8B\xC8\xE8", 5);
+            auto* colorWriteCtor = colorWriteFound ? callTarget(colorWriteCall + 4) : nullptr;
+            // Each constructor's mov dword ptr [ecx], vtable
+            if (!colorWriteCtor || faceCtor[0x28] != 0xC7 || faceCtor[0x29] != 0x01 || colorWriteCtor[0x24] != 0xC7 || colorWriteCtor[0x25] != 0x01)
+                status = "constructors not as expected";
+            else
+            {
+                slotRecords = *slots.get_first<uint32_t>(2) - 0xf0;
+                auto** faceVtable = *reinterpret_cast<void***>(faceCtor + 0x2a);
+                auto** colorWriteVtable = *reinterpret_cast<void***>(colorWriteCtor + 0x26);
+                static auto face0Hook = safetyhook::create_mid(face0.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp); });
+                static auto face1Hook = safetyhook::create_mid(face1.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp); });
+                faceExecute = reinterpret_cast<DrawExecute>(faceVtable[1]);
+                injector::WriteMemory(&faceVtable[1], reinterpret_cast<void*>(&FaceExecute), true);
+                colorWriteExecute = reinterpret_cast<DrawExecute>(colorWriteVtable[1]);
+                injector::WriteMemory(&colorWriteVtable[1], reinterpret_cast<void*>(&ColorWriteExecute), true);
+                bFaceHooks = true;
+                status = "in place";
+            }
+        }
+        FusionLog::Write("EntityClass", "Settings", "the lamps' paraboloid halves: %s\n", status);
+    }
+
     void Install()
     {
         auto pattern = hook::pattern("56 E8 ? ? ? ? 8B 75 0C EB 02 33 C0 50 E8");
@@ -464,6 +493,7 @@ namespace
         hookExecute(pedVtables[3], drawPedExecute[3], reinterpret_cast<void*>(&DrawPedExecute<3>));
         hookExecute(pedVtables[4], drawPedExecute[4], reinterpret_cast<void*>(&DrawPedExecute<4>));
         bInstalled = true;
+        InstallFaceHooks();
     }
 
     class EntityClassInit
@@ -480,7 +510,10 @@ namespace
                 auto readIni = [](CIniReader& iniReader)
                 {
                     bDrawLog = iniReader.ReadInteger("DEBUG", "EntityDrawLog", 0) != 0;
-                    bFaceCulling = iniReader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 0) != 0;
+                    bFaceCullingSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 1) != 0;
+                    bFaceCulling = bFaceCullingSetting && bFaceHooks;
+                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s)\n", int(bDrawLog), int(bFaceCullingSetting),
+                        !bFaceCullingSetting ? "off" : bFaceCulling ? "on" : "no hooks");
                 };
                 CIniReader iniReader("");
                 readIni(iniReader);
