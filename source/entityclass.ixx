@@ -100,7 +100,7 @@ namespace
 
     // EntityDrawLog and LampShadowFaceCulling: render thread only, but for the switches
     bool bDrawLog = false;
-    int nFaceCulling = 0;           // LampShadowFaceCulling: 0 off, 1 the first half faces +axis, 2 -axis
+    int nFaceCulling = 0;           // LampShadowFaceCulling: 0 off, 1 the first half faces +axis, 2 -axis, 3 none drawn (test)
     bool bFaceCulling = false;
     uintptr_t modelInfos = 0;       // CE 0x1295cd8, model infos by index
     constexpr uint32_t kDrawLogFrames = 600;
@@ -296,7 +296,11 @@ namespace
         const bool lampMaps = (bDrawLog || bFaceCulling) && IsLampMaps(target);
         const int side = lampMaps ? SphereSide(dc, source) : 0;
         // The half drawn is on the other side of the sphere: what each setting leaves out
-        const bool outside = nFaceCulling == 2 ? side > 0 : side < 0;
+        // 3 (a test): every entity and fragment type draw into the lamps' maps, both halves
+        uint16_t testModel;
+        const float* testPlace;
+        const bool outside = nFaceCulling == 3 ? lampMaps && currentFace >= 0 && ModelAndPlace(dc, source, testModel, testPlace)
+                           : nFaceCulling == 2 ? side > 0 : side < 0;
         if (outside && bFaceCulling)
         {
             if (bDrawLog)
@@ -510,7 +514,7 @@ namespace
                 auto readIni = [](CIniReader& iniReader)
                 {
                     bDrawLog = iniReader.ReadInteger("DEBUG", "EntityDrawLog", 0) != 0;
-                    nFaceCulling = std::clamp(iniReader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 0), 0, 2);
+                    nFaceCulling = std::clamp(iniReader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 0), 0, 3);
                     bFaceCulling = nFaceCulling != 0 && bFaceHooks;
                     FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s)\n", int(bDrawLog), nFaceCulling,
                         !nFaceCulling ? "off" : bFaceCulling ? "on" : "no hooks");
