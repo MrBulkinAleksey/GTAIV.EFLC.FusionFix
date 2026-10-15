@@ -2144,6 +2144,9 @@ public:
             { 0, "PREF_TAIL_LIGHT_SHADOWS",     "NIGHTSHADOWS", "TailLightShadows",                 "",                           1, nullptr, 0, 1 },
             { 0, "PREF_WORLD_LIGHT_SHADOWS",    "NIGHTSHADOWS", "WorldLightShadows",                "",                           1, nullptr, 0, 1 },
             { 0, "PREF_BUILDING_SHADOWS",       "NIGHTSHADOWS", "BuildingShadows",                  "",                           1, nullptr, 0, 1 },
+            // Car paint and rain drops on it (vehiclepaint.ixx)
+            { 0, "PREF_VEHICLE_PAINT",          "TEXTURES",   "VehiclePaint",                       "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_CAR_RAINDROPS",          "WEATHER",    "CarRaindrops",                       "",                           1, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2396,6 +2399,7 @@ public:
             AddRow(category, "VolumeClouds", "PREF_VOLUMETRIC_CLOUDS", 2, toggle);
             AddRow(category, "GGXLighting", "PREF_GGX_LIGHTING", 2, toggle);
             AddRow(category, "WetWeather", "PREF_WET_WEATHER", 2, toggle);
+            AddRow(category, "CarRaindrops", "PREF_CAR_RAINDROPS", 2, toggle);
             AddRow(category, "VehBoxShadows", "PREF_VEHICLE_BOX_SHADOWS", 2, toggle);
             AddRow(category, "WorldLightShad", "PREF_WORLD_LIGHT_SHADOWS", 2, toggle);
             AddEmptyLine(category);
@@ -2424,6 +2428,7 @@ public:
             AddRow(category, "DetailTex", "PREF_DETAIL_TEXTURES", 2, toggle);
             AddRow(category, "SpecularAA", "PREF_SPECULAR_AA", 2, toggle);
             AddRow(category, "GroundSurf", "PREF_GROUND_SURFACES", 2, toggle);
+            AddRow(category, "VehiclePaint", "PREF_VEHICLE_PAINT", 2, toggle);
         }
 
         // Graphics: a Debug category for the debug views, all off; the logs and traces stay in [DEBUG] of the ini

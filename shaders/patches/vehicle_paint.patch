@@ -1,0 +1,802 @@
+diff --git a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
+index 8e22fba1..ec001b03 100644
+--- a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
++++ b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
+@@ -55,12 +55,25 @@
+     def c3, -13.2877121, 128, 8, 4
+     def c4, 32, 4, 1, 0.00392156886
+     def c100, 10, 1, 0, 0
++    def c180, 13.6999998, 0.5, 0.100000001, 0.25 // FusionFix vehicle_paint.patch: presence hash, a half, a tenth, a quarter
++    def c181, 0.5, 0.100000001, 0.25, 0 // FusionFix vehicle_paint.patch: columns and rows of running drops per bead cell, the head's place in its cell
++    def c182, 0.300000012, 0.349999994, 3.33333325, 14.2857141 // FusionFix vehicle_paint.patch: the head's place across its column, 1 / half width, 1 / half height
++    def c183, 1.66666663, 0.100000001, 0.100000001, 0.5 // FusionFix vehicle_paint.patch: 1 / trail length, darkening under drops, a wet film's specular, a drop's
++    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix vehicle_paint.patch: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix vehicle_paint.patch: luminance, zero
++    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix vehicle_paint.patch: the pearl tint
++    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix vehicle_paint.patch: specular as stored, flat tops, one
++    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix vehicle_paint.patch: the hash
++    def c189, 0.400000006, 0.300000012, 0.180000007, 0.100000001 // FusionFix vehicle_paint.patch: a bead's centre within its cell, its radius
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord3 v2.xyz
+     dcl_color v3
+     dcl_texcoord7 v4.xy
+     dcl_texcoord9 v9
++    dcl_texcoord2 v5 // FusionFix vehicle_paint.patch: position in the car's space
++    dcl_texcoord4 v6 // FusionFix vehicle_paint.patch: normal in the car's space
++    dcl_texcoord5 v7 // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
+@@ -97,6 +110,137 @@
+     else
+       mov r4.x, c1.x
+     endif
++    // --- FusionFix vehicle_paint.patch: the finish (c175: clearcoat strength and gloss floor, richness - 1, pearl tint; c176.xy: baked
++    // --- highlight cut, clearcoat gloss share) on clean paint, and the rain (c176.z: share of cells with a drop,
++    // --- c176.w: how far running drops slid; c177: cells per metre, drop height, running share, wet film).
++    mov r20.w, r4.x // 1 where clean, less under dirt
++    add r8.xyz, c0.x, v1
++    nrm r27.xyz, r8 // the surface's normal, bent by the drops below
++    add r8.xyz, c0.x, v2
++    nrm r9.xyz, r8 // towards the camera
++    dp3_sat r23.x, r27, r9
++    add r23.x, -r23.x, c187.w // 1 - N.V
++    mul r23.y, r23.x, r23.x
++    mul r23.z, r23.y, r23.y
++    mul r23.z, r23.z, r23.x // (1 - N.V)^5
++    dp3 r8.x, r0, c185
++    add r8.yzw, r0.xxyz, -r8.x
++    mul r8.x, r20.w, c175.z
++    mad r0.xyz, r8.yzww, r8.x, r0 // saturation around the luminance
++    max r0.xyz, r0, c185.w
++    mul r8.x, r23.y, c175.w
++    mul r8.x, r8.x, r20.w
++    mad r0.xyz, c186, r8.x, r0 // the pearl tint towards the silhouette
++    mov_sat r20.x, c177.w // how wet: 0 dry, 1 in the rain
++    mov r24, c185.w // drops in x, trails in y
++    mov r8.x, c176.z // how many cells hold a drop
++    if_lt c185.w, r8.x
++      // The surface's frame in the car's space: up along it (world up, or the car's x on flat tops) and across
++      mov r10.xyz, v6
++      mov r11.xyz, v7
++      mov r12.xyz, v5
++      nrm r13.xyz, r10
++      dp3 r8.y, r13, r11
++      mad r14.xyz, r13, -r8.y, r11
++      add r14.x, r14.x, c187.z
++      nrm r15.xyz, r14
++      crs r16.xyz, r13, r15
++      dp3 r17.x, r12, r16
++      dp3 r17.y, r12, r15 // across and up, in metres
++      // Beads: cells of 1 / c177.x metres, a drop at a random spot in some of them
++      mul r17.zw, r17.xyxy, c177.x
++      frc r18.xy, r17.zwzw
++      add r18.zw, r17.zwzw, -r18.xyxy
++      mul r9.xyz, r18.zwzw, c188
++      frc r9.xyz, r9
++      add r10.xyz, r9.yzxw, c188.w
++      dp3 r10.x, r9, r10
++      add r9.xyz, r9, r10.x
++      add r10.xyz, r9.xxyw, r9.yzzw
++      mul r10.xyz, r10, r9.zyxw
++      frc r9.xyz, r10
++      mad r10.xy, r9, c189.x, c189.y
++      add r10.xy, r18, -r10
++      mad r10.z, r9.z, c189.z, c189.w
++      rcp r10.z, r10.z
++      mul r10.xy, r10, r10.z
++      dp2add r10.w, r10, r10, c185.w
++      add_sat r10.w, -r10.w, c187.w // the bead's dome
++      mul r9.w, r9.z, c180.x
++      frc r9.w, r9.w
++      add r9.w, r9.w, -r8.x
++      cmp r9.w, r9.w, c187.x, c187.w
++      mul r24.x, r10.w, r9.w
++      // Running drops, on the sides: columns of half the bead density, each sliding at its own speed
++      add r8.y, -r8_abs.y, c187.w
++      add_sat r8.y, r8.y, r8.y
++      mul r8.y, r8.y, c177.z
++      mul r17.z, r17.x, c177.x
++      mul r17.z, r17.z, c181.x
++      frc r18.x, r17.z
++      add r18.z, r17.z, -r18.x // the column
++      mul r9.xyz, r18.zzzz, c188
++      frc r9.xyz, r9
++      add r10.xyz, r9.yzxw, c188.w
++      dp3 r10.x, r9, r10
++      add r9.xyz, r9, r10.x
++      add r10.xyz, r9.xxyw, r9.yzzw
++      mul r10.xyz, r10, r9.zyxw
++      frc r9.xyz, r10
++      add r9.w, r9.x, c180.y
++      mul r9.w, r9.w, c176.w // how far it slid: 0.5 to 1.5 times c176.w metres
++      add r9.w, r9.w, r17.y
++      mul r9.w, r9.w, c177.x
++      mad r9.w, r9.w, c181.y, r9.y
++      frc r18.y, r9.w
++      add r18.w, r9.w, -r18.y // the row
++      mad r10.y, r9.z, c182.x, c182.y
++      add r10.x, r18.x, -r10.y
++      mul r10.x, r10.x, c182.z
++      add r10.y, r18.y, -c181.z
++      mul r10.z, r10.y, c182.w
++      mul r10.w, r10.x, r10.x
++      mad r10.w, r10.z, r10.z, r10.w
++      add_sat r10.w, -r10.w, c187.w // the head's dome
++      add_sat r11.x, -r10_abs.x, c187.w
++      mul r11.y, r10.y, c183.x
++      add_sat r11.z, -r11.y, c187.w
++      cmp r11.z, r10.y, r11.z, c185.w
++      mul r11.z, r11.z, r11.x // the trail above it
++      mul r9.xyz, r18.zwzw, c188
++      frc r9.xyz, r9
++      add r12.xyz, r9.yzxw, c188.w
++      dp3 r12.x, r9, r12
++      add r9.xyz, r9, r12.x
++      add r12.xyz, r9.xxyw, r9.yzzw
++      mul r12.xyz, r12, r9.zyxw
++      frc r9.xyz, r12
++      add r9.w, r9.x, -r8.x
++      cmp r9.w, r9.w, c187.x, c187.w
++      mul r9.w, r9.w, r8.y
++      mul r24.y, r11.z, r9.w
++      mul r10.w, r10.w, r9.w
++      max r24.x, r24.x, r10.w
++      // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
++      // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
++      mul r8.w, r24.x, c177.y
++      dsx r9.xyz, v2
++      dsy r10.xyz, v2
++      crs r11.xyz, r10, r27
++      crs r12.xyz, r27, r9
++      dp3 r13.x, r9, r11
++      dsx r13.y, r8.w
++      dsy r13.z, r8.w
++      mul r14.xyz, r11, r13.y
++      mad r14.xyz, r12, r13.z, r14
++      cmp r13.w, r13.x, c187.w, -c187.w
++      mul r14.xyz, r14, r13.w
++      mad r14.xyz, r27, r13_abs.x, r14
++      nrm r27.xyz, r14
++      mul r8.x, r24.x, c183.y
++      add r8.x, -r8.x, c187.w
++      mul r0.xyz, r0, r8.x // a little darker under drops
++    endif
+     mul r3.w, r3.x, r4.x
+     mov r4.xyz, c1
+     mul r4.z, r4.z, c78.x
+@@ -121,11 +265,14 @@
+     cmp r2.x, r2.x, r2.y, c3.x
+     mul r2.x, r3.y, r2.x
+     exp r2.x, r2.x
++    mul r8.x, r20.w, c176.x // FusionFix vehicle_paint.patch: the baked highlight turned down on clean paint
++    add r8.x, -r8.x, c187.w
++    mul r5.xyz, r5, r8.x
+     mad r2.xyz, r5, r2.x, r0
+     cmp oC0.xyz, -c79.x, r0, r2
+     mul r0.x, r3.w, c72.w
+     mul r0.y, r2.w, c72.w
+-    mad r1.xyz, r1, r1.w, c1.x
++    add r1.xyz, r27, c1.x // FusionFix vehicle_paint.patch: the normal the drops bent
+     mul r2.xyz, r1, c3.y
+     frc r3.xyz, r2
+     add r2.xyz, r2, -r3
+@@ -136,10 +283,27 @@
+     dp3 r0.z, r1, c4
+     mul oC1.w, r0.z, c4.w
+     mul oC1.xyz, r2, c2.x
+-    mul oC2.x, r0.x, c2.y
++    mul r25.x, r0.x, c2.y // FusionFix vehicle_paint.patch: the paint's own specular, halved as stored
++    mad r25.y, r23.z, c184.z, c184.w
++    mul r25.y, r25.y, c187.y
++    mul r25.y, r25.y, c175.x
++    mul r25.y, r25.y, r20.w
++    max r25.x, r25.x, r25.y // the clearcoat's where stronger
++    mul r25.z, r20.x, c183.z
++    max r25.x, r25.x, r25.z // a wet film
++    lrp r26.x, r24.x, c183.w, r25.x // drops
++    mov oC2.x, r26.x
+     mul r0.x, r0.y, c2.z
+     rsq r0.x, r0.x
+-    rcp oC2.y, r0.x
++    rcp r25.x, r0.x // FusionFix vehicle_paint.patch: the paint's own gloss
++    max r25.y, r25.x, c175.y
++    mul r25.z, r20.w, c176.y
++    lrp r26.x, r25.z, r25.y, r25.x // the clearcoat's floor on clean paint
++    mul r25.w, r20.x, c184.x
++    max r26.y, r26.x, r25.w // a wet film
++    max r26.z, r24.x, r24.y
++    lrp r27.x, r26.z, c184.y, r26.y // drops and trails
++    mov oC2.y, r27.x
+     mul oC0.w, r0.w, c39.x
+     // mov oC2.w, c1.x
+     mov oC2.w, c0.w
+diff --git a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS3.asm b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS3.asm
+index 5e61aa62..d2ff45a6 100644
+--- a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS3.asm
++++ b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS3.asm
+@@ -38,6 +38,9 @@
+     dcl_2d s0
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator
++    dcl_texcoord2 o7.xyz // FusionFix vehicle_paint.patch: position in the car's space
++    dcl_texcoord4 o8.xyz // FusionFix vehicle_paint.patch: normal in the car's space
++    dcl_texcoord5 o9.xyz // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_texcoord o1.xy
+     dcl_texcoord1 o2
+     dcl_texcoord3 o3.xyz
+@@ -281,6 +284,13 @@
+     mov o5.xyz, r0
+     mov o5.w, c4.y
+     mov o6.xy, v3
++    mov o7.xyz, r3 // FusionFix vehicle_paint.patch: the position (dented), the normal and world up in the car's space
++    mov o8.xyz, v4
++    mov r8.x, c0.z
++    mov r8.y, c1.z
++    mov r8.z, c2.z
++    nrm r7.xyz, r8
++    mov o9.xyz, r7
+     dp3 o10.xy, c10.xyw, c10.xyw
+ 
+ // approximately 246 instruction slots used (8 texture, 238 arithmetic)
+diff --git a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS4.asm b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS4.asm
+index 45aef76b..6af4ae0c 100644
+--- a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS4.asm
++++ b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS4.asm
+@@ -41,6 +41,9 @@
+     dcl_2d s0
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator
++    dcl_texcoord2 o7.xyz // FusionFix vehicle_paint.patch: position in the car's space
++    dcl_texcoord4 o8.xyz // FusionFix vehicle_paint.patch: normal in the car's space
++    dcl_texcoord5 o9.xyz // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_texcoord o1.xy
+     dcl_texcoord1 o2
+     dcl_texcoord3 o3.xyz
+@@ -276,6 +279,11 @@
+     mov o5.xyz, r0
+     mov o5.w, c0.y
+     mov o6.xy, v3
++    mov o7.xyz, r3 // FusionFix vehicle_paint.patch: the position (dented), the normal and world up in the bone's space
++    mov o8.xyz, r4
++    mov r8.xyz, c66[a0.x]
++    nrm r7.xyz, r8
++    mov o9.xyz, r7
+     dp3 o10.xy, c10.xyw, c10.xyw
+ 
+ // approximately 238 instruction slots used (8 texture, 230 arithmetic)
+diff --git a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
+index 992eb2bf..1ed53ea4 100644
+--- a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
++++ b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
+@@ -55,11 +55,24 @@
+     def c3, -13.2877121, 128, 8, 4
+     def c4, 32, 4, 1, 0.00392156886
+     def c100, 10, 1, 0, 0
++    def c180, 13.6999998, 0.5, 0.100000001, 0.25 // FusionFix vehicle_paint.patch: presence hash, a half, a tenth, a quarter
++    def c181, 0.5, 0.100000001, 0.25, 0 // FusionFix vehicle_paint.patch: columns and rows of running drops per bead cell, the head's place in its cell
++    def c182, 0.300000012, 0.349999994, 3.33333325, 14.2857141 // FusionFix vehicle_paint.patch: the head's place across its column, 1 / half width, 1 / half height
++    def c183, 1.66666663, 0.100000001, 0.100000001, 0.5 // FusionFix vehicle_paint.patch: 1 / trail length, darkening under drops, a wet film's specular, a drop's
++    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix vehicle_paint.patch: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix vehicle_paint.patch: luminance, zero
++    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix vehicle_paint.patch: the pearl tint
++    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix vehicle_paint.patch: specular as stored, flat tops, one
++    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix vehicle_paint.patch: the hash
++    def c189, 0.400000006, 0.300000012, 0.180000007, 0.100000001 // FusionFix vehicle_paint.patch: a bead's centre within its cell, its radius
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord3 v2.xyz
+     dcl_color v3
+     dcl_texcoord9 v9
++    dcl_texcoord2 v5 // FusionFix vehicle_paint.patch: position in the car's space
++    dcl_texcoord4 v6 // FusionFix vehicle_paint.patch: normal in the car's space
++    dcl_texcoord5 v7 // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
+@@ -96,6 +109,137 @@
+     else
+       mov r4.x, c1.x
+     endif
++    // --- FusionFix vehicle_paint.patch: the finish (c175: clearcoat strength and gloss floor, richness - 1, pearl tint; c176.xy: baked
++    // --- highlight cut, clearcoat gloss share) on clean paint, and the rain (c176.z: share of cells with a drop,
++    // --- c176.w: how far running drops slid; c177: cells per metre, drop height, running share, wet film).
++    mov r20.w, r4.x // 1 where clean, less under dirt
++    add r8.xyz, c0.x, v1
++    nrm r27.xyz, r8 // the surface's normal, bent by the drops below
++    add r8.xyz, c0.x, v2
++    nrm r9.xyz, r8 // towards the camera
++    dp3_sat r23.x, r27, r9
++    add r23.x, -r23.x, c187.w // 1 - N.V
++    mul r23.y, r23.x, r23.x
++    mul r23.z, r23.y, r23.y
++    mul r23.z, r23.z, r23.x // (1 - N.V)^5
++    dp3 r8.x, r0, c185
++    add r8.yzw, r0.xxyz, -r8.x
++    mul r8.x, r20.w, c175.z
++    mad r0.xyz, r8.yzww, r8.x, r0 // saturation around the luminance
++    max r0.xyz, r0, c185.w
++    mul r8.x, r23.y, c175.w
++    mul r8.x, r8.x, r20.w
++    mad r0.xyz, c186, r8.x, r0 // the pearl tint towards the silhouette
++    mov_sat r20.x, c177.w // how wet: 0 dry, 1 in the rain
++    mov r24, c185.w // drops in x, trails in y
++    mov r8.x, c176.z // how many cells hold a drop
++    if_lt c185.w, r8.x
++      // The surface's frame in the car's space: up along it (world up, or the car's x on flat tops) and across
++      mov r10.xyz, v6
++      mov r11.xyz, v7
++      mov r12.xyz, v5
++      nrm r13.xyz, r10
++      dp3 r8.y, r13, r11
++      mad r14.xyz, r13, -r8.y, r11
++      add r14.x, r14.x, c187.z
++      nrm r15.xyz, r14
++      crs r16.xyz, r13, r15
++      dp3 r17.x, r12, r16
++      dp3 r17.y, r12, r15 // across and up, in metres
++      // Beads: cells of 1 / c177.x metres, a drop at a random spot in some of them
++      mul r17.zw, r17.xyxy, c177.x
++      frc r18.xy, r17.zwzw
++      add r18.zw, r17.zwzw, -r18.xyxy
++      mul r9.xyz, r18.zwzw, c188
++      frc r9.xyz, r9
++      add r10.xyz, r9.yzxw, c188.w
++      dp3 r10.x, r9, r10
++      add r9.xyz, r9, r10.x
++      add r10.xyz, r9.xxyw, r9.yzzw
++      mul r10.xyz, r10, r9.zyxw
++      frc r9.xyz, r10
++      mad r10.xy, r9, c189.x, c189.y
++      add r10.xy, r18, -r10
++      mad r10.z, r9.z, c189.z, c189.w
++      rcp r10.z, r10.z
++      mul r10.xy, r10, r10.z
++      dp2add r10.w, r10, r10, c185.w
++      add_sat r10.w, -r10.w, c187.w // the bead's dome
++      mul r9.w, r9.z, c180.x
++      frc r9.w, r9.w
++      add r9.w, r9.w, -r8.x
++      cmp r9.w, r9.w, c187.x, c187.w
++      mul r24.x, r10.w, r9.w
++      // Running drops, on the sides: columns of half the bead density, each sliding at its own speed
++      add r8.y, -r8_abs.y, c187.w
++      add_sat r8.y, r8.y, r8.y
++      mul r8.y, r8.y, c177.z
++      mul r17.z, r17.x, c177.x
++      mul r17.z, r17.z, c181.x
++      frc r18.x, r17.z
++      add r18.z, r17.z, -r18.x // the column
++      mul r9.xyz, r18.zzzz, c188
++      frc r9.xyz, r9
++      add r10.xyz, r9.yzxw, c188.w
++      dp3 r10.x, r9, r10
++      add r9.xyz, r9, r10.x
++      add r10.xyz, r9.xxyw, r9.yzzw
++      mul r10.xyz, r10, r9.zyxw
++      frc r9.xyz, r10
++      add r9.w, r9.x, c180.y
++      mul r9.w, r9.w, c176.w // how far it slid: 0.5 to 1.5 times c176.w metres
++      add r9.w, r9.w, r17.y
++      mul r9.w, r9.w, c177.x
++      mad r9.w, r9.w, c181.y, r9.y
++      frc r18.y, r9.w
++      add r18.w, r9.w, -r18.y // the row
++      mad r10.y, r9.z, c182.x, c182.y
++      add r10.x, r18.x, -r10.y
++      mul r10.x, r10.x, c182.z
++      add r10.y, r18.y, -c181.z
++      mul r10.z, r10.y, c182.w
++      mul r10.w, r10.x, r10.x
++      mad r10.w, r10.z, r10.z, r10.w
++      add_sat r10.w, -r10.w, c187.w // the head's dome
++      add_sat r11.x, -r10_abs.x, c187.w
++      mul r11.y, r10.y, c183.x
++      add_sat r11.z, -r11.y, c187.w
++      cmp r11.z, r10.y, r11.z, c185.w
++      mul r11.z, r11.z, r11.x // the trail above it
++      mul r9.xyz, r18.zwzw, c188
++      frc r9.xyz, r9
++      add r12.xyz, r9.yzxw, c188.w
++      dp3 r12.x, r9, r12
++      add r9.xyz, r9, r12.x
++      add r12.xyz, r9.xxyw, r9.yzzw
++      mul r12.xyz, r12, r9.zyxw
++      frc r9.xyz, r12
++      add r9.w, r9.x, -r8.x
++      cmp r9.w, r9.w, c187.x, c187.w
++      mul r9.w, r9.w, r8.y
++      mul r24.y, r11.z, r9.w
++      mul r10.w, r10.w, r9.w
++      max r24.x, r24.x, r10.w
++      // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
++      // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
++      mul r8.w, r24.x, c177.y
++      dsx r9.xyz, v2
++      dsy r10.xyz, v2
++      crs r11.xyz, r10, r27
++      crs r12.xyz, r27, r9
++      dp3 r13.x, r9, r11
++      dsx r13.y, r8.w
++      dsy r13.z, r8.w
++      mul r14.xyz, r11, r13.y
++      mad r14.xyz, r12, r13.z, r14
++      cmp r13.w, r13.x, c187.w, -c187.w
++      mul r14.xyz, r14, r13.w
++      mad r14.xyz, r27, r13_abs.x, r14
++      nrm r27.xyz, r14
++      mul r8.x, r24.x, c183.y
++      add r8.x, -r8.x, c187.w
++      mul r0.xyz, r0, r8.x // a little darker under drops
++    endif
+     mul r3.w, r3.x, r4.x
+     mov r4.xyz, c1
+     mul r4.z, r4.z, c78.x
+@@ -120,11 +264,14 @@
+     cmp r2.x, r2.x, r2.y, c3.x
+     mul r2.x, r3.y, r2.x
+     exp r2.x, r2.x
++    mul r8.x, r20.w, c176.x // FusionFix vehicle_paint.patch: the baked highlight turned down on clean paint
++    add r8.x, -r8.x, c187.w
++    mul r5.xyz, r5, r8.x
+     mad r2.xyz, r5, r2.x, r0
+     cmp oC0.xyz, -c79.x, r0, r2
+     mul r0.x, r3.w, c72.w
+     mul r0.y, r2.w, c72.w
+-    mad r1.xyz, r1, r1.w, c1.x
++    add r1.xyz, r27, c1.x // FusionFix vehicle_paint.patch: the normal the drops bent
+     mul r2.xyz, r1, c3.y
+     frc r3.xyz, r2
+     add r2.xyz, r2, -r3
+@@ -135,10 +282,27 @@
+     dp3 r0.z, r1, c4
+     mul oC1.w, r0.z, c4.w
+     mul oC1.xyz, r2, c2.x
+-    mul oC2.x, r0.x, c2.y
++    mul r25.x, r0.x, c2.y // FusionFix vehicle_paint.patch: the paint's own specular, halved as stored
++    mad r25.y, r23.z, c184.z, c184.w
++    mul r25.y, r25.y, c187.y
++    mul r25.y, r25.y, c175.x
++    mul r25.y, r25.y, r20.w
++    max r25.x, r25.x, r25.y // the clearcoat's where stronger
++    mul r25.z, r20.x, c183.z
++    max r25.x, r25.x, r25.z // a wet film
++    lrp r26.x, r24.x, c183.w, r25.x // drops
++    mov oC2.x, r26.x
+     mul r0.x, r0.y, c2.z
+     rsq r0.x, r0.x
+-    rcp oC2.y, r0.x
++    rcp r25.x, r0.x // FusionFix vehicle_paint.patch: the paint's own gloss
++    max r25.y, r25.x, c175.y
++    mul r25.z, r20.w, c176.y
++    lrp r26.x, r25.z, r25.y, r25.x // the clearcoat's floor on clean paint
++    mul r25.w, r20.x, c184.x
++    max r26.y, r26.x, r25.w // a wet film
++    max r26.z, r24.x, r24.y
++    lrp r27.x, r26.z, c184.y, r26.y // drops and trails
++    mov oC2.y, r27.x
+     mul oC0.w, r0.w, c39.x
+     // mov oC2.w, c1.x
+     mov oC2.w, c0.w
+diff --git a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS3.asm b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS3.asm
+index e79f302d..547bff5b 100644
+--- a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS3.asm
++++ b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS3.asm
+@@ -37,6 +37,9 @@
+     dcl_2d s0
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator
++    dcl_texcoord2 o7.xyz // FusionFix vehicle_paint.patch: position in the car's space
++    dcl_texcoord4 o8.xyz // FusionFix vehicle_paint.patch: normal in the car's space
++    dcl_texcoord5 o9.xyz // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_texcoord o1.xy
+     dcl_texcoord1 o2
+     dcl_texcoord3 o3.xyz
+@@ -278,6 +281,13 @@
+     mad o4, v1.xyzx, c7.yyyz, c7.zzzy
+     mov o5.xyz, r0
+     mov o5.w, c4.y
++    mov o7.xyz, r3 // FusionFix vehicle_paint.patch: the position (dented), the normal and world up in the car's space
++    mov o8.xyz, v4
++    mov r8.x, c0.z
++    mov r8.y, c1.z
++    mov r8.z, c2.z
++    nrm r7.xyz, r8
++    mov o9.xyz, r7
+     dp3 o10.xy, c10.xyw, c10.xyw
+ 
+ // approximately 245 instruction slots used (8 texture, 237 arithmetic)
+diff --git a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS4.asm b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS4.asm
+index cd862d20..0a1bed40 100644
+--- a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS4.asm
++++ b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS4.asm
+@@ -40,6 +40,9 @@
+     dcl_2d s0
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator
++    dcl_texcoord2 o7.xyz // FusionFix vehicle_paint.patch: position in the car's space
++    dcl_texcoord4 o8.xyz // FusionFix vehicle_paint.patch: normal in the car's space
++    dcl_texcoord5 o9.xyz // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_texcoord o1.xy
+     dcl_texcoord1 o2
+     dcl_texcoord3 o3.xyz
+@@ -273,6 +276,11 @@
+     mad o4, v4.xyzx, c4.zzzy, c4.yyyz
+     mov o5.xyz, r0
+     mov o5.w, c0.y
++    mov o7.xyz, r3 // FusionFix vehicle_paint.patch: the position (dented), the normal and world up in the bone's space
++    mov o8.xyz, r4
++    mov r8.xyz, c66[a0.x]
++    nrm r7.xyz, r8
++    mov o9.xyz, r7
+     dp3 o10.xy, c10.xyw, c10.xyw
+ 
+ // approximately 237 instruction slots used (8 texture, 229 arithmetic)
+diff --git a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
+index 141b8ca2..e051a271 100644
+--- a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
++++ b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
+@@ -57,11 +57,24 @@
+     def c3, -13.2877121, 128, 8, 4
+     def c4, 32, 4, 1, 0.00392156886
+     def c100, 10, 1, 0, 0
++    def c180, 13.6999998, 0.5, 0.100000001, 0.25 // FusionFix vehicle_paint.patch: presence hash, a half, a tenth, a quarter
++    def c181, 0.5, 0.100000001, 0.25, 0 // FusionFix vehicle_paint.patch: columns and rows of running drops per bead cell, the head's place in its cell
++    def c182, 0.300000012, 0.349999994, 3.33333325, 14.2857141 // FusionFix vehicle_paint.patch: the head's place across its column, 1 / half width, 1 / half height
++    def c183, 1.66666663, 0.100000001, 0.100000001, 0.5 // FusionFix vehicle_paint.patch: 1 / trail length, darkening under drops, a wet film's specular, a drop's
++    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix vehicle_paint.patch: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix vehicle_paint.patch: luminance, zero
++    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix vehicle_paint.patch: the pearl tint
++    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix vehicle_paint.patch: specular as stored, flat tops, one
++    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix vehicle_paint.patch: the hash
++    def c189, 0.400000006, 0.300000012, 0.180000007, 0.100000001 // FusionFix vehicle_paint.patch: a bead's centre within its cell, its radius
+     dcl_texcoord v0
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord3 v2.xyz
+     dcl_color v3
+     dcl_texcoord9 v9
++    dcl_texcoord2 v5 // FusionFix vehicle_paint.patch: position in the car's space
++    dcl_texcoord4 v6 // FusionFix vehicle_paint.patch: normal in the car's space
++    dcl_texcoord5 v7 // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
+@@ -102,6 +115,137 @@
+     else
+       mov r5.x, c1.x
+     endif
++    // --- FusionFix vehicle_paint.patch: the finish (c175: clearcoat strength and gloss floor, richness - 1, pearl tint; c176.xy: baked
++    // --- highlight cut, clearcoat gloss share) on clean paint, and the rain (c176.z: share of cells with a drop,
++    // --- c176.w: how far running drops slid; c177: cells per metre, drop height, running share, wet film).
++    mov r20.w, r5.x // 1 where clean, less under dirt
++    add r8.xyz, c0.x, v1
++    nrm r27.xyz, r8 // the surface's normal, bent by the drops below
++    add r8.xyz, c0.x, v2
++    nrm r9.xyz, r8 // towards the camera
++    dp3_sat r23.x, r27, r9
++    add r23.x, -r23.x, c187.w // 1 - N.V
++    mul r23.y, r23.x, r23.x
++    mul r23.z, r23.y, r23.y
++    mul r23.z, r23.z, r23.x // (1 - N.V)^5
++    dp3 r8.x, r0, c185
++    add r8.yzw, r0.xxyz, -r8.x
++    mul r8.x, r20.w, c175.z
++    mad r0.xyz, r8.yzww, r8.x, r0 // saturation around the luminance
++    max r0.xyz, r0, c185.w
++    mul r8.x, r23.y, c175.w
++    mul r8.x, r8.x, r20.w
++    mad r0.xyz, c186, r8.x, r0 // the pearl tint towards the silhouette
++    mov_sat r20.x, c177.w // how wet: 0 dry, 1 in the rain
++    mov r24, c185.w // drops in x, trails in y
++    mov r8.x, c176.z // how many cells hold a drop
++    if_lt c185.w, r8.x
++      // The surface's frame in the car's space: up along it (world up, or the car's x on flat tops) and across
++      mov r10.xyz, v6
++      mov r11.xyz, v7
++      mov r12.xyz, v5
++      nrm r13.xyz, r10
++      dp3 r8.y, r13, r11
++      mad r14.xyz, r13, -r8.y, r11
++      add r14.x, r14.x, c187.z
++      nrm r15.xyz, r14
++      crs r16.xyz, r13, r15
++      dp3 r17.x, r12, r16
++      dp3 r17.y, r12, r15 // across and up, in metres
++      // Beads: cells of 1 / c177.x metres, a drop at a random spot in some of them
++      mul r17.zw, r17.xyxy, c177.x
++      frc r18.xy, r17.zwzw
++      add r18.zw, r17.zwzw, -r18.xyxy
++      mul r9.xyz, r18.zwzw, c188
++      frc r9.xyz, r9
++      add r10.xyz, r9.yzxw, c188.w
++      dp3 r10.x, r9, r10
++      add r9.xyz, r9, r10.x
++      add r10.xyz, r9.xxyw, r9.yzzw
++      mul r10.xyz, r10, r9.zyxw
++      frc r9.xyz, r10
++      mad r10.xy, r9, c189.x, c189.y
++      add r10.xy, r18, -r10
++      mad r10.z, r9.z, c189.z, c189.w
++      rcp r10.z, r10.z
++      mul r10.xy, r10, r10.z
++      dp2add r10.w, r10, r10, c185.w
++      add_sat r10.w, -r10.w, c187.w // the bead's dome
++      mul r9.w, r9.z, c180.x
++      frc r9.w, r9.w
++      add r9.w, r9.w, -r8.x
++      cmp r9.w, r9.w, c187.x, c187.w
++      mul r24.x, r10.w, r9.w
++      // Running drops, on the sides: columns of half the bead density, each sliding at its own speed
++      add r8.y, -r8_abs.y, c187.w
++      add_sat r8.y, r8.y, r8.y
++      mul r8.y, r8.y, c177.z
++      mul r17.z, r17.x, c177.x
++      mul r17.z, r17.z, c181.x
++      frc r18.x, r17.z
++      add r18.z, r17.z, -r18.x // the column
++      mul r9.xyz, r18.zzzz, c188
++      frc r9.xyz, r9
++      add r10.xyz, r9.yzxw, c188.w
++      dp3 r10.x, r9, r10
++      add r9.xyz, r9, r10.x
++      add r10.xyz, r9.xxyw, r9.yzzw
++      mul r10.xyz, r10, r9.zyxw
++      frc r9.xyz, r10
++      add r9.w, r9.x, c180.y
++      mul r9.w, r9.w, c176.w // how far it slid: 0.5 to 1.5 times c176.w metres
++      add r9.w, r9.w, r17.y
++      mul r9.w, r9.w, c177.x
++      mad r9.w, r9.w, c181.y, r9.y
++      frc r18.y, r9.w
++      add r18.w, r9.w, -r18.y // the row
++      mad r10.y, r9.z, c182.x, c182.y
++      add r10.x, r18.x, -r10.y
++      mul r10.x, r10.x, c182.z
++      add r10.y, r18.y, -c181.z
++      mul r10.z, r10.y, c182.w
++      mul r10.w, r10.x, r10.x
++      mad r10.w, r10.z, r10.z, r10.w
++      add_sat r10.w, -r10.w, c187.w // the head's dome
++      add_sat r11.x, -r10_abs.x, c187.w
++      mul r11.y, r10.y, c183.x
++      add_sat r11.z, -r11.y, c187.w
++      cmp r11.z, r10.y, r11.z, c185.w
++      mul r11.z, r11.z, r11.x // the trail above it
++      mul r9.xyz, r18.zwzw, c188
++      frc r9.xyz, r9
++      add r12.xyz, r9.yzxw, c188.w
++      dp3 r12.x, r9, r12
++      add r9.xyz, r9, r12.x
++      add r12.xyz, r9.xxyw, r9.yzzw
++      mul r12.xyz, r12, r9.zyxw
++      frc r9.xyz, r12
++      add r9.w, r9.x, -r8.x
++      cmp r9.w, r9.w, c187.x, c187.w
++      mul r9.w, r9.w, r8.y
++      mul r24.y, r11.z, r9.w
++      mul r10.w, r10.w, r9.w
++      max r24.x, r24.x, r10.w
++      // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
++      // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
++      mul r8.w, r24.x, c177.y
++      dsx r9.xyz, v2
++      dsy r10.xyz, v2
++      crs r11.xyz, r10, r27
++      crs r12.xyz, r27, r9
++      dp3 r13.x, r9, r11
++      dsx r13.y, r8.w
++      dsy r13.z, r8.w
++      mul r14.xyz, r11, r13.y
++      mad r14.xyz, r12, r13.z, r14
++      cmp r13.w, r13.x, c187.w, -c187.w
++      mul r14.xyz, r14, r13.w
++      mad r14.xyz, r27, r13_abs.x, r14
++      nrm r27.xyz, r14
++      mul r8.x, r24.x, c183.y
++      add r8.x, -r8.x, c187.w
++      mul r0.xyz, r0, r8.x // a little darker under drops
++    endif
+     mul r1.x, r4.x, r5.x
+     mov r5.xyz, c1
+     mul r1.w, r5.z, c78.x
+@@ -126,11 +270,14 @@
+     cmp r1.z, r1.z, r1.w, c3.x
+     mul r1.y, r1.y, r1.z
+     exp r1.y, r1.y
++    mul r8.x, r20.w, c176.x // FusionFix vehicle_paint.patch: the baked highlight turned down on clean paint
++    add r8.x, -r8.x, c187.w
++    mul r4.xyz, r4, r8.x
+     mad r1.yzw, r4.xxyz, r1.y, r0.xxyz
+     cmp oC0.xyz, -c79.x, r0, r1.yzww
+     mul r0.x, r1.x, c72.w
+     mul r0.y, r3.w, c72.w
+-    mad r1.xyz, r2, r2.w, c1.x
++    add r1.xyz, r27, c1.x // FusionFix vehicle_paint.patch: the normal the drops bent
+     mul r2.xyz, r1, c3.y
+     frc r3.xyz, r2
+     add r2.xyz, r2, -r3
+@@ -141,10 +288,27 @@
+     dp3 r0.z, r1, c4
+     mul oC1.w, r0.z, c4.w
+     mul oC1.xyz, r2, c2.x
+-    mul oC2.x, r0.x, c2.y
++    mul r25.x, r0.x, c2.y // FusionFix vehicle_paint.patch: the paint's own specular, halved as stored
++    mad r25.y, r23.z, c184.z, c184.w
++    mul r25.y, r25.y, c187.y
++    mul r25.y, r25.y, c175.x
++    mul r25.y, r25.y, r20.w
++    max r25.x, r25.x, r25.y // the clearcoat's where stronger
++    mul r25.z, r20.x, c183.z
++    max r25.x, r25.x, r25.z // a wet film
++    lrp r26.x, r24.x, c183.w, r25.x // drops
++    mov oC2.x, r26.x
+     mul r0.x, r0.y, c2.z
+     rsq r0.x, r0.x
+-    rcp oC2.y, r0.x
++    rcp r25.x, r0.x // FusionFix vehicle_paint.patch: the paint's own gloss
++    max r25.y, r25.x, c175.y
++    mul r25.z, r20.w, c176.y
++    lrp r26.x, r25.z, r25.y, r25.x // the clearcoat's floor on clean paint
++    mul r25.w, r20.x, c184.x
++    max r26.y, r26.x, r25.w // a wet film
++    max r26.z, r24.x, r24.y
++    lrp r27.x, r26.z, c184.y, r26.y // drops and trails
++    mov oC2.y, r27.x
+     mul oC0.w, r0.w, c39.x
+     // mov oC2.w, c1.x
+     mov oC2.w, c0.w
+diff --git a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS3.asm b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS3.asm
+index b5cbb9da..0489992e 100644
+--- a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS3.asm
++++ b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS3.asm
+@@ -38,6 +38,9 @@
+     dcl_2d s0
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator
++    dcl_texcoord2 o7.xyz // FusionFix vehicle_paint.patch: position in the car's space
++    dcl_texcoord4 o8.xyz // FusionFix vehicle_paint.patch: normal in the car's space
++    dcl_texcoord5 o9.xyz // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_texcoord o1
+     dcl_texcoord1 o2
+     dcl_texcoord3 o3.xyz
+@@ -280,6 +283,13 @@
+     mad o4, v1.xyzx, c7.yyyz, c7.zzzy
+     mov o5.xyz, r0
+     mov o5.w, c4.y
++    mov o7.xyz, r3 // FusionFix vehicle_paint.patch: the position (dented), the normal and world up in the car's space
++    mov o8.xyz, v4
++    mov r8.x, c0.z
++    mov r8.y, c1.z
++    mov r8.z, c2.z
++    nrm r7.xyz, r8
++    mov o9.xyz, r7
+     dp3 o10.xy, c10.xyw, c10.xyw
+ 
+ // approximately 246 instruction slots used (8 texture, 238 arithmetic)
+diff --git a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS4.asm b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS4.asm
+index e6a1fe74..732058e4 100644
+--- a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS4.asm
++++ b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS4.asm
+@@ -41,6 +41,9 @@
+     dcl_2d s0
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator
++    dcl_texcoord2 o7.xyz // FusionFix vehicle_paint.patch: position in the car's space
++    dcl_texcoord4 o8.xyz // FusionFix vehicle_paint.patch: normal in the car's space
++    dcl_texcoord5 o9.xyz // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_texcoord o1
+     dcl_texcoord1 o2
+     dcl_texcoord3 o3.xyz
+@@ -275,6 +278,11 @@
+     mad o4, v5.xyzx, c4.zzzy, c4.yyyz
+     mov o5.xyz, r0
+     mov o5.w, c0.y
++    mov o7.xyz, r3 // FusionFix vehicle_paint.patch: the position (dented), the normal and world up in the bone's space
++    mov o8.xyz, r4
++    mov r8.xyz, c66[a0.x]
++    nrm r7.xyz, r8
++    mov o9.xyz, r7
+     dp3 o10.xy, c10.xyw, c10.xyw
+ 
+ // approximately 238 instruction slots used (8 texture, 230 arithmetic)
