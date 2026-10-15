@@ -4,7 +4,8 @@
 # the car glass drawn into the G-buffer (gta_vehicle_vehglass PS5). source/vehiclepaint.ixx
 # sets c175-c177 at the start of every G-buffer pass; all zero leaves the stock paint.
 #
-# The finish, on clean paint only (dirt keeps the stock look):
+# The finish, on clean paint only (dirt keeps the stock look); the clearcoat and its gloss also only where the material
+# has a specular of its own (matDiffuseColor2.w, c72.w), so matte trims, plastics and the underside stay matte:
 #  - a clearcoat: Schlick's Fresnel from 0.045 head on raises the specular where it beats the paint's own (near the
 #    silhouette), and a gloss floor sharpens the sun's highlight and the reflections;
 #  - the sun highlight the game bakes into the albedo (specular2, which ignores shadows: it shows in tunnels and at
@@ -39,6 +40,10 @@ VARIANTS = {
 }
 
 
+PAINT_DEFS = f'''\
+    def c194, 20, 0, 0, 0 // {TAG}: the clearcoat in full from a material specular (matDiffuseColor2.w) of 0.05
+'''
+
 PS_DCLS = f'''\
     dcl_texcoord2 v5 // {TAG}: position in the car's space
     dcl_texcoord4 v6 // {TAG}: normal in the car's space
@@ -52,6 +57,9 @@ def finish_and_drops(clean):
     // --- highlight cut, clearcoat gloss share) on clean paint, and the rain (c176.z: share of cells with a drop,
     // --- c176.w: how far running drops slid; c177: cells per metre, drop height, running share, wet film).
     mov r20.w, {clean} // 1 where clean, less under dirt
+    mov r20.z, c72.w
+    mul_sat r20.z, r20.z, c194.x
+    mul r20.z, r20.z, r20.w // the clearcoat's share: clean, on a material with a specular of its own (c72.w from 0.05)
     add r8.xyz, c0.x, v1
     nrm r27.xyz, r8 // the surface's normal, bent by the drops below
     add r8.xyz, c0.x, v2
@@ -96,7 +104,7 @@ SPECULAR = f'''\
     mad r25.y, r23.z, c184.z, c184.w
     mul r25.y, r25.y, c187.y
     mul r25.y, r25.y, c175.x
-    mul r25.y, r25.y, r20.w
+    mul r25.y, r25.y, r20.z
     max r25.x, r25.x, r25.y // the clearcoat's where stronger
     mul r25.z, r20.x, c183.z
     max r25.x, r25.x, r25.z // a wet film
@@ -107,7 +115,7 @@ SPECULAR = f'''\
 GLOSS = f'''\
     rcp r25.x, r0.x // {TAG}: the paint's own gloss
     max r25.y, r25.x, c175.y
-    mul r25.z, r20.w, c176.y
+    mul r25.z, r20.z, c176.y
     lrp r26.x, r25.z, r25.y, r25.x // the clearcoat's floor on clean paint
     mul r25.w, r20.x, c184.x
     max r26.y, r26.x, r25.w // a wet film
@@ -146,7 +154,7 @@ def patch_ps(name, v):
     text = body(path)
     if TAG in text:
         sys.exit(f'{path} is patched already')
-    text = insert_after(text, r'def c100,', PS_DEFS, path)
+    text = insert_after(text, r'def c100,', PS_DEFS + PAINT_DEFS, path)
     text = insert_after(text, r'dcl_texcoord9 v9', PS_DCLS, path)
     # The finish and the drops right after the dirt, which leaves the albedo in r0 and the cleanliness behind
     lines = text.split('\n')

@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
-index 8e22fba1..d2801a10 100644
+index 8e22fba1..2faf3f95 100644
 --- a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
-@@ -55,12 +55,29 @@
+@@ -55,12 +55,30 @@
      def c3, -13.2877121, 128, 8, 4
      def c4, 32, 4, 1, 0.00392156886
      def c100, 10, 1, 0, 0
@@ -20,6 +20,7 @@ index 8e22fba1..d2801a10 100644
 +    def c191, 0.800000012, 0.150000006, 0.150000006, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
 +    def c192, 0.400000006, 0.300000012, 0.159999996, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
 +    def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
++    def c194, 20, 0, 0, 0 // FusionFix vehicle_paint.patch: the clearcoat in full from a material specular (matDiffuseColor2.w) of 0.05
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
@@ -32,7 +33,7 @@ index 8e22fba1..d2801a10 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -97,6 +114,236 @@
+@@ -97,6 +115,239 @@
      else
        mov r4.x, c1.x
      endif
@@ -40,6 +41,9 @@ index 8e22fba1..d2801a10 100644
 +    // --- highlight cut, clearcoat gloss share) on clean paint, and the rain (c176.z: share of cells with a drop,
 +    // --- c176.w: how far running drops slid; c177: cells per metre, drop height, running share, wet film).
 +    mov r20.w, r4.x // 1 where clean, less under dirt
++    mov r20.z, c72.w
++    mul_sat r20.z, r20.z, c194.x
++    mul r20.z, r20.z, r20.w // the clearcoat's share: clean, on a material with a specular of its own (c72.w from 0.05)
 +    add r8.xyz, c0.x, v1
 +    nrm r27.xyz, r8 // the surface's normal, bent by the drops below
 +    add r8.xyz, c0.x, v2
@@ -269,7 +273,7 @@ index 8e22fba1..d2801a10 100644
      mul r3.w, r3.x, r4.x
      mov r4.xyz, c1
      mul r4.z, r4.z, c78.x
-@@ -121,11 +368,14 @@
+@@ -121,11 +372,14 @@
      cmp r2.x, r2.x, r2.y, c3.x
      mul r2.x, r3.y, r2.x
      exp r2.x, r2.x
@@ -285,7 +289,7 @@ index 8e22fba1..d2801a10 100644
      mul r2.xyz, r1, c3.y
      frc r3.xyz, r2
      add r2.xyz, r2, -r3
-@@ -136,10 +386,27 @@
+@@ -136,10 +390,27 @@
      dp3 r0.z, r1, c4
      mul oC1.w, r0.z, c4.w
      mul oC1.xyz, r2, c2.x
@@ -294,7 +298,7 @@ index 8e22fba1..d2801a10 100644
 +    mad r25.y, r23.z, c184.z, c184.w
 +    mul r25.y, r25.y, c187.y
 +    mul r25.y, r25.y, c175.x
-+    mul r25.y, r25.y, r20.w
++    mul r25.y, r25.y, r20.z
 +    max r25.x, r25.x, r25.y // the clearcoat's where stronger
 +    mul r25.z, r20.x, c183.z
 +    max r25.x, r25.x, r25.z // a wet film
@@ -305,7 +309,7 @@ index 8e22fba1..d2801a10 100644
 -    rcp oC2.y, r0.x
 +    rcp r25.x, r0.x // FusionFix vehicle_paint.patch: the paint's own gloss
 +    max r25.y, r25.x, c175.y
-+    mul r25.z, r20.w, c176.y
++    mul r25.z, r20.z, c176.y
 +    lrp r26.x, r25.z, r25.y, r25.x // the clearcoat's floor on clean paint
 +    mul r25.w, r20.x, c184.x
 +    max r26.y, r26.x, r25.w // a wet film
@@ -370,10 +374,10 @@ index 45aef76b..6af4ae0c 100644
  
  // approximately 238 instruction slots used (8 texture, 230 arithmetic)
 diff --git a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
-index 992eb2bf..6bd62d02 100644
+index 992eb2bf..f172a5c9 100644
 --- a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
-@@ -55,11 +55,28 @@
+@@ -55,11 +55,29 @@
      def c3, -13.2877121, 128, 8, 4
      def c4, 32, 4, 1, 0.00392156886
      def c100, 10, 1, 0, 0
@@ -391,6 +395,7 @@ index 992eb2bf..6bd62d02 100644
 +    def c191, 0.800000012, 0.150000006, 0.150000006, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
 +    def c192, 0.400000006, 0.300000012, 0.159999996, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
 +    def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
++    def c194, 20, 0, 0, 0 // FusionFix vehicle_paint.patch: the clearcoat in full from a material specular (matDiffuseColor2.w) of 0.05
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
@@ -402,7 +407,7 @@ index 992eb2bf..6bd62d02 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -96,6 +113,236 @@
+@@ -96,6 +114,239 @@
      else
        mov r4.x, c1.x
      endif
@@ -410,6 +415,9 @@ index 992eb2bf..6bd62d02 100644
 +    // --- highlight cut, clearcoat gloss share) on clean paint, and the rain (c176.z: share of cells with a drop,
 +    // --- c176.w: how far running drops slid; c177: cells per metre, drop height, running share, wet film).
 +    mov r20.w, r4.x // 1 where clean, less under dirt
++    mov r20.z, c72.w
++    mul_sat r20.z, r20.z, c194.x
++    mul r20.z, r20.z, r20.w // the clearcoat's share: clean, on a material with a specular of its own (c72.w from 0.05)
 +    add r8.xyz, c0.x, v1
 +    nrm r27.xyz, r8 // the surface's normal, bent by the drops below
 +    add r8.xyz, c0.x, v2
@@ -639,7 +647,7 @@ index 992eb2bf..6bd62d02 100644
      mul r3.w, r3.x, r4.x
      mov r4.xyz, c1
      mul r4.z, r4.z, c78.x
-@@ -120,11 +367,14 @@
+@@ -120,11 +371,14 @@
      cmp r2.x, r2.x, r2.y, c3.x
      mul r2.x, r3.y, r2.x
      exp r2.x, r2.x
@@ -655,7 +663,7 @@ index 992eb2bf..6bd62d02 100644
      mul r2.xyz, r1, c3.y
      frc r3.xyz, r2
      add r2.xyz, r2, -r3
-@@ -135,10 +385,27 @@
+@@ -135,10 +389,27 @@
      dp3 r0.z, r1, c4
      mul oC1.w, r0.z, c4.w
      mul oC1.xyz, r2, c2.x
@@ -664,7 +672,7 @@ index 992eb2bf..6bd62d02 100644
 +    mad r25.y, r23.z, c184.z, c184.w
 +    mul r25.y, r25.y, c187.y
 +    mul r25.y, r25.y, c175.x
-+    mul r25.y, r25.y, r20.w
++    mul r25.y, r25.y, r20.z
 +    max r25.x, r25.x, r25.y // the clearcoat's where stronger
 +    mul r25.z, r20.x, c183.z
 +    max r25.x, r25.x, r25.z // a wet film
@@ -675,7 +683,7 @@ index 992eb2bf..6bd62d02 100644
 -    rcp oC2.y, r0.x
 +    rcp r25.x, r0.x // FusionFix vehicle_paint.patch: the paint's own gloss
 +    max r25.y, r25.x, c175.y
-+    mul r25.z, r20.w, c176.y
++    mul r25.z, r20.z, c176.y
 +    lrp r26.x, r25.z, r25.y, r25.x // the clearcoat's floor on clean paint
 +    mul r25.w, r20.x, c184.x
 +    max r26.y, r26.x, r25.w // a wet film
@@ -740,10 +748,10 @@ index cd862d20..0a1bed40 100644
  
  // approximately 237 instruction slots used (8 texture, 229 arithmetic)
 diff --git a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
-index 141b8ca2..0fa6dc6f 100644
+index 141b8ca2..587a7f55 100644
 --- a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
-@@ -57,11 +57,28 @@
+@@ -57,11 +57,29 @@
      def c3, -13.2877121, 128, 8, 4
      def c4, 32, 4, 1, 0.00392156886
      def c100, 10, 1, 0, 0
@@ -761,6 +769,7 @@ index 141b8ca2..0fa6dc6f 100644
 +    def c191, 0.800000012, 0.150000006, 0.150000006, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
 +    def c192, 0.400000006, 0.300000012, 0.159999996, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
 +    def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
++    def c194, 20, 0, 0, 0 // FusionFix vehicle_paint.patch: the clearcoat in full from a material specular (matDiffuseColor2.w) of 0.05
      dcl_texcoord v0
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
@@ -772,7 +781,7 @@ index 141b8ca2..0fa6dc6f 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -102,6 +119,236 @@
+@@ -102,6 +120,239 @@
      else
        mov r5.x, c1.x
      endif
@@ -780,6 +789,9 @@ index 141b8ca2..0fa6dc6f 100644
 +    // --- highlight cut, clearcoat gloss share) on clean paint, and the rain (c176.z: share of cells with a drop,
 +    // --- c176.w: how far running drops slid; c177: cells per metre, drop height, running share, wet film).
 +    mov r20.w, r5.x // 1 where clean, less under dirt
++    mov r20.z, c72.w
++    mul_sat r20.z, r20.z, c194.x
++    mul r20.z, r20.z, r20.w // the clearcoat's share: clean, on a material with a specular of its own (c72.w from 0.05)
 +    add r8.xyz, c0.x, v1
 +    nrm r27.xyz, r8 // the surface's normal, bent by the drops below
 +    add r8.xyz, c0.x, v2
@@ -1009,7 +1021,7 @@ index 141b8ca2..0fa6dc6f 100644
      mul r1.x, r4.x, r5.x
      mov r5.xyz, c1
      mul r1.w, r5.z, c78.x
-@@ -126,11 +373,14 @@
+@@ -126,11 +377,14 @@
      cmp r1.z, r1.z, r1.w, c3.x
      mul r1.y, r1.y, r1.z
      exp r1.y, r1.y
@@ -1025,7 +1037,7 @@ index 141b8ca2..0fa6dc6f 100644
      mul r2.xyz, r1, c3.y
      frc r3.xyz, r2
      add r2.xyz, r2, -r3
-@@ -141,10 +391,27 @@
+@@ -141,10 +395,27 @@
      dp3 r0.z, r1, c4
      mul oC1.w, r0.z, c4.w
      mul oC1.xyz, r2, c2.x
@@ -1034,7 +1046,7 @@ index 141b8ca2..0fa6dc6f 100644
 +    mad r25.y, r23.z, c184.z, c184.w
 +    mul r25.y, r25.y, c187.y
 +    mul r25.y, r25.y, c175.x
-+    mul r25.y, r25.y, r20.w
++    mul r25.y, r25.y, r20.z
 +    max r25.x, r25.x, r25.y // the clearcoat's where stronger
 +    mul r25.z, r20.x, c183.z
 +    max r25.x, r25.x, r25.z // a wet film
@@ -1045,7 +1057,7 @@ index 141b8ca2..0fa6dc6f 100644
 -    rcp oC2.y, r0.x
 +    rcp r25.x, r0.x // FusionFix vehicle_paint.patch: the paint's own gloss
 +    max r25.y, r25.x, c175.y
-+    mul r25.z, r20.w, c176.y
++    mul r25.z, r20.z, c176.y
 +    lrp r26.x, r25.z, r25.y, r25.x // the clearcoat's floor on clean paint
 +    mul r25.w, r20.x, c184.x
 +    max r26.y, r26.x, r25.w // a wet film
