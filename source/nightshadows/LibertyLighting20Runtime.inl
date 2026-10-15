@@ -634,7 +634,7 @@ namespace Lighting20
         // (group 0) and under wd (group 4): 3 opens 0x444C50 to props only under wd_local, 4 only under wd. 3 still
         // gave two shadows, 4 none: both from the wd_local draws, each prop drawn into both paraboloid halves of a
         // lamp's map. 5 and 6 are 3 into the first half (faces -x) or the second (+x) only, 7 into the half on the
-        // prop's side of the lamp only (its place against the lamp along x).
+        // prop's side of the lamp only (PropOneHalf, now on by default).
         static std::atomic<int> drawRoute{0};
         static std::atomic<uint32_t> routeSkips{0};
         // The rules above are for map lights: a car's own lights (headlights, rear lamps, sirens) shine low and are no
@@ -981,11 +981,13 @@ namespace Lighting20
             }
         }
 
-        // PropCacheLocal: the props go into a lamp's cache (no face command, so no half known) through list 2, which
-        // the lamp pass draws under wd (group 4, the sun's technique: a flat projection by gShadowMatrix and the sun's
-        // depth), and with PropDrawRoute 4 (only the wd draws) no prop had a shadow at all: what the caches held of
-        // them was no shadow, and the props shadowed from a lamp only once it took a slot (wd_local draws from Cast).
-        // Their draws in a lamp's map under wd are made under wd_local instead, the forced group swapped for the call.
+        // PropCacheLocal: the props go into a lamp's cache through list 2, which the lamp pass draws under wd (group 4,
+        // the sun's technique: a flat projection by gShadowMatrix and the sun's depth), and with PropDrawRoute 4 (only
+        // the wd draws) no prop had a shadow at all: what the caches held of them was no shadow, and the props shadowed
+        // from a lamp only once it took a slot (wd_local draws from Cast). Their draws into a cache's halves under wd
+        // are made under wd_local instead, the forced group swapped for the call. A cache is drawn by paraboloid
+        // halves as a slot is (three times over); before EntityClass knew a cache's halves the props went into both
+        // and had their shadows in wrong places.
         static bool cacheLocal = true;
         static std::atomic<uint32_t> cacheRegrouped{0};
 
@@ -999,9 +1001,7 @@ namespace Lighting20
         static int32_t Regroup() noexcept
         {
             auto& group = *reinterpret_cast<int32_t*>(game + 0xC6B308);
-            if (!cacheLocal || localTechnique < 0 || group != 4 || !InLampMap()) return -2;
-            float lamp[3];
-            if (EntityClass::CurrentLampFace(lamp) >= 0) return -2;
+            if (!cacheLocal || localTechnique < 0 || group != 4 || !EntityClass::CurrentLampCache() || !InLampMap()) return -2;
             const int32_t saved = group;
             group = localTechnique;
             ++cacheRegrouped;
@@ -1013,16 +1013,22 @@ namespace Lighting20
             if (saved != -2) *reinterpret_cast<int32_t*>(game + 0xC6B308) = saved;
         }
 
-        // PropDrawRoute 5-7: whether the half of the lamp's map being drawn is one the prop goes into
+        // PropOneHalf: a prop goes only into the paraboloid half of a lamp's map (a slot's or a cache's) on its side of
+        // the lamp, by its place against the lamp along x (the first half faces -x). Drawn into the other half too, a
+        // post had a second shadow from every light (PropDrawRoute 5 and 6 each left one of the two); the part of a
+        // post's arm reaching over the lamp casts no shadow on that side. PropDrawRoute 5 and 6 draw them into the
+        // first or the second half only, as a test.
+        static bool oneHalf = true;
+
         static bool RouteFace(const float* at) noexcept
         {
             const int route = drawRoute.load(std::memory_order_relaxed);
-            if (route < 5) return true;
+            if (!oneHalf && route < 5) return true;
             float lamp[3];
             const int face = EntityClass::CurrentLampFace(lamp);
             if (face < 0) return true;
-            if (route == 7) return face == (at[0] < lamp[0] ? 0 : 1);
-            return face == route - 5;
+            if (route == 5 || route == 6) return face == route - 5;
+            return face == (at[0] < lamp[0] ? 0 : 1);
         }
 
         // A prop's draw by another command than the fragment type one (0x8DD0B0): a lamp post touched by a car goes
@@ -1504,6 +1510,7 @@ namespace Lighting20
             verdictsOn = ini.ReadInteger("NIGHTSHADOWS", "PropRenderVerdicts", 1) != 0;
             cacheProps = ini.ReadInteger("NIGHTSHADOWS", "PropsInCaches", 1) != 0;
             cacheLocal = ini.ReadInteger("NIGHTSHADOWS", "PropCacheLocal", 1) != 0;
+            oneHalf = ini.ReadInteger("NIGHTSHADOWS", "PropOneHalf", 1) != 0;
             const auto readRoute = [](CIniReader& reader)
             {
                 drawRoute.store(std::clamp(reader.ReadInteger("NIGHTSHADOWS", "PropDrawRoute", 0), 0, 7), std::memory_order_relaxed);

@@ -45,8 +45,9 @@ import temporal;
 // LampShadowFaceCulling ([PERFORMANCE]): the lamps' shadow maps (SHADOW_MAP_COLOUR_POINT) are dual paraboloid: one
 // tile a lamp, the half facing one way written to red and the other to green (CSetColorWrite 1 and 2), and every
 // entity of the lamp is drawn into both. The slot render (0xd77a00, mode 4) makes a face command (0xd77930, face at
-// +0x10) before each half; as it is made, the slot's position (+0xc0) and the halves' axis (the third row of its
-// matrix at +0x40, world +x) go into a ring here, its index into the command's spare bytes +0x16/+0x17. On the render
+// +0x10) before each half, and so does a static cache's render (mode 3, three times over); as it is made, the slot's
+// position (+0xc0) and the halves' axis (the third row of its matrix at +0x40, world +x) go into a ring here, its
+// index into the command's spare bytes +0x16/+0x17. On the render
 // thread that command's execute says which half and lamp the next draws are for, until CSetColorWrite 0xf. An entity
 // or fragment type draw whose bounding sphere lies wholly on the other side of the plane through the lamp across the
 // axis is left out. The first half (red, face 0) faces -x and the second +x: the other way round dropped props'
@@ -80,6 +81,9 @@ export namespace EntityClass
     // The lamp half being drawn on the render thread (0 or 1, -1 for none) and its slot's position, for other features'
     // traces (PropTrace in nightshadows).
     int CurrentLampFace(float position[3]);
+
+    // Whether the lamp half being drawn is one of a static cache's (slot mode 3) rather than a dynamic slot's
+    bool CurrentLampCache();
 
     // On the render thread, inside the hooks of a draw: which command it is (0 entity, 1 fragment, 2 fragment type,
     // 3 skinned, 4 ped; -1 outside a draw), its model index and, where the command keeps it, its position (else 0s).
@@ -286,6 +290,7 @@ namespace
     {
         float position[3];
         float axis[3];
+        bool cache;
     };
     FaceOrigin faceOrigins[256]{};
     uint8_t nextFaceOrigin = 0;
@@ -295,6 +300,7 @@ namespace
     DrawExecute faceExecute = nullptr;
     DrawExecute colorWriteExecute = nullptr;
     bool bFaceHooks = false;
+    bool bCacheFaces = false;
     int currentFace = -1;
     FaceOrigin currentOrigin{};
 
@@ -313,6 +319,7 @@ namespace
         auto& origin = faceOrigins[nextFaceOrigin];
         std::memcpy(origin.position, reinterpret_cast<const float*>(slot + 0xc0), sizeof(origin.position));
         std::memcpy(origin.axis, reinterpret_cast<const float*>(slot + 0x60), sizeof(origin.axis));
+        origin.cache = *reinterpret_cast<const int32_t*>(slot + 0xfc) == 3;
         auto* bytes = reinterpret_cast<uint8_t*>(dc);
         bytes[kFaceOriginByte] = nextFaceOrigin++;
         bytes[kFaceMarkByte] = kFaceMark;
@@ -561,12 +568,27 @@ namespace
                 auto** colorWriteVtable = *reinterpret_cast<void***>(colorWriteCtor + 0x26);
                 static auto face0Hook = safetyhook::create_mid(face0.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp); });
                 static auto face1Hook = safetyhook::create_mid(face1.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp); });
+                // A static cache (mode 3) is drawn by halves too, three times over (0xd77ac3 loop), its face commands
+                // made with the other half's argument at -1: mov dword ptr [esp+34h] / [esp+30h], -1 before the call
+                auto cache0 = hook::pattern("C7 44 24 34 FF FF FF FF E8 ? ? ? ? EB 02 33 C0 50 E8");
+                auto cache1 = hook::pattern("C7 44 24 30 FF FF FF FF E8 ? ? ? ? EB 02 33 C0 50 E8");
+                const auto local = [&](hook::pattern& p)
+                {
+                    return !p.empty() && p.size() == 1 && callTarget(p.get_first<uint8_t>(8)) == faceCtor &&
+                        std::abs(p.get_first<uint8_t>(0) - site) < 0x1000;
+                };
+                if (local(cache0) && local(cache1))
+                {
+                    static auto cache0Hook = safetyhook::create_mid(cache0.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp); });
+                    static auto cache1Hook = safetyhook::create_mid(cache1.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp); });
+                    bCacheFaces = true;
+                }
                 faceExecute = reinterpret_cast<DrawExecute>(faceVtable[1]);
                 injector::WriteMemory(&faceVtable[1], reinterpret_cast<void*>(&FaceExecute), true);
                 colorWriteExecute = reinterpret_cast<DrawExecute>(colorWriteVtable[1]);
                 injector::WriteMemory(&colorWriteVtable[1], reinterpret_cast<void*>(&ColorWriteExecute), true);
                 bFaceHooks = true;
-                status = "in place";
+                status = bCacheFaces ? "in place, caches too" : "in place, caches not found";
             }
         }
         FusionLog::Write("EntityClass", "Settings", "the lamps' paraboloid halves: %s\n", status);
@@ -667,6 +689,11 @@ namespace EntityClass
     int CurrentLampFace(float position[3])
     {
         return LampFace(position);
+    }
+
+    bool CurrentLampCache()
+    {
+        return currentFace >= 0 && currentOrigin.cache;
     }
 
     int CurrentDraw(uint16_t& model, float place[3])
