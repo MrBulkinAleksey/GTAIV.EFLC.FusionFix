@@ -1,0 +1,87 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index 99577afb..8089519c 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -51,6 +51,7 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.6624670822e-44 // 19
++    def c114, -198, -199, 1, 0 // FusionFix: local_light_with_shadow_size_fade.patch: the marker's band, one, zero
+     def c0, 0.50999999, 512, 0.25, 256
+     def c1, 0.998046875, 7.984375, 63.875, -127.999992
+     def c2, 9.99999975e-006, 1, -0.100000001, 1.11111116
+@@ -284,6 +285,16 @@
+       
+       dp4 r0.x, r25, -c110.x
+     endif
++    // --- FusionFix: local_light_with_shadow_size_fade.patch (Liberty's Shadows 2.0.4, OnyxOak): a lamp kept past the game's
++    // --- size limit has its map's shadow param x set to -198 - s (s from 1 to 0 as it gets smaller on screen), its shadow fades to none
++    mov r30.w, c76.x
++    add r30.x, c114.x, -r30.w
++    add r30.y, r30.w, -c114.y
++    cmp r30.z, r30.x, c114.z, c114.w
++    cmp r30.y, r30.y, c114.z, c114.w
++    mul r30.y, r30.y, r30.z
++    lrp r29.x, r30.y, r30.x, c114.z
++    lrp r0.x, r29.x, r0.x, c114.z
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     dp3 r0.y, r2, r2
+     mov r12.w, r0.y // FusionFix GGX lights: the distance to the light squared
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+index 1b8e33e9..62b8e899 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+@@ -47,6 +47,7 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.8025969286e-44 // 20
++    def c114, -198, -199, 1, 0 // FusionFix: local_light_with_shadow_size_fade.patch: the marker's band, one, zero
+     def c0, 0.50999999, 2, -0.999989986, 9.99999975e-006
+     def c1, 1, -0.333333343, 1.5, 0.100000001
+     def c2, 1, 0, 0.5, -0.5
+@@ -292,6 +293,16 @@
+       
+       dp4 r0.w, r25, -c110.x
+     endif
++    // --- FusionFix: local_light_with_shadow_size_fade.patch (Liberty's Shadows 2.0.4, OnyxOak): a lamp kept past the game's
++    // --- size limit has its map's shadow param x set to -198 - s (s from 1 to 0 as it gets smaller on screen), its shadow fades to none
++    mov r30.w, c76.x
++    add r30.x, c114.x, -r30.w
++    add r30.y, r30.w, -c114.y
++    cmp r30.z, r30.x, c114.z, c114.w
++    cmp r30.y, r30.y, c114.z, c114.w
++    mul r30.y, r30.y, r30.z
++    lrp r29.x, r30.y, r30.x, c114.z
++    lrp r0.w, r29.x, r0.w, c114.z
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     add r2.xyz, r1, c0.w
+     dp3 r1.x, r1, r1
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index fbc00985..3ac3ec07 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -55,6 +55,7 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 3.0828566215e-44 // 22
++    def c114, -198, -199, 1, 0 // FusionFix: local_light_with_shadow_size_fade.patch: the marker's band, one, zero
+     def c0, 0.50999999, 512, 2, -0.999989986
+     def c1, 1, 0.5, 0, 9.99999975e-006
+     def c2, -0.100000001, 1.11111116, 0.100000001, 0.75
+@@ -364,6 +365,16 @@
+       
+       dp4 r1.x, r25, -c110.x
+     endif
++    // --- FusionFix: local_light_with_shadow_size_fade.patch (Liberty's Shadows 2.0.4, OnyxOak): a lamp kept past the game's
++    // --- size limit has its map's shadow param x set to -198 - s (s from 1 to 0 as it gets smaller on screen), its shadow fades to none
++    mov r30.w, c76.x
++    add r30.x, c114.x, -r30.w
++    add r30.y, r30.w, -c114.y
++    cmp r30.z, r30.x, c114.z, c114.w
++    cmp r30.y, r30.y, c114.z, c114.w
++    mul r30.y, r30.y, r30.z
++    lrp r29.x, r30.y, r30.x, c114.z
++    lrp r1.x, r29.x, r1.x, c114.z
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     mul r0.xyz, r0, r1.x
+     cmp r0.xyz, r0.w, r0, c1.z

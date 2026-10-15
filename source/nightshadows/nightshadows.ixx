@@ -27,6 +27,7 @@ module;
 #include "ShadowInactiveSlots.hpp"
 #include "ShadowViewPriority.hpp"
 #include "VisibleReceiverRanking133.hpp"
+#include "IndoorShadowBubble212.hpp"
 #include "ShadowDrivingFocus.hpp"
 #include "ShadowLookupValidation.hpp"
 #include "ShadowTrace34.hpp"
@@ -69,6 +70,7 @@ static float fTailLightShadowDistance = 25.0f;
 #include "BeamTraceRuntime.inl"
 #include "HeadlightEnhancementRuntime.inl"
 #include "LampShadowSizeGateRuntime.inl"
+#include "ModelReferenceQueueRuntime.inl"
 
 // Queried for every light on every frame; a lookup by name scans the whole preference table.
 static int32_t ShadowReachStep(bool headlight)
@@ -541,6 +543,8 @@ public:
             {
                 PlayerCar::driverOffset = 0xF50;
                 BeamTrace::enabled = true;
+                // Always: the game's model reference buffers overflow with our extra shadow draws.
+                ModelReferenceQueue::Install();
                 HeadlightEnhancement::log.Name("Headlights", "Status");
                 HeadlightEnhancement::brightnessInstalled = HeadlightEnhancement::InstallBrightness(
                     iniReader.ReadInteger("HEADLIGHTS", "ConsistentBrightness", 0) != 0,
@@ -585,7 +589,10 @@ public:
                 EmergencyTrafficShadows::Install(static_cast<unsigned>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "TrafficSignalShadows", 2), 0, 7)),
                     iniReader.ReadInteger("NIGHTSHADOWS", "EmergencyLightShadows", 1) != 0,
                     iniReader.ReadFloat("NIGHTSHADOWS", "TrafficSignalIntensity", 1.05f));
-                LampShadowSizeGate::Install(iniReader.ReadFloat("NIGHTSHADOWS", "LampShadowSizeReach", 1.3f));
+                LampShadowSizeGate::Install(iniReader.ReadFloat("NIGHTSHADOWS", "LampShadowSizeReach", 1.3f),
+                    iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowRetention", 0) != 0,
+                    iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowFade", 0) != 0,
+                    iniReader.ReadInteger("NIGHTSHADOWS", "IndoorShadowBubble", 0) != 0);
                 // Liberty's Shadows 2.0: dual headlights, tail lights, world lights, buildings in dynamic maps.
                 // Each family is switched in the graphics menu; its hooks stay in place.
                 Lighting20::Install(iniReader);

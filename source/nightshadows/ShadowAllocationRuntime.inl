@@ -30,7 +30,7 @@ namespace PlayerShadowAllocation
     static SafetyHookMid collectHook, finalizeHook, lampDistanceHook, compareResultHook, cacheResultHook;
     static bool nativeLampPriority=false;
     static bool visibleReceiverRanking=false;
-    static std::atomic<uint32_t> receiverRanked{0};
+    static std::atomic<uint32_t> receiverRanked{0}, indoorRanked{0};
     static std::atomic<uint32_t> lampDistanceAdjusted{0};
     static std::atomic<uint32_t> cacheDependencyChecks{0}, cacheDependencyRedirected{0}, cacheDependencyDeferred{0}, cacheDependencyRejected{0};
     static std::atomic<uint32_t> continuityComparisons{0}, continuityOverrides{0}, continuityRejected{0};
@@ -632,6 +632,17 @@ namespace PlayerShadowAllocation
         float adjusted=fusionfix::shadows::NativeLampPriorityDistance(original,
             distanceSquared,effectiveWeight,reach,retained);
         if(receiverBenefit>0) { adjusted=fusionfix::shadows::VisibleReceiverNativeDistance133(adjusted,receiverBenefit); ++receiverRanked; }
+        // IndoorShadowBubble (Liberty's Shadows 2.0.4): on foot, a lamp of the room around you within
+        // 35 ft ranks by how much it shows: its light in view, its size on screen, its brightness.
+        if(LampShadowSizeGate::indoorBubble && !state.occupiedCar && light.mInteriorIndex>0 && light.mRoomIndex>0 &&
+           (light.mType==rage::LT_POINT || light.mType==rage::LT_SPOT)) {
+            const float bubble=fusionfix::shadows::IndoorBubbleStrength212(state.player,position);
+            if(bubble>0) {
+                const float consequence=fusionfix::shadows::IndoorBubbleConsequence212(state.view,position,direction,
+                    light.mRadius,light.mIntensity,{light.mColor.x,light.mColor.y,light.mColor.z},light.mType==rage::LT_SPOT);
+                if(consequence>=0) { adjusted=fusionfix::shadows::IndoorBubbleNativeDistance212(adjusted,consequence,bubble); ++indoorRanked; }
+            }
+        }
         // Driving, rank a visible lamp by how close the car is about to be, so
         // the lamps over the traffic ahead take their slots before it is near.
         if(casterPriority && state.occupiedCar && std::isfinite(distanceSquared) && distanceSquared>1.0f) {
