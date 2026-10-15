@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
-index 8e22fba1..31151ef7 100644
+index 8e22fba1..9410884a 100644
 --- a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
 @@ -55,12 +55,25 @@
@@ -143,26 +143,26 @@ index 8e22fba1..31151ef7 100644
 +      mul r24.y, r11.z, r9.w
 +      mul r10.w, r10.w, r9.w
 +      max r24.x, r24.x, r10.w
-+      // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
-+      // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
-+      mul r8.w, r24.x, c177.y
-+      dsx r9.xyz, v2
-+      dsy r10.xyz, v2
-+      crs r11.xyz, r10, r27
-+      crs r12.xyz, r27, r9
-+      dp3 r13.x, r9, r11
-+      dsx r13.y, r8.w
-+      dsy r13.z, r8.w
-+      mul r14.xyz, r11, r13.y
-+      mad r14.xyz, r12, r13.z, r14
-+      cmp r13.w, r13.x, c187.w, -c187.w
-+      mul r14.xyz, r14, r13.w
-+      mad r14.xyz, r27, r13_abs.x, r14
-+      nrm r27.xyz, r14
 +      mul r8.x, r24.x, c183.y
 +      add r8.x, -r8.x, c187.w
 +      mul r0.xyz, r0, r8.x // a little darker under drops
 +    endif
++    // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
++    // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
++    mul r8.w, r24.x, c177.y
++    dsx r9.xyz, v2
++    dsy r10.xyz, v2
++    crs r11.xyz, r10, r27
++    crs r12.xyz, r27, r9
++    dp3 r13.x, r9, r11
++    dsx r13.y, r8.w
++    dsy r13.z, r8.w
++    mul r14.xyz, r11, r13.y
++    mad r14.xyz, r12, r13.z, r14
++    cmp r13.w, r13.x, c187.w, -c187.w
++    mul r14.xyz, r14, r13.w
++    mad r14.xyz, r27, r13_abs.x, r14
++    nrm r27.xyz, r14
      mul r3.w, r3.x, r4.x
      mov r4.xyz, c1
      mul r4.z, r4.z, c78.x
@@ -267,7 +267,7 @@ index 45aef76b..6af4ae0c 100644
  
  // approximately 238 instruction slots used (8 texture, 230 arithmetic)
 diff --git a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
-index 992eb2bf..88691458 100644
+index 992eb2bf..2213cdb0 100644
 --- a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
 @@ -55,11 +55,24 @@
@@ -410,26 +410,26 @@ index 992eb2bf..88691458 100644
 +      mul r24.y, r11.z, r9.w
 +      mul r10.w, r10.w, r9.w
 +      max r24.x, r24.x, r10.w
-+      // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
-+      // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
-+      mul r8.w, r24.x, c177.y
-+      dsx r9.xyz, v2
-+      dsy r10.xyz, v2
-+      crs r11.xyz, r10, r27
-+      crs r12.xyz, r27, r9
-+      dp3 r13.x, r9, r11
-+      dsx r13.y, r8.w
-+      dsy r13.z, r8.w
-+      mul r14.xyz, r11, r13.y
-+      mad r14.xyz, r12, r13.z, r14
-+      cmp r13.w, r13.x, c187.w, -c187.w
-+      mul r14.xyz, r14, r13.w
-+      mad r14.xyz, r27, r13_abs.x, r14
-+      nrm r27.xyz, r14
 +      mul r8.x, r24.x, c183.y
 +      add r8.x, -r8.x, c187.w
 +      mul r0.xyz, r0, r8.x // a little darker under drops
 +    endif
++    // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
++    // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
++    mul r8.w, r24.x, c177.y
++    dsx r9.xyz, v2
++    dsy r10.xyz, v2
++    crs r11.xyz, r10, r27
++    crs r12.xyz, r27, r9
++    dp3 r13.x, r9, r11
++    dsx r13.y, r8.w
++    dsy r13.z, r8.w
++    mul r14.xyz, r11, r13.y
++    mad r14.xyz, r12, r13.z, r14
++    cmp r13.w, r13.x, c187.w, -c187.w
++    mul r14.xyz, r14, r13.w
++    mad r14.xyz, r27, r13_abs.x, r14
++    nrm r27.xyz, r14
      mul r3.w, r3.x, r4.x
      mov r4.xyz, c1
      mul r4.z, r4.z, c78.x
@@ -534,7 +534,7 @@ index cd862d20..0a1bed40 100644
  
  // approximately 237 instruction slots used (8 texture, 229 arithmetic)
 diff --git a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
-index 141b8ca2..1db1d1fe 100644
+index 141b8ca2..b6af22d6 100644
 --- a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
 @@ -57,11 +57,24 @@
@@ -677,26 +677,26 @@ index 141b8ca2..1db1d1fe 100644
 +      mul r24.y, r11.z, r9.w
 +      mul r10.w, r10.w, r9.w
 +      max r24.x, r24.x, r10.w
-+      // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
-+      // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
-+      mul r8.w, r24.x, c177.y
-+      dsx r9.xyz, v2
-+      dsy r10.xyz, v2
-+      crs r11.xyz, r10, r27
-+      crs r12.xyz, r27, r9
-+      dp3 r13.x, r9, r11
-+      dsx r13.y, r8.w
-+      dsy r13.z, r8.w
-+      mul r14.xyz, r11, r13.y
-+      mad r14.xyz, r12, r13.z, r14
-+      cmp r13.w, r13.x, c187.w, -c187.w
-+      mul r14.xyz, r14, r13.w
-+      mad r14.xyz, r27, r13_abs.x, r14
-+      nrm r27.xyz, r14
 +      mul r8.x, r24.x, c183.y
 +      add r8.x, -r8.x, c187.w
 +      mul r0.xyz, r0, r8.x // a little darker under drops
 +    endif
++    // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
++    // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
++    mul r8.w, r24.x, c177.y
++    dsx r9.xyz, v2
++    dsy r10.xyz, v2
++    crs r11.xyz, r10, r27
++    crs r12.xyz, r27, r9
++    dp3 r13.x, r9, r11
++    dsx r13.y, r8.w
++    dsy r13.z, r8.w
++    mul r14.xyz, r11, r13.y
++    mad r14.xyz, r12, r13.z, r14
++    cmp r13.w, r13.x, c187.w, -c187.w
++    mul r14.xyz, r14, r13.w
++    mad r14.xyz, r27, r13_abs.x, r14
++    nrm r27.xyz, r14
      mul r1.x, r4.x, r5.x
      mov r5.xyz, c1
      mul r1.w, r5.z, c78.x

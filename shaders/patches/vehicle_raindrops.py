@@ -44,8 +44,8 @@ def hash3(src, dst, tmp):
 
 
 def drops(pos, nrm, up):
-    """Expects r27.xyz = the surface's unit normal (world space), v2 = the camera minus the position and r8.x = c176.z;
-    leaves the drops in r24.x, the trails in r24.y and the bent normal in r27.xyz. Uses r8-r18."""
+    """Expects r8.x = c176.z; leaves the drops in r24.x and the trails in r24.y. Uses r8-r18. May sit in a dynamic
+    branch: the normal is bent by drops_bend() after it, outside any, as ps_3_0 takes no dsx/dsy of r# in one."""
     return f'''\
       // The surface's frame in the car's space: up along it (world up, or the car's x on flat tops) and across
       mov r10.xyz, {nrm}
@@ -112,20 +112,28 @@ def drops(pos, nrm, up):
       mul r24.y, r11.z, r9.w
       mul r10.w, r10.w, r9.w
       max r24.x, r24.x, r10.w
-      // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
-      // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
-      mul r8.w, r24.x, c177.y
-      dsx r9.xyz, v2
-      dsy r10.xyz, v2
-      crs r11.xyz, r10, r27
-      crs r12.xyz, r27, r9
-      dp3 r13.x, r9, r11
-      dsx r13.y, r8.w
-      dsy r13.z, r8.w
-      mul r14.xyz, r11, r13.y
-      mad r14.xyz, r12, r13.z, r14
-      cmp r13.w, r13.x, c187.w, -c187.w
-      mul r14.xyz, r14, r13.w
-      mad r14.xyz, r27, r13_abs.x, r14
-      nrm r27.xyz, r14
+'''
+
+
+def drops_bend():
+    """Expects r27.xyz = the surface's unit normal (world space), v2 = the camera minus the position and r24.x the
+    drops (zero where drops() did not run); leaves the bent normal in r27.xyz. Uses r8.w, r9-r14. Outside any dynamic
+    branch, for the derivatives."""
+    return f'''\
+    // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
+    // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
+    mul r8.w, r24.x, c177.y
+    dsx r9.xyz, v2
+    dsy r10.xyz, v2
+    crs r11.xyz, r10, r27
+    crs r12.xyz, r27, r9
+    dp3 r13.x, r9, r11
+    dsx r13.y, r8.w
+    dsy r13.z, r8.w
+    mul r14.xyz, r11, r13.y
+    mad r14.xyz, r12, r13.z, r14
+    cmp r13.w, r13.x, c187.w, -c187.w
+    mul r14.xyz, r14, r13.w
+    mad r14.xyz, r27, r13_abs.x, r14
+    nrm r27.xyz, r14
 '''

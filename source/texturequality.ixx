@@ -405,13 +405,13 @@ private:
         if (FAILED(tex->GetLevelDesc(0, &desc)))
             return 0.0f;
         const UINT levels = tex->GetLevelCount();
-        const UINT small = (std::min)(desc.Width, desc.Height);
-        if (small < 32 || (std::max)(desc.Width, desc.Height) > 2 * small)
+        const UINT shortSide = (std::min)(desc.Width, desc.Height);
+        if (shortSide < 32 || (std::max)(desc.Width, desc.Height) > 2 * shortSide)
             return 0.0f;
         auto msb = [](UINT v) { UINT n = 0; while (v >>= 1) ++n; return n; };
-        const UINT coarse = (std::min)(msb(small) - 2, levels - 1);
-        const UINT fine = (std::min)(msb(small) - 4, levels - 1);
-        if ((small >> coarse) > 16)
+        const UINT coarse = (std::min)(msb(shortSide) - 2, levels - 1);
+        const UINT fine = (std::min)(msb(shortSide) - 4, levels - 1);
+        if ((shortSide >> coarse) > 16)
             return 0.0f; // no mips to look at
         std::vector<float> rgb;
         UINT w = 0, h = 0;

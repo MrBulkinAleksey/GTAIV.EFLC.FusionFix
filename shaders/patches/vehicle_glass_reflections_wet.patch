@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 5de051e3..49a1fc14 100644
+index 5de051e3..e5e4b578 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 @@ -167,8 +167,19 @@
@@ -42,7 +42,7 @@ index 5de051e3..49a1fc14 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -428,6 +444,141 @@
+@@ -428,6 +444,145 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
@@ -50,9 +50,10 @@ index 5de051e3..49a1fc14 100644
 +    // Rain drops: r28 takes the scene they show and how much they cover, r30 the normal they bend
 +    mov r28, c185.w
 +    mov r30.xyz, r2
++    mov r24, c185.w
++    mov r27.xyz, r2
 +    mov r8.x, c176.z
 +    if_lt c185.w, r8.x
-+      mov r27.xyz, r2
 +      // The surface's frame in the car's space: up along it (world up, or the car's x on flat tops) and across
 +      mov r10.xyz, v7
 +      mov r11.xyz, v8
@@ -139,22 +140,25 @@ index 5de051e3..49a1fc14 100644
 +      mul r24.y, r11.z, r9.w
 +      mul r10.w, r10.w, r9.w
 +      max r24.x, r24.x, r10.w
-+      // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
-+      // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
-+      mul r8.w, r24.x, c177.y
-+      dsx r9.xyz, v2
-+      dsy r10.xyz, v2
-+      crs r11.xyz, r10, r27
-+      crs r12.xyz, r27, r9
-+      dp3 r13.x, r9, r11
-+      dsx r13.y, r8.w
-+      dsy r13.z, r8.w
-+      mul r14.xyz, r11, r13.y
-+      mad r14.xyz, r12, r13.z, r14
-+      cmp r13.w, r13.x, c187.w, -c187.w
-+      mul r14.xyz, r14, r13.w
-+      mad r14.xyz, r27, r13_abs.x, r14
-+      nrm r27.xyz, r14
++    endif
++    // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
++    // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
++    mul r8.w, r24.x, c177.y
++    dsx r9.xyz, v2
++    dsy r10.xyz, v2
++    crs r11.xyz, r10, r27
++    crs r12.xyz, r27, r9
++    dp3 r13.x, r9, r11
++    dsx r13.y, r8.w
++    dsy r13.z, r8.w
++    mul r14.xyz, r11, r13.y
++    mad r14.xyz, r12, r13.z, r14
++    cmp r13.w, r13.x, c187.w, -c187.w
++    mul r14.xyz, r14, r13.w
++    mad r14.xyz, r27, r13_abs.x, r14
++    nrm r27.xyz, r14
++    mov r8.x, c176.z
++    if_lt c185.w, r8.x
 +      mov r30.xyz, r27
 +      add r9.xyz, r27, -r2
 +      mov r10, c160
@@ -184,7 +188,7 @@ index 5de051e3..49a1fc14 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -793,6 +944,7 @@
+@@ -793,6 +948,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -192,7 +196,7 @@ index 5de051e3..49a1fc14 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -917,6 +1069,32 @@
+@@ -917,6 +1073,32 @@
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0
@@ -226,7 +230,7 @@ index 5de051e3..49a1fc14 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 317652ff..02d6c80d 100644
+index 317652ff..9690eda8 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 @@ -118,8 +118,19 @@
@@ -269,7 +273,7 @@ index 317652ff..02d6c80d 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -378,6 +394,141 @@
+@@ -378,6 +394,145 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
@@ -277,9 +281,10 @@ index 317652ff..02d6c80d 100644
 +    // Rain drops: r28 takes the scene they show and how much they cover, r30 the normal they bend
 +    mov r28, c185.w
 +    mov r30.xyz, r2
++    mov r24, c185.w
++    mov r27.xyz, r2
 +    mov r8.x, c176.z
 +    if_lt c185.w, r8.x
-+      mov r27.xyz, r2
 +      // The surface's frame in the car's space: up along it (world up, or the car's x on flat tops) and across
 +      mov r10.xyz, v7
 +      mov r11.xyz, v8
@@ -366,22 +371,25 @@ index 317652ff..02d6c80d 100644
 +      mul r24.y, r11.z, r9.w
 +      mul r10.w, r10.w, r9.w
 +      max r24.x, r24.x, r10.w
-+      // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
-+      // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
-+      mul r8.w, r24.x, c177.y
-+      dsx r9.xyz, v2
-+      dsy r10.xyz, v2
-+      crs r11.xyz, r10, r27
-+      crs r12.xyz, r27, r9
-+      dp3 r13.x, r9, r11
-+      dsx r13.y, r8.w
-+      dsy r13.z, r8.w
-+      mul r14.xyz, r11, r13.y
-+      mad r14.xyz, r12, r13.z, r14
-+      cmp r13.w, r13.x, c187.w, -c187.w
-+      mul r14.xyz, r14, r13.w
-+      mad r14.xyz, r27, r13_abs.x, r14
-+      nrm r27.xyz, r14
++    endif
++    // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
++    // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
++    mul r8.w, r24.x, c177.y
++    dsx r9.xyz, v2
++    dsy r10.xyz, v2
++    crs r11.xyz, r10, r27
++    crs r12.xyz, r27, r9
++    dp3 r13.x, r9, r11
++    dsx r13.y, r8.w
++    dsy r13.z, r8.w
++    mul r14.xyz, r11, r13.y
++    mad r14.xyz, r12, r13.z, r14
++    cmp r13.w, r13.x, c187.w, -c187.w
++    mul r14.xyz, r14, r13.w
++    mad r14.xyz, r27, r13_abs.x, r14
++    nrm r27.xyz, r14
++    mov r8.x, c176.z
++    if_lt c185.w, r8.x
 +      mov r30.xyz, r27
 +      add r9.xyz, r27, -r2
 +      mov r10, c160
@@ -411,7 +419,7 @@ index 317652ff..02d6c80d 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -743,6 +894,7 @@
+@@ -743,6 +898,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -419,7 +427,7 @@ index 317652ff..02d6c80d 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r2.yzw, r6.xxyz, r3.x
      mul r2.yzw, r1.w, r2
-@@ -765,6 +917,32 @@
+@@ -765,6 +921,32 @@
      cmp r1.w, r1.w, r2.w, c5.w
      mad r0.yzw, r2.xxyz, r1.w, r0
      mad r0.yzw, r1.xxyz, r1.w, r0
@@ -453,7 +461,7 @@ index 317652ff..02d6c80d 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 5aac5d8b..036dddcb 100644
+index 5aac5d8b..192e698a 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 @@ -143,8 +143,19 @@
@@ -496,7 +504,7 @@ index 5aac5d8b..036dddcb 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -404,6 +420,141 @@
+@@ -404,6 +420,145 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
@@ -504,9 +512,10 @@ index 5aac5d8b..036dddcb 100644
 +    // Rain drops: r28 takes the scene they show and how much they cover, r30 the normal they bend
 +    mov r28, c185.w
 +    mov r30.xyz, r2
++    mov r24, c185.w
++    mov r27.xyz, r2
 +    mov r8.x, c176.z
 +    if_lt c185.w, r8.x
-+      mov r27.xyz, r2
 +      // The surface's frame in the car's space: up along it (world up, or the car's x on flat tops) and across
 +      mov r10.xyz, v7
 +      mov r11.xyz, v8
@@ -593,22 +602,25 @@ index 5aac5d8b..036dddcb 100644
 +      mul r24.y, r11.z, r9.w
 +      mul r10.w, r10.w, r9.w
 +      max r24.x, r24.x, r10.w
-+      // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
-+      // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
-+      mul r8.w, r24.x, c177.y
-+      dsx r9.xyz, v2
-+      dsy r10.xyz, v2
-+      crs r11.xyz, r10, r27
-+      crs r12.xyz, r27, r9
-+      dp3 r13.x, r9, r11
-+      dsx r13.y, r8.w
-+      dsy r13.z, r8.w
-+      mul r14.xyz, r11, r13.y
-+      mad r14.xyz, r12, r13.z, r14
-+      cmp r13.w, r13.x, c187.w, -c187.w
-+      mul r14.xyz, r14, r13.w
-+      mad r14.xyz, r27, r13_abs.x, r14
-+      nrm r27.xyz, r14
++    endif
++    // The drops' height (c177.y metres) bends the normal: Mikkelsen's surface gradient, from the derivatives of
++    // the position (v2 is the camera minus it, which flips the gradient's sign and so its sum below)
++    mul r8.w, r24.x, c177.y
++    dsx r9.xyz, v2
++    dsy r10.xyz, v2
++    crs r11.xyz, r10, r27
++    crs r12.xyz, r27, r9
++    dp3 r13.x, r9, r11
++    dsx r13.y, r8.w
++    dsy r13.z, r8.w
++    mul r14.xyz, r11, r13.y
++    mad r14.xyz, r12, r13.z, r14
++    cmp r13.w, r13.x, c187.w, -c187.w
++    mul r14.xyz, r14, r13.w
++    mad r14.xyz, r27, r13_abs.x, r14
++    nrm r27.xyz, r14
++    mov r8.x, c176.z
++    if_lt c185.w, r8.x
 +      mov r30.xyz, r27
 +      add r9.xyz, r27, -r2
 +      mov r10, c160
@@ -638,7 +650,7 @@ index 5aac5d8b..036dddcb 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -769,6 +920,7 @@
+@@ -769,6 +924,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -646,7 +658,7 @@ index 5aac5d8b..036dddcb 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -842,6 +994,32 @@
+@@ -842,6 +998,32 @@
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0

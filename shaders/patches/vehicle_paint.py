@@ -24,7 +24,7 @@ import re
 import sys
 from pathlib import Path
 
-from vehicle_raindrops import DEFS as PS_DEFS, drops
+from vehicle_raindrops import DEFS as PS_DEFS, drops, drops_bend
 
 TAG = 'FusionFix vehicle_paint.patch'
 
@@ -77,7 +77,7 @@ def finish_and_drops(clean):
       add r8.x, -r8.x, c187.w
       mul r0.xyz, r0, r8.x // a little darker under drops
     endif
-'''
+{drops_bend()}'''
 
 
 def spec2_cut(reg):
