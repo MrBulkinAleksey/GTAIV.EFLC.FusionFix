@@ -52,8 +52,10 @@ import temporal;
 // fragment (vehicles, objects with fragments) or fragment type draw whose bounding sphere lies wholly on the other side of the plane through the lamp across the
 // axis is left out. The first half (red, face 0) faces -x and the second +x: the other way round dropped props'
 // shadows in game. The sphere is the model's (model info +0x10 centre, +0x1c radius) around the command's position,
-// grown by the centre's offset so the entity's turn needs no matrix. With it 0, EntityDrawLog counts what it
-// would leave out.
+// grown by the centre's offset so the entity's turn needs no matrix. A fragment command (CDrawFragDC: vehicles,
+// objects with fragments) keeps the entity's position as the list was made, as the slot's lamp is taken, so a moving
+// car and its own headlights match; its skeleton may leave the rest pose, so its sphere grows by a quarter and a
+// metre. With it 0, EntityDrawLog counts what it would leave out.
 //
 // LampShadowRangeCulling ([PERFORMANCE]): the lamp's render list reaches far past its light (props 40+ m from the lamp
 // took half the pass's time), but the map's depth is the distance over the slot's radius (+0xe0), and anything wholly
@@ -460,7 +462,10 @@ namespace
         const float radius = *reinterpret_cast<const float*>(info + 0x1c);
         if (!(radius > 0.0f))
             return {};
-        const float reach = radius + std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
+        // A fragment's bones leave the model's rest pose (open doors, a hanging bumper, a turned rotor): its sphere
+        // grows by a quarter and a metre
+        const float rest = radius + std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
+        const float reach = source == FromFrag ? rest * 1.25f + 1.0f : rest;
         const auto& o = currentOrigin;
         float along = 0.0f, distance2 = 0.0f;
         for (int i = 0; i < 3; ++i)
