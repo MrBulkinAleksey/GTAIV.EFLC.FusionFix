@@ -631,6 +631,14 @@ namespace Lighting20
         static thread_local bool scopeCache = false;
         static std::atomic<uint32_t> cachePhases{0}; // phase index bits of slot 0
         static std::atomic<uint32_t> cachePasses{0}, castInCache{0}, addedForCache{0};
+        // A lamp's static cache is drawn once and redrawn only when the count of its phase's lists 0 and 1 (0xAE5EA0)
+        // differs from the one kept with the cache when it was drawn (0xD77A88 against the record's +0xF4, stored to the
+        // cache's +0x10 at 0xD77D49): the props Collect puts into list 2 never changed it, so a cache drawn before they
+        // were there (one a frame, most of them long ago) never got them, and they shadowed only once the lamp took a
+        // slot. The props added for this frame's cache count in too (cacheRedraw at 0xD77A88), so a prop coming into
+        // the lamp's light redraws its cache.
+        static std::atomic<uint32_t> cacheAddFrame{0}, cacheAdds{0}, cacheRedraws{0};
+        static SafetyHookMid cacheRedraw;
         // The technique group forced while a prop's model is drawn (0x444C50), by group: which group the lamps' caches
         // draw with, if not wd_local
         static std::array<std::atomic<uint32_t>, 16> gmGroups{};
@@ -840,7 +848,13 @@ namespace Lighting20
                         cachePhases.load(std::memory_order_relaxed));
             }
             if (!phases) return;
-            if (phases & cachePhases.load(std::memory_order_relaxed)) ++addedForCache;
+            if (phases & cachePhases.load(std::memory_order_relaxed))
+            {
+                ++addedForCache;
+                if (cacheAddFrame.exchange(Frame(), std::memory_order_relaxed) != Frame())
+                    cacheAdds.store(0, std::memory_order_relaxed);
+                ++cacheAdds;
+            }
             addToList(phases, entity, 0.0f, 2);
             ++added;
             if (diagnostics || allBuckets) Remember(entity);
@@ -1363,6 +1377,22 @@ namespace Lighting20
             if (!collect) level = 0;
             installStatus += collect ? " props=" + std::to_string(level) : " props=hook_failed";
             if (!collect) return;
+            // cmp edi, [ebp+119F1F4h] (EDI the count, kept at [esp+2Ch] for the store at 0xD77D49)
+            if (cacheProps && BytesAt(0x977A88, { 0x3B, 0xBD, 0xF4, 0xF1 }) && BytesAt(0x977D49, { 0x89, 0xB8, 0xFC, 0x0B }))
+            {
+                cacheRedraw = safetyhook::create_mid(game + 0x977A88, [](SafetyHookContext& regs)
+                {
+                    if (!On() || regs.ebx != 0 || cacheAddFrame.load(std::memory_order_relaxed) != Frame()) return;
+                    const auto n = cacheAdds.load(std::memory_order_relaxed);
+                    if (!n) return;
+                    regs.edi += n;
+                    *reinterpret_cast<uint32_t*>(regs.esp + 0x2C) += n;
+                    if (regs.edi != *reinterpret_cast<const uint32_t*>(regs.ebp + game + 0xD9F1F4)) ++cacheRedraws;
+                });
+                installStatus += cacheRedraw ? " prop_cache_redraw=1" : " prop_cache_redraw=hook_failed";
+            }
+            else if (cacheProps)
+                installStatus += " prop_cache_redraw=code_differs";
             allBuckets = ini.ReadInteger("NIGHTSHADOWS", "PropAllBuckets", 1) != 0;
             diagnostics = ini.ReadInteger("DEBUG", "NightShadowsDiagnostics", 0) != 0;
             if (!diagnostics && !allBuckets) return;
@@ -1923,7 +1953,7 @@ namespace Lighting20
                     return list.empty() ? std::string("-") : list;
                 }() << " vehicle_light_passes=" << Props::vehiclePasses.load()
                 << " cache: passes=" << Props::cachePasses.load() << " cast=" << Props::castInCache.load()
-                << " added=" << Props::addedForCache.load()
+                << " added=" << Props::addedForCache.load() << " redraws=" << Props::cacheRedraws.load()
                 << " prop_model_draws=" << Props::propModelDraws.load() << " prop_buckets(shader>drawn:n)=" << Props::Buckets()
                 << " all_under_wd_local: found=" << Props::localFound.load() << " missing=" << Props::localMissing.load()
                 << " missing_in=" << Props::Effects(Props::localMissingEffects)
