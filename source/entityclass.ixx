@@ -48,17 +48,19 @@ import temporal;
 // entity of the lamp is drawn into both. The slot render (0xd77a00, mode 4) makes a face command (0xd77930, face at
 // +0x10) before each half; as it is made, the slot's position (+0xc0) and the halves' axis (the third row of its
 // matrix at +0x40, world +x) go into a ring here, its index into the command's spare bytes +0x16/+0x17. On the render
-// thread that command's execute says which half and lamp the next draws are for, until CSetColorWrite 0xf. An entity
-// or fragment type draw whose bounding sphere lies wholly on the other side of the plane through the lamp across the
+// thread that command's execute says which half and lamp the next draws are for, until CSetColorWrite 0xf. An entity,
+// fragment (vehicles, objects with fragments) or fragment type draw whose bounding sphere lies wholly on the other side of the plane through the lamp across the
 // axis is left out. The first half (red, face 0) faces -x and the second +x: the other way round dropped props'
 // shadows in game. The sphere is the model's (model info +0x10 centre, +0x1c radius) around the command's position,
-// grown by the centre's offset so the entity's turn needs no matrix. With it 0, EntityDrawLog counts what it
-// would leave out.
+// grown by the centre's offset so the entity's turn needs no matrix. A fragment command (CDrawFragDC: vehicles,
+// objects with fragments) keeps the entity's position as the list was made, as the slot's lamp is taken, so a moving
+// car and its own headlights match; its skeleton may leave the rest pose, so its sphere grows by a quarter and a
+// metre. With it 0, EntityDrawLog counts what it would leave out.
 //
 // LampShadowRangeCulling ([PERFORMANCE]): the lamp's render list reaches far past its light (props 40+ m from the lamp
 // took half the pass's time), but the map's depth is the distance over the slot's radius (+0xe0), and anything wholly
-// further from the lamp than that is further than every point it lights, so it cannot shadow them. An entity or
-// fragment type draw whose sphere (as above) lies wholly outside the radius is left out of the lamp's map. With it 0,
+// further from the lamp than that is further than every point it lights, so it cannot shadow them. An entity,
+// fragment or fragment type draw whose sphere (as above) lies wholly outside the radius is left out of the lamp's map. With it 0,
 // EntityDrawLog counts what it would leave out.
 //
 // LampShadowSmallCull ([PERFORMANCE]): a prop whose sphere's reach is under 2% of its distance from the lamp (a 0.4 m
@@ -66,8 +68,8 @@ import temporal;
 // like any other. Such props are left out of the lamp's map; buildings never are. The same ones each time for a lamp,
 // so nothing flickers. With it 0, EntityDrawLog counts what it would leave out.
 //
-// LampShadowConeCulling ([PERFORMANCE]): a spot lamp lights nothing outside its outer cone, so an entity or fragment
-// type draw whose sphere lies wholly outside it, by a 5 degree margin, is left out of its map. The slot keeps only the
+// LampShadowConeCulling ([PERFORMANCE]): a spot lamp lights nothing outside its outer cone, so an entity, fragment
+// or fragment type draw whose sphere lies wholly outside it, by a 5 degree margin, is left out of its map. The slot keeps only the
 // light's position, direction, radius and key (the selection, 0x9280fd, copies them from the light list): there the
 // light's type (+0x44), outer cone (+0x5c, a cosine: the game draws a spot whose cosine is under 0 as clamped, 0xac1437)
 // and key (+0x60) are kept by slot, and the face command takes them while the slot still holds that key. Moving a
@@ -147,7 +149,7 @@ namespace
         int64_t ticks[size_t(Kind::Kinds)]{};
         uint64_t sourceDraws[Sources]{};
         // Locks of the target that had draws, and device viewports within them (the faces of a lamp's cube map);
-        // per lock the entities drawn into it, by model and place (entity and fragment type commands), to tell how
+        // per lock the entities drawn into it, by model and place (entity, fragment and fragment type commands), to tell how
         // often one entity is drawn into one lamp's map
         uint64_t locks = 0, faces = 0;
         uint64_t keyedDraws = 0, entities = 0;
@@ -323,7 +325,8 @@ namespace
     }
 
     // The model index and the position the command keeps: CDrawEntityDC +0x30 and +0x20, CDrawFragTypeDC
-    // +0x58 and +0x40; false for the other commands
+    // +0x58 and +0x40, CDrawFragDC (vehicles, objects with fragments) +0x46 and +0x10 (the entity's matrix row +0x40,
+    // its ctor 0x8dad40); false for the other commands
     bool ModelAndPlace(void* dc, Source source, uint16_t& model, const float*& place)
     {
         const auto* bytes = reinterpret_cast<const uint8_t*>(dc);
@@ -331,6 +334,8 @@ namespace
             model = *reinterpret_cast<const uint16_t*>(bytes + 0x30), place = reinterpret_cast<const float*>(bytes + 0x20);
         else if (source == FromFragType)
             model = *reinterpret_cast<const uint16_t*>(bytes + 0x58), place = reinterpret_cast<const float*>(bytes + 0x40);
+        else if (source == FromFrag)
+            model = *reinterpret_cast<const uint16_t*>(bytes + 0x46), place = reinterpret_cast<const float*>(bytes + 0x10);
         else
             return false;
         return true;
@@ -457,7 +462,10 @@ namespace
         const float radius = *reinterpret_cast<const float*>(info + 0x1c);
         if (!(radius > 0.0f))
             return {};
-        const float reach = radius + std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
+        // A fragment's bones leave the model's rest pose (open doors, a hanging bumper, a turned rotor): its sphere
+        // grows by a quarter and a metre
+        const float rest = radius + std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
+        const float reach = source == FromFrag ? rest * 1.25f + 1.0f : rest;
         const auto& o = currentOrigin;
         float along = 0.0f, distance2 = 0.0f;
         for (int i = 0; i < 3; ++i)
