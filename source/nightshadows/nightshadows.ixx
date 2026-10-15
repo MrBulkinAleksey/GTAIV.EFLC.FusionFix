@@ -472,6 +472,7 @@ class NightShadows
         NearbyVehicleLighting36::enabled.store(iniReader.ReadInteger("NIGHTSHADOWS", "NearbyVehicleReceivers", 0) != 0, std::memory_order_release);
         PlayerShadowAllocation::nativeLampPriority = iniReader.ReadInteger("NIGHTSHADOWS", "LampViewPriority", 0) != 0;
         PlayerShadowAllocation::visibleReceiverRanking = iniReader.ReadInteger("NIGHTSHADOWS", "VisibleReceiverRanking", 0) != 0;
+        PlayerShadowAllocation::cacheViewPriority = iniReader.ReadInteger("NIGHTSHADOWS", "LampCacheViewPriority", 1) != 0;
         PlayerShadowAllocation::casterPriority = iniReader.ReadInteger("NIGHTSHADOWS", "CasterAwarePriority", 0) != 0;
         PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "CasterAwarePriorityHold", 750), 0, 2000));
         PlayerShadowAllocation::casterLeadSeconds = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "CasterAwarePriorityLead", 1.0f), 0.0f, 3.0f);

@@ -154,6 +154,7 @@ namespace ShadowDiagnostics
                 << " continuity_rejected=" << PlayerShadowAllocation::continuityRejected.load()
                 << " lamp_distance_adjusted=" << PlayerShadowAllocation::lampDistanceAdjusted.load()
                 << " receiver_ranked=" << PlayerShadowAllocation::receiverRanked.load() << " indoor_ranked=" << PlayerShadowAllocation::indoorRanked.load()
+                << " cache_view_priority=" << PlayerShadowAllocation::cacheViewPriority << " cache_distance_adjusted=" << PlayerShadowAllocation::cacheDistanceAdjusted.load()
                 << " caster_priority=" << PlayerShadowAllocation::casterPriority
                 << " caster_captures=" << PlayerShadowAllocation::casterCaptures.load()
                 << " cars_left_to_boxes=" << PlayerShadowAllocation::carsLeftToBoxes.load()
