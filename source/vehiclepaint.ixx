@@ -33,8 +33,8 @@ class VehiclePaint
     static inline float fRainAmount = 0.85f;        // share of the bead cells holding a drop in heavy rain
     static inline float fRainDensity = 40.0f;       // bead cells per metre; running drops' columns are half as dense
     static inline float fRainBump = 0.002f;         // a drop's height in metres
-    static inline float fRainRunning = 0.25f;       // how many running drops on the sides, against the beads
-    static inline float fRainSpeed = 0.5f;          // how fast running drops slide, metres per second
+    static inline float fRainRunning = 1.0f;        // how many running drops on the sides, against the beads
+    static inline float fRainSpeed = 0.15f;         // how fast running drops slide, metres per second
 
     // Missing prefs count as on.
     static int32_t Pref(std::optional<std::reference_wrapper<int32_t>>& ref)
@@ -52,8 +52,8 @@ class VehiclePaint
         fRainAmount = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsAmount", 0.85f), 0.0f, 2.5f);
         fRainDensity = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsDensity", 40.0f), 5.0f, 200.0f);
         fRainBump = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsBump", 0.002f), 0.0f, 0.02f);
-        fRainRunning = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsRunning", 0.25f), 0.0f, 1.0f);
-        fRainSpeed = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsSpeed", 0.5f), 0.0f, 3.0f);
+        fRainRunning = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsRunning", 1.0f), 0.0f, 1.0f);
+        fRainSpeed = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsSpeed", 0.15f), 0.0f, 3.0f);
     }
 
     // First command of the G-buffer pass: the paint's constants for this frame.

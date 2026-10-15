@@ -24,7 +24,7 @@ import re
 import sys
 from pathlib import Path
 
-from vehicle_raindrops import DEFS as PS_DEFS, drops, drops_bend
+from vehicle_raindrops import DEFS as PS_DEFS, drops, drops_bend, drops_frame
 
 TAG = 'FusionFix vehicle_paint.patch'
 
@@ -70,12 +70,15 @@ def finish_and_drops(clean):
     mul r8.x, r8.x, r20.w
     mad r0.xyz, c186, r8.x, r0 // the pearl tint towards the silhouette
     mov_sat r20.x, c177.w // how wet: 0 dry, 1 in the rain
-    mov r24, c185.w // drops in x, trails in y
+{drops_frame('v5', 'v6', 'v7')}\
+    mov r24, c185.w // drops in x, trails in y, the drops' slope in zw
     mov r8.x, c176.z // how many cells hold a drop
     if_lt c185.w, r8.x
-{drops('v5', 'v6', 'v7')}      mul r8.x, r24.x, c183.y
+{drops()}      mul r8.y, r24.y, c180.y
+      max r8.x, r24.x, r8.y
+      mul r8.x, r8.x, c183.y
       add r8.x, -r8.x, c187.w
-      mul r0.xyz, r0, r8.x // a little darker under drops
+      mul r0.xyz, r0, r8.x // darker under drops, and half as much along their trails
     endif
 {drops_bend()}'''
 
