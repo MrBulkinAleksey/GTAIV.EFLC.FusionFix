@@ -307,10 +307,12 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     // the sky on screen (CloudsSkyRef, in Clouds.fx), the reflections that of the frame before:
     // the game's SkyColor stays bluish under a pink evening sky, and the clouds came out white
     // against it. SkyColor's hue only while there is no sky colour of a recent frame.
-    constexpr float kCloudLitSkyHue = 0.4f;
+    // The lit side's share of it goes with the physical sky's share: under its blue the sunlit sides
+    // came out a grey blue. They take the sun's colour, the sky lights only the shade.
+    const float litSkyHue = 0.4f * (1.0f - pbrShare);
     const bool skyRefRecent = R.CloudSkyRefTex && R.nCloudSkyRefFrame && FrameHistory::Frame() - R.nCloudSkyRefFrame <= 2;
     {
-        const float skyHue[3] = { skyRefRecent ? R.fVolumetricCloudsSkyLight : 0.0f, skyRefRecent ? kCloudLitSkyHue : 0.0f,
+        const float skyHue[3] = { skyRefRecent ? R.fVolumetricCloudsSkyLight : 0.0f, skyRefRecent ? litSkyHue : 0.0f,
                                   R.fVolumetricCloudsSaturation };
         effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3SkyHue"), skyHue, 3);
     }
@@ -330,7 +332,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         const float litLuma = 0.2126f * litColour[0] + 0.7152f * litColour[1] + 0.0722f * litColour[2];
         if (skyLuma > 1e-4f)
             for (int i = 0; i < 3; ++i)
-                litColour[i] += ((std::max)(skyColour[i], 0.0f) / skyLuma * litLuma - litColour[i]) * kCloudLitSkyHue;
+                litColour[i] += ((std::max)(skyColour[i], 0.0f) / skyLuma * litLuma - litColour[i]) * litSkyHue;
     }
     // VolumetricCloudsSaturation, about each colour's luma.
     for (float* colour : { litColour, shadeColour, sunsetLit })
