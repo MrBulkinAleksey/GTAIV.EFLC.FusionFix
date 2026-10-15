@@ -616,6 +616,8 @@ namespace Lighting20
         // lights (a 2dfx light's key is its entity plus an offset under 0x320): a cobra head's post had a second shadow
         // from a light of the building beside it, 5 m off. The keys of the phases' lights by phase index, from Scope.
         static bool ownLampOnly = true;
+        // PropRenderVerdicts: see Verdicts
+        static bool verdictsOn = true;
         // PropsInCaches: the lamps' static caches (slot 0) take the props too
         static bool cacheProps = true;
         static std::array<std::atomic<uint32_t>, 32> phaseKey{};
@@ -874,6 +876,58 @@ namespace Lighting20
         struct CommandTrace { bool on = false; uint32_t models = 0, culled = 0, unculled = 0, draws = 0, forced = 0; std::string buckets; };
         static thread_local CommandTrace commandTrace;
 
+        // The main thread's verdicts kept for the render thread, by the lamp and the prop's place (half metres): a trace
+        // had a post excluded in every mode of another lamp's pass and kept out of its list 2, and still drawn into that
+        // lamp's map every frame by some other way. A fragment command for a lamp's half (EntityClass) whose pair was
+        // excluded within the last frames is not executed, whatever way it came.
+        namespace Verdicts
+        {
+            struct Cell { std::atomic<uint64_t> key{0}; std::atomic<uint32_t> frame{0}; std::atomic<uint8_t> excluded{0}; };
+            static constexpr uint32_t Cells = 4096;
+            static Cell cells[Cells];
+            static std::atomic<uint32_t> skipped{0};
+
+            static uint64_t Key(const float* lamp, const float* prop) noexcept
+            {
+                uint64_t h = 1469598103934665603ull;
+                for (const float v : { lamp[0], lamp[1], lamp[2], prop[0], prop[1], prop[2] })
+                {
+                    h ^= uint64_t(int64_t(std::floor(v * 2.0f + 0.5f)) & 0xFFFFF);
+                    h *= 1099511628211ull;
+                }
+                return h | 1;
+            }
+
+            static void Note(const float* lamp, const float* prop, bool excluded) noexcept
+            {
+                const auto key = Key(lamp, prop);
+                for (uint32_t i = 0, c = uint32_t(key) & (Cells - 1); i < 8; ++i, c = (c + 1) & (Cells - 1))
+                {
+                    auto& cell = cells[c];
+                    const auto k = cell.key.load(std::memory_order_relaxed);
+                    if (k == key || !k || Frame() - cell.frame.load(std::memory_order_relaxed) > 30)
+                    {
+                        cell.excluded.store(excluded, std::memory_order_relaxed);
+                        cell.frame.store(Frame(), std::memory_order_relaxed);
+                        cell.key.store(key, std::memory_order_release);
+                        return;
+                    }
+                }
+            }
+
+            static bool Excluded(const float* lamp, const float* prop) noexcept
+            {
+                const auto key = Key(lamp, prop);
+                for (uint32_t i = 0, c = uint32_t(key) & (Cells - 1); i < 8; ++i, c = (c + 1) & (Cells - 1))
+                {
+                    const auto& cell = cells[c];
+                    if (cell.key.load(std::memory_order_acquire) == key)
+                        return cell.excluded.load(std::memory_order_relaxed) && Frame() - cell.frame.load(std::memory_order_relaxed) <= 4;
+                }
+                return false;
+            }
+        }
+
         static uint32_t __fastcall Consumer(void* command, void*)
         {
             const auto model = *reinterpret_cast<const uint16_t*>(reinterpret_cast<uintptr_t>(command) + 0x58);
@@ -886,6 +940,19 @@ namespace Lighting20
             const bool previous = propDraw;
             propDraw = prop;
             const float* at = reinterpret_cast<const float*>(reinterpret_cast<uintptr_t>(command) + 0x40);
+            if (prop && verdictsOn)
+            {
+                float lamp[3];
+                if (EntityClass::CurrentLampFace(lamp) >= 0 && Verdicts::Excluded(lamp, at))
+                {
+                    ++Verdicts::skipped;
+                    if (Trace::Active() && Trace::Near(at))
+                        Trace::Line("fragment model=%u at=%.1f,%.1f,%.1f lamp=%.1f,%.1f,%.1f skipped by the main thread's verdict",
+                            model, at[0], at[1], at[2], lamp[0], lamp[1], lamp[2]);
+                    propDraw = previous;
+                    return 0;
+                }
+            }
             const bool traced = prop && Trace::Active() && Trace::Near(at);
             if (traced) commandTrace = { true };
             const auto result = consumer.unsafe_thiscall<uint32_t>(command);
@@ -1156,6 +1223,12 @@ namespace Lighting20
                 decision = 2;
                 why = "cast";
             }
+            if (verdictsOn && scope && type == 4 && entity)
+            {
+                const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
+                if ((flags & 0xC000) == 0x8000 && (level >= 2 || (flags & 0x800000)))
+                    Verdicts::Note(scopeLight, EntityAt(entity), decision == 1);
+            }
             if (scope && type == 4 && entity && Trace::Active())
             {
                 const float* at = EntityAt(entity);
@@ -1261,6 +1334,7 @@ namespace Lighting20
             level = std::clamp(ini.ReadInteger("NIGHTSHADOWS", "PropShadows", 1), 0, 2);
             minLightHeight = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "PropMinLightHeight", 4.0f), 0.0f, 20.0f);
             ownLampOnly = ini.ReadInteger("NIGHTSHADOWS", "PropOwnLampOnly", 1) != 0;
+            verdictsOn = ini.ReadInteger("NIGHTSHADOWS", "PropRenderVerdicts", 1) != 0;
             cacheProps = ini.ReadInteger("NIGHTSHADOWS", "PropsInCaches", 1) != 0;
             if (!level)
             {
@@ -1815,6 +1889,7 @@ namespace Lighting20
                 << " within_5m(mode0,1,2)=" << Props::nearLamp[0].load() << ',' << Props::nearLamp[1].load() << ',' << Props::nearLamp[2].load()
                 << " objects_from_you(<10,<20,<30,<45,<60,60+)=" << Props::Counts(Props::objectsAt)
                 << " passes_by_lamp_from_you=" << Props::Counts(Props::passesAt) << " their_objects=" << Props::Counts(Props::passObjectsAt)
+                << " render_verdict_skips=" << Props::Verdicts::skipped.load()
                 << " low_light_skips=" << Props::lowLightSkips.load() << " not_own_lamp_skips=" << Props::notOwnSkips.load()
                 << " phases(slot:mode=n)=" << [] {
                     std::string list;
