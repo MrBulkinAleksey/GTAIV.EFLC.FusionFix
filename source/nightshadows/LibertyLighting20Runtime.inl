@@ -301,6 +301,10 @@ namespace Lighting20
         static std::atomic<uint32_t> lampsPromoted{0}, modelLightsPromoted{0}, coronaLights{0}, coronasRefused{0}, coronasCapped{0};
         static std::atomic<uint32_t> coronasMerged{0}, modelLightsMerged{0}, modelLightsIdle{0};
         static bool modelLightsNeedCasters = true; // ModelLightShadowsNeedCasters
+        // ModelLightCaches: a model light gets the static shadow flag (2) with the dynamic one, so it can take one of the
+        // game's eight caches like the map's cached lamps: with the dynamic flag alone, street lamps such as bm_nylamp1
+        // (no shadow of their own) shadowed nothing until they took a slot, and their props appeared as you came near.
+        static bool modelLightCaches = true;
         static float mergeDistance = 1.5f; // ExtraLightMergeDistance
 
         struct CoronaSettings
@@ -416,6 +420,7 @@ namespace Lighting20
             pref = FusionFixSettings.GetRef("PREF_WORLD_LIGHT_SHADOWS");
             cachedLamps = ini.ReadInteger("NIGHTSHADOWS", "CachedLampShadows", 1) != 0;
             modelLights = ini.ReadInteger("NIGHTSHADOWS", "ModelLightShadows", 1) != 0;
+            modelLightCaches = ini.ReadInteger("NIGHTSHADOWS", "ModelLightCaches", 1) != 0;
             coronas = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightShadows", 1) != 0;
             corona.approximate = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightApproximation", 1) != 0;
             corona.radiusPerSize = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightRadiusPerSize", 12.0f), 0.1f, 1024.0f);
@@ -625,7 +630,8 @@ namespace Lighting20
         // headlights on, as if drawn twice into each map at two places. It goes in two ways: the caster loop's own draws
         // in modes 1 and 2 (no forced group) and ours in mode 0 (Cast, and list 2 from Collect, under wd_local / wd).
         // 0 both, 1 only ours (the props PropShadows takes left out of modes 1 and 2), 2 only the game's (no Cast, no
-        // list 2 adds).
+        // list 2 adds). A trace had the game's draws of a post put no geometry in and ours draw it twice, under wd_local
+        // (group 0) and under wd (group 4): 3 opens 0x444C50 to props only under wd_local, 4 only under wd.
         static std::atomic<int> drawRoute{0};
         static std::atomic<uint32_t> routeSkips{0};
         // The rules above are for map lights: a car's own lights (headlights, rear lamps, sirens) shine low and are no
@@ -972,6 +978,45 @@ namespace Lighting20
             }
         }
 
+        // A prop's draw by another command than the fragment type one (0x8DD0B0): a lamp post touched by a car goes
+        // over to the fragment command (CDrawFragDC) and its shadow went, the bucket and cull passes of 0x444C50 being
+        // opened only in Consumer. EntityClass's draw hooks set propDraw for those too.
+        static std::atomic<uint32_t> otherCommandDraws{0};
+        static thread_local uint8_t otherDepth = 0;
+        static thread_local uint32_t otherSaved = 0;
+
+        static void BeforeOtherDraw(EntityClass::Kind kind) noexcept
+        {
+            const bool previous = propDraw;
+            if (otherDepth < 32)
+                otherSaved = (otherSaved & ~(1u << otherDepth)) | (uint32_t(previous) << otherDepth);
+            ++otherDepth;
+            if (kind != EntityClass::Kind::Prop) return;
+            uint16_t model = 0;
+            float at[3];
+            const int source = EntityClass::CurrentDraw(model, at);
+            if ((source != 1 && source != 3) || !model || !(models[model >> 3].load(std::memory_order_relaxed) & (1u << (model & 7))))
+                return;
+            propDraw = true;
+            ++otherCommandDraws;
+            if (Trace::Active() && (source == 3 || Trace::Near(at)))
+            {
+                float lamp[3]{};
+                const int face = EntityClass::CurrentLampFace(lamp);
+                const char* target = RenderSkip::CurrentTarget();
+                Trace::Line("%s model=%u at=%.1f,%.1f,%.1f group=%d target=%s face=%d lamp=%.1f,%.1f,%.1f",
+                    source == 1 ? "fragment_instance" : "skinned", model, at[0], at[1], at[2],
+                    *reinterpret_cast<const int32_t*>(game + 0xC6B308), target ? target : "-", face, lamp[0], lamp[1], lamp[2]);
+            }
+        }
+
+        static void AfterOtherDraw(EntityClass::Kind) noexcept
+        {
+            if (!otherDepth) return;
+            --otherDepth;
+            if (otherDepth < 32) propDraw = (otherSaved >> otherDepth) & 1;
+        }
+
         static uint32_t __fastcall Consumer(void* command, void*)
         {
             const auto model = *reinterpret_cast<const uint16_t*>(reinterpret_cast<uintptr_t>(command) + 0x58);
@@ -1065,6 +1110,9 @@ namespace Lighting20
         {
             if (!propDraw || localTechnique < 0) return false;
             const auto group = *reinterpret_cast<const int32_t*>(game + 0xC6B308);
+            const int route = drawRoute.load(std::memory_order_relaxed);
+            if (route == 3) return group == localTechnique;
+            if (route == 4) return group == 4;
             return group == localTechnique || group == 4;
         }
 
@@ -1390,7 +1438,7 @@ namespace Lighting20
             cacheProps = ini.ReadInteger("NIGHTSHADOWS", "PropsInCaches", 1) != 0;
             const auto readRoute = [](CIniReader& reader)
             {
-                drawRoute.store(std::clamp(reader.ReadInteger("NIGHTSHADOWS", "PropDrawRoute", 0), 0, 2), std::memory_order_relaxed);
+                drawRoute.store(std::clamp(reader.ReadInteger("NIGHTSHADOWS", "PropDrawRoute", 0), 0, 4), std::memory_order_relaxed);
             };
             readRoute(ini);
             IniReload::Add(readRoute);
@@ -1443,6 +1491,7 @@ namespace Lighting20
                 BytesAt(0x29ECEC, { 0x3B, 0x44, 0x24, 0x38, 0x0F, 0x85 }))
             {
                 consumer = safetyhook::create_inline(game + 0x4DD0B0, Consumer);
+                if (consumer) EntityClass::AddDrawHooks(BeforeOtherDraw, AfterOtherDraw);
                 bucketTest = safetyhook::create_mid(game + 0x29ECEC, BucketTest);
                 installStatus += consumer && bucketTest ? (allBuckets ? " prop_all_buckets=1" : " prop_all_buckets=0") : " prop_all_buckets=hook_failed";
                 if (!diagnostics) return;
@@ -1508,7 +1557,8 @@ namespace Lighting20
                 }
                 else
                 {
-                    o.mFlags &= ~rage::LF_DYNAMIC_SHADOW;
+                    // both: with ModelLightCaches the static flag would give it a second shadow from a cache
+                    o.mFlags &= ~6u;
                     ++World::modelLightsMerged;
                 }
                 break;
@@ -1989,7 +2039,7 @@ namespace Lighting20
                 }() << " vehicle_light_passes=" << Props::vehiclePasses.load()
                 << " cache: passes=" << Props::cachePasses.load() << " cast=" << Props::castInCache.load()
                 << " added=" << Props::addedForCache.load() << " redraws=" << Props::cacheRedraws.load()
-                << " draw_route=" << Props::drawRoute.load() << " route_skips=" << Props::routeSkips.load()
+                << " other_command_draws=" << Props::otherCommandDraws.load() << " draw_route=" << Props::drawRoute.load() << " route_skips=" << Props::routeSkips.load()
                 << " prop_model_draws=" << Props::propModelDraws.load() << " prop_buckets(shader>drawn:n)=" << Props::Buckets()
                 << " all_under_wd_local: found=" << Props::localFound.load() << " missing=" << Props::localMissing.load()
                 << " missing_in=" << Props::Effects(Props::localMissingEffects)

@@ -78,6 +78,11 @@ export namespace EntityClass
     // The lamp half being drawn on the render thread (0 or 1, -1 for none) and its slot's position, for other features'
     // traces (PropTrace in nightshadows).
     int CurrentLampFace(float position[3]);
+
+    // On the render thread, inside the hooks of a draw: which command it is (0 entity, 1 fragment, 2 fragment type,
+    // 3 skinned, 4 ped; -1 outside a draw), its model index and, where the command keeps it, its position (else 0s).
+    // A touched lamp post goes from the fragment type command to the fragment one.
+    int CurrentDraw(uint16_t& model, float place[3]);
 }
 
 namespace
@@ -202,6 +207,10 @@ namespace
 
     // The model index and the position the command keeps: CDrawEntityDC +0x30 and +0x20, CDrawFragTypeDC
     // +0x58 and +0x40; false for the other commands
+    // The draw whose hooks run now (CurrentDraw)
+    thread_local void* currentDc = nullptr;
+    thread_local Source currentSource = Sources;
+
     bool ModelAndPlace(void* dc, Source source, uint16_t& model, const float*& place)
     {
         const auto* bytes = reinterpret_cast<const uint8_t*>(dc);
@@ -337,6 +346,10 @@ namespace
         }
 
         const auto& hooks = Hooks();
+        void* const previousDc = currentDc;
+        const Source previousSource = currentSource;
+        currentDc = dc;
+        currentSource = source;
         for (const auto& [before, after] : hooks)
             if (before)
                 before(kind);
@@ -404,6 +417,8 @@ namespace
         for (auto it = hooks.rbegin(); it != hooks.rend(); ++it)
             if (it->second)
                 it->second(kind);
+        currentDc = previousDc;
+        currentSource = previousSource;
     }
 
     Kind MarkOf(void* dc, ptrdiff_t at)
@@ -568,6 +583,28 @@ namespace EntityClass
     int CurrentLampFace(float position[3])
     {
         return LampFace(position);
+    }
+
+    int CurrentDraw(uint16_t& model, float place[3])
+    {
+        place[0] = place[1] = place[2] = 0.0f;
+        if (!currentDc || currentSource >= Sources)
+            return -1;
+        const auto* bytes = reinterpret_cast<const uint8_t*>(currentDc);
+        const float* at = nullptr;
+        // CDrawFragDC: the model at +0x46 and the instance's position at +0x10 (its constructor 0x8dad40);
+        // CDrawSkinnedEntityDC: the model at +8, no position
+        if (currentSource == FromFrag)
+            model = *reinterpret_cast<const uint16_t*>(bytes + 0x46), at = reinterpret_cast<const float*>(bytes + 0x10);
+        else if (currentSource == FromSkinned)
+            model = *reinterpret_cast<const uint16_t*>(bytes + 0x08);
+        else if (currentSource == FromPed)
+            model = 0;
+        else if (!ModelAndPlace(currentDc, currentSource, model, at))
+            return -1;
+        if (at)
+            std::copy_n(at, 3, place);
+        return int(currentSource);
     }
 
     Kind OfEntity(void* entity)
