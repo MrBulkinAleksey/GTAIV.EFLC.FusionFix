@@ -43,10 +43,10 @@ import temporal;
 // matrix at +0x40, world +x) go into a ring here, its index into the command's spare bytes +0x16/+0x17. On the render
 // thread that command's execute says which half and lamp the next draws are for, until CSetColorWrite 0xf. An entity
 // or fragment type draw whose bounding sphere lies wholly on the other side of the plane through the lamp across the
-// axis is left out: 1 the first half faces +axis, 2 it faces -axis (which one is right shows in game: the wrong one
-// drops shadows). The sphere is the model's (model info +0x10 centre, +0x1c radius) around the command's position,
-// grown by the centre's offset so the entity's turn needs no matrix. With it 0, EntityDrawLog counts where the
-// spheres lie against each half.
+// axis is left out. The first half (red, face 0) faces -x and the second +x: the other way round dropped props'
+// shadows in game. The sphere is the model's (model info +0x10 centre, +0x1c radius) around the command's position,
+// grown by the centre's offset so the entity's turn needs no matrix. With it 0, EntityDrawLog counts what it
+// would leave out.
 export namespace EntityClass
 {
     enum class Kind : uint8_t
@@ -100,8 +100,8 @@ namespace
 
     // EntityDrawLog and LampShadowFaceCulling: render thread only, but for the switches
     bool bDrawLog = false;
-    int nFaceCulling = 0;           // LampShadowFaceCulling: 0 off, 1 the first half faces +axis, 2 -axis, 3 none drawn (test)
-    bool bFaceCulling = false;
+    bool bFaceCullingSetting = true;   // LampShadowFaceCulling
+    bool bFaceCulling = false;          // and its hooks in place
     uintptr_t modelInfos = 0;       // CE 0x1295cd8, model infos by index
     constexpr uint32_t kDrawLogFrames = 600;
     struct TargetStats
@@ -119,8 +119,8 @@ namespace
         std::unordered_set<uint64_t> keys;
         // Draws outside the face drawn: left out with LampShadowFaceCulling, else counted only
         uint64_t outside = 0;
-        // Lamp maps: draws with the half known, and where their spheres are against the plane between the halves, as
-        // the half drawn would face with LampShadowFaceCulling 1: on its side, on the other, across
+        // Lamp maps: draws with the half known, and where their spheres are against the plane between the halves: on
+        // the side the half drawn faces, on the other, across
         uint64_t faceKnown = 0, faceUnknown = 0, ahead = 0, behind = 0, across = 0;
         int64_t Total() const
         {
@@ -176,7 +176,7 @@ namespace
                 text += std::format(" half known for {:.0f}%, spheres on the half's side {:.1f}, the other side {:.1f}, across {:.1f},",
                     100.0 * s.faceKnown / double(s.faceKnown + s.faceUnknown), s.ahead * perFrame, s.behind * perFrame, s.across * perFrame);
             if (s.outside)
-                text += std::format(" outside their face {:.1f} ({}),", s.outside * perFrame, bFaceCulling ? "left out" : "would go with 1");
+                text += std::format(" outside their face {:.1f} ({}),", s.outside * perFrame, bFaceCulling ? "left out" : "drawn");
             text += " by command";
             for (int i = 0; i < Sources; ++i)
                 text += std::format("{} {} {:.1f}", i ? "," : "", SourceNames[i], s.sourceDraws[i] * perFrame);
@@ -265,8 +265,8 @@ namespace
         colorWriteExecute(dc);
     }
 
-    // Where the draw's bounding sphere is against the plane between the lamp's halves, as the half drawn faces with
-    // LampShadowFaceCulling 1 (-1 wholly on the other side, 1 wholly on its side, 0 across or unknown); flipped for 2
+    // Where the draw's bounding sphere is against the plane between the lamp's halves: -1 wholly on the side the half
+    // drawn does not face, 1 wholly on its side, 0 across or unknown. The first half faces -axis, the second +axis
     int SphereSide(void* dc, Source source)
     {
         uint16_t model;
@@ -285,7 +285,7 @@ namespace
         float along = 0.0f;
         for (int i = 0; i < 3; ++i)
             along += (place[i] - o.position[i]) * o.axis[i];
-        if (currentFace == 1)
+        if (currentFace == 0)
             along = -along;
         return along > reach ? 1 : along < -reach ? -1 : 0;
     }
@@ -295,12 +295,8 @@ namespace
         const char* target = bDrawLog || bFaceCulling ? RenderSkip::CurrentTarget() : nullptr;
         const bool lampMaps = (bDrawLog || bFaceCulling) && IsLampMaps(target);
         const int side = lampMaps ? SphereSide(dc, source) : 0;
-        // The half drawn is on the other side of the sphere: what each setting leaves out
-        // 3 (a test): every entity and fragment type draw into the lamps' maps, both halves
-        uint16_t testModel;
-        const float* testPlace;
-        const bool outside = nFaceCulling == 3 ? lampMaps && currentFace >= 0 && ModelAndPlace(dc, source, testModel, testPlace)
-                           : nFaceCulling == 2 ? side > 0 : side < 0;
+        // The half drawn faces away from the sphere
+        const bool outside = side < 0;
         if (outside && bFaceCulling)
         {
             if (bDrawLog)
@@ -514,10 +510,10 @@ namespace
                 auto readIni = [](CIniReader& iniReader)
                 {
                     bDrawLog = iniReader.ReadInteger("DEBUG", "EntityDrawLog", 0) != 0;
-                    nFaceCulling = std::clamp(iniReader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 0), 0, 3);
-                    bFaceCulling = nFaceCulling != 0 && bFaceHooks;
-                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s)\n", int(bDrawLog), nFaceCulling,
-                        !nFaceCulling ? "off" : bFaceCulling ? "on" : "no hooks");
+                    bFaceCullingSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 1) != 0;
+                    bFaceCulling = bFaceCullingSetting && bFaceHooks;
+                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s)\n", int(bDrawLog), int(bFaceCullingSetting),
+                        !bFaceCullingSetting ? "off" : bFaceCulling ? "on" : "no hooks");
                 };
                 CIniReader iniReader("");
                 readIni(iniReader);
