@@ -1,6 +1,7 @@
 module;
 
 #include <common.hxx>
+#include "FusionLog.hpp"
 
 export module firstperson;
 
@@ -38,6 +39,7 @@ namespace FirstPerson
 {
     static bool active = false;
     static bool vehicleActive = false;
+    static uintptr_t vehicleCamera = 0; // the vehicle camera first person was switched on in
     static float forwardOffset = 0.1f;
     static float upOffset = 0.05f;
     // Where the follow camera's update put the view this frame, and the frame it did: the final
@@ -86,14 +88,28 @@ namespace FirstPerson
         return vehicleActive && CTimer::m_frameCount && *CTimer::m_frameCount - seatFrame <= 1;
     }
 
-    static bool HeadBonePosition(Ped handle, float (&head)[3])
+    // CPed::GetBoneMatrix (CE 0x9E70B0, also behind GET_PED_BONE_POSITION): the bone as posed by the
+    // animation, in the world.
+    static void (__fastcall* GetBoneMatrix)(uintptr_t ped, void*, float* matrix, uint32_t bone) = nullptr;
+
+    static bool HeadBonePosition(uintptr_t ped, float (&head)[3])
     {
-        Vector3 bone{};
-        Natives::GetPedBonePosition(handle, HeadBone, 0.0f, 0.0f, 0.0f, &bone);
-        if (!std::isfinite(bone.fX) || !std::isfinite(bone.fY) || !std::isfinite(bone.fZ) ||
-            (bone.fX == 0.0f && bone.fY == 0.0f && bone.fZ == 0.0f))
+        if (!GetBoneMatrix || !ped) return false;
+        float m[16]{};
+        GetBoneMatrix(ped, nullptr, m, HeadBone);
+        if (!std::isfinite(m[12]) || !std::isfinite(m[13]) || !std::isfinite(m[14]) ||
+            (m[12] == 0.0f && m[13] == 0.0f && m[14] == 0.0f))
             return false;
-        head[0] = bone.fX; head[1] = bone.fY; head[2] = bone.fZ;
+        head[0] = m[12]; head[1] = m[13]; head[2] = m[14];
+        return true;
+    }
+
+    // A line now and then while first person is on, to tell from a log what it follows.
+    static bool LogDue(uint32_t& last)
+    {
+        const uint32_t frame = CTimer::m_frameCount ? *CTimer::m_frameCount : 0;
+        if (last && frame - last < 120) return false;
+        last = frame;
         return true;
     }
 
@@ -107,12 +123,14 @@ namespace FirstPerson
             {
                 active = false;
                 zoom = 1;
+                FusionLog::Write("FirstPerson", "OnFoot", "off\n");
             }
         }
         else if (zoom >= 4)
         {
             active = true;
             zoom = 1;
+            FusionLog::Write("FirstPerson", "OnFoot", "on\n");
         }
     }
 
@@ -129,13 +147,14 @@ namespace FirstPerson
             return result;
 
         float head[3]{};
-        Ped handle = 0;
-        Natives::GetPlayerChar(Natives::GetPlayerId(), &handle);
-        if (!handle || !HeadBonePosition(handle, head))
+        const bool bone = HeadBonePosition(ped, head);
+        if (!bone)
         {
             if (!CEntity::GetPosition(ped, head)) return result;
             head[2] += HeadAbovePed;
         }
+        Ped handle = 0;
+        Natives::GetPlayerChar(Natives::GetPlayerId(), &handle);
 
         int32_t phoneTask = 0;
         const bool phone = handle && (Natives::GetMobilePhoneTaskSubTask(handle, &phoneTask) || Natives::IsMobilePhoneCallOngoing());
@@ -157,6 +176,14 @@ namespace FirstPerson
             eye[1] = head[1];
         }
         eye[2] = head[2] + upOffset + down * LookDownUp;
+        static uint32_t logFrame = 0;
+        if (LogDue(logFrame))
+        {
+            float position[3]{};
+            CEntity::GetPosition(ped, position);
+            FusionLog::Write("FirstPerson", "OnFoot", "head %s z %.2f above the ped %.2f, eye z %.2f\n",
+                bone ? "bone" : "fallback", head[2], head[2] - position[2], eye[2]);
+        }
         std::copy(std::begin(eye), std::end(eye), frame + 12);
         eyeFrame = *CTimer::m_frameCount;
         return result;
@@ -168,12 +195,17 @@ namespace FirstPerson
     static void StepVehicleView(SafetyHookContext& regs)
     {
         auto& view = *reinterpret_cast<int8_t*>(regs.esi + VehicleViewOffset);
-        if (vehicleActive)
+        if (vehicleActive && regs.esi == vehicleCamera)
+        {
             vehicleActive = false;
+            FusionLog::Write("FirstPerson", "Vehicle", "off (camera %08X)\n", uint32_t(regs.esi));
+        }
         else if (view == HoodView)
         {
             vehicleActive = true;
+            vehicleCamera = regs.esi;
             view = HoodView - 1;
+            FusionLog::Write("FirstPerson", "Vehicle", "on (camera %08X)\n", uint32_t(regs.esi));
         }
     }
 
@@ -275,24 +307,38 @@ namespace FirstPerson
     static uint32_t __fastcall VehicleUpdate(uintptr_t camera, void*)
     {
         const auto result = vehicleUpdateHook.unsafe_thiscall<uint32_t>(camera);
-        if (!vehicleActive || !CPlayer::getLocalPlayerPed || !CTimer::m_frameCount)
+        if (!vehicleActive || camera != vehicleCamera || !CPlayer::getLocalPlayerPed || !CTimer::m_frameCount)
             return result;
+        static uint32_t logFrame = 0;
+        const bool logDue = LogDue(logFrame);
+        auto skip = [&](const char* why)
+        {
+            if (logDue) FusionLog::Write("FirstPerson", "Vehicle", "not placed: %s\n", why);
+            return result;
+        };
         // another view put in by the game (a new car, a script): first person is left with the hood
-        if (*reinterpret_cast<const int8_t*>(camera + VehicleViewOffset) != HoodView)
+        const auto view = *reinterpret_cast<const int8_t*>(camera + VehicleViewOffset);
+        if (view != HoodView)
         {
             vehicleActive = false;
+            FusionLog::Write("FirstPerson", "Vehicle", "off: the camera went to view %d\n", view);
             return result;
         }
         if (!*reinterpret_cast<const uintptr_t*>(camera + VehicleOffset))
-            return result;
-        const auto pedMatrix = CEntity::GetMatrix(CPlayer::getLocalPlayerPed());
+            return skip("the camera has no vehicle");
+        const auto ped = CPlayer::getLocalPlayerPed();
+        const auto pedMatrix = CEntity::GetMatrix(ped);
         if (!pedMatrix)
-            return result;
+            return skip("no player matrix");
 
         Ped handle = 0;
         Natives::GetPlayerChar(Natives::GetPlayerId(), &handle);
-        if (!handle || !Natives::IsCharSittingInAnyCar(handle) || Natives::IsCharGettingInToACar(handle))
-            return result;
+        if (!handle)
+            return skip("no player handle");
+        if (!Natives::IsCharSittingInAnyCar(handle))
+            return skip("the player is not sitting in a car");
+        if (Natives::IsCharGettingInToACar(handle))
+            return skip("the player is getting in");
         Vehicle vehicle = 0;
         Natives::GetCarCharIsUsing(handle, &vehicle);
         float speed = 0.0f;
@@ -306,10 +352,13 @@ namespace FirstPerson
         const uint32_t frame = *CTimer::m_frameCount;
         seatTracker.Push(pedMatrix, frame);
         float head[3]{};
-        if (!HeadBonePosition(handle, head))
-            return result;
+        if (!HeadBonePosition(ped, head))
+            return skip("no head bone");
         seatTracker.Update(head, model, Natives::IsCharOnAnyBike(handle), speed, seat);
         seatFrame = frame;
+        if (logDue)
+            FusionLog::Write("FirstPerson", "Vehicle", "model %08X speed %.1f, head in the ped's frame %.2f %.2f %.2f%s\n",
+                model, speed, seat[0], seat[1], seat[2], seatTracker.learned.contains(model) ? " (learned)" : "");
         return result;
     }
 
@@ -429,6 +478,11 @@ public:
             };
             readOffsets(iniReader);
             IniReload::Add(readOffsets);
+
+            // CPed::GetBoneMatrix: push edi / mov edi, ecx / mov eax, [edi] / call [eax+A0] / ...
+            auto bones = hook::pattern("57 8B F9 8B 07 FF 90 A0 00 00 00 85 C0 74 16 8B 07 8B CF FF 90 A0 00 00 00 8B 10 8B C8 FF 92 E0 00 00 00 EB 06 8B 87 00 01 00 00 85 C0 0F 84");
+            if (!bones.empty())
+                FirstPerson::GetBoneMatrix = bones.get_first<void(__fastcall)(uintptr_t, void*, float*, uint32_t)>(0);
 
             // lea eax, [esp+30] / push eax / mov ecx, ebx / call 0x4319B0 / movss xmm0, [esi+54]
             auto finalSite = hook::pattern("8D 44 24 30 50 8B CB E8 ? ? ? ? F3 0F 10 46 54");
