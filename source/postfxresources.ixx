@@ -1003,8 +1003,9 @@ public:
     float fSSRGlossCutoff = 0.5f;
     // SSRWetGround: while it rains, SSR on ground facing up that is under the
     // gloss cutoff, drawn this many times brighter (fWetGroundBoost in SSR.fx); 0 turns it off. The
-    // wet ground pass gives only puddles water's specular: its film keeps about dry asphalt's (0.12),
+    // wet ground pass gives only puddles water's specular: its film keeps about dry asphalt's (0.08),
     // so at 1 cars on wet roads reflected half as bright as at 2, and 2 was brighter than the scene.
+    // The film reflects at a third of the puddles' weight, less where its gloss is low (grass).
     float fSSRWetGround = 1.5f;
     float fSSRWaterIntensity = 1.0f;
     // CWater::Render loads this as the Z of every flat water vertex, so it is the real
