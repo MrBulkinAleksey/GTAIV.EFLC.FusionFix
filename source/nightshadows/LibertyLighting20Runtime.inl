@@ -614,6 +614,8 @@ namespace Lighting20
         // lights (a 2dfx light's key is its entity plus an offset under 0x320): a cobra head's post had a second shadow
         // from a light of the building beside it, 5 m off. The keys of the phases' lights by phase index, from Scope.
         static bool ownLampOnly = true;
+        // PropsInCaches: the lamps' static caches (slot 0) take the props too
+        static bool cacheProps = true;
         static std::array<std::atomic<uint32_t>, 32> phaseKey{};
         static std::atomic<uint32_t> notOwnSkips{0};
         // Every phase render (0xD77A00) by its slot (+0x940, 0-15, 15 for more) and that slot record's mode (+0xFC: 3 the
@@ -642,13 +644,19 @@ namespace Lighting20
         }
 
         // A render phase (CE 0xD77990 object) drawing the map of an active slot 1-7, on the main thread.
+        // Slots 1-7 draw the lamps' dynamic maps (record mode +0xFC 4 or 5); slot 0 draws one lamp's static cache a
+        // frame (mode 3, a log: 3522 passes in 3522 frames), which the lamp shows while it has no slot. Props drawn
+        // only into the dynamic maps shadowed from a lamp only once it took a slot, as you came near.
         static bool LampPass(uintptr_t phase) noexcept
         {
             if (!phase) return false;
             const auto slot = *reinterpret_cast<const uint32_t*>(phase + 0x940);
-            if (slot < 1 || slot > 7) return false;
-            return *reinterpret_cast<const uint8_t*>(game + 0xD9F100 + slot * 0x110 + 0xED) == 1 &&
-                !*reinterpret_cast<const uint8_t*>(game + fusionfix::shadows::ce::casterguard::DeferredFlagRva);
+            if (slot > 7 || *reinterpret_cast<const uint8_t*>(game + fusionfix::shadows::ce::casterguard::DeferredFlagRva))
+                return false;
+            const auto record = game + 0xD9F100 + slot * 0x110;
+            if (slot == 0)
+                return cacheProps && *reinterpret_cast<const uint32_t*>(record + 0xFC) == 3;
+            return *reinterpret_cast<const uint8_t*>(record + 0xED) == 1;
         }
 
         // 0xAE73B1, the render list's test of 0x8000 (ESI the entity, [esp+0x28] the phases it is visible in)
@@ -986,6 +994,7 @@ namespace Lighting20
             level = std::clamp(ini.ReadInteger("NIGHTSHADOWS", "PropShadows", 1), 0, 2);
             minLightHeight = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "PropMinLightHeight", 4.0f), 0.0f, 20.0f);
             ownLampOnly = ini.ReadInteger("NIGHTSHADOWS", "PropOwnLampOnly", 1) != 0;
+            cacheProps = ini.ReadInteger("NIGHTSHADOWS", "PropsInCaches", 1) != 0;
             if (!level)
             {
                 installStatus += " props=0";
