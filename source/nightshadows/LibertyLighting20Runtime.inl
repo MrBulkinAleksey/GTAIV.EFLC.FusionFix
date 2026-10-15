@@ -653,6 +653,82 @@ namespace Lighting20
             return matrix ? matrix[14] : *reinterpret_cast<const float*>(entity + 0x18);
         }
 
+        static const float* EntityAt(uintptr_t entity) noexcept
+        {
+            const auto matrix = *reinterpret_cast<const float* const*>(entity + 0x20);
+            return matrix ? matrix + 12 : reinterpret_cast<const float*>(entity + 0x10);
+        }
+
+        // Ctrl+Shift+F7: the next 120 frames of every prop within 15 m of you, to
+        // GTAIV.EFLC.FusionFix.NightShadows.PropTrace.log: each shadow pass (slot, its record's mode and cache, the light,
+        // whether a car's), each visit of such a prop by the caster loop and what was decided, its adds to list 2, and on
+        // the render thread each of its fragment commands with the forced technique group and the viewport's camera
+        // (the light whose map it goes into) and what 0x444C50 did with its model. Lines gathered from both threads,
+        // written out once a frame from Update.
+        namespace Trace
+        {
+            static std::atomic<uint32_t> until{0};
+            static std::mutex mutex;
+            static std::string buffer;
+            static std::atomic<float> you[3]{};
+            static constexpr float Reach = 15.0f;
+            static DWORD mainThread = 0;
+
+            static bool Active() noexcept
+            {
+                const auto end = until.load(std::memory_order_relaxed);
+                return end && Frame() <= end;
+            }
+
+            static bool Near(const float* at) noexcept
+            {
+                const float x = at[0] - you[0].load(std::memory_order_relaxed), y = at[1] - you[1].load(std::memory_order_relaxed);
+                return x * x + y * y < Reach * Reach;
+            }
+
+            static void Line(const char* format, ...) noexcept
+            {
+                try
+                {
+                    va_list args;
+                    va_start(args, format);
+                    auto text = FusionLog::FormatV(format, args);
+                    va_end(args);
+                    std::lock_guard lock(mutex);
+                    if (buffer.size() > (16u << 20)) return;
+                    buffer += "f=" + std::to_string(Frame()) + (GetCurrentThreadId() == mainThread ? " main " : " render ");
+                    buffer += text;
+                    buffer += '\n';
+                }
+                catch (...) {}
+            }
+
+            static void Tick() noexcept
+            {
+                mainThread = GetCurrentThreadId();
+                const auto& p = PlayerShadowAllocation::state.player;
+                you[0].store(p.x, std::memory_order_relaxed);
+                you[1].store(p.y, std::memory_order_relaxed);
+                you[2].store(p.z, std::memory_order_relaxed);
+                static bool wasDown = false;
+                const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+                    (GetAsyncKeyState(VK_F7) & 0x8000);
+                if (down && !wasDown)
+                {
+                    until.store(Frame() + 120, std::memory_order_relaxed);
+                    Line("start: you at %.1f,%.1f,%.1f; props within %.0f m for 120 frames", p.x, p.y, p.z, Reach);
+                }
+                wasDown = down;
+                std::string text;
+                {
+                    std::lock_guard lock(mutex);
+                    text.swap(buffer);
+                }
+                if (!text.empty())
+                    FusionLog::WriteText("NightShadows.PropTrace", "", text);
+            }
+        }
+
         static int DistanceBucket(float dx, float dy, float dz) noexcept
         {
             const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -710,6 +786,15 @@ namespace Lighting20
                         phases &= ~(1u << i);
                 if (!phases) ++notOwnSkips;
             }
+            if (Trace::Active())
+            {
+                const float* at = EntityAt(entity);
+                if (Trace::Near(at))
+                    Trace::Line("list2 entity=%08x model=%u at=%.1f,%.1f,%.1f visible_in=%08x lamp_phases=%08x kept=%08x cache_phases=%08x",
+                        uint32_t(entity), *reinterpret_cast<const uint16_t*>(entity + 0x2E), at[0], at[1], at[2],
+                        *reinterpret_cast<const uint32_t*>(regs.esp + 0x28), lampPhases.load(std::memory_order_relaxed), phases,
+                        cachePhases.load(std::memory_order_relaxed));
+            }
             if (!phases) return;
             if (phases & cachePhases.load(std::memory_order_relaxed)) ++addedForCache;
             addToList(phases, entity, 0.0f, 2);
@@ -753,6 +838,10 @@ namespace Lighting20
             }
         }
 
+        // The trace of one prop fragment command on the render thread, filled by the 0x444C50 hooks while it runs
+        struct CommandTrace { bool on = false; uint32_t models = 0, culled = 0, unculled = 0, draws = 0, forced = 0; std::string buckets; };
+        static thread_local CommandTrace commandTrace;
+
         static uint32_t __fastcall Consumer(void* command, void*)
         {
             const auto model = *reinterpret_cast<const uint16_t*>(reinterpret_cast<uintptr_t>(command) + 0x58);
@@ -764,7 +853,21 @@ namespace Lighting20
             }
             const bool previous = propDraw;
             propDraw = prop;
+            const float* at = reinterpret_cast<const float*>(reinterpret_cast<uintptr_t>(command) + 0x40);
+            const bool traced = prop && Trace::Active() && Trace::Near(at);
+            if (traced) commandTrace = { true };
             const auto result = consumer.unsafe_thiscall<uint32_t>(command);
+            if (traced)
+            {
+                float eye[3]{};
+                if (auto* vp = rage::GetCurrentViewport())
+                    std::copy_n(vp->mCameraMatrix[3], 3, eye);
+                const auto& t = commandTrace;
+                Trace::Line("fragment model=%u at=%.1f,%.1f,%.1f group=%d camera=%.1f,%.1f,%.1f models=%u culled=%u unculled=%u buckets=%s forced=%u draws=%u",
+                    model, at[0], at[1], at[2], *reinterpret_cast<const int32_t*>(game + 0xC6B308), eye[0], eye[1], eye[2],
+                    t.models, t.culled, t.unculled, t.buckets.empty() ? "-" : t.buckets.c_str(), t.forced, t.draws);
+                commandTrace.on = false;
+            }
             propDraw = previous;
             return result;
         }
@@ -834,6 +937,7 @@ namespace Lighting20
             {
                 if (!propDraw) return;
                 ++gmModels;
+                if (commandTrace.on) ++commandTrace.models;
                 const auto group = *reinterpret_cast<const int32_t*>(game + 0xC6B308);
                 ++gmGroups[group >= 0 && group < 15 ? group : 15];
             });
@@ -841,10 +945,12 @@ namespace Lighting20
             {
                 if (!propDraw || regs.ecx) return;
                 ++gmCulled;
+                if (commandTrace.on) ++commandTrace.culled;
                 if (allBuckets && ForcedLocal())
                 {
                     regs.ecx = 2;
                     ++gmUnculled;
+                    if (commandTrace.on) ++commandTrace.unculled;
                 }
             });
             gmBucket = safetyhook::create_mid(game + 0x44E8B, [](SafetyHookContext& regs)
@@ -852,13 +958,21 @@ namespace Lighting20
                 if (!propDraw) return;
                 const auto drawn = *reinterpret_cast<const uint32_t*>(regs.ebp + 0xC);
                 ++gmBuckets[((regs.eax & 15) << 4) | (drawn & 15)];
+                if (commandTrace.on && commandTrace.buckets.size() < 64)
+                    commandTrace.buckets += std::to_string(regs.eax) + '>' + std::to_string(drawn) + ' ';
                 if (allBuckets && regs.eax != drawn && ForcedLocal())
                 {
                     regs.eax = drawn;
                     ++bucketsForced;
+                    if (commandTrace.on) ++commandTrace.forced;
                 }
             });
-            gmDraw = safetyhook::create_mid(game + 0x44F15, [](SafetyHookContext&) { if (propDraw) ++gmDraws; });
+            gmDraw = safetyhook::create_mid(game + 0x44F15, [](SafetyHookContext&)
+            {
+                if (!propDraw) return;
+                ++gmDraws;
+                if (commandTrace.on) ++commandTrace.draws;
+            });
             installStatus += gmEntry && gmViewport && gmBucket && gmDraw ? " prop_model_draw=1" : " prop_model_draw=hook_failed";
         }
 
@@ -970,7 +1084,7 @@ namespace Lighting20
         // post had a shadow in every lamp's map whatever Cast said. So the same rules for every mode: a post (or any
         // prop PropShadows takes) under a light lower than PropMinLightHeight above it, or not its own
         // (PropOwnLampOnly), is left out of the pass (the hook resumes at 0xAE3867, the loop's next entity).
-        static bool Excluded(uintptr_t entity, uint32_t type) noexcept
+        static bool Excluded(uintptr_t entity, uint32_t type, const char** why = nullptr) noexcept
         {
             if (!scope || scopeVehicle || type != 4 || !entity || !On()) return false;
             const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
@@ -978,14 +1092,47 @@ namespace Lighting20
             if (minLightHeight > 0.0f && scopeLight[2] - EntityZ(entity) < minLightHeight)
             {
                 ++lowLightSkips;
+                if (why) *why = "excluded_low_light";
                 return true;
             }
             if (ownLampOnly && (flags & 0x800000) && scopeKey - static_cast<uint32_t>(entity) >= 0x320)
             {
                 ++notOwnSkips;
+                if (why) *why = "excluded_not_own";
                 return true;
             }
             return false;
+        }
+
+        // The caster hook's decision for an entity in a pass: 1 leave it out, 2 let it in as if it had the 0x800 bit,
+        // 0 as the game has it; traced for props near you.
+        static int Decide(uintptr_t entity, uint32_t type, uint32_t mode, bool artificial) noexcept
+        {
+            const char* why = "native";
+            int decision = 0;
+            if (artificial && Excluded(entity, type, &why))
+                decision = 1;
+            else if (artificial && Cast(entity, type, mode))
+            {
+                decision = 2;
+                why = "cast";
+            }
+            if (scope && type == 4 && entity && Trace::Active())
+            {
+                const float* at = EntityAt(entity);
+                if (Trace::Near(at))
+                {
+                    const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
+                    // only the props PropShadows takes, as Collect remembers them: the trace changes nothing it shows
+                    if ((diagnostics || allBuckets) && (flags & 0xC000) == 0x8000 && (level >= 2 || (flags & 0x800000)))
+                        Remember(entity);
+                    Trace::Line("visit entity=%08x model=%u at=%.1f,%.1f,%.1f f24=%08x f210=%08x mode=%u artificial=%d decision=%s pass_key=%08x own=%d",
+                        uint32_t(entity), *reinterpret_cast<const uint16_t*>(entity + 0x2E), at[0], at[1], at[2], flags,
+                        *reinterpret_cast<const uint32_t*>(entity + 0x210), mode, int(artificial), why, scopeKey,
+                        int(scopeKey - static_cast<uint32_t>(entity) < 0x320));
+                }
+            }
+            return decision;
         }
 
         // Around the phase's render (0xD77A00), as Buildings::Scope.
@@ -1001,6 +1148,21 @@ namespace Lighting20
                     const auto slot = *reinterpret_cast<const uint32_t*>(p + 0x940);
                     const uint32_t mode = slot < 8 ? *reinterpret_cast<const uint32_t*>(game + 0xD9F100 + slot * 0x110 + 0xFC) : 7;
                     ++phaseKinds[(slot < 15 ? slot : 15) * 8 + (mode < 7 ? mode : 7)];
+                }
+                if (p && Trace::Active())
+                {
+                    const auto slot = *reinterpret_cast<const uint32_t*>(p + 0x940);
+                    if (slot < 8)
+                    {
+                        const auto r = game + 0xD9F100 + slot * 0x110;
+                        const auto key = *reinterpret_cast<const uint32_t*>(r + 0xF8);
+                        Trace::Line("pass slot=%u mode=%u cache=%d active=%u key=%08x light=%.1f,%.1f,%.1f radius=%.1f phase_index=%u taken=%d vehicle=%d",
+                            slot, *reinterpret_cast<const uint32_t*>(r + 0xFC), *reinterpret_cast<const int32_t*>(r + 0xF0),
+                            *reinterpret_cast<const uint8_t*>(r + 0xED), key, *reinterpret_cast<const float*>(r + 0xC0),
+                            *reinterpret_cast<const float*>(r + 0xC4), *reinterpret_cast<const float*>(r + 0xC8),
+                            *reinterpret_cast<const float*>(r + 0xE0), *reinterpret_cast<const uint32_t*>(p + 0x938),
+                            int(level > 0 && LampPass(p)), int(VehicleLight(key)));
+                    }
                 }
                 scope = level > 0 && LampPass(p);
                 if (!scope) return;
@@ -1593,6 +1755,7 @@ namespace Lighting20
     static void Update() noexcept
     {
         Props::InstallModelDraw();
+        Props::Trace::Tick();
         log.Write(std::ios::app, [](std::ostream& out, uint64_t now)
         {
             out << "tick=" << now << installStatus
