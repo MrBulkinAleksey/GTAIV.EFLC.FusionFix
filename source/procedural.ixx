@@ -51,6 +51,10 @@ import inireload;
 //    reach: each one's reach is drawn, by the hash of its position, between the two (the square of a uniform share
 //    of the way), so some 75% are left at 130 m, 45% at 200 m and 20% at 300 m with the slider and Detail Quality at
 //    their top. Thousands of weeds and plants 100-300 m out took 2-2.5 ms of CPU a frame in the G-buffer.
+//  - ProceduralSmallFarCull: a prop whose radius is under 0.5% of its distance (a 0.9 m weed past 180 m, a 0.4 m
+//    plant past 80 m) is left out of the scene's render list. The thinning alone left 3000+ weed draws, 2.5 ms of a
+//    6 ms G-buffer at night: the game's own reach is own + Detail Quality's 110 m, and it fades them over those
+//    110 m (alpha (reach - distance) / extra, CE 0xae7cac), so most far ones were a faint stipple anyway.
 //  - The 64 candidates of one entity's 2dfx props are capped, which the game itself never checked.
 //
 // And what keeps the cost of more props down (the game already keeps them out of shadows: it sets
@@ -82,6 +86,8 @@ namespace Procedural
     float fDensity = 1.0f;
     float fDistance = 1.0f;
     bool bFarThinning = true;
+    bool bSmallFarCull = true;
+    constexpr float SmallFarScreenSize = 0.005f;   // radius over distance under which a prop is left out
     int32_t nGroundTriangles = 2048;
     volatile LONG nTriangles = 0;       // with the trace on, the triangles the manager holds
     bool bInReflections = false;
@@ -198,16 +204,19 @@ namespace Procedural
     float lastCamera[3] = {};
     uint64_t lastCameraTime = 0;
 
-    // The props that are out, for the render lists
-    std::unordered_set<uintptr_t> props;
+    // The props that are out, for the render lists, with their model's radius
+    std::unordered_map<uintptr_t, float> props;
     SRWLOCK propsLock = SRWLOCK_INIT;
+    uintptr_t modelInfos = 0;           // CE 0x1295cd8, model infos by index
 
-    bool IsProp(uintptr_t entity)
+    // Its radius when it is a prop, else a negative
+    float PropRadius(uintptr_t entity)
     {
         AcquireSRWLockShared(&propsLock);
-        bool found = props.contains(entity);
+        auto it = props.find(entity);
+        float radius = it != props.end() ? it->second : -1.0f;
         ReleaseSRWLockShared(&propsLock);
-        return found;
+        return radius;
     }
 
     // Positions held over to the next update, first in the queue then
@@ -335,7 +344,7 @@ namespace Procedural
     uint32_t nUsedMax = 0;
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
     uint32_t nQueueMax = 0, nWaitingMax = 0, nDropped = 0;
-    uint32_t nReflectionsSkipped = 0;
+    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0;
     uint32_t nConeFull = 0, nParkedNow = 0;
     uint32_t nUpdates = 0;
     double fUpdateMs = 0.0, fUpdateMaxMs = 0.0;
@@ -484,6 +493,7 @@ namespace Procedural
         fConeBack = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeBack", 70.0f), 0.0f, 1000.0f);
         // For the props made from now on
         bFarThinning = iniReader.ReadInteger("PROCEDURAL", "ProceduralFarThinning", 1) != 0;
+        bSmallFarCull = iniReader.ReadInteger("PROCEDURAL", "ProceduralSmallFarCull", 1) != 0;
         fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
         fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
         bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
@@ -595,8 +605,11 @@ namespace Procedural
         {
             if (auto entity = *(uint8_t**)(record + 8))
             {
+                const auto model = *(uint16_t*)(entity + 0x2E);
+                const auto info = modelInfos ? *(uintptr_t*)(modelInfos + model * 4) : 0;
+                const float radius = info ? *(float*)(info + 0x1C) : 0.0f;
                 AcquireSRWLockExclusive(&propsLock);
-                props.insert(uintptr_t(entity));
+                props[uintptr_t(entity)] = radius;
                 ReleaseSRWLockExclusive(&propsLock);
 
                 // Drawn while its own distance times the phase's multiplier (about 1) plus Detail Quality's extra
@@ -856,20 +869,33 @@ namespace Procedural
         waiting.clear();
     }
 
-    // The render lists: reflection phases off for props
-    uint32_t DropReflections(uintptr_t entity, uint32_t phases)
+    // The render lists: reflection phases off for props, and the scene for small ones far off
+    uint32_t DropPhases(uintptr_t entity, uint32_t phases, float distance)
     {
-        if (bInReflections || !pReflectionPhases || !pScenePhase)
+        if (!pReflectionPhases || !pScenePhase)
             return phases;
-        auto reflections = *pReflectionPhases & ~*pScenePhase;
-        if (!(phases & reflections))
+        const auto reflections = bInReflections ? 0 : *pReflectionPhases & ~*pScenePhase;
+        const auto scene = bSmallFarCull ? *pScenePhase : 0;
+        if (!(phases & (reflections | scene)))
             return phases;
         // Props have 0x10000 (no shadows) and 0x40000000 from the generator; few other entities have both
         constexpr uint32_t propFlags = 0x10000 | 0x40000000;
-        if ((*(uint32_t*)(entity + 0x24) & propFlags) != propFlags || !IsProp(entity))
+        if ((*(uint32_t*)(entity + 0x24) & propFlags) != propFlags)
             return phases;
-        nReflectionsSkipped++;
-        return phases & ~reflections;
+        const float radius = PropRadius(entity);
+        if (radius < 0.0f)
+            return phases;
+        if (phases & reflections)
+        {
+            nReflectionsSkipped++;
+            phases &= ~reflections;
+        }
+        if ((phases & scene) && radius > 0.0f && radius < distance * SmallFarScreenSize)
+        {
+            nSmallFarCulled++;
+            phases &= ~scene;
+        }
+        return phases;
     }
 
     SafetyHookInline shUpdate;
@@ -1289,21 +1315,24 @@ public:
             }
 
             // Render lists, where the shadow phases are dropped for entities with 0x10000: esi the entity,
-            // ecx its phases (the second also keeps them at [esp+0x28])
+            // ecx its phases (the second also keeps them at [esp+0x28]), edi its entry, the distance at +4
             pattern = hook::pattern("85 0D ? ? ? ? 75 ? 0F B6 46 63 3D EF 00 00 00");
             auto listA = hook::pattern("F7 43 40 00 01 00 00 F3 0F 10 47 04");
             auto listB = hook::pattern("89 4C 24 28 A9 00 00 00 08");
             if (!pattern.empty() && !listA.empty() && !listB.empty())
             {
                 pReflectionPhases = *pattern.get_first<uint32_t*>(2);
+                // CDrawEntityDC's execute: movzx eax, word [esi+0x30]; mov eax, [eax*4 + model infos]
+                if (auto infos = hook::pattern("0F B7 46 30 8B 04 85 ? ? ? ? 85 C0"); !infos.empty())
+                    modelInfos = *infos.get_first<uintptr_t>(7);
                 pScenePhase = *listB.get_first<uint32_t*>(0xD); // test [0x159af24], edx after the je
                 static auto ListAHook = safetyhook::create_mid(listA.get_first(0), [](SafetyHookContext& regs)
                 {
-                    regs.ecx = DropReflections(regs.esi, uint32_t(regs.ecx));
+                    regs.ecx = DropPhases(regs.esi, uint32_t(regs.ecx), *(float*)(regs.edi + 4));
                 });
                 static auto ListBHook = safetyhook::create_mid(listB.get_first(4), [](SafetyHookContext& regs)
                 {
-                    regs.ecx = DropReflections(regs.esi, uint32_t(regs.ecx));
+                    regs.ecx = DropPhases(regs.esi, uint32_t(regs.ecx), *(float*)(regs.edi + 4));
                     *(uint32_t*)(regs.esp + 0x28) = uint32_t(regs.ecx);
                 });
             }
@@ -1347,13 +1376,13 @@ public:
             auto alive = props.size();
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}; box full {}, candidates capped {}",
+                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}; box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
-                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nEntitiesCapped, nCandidatesCapped));
+                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nEntitiesCapped, nCandidatesCapped));
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
-            nReflectionsSkipped = 0;
+            nReflectionsSkipped = nSmallFarCulled = 0;
             nConeFull = 0;
             nConeReleased = 0;
         };
