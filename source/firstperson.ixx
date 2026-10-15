@@ -13,8 +13,9 @@ import inireload;
 // zoom of CCamFollowPed (+0x360) through 1, 2 and 3 (CE 0xA21A1C); after 3 the view now goes to
 // first person, with the zoom held at 1 underneath, and the next press back to 1. The follow
 // camera keeps working as it does (look, aim, its collision), only its position is moved to the
-// player's head once it is done, and the player is left out of the camera's scene, his shadows and
-// reflections kept.
+// player's head once it is done: a little ahead of it along the level view, further out over the chest
+// as the view goes down (not with the phone in the hand, which stays in view), so the body, the
+// arms and the weapon in them show, and the feet looking down.
 //
 // First person in vehicles, as one more step after the hood view. CCamFollowVehicle keeps its view
 // in +0x22C (CE 0xA12DF0 steps it on a press: 0..3 behind the car, 4 the hood, then 5 or back to
@@ -22,8 +23,10 @@ import inireload;
 // look around and its rotation with the car stay and only the eye is moved to the player's head. The
 // head bone lags the car by a frame or two at speed (the skeleton is posed before the car moves), so
 // the head is kept in the ped's own frame, learned while the car nearly stands, and placed with the
-// ped's matrix as it is when the final camera is built. The head, hair and face are not drawn and the
-// near clip is raised, which cuts away the neck and shoulders around the eye.
+// ped's matrix as it is when the final camera is built.
+//
+// In both the head, hair and face are not drawn and the near clip is raised, which cuts away the
+// neck and shoulders around the eye.
 namespace FirstPerson
 {
     static bool active = false;
@@ -31,7 +34,7 @@ namespace FirstPerson
     static float forwardOffset = 0.1f;
     static float upOffset = 0.05f;
     // Where the follow camera's update put the view this frame, and the frame it did: the final
-    // camera takes it and the player is hidden only while it is current, so he shows again once
+    // camera takes it and the head is hidden only while it is current, so it shows again once
     // another camera takes over (aiming, cars, cutscenes).
     static float eye[3]{};
     static uint32_t eyeFrame = 0;
@@ -44,7 +47,10 @@ namespace FirstPerson
     static constexpr uintptr_t ZoomOffset = 0x360, TargetOffset = 0x384;
     static constexpr uintptr_t VehicleViewOffset = 0x22C, VehicleOffset = 0x170;
     static constexpr int8_t HoodView = 4;
-    static constexpr float VehicleNearClip = 0.12f; // the game's own is 0.05; hands and the wheel are further
+    static constexpr float NearClip = 0.12f;        // the game's own is 0.05; hands, guns and the wheel are further
+    static constexpr float LookDownForward = 0.2f;  // m the eye moves out over the chest looking straight down
+    static constexpr float LookDownUp = 0.03f;
+    static float lookDownWeight = 0.0f;              // eases to 0 while the phone is in the hand
     static constexpr float LearnBelowSpeed = 1.5f;  // m/s: below it the head bone's lag is a few cm
 
     static SafetyHookMid zoomHook;
@@ -94,8 +100,8 @@ namespace FirstPerson
     }
 
     // CCamFollowPed::Update (vtable slot 4), then where the eye goes: the head, a little ahead along
-    // the view and up. The camera's frame at +0x10 holds right, front and up, then the position at
-    // +0x40, which is moved too.
+    // the level view and up, and out over the chest as the view goes down. The camera's frame at +0x10
+    // holds right, front and up, then the position at +0x40, which is moved too.
     static bool __fastcall Update(uintptr_t camera, void*)
     {
         const bool result = updateHook.unsafe_thiscall<bool>(camera);
@@ -114,11 +120,26 @@ namespace FirstPerson
             head[2] += HeadAbovePed;
         }
 
+        int32_t phoneTask = 0;
+        const bool phone = handle && (Natives::GetMobilePhoneTaskSubTask(handle, &phoneTask) || Natives::IsMobilePhoneCallOngoing());
+        lookDownWeight += ((phone ? 0.0f : 1.0f) - lookDownWeight) * 0.1f;
+
         auto frame = reinterpret_cast<float*>(camera + 0x10);
         const float* front = frame + 4;
-        const float* up = frame + 8;
-        for (int i = 0; i < 3; ++i)
-            eye[i] = head[i] + front[i] * forwardOffset + up[i] * upOffset;
+        const float level = std::sqrt(front[0] * front[0] + front[1] * front[1]);
+        const float down = std::max(-front[2], 0.0f) * lookDownWeight;
+        const float push = forwardOffset + down * LookDownForward;
+        if (level > 1e-3f)
+        {
+            eye[0] = head[0] + front[0] / level * push;
+            eye[1] = head[1] + front[1] / level * push;
+        }
+        else
+        {
+            eye[0] = head[0];
+            eye[1] = head[1];
+        }
+        eye[2] = head[2] + upOffset + down * LookDownUp;
         std::copy(std::begin(eye), std::end(eye), frame + 12);
         eyeFrame = *CTimer::m_frameCount;
         return result;
@@ -259,8 +280,8 @@ namespace FirstPerson
     // CCamFinal hands its matrix to the viewport (CE 0xC462FE, the matrix pushed for 0x4319B0, its
     // position at +0x30, built from the final camera's frame in esi): the eye goes in there, the
     // view as rendered, whichever cameras the follow camera's position went through on the way.
-    // In a vehicle the head is placed with the ped's matrix as it is now, and the near clip (esi+54,
-    // read right after) raised.
+    // In a vehicle the head is placed with the ped's matrix as it is now. The near clip (esi+54, read
+    // right after) is raised.
     static void PlaceFinal(SafetyHookContext& regs)
     {
         const auto matrix = *reinterpret_cast<float**>(regs.esp);
@@ -278,28 +299,25 @@ namespace FirstPerson
                     front[i] * forwardOffset + up[i] * upOffset;
             std::copy(std::begin(position), std::end(position), matrix + 12);
             std::copy(std::begin(position), std::end(position), cam + 12);
-            auto& nearClip = cam[21];
-            if (nearClip > 0.0f && nearClip < VehicleNearClip)
-                nearClip = VehicleNearClip;
-            return;
         }
-        if (!EyeCurrent()) return;
-        std::copy(std::begin(eye), std::end(eye), matrix + 12);
-        std::copy(std::begin(eye), std::end(eye), cam + 12);
+        else if (EyeCurrent())
+        {
+            std::copy(std::begin(eye), std::end(eye), matrix + 12);
+            std::copy(std::begin(eye), std::end(eye), cam + 12);
+        }
+        else
+            return;
+        auto& nearClip = cam[21];
+        if (nearClip > 0.0f && nearClip < NearClip)
+            nearClip = NearClip;
     }
 
-    static bool SkipInScene(void* entity)
-    {
-        return EyeCurrent() && CPlayer::getLocalPlayerPed &&
-            reinterpret_cast<uintptr_t>(entity) == CPlayer::getLocalPlayerPed();
-    }
-
-    // The player's head, hair, teeth and face are not drawn while the eye is in them in a vehicle (on
-    // foot the whole player is left out of the scene), and drawn again as soon as it is not.
+    // The player's head, hair, teeth and face are not drawn while the eye is in them, and drawn again
+    // as soon as it is not.
     static void HideHead()
     {
         static bool hidden = false;
-        const bool hide = SeatCurrent();
+        const bool hide = EyeCurrent() || SeatCurrent();
         if (hide == hidden) return;
         hidden = hide;
         for (const int32_t component : { 0, 7, 9, 10 })
@@ -343,7 +361,6 @@ public:
                 {
                     FirstPerson::zoomHook = safetyhook::create_mid(zoom.get_first(7), FirstPerson::StepZoom);
                     FirstPerson::updateHook = safetyhook::create_inline(update.get_first(0), FirstPerson::Update);
-                    CRenderPhaseDeferredLighting_SceneToGBuffer::SkipEntity = FirstPerson::SkipInScene;
                 }
             }
 
@@ -357,9 +374,9 @@ public:
                 {
                     FirstPerson::vehicleViewHook = safetyhook::create_mid(view.get_first(0), FirstPerson::StepVehicleView);
                     FirstPerson::vehicleUpdateHook = safetyhook::create_inline(update.get_first(0), FirstPerson::VehicleUpdate);
-                    FusionFix::onGameProcessEvent() += FirstPerson::HideHead;
                 }
             }
+            FusionFix::onGameProcessEvent() += FirstPerson::HideHead;
         };
     }
 } FirstPersonCamera;
