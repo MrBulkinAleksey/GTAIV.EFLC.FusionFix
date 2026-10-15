@@ -6,9 +6,10 @@
 # rolls on its springs (with world up, the frame on the near flat bonnet swung with every bit of pitch and the beads
 # swam while the car sped up). On the bodywork:
 #  - beads in two sizes: small ones (1 to 2.7 mm across their radius at the default density) in most cells of a fine
-#    grid, and fewer big ones (5 to 9 mm) on a coarse one, more of both the harder it rains. The grid lies across the
-#    body's forward axis (n x y, fixed to the body and defined everywhere but on faces straight ahead or behind, where
-#    it only turns; a 3D grid of spheres was tried and left rows and empty bands on the near flat bonnet);
+#    grid, and fewer big ones (2.5 to 5 mm; at 5 to 9 mm they read as small puddles) on a coarse one, more of both the
+#    harder it rains. The grid lies across the body's forward axis (n x y, fixed to the body and defined everywhere but
+#    on faces straight ahead or behind, where it only turns; a 3D grid of spheres was tried and left rows and empty
+#    bands on the near flat bonnet);
 #  - running drops on the sides: columns some 17 mm apart along the body's own vertical, each with narrow heads
 #    (3 x 8 mm) sliding down at its own speed and a thin wet trail (1 mm, 55 mm long) above each; none on flat tops.
 # Each drop's height is a dome whose slope is known exactly, so the normal is bent from that slope carried to the
@@ -38,8 +39,8 @@ DEFS = f'''\
     def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // {TAG}: the hash
     def c189, 3, 0.119999997, 0.200000003, 1.39999998 // {TAG}: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
     def c190, 0.360000014, 0.319999993, 0.150000006, 100000 // {TAG}: their centre's range and start, mean cover of a cell; most pixels per metre
-    def c191, 0.800000012, 0.150000006, 0.150000006, 0.449999988 // {TAG}: big beads: cells per bead cell, radius from, radius range (cells), share
-    def c192, 0.400000006, 0.300000012, 0.159999996, 1 // {TAG}: their centre's range and start, mean cover of a cell; running heads' share
+    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.449999988 // {TAG}: big beads: cells per bead cell, radius from, radius range (cells), share
+    def c192, 0.680000007, 0.159999996, 0.0469999984, 1 // {TAG}: their centre's range and start, mean cover of a cell; running heads' share
     def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // {TAG}: 1 / a running head's half width and half height, its half width, a trail's (m)
     def c194, 20, 4, 0, 0 // {TAG}: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
     def c195, 0, 1, 0, 0 // {TAG}: the body's forward axis

@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
-index 8e22fba..bf73a53 100644
+index 8e22fba..a05000e 100644
 --- a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
 @@ -55,12 +55,32 @@
@@ -17,8 +17,8 @@ index 8e22fba..bf73a53 100644
 +    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix rain on cars: the hash
 +    def c189, 3, 0.119999997, 0.200000003, 1.39999998 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
 +    def c190, 0.360000014, 0.319999993, 0.150000006, 100000 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; most pixels per metre
-+    def c191, 0.800000012, 0.150000006, 0.150000006, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
-+    def c192, 0.400000006, 0.300000012, 0.159999996, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
++    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
++    def c192, 0.680000007, 0.159999996, 0.0469999984, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
 +    def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
 +    def c194, 20, 4, 0, 0 // FusionFix rain on cars: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
 +    def c195, 0, 1, 0, 0 // FusionFix rain on cars: the body's forward axis
@@ -403,7 +403,7 @@ index 45aef76..6af4ae0 100644
  
  // approximately 238 instruction slots used (8 texture, 230 arithmetic)
 diff --git a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
-index 992eb2b..773c567 100644
+index 992eb2b..fa73d6e 100644
 --- a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
 @@ -55,11 +55,31 @@
@@ -421,8 +421,8 @@ index 992eb2b..773c567 100644
 +    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix rain on cars: the hash
 +    def c189, 3, 0.119999997, 0.200000003, 1.39999998 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
 +    def c190, 0.360000014, 0.319999993, 0.150000006, 100000 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; most pixels per metre
-+    def c191, 0.800000012, 0.150000006, 0.150000006, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
-+    def c192, 0.400000006, 0.300000012, 0.159999996, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
++    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
++    def c192, 0.680000007, 0.159999996, 0.0469999984, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
 +    def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
 +    def c194, 20, 4, 0, 0 // FusionFix rain on cars: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
 +    def c195, 0, 1, 0, 0 // FusionFix rain on cars: the body's forward axis
@@ -806,7 +806,7 @@ index cd862d2..0a1bed4 100644
  
  // approximately 237 instruction slots used (8 texture, 229 arithmetic)
 diff --git a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
-index 141b8ca..7b10ad8 100644
+index 141b8ca..4a4da9c 100644
 --- a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
 @@ -57,11 +57,31 @@
@@ -824,8 +824,8 @@ index 141b8ca..7b10ad8 100644
 +    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix rain on cars: the hash
 +    def c189, 3, 0.119999997, 0.200000003, 1.39999998 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
 +    def c190, 0.360000014, 0.319999993, 0.150000006, 100000 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; most pixels per metre
-+    def c191, 0.800000012, 0.150000006, 0.150000006, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
-+    def c192, 0.400000006, 0.300000012, 0.159999996, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
++    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.449999988 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
++    def c192, 0.680000007, 0.159999996, 0.0469999984, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
 +    def c193, 666.666687, 250, 0.00150000001, 0.000500000024 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
 +    def c194, 20, 4, 0, 0 // FusionFix rain on cars: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
 +    def c195, 0, 1, 0, 0 // FusionFix rain on cars: the body's forward axis
