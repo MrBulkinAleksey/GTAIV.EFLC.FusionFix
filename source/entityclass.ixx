@@ -512,6 +512,8 @@ namespace
                     bDrawLog = iniReader.ReadInteger("DEBUG", "EntityDrawLog", 0) != 0;
                     nFaceCulling = std::clamp(iniReader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 0), 0, 2);
                     bFaceCulling = nFaceCulling != 0 && bFaceHooks;
+                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s)\n", int(bDrawLog), nFaceCulling,
+                        !nFaceCulling ? "off" : bFaceCulling ? "on" : "no hooks");
                 };
                 CIniReader iniReader("");
                 readIni(iniReader);
