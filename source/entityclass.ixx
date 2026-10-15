@@ -36,7 +36,8 @@ import temporal;
 // execute took, per frame and per target the game had locked (RenderSkip::CurrentTarget), to
 // GTAIV.EFLC.FusionFix.EntityClass.log: what leaving a kind out of a pass would save. For the G-buffer and the water's
 // reflection also by the distance from the viewport's camera and by the size on screen (the sphere's reach over the
-// distance), and for the G-buffer the costliest models, by the hash of their name (model info +0x3c).
+// distance), for the lamps' maps the same from the lamp of the half drawn, and for the G-buffer and the lamps' maps the
+// costliest models, by the hash of their name (model info +0x3c), with their mean distance.
 //
 // SkipLeftOutDraws = 1 ([PERFORMANCE]): RenderSkip leaves passes out on the GPU (the reflections and far cascades
 // taking turns, the night's cascades) by dropping their device draws, but the game still works through every draw
@@ -131,13 +132,14 @@ namespace
         // Lamp maps: draws with the half known, and where their spheres are against the plane between the halves: on
         // the side the half drawn faces, on the other, across
         uint64_t faceKnown = 0, faceUnknown = 0, ahead = 0, behind = 0, across = 0;
-        // The G-buffer and the water's reflection: draws and time by distance and by size on screen (keyed draws)
-        bool camera = false;
+        // The G-buffer and the water's reflection: draws and time by distance and by size on screen (keyed draws);
+        // the lamps' maps: the same from the lamp
+        bool camera = false, lamp = false;
         uint64_t distanceDraws[6]{}, sizeDraws[6]{};
         int64_t distanceTicks[6]{}, sizeTicks[6]{};
         // The G-buffer: by model
         bool models = false;
-        struct ModelStats { uint64_t draws = 0; int64_t ticks = 0; Kind kind = Kind::Unknown; };
+        struct ModelStats { uint64_t draws = 0, placed = 0; int64_t ticks = 0; double distance = 0.0; Kind kind = Kind::Unknown; };
         std::unordered_map<uint16_t, ModelStats> byModel;
         int64_t Total() const
         {
@@ -166,7 +168,9 @@ namespace
             targetStats.push_back({ shown });
             it = targetStats.end() - 1;
             it->camera = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || !std::strcmp(shown, "WATER_REFLECTION_COLOUR");
-            it->models = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_");
+            it->lamp = !std::strcmp(shown, "SHADOW_MAP_COLOUR_POINT");
+            it->camera |= it->lamp;
+            it->models = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->lamp;
         }
         lastTargetName = name;
         lastTarget = size_t(it - targetStats.begin());
@@ -204,9 +208,13 @@ namespace
             text += "\n";
             if (s.camera)
             {
-                static constexpr const char* distances[6] = { "0-25 m", "25-50 m", "50-100 m", "100-200 m", "200-400 m", "400+ m" };
-                static constexpr const char* sizes[6] = { "under 0.5%", "0.5-1%", "1-2%", "2-5%", "5-10%", "10%+" };
-                text += "    by distance:";
+                static constexpr const char* cameraDistances[6] = { "0-25 m", "25-50 m", "50-100 m", "100-200 m", "200-400 m", "400+ m" };
+                static constexpr const char* lampDistances[6] = { "0-2 m", "2-5 m", "5-10 m", "10-20 m", "20-40 m", "40+ m" };
+                static constexpr const char* cameraSizes[6] = { "under 0.5%", "0.5-1%", "1-2%", "2-5%", "5-10%", "10%+" };
+                static constexpr const char* lampSizes[6] = { "under 2%", "2-5%", "5-10%", "10-20%", "20-50%", "50%+" };
+                const auto distances = s.lamp ? lampDistances : cameraDistances;
+                const auto sizes = s.lamp ? lampSizes : cameraSizes;
+                text += s.lamp ? "    by distance from the lamp:" : "    by distance:";
                 for (int i = 0; i < 6; ++i)
                     text += std::format("{} {} {:.1f} ({:.3f} ms)", i ? "," : "", distances[i], s.distanceDraws[i] * perFrame, s.distanceTicks[i] * msPerFrame);
                 text += "\n    by size on screen (radius over distance):";
@@ -221,7 +229,8 @@ namespace
                 int64_t all = 0;
                 for (auto& [model, m] : top)
                     all += m.ticks;
-                text += std::format("    {} models; the costliest (name hash, radius, kind, draws, ms, us a draw):\n", top.size());
+                text += std::format("    {} models; the costliest (name hash, radius, kind, draws, ms, us a draw, mean distance{}):\n",
+                    top.size(), s.lamp ? " from the lamp" : "");
                 int64_t shown = 0;
                 for (size_t i = 0; i < top.size() && i < 20; ++i)
                 {
@@ -229,8 +238,9 @@ namespace
                     const auto info = modelInfos ? *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4) : 0;
                     const uint32_t hash = info ? *reinterpret_cast<const uint32_t*>(info + 0x3c) : 0;
                     const float radius = info ? *reinterpret_cast<const float*>(info + 0x1c) : 0.0f;
-                    text += std::format("      {:08X} {:6.1f} m {:<9} {:7.2f} {:6.3f} ms {:6.2f}\n", hash, radius, KindNames[size_t(m.kind)],
-                        m.draws * perFrame, m.ticks * msPerFrame, m.draws ? m.ticks * 1e6 / double(qpcFrequency) / m.draws : 0.0);
+                    text += std::format("      {:08X} {:6.1f} m {:<9} {:7.2f} {:6.3f} ms {:6.2f} {:6.1f} m\n", hash, radius, KindNames[size_t(m.kind)],
+                        m.draws * perFrame, m.ticks * msPerFrame, m.draws ? m.ticks * 1e6 / double(qpcFrequency) / m.draws : 0.0,
+                        m.placed ? m.distance / double(m.placed) : 0.0);
                     shown += m.ticks;
                 }
                 text += std::format("      the top 20 take {:.0f}% of the models' time\n", all ? 100.0 * shown / all : 0.0);
@@ -344,23 +354,28 @@ namespace
         return along > reach ? 1 : along < -reach ? -1 : 0;
     }
 
-    // The draw's distance from the current viewport's camera and its size on screen, into their buckets
-    void CountByCamera(TargetStats& stats, uint16_t model, const float* place, int64_t ticks)
+    // The draw's distance from the current viewport's camera (in the lamps' maps from the lamp of the half drawn) and
+    // its size on screen, into their buckets; the distance, or a negative when not known
+    float CountByCamera(TargetStats& stats, uint16_t model, const float* place, int64_t ticks)
     {
         auto viewport = rage::GetCurrentViewport();
-        if (!viewport || !modelInfos)
-            return;
+        if (!modelInfos || (stats.lamp ? currentFace < 0 : !viewport))
+            return -1.0f;
         const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4);
         if (!info)
-            return;
+            return -1.0f;
         const float* centre = reinterpret_cast<const float*>(info + 0x10);
         const float radius = *reinterpret_cast<const float*>(info + 0x1c);
         const float reach = radius + std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
-        const float* eye = viewport->mViewInverseMatrix[3];
+        const float* eye = stats.lamp ? currentOrigin.position : viewport->mViewInverseMatrix[3];
         const float dx = place[0] - eye[0], dy = place[1] - eye[1], dz = place[2] - eye[2];
         const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-        static constexpr float distanceEdges[5] = { 25.0f, 50.0f, 100.0f, 200.0f, 400.0f };
-        static constexpr float sizeEdges[5] = { 0.005f, 0.01f, 0.02f, 0.05f, 0.1f };
+        static constexpr float cameraDistanceEdges[5] = { 25.0f, 50.0f, 100.0f, 200.0f, 400.0f };
+        static constexpr float lampDistanceEdges[5] = { 2.0f, 5.0f, 10.0f, 20.0f, 40.0f };
+        static constexpr float cameraSizeEdges[5] = { 0.005f, 0.01f, 0.02f, 0.05f, 0.1f };
+        static constexpr float lampSizeEdges[5] = { 0.02f, 0.05f, 0.1f, 0.2f, 0.5f };
+        const auto distanceEdges = stats.lamp ? lampDistanceEdges : cameraDistanceEdges;
+        const auto sizeEdges = stats.lamp ? lampSizeEdges : cameraSizeEdges;
         const float size = reach / (std::max)(distance, 1.0f);
         int d = 0, z = 0;
         while (d < 5 && distance >= distanceEdges[d])
@@ -371,6 +386,7 @@ namespace
         stats.distanceTicks[d] += ticks;
         stats.sizeDraws[z]++;
         stats.sizeTicks[z] += ticks;
+        return distance;
     }
 
     void Execute(DrawExecute original, void* dc, Kind kind, Source source)
@@ -452,14 +468,18 @@ namespace
             if (ModelAndPlace(dc, source, model, place))
             {
                 const int64_t ticks = end.QuadPart - start.QuadPart;
-                if (stats.camera)
-                    CountByCamera(stats, model, place, ticks);
+                const float distance = stats.camera ? CountByCamera(stats, model, place, ticks) : -1.0f;
                 if (stats.models)
                 {
                     auto& m = stats.byModel[model];
                     m.draws++;
                     m.ticks += ticks;
                     m.kind = kind;
+                    if (distance >= 0.0f)
+                    {
+                        m.placed++;
+                        m.distance += distance;
+                    }
                 }
                 uint64_t key = model;
                 for (int i = 0; i < 3; ++i)
