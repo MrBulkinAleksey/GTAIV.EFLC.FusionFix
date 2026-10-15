@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 5de051e3..bbd291bc 100644
+index 5de051e..523ca78 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 @@ -167,8 +167,26 @@
@@ -12,7 +12,7 @@ index 5de051e3..bbd291bc 100644
 +    def c180, 13.6999998, 0.5, 0.699999988, 0.769230783 // FusionFix rain on cars: presence hash, a half; drops fade out under 2 pixels across
 +    def c181, 1.5, 12.5, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
 +    def c182, 0.400000006, 0.300000012, 0.0799999982, -2 // FusionFix rain on cars: the head's place across its column, a row's length in metres, -2
-+    def c183, 18, 0.349999994, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
++    def c183, 18, 0.100000001, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
 +    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix rain on cars: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
 +    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix rain on cars: luminance, zero
 +    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix rain on cars: the pearl tint
@@ -358,7 +358,7 @@ index 5de051e3..bbd291bc 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 317652ff..7433be1b 100644
+index 317652f..e8d2f63 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 @@ -118,8 +118,26 @@
@@ -371,7 +371,7 @@ index 317652ff..7433be1b 100644
 +    def c180, 13.6999998, 0.5, 0.699999988, 0.769230783 // FusionFix rain on cars: presence hash, a half; drops fade out under 2 pixels across
 +    def c181, 1.5, 12.5, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
 +    def c182, 0.400000006, 0.300000012, 0.0799999982, -2 // FusionFix rain on cars: the head's place across its column, a row's length in metres, -2
-+    def c183, 18, 0.349999994, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
++    def c183, 18, 0.100000001, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
 +    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix rain on cars: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
 +    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix rain on cars: luminance, zero
 +    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix rain on cars: the pearl tint
@@ -717,7 +717,7 @@ index 317652ff..7433be1b 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 5aac5d8b..c4c61706 100644
+index 5aac5d8..ffec4f2 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 @@ -143,8 +143,26 @@
@@ -730,7 +730,7 @@ index 5aac5d8b..c4c61706 100644
 +    def c180, 13.6999998, 0.5, 0.699999988, 0.769230783 // FusionFix rain on cars: presence hash, a half; drops fade out under 2 pixels across
 +    def c181, 1.5, 12.5, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
 +    def c182, 0.400000006, 0.300000012, 0.0799999982, -2 // FusionFix rain on cars: the head's place across its column, a row's length in metres, -2
-+    def c183, 18, 0.349999994, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
++    def c183, 18, 0.100000001, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
 +    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix rain on cars: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
 +    def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // FusionFix rain on cars: luminance, zero
 +    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix rain on cars: the pearl tint
@@ -1076,7 +1076,7 @@ index 5aac5d8b..c4c61706 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS1.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS1.asm
-index 3c29edf4..d1e9cb40 100644
+index 3c29edf..d1e9cb4 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS1.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS1.asm
 @@ -38,6 +38,9 @@
@@ -1107,7 +1107,7 @@ index 3c29edf4..d1e9cb40 100644
  
  // approximately 246 instruction slots used (8 texture, 238 arithmetic)
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS2.asm
-index 5754d80a..020eb6db 100644
+index 5754d80..020eb6d 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS2.asm
 @@ -41,6 +41,9 @@

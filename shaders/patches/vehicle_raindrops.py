@@ -30,7 +30,7 @@ DEFS = f'''\
     def c180, 13.6999998, 0.5, 0.699999988, 0.769230783 // {TAG}: presence hash, a half; drops fade out under 2 pixels across
     def c181, 1.5, 12.5, 0.300000012, 9.99999975e-005 // {TAG}: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
     def c182, 0.400000006, 0.300000012, 0.0799999982, -2 // {TAG}: the head's place across its column, a row's length in metres, -2
-    def c183, 18, 0.349999994, 0.100000001, 0.150000006 // {TAG}: 1 / trail length, darkening under drops, a wet film's specular, a drop's
+    def c183, 18, 0.100000001, 0.100000001, 0.150000006 // {TAG}: 1 / trail length, darkening under drops, a wet film's specular, a drop's
     def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // {TAG}: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
     def c185, 0.212599993, 0.715200007, 0.0722000003, 0 // {TAG}: luminance, zero
     def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // {TAG}: the pearl tint

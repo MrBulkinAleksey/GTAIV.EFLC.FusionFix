@@ -81,7 +81,10 @@ def finish_and_drops(clean):
       max r8.x, r24.x, r8.y
       mul r8.x, r8.x, c183.y
       add r8.x, -r8.x, c187.w
-      mul r0.xyz, r0, r8.x // darker under drops, and half as much along their trails
+      mul r0.xyz, r0, r8.x // darker under drops (a tenth: water is clear, at a third they read as holes), half along trails
+      // The drops' slope at 0.4 on paint: the one normal lights the diffuse too, and full domes came out lit on one side
+      // and dark on the other, like dents with their own shadows; the drops' gloss of 0.97 still shows their highlights
+      mul r24.zw, r24, c182.x
     endif
 {drops_bend()}'''
 
