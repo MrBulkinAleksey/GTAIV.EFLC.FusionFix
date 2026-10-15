@@ -2147,6 +2147,7 @@ public:
             // Car paint and rain drops on it (vehiclepaint.ixx)
             { 0, "PREF_VEHICLE_PAINT",          "TEXTURES",   "VehiclePaint",                       "",                           1, nullptr, 0, 1 },
             { 0, "PREF_CAR_RAINDROPS",          "WEATHER",    "CarRaindrops",                       "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_SUN_FLARE",              "SUNSHAFTS",  "SunFlare",                           "",                           0, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2396,6 +2397,7 @@ public:
             AddRow(category, "Contact Shadows", "PREF_CONTACTSHADOWS", 2, toggle);
             AddRow(category, "SkinSSS", "PREF_SKIN_SSS", 2, toggle);
             AddRow(category, "VolumetricLight", "PREF_VOLUMETRIC_LIGHT", 2, toggle);
+            AddRow(category, "SunFlare", "PREF_SUN_FLARE", 2, toggle);
             AddRow(category, "VolumeClouds", "PREF_VOLUMETRIC_CLOUDS", 2, toggle);
             AddRow(category, "GGXLighting", "PREF_GGX_LIGHTING", 2, toggle);
             AddRow(category, "WetWeather", "PREF_WET_WEATHER", 2, toggle);
