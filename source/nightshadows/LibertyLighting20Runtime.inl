@@ -604,9 +604,10 @@ namespace Lighting20
         static bool On() noexcept { return level > 0 && bExtraNightShadows; }
 
         // PropMinLightHeight: a prop goes only into the maps of lights at least this many metres above its foot. A game
-        // lamp 2 m over the pavement 10 m from a post, taking a slot (CachedLampShadows), threw the post's shadow up a
-        // whole wall beside the one from the post's own lamp. The lights of the lamps' phases by phase index, from Scope.
-        static float minLightHeight = 3.0f;
+        // lamp over a door, some 3 m over the pavement 10 m from a post, taking a slot (CachedLampShadows, or a free
+        // one), threw the post's shadow up a whole wall beside the one from the post's own lamp; street lamps stand
+        // 6 to 9 m high. The lights of the lamps' phases by phase index, from Scope.
+        static float minLightHeight = 4.0f;
         static std::array<std::atomic<float>, 32> phaseLightZ{};
         static std::atomic<uint32_t> lowLightSkips{0};
 
@@ -951,7 +952,7 @@ namespace Lighting20
         static void Install(CIniReader& ini) noexcept
         {
             level = std::clamp(ini.ReadInteger("NIGHTSHADOWS", "PropShadows", 1), 0, 2);
-            minLightHeight = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "PropMinLightHeight", 3.0f), 0.0f, 20.0f);
+            minLightHeight = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "PropMinLightHeight", 4.0f), 0.0f, 20.0f);
             if (!level)
             {
                 installStatus += " props=0";
