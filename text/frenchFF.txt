@@ -361,6 +361,9 @@ Walls block headlights
 [VolumeClouds]
 Volumetric Clouds
 
+[PbrSky]
+Physical Sky
+
 [Zoomed Movement]
 Permettre le mouvement en zoomant
 

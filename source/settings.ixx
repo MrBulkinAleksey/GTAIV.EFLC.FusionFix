@@ -2144,6 +2144,7 @@ public:
             { 0, "PREF_TAIL_LIGHT_SHADOWS",     "NIGHTSHADOWS", "TailLightShadows",                 "",                           1, nullptr, 0, 1 },
             { 0, "PREF_WORLD_LIGHT_SHADOWS",    "NIGHTSHADOWS", "WorldLightShadows",                "",                           1, nullptr, 0, 1 },
             { 0, "PREF_BUILDING_SHADOWS",       "NIGHTSHADOWS", "BuildingShadows",                  "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_PBR_SKY",                "WEATHER",    "PbrSky",                             "",                           1, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2394,6 +2395,7 @@ public:
             AddRow(category, "SkinSSS", "PREF_SKIN_SSS", 2, toggle);
             AddRow(category, "VolumetricLight", "PREF_VOLUMETRIC_LIGHT", 2, toggle);
             AddRow(category, "VolumeClouds", "PREF_VOLUMETRIC_CLOUDS", 2, toggle);
+            AddRow(category, "PbrSky", "PREF_PBR_SKY", 2, toggle);
             AddRow(category, "GGXLighting", "PREF_GGX_LIGHTING", 2, toggle);
             AddRow(category, "WetWeather", "PREF_WET_WEATHER", 2, toggle);
             AddRow(category, "VehBoxShadows", "PREF_VEHICLE_BOX_SHADOWS", 2, toggle);

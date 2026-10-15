@@ -1,0 +1,330 @@
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS1.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS1.asm
+index 3c09a57f..6367f059 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS1.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS1.asm
+@@ -63,6 +63,9 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.1275310931e-44 // 58
++    def c151, 1.57072878, -0.212114394, 0.0742610022, -0.0187292993 // FusionFix sky_pbr.patch: acos cubic
++    def c152, 1, -0.636619747, 0.5, -0.5 // FusionFix sky_pbr.patch: one, -2 / pi, a half
++    def c153, 3.14159274, 0.318309873, 9.99999997e-007, 0 // FusionFix sky_pbr.patch: pi, 1 / pi, tiny, zero
+     def c0, 0.200000003, 0, 0.25, 0.349999994
+     def c1, 9.99999975e-006, 1, -11.6163721, 32
+     def c2, 0.9375, 0.5, 12.5799999, -0.0625
+@@ -82,6 +85,7 @@
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
++    dcl_2d s10 // FusionFix sky_pbr.patch: the PBR sky's SkyView table
+     
+     mul r20.w, c44.x, c44.w
+     add r20.w, r20.w, -c142.y
+@@ -142,7 +146,43 @@
+     mul_pp r1.xyz, r0.x, c66
+     add_sat_pp r0.x, -r0.x, c1.y
+     mul_pp r0.x, r0.x, c82.x
++    // --- FusionFix sky_pbr.patch: the PBR sky's colour this way (r26.xyz), from its SkyView table on s10
++    nrm r24.xyz, v1
++    mad r25.y, r24_abs.y, c151.w, c151.z
++    mad r25.y, r25.y, r24_abs.y, c151.y
++    mad r25.y, r25.y, r24_abs.y, c151.x
++    add r25.z, -r24_abs.y, c152.x
++    rsq r25.z, r25.z
++    rcp r25.z, r25.z
++    mul r25.y, r25.y, r25.z // acos |elevation sine|
++    mad r25.y, r25.y, c152.y, c152.x // the elevation's share of a right angle
++    rsq r25.y, r25.y
++    rcp r25.y, r25.y
++    cmp r25.w, r24.y, c152.w, c152.z
++    mad r26.y, r25.w, r25.y, c152.z // v
++    dp2add r25.x, r24.xzzw, r24.xzzw, c153.z
++    rsq r25.x, r25.x
++    mul r25.zw, r24.xxxz, r25.x // the view seen from above
++    mov r24.xz, c65
++    dp2add r25.x, r24.xzzw, r24.xzzw, c153.z
++    rsq r25.x, r25.x
++    mul r24.xz, r24, r25.x // the sun seen from above
++    dp2add r25.x, r25.zwzw, r24.xzzw, c153.w // cos of the angle between them
++    mad r25.y, r25_abs.x, c151.w, c151.z
++    mad r25.y, r25.y, r25_abs.x, c151.y
++    mad r25.y, r25.y, r25_abs.x, c151.x
++    add r25.z, -r25_abs.x, c152.x
++    rsq r25.z, r25.z
++    rcp r25.z, r25.z
++    mul r25.y, r25.y, r25.z
++    add r25.z, -r25.y, c153.x
++    cmp r25.y, r25.x, r25.y, r25.z // the angle
++    mul r26.x, r25.y, c153.y // u
++    texld r26, r26, s10
+     mul_sat_pp r2.xzw, r0.x, v5.xyyz
++    mul r25.xyz, r0.x, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped
++    add r25.xyz, r25, -r2.xzww
++    mad r2.xzw, c194.x, r25.xxyz, r2
+     mul r3.xyz, r1_abs, r1_abs
+     mad_pp r1.xyz, r3, r3, r1
+     mad_pp r1.xyz, r1, c82.x, r2.xzww
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS5.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS5.asm
+index a108c09b..3fb1d47b 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS5.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS5.asm
+@@ -59,6 +59,9 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.6880504788e-44 // 62
++    def c151, 1.57072878, -0.212114394, 0.0742610022, -0.0187292993 // FusionFix sky_pbr.patch: acos cubic
++    def c152, 1, -0.636619747, 0.5, -0.5 // FusionFix sky_pbr.patch: one, -2 / pi, a half
++    def c153, 3.14159274, 0.318309873, 9.99999997e-007, 0 // FusionFix sky_pbr.patch: pi, 1 / pi, tiny, zero
+     def c0, 0.200000003, 0, 0.25, 0.349999994
+     def c1, 9.99999975e-006, 1, -11.6163721, 32
+     def c2, 0.9375, 0.5, 12.5799999, -0.0625
+@@ -72,6 +75,7 @@
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
++    dcl_2d s10 // FusionFix sky_pbr.patch: the PBR sky's SkyView table
+     mov r0.xw, c3
+     add_sat r0.x, r0.x, c65.w
+     mov r1.yz, c2.xxyw
+@@ -99,7 +103,43 @@
+     mul_pp r1.xyz, r0.x, c66
+     add_sat_pp r0.x, -r0.x, c1.y
+     mul_pp r0.x, r0.x, c82.x
++    // --- FusionFix sky_pbr.patch: the PBR sky's colour this way (r26.xyz), from its SkyView table on s10
++    nrm r24.xyz, v1
++    mad r25.y, r24_abs.y, c151.w, c151.z
++    mad r25.y, r25.y, r24_abs.y, c151.y
++    mad r25.y, r25.y, r24_abs.y, c151.x
++    add r25.z, -r24_abs.y, c152.x
++    rsq r25.z, r25.z
++    rcp r25.z, r25.z
++    mul r25.y, r25.y, r25.z // acos |elevation sine|
++    mad r25.y, r25.y, c152.y, c152.x // the elevation's share of a right angle
++    rsq r25.y, r25.y
++    rcp r25.y, r25.y
++    cmp r25.w, r24.y, c152.w, c152.z
++    mad r26.y, r25.w, r25.y, c152.z // v
++    dp2add r25.x, r24.xzzw, r24.xzzw, c153.z
++    rsq r25.x, r25.x
++    mul r25.zw, r24.xxxz, r25.x // the view seen from above
++    mov r24.xz, c65
++    dp2add r25.x, r24.xzzw, r24.xzzw, c153.z
++    rsq r25.x, r25.x
++    mul r24.xz, r24, r25.x // the sun seen from above
++    dp2add r25.x, r25.zwzw, r24.xzzw, c153.w // cos of the angle between them
++    mad r25.y, r25_abs.x, c151.w, c151.z
++    mad r25.y, r25.y, r25_abs.x, c151.y
++    mad r25.y, r25.y, r25_abs.x, c151.x
++    add r25.z, -r25_abs.x, c152.x
++    rsq r25.z, r25.z
++    rcp r25.z, r25.z
++    mul r25.y, r25.y, r25.z
++    add r25.z, -r25.y, c153.x
++    cmp r25.y, r25.x, r25.y, r25.z // the angle
++    mul r26.x, r25.y, c153.y // u
++    texld r26, r26, s10
+     mul_sat_pp r2.xzw, r0.x, v5.xyyz
++    mul r25.xyz, r0.x, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped
++    add r25.xyz, r25, -r2.xzww
++    mad r2.xzw, c194.x, r25.xxyz, r2
+     mul r3.xyz, r1_abs, r1_abs
+     mad_pp r1.xyz, r3, r3, r1
+     mad_pp r1.xyz, r1, c82.x, r2.xzww
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS7.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS7.asm
+index 43d39117..a1c6337c 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS7.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS7.asm
+@@ -81,6 +81,9 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.9683101717e-44 // 64
++    def c151, 1.57072878, -0.212114394, 0.0742610022, -0.0187292993 // FusionFix sky_pbr.patch: acos cubic
++    def c152, 1, -0.636619747, 0.5, -0.5 // FusionFix sky_pbr.patch: one, -2 / pi, a half
++    def c153, 3.14159274, 0.318309873, 9.99999997e-007, 0 // FusionFix sky_pbr.patch: pi, 1 / pi, tiny, zero
+     def c0, 9.99999975e-006, 1, -11.6163721, 32
+     def c1, 0.9375, 0.5, 12.5799999, -0.0625
+     def c2, 0.600000024, -2, 3, 4
+@@ -105,6 +108,7 @@
+     dcl_2d s2
+     dcl_2d s3
+     dcl_2d s4
++    dcl_2d s10 // FusionFix sky_pbr.patch: the PBR sky's SkyView table
+     
+     mul r20.w, c44.x, c44.w
+     add r20.w, r20.w, -c142.y
+@@ -206,7 +210,43 @@
+     mul_pp r1.z, r1.w, r3.x
+     lrp_pp r5.xyz, r1.z, c76, r4
+     mad_pp r1.z, r3.x, r1.z, r3.z
++    // --- FusionFix sky_pbr.patch: the PBR sky's colour this way (r26.xyz), from its SkyView table on s10
++    nrm r24.xyz, v1
++    mad r25.y, r24_abs.y, c151.w, c151.z
++    mad r25.y, r25.y, r24_abs.y, c151.y
++    mad r25.y, r25.y, r24_abs.y, c151.x
++    add r25.z, -r24_abs.y, c152.x
++    rsq r25.z, r25.z
++    rcp r25.z, r25.z
++    mul r25.y, r25.y, r25.z // acos |elevation sine|
++    mad r25.y, r25.y, c152.y, c152.x // the elevation's share of a right angle
++    rsq r25.y, r25.y
++    rcp r25.y, r25.y
++    cmp r25.w, r24.y, c152.w, c152.z
++    mad r26.y, r25.w, r25.y, c152.z // v
++    dp2add r25.x, r24.xzzw, r24.xzzw, c153.z
++    rsq r25.x, r25.x
++    mul r25.zw, r24.xxxz, r25.x // the view seen from above
++    mov r24.xz, c65
++    dp2add r25.x, r24.xzzw, r24.xzzw, c153.z
++    rsq r25.x, r25.x
++    mul r24.xz, r24, r25.x // the sun seen from above
++    dp2add r25.x, r25.zwzw, r24.xzzw, c153.w // cos of the angle between them
++    mad r25.y, r25_abs.x, c151.w, c151.z
++    mad r25.y, r25.y, r25_abs.x, c151.y
++    mad r25.y, r25.y, r25_abs.x, c151.x
++    add r25.z, -r25_abs.x, c152.x
++    rsq r25.z, r25.z
++    rcp r25.z, r25.z
++    mul r25.y, r25.y, r25.z
++    add r25.z, -r25.y, c153.x
++    cmp r25.y, r25.x, r25.y, r25.z // the angle
++    mul r26.x, r25.y, c153.y // u
++    texld r26, r26, s10
+     mul_sat_pp r3.xyz, r1.x, v5
++    mul r25.xyz, r1.x, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped
++    add r25.xyz, r25, -r3.xyzz
++    mad r3.xyz, c194.x, r25.xyzx, r3
+     mad_pp r2.xzw, r2, c89.x, r3.xyyz
+     texld_pp r4, v3.zwzw, s2
+     mul_pp r3.xyz, r4, c80.y
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS8.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS8.asm
+index 8805df19..af388d0e 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS8.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS8.asm
+@@ -65,6 +65,9 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 9.1084400181e-44 // 65
++    def c151, 1.57072878, -0.212114394, 0.0742610022, -0.0187292993 // FusionFix sky_pbr.patch: acos cubic
++    def c152, 1, -0.636619747, 0.5, -0.5 // FusionFix sky_pbr.patch: one, -2 / pi, a half
++    def c153, 3.14159274, 0.318309873, 9.99999997e-007, 0 // FusionFix sky_pbr.patch: pi, 1 / pi, tiny, zero
+     def c0, 0.200000003, 0, 0.25, 0.349999994
+     def c1, 9.99999975e-006, 1, -11.6163721, 32
+     def c2, 0.9375, 0.5, 12.5799999, -0.0625
+@@ -86,6 +89,7 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s3
++    dcl_2d s10 // FusionFix sky_pbr.patch: the PBR sky's SkyView table
+     
+     mul r20.w, c44.x, c44.w
+     add r20.w, r20.w, -c142.y
+@@ -153,7 +157,43 @@
+     mul_pp r1.xyz, r0.w, c66
+     add_sat_pp r0.w, -r0.w, c1.y
+     mul_pp r0.w, r0.w, c82.x
++    // --- FusionFix sky_pbr.patch: the PBR sky's colour this way (r26.xyz), from its SkyView table on s10
++    nrm r24.xyz, v1
++    mad r25.y, r24_abs.y, c151.w, c151.z
++    mad r25.y, r25.y, r24_abs.y, c151.y
++    mad r25.y, r25.y, r24_abs.y, c151.x
++    add r25.z, -r24_abs.y, c152.x
++    rsq r25.z, r25.z
++    rcp r25.z, r25.z
++    mul r25.y, r25.y, r25.z // acos |elevation sine|
++    mad r25.y, r25.y, c152.y, c152.x // the elevation's share of a right angle
++    rsq r25.y, r25.y
++    rcp r25.y, r25.y
++    cmp r25.w, r24.y, c152.w, c152.z
++    mad r26.y, r25.w, r25.y, c152.z // v
++    dp2add r25.x, r24.xzzw, r24.xzzw, c153.z
++    rsq r25.x, r25.x
++    mul r25.zw, r24.xxxz, r25.x // the view seen from above
++    mov r24.xz, c65
++    dp2add r25.x, r24.xzzw, r24.xzzw, c153.z
++    rsq r25.x, r25.x
++    mul r24.xz, r24, r25.x // the sun seen from above
++    dp2add r25.x, r25.zwzw, r24.xzzw, c153.w // cos of the angle between them
++    mad r25.y, r25_abs.x, c151.w, c151.z
++    mad r25.y, r25.y, r25_abs.x, c151.y
++    mad r25.y, r25.y, r25_abs.x, c151.x
++    add r25.z, -r25_abs.x, c152.x
++    rsq r25.z, r25.z
++    rcp r25.z, r25.z
++    mul r25.y, r25.y, r25.z
++    add r25.z, -r25.y, c153.x
++    cmp r25.y, r25.x, r25.y, r25.z // the angle
++    mul r26.x, r25.y, c153.y // u
++    texld r26, r26, s10
+     mul_sat_pp r2.xzw, r0.w, v5.xyyz
++    mul r25.xyz, r0.w, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped
++    add r25.xyz, r25, -r2.xzww
++    mad r2.xzw, c194.x, r25.xxyz, r2
+     mul r3.xzw, r1_abs.xyyz, r1_abs.xyyz
+     mad_pp r1.xyz, r3.xzww, r3.xzww, r1
+     mad_pp r1.xyz, r1, c82.x, r2.xzww
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS9.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS9.asm
+index 5f5dfee0..0c91b397 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS9.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS9.asm
+@@ -83,6 +83,9 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 9.2485698645e-44 // 66
++    def c151, 1.57072878, -0.212114394, 0.0742610022, -0.0187292993 // FusionFix sky_pbr.patch: acos cubic
++    def c152, 1, -0.636619747, 0.5, -0.5 // FusionFix sky_pbr.patch: one, -2 / pi, a half
++    def c153, 3.14159274, 0.318309873, 9.99999997e-007, 0 // FusionFix sky_pbr.patch: pi, 1 / pi, tiny, zero
+     def c0, 9.99999975e-006, 1, -11.6163721, 32
+     def c1, 0.9375, 0.5, 12.5799999, -0.0625
+     def c2, 0.600000024, -2, 3, 4
+@@ -108,6 +111,7 @@
+     dcl_2d s3
+     dcl_2d s4
+     dcl_2d s5
++    dcl_2d s10 // FusionFix sky_pbr.patch: the PBR sky's SkyView table
+     
+     mul r20.w, c44.x, c44.w
+     add r20.w, r20.w, -c142.y
+@@ -209,7 +213,43 @@
+     mul_pp r1.z, r1.w, r3.x
+     lrp_pp r5.xyz, r1.z, c76, r4
+     mad_pp r1.z, r3.x, r1.z, r3.z
++    // --- FusionFix sky_pbr.patch: the PBR sky's colour this way (r26.xyz), from its SkyView table on s10
++    nrm r24.xyz, v1
++    mad r25.y, r24_abs.y, c151.w, c151.z
++    mad r25.y, r25.y, r24_abs.y, c151.y
++    mad r25.y, r25.y, r24_abs.y, c151.x
++    add r25.z, -r24_abs.y, c152.x
++    rsq r25.z, r25.z
++    rcp r25.z, r25.z
++    mul r25.y, r25.y, r25.z // acos |elevation sine|
++    mad r25.y, r25.y, c152.y, c152.x // the elevation's share of a right angle
++    rsq r25.y, r25.y
++    rcp r25.y, r25.y
++    cmp r25.w, r24.y, c152.w, c152.z
++    mad r26.y, r25.w, r25.y, c152.z // v
++    dp2add r25.x, r24.xzzw, r24.xzzw, c153.z
++    rsq r25.x, r25.x
++    mul r25.zw, r24.xxxz, r25.x // the view seen from above
++    mov r24.xz, c65
++    dp2add r25.x, r24.xzzw, r24.xzzw, c153.z
++    rsq r25.x, r25.x
++    mul r24.xz, r24, r25.x // the sun seen from above
++    dp2add r25.x, r25.zwzw, r24.xzzw, c153.w // cos of the angle between them
++    mad r25.y, r25_abs.x, c151.w, c151.z
++    mad r25.y, r25.y, r25_abs.x, c151.y
++    mad r25.y, r25.y, r25_abs.x, c151.x
++    add r25.z, -r25_abs.x, c152.x
++    rsq r25.z, r25.z
++    rcp r25.z, r25.z
++    mul r25.y, r25.y, r25.z
++    add r25.z, -r25.y, c153.x
++    cmp r25.y, r25.x, r25.y, r25.z // the angle
++    mul r26.x, r25.y, c153.y // u
++    texld r26, r26, s10
+     mul_sat_pp r3.xyz, r1.x, v5
++    mul r25.xyz, r1.x, r26 // FusionFix sky_pbr.patch: the PBR sky, unclamped
++    add r25.xyz, r25, -r3.xyzz
++    mad r3.xyz, c194.x, r25.xyzx, r3
+     mad_pp r2.xzw, r2, c89.x, r3.xyyz
+     texld_pp r4, v3, s2
+     mad_pp r3.xyz, r4, c80.x, -c80.z

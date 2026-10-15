@@ -361,6 +361,9 @@ Logitech LightSync RGB
 [VolumeClouds]
 Объёмные облака
 
+[PbrSky]
+Физическое небо
+
 [Zoomed Movement]
 Разрешить движение при прицеливании
 
