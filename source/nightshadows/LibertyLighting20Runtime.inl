@@ -535,8 +535,8 @@ namespace Lighting20
     // round the camera had 0x8000 and 0x800000, their model has lights, and none of 0x1000/0x2000/0x4000).
     // PropShadows puts such entities also into list 2 of the lamps' phases (drawn in mode 0 by 0xAE3310's plain loop
     // at 0xAE34AF while byte 0x103F738 is set) and lets them through the mode 0 gate of its caster loop (Cast):
-    // 1 those with lights (0x800000: posts, wall lamps), 2 every sun-only object. world_wd_local_shadow_skinned.patch
-    // drops what is within half a metre of a light in the world shaders' local depth, so a lamp's head and glass
+    // 1 those with lights (0x800000: posts, wall lamps), 2 every sun-only object and, in the caches, every object
+    // (Takes). world_wd_local_shadow_skinned.patch drops what is within half a metre of a light in the world shaders' local depth, so a lamp's head and glass
     // don't cover its own light.
     namespace Props
     {
@@ -653,6 +653,16 @@ namespace Lighting20
         // static cache, 4 cache and dynamic, 5 no cache; 7 for other or no record), to find where caches are drawn:
         // props in a lamp's cache would shadow without a slot, as you come near
         static std::array<std::atomic<uint32_t>, 16 * 8> phaseKinds{};
+
+        // The objects PropShadows takes by their +0x24 flags: those the render list puts only into the sun's list 5 (0x8000
+        // without 0x4000), with 1 only those with lights of their own (posts). For a lamp's static cache (slot 0) with 2,
+        // any object: the scene walk shows none to the cache's phase, and bins and hydrants, most with none of the list
+        // bits 0x1000-0x8000, shadowed from a lamp only once it took a slot, as you came near.
+        static bool Takes(uint32_t flags, bool cache) noexcept
+        {
+            if (cache && level >= 2) return true;
+            return (flags & 0xC000) == 0x8000 && (level >= 2 || (flags & 0x800000));
+        }
 
         static float EntityZ(uintptr_t entity) noexcept
         {
@@ -772,10 +782,10 @@ namespace Lighting20
             if (!On()) return;
             const auto entity = static_cast<uintptr_t>(regs.esi);
             const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
-            if ((flags & 0xC000) != 0x8000 || (level < 2 && !(flags & 0x800000)) ||
-                ((*reinterpret_cast<const uint32_t*>(entity + 0x28) >> 6) & 15) != 4)
-                return;
-            uint32_t phases = *reinterpret_cast<const uint32_t*>(regs.esp + 0x28) & lampPhases.load(std::memory_order_relaxed);
+            if (((*reinterpret_cast<const uint32_t*>(entity + 0x28) >> 6) & 15) != 4) return;
+            const bool lamps = Takes(flags, false);
+            if (!lamps && !(cacheProps && Takes(flags, true))) return;
+            uint32_t phases = lamps ? *reinterpret_cast<const uint32_t*>(regs.esp + 0x28) & lampPhases.load(std::memory_order_relaxed) : 0;
             // The cache's phase (slot 0) never has a prop among its visible ones (a trace: the scene walk leaves objects
             // out of it), so a prop within the light of the lamp cached this frame (slot 0's record, mode 3, filled by
             // the selection before the render list) goes into the cache's list 2 too; Scope keeps that phase's light.
@@ -1167,8 +1177,7 @@ namespace Lighting20
         {
             if (!scope || mode != 0 || type != 4 || !entity || !On()) return false;
             const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
-            if ((flags & 0xC000) != 0x8000 || (level < 2 && !(flags & 0x800000)) ||
-                (*reinterpret_cast<const uint32_t*>(entity + 0x210) & 0x800))
+            if (!Takes(flags, scopeCache) || (*reinterpret_cast<const uint32_t*>(entity + 0x210) & 0x800))
                 return false;
             if (!scopeVehicle && minLightHeight > 0.0f && scopeLight[2] - EntityZ(entity) < minLightHeight)
             {
@@ -1194,7 +1203,7 @@ namespace Lighting20
         {
             if (!scope || scopeVehicle || type != 4 || !entity || !On()) return false;
             const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
-            if ((flags & 0xC000) != 0x8000 || (level < 2 && !(flags & 0x800000))) return false;
+            if (!Takes(flags, scopeCache)) return false;
             if (minLightHeight > 0.0f && scopeLight[2] - EntityZ(entity) < minLightHeight)
             {
                 ++lowLightSkips;
@@ -1226,7 +1235,7 @@ namespace Lighting20
             if (verdictsOn && scope && type == 4 && entity)
             {
                 const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
-                if ((flags & 0xC000) == 0x8000 && (level >= 2 || (flags & 0x800000)))
+                if (Takes(flags, scopeCache))
                     Verdicts::Note(scopeLight, EntityAt(entity), decision == 1);
             }
             if (scope && type == 4 && entity && Trace::Active())
@@ -1236,7 +1245,7 @@ namespace Lighting20
                 {
                     const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
                     // only the props PropShadows takes, as Collect remembers them: the trace changes nothing it shows
-                    if ((diagnostics || allBuckets) && (flags & 0xC000) == 0x8000 && (level >= 2 || (flags & 0x800000)))
+                    if ((diagnostics || allBuckets) && Takes(flags, scopeCache))
                         Remember(entity);
                     Trace::Line("visit entity=%08x model=%u at=%.1f,%.1f,%.1f f24=%08x f210=%08x mode=%u artificial=%d decision=%s pass_key=%08x own=%d",
                         uint32_t(entity), *reinterpret_cast<const uint16_t*>(entity + 0x2E), at[0], at[1], at[2], flags,
