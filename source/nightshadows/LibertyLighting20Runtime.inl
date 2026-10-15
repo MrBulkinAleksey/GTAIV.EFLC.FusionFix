@@ -621,6 +621,13 @@ namespace Lighting20
         // PropsInCaches: the lamps' static caches (slot 0) take the props too
         static bool cacheProps = true;
         static std::array<std::atomic<uint32_t>, 32> phaseKey{};
+        // PropDrawRoute (test, re-read on Ctrl+Shift+F10): a post had two shadows from every light, four with the
+        // headlights on, as if drawn twice into each map at two places. It goes in two ways: the caster loop's own draws
+        // in modes 1 and 2 (no forced group) and ours in mode 0 (Cast, and list 2 from Collect, under wd_local / wd).
+        // 0 both, 1 only ours (the props PropShadows takes left out of modes 1 and 2), 2 only the game's (no Cast, no
+        // list 2 adds).
+        static std::atomic<int> drawRoute{0};
+        static std::atomic<uint32_t> routeSkips{0};
         // The rules above are for map lights: a car's own lights (headlights, rear lamps, sirens) shine low and are no
         // prop's own, and the player's headlights stopped shadowing posts. Whether the pass's light is a car's, looked
         // up by its key in the frame's light list, in Scope; by phase index for Collect.
@@ -791,6 +798,7 @@ namespace Lighting20
             const auto entity = static_cast<uintptr_t>(regs.esi);
             const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
             if (((*reinterpret_cast<const uint32_t*>(entity + 0x28) >> 6) & 15) != 4) return;
+            if (drawRoute.load(std::memory_order_relaxed) == 2) return;
             const bool lamps = Takes(flags, false);
             if (!lamps && !(cacheProps && Takes(flags, true))) return;
             uint32_t phases = lamps ? *reinterpret_cast<const uint32_t*>(regs.esp + 0x28) & lampPhases.load(std::memory_order_relaxed) : 0;
@@ -1189,7 +1197,7 @@ namespace Lighting20
         // they had the bit: the hook resumes at 0xAE3767 with EAX 1.
         static bool Cast(uintptr_t entity, uint32_t type, uint32_t mode) noexcept
         {
-            if (!scope || mode != 0 || type != 4 || !entity || !On()) return false;
+            if (!scope || mode != 0 || type != 4 || !entity || !On() || drawRoute.load(std::memory_order_relaxed) == 2) return false;
             const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
             if (!Takes(flags, scopeCache) || (*reinterpret_cast<const uint32_t*>(entity + 0x210) & 0x800))
                 return false;
@@ -1251,6 +1259,15 @@ namespace Lighting20
                 const auto flags = *reinterpret_cast<const uint32_t*>(entity + 0x24);
                 if (Takes(flags, scopeCache))
                     Verdicts::Note(scopeLight, EntityAt(entity), decision == 1);
+            }
+            // After the verdict: a mode left out by PropDrawRoute says nothing of whether the lamp takes the prop, and
+            // its verdict would skip our draws of the prop too on the render thread
+            if (decision == 0 && artificial && mode != 0 && scope && type == 4 && entity && On() &&
+                drawRoute.load(std::memory_order_relaxed) == 1 && Takes(*reinterpret_cast<const uint32_t*>(entity + 0x24), scopeCache))
+            {
+                decision = 1;
+                why = "route";
+                ++routeSkips;
             }
             if (scope && type == 4 && entity && Trace::Active())
             {
@@ -1359,6 +1376,12 @@ namespace Lighting20
             ownLampOnly = ini.ReadInteger("NIGHTSHADOWS", "PropOwnLampOnly", 1) != 0;
             verdictsOn = ini.ReadInteger("NIGHTSHADOWS", "PropRenderVerdicts", 1) != 0;
             cacheProps = ini.ReadInteger("NIGHTSHADOWS", "PropsInCaches", 1) != 0;
+            const auto readRoute = [](CIniReader& reader)
+            {
+                drawRoute.store(std::clamp(reader.ReadInteger("NIGHTSHADOWS", "PropDrawRoute", 0), 0, 2), std::memory_order_relaxed);
+            };
+            readRoute(ini);
+            IniReload::Add(readRoute);
             if (!level)
             {
                 installStatus += " props=0";
@@ -1954,6 +1977,7 @@ namespace Lighting20
                 }() << " vehicle_light_passes=" << Props::vehiclePasses.load()
                 << " cache: passes=" << Props::cachePasses.load() << " cast=" << Props::castInCache.load()
                 << " added=" << Props::addedForCache.load() << " redraws=" << Props::cacheRedraws.load()
+                << " draw_route=" << Props::drawRoute.load() << " route_skips=" << Props::routeSkips.load()
                 << " prop_model_draws=" << Props::propModelDraws.load() << " prop_buckets(shader>drawn:n)=" << Props::Buckets()
                 << " all_under_wd_local: found=" << Props::localFound.load() << " missing=" << Props::localMissing.load()
                 << " missing_in=" << Props::Effects(Props::localMissingEffects)
