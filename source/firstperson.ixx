@@ -188,13 +188,18 @@ namespace FirstPerson
             eye[1] = head[1];
         }
         eye[2] = head[2] + upOffset + down * LookDownUp;
+        // the follow camera lowers its pivot and target by its duck offset (+0x2C8, eased to -0.55 m, CE 0xA1D990)
         static uint32_t logFrame = 0;
-        if (LogDue(logFrame))
+        static bool wasDucking = false;
+        const bool ducking = handle && Natives::IsCharDucking(handle);
+        if (LogDue(logFrame) || ducking != wasDucking)
         {
+            wasDucking = ducking;
             float position[3]{};
             CEntity::GetPosition(ped, position);
-            FusionLog::Write("FirstPerson", "OnFoot", "head %s z %.2f above the ped %.2f, eye z %.2f\n",
-                bone ? "bone" : "fallback", head[2], head[2] - position[2], eye[2]);
+            FusionLog::Write("FirstPerson", "OnFoot", "%s: head %s z %.2f above the ped %.2f, eye z %.2f, view pitch %.1f, duck offset %.2f\n",
+                ducking ? "ducking" : "standing", bone ? "bone" : "fallback", head[2], head[2] - position[2], eye[2],
+                std::asin(std::clamp(front[2], -1.0f, 1.0f)) * 57.29578f, *reinterpret_cast<const float*>(camera + 0x2C8));
         }
         std::copy(std::begin(eye), std::end(eye), frame + 12);
         eyeFrame = *CTimer::m_frameCount;
