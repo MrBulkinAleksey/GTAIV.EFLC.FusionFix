@@ -524,15 +524,20 @@ public:
         static inline SafetyHookInline hook{};
         static int __fastcall AddToDrawList(void* entity, void* edx, int a2, int a3, int a4, int a5)
         {
-            if (bBuildingSceneList && CRenderPhaseDeferredLighting_SceneToGBuffer::SkipEntity &&
-                CRenderPhaseDeferredLighting_SceneToGBuffer::SkipEntity(entity))
-                return 0;
+            const auto around = bBuildingSceneList ? CRenderPhaseDeferredLighting_SceneToGBuffer::AroundEntity : nullptr;
+            if (around)
+                around(entity, true);
+            int result;
             if (!bBuildingSceneList || !bObjectMotionVectors)
-                return hook.unsafe_thiscall<int>(entity, a2, a3, a4, a5);
-
-            Append(CTemporalDC::Type::EntityBegin, entity);
-            auto result = hook.unsafe_thiscall<int>(entity, a2, a3, a4, a5);
-            Append(CTemporalDC::Type::EntityEnd, entity);
+                result = hook.unsafe_thiscall<int>(entity, a2, a3, a4, a5);
+            else
+            {
+                Append(CTemporalDC::Type::EntityBegin, entity);
+                result = hook.unsafe_thiscall<int>(entity, a2, a3, a4, a5);
+                Append(CTemporalDC::Type::EntityEnd, entity);
+            }
+            if (around)
+                around(entity, false);
             return result;
         }
     };

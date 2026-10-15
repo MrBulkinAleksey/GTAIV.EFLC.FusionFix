@@ -25,8 +25,13 @@ import inireload;
 // the head is kept in the ped's own frame, learned while the car nearly stands, and placed with the
 // ped's matrix as it is when the final camera is built.
 //
-// In both the head, hair and face are not drawn and the near clip is raised, which cuts away the
-// neck and shoulders around the eye.
+// In both the head, hair and face are left out of the camera's scene, their shadows and reflections
+// kept, and the near clip is raised, which cuts away the neck and shoulders around the eye. The game
+// keeps whether a player component is drawn in a byte each (SET_DRAW_PLAYER_COMPONENT, CE 0x150E0DC):
+// IV reads them as the player is drawn (CE 0xAB7EBF), so commands around his draws in the camera's
+// scene clear and restore them there; the episodes copy them into each player draw command as it is
+// made (CE 0xBF16F4) and back when it runs, so that copy is set too, hidden in the camera's scene and
+// drawn everywhere else.
 namespace FirstPerson
 {
     static bool active = false;
@@ -58,6 +63,10 @@ namespace FirstPerson
     static SafetyHookMid finalHook;
     static SafetyHookMid vehicleViewHook;
     static SafetyHookInline vehicleUpdateHook;
+    static SafetyHookMid componentCopyHook;
+    static uint8_t* drawComponents = nullptr;          // the game's 16 player component draw bytes
+    static constexpr int32_t HeadComponents[] = { 0, 7, 9, 10 }; // head, hair, teeth, face
+    static bool buildingHiddenHead = false;            // the player's draws in the camera's scene are being made
 
     static bool EyeCurrent() noexcept
     {
@@ -312,16 +321,64 @@ namespace FirstPerson
             nearClip = NearClip;
     }
 
-    // The player's head, hair, teeth and face are not drawn while the eye is in them, and drawn again
-    // as soon as it is not.
-    static void HideHead()
+    static bool HeadHidden() noexcept
     {
-        static bool hidden = false;
-        const bool hide = EyeCurrent() || SeatCurrent();
-        if (hide == hidden) return;
-        hidden = hide;
-        for (const int32_t component : { 0, 7, 9, 10 })
-            Natives::SetDrawPlayerComponent(component, !hide);
+        return EyeCurrent() || SeatCurrent();
+    }
+
+    static bool IsHeadComponent(int32_t component) noexcept
+    {
+        return std::find(std::begin(HeadComponents), std::end(HeadComponents), component) != std::end(HeadComponents);
+    }
+
+    // Runs right before (hide) and after the player's draws in the camera's scene.
+    class CHeadDC : public CBaseDC
+    {
+    public:
+        bool hide;
+        static inline uint8_t saved[std::size(HeadComponents)]{};
+
+        CHeadDC(bool h) : CBaseDC(), hide(h) {}
+
+        void DrawCommand() override
+        {
+            for (size_t i = 0; i < std::size(HeadComponents); ++i)
+            {
+                auto& draw = drawComponents[HeadComponents[i]];
+                if (hide)
+                {
+                    saved[i] = draw;
+                    draw = 0;
+                }
+                else
+                    draw = saved[i];
+            }
+        }
+
+        int32_t GetSize() override
+        {
+            return sizeof(CHeadDC);
+        }
+    };
+
+    static void AroundEntity(void* entity, bool before)
+    {
+        if (!CPlayer::getLocalPlayerPed || reinterpret_cast<uintptr_t>(entity) != CPlayer::getLocalPlayerPed())
+            return;
+        if (before && !HeadHidden())
+            return;
+        if (!before && !buildingHiddenHead)
+            return;
+        buildingHiddenHead = before;
+        if (auto dc = new CHeadDC(before))
+            dc->Append();
+    }
+
+    // The episodes' copy into a player draw command as it is made (dl the byte, ecx the component).
+    static void CopyComponent(SafetyHookContext& regs)
+    {
+        if (HeadHidden() && IsHeadComponent(static_cast<int32_t>(regs.ecx)))
+            regs.edx = (regs.edx & ~0xFFu) | (buildingHiddenHead ? 0u : 1u);
     }
 }
 
@@ -376,7 +433,14 @@ public:
                     FirstPerson::vehicleUpdateHook = safetyhook::create_inline(update.get_first(0), FirstPerson::VehicleUpdate);
                 }
             }
-            FusionFix::onGameProcessEvent() += FirstPerson::HideHead;
+
+            // cmp ecx, 10 / jae / mov dl, [ecx+150E0DC] / jmp / mov dl, 1 / mov al, [edi+ecx+30] / and al, 7F / shl dl, 7
+            auto copy = hook::pattern("83 F9 10 73 08 8A 91 ? ? ? ? EB 02 B2 01 8A 44 0F 30 24 7F C0 E2 07");
+            if (copy.empty())
+                return;
+            FirstPerson::drawComponents = *copy.get_first<uint8_t*>(7);
+            FirstPerson::componentCopyHook = safetyhook::create_mid(copy.get_first(15), FirstPerson::CopyComponent);
+            CRenderPhaseDeferredLighting_SceneToGBuffer::AroundEntity = FirstPerson::AroundEntity;
         };
     }
 } FirstPersonCamera;
