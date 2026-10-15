@@ -168,6 +168,24 @@ namespace
         return true;
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Device hooks
+
+    constexpr int SetRenderTargetIndex = 37;
+    constexpr int SetDepthStencilSurfaceIndex = 39;
+    constexpr int GetDepthStencilSurfaceIndex = 40;
+    constexpr int ClearIndex = 43;
+    constexpr int SetViewportIndex = 47;
+    constexpr int SetScissorRectIndex = 75;
+
+    HRESULT(__stdcall* RealSetRenderTarget)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*) = nullptr;
+    HRESULT(__stdcall* RealSetDepthStencilSurface)(IDirect3DDevice9*, IDirect3DSurface9*) = nullptr;
+    HRESULT(__stdcall* RealGetDepthStencilSurface)(IDirect3DDevice9*, IDirect3DSurface9**) = nullptr;
+    HRESULT(__stdcall* RealClear)(IDirect3DDevice9*, DWORD, const D3DRECT*, DWORD, D3DCOLOR, float, DWORD) = nullptr;
+    HRESULT(__stdcall* RealSetViewport)(IDirect3DDevice9*, const D3DVIEWPORT9*) = nullptr;
+    HRESULT(__stdcall* RealSetScissorRect)(IDirect3DDevice9*, const RECT*) = nullptr;
+    void** HookedVTable = nullptr;
+
     // The bound render target 0 and depth buffer with their sizes, kept by the device hooks so that the thousands of
     // calls a frame don't ask the device. Unknown after a reset, until the next call sets them.
     struct Bound
@@ -225,24 +243,6 @@ namespace
     {
         return width == RenderWidth && height == RenderHeight;
     }
-
-    // ---------------------------------------------------------------------------------------------
-    // Device hooks
-
-    constexpr int SetRenderTargetIndex = 37;
-    constexpr int SetDepthStencilSurfaceIndex = 39;
-    constexpr int GetDepthStencilSurfaceIndex = 40;
-    constexpr int ClearIndex = 43;
-    constexpr int SetViewportIndex = 47;
-    constexpr int SetScissorRectIndex = 75;
-
-    HRESULT(__stdcall* RealSetRenderTarget)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*) = nullptr;
-    HRESULT(__stdcall* RealSetDepthStencilSurface)(IDirect3DDevice9*, IDirect3DSurface9*) = nullptr;
-    HRESULT(__stdcall* RealGetDepthStencilSurface)(IDirect3DDevice9*, IDirect3DSurface9**) = nullptr;
-    HRESULT(__stdcall* RealClear)(IDirect3DDevice9*, DWORD, const D3DRECT*, DWORD, D3DCOLOR, float, DWORD) = nullptr;
-    HRESULT(__stdcall* RealSetViewport)(IDirect3DDevice9*, const D3DVIEWPORT9*) = nullptr;
-    HRESULT(__stdcall* RealSetScissorRect)(IDirect3DDevice9*, const RECT*) = nullptr;
-    void** HookedVTable = nullptr;
 
     // Binds a depth buffer past the hooks, and keeps track of it
     void BindDepth(IDirect3DDevice9* device, IDirect3DSurface9* surface)
