@@ -36,11 +36,12 @@ import temporal;
 // execute took, per frame and per target the game had locked (RenderSkip::CurrentTarget), to
 // GTAIV.EFLC.FusionFix.EntityClass.log: what leaving a kind out of a pass would save.
 //
-// LampShadowFaceCulling = 1 ([PERFORMANCE]): the lamps' shadow maps (SHADOW_MAP_COLOUR_POINT) get every entity
-// once for each face of their cube map. An entity or fragment type draw whose bounding sphere is outside the face
-// being drawn (the current grcViewport's view and projection) is left out. The sphere is the model's (model info
+// LampShadowFaceCulling = 1 ([PERFORMANCE]): the lamps' shadow maps (SHADOW_MAP_COLOUR_POINT) are dual paraboloid,
+// two halves a lamp, and get every entity in both. An entity or fragment type draw whose bounding sphere is wholly
+// behind the half being drawn (the current grcViewport's view: behind its eye, view z > reach as RAGE looks down -z)
+// is left out; a perspective viewport is tested against its frustum instead. The sphere is the model's (model info
 // +0x10 centre, +0x1c radius) around the command's position, grown by the centre's offset so the entity's turn
-// needs no matrix. With the switch off, EntityDrawLog counts what it would leave out.
+// needs no matrix. With the switch off, EntityDrawLog counts what it would leave out, and where the spheres lie.
 export namespace EntityClass
 {
     enum class Kind : uint8_t
@@ -112,6 +113,9 @@ namespace
         std::unordered_set<uint64_t> keys;
         // Draws outside the face drawn: left out with LampShadowFaceCulling, else counted only
         uint64_t outside = 0;
+        // Lamp maps: the views (grcViewport view matrices) per lock, perspective or not, and where the draws' spheres
+        // are against the view: ahead of the eye, behind it, across it
+        uint64_t views = 0, perspective = 0, ahead = 0, behind = 0, across = 0;
         int64_t Total() const
         {
             int64_t total = 0;
@@ -162,6 +166,10 @@ namespace
             if (s.keyedDraws)
                 text += std::format(" locks {:.1f}, faces per lock {:.2f}, draws per entity in a lock {:.2f},", s.locks * perFrame,
                     s.locks ? double(s.faces) / double(s.locks) : 0.0, double(s.keyedDraws) / double(s.entities));
+            if (s.ahead + s.behind + s.across)
+                text += std::format(" views per lock {:.2f} ({:.0f}% perspective), spheres ahead {:.1f}, behind {:.1f}, across {:.1f},",
+                    s.locks ? double(s.views) / double(s.locks) : 0.0, s.views ? 100.0 * s.perspective / s.views : 0.0,
+                    s.ahead * perFrame, s.behind * perFrame, s.across * perFrame);
             if (s.outside)
                 text += std::format(" outside their face {:.1f} ({}),", s.outside * perFrame, bFaceCulling ? "left out" : "drawn");
             text += " by command";
@@ -200,22 +208,30 @@ namespace
         return lastIs;
     }
 
-    // The current viewport's frustum as planes (x, y, z, w) with w + dot(xyz, p) >= 0 inside, from view x projection
-    // (row vectors, D3D clip z 0 to w), made again when its matrices change
+    // The current viewport's view, and for a perspective one its frustum as planes (x, y, z, w) with
+    // w + dot(xyz, p) >= 0 inside, from view x projection (row vectors, D3D clip z 0 to w); made again when its
+    // matrices change, which counts a view
     float frustum[6][4]{};
     float frustumFrom[2][4][4]{};
     bool frustumValid = false;
+    bool viewPerspective = false;
+    bool viewChanged = false;
 
-    bool UpdateFrustum()
+    bool UpdateView()
     {
         auto viewport = rage::GetCurrentViewport();
-        if (!viewport || !viewport->mIsPerspective)
+        if (!viewport)
             return false;
         if (frustumValid && !std::memcmp(frustumFrom[0], viewport->mViewMatrix, sizeof(frustumFrom[0])) &&
             !std::memcmp(frustumFrom[1], viewport->mProjectionMatrix, sizeof(frustumFrom[1])))
             return true;
+        viewChanged = true;
         std::memcpy(frustumFrom[0], viewport->mViewMatrix, sizeof(frustumFrom[0]));
         std::memcpy(frustumFrom[1], viewport->mProjectionMatrix, sizeof(frustumFrom[1]));
+        viewPerspective = viewport->mIsPerspective;
+        frustumValid = true;
+        if (!viewPerspective)
+            return true;
         float m[4][4];
         for (int i = 0; i < 4; ++i)
             for (int j = 0; j < 4; ++j)
@@ -242,39 +258,63 @@ namespace
                 for (auto& v : plane)
                     v /= length;
         }
-        frustumValid = true;
         return true;
     }
 
-    // Whether the draw's bounding sphere is wholly outside the face being drawn
-    bool OutsideFace(void* dc, Source source)
+    // Where the draw's bounding sphere is against the view drawn: -1 wholly outside it (behind a paraboloid
+    // half's eye, or outside a perspective frustum), 1 wholly ahead or inside, 0 across or unknown
+    int SphereSide(void* dc, Source source)
     {
         uint16_t model;
         const float* place;
         if (!modelInfos || !ModelAndPlace(dc, source, model, place))
-            return false;
+            return 0;
         const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4);
         if (!info)
-            return false;
+            return 0;
         const float* centre = reinterpret_cast<const float*>(info + 0x10);
         const float radius = *reinterpret_cast<const float*>(info + 0x1c);
-        if (!(radius > 0.0f) || !UpdateFrustum())
-            return false;
+        if (!(radius > 0.0f) || !UpdateView())
+            return 0;
         const float reach = radius + std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
-        for (const auto& plane : frustum)
-            if (plane[0] * place[0] + plane[1] * place[1] + plane[2] * place[2] + plane[3] < -reach)
-                return true;
-        return false;
+        if (viewPerspective)
+        {
+            bool inside = true;
+            for (const auto& plane : frustum)
+            {
+                const float d = plane[0] * place[0] + plane[1] * place[1] + plane[2] * place[2] + plane[3];
+                if (d < -reach)
+                    return -1;
+                inside = inside && d >= reach;
+            }
+            return inside ? 1 : 0;
+        }
+        // View space z (row vectors: z = p . column 2 + m[3][2]); the eye looks down -z
+        const auto& v = frustumFrom[0];
+        const float z = place[0] * v[0][2] + place[1] * v[1][2] + place[2] * v[2][2] + v[3][2];
+        return z > reach ? -1 : z < -reach ? 1 : 0;
     }
 
     void Execute(DrawExecute original, void* dc, Kind kind, Source source)
     {
         const char* target = bDrawLog || bFaceCulling ? RenderSkip::CurrentTarget() : nullptr;
-        const bool outside = (bDrawLog || bFaceCulling) && IsLampMaps(target) && OutsideFace(dc, source);
+        const bool lampMaps = (bDrawLog || bFaceCulling) && IsLampMaps(target);
+        viewChanged = false;
+        const int side = lampMaps ? SphereSide(dc, source) : 0;
+        const bool outside = side < 0;
         if (outside && bFaceCulling)
         {
             if (bDrawLog)
-                StatsFor(target).outside++;
+            {
+                auto& stats = StatsFor(target);
+                stats.outside++;
+                stats.behind++;
+                if (viewChanged)
+                {
+                    stats.views++;
+                    stats.perspective += viewPerspective;
+                }
+            }
             return;
         }
 
@@ -304,6 +344,15 @@ namespace
             stats.sourceDraws[source]++;
             if (outside)
                 stats.outside++;
+            if (lampMaps)
+            {
+                if (viewChanged)
+                {
+                    stats.views++;
+                    stats.perspective += viewPerspective;
+                }
+                (side < 0 ? stats.behind : side > 0 ? stats.ahead : stats.across)++;
+            }
             const auto lock = RenderSkip::LockCount();
             if (lock != lastLock)
             {
