@@ -168,7 +168,7 @@ VS_DCLS = f'''\
 VS_OUT = {
     3: f'''\
     mov o7.xyz, r3 // {TAG}: the position (dented), the normal and world up in the car's space
-    mov o8.xyz, v4
+    mov o8.xyz, {{normal}}
     mov r8.x, c0.z
     mov r8.y, c1.z
     mov r8.z, c2.z
@@ -191,7 +191,9 @@ def patch_vs(name, n):
     if TAG in text:
         sys.exit(f'{path} is patched already')
     text = insert_after(text, r'dcl_texcoord9 o10', VS_DCLS, path)
-    text = insert_after(text, re.escape('dp3 o10.xy, c10.xyw, c10.xyw'), VS_OUT[n], path, before=True)
+    normal = re.search(r'dcl_normal (v\d+)', text).group(1) # v4, or v3 where there is no texcoord1 (paint2)
+    text = insert_after(text, re.escape('dp3 o10.xy, c10.xyw, c10.xyw'), VS_OUT[n].replace('{normal}', normal), path,
+                        before=True)
     path.write_text(text)
 
 

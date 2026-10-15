@@ -480,7 +480,7 @@ index 992eb2bf..2213cdb0 100644
      // mov oC2.w, c1.x
      mov oC2.w, c0.w
 diff --git a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS3.asm b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS3.asm
-index e79f302d..547bff5b 100644
+index e79f302d..7ed09178 100644
 --- a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS3.asm
 +++ b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS3.asm
 @@ -37,6 +37,9 @@
@@ -498,7 +498,7 @@ index e79f302d..547bff5b 100644
      mov o5.xyz, r0
      mov o5.w, c4.y
 +    mov o7.xyz, r3 // FusionFix vehicle_paint.patch: the position (dented), the normal and world up in the car's space
-+    mov o8.xyz, v4
++    mov o8.xyz, v3
 +    mov r8.x, c0.z
 +    mov r8.y, c1.z
 +    mov r8.z, c2.z
