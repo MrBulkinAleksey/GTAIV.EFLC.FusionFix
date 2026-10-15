@@ -55,6 +55,10 @@ import inireload;
 //    plant past 80 m) is left out of the scene's render list. The thinning alone left 3000+ weed draws, 2.5 ms of a
 //    6 ms G-buffer at night: the game's own reach is own + Detail Quality's 110 m, and it fades them over those
 //    110 m (alpha (reach - distance) / extra, CE 0xae7cac), so most far ones were a faint stipple anyway.
+//    And past 40 m small props (radius under 2 m) thin out as they are drawn: of those at distance d, a share
+//    (40 / d)^2 is kept, picked by the hash of their place, so the same ones stay and nearer ones come back as you
+//    get close (skipping them when made would lose them for good: a position is offered once). With the pool at
+//    16384 instead of 512 and the slider at its top, 4000+ weed draws 50-200 m out still took 3.5 ms.
 //  - The 64 candidates of one entity's 2dfx props are capped, which the game itself never checked.
 //
 // And what keeps the cost of more props down (the game already keeps them out of shadows: it sets
@@ -88,6 +92,8 @@ namespace Procedural
     bool bFarThinning = true;
     bool bSmallFarCull = true;
     constexpr float SmallFarScreenSize = 0.005f;   // radius over distance under which a prop is left out
+    constexpr float SmallPropRadius = 2.0f;        // smaller ones thin out past SmallFarThinFrom
+    constexpr float SmallFarThinFrom = 40.0f;
     int32_t nGroundTriangles = 2048;
     volatile LONG nTriangles = 0;       // with the trace on, the triangles the manager holds
     bool bInReflections = false;
@@ -204,19 +210,21 @@ namespace Procedural
     float lastCamera[3] = {};
     uint64_t lastCameraTime = 0;
 
-    // The props that are out, for the render lists, with their model's radius
-    std::unordered_map<uintptr_t, float> props;
+    // The props that are out, for the render lists, with their model's radius and the share of the way past
+    // SmallFarThinFrom they keep being drawn at (from the hash of their place)
+    struct PropInfo { float radius; float keep; };
+    std::unordered_map<uintptr_t, PropInfo> props;
     SRWLOCK propsLock = SRWLOCK_INIT;
     uintptr_t modelInfos = 0;           // CE 0x1295cd8, model infos by index
 
-    // Its radius when it is a prop, else a negative
-    float PropRadius(uintptr_t entity)
+    // Its radius and share when it is a prop, else a negative radius
+    PropInfo FindProp(uintptr_t entity)
     {
         AcquireSRWLockShared(&propsLock);
         auto it = props.find(entity);
-        float radius = it != props.end() ? it->second : -1.0f;
+        PropInfo info = it != props.end() ? it->second : PropInfo{ -1.0f, 0.0f };
         ReleaseSRWLockShared(&propsLock);
-        return radius;
+        return info;
     }
 
     // Positions held over to the next update, first in the queue then
@@ -608,8 +616,12 @@ namespace Procedural
                 const auto model = *(uint16_t*)(entity + 0x2E);
                 const auto info = modelInfos ? *(uintptr_t*)(modelInfos + model * 4) : 0;
                 const float radius = info ? *(float*)(info + 0x1C) : 0.0f;
+                // Other bits of the hash than the reach's below, so the two don't go together
+                float place[3];
+                const float keep = CEntity::GetPosition(uintptr_t(entity), place) ?
+                    float((PositionKey(place) >> 12) & 0xFFFFFF) / float(0x1000000) : 0.0f;
                 AcquireSRWLockExclusive(&propsLock);
-                props[uintptr_t(entity)] = radius;
+                props[uintptr_t(entity)] = { radius, keep };
                 ReleaseSRWLockExclusive(&propsLock);
 
                 // Drawn while its own distance times the phase's multiplier (about 1) plus Detail Quality's extra
@@ -882,7 +894,7 @@ namespace Procedural
         constexpr uint32_t propFlags = 0x10000 | 0x40000000;
         if ((*(uint32_t*)(entity + 0x24) & propFlags) != propFlags)
             return phases;
-        const float radius = PropRadius(entity);
+        const auto [radius, keep] = FindProp(entity);
         if (radius < 0.0f)
             return phases;
         if (phases & reflections)
@@ -890,7 +902,8 @@ namespace Procedural
             nReflectionsSkipped++;
             phases &= ~reflections;
         }
-        if ((phases & scene) && radius > 0.0f && radius < distance * SmallFarScreenSize)
+        if ((phases & scene) && radius > 0.0f && (radius < distance * SmallFarScreenSize ||
+            (radius < SmallPropRadius && distance > SmallFarThinFrom && keep * distance * distance > SmallFarThinFrom * SmallFarThinFrom)))
         {
             nSmallFarCulled++;
             phases &= ~scene;
