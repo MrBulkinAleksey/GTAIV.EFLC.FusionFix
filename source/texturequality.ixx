@@ -29,9 +29,10 @@ import entityclass;
 //  - Detail Textures: a fine grain on surfaces up close (b12, c190, c191, s12).
 //  - Bicubic Filtering: magnified diffuse textures read with a Catmull-Rom filter (b13, c192).
 //  - Specular Anti-Aliasing: highlights widened where the normal turns within a pixel (b14, c193).
-//  - Ground Surfaces: terrain layers blended by height, their repeat broken up, wide colour patches
-//    and bumps from their height; parallax occlusion mapping on gta_parallax* and natural ground (b15, c166-c174, s12).
-// The shader side is shaders/patches/texture_quality.patch and world_terrain_and_parallax.patch;
+//  - Ground Surfaces: terrain layers blended by height, their repeat broken up (hexagonal tiling of the textures
+//    that tile evenly, c179), wide colour patches and bumps from their height; parallax occlusion mapping on
+//    gta_parallax* and natural ground (b15, c166-c174, s12).
+// The shader side is shaders/patches/texture_quality.patch, world_terrain_and_parallax.patch and world_terrain_hex_tiling.patch;
 // Sharpening is a post fx pass.
 class TextureQuality
 {
@@ -114,6 +115,7 @@ class TextureQuality
     static inline SafetyHookInline shSetTexture{};
     static inline SafetyHookInline shSetSamplerState{};
     static inline bool bDeviceHooksTried = false;
+    static inline bool bTileHook = false;
 
     // Set from the start to the end of the G-buffer pass, on the render thread.
     static inline bool bInGBuffer = false;
@@ -281,6 +283,223 @@ private:
         return pDetailTex;
     }
 
+    // Ground Surfaces' hexagonal tiling (world_terrain_hex_tiling.patch) takes only diffuse textures that tile evenly:
+    // c179.x, from a look at each texture's small mips the first time the G-buffer pass binds it. Textures are freed
+    // and made as the world streams, so a texture's entry is checked against its size and format and all are
+    // dropped now and then.
+    struct TileInfo
+    {
+        UINT width = 0, height = 0, levels = 0;
+        D3DFORMAT format = D3DFMT_UNKNOWN;
+        float score = 1.0f;
+    };
+    static inline std::unordered_map<IDirect3DBaseTexture9*, TileInfo> tileInfos;
+    static inline float lastTileScore = -1.0f;
+    static inline uint32_t tileFrames = 0;
+    static inline uint32_t tileLooksThisFrame = 0;
+    static inline uint64_t tileLooked = 0, tileUnreadable = 0, tileEven = 0;
+    // GroundAntiTilingTolerance: how much large scale variation a texture may have and still be tiled
+    static inline float fGroundAntiTilingTolerance = 0.1f;
+    static constexpr uint32_t kTileLooksPerFrame = 64;
+    static constexpr uint32_t kTileFramesKept = 1200;
+
+    // A level of a texture as RGB floats; only the formats world textures come in.
+    static bool ReadLevel(IDirect3DTexture9* tex, UINT level, std::vector<float>& rgb, UINT& width, UINT& height)
+    {
+        D3DSURFACE_DESC desc = {};
+        if (FAILED(tex->GetLevelDesc(level, &desc)) || !desc.Width || !desc.Height)
+            return false;
+        const bool dxt1 = desc.Format == D3DFMT_DXT1;
+        const bool dxt = dxt1 || desc.Format == D3DFMT_DXT2 || desc.Format == D3DFMT_DXT3 || desc.Format == D3DFMT_DXT4 || desc.Format == D3DFMT_DXT5;
+        const bool argb = desc.Format == D3DFMT_A8R8G8B8 || desc.Format == D3DFMT_X8R8G8B8;
+        if (!dxt && !argb)
+            return false;
+        D3DLOCKED_RECT locked = {};
+        if (FAILED(tex->LockRect(level, &locked, nullptr, D3DLOCK_READONLY)) || !locked.pBits)
+            return false;
+        width = desc.Width;
+        height = desc.Height;
+        rgb.assign(size_t(width) * height * 3, 0.0f);
+        auto put = [&](UINT x, UINT y, float r, float g, float b)
+        {
+            if (x >= width || y >= height)
+                return;
+            auto* t = &rgb[(size_t(y) * width + x) * 3];
+            t[0] = r; t[1] = g; t[2] = b;
+        };
+        const auto* bits = static_cast<const uint8_t*>(locked.pBits);
+        if (argb)
+        {
+            for (UINT y = 0; y < height; ++y)
+                for (UINT x = 0; x < width; ++x)
+                {
+                    const uint8_t* p = bits + y * locked.Pitch + x * 4;
+                    put(x, y, p[2] / 255.0f, p[1] / 255.0f, p[0] / 255.0f);
+                }
+        }
+        else
+        {
+            // Only the colour block: DXT1 has it alone, DXT2-5 after an 8 byte alpha block.
+            const UINT blockSize = dxt1 ? 8 : 16;
+            for (UINT by = 0; by < (height + 3) / 4; ++by)
+                for (UINT bx = 0; bx < (width + 3) / 4; ++bx)
+                {
+                    const uint8_t* block = bits + by * locked.Pitch + bx * blockSize + (dxt1 ? 0 : 8);
+                    const uint16_t c0 = uint16_t(block[0] | (block[1] << 8)), c1 = uint16_t(block[2] | (block[3] << 8));
+                    float pal[4][3];
+                    auto unpack = [](uint16_t c, float* out)
+                    {
+                        out[0] = ((c >> 11) & 31) / 31.0f;
+                        out[1] = ((c >> 5) & 63) / 63.0f;
+                        out[2] = (c & 31) / 31.0f;
+                    };
+                    unpack(c0, pal[0]);
+                    unpack(c1, pal[1]);
+                    for (int c = 0; c < 3; ++c)
+                    {
+                        if (!dxt1 || c0 > c1)
+                        {
+                            pal[2][c] = (2.0f * pal[0][c] + pal[1][c]) / 3.0f;
+                            pal[3][c] = (pal[0][c] + 2.0f * pal[1][c]) / 3.0f;
+                        }
+                        else
+                        {
+                            pal[2][c] = 0.5f * (pal[0][c] + pal[1][c]);
+                            pal[3][c] = 0.0f;
+                        }
+                    }
+                    const uint32_t indices = block[4] | (block[5] << 8) | (block[6] << 16) | (uint32_t(block[7]) << 24);
+                    for (UINT i = 0; i < 16; ++i)
+                    {
+                        const float* c = pal[(indices >> (2 * i)) & 3];
+                        put(bx * 4 + (i & 3), by * 4 + (i >> 2), c[0], c[1], c[2]);
+                    }
+                }
+        }
+        tex->UnlockRect(level);
+        return true;
+    }
+
+    static float Luma(const float* c)
+    {
+        return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2];
+    }
+
+    static float Smoothstep(float a, float b, float x)
+    {
+        const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    }
+
+    // 1 for a texture that tiles evenly: even at large scale (its mip of about 4x4 texels), of a natural colour
+    // (grass, earth, sand: saturated, green not far under red, blue not over green) and without stripes or tracks
+    // (in its mip of about 16x16 the light changes as much along every direction); 0 otherwise. Unreadable
+    // textures keep the old behaviour, 1, and are left to the shader's own test of the saturation.
+    static float TileScore(IDirect3DBaseTexture9* base, bool& readable)
+    {
+        readable = false;
+        if (!base || base->GetType() != D3DRTYPE_TEXTURE)
+            return 0.0f;
+        auto tex = static_cast<IDirect3DTexture9*>(base);
+        D3DSURFACE_DESC desc = {};
+        if (FAILED(tex->GetLevelDesc(0, &desc)))
+            return 0.0f;
+        const UINT levels = tex->GetLevelCount();
+        const UINT small = (std::min)(desc.Width, desc.Height);
+        if (small < 32 || (std::max)(desc.Width, desc.Height) > 2 * small)
+            return 0.0f;
+        auto msb = [](UINT v) { UINT n = 0; while (v >>= 1) ++n; return n; };
+        const UINT coarse = (std::min)(msb(small) - 2, levels - 1);
+        const UINT fine = (std::min)(msb(small) - 4, levels - 1);
+        if ((small >> coarse) > 16)
+            return 0.0f; // no mips to look at
+        std::vector<float> rgb;
+        UINT w = 0, h = 0;
+        if (!ReadLevel(tex, coarse, rgb, w, h))
+            return 1.0f;
+        readable = true;
+        const size_t n = size_t(w) * h;
+        float mean[3] = {};
+        for (size_t i = 0; i < n; ++i)
+            for (int c = 0; c < 3; ++c)
+                mean[c] += rgb[i * 3 + c] / n;
+        float deviation = 0.0f;
+        for (size_t i = 0; i < n; ++i)
+        {
+            const float d[3] = { rgb[i * 3] - mean[0], rgb[i * 3 + 1] - mean[1], rgb[i * 3 + 2] - mean[2] };
+            deviation = (std::max)(deviation, std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]));
+        }
+        const float luma = Luma(mean) + 0.05f;
+        const float even = 1.0f - Smoothstep(fGroundAntiTilingTolerance, fGroundAntiTilingTolerance * 1.5f, deviation / luma);
+        const float hi = (std::max)({ mean[0], mean[1], mean[2] }), lo = (std::min)({ mean[0], mean[1], mean[2] });
+        const float saturation = hi > 1e-4f ? (hi - lo) / hi : 0.0f;
+        const float natural = Smoothstep(0.08f, 0.15f, saturation) * Smoothstep(0.45f, 0.6f, mean[1] / (std::max)(mean[0], 1e-4f)) *
+                              (mean[2] <= mean[1] * 1.05f ? 1.0f : 0.0f);
+        float score = even * natural;
+        if (score > 0.0f && ReadLevel(tex, fine, rgb, w, h) && w >= 4 && h >= 4)
+        {
+            // How much the light changes along x, y and the two diagonals, wrapping around as the texture tiles
+            float sums[4] = {};
+            auto at = [&](UINT x, UINT y) { return Luma(&rgb[(size_t(y % h) * w + (x % w)) * 3]); };
+            for (UINT y = 0; y < h; ++y)
+                for (UINT x = 0; x < w; ++x)
+                {
+                    const float c = at(x, y);
+                    sums[0] += std::abs(at(x + 1, y) - c);
+                    sums[1] += std::abs(at(x, y + 1) - c);
+                    sums[2] += std::abs(at(x + 1, y + 1) - c);
+                    sums[3] += std::abs(at(x + 1, y + h - 1) - c);
+                }
+            const float most = (std::max)({ sums[0], sums[1], sums[2], sums[3] }), least = (std::min)({ sums[0], sums[1], sums[2], sums[3] });
+            const float anisotropy = (most - least) / (most + 1e-4f);
+            const float contrast = most / float(w * h) / luma;
+            score *= 1.0f - Smoothstep(0.55f, 0.75f, anisotropy) * Smoothstep(0.03f, 0.06f, contrast);
+        }
+        return score;
+    }
+
+    // c179 for the hexagonal tiling: how evenly the diffuse texture the next draws read tiles.
+    static void SetTileScore(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* pTexture)
+    {
+        float score = 0.0f;
+        if (pTexture)
+        {
+            TileInfo info;
+            D3DSURFACE_DESC desc = {};
+            if (pTexture->GetType() == D3DRTYPE_TEXTURE && SUCCEEDED(static_cast<IDirect3DTexture9*>(pTexture)->GetLevelDesc(0, &desc)))
+            {
+                info.width = desc.Width;
+                info.height = desc.Height;
+                info.format = desc.Format;
+                info.levels = pTexture->GetLevelCount();
+            }
+            auto it = tileInfos.find(pTexture);
+            if (it != tileInfos.end() && it->second.width == info.width && it->second.height == info.height &&
+                it->second.format == info.format && it->second.levels == info.levels)
+                score = it->second.score;
+            else if (tileLooksThisFrame < kTileLooksPerFrame)
+            {
+                ++tileLooksThisFrame;
+                bool readable = false;
+                info.score = TileScore(pTexture, readable);
+                ++tileLooked;
+                if (!readable)
+                    ++tileUnreadable;
+                else if (info.score > 0.5f)
+                    ++tileEven;
+                tileInfos[pTexture] = info;
+                score = info.score;
+            }
+            else
+                score = 1.0f; // looked at in a later frame
+        }
+        if (score == lastTileScore)
+            return;
+        lastTileScore = score;
+        const float c179[4] = { score, 0.0f, 0.0f, 0.0f };
+        pDevice->SetPixelShaderConstantF(179, c179, 1);
+    }
+
     // c192 for the bicubic filter: the size of the diffuse texture the next draws read.
     static void SetDiffuseSize(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* pTexture)
     {
@@ -304,6 +523,8 @@ private:
     {
         if (bInGBuffer && bBicubic && stage == 0)
             SetDiffuseSize(pDevice, pTexture);
+        if (bInGBuffer && bLastGround && bTileHook && stage == 0)
+            SetTileScore(pDevice, pTexture);
         return shSetTexture.unsafe_stdcall<HRESULT>(pDevice, stage, pTexture);
     }
 
@@ -355,6 +576,8 @@ private:
         fGroundAntiTiling = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTiling", 1.0f), 0.0f, 1.0f);
         fGroundAntiTilingSize = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTilingSize", 4.0f), 0.5f, 100.0f);
         fGroundAntiTilingSharpness = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTilingSharpness", 16.0f), 1.0f, 100.0f);
+        fGroundAntiTilingTolerance = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTilingTolerance", 0.1f), 0.01f, 1.0f);
+        tileInfos.clear();
         fGroundColorVariation = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundColorVariation", 0.25f), 0.0f, 1.0f);
         fGroundColorVariationSize = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundColorVariationSize", 15.0f), 1.0f, 500.0f);
         fGroundBumps = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumps", 0.08f), 0.0f, 0.5f);
@@ -463,6 +686,9 @@ private:
                 list += std::format("{}{} {:.1f}", list.empty() ? "" : ", ", info->signature, info->binds / frames);
             if (!list.empty())
                 FusionLog::Write("Ground", "Shaders", "G-buffer pixel shaders by their number in the pack, binds per frame: %s\n", list.c_str());
+            FusionLog::Write("Ground", "Tiling", "Hexagonal tiling: texture hook %s, %llu textures looked at, %llu unreadable (tiled as before), %llu tile evenly; %zu kept\n",
+                    bTileHook ? "on" : "off", static_cast<unsigned long long>(tileLooked), static_cast<unsigned long long>(tileUnreadable),
+                    static_cast<unsigned long long>(tileEven), tileInfos.size());
             for (auto& [ptr, info] : shaderKinds)
                 info.binds = 0;
             memset(groundBinds, 0, sizeof(groundBinds));
@@ -501,12 +727,14 @@ private:
 
         bAnisoAllMaps = Pref(anisoPref) != 0;
         bBicubic = Pref(bicubicPref) != 0;
-        if ((bAnisoAllMaps || bBicubic) && !InstallDeviceHooks(pDevice))
-            bAnisoAllMaps = bBicubic = false;
         const bool detail = Pref(detailPref) != 0 && GetDetailTexture(pDevice);
         const bool specularAA = Pref(specularAAPref) != 0;
         // The ground's noise is the detail texture read at the scale of metres.
         const bool ground = Pref(groundPref) != 0 && GetDetailTexture(pDevice);
+        const bool hooks = (bAnisoAllMaps || bBicubic || ground) && InstallDeviceHooks(pDevice);
+        if (!hooks)
+            bAnisoAllMaps = bBicubic = false;
+        bTileHook = ground && hooks;
         bLastGround = ground;
         bInGBuffer = true;
         bGroundBound = true;
@@ -545,6 +773,29 @@ private:
             const float params[8] = { fDetailTiling, 2.0f * fDetailAlbedo, 1.0f - fDetailAlbedo, 0.0f,
                                       fDetailNormal, -0.5f * fDetailNormal, 0.0f, 0.0f };
             pDevice->SetPixelShaderConstantF(190, params, 2);
+        }
+
+        if (ground)
+        {
+            // Without the hook every natural texture is tiled, as before the look at their mips.
+            tileLooksThisFrame = 0;
+            if (++tileFrames % kTileFramesKept == 0)
+                tileInfos.clear();
+            lastTileScore = -1.0f;
+            if (bTileHook)
+            {
+                // The game skips setting a texture that is already bound, so start from what is.
+                IDirect3DBaseTexture9* tex = nullptr;
+                pDevice->GetTexture(0, &tex);
+                SetTileScore(pDevice, tex);
+                if (tex)
+                    tex->Release();
+            }
+            else
+            {
+                const float c179[4] = { 1.0f, 0.0f, 0.0f, 0.0f };
+                pDevice->SetPixelShaderConstantF(179, c179, 1);
+            }
         }
 
         if (bBicubic)
@@ -690,6 +941,7 @@ public:
             memset(lastDiffuseSize, 0, sizeof(lastDiffuseSize));
             // Shaders made after the reset may reuse the old ones' addresses.
             shaderKinds.clear();
+            tileInfos.clear();
         };
     }
 } TextureQuality;
