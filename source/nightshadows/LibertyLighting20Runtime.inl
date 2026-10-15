@@ -943,9 +943,13 @@ namespace Lighting20
             }
         }
 
+        // A shadow map's draw: the forced group wd_local (the lamps' and lights' maps) or wd (group 4 in the dump, which
+        // the lamps' passes also run with bucket 3, and which the caches may draw with)
         static bool ForcedLocal() noexcept
         {
-            return propDraw && localTechnique >= 0 && *reinterpret_cast<const int32_t*>(game + 0xC6B308) == localTechnique;
+            if (!propDraw || localTechnique < 0) return false;
+            const auto group = *reinterpret_cast<const int32_t*>(game + 0xC6B308);
+            return group == localTechnique || group == 4;
         }
 
         static void InstallModelDraw() noexcept
