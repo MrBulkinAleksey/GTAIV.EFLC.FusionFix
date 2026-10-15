@@ -56,6 +56,7 @@ import natives;
 import settings;
 import renderskip;
 import inireload;
+import entityclass;
 
 bool bHighResolutionNightShadows = false;
 static bool bCloseHeadlightRelevance = false;

@@ -231,6 +231,15 @@ namespace
     int currentFace = -1;
     FaceOrigin currentOrigin{};
 
+    // The lamp half being drawn on the render thread (0 or 1, -1 for none) and its slot's position, for other features'
+    // traces (PropTrace in nightshadows)
+    int CurrentLampFace(float position[3])
+    {
+        if (currentFace >= 0)
+            std::memcpy(position, currentOrigin.position, sizeof(currentOrigin.position));
+        return currentFace;
+    }
+
     void MarkFace(uintptr_t dc, uintptr_t slotOffset)
     {
         if (!dc || !slotRecords)

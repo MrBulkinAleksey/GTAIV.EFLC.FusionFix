@@ -572,7 +572,9 @@ namespace Lighting20
         static std::array<std::atomic<uint32_t>, 6> objectsAt{}, passesAt{}, passObjectsAt{};
         static thread_local uint32_t passObjects = 0;
         static thread_local int passBucket = -1;
-        static std::array<std::atomic<uint16_t>, 64> models{};
+        // The props' models, a bit each by model index: a table of 64 by index modulo 64 let another prop's model push a
+        // post's out, which then lost its way through 0x444C50 and its shadow until it was remembered again
+        static std::array<std::atomic<uint8_t>, 65536 / 8> models{};
         static int32_t localTechnique = -1;
         static thread_local bool propDraw = false;
         static std::atomic<uint32_t> propFragments{0}, propFragmentsLocal{0}, cast{0};
@@ -743,7 +745,7 @@ namespace Lighting20
         static void Remember(uintptr_t entity) noexcept
         {
             const auto model = *reinterpret_cast<const uint16_t*>(entity + 0x2E);
-            models[model % models.size()].store(model, std::memory_order_relaxed);
+            models[model >> 3].fetch_or(uint8_t(1u << (model & 7)), std::memory_order_relaxed);
         }
 
         // A render phase (CE 0xD77990 object) drawing the map of an active slot 1-7, on the main thread.
@@ -875,7 +877,7 @@ namespace Lighting20
         static uint32_t __fastcall Consumer(void* command, void*)
         {
             const auto model = *reinterpret_cast<const uint16_t*>(reinterpret_cast<uintptr_t>(command) + 0x58);
-            const bool prop = model && models[model % models.size()].load(std::memory_order_relaxed) == model;
+            const bool prop = model && (models[model >> 3].load(std::memory_order_relaxed) & (1u << (model & 7)));
             if (prop)
             {
                 ++propFragments;
@@ -889,12 +891,15 @@ namespace Lighting20
             const auto result = consumer.unsafe_thiscall<uint32_t>(command);
             if (traced)
             {
-                float eye[3]{};
+                float eye[3]{}, lamp[3]{};
                 if (auto* vp = rage::GetCurrentViewport())
                     std::copy_n(vp->mCameraMatrix[3], 3, eye);
+                const int face = EntityClass::CurrentLampFace(lamp);
+                const char* target = RenderSkip::CurrentTarget();
                 const auto& t = commandTrace;
-                Trace::Line("fragment model=%u at=%.1f,%.1f,%.1f group=%d camera=%.1f,%.1f,%.1f models=%u culled=%u unculled=%u buckets=%s forced=%u draws=%u",
-                    model, at[0], at[1], at[2], *reinterpret_cast<const int32_t*>(game + 0xC6B308), eye[0], eye[1], eye[2],
+                Trace::Line("fragment model=%u at=%.1f,%.1f,%.1f group=%d target=%s face=%d lamp=%.1f,%.1f,%.1f camera=%.1f,%.1f,%.1f models=%u culled=%u unculled=%u buckets=%s forced=%u draws=%u",
+                    model, at[0], at[1], at[2], *reinterpret_cast<const int32_t*>(game + 0xC6B308), target ? target : "-", face,
+                    lamp[0], lamp[1], lamp[2], eye[0], eye[1], eye[2],
                     t.models, t.culled, t.unculled, t.buckets.empty() ? "-" : t.buckets.c_str(), t.forced, t.draws);
                 commandTrace.on = false;
             }
