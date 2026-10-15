@@ -78,6 +78,9 @@ namespace EmergencyTrafficShadows
         // Only the maxShadows signals nearest the player in the previous frame cast shadows; the
         // others stay as the game draws them, so they never push more lamps out of the seven slots.
         unsigned maxShadows = 2;
+        // A signal's light is this many times brighter in the frames it casts its shadow
+        // (Liberty's Shadows 2.0.1: 1.05). Applied once per frame with the admission.
+        float spillScale = 1.0f;
         struct Nearest { uint32_t owner = 0; float distanceSquared = std::numeric_limits<float>::infinity(); };
         std::array<Nearest, 7> nearest{}, allowed{};
         uint32_t nearestFrame = UINT32_MAX;
@@ -274,6 +277,11 @@ namespace EmergencyTrafficShadows
             const auto collision = KeyCollision(entry.key);
             if (registry.Apply(index, value.identity, frame, TrafficSiteRva, args[2], regs.edi, collision != 0, args[3], args[16]))
             {
+                // args[8] is the intensity; a signal with no colour stays as it is.
+                const float intensity = std::bit_cast<float>(args[8]), adjusted = intensity * spillScale;
+                if (spillScale != 1.0f && std::isfinite(adjusted) && intensity > 0 && adjusted > 0 &&
+                    rgb[0] >= 0 && rgb[1] >= 0 && rgb[2] >= 0 && rgb[0] + rgb[1] + rgb[2] > 0)
+                    args[8] = std::bit_cast<uint32_t>(adjusted);
                 snapshots[index].state.store(1, std::memory_order_release); ++admitted;
             }
             else if (collision)
@@ -554,9 +562,10 @@ namespace EmergencyTrafficShadows
     }
 
     // After the allocation adapter and only with its publication on; every site is checked first.
-    static void Install(unsigned trafficMax, bool emergency) noexcept
+    static void Install(unsigned trafficMax, bool emergency, float trafficSpill) noexcept
     {
         game = GameBase();
+        TrafficSignal::spillScale = std::isfinite(trafficSpill) ? std::clamp(trafficSpill, 0.0f, 4.0f) : 1.0f;
         TrafficSignal::maxShadows = (std::min)(trafficMax, 7u);
         bool traffic = trafficMax != 0;
         if (!traffic && !emergency) return;

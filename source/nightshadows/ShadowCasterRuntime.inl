@@ -119,6 +119,11 @@ namespace ShadowDiagnostics
                 if (log.good()) startupWritten = true;
             }
             log << "tick=" << now << " admission_installed=" << admissionInstalled
+                << " lamp_size_gate=" << LampShadowSizeGate::status << " lamp_size_gate_kept=" << LampShadowSizeGate::kept.load()
+                << " lamp_size_gate_retained=" << LampShadowSizeGate::retained.load() << " lamp_size_gate_indoor=" << LampShadowSizeGate::indoor.load()
+                << " lamp_size_gate_fade=" << LampShadowSizeGate::fade << " lamp_size_gate_faded=" << LampShadowSizeGate::faded.load()
+                << " model_ref_guard=" << ModelReferenceQueue::status << " model_ref_duplicates=" << ModelReferenceQueue::duplicates.load()
+                << " model_ref_spilled=" << ModelReferenceQueue::spilled.load() << " model_ref_invalid=" << ModelReferenceQueue::invalid.load()
                 << " traffic_self_shadow_fix=" << bTrafficSelfShadowFix
                 << " traffic_car_excluded=" << OwnHeadlightCaster::trafficCarExcluded.load()
                 << " close_headlight_relevance=" << bCloseHeadlightRelevance << " caster_guard=" << guardPassed
@@ -148,6 +153,7 @@ namespace ShadowDiagnostics
                 << " continuity_overrides=" << PlayerShadowAllocation::continuityOverrides.load()
                 << " continuity_rejected=" << PlayerShadowAllocation::continuityRejected.load()
                 << " lamp_distance_adjusted=" << PlayerShadowAllocation::lampDistanceAdjusted.load()
+                << " receiver_ranked=" << PlayerShadowAllocation::receiverRanked.load() << " indoor_ranked=" << PlayerShadowAllocation::indoorRanked.load()
                 << " caster_priority=" << PlayerShadowAllocation::casterPriority
                 << " caster_captures=" << PlayerShadowAllocation::casterCaptures.load()
                 << " lamps_without_casters=" << PlayerShadowAllocation::lampsWithoutCasters.load()

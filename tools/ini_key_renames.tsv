@@ -250,3 +250,7 @@ TEMPORAL	FrameGenerationDebug	DEBUG	FrameGenerationDebug	debug
 TEMPORAL	UpscalerTimingLog	DEBUG	UpscalerTimingLog	debug
 TEXTURES	GroundSurfacesDebug	DEBUG	GroundSurfacesDebug	debug
 PROCEDURAL	ProceduralLog	DEBUG	ProceduralLog	debug
+SHADOWS	VisibleReceiverRanking	NIGHTSHADOWS	VisibleReceiverRanking	shown
+SHADOWS	TrafficSignalIntensity	NIGHTSHADOWS	TrafficSignalIntensity	hidden
+SHADOWS	LampShadowSizeReach	NIGHTSHADOWS	LampShadowSizeReach	hidden
+HEADLIGHTS	Intensity	HEADLIGHTS	Intensity	hidden

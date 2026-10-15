@@ -9,6 +9,11 @@ namespace HeadlightEnhancement
     static const uintptr_t imageBase = GameBase();
     static std::atomic<uint32_t> retainedSubmissions{0};
     static bool brightnessInstalled = false;
+    static bool retainAfterExit = false;
+    // Every car's headlight intensity is multiplied by this once, after the player scaling and
+    // the retained brightness, before high beams and the dual headlight split (Liberty's
+    // Shadows 2.0.1 dims them by 15%).
+    static float intensityScale = 1.0f;
     // Why the hook is or is not in place: another plugin that patches the same game code turns it
     // off at install.
     static std::string brightnessStatus = "not checked";
@@ -86,6 +91,16 @@ namespace HeadlightEnhancement
             regs.xmm4.f32[0] *= (bonus + base) / kept;
     }
 
+    static void RetainAfterExit(SafetyHookContext& regs);
+
+    static void Brightness(SafetyHookContext& regs)
+    {
+        if (retainAfterExit) RetainAfterExit(regs);
+        const float intensity = regs.xmm1.f32[0];
+        if (intensityScale != 1.0f && std::isfinite(intensity) && intensity >= 0)
+            regs.xmm1.f32[0] = intensity * intensityScale;
+    }
+
     static void RetainAfterExit(SafetyHookContext& regs)
     {
         const auto vehicle = static_cast<uintptr_t>(regs.esi);
@@ -119,6 +134,7 @@ namespace HeadlightEnhancement
         log.Write(std::ios::trunc, [](std::ostream& out, uint64_t) {
             out << "brightnessInstalled=" << brightnessInstalled
                 << "\nbrightnessStatus=" << brightnessStatus
+                << "\nretainAfterExit=" << retainAfterExit << " intensityScale=" << intensityScale
                 << "\nretainedSubmissions=" << retainedSubmissions.load()
                 << "\nlightModesStatus=" << lightModesStatus
                 << "\nshadowOriginStatus=" << shadowOriginStatus
@@ -129,9 +145,11 @@ namespace HeadlightEnhancement
         });
     }
 
-    static bool InstallBrightness(bool enabled)
+    static bool InstallBrightness(bool enabled, float scale)
     {
-        if (!enabled)
+        retainAfterExit = enabled;
+        intensityScale = std::isfinite(scale) ? std::clamp(scale, 0.0f, 4.0f) : 1.0f;
+        if (!enabled && intensityScale == 1.0f)
         {
             brightnessStatus = "off in the ini";
             return false;
@@ -151,7 +169,7 @@ namespace HeadlightEnhancement
         }
         // Runs after original player-only scaling, before high-beam scaling.
         // Do not bypass or alter the original driver eligibility instructions.
-        brightnessHook = safetyhook::create_mid(imageBase + 0x63FB77, RetainAfterExit);
+        brightnessHook = safetyhook::create_mid(imageBase + 0x63FB77, Brightness);
         if (!brightnessHook)
         {
             brightnessStatus = "hook failed";

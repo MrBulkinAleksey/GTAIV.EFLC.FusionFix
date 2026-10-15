@@ -1,6 +1,7 @@
 module;
 
 #include <common.hxx>
+#include <bit>
 #include "StableHeadlightSelector.hpp"
 #include "ShadowAdapterCE.hpp"
 #include "ShadowAllocationCE.hpp"
@@ -25,6 +26,8 @@ module;
 #include "NativeCacheDependencies44.hpp"
 #include "ShadowInactiveSlots.hpp"
 #include "ShadowViewPriority.hpp"
+#include "VisibleReceiverRanking133.hpp"
+#include "IndoorShadowBubble212.hpp"
 #include "ShadowDrivingFocus.hpp"
 #include "ShadowLookupValidation.hpp"
 #include "ShadowTrace34.hpp"
@@ -66,6 +69,8 @@ static float fTailLightShadowDistance = 25.0f;
 #include "PlayerCarRuntime.inl"
 #include "BeamTraceRuntime.inl"
 #include "HeadlightEnhancementRuntime.inl"
+#include "LampShadowSizeGateRuntime.inl"
+#include "ModelReferenceQueueRuntime.inl"
 
 // Queried for every light on every frame; a lookup by name scans the whole preference table.
 static int32_t ShadowReachStep(bool headlight)
@@ -466,6 +471,7 @@ class NightShadows
         bTrafficSelfShadowFix = iniReader.ReadInteger("NIGHTSHADOWS", "TrafficSelfShadowFix", 0) != 0;
         NearbyVehicleLighting36::enabled.store(iniReader.ReadInteger("NIGHTSHADOWS", "NearbyVehicleReceivers", 0) != 0, std::memory_order_release);
         PlayerShadowAllocation::nativeLampPriority = iniReader.ReadInteger("NIGHTSHADOWS", "LampViewPriority", 0) != 0;
+        PlayerShadowAllocation::visibleReceiverRanking = iniReader.ReadInteger("NIGHTSHADOWS", "VisibleReceiverRanking", 0) != 0;
         PlayerShadowAllocation::casterPriority = iniReader.ReadInteger("NIGHTSHADOWS", "CasterAwarePriority", 0) != 0;
         PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "CasterAwarePriorityHold", 750), 0, 2000));
         PlayerShadowAllocation::casterLeadSeconds = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "CasterAwarePriorityLead", 1.0f), 0.0f, 3.0f);
@@ -537,9 +543,12 @@ public:
             {
                 PlayerCar::driverOffset = 0xF50;
                 BeamTrace::enabled = true;
+                // Always: the game's model reference buffers overflow with our extra shadow draws.
+                ModelReferenceQueue::Install();
                 HeadlightEnhancement::log.Name("Headlights", "Status");
                 HeadlightEnhancement::brightnessInstalled = HeadlightEnhancement::InstallBrightness(
-                    iniReader.ReadInteger("HEADLIGHTS", "ConsistentBrightness", 0) != 0);
+                    iniReader.ReadInteger("HEADLIGHTS", "ConsistentBrightness", 0) != 0,
+                    iniReader.ReadFloat("HEADLIGHTS", "Intensity", 0.85f));
                 HeadlightEnhancement::InstallLightModes(iniReader.ReadInteger("HEADLIGHTS", "LightModes", 0) != 0);
                 HeadlightEnhancement::InstallOffscreenLights(iniReader.ReadInteger("HEADLIGHTS", "OffscreenLights", 1),
                     std::clamp(iniReader.ReadFloat("HEADLIGHTS", "OffscreenLightsDistance", 100.0f), 0.0f, 500.0f));
@@ -578,7 +587,12 @@ public:
                 // CE 1.8: shadows from traffic signals and emergency vehicle lights.
                 EmergencyTrafficShadows::log.Name("NightShadows", "EmergencyTraffic");
                 EmergencyTrafficShadows::Install(static_cast<unsigned>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "TrafficSignalShadows", 2), 0, 7)),
-                    iniReader.ReadInteger("NIGHTSHADOWS", "EmergencyLightShadows", 1) != 0);
+                    iniReader.ReadInteger("NIGHTSHADOWS", "EmergencyLightShadows", 1) != 0,
+                    iniReader.ReadFloat("NIGHTSHADOWS", "TrafficSignalIntensity", 1.05f));
+                LampShadowSizeGate::Install(iniReader.ReadFloat("NIGHTSHADOWS", "LampShadowSizeReach", 1.3f),
+                    iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowRetention", 0) != 0,
+                    iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowFade", 0) != 0,
+                    iniReader.ReadInteger("NIGHTSHADOWS", "IndoorShadowBubble", 0) != 0);
                 // Liberty's Shadows 2.0: dual headlights, tail lights, world lights, buildings in dynamic maps.
                 // Each family is switched in the graphics menu; its hooks stay in place.
                 Lighting20::Install(iniReader);

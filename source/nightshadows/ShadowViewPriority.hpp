@@ -26,7 +26,7 @@ inline float SmoothUnit(float value) noexcept {
     const float t = std::clamp(value,0.0f,1.0f);
     return t*t*(3.0f-2.0f*t);
 }
-inline float ViewSample(const ShadowView& c, Vec3 p) noexcept {
+inline float ViewSample(const ShadowView& c, Vec3 p, bool sceneryCenterBias=false) noexcept {
     if (!c.valid) return 0;
     const float v[4]{p.x,p.y,p.z,1};
     float eye[4]{}, clip[4]{};
@@ -41,23 +41,25 @@ inline float ViewSample(const ShadowView& c, Vec3 p) noexcept {
     // discontinuity without favoring the screen center.
     // Equal relevance throughout the frame. Keep a continuous shoulder outside
     // it so a small camera movement does not immediately invalidate a receiver.
-    return 1.0f-SmoothUnit((edge-1.0f)/0.35f);
+    const float shoulder=1.0f-SmoothUnit((edge-1.0f)/0.35f);
+    // Liberty's Shadows 2.0.1: scenery ranking leans to the middle of the frame, half at its edge.
+    return sceneryCenterBias?shoulder*(0.5f+0.5f*(1.0f-SmoothUnit(edge))):shoulder;
 }
 inline float ShadowViewWeight(const ShadowView& c, Vec3 position, Vec3 direction,
-                              float radius, bool beam) noexcept {
+                              float radius, bool beam, bool sceneryCenterBias=false) noexcept {
     if(!c.valid || !std::isfinite(radius) || radius<=0) return 1;
-    float score=ViewSample(c,position);
+    float score=ViewSample(c,position,sceneryCenterBias);
     const float span=(std::min)(radius,60.96f);
     const float len=std::sqrt(direction.x*direction.x+direction.y*direction.y+direction.z*direction.z);
     if(beam && std::isfinite(len) && len>0.001f) {
         for(float fraction: {0.2f,0.45f,0.7f,0.95f}) {
             const float d=span*fraction/len;
-            score=(std::max)(score,ViewSample(c,{position.x+direction.x*d,position.y+direction.y*d,position.z+direction.z*d}));
+            score=(std::max)(score,ViewSample(c,{position.x+direction.x*d,position.y+direction.y*d,position.z+direction.z*d},sceneryCenterBias));
         }
     } else if(!beam) {
         const float d=span*0.5f;
         for(Vec3 offset: {Vec3{d,0,0},Vec3{-d,0,0},Vec3{0,d,0},Vec3{0,-d,0},Vec3{0,0,-d}})
-            score=(std::max)(score,ViewSample(c,{position.x+offset.x,position.y+offset.y,position.z+offset.z}));
+            score=(std::max)(score,ViewSample(c,{position.x+offset.x,position.y+offset.y,position.z+offset.z},sceneryCenterBias));
     }
     return 1.0f+2.0f*score; // Bounded preference: distance still matters.
 }
