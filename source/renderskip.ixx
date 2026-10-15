@@ -65,6 +65,8 @@ export namespace RenderSkip
     uint32_t LockCount();
     // Render thread: how many device viewports have been set, to tell one face of a lamp's shadow map from the next
     uint32_t ViewportCount();
+    // Render thread: the pass being drawn now is left out, its draws dropped (whatever else of it goes through)
+    bool DropsDraws();
 }
 
 namespace RenderSkip
@@ -677,6 +679,11 @@ namespace RenderSkip
     uint32_t ViewportCount()
     {
         return nViewports;
+    }
+
+    bool DropsDraws()
+    {
+        return drop != Drop::Nothing;
     }
 
     float SunElevation()
