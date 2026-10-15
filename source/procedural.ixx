@@ -55,8 +55,8 @@ import inireload;
 //    plant past 80 m) is left out of the scene's render list. The thinning alone left 3000+ weed draws, 2.5 ms of a
 //    6 ms G-buffer at night: the game's own reach is own + Detail Quality's 110 m, and it fades them over those
 //    110 m (alpha (reach - distance) / extra, CE 0xae7cac), so most far ones were a faint stipple anyway.
-//    And past 40 m small props (radius under 2 m) thin out as they are drawn: of those at distance d, a share
-//    (40 / d)^2 is kept, picked by the hash of their place, so the same ones stay and nearer ones come back as you
+//    And past 60 m small props (radius under 2 m) thin out as they are drawn: of those at distance d, a share
+//    60 / d is kept (half at 120 m, 30% at 200 m; (40 / d)^2 showed them coming in), picked by the hash of their place, so the same ones stay and nearer ones come back as you
 //    get close (skipping them when made would lose them for good: a position is offered once). With the pool at
 //    16384 instead of 512 and the slider at its top, 4000+ weed draws 50-200 m out still took 3.5 ms.
 //  - The 64 candidates of one entity's 2dfx props are capped, which the game itself never checked.
@@ -93,7 +93,7 @@ namespace Procedural
     bool bSmallFarCull = true;
     constexpr float SmallFarScreenSize = 0.005f;   // radius over distance under which a prop is left out
     constexpr float SmallPropRadius = 2.0f;        // smaller ones thin out past SmallFarThinFrom
-    constexpr float SmallFarThinFrom = 40.0f;
+    constexpr float SmallFarThinFrom = 60.0f;
     int32_t nGroundTriangles = 2048;
     volatile LONG nTriangles = 0;       // with the trace on, the triangles the manager holds
     bool bInReflections = false;
@@ -903,7 +903,7 @@ namespace Procedural
             phases &= ~reflections;
         }
         if ((phases & scene) && radius > 0.0f && (radius < distance * SmallFarScreenSize ||
-            (radius < SmallPropRadius && distance > SmallFarThinFrom && keep * distance * distance > SmallFarThinFrom * SmallFarThinFrom)))
+            (radius < SmallPropRadius && distance > SmallFarThinFrom && keep * distance > SmallFarThinFrom)))
         {
             nSmallFarCulled++;
             phases &= ~scene;
