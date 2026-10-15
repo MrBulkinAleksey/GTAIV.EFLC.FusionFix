@@ -418,6 +418,7 @@ static void __fastcall sub_D77A00(void* _this, void* edx)
     const fusionfix::shadows::caster::Scope scope(OwnHeadlightCaster::context,
                                                 OwnHeadlightCaster::Capture(_this));
     const Lighting20::Buildings::Scope buildings(_this);
+    const Lighting20::Props::Scope props(_this);
     return shsub_D77A00.unsafe_fastcall(_this, edx);
 }
 
@@ -471,6 +472,8 @@ class NightShadows
         PlayerShadowAllocation::casterLeadSeconds = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "CasterAwarePriorityLead", 1.0f), 0.0f, 3.0f);
         PlayerShadowAllocation::boxedCarCasterDistance = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "BoxedCarCasterDistance", 25.0f), 0.0f, 150.0f);
         PlayerShadowAllocation::pedCasterDistance = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "PedCasterDistance", 35.0f), 0.0f, 150.0f);
+        fusionfix::shadows::ShadowCasterPresence::MinLightAbove = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "CasterMinLightHeight", 2.5f), 0.0f, 10.0f);
+        PlayerShadowAllocation::interiorLightsYield = iniReader.ReadInteger("NIGHTSHADOWS", "InteriorLightsYieldOutside", 1) != 0;
         PlayerShadowAllocation::lampSpacing.base = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "LampSpacing", 0.0f), 0.0f, 40.0f);
         PlayerShadowAllocation::lampSpacing.seconds = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "LampSpacingSeconds", 0.5f), 0.0f, 5.0f);
         PlayerShadowAllocation::lampSpacing.alongRoad = iniReader.ReadInteger("NIGHTSHADOWS", "LampSpacingAlongRoad", 0) != 0;
@@ -617,6 +620,7 @@ public:
                 pattern = find_pattern("A1 ? ? ? ? 83 EC 40 56", "A1 ? ? ? ? 83 EC 40 85 C0");
                 auto registerTechniqueGroup = (int32_t(__cdecl*)(const char*))pattern.get_first(0);
                 static int32_t nLocalShadowTechId = registerTechniqueGroup("wd_local");
+                Lighting20::Props::localTechnique = nLocalShadowTechId;
 
                 pattern = find_pattern("E8 ? ? ? ? 6A 00 6A 14 E8 ? ? ? ? 8B F8 83 C4 44", "E8 ? ? ? ? 53 6A 14 E8 ? ? ? ? 83 C4 44");
                 static void (__cdecl* AddToDrawListEntityListShadow)(int32_t, int32_t, int32_t, int32_t, int32_t) = injector::GetBranchDestination(pattern.get_first(0)).get();
@@ -686,6 +690,13 @@ public:
                                 // immediate headlight pass; retain their lamp shadows.
                                 if (OwnHeadlightCaster::Exclude(regs.esi, regs.eax, artificial))
                                     return_to(loc_AE3867);
+                                Lighting20::Props::Visit(regs.esi, regs.eax, regs.edx);
+                                // Props in lamp maps (PropShadows): as if bit 0x800 of +0x210 were set
+                                if (artificial && Lighting20::Props::Cast(regs.esi, regs.eax, regs.edx))
+                                {
+                                    regs.eax = 1;
+                                    return_to(loc_AE374F + 0x18);
+                                }
                             }
                             else if (bHeadlightShadows && bVehicleNightShadows)
                             {

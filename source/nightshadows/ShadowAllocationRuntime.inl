@@ -41,6 +41,13 @@ namespace PlayerShadowAllocation
     static float casterLeadSeconds = 1.0f; // CasterAwarePriorityLead
     static float boxedCarCasterDistance = 25.0f; // BoxedCarCasterDistance
     static float pedCasterDistance = 35.0f; // PedCasterDistance
+    // InteriorLightsYieldOutside: while the scene is not an interior (IS_INTERIOR_SCENE, read once a frame in
+    // CaptureCasters), a light of an interior (mInteriorIndex set) takes no dynamic slot at all, a cached one keeps
+    // its cache: room lights shining out through a door took slots from the street lamps, by a ped in their light,
+    // by lighting you (uncached), or as the slots were free, and threw a second shadow of the cars and lamp posts.
+    static bool interiorLightsYield = true;
+    static std::atomic<bool> interiorScene{false};
+    static std::atomic<uint32_t> interiorLightsYielded{0};
     // Copied on the game-process callback, read by selection on the render side.
     static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
     static fusionfix::shadows::ShadowCasterPresence casters{};
@@ -400,6 +407,7 @@ namespace PlayerShadowAllocation
     {
         using fusionfix::shadows::ShadowCasterPresence;
         if (!casterPriority || !Enabled() || !CTimer::m_snTimeInMilliseconds) return;
+        if (interiorLightsYield) interiorScene.store(Natives::IsInteriorScene(), std::memory_order_relaxed);
         PlayerCar::Focus focus;
         ShadowCasterPresence next{};
         next.timeMs = static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds);
@@ -656,6 +664,26 @@ namespace PlayerShadowAllocation
         }
     }
 
+    // CasterMinLightHeight: whether a light of the list other than skip, with a shadow, at least that high above the
+    // caster at p, reaches it (see ShadowCasterPresence::MinLightAbove).
+    static bool CoveredByHigherLight(const rage::CLightSource* lights, uint32_t count, uint32_t skip, Vec3 p, float extent) noexcept
+    {
+        for (uint32_t j = 0; j < count; ++j)
+        {
+            const auto& o = lights[j];
+            if (j == skip || !(o.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW)) || (o.mFlags & rage::LF_VEHICLE) ||
+                o.mPosition.z - p.z < fusionfix::shadows::ShadowCasterPresence::MinLightAbove)
+                continue;
+            const Vec3 source{o.mPosition.x, o.mPosition.y, o.mPosition.z};
+            if (o.mType == rage::LT_SPOT
+                ? fusionfix::shadows::BeamTouchesReceiver(p, extent, source, {o.mDirection.x, o.mDirection.y, o.mDirection.z}, o.mOuterConeAngle, o.mRadius)
+                : (p.x - source.x) * (p.x - source.x) + (p.y - source.y) * (p.y - source.y) + (p.z - source.z) * (p.z - source.z) <=
+                    (o.mRadius + extent) * (o.mRadius + extent))
+                return true;
+        }
+        return false;
+    }
+
     static void Collect(SafetyHookContext& regs) noexcept
     {
         const FloatingPointState fp;
@@ -691,6 +719,13 @@ namespace PlayerShadowAllocation
             ((flags & rage::LF_STATIC_SHADOW) && light.mShadowCacheIndex < 0))
         {
             RejectPass();
+            return;
+        }
+        if (interiorLightsYield && light.mInteriorIndex >= 0 && !(flags & rage::LF_VEHICLE) &&
+            !interiorScene.load(std::memory_order_relaxed))
+        {
+            regs.eip = gameBase + allocation::CollectSkipRva;
+            ++interiorLightsYielded;
             return;
         }
         const auto key = static_cast<uint32_t>(light.mCastShadows); // Audited opaque +60 key.
@@ -745,7 +780,8 @@ namespace PlayerShadowAllocation
                 gain=kind==budget::Kind::Lamp && cached
                     ? state.casters.Lights({light.mPosition.x,light.mPosition.y,light.mPosition.z},
                         {light.mDirection.x,light.mDirection.y,light.mDirection.z},
-                        static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle,&caster)
+                        static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle,&caster,
+                        [&](unsigned c) { return CoveredByHigherLight(lights,count,index,state.casters.points[c],state.casters.extents[c]); })
                     : volumeVisible ? SlotGain::InView : SlotGain::OffScreen;
             // An uncached lamp whose light reaches you or your car throws its shadow round you, in view whichever
             // way the camera looks. Ranked by where it stood from the camera, the lamp next to the car in a tunnel

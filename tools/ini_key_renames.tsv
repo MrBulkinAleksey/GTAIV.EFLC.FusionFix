@@ -250,3 +250,4 @@ TEMPORAL	FrameGenerationDebug	DEBUG	FrameGenerationDebug	debug
 TEMPORAL	UpscalerTimingLog	DEBUG	UpscalerTimingLog	debug
 TEXTURES	GroundSurfacesDebug	DEBUG	GroundSurfacesDebug	debug
 PROCEDURAL	ProceduralLog	DEBUG	ProceduralLog	debug
+SHADOWS	PropShadows	NIGHTSHADOWS	PropShadows	shown
