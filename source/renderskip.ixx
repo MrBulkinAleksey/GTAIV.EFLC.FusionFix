@@ -63,6 +63,8 @@ export namespace RenderSkip
     const char* CurrentTarget();
     // Render thread: how many locks of target index 0 there have been, to tell one lock of a target from the next
     uint32_t LockCount();
+    // Render thread: how many device viewports have been set, to tell one face of a lamp's shadow map from the next
+    uint32_t ViewportCount();
 }
 
 namespace RenderSkip
@@ -185,6 +187,7 @@ namespace RenderSkip
     int depth = 0;
     bool bLockHooked = false;
     uint32_t nLocks = 0;
+    uint32_t nViewports = 0;
     uint32_t dropped[Kinds]{};
 
     // The far cascades by day: the cascades' passes counted, and where the camera was at each one's last draw
@@ -625,6 +628,7 @@ namespace RenderSkip
 
     HRESULT __stdcall SetViewport(IDirect3DDevice9* device, const D3DVIEWPORT9* viewport)
     {
+        ++nViewports;
         if (viewport && Tracing())
             TraceEvent(std::format("viewport {} {} {}x{}", viewport->X, viewport->Y, viewport->Width, viewport->Height));
         return RealSetViewport(device, viewport);
@@ -668,6 +672,11 @@ namespace RenderSkip
     uint32_t LockCount()
     {
         return nLocks;
+    }
+
+    uint32_t ViewportCount()
+    {
+        return nViewports;
     }
 
     float SunElevation()

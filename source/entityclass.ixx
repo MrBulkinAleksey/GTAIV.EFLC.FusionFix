@@ -3,6 +3,7 @@ module;
 #include <common.hxx>
 #include "FusionLog.hpp"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <string>
@@ -14,6 +15,7 @@ module;
 export module entityclass;
 
 import common;
+import comvars;
 import inireload;
 import renderskip;
 import temporal;
@@ -33,6 +35,12 @@ import temporal;
 // EntityDrawLog = 1 ([DEBUG]): every 600 scene frames, the draws of each kind and the CPU time their
 // execute took, per frame and per target the game had locked (RenderSkip::CurrentTarget), to
 // GTAIV.EFLC.FusionFix.EntityClass.log: what leaving a kind out of a pass would save.
+//
+// LampShadowFaceCulling = 1 ([PERFORMANCE]): the lamps' shadow maps (SHADOW_MAP_COLOUR_POINT) get every entity
+// once for each face of their cube map. An entity or fragment type draw whose bounding sphere is outside the face
+// being drawn (the current grcViewport's view and projection) is left out. The sphere is the model's (model info
+// +0x10 centre, +0x1c radius) around the command's position, grown by the centre's offset so the entity's turn
+// needs no matrix. With the switch off, EntityDrawLog counts what it would leave out.
 export namespace EntityClass
 {
     enum class Kind : uint8_t
@@ -84,8 +92,10 @@ namespace
     constexpr const char* SourceNames[Sources] = { "entity", "fragment", "fragment type", "skinned", "ped" };
     constexpr const char* KindNames[size_t(Kind::Kinds)] = { "unmarked", "buildings", "props", "vehicles", "peds" };
 
-    // EntityDrawLog: render thread only, but for the switch
+    // EntityDrawLog and LampShadowFaceCulling: render thread only, but for the switches
     bool bDrawLog = false;
+    bool bFaceCulling = false;
+    uintptr_t modelInfos = 0;       // CE 0x1295cd8, model infos by index
     constexpr uint32_t kDrawLogFrames = 600;
     struct TargetStats
     {
@@ -93,13 +103,15 @@ namespace
         uint64_t draws[size_t(Kind::Kinds)]{};
         int64_t ticks[size_t(Kind::Kinds)]{};
         uint64_t sourceDraws[Sources]{};
-        // Locks of the target that had draws; and per scene frame the entities drawn into it, by model and place
-        // (entity and fragment type commands), to tell how often one entity is drawn into it, as into each face
-        // of a lamp's cube map
-        uint64_t locks = 0;
+        // Locks of the target that had draws, and device viewports within them (the faces of a lamp's cube map);
+        // per lock the entities drawn into it, by model and place (entity and fragment type commands), to tell how
+        // often one entity is drawn into one lamp's map
+        uint64_t locks = 0, faces = 0;
         uint64_t keyedDraws = 0, entities = 0;
-        uint32_t keysFrame = 0;
+        uint32_t keysLock = ~0u;
         std::unordered_set<uint64_t> keys;
+        // Draws outside the face drawn: left out with LampShadowFaceCulling, else counted only
+        uint64_t outside = 0;
         int64_t Total() const
         {
             int64_t total = 0;
@@ -113,6 +125,7 @@ namespace
     size_t lastTarget = 0;
     uint32_t statsFrom = 0;
     uint32_t lastLock = ~0u;
+    uint32_t lastViewport = ~0u;
     int64_t qpcFrequency = 0;
 
     TargetStats& StatsFor(const char* name)
@@ -147,7 +160,10 @@ namespace
                     text += std::format(" {} {:.1f} ({:.3f} ms),", KindNames[kind], s.draws[kind] * perFrame, s.ticks[kind] * msPerFrame);
             }
             if (s.keyedDraws)
-                text += std::format(" locks {:.1f}, draws per entity {:.2f},", s.locks * perFrame, double(s.keyedDraws) / double(s.entities));
+                text += std::format(" locks {:.1f}, faces per lock {:.2f}, draws per entity in a lock {:.2f},", s.locks * perFrame,
+                    s.locks ? double(s.faces) / double(s.locks) : 0.0, double(s.keyedDraws) / double(s.entities));
+            if (s.outside)
+                text += std::format(" outside their face {:.1f} ({}),", s.outside * perFrame, bFaceCulling ? "left out" : "drawn");
             text += " by command";
             for (int i = 0; i < Sources; ++i)
                 text += std::format("{} {} {:.1f}", i ? "," : "", SourceNames[i], s.sourceDraws[i] * perFrame);
@@ -158,8 +174,110 @@ namespace
         lastTargetName = nullptr;
     }
 
+    // The model index and the position the command keeps: CDrawEntityDC +0x30 and +0x20, CDrawFragTypeDC
+    // +0x58 and +0x40; false for the other commands
+    bool ModelAndPlace(void* dc, Source source, uint16_t& model, const float*& place)
+    {
+        const auto* bytes = reinterpret_cast<const uint8_t*>(dc);
+        if (source == FromEntity)
+            model = *reinterpret_cast<const uint16_t*>(bytes + 0x30), place = reinterpret_cast<const float*>(bytes + 0x20);
+        else if (source == FromFragType)
+            model = *reinterpret_cast<const uint16_t*>(bytes + 0x58), place = reinterpret_cast<const float*>(bytes + 0x40);
+        else
+            return false;
+        return true;
+    }
+
+    bool IsLampMaps(const char* target)
+    {
+        static const char* lastName = nullptr;
+        static bool lastIs = false;
+        if (target != lastName)
+        {
+            lastName = target;
+            lastIs = target && !std::strcmp(target, "SHADOW_MAP_COLOUR_POINT");
+        }
+        return lastIs;
+    }
+
+    // The current viewport's frustum as planes (x, y, z, w) with w + dot(xyz, p) >= 0 inside, from view x projection
+    // (row vectors, D3D clip z 0 to w), made again when its matrices change
+    float frustum[6][4]{};
+    float frustumFrom[2][4][4]{};
+    bool frustumValid = false;
+
+    bool UpdateFrustum()
+    {
+        auto viewport = rage::GetCurrentViewport();
+        if (!viewport || !viewport->mIsPerspective)
+            return false;
+        if (frustumValid && !std::memcmp(frustumFrom[0], viewport->mViewMatrix, sizeof(frustumFrom[0])) &&
+            !std::memcmp(frustumFrom[1], viewport->mProjectionMatrix, sizeof(frustumFrom[1])))
+            return true;
+        std::memcpy(frustumFrom[0], viewport->mViewMatrix, sizeof(frustumFrom[0]));
+        std::memcpy(frustumFrom[1], viewport->mProjectionMatrix, sizeof(frustumFrom[1]));
+        float m[4][4];
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
+            {
+                m[i][j] = 0.0f;
+                for (int k = 0; k < 4; ++k)
+                    m[i][j] += frustumFrom[0][i][k] * frustumFrom[1][k][j];
+            }
+        // Columns of m: clip x, y, z, w; inside -w <= x <= w, -w <= y <= w, 0 <= z <= w
+        auto column = [&](int c, int i) { return m[i][c]; };
+        for (int i = 0; i < 4; ++i)
+        {
+            frustum[0][i] = column(3, i) + column(0, i);
+            frustum[1][i] = column(3, i) - column(0, i);
+            frustum[2][i] = column(3, i) + column(1, i);
+            frustum[3][i] = column(3, i) - column(1, i);
+            frustum[4][i] = column(2, i);
+            frustum[5][i] = column(3, i) - column(2, i);
+        }
+        for (auto& plane : frustum)
+        {
+            const float length = std::sqrt(plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]);
+            if (length > 0.0f)
+                for (auto& v : plane)
+                    v /= length;
+        }
+        frustumValid = true;
+        return true;
+    }
+
+    // Whether the draw's bounding sphere is wholly outside the face being drawn
+    bool OutsideFace(void* dc, Source source)
+    {
+        uint16_t model;
+        const float* place;
+        if (!modelInfos || !ModelAndPlace(dc, source, model, place))
+            return false;
+        const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4);
+        if (!info)
+            return false;
+        const float* centre = reinterpret_cast<const float*>(info + 0x10);
+        const float radius = *reinterpret_cast<const float*>(info + 0x1c);
+        if (!(radius > 0.0f) || !UpdateFrustum())
+            return false;
+        const float reach = radius + std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
+        for (const auto& plane : frustum)
+            if (plane[0] * place[0] + plane[1] * place[1] + plane[2] * place[2] + plane[3] < -reach)
+                return true;
+        return false;
+    }
+
     void Execute(DrawExecute original, void* dc, Kind kind, Source source)
     {
+        const char* target = bDrawLog || bFaceCulling ? RenderSkip::CurrentTarget() : nullptr;
+        const bool outside = (bDrawLog || bFaceCulling) && IsLampMaps(target) && OutsideFace(dc, source);
+        if (outside && bFaceCulling)
+        {
+            if (bDrawLog)
+                StatsFor(target).outside++;
+            return;
+        }
+
         const auto& hooks = Hooks();
         for (const auto& [before, after] : hooks)
             if (before)
@@ -180,31 +298,33 @@ namespace
                 WriteDrawLog(frame - statsFrom);
                 statsFrom = frame;
             }
-            auto& stats = StatsFor(RenderSkip::CurrentTarget());
+            auto& stats = StatsFor(target);
             stats.draws[size_t(kind)]++;
             stats.ticks[size_t(kind)] += end.QuadPart - start.QuadPart;
             stats.sourceDraws[source]++;
-            if (const auto lock = RenderSkip::LockCount(); lock != lastLock)
+            if (outside)
+                stats.outside++;
+            const auto lock = RenderSkip::LockCount();
+            if (lock != lastLock)
             {
                 lastLock = lock;
                 stats.locks++;
             }
-            // The model index and the position the command keeps: CDrawEntityDC +0x30 and +0x20, CDrawFragTypeDC
-            // +0x58 and +0x40
-            const auto* bytes = reinterpret_cast<const uint8_t*>(dc);
-            ptrdiff_t model = -1, place = 0;
-            if (source == FromEntity)
-                model = 0x30, place = 0x20;
-            else if (source == FromFragType)
-                model = 0x58, place = 0x40;
-            if (model >= 0)
+            if (const auto viewport = RenderSkip::ViewportCount(); viewport != lastViewport)
             {
-                uint64_t key = *reinterpret_cast<const uint16_t*>(bytes + model);
+                lastViewport = viewport;
+                stats.faces++;
+            }
+            uint16_t model;
+            const float* place;
+            if (ModelAndPlace(dc, source, model, place))
+            {
+                uint64_t key = model;
                 for (int i = 0; i < 3; ++i)
-                    key = key * 0x9E3779B97F4A7C15ull ^ *reinterpret_cast<const uint32_t*>(bytes + place + 4 * i);
-                if (stats.keysFrame != frame)
+                    key = key * 0x9E3779B97F4A7C15ull ^ reinterpret_cast<const uint32_t*>(place)[i];
+                if (stats.keysLock != lock)
                 {
-                    stats.keysFrame = frame;
+                    stats.keysLock = lock;
                     stats.keys.clear();
                 }
                 stats.keyedDraws++;
@@ -256,6 +376,9 @@ namespace
         auto fragVtable = hook::pattern("C7 07 ? ? ? ? E8 ? ? ? ? 8B 5C 24 18 66 89 77 46");
         auto fragTypeVtable = hook::pattern("C7 07 ? ? ? ? E8 ? ? ? ? 8B 4C 24 1C 66 89 77");
         auto skinnedVtable = hook::pattern("C7 06 ? ? ? ? 66 89 7E 08 89 46 1C");
+        // CDrawEntityDC's execute: movzx eax, word [esi+0x30]; mov eax, [eax*4 + model infos]
+        if (auto infos = hook::pattern("0F B7 46 30 8B 04 85 ? ? ? ? 85 C0"); !infos.empty())
+            modelInfos = *infos.get_first<uintptr_t>(7);
         hook::pattern pedVtables[kPedCommands] = {
             hook::pattern("C7 03 ? ? ? ? E8 ? ? ? ? 8A 44 24 2C"),
             hook::pattern("C7 03 ? ? ? ? E8 ? ? ? ? 8A 44 24 20"),
@@ -305,7 +428,11 @@ namespace
                 LARGE_INTEGER frequency;
                 QueryPerformanceFrequency(&frequency);
                 qpcFrequency = frequency.QuadPart;
-                auto readIni = [](CIniReader& iniReader) { bDrawLog = iniReader.ReadInteger("DEBUG", "EntityDrawLog", 0) != 0; };
+                auto readIni = [](CIniReader& iniReader)
+                {
+                    bDrawLog = iniReader.ReadInteger("DEBUG", "EntityDrawLog", 0) != 0;
+                    bFaceCulling = iniReader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 0) != 0;
+                };
                 CIniReader iniReader("");
                 readIni(iniReader);
                 IniReload::Add(readIni);
