@@ -1622,6 +1622,8 @@ private:
                         R.szPbrSkyStatus, R.SkyEffect ? "built" : "missing", static_cast<unsigned long>(R.hrSkyEffect), R.fPbrSkyLastStrength,
                         R.fPbrSkyLastSunHeight, R.fPbrSkyLastHaze, R.fSkyTablesHaze, unsigned(R.nSkyViewFrame), unsigned(FrameHistory::Frame()),
                         unsigned(R.nPbrSkyDraws));
+                log.Printf("physical sky in the clouds: share %.2f, table times %.2f on screen, sun hue %.2f %.2f %.2f\n",
+                        R.CloudLastPbrShare, R.CloudLastSkyUnits, R.CloudLastSunHue[0], R.CloudLastSunHue[1], R.CloudLastSunHue[2]);
                 // The game's weather by name, and the cloud layer it gives, so a screenshot can be
                 // matched to its weather.
                 {

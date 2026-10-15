@@ -73,7 +73,7 @@ static float WeatherHaze()
 // The sky's parameters, registered at start (registering while drawing would grow the list the shader parameter hook
 // may be reading); shaders.ixx and the clouds register some of them too, and get the same indices.
 static size_t nSkyColorIdx = 0, nAzimuthColorIdx = 0, nAzimuthColorEastIdx = 0, nAzimuthStrengthIdx = 0, nAzimuthHeightIdx = 0,
-              nSunDirectionIdx = 0;
+              nSunDirectionIdx = 0, nSunExposureIdx = 0;
 static bool bParamsRegistered = false;
 
 export void RegisterPbrSkyParams()
@@ -84,6 +84,7 @@ export void RegisterPbrSkyParams()
     nAzimuthStrengthIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "AzimuthStrength");
     nAzimuthHeightIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "AzimuthHeight");
     nSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
+    nSunExposureIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "HDRSunExposure");
     bParamsRegistered = true;
 }
 
@@ -258,4 +259,63 @@ export void PbrSkyAfterDraw(IDirect3DDevice9* pDevice)
     for (size_t i = 0; i < std::size(kBoundStates); ++i)
         SetSamplerStateBoth(pDevice, kSkyViewStage, kBoundStates[i], savedSamplerStates[i]);
     SAFE_RELEASE(pSavedTexture);
+}
+
+// For the volumetric clouds (volumetricclouds.ixx), so they take their light from the same air as the sky.
+
+// The share of the table the sky took this frame or the last: 0 while it is off, at night, or no sky was drawn.
+export float PbrSkyShare()
+{
+    auto& R = PostFxResources;
+    if (!R.PbrSkyEnabled() || !R.nSkyViewFrame || FrameHistory::Frame() - R.nSkyViewFrame > 1)
+        return 0.0f;
+    return R.fPbrSkyLastStrength;
+}
+
+// What the SkyView table's colour is times on screen, before the exposure: gta_atmoscatt_clouds takes it as it takes
+// the timecycle's gradient, times HDRSunExposure.x (sky_pbr.patch), and all of the sky times HDRExposure after that.
+export float PbrSkySunExposure()
+{
+    return bParamsRegistered ? rage::grmShaderInfo::getShaderParamData(nSunExposureIdx)[0] : 0.0f;
+}
+
+// The hue of the sunlight reaching a height (km above the sea) with the sun at sunSine above the horizon, through the
+// air of SkyAtmosphere.fx at the weather's haze, at brightness 1 (Rec. 709 luma), each channel within 0 to 2. On the
+// CPU, as the transmittance table: the clouds need it at one height only. False where no sunlight gets there.
+export bool PbrSkySunHue(float heightKm, float sunSine, float hue[3])
+{
+    constexpr double kGround = 6360.0, kTop = 6460.0;
+    constexpr double kRayleigh[3] = { 5.802e-3, 13.558e-3, 33.1e-3 };
+    constexpr double kOzone[3] = { 0.650e-3, 1.881e-3, 0.085e-3 };
+    constexpr double kMieExtinction = 4.440e-3;
+    constexpr int kSteps = 40;
+    const double haze = WeatherHaze();
+    const double r = kGround + std::max(double(heightKm), 0.0);
+    const double mu = std::clamp(double(sunSine), -1.0, 1.0);
+    const double b = r * mu;
+    // Behind the planet's edge
+    const double groundDisc = b * b - (r * r - kGround * kGround);
+    if (groundDisc > 0.0 && -b - std::sqrt(groundDisc) > 0.0)
+        return false;
+    const double tMax = -b + std::sqrt(std::max(b * b - (r * r - kTop * kTop), 0.0));
+    const double dt = tMax / kSteps;
+    double depth[3] = {};
+    for (int i = 0; i < kSteps; ++i)
+    {
+        const double t = (i + 0.5) * dt;
+        const double h = std::max(std::sqrt(r * r + t * t + 2.0 * r * mu * t) - kGround, 0.0);
+        const double rayleigh = std::exp(-h / 8.0), mie = std::exp(-h / 1.2) * haze;
+        const double ozone = std::max(0.0, 1.0 - std::abs(h - 25.0) / 15.0);
+        for (int c = 0; c < 3; ++c)
+            depth[c] += (kRayleigh[c] * rayleigh + kMieExtinction * mie + kOzone[c] * ozone) * dt;
+    }
+    double transmittance[3];
+    for (int c = 0; c < 3; ++c)
+        transmittance[c] = std::exp(-depth[c]);
+    const double luma = 0.2126 * transmittance[0] + 0.7152 * transmittance[1] + 0.0722 * transmittance[2];
+    if (luma <= 1e-6)
+        return false;
+    for (int c = 0; c < 3; ++c)
+        hue[c] = float(std::clamp(transmittance[c] / luma, 0.0, 2.0));
+    return true;
 }

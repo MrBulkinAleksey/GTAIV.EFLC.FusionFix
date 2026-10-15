@@ -755,6 +755,8 @@ public:
     size_t CloudMoonPositionIdx = 0, CloudSkyColorIdx = 0;
     // The lit and shaded colours the clouds were last drawn with, and the sky's clamp, for the log.
     float CloudLastLit[3] = {}, CloudLastShade[3] = {}, CloudLastClamp[3] = {}, CloudLastCeiling = 0.0f, CloudLastLightStrength = 0.0f;
+    // The physical sky's share in the clouds' light, its table's colour times this on screen, and the sun's hue it gave.
+    float CloudLastPbrShare = 0.0f, CloudLastSkyUnits = 0.0f, CloudLastSunHue[3] = {};
     // The direction towards the game's own directional light (-c17, gDirectionalLight), taken in
     // the lighting phase, and the frame it was taken; the sky's SunDirection the clouds used to be
     // lit by came out mirrored across the sky. And the directions the clouds were last lit from.
