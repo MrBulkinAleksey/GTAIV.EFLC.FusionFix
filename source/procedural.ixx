@@ -47,6 +47,10 @@ import inireload;
 //  - ProceduralPool: more records than 512, so props don't vanish or pop where many are around.
 //  - Grass & Props Distance: grass, surface props and 2dfx props go further, and props' own draw distance.
 //  - ProceduralDensity: more or fewer props (not grass).
+//  - ProceduralFarThinning: past the game's own reach the props thin out instead of all going the whole stretched
+//    reach: each one's reach is drawn, by the hash of its position, between the two (the square of a uniform share
+//    of the way), so some 75% are left at 130 m, 45% at 200 m and 20% at 300 m with the slider and Detail Quality at
+//    their top. Thousands of weeds and plants 100-300 m out took 2-2.5 ms of CPU a frame in the G-buffer.
 //  - The 64 candidates of one entity's 2dfx props are capped, which the game itself never checked.
 //
 // And what keeps the cost of more props down (the game already keeps them out of shadows: it sets
@@ -77,6 +81,7 @@ namespace Procedural
     int32_t nRenderCache = 32768;
     float fDensity = 1.0f;
     float fDistance = 1.0f;
+    bool bFarThinning = true;
     int32_t nGroundTriangles = 2048;
     volatile LONG nTriangles = 0;       // with the trace on, the triangles the manager holds
     bool bInReflections = false;
@@ -477,6 +482,8 @@ namespace Procedural
         bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
         bGatherPriority = iniReader.ReadInteger("PROCEDURAL", "ProceduralGatherPriority", 1) != 0;
         fConeBack = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeBack", 70.0f), 0.0f, 1000.0f);
+        // For the props made from now on
+        bFarThinning = iniReader.ReadInteger("PROCEDURAL", "ProceduralFarThinning", 1) != 0;
         fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
         fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
         bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
@@ -598,8 +605,19 @@ namespace Procedural
                 auto& drawDistance = *(float*)(entity + 0x50);
                 if (fDistance != 1.0f && std::isfinite(drawDistance) && drawDistance > 0.0f && drawDistance < 2000.0f)
                 {
-                    float extra = pDetailExtra ? *pDetailExtra : 0.0f;
-                    drawDistance = drawDistance * fDistance + (fDistance - 1.0f) * std::max(extra, 0.0f);
+                    float extra = std::max(pDetailExtra ? *pDetailExtra : 0.0f, 0.0f);
+                    float stretched = drawDistance * fDistance + (fDistance - 1.0f) * extra;
+                    float position[3];
+                    if (bFarThinning && fDistance > 1.0f && CEntity::GetPosition(uintptr_t(entity), position))
+                    {
+                        // Its reach (own + extra) between the game's and the stretched one, the same for a prop at the
+                        // same place each time it is made
+                        const float own = drawDistance + extra, full = stretched + extra;
+                        const float share = float((PositionKey(position) >> 40) & 0xFFFFFF) / float(0x1000000);
+                        drawDistance = own + (full - own) * share * share - extra;
+                    }
+                    else
+                        drawDistance = stretched;
                 }
             }
         }
