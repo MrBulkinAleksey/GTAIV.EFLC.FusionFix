@@ -10,7 +10,7 @@
 // makes it), by brightness and by hue as far as fPalette says. What the atmosphere adds is how the sky changes
 // around: brighter and warmer towards the sun, cooler away from it, the sunset's bands, the earth's shadow. A knee
 // keeps the bright side within twice the timecycle's colour there, so neither the sky nor the clouds matched to it
-// come out brighter than the game's.
+// come out brighter than the game's; only the glow within 20 degrees of the sun rises higher, white as the sunlight.
 //
 // Units: kilometres. The tables' own frame is z up, the sun at azimuth 0.
 
@@ -44,8 +44,8 @@ float4 vec4Air;       // x haze (Mie) multiplier, y camera height in km, z groun
 float3 vec3Sun;       // towards the sun in the tables' frame: (cos elevation, 0, sin elevation)
 float3 vec3SkyColour;  // the timecycle's SkyColor
 float4 vec4Azimuth;    // xyz the mean of its azimuth colours times AzimuthStrength, w AzimuthHeight
-float4 vec4Match;      // x fPalette: 0 brightness only, 1 the timecycle's hue too; z, w the knee and the ceiling of the
-                       // sky's brightness, in times the timecycle's at that height
+float4 vec4Match;      // x fPalette: 0 brightness only, 1 the timecycle's hue too; y the ceiling next to the sun; z, w the
+                       // knee and the ceiling of the sky's brightness elsewhere, in times the timecycle's at that height
 
 struct Medium
 {
@@ -275,11 +275,11 @@ float Luminance(float3 c)
 }
 
 // What the sky's colour is scaled by to take the timecycle's at a point: by brightness, or channel by channel.
-float3 MatchScale(float3 pbr, float3 target)
+float3 MatchScale(float3 pbr, float3 target, float palette)
 {
     const float3 byBrightness = Luminance(target) / max(Luminance(pbr), 1e-7);
     const float3 byChannel = target / max(pbr, 1e-7);
-    return lerp(byBrightness, byChannel, vec4Match.x);
+    return lerp(byBrightness, byChannel, palette);
 }
 
 // The timecycle's sky at a height (the sine of the elevation), as gta_atmoscatt_clouds' vertex shader makes it with
@@ -296,11 +296,16 @@ float4 SkyView_PS(float2 uv : TEXCOORD0) : COLOR0
     // The same height a right angle from the sun takes the timecycle's colour there; below the horizon, the horizon's.
     const float3 side = SkyRadiance(float3(0.0, sqrt(saturate(1.0 - dir.z * dir.z)), dir.z));
     const float3 target = TimecycleSky(max(dir.z, 0.0));
-    const float3 matched = sky * MatchScale(side, target);
+    // The haze's glow about the sun, within some 20 degrees of it, most within 10: held at twice the timecycle's
+    // there it was a dull beige smudge, at the timecycle's hue. There the ceiling rises towards vec4Match.y and the
+    // hue is the air's own, the sunlight's.
+    const float aureole = saturate((dot(dir, vec3Sun) - 0.9397) / (1.0 - 0.9397));
+    const float nearSun = aureole * aureole;
+    const float3 matched = sky * MatchScale(side, target, vec4Match.x * (1.0 - nearSun));
     // Towards a low sun the sky comes out many times the side's: past the knee its brightness rolls off towards the
     // ceiling, keeping the hue.
     const float l = Luminance(matched) / max(Luminance(target), 1e-7);
-    const float knee = vec4Match.z, room = vec4Match.w - vec4Match.z;
+    const float knee = vec4Match.z, room = lerp(vec4Match.w, vec4Match.y, nearSun) - vec4Match.z;
     const float rolled = l <= knee ? l : knee + room * (1.0 - exp(-(l - knee) / room));
     return float4(matched * (rolled / max(l, 1e-7)), 1.0);
 }

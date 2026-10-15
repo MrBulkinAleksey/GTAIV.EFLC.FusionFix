@@ -38,10 +38,12 @@ constexpr UINT kStrengthRegister = 194;
 constexpr DWORD kSkyViewStage = 10;
 
 // The table keeps the timecycle's brightness at every height (see SkyAtmosphere.fx), takes a third of its hue, and its
-// bright side towards the sun rolls off from 1.2 to at most 2 times the timecycle's colour there.
+// bright side towards the sun rolls off from 1.2 to at most 2 times the timecycle's colour there; the glow within 20
+// degrees of the sun up to 8 times, in the sunlight's own hue.
 constexpr float kPalette = 0.35f;
 constexpr float kKnee = 1.2f;
 constexpr float kCeiling = 2.0f;
+constexpr float kSunCeiling = 8.0f;
 // Haze: Mie phase asymmetry, ground albedo and the camera's height above the sea in km.
 constexpr float kMieG = 0.76f;
 constexpr float kGroundAlbedo = 0.3f;
@@ -130,7 +132,7 @@ static bool DrawTables(IDirect3DDevice9* pDevice, float sunHeight, float haze)
     TimecycleSky(skyColour, azimuth);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec3SkyColour"), &skyColour);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Azimuth"), &azimuth);
-    const D3DXVECTOR4 match(kPalette, 0.0f, kKnee, kCeiling);
+    const D3DXVECTOR4 match(kPalette, kSunCeiling, kKnee, kCeiling);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Match"), &match);
 
     auto draw = [&](const char* technique, IDirect3DSurface9* target, float width, float height)

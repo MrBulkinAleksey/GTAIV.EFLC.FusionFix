@@ -677,7 +677,11 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         float3 hazeSky = sky * min(1.0, 2.0 * skyLuma / max(behind, 1e-4));
         // With the physical sky, the air's own colour this way, by its share: the sky behind the cloud without the
         // game's sun and its halo, which the cap above only held down.
-        hazeSky = lerp(hazeSky, SkyTable(dir), vec4SkyTable.x);
+        // Held within twice the frame's sky as well: the table's glow about the sun is up to eight times the sky's,
+        // and the whole cloud would take it.
+        float3 tableSky = SkyTable(dir);
+        tableSky *= min(1.0, 2.0 * skyLuma / max(dot(tableSky, float3(0.2126, 0.7152, 0.0722)), 1e-4));
+        hazeSky = lerp(hazeSky, tableSky, vec4SkyTable.x);
         float3 termHaze = hazeSky * (cover * (1.0 - haze));
 
         // VolumetricCloudsDebug: 2 the clouds grey at the sky they are matched to; 3 to 10 one term of
