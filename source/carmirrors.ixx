@@ -76,6 +76,50 @@ namespace CarMirrors
     };
     static Snapshot snapshots[16];
     static uint32_t nextSnapshot = 1;
+
+    // A callback command of the game's own (vtable CE 0xE81E0C: its execute calls fn(parameter) on the render
+    // thread), made as the draw lists make the mirror quad's: allocate 0x10 bytes (0x8DC3A0), the base vtable, the
+    // command's number from the counter, the vtable, fn and its parameter, then add it (0x499E30).
+    struct GameCallback
+    {
+        void* (__cdecl* allocate)(uint32_t size, uint32_t flags) = nullptr;
+        void (__cdecl* add)(void* command) = nullptr;
+        uint32_t baseVtable = 0, vtable = 0;
+        uint32_t* counter = nullptr;
+
+        void Queue(void (__cdecl* fn)(uint32_t), uint32_t parameter) const
+        {
+            if (!allocate || !add)
+                return;
+            auto command = static_cast<uint32_t*>(allocate(0x10, 0));
+            if (command)
+            {
+                command[0] = baseVtable;
+                command[1] ^= (command[1] ^ *counter) & 0x3FFF;
+                ++*counter;
+                command[0] = vtable;
+                command[2] = reinterpret_cast<uint32_t>(fn);
+                command[3] = parameter;
+            }
+            add(command);
+        }
+    };
+    static GameCallback callback;
+
+    // Render thread, around the mirror phase's draws: c204 for the car glass (vehicle_glass_reflections_wet.patch,
+    // set for the main view by postfx.ixx): the player's car's own glass keeps 40% of its tint in the mirror too, within
+    // 4 m of the reflected eye, which stands further from the rear window than the driver; an interior mirror showed
+    // the dark tinted rear window and little else.
+    static void __cdecl MirrorPassTint(uint32_t on)
+    {
+        auto device = rage::grcDevice::GetD3DDevice();
+        if (!device)
+            return;
+        const float tint[4] = { on ? 0.4f : 0.0f, on ? 4.0f * 4.0f : 0.0f, 0.0f, 0.0f };
+        device->SetPixelShaderConstantF(204, tint, 1);
+        if (auto real = RageDirect3DDevice9::RealDevice(device); real != device)
+            real->SetPixelShaderConstantF(204, tint, 1);
+    }
     static float quadShift = 0.0f;          // the most the drawn car stood off the main thread's, since the last log
 
     static double NowMs()
@@ -270,8 +314,11 @@ namespace CarMirrors
             const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
             if (const float* m = glass && vehicle ? CEntity::GetMatrix(vehicle) : nullptr)
                 PlaceGlass(m, *glass, true, nullptr);
+            callback.Queue(MirrorPassTint, 1);
         }
         phaseBuildHook.unsafe_thiscall<void>(phase);
+        if (usedThisFrame)
+            callback.Queue(MirrorPassTint, 0);
         if (usedThisFrame)
         {
             buildMs += NowMs() - start;
@@ -447,6 +494,22 @@ public:
             if (!quad.empty() && *quad.get_first<uint8_t*>(25) == CarMirrors::mirrorOn)
             {
                 CarMirrors::quadHook = safetyhook::create_mid(quad.get_first(0), CarMirrors::PlaceQuad);
+                // how they make it: push 0 / push 10 / call allocate / mov edx, eax / add esp, 10 / test edx, edx / je /
+                // mov ecx, [edx+4] / mov [edx], base vtable / xor ecx, [counter] / and ecx, 3FFF / xor [edx+4], ecx /
+                // inc [counter] / mov [edx], vtable / mov [edx+8], fn / mov eax, [edi+938] / mov [edx+C], eax / jmp +2 /
+                // xor edx, edx / push edx / call add
+                auto make = hook::pattern("6A 00 6A 10 E8 ? ? ? ? 8B D0 83 C4 10 85 D2 74 ? 8B 4A 04 C7 02 ? ? ? ? 33 0D ? ? ? ? 81 E1 FF 3F 00 00 31 4A 04 FF 05 ? ? ? ? C7 02 ? ? ? ? C7 42 08 ? ? ? ? 8B 87 38 09 00 00 89 42 0C EB 02 33 D2 52 E8");
+                for (size_t i = 0; i < make.size() && !CarMirrors::callback.add; ++i)
+                {
+                    auto site = make.get(i);
+                    if (*site.get<void*>(57) != quad.get_first(0))
+                        continue; // the same kind of command for another function
+                    CarMirrors::callback.allocate = reinterpret_cast<void* (__cdecl*)(uint32_t, uint32_t)>(injector::GetBranchDestination(site.get<void>(4)).as_int());
+                    CarMirrors::callback.add = reinterpret_cast<void (__cdecl*)(void*)>(injector::GetBranchDestination(site.get<void>(75)).as_int());
+                    CarMirrors::callback.baseVtable = *site.get<uint32_t>(23);
+                    CarMirrors::callback.counter = *site.get<uint32_t*>(29);
+                    CarMirrors::callback.vtable = *site.get<uint32_t>(50);
+                }
                 // where the scene's draw lists queue it: mov [edx+8], 0xB59900 / mov eax, [edi+938] / mov [edx+C], eax /
                 // jmp +2 (over xor edx, edx, a jump's target, left alone)
                 auto queue = hook::pattern("C7 42 08 ? ? ? ? 8B 87 38 09 00 00 89 42 0C EB 02");
@@ -466,6 +529,7 @@ public:
                 uint32_t(std::size(CarMirrorTable)), timeBuild && timeVisibility ? "on" : "partly off",
                 CarMirrors::waterVisibility ? "found" : "not found (the mirrors stay empty outdoors)",
                 CarMirrors::quadHook ? "on" : "off (not found)", uint32_t(CarMirrors::queueHooks.size()));
+            FusionLog::Write("CarMirrors", "Init", "the mirror pass's glass tint %s\n", CarMirrors::callback.add ? "on" : "off (the game's callback command was not found)");
             if (CarMirrors::quadOffset)
                 FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
         };
