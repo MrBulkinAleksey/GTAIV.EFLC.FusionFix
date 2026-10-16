@@ -2118,6 +2118,7 @@ public:
             { 0, "PREF_CLOUD_SHADOWS_DEBUG",    "DEBUG",      "CloudShadowsDebug",                  "MENU_DISPLAY_CLOUD_SH_DEBUG", 0, nullptr, 0, 2 },
             { 0, "PREF_CLOUDS_DEBUG",           "DEBUG",      "VolumetricCloudsDebug",              "MENU_DISPLAY_CLOUDS_DEBUG",  0, nullptr, 0, 14 },
             { 0, "PREF_SSR_FULL_DEPTH",         "DEBUG",      "SSRMarchFullDepth",                  "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_AERIAL_DEBUG",           "DEBUG",      "AerialPerspectiveDebug",             "",                           0, nullptr, 0, 1 },
             { 0, "PREF_FG_DEBUG_VIEW",          "DEBUG",      "FrameGenerationDebugView",           "MENU_DISPLAY_FG_DEBUG",      0, nullptr, 0, 3 },
             { 0, "PREF_VOLUMETRIC_LIGHT",       "LIGHTING",   "VolumetricLight",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_CONTACTSHADOWS",         "LIGHTING",   "ContactShadows",                     "",                           1, nullptr, 0, 1 },
@@ -2450,6 +2451,7 @@ public:
             AddRow(category, "WetGroundDebug", "PREF_WET_GROUND_DEBUG", 3, "MENU_DISPLAY_WET_DEBUG");
             AddRow(category, "CloudShDebug", "PREF_CLOUD_SHADOWS_DEBUG", 3, "MENU_DISPLAY_CLOUD_SH_DEBUG");
             AddRow(category, "CloudsDebug", "PREF_CLOUDS_DEBUG", 15, "MENU_DISPLAY_CLOUDS_DEBUG");
+            AddRow(category, "AerialDebug", "PREF_AERIAL_DEBUG", 2, toggle);
             AddEmptyLine(category);
             AddRow(category, "FGDebug", "PREF_FG_DEBUG_VIEW", 4, "MENU_DISPLAY_FG_DEBUG");
         }

@@ -220,6 +220,9 @@ Logitech LightSync RGB
 [CloudsDebug]
 Отладка объёмных облаков
 
+[AerialDebug]
+Отладка воздушной перспективы
+
 [WetDbgMaterial]
 Категории материалов
 

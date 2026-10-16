@@ -220,6 +220,9 @@ Cloud Shadows Debug View
 [CloudsDebug]
 Volumetric Clouds Debug View
 
+[AerialDebug]
+Aerial Perspective Debug View
+
 [WetDbgMaterial]
 Material Categories
 

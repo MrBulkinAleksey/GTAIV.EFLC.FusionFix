@@ -733,6 +733,12 @@ public:
         static auto p = FusionFixSettings.GetRef("PREF_AERIAL_PERSPECTIVE");
         return p ? p->get() != 0 : true;
     }
+    // Aerial Perspective Debug View in Graphics > Debug ([DEBUG] AerialPerspectiveDebug): the air 25 times as thick.
+    bool AerialPerspectiveDebug() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_AERIAL_DEBUG");
+        return p && p->get() != 0;
+    }
     float fAerialLastShare = 0.0f, fAerialLastStrength = 0.0f, fAerialLastUnits = 0.0f, fAerialLastHaze = 0.0f;
     // Why the last frame drew no volumetric clouds, or that it did, for the Ctrl+Shift+F10 log.
     const char* szCloudsStatus = "not run yet";
