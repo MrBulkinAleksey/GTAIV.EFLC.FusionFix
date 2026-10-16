@@ -485,6 +485,7 @@ class NightShadows
         PlayerShadowAllocation::lampSpacing.alongRoad = iniReader.ReadInteger("NIGHTSHADOWS", "LampSpacingAlongRoad", 0) != 0;
         PlayerShadowAllocation::behindLampReach = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "BehindLampReach", 12.0f), 0.0f, 100.0f);
         PlayerShadowAllocation::uncachedLampAdvantage = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "UncachedLampAdvantage", 1.5f), 0.0f, 10.0f);
+        PlayerShadowAllocation::cachedLampViewSlots = iniReader.ReadInteger("NIGHTSHADOWS", "CachedLampViewSlots", 1) != 0;
         fTailLightShadowDistance = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "TailLightShadowDistance", 25.0f), 0.0f, 500.0f);
         PlayerShadowAllocation::slotMinHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "SlotMinHold", 1000), 0, 5000));
         fusionfix::shadows::NativeShadowContinuity42::claimDistanceRatio =

@@ -62,7 +62,7 @@ namespace PlayerShadowAllocation
     // Copied on the game-process callback, read by selection on the render side.
     static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
     static fusionfix::shadows::ShadowCasterPresence casters{};
-    static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0}, lightsOffScreen{0}, carsLeftToBoxes{0}, pedsLeftOut{0};
+    static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0}, lightsOffScreen{0}, cachedLampsInView{0}, carsLeftToBoxes{0}, pedsLeftOut{0};
     // NightShadowsSlotLog: filled by selection, written out from the game's thread.
     static fusionfix::shadows::ShadowSlotTrace slotTrace;
     // LampSpacing: lamps beside a nearer one in view give way to lamps further along
@@ -168,6 +168,7 @@ namespace PlayerShadowAllocation
     static uint32_t slotMinHoldMs = 0;
     static float behindLampReach = 12.0f; // BehindLampReach
     static float uncachedLampAdvantage = 1.5f; // UncachedLampAdvantage
+    static bool cachedLampViewSlots = true; // CachedLampViewSlots
     static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
     static std::atomic<uint32_t> lightsFlickering{0}; // lights ranked off screen as they flicker out of the list, for the status line
     // Rear lamp keys (Liberty's Shadows 2.0 tail light shadows), set by Lighting20, which comes after
@@ -869,6 +870,15 @@ namespace PlayerShadowAllocation
                 if(light.mType!=rage::LT_SPOT || fusionfix::shadows::BeamTouchesReceiver(state.player,2.0f,source,
                     {light.mDirection.x,light.mDirection.y,light.mDirection.z},light.mOuterConeAngle,light.mRadius))
                     gain=SlotGain::InView;
+            }
+            // CachedLampViewSlots: a cached lamp with no car or ped in its light ranked None, level with the lamps
+            // behind you, and took a free slot only by distance, so the lamps down the street you look at had no
+            // props' shadow (bins are not in its cache) until you came near. Its light in view, it ranks off screen,
+            // above those and any slot they hold; among themselves such lamps go by the game's distance, which
+            // LampViewPriority already shortens for lamps in view.
+            if(casterPriority && cachedLampViewSlots && kind==budget::Kind::Lamp && cached && gain==SlotGain::None &&
+               volumeVisible && viewWeight>1.01f) {
+                gain=SlotGain::OffScreen; ++cachedLampsInView;
             }
             // An uncached lamp out of the frame (behind or beside the camera, view weight 1) whose light still
             // reaches it counted as a shadow in view, and in tunnels lamps 15-20 m behind took slots from those
