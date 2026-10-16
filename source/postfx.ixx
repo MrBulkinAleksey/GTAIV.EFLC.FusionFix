@@ -2374,7 +2374,7 @@ public:
             pDevice->SetPixelShaderConstantF(201, scale, 1);
             pDevice->SetPixelShaderConstantF(205, offset, 1);
         }
-        // Clothes (ped_cloth_sheen.patch). c164: the sheen, its power, its white share, the cut of
+        // Clothes (ped_cloth_sheen.patch). c164: the sheen, the power of its ambient rim, its colour's share of white, the cut of
         // the game's highlight. c191: the gloss the fade starts at, one over its width, the debug view and its brightness.
         {
             const bool on = R.ClothSheenEnabled();

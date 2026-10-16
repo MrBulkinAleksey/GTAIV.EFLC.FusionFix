@@ -9,9 +9,11 @@
 #
 # On clothes:
 # - sheen: the fibres standing out of the cloth catch light at grazing angles, so the rim of a sleeve or a
-#   trouser leg turns towards the light around it. (1 - N.V)^c164.y times c164.x, lit by the ambient and by
-#   the sun wrapped half past the terminator with its shadow, coloured by the cloth (it joins the diffuse
-#   light, which the albedo multiplies) and c164.z of it white (it joins the specular).
+#   trouser leg lights up, against the sun most of all. From the sun, the Charlie sheen lobe at roughness 0.5
+#   with Neubelt's visibility (pi D V N.L = (1 - N.H^2) N.L / (2 (N.L + N.V - N.L N.V))) and its shadow; from
+#   the ambient, (1 - N.V)^c164.y of it. c164.x times that, in a colour of its own: the square root of the
+#   albedo, c164.z of the way to white. It is added after the albedo: a dark cloth's sheen is not much darker
+#   (a first version lit the sheen as diffuse light, and on a brown jacket it made 2% of the lit side).
 # - the game's highlight and reflection are scaled by 1 - c164.w: its Phong lobe made cotton look plastic.
 # - c191.xy fades both out above a G-buffer gloss (c191.x where it starts, c191.y one over its width), for
 #   leather and vinyl drawn as clothes; c191.x 1 lets everything through.
@@ -26,24 +28,25 @@ from pathlib import Path
 ROOT = Path(sys.argv[1]) / 'win32_30_nv8' / 'deferred_lighting'
 TAG = 'FusionFix cloth sheen'
 
-# Per shader: the line that leaves 1 - |N.V| in a register, a constant holding 1, the line after which the
+# Per shader: the line that leaves 1 - |N.V| in a register, the view ray there (from the camera), the normal
+# where N.L is taken, a constant holding 1, the line after which the
 # G-buffer gloss is in a register, the sun's colour, its shadow, the ambient term (as it is written and as
 # it is read), the line the ambient is added to the direct light in, the specular (written and read), and
 # the line that writes the colour.
 SHADERS = {
-    1: dict(rim=('add r1.x, -r1_abs.x, c2.w', 'r1.x'), one='c2.w', gloss=('mov r18.x, r4.y', 'r4.y'),
+    1: dict(view='r3', normal='r2', rim=('add r1.x, -r1_abs.x, c2.w', 'r1.x'), one='c2.w', gloss=('mov r18.x, r4.y', 'r4.y'),
             sun='r6', shadow='r0.y', amb=('r1.yzw', 'r1', 'r12.xxyz', 'r1.yzww'),
             before='mad r1.xyz, r2, r27, r1.yzww', spec=('r0.xzw', 'r12.xxyz'),
             final=('mad oC0.xyz, r2, r1, r0.xzww', 'mad r2.xyz, r2, r1, r0.xzww')),
-    2: dict(rim=('add r1.x, -r1_abs.x, c3.z', 'r1.x'), one='c3.z', gloss=('mov r18.x, r4.y', 'r4.y'),
+    2: dict(view='r3', normal='r2', rim=('add r1.x, -r1_abs.x, c3.z', 'r1.x'), one='c3.z', gloss=('mov r18.x, r4.y', 'r4.y'),
             sun='r5.yzww', shadow='r0.y', amb=('r2.xyz', 'r2', 'r12', 'r2'),
             before='mad r1.xyw, r1, r27.xyzz, r2.xyzz', spec=('r0.xzw', 'r12.xxyz'),
             final=('mad oC0.xyz, r2, r1.xyww, r0.xzww', 'mad r2.xyz, r2, r1.xyww, r0.xzww')),
-    3: dict(rim=('add r0.x, -r0_abs.x, c0.z', 'r0.x'), one='c0.z', gloss=('texld r3, v0, s2', 'r3.y'),
+    3: dict(view='r3', normal='r1', rim=('add r0.x, -r0_abs.x, c0.z', 'r0.x'), one='c0.z', gloss=('texld r3, v0, s2', 'r3.y'),
             sun='r2', shadow='r29.x', amb=('r1.yzw', 'r1', 'r12.xxyz', 'r1.yzww'),
             before='mad r1.xyz, r2, r25, r1.yzww', spec=('r0.xyz', 'r12'),
             final=('mad oC0.xyz, r2, r1, r0', 'mad r2.xyz, r2, r1, r0')),
-    4: dict(rim=('add r0.x, -r0_abs.x, c3.z', 'r0.x'), one='c3.z', gloss=('texld r3, v0, s2', 'r3.y'),
+    4: dict(view='r3', normal='r1', rim=('add r0.x, -r0_abs.x, c3.z', 'r0.x'), one='c3.z', gloss=('texld r3, v0, s2', 'r3.y'),
             sun='r3', shadow='r29.x', amb=('r1.yzw', 'r1', 'r12.xxyz', 'r1.yzww'),
             before='mad r1.xyz, r3, r25, r1.yzww', spec=('r0.xzw', 'r12.xxyz'),
             final=('mad oC0.xyz, r2, r1, r0.xzww', 'mad r2.xyz, r2, r1, r0.xzww')),
@@ -71,12 +74,13 @@ def patch(number, s):
     one = s['one']
 
     i = find_one(lines, DEF_AFTER.split(' //')[0])
-    lines.insert(i + 1, indent(lines[i]) + f'def c166, 16, -5, 0.666666687, 0.333333343 // {TAG}: the clothes test; the sun wrapped half past the terminator')
+    lines.insert(i + 1, indent(lines[i]) + f'def c166, 16, -5, 0.0001, 0.5 // {TAG}: the clothes test; a floor and a half for the sheen lobe')
 
     branch = find_one(lines, 'mov r26.x, ' + ('r21.x' if number in (1, 3) else 'r4.x' if number == 2 else 'r22.x'))
 
     i = find_one(lines, s['rim'][0], branch)
-    lines.insert(i + 1, indent(lines[i]) + f'mov r30.x, {s["rim"][1]} // {TAG}: 1 - N.V')
+    lines[i + 1:i + 1] = [indent(lines[i]) + f'mov r30.x, {s["rim"][1]} // {TAG}: 1 - N.V',
+                          indent(lines[i]) + f'add r30.yzw, -c17.xxyz, -{s["view"]}.xxyz // {TAG}: towards the sun plus towards the camera']
 
     i = find_one(lines, s['gloss'][0], branch)
     lines.insert(i + 1, indent(lines[i]) + f'mov r26.z, {s["gloss"][1]} // {TAG}: the G-buffer gloss')
@@ -84,38 +88,59 @@ def patch(number, s):
     i = find_one(lines, SKIN_FRC, branch)
     pad = indent(lines[i])
     lines[i + 1:i + 1] = [pad + f'mad_sat r26.y, r26.x, c166.x, c166.y // {TAG}: 1 on clothes (an eighth) and skin (a quarter), 0 elsewhere',
+                          pad + f'dp3 r26.w, r30.yzww, r30.yzww // {TAG}: N.H',
+                          pad + f'max r26.w, r26.w, c166.z',
+                          pad + 'rsq r26.w, r26.w',
+                          pad + f'dp3 r30.y, {s["normal"]}, r30.yzww',
+                          pad + 'mul r30.y, r30.y, r26.w',
                           pad + f'mov r30.z, r1.x // {TAG}: N.L']
     i = find_one(lines, SKIN_MASK, i)
     lines.insert(i + 1, pad + f'add r26.y, r26.y, -r26.x // {TAG}: 1 on clothes only')
 
-    amb_dst, amb_src, sheen_amb, amb_read = s['amb']
-    spec_dst, sheen_spec = s['spec']
+    amb_read = s['amb'][3]
+    spec_dst = s['spec'][0]
     i = find_one(lines, s['before'], i)
     lines[i:i] = [pad + line for line in [
         f'// --- {TAG} (c164, c191: ClothSheen in postfx.ixx): fibres catch the light around a sleeve\'s rim, and the',
         f'// --- game\'s plastic highlight is toned down; gloss above c191.x (leather, vinyl) keeps the game\'s look.',
-        'add r30.w, r26.z, -c191.x',
-        'mul_sat r30.w, r30.w, c191.y',
-        f'add r30.w, -r30.w, {one}',
-        'mul r30.y, r26.y, r30.w // clothes, as far as their gloss lets them',
-        'mul r30.w, r30.y, c164.w',
+        'add r26.w, r26.z, -c191.x',
+        'mul_sat r26.w, r26.w, c191.y',
+        f'add r26.w, -r26.w, {one}',
+        'mul r26.w, r26.y, r26.w // clothes, as far as their gloss lets them',
+        'mul r30.w, r26.w, c164.w',
         f'add r30.w, -r30.w, {one}',
         f'mul {spec_dst}, r0, r30.w // the game\'s highlight and reflection',
+        'mul r30.y, r30.y, r30.y',
+        f'add r30.y, -r30.y, {one} // 1 - N.H^2',
+        'mov_sat r30.z, r30.z',
+        f'add r30.w, -r30.x, {one} // N.V',
+        'mad r12.x, -r30.z, r30.w, r30.w',
+        'add r12.x, r12.x, r30.z',
+        'max r12.x, r12.x, c166.z',
+        'rcp r12.x, r12.x',
+        'mul r12.x, r12.x, r30.z',
+        'mul r12.x, r12.x, r30.y',
+        'mul r12.x, r12.x, c166.w // the sun\'s lobe: (1 - N.H^2) N.L / (2 (N.L + N.V - N.L N.V))',
+        f'mul r12.x, r12.x, {s["shadow"]}',
+        f'mul r12.xyz, {s["sun"]}, r12.x',
         'pow r30.x, r30.x, c164.y',
-        'mul r30.x, r30.x, r30.y',
-        'mul r30.x, r30.x, c164.x // the sheen',
-        'mad_sat r30.z, r30.z, c166.z, c166.w',
-        f'mul r30.z, r30.z, {s["shadow"]}',
-        f'mul r12.xyz, {s["sun"]}, r30.z',
-        f'add r12.xyz, r12, {amb_read}',
-        'mul r12.xyz, r12, r30.x // the light it catches',
-        f'mad {spec_dst}, {sheen_spec}, c164.z, r0 // a little of it white',
-        f'add {amb_dst}, {amb_src}, {sheen_amb} // the rest the colour of the cloth',
+        f'mad r12.xyz, {amb_read}, r30.x, r12 // and the ambient around the rim',
+        'mul r12.xyz, r12, r26.w',
+        'mul r12.xyz, r12, c164.x // the light the fibres catch, kept in r12 until the albedo is known',
     ]]
 
     i = find_one(lines, s['final'][0], i)
     lines[i:i + 1] = [pad + line for line in [
+        f'rsq r30.x, r2.x // {TAG}: the sheen\'s colour, the square root of the albedo, c164.z of the way to white',
+        'rsq r30.y, r2.y',
+        'rsq r30.z, r2.z',
+        'rcp r30.x, r30.x',
+        'rcp r30.y, r30.y',
+        'rcp r30.z, r30.z',
+        'mad r30.xyz, -r30, c164.z, r30',
+        'add r30.xyz, r30, c164.z',
         s['final'][1],
+        'mad r2.xyz, r12, r30, r2 // the sheen',
         f'mov r12.x, r26.y // {TAG}: ClothDebug shows clothes red, their gloss green and skin blue',
         'mul r12.y, r26.y, r26.z',
         'mov r12.z, r26.x',

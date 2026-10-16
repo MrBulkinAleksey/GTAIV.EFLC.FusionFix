@@ -1,24 +1,25 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-index fc37e203..f56a42da 100644
+index fc37e203..75d4073b 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 @@ -79,6 +79,7 @@
      // -------------------------------------------------------------- Shadow Constants --------------------------------------------------------------
      def c110, -0.25, 1, -1, 0
      def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
-+    def c166, 16, -5, 0.666666687, 0.333333343 // FusionFix cloth sheen: the clothes test; the sun wrapped half past the terminator
++    def c166, 16, -5, 0.0001, 0.5 // FusionFix cloth sheen: the clothes test; a floor and a half for the sheen lobe
      def c163, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
      def c157, 0.05, 0, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at
-@@ -554,6 +555,7 @@
+@@ -554,6 +555,8 @@
        dp3 r1.x, r3, r2
        add r1.y, r1.x, r1.x
        add r1.x, -r1_abs.x, c2.w
 +      mov r30.x, r1.x // FusionFix cloth sheen: 1 - N.V
++      add r30.yzw, -c17.xxyz, -r3.xxyz // FusionFix cloth sheen: towards the sun plus towards the camera
        mul r1.x, r1.x, r1.x
        mul r1.x, r1.x, r1.x
        mad r1.x, r1.x, c5.y, c5.z
-@@ -562,6 +564,7 @@
+@@ -562,6 +565,7 @@
        add r2.w, r2.w, c2.y
        texld r4, v0, s2
        mov r18.x, r4.y // FusionFix specular sheen: the G-buffer gloss before it is decoded
@@ -26,45 +27,66 @@ index fc37e203..f56a42da 100644
        // --- FusionFix specular sheen (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
        // --- (gta_default and its kind write specular 0, and gloss 258 / 1023 as world_no_specular_mark.patch
        // --- marks them; peds and black texels of specular maps write 0.25) got neither the sun's highlight nor
-@@ -675,7 +678,10 @@
+@@ -675,7 +679,15 @@
        // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin, the sun's light wraps past the terminator further in red than in green and blue, and red keeps on longer into the penumbra of shadows.
        mad r26.x, r26.x, c156.x, c156.y
        frc r26.x, r26.x
 +      mad_sat r26.y, r26.x, c166.x, c166.y // FusionFix cloth sheen: 1 on clothes (an eighth) and skin (a quarter), 0 elsewhere
++      dp3 r26.w, r30.yzww, r30.yzww // FusionFix cloth sheen: N.H
++      max r26.w, r26.w, c166.z
++      rsq r26.w, r26.w
++      dp3 r30.y, r2, r30.yzww
++      mul r30.y, r30.y, r26.w
 +      mov r30.z, r1.x // FusionFix cloth sheen: N.L
        mad_sat r26.x, r26.x, c156.z, c156.w // 1 on skin (a half), 0 elsewhere (a quarter)
 +      add r26.y, r26.y, -r26.x // FusionFix cloth sheen: 1 on clothes only
        mad r26.w, r1.x, c220.z, c220.w // the game's N.L curve, unclamped
        mul r24, c205, r26.x // wrap offset wrap / (1 + wrap) (xyz) and red penumbra (w), on skin only
        mul r25.xyz, c201, r26.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
-@@ -704,10 +710,36 @@
+@@ -704,10 +716,52 @@
        rcp r27.w, r27.w
        lrp r27.x, r24.w, r27.w, r0.y // red towards the square root of the shadow
        mov r27.yz, r0.y
 +      // --- FusionFix cloth sheen (c164, c191: ClothSheen in postfx.ixx): fibres catch the light around a sleeve's rim, and the
 +      // --- game's plastic highlight is toned down; gloss above c191.x (leather, vinyl) keeps the game's look.
-+      add r30.w, r26.z, -c191.x
-+      mul_sat r30.w, r30.w, c191.y
-+      add r30.w, -r30.w, c2.w
-+      mul r30.y, r26.y, r30.w // clothes, as far as their gloss lets them
-+      mul r30.w, r30.y, c164.w
++      add r26.w, r26.z, -c191.x
++      mul_sat r26.w, r26.w, c191.y
++      add r26.w, -r26.w, c2.w
++      mul r26.w, r26.y, r26.w // clothes, as far as their gloss lets them
++      mul r30.w, r26.w, c164.w
 +      add r30.w, -r30.w, c2.w
 +      mul r0.xzw, r0, r30.w // the game's highlight and reflection
++      mul r30.y, r30.y, r30.y
++      add r30.y, -r30.y, c2.w // 1 - N.H^2
++      mov_sat r30.z, r30.z
++      add r30.w, -r30.x, c2.w // N.V
++      mad r12.x, -r30.z, r30.w, r30.w
++      add r12.x, r12.x, r30.z
++      max r12.x, r12.x, c166.z
++      rcp r12.x, r12.x
++      mul r12.x, r12.x, r30.z
++      mul r12.x, r12.x, r30.y
++      mul r12.x, r12.x, c166.w // the sun's lobe: (1 - N.H^2) N.L / (2 (N.L + N.V - N.L N.V))
++      mul r12.x, r12.x, r0.y
++      mul r12.xyz, r6, r12.x
 +      pow r30.x, r30.x, c164.y
-+      mul r30.x, r30.x, r30.y
-+      mul r30.x, r30.x, c164.x // the sheen
-+      mad_sat r30.z, r30.z, c166.z, c166.w
-+      mul r30.z, r30.z, r0.y
-+      mul r12.xyz, r6, r30.z
-+      add r12.xyz, r12, r1.yzww
-+      mul r12.xyz, r12, r30.x // the light it catches
-+      mad r0.xzw, r12.xxyz, c164.z, r0 // a little of it white
-+      add r1.yzw, r1, r12.xxyz // the rest the colour of the cloth
++      mad r12.xyz, r1.yzww, r30.x, r12 // and the ambient around the rim
++      mul r12.xyz, r12, r26.w
++      mul r12.xyz, r12, c164.x // the light the fibres catch, kept in r12 until the albedo is known
        mad r1.xyz, r2, r27, r1.yzww
        add r1.xyz, r1, r28 // FusionFix indirect light joins the ambient term
        texld r2, v0, s0
 -      mad oC0.xyz, r2, r1, r0.xzww
++      rsq r30.x, r2.x // FusionFix cloth sheen: the sheen's colour, the square root of the albedo, c164.z of the way to white
++      rsq r30.y, r2.y
++      rsq r30.z, r2.z
++      rcp r30.x, r30.x
++      rcp r30.y, r30.y
++      rcp r30.z, r30.z
++      mad r30.xyz, -r30, c164.z, r30
++      add r30.xyz, r30, c164.z
 +      mad r2.xyz, r2, r1, r0.xzww
++      mad r2.xyz, r12, r30, r2 // the sheen
 +      mov r12.x, r26.y // FusionFix cloth sheen: ClothDebug shows clothes red, their gloss green and skin blue
 +      mul r12.y, r26.y, r26.z
 +      mov r12.z, r26.x
@@ -76,26 +98,27 @@ index fc37e203..f56a42da 100644
      else
        mov r8.x, r0.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-index 79a28da0..6ea1664a 100644
+index 79a28da0..ac47ae15 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 @@ -80,6 +80,7 @@
      // -------------------------------------------------------------- Shadow Constants --------------------------------------------------------------
      def c110, -0.25, 1, -1, 0
      def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
-+    def c166, 16, -5, 0.666666687, 0.333333343 // FusionFix cloth sheen: the clothes test; the sun wrapped half past the terminator
++    def c166, 16, -5, 0.0001, 0.5 // FusionFix cloth sheen: the clothes test; a floor and a half for the sheen lobe
      def c163, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
      def c157, 0.05, 0, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at
-@@ -555,6 +556,7 @@
+@@ -555,6 +556,8 @@
        dp3 r1.x, r3, r2
        add r1.y, r1.x, r1.x
        add r1.x, -r1_abs.x, c3.z
 +      mov r30.x, r1.x // FusionFix cloth sheen: 1 - N.V
++      add r30.yzw, -c17.xxyz, -r3.xxyz // FusionFix cloth sheen: towards the sun plus towards the camera
        mul r1.x, r1.x, r1.x
        mul r1.x, r1.x, r1.x
        mad r1.x, r1.x, c7.z, c7.w
-@@ -569,6 +571,7 @@
+@@ -569,6 +572,7 @@
        cmp r3.w, r4.x, r3.w, c0.x
        texld r4, v0, s2
        mov r18.x, r4.y // FusionFix specular sheen: the G-buffer gloss before it is decoded
@@ -103,46 +126,67 @@ index 79a28da0..6ea1664a 100644
        // --- FusionFix specular sheen (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
        // --- (gta_default and its kind write specular 0, and gloss 258 / 1023 as world_no_specular_mark.patch
        // --- marks them; peds and black texels of specular maps write 0.25) got neither the sun's highlight nor
-@@ -692,7 +695,10 @@
+@@ -692,7 +696,15 @@
        // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin, the sun's light wraps past the terminator further in red than in green and blue, and red keeps on longer into the penumbra of shadows.
        mad r26.x, r26.x, c156.x, c156.y
        frc r26.x, r26.x
 +      mad_sat r26.y, r26.x, c166.x, c166.y // FusionFix cloth sheen: 1 on clothes (an eighth) and skin (a quarter), 0 elsewhere
++      dp3 r26.w, r30.yzww, r30.yzww // FusionFix cloth sheen: N.H
++      max r26.w, r26.w, c166.z
++      rsq r26.w, r26.w
++      dp3 r30.y, r2, r30.yzww
++      mul r30.y, r30.y, r26.w
 +      mov r30.z, r1.x // FusionFix cloth sheen: N.L
        mad_sat r26.x, r26.x, c156.z, c156.w // 1 on skin (a half), 0 elsewhere (a quarter)
 +      add r26.y, r26.y, -r26.x // FusionFix cloth sheen: 1 on clothes only
        mad r26.w, r1.x, c220.z, c220.w // the game's N.L curve, unclamped
        mul r24, c205, r26.x // wrap offset wrap / (1 + wrap) (xyz) and red penumbra (w), on skin only
        mul r25.xyz, c201, r26.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
-@@ -721,11 +727,37 @@
+@@ -721,11 +733,53 @@
        rcp r27.w, r27.w
        lrp r27.x, r24.w, r27.w, r0.y // red towards the square root of the shadow
        mov r27.yz, r0.y
 +      // --- FusionFix cloth sheen (c164, c191: ClothSheen in postfx.ixx): fibres catch the light around a sleeve's rim, and the
 +      // --- game's plastic highlight is toned down; gloss above c191.x (leather, vinyl) keeps the game's look.
-+      add r30.w, r26.z, -c191.x
-+      mul_sat r30.w, r30.w, c191.y
-+      add r30.w, -r30.w, c3.z
-+      mul r30.y, r26.y, r30.w // clothes, as far as their gloss lets them
-+      mul r30.w, r30.y, c164.w
++      add r26.w, r26.z, -c191.x
++      mul_sat r26.w, r26.w, c191.y
++      add r26.w, -r26.w, c3.z
++      mul r26.w, r26.y, r26.w // clothes, as far as their gloss lets them
++      mul r30.w, r26.w, c164.w
 +      add r30.w, -r30.w, c3.z
 +      mul r0.xzw, r0, r30.w // the game's highlight and reflection
++      mul r30.y, r30.y, r30.y
++      add r30.y, -r30.y, c3.z // 1 - N.H^2
++      mov_sat r30.z, r30.z
++      add r30.w, -r30.x, c3.z // N.V
++      mad r12.x, -r30.z, r30.w, r30.w
++      add r12.x, r12.x, r30.z
++      max r12.x, r12.x, c166.z
++      rcp r12.x, r12.x
++      mul r12.x, r12.x, r30.z
++      mul r12.x, r12.x, r30.y
++      mul r12.x, r12.x, c166.w // the sun's lobe: (1 - N.H^2) N.L / (2 (N.L + N.V - N.L N.V))
++      mul r12.x, r12.x, r0.y
++      mul r12.xyz, r5.yzww, r12.x
 +      pow r30.x, r30.x, c164.y
-+      mul r30.x, r30.x, r30.y
-+      mul r30.x, r30.x, c164.x // the sheen
-+      mad_sat r30.z, r30.z, c166.z, c166.w
-+      mul r30.z, r30.z, r0.y
-+      mul r12.xyz, r5.yzww, r30.z
-+      add r12.xyz, r12, r2
-+      mul r12.xyz, r12, r30.x // the light it catches
-+      mad r0.xzw, r12.xxyz, c164.z, r0 // a little of it white
-+      add r2.xyz, r2, r12 // the rest the colour of the cloth
++      mad r12.xyz, r2, r30.x, r12 // and the ambient around the rim
++      mul r12.xyz, r12, r26.w
++      mul r12.xyz, r12, c164.x // the light the fibres catch, kept in r12 until the albedo is known
        mad r1.xyw, r1, r27.xyzz, r2.xyzz
        add r1.xyw, r1, r28.xyzz // FusionFix indirect light joins the ambient term
        texld r2, v0, s0
        mul r2.xyz, r1.z, r2
 -      mad oC0.xyz, r2, r1.xyww, r0.xzww
++      rsq r30.x, r2.x // FusionFix cloth sheen: the sheen's colour, the square root of the albedo, c164.z of the way to white
++      rsq r30.y, r2.y
++      rsq r30.z, r2.z
++      rcp r30.x, r30.x
++      rcp r30.y, r30.y
++      rcp r30.z, r30.z
++      mad r30.xyz, -r30, c164.z, r30
++      add r30.xyz, r30, c164.z
 +      mad r2.xyz, r2, r1.xyww, r0.xzww
++      mad r2.xyz, r12, r30, r2 // the sheen
 +      mov r12.x, r26.y // FusionFix cloth sheen: ClothDebug shows clothes red, their gloss green and skin blue
 +      mul r12.y, r26.y, r26.z
 +      mov r12.z, r26.x
@@ -154,26 +198,27 @@ index 79a28da0..6ea1664a 100644
      else
        mov r8.x, r0.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
-index 65eff52b..87520079 100644
+index 65eff52b..487973b4 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
 @@ -50,6 +50,7 @@
      def c24, 0.212500006, 0.715399981, 0.0720999986, 0.5
      def c159, 0, 1, 0, 0 // FusionFix: zero, one
      def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
-+    def c166, 16, -5, 0.666666687, 0.333333343 // FusionFix cloth sheen: the clothes test; the sun wrapped half past the terminator
++    def c166, 16, -5, 0.0001, 0.5 // FusionFix cloth sheen: the clothes test; a floor and a half for the sheen lobe
      def c174, -1, -0.0275, -0.572, 0.022 // FusionFix GGX lights: the environment BRDF fit, roughness scale
      def c175, 1, 0.0425, 1.04, -0.04 // FusionFix GGX lights: the environment BRDF fit, offset
      def c176, -9.28, -1.04, 1.04, 0.25 // FusionFix GGX lights: the environment BRDF fit; the game's reflectance head on
-@@ -101,6 +102,7 @@
+@@ -101,6 +102,8 @@
        mov r15.y, r0_abs.x // FusionFix GGX lights: N.V
        add r0.y, r0.x, r0.x
        add r0.x, -r0_abs.x, c0.z
 +      mov r30.x, r0.x // FusionFix cloth sheen: 1 - N.V
++      add r30.yzw, -c17.xxyz, -r3.xxyz // FusionFix cloth sheen: towards the sun plus towards the camera
        mul r0.x, r0.x, r0.x
        mul r0.x, r0.x, r0.x
        mad r0.x, r0.x, c4.x, c4.y
-@@ -120,6 +122,7 @@
+@@ -120,6 +123,7 @@
        add r2.xy, -r0.yzzw, c0.z
        mov r2.z, c0.w
        texld r3, v0, s2
@@ -181,45 +226,66 @@ index 65eff52b..87520079 100644
        mul r12.w, r3.y, r3.y
        mul r12.w, r12.w, c177.y
        mad r12.x, r12.w, c177.w, c177.x
-@@ -177,7 +180,10 @@
+@@ -177,7 +181,15 @@
        // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin, the sun's light wraps past the terminator further in red than in green and blue, and red keeps on longer into the penumbra of shadows.
        mad r26.x, r26.x, c156.x, c156.y
        frc r26.x, r26.x
 +      mad_sat r26.y, r26.x, c166.x, c166.y // FusionFix cloth sheen: 1 on clothes (an eighth) and skin (a quarter), 0 elsewhere
++      dp3 r26.w, r30.yzww, r30.yzww // FusionFix cloth sheen: N.H
++      max r26.w, r26.w, c166.z
++      rsq r26.w, r26.w
++      dp3 r30.y, r1, r30.yzww
++      mul r30.y, r30.y, r26.w
 +      mov r30.z, r1.x // FusionFix cloth sheen: N.L
        mad_sat r26.x, r26.x, c156.z, c156.w // 1 on skin (a half), 0 elsewhere (a quarter)
 +      add r26.y, r26.y, -r26.x // FusionFix cloth sheen: 1 on clothes only
        mad r26.w, r1.x, c220.z, c220.w // the game's N.L curve, unclamped
        mul r24, c205, r26.x // wrap offset wrap / (1 + wrap) (xyz) and red penumbra (w), on skin only
        mul r25.xyz, c201, r26.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
-@@ -207,10 +213,36 @@
+@@ -207,10 +219,52 @@
        mov r27.yz, r29.x
        mul r27.xyz, r25, r27
        lrp r25.xyz, r26.x, r27, r1.x // skin, or the game's
 +      // --- FusionFix cloth sheen (c164, c191: ClothSheen in postfx.ixx): fibres catch the light around a sleeve's rim, and the
 +      // --- game's plastic highlight is toned down; gloss above c191.x (leather, vinyl) keeps the game's look.
-+      add r30.w, r26.z, -c191.x
-+      mul_sat r30.w, r30.w, c191.y
-+      add r30.w, -r30.w, c0.z
-+      mul r30.y, r26.y, r30.w // clothes, as far as their gloss lets them
-+      mul r30.w, r30.y, c164.w
++      add r26.w, r26.z, -c191.x
++      mul_sat r26.w, r26.w, c191.y
++      add r26.w, -r26.w, c0.z
++      mul r26.w, r26.y, r26.w // clothes, as far as their gloss lets them
++      mul r30.w, r26.w, c164.w
 +      add r30.w, -r30.w, c0.z
 +      mul r0.xyz, r0, r30.w // the game's highlight and reflection
++      mul r30.y, r30.y, r30.y
++      add r30.y, -r30.y, c0.z // 1 - N.H^2
++      mov_sat r30.z, r30.z
++      add r30.w, -r30.x, c0.z // N.V
++      mad r12.x, -r30.z, r30.w, r30.w
++      add r12.x, r12.x, r30.z
++      max r12.x, r12.x, c166.z
++      rcp r12.x, r12.x
++      mul r12.x, r12.x, r30.z
++      mul r12.x, r12.x, r30.y
++      mul r12.x, r12.x, c166.w // the sun's lobe: (1 - N.H^2) N.L / (2 (N.L + N.V - N.L N.V))
++      mul r12.x, r12.x, r29.x
++      mul r12.xyz, r2, r12.x
 +      pow r30.x, r30.x, c164.y
-+      mul r30.x, r30.x, r30.y
-+      mul r30.x, r30.x, c164.x // the sheen
-+      mad_sat r30.z, r30.z, c166.z, c166.w
-+      mul r30.z, r30.z, r29.x
-+      mul r12.xyz, r2, r30.z
-+      add r12.xyz, r12, r1.yzww
-+      mul r12.xyz, r12, r30.x // the light it catches
-+      mad r0.xyz, r12, c164.z, r0 // a little of it white
-+      add r1.yzw, r1, r12.xxyz // the rest the colour of the cloth
++      mad r12.xyz, r1.yzww, r30.x, r12 // and the ambient around the rim
++      mul r12.xyz, r12, r26.w
++      mul r12.xyz, r12, c164.x // the light the fibres catch, kept in r12 until the albedo is known
        mad r1.xyz, r2, r25, r1.yzww
        add r1.xyz, r1, r28 // FusionFix indirect light joins the ambient term
        texld r2, v0, s0
 -      mad oC0.xyz, r2, r1, r0
++      rsq r30.x, r2.x // FusionFix cloth sheen: the sheen's colour, the square root of the albedo, c164.z of the way to white
++      rsq r30.y, r2.y
++      rsq r30.z, r2.z
++      rcp r30.x, r30.x
++      rcp r30.y, r30.y
++      rcp r30.z, r30.z
++      mad r30.xyz, -r30, c164.z, r30
++      add r30.xyz, r30, c164.z
 +      mad r2.xyz, r2, r1, r0
++      mad r2.xyz, r12, r30, r2 // the sheen
 +      mov r12.x, r26.y // FusionFix cloth sheen: ClothDebug shows clothes red, their gloss green and skin blue
 +      mul r12.y, r26.y, r26.z
 +      mov r12.z, r26.x
@@ -231,26 +297,27 @@ index 65eff52b..87520079 100644
      else
        //dot(viewDir, normal)
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
-index f8570f01..b57e86cc 100644
+index f8570f01..1ec32ff4 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
 @@ -51,6 +51,7 @@
      def c24, 0.212500006, 0.715399981, 0.0720999986, 0.5
      def c159, 0, 1, 0, 0 // FusionFix: zero, one
      def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
-+    def c166, 16, -5, 0.666666687, 0.333333343 // FusionFix cloth sheen: the clothes test; the sun wrapped half past the terminator
++    def c166, 16, -5, 0.0001, 0.5 // FusionFix cloth sheen: the clothes test; a floor and a half for the sheen lobe
      def c174, -1, -0.0275, -0.572, 0.022 // FusionFix GGX lights: the environment BRDF fit, roughness scale
      def c175, 1, 0.0425, 1.04, -0.04 // FusionFix GGX lights: the environment BRDF fit, offset
      def c176, -9.28, -1.04, 1.04, 0.25 // FusionFix GGX lights: the environment BRDF fit; the game's reflectance head on
-@@ -102,6 +103,7 @@
+@@ -102,6 +103,8 @@
        mov r15.y, r0_abs.x // FusionFix GGX lights: N.V
        add r0.y, r0.x, r0.x
        add r0.x, -r0_abs.x, c3.z
 +      mov r30.x, r0.x // FusionFix cloth sheen: 1 - N.V
++      add r30.yzw, -c17.xxyz, -r3.xxyz // FusionFix cloth sheen: towards the sun plus towards the camera
        mul r0.x, r0.x, r0.x
        mul r0.x, r0.x, r0.x
        mad r0.x, r0.x, c5.z, c5.w
-@@ -127,6 +129,7 @@
+@@ -127,6 +130,7 @@
        add r0.z, -r22.x, c2.z
        cmp r0.y, r0.z, r0.y, c0.x
        texld r3, v0, s2
@@ -258,44 +325,65 @@ index f8570f01..b57e86cc 100644
        mul r0.z, r3.y, r3.y
        mul r3.yw, r0.z, c0.xyzz
        min r4.x, r3.w, c2.x
-@@ -195,7 +198,10 @@
+@@ -195,7 +199,15 @@
        // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin, the sun's light wraps past the terminator further in red than in green and blue, and red keeps on longer into the penumbra of shadows.
        mad r26.x, r26.x, c156.x, c156.y
        frc r26.x, r26.x
 +      mad_sat r26.y, r26.x, c166.x, c166.y // FusionFix cloth sheen: 1 on clothes (an eighth) and skin (a quarter), 0 elsewhere
++      dp3 r26.w, r30.yzww, r30.yzww // FusionFix cloth sheen: N.H
++      max r26.w, r26.w, c166.z
++      rsq r26.w, r26.w
++      dp3 r30.y, r1, r30.yzww
++      mul r30.y, r30.y, r26.w
 +      mov r30.z, r1.x // FusionFix cloth sheen: N.L
        mad_sat r26.x, r26.x, c156.z, c156.w // 1 on skin (a half), 0 elsewhere (a quarter)
 +      add r26.y, r26.y, -r26.x // FusionFix cloth sheen: 1 on clothes only
        mad r26.w, r1.x, c220.z, c220.w // the game's N.L curve, unclamped
        mul r24, c205, r26.x // wrap offset wrap / (1 + wrap) (xyz) and red penumbra (w), on skin only
        mul r25.xyz, c201, r26.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
-@@ -225,9 +231,35 @@
+@@ -225,9 +237,51 @@
        mov r27.yz, r29.x
        mul r27.xyz, r25, r27
        lrp r25.xyz, r26.x, r27, r1.x // skin, or the game's
 +      // --- FusionFix cloth sheen (c164, c191: ClothSheen in postfx.ixx): fibres catch the light around a sleeve's rim, and the
 +      // --- game's plastic highlight is toned down; gloss above c191.x (leather, vinyl) keeps the game's look.
-+      add r30.w, r26.z, -c191.x
-+      mul_sat r30.w, r30.w, c191.y
-+      add r30.w, -r30.w, c3.z
-+      mul r30.y, r26.y, r30.w // clothes, as far as their gloss lets them
-+      mul r30.w, r30.y, c164.w
++      add r26.w, r26.z, -c191.x
++      mul_sat r26.w, r26.w, c191.y
++      add r26.w, -r26.w, c3.z
++      mul r26.w, r26.y, r26.w // clothes, as far as their gloss lets them
++      mul r30.w, r26.w, c164.w
 +      add r30.w, -r30.w, c3.z
 +      mul r0.xzw, r0, r30.w // the game's highlight and reflection
++      mul r30.y, r30.y, r30.y
++      add r30.y, -r30.y, c3.z // 1 - N.H^2
++      mov_sat r30.z, r30.z
++      add r30.w, -r30.x, c3.z // N.V
++      mad r12.x, -r30.z, r30.w, r30.w
++      add r12.x, r12.x, r30.z
++      max r12.x, r12.x, c166.z
++      rcp r12.x, r12.x
++      mul r12.x, r12.x, r30.z
++      mul r12.x, r12.x, r30.y
++      mul r12.x, r12.x, c166.w // the sun's lobe: (1 - N.H^2) N.L / (2 (N.L + N.V - N.L N.V))
++      mul r12.x, r12.x, r29.x
++      mul r12.xyz, r3, r12.x
 +      pow r30.x, r30.x, c164.y
-+      mul r30.x, r30.x, r30.y
-+      mul r30.x, r30.x, c164.x // the sheen
-+      mad_sat r30.z, r30.z, c166.z, c166.w
-+      mul r30.z, r30.z, r29.x
-+      mul r12.xyz, r3, r30.z
-+      add r12.xyz, r12, r1.yzww
-+      mul r12.xyz, r12, r30.x // the light it catches
-+      mad r0.xzw, r12.xxyz, c164.z, r0 // a little of it white
-+      add r1.yzw, r1, r12.xxyz // the rest the colour of the cloth
++      mad r12.xyz, r1.yzww, r30.x, r12 // and the ambient around the rim
++      mul r12.xyz, r12, r26.w
++      mul r12.xyz, r12, c164.x // the light the fibres catch, kept in r12 until the albedo is known
        mad r1.xyz, r3, r25, r1.yzww
        add r1.xyz, r1, r28 // FusionFix indirect light joins the ambient term
 -      mad oC0.xyz, r2, r1, r0.xzww
++      rsq r30.x, r2.x // FusionFix cloth sheen: the sheen's colour, the square root of the albedo, c164.z of the way to white
++      rsq r30.y, r2.y
++      rsq r30.z, r2.z
++      rcp r30.x, r30.x
++      rcp r30.y, r30.y
++      rcp r30.z, r30.z
++      mad r30.xyz, -r30, c164.z, r30
++      add r30.xyz, r30, c164.z
 +      mad r2.xyz, r2, r1, r0.xzww
++      mad r2.xyz, r12, r30, r2 // the sheen
 +      mov r12.x, r26.y // FusionFix cloth sheen: ClothDebug shows clothes red, their gloss green and skin blue
 +      mul r12.y, r26.y, r26.z
 +      mov r12.z, r26.x

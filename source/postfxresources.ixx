@@ -426,17 +426,18 @@ public:
     // Clothes (c164 and c191; shaders/patches/ped_cloth_sheen.patch for the sun and the sky): the
     // components ClothComponents names (bits of the ped component numbers: 1 UPPR, 2 LOWR, 3 SUSE,
     // 6 JACK, 8 SUS2 by default) put an eighth of a step on the material ID (InstallPedSkinHooks).
-    // There the rim, (1 - N.V)^ClothSheenPower times ClothSheenStrength, catches the ambient and the sun
-    // wrapped past the terminator, in the cloth's colour and ClothSheenWhite of it white, and the
-    // game's highlight is scaled by 1 - ClothSpecularCut. Gloss above ClothGlossCut fades it out
+    // There the fibres catch the sun at grazing angles (the Charlie sheen lobe, roughness 0.5, with its
+    // shadow) and the ambient around the rim ((1 - N.V)^ClothSheenPower), ClothSheenStrength times, in
+    // the square root of the albedo ClothSheenWhite of the way to white, added after the albedo so dark
+    // cloth keeps it. The game's highlight is scaled by 1 - ClothSpecularCut. Gloss above ClothGlossCut fades it out
     // over ClothGlossFade, for leather drawn as clothes (1 lets all through). ClothDebug (graphics
     // menu, Debug) shows clothes red, their gloss green and skin blue on people, ClothDebugBrightness
     // times as bright so the masks read after the tone map; the rest of the frame keeps its colour.
     static bool ClothSheenEnabled() { static auto p = FusionFixSettings.GetRef("PREF_CLOTH_SHEEN"); return p && p->get() != 0; }
     static bool ClothDebug() { static auto p = FusionFixSettings.GetRef("PREF_CLOTH_DEBUG"); return p && p->get() != 0; }
-    float fClothSheen = 0.6f;
+    float fClothSheen = 1.0f;
     float fClothSheenPower = 3.0f;
-    float fClothSheenWhite = 0.05f;
+    float fClothSheenWhite = 0.2f;
     float fClothSpecularCut = 0.5f;
     float fClothGlossCut = 1.0f;
     float fClothGlossFade = 0.1f;
@@ -1935,9 +1936,9 @@ public:
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLowLightNarrow", &PostFxResource::fVehicleBoxShadowLowLightNarrow, 1.0f, 0.2f, 1.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLowLightHeight", &PostFxResource::fVehicleBoxShadowLowLightHeight, 0.6f, 0.2f, 1.0f),
             IniFloat("LIGHTING", "SkinLighting", &PostFxResource::fSkinLighting, 1.0f, 0.0f, 2.0f),
-            IniFloat("LIGHTING", "ClothSheenStrength", &PostFxResource::fClothSheen, 0.6f, 0.0f, 4.0f),
+            IniFloat("LIGHTING", "ClothSheenStrength", &PostFxResource::fClothSheen, 1.0f, 0.0f, 4.0f),
             IniFloat("LIGHTING", "ClothSheenPower", &PostFxResource::fClothSheenPower, 3.0f, 0.5f, 16.0f),
-            IniFloat("LIGHTING", "ClothSheenWhite", &PostFxResource::fClothSheenWhite, 0.05f, 0.0f, 1.0f),
+            IniFloat("LIGHTING", "ClothSheenWhite", &PostFxResource::fClothSheenWhite, 0.2f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "ClothSpecularCut", &PostFxResource::fClothSpecularCut, 0.5f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "ClothGlossCut", &PostFxResource::fClothGlossCut, 1.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "ClothGlossFade", &PostFxResource::fClothGlossFade, 0.1f, 0.01f, 1.0f),
