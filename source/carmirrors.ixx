@@ -19,7 +19,7 @@ import temporal;
 // visible one an interior registered, which writes its plane (n, d) and the four corners of its glass, then whether a
 // mirror is on (0x166DA20) and the camera behind it (0x166DA21). The mirror render phase (CRenderPhaseMirrorReflection)
 // draws the scene from the camera reflected in that plane, clipped by it, into MIRROR_RT, and the main scene draws
-// the glass as a quad on those corners (0xB59900, 3.5 cm in front of the plane along n) with mirror.fx, which reads
+// the glass as a quad on those corners (0xB59900, in front of the plane along n by a float in its code) with mirror.fx, which reads
 // MIRROR_RT at the screen position. With no interior mirror on, the mirror of the player's car the camera looks at
 // most goes in instead: its glass from carmirrorstable.hxx (tools/vehicle_mirrors, from vehicles.img), in the car's
 // space, placed with the car's matrix, rounded by mirror_car_shape.patch. One mirror at a time, as the game has one
@@ -37,7 +37,11 @@ namespace CarMirrors
     static bool reverse = false;            // CarMirrorsReverse (hidden): the corners the other way round, if the quad is culled
     static bool rounded = true;             // CarMirrorsRounded (hidden): 0 draws the plain quad, to tell the shape from a missing quad
     static bool byDrawnCar = true;          // CarMirrorsByDrawnCar (hidden): 0 keeps the main thread's corners
-    static constexpr float AheadOfGlass = 0.03f; // the game puts the quad 0.035 m along n: 5 mm in front of the glass
+    // The game puts the quad along n by a float its quad code reads (0.035 m on PC, 0.0125 with shaders.ixx's Xbox
+    // value): read where the code points as the corners are placed, which lands the quad 5 mm in front of the glass.
+    // Taken as 0.035, the quad sat 1.75 cm behind the glass, inside the mirror's housing.
+    static float* const* quadOffset = nullptr;
+    static constexpr float InFrontOfGlass = 0.005f;
     static constexpr float MinLook = 0.3f;  // cosine: a mirror further off the view than ~73 degrees is not taken
     static constexpr float Keep = 0.1f;     // the mirror in use stays until another is this much nearer the view
 
@@ -100,13 +104,14 @@ namespace CarMirrors
             for (int i = 0; i < 3; ++i) plane[i] = normal[i];
             plane[3] = Dot(normal, centre);
         }
+        const float pushed = (quadOffset && *quadOffset ? **quadOffset : 0.035f) - InFrontOfGlass;
         // round the glass: bottom left, bottom right, top right, top left as the driver sees it
         static constexpr float signs[4][2] = { { -1.0f, -1.0f }, { 1.0f, -1.0f }, { 1.0f, 1.0f }, { -1.0f, 1.0f } };
         for (int k = 0; k < 4; ++k)
         {
             const auto& s = signs[reverse ? (5 - k) % 4 : k];
             for (int i = 0; i < 3; ++i)
-                corners[k * 4 + i] = centre[i] + right[i] * s[0] + up[i] * s[1] - normal[i] * AheadOfGlass;
+                corners[k * 4 + i] = centre[i] + right[i] * s[0] + up[i] * s[1] - normal[i] * pushed;
             corners[k * 4 + 3] = 1.0f;
         }
         if (centreOut)
@@ -357,6 +362,10 @@ public:
             auto quad = hook::pattern("55 8B EC 83 E4 F0 83 EC 20 E8 ? ? ? ? F6 00 40 0F 84 ? ? ? ? 80 3D ? ? ? ? 00 0F 84");
             if (!quad.empty() && *quad.get_first<uint8_t*>(25) == CarMirrors::mirrorOn)
                 CarMirrors::quadHook = safetyhook::create_mid(quad.get_first(0), CarMirrors::PlaceQuad);
+            // in it: movss xmm2, [the offset] / movaps xmm1, xmm4 / mulss xmm1, xmm3 (the pattern shaders.ixx patches)
+            auto offset = hook::pattern("F3 0F 10 15 ? ? ? ? 0F 28 CC F3 0F 59 CB");
+            if (!offset.empty())
+                CarMirrors::quadOffset = offset.get_first<float*>(4);
             // cmp byte [mirror on], 1 / push esi / mov esi, ecx / je / mov eax, [..] / test eax, eax / je / mov al, [eax+22] / and al, 1 / jne
             auto water = hook::pattern("80 3D ? ? ? ? 01 56 8B F1 74 ? A1 ? ? ? ? 85 C0 74 ? 8A 40 22 24 01 75");
             if (!water.empty() && *water.get_first<uint8_t*>(2) == CarMirrors::mirrorOn)
@@ -365,6 +374,8 @@ public:
                 uint32_t(std::size(CarMirrorTable)), timeBuild && timeVisibility ? "on" : "partly off",
                 CarMirrors::waterVisibility ? "found" : "not found (the mirrors stay empty outdoors)",
                 CarMirrors::quadHook ? "on" : "off (not found)");
+            if (CarMirrors::quadOffset)
+                FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
         };
     }
 } CarMirrorsHooksInstance;
