@@ -2239,15 +2239,22 @@ private:
     // which cannot tell skin in a pixel; the component loops of the ped draw can. Each turn of
     // the loop (CE 0xAB7C20 for component peds, 0xAB7EB0 the other) sets c150.x for its
     // component: a quarter step for HEAD and HAND, which gta_ped and gta_ped_reflect add to the
-    // material ID as the skin shaders do (ped_skin_scattering_mask.patch), 0 for the rest. FACE,
-    // the last turn, leaves it at 0 for whatever is drawn next.
+    // material ID as the skin shaders do (ped_skin_scattering_mask.patch), an eighth for the
+    // clothes ClothComponents names (ped_cloth_sheen.patch), 0 for the rest. FACE, the last turn,
+    // leaves it at 0 for whatever is drawn next.
     static inline SafetyHookMid shPedSkinComponent[2]{};
 
     static void MarkPedSkin(uintptr_t component)
     {
         auto& R = PostFxResources;
-        const bool on = R.SkinScatteringEnabled() || R.SSRDebugMode() == R.kSkinDebugMode;
-        const float mark[4] = { (on && (component == 0 || component == 4)) ? 0.25f / 255.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+        const bool skin = R.SkinScatteringEnabled() || R.SSRDebugMode() == R.kSkinDebugMode;
+        const bool cloth = R.ClothSheenEnabled() || R.ClothDebug();
+        float id = 0.0f;
+        if (skin && (component == 0 || component == 4))
+            id = 0.25f / 255.0f;
+        else if (cloth && component < 11 && (R.nClothComponents & (1 << component)))
+            id = 0.125f / 255.0f;
+        const float mark[4] = { id, 0.0f, 0.0f, 0.0f };
         if (auto pDevice = rage::grcDevice::GetD3DDevice())
             pDevice->SetPixelShaderConstantF(150, mark, 1);
     }
@@ -2317,7 +2324,7 @@ public:
     // What deferred_lighting reads besides the game's own inputs: s3 the SSR result (the cleared
     // SSR target while SSR is off, else a transparent 1x1), s9 the contact shadows while they
     // are valid, s8 the indirect light, c202-c204 the local light contact shadow constants, and
-    // c201, c205 and s11 (the material IDs) the light on skin.
+    // c201, c205 and s11 (the material IDs) the light on skin, c164 and c191 the light on clothes.
     static void BindLightingInputs(IDirect3DDevice9* pDevice)
     {
         auto& R = PostFxResources;
@@ -2366,6 +2373,15 @@ public:
             offset[3] = (std::min)(0.2f * k, 1.0f);
             pDevice->SetPixelShaderConstantF(201, scale, 1);
             pDevice->SetPixelShaderConstantF(205, offset, 1);
+        }
+        // Clothes (ped_cloth_sheen.patch). c164: the sheen, its power, its white share, the cut of
+        // the game's highlight. c191: the gloss the fade starts at, one over its width, the debug view.
+        {
+            const bool on = R.ClothSheenEnabled();
+            const float c164[4] = { on ? R.fClothSheen : 0.0f, R.fClothSheenPower, R.fClothSheenWhite, on ? R.fClothSpecularCut : 0.0f };
+            const float c191[4] = { R.fClothGlossCut, 1.0f / (std::max)(R.fClothGlossFade, 0.01f), R.ClothDebug() ? 1.0f : 0.0f, 0.0f };
+            pDevice->SetPixelShaderConstantF(164, c164, 1);
+            pDevice->SetPixelShaderConstantF(191, c191, 1);
         }
         // The GGX highlights. c200: x the strength (0 the game's own), halved since the shaders
         // divide by twice the visibility's denominator, y the Fresnel rise, z the lights' radius
@@ -2632,6 +2648,8 @@ public:
         VehicleBoxShadows::Off(pDevice);
         pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
+        pDevice->SetPixelShaderConstantF(164, noLocalContactShadows, 1);
+        pDevice->SetPixelShaderConstantF(191, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(197, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(200, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(165, noLocalContactShadows, 1);

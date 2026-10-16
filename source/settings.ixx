@@ -2114,6 +2114,7 @@ public:
             { 0, "PREF_SSR",                    "REFLECTIONS", "SSR",                               "MENU_DISPLAY_SSR_QUALITY",   0, nullptr, 0, 2 },
             { 0, "PREF_SSR_DEBUG",              "DEBUG",      "SSRDebug",                           "MENU_DISPLAY_SSR_DEBUG",     0, nullptr, 0, 10 },
             { 0, "PREF_GROUND_DEBUG",           "DEBUG",      "GroundSurfacesDebug",                "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_CLOTH_DEBUG",            "DEBUG",      "ClothDebug",                         "",                           0, nullptr, 0, 1 },
             { 0, "PREF_WET_GROUND_DEBUG",       "DEBUG",      "WetGroundDebug",                     "MENU_DISPLAY_WET_DEBUG",     0, nullptr, 0, 2 },
             { 0, "PREF_CLOUD_SHADOWS_DEBUG",    "DEBUG",      "CloudShadowsDebug",                  "MENU_DISPLAY_CLOUD_SH_DEBUG", 0, nullptr, 0, 2 },
             { 0, "PREF_CLOUDS_DEBUG",           "DEBUG",      "VolumetricCloudsDebug",              "MENU_DISPLAY_CLOUDS_DEBUG",  0, nullptr, 0, 14 },
@@ -2123,6 +2124,7 @@ public:
             { 0, "PREF_CONTACTSHADOWS",         "LIGHTING",   "ContactShadows",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSGI",                   "LIGHTING",   "IndirectLight",                      "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SKIN_SSS",               "LIGHTING",   "SkinScattering",                     "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_CLOTH_SHEEN",            "LIGHTING",   "ClothSheen",                         "",                           1, nullptr, 0, 1 },
             { 0, "PREF_HEADLIGHT_REACH",        "NIGHTSHADOWS", "HeadlightReach",                   "",                           10, nullptr, 0, 100 },
             { 0, "PREF_LAMP_REACH",             "NIGHTSHADOWS", "LampReach",                        "",                           10, nullptr, 0, 100 },
             { 0, "PREF_SHARPENING",             "TEXTURES",   "Sharpening",                         "MENU_DISPLAY_SHARPENING",    0, nullptr, 0, 3 },
@@ -2397,6 +2399,7 @@ public:
             AddRow(category, "SSGI", "PREF_SSGI", 2, toggle);
             AddRow(category, "Contact Shadows", "PREF_CONTACTSHADOWS", 2, toggle);
             AddRow(category, "SkinSSS", "PREF_SKIN_SSS", 2, toggle);
+            AddRow(category, "ClothSheen", "PREF_CLOTH_SHEEN", 2, toggle);
             AddRow(category, "VolumetricLight", "PREF_VOLUMETRIC_LIGHT", 2, toggle);
             AddRow(category, "SunFlare", "PREF_SUN_FLARE", 2, toggle);
             AddRow(category, "VolumeClouds", "PREF_VOLUMETRIC_CLOUDS", 2, toggle);
@@ -2445,6 +2448,7 @@ public:
             AddRow(category, "SSRFullDepth", "PREF_SSR_FULL_DEPTH", 2, toggle);
             AddEmptyLine(category);
             AddRow(category, "GroundDebug", "PREF_GROUND_DEBUG", 2, toggle);
+            AddRow(category, "ClothDebug", "PREF_CLOTH_DEBUG", 2, toggle);
             AddRow(category, "WetGroundDebug", "PREF_WET_GROUND_DEBUG", 3, "MENU_DISPLAY_WET_DEBUG");
             AddRow(category, "CloudShDebug", "PREF_CLOUD_SHADOWS_DEBUG", 3, "MENU_DISPLAY_CLOUD_SH_DEBUG");
             AddRow(category, "CloudsDebug", "PREF_CLOUDS_DEBUG", 15, "MENU_DISPLAY_CLOUDS_DEBUG");

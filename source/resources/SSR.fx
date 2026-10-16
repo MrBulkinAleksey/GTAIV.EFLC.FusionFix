@@ -1746,11 +1746,11 @@ static const float4 kSkinKernel[17] =
     float4(0.003174, 0.000135, 0.000038,  2.000000),
 };
 
-// Material IDs are whole steps of 1/255; skin's is a quarter over.
+// Material IDs are whole steps of 1/255; skin's is a quarter over, clothes' an eighth.
 float SkinMask(float2 uv)
 {
     float id = tex2Dlod(SkinIDTex, float4(uv, 0, 0)).r * 255.0;
-    return abs(frac(id + 0.5) - 0.75) < 0.125 ? 1.0 : 0.0;
+    return abs(frac(id + 0.5) - 0.75) < 0.0625 ? 1.0 : 0.0;
 }
 
 float3 SkinAlbedo(float2 uv)
