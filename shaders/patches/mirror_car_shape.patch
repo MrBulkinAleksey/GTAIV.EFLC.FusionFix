@@ -1,12 +1,13 @@
 diff --git a/win32_30_nv8/mirror/mirrorPS1.asm b/win32_30_nv8/mirror/mirrorPS1.asm
-index f0752696..346da780 100644
+index f0752696..8d4f4fa5 100644
 --- a/win32_30_nv8/mirror/mirrorPS1.asm
 +++ b/win32_30_nv8/mirror/mirrorPS1.asm
-@@ -20,12 +20,75 @@
+@@ -20,14 +20,81 @@
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0691907283e-42 // 763
      def c0, -1.75, -0.5, -0.285714298, 0.5
 +    def c1, 2, -1, 1, 1000 // FusionFix mirror_car_shape.patch: uv to -1..1, one, far inside
++    def c2, 0.0199999996, 0.0199999996, 0.0250000004, 0 // FusionFix mirror_car_shape.patch: dark glass
      dcl_texcoord v0.xyw
      dcl_texcoord9 v9
 +    dcl_texcoord5 v6.xy // FusionFix mirror_car_shape.patch: the quad's uv
@@ -76,5 +77,11 @@ index f0752696..346da780 100644
 +    mad r6.xy, r2.zwzw, r5.y, r6
 +    mad r0.xy, r6, -c152.y, r0
      texld r0, r0, s0
-     mul oC0.xyz, r0, c39.y
+-    mul oC0.xyz, r0, c39.y
++    // FusionFix mirror_car_shape.patch: c152.z how dark: a car's other mirrors, and the one reflected as it fades out and in
++    mov r10, c152
++    lrp r11.xyz, r10.z, c2, r0
++    mul oC0.xyz, r11, c39.y
      mov oC0.w, c46.x
+     
+     // LogDepth Write
