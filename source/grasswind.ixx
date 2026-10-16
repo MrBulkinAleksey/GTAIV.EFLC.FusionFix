@@ -212,8 +212,8 @@ class GrassWind
 
         const bool on = Pref(windPref, 1) != 0 && fStrength > 0.0f && EntityClass::Installed();
         const float scale = on ? fStrength * (Pref(debugPref, 0) ? 4.0f : 1.0f) : 0.0f;
-        fBendPerHeight = scale * (0.03f + 0.22f * fWind);
-        fFlutterPerHeight = scale * (0.008f + 0.035f * fWind);
+        fBendPerHeight = scale * (0.045f + 0.3f * fWind);
+        fFlutterPerHeight = scale * (0.012f + 0.045f * fWind);
 
         const float wind[8] = {
             kDirection[0] / kGustWavelength, kDirection[1] / kGustWavelength, -static_cast<float>(gustPhase), static_cast<float>(flutterPhase),
