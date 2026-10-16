@@ -30,7 +30,7 @@ class VehiclePaint
     static inline float fColorRichness = 1.25f;     // saturation, 1 as the game
     static inline float fPearl = 0.4f;              // the blue-violet tint at the silhouette, 0 off
 
-    static inline float fRainAmount = 3.0f;         // how many drops: 0.6 of it, up to 0.9, is the share of cells holding one in heavy rain
+    static inline float fRainAmount = 1.4f;         // how many drops: 0.6 of it, up to 0.9, is the share of cells holding one in heavy rain
     static inline float fRainDensity = 40.0f;       // bead cells per metre; running drops' columns are half as dense
     static inline float fRainBump = 0.002f;         // a drop's height in metres
     static inline float fRainRunning = 1.0f;        // how many running drops on the sides, against the beads
@@ -49,7 +49,7 @@ class VehiclePaint
         fBakedHighlightCut = std::clamp(iniReader.ReadFloat("TEXTURES", "VehiclePaintBakedHighlightCut", 0.2f), 0.0f, 1.0f);
         fColorRichness = std::clamp(iniReader.ReadFloat("TEXTURES", "VehiclePaintColorRichness", 1.25f), 0.5f, 2.0f);
         fPearl = std::clamp(iniReader.ReadFloat("TEXTURES", "VehiclePaintPearl", 0.4f), 0.0f, 1.0f);
-        fRainAmount = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsAmount", 3.0f), 0.0f, 4.0f);
+        fRainAmount = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsAmount", 1.4f), 0.0f, 4.0f);
         fRainDensity = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsDensity", 40.0f), 5.0f, 200.0f);
         fRainBump = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsBump", 0.002f), 0.0f, 0.02f);
         fRainRunning = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsRunning", 1.0f), 0.0f, 1.0f);

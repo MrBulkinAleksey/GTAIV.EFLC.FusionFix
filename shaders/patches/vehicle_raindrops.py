@@ -10,7 +10,7 @@
 #    9 mm they read as small puddles) on a coarse one, more of both the harder it rains. The grid lies across the
 #    body's forward axis (n x y, fixed to the body and defined everywhere but on faces straight ahead or behind, where
 #    it only turns; a 3D grid of spheres was tried and left rows and empty bands on the near flat bonnet);
-#  - running drops on the sides: sparse columns some 4 cm apart along the body's own vertical, a narrow head (3 x 8 mm)
+#  - running drops on the sides: sparse columns some 3 cm apart along the body's own vertical, a narrow head (3 x 8 mm)
 #    sliding down now and then in each at its own speed, with a wet trail (2.4 mm, 7 to 22 cm long) above it that
 #    meanders up to 4 mm the higher it goes (at 1.5 mm, a pixel and a half up close, trails stayed ruler straight);
 #    none on flat tops. Short trails on a dense grid read as dirt.
@@ -31,7 +31,7 @@ TAG = 'FusionFix rain on cars'
 
 DEFS = f'''\
     def c180, 13.6999998, 0.5, 0.699999988, 0.769230783 // {TAG}: presence hash, a half; drops fade out under 2 pixels across
-    def c181, 0.600000024, 3, 0.300000012, 9.99999975e-005 // {TAG}: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
+    def c181, 0.800000012, 3, 0.300000012, 9.99999975e-005 // {TAG}: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
     def c182, 0.400000006, 0.300000012, 0.333333343, -2 // {TAG}: the head's place across its column, a row's length in metres, -2
     def c183, 4.5, 0.100000001, 0.100000001, 0.150000006 // {TAG}: 1 / trail length, darkening under drops, a wet film's specular, a drop's
     def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // {TAG}: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
@@ -39,9 +39,9 @@ DEFS = f'''\
     def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // {TAG}: the pearl tint
     def c187, 0, 0.5, 0.00100000005, 1 // {TAG}: zero, flat tops, one
     def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // {TAG}: the hash
-    def c189, 3, 0.100000001, 0.100000001, 0.699999988 // {TAG}: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
+    def c189, 3, 0.100000001, 0.100000001, 1 // {TAG}: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
     def c190, 0.600000024, 0.200000003, 0.0733000040, 100000 // {TAG}: their centre's range and start, mean cover of a cell; most pixels per metre
-    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.25 // {TAG}: big beads: cells per bead cell, radius from, radius range (cells), share
+    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.349999994 // {TAG}: big beads: cells per bead cell, radius from, radius range (cells), share
     def c192, 0.680000007, 0.159999996, 0.0469999984, 1 // {TAG}: their centre's range and start, mean cover of a cell; running heads' share
     def c193, 666.666687, 250, 0.00150000001, 0.00120000006 // {TAG}: 1 / a running head's half width and half height, its half width, a trail's (m)
     def c194, 20, 4, 0, 0 // {TAG}: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
@@ -152,7 +152,7 @@ def drops(pos, nrm):
       crs r17.xyz, r13, r18
       dp3 r16.z, {pos}, r17
       dp3 r8.w, {pos}, r18
-      // columns 0.6 times the bead density (some 4 cm apart), narrow heads sliding at the column's speed
+      // columns 0.8 times the bead density (some 3 cm apart), narrow heads sliding at the column's speed
       mov r9.x, c177.x
       mul r9.x, r9.x, c181.x
       rcp r9.y, r9.x

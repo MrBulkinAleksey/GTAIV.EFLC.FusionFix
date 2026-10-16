@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 5de051e..24f20b5 100644
+index 5de051e..a1de781 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 @@ -167,8 +167,27 @@
@@ -10,7 +10,7 @@ index 5de051e..24f20b5 100644
 +    def c164, 12, 48, 9.99999997e-007, 0.0199999996 // step count limits, thickness growth a metre
      defi i0, 48, 0, 0, 0
 +    def c180, 13.6999998, 0.5, 0.699999988, 0.769230783 // FusionFix rain on cars: presence hash, a half; drops fade out under 2 pixels across
-+    def c181, 0.600000024, 3, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
++    def c181, 0.800000012, 3, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
 +    def c182, 0.400000006, 0.300000012, 0.333333343, -2 // FusionFix rain on cars: the head's place across its column, a row's length in metres, -2
 +    def c183, 4.5, 0.100000001, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
 +    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix rain on cars: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
@@ -18,9 +18,9 @@ index 5de051e..24f20b5 100644
 +    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix rain on cars: the pearl tint
 +    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix rain on cars: zero, flat tops, one
 +    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix rain on cars: the hash
-+    def c189, 3, 0.100000001, 0.100000001, 0.699999988 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
++    def c189, 3, 0.100000001, 0.100000001, 1 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
 +    def c190, 0.600000024, 0.200000003, 0.0733000040, 100000 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; most pixels per metre
-+    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.25 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
++    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.349999994 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
 +    def c192, 0.680000007, 0.159999996, 0.0469999984, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
 +    def c193, 666.666687, 250, 0.00150000001, 0.00120000006 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
 +    def c194, 20, 4, 0, 0 // FusionFix rain on cars: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
@@ -193,7 +193,7 @@ index 5de051e..24f20b5 100644
 +      crs r17.xyz, r13, r18
 +      dp3 r16.z, v6, r17
 +      dp3 r8.w, v6, r18
-+      // columns 0.6 times the bead density (some 4 cm apart), narrow heads sliding at the column's speed
++      // columns 0.8 times the bead density (some 3 cm apart), narrow heads sliding at the column's speed
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c181.x
 +      rcp r9.y, r9.x
@@ -370,7 +370,7 @@ index 5de051e..24f20b5 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 317652f..1542ac9 100644
+index 317652f..9b3c243 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 @@ -118,8 +118,27 @@
@@ -381,7 +381,7 @@ index 317652f..1542ac9 100644
 +    def c164, 12, 48, 9.99999997e-007, 0.0199999996 // step count limits, thickness growth a metre
      defi i0, 48, 0, 0, 0
 +    def c180, 13.6999998, 0.5, 0.699999988, 0.769230783 // FusionFix rain on cars: presence hash, a half; drops fade out under 2 pixels across
-+    def c181, 0.600000024, 3, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
++    def c181, 0.800000012, 3, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
 +    def c182, 0.400000006, 0.300000012, 0.333333343, -2 // FusionFix rain on cars: the head's place across its column, a row's length in metres, -2
 +    def c183, 4.5, 0.100000001, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
 +    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix rain on cars: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
@@ -389,9 +389,9 @@ index 317652f..1542ac9 100644
 +    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix rain on cars: the pearl tint
 +    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix rain on cars: zero, flat tops, one
 +    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix rain on cars: the hash
-+    def c189, 3, 0.100000001, 0.100000001, 0.699999988 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
++    def c189, 3, 0.100000001, 0.100000001, 1 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
 +    def c190, 0.600000024, 0.200000003, 0.0733000040, 100000 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; most pixels per metre
-+    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.25 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
++    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.349999994 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
 +    def c192, 0.680000007, 0.159999996, 0.0469999984, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
 +    def c193, 666.666687, 250, 0.00150000001, 0.00120000006 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
 +    def c194, 20, 4, 0, 0 // FusionFix rain on cars: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
@@ -564,7 +564,7 @@ index 317652f..1542ac9 100644
 +      crs r17.xyz, r13, r18
 +      dp3 r16.z, v6, r17
 +      dp3 r8.w, v6, r18
-+      // columns 0.6 times the bead density (some 4 cm apart), narrow heads sliding at the column's speed
++      // columns 0.8 times the bead density (some 3 cm apart), narrow heads sliding at the column's speed
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c181.x
 +      rcp r9.y, r9.x
@@ -741,7 +741,7 @@ index 317652f..1542ac9 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 5aac5d8..5a03b28 100644
+index 5aac5d8..52dd771 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 @@ -143,8 +143,27 @@
@@ -752,7 +752,7 @@ index 5aac5d8..5a03b28 100644
 +    def c164, 12, 48, 9.99999997e-007, 0.0199999996 // step count limits, thickness growth a metre
      defi i0, 48, 0, 0, 0
 +    def c180, 13.6999998, 0.5, 0.699999988, 0.769230783 // FusionFix rain on cars: presence hash, a half; drops fade out under 2 pixels across
-+    def c181, 0.600000024, 3, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
++    def c181, 0.800000012, 3, 0.300000012, 9.99999975e-005 // FusionFix rain on cars: running drop columns per bead cell, rows per metre, the head's place in its row, a tiny alpha
 +    def c182, 0.400000006, 0.300000012, 0.333333343, -2 // FusionFix rain on cars: the head's place across its column, a row's length in metres, -2
 +    def c183, 4.5, 0.100000001, 0.100000001, 0.150000006 // FusionFix rain on cars: 1 / trail length, darkening under drops, a wet film's specular, a drop's
 +    def c184, 0.899999976, 0.970000029, 0.955000043, 0.0450000018 // FusionFix rain on cars: a wet film's gloss, a drop's; Schlick's 1 - F0 and F0 for the clearcoat
@@ -760,9 +760,9 @@ index 5aac5d8..5a03b28 100644
 +    def c186, 0.0799999982, 0.0399999991, 0.119999997, 0 // FusionFix rain on cars: the pearl tint
 +    def c187, 0, 0.5, 0.00100000005, 1 // FusionFix rain on cars: zero, flat tops, one
 +    def c188, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix rain on cars: the hash
-+    def c189, 3, 0.100000001, 0.100000001, 0.699999988 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
++    def c189, 3, 0.100000001, 0.100000001, 1 // FusionFix rain on cars: small beads: cells per bead cell (some 8 mm), radius from, radius range (cells), share
 +    def c190, 0.600000024, 0.200000003, 0.0733000040, 100000 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; most pixels per metre
-+    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.25 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
++    def c191, 0.800000012, 0.0799999982, 0.0799999982, 0.349999994 // FusionFix rain on cars: big beads: cells per bead cell, radius from, radius range (cells), share
 +    def c192, 0.680000007, 0.159999996, 0.0469999984, 1 // FusionFix rain on cars: their centre's range and start, mean cover of a cell; running heads' share
 +    def c193, 666.666687, 250, 0.00150000001, 0.00120000006 // FusionFix rain on cars: 1 / a running head's half width and half height, its half width, a trail's (m)
 +    def c194, 20, 4, 0, 0 // FusionFix rain on cars: the clearcoat in full from a material specular of 0.05 (paint); running drops gone from |n.z| 0.75 over a quarter
@@ -935,7 +935,7 @@ index 5aac5d8..5a03b28 100644
 +      crs r17.xyz, r13, r18
 +      dp3 r16.z, v6, r17
 +      dp3 r8.w, v6, r18
-+      // columns 0.6 times the bead density (some 4 cm apart), narrow heads sliding at the column's speed
++      // columns 0.8 times the bead density (some 3 cm apart), narrow heads sliding at the column's speed
 +      mov r9.x, c177.x
 +      mul r9.x, r9.x, c181.x
 +      rcp r9.y, r9.x
