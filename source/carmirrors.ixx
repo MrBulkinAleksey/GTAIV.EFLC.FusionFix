@@ -49,10 +49,11 @@ namespace CarMirrors
     // housing over the side mirrors, an interior mirror black).
     static constexpr float ClipAhead = 0.025f;
     // The mirrors set as a driver sets them: the plane turned halfway between the way to the eye and the way to what it
-    // should show, 10 m straight back along the car, a little down, side mirrors turned in towards the car by
-    // CarMirrorsSideAim degrees (hidden), the interior one down by CarMirrorsInteriorAimDown (hidden); the quad stays
-    // on the glass. The eye is kept in the car's space (the driver's seat), the model's glass faced anywhere.
-    static float sideAim = 3.0f, interiorAimDown = 3.0f;
+    // should show, 10 m straight back along the car turned by the hidden ini's degrees: side mirrors in towards the car
+    // (CarMirrorsSideAimIn) and down (CarMirrorsSideAimDown), the interior one to the car's right (CarMirrorsInteriorAimRight)
+    // and down (CarMirrorsInteriorAimDown); the quad stays on the glass. The eye is kept in the car's space (the
+    // driver's seat), the model's glass faced anywhere.
+    static float sideAimIn = 3.0f, sideAimDown = 1.5f, interiorAimRight = 0.0f, interiorAimDown = 3.0f;
     static float eyeInCar[3]{};
     static bool eyeKnown = false;
     static constexpr float MinLook = 0.3f;  // cosine: a mirror further off the view than ~73 degrees is not taken
@@ -167,9 +168,11 @@ namespace CarMirrors
             return;
         const float* c = glass.centre;
         const bool side = glass.kind != 2;
-        const float inward = side ? (c[0] < 0.0f ? 1.0f : -1.0f) * 10.0f * std::tan(sideAim * 0.01745329f) : 0.0f;
-        const float down = 10.0f * std::tan((side ? 1.5f : interiorAimDown) * 0.01745329f);
-        const float toTarget[3] = { inward, -10.0f, -down };
+        // across: towards the car for side mirrors (+x for the left one), to the car's right (+x) for the interior one
+        const float across = side ? (c[0] < 0.0f ? 1.0f : -1.0f) * std::tan(sideAimIn * 0.01745329f)
+                                  : std::tan(interiorAimRight * 0.01745329f);
+        const float down = std::tan((side ? sideAimDown : interiorAimDown) * 0.01745329f);
+        const float toTarget[3] = { 10.0f * across, -10.0f, -10.0f * down };
         float toEye[3] = { eyeInCar[0] - c[0], eyeInCar[1] - c[1], eyeInCar[2] - c[2] };
         const float eyeLength = std::sqrt(Dot(toEye, toEye)), targetLength = std::sqrt(Dot(toTarget, toTarget));
         if (eyeLength < 0.05f)
@@ -498,11 +501,13 @@ public:
                 CarMirrors::rounded = ini.ReadInteger("MISC", "CarMirrorsRounded", 1) != 0;
                 CarMirrors::byDrawnCar = ini.ReadInteger("MISC", "CarMirrorsByDrawnCar", 1) != 0;
                 CarMirrors::zoomOut = std::clamp(ini.ReadFloat("MISC", "CarMirrorsZoomOut", 1.3f), 1.0f, 2.5f);
-                CarMirrors::sideAim = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAim", 3.0f), -20.0f, 20.0f);
-                CarMirrors::interiorAimDown = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimDown", 3.0f), -20.0f, 20.0f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, side aim %.1f, interior aim down %.1f\n",
+                CarMirrors::sideAimIn = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimIn", 3.0f), -30.0f, 30.0f);
+                CarMirrors::sideAimDown = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimDown", 1.5f), -30.0f, 30.0f);
+                CarMirrors::interiorAimRight = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimRight", 0.0f), -30.0f, 30.0f);
+                CarMirrors::interiorAimDown = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimDown", 3.0f), -30.0f, 30.0f);
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f; aim: side in %.1f down %.1f, interior right %.1f down %.1f\n",
                     int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut,
-                    CarMirrors::sideAim, CarMirrors::interiorAimDown);
+                    CarMirrors::sideAimIn, CarMirrors::sideAimDown, CarMirrors::interiorAimRight, CarMirrors::interiorAimDown);
             };
             CIniReader iniReader("");
             readIni(iniReader);
