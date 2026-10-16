@@ -6,7 +6,10 @@
 #    alpha rises towards it, instead of the reflection being added over the full view through the glass;
 #  - rain drops on the glass (vehicle_raindrops.py, the same as on the paint): each shows the scene behind it
 #    refracted (the lit opaque scene the glass reflections copy, shifted by the drop's slope on the screen),
-#    covers the view through the glass and catches the sun or the moon, in its shadow.
+#    covers the view through the glass and catches the sun or the moon, in its shadow. Its own Fresnel mixes in the
+#    environment map along the view reflected off it, and its rim, where the dome turns away from the glass, shows
+#    dark, as light there bends out of the drop or reflects inside it: refraction alone shows nothing on a dark window
+#    at night, the reflection at the rim and the dark ring are what make drops on glass seen.
 # The drops need the glass reflections' parameter texture and scene copy; without them only the cover is left out too.
 #
 # Usage: vehicle_glass_reflections_wet.py <FusionShaders checkout with the other patches applied>; the patch is the
@@ -22,6 +25,8 @@ TAG = 'FusionFix vehicle_glass_reflections_wet.patch'
 
 PS_DEFS = DEFS + f'''\
     def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // {TAG}: refraction on the screen, a drop's cover, the glint's power
+    def c198, 0.980000019, 0.0199999996, 4, 0.0799999982 // {TAG}: water's Fresnel (1 - F0, F0); the rim from 1 - n.n_glass 0.08, full by 0.33
+    def c199, 0.850000024, 0, 0, 0 // {TAG}: how dark the rim
 '''
 
 PS_DCLS = f'''\
@@ -36,6 +41,7 @@ COVER_AND_DROPS = f'''\
     mov r28, c185.w
     mov r30.xyz, r2
     mov r30.w, r17.w // the found reflection's share, kept from the drops' frame (r30.w is free after the march)
+    mov r19.xyz, r2 // the glass's own normal, for the drops' rims (r19 is free until the depth write)
     mov r24, c185.w
     mov r27.xyz, r2
     mov r8.x, c176.z
@@ -87,13 +93,39 @@ COMPOSE = f'''\
     add r29.y, -r29.z, c157.y
     mul r29.w, r29.y, r28.w
     add r29.z, r29.z, r29.w
-    mad r31.xyz, r28, r29.w, r31
     if_lt c185.w, r28.w
       add r8.xyz, -v4, c15
       nrm r9.xyz, r8
       dp3 r8.w, r30, r9
+      mov_sat r11.x, r8.w
+      add r11.x, -r11.x, c187.w
+      mul r11.y, r11.x, r11.x
+      mul r11.y, r11.y, r11.y
+      mul r11.x, r11.y, r11.x
+      mad r11.x, r11.x, c198.x, c198.y // the drop's Fresnel
       add r8.w, r8.w, r8.w
       mad r10.xyz, r30, r8.w, -r9 // the view reflected off the drop
+      // The environment map along it, read as the game reads it for the glass (with our constants: c1 differs
+      // between PS2, PS3 and PS4)
+      nrm r13.xyz, r10
+      mov_sat r12.z, r13.z
+      add r12.z, r12.z, c187.w
+      add r12.z, r12.z, r12.z
+      rcp r12.z, r12.z
+      mad r12.xy, r13, r12.z, c180.y
+      add r12.xy, -r12, c187.w
+      mov r12.zw, c185.w
+      texldl r12, r12, s4
+      // Dark at the rim, where the dome turns away from the glass
+      dp3 r11.y, r30, r19
+      add r11.y, -r11.y, c187.w
+      add r11.y, r11.y, -c198.w
+      mul_sat r11.y, r11.y, c198.z
+      mul r11.y, r11.y, c199.x
+      add r11.y, -r11.y, c187.w
+      mul r13.xyz, r28, r11.y
+      lrp r14.xyz, r11.x, r12, r13
+      mad r31.xyz, r14, r29.w, r31 // the drop: what it refracts, darker at the rim, and what it reflects
       dp3_sat r8.w, r10, -c17
       pow r8.w, r8.w, c179.w
       mul r8.w, r8.w, r28.w
