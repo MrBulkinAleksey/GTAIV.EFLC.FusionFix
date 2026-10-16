@@ -166,6 +166,7 @@ namespace ShadowDiagnostics
                 << " cached_lamps_in_view=" << PlayerShadowAllocation::cachedLampsInView.load()
                 << " uncached_lamps_trimmed=" << PlayerShadowAllocation::uncachedLampsTrimmed.load()
                 << " lamps_behind_camera=" << PlayerShadowAllocation::lampsBehindCamera.load()
+                << " added_lights_yielded=" << PlayerShadowAllocation::addedLightsYielded.load()
                 << " nearby_receivers=" << NearbyVehicleLighting36::enabled.load()
                 << " receiver_captures=" << NearbyVehicleLighting36::captures.load()
                 << " receiver_matches=" << NearbyVehicleLighting36::matches.load()

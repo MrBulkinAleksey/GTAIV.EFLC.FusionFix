@@ -173,6 +173,10 @@ namespace PlayerShadowAllocation
     // view or you; BehindLampByFixture: BehindLampReach goes by the fixture behind the camera, not the light's sphere
     static float uncachedLampViewShare = 0.5f;
     static bool behindLampByFixture = true;
+    // AddedLightsYield: the lights we give a shadow the game does not (model lights on facades, corona lights, traffic
+    // signals) rank None unless their light reaches you; for the slot trace's status line
+    static bool addedLightsYield = true;
+    static std::atomic<uint32_t> addedLightsYielded{0};
     static std::atomic<uint32_t> uncachedLampsTrimmed{0}, lampsBehindCamera{0};
     static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
     static std::atomic<uint32_t> lightsFlickering{0}; // lights ranked off screen as they flicker out of the list, for the status line
@@ -984,6 +988,16 @@ namespace PlayerShadowAllocation
                 const bool behindCamera=behindLampByFixture && viewWeight>1.01f &&
                     fusionfix::shadows::BehindCamera(state.view,{light.mPosition.x,light.mPosition.y,light.mPosition.z});
                 if(viewWeight<=1.01f || behindCamera) { gain=SlotGain::OffScreen; if(behindCamera) ++lampsBehindCamera; }
+            }
+            // AddedLightsYield: facades' model lights and traffic signals with a shadow of ours, uncached and in view,
+            // took four of the seven slots from street lamps (the game's, cached, with props under them) 25-40 m ahead:
+            // a facade's shadow falls mostly on its wall, a signal's goes with the street lamps'. Such a light ranks
+            // None, below a street lamp whose light is in view, unless its light reaches you (lightsPlayer).
+            if(casterPriority && addedLightsYield && kind==budget::Kind::Lamp && !cached && !lightsPlayer && gain!=SlotGain::None) {
+                const auto origin=lightOrigin ? lightOrigin(key) : static_cast<uint8_t>(fusionfix::shadows::ShadowSlotTrace::OriginGame);
+                const bool trafficSignal=(flags&rage::LF_TRAFFIC) && !(flags&rage::LF_MAP);
+                if(trafficSignal || origin==fusionfix::shadows::ShadowSlotTrace::OriginModelLight ||
+                   origin==fusionfix::shadows::ShadowSlotTrace::OriginCorona) { gain=SlotGain::None; ++addedLightsYielded; }
             }
             if(casterPriority && kind==budget::Kind::Lamp && !cached && gain==SlotGain::InView &&
                geometry.distanceSquared<=reach*reach &&
