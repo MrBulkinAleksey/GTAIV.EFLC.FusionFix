@@ -75,7 +75,7 @@ static float WeatherHaze()
 // The sky's parameters, registered at start (registering while drawing would grow the list the shader parameter hook
 // may be reading); shaders.ixx and the clouds register some of them too, and get the same indices.
 static size_t nSkyColorIdx = 0, nAzimuthColorIdx = 0, nAzimuthColorEastIdx = 0, nAzimuthStrengthIdx = 0, nAzimuthHeightIdx = 0,
-              nSunDirectionIdx = 0, nSunExposureIdx = 0;
+              nSunDirectionIdx = 0, nSunExposureIdx = 0, nExposureIdx = 0;
 static bool bParamsRegistered = false;
 
 export void RegisterPbrSkyParams()
@@ -87,6 +87,7 @@ export void RegisterPbrSkyParams()
     nAzimuthHeightIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "AzimuthHeight");
     nSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
     nSunExposureIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "HDRSunExposure");
+    nExposureIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "HDRExposure");
     bParamsRegistered = true;
 }
 
@@ -185,6 +186,12 @@ static constexpr D3DSAMPLERSTATETYPE kBoundStates[6] =
     { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
 static bool bBound = false;
 
+// The aerial perspective's SkyView on s14, from the fog pass to the end of the frame (AerialPerspectiveBind below)
+constexpr DWORD kAerialStage = 14;
+static IDirect3DBaseTexture9* pAerialSavedTexture = nullptr;
+static DWORD aerialSavedStates[6] = {};
+static bool bAerialBound = false;
+
 static void SetStrength(IDirect3DDevice9* pDevice, float strength)
 {
     // On the game's caching wrapper and on the device behind it, as SetTextureBoth does
@@ -227,7 +234,12 @@ export void PbrSkyBeforeDraw(IDirect3DDevice9* pDevice)
     {
         const float haze = WeatherHaze();
         R.fPbrSkyLastHaze = haze;
+        // Never into SkyView while it is bound for the fog
+        if (bAerialBound)
+            SetTextureBoth(pDevice, kAerialStage, nullptr);
         DrawTables(pDevice, sunHeight, haze);
+        if (bAerialBound)
+            SetTextureBoth(pDevice, kAerialStage, R.SkyViewTex->mD3DTexture);
         R.nSkyViewFrame = frame;
     }
 
@@ -320,4 +332,85 @@ export bool PbrSkySunHue(float heightKm, float sunSine, float hue[3])
     for (int c = 0; c < 3; ++c)
         hue[c] = float(std::clamp(transmittance[c] / luma, 0.0, 2.0));
     return true;
+}
+
+// Aerial perspective (Aerial Perspective in the graphics menu) and the fog's colour under the Physical Sky, in every
+// shader with the volumetric fog (zz_aerial_perspective.patch): the fog pass for the opaque world and the forward
+// shaders drawn after it. From the fog pass to the end of the frame SkyView is on s14 (deferred_lighting's lamp
+// shadow cache, read in the lighting before) and c104-c106 say how to take it; at the end of the frame both go back,
+// so reflections and anything else drawn before the next fog pass keep the game's fog.
+
+constexpr UINT kAerialRegister = 104;
+// The air k times as thick as the Earth's: through the real one the city's 2 km of air keep 94% of the blue.
+constexpr float kAerialScale = 4.0f;
+constexpr float kRayleighHeightM = 8000.0f, kMieHeightM = 1200.0f;
+constexpr float kLog2e = 1.44269504f;
+
+static void SetAerialConstants(IDirect3DDevice9* pDevice, const float (&values)[12])
+{
+    pDevice->SetPixelShaderConstantF(kAerialRegister, values, 3);
+    if (auto real = RealDevice(pDevice); real && real != pDevice)
+        real->SetPixelShaderConstantF(kAerialRegister, values, 3);
+}
+
+// Before the fog pass: SkyView on s14 and the constants, if the Physical Sky is drawn.
+export void AerialPerspectiveBind(IDirect3DDevice9* pDevice)
+{
+    auto& R = PostFxResources;
+    R.fAerialLastShare = R.fAerialLastStrength = 0.0f;
+    if (!pDevice || bAerialBound || !bParamsRegistered || !R.SkyViewTex)
+        return;
+    const float share = PbrSkyShare();
+    const float units = PbrSkySunExposure() * rage::grmShaderInfo::getShaderParamData(nExposureIdx)[0];
+    if (share <= 0.0f || units <= 0.0f)
+        return;
+
+    // The sun seen from above in the world (z up): the sky's SunDirection is y up, (x, -z, y) in the world.
+    const auto& sunDirection = rage::grmShaderInfo::getShaderParamData(nSunDirectionIdx);
+    float sunX = sunDirection[0], sunY = -sunDirection[2];
+    const float flat = std::sqrt(sunX * sunX + sunY * sunY);
+    if (flat > 1e-4f)
+        sunX /= flat, sunY /= flat;
+    else
+        sunX = 1.0f, sunY = 0.0f;
+
+    const float strength = R.AerialPerspectiveEnabled() ? share : 0.0f;
+    const float haze = WeatherHaze();
+    const float perMetre = kAerialScale * kLog2e / 1000.0f;
+    const float values[12] = {
+        5.802e-3f * perMetre, 13.558e-3f * perMetre, 33.1e-3f * perMetre, 4.440e-3f * haze * perMetre,
+        -kLog2e / kRayleighHeightM, -kLog2e / kMieHeightM, units, strength,
+        sunX, sunY, 0.0f, share,
+    };
+
+    pDevice->GetTexture(kAerialStage, &pAerialSavedTexture);
+    for (size_t i = 0; i < std::size(kBoundStates); ++i)
+        pDevice->GetSamplerState(kAerialStage, kBoundStates[i], &aerialSavedStates[i]);
+    SetTextureBoth(pDevice, kAerialStage, R.SkyViewTex->mD3DTexture);
+    SetSamplerStateBoth(pDevice, kAerialStage, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+    SetSamplerStateBoth(pDevice, kAerialStage, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+    SetSamplerStateBoth(pDevice, kAerialStage, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+    SetSamplerStateBoth(pDevice, kAerialStage, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+    SetSamplerStateBoth(pDevice, kAerialStage, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    SetSamplerStateBoth(pDevice, kAerialStage, D3DSAMP_SRGBTEXTURE, FALSE);
+    SetAerialConstants(pDevice, values);
+    bAerialBound = true;
+    R.fAerialLastShare = share;
+    R.fAerialLastStrength = strength;
+    R.fAerialLastUnits = units;
+    R.fAerialLastHaze = haze;
+}
+
+// At the end of the frame: the fog back to the game's and s14 as it was.
+export void AerialPerspectiveEndFrame(IDirect3DDevice9* pDevice)
+{
+    if (!pDevice || !bAerialBound)
+        return;
+    bAerialBound = false;
+    static const float none[12] = {};
+    SetAerialConstants(pDevice, none);
+    SetTextureBoth(pDevice, kAerialStage, pAerialSavedTexture);
+    for (size_t i = 0; i < std::size(kBoundStates); ++i)
+        SetSamplerStateBoth(pDevice, kAerialStage, kBoundStates[i], aerialSavedStates[i]);
+    SAFE_RELEASE(pAerialSavedTexture);
 }

@@ -2145,6 +2145,7 @@ public:
             { 0, "PREF_WORLD_LIGHT_SHADOWS",    "NIGHTSHADOWS", "WorldLightShadows",                "",                           1, nullptr, 0, 1 },
             { 0, "PREF_BUILDING_SHADOWS",       "NIGHTSHADOWS", "BuildingShadows",                  "",                           1, nullptr, 0, 1 },
             { 0, "PREF_PBR_SKY",                "WEATHER",    "PbrSky",                             "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_AERIAL_PERSPECTIVE",     "WEATHER",    "AerialPerspective",                  "",                           1, nullptr, 0, 1 },
             // Car paint and rain drops on it (vehiclepaint.ixx)
             { 0, "PREF_VEHICLE_PAINT",          "TEXTURES",   "VehiclePaint",                       "",                           1, nullptr, 0, 1 },
             { 0, "PREF_CAR_RAINDROPS",          "WEATHER",    "CarRaindrops",                       "",                           1, nullptr, 0, 1 },
@@ -2401,6 +2402,7 @@ public:
             AddRow(category, "SunFlare", "PREF_SUN_FLARE", 2, toggle);
             AddRow(category, "VolumeClouds", "PREF_VOLUMETRIC_CLOUDS", 2, toggle);
             AddRow(category, "PbrSky", "PREF_PBR_SKY", 2, toggle);
+            AddRow(category, "AerialPersp", "PREF_AERIAL_PERSPECTIVE", 2, toggle);
             AddRow(category, "GGXLighting", "PREF_GGX_LIGHTING", 2, toggle);
             AddRow(category, "WetWeather", "PREF_WET_WEATHER", 2, toggle);
             AddRow(category, "CarRaindrops", "PREF_CAR_RAINDROPS", 2, toggle);

@@ -373,6 +373,9 @@ Logitech LightSync RGB
 [PbrSky]
 Физическое небо
 
+[AerialPersp]
+Воздушная перспектива
+
 [Zoomed Movement]
 Разрешить движение при прицеливании
 

@@ -373,6 +373,9 @@ Volumetric Clouds
 [PbrSky]
 Physical Sky
 
+[AerialPersp]
+Aerial Perspective
+
 [Zoomed Movement]
 Consenti movimento con lo zoom
 

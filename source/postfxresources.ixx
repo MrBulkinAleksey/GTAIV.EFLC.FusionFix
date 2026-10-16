@@ -726,6 +726,14 @@ public:
         static auto p = FusionFixSettings.GetRef("PREF_PBR_SKY");
         return p ? p->get() != 0 : true;
     }
+    // Aerial Perspective in the graphics menu (PREF_AERIAL_PERSPECTIVE, [WEATHER] AerialPerspective); the fog takes the
+    // Physical Sky's colour without it too. What the last fog pass took, for the Ctrl+Shift+F10 log.
+    bool AerialPerspectiveEnabled() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_AERIAL_PERSPECTIVE");
+        return p ? p->get() != 0 : true;
+    }
+    float fAerialLastShare = 0.0f, fAerialLastStrength = 0.0f, fAerialLastUnits = 0.0f, fAerialLastHaze = 0.0f;
     // Why the last frame drew no volumetric clouds, or that it did, for the Ctrl+Shift+F10 log.
     const char* szCloudsStatus = "not run yet";
     // The same for the reflection map (DrawSkyReflection): what the last call did, how many calls

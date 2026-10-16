@@ -373,6 +373,9 @@ Volumetric Clouds
 [PbrSky]
 Physical Sky
 
+[AerialPersp]
+Aerial Perspective
+
 [Zoomed Movement]
 Permitir movimiento al acercar la mirilla
 
