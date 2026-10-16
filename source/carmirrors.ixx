@@ -198,16 +198,22 @@ namespace CarMirrors
         for (int i = 0; i < 3; ++i) out[i] = n[i] / length;
     }
 
-    // The mirror's plane in the world by the car's matrix m, as set (Aim), ClipAhead in front of the glass.
+    // The mirror's plane in the world by the car's matrix m, as set (Aim), ClipAhead in front of the glass's corner
+    // that stands furthest out along it: turned from the glass, the plane through the middle had one edge of the
+    // housing's rim in front of it again, kept in the reflection.
     static void PlacePlane(const float* m, const CarMirrorGlass& glass)
     {
-        float aimed[3], centre[3], normal[3];
+        float aimed[3], centre[3], normal[3], right[3], up[3];
         Aim(glass, aimed);
         Transform(m, glass.centre, centre, true);
         Transform(m, aimed, normal, false);
+        Transform(m, glass.right, right, false);
+        Transform(m, glass.up, up, false);
         Normalize(normal);
+        // the most a corner of the glass's rectangle stands out along the plane's normal
+        const float out = std::abs(Dot(normal, right)) + std::abs(Dot(normal, up));
         for (int i = 0; i < 3; ++i) plane[i] = normal[i];
-        plane[3] = Dot(normal, centre) + ClipAhead;
+        plane[3] = Dot(normal, centre) + out + ClipAhead;
     }
 
     // The glass's corners in the world by the car's matrix m, round it as the driver sees it (bottom left, bottom
