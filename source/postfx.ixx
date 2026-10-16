@@ -40,6 +40,7 @@ import postfxresources;
 import screenquad;
 import ssrtrace;
 import postfxpass;
+import firstperson;
 import vehicleboxshadows;
 import ssr;
 import ambientocclusion;
@@ -1532,6 +1533,8 @@ private:
     static void __fastcall DrawCallPostFX(void* _this, void* edx, int a2, int a3, int a4)
     {
         UnbindGlassReflections();
+        if (auto pDevice = rage::grcDevice::GetD3DDevice(); pDevice && !bDeviceLost)
+            SetGlassInsideTint(pDevice, false);
         bInsteadDrawPrimitivePostFX = true;
         hbDrawCallPostFX.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitivePostFX = false;
@@ -2563,6 +2566,17 @@ public:
         SetSamplerStateBoth(pDevice, slot, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
     }
 
+    // c204 for the car glass (vehicle_glass_reflections_wet.patch): from the driver's seat in first person the glass
+    // within 2.5 m of the camera, the car's own, keeps 40% of its tint; zeros (glass in reflections and mirrors, drawn
+    // once the main scene is done) keep all of it.
+    static void SetGlassInsideTint(IDirect3DDevice9* pDevice, bool inside)
+    {
+        const float tint[4] = { inside ? 0.4f : 0.0f, inside ? 2.5f * 2.5f : 0.0f, 0.0f, 0.0f };
+        pDevice->SetPixelShaderConstantF(204, tint, 1);
+        if (auto real = RealDevice(pDevice); real != pDevice)
+            real->SetPixelShaderConstantF(204, tint, 1);
+    }
+
     // Right after deferred lighting: binds this frame's camera, and the textures the fog pass
     // copies the depth and the lit opaque scene into, for the patched car glass shaders. Anything missing
     // leaves s9 empty, and the glass keeps the game's environment map.
@@ -2618,6 +2632,7 @@ public:
         pDevice->SetPixelShaderConstantF(197, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(200, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(165, noLocalContactShadows, 1);
+        SetGlassInsideTint(pDevice, FirstPersonInVehicle());
 
         bool ok = R.bGlassFrameValid && R.bGlassReflections && R.SSREnabled() && R.PreAlphaDepthCopyRT &&
                   R.PreAlphaDepthCopyRT->mD3DTexture && R.SSRHistoryTex && R.SSRHistoryTex->mD3DTexture;

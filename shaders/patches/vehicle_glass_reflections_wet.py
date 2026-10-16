@@ -9,7 +9,8 @@
 #    covers the view through the glass and catches the sun or the moon, in its shadow. Its own Fresnel mixes in the
 #    environment map along the view reflected off it, and its rim, where the dome turns away from the glass, shows
 #    dark, as light there bends out of the drop or reflects inside it: refraction alone shows nothing on a dark window
-#    at night, the reflection at the rim and the dark ring are what make drops on glass seen.
+#    at night, the reflection at the rim and the dark ring are what make drops on glass seen;
+#  - from the driver's seat in first person the car's own glass keeps less of its tint (c204, source/postfx.ixx).
 # The drops need the glass reflections' parameter texture and scene copy; without them only the cover is left out too.
 #
 # Usage: vehicle_glass_reflections_wet.py <FusionShaders checkout with the other patches applied>; the patch is the
@@ -88,6 +89,18 @@ COVER_AND_DROPS = f'''\
 
 SHADOW = f'''\
     mov r27.x, r1.w // {TAG}: the sun's shadow, for the drops' glint
+'''
+
+INSIDE = f'''\
+    // {TAG}: from the driver's seat in first person (c204.x the share of the tint kept) the glass
+    // within c204.y (a distance squared) of the camera, the car's own, keeps less of its tint, both its outer and
+    // its inner layer: through dark windows the street was hard to see. Unset (zeros) changes nothing.
+    add r8.xyz, -v4, c15
+    dp3 r8.w, r8, r8
+    add r8.w, r8.w, -c204.y
+    mov r8.x, c204.x
+    cmp r8.w, r8.w, c187.w, r8.x
+    mul r0.x, r0.x, r8.w
 '''
 
 COMPOSE = f'''\
@@ -180,6 +193,7 @@ def patch_ps(n):
           mad r29.x, r28.y, r29.z, r29.x''', path)
     text = insert(text, 'mov r4.xyz, r15', COVER_AND_DROPS, path)
     text = insert(text, 'lrp r1.w, r20.y, c110.y, r20.x', SHADOW, path)
+    text = insert(text, 'mov_sat r0.x, r0.x', INSIDE, path, before=True)
     text = insert(text, 'mul oC0.w, r0.x, c39.x', COMPOSE, path, before=True)
     path.write_text(text)
 

@@ -519,6 +519,12 @@ namespace FirstPerson
     }
 }
 
+// Whether the eye is in the player's seat this frame (first person in a vehicle), for the car glass's tint.
+export bool FirstPersonInVehicle() noexcept
+{
+    return FirstPerson::SeatCurrent();
+}
+
 class FirstPersonCamera
 {
 public:
