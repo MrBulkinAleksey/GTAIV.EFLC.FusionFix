@@ -47,7 +47,7 @@ def find(name):
         if best:
             area,pts,n,dd,gi,sh=best
             xs=[p[0] for p in pts]; ys=[p[1] for p in pts]; zs=[p[2] for p in pts]
-            res[side]=(area,n,(min(xs),max(xs),min(ys),max(ys),min(zs),max(zs)),gi,sh)
+            res[side]=(area,n,(min(xs),max(xs),min(ys),max(ys),min(zs),max(zs)),gi,sh,pts)
     return res
 if __name__=='__main__':
     names=[e[4] for e in toc(os.environ.get('VEHICLES_IMG', 'log/vehicles.img')) if e[4].endswith('.wft')]
@@ -58,6 +58,6 @@ if __name__=='__main__':
         line=nm
         for s in 'LRC':
             if s in r:
-                a,n,bb,gi,sh=r[s]; line+='  %s: %.0fcm2 n(%.2f %.2f %.2f) x%.2f..%.2f y%.2f..%.2f z%.2f..%.2f g%d %s'%((s,a*1e4)+n+bb+(gi,sh[12:]))
+                a,n,bb,gi,sh,_=r[s]; line+='  %s: %.0fcm2 n(%.2f %.2f %.2f) x%.2f..%.2f y%.2f..%.2f z%.2f..%.2f g%d %s'%((s,a*1e4)+n+bb+(gi,sh[12:]))
             else: line+='  %s: -'%s
         print(line)
