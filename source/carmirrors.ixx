@@ -12,6 +12,7 @@ import natives;
 import settings;
 import inireload;
 import firstperson;
+import temporal;
 
 // Real reflections in the player car's mirrors, from the driver's seat in first person (Car Mirrors in the menu).
 // The game has planar mirrors for interiors (bathrooms): each frame CE 0xB59DD0 asks 0xA0F820 for the nearest
@@ -45,6 +46,14 @@ namespace CarMirrors
     static double buildMs = 0.0, visibilityMs = 0.0;
     static uint32_t timedFrames = 0;
     static uint32_t outdoorScans = 0;      // frames the outdoor scan ran for the mirror
+    // The car and glass in use, for the render thread, which puts the quad where the car was drawn: the game reads the
+    // corners as it draws it (CE 0xB59900, after the G-buffer), and the car the main thread placed them by had moved
+    // on by then, the quad off the mirror and sliding as the car drove.
+    static std::atomic<uintptr_t> drawnVehicle{ 0 };
+    static std::atomic<const CarMirrorGlass*> drawnGlass{ nullptr };
+    static SafetyHookMid quadHook;
+    static uint32_t quadDrawn = 0, quadByDrawnCar = 0;
+    static float quadShift = 0.0f;          // the most the drawn car stood off the main thread's, since the last log
 
     static double NowMs()
     {
@@ -72,12 +81,42 @@ namespace CarMirrors
         return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     }
 
+    // The glass in the world by the car's matrix m: the corners round it, a little in front of it, and with plane, its
+    // plane; centre, where given, takes its middle.
+    static void PlaceGlass(const float* m, const CarMirrorGlass& glass, bool withPlane, float* centreOut)
+    {
+        float centre[3], normal[3], right[3], up[3];
+        Transform(m, glass.centre, centre, true);
+        Transform(m, glass.normal, normal, false);
+        Transform(m, glass.right, right, false);
+        Transform(m, glass.up, up, false);
+        const float length = std::sqrt(Dot(normal, normal));
+        for (auto& n : normal) n /= length;
+        if (withPlane)
+        {
+            for (int i = 0; i < 3; ++i) plane[i] = normal[i];
+            plane[3] = Dot(normal, centre);
+        }
+        // round the glass: bottom left, bottom right, top right, top left as the driver sees it
+        static constexpr float signs[4][2] = { { -1.0f, -1.0f }, { 1.0f, -1.0f }, { 1.0f, 1.0f }, { -1.0f, 1.0f } };
+        for (int k = 0; k < 4; ++k)
+        {
+            const auto& s = signs[reverse ? (5 - k) % 4 : k];
+            for (int i = 0; i < 3; ++i)
+                corners[k * 4 + i] = centre[i] + right[i] * s[0] + up[i] * s[1] - normal[i] * AheadOfGlass;
+            corners[k * 4 + 3] = 1.0f;
+        }
+        if (centreOut)
+            std::copy_n(centre, 3, centreOut);
+    }
+
     static void Off(const char* why)
     {
         if (usedKind >= 0)
             FusionLog::Write("CarMirrors", "Select", "off: %s\n", why);
         usedKind = -1;
         usedModel = 0;
+        drawnGlass.store(nullptr, std::memory_order_release);
     }
 
     // Main thread, once a frame, after the game looked for an interior mirror.
@@ -151,30 +190,16 @@ namespace CarMirrors
                 FusionLog::Write("CarMirrors", "Select", "model %08X has no mirrors in the table\n", model);
             usedModel = model;
             usedKind = -2;
+            drawnGlass.store(nullptr, std::memory_order_release);
             return;
         }
         if (!best || bestScore < MinLook)
             return Off("no mirror in view");
 
-        float centre[3], normal[3], right[3], up[3];
-        Transform(m, best->centre, centre, true);
-        Transform(m, best->normal, normal, false);
-        Transform(m, best->right, right, false);
-        Transform(m, best->up, up, false);
-        const float length = std::sqrt(Dot(normal, normal));
-        for (auto& n : normal) n /= length;
-
-        for (int i = 0; i < 3; ++i) plane[i] = normal[i];
-        plane[3] = Dot(normal, centre);
-        // round the glass: bottom left, bottom right, top right, top left as the driver sees it
-        static constexpr float signs[4][2] = { { -1.0f, -1.0f }, { 1.0f, -1.0f }, { 1.0f, 1.0f }, { -1.0f, 1.0f } };
-        for (int k = 0; k < 4; ++k)
-        {
-            const auto& s = signs[reverse ? (5 - k) % 4 : k];
-            for (int i = 0; i < 3; ++i)
-                corners[k * 4 + i] = centre[i] + right[i] * s[0] + up[i] * s[1] - normal[i] * AheadOfGlass;
-            corners[k * 4 + 3] = 1.0f;
-        }
+        float centre[3];
+        PlaceGlass(m, *best, true, centre);
+        drawnVehicle.store(vehicle, std::memory_order_relaxed);
+        drawnGlass.store(best, std::memory_order_release);
         *mirrorOn = 1;
         *cameraBehind = 0;
         usedThisFrame = true;
@@ -196,9 +221,11 @@ namespace CarMirrors
     {
         if (++timedFrames < 300)
             return;
-        FusionLog::Write("CarMirrors", "Cost", "mirror phase CPU per frame: draw list %.3f ms, visibility %.3f ms; outdoor scans %u of %u frames\n",
-            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames);
-        outdoorScans = 0;
+        FusionLog::Write("CarMirrors", "Cost", "mirror phase CPU per frame: draw list %.3f ms, visibility %.3f ms; outdoor scans %u of %u frames; "
+            "quad placed by the drawn car %u of %u, it stood up to %.2f m off\n",
+            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadByDrawnCar, quadDrawn, quadShift);
+        outdoorScans = quadDrawn = quadByDrawnCar = 0;
+        quadShift = 0.0f;
         buildMs = visibilityMs = 0.0;
         timedFrames = 0;
     }
@@ -239,6 +266,28 @@ namespace CarMirrors
             phaseVisibilityHook.unsafe_thiscall<void>(phase);
         if (usedThisFrame)
             visibilityMs += NowMs() - start;
+    }
+
+    // Render thread, the game's mirror quad about to be drawn: its corners by the matrix the G-buffer drew the player's
+    // car with this frame (TemporalAA, with object motion vectors), else as the main thread put them.
+    static void PlaceQuad(SafetyHookContext&)
+    {
+        const auto glass = drawnGlass.load(std::memory_order_acquire);
+        const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
+        if (!glass || !vehicle || !mirrorOn || !*mirrorOn)
+            return;
+        ++quadDrawn;
+        float around[3];
+        if (!CEntity::GetPosition(vehicle, around))
+            return;
+        float m[16];
+        bool skinned = false;
+        if (!TemporalAA::DrawnWorldMatrix(reinterpret_cast<void*>(vehicle), around, 3.0f, m, nullptr, nullptr, nullptr, &skinned, 25.0f) || !skinned)
+            return;
+        const float dx = m[12] - around[0], dy = m[13] - around[1], dz = m[14] - around[2];
+        quadShift = (std::max)(quadShift, std::sqrt(dx * dx + dy * dy + dz * dz));
+        PlaceGlass(m, *glass, false, nullptr);
+        ++quadByDrawnCar;
     }
 }
 
@@ -282,13 +331,18 @@ public:
                 CarMirrors::phaseBuildHook = safetyhook::create_inline(build.get_first(0), CarMirrors::PhaseBuild);
             if (timeVisibility)
                 CarMirrors::phaseVisibilityHook = safetyhook::create_inline(visibility.get_first(0), CarMirrors::PhaseVisibility);
+            // push ebp / mov ebp, esp / and esp, -10 / sub esp, 20 / call / test byte [eax], 40 / je / cmp byte [mirror on], 0 / je
+            auto quad = hook::pattern("55 8B EC 83 E4 F0 83 EC 20 E8 ? ? ? ? F6 00 40 0F 84 ? ? ? ? 80 3D ? ? ? ? 00 0F 84");
+            if (!quad.empty() && *quad.get_first<uint8_t*>(25) == CarMirrors::mirrorOn)
+                CarMirrors::quadHook = safetyhook::create_mid(quad.get_first(0), CarMirrors::PlaceQuad);
             // cmp byte [mirror on], 1 / push esi / mov esi, ecx / je / mov eax, [..] / test eax, eax / je / mov al, [eax+22] / and al, 1 / jne
             auto water = hook::pattern("80 3D ? ? ? ? 01 56 8B F1 74 ? A1 ? ? ? ? 85 C0 74 ? 8A 40 22 24 01 75");
             if (!water.empty() && *water.get_first<uint8_t*>(2) == CarMirrors::mirrorOn)
                 CarMirrors::waterVisibility = water.get_first<void(__fastcall)(uintptr_t, void*)>(0);
-            FusionLog::Write("CarMirrors", "Init", "%u mirror glasses in the table; phase timing %s; outdoor scan %s\n",
+            FusionLog::Write("CarMirrors", "Init", "%u mirror glasses in the table; phase timing %s; outdoor scan %s; quad by the drawn car %s\n",
                 uint32_t(std::size(CarMirrorTable)), timeBuild && timeVisibility ? "on" : "partly off",
-                CarMirrors::waterVisibility ? "found" : "not found (the mirrors stay empty outdoors)");
+                CarMirrors::waterVisibility ? "found" : "not found (the mirrors stay empty outdoors)",
+                CarMirrors::quadHook ? "on" : "off (not found)");
         };
     }
 } CarMirrorsHooksInstance;
