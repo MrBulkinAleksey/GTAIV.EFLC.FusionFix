@@ -422,9 +422,12 @@ namespace CarMirrors
     // it in the plane (0xA87B50) and clips by it. The plane goes in right before, by the car as it is now: from the
     // update's plane, a frame old where this runs first, the reflected view was off by twice the car's travel in a
     // frame (0.7 m at 20 m/s), the reflection lagging and jerking while driving.
-    // Then its views (+0xB0, the reflected one, and +0x4A0, both copies of the camera's grcViewport) are widened by
-    // Widen (grcViewport::Perspective, CE 0x431470, the field of view at +0x2B8): the zoom out reads the reflection
-    // further out than the screen it was made for, and a mirror by the screen's edge smeared its last pixels.
+    // The view it copies (the camera's grcViewport at view + 0x10) is widened for the call by Widen
+    // (grcViewport::Perspective, CE 0x431470, the field of view at +0x2B8) and put back byte for byte after: the zoom
+    // out reads the reflection further out than the screen it was made for, and a mirror by the screen's edge smeared
+    // its last pixels. Not the phase's own views after the call: the clip there (CE 0x432470) is an oblique near plane
+    // in the projection, which Perspective's recompute (0x4314C0, the projection +0x1C0, the lens +0x2A0..0x2EF)
+    // would wipe. The put back keeps whatever else was in the camera's projection (a jitter).
     static void (__fastcall* perspective)(uintptr_t viewport, void*, float fov, float aspect, float zNear, float zFar) = nullptr;
     static std::atomic<float> widened{ 1.0f };
 
@@ -442,20 +445,30 @@ namespace CarMirrors
             if (const float* m = vehicle ? CEntity::GetMatrix(vehicle) : nullptr)
                 PlacePlane(m, *active);
         }
-        phaseViewHook.unsafe_thiscall<void>(phase, view);
-        const float widen = ours && perspective ? Widen() : 1.0f;
+        float widen = ours && perspective && view ? Widen() : 1.0f;
+        const auto camera = view + 0x10;
+        uint8_t projection[0x40], lens[0x50];
         if (widen > 1.0f)
-            for (const uintptr_t offset : { uintptr_t(0xB0), uintptr_t(0x4A0) })
+        {
+            std::memcpy(projection, reinterpret_cast<const void*>(camera + 0x1C0), sizeof(projection));
+            std::memcpy(lens, reinterpret_cast<const void*>(camera + 0x2A0), sizeof(lens));
+            const auto* fov = reinterpret_cast<const float*>(camera + 0x2B8); // fov, aspect, near, far
+            const bool degrees = fov[0] > 3.2f;
+            const float half = (degrees ? fov[0] * 0.01745329f : fov[0]) * 0.5f;
+            if (half > 0.0f && half < 1.5f)
             {
-                const auto viewport = phase + offset;
-                const auto* lens = reinterpret_cast<const float*>(viewport + 0x2B8); // fov, aspect, near, far
-                const bool degrees = lens[0] > 3.2f;
-                const float half = (degrees ? lens[0] * 0.01745329f : lens[0]) * 0.5f;
-                if (!(half > 0.0f && half < 1.5f))
-                    continue;
                 const float wider = 2.0f * std::atan(std::tan(half) * widen);
-                perspective(viewport, nullptr, degrees ? wider * 57.29578f : wider, lens[1], lens[2], lens[3]);
+                perspective(camera, nullptr, degrees ? wider * 57.29578f : wider, fov[1], fov[2], fov[3]);
             }
+            else
+                widen = 1.0f;
+        }
+        phaseViewHook.unsafe_thiscall<void>(phase, view);
+        if (widen > 1.0f)
+        {
+            std::memcpy(reinterpret_cast<void*>(camera + 0x1C0), projection, sizeof(projection));
+            std::memcpy(reinterpret_cast<void*>(camera + 0x2A0), lens, sizeof(lens));
+        }
         widened.store(widen, std::memory_order_relaxed);
     }
 
