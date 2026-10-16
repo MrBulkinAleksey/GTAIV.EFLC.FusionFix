@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 5de051e..8b1c8c4 100644
+index 5de051e3..840bf9a1 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 @@ -167,8 +167,29 @@
@@ -29,7 +29,7 @@ index 5de051e..8b1c8c4 100644
 +    def c197, 8, 6.28318548, -3.14159274, 0.00400000019 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
 +    def c198, 0.980000019, 0.0199999996, 4, 0.0799999982 // FusionFix vehicle_glass_reflections_wet.patch: water's Fresnel (1 - F0, F0); the rim from 1 - n.n_glass 0.08, full by 0.33
-+    def c199, 0.850000024, 0, 0, 0 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim
++    def c199, 0.850000024, 0.625, -0.25, 0 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2)
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
@@ -52,11 +52,17 @@ index 5de051e..8b1c8c4 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -428,6 +454,278 @@
+@@ -428,6 +454,284 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
-+    mul r27.w, r17.w, r1.z // FusionFix vehicle_glass_reflections_wet.patch: how much of the view through the glass the found reflection covers
++    // FusionFix vehicle_glass_reflections_wet.patch: how much of the view through the glass the found reflection covers: its share times the Fresnel.
++    // The game's r1.z is 2 (0.8 F + 0.2) with F = (1 - |n.v|)^4, its reflection's strength, not a share: taken as one
++    // it covered 40% face on and all of it at a glance, and windows showed nothing of the cabin. F back from it,
++    // then 0.02 + 0.98 F.
++    mad_sat r27.w, r1.z, c199.y, c199.z
++    mad r27.w, r27.w, c198.x, c198.y
++    mul r27.w, r27.w, r17.w
 +    // Rain drops: r28 takes the scene they show and how much they cover, r30 the normal they bend
 +    mov r28, c185.w
 +    mov r30.xyz, r2
@@ -331,7 +337,7 @@ index 5de051e..8b1c8c4 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -793,6 +1091,7 @@
+@@ -793,6 +1097,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -339,7 +345,7 @@ index 5de051e..8b1c8c4 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -917,6 +1216,58 @@
+@@ -917,6 +1222,58 @@
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0
@@ -399,7 +405,7 @@ index 5de051e..8b1c8c4 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 317652f..845a81e 100644
+index 317652ff..83384743 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 @@ -118,8 +118,29 @@
@@ -429,7 +435,7 @@ index 317652f..845a81e 100644
 +    def c197, 8, 6.28318548, -3.14159274, 0.00400000019 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
 +    def c198, 0.980000019, 0.0199999996, 4, 0.0799999982 // FusionFix vehicle_glass_reflections_wet.patch: water's Fresnel (1 - F0, F0); the rim from 1 - n.n_glass 0.08, full by 0.33
-+    def c199, 0.850000024, 0, 0, 0 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim
++    def c199, 0.850000024, 0.625, -0.25, 0 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2)
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
@@ -452,11 +458,17 @@ index 317652f..845a81e 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -378,6 +404,278 @@
+@@ -378,6 +404,284 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
-+    mul r27.w, r17.w, r1.z // FusionFix vehicle_glass_reflections_wet.patch: how much of the view through the glass the found reflection covers
++    // FusionFix vehicle_glass_reflections_wet.patch: how much of the view through the glass the found reflection covers: its share times the Fresnel.
++    // The game's r1.z is 2 (0.8 F + 0.2) with F = (1 - |n.v|)^4, its reflection's strength, not a share: taken as one
++    // it covered 40% face on and all of it at a glance, and windows showed nothing of the cabin. F back from it,
++    // then 0.02 + 0.98 F.
++    mad_sat r27.w, r1.z, c199.y, c199.z
++    mad r27.w, r27.w, c198.x, c198.y
++    mul r27.w, r27.w, r17.w
 +    // Rain drops: r28 takes the scene they show and how much they cover, r30 the normal they bend
 +    mov r28, c185.w
 +    mov r30.xyz, r2
@@ -731,7 +743,7 @@ index 317652f..845a81e 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -743,6 +1041,7 @@
+@@ -743,6 +1047,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -739,7 +751,7 @@ index 317652f..845a81e 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r2.yzw, r6.xxyz, r3.x
      mul r2.yzw, r1.w, r2
-@@ -765,6 +1064,58 @@
+@@ -765,6 +1070,58 @@
      cmp r1.w, r1.w, r2.w, c5.w
      mad r0.yzw, r2.xxyz, r1.w, r0
      mad r0.yzw, r1.xxyz, r1.w, r0
@@ -799,7 +811,7 @@ index 317652f..845a81e 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 5aac5d8..2e20cab 100644
+index 5aac5d8b..ac84c682 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 @@ -143,8 +143,29 @@
@@ -829,7 +841,7 @@ index 5aac5d8..2e20cab 100644
 +    def c197, 8, 6.28318548, -3.14159274, 0.00400000019 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
 +    def c198, 0.980000019, 0.0199999996, 4, 0.0799999982 // FusionFix vehicle_glass_reflections_wet.patch: water's Fresnel (1 - F0, F0); the rim from 1 - n.n_glass 0.08, full by 0.33
-+    def c199, 0.850000024, 0, 0, 0 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim
++    def c199, 0.850000024, 0.625, -0.25, 0 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2)
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
@@ -852,11 +864,17 @@ index 5aac5d8..2e20cab 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -404,6 +430,278 @@
+@@ -404,6 +430,284 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
-+    mul r27.w, r17.w, r1.z // FusionFix vehicle_glass_reflections_wet.patch: how much of the view through the glass the found reflection covers
++    // FusionFix vehicle_glass_reflections_wet.patch: how much of the view through the glass the found reflection covers: its share times the Fresnel.
++    // The game's r1.z is 2 (0.8 F + 0.2) with F = (1 - |n.v|)^4, its reflection's strength, not a share: taken as one
++    // it covered 40% face on and all of it at a glance, and windows showed nothing of the cabin. F back from it,
++    // then 0.02 + 0.98 F.
++    mad_sat r27.w, r1.z, c199.y, c199.z
++    mad r27.w, r27.w, c198.x, c198.y
++    mul r27.w, r27.w, r17.w
 +    // Rain drops: r28 takes the scene they show and how much they cover, r30 the normal they bend
 +    mov r28, c185.w
 +    mov r30.xyz, r2
@@ -1131,7 +1149,7 @@ index 5aac5d8..2e20cab 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -769,6 +1067,7 @@
+@@ -769,6 +1073,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -1139,7 +1157,7 @@ index 5aac5d8..2e20cab 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -842,6 +1141,58 @@
+@@ -842,6 +1147,58 @@
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0
@@ -1199,7 +1217,7 @@ index 5aac5d8..2e20cab 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS1.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS1.asm
-index 3c29edf..d1e9cb4 100644
+index 3c29edf4..d1e9cb40 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS1.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS1.asm
 @@ -38,6 +38,9 @@
@@ -1230,7 +1248,7 @@ index 3c29edf..d1e9cb4 100644
  
  // approximately 246 instruction slots used (8 texture, 238 arithmetic)
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS2.asm
-index 5754d80..020eb6d 100644
+index 5754d80a..020eb6db 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassVS2.asm
 @@ -41,6 +41,9 @@

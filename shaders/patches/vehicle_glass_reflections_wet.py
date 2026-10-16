@@ -26,7 +26,7 @@ TAG = 'FusionFix vehicle_glass_reflections_wet.patch'
 PS_DEFS = DEFS + f'''\
     def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // {TAG}: refraction on the screen, a drop's cover, the glint's power
     def c198, 0.980000019, 0.0199999996, 4, 0.0799999982 // {TAG}: water's Fresnel (1 - F0, F0); the rim from 1 - n.n_glass 0.08, full by 0.33
-    def c199, 0.850000024, 0, 0, 0 // {TAG}: how dark the rim
+    def c199, 0.850000024, 0.625, -0.25, 0 // {TAG}: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2)
 '''
 
 PS_DCLS = f'''\
@@ -36,7 +36,13 @@ PS_DCLS = f'''\
 '''
 
 COVER_AND_DROPS = f'''\
-    mul r27.w, r17.w, r1.z // {TAG}: how much of the view through the glass the found reflection covers
+    // {TAG}: how much of the view through the glass the found reflection covers: its share times the Fresnel.
+    // The game's r1.z is 2 (0.8 F + 0.2) with F = (1 - |n.v|)^4, its reflection's strength, not a share: taken as one
+    // it covered 40% face on and all of it at a glance, and windows showed nothing of the cabin. F back from it,
+    // then 0.02 + 0.98 F.
+    mad_sat r27.w, r1.z, c199.y, c199.z
+    mad r27.w, r27.w, c198.x, c198.y
+    mul r27.w, r27.w, r17.w
     // Rain drops: r28 takes the scene they show and how much they cover, r30 the normal they bend
     mov r28, c185.w
     mov r30.xyz, r2
