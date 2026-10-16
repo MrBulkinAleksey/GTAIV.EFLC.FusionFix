@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 5de051e3..840bf9a1 100644
+index 5de051e3..b4a6bd33 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 @@ -167,8 +167,29 @@
@@ -29,7 +29,7 @@ index 5de051e3..840bf9a1 100644
 +    def c197, 8, 6.28318548, -3.14159274, 0.00400000019 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
 +    def c198, 0.980000019, 0.0199999996, 4, 0.0799999982 // FusionFix vehicle_glass_reflections_wet.patch: water's Fresnel (1 - F0, F0); the rim from 1 - n.n_glass 0.08, full by 0.33
-+    def c199, 0.850000024, 0.625, -0.25, 0 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2)
++    def c199, 0.850000024, 0.625, -0.25, 0.400000006 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2); the tint from inside
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
@@ -345,7 +345,20 @@ index 5de051e3..840bf9a1 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -917,6 +1222,58 @@
+@@ -911,12 +1216,71 @@
+     mul r0, r0.wxyz, r2.wxyz
+     mul r2.xyz, r3, r1.y
+     mul r1.xyz, r1.y, r4
++    // FusionFix vehicle_glass_reflections_wet.patch: seen from inside the car (the camera behind the glass's normal) the glass keeps 40% of its tint: through
++    // dark windows the street was hard to see from the driver's seat, while from outside they stay as dark as they were.
++    add r8.xyz, -v4, c15
++    dp3 r8.w, r8, r19
++    mov r8.x, c199.w
++    cmp r8.w, r8.w, c187.w, r8.x
++    mul r0.x, r0.x, r8.w
+     mov_sat r0.x, r0.x
+     add r2.w, r0.x, c6.y
+     rcp r3.x, r0.x
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0
@@ -405,7 +418,7 @@ index 5de051e3..840bf9a1 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 317652ff..83384743 100644
+index 317652ff..7d92d521 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 @@ -118,8 +118,29 @@
@@ -435,7 +448,7 @@ index 317652ff..83384743 100644
 +    def c197, 8, 6.28318548, -3.14159274, 0.00400000019 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
 +    def c198, 0.980000019, 0.0199999996, 4, 0.0799999982 // FusionFix vehicle_glass_reflections_wet.patch: water's Fresnel (1 - F0, F0); the rim from 1 - n.n_glass 0.08, full by 0.33
-+    def c199, 0.850000024, 0.625, -0.25, 0 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2)
++    def c199, 0.850000024, 0.625, -0.25, 0.400000006 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2); the tint from inside
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
@@ -751,7 +764,20 @@ index 317652ff..83384743 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r2.yzw, r6.xxyz, r3.x
      mul r2.yzw, r1.w, r2
-@@ -765,6 +1070,58 @@
+@@ -759,12 +1064,71 @@
+     mul r0, r0.wxyz, r3.wxyz
+     mul r2.xyz, r2, r1.y
+     mul r1.xyz, r1.y, r1.xzww
++    // FusionFix vehicle_glass_reflections_wet.patch: seen from inside the car (the camera behind the glass's normal) the glass keeps 40% of its tint: through
++    // dark windows the street was hard to see from the driver's seat, while from outside they stay as dark as they were.
++    add r8.xyz, -v4, c15
++    dp3 r8.w, r8, r19
++    mov r8.x, c199.w
++    cmp r8.w, r8.w, c187.w, r8.x
++    mul r0.x, r0.x, r8.w
+     mov_sat r0.x, r0.x
+     add r1.w, r0.x, c5.z
+     rcp r2.w, r0.x
      cmp r1.w, r1.w, r2.w, c5.w
      mad r0.yzw, r2.xxyz, r1.w, r0
      mad r0.yzw, r1.xxyz, r1.w, r0
@@ -811,7 +837,7 @@ index 317652ff..83384743 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 5aac5d8b..ac84c682 100644
+index 5aac5d8b..b32ac2aa 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 @@ -143,8 +143,29 @@
@@ -841,7 +867,7 @@ index 5aac5d8b..ac84c682 100644
 +    def c197, 8, 6.28318548, -3.14159274, 0.00400000019 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
 +    def c198, 0.980000019, 0.0199999996, 4, 0.0799999982 // FusionFix vehicle_glass_reflections_wet.patch: water's Fresnel (1 - F0, F0); the rim from 1 - n.n_glass 0.08, full by 0.33
-+    def c199, 0.850000024, 0.625, -0.25, 0 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2)
++    def c199, 0.850000024, 0.625, -0.25, 0.400000006 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2); the tint from inside
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
@@ -1157,7 +1183,20 @@ index 5aac5d8b..ac84c682 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -842,6 +1147,58 @@
+@@ -836,12 +1141,71 @@
+     mul r0, r0.wxyz, r2.wxyz
+     mul r2.xyz, r3, r1.y
+     mul r1.xyz, r1.y, r4
++    // FusionFix vehicle_glass_reflections_wet.patch: seen from inside the car (the camera behind the glass's normal) the glass keeps 40% of its tint: through
++    // dark windows the street was hard to see from the driver's seat, while from outside they stay as dark as they were.
++    add r8.xyz, -v4, c15
++    dp3 r8.w, r8, r19
++    mov r8.x, c199.w
++    cmp r8.w, r8.w, c187.w, r8.x
++    mul r0.x, r0.x, r8.w
+     mov_sat r0.x, r0.x
+     add r2.w, r0.x, c6.y
+     rcp r3.x, r0.x
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0

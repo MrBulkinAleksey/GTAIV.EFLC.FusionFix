@@ -9,7 +9,8 @@
 #    covers the view through the glass and catches the sun or the moon, in its shadow. Its own Fresnel mixes in the
 #    environment map along the view reflected off it, and its rim, where the dome turns away from the glass, shows
 #    dark, as light there bends out of the drop or reflects inside it: refraction alone shows nothing on a dark window
-#    at night, the reflection at the rim and the dark ring are what make drops on glass seen.
+#    at night, the reflection at the rim and the dark ring are what make drops on glass seen;
+#  - from inside the car the glass keeps less of its tint, so the street shows through dark windows.
 # The drops need the glass reflections' parameter texture and scene copy; without them only the cover is left out too.
 #
 # Usage: vehicle_glass_reflections_wet.py <FusionShaders checkout with the other patches applied>; the patch is the
@@ -26,7 +27,7 @@ TAG = 'FusionFix vehicle_glass_reflections_wet.patch'
 PS_DEFS = DEFS + f'''\
     def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // {TAG}: refraction on the screen, a drop's cover, the glint's power
     def c198, 0.980000019, 0.0199999996, 4, 0.0799999982 // {TAG}: water's Fresnel (1 - F0, F0); the rim from 1 - n.n_glass 0.08, full by 0.33
-    def c199, 0.850000024, 0.625, -0.25, 0 // {TAG}: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2)
+    def c199, 0.850000024, 0.625, -0.25, 0.400000006 // {TAG}: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2); the tint from inside
 '''
 
 PS_DCLS = f'''\
@@ -88,6 +89,16 @@ COVER_AND_DROPS = f'''\
 
 SHADOW = f'''\
     mov r27.x, r1.w // {TAG}: the sun's shadow, for the drops' glint
+'''
+
+INSIDE = f'''\
+    // {TAG}: seen from inside the car (the camera behind the glass's normal) the glass keeps 40% of its tint: through
+    // dark windows the street was hard to see from the driver's seat, while from outside they stay as dark as they were.
+    add r8.xyz, -v4, c15
+    dp3 r8.w, r8, r19
+    mov r8.x, c199.w
+    cmp r8.w, r8.w, c187.w, r8.x
+    mul r0.x, r0.x, r8.w
 '''
 
 COMPOSE = f'''\
@@ -180,6 +191,7 @@ def patch_ps(n):
           mad r29.x, r28.y, r29.z, r29.x''', path)
     text = insert(text, 'mov r4.xyz, r15', COVER_AND_DROPS, path)
     text = insert(text, 'lrp r1.w, r20.y, c110.y, r20.x', SHADOW, path)
+    text = insert(text, 'mov_sat r0.x, r0.x', INSIDE, path, before=True)
     text = insert(text, 'mul oC0.w, r0.x, c39.x', COMPOSE, path, before=True)
     path.write_text(text)
 
