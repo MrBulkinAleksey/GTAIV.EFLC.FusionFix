@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from img3 import toc
 from mirrors import find
 
-INSET = 0.92  # of the glass's extent: the quad stays inside its rim
+INSET = 0.98  # of the glass's extent: the quad, rounded by mirror_car_shape.patch, stays inside its rim
 
 
 def joaat(name):

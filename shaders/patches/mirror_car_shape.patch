@@ -1,0 +1,25 @@
+diff --git a/win32_30_nv8/mirror/mirrorPS1.asm b/win32_30_nv8/mirror/mirrorPS1.asm
+index f0752696..d65f631e 100644
+--- a/win32_30_nv8/mirror/mirrorPS1.asm
++++ b/win32_30_nv8/mirror/mirrorPS1.asm
+@@ -20,9 +20,20 @@
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0691907283e-42 // 763
+     def c0, -1.75, -0.5, -0.285714298, 0.5
++    def c1, 2, -1, 1, 0 // FusionFix mirror_car_shape.patch: uv to -1..1, one
+     dcl_texcoord v0.xyw
+     dcl_texcoord9 v9
++    dcl_texcoord5 v6.xy // FusionFix mirror_car_shape.patch: the quad's uv
+     dcl_2d s0
++    // FusionFix mirror_car_shape.patch: a car's mirror (c152.x 1, set by carmirrors.ixx right before the quad is drawn)
++    // is rounded, x^4 + y^4 <= 1 over the quad; interior mirrors (c152.x 0) keep their corners.
++    mad r1.xy, v6, c1.x, c1.y
++    mul r1.xy, r1, r1
++    mul r1.xy, r1, r1
++    add r1.x, r1.x, r1.y
++    mul r1.x, r1.x, c152.x
++    add r1.xyz, -r1.x, c1.z
++    texkill r1
+     rcp r0.x, v0_abs.w
+     mul r0.x, r0.x, c0.y
+     mad r0.xy, v0, r0.x, c0.w

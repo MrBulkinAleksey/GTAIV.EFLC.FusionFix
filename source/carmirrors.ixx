@@ -22,7 +22,8 @@ import temporal;
 // the glass as a quad on those corners (0xB59900, 3.5 cm in front of the plane along n) with mirror.fx, which reads
 // MIRROR_RT at the screen position. With no interior mirror on, the mirror of the player's car the camera looks at
 // most goes in instead: its glass from carmirrorstable.hxx (tools/vehicle_mirrors, from vehicles.img), in the car's
-// space, placed with the car's matrix. One mirror at a time, as the game has one target.
+// space, placed with the car's matrix, rounded by mirror_car_shape.patch. One mirror at a time, as the game has one
+// target.
 namespace CarMirrors
 {
     static float* plane = nullptr;    // n.xyz, d
@@ -270,11 +271,26 @@ namespace CarMirrors
 
     // Render thread, the game's mirror quad about to be drawn: its corners by the matrix the G-buffer drew the player's
     // car with this frame (TemporalAA, with object motion vectors), else as the main thread put them.
+    // c152.x for mirror.fx (mirror_car_shape.patch): 1 rounds the quad as car mirrors are, 0 keeps an interior
+    // mirror's corners.
+    static void SetRounded(bool rounded)
+    {
+        auto device = rage::grcDevice::GetD3DDevice();
+        if (!device)
+            return;
+        const float shape[4] = { rounded ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+        device->SetPixelShaderConstantF(152, shape, 1);
+        if (auto real = RageDirect3DDevice9::RealDevice(device); real != device)
+            real->SetPixelShaderConstantF(152, shape, 1);
+    }
+
     static void PlaceQuad(SafetyHookContext&)
     {
         const auto glass = drawnGlass.load(std::memory_order_acquire);
         const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
-        if (!glass || !vehicle || !mirrorOn || !*mirrorOn)
+        const bool ours = glass && vehicle && mirrorOn && *mirrorOn;
+        SetRounded(ours);
+        if (!ours)
             return;
         ++quadDrawn;
         float around[3];
