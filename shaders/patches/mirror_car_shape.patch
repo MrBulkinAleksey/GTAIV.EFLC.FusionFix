@@ -1,25 +1,58 @@
 diff --git a/win32_30_nv8/mirror/mirrorPS1.asm b/win32_30_nv8/mirror/mirrorPS1.asm
-index f0752696..451e110a 100644
+index f0752696..346da780 100644
 --- a/win32_30_nv8/mirror/mirrorPS1.asm
 +++ b/win32_30_nv8/mirror/mirrorPS1.asm
-@@ -20,12 +20,42 @@
+@@ -20,12 +20,75 @@
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0691907283e-42 // 763
      def c0, -1.75, -0.5, -0.285714298, 0.5
-+    def c1, 2, -1, 1, 0 // FusionFix mirror_car_shape.patch: uv to -1..1, one
++    def c1, 2, -1, 1, 1000 // FusionFix mirror_car_shape.patch: uv to -1..1, one, far inside
      dcl_texcoord v0.xyw
      dcl_texcoord9 v9
 +    dcl_texcoord5 v6.xy // FusionFix mirror_car_shape.patch: the quad's uv
      dcl_2d s0
-+    // FusionFix mirror_car_shape.patch: a car's mirror (c152.x 1, set by carmirrors.ixx right before the quad is drawn)
-+    // is rounded, x^4 + y^4 <= 1 over the quad; interior mirrors (c152.x 0) keep their corners.
++    // FusionFix mirror_car_shape.patch: a car's mirror (c152.x 1, set by carmirrors.ixx right before the quad is drawn) keeps only what lies
++    // inside its glass's outline, c153-c160 its edges (a corner xy, the way to the next zw, counter-clockwise over the
++    // quad's -1..1; unused ones all zero); interior mirrors (c152.x 0) keep the whole quad.
 +    mad r1.xy, v6, c1.x, c1.y
-+    mul r1.xy, r1, r1
-+    mul r1.xy, r1, r1
-+    add r1.x, r1.x, r1.y
-+    mul r1.x, r1.x, c152.x
-+    add r1.xyz, -r1.x, c1.z
-+    texkill r1
++    mov r8.x, c1.z
++    add r7.xy, r1, -c153
++    mul r7.z, r7.y, c153.z
++    mad r7.z, r7.x, -c153.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c154
++    mul r7.z, r7.y, c154.z
++    mad r7.z, r7.x, -c154.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c155
++    mul r7.z, r7.y, c155.z
++    mad r7.z, r7.x, -c155.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c156
++    mul r7.z, r7.y, c156.z
++    mad r7.z, r7.x, -c156.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c157
++    mul r7.z, r7.y, c157.z
++    mad r7.z, r7.x, -c157.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c158
++    mul r7.z, r7.y, c158.z
++    mad r7.z, r7.x, -c158.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c159
++    mul r7.z, r7.y, c159.z
++    mad r7.z, r7.x, -c159.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c160
++    mul r7.z, r7.y, c160.z
++    mad r7.z, r7.x, -c160.w, r7.z
++    min r8.x, r8.x, r7.z
++    mov r8.z, c152.x
++    add r8.y, c1.z, -r8.z
++    mad r8.x, r8.y, c1.w, r8.x
++    mov r9.xyz, r8.x
++    texkill r9
      rcp r0.x, v0_abs.w
      mul r0.x, r0.x, c0.y
      mad r0.xy, v0, r0.x, c0.w

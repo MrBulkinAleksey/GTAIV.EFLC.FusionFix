@@ -22,7 +22,8 @@ import temporal;
 // the glass as a quad on those corners (0xB59900, in front of the plane along n by a float in its code) with mirror.fx, which reads
 // MIRROR_RT at the screen position. With no interior mirror on, the mirror of the player's car the camera looks at
 // most goes in instead: its glass from carmirrorstable.hxx (tools/vehicle_mirrors, from vehicles.img), in the car's
-// space, placed with the car's matrix, rounded and widened as a convex mirror by mirror_car_shape.patch. One mirror at a time, as the game has one
+// space, placed with the car's matrix, cut to the glass's outline and widened as a convex mirror by
+// mirror_car_shape.patch. One mirror at a time, as the game has one
 // target.
 namespace CarMirrors
 {
@@ -35,7 +36,7 @@ namespace CarMirrors
     static SafetyHookInline phaseVisibilityHook;
 
     static bool reverse = false;            // CarMirrorsReverse (hidden): the corners the other way round, if the quad is culled
-    static bool rounded = true;             // CarMirrorsRounded (hidden): 0 draws the plain quad, to tell the shape from a missing quad
+    static bool rounded = true;             // CarMirrorsRounded (hidden): 0 draws the plain quad, not cut to the glass's outline
     static bool byDrawnCar = true;          // CarMirrorsByDrawnCar (hidden): 0 keeps the main thread's update's corners
     static float zoomOut = 1.3f;            // CarMirrorsZoomOut (hidden): how much wider than a flat mirror they show, 1 flat
     // The game puts the quad along n by a float its quad code reads (0.035 m on PC, 0.0125 with shaders.ixx's Xbox
@@ -45,6 +46,9 @@ namespace CarMirrors
     static constexpr float InFrontOfGlass = 0.005f;
     static constexpr float MinLook = 0.3f;  // cosine: a mirror further off the view than ~73 degrees is not taken
     static constexpr float Keep = 0.1f;     // the mirror in use stays until another is this much nearer the view
+    // ... and while it is on the screen at all (within ~60 degrees of the view): the game draws one mirror, and the
+    // one in use went off while still in view as soon as another came nearer the view's middle.
+    static constexpr float OnScreen = 0.5f;
 
     static uint32_t usedModel = 0;
     static int usedKind = -1;               // 0 left, 1 right, 2 interior, -1 none
@@ -182,7 +186,7 @@ namespace CarMirrors
         const float forward[3] = { -std::sin(heading) * std::cos(pitch), std::cos(heading) * std::cos(pitch), std::sin(pitch) };
 
         const CarMirrorGlass* best = nullptr;
-        float bestScore = -2.0f;
+        float bestScore = -2.0f, bestLook = -2.0f;
         bool known = false;
         for (const auto& glass : CarMirrorTable)
         {
@@ -197,12 +201,14 @@ namespace CarMirrors
             if (Dot(normal, toEye) <= 0.0f || distance < 0.05f)
                 continue; // seen from behind
             const float toGlass[3] = { -toEye[0] / distance, -toEye[1] / distance, -toEye[2] / distance };
-            float score = Dot(forward, toGlass);
+            const float look = Dot(forward, toGlass);
+            float score = look;
             if (model == usedModel && glass.kind == usedKind)
-                score += Keep;
+                score += look >= OnScreen ? 10.0f : Keep;
             if (score > bestScore)
             {
                 bestScore = score;
+                bestLook = look;
                 best = &glass;
             }
         }
@@ -215,7 +221,7 @@ namespace CarMirrors
             drawnGlass.store(nullptr, std::memory_order_release);
             return;
         }
-        if (!best || bestScore < MinLook)
+        if (!best || bestLook < MinLook)
             return Off("no mirror in view");
 
         float centre[3];
@@ -230,7 +236,7 @@ namespace CarMirrors
         {
             static constexpr const char* kinds[] = { "left", "right", "interior" };
             FusionLog::Write("CarMirrors", "Select", "model %08X: the %s mirror, %.2f off the view, %.2f m away, plane %.3f %.3f %.3f %.3f\n",
-                model, kinds[best->kind], bestScore - (model == usedModel && best->kind == usedKind ? Keep : 0.0f),
+                model, kinds[best->kind], bestLook,
                 std::sqrt((eye[0] - centre[0]) * (eye[0] - centre[0]) + (eye[1] - centre[1]) * (eye[1] - centre[1]) +
                           (eye[2] - centre[2]) * (eye[2] - centre[2])),
                 plane[0], plane[1], plane[2], plane[3]);
@@ -290,17 +296,42 @@ namespace CarMirrors
             visibilityMs += NowMs() - start;
     }
 
-    // c152 for mirror.fx (mirror_car_shape.patch): x 1 rounds the quad as car mirrors are, y the zoom out - 1 widens
+    // c152 for mirror.fx (mirror_car_shape.patch): x 1 cuts the quad to the glass's outline, y the zoom out - 1 widens
     // the view as a convex mirror's; zeros keep an interior mirror as the game draws it.
-    static void SetShape(bool ours)
+    // c153-c160: the glass's outline's edges, a corner xy and the way to the next zw, counter-clockwise over the quad's
+    // -1..1 (u right, v up as the driver sees it; CarMirrorsReverse turns u round); unused edges all zero.
+    static void SetShape(const CarMirrorGlass* glass)
     {
         auto device = rage::grcDevice::GetD3DDevice();
         if (!device)
             return;
-        const float shape[4] = { ours && rounded ? 1.0f : 0.0f, ours ? zoomOut - 1.0f : 0.0f, 0.0f, 0.0f };
-        device->SetPixelShaderConstantF(152, shape, 1);
+        float shape[9][4]{};
+        const int n = glass ? glass->corners : 0;
+        shape[0][0] = glass && rounded && n >= 3 ? 1.0f : 0.0f;
+        shape[0][1] = glass ? zoomOut - 1.0f : 0.0f;
+        if (shape[0][0] != 0.0f)
+        {
+            float outline[8][2];
+            for (int k = 0; k < n; ++k)
+            {
+                // turned round, the order goes back too, so the corners stay counter-clockwise
+                const auto& corner = glass->outline[reverse ? n - 1 - k : k];
+                outline[k][0] = reverse ? -corner[0] : corner[0];
+                outline[k][1] = corner[1];
+            }
+            for (int k = 0; k < n; ++k)
+            {
+                const auto& a = outline[k];
+                const auto& b = outline[(k + 1) % n];
+                shape[1 + k][0] = a[0];
+                shape[1 + k][1] = a[1];
+                shape[1 + k][2] = b[0] - a[0];
+                shape[1 + k][3] = b[1] - a[1];
+            }
+        }
+        device->SetPixelShaderConstantF(152, &shape[0][0], 9);
         if (auto real = RageDirect3DDevice9::RealDevice(device); real != device)
-            real->SetPixelShaderConstantF(152, shape, 1);
+            real->SetPixelShaderConstantF(152, &shape[0][0], 9);
     }
 
     // Main thread, the quad's command just made (edx), its parameter about to be stored from eax: the corners by the car
@@ -328,7 +359,7 @@ namespace CarMirrors
         const auto glass = drawnGlass.load(std::memory_order_acquire);
         const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
         const bool ours = glass && vehicle && mirrorOn && *mirrorOn;
-        SetShape(ours);
+        SetShape(ours ? glass : nullptr);
         if (!ours || !byDrawnCar)
             return;
         ++quadDrawn;
