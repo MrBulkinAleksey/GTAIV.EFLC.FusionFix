@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 5de051e..a1de781 100644
+index 5de051e..8b1c8c4 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-@@ -167,8 +167,27 @@
+@@ -167,8 +167,29 @@
      def c158, 0.5, -0.5, 0.5, 0
      def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
      def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
@@ -28,10 +28,12 @@ index 5de051e..a1de781 100644
 +    def c196, 0.00100000005, 0, 1, 0.75 // FusionFix rain on cars: the body's vertical, a little across so flat tops keep a frame
 +    def c197, 8, 6.28318548, -3.14159274, 0.00400000019 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
++    def c198, 0.980000019, 0.0199999996, 4, 0.0799999982 // FusionFix vehicle_glass_reflections_wet.patch: water's Fresnel (1 - F0, F0); the rim from 1 - n.n_glass 0.08, full by 0.33
++    def c199, 0.850000024, 0, 0, 0 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
-@@ -178,6 +197,9 @@
+@@ -178,6 +199,9 @@
      dcl_texcoord2 v4.xyz
      dcl_texcoord7 v5.xy
      dcl_texcoord9 v9
@@ -41,7 +43,7 @@ index 5de051e..a1de781 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -342,6 +364,8 @@
+@@ -342,6 +366,8 @@
            add r29.x, r16.w, -r31.w
            abs r29.x, r29.x
            add r29.x, r29.x, r28.y
@@ -50,7 +52,7 @@ index 5de051e..a1de781 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -428,6 +452,277 @@
+@@ -428,6 +454,278 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
@@ -59,6 +61,7 @@ index 5de051e..a1de781 100644
 +    mov r28, c185.w
 +    mov r30.xyz, r2
 +    mov r30.w, r17.w // the found reflection's share, kept from the drops' frame (r30.w is free after the march)
++    mov r19.xyz, r2 // the glass's own normal, for the drops' rims (r19 is free until the depth write)
 +    mov r24, c185.w
 +    mov r27.xyz, r2
 +    mov r8.x, c176.z
@@ -328,7 +331,7 @@ index 5de051e..a1de781 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -793,6 +1088,7 @@
+@@ -793,6 +1091,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -336,7 +339,7 @@ index 5de051e..a1de781 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -917,6 +1213,32 @@
+@@ -917,6 +1216,58 @@
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0
@@ -348,13 +351,39 @@ index 5de051e..a1de781 100644
 +    add r29.y, -r29.z, c157.y
 +    mul r29.w, r29.y, r28.w
 +    add r29.z, r29.z, r29.w
-+    mad r31.xyz, r28, r29.w, r31
 +    if_lt c185.w, r28.w
 +      add r8.xyz, -v4, c15
 +      nrm r9.xyz, r8
 +      dp3 r8.w, r30, r9
++      mov_sat r11.x, r8.w
++      add r11.x, -r11.x, c187.w
++      mul r11.y, r11.x, r11.x
++      mul r11.y, r11.y, r11.y
++      mul r11.x, r11.y, r11.x
++      mad r11.x, r11.x, c198.x, c198.y // the drop's Fresnel
 +      add r8.w, r8.w, r8.w
 +      mad r10.xyz, r30, r8.w, -r9 // the view reflected off the drop
++      // The environment map along it, read as the game reads it for the glass (with our constants: c1 differs
++      // between PS2, PS3 and PS4)
++      nrm r13.xyz, r10
++      mov_sat r12.z, r13.z
++      add r12.z, r12.z, c187.w
++      add r12.z, r12.z, r12.z
++      rcp r12.z, r12.z
++      mad r12.xy, r13, r12.z, c180.y
++      add r12.xy, -r12, c187.w
++      mov r12.zw, c185.w
++      texldl r12, r12, s4
++      // Dark at the rim, where the dome turns away from the glass
++      dp3 r11.y, r30, r19
++      add r11.y, -r11.y, c187.w
++      add r11.y, r11.y, -c198.w
++      mul_sat r11.y, r11.y, c198.z
++      mul r11.y, r11.y, c199.x
++      add r11.y, -r11.y, c187.w
++      mul r13.xyz, r28, r11.y
++      lrp r14.xyz, r11.x, r12, r13
++      mad r31.xyz, r14, r29.w, r31 // the drop: what it refracts, darker at the rim, and what it reflects
 +      dp3_sat r8.w, r10, -c17
 +      pow r8.w, r8.w, c179.w
 +      mul r8.w, r8.w, r28.w
@@ -370,10 +399,10 @@ index 5de051e..a1de781 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 317652f..9b3c243 100644
+index 317652f..845a81e 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-@@ -118,8 +118,27 @@
+@@ -118,8 +118,29 @@
      def c158, 0.5, -0.5, 0.5, 0
      def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
      def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
@@ -399,10 +428,12 @@ index 317652f..9b3c243 100644
 +    def c196, 0.00100000005, 0, 1, 0.75 // FusionFix rain on cars: the body's vertical, a little across so flat tops keep a frame
 +    def c197, 8, 6.28318548, -3.14159274, 0.00400000019 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
++    def c198, 0.980000019, 0.0199999996, 4, 0.0799999982 // FusionFix vehicle_glass_reflections_wet.patch: water's Fresnel (1 - F0, F0); the rim from 1 - n.n_glass 0.08, full by 0.33
++    def c199, 0.850000024, 0, 0, 0 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
-@@ -129,6 +148,9 @@
+@@ -129,6 +150,9 @@
      dcl_texcoord2 v4.xyz
      dcl_texcoord7 v5.xy
      dcl_texcoord9 v9
@@ -412,7 +443,7 @@ index 317652f..9b3c243 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -292,6 +314,8 @@
+@@ -292,6 +316,8 @@
            add r29.x, r16.w, -r31.w
            abs r29.x, r29.x
            add r29.x, r29.x, r28.y
@@ -421,7 +452,7 @@ index 317652f..9b3c243 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -378,6 +402,277 @@
+@@ -378,6 +404,278 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
@@ -430,6 +461,7 @@ index 317652f..9b3c243 100644
 +    mov r28, c185.w
 +    mov r30.xyz, r2
 +    mov r30.w, r17.w // the found reflection's share, kept from the drops' frame (r30.w is free after the march)
++    mov r19.xyz, r2 // the glass's own normal, for the drops' rims (r19 is free until the depth write)
 +    mov r24, c185.w
 +    mov r27.xyz, r2
 +    mov r8.x, c176.z
@@ -699,7 +731,7 @@ index 317652f..9b3c243 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -743,6 +1038,7 @@
+@@ -743,6 +1041,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -707,7 +739,7 @@ index 317652f..9b3c243 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r2.yzw, r6.xxyz, r3.x
      mul r2.yzw, r1.w, r2
-@@ -765,6 +1061,32 @@
+@@ -765,6 +1064,58 @@
      cmp r1.w, r1.w, r2.w, c5.w
      mad r0.yzw, r2.xxyz, r1.w, r0
      mad r0.yzw, r1.xxyz, r1.w, r0
@@ -719,13 +751,39 @@ index 317652f..9b3c243 100644
 +    add r29.y, -r29.z, c157.y
 +    mul r29.w, r29.y, r28.w
 +    add r29.z, r29.z, r29.w
-+    mad r31.xyz, r28, r29.w, r31
 +    if_lt c185.w, r28.w
 +      add r8.xyz, -v4, c15
 +      nrm r9.xyz, r8
 +      dp3 r8.w, r30, r9
++      mov_sat r11.x, r8.w
++      add r11.x, -r11.x, c187.w
++      mul r11.y, r11.x, r11.x
++      mul r11.y, r11.y, r11.y
++      mul r11.x, r11.y, r11.x
++      mad r11.x, r11.x, c198.x, c198.y // the drop's Fresnel
 +      add r8.w, r8.w, r8.w
 +      mad r10.xyz, r30, r8.w, -r9 // the view reflected off the drop
++      // The environment map along it, read as the game reads it for the glass (with our constants: c1 differs
++      // between PS2, PS3 and PS4)
++      nrm r13.xyz, r10
++      mov_sat r12.z, r13.z
++      add r12.z, r12.z, c187.w
++      add r12.z, r12.z, r12.z
++      rcp r12.z, r12.z
++      mad r12.xy, r13, r12.z, c180.y
++      add r12.xy, -r12, c187.w
++      mov r12.zw, c185.w
++      texldl r12, r12, s4
++      // Dark at the rim, where the dome turns away from the glass
++      dp3 r11.y, r30, r19
++      add r11.y, -r11.y, c187.w
++      add r11.y, r11.y, -c198.w
++      mul_sat r11.y, r11.y, c198.z
++      mul r11.y, r11.y, c199.x
++      add r11.y, -r11.y, c187.w
++      mul r13.xyz, r28, r11.y
++      lrp r14.xyz, r11.x, r12, r13
++      mad r31.xyz, r14, r29.w, r31 // the drop: what it refracts, darker at the rim, and what it reflects
 +      dp3_sat r8.w, r10, -c17
 +      pow r8.w, r8.w, c179.w
 +      mul r8.w, r8.w, r28.w
@@ -741,10 +799,10 @@ index 317652f..9b3c243 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 5aac5d8..52dd771 100644
+index 5aac5d8..2e20cab 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-@@ -143,8 +143,27 @@
+@@ -143,8 +143,29 @@
      def c158, 0.5, -0.5, 0.5, 0
      def c159, 0.0671105608, 0.00583714992, 52.9829178, -1
      def c163, 2, 0.5, 0.800000012, 3.33333325 // toward camera fades
@@ -770,10 +828,12 @@ index 5aac5d8..52dd771 100644
 +    def c196, 0.00100000005, 0, 1, 0.75 // FusionFix rain on cars: the body's vertical, a little across so flat tops keep a frame
 +    def c197, 8, 6.28318548, -3.14159274, 0.00400000019 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
 +    def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // FusionFix vehicle_glass_reflections_wet.patch: refraction on the screen, a drop's cover, the glint's power
++    def c198, 0.980000019, 0.0199999996, 4, 0.0799999982 // FusionFix vehicle_glass_reflections_wet.patch: water's Fresnel (1 - F0, F0); the rim from 1 - n.n_glass 0.08, full by 0.33
++    def c199, 0.850000024, 0, 0, 0 // FusionFix vehicle_glass_reflections_wet.patch: how dark the rim
      defi i1, 6, 0, 0, 0
      dcl vPos.xy
      dcl_texcoord v0.xy
-@@ -154,6 +173,9 @@
+@@ -154,6 +175,9 @@
      dcl_texcoord2 v4.xyz
      dcl_texcoord7 v5.xy
      dcl_texcoord9 v9
@@ -783,7 +843,7 @@ index 5aac5d8..52dd771 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -318,6 +340,8 @@
+@@ -318,6 +342,8 @@
            add r29.x, r16.w, -r31.w
            abs r29.x, r29.x
            add r29.x, r29.x, r28.y
@@ -792,7 +852,7 @@ index 5aac5d8..52dd771 100644
            if_lt r14.y, r29.x
            if_lt c155.z, r17.x // and crossed from in front, not just still behind
              // Refine where the ray crossed the scene between the previous step and this one,
-@@ -404,6 +428,277 @@
+@@ -404,6 +430,278 @@
      // --- leaves the environment map as it is.
      lrp r15.xyz, r17.w, r17, r4
      mov r4.xyz, r15
@@ -801,6 +861,7 @@ index 5aac5d8..52dd771 100644
 +    mov r28, c185.w
 +    mov r30.xyz, r2
 +    mov r30.w, r17.w // the found reflection's share, kept from the drops' frame (r30.w is free after the march)
++    mov r19.xyz, r2 // the glass's own normal, for the drops' rims (r19 is free until the depth write)
 +    mov r24, c185.w
 +    mov r27.xyz, r2
 +    mov r8.x, c176.z
@@ -1070,7 +1131,7 @@ index 5aac5d8..52dd771 100644
      mul_sat r1.x, r5.z, c3.x
      // --- FusionFix glass reflections: the game fades reflections that point below the horizon,
      // --- since its parabolic map only holds the sky. Keep that fade only where the march missed.
-@@ -769,6 +1064,7 @@
+@@ -769,6 +1067,7 @@
      mul_sat r20.y, r20.y, r1.w
      mul r20.y, r20.y, r20.y
      lrp r1.w, r20.y, c110.y, r20.x
@@ -1078,7 +1139,7 @@ index 5aac5d8..52dd771 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -842,6 +1138,32 @@
+@@ -842,6 +1141,58 @@
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0
@@ -1090,13 +1151,39 @@ index 5aac5d8..52dd771 100644
 +    add r29.y, -r29.z, c157.y
 +    mul r29.w, r29.y, r28.w
 +    add r29.z, r29.z, r29.w
-+    mad r31.xyz, r28, r29.w, r31
 +    if_lt c185.w, r28.w
 +      add r8.xyz, -v4, c15
 +      nrm r9.xyz, r8
 +      dp3 r8.w, r30, r9
++      mov_sat r11.x, r8.w
++      add r11.x, -r11.x, c187.w
++      mul r11.y, r11.x, r11.x
++      mul r11.y, r11.y, r11.y
++      mul r11.x, r11.y, r11.x
++      mad r11.x, r11.x, c198.x, c198.y // the drop's Fresnel
 +      add r8.w, r8.w, r8.w
 +      mad r10.xyz, r30, r8.w, -r9 // the view reflected off the drop
++      // The environment map along it, read as the game reads it for the glass (with our constants: c1 differs
++      // between PS2, PS3 and PS4)
++      nrm r13.xyz, r10
++      mov_sat r12.z, r13.z
++      add r12.z, r12.z, c187.w
++      add r12.z, r12.z, r12.z
++      rcp r12.z, r12.z
++      mad r12.xy, r13, r12.z, c180.y
++      add r12.xy, -r12, c187.w
++      mov r12.zw, c185.w
++      texldl r12, r12, s4
++      // Dark at the rim, where the dome turns away from the glass
++      dp3 r11.y, r30, r19
++      add r11.y, -r11.y, c187.w
++      add r11.y, r11.y, -c198.w
++      mul_sat r11.y, r11.y, c198.z
++      mul r11.y, r11.y, c199.x
++      add r11.y, -r11.y, c187.w
++      mul r13.xyz, r28, r11.y
++      lrp r14.xyz, r11.x, r12, r13
++      mad r31.xyz, r14, r29.w, r31 // the drop: what it refracts, darker at the rim, and what it reflects
 +      dp3_sat r8.w, r10, -c17
 +      pow r8.w, r8.w, c179.w
 +      mul r8.w, r8.w, r28.w
