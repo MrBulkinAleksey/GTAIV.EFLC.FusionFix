@@ -44,6 +44,7 @@ namespace CarMirrors
     // The mirror phase's CPU time while a car mirror is on, for the log every 300 frames.
     static double buildMs = 0.0, visibilityMs = 0.0;
     static uint32_t timedFrames = 0;
+    static uint32_t outdoorScans = 0;      // frames the outdoor scan ran for the mirror
 
     static double NowMs()
     {
@@ -195,8 +196,9 @@ namespace CarMirrors
     {
         if (++timedFrames < 300)
             return;
-        FusionLog::Write("CarMirrors", "Cost", "mirror phase CPU per frame: draw list %.3f ms, visibility %.3f ms\n",
-            buildMs / timedFrames, visibilityMs / timedFrames);
+        FusionLog::Write("CarMirrors", "Cost", "mirror phase CPU per frame: draw list %.3f ms, visibility %.3f ms; outdoor scans %u of %u frames\n",
+            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames);
+        outdoorScans = 0;
         buildMs = visibilityMs = 0.0;
         timedFrames = 0;
     }
@@ -213,10 +215,28 @@ namespace CarMirrors
         }
     }
 
+    // CRenderPhaseWaterReflection's visibility (vtable slot 3, CE 0xD77550): the same scan from the phase's own
+    // viewport, with no interior gate; it does nothing while a mirror is on.
+    static void (__fastcall* waterVisibility)(uintptr_t phase, void*) = nullptr;
+    // The mirror's scan runs only from an interior's room: it skips unless the phase's scene start (+0x940) has an
+    // interior (+0x30) and a room above 0 (+0x38), as a bathroom mirror's has. Outdoors the car mirror's phase then
+    // had nothing to draw (0.000 ms), so there it takes the water's scan, which starts from the phase's viewport like
+    // the main camera, with the mirror flag down for the call. The water reflection is left out while a mirror is on.
     static void __fastcall PhaseVisibility(uintptr_t phase, void*)
     {
         const double start = usedThisFrame ? NowMs() : 0.0;
-        phaseVisibilityHook.unsafe_thiscall<void>(phase);
+        const auto scene = *reinterpret_cast<const uintptr_t*>(phase + 0x940);
+        const bool inRoom = scene && *reinterpret_cast<const uintptr_t*>(scene + 0x30) &&
+                            *reinterpret_cast<const int32_t*>(scene + 0x38) > 0;
+        if (usedThisFrame && !inRoom && waterVisibility)
+        {
+            *mirrorOn = 0;
+            waterVisibility(phase, nullptr);
+            *mirrorOn = 1;
+            ++outdoorScans;
+        }
+        else
+            phaseVisibilityHook.unsafe_thiscall<void>(phase);
         if (usedThisFrame)
             visibilityMs += NowMs() - start;
     }
@@ -262,8 +282,13 @@ public:
                 CarMirrors::phaseBuildHook = safetyhook::create_inline(build.get_first(0), CarMirrors::PhaseBuild);
             if (timeVisibility)
                 CarMirrors::phaseVisibilityHook = safetyhook::create_inline(visibility.get_first(0), CarMirrors::PhaseVisibility);
-            FusionLog::Write("CarMirrors", "Init", "%u mirror glasses in the table; phase timing %s\n",
-                uint32_t(std::size(CarMirrorTable)), timeBuild && timeVisibility ? "on" : "partly off");
+            // cmp byte [mirror on], 1 / push esi / mov esi, ecx / je / mov eax, [..] / test eax, eax / je / mov al, [eax+22] / and al, 1 / jne
+            auto water = hook::pattern("80 3D ? ? ? ? 01 56 8B F1 74 ? A1 ? ? ? ? 85 C0 74 ? 8A 40 22 24 01 75");
+            if (!water.empty() && *water.get_first<uint8_t*>(2) == CarMirrors::mirrorOn)
+                CarMirrors::waterVisibility = water.get_first<void(__fastcall)(uintptr_t, void*)>(0);
+            FusionLog::Write("CarMirrors", "Init", "%u mirror glasses in the table; phase timing %s; outdoor scan %s\n",
+                uint32_t(std::size(CarMirrorTable)), timeBuild && timeVisibility ? "on" : "partly off",
+                CarMirrors::waterVisibility ? "found" : "not found (the mirrors stay empty outdoors)");
         };
     }
 } CarMirrorsHooksInstance;
