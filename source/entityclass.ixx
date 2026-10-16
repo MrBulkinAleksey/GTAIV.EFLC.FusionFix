@@ -98,6 +98,10 @@ export namespace EntityClass
 
     // By the classes in the entity's vtable RTTI (its own and its bases).
     Kind OfEntity(void* entity);
+
+    // The device draws one entity (or fragment type) of the model took in the scene's G-buffer the last time one was
+    // drawn there, up to 255; 0 when none has been. Written on the render thread, read on any.
+    uint32_t DrawsPerEntity(uint16_t model);
 }
 
 namespace
@@ -141,6 +145,8 @@ namespace
     constexpr float kConeMargin = 5.0f * 3.14159265f / 180.0f;
     bool bSkipLeftOut = true;           // SkipLeftOutDraws
     uintptr_t modelInfos = 0;       // CE 0x1295cd8, model infos by index
+    // DrawsPerEntity: by model index (CDrawEntityDC +0x30, CDrawFragTypeDC +0x58)
+    volatile uint8_t modelDraws[0x10000] = {};
     constexpr uint32_t kDrawLogFrames = 600;
     struct TargetStats
     {
@@ -339,6 +345,31 @@ namespace
         else
             return false;
         return true;
+    }
+
+    bool IsGBuffer(const char* target)
+    {
+        static const char* lastName = nullptr;
+        static bool lastIs = false;
+        if (target != lastName)
+        {
+            lastName = target;
+            lastIs = target && !std::strcmp(target, "_DEFERRED_GBUFFER_0_");
+        }
+        return lastIs;
+    }
+
+    // DrawsPerEntity: the device draws of an entity or fragment type command in the G-buffer, by its model
+    void LearnDraws(void* dc, Source source, uint32_t draws)
+    {
+        uint16_t model;
+        if (source == FromEntity)
+            model = *reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(dc) + 0x30);
+        else if (source == FromFragType)
+            model = *reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(dc) + 0x58);
+        else
+            return;
+        modelDraws[model] = uint8_t((std::min)(draws, 255u));
     }
 
     bool IsLampMaps(const char* target)
@@ -544,7 +575,7 @@ namespace
             return;
         }
         const bool lampCulling = bFaceCulling || bRangeCulling || bSmallCulling || bConeCulling;
-        const char* target = bDrawLog || lampCulling ? RenderSkip::CurrentTarget() : nullptr;
+        const char* target = RenderSkip::CurrentTarget();
         const bool lampMaps = (bDrawLog || lampCulling) && IsLampMaps(target);
         const auto atLamp = lampMaps ? SphereAtLamp(dc, kind, source) : LampPlace{};
         const int side = atLamp.side;
@@ -576,14 +607,22 @@ namespace
         for (const auto& [before, after] : hooks)
             if (before)
                 before(kind);
+        const bool learn = (source == FromEntity || source == FromFragType) && IsGBuffer(target);
+        const uint32_t drawsBefore = learn ? RenderSkip::DrawCount() : 0;
         if (!bDrawLog)
+        {
             original(dc);
+            if (learn)
+                LearnDraws(dc, source, RenderSkip::DrawCount() - drawsBefore);
+        }
         else
         {
             LARGE_INTEGER start, end;
             QueryPerformanceCounter(&start);
             original(dc);
             QueryPerformanceCounter(&end);
+            if (learn)
+                LearnDraws(dc, source, RenderSkip::DrawCount() - drawsBefore);
             const uint32_t frame = TemporalAA::SceneFrame;
             if (!statsFrom || frame < statsFrom)
                 statsFrom = frame;
@@ -864,6 +903,11 @@ namespace
 
 namespace EntityClass
 {
+    uint32_t DrawsPerEntity(uint16_t model)
+    {
+        return modelDraws[model];
+    }
+
     void AddDrawHooks(DrawHook before, DrawHook after)
     {
         Hooks().emplace_back(before, after);
