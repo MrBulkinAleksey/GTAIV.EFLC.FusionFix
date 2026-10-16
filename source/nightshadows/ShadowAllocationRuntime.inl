@@ -169,6 +169,11 @@ namespace PlayerShadowAllocation
     static float behindLampReach = 12.0f; // BehindLampReach
     static float uncachedLampAdvantage = 1.5f; // UncachedLampAdvantage
     static bool cachedLampViewSlots = true; // CachedLampViewSlots
+    // UncachedLampViewShare: the share of an uncached lamp's radius that counts for whether its light reaches the
+    // view or you; BehindLampByFixture: BehindLampReach goes by the fixture behind the camera, not the light's sphere
+    static float uncachedLampViewShare = 0.5f;
+    static bool behindLampByFixture = true;
+    static std::atomic<uint32_t> uncachedLampsTrimmed{0}, lampsBehindCamera{0};
     static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
     static std::atomic<uint32_t> lightsFlickering{0}; // lights ranked off screen as they flicker out of the list, for the status line
     // Rear lamp keys (Liberty's Shadows 2.0 tail light shadows), set by Lighting20, which comes after
@@ -929,12 +934,24 @@ namespace PlayerShadowAllocation
                         static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle,&caster,
                         [&](unsigned c) { return CoveredByHigherLight(lights,count,index,state.casters.points[c],state.casters.extents[c]); })
                     : volumeVisible ? SlotGain::InView : SlotGain::OffScreen;
+            // UncachedLampViewShare: a facade's point light, uncached with a 25 m radius, counted in view and as
+            // lighting you from 25 m behind you, its sphere's edge (where its light is all but gone) in the frame,
+            // and such lights took the slots from the street lamp you looked at 30 m ahead. Only the inner share
+            // of an uncached lamp's radius counts, here and for lighting you below. One whose inner part reaches
+            // neither ranks None, as a cached lamp with nobody in its light: off screen it went by distance against
+            // the cached lamps in view (CachedLampViewSlots) and, nearer, still won.
+            const bool trimmedLamp=casterPriority && kind==budget::Kind::Lamp && !cached && uncachedLampViewShare<1.0f;
+            const float viewRadius=trimmedLamp ? light.mRadius*uncachedLampViewShare : light.mRadius;
+            if(trimmedLamp && gain!=SlotGain::None && !fusionfix::shadows::ShadowVolumeMayReachView(state.frustum,
+                {light.mPosition.x,light.mPosition.y,light.mPosition.z},viewRadius)) {
+                gain=SlotGain::None; ++uncachedLampsTrimmed;
+            }
             // An uncached lamp whose light reaches you or your car throws its shadow round you, in view whichever
             // way the camera looks. Ranked by where it stood from the camera, the lamp next to the car in a tunnel
             // took and lost its slot as the camera turned or the car went back and forth, and the car's shadow
             // jumped between the lamp's map and its box.
             const bool lightsPlayer=casterPriority && kind==budget::Kind::Lamp && !cached &&
-                std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=light.mRadius*light.mRadius;
+                std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=viewRadius*viewRadius;
             if(lightsPlayer) gain=SlotGain::InView;
             // A cached lamp you stand under, in view or not and up to 2 m outside its cone: a cobra head's light 28
             // degrees off its axis took you in and lost you as you moved, and its slot came and went every second or so
@@ -960,10 +977,14 @@ namespace PlayerShadowAllocation
             // An uncached lamp out of the frame (behind or beside the camera, view weight 1) whose light still
             // reaches it counted as a shadow in view, and in tunnels lamps 15-20 m behind took slots from those
             // ahead. Close behind it throws your car's shadow forward into view, so it keeps that within
-            // BehindLampReach; further away it ranks as off screen.
+            // BehindLampReach; further away it ranks as off screen. BehindLampByFixture: a lamp whose fixture stands
+            // behind the camera counts too, however much of its sphere reaches the frame.
             if(casterPriority && kind==budget::Kind::Lamp && !cached && !lightsPlayer && gain==SlotGain::InView && behindLampReach>0 &&
-               state.view.valid && viewWeight<=1.01f && geometry.distanceSquared>behindLampReach*behindLampReach)
-                gain=SlotGain::OffScreen;
+               state.view.valid && geometry.distanceSquared>behindLampReach*behindLampReach) {
+                const bool behindCamera=behindLampByFixture && viewWeight>1.01f &&
+                    fusionfix::shadows::BehindCamera(state.view,{light.mPosition.x,light.mPosition.y,light.mPosition.z});
+                if(viewWeight<=1.01f || behindCamera) { gain=SlotGain::OffScreen; if(behindCamera) ++lampsBehindCamera; }
+            }
             if(casterPriority && kind==budget::Kind::Lamp && !cached && gain==SlotGain::InView &&
                geometry.distanceSquared<=reach*reach &&
                LampBehindWall(key,{light.mPosition.x,light.mPosition.y,light.mPosition.z})) {

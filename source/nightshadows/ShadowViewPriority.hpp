@@ -45,6 +45,15 @@ inline float ViewSample(const ShadowView& c, Vec3 p, bool sceneryCenterBias=fals
     // Liberty's Shadows 2.0.1: scenery ranking leans to the middle of the frame, half at its edge.
     return sceneryCenterBias?shoulder*(0.5f+0.5f*(1.0f-SmoothUnit(edge))):shoulder;
 }
+// Whether a point lies behind the camera's plane (its clip w not positive): a light fixture at your back.
+inline bool BehindCamera(const ShadowView& c, Vec3 p) noexcept {
+    if (!c.valid) return false;
+    const float v[4]{p.x,p.y,p.z,1};
+    float eye[4]{}, w = 0;
+    for (int j=0;j<4;++j) for(int i=0;i<4;++i) eye[j]+=v[i]*c.view[i][j];
+    for (int i=0;i<4;++i) w+=eye[i]*c.projection[i][3];
+    return std::isfinite(w) && w<=0;
+}
 inline float ShadowViewWeight(const ShadowView& c, Vec3 position, Vec3 direction,
                               float radius, bool beam, bool sceneryCenterBias=false) noexcept {
     if(!c.valid || !std::isfinite(radius) || radius<=0) return 1;
