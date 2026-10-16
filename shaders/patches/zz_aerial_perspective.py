@@ -7,7 +7,10 @@
 # Under the Physical Sky (pbrsky.ixx binds its SkyView table on s14 for the frame after the lighting, which reads s14
 # itself, and sets c104-c106):
 #  - the fog's colour is the PBR sky's this way instead of the timecycle's gradient rebuilt from c212-c216, by
-#    c106.w (the sky's share), so the fog melts into the sky drawn above it;
+#    c106.w (the sky's share), so the fog melts into the sky drawn above it. Not the sky's own colour though: that is
+#    the light of an endless path, at a low sun the reddened sunlight's yellow, while the few kilometres of air up to
+#    a building glow as the sky times 1 - T over them (blue-grey, as the in-scatter below). Its brightness is the
+#    sky's, the hue that of the path to the point, at any strength of the aerial perspective;
 #  - Aerial Perspective: through d metres of air at the camera's height the light keeps T = exp(-k sigma(h) d) of
 #    itself, per channel (Rayleigh's blue far more than Mie's grey haze), and gains the sky's own colour this way
 #    times 1 - T: in air the same all along the ray that is exact, and the city's heights hardly change the air.
@@ -39,12 +42,14 @@ DEFS = f'''\
 '''
 
 
-def lookup(a, b, c, mask):
+def lookup(a, b, c, f, mask):
     masked = f'        mul {c}.yz, {c}, {mask} // none on the sky\n' if mask else ''
     return f'''\
-      // --- {TAG}: {a}.xyz the light that gets through the air, {b}.xyz the PBR sky this way
+      // --- {TAG}: {a}.xyz the light that gets through the air, {b}.xyz the PBR sky this way, {f}.xyz the fog's
+      // colour: the sky's brightness in the hue of the air up to the point
       mov {a}.xyz, c108.x
       mov {b}.xyz, c108.w
+      mov {f}.xyz, c108.w
       mov {c}.x, c106.w
       if_lt c108.w, {c}.x
         mul {c}.x, r20.z, r20.w
@@ -55,6 +60,12 @@ def lookup(a, b, c, mask):
         exp {c}.y, {c}.y
         exp {c}.z, {c}.z
         mul {c}.yz, {c}, r20.w
+        mul {f}.xyz, {c}.y, c104
+        mad {f}.xyz, {c}.z, c104.w, {f}
+        exp {f}.x, -{f}.x
+        exp {f}.y, -{f}.y
+        exp {f}.z, -{f}.z
+        add {f}.xyz, -{f}, c108.x // 1 - T up to the point, whatever the aerial perspective's strength
 {masked}        mul {c}.yz, {c}, c105.w
         mul {a}.xyz, {c}.y, c104
         mad {a}.xyz, {c}.z, c104.w, {a}
@@ -90,6 +101,13 @@ def lookup(a, b, c, mask):
         mov {b}.zw, c108.w
         texldl {b}, {b}, s14
         mul {b}.xyz, {b}, c105.z // as the sky is drawn
+        mul {f}.xyz, {f}, {b}
+        dp3 {c}.x, {b}, c108.x
+        dp3 {c}.y, {f}, c108.x
+        max {c}.y, {c}.y, c109.y
+        rcp {c}.y, {c}.y
+        mul {c}.x, {c}.x, {c}.y
+        mul {f}.xyz, {f}, {c}.x // the sky's channel sum in the path's hue
       endif
 '''
 
@@ -120,10 +138,10 @@ def patch(path):
     if re.search(r'\bs14\b|\bc10[4-9]\b', text):
         sys.exit(f'{path} already uses s14 or c104-c109')
     start = re.search(r'^([ \t]*)mov r21\.xyz, c212\b.*\n', text, re.M)
-    regs = free_registers(text[start.start():], 3)
+    regs = free_registers(text[start.start():], 4)
     if not regs:
-        sys.exit(f'{path}: no three free temporaries')
-    a, b, c = regs
+        sys.exit(f'{path}: no four free temporaries')
+    a, b, c, f = regs
 
     end_of_block = text.index('endif', start.end())
     block = text[start.start():end_of_block]
@@ -132,7 +150,7 @@ def patch(path):
     clamp = re.search(r'^[ \t]*min r21\.xyz, r21, c141\.w.*\n', block, re.M)
     if not clamp:
         sys.exit(f'{path}: no clamp of the rebuilt sky')
-    colour = (f'      lrp {c}.xyz, c106.w, {b}, r21 // {TAG}: the PBR sky\'s colour by its share\n'
+    colour = (f'      lrp {c}.xyz, c106.w, {f}, r21 // {TAG}: the PBR air\'s colour by the sky\'s share\n'
               f'      mov r21.xyz, {c}\n')
     block = block[:clamp.end()] + colour + block[clamp.end():]
 
@@ -150,7 +168,7 @@ def patch(path):
            f'{m.group(1)}mad {dst}.{mask}, {c}.{into}, {a}.{into}, {b}.{into}\n')
     block = block[:m.start()] + air + block[m.end():]
 
-    text = text[:start.start()] + lookup(a, b, c, SKY_MASKED.get(path.name)) + block + text[end_of_block:]
+    text = text[:start.start()] + lookup(a, b, c, f, SKY_MASKED.get(path.name)) + block + text[end_of_block:]
 
     # The sampler after the shader's own, the constants after its first def (or before its first dcl)
     last_dcl = list(re.finditer(r'^([ \t]*)dcl_2d s\d+.*\n', text, re.M))[-1]

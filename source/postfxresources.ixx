@@ -585,6 +585,9 @@ public:
     // The clouds' sunlit side against the sky behind them, in times its brightness.
     float fVolumetricCloudsSkyMatch = 2.0f;
     bool bVolumetricCloudsWeather = true;
+    // [WEATHER] PbrSkyHorizonHue: the Physical Sky takes the timecycle's hue (fPalette of it) down to the horizon, as
+    // before; off, only its brightness within 10 degrees of the horizon, and the hue there is the air's own.
+    bool bPbrSkyHorizonHue = false;
     float fVolumetricCloudsVanilla = 0.0f;
     float fVolumetricCloudsTranslucency = 0.25f;
     float fVolumetricCloudsEvolution = 1.0f;
@@ -1985,6 +1988,7 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.25f, 0.0f, 0.9f),
             IniFloat("WEATHER", "VolumetricCloudsSkyMatch", &PostFxResource::fVolumetricCloudsSkyMatch, 2.0f, 0.0f, 20.0f),
             IniFlag("WEATHER", "VolumetricCloudsWeather", &PostFxResource::bVolumetricCloudsWeather, 1),
+            IniFlag("WEATHER", "PbrSkyHorizonHue", &PostFxResource::bPbrSkyHorizonHue, 0),
             IniFloat("WEATHER", "VolumetricCloudsVanilla", &PostFxResource::fVolumetricCloudsVanilla, 0.0f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsTranslucency", &PostFxResource::fVolumetricCloudsTranslucency, 0.25f, 0.0f, 0.9f),
             IniFloat("WEATHER", "VolumetricCloudsEvolution", &PostFxResource::fVolumetricCloudsEvolution, 1.0f, 0.0f, 10.0f),

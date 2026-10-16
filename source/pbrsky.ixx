@@ -135,6 +135,7 @@ static bool DrawTables(IDirect3DDevice9* pDevice, float sunHeight, float haze)
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Azimuth"), &azimuth);
     const D3DXVECTOR4 match(kPalette, kSunCeiling, kKnee, kCeiling);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Match"), &match);
+    effect->SetFloat(effect->GetParameterByName(nullptr, "fHorizonPalette"), R.bPbrSkyHorizonHue ? 1.0f : 0.0f);
 
     auto draw = [&](const char* technique, IDirect3DSurface9* target, float width, float height)
     {
