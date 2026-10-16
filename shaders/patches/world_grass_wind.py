@@ -7,7 +7,7 @@
 #
 # The offset is made in the world and taken back into the model's space through gWorld's rows (c0-c2, scaled
 # rotations: each axis over its length squared), so it holds however the prop is turned:
-#  - along the wind: a gust wave travelling downwind, 0.65..1 of the bend, its phase from the vertex's world position;
+#  - along the wind: a gust wave travelling downwind, 0.05..1.15 of the bend, its phase from the vertex's world position;
 #  - across it: a quicker flutter, its phase from the position too, so neighbouring clumps move apart;
 #  - weighted by (height / model height)^2, so the base stays on the ground, and the tip drops by d^2 / 2h so the
 #    blade bends rather than stretches.
@@ -27,7 +27,7 @@ SHADERS = ['gta_defaultVS4.asm', 'gta_defaultVS5.asm']
 
 DEF = f'''\
     def c247, 0.159154937, 0.5, 6.28318548, -3.14159274 // {TAG}: 1 / 2pi, 1 / 2, 2pi, -pi
-    def c246, 0.349999994, 0.649999976, 0.699999988, 0 // {TAG}: the gust's swing and floor, the flutter's cycles a metre
+    def c246, 0.550000012, 0.600000024, 1.29999995, 0 // {TAG}: the gust's swing and floor, the flutter's cycles a metre
 '''
 
 SWAY = f'''\

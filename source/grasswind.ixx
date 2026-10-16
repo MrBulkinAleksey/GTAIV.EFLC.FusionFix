@@ -49,7 +49,7 @@ class GrassWind
     // CWeather::Update's wind by weather type (0x103c878): EXTRASUNNY, SUNNY, SUNNY_WINDY, CLOUDY, RAIN, DRIZZLE,
     // FOGGY, LIGHTNING
     static constexpr float kWeatherWind[8] = { 0.15f, 0.25f, 0.8f, 0.2f, 0.5f, 0.3f, 0.1f, 1.0f };
-    static constexpr float kGustWavelength = 8.0f;  // metres between gusts along the wind
+    static constexpr float kGustWavelength = 5.0f;  // metres between gusts along the wind
 
     static inline float fStrength = 1.0f;
     static inline bool bLog = false;
@@ -207,12 +207,12 @@ class GrassWind
         fWind = fWind < 0.0f ? target : fWind + (target - fWind) * (1.0f - std::exp(-dt / 3.0f));
 
         // The gusts run downwind faster in a strong wind; the flutter quickens with it.
-        gustPhase = std::fmod(gustPhase + dt * (1.5f + 5.0f * fWind) / kGustWavelength, 1.0);
-        flutterPhase = std::fmod(flutterPhase + dt * (0.8f + 2.2f * fWind), 1.0);
+        gustPhase = std::fmod(gustPhase + dt * (3.0f + 8.0f * fWind) / kGustWavelength, 1.0);
+        flutterPhase = std::fmod(flutterPhase + dt * (1.4f + 3.0f * fWind), 1.0);
 
         const bool on = Pref(windPref, 1) != 0 && fStrength > 0.0f && EntityClass::Installed();
         const float scale = on ? fStrength * (Pref(debugPref, 0) ? 4.0f : 1.0f) : 0.0f;
-        fBendPerHeight = scale * (0.045f + 0.3f * fWind);
+        fBendPerHeight = scale * (0.03f + 0.22f * fWind);
         fFlutterPerHeight = scale * (0.012f + 0.045f * fWind);
 
         const float wind[8] = {
