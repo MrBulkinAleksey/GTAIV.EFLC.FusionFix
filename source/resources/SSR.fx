@@ -721,7 +721,11 @@ float SSRSurfaceWeight(float2 uv, out float wetOnly)
     [branch]
     if (fWetness > 0.0)
     {
-        float wet = fWetness * smoothstep(0.75, 0.9, GBufferNormalWorld(uv).z);
+        // The wet ground pass's film (gloss 0.46, a fifth of its sheen on grass) reflects a third as much as
+        // its puddles, which go by their own gloss of 0.9 above: at full weight over all the ground, tree trunks
+        // showed in the roads and lawns, and the puddles did not stand out of the film around them.
+        float film = 0.35 * smoothstep(0.2, 0.46, gloss);
+        float wet = fWetness * film * smoothstep(0.75, 0.9, GBufferNormalWorld(uv).z);
         wetOnly = saturate(wet - weight);
         weight = max(weight, wet);
     }

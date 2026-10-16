@@ -319,6 +319,15 @@ Logitech LightSync RGB
 [GroundSurf]
 Поверхности земли
 
+[VehiclePaint]
+Покраска машин
+
+[CarRaindrops]
+Капли на машинах
+
+[SunFlare]
+Блик солнца в объективе
+
 [FF_PROCDIST]
 Дальность травы и предметов
 

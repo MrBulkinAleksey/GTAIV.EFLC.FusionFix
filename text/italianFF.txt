@@ -319,6 +319,15 @@ Specular Anti-Aliasing
 [GroundSurf]
 Ground Surfaces
 
+[VehiclePaint]
+Vehicle Paint
+
+[CarRaindrops]
+Car Raindrops
+
+[SunFlare]
+Sun Lens Flare
+
 [FF_PROCDIST]
 Grass & Props Distance
 

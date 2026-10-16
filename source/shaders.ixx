@@ -27,6 +27,9 @@ using remove_cvref_t = std::remove_cvref_t<std::remove_pointer_t<std::decay_t<T>
 // and the bright sky around it reach the bloom (c210.w, sky_hdr.patch).
 export inline bool bSkyHDR = true;
 
+// The sun's direction in world space as c216 carries it, for placing the sun on the screen on the CPU (the sun flare).
+export inline float SunDirectionWorld[3] = {};
+
 export template <typename T> requires IsAnyOf<remove_cvref_t<T>, IDirect3DPixelShader9, IDirect3DVertexShader9>
 int GetFusionShaderID(T pShader)
 {
@@ -138,6 +141,7 @@ class Shaders
             arr[3] = 0.0f;
 
             pDevice->SetPixelShaderConstantF(216, &arr[0], 1);
+            std::copy_n(arr, 3, SunDirectionWorld);
             pDevice->SetVertexShaderConstantF(232, &arr[0], 1);
         }
     }
@@ -160,6 +164,8 @@ public:
 
         static float fSSDensity = 0.9f;
         static float fSSDecay = 0.95f;
+        // SunFlareIntensity (hidden): the sun lens flare's strength with Sun Flare on in the menu
+        static float fSunFlare = 1.0f;
 
         static float fCascadeBlendSize = 0.1f;
 
@@ -197,7 +203,12 @@ public:
             bSmoothShorelines = iniReader.ReadInteger("MISC", "SmoothShorelines", 1) != 0;
             bSmoothLightVolumes = iniReader.ReadInteger("MISC", "SmoothLightVolumes", 1) != 0;
             bSkyHDR = iniReader.ReadInteger("LIGHTING", "SkyHDR", 1) != 0;
-            IniReload::Add([](CIniReader& ini) { bSkyHDR = ini.ReadInteger("LIGHTING", "SkyHDR", 1) != 0; });
+            fSunFlare = std::clamp(iniReader.ReadFloat("SUNSHAFTS", "SunFlareIntensity", 1.0f), 0.0f, 4.0f);
+            IniReload::Add([](CIniReader& ini)
+            {
+                bSkyHDR = ini.ReadInteger("LIGHTING", "SkyHDR", 1) != 0;
+                fSunFlare = std::clamp(ini.ReadFloat("SUNSHAFTS", "SunFlareIntensity", 1.0f), 0.0f, 4.0f);
+            });
 
             bNoBloomColorShift = iniReader.ReadInteger("MISC", "NoBloomColorShift", 1) != 0;
             fMaxPQValue = std::max(iniReader.ReadFloat("MISC", "MaxPQValue", 100.0f), 0.0000001f);
@@ -611,7 +622,9 @@ public:
                         arr13[0] = std::max(CTimeCycleExt::GetSSIntensity(), 0.0f);
                         arr13[1] = fSSDensity;
                         arr13[2] = fSSDecay;
-                        arr13[3] = 0.0f;
+                        // The sun lens flare, drawn with the shafts (SunShafts_PS.hlsl)
+                        static auto sunFlare = FusionFixSettings.GetRef("PREF_SUN_FLARE");
+                        arr13[3] = (sunFlare && sunFlare->get()) ? fSunFlare : 0.0f;
 
                         pDevice->SetPixelShaderConstantF(208, &arr13[0], 1);
                     }
