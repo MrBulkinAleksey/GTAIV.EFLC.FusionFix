@@ -36,7 +36,7 @@ namespace CarMirrors
 
     static bool reverse = false;            // CarMirrorsReverse (hidden): the corners the other way round, if the quad is culled
     static bool rounded = true;             // CarMirrorsRounded (hidden): 0 draws the plain quad, to tell the shape from a missing quad
-    static bool byDrawnCar = true;          // CarMirrorsByDrawnCar (hidden): 0 keeps the main thread's corners
+    static bool byDrawnCar = true;          // CarMirrorsByDrawnCar (hidden): 0 keeps the main thread's update's corners
     static float zoomOut = 1.3f;            // CarMirrorsZoomOut (hidden): how much wider than a flat mirror they show, 1 flat
     // The game puts the quad along n by a float its quad code reads (0.035 m on PC, 0.0125 with shaders.ixx's Xbox
     // value): read where the code points as the corners are placed, which lands the quad 5 mm in front of the glass.
@@ -60,7 +60,18 @@ namespace CarMirrors
     static std::atomic<uintptr_t> drawnVehicle{ 0 };
     static std::atomic<const CarMirrorGlass*> drawnGlass{ nullptr };
     static SafetyHookMid quadHook;
-    static uint32_t quadDrawn = 0, quadByDrawnCar = 0;
+    static std::vector<SafetyHookMid> queueHooks;
+    static uint32_t quadDrawn = 0, quadByDrawnCar = 0, quadBySnapshot = 0;
+    // The corners as the quad is put in the scene's draw list (main thread, CE 0xADD526 / 0xADD930), with the car where
+    // its own draws of that list are made: the quad's command hands its parameter to 0xB59900, which never reads it, so
+    // it carries the snapshot's number to the render thread. No object motion vectors needed.
+    struct Snapshot
+    {
+        std::atomic<uint32_t> number{ 0 };
+        float corners[16]{};
+    };
+    static Snapshot snapshots[16];
+    static uint32_t nextSnapshot = 1;
     static float quadShift = 0.0f;          // the most the drawn car stood off the main thread's, since the last log
 
     static double NowMs()
@@ -91,8 +102,10 @@ namespace CarMirrors
 
     // The glass in the world by the car's matrix m: the corners round it, a little in front of it, and with plane, its
     // plane; centre, where given, takes its middle.
-    static void PlaceGlass(const float* m, const CarMirrorGlass& glass, bool withPlane, float* centreOut)
+    static void PlaceGlass(const float* m, const CarMirrorGlass& glass, bool withPlane, float* centreOut, float* out = nullptr)
     {
+        if (!out)
+            out = corners;
         float centre[3], normal[3], right[3], up[3];
         Transform(m, glass.centre, centre, true);
         Transform(m, glass.normal, normal, false);
@@ -112,8 +125,8 @@ namespace CarMirrors
         {
             const auto& s = signs[reverse ? (5 - k) % 4 : k];
             for (int i = 0; i < 3; ++i)
-                corners[k * 4 + i] = centre[i] + right[i] * s[0] + up[i] * s[1] - normal[i] * pushed;
-            corners[k * 4 + 3] = 1.0f;
+                out[k * 4 + i] = centre[i] + right[i] * s[0] + up[i] * s[1] - normal[i] * pushed;
+            out[k * 4 + 3] = 1.0f;
         }
         if (centreOut)
             std::copy_n(centre, 3, centreOut);
@@ -231,9 +244,9 @@ namespace CarMirrors
         if (++timedFrames < 300)
             return;
         FusionLog::Write("CarMirrors", "Cost", "mirror phase CPU per frame: draw list %.3f ms, visibility %.3f ms; outdoor scans %u of %u frames; "
-            "quad placed by the drawn car %u of %u, it stood up to %.2f m off\n",
-            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadByDrawnCar, quadDrawn, quadShift);
-        outdoorScans = quadDrawn = quadByDrawnCar = 0;
+            "quads %u: by the draw list's car %u, by the drawn car %u (it stood up to %.2f m off)\n",
+            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadByDrawnCar, quadShift);
+        outdoorScans = quadDrawn = quadByDrawnCar = quadBySnapshot = 0;
         quadShift = 0.0f;
         buildMs = visibilityMs = 0.0;
         timedFrames = 0;
@@ -277,8 +290,6 @@ namespace CarMirrors
             visibilityMs += NowMs() - start;
     }
 
-    // Render thread, the game's mirror quad about to be drawn: its corners by the matrix the G-buffer drew the player's
-    // car with this frame (TemporalAA, with object motion vectors), else as the main thread put them.
     // c152 for mirror.fx (mirror_car_shape.patch): x 1 rounds the quad as car mirrors are, y the zoom out - 1 widens
     // the view as a convex mirror's; zeros keep an interior mirror as the game draws it.
     static void SetShape(bool ours)
@@ -292,7 +303,27 @@ namespace CarMirrors
             real->SetPixelShaderConstantF(152, shape, 1);
     }
 
-    static void PlaceQuad(SafetyHookContext&)
+    // Main thread, the quad's command just made (edx), its parameter about to be stored from eax: the corners by the car
+    // as it is now, and their number in its place.
+    static void QueueQuad(SafetyHookContext& regs)
+    {
+        const auto glass = drawnGlass.load(std::memory_order_acquire);
+        const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
+        const float* m = vehicle ? CEntity::GetMatrix(vehicle) : nullptr;
+        if (!glass || !m || !mirrorOn || !*mirrorOn || !byDrawnCar)
+            return;
+        const uint32_t number = nextSnapshot++ | 0x80000000u; // never 0, never a small visibility id
+        auto& snapshot = snapshots[number & 15];
+        snapshot.number.store(0, std::memory_order_relaxed);
+        PlaceGlass(m, *glass, false, nullptr, snapshot.corners);
+        snapshot.number.store(number, std::memory_order_release);
+        regs.eax = number;
+    }
+
+    // Render thread, the game's mirror quad about to be drawn (its parameter at esp+4): its corners as the draw list put
+    // them, else by the matrix the G-buffer drew the player's car with (TemporalAA, with object motion vectors), else as
+    // the main thread's update put them.
+    static void PlaceQuad(SafetyHookContext& regs)
     {
         const auto glass = drawnGlass.load(std::memory_order_acquire);
         const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
@@ -301,6 +332,17 @@ namespace CarMirrors
         if (!ours || !byDrawnCar)
             return;
         ++quadDrawn;
+        const uint32_t number = *reinterpret_cast<const uint32_t*>(regs.esp + 4);
+        if (number & 0x80000000u)
+        {
+            const auto& snapshot = snapshots[number & 15];
+            if (snapshot.number.load(std::memory_order_acquire) == number)
+            {
+                std::copy_n(snapshot.corners, 16, corners);
+                ++quadBySnapshot;
+                return;
+            }
+        }
         float around[3];
         if (!CEntity::GetPosition(vehicle, around))
             return;
@@ -363,7 +405,15 @@ public:
             // push ebp / mov ebp, esp / and esp, -10 / sub esp, 20 / call / test byte [eax], 40 / je / cmp byte [mirror on], 0 / je
             auto quad = hook::pattern("55 8B EC 83 E4 F0 83 EC 20 E8 ? ? ? ? F6 00 40 0F 84 ? ? ? ? 80 3D ? ? ? ? 00 0F 84");
             if (!quad.empty() && *quad.get_first<uint8_t*>(25) == CarMirrors::mirrorOn)
+            {
                 CarMirrors::quadHook = safetyhook::create_mid(quad.get_first(0), CarMirrors::PlaceQuad);
+                // where the scene's draw lists queue it: mov [edx+8], 0xB59900 / mov eax, [edi+938] / mov [edx+C], eax /
+                // jmp +2 (over xor edx, edx, a jump's target, left alone)
+                auto queue = hook::pattern("C7 42 08 ? ? ? ? 8B 87 38 09 00 00 89 42 0C EB 02");
+                for (size_t i = 0; i < queue.size(); ++i)
+                    if (*queue.get(i).get<void*>(3) == quad.get_first(0))
+                        CarMirrors::queueHooks.emplace_back(safetyhook::create_mid(queue.get(i).get<void>(13), CarMirrors::QueueQuad));
+            }
             // in it: movss xmm2, [the offset] / movaps xmm1, xmm4 / mulss xmm1, xmm3 (the pattern shaders.ixx patches)
             auto offset = hook::pattern("F3 0F 10 15 ? ? ? ? 0F 28 CC F3 0F 59 CB");
             if (!offset.empty())
@@ -372,10 +422,10 @@ public:
             auto water = hook::pattern("80 3D ? ? ? ? 01 56 8B F1 74 ? A1 ? ? ? ? 85 C0 74 ? 8A 40 22 24 01 75");
             if (!water.empty() && *water.get_first<uint8_t*>(2) == CarMirrors::mirrorOn)
                 CarMirrors::waterVisibility = water.get_first<void(__fastcall)(uintptr_t, void*)>(0);
-            FusionLog::Write("CarMirrors", "Init", "%u mirror glasses in the table; phase timing %s; outdoor scan %s; quad by the drawn car %s\n",
+            FusionLog::Write("CarMirrors", "Init", "%u mirror glasses in the table; phase timing %s; outdoor scan %s; quad by the drawn car %s, %u draw list sites\n",
                 uint32_t(std::size(CarMirrorTable)), timeBuild && timeVisibility ? "on" : "partly off",
                 CarMirrors::waterVisibility ? "found" : "not found (the mirrors stay empty outdoors)",
-                CarMirrors::quadHook ? "on" : "off (not found)");
+                CarMirrors::quadHook ? "on" : "off (not found)", uint32_t(CarMirrors::queueHooks.size()));
             if (CarMirrors::quadOffset)
                 FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
         };
