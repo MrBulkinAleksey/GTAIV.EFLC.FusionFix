@@ -23,11 +23,12 @@ import entityclass;
 import postfxresources;
 
 // Grass Wind (Graphics > Lighting, [PROCEDURAL] GrassWind): the wind sways the grass, weeds and small plants the game
-// scatters on the ground (procedural props: proc_grass*, *_proc_plant_*, *weed*, sm_plant*). They are props drawn with
-// gta_default (gta_cutout), whose deferred vertex shaders move each vertex when b12 is on
-// (shaders/patches/world_grass_wind.patch). Around each G-buffer draw of such a model (by its name's hash, model info
-// +0x3c) b12 is set and c241 gets the model's height and its bend and flutter at the tip; at the start of the pass c240
-// and c242 get the wind's direction and the phases of the gust wave and the flutter.
+// scatters on the ground (procedural props: proc_grass*, *_proc_plant_*, *weed*, sm_plant*). They are buildings from
+// the building pool (EntityClass counts them as buildings) drawn with gta_default (gta_cutout), whose deferred vertex
+// shaders move each vertex when b12 is on (shaders/patches/world_grass_wind.patch). Around each G-buffer draw of such a
+// model (by its name's hash, model info +0x3c) b12 is set and c241 gets the model's height and its bend and flutter at
+// the tip; at the start of the pass c240 and c242 get the wind's direction and the phases of the gust wave and the
+// flutter.
 //
 // The game has no wind direction; the clouds' drift (0.93, 0.37) is taken so the grass and the clouds agree. The
 // strength is the weather's own (CWeather::Update's table, lerped between the old and the new weather), without the
@@ -73,7 +74,7 @@ class GrassWind
 
     // GrassWindLog
     static inline uint32_t logPasses = 0;
-    static inline uint64_t logGrassDraws = 0, logPropDraws = 0;
+    static inline uint64_t logGrassDraws = 0, logCheckedDraws = 0;
     static inline std::unordered_set<uint16_t> logModels;
 
     static int32_t Pref(std::optional<std::reference_wrapper<int32_t>>& ref, int32_t missing)
@@ -229,10 +230,10 @@ class GrassWind
             std::string heights;
             for (const auto model : logModels)
                 heights += std::format(" {:08x}:{:.2f}", models[model].hash, models[model].height);
-            FusionLog::Write("GrassWind", "Stats", "wind %.2f (weather %.2f) scale %.2f, per pass: %.1f grass draws of %.1f prop draws; %zu grass models (hash:height m):%s\n",
-                fWind, target, scale, double(logGrassDraws) / logPasses, double(logPropDraws) / logPasses, logModels.size(), heights.c_str());
+            FusionLog::Write("GrassWind", "Stats", "wind %.2f (weather %.2f) scale %.2f, per pass: %.1f grass draws of %.1f building and prop draws; %zu grass models (hash:height m):%s\n",
+                fWind, target, scale, double(logGrassDraws) / logPasses, double(logCheckedDraws) / logPasses, logModels.size(), heights.c_str());
             logPasses = 0;
-            logGrassDraws = logPropDraws = 0;
+            logGrassDraws = logCheckedDraws = 0;
             logModels.clear();
         }
     }
@@ -248,14 +249,15 @@ class GrassWind
 
     static void BeforeEntityDraw(EntityClass::Kind kind)
     {
-        if (!bInGBuffer || kind != EntityClass::Kind::Prop)
+        // Procedural props are buildings from the building pool; props placed by the map or scripts are objects
+        if (!bInGBuffer || (kind != EntityClass::Kind::Building && kind != EntityClass::Kind::Prop))
             return;
         uint16_t model;
         const float* place;
         if (!EntityClass::CurrentModel(model, place))
             return;
         if (bLog)
-            ++logPropDraws;
+            ++logCheckedDraws;
         const float height = GrassHeight(model);
         if (height <= 0.0f)
             return;
