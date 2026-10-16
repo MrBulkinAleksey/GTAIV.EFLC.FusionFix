@@ -37,7 +37,12 @@ import temporal;
 // GTAIV.EFLC.FusionFix.EntityClass.log: what leaving a kind out of a pass would save. For the G-buffer and the water's
 // reflection also by the distance from the viewport's camera and by the size on screen (the sphere's reach over the
 // distance), for the lamps' maps the same from the lamp of the half drawn, and for the G-buffer and the lamps' maps the
-// costliest models, by the hash of their name (model info +0x3c), with their mean distance.
+// costliest models, by the hash of their name (model info +0x3c), with their mean distance. For the G-buffer, the water's
+// reflection and the sun's cascades (CASCADE_TARGET_R32, distance from the scene's camera of the last G-buffer draw) also
+// what instancing would gather: per lock of the target (a frame's G-buffer, one cascade), the entities of a model drawn
+// kInstancesMin or more times in it (at any distance, and kInstancingFar m or more from the camera), the device draws they
+// took and how many they would take as one instanced draw per geometry, with their CPU time; and the costliest models far
+// off, with how many of them a frame.
 //
 // SkipLeftOutDraws = 1 ([PERFORMANCE]): RenderSkip leaves passes out on the GPU (the reflections and far cascades
 // taking turns, the night's cascades) by dropping their device draws, but the game still works through every draw
@@ -183,8 +188,24 @@ namespace
         int64_t distanceTicks[6]{}, sizeTicks[6]{};
         // The G-buffer: by model
         bool models = false;
-        struct ModelStats { uint64_t draws = 0, placed = 0; int64_t ticks = 0; double distance = 0.0; Kind kind = Kind::Unknown; };
+        struct ModelStats
+        {
+            uint64_t draws = 0, placed = 0; int64_t ticks = 0; double distance = 0.0; Kind kind = Kind::Unknown;
+            // kInstancingFar m or more from the camera: entities, their device draws and time, the most in one lock
+            uint64_t farDraws = 0, farDevDraws = 0; int64_t farTicks = 0; uint32_t farMost = 0;
+        };
         std::unordered_map<uint16_t, ModelStats> byModel;
+        // Instancing: this lock's draws by model (one lock a cascade), summed into batch at its end. Index 0 at any distance, 1 far
+        bool instancing = false, cascade = false;
+        struct LockModel { uint32_t count[2]{}, devDraws[2]{}; int64_t ticks[2]{}; };
+        std::unordered_map<uint16_t, LockModel> lockModels;
+        uint32_t lockOf = ~0u;
+        uint64_t instancingLocks = 0;
+        struct Batch
+        {
+            uint64_t entities = 0, devDraws = 0; int64_t ticks = 0;     // every keyed draw
+            uint64_t models = 0, batchEntities = 0, batchDevDraws = 0, batchAfter = 0; int64_t batchTicks = 0;
+        } batch[2];
         int64_t Total() const
         {
             int64_t total = 0;
@@ -200,6 +221,65 @@ namespace
     uint32_t lastLock = ~0u;
     uint32_t lastViewport = ~0u;
     int64_t qpcFrequency = 0;
+    constexpr uint32_t kInstancesMin = 4;
+    constexpr float kInstancingFar = 50.0f;
+    // The scene's camera at the last G-buffer draw, for the distances in the cascades
+    float sceneEye[3] = {};
+    bool bSceneEye = false;
+
+    void FlushLock(TargetStats& s)
+    {
+        if (s.lockModels.empty())
+            return;
+        s.instancingLocks++;
+        for (auto& [model, f] : s.lockModels)
+        {
+            for (int g = 0; g < 2; ++g)
+            {
+                const uint32_t n = f.count[g];
+                if (!n)
+                    continue;
+                auto& b = s.batch[g];
+                b.entities += n;
+                b.devDraws += f.devDraws[g];
+                b.ticks += f.ticks[g];
+                if (n < kInstancesMin)
+                    continue;
+                b.models++;
+                b.batchEntities += n;
+                b.batchDevDraws += f.devDraws[g];
+                b.batchAfter += (std::max)(1u, (f.devDraws[g] + n / 2) / n);
+                b.batchTicks += f.ticks[g];
+            }
+            if (f.count[1] && s.models)
+            {
+                auto& m = s.byModel[model];
+                m.farDraws += f.count[1];
+                m.farDevDraws += f.devDraws[1];
+                m.farTicks += f.ticks[1];
+                m.farMost = (std::max)(m.farMost, f.count[1]);
+            }
+        }
+        s.lockModels.clear();
+    }
+
+    void CountInstance(TargetStats& s, uint16_t model, float distance, int64_t ticks, uint32_t devDraws, uint32_t lock)
+    {
+        if (s.lockOf != lock)
+        {
+            FlushLock(s);
+            s.lockOf = lock;
+        }
+        auto& f = s.lockModels[model];
+        for (int g = 0; g < 2; ++g)
+        {
+            if (g && !(distance >= kInstancingFar))
+                break;
+            f.count[g]++;
+            f.devDraws[g] += devDraws;
+            f.ticks[g] += ticks;
+        }
+    }
 
     TargetStats& StatsFor(const char* name)
     {
@@ -214,7 +294,10 @@ namespace
             it->camera = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || !std::strcmp(shown, "WATER_REFLECTION_COLOUR");
             it->lamp = !std::strcmp(shown, "SHADOW_MAP_COLOUR_POINT");
             it->camera |= it->lamp;
-            it->models = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->lamp;
+            it->cascade = !std::strcmp(shown, "CASCADE_TARGET_R32");
+            it->instancing = (it->camera && !it->lamp) || it->cascade;
+            it->camera |= it->cascade;
+            it->models = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->lamp || it->cascade;
         }
         lastTargetName = name;
         lastTarget = size_t(it - targetStats.begin());
@@ -223,6 +306,8 @@ namespace
 
     void WriteDrawLog(uint32_t frames)
     {
+        for (auto& s : targetStats)
+            FlushLock(s);
         std::sort(targetStats.begin(), targetStats.end(), [](auto& a, auto& b) { return a.Total() > b.Total(); });
         const double perFrame = 1.0 / frames;
         const double msPerFrame = 1000.0 / double(qpcFrequency) / frames;
@@ -317,6 +402,40 @@ namespace
                     shown += m.ticks;
                 }
                 text += std::format("      the top 20 take {:.0f}% of the models' time\n", all ? 100.0 * shown / all : 0.0);
+            }
+            if (s.instancing && s.instancingLocks)
+            {
+                static constexpr const char* groups[2] = { "at any distance", "far" };
+                text += std::format("    instancing, a model drawn {}+ times in a lock as one draw per geometry (far = {:.0f}+ m from the camera):\n",
+                    kInstancesMin, kInstancingFar);
+                for (int g = 0; g < 2; ++g)
+                {
+                    const auto& b = s.batch[g];
+                    text += std::format("      {}: {:.1f} entities ({:.1f} device draws, {:.3f} ms); of them {:.1f} entities of {:.1f} models "
+                        "({:.1f} device draws, {:.3f} ms) would take {:.1f} device draws\n", groups[g], b.entities * perFrame, b.devDraws * perFrame,
+                        b.ticks * msPerFrame, b.batchEntities * perFrame, b.models * perFrame, b.batchDevDraws * perFrame, b.batchTicks * msPerFrame,
+                        b.batchAfter * perFrame);
+                }
+                if (s.models)
+                {
+                    std::vector<std::pair<uint16_t, TargetStats::ModelStats>> far;
+                    for (auto& [model, m] : s.byModel)
+                        if (m.farDraws)
+                            far.emplace_back(model, m);
+                    std::sort(far.begin(), far.end(), [](auto& a, auto& b) { return a.second.farTicks > b.second.farTicks; });
+                    text += std::format("    {} models far; the costliest there (name hash, radius, kind, entities a frame, most in a lock, "
+                        "device draws an entity, ms, us an entity):\n", far.size());
+                    for (size_t i = 0; i < far.size() && i < 20; ++i)
+                    {
+                        const auto& [model, m] = far[i];
+                        const auto info = modelInfos ? *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4) : 0;
+                        const uint32_t hash = info ? *reinterpret_cast<const uint32_t*>(info + 0x3c) : 0;
+                        const float radius = info ? *reinterpret_cast<const float*>(info + 0x1c) : 0.0f;
+                        text += std::format("      {:08X} {:6.1f} m {:<9} {:7.1f} {:5} {:5.2f} {:6.3f} ms {:6.2f}\n", hash, radius, KindNames[size_t(m.kind)],
+                            m.farDraws * perFrame, m.farMost, double(m.farDevDraws) / double(m.farDraws), m.farTicks * msPerFrame,
+                            m.farTicks * 1e6 / double(qpcFrequency) / double(m.farDraws));
+                    }
+                }
             }
         }
         FusionLog::WriteText("EntityClass", "Draws", text);
@@ -512,7 +631,14 @@ namespace
         const float* centre = reinterpret_cast<const float*>(info + 0x10);
         const float radius = *reinterpret_cast<const float*>(info + 0x1c);
         const float reach = radius + std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
-        const float* eye = stats.lamp ? currentOrigin.position : viewport->mViewInverseMatrix[3];
+        if (stats.cascade && !bSceneEye)
+            return -1.0f;
+        const float* eye = stats.lamp ? currentOrigin.position : stats.cascade ? sceneEye : viewport->mViewInverseMatrix[3];
+        if (!stats.lamp && !stats.cascade && stats.models)
+        {
+            std::memcpy(sceneEye, eye, sizeof(sceneEye));
+            bSceneEye = true;
+        }
         const float dx = place[0] - eye[0], dy = place[1] - eye[1], dz = place[2] - eye[2];
         const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
         static constexpr float cameraDistanceEdges[5] = { 25.0f, 50.0f, 100.0f, 200.0f, 400.0f };
@@ -581,9 +707,11 @@ namespace
         else
         {
             LARGE_INTEGER start, end;
+            const uint32_t drawsBefore = RenderSkip::DrawCount();
             QueryPerformanceCounter(&start);
             original(dc);
             QueryPerformanceCounter(&end);
+            const uint32_t devDraws = RenderSkip::DrawCount() - drawsBefore;
             const uint32_t frame = TemporalAA::SceneFrame;
             if (!statsFrom || frame < statsFrom)
                 statsFrom = frame;
@@ -666,6 +794,8 @@ namespace
             {
                 const int64_t ticks = end.QuadPart - start.QuadPart;
                 const float distance = stats.camera ? CountByCamera(stats, model, place, ticks) : -1.0f;
+                if (stats.instancing)
+                    CountInstance(stats, model, distance, ticks, devDraws, lock);
                 if (stats.models)
                 {
                     auto& m = stats.byModel[model];
