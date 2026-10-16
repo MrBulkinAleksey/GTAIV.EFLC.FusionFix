@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
-index 5de051e3..840bf9a1 100644
+index 5de051e3..f99613dd 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
 @@ -167,8 +167,29 @@
@@ -345,7 +345,22 @@ index 5de051e3..840bf9a1 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -917,6 +1222,58 @@
+@@ -911,12 +1216,73 @@
+     mul r0, r0.wxyz, r2.wxyz
+     mul r2.xyz, r3, r1.y
+     mul r1.xyz, r1.y, r4
++    // FusionFix vehicle_glass_reflections_wet.patch: from the driver's seat in first person (c204.x the share of the tint kept) the glass
++    // within c204.y (a distance squared) of the camera, the car's own, keeps less of its tint, both its outer and
++    // its inner layer: through dark windows the street was hard to see. Unset (zeros) changes nothing.
++    add r8.xyz, -v4, c15
++    dp3 r8.w, r8, r8
++    add r8.w, r8.w, -c204.y
++    mov r8.x, c204.x
++    cmp r8.w, r8.w, c187.w, r8.x
++    mul r0.x, r0.x, r8.w
+     mov_sat r0.x, r0.x
+     add r2.w, r0.x, c6.y
+     rcp r3.x, r0.x
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0
@@ -405,7 +420,7 @@ index 5de051e3..840bf9a1 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
-index 317652ff..83384743 100644
+index 317652ff..076e2e0c 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
 @@ -118,8 +118,29 @@
@@ -751,7 +766,22 @@ index 317652ff..83384743 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r2.yzw, r6.xxyz, r3.x
      mul r2.yzw, r1.w, r2
-@@ -765,6 +1070,58 @@
+@@ -759,12 +1064,73 @@
+     mul r0, r0.wxyz, r3.wxyz
+     mul r2.xyz, r2, r1.y
+     mul r1.xyz, r1.y, r1.xzww
++    // FusionFix vehicle_glass_reflections_wet.patch: from the driver's seat in first person (c204.x the share of the tint kept) the glass
++    // within c204.y (a distance squared) of the camera, the car's own, keeps less of its tint, both its outer and
++    // its inner layer: through dark windows the street was hard to see. Unset (zeros) changes nothing.
++    add r8.xyz, -v4, c15
++    dp3 r8.w, r8, r8
++    add r8.w, r8.w, -c204.y
++    mov r8.x, c204.x
++    cmp r8.w, r8.w, c187.w, r8.x
++    mul r0.x, r0.x, r8.w
+     mov_sat r0.x, r0.x
+     add r1.w, r0.x, c5.z
+     rcp r2.w, r0.x
      cmp r1.w, r1.w, r2.w, c5.w
      mad r0.yzw, r2.xxyz, r1.w, r0
      mad r0.yzw, r1.xxyz, r1.w, r0
@@ -811,7 +841,7 @@ index 317652ff..83384743 100644
      add r0.x, c16.w, -v1.w
      add r1.x, -c16.z, c16.w
 diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
-index 5aac5d8b..ac84c682 100644
+index 5aac5d8b..6bd28924 100644
 --- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 +++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
 @@ -143,8 +143,29 @@
@@ -1157,7 +1187,22 @@ index 5aac5d8b..ac84c682 100644
      // ----------------------------------------------------------------------------------------------------------------------------------------------
      mul r7.xyz, r6, r5.w
      mul r7.xyz, r1.w, r7
-@@ -842,6 +1147,58 @@
+@@ -836,12 +1141,73 @@
+     mul r0, r0.wxyz, r2.wxyz
+     mul r2.xyz, r3, r1.y
+     mul r1.xyz, r1.y, r4
++    // FusionFix vehicle_glass_reflections_wet.patch: from the driver's seat in first person (c204.x the share of the tint kept) the glass
++    // within c204.y (a distance squared) of the camera, the car's own, keeps less of its tint, both its outer and
++    // its inner layer: through dark windows the street was hard to see. Unset (zeros) changes nothing.
++    add r8.xyz, -v4, c15
++    dp3 r8.w, r8, r8
++    add r8.w, r8.w, -c204.y
++    mov r8.x, c204.x
++    cmp r8.w, r8.w, c187.w, r8.x
++    mul r0.x, r0.x, r8.w
+     mov_sat r0.x, r0.x
+     add r2.w, r0.x, c6.y
+     rcp r3.x, r0.x
      cmp r2.w, r2.w, r3.x, c6.z
      mad r0.yzw, r2.xxyz, r2.w, r0
      mad r0.yzw, r1.xxyz, r2.w, r0
