@@ -68,6 +68,8 @@ import entityclass;
 //    they leave the sun's cascades (the phases of type 0x15, CE 0x159b760, the same the game drops for props: past
 //    the second cascade their shadows are a few texels), past 80 m they thin out as the small props do, 80 / distance
 //    kept by the hash of their place, and under 1% of their distance (a 1.6 m bench past 160 m) none are drawn.
+//    Taken where the entity goes into the phases' lists (CE 0xae43a0): the render lists' hooks above miss most
+//    objects (a log: CJ_MH_CP_POST1 kept 30 cascade draws a frame 75 m out).
 //
 // And what keeps the cost of more props down (the game already keeps them out of shadows: it sets
 // entity +0x24 0x10000 on each, and the render lists then drop the shadow phases, CE 0xae85a5/0xae7058):
@@ -942,7 +944,7 @@ namespace Procedural
         // Props have 0x10000 (no shadows) and 0x40000000 from the generator; few other entities have both
         constexpr uint32_t propFlags = 0x10000 | 0x40000000;
         if ((*(uint32_t*)(entity + 0x24) & propFlags) != propFlags)
-            return bHeavyPropCull ? DropHeavy(entity, phases, distance) : phases;
+            return phases;
         const auto reflections = bInReflections ? 0 : *pReflectionPhases & ~*pScenePhase;
         const auto scene = bSmallFarCull ? *pScenePhase : 0;
         if (!(phases & (reflections | scene)))
@@ -1404,6 +1406,21 @@ public:
                     regs.ecx = DropPhases(regs.esi, uint32_t(regs.ecx), *(float*)(regs.edi + 4));
                     *(uint32_t*)(regs.esp + 0x28) = uint32_t(regs.ecx);
                 });
+                // HeavyPropCull: where every entity goes into the phases' lists (CE 0xae43a0(phases, entity, distance,
+                // bucket), called from twelve places: the two above see only some of them, objects made from the map's
+                // dummies come through others), at its entry: [esp+4] phases, [esp+8] entity, [esp+0xc] distance
+                if (auto add = hook::pattern("83 EC 10 53 8B 5C 24 18 85 DB 0F 84 ? ? ? ? 33 C9 8B C3 85 DB 78"); !add.empty())
+                {
+                    static auto AddHook = safetyhook::create_mid(add.get_first(0), [](SafetyHookContext& regs)
+                    {
+                        if (!bHeavyPropCull)
+                            return;
+                        auto& phases = *(uint32_t*)(regs.esp + 4);
+                        const auto entity = *(uintptr_t*)(regs.esp + 8);
+                        if (phases && entity)
+                            phases = DropHeavy(entity, phases, *(float*)(regs.esp + 0xc));
+                    });
+                }
             }
 
             FusionFixSettings.SetCallback("PREF_PROCEDURAL_DISTANCE", [](int32_t value)
