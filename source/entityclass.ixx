@@ -42,7 +42,10 @@ import temporal;
 // what instancing would gather: per lock of the target (a frame's G-buffer, one cascade), the entities of a model drawn
 // kInstancesMin or more times in it (at any distance, and kInstancingFar m or more from the camera), the device draws they
 // took and how many they would take as one instanced draw per geometry, with their CPU time; and the costliest models far
-// off, with how many of them a frame.
+// off, with how many of them a frame. For the G-buffer and the water's reflection also what impostors would take over
+// kFarFrom m or more out: by band (400-800, 800-1500, 1500+ m) the entities, device draws and time, the models a lock, the
+// draws by the sphere's diameter on screen in pixels, and how big an atlas of impostors (6x6 views of four G-buffer layers)
+// those models would need, with frames up to 256 or 64 px.
 //
 // SkipLeftOutDraws = 1 ([PERFORMANCE]): RenderSkip leaves passes out on the GPU (the reflections and far cascades
 // taking turns, the night's cascades) by dropping their device draws, but the game still works through every draw
@@ -206,6 +209,23 @@ namespace
             uint64_t entities = 0, devDraws = 0; int64_t ticks = 0;     // every keyed draw
             uint64_t models = 0, batchEntities = 0, batchDevDraws = 0, batchAfter = 0; int64_t batchTicks = 0;
         } batch[2];
+        // The G-buffer and the water's reflection, kFarFrom m or more from the camera (what impostors would take over), in
+        // bands 400-800, 800-1500, 1500+ m: draws, device draws, time; by the sphere's size on screen in pixels; per lock
+        // the models drawn (with the most pixels each had) for what an atlas of their impostors would hold
+        bool farBands = false;
+        struct FarBand
+        {
+            uint64_t draws = 0, devDraws = 0; int64_t ticks = 0;
+            uint64_t pxDraws[5]{}; int64_t pxTicks[5]{};
+            uint64_t lockModels = 0;
+        } farBand[3];
+        std::unordered_map<uint16_t, float> farModels;      // every model drawn 400+ m off in the window, its most pixels
+        std::unordered_map<uint16_t, float> farLock;        // this lock's, band by the model's nearest draw
+        std::unordered_map<uint16_t, int> farLockBand;
+        uint32_t farLockOf = ~0u;
+        uint64_t farLocks = 0;
+        double farLockBytes[2]{};                           // impostor frames up to 256 px and up to 64 px
+        double screenHeightSum = 0.0; uint64_t screenHeights = 0;
         int64_t Total() const
         {
             int64_t total = 0;
@@ -223,6 +243,20 @@ namespace
     int64_t qpcFrequency = 0;
     constexpr uint32_t kInstancesMin = 4;
     constexpr float kInstancingFar = 50.0f;
+    constexpr float kFarFrom = 400.0f;
+    constexpr float kFarBandEdges[2] = { 800.0f, 1500.0f };
+    constexpr float kFarPxEdges[4] = { 32.0f, 64.0f, 128.0f, 256.0f };
+    // An impostor: hemi-octahedral 6x6 views, four layers like the G-buffer's (albedo, normal, specular, depth) at 4 bytes
+    constexpr double kImpostorViews = 36.0, kImpostorTexelBytes = 16.0;
+
+    // The bytes of one model's impostor whose sphere spanned px pixels: frames of the next power of two, 32 at least
+    double ImpostorBytes(float px, float cap)
+    {
+        float side = 32.0f;
+        while (side < px && side < cap)
+            side *= 2.0f;
+        return kImpostorViews * side * side * kImpostorTexelBytes;
+    }
     // The scene's camera at the last G-buffer draw, for the distances in the cascades
     float sceneEye[3] = {};
     bool bSceneEye = false;
@@ -263,6 +297,52 @@ namespace
         s.lockModels.clear();
     }
 
+    void FlushFar(TargetStats& s)
+    {
+        if (s.farLock.empty())
+            return;
+        s.farLocks++;
+        for (auto& [model, px] : s.farLock)
+        {
+            s.farBand[s.farLockBand[model]].lockModels++;
+            s.farLockBytes[0] += ImpostorBytes(px, 256.0f);
+            s.farLockBytes[1] += ImpostorBytes(px, 64.0f);
+        }
+        s.farLock.clear();
+        s.farLockBand.clear();
+    }
+
+    void CountFar(TargetStats& s, uint16_t model, float distance, float px, int64_t ticks, uint32_t devDraws, uint32_t lock)
+    {
+        if (s.farLockOf != lock)
+        {
+            FlushFar(s);
+            s.farLockOf = lock;
+        }
+        if (!(distance >= kFarFrom))
+            return;
+        const int band = distance < kFarBandEdges[0] ? 0 : distance < kFarBandEdges[1] ? 1 : 2;
+        auto& b = s.farBand[band];
+        b.draws++;
+        b.devDraws += devDraws;
+        b.ticks += ticks;
+        int z = 0;
+        while (z < 4 && px >= kFarPxEdges[z])
+            ++z;
+        b.pxDraws[z]++;
+        b.pxTicks[z] += ticks;
+        auto& most = s.farModels[model];
+        most = (std::max)(most, px);
+        auto [it, added] = s.farLock.try_emplace(model, px);
+        if (added)
+            s.farLockBand[model] = band;
+        else
+        {
+            it->second = (std::max)(it->second, px);
+            s.farLockBand[model] = (std::min)(s.farLockBand[model], band);
+        }
+    }
+
     void CountInstance(TargetStats& s, uint16_t model, float distance, int64_t ticks, uint32_t devDraws, uint32_t lock)
     {
         if (s.lockOf != lock)
@@ -298,6 +378,7 @@ namespace
             it->instancing = (it->camera && !it->lamp) || it->cascade;
             it->camera |= it->cascade;
             it->models = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->lamp || it->cascade;
+            it->farBands = it->camera && !it->lamp && !it->cascade;
         }
         lastTargetName = name;
         lastTarget = size_t(it - targetStats.begin());
@@ -307,7 +388,7 @@ namespace
     void WriteDrawLog(uint32_t frames)
     {
         for (auto& s : targetStats)
-            FlushLock(s);
+            FlushLock(s), FlushFar(s);
         std::sort(targetStats.begin(), targetStats.end(), [](auto& a, auto& b) { return a.Total() > b.Total(); });
         const double perFrame = 1.0 / frames;
         const double msPerFrame = 1000.0 / double(qpcFrequency) / frames;
@@ -436,6 +517,29 @@ namespace
                             m.farTicks * 1e6 / double(qpcFrequency) / double(m.farDraws));
                     }
                 }
+            }
+            if (s.farBands && !s.farModels.empty())
+            {
+                static constexpr const char* bandNames[3] = { "400-800 m", "800-1500 m", "1500+ m" };
+                static constexpr const char* pxNames[5] = { "under 32 px", "32-64", "64-128", "128-256", "256+" };
+                text += std::format("    far off, for impostors (size = the sphere's diameter on a screen {:.0f} px high):\n",
+                    s.screenHeights ? s.screenHeightSum / double(s.screenHeights) : 0.0);
+                for (int band = 0; band < 3; ++band)
+                {
+                    const auto& b = s.farBand[band];
+                    text += std::format("      {}: {:.1f} entities ({:.1f} device draws, {:.3f} ms), {:.1f} models a lock; by size", bandNames[band],
+                        b.draws * perFrame, b.devDraws * perFrame, b.ticks * msPerFrame, s.farLocks ? double(b.lockModels) / double(s.farLocks) : 0.0);
+                    for (int z = 0; z < 5; ++z)
+                        text += std::format("{} {} {:.1f} ({:.3f} ms)", z ? "," : "", pxNames[z], b.pxDraws[z] * perFrame, b.pxTicks[z] * msPerFrame);
+                    text += "\n";
+                }
+                double all[2]{};
+                for (auto& [model, px] : s.farModels)
+                    all[0] += ImpostorBytes(px, 256.0f), all[1] += ImpostorBytes(px, 64.0f);
+                constexpr double mb = 1.0 / (1024.0 * 1024.0);
+                text += std::format("      impostor atlas ({:.0f} views, {:.0f} bytes a texel): the {} models seen {:.0f} MB with frames up to 256 px, "
+                    "{:.0f} MB up to 64 px; those of one lock {:.0f} MB / {:.0f} MB\n", kImpostorViews, kImpostorTexelBytes, s.farModels.size(),
+                    all[0] * mb, all[1] * mb, s.farLocks ? s.farLockBytes[0] / s.farLocks * mb : 0.0, s.farLocks ? s.farLockBytes[1] / s.farLocks * mb : 0.0);
             }
         }
         FusionLog::WriteText("EntityClass", "Draws", text);
@@ -620,7 +724,7 @@ namespace
 
     // The draw's distance from the current viewport's camera (in the lamps' maps from the lamp of the half drawn) and
     // its size on screen, into their buckets; the distance, or a negative when not known
-    float CountByCamera(TargetStats& stats, uint16_t model, const float* place, int64_t ticks)
+    float CountByCamera(TargetStats& stats, uint16_t model, const float* place, int64_t ticks, float* px = nullptr)
     {
         auto viewport = rage::GetCurrentViewport();
         if (!modelInfos || (stats.lamp ? currentFace < 0 : !viewport))
@@ -648,6 +752,16 @@ namespace
         const auto distanceEdges = stats.lamp ? lampDistanceEdges : cameraDistanceEdges;
         const auto sizeEdges = stats.lamp ? lampSizeEdges : cameraSizeEdges;
         const float size = reach / (std::max)(distance, 1.0f);
+        if (px && stats.farBands)
+        {
+            // The sphere's diameter in pixels: 2 reach / distance over the view's height at that distance, 2 / m22
+            float height = viewport->mGrcViewportWindow1.Height;
+            if (height <= 1.0f)
+                height = float(viewport->mHeight);
+            *px = size * viewport->mProjectionMatrix[1][1] * height;
+            stats.screenHeightSum += height;
+            stats.screenHeights++;
+        }
         int d = 0, z = 0;
         while (d < 5 && distance >= distanceEdges[d])
             ++d;
@@ -793,7 +907,10 @@ namespace
             if (ModelAndPlace(dc, source, model, place))
             {
                 const int64_t ticks = end.QuadPart - start.QuadPart;
-                const float distance = stats.camera ? CountByCamera(stats, model, place, ticks) : -1.0f;
+                float px = 0.0f;
+                const float distance = stats.camera ? CountByCamera(stats, model, place, ticks, &px) : -1.0f;
+                if (stats.farBands)
+                    CountFar(stats, model, distance, px, ticks, devDraws, lock);
                 if (stats.instancing)
                     CountInstance(stats, model, distance, ticks, devDraws, lock);
                 if (stats.models)
