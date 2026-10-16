@@ -422,15 +422,41 @@ namespace CarMirrors
     // it in the plane (0xA87B50) and clips by it. The plane goes in right before, by the car as it is now: from the
     // update's plane, a frame old where this runs first, the reflected view was off by twice the car's travel in a
     // frame (0.7 m at 20 m/s), the reflection lagging and jerking while driving.
+    // Then its views (+0xB0, the reflected one, and +0x4A0, both copies of the camera's grcViewport) are widened by
+    // Widen (grcViewport::Perspective, CE 0x431470, the field of view at +0x2B8): the zoom out reads the reflection
+    // further out than the screen it was made for, and a mirror by the screen's edge smeared its last pixels.
+    static void (__fastcall* perspective)(uintptr_t viewport, void*, float fov, float aspect, float zNear, float zFar) = nullptr;
+    static std::atomic<float> widened{ 1.0f };
+
+    static float Widen()
+    {
+        return 1.0f + (zoomOut - 1.0f) * 0.8f;
+    }
+
     static void __fastcall PhaseView(uintptr_t phase, void*, uintptr_t view)
     {
-        if (quadsThisFrame && active)
+        const bool ours = quadsThisFrame && active;
+        if (ours)
         {
             const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
             if (const float* m = vehicle ? CEntity::GetMatrix(vehicle) : nullptr)
                 PlacePlane(m, *active);
         }
         phaseViewHook.unsafe_thiscall<void>(phase, view);
+        const float widen = ours && perspective ? Widen() : 1.0f;
+        if (widen > 1.0f)
+            for (const uintptr_t offset : { uintptr_t(0xB0), uintptr_t(0x4A0) })
+            {
+                const auto viewport = phase + offset;
+                const auto* lens = reinterpret_cast<const float*>(viewport + 0x2B8); // fov, aspect, near, far
+                const bool degrees = lens[0] > 3.2f;
+                const float half = (degrees ? lens[0] * 0.01745329f : lens[0]) * 0.5f;
+                if (!(half > 0.0f && half < 1.5f))
+                    continue;
+                const float wider = 2.0f * std::atan(std::tan(half) * widen);
+                perspective(viewport, nullptr, degrees ? wider * 57.29578f : wider, lens[1], lens[2], lens[3]);
+            }
+        widened.store(widen, std::memory_order_relaxed);
     }
 
     // CRenderPhaseWaterReflection's visibility (vtable slot 3, CE 0xD77550): the same scan from the phase's own
@@ -460,7 +486,8 @@ namespace CarMirrors
     }
 
     // c152 for mirror.fx (mirror_car_shape.patch): x 1 cuts the quad to the glass's outline, y the zoom out - 1 widens
-    // the view as a convex mirror's, z how dark (1 dark glass, not the reflection); zeros keep an interior mirror as the
+    // the view as a convex mirror's, z how dark (1 dark glass, not the reflection), w 1 / Widen - 1 (the reflection made
+    // wider than the screen, read nearer its middle); zeros keep an interior mirror as the
     // game draws it. c153-c160: the glass's outline's edges, a corner xy and the way to the next zw, counter-clockwise
     // over the quad's -1..1 (u right, v up as the driver sees it; CarMirrorsReverse turns u round); unused edges zero.
     static void SetShape(const CarMirrorGlass* glass, float darkness)
@@ -473,6 +500,7 @@ namespace CarMirrors
         shape[0][0] = glass && rounded && n >= 3 ? 1.0f : 0.0f;
         shape[0][1] = glass ? zoomOut - 1.0f : 0.0f;
         shape[0][2] = glass ? std::clamp(darkness, 0.0f, 1.0f) : 0.0f;
+        shape[0][3] = glass ? 1.0f / widened.load(std::memory_order_relaxed) - 1.0f : 0.0f;
         if (shape[0][0] != 0.0f)
         {
             float outline[8][2];
@@ -602,6 +630,10 @@ public:
             auto view = hook::pattern("55 8B EC 83 E4 F0 81 EC 88 00 00 00 56 8B 75 08 57 8B F9 83 C6 10 8D 8F B0 00 00 00 56 E8");
             if (!view.empty())
                 CarMirrors::phaseViewHook = safetyhook::create_inline(view.get_first(0), CarMirrors::PhaseView);
+            // grcViewport::Perspective: push ecx / movss xmm0, [esp+8] / movss [ecx+2B8], xmm0 / movss xmm0, [esp+C] / movss [ecx+2BC], xmm0
+            auto lens = hook::pattern("51 F3 0F 10 44 24 08 F3 0F 11 81 B8 02 00 00 F3 0F 10 44 24 0C F3 0F 11 81 BC 02 00 00");
+            if (!lens.empty())
+                CarMirrors::perspective = lens.get_first<void(__fastcall)(uintptr_t, void*, float, float, float, float)>(0);
             // push ebp / mov ebp, esp / and esp, -10 / sub esp, 20 / call / test byte [eax], 40 / je / cmp byte [mirror on], 0 / je
             auto quad = hook::pattern("55 8B EC 83 E4 F0 83 EC 20 E8 ? ? ? ? F6 00 40 0F 84 ? ? ? ? 80 3D ? ? ? ? 00 0F 84");
             if (!quad.empty() && *quad.get_first<uint8_t*>(25) == CarMirrors::mirrorOn)
@@ -643,9 +675,9 @@ public:
                 uint32_t(std::size(CarMirrorTable)), timeBuild && timeVisibility ? "on" : "partly off",
                 CarMirrors::waterVisibility ? "found" : "not found (the mirrors stay empty outdoors)",
                 CarMirrors::quadHook ? "on" : "off (not found)", uint32_t(CarMirrors::queueHooks.size()));
-            FusionLog::Write("CarMirrors", "Init", "the mirror pass's glass tint %s; the plane before the reflected view %s\n",
+            FusionLog::Write("CarMirrors", "Init", "the mirror pass's glass tint %s; the plane before the reflected view %s; wider reflection %s\n",
                 CarMirrors::callback.add ? "on" : "off (the game's callback command was not found)",
-                CarMirrors::phaseViewHook ? "on" : "off (not found)");
+                CarMirrors::phaseViewHook ? "on" : "off (not found)", CarMirrors::perspective ? "on" : "off (not found)");
             if (CarMirrors::quadOffset)
                 FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
         };

@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/mirror/mirrorPS1.asm b/win32_30_nv8/mirror/mirrorPS1.asm
-index f0752696..8d4f4fa5 100644
+index f0752696..3d901550 100644
 --- a/win32_30_nv8/mirror/mirrorPS1.asm
 +++ b/win32_30_nv8/mirror/mirrorPS1.asm
-@@ -20,14 +20,81 @@
+@@ -20,14 +20,86 @@
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0691907283e-42 // 763
      def c0, -1.75, -0.5, -0.285714298, 0.5
@@ -76,6 +76,11 @@ index f0752696..8d4f4fa5 100644
 +    mul r6.xy, r2, r5.x
 +    mad r6.xy, r2.zwzw, r5.y, r6
 +    mad r0.xy, r6, -c152.y, r0
++    // FusionFix mirror_car_shape.patch: the reflection was made wider than the screen (c152.w, 1 / widen - 1; 0 for interior mirrors): read
++    // nearer its middle
++    mov r12, c152
++    add r13.xy, r0, -c0.w
++    mad r0.xy, r13, r12.w, r0
      texld r0, r0, s0
 -    mul oC0.xyz, r0, c39.y
 +    // FusionFix mirror_car_shape.patch: c152.z how dark: a car's other mirrors, and the one reflected as it fades out and in
