@@ -44,6 +44,17 @@ namespace CarMirrors
     // Taken as 0.035, the quad sat 1.75 cm behind the glass, inside the mirror's housing.
     static float* const* quadOffset = nullptr;
     static constexpr float InFrontOfGlass = 0.005f;
+    // The plane the reflection is made in and clipped by stands this far in front of the glass: the housing's rim stood
+    // in front of the glass by 1-2 cm and, kept by the clip, covered the reflected view right by the eye (a piece of the
+    // housing over the side mirrors, an interior mirror black).
+    static constexpr float ClipAhead = 0.025f;
+    // The mirrors set as a driver sets them: the plane turned halfway between the way to the eye and the way to what it
+    // should show, 10 m straight back along the car, a little down, side mirrors turned in towards the car by
+    // CarMirrorsSideAim degrees (hidden), the interior one down by CarMirrorsInteriorAimDown (hidden); the quad stays
+    // on the glass. The eye is kept in the car's space (the driver's seat), the model's glass faced anywhere.
+    static float sideAim = 3.0f, interiorAimDown = 3.0f;
+    static float eyeInCar[3]{};
+    static bool eyeKnown = false;
     static constexpr float MinLook = 0.3f;  // cosine: a mirror further off the view than ~73 degrees is not taken
     static constexpr float Keep = 0.1f;     // the mirror in use stays until another is this much nearer the view
     // ... and while it is on the screen at all (within ~60 degrees of the view): the game draws one mirror, and the
@@ -148,15 +159,40 @@ namespace CarMirrors
         return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     }
 
+    // The plane's normal in the car's space: halfway between the way to the eye and the way to what the mirror shows.
+    static void Aim(const CarMirrorGlass& glass, float (&out)[3])
+    {
+        std::copy_n(glass.normal, 3, out);
+        if (!eyeKnown)
+            return;
+        const float* c = glass.centre;
+        const bool side = glass.kind != 2;
+        const float inward = side ? (c[0] < 0.0f ? 1.0f : -1.0f) * 10.0f * std::tan(sideAim * 0.01745329f) : 0.0f;
+        const float down = 10.0f * std::tan((side ? 1.5f : interiorAimDown) * 0.01745329f);
+        const float toTarget[3] = { inward, -10.0f, -down };
+        float toEye[3] = { eyeInCar[0] - c[0], eyeInCar[1] - c[1], eyeInCar[2] - c[2] };
+        const float eyeLength = std::sqrt(Dot(toEye, toEye)), targetLength = std::sqrt(Dot(toTarget, toTarget));
+        if (eyeLength < 0.05f)
+            return;
+        float n[3];
+        for (int i = 0; i < 3; ++i) n[i] = toEye[i] / eyeLength + toTarget[i] / targetLength;
+        const float length = std::sqrt(Dot(n, n));
+        if (length < 1e-3f || Dot(n, glass.normal) <= 0.2f * length)
+            return; // a turn this far would show the glass from its edge: keep the model's
+        for (int i = 0; i < 3; ++i) out[i] = n[i] / length;
+    }
+
     // The glass in the world by the car's matrix m: the corners round it, a little in front of it, and with plane, its
-    // plane; centre, where given, takes its middle.
+    // plane, the mirror as set (Aim); centre, where given, takes its middle.
     static void PlaceGlass(const float* m, const CarMirrorGlass& glass, bool withPlane, float* centreOut, float* out = nullptr)
     {
         if (!out)
             out = corners;
+        float aimed[3];
+        Aim(glass, aimed);
         float centre[3], normal[3], right[3], up[3];
         Transform(m, glass.centre, centre, true);
-        Transform(m, glass.normal, normal, false);
+        Transform(m, aimed, normal, false);
         Transform(m, glass.right, right, false);
         Transform(m, glass.up, up, false);
         const float length = std::sqrt(Dot(normal, normal));
@@ -164,7 +200,7 @@ namespace CarMirrors
         if (withPlane)
         {
             for (int i = 0; i < 3; ++i) plane[i] = normal[i];
-            plane[3] = Dot(normal, centre);
+            plane[3] = Dot(normal, centre) + ClipAhead;
         }
         const float pushed = (quadOffset && *quadOffset ? **quadOffset : 0.035f) - InFrontOfGlass;
         // round the glass: bottom left, bottom right, top right, top left as the driver sees it
@@ -267,6 +303,11 @@ namespace CarMirrors
         }
         if (!best || bestLook < MinLook)
             return Off("no mirror in view");
+
+        // the eye in the car's space, the mirrors set for it
+        for (int j = 0; j < 3; ++j)
+            eyeInCar[j] = (eye[0] - m[12]) * m[4 * j] + (eye[1] - m[13]) * m[4 * j + 1] + (eye[2] - m[14]) * m[4 * j + 2];
+        eyeKnown = std::isfinite(eyeInCar[0]) && std::isfinite(eyeInCar[1]) && std::isfinite(eyeInCar[2]);
 
         float centre[3];
         PlaceGlass(m, *best, true, centre);
@@ -457,8 +498,11 @@ public:
                 CarMirrors::rounded = ini.ReadInteger("MISC", "CarMirrorsRounded", 1) != 0;
                 CarMirrors::byDrawnCar = ini.ReadInteger("MISC", "CarMirrorsByDrawnCar", 1) != 0;
                 CarMirrors::zoomOut = std::clamp(ini.ReadFloat("MISC", "CarMirrorsZoomOut", 1.3f), 1.0f, 2.5f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f\n",
-                    int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut);
+                CarMirrors::sideAim = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAim", 3.0f), -20.0f, 20.0f);
+                CarMirrors::interiorAimDown = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimDown", 3.0f), -20.0f, 20.0f);
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, side aim %.1f, interior aim down %.1f\n",
+                    int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut,
+                    CarMirrors::sideAim, CarMirrors::interiorAimDown);
             };
             CIniReader iniReader("");
             readIni(iniReader);
