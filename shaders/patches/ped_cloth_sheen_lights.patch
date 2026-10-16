@@ -1,0 +1,459 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index 4305b000..945dbfd4 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -81,6 +81,7 @@
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
+     def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
++    def c166, 16, -5, 0.0001, 0.5 // FusionFix cloth sheen: the clothes test; a floor and a half for the sheen lobe
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -324,13 +325,32 @@
+     texld r20, r0.zwzw, s11
+     mad r20.x, r20.x, c156.x, c156.y
+     frc r20.x, r20.x
++    mad_sat r22.w, r20.x, c166.x, c166.y // FusionFix cloth sheen: 1 on clothes (an eighth) and skin (a quarter), 0 elsewhere
+     mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
++    add r22.w, r22.w, -r20.x // FusionFix cloth sheen: 1 on clothes only
+     dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
+     mul r21.xyz, c201, r20.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
+     mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
+     mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
+     add_sat r21.xyz, r21, r22 // the game's N.L off skin
++    // --- FusionFix cloth sheen (c164: ClothSheen in postfx.ixx): fibres catch the light around a sleeve's rim, the Charlie lobe
++    add r22.xyz, r3, -r12 // towards the light plus towards the camera
++    nrm r23.xyz, r22
++    dp3 r22.x, r2, r23
++    mad r22.x, -r22.x, r22.x, c171.x // 1 - N.H^2
++    dp3_sat r22.y, r3, r2 // N.L
++    dp3 r22.z, r2, r12 // -N.V
++    mad r23.w, -r22.y, r22_abs.z, r22_abs.z
++    add r23.w, r23.w, r22.y
++    max r23.w, r23.w, c166.z
++    rcp r23.w, r23.w
++    mul r23.w, r23.w, r22.y
++    mul r23.w, r23.w, r22.x
++    mul r23.w, r23.w, c166.w // (1 - N.H^2) N.L / (2 (N.L + N.V - N.L N.V))
++    mul r22.w, r22.w, r23.w
++    mul r22.w, r22.w, c164.x // on clothes only, ClothSheenStrength times
+     dp3_sat r0.y, r2, r4
++    mul r22.xyz, r1, r22.w // FusionFix cloth sheen: the light the fibres catch
+     mul r2.xyz, r1, r21 // FusionFix skin lighting: the wrapped N.L per channel
+     texld r3, r0.zwzw, s2
+     // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
+@@ -408,6 +428,15 @@
+     mad r0.x, r0.x, c6.z, r0.z
+     add r0.x, r0.x, c7.z
+     cmp r0.x, r0.x, c2.y, r0.y
++    rsq r23.x, r4.x // FusionFix cloth sheen: the sheen's colour, the square root of the albedo, c164.z of the way to white
++    rsq r23.y, r4.y
++    rsq r23.z, r4.z
++    rcp r23.x, r23.x
++    rcp r23.y, r23.y
++    rcp r23.z, r23.z
++    mad r23.xyz, -r23, c164.z, r23
++    add r23.xyz, r23, c164.z
++    mad r1.xyz, r22, r23, r1 // the sheen
+     mul r26, r1, r0.x
+     // --- FusionFix local contact shadows: a short ray from this pixel towards the light
+     // --- through the opaque depth catches small occluders, also for lights without a shadow
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+index 4ca6b053..67614172 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -51,6 +51,7 @@
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
+     def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
++    def c166, 16, -5, 0.0001, 0.5 // FusionFix cloth sheen: the clothes test; a floor and a half for the sheen lobe
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -87,7 +88,9 @@
+     texld r20, r1, s11
+     mad r20.x, r20.x, c156.x, c156.y
+     frc r20.x, r20.x
++    mad_sat r22.w, r20.x, c166.x, c166.y // FusionFix cloth sheen: 1 on clothes (an eighth) and skin (a quarter), 0 elsewhere
+     mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
++    add r22.w, r22.w, -r20.x // FusionFix cloth sheen: 1 on clothes only
+     
+     // LogDepth Read
+     pow r19.x, c209_abs.z, r2.x
+@@ -186,6 +189,22 @@
+     mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
+     mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
+     add_sat r21.xyz, r21, r22 // the game's N.L off skin
++    // --- FusionFix cloth sheen (c164: ClothSheen in postfx.ixx): fibres catch the light around a sleeve's rim, the Charlie lobe
++    add r22.xyz, r8, -r12 // towards the light plus towards the camera
++    nrm r23.xyz, r22
++    dp3 r22.x, r5, r23
++    mad r22.x, -r22.x, r22.x, c171.x // 1 - N.H^2
++    dp3_sat r22.y, r8, r5 // N.L
++    dp3 r22.z, r5, r12 // -N.V
++    mad r23.w, -r22.y, r22_abs.z, r22_abs.z
++    add r23.w, r23.w, r22.y
++    max r23.w, r23.w, c166.z
++    rcp r23.w, r23.w
++    mul r23.w, r23.w, r22.y
++    mul r23.w, r23.w, r22.x
++    mul r23.w, r23.w, c166.w // (1 - N.H^2) N.L / (2 (N.L + N.V - N.L N.V))
++    mul r22.w, r22.w, r23.w
++    mul r22.w, r22.w, c164.x // on clothes only, ClothSheenStrength times
+     mul r0.xyz, r0, r1.x
+     cmp r0.xyz, r0.w, r0, c1.z
+     pow r0.w, r1.y, r1.w
+@@ -220,12 +239,22 @@
+     endif
+     cmp r0.w, -c200.x, r0.w, r13.w // the game's highlight while c200.x is 0
+     mul r1.xyw, r0.xyzz, r0.w
++    mul r22.xyz, r0, r22.w // FusionFix cloth sheen: the light the fibres catch
+     mul r0.xyz, r21, r0 // FusionFix skin lighting: the wrapped N.L per channel
+     mul r2.xyz, r3, r6
+     mul r1.xyz, r1.z, r1.xyww
+     mad r0.xyz, r2, r0, r1
+     mad_sat r1.x, r4.z, r4.z, c1.y
+     mov r0.w, c1.x
++    rsq r23.x, r3.x // FusionFix cloth sheen: the sheen's colour, the square root of the albedo, c164.z of the way to white
++    rsq r23.y, r3.y
++    rsq r23.z, r3.z
++    rcp r23.x, r23.x
++    rcp r23.y, r23.y
++    rcp r23.z, r23.z
++    mad r23.xyz, -r23, c164.z, r23
++    add r23.xyz, r23, c164.z
++    mad r0.xyz, r22, r23, r0 // the sheen
+     mul r26, r0, r1.x
+     // --- FusionFix local contact shadows: a short ray from this pixel towards the light
+     // --- through the opaque depth catches small occluders, also for lights without a shadow
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index b19777dd..641ee2fc 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -83,6 +83,7 @@
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
+     def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
++    def c166, 16, -5, 0.0001, 0.5 // FusionFix cloth sheen: the clothes test; a floor and a half for the sheen lobe
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -120,7 +121,9 @@
+     texld r20.w, r1, s11.x
+     mad r20.w, r20.w, c156.x, c156.y
+     frc r20.w, r20.w
++    mad_sat r28.x, r20.w, c166.x, c166.y // FusionFix cloth sheen: 1 on clothes (an eighth) and skin (a quarter), 0 elsewhere
+     mad_sat r20.w, r20.w, c156.z, c156.w // 1 on skin, 0 elsewhere
++    add r28.x, r28.x, -r20.w // FusionFix cloth sheen: 1 on clothes only
+     
+     // LogDepth Read
+     pow r19.x, c209_abs.z, r2.x
+@@ -419,12 +422,38 @@
+     mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
+     mul r22.xyz, c205, r20.w // wrap / (1 + wrap) on skin, 0 elsewhere
+     add_sat r21.xyz, r21, r22 // the game's N.L off skin
++    // --- FusionFix cloth sheen (c164: ClothSheen in postfx.ixx): fibres catch the light around a sleeve's rim, the Charlie lobe
++    add r22.xyz, r8, -r12 // towards the light plus towards the camera
++    nrm r23.xyz, r22
++    dp3 r22.x, r5, r23
++    mad r22.x, -r22.x, r22.x, c171.x // 1 - N.H^2
++    dp3_sat r22.y, r8, r5 // N.L
++    dp3 r22.z, r5, r12 // -N.V
++    mad r23.w, -r22.y, r22_abs.z, r22_abs.z
++    add r23.w, r23.w, r22.y
++    max r23.w, r23.w, c166.z
++    rcp r23.w, r23.w
++    mul r23.w, r23.w, r22.y
++    mul r23.w, r23.w, r22.x
++    mul r23.w, r23.w, c166.w // (1 - N.H^2) N.L / (2 (N.L + N.V - N.L N.V))
++    mul r22.w, r28.x, r23.w
++    mul r22.w, r22.w, c164.x // on clothes only, ClothSheenStrength times
+     mul r1.xyw, r0.xyzz, r2.x
++    mul r22.xyz, r0, r22.w // FusionFix cloth sheen: the light the fibres catch
+     mul r0.xyz, r0, r21 // FusionFix skin lighting: the wrapped N.L per channel
+     mul r2.xyz, r3, r6
+     mul r1.xyz, r1.z, r1.xyww
+     mad r26.xyz, r2, r0, r1
+     mov r26.w, c1.x
++    rsq r23.x, r3.x // FusionFix cloth sheen: the sheen's colour, the square root of the albedo, c164.z of the way to white
++    rsq r23.y, r3.y
++    rsq r23.z, r3.z
++    rcp r23.x, r23.x
++    rcp r23.y, r23.y
++    rcp r23.z, r23.z
++    mad r23.xyz, -r23, c164.z, r23
++    add r23.xyz, r23, c164.z
++    mad r26.xyz, r22, r23, r26 // the sheen
+     // --- FusionFix local contact shadows: a short ray from this pixel towards the light
+     // --- through the opaque depth catches small occluders, also for lights without a shadow
+     // --- map. FusionFix sets c202-c204 right before lighting, from the camera (c203.w the magic value
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+index f3b45d36..83a3bdca 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -46,6 +46,7 @@
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
+     def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
++    def c166, 16, -5, 0.0001, 0.5 // FusionFix cloth sheen: the clothes test; a floor and a half for the sheen lobe
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -137,7 +138,9 @@
+     texld r20, r0, s11
+     mad r20.x, r20.x, c156.x, c156.y
+     frc r20.x, r20.x
++    mad_sat r22.w, r20.x, c166.x, c166.y // FusionFix cloth sheen: 1 on clothes (an eighth) and skin (a quarter), 0 elsewhere
+     mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
++    add r22.w, r22.w, -r20.x // FusionFix cloth sheen: 1 on clothes only
+     mul r0.x, r1.y, r1.y
+     mul r0.x, r0.x, c0.y
+     pow r1.y, r0.w, r0.x
+@@ -179,6 +182,22 @@
+     mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
+     mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
+     add_sat r21.xyz, r21, r22 // the game's N.L off skin
++    // --- FusionFix cloth sheen (c164: ClothSheen in postfx.ixx): fibres catch the light around a sleeve's rim, the Charlie lobe
++    add r22.xyz, r3, -r12 // towards the light plus towards the camera
++    nrm r23.xyz, r22
++    dp3 r22.x, r2, r23
++    mad r22.x, -r22.x, r22.x, c171.x // 1 - N.H^2
++    dp3_sat r22.y, r3, r2 // N.L
++    dp3 r22.z, r2, r12 // -N.V
++    mad r23.w, -r22.y, r22_abs.z, r22_abs.z
++    add r23.w, r23.w, r22.y
++    max r23.w, r23.w, c166.z
++    rcp r23.w, r23.w
++    mul r23.w, r23.w, r22.y
++    mul r23.w, r23.w, r22.x
++    mul r23.w, r23.w, c166.w // (1 - N.H^2) N.L / (2 (N.L + N.V - N.L N.V))
++    mul r22.w, r22.w, r23.w
++    mul r22.w, r22.w, c164.x // on clothes only, ClothSheenStrength times
+     add r0.y, r0.y, -c74.x
+     mul_sat r0.y, r0.y, c75.x
+     mul r0.x, r0.x, r0.y
+@@ -186,12 +205,22 @@
+     mul r2.xyz, r0.x, r2
+     cmp r0.xyz, r0.z, r2, c3.y
+     mul r2.xyz, r1.y, r0
++    mul r22.xyz, r0, r22.w // FusionFix cloth sheen: the light the fibres catch
+     mul r0.xyz, r21, r0 // FusionFix skin lighting: the wrapped N.L per channel
+     mul r0.xyz, r4, r0
+     add r0.w, r1.x, r1.x
+     mad_sat r1.x, r1.z, r1.z, c2.x
+     mad r0.xyz, r0.w, r2, r0
+     mov r0.w, c2.z
++    rsq r23.x, r4.x // FusionFix cloth sheen: the sheen's colour, the square root of the albedo, c164.z of the way to white
++    rsq r23.y, r4.y
++    rsq r23.z, r4.z
++    rcp r23.x, r23.x
++    rcp r23.y, r23.y
++    rcp r23.z, r23.z
++    mad r23.xyz, -r23, c164.z, r23
++    add r23.xyz, r23, c164.z
++    mad r0.xyz, r22, r23, r0 // the sheen
+     mul r26, r1.x, r0
+     // --- FusionFix local contact shadows: a short ray from this pixel towards the light
+     // --- through the opaque depth catches small occluders, also for lights without a shadow
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+index 631918c6..ac280524 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -49,6 +49,7 @@
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
+     def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
++    def c166, 16, -5, 0.0001, 0.5 // FusionFix cloth sheen: the clothes test; a floor and a half for the sheen lobe
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -177,12 +178,30 @@
+     texld r20, r0, s11
+     mad r20.x, r20.x, c156.x, c156.y
+     frc r20.x, r20.x
++    mad_sat r22.w, r20.x, c166.x, c166.y // FusionFix cloth sheen: 1 on clothes (an eighth) and skin (a quarter), 0 elsewhere
+     mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
++    add r22.w, r22.w, -r20.x // FusionFix cloth sheen: 1 on clothes only
+     dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
+     mul r21.xyz, c201, r20.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
+     mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
+     mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
+     add_sat r21.xyz, r21, r22 // the game's N.L off skin
++    // --- FusionFix cloth sheen (c164: ClothSheen in postfx.ixx): fibres catch the light around a sleeve's rim, the Charlie lobe
++    add r22.xyz, r3, -r12 // towards the light plus towards the camera
++    nrm r23.xyz, r22
++    dp3 r22.x, r2, r23
++    mad r22.x, -r22.x, r22.x, c171.x // 1 - N.H^2
++    dp3_sat r22.y, r3, r2 // N.L
++    dp3 r22.z, r2, r12 // -N.V
++    mad r23.w, -r22.y, r22_abs.z, r22_abs.z
++    add r23.w, r23.w, r22.y
++    max r23.w, r23.w, c166.z
++    rcp r23.w, r23.w
++    mul r23.w, r23.w, r22.y
++    mul r23.w, r23.w, r22.x
++    mul r23.w, r23.w, c166.w // (1 - N.H^2) N.L / (2 (N.L + N.V - N.L N.V))
++    mul r22.w, r22.w, r23.w
++    mul r22.w, r22.w, c164.x // on clothes only, ClothSheenStrength times
+     add r1.y, r1.y, -c74.x
+     mul_sat r1.y, r1.y, c75.x
+     mul r0.w, r0.w, r1.y
+@@ -190,6 +209,7 @@
+     mul r2.xyz, r0.w, r2
+     cmp r2.xyz, r0.z, r2, -c2.z
+     mul r3.xyz, r2.w, r2
++    mul r22.xyz, r2, r22.w // FusionFix cloth sheen: the light the fibres catch
+     mul r1.yzw, r21.xxyz, r2.xxyz // FusionFix skin lighting: the wrapped N.L per channel
+     texld r2, r0, s0
+     texld r0, r0, s5
+@@ -201,6 +221,15 @@
+     mad r0.x, r0.x, c2.x, r0.y
+     add r0.x, r0.x, c2.w
+     cmp r0.x, r0.x, c3.x, c3.y
++    rsq r23.x, r2.x // FusionFix cloth sheen: the sheen's colour, the square root of the albedo, c164.z of the way to white
++    rsq r23.y, r2.y
++    rsq r23.z, r2.z
++    rcp r23.x, r23.x
++    rcp r23.y, r23.y
++    rcp r23.z, r23.z
++    mad r23.xyz, -r23, c164.z, r23
++    add r23.xyz, r23, c164.z
++    mad r1.xyz, r22, r23, r1 // the sheen
+     mul r26, r1, r0.x
+     // --- FusionFix local contact shadows: a short ray from this pixel towards the light
+     // --- through the opaque depth catches small occluders, also for lights without a shadow
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+index 03685891..8a1efaaf 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -49,6 +49,7 @@
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
+     def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
++    def c166, 16, -5, 0.0001, 0.5 // FusionFix cloth sheen: the clothes test; a floor and a half for the sheen lobe
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -176,12 +177,30 @@
+     texld r20, r0, s11
+     mad r20.x, r20.x, c156.x, c156.y
+     frc r20.x, r20.x
++    mad_sat r22.w, r20.x, c166.x, c166.y // FusionFix cloth sheen: 1 on clothes (an eighth) and skin (a quarter), 0 elsewhere
+     mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
++    add r22.w, r22.w, -r20.x // FusionFix cloth sheen: 1 on clothes only
+     dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
+     mul r21.xyz, c201, r20.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
+     mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
+     mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
+     add_sat r21.xyz, r21, r22 // the game's N.L off skin
++    // --- FusionFix cloth sheen (c164: ClothSheen in postfx.ixx): fibres catch the light around a sleeve's rim, the Charlie lobe
++    add r22.xyz, r3, -r12 // towards the light plus towards the camera
++    nrm r23.xyz, r22
++    dp3 r22.x, r2, r23
++    mad r22.x, -r22.x, r22.x, c171.x // 1 - N.H^2
++    dp3_sat r22.y, r3, r2 // N.L
++    dp3 r22.z, r2, r12 // -N.V
++    mad r23.w, -r22.y, r22_abs.z, r22_abs.z
++    add r23.w, r23.w, r22.y
++    max r23.w, r23.w, c166.z
++    rcp r23.w, r23.w
++    mul r23.w, r23.w, r22.y
++    mul r23.w, r23.w, r22.x
++    mul r23.w, r23.w, c166.w // (1 - N.H^2) N.L / (2 (N.L + N.V - N.L N.V))
++    mul r22.w, r22.w, r23.w
++    mul r22.w, r22.w, c164.x // on clothes only, ClothSheenStrength times
+     add r1.y, r1.y, -c74.x
+     mul_sat r1.y, r1.y, c75.x
+     mul r0.w, r0.w, r1.y
+@@ -189,6 +208,7 @@
+     mul r2.xyz, r0.w, r2
+     cmp r2.xyz, r0.z, r2, -c3.z
+     mul r3.xyz, r2.w, r2
++    mul r22.xyz, r2, r22.w // FusionFix cloth sheen: the light the fibres catch
+     mul r2.xyz, r21, r2 // FusionFix skin lighting: the wrapped N.L per channel
+     texld r4, r0, s0
+     texld r0, r0, s5
+@@ -203,6 +223,15 @@
+     add r0.x, r0.x, c3.w
+     cmp r0.x, r0.x, c0.x, c0.y
+     mul r0, r2, r0.x
++    rsq r23.x, r4.x // FusionFix cloth sheen: the sheen's colour, the square root of the albedo, c164.z of the way to white
++    rsq r23.y, r4.y
++    rsq r23.z, r4.z
++    rcp r23.x, r23.x
++    rcp r23.y, r23.y
++    rcp r23.z, r23.z
++    mad r23.xyz, -r23, c164.z, r23
++    add r23.xyz, r23, c164.z
++    mad r0.xyz, r22, r23, r0 // the sheen
+     mul r26, r1.y, r0
+     // --- FusionFix local contact shadows: a short ray from this pixel towards the light
+     // --- through the opaque depth catches small occluders, also for lights without a shadow
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+index 0fe181f0..999b0afe 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -49,6 +49,7 @@
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
+     def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
++    def c166, 16, -5, 0.0001, 0.5 // FusionFix cloth sheen: the clothes test; a floor and a half for the sheen lobe
+     def c158, 0.5, -0.5, 0.5, 0
+     def c160, 2, -1, 0.899999976, 0
+     def c161, 0.00300000003, 0.0199999996, 4, 0
+@@ -177,12 +178,30 @@
+     texld r20, r0, s11
+     mad r20.x, r20.x, c156.x, c156.y
+     frc r20.x, r20.x
++    mad_sat r22.w, r20.x, c166.x, c166.y // FusionFix cloth sheen: 1 on clothes (an eighth) and skin (a quarter), 0 elsewhere
+     mad_sat r20.x, r20.x, c156.z, c156.w // 1 on skin, 0 elsewhere
++    add r22.w, r22.w, -r20.x // FusionFix cloth sheen: 1 on clothes only
+     dp3 r21.w, r3, r2 // FusionFix skin lighting: N.L, unclamped
+     mul r21.xyz, c201, r20.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
+     mad r21.xyz, r21.w, r21, r21.w // N.L times 1 / (1 + wrap) on skin
+     mul r22.xyz, c205, r20.x // wrap / (1 + wrap) on skin, 0 elsewhere
+     add_sat r21.xyz, r21, r22 // the game's N.L off skin
++    // --- FusionFix cloth sheen (c164: ClothSheen in postfx.ixx): fibres catch the light around a sleeve's rim, the Charlie lobe
++    add r22.xyz, r3, -r12 // towards the light plus towards the camera
++    nrm r23.xyz, r22
++    dp3 r22.x, r2, r23
++    mad r22.x, -r22.x, r22.x, c171.x // 1 - N.H^2
++    dp3_sat r22.y, r3, r2 // N.L
++    dp3 r22.z, r2, r12 // -N.V
++    mad r23.w, -r22.y, r22_abs.z, r22_abs.z
++    add r23.w, r23.w, r22.y
++    max r23.w, r23.w, c166.z
++    rcp r23.w, r23.w
++    mul r23.w, r23.w, r22.y
++    mul r23.w, r23.w, r22.x
++    mul r23.w, r23.w, c166.w // (1 - N.H^2) N.L / (2 (N.L + N.V - N.L N.V))
++    mul r22.w, r22.w, r23.w
++    mul r22.w, r22.w, c164.x // on clothes only, ClothSheenStrength times
+     add r1.y, r1.y, -c74.x
+     mul_sat r1.y, r1.y, c75.x
+     mul r0.w, r0.w, r1.y
+@@ -190,6 +209,7 @@
+     mul r2.xyz, r0.w, r2
+     cmp r2.xyz, r0.z, r2, -c2.z
+     mul r3.xyz, r2.w, r2
++    mul r22.xyz, r2, r22.w // FusionFix cloth sheen: the light the fibres catch
+     mul r1.yzw, r21.xxyz, r2.xxyz // FusionFix skin lighting: the wrapped N.L per channel
+     texld r2, r0, s0
+     texld r0, r0, s5
+@@ -205,6 +225,15 @@
+     add r0.x, -r0_abs.x, c3.w
+     cmp r0.x, r0.x, -c3.z, -c3.y
+     mov r1.w, -c3.z
++    rsq r23.x, r2.x // FusionFix cloth sheen: the sheen's colour, the square root of the albedo, c164.z of the way to white
++    rsq r23.y, r2.y
++    rsq r23.z, r2.z
++    rcp r23.x, r23.x
++    rcp r23.y, r23.y
++    rcp r23.z, r23.z
++    mad r23.xyz, -r23, c164.z, r23
++    add r23.xyz, r23, c164.z
++    mad r1.xyz, r22, r23, r1 // the sheen
+     mul r26, r1, r0.x
+     // --- FusionFix local contact shadows: a short ray from this pixel towards the light
+     // --- through the opaque depth catches small occluders, also for lights without a shadow

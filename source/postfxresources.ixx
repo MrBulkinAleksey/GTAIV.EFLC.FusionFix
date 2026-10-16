@@ -423,7 +423,8 @@ public:
     // stay close: past where green and blue end only red is lit, and with 0.5, 0.2 and 0.1 that
     // band reached a fifth of full light and turned the dark side of faces red.
     float fSkinLighting = 1.0f;
-    // Clothes (c164 and c191; shaders/patches/ped_cloth_sheen.patch for the sun and the sky): the
+    // Clothes (c164 and c191; shaders/patches/ped_cloth_sheen.patch for the sun and the sky,
+    // ped_cloth_sheen_lights.patch for lamps and headlights, which take the same lobe without the ambient): the
     // components ClothComponents names (bits of the ped component numbers: 1 UPPR, 2 LOWR, 3 SUSE,
     // 6 JACK, 8 SUS2 by default) put an eighth of a step on the material ID (InstallPedSkinHooks).
     // There the fibres catch the sun at grazing angles (the Charlie sheen lobe, roughness 0.5, with its
