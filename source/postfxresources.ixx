@@ -64,6 +64,7 @@ import postfxprofiler;
 #define IDR_CLOUDS_FX                            138
 #define IDR_WETGROUND_FX                         139
 #define IDR_HEADLIGHTGLINTS_FX                   140
+#define IDR_SKYATMOSPHERE_FX                     142
 
 #define IDR_SSDraw_PS_compiled                   2127
 #define IDR_SSPrepass_PS_compiled                2128
@@ -701,6 +702,30 @@ public:
         return p ? p->get() != 0 : bVolumetricClouds;
     }
     bool VolumetricCloudsOn() const { return VolumetricCloudsEnabled() && CloudsEffect != nullptr; }
+
+    // PBR sky (pbrsky.ixx, SkyAtmosphere.fx): the transmittance and multiple scattering tables, drawn again when the
+    // haze changes, and the sky seen from the camera, drawn once a frame before the first sky; gta_atmoscatt_clouds
+    // reads it on s10 (sky_pbr.patch).
+    ID3DXEffect* SkyEffect = nullptr;
+    HRESULT hrSkyEffect = S_OK;
+    rage::grcRenderTargetPC* SkyTransmittanceTex = nullptr;
+    IDirect3DSurface9* SkyTransmittanceSurf = nullptr;
+    rage::grcRenderTargetPC* SkyMultiScatterTex = nullptr;
+    IDirect3DSurface9* SkyMultiScatterSurf = nullptr;
+    rage::grcRenderTargetPC* SkyViewTex = nullptr;
+    IDirect3DSurface9* SkyViewSurf = nullptr;
+    float fSkyTablesHaze = -1.0f;   // the haze the first two tables were drawn for, < 0 not drawn
+    uint32_t nSkyViewFrame = 0;     // FrameHistory::Frame() SkyView was drawn in, 0 never
+    // The strength the sky last took the table at, and why it did not, for the Ctrl+Shift+F10 log.
+    float fPbrSkyLastStrength = 0.0f, fPbrSkyLastHaze = 0.0f, fPbrSkyLastSunHeight = 0.0f;
+    const char* szPbrSkyStatus = "not run yet";
+    uint32_t nPbrSkyDraws = 0;
+    // Physical Sky in the graphics menu (PREF_PBR_SKY, [WEATHER] PbrSky)
+    bool PbrSkyEnabled() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_PBR_SKY");
+        return p ? p->get() != 0 : true;
+    }
     // Why the last frame drew no volumetric clouds, or that it did, for the Ctrl+Shift+F10 log.
     const char* szCloudsStatus = "not run yet";
     // The same for the reflection map (DrawSkyReflection): what the last call did, how many calls
@@ -730,6 +755,8 @@ public:
     size_t CloudMoonPositionIdx = 0, CloudSkyColorIdx = 0;
     // The lit and shaded colours the clouds were last drawn with, and the sky's clamp, for the log.
     float CloudLastLit[3] = {}, CloudLastShade[3] = {}, CloudLastClamp[3] = {}, CloudLastCeiling = 0.0f, CloudLastLightStrength = 0.0f;
+    // The physical sky's share in the clouds' light, its table's colour times this on screen, and the sun's hue it gave.
+    float CloudLastPbrShare = 0.0f, CloudLastSkyUnits = 0.0f, CloudLastSunHue[3] = {};
     // The direction towards the game's own directional light (-c17, gDirectionalLight), taken in
     // the lighting phase, and the frame it was taken; the sky's SunDirection the clouds used to be
     // lit by came out mirrored across the sky. And the directions the clouds were last lit from.
@@ -1668,6 +1695,22 @@ public:
             if (hrCloudsEffect != S_OK)
             {
                 CloudsEffect = nullptr;
+                if (errors)
+                    MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
+            }
+            SAFE_RELEASE(errors);
+        }
+
+        // Like the clouds': without it the sky keeps the timecycle's gradient.
+        static bool skyEffectTried = false;
+        if (!SkyEffect && !skyEffectTried)
+        {
+            skyEffectTried = true;
+            ID3DXBuffer* errors = nullptr;
+            hrSkyEffect = CreateEffectCached(rage::grcDevice::GetD3DDevice(), hm, IDR_SKYATMOSPHERE_FX, "SkyAtmosphere", nullptr, &SkyEffect, &errors);
+            if (hrSkyEffect != S_OK)
+            {
+                SkyEffect = nullptr;
                 if (errors)
                     MessageBoxA(nullptr, (LPCSTR)errors->GetBufferPointer(), "Error building shader!", MB_OK);
             }

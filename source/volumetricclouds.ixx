@@ -28,6 +28,7 @@ import framegeneration;
 import framehistory;
 import hdr;
 import natives;
+import pbrsky;
 import settings;
 import shaders;
 import renderscale;
@@ -171,6 +172,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     if (sunLength <= 0.0f)
         return skip("SunDirection of the sky reads zero");
     sun /= sunLength;
+    const D3DXVECTOR4 skySun = sun;
     // Below the horizon the sun hands the clouds over to the moon. The sun still lights their
     // bellies a little way below it, at dusk; then its light fades out, and the moon's fades in
     // from the same zero, so the light never jumps from one to the other at full strength.
@@ -266,7 +268,8 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     // By day the game's own directional light, taken in the lighting phase of this frame or the
     // last: the sky's SunDirection, remapped from its y up space, lit the clouds from the
     // mirror image of the sun across the sky, their far sides lit and the near ones dark.
-    if (!moonlit && R.nCloudLightFrame && FrameHistory::Frame() - R.nCloudLightFrame <= 2 && R.CloudLightDir[2] > 0.0f)
+    const bool gameLight = !moonlit && R.nCloudLightFrame && FrameHistory::Frame() - R.nCloudLightFrame <= 2 && R.CloudLightDir[2] > 0.0f;
+    if (gameLight)
     {
         // Learn the sky's axis signs while both directions are clear of the zenith.
         for (int axis = 0; axis < 2; ++axis)
@@ -275,10 +278,21 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
             if (std::fabs(skyAxis) > 0.2f && std::fabs(gameAxis) > 0.2f)
                 R.CloudSkyAxisSign[axis] = (skyAxis > 0.0f) == (gameAxis > 0.0f) ? 1.0f : -1.0f;
         }
-        sun = D3DXVECTOR4(R.CloudLightDir[0], R.CloudLightDir[1], R.CloudLightDir[2], 0.0f);
+        // Its way round, at the height of the sun the sky draws: the game holds its light high, at 30
+        // degrees with the sky's sun on the horizon at 20:00, and the clouds of a sunset were lit, and
+        // took the sun's colour, as at midday.
+        const float flat = std::sqrt(R.CloudLightDir[0] * R.CloudLightDir[0] + R.CloudLightDir[1] * R.CloudLightDir[1]);
+        const float across = std::sqrt((std::max)(0.0f, 1.0f - skySun.z * skySun.z));
+        sun = flat > 1e-3f ? D3DXVECTOR4(R.CloudLightDir[0] / flat * across, R.CloudLightDir[1] / flat * across, skySun.z, 0.0f)
+                           : D3DXVECTOR4(R.CloudLightDir[0], R.CloudLightDir[1], R.CloudLightDir[2], 0.0f);
     }
     if (!reflection)
         std::memcpy(R.CloudLastUsedSun, &sun.x, sizeof(R.CloudLastUsedSun));
+    // The sun the physical sky's table was drawn about, in the world: the game's light's way round at the sky sun's
+    // height by day, else the sky's sun with the axis signs learnt from it.
+    const D3DXVECTOR4 tableSun = gameLight ? sun : D3DXVECTOR4(skySun.x * R.CloudSkyAxisSign[0], skySun.y * R.CloudSkyAxisSign[1], skySun.z, 0.0f);
+    // How much of their light the clouds take from the physical sky (pbrsky.ixx), as much as the sky took of it.
+    const float pbrShare = PbrSkyShare();
     // VolumetricCloudsDebug 15: the sun straight overhead, to test the sun's direction.
     if (R.VolumetricCloudsDebug() == 15)
         sun = D3DXVECTOR4(0.0f, 0.0f, 1.0f, 0.0f);
@@ -299,10 +313,12 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     // the sky on screen (CloudsSkyRef, in Clouds.fx), the reflections that of the frame before:
     // the game's SkyColor stays bluish under a pink evening sky, and the clouds came out white
     // against it. SkyColor's hue only while there is no sky colour of a recent frame.
-    constexpr float kCloudLitSkyHue = 0.4f;
+    // The lit side's share of it goes with the physical sky's share: under its blue the sunlit sides
+    // came out a grey blue. They take the sun's colour, the sky lights only the shade.
+    const float litSkyHue = 0.4f * (1.0f - pbrShare);
     const bool skyRefRecent = R.CloudSkyRefTex && R.nCloudSkyRefFrame && FrameHistory::Frame() - R.nCloudSkyRefFrame <= 2;
     {
-        const float skyHue[3] = { skyRefRecent ? R.fVolumetricCloudsSkyLight : 0.0f, skyRefRecent ? kCloudLitSkyHue : 0.0f,
+        const float skyHue[3] = { skyRefRecent ? R.fVolumetricCloudsSkyLight : 0.0f, skyRefRecent ? litSkyHue : 0.0f,
                                   R.fVolumetricCloudsSaturation };
         effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3SkyHue"), skyHue, 3);
     }
@@ -322,7 +338,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         const float litLuma = 0.2126f * litColour[0] + 0.7152f * litColour[1] + 0.0722f * litColour[2];
         if (skyLuma > 1e-4f)
             for (int i = 0; i < 3; ++i)
-                litColour[i] += ((std::max)(skyColour[i], 0.0f) / skyLuma * litLuma - litColour[i]) * kCloudLitSkyHue;
+                litColour[i] += ((std::max)(skyColour[i], 0.0f) / skyLuma * litLuma - litColour[i]) * litSkyHue;
     }
     // VolumetricCloudsSaturation, about each colour's luma.
     for (float* colour : { litColour, shadeColour, sunsetLit })
@@ -365,7 +381,10 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     effect->SetFloat(effect->GetParameterByName(nullptr, "fCeiling"), ceiling);
     {
         const float litLuma = 0.2126f * litColour[0] + 0.7152f * litColour[1] + 0.0722f * litColour[2];
-        effect->SetFloat(effect->GetParameterByName(nullptr, "fSkyMatch"), canReadScene && litLuma > 1e-4f ? R.fVolumetricCloudsSkyMatch * R.Cloud.skyMatch / litLuma : 0.0f);
+        // Under the physical sky twice as bright against it, by its share: matched to its whole dome, a darker
+        // blue than the timecycle's teal on screen, the clouds at twice its brightness came out grey on it.
+        const float skyMatch = R.fVolumetricCloudsSkyMatch * R.Cloud.skyMatch * (1.0f + pbrShare);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fSkyMatch"), canReadScene && litLuma > 1e-4f ? skyMatch / litLuma : 0.0f);
     }
     effect->SetFloat(effect->GetParameterByName(nullptr, "fLightStrength"), lightStrength);
     // How high the sun (or the moon) stands: 0 up to 5 degrees, 1 from 35 up. With it low, the clouds
@@ -383,22 +402,55 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     }
     effect->SetFloat(effect->GetParameterByName(nullptr, "fMottle"), R.fVolumetricCloudsMottle);
     // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
-    // towards white by VolumetricCloudsSunTint. The moon's is a cool white.
+    // towards white by VolumetricCloudsSunTint. The moon's is a cool white. With the physical sky,
+    // the sunlight that gets through its air to the middle of the layer, by its share.
     {
         static const float moonColour[3] = { 0.85f, 0.95f, 1.2f };
         const float* sunColour = moonlit ? moonColour : rage::grmShaderInfo::getShaderParamData(R.CloudSunColorIdx).data();
         const float luma = 0.2126f * sunColour[0] + 0.7152f * sunColour[1] + 0.0722f * sunColour[2];
-        float tint[3] = { 1.0f, 1.0f, 1.0f };
+        float hue[3] = { 1.0f, 1.0f, 1.0f };
         if (luma > 1e-4f)
             for (int i = 0; i < 3; ++i)
-                tint[i] = 1.0f + (std::clamp(sunColour[i] / luma, 0.0f, 2.0f) - 1.0f) * R.fVolumetricCloudsSunTint;
+                hue[i] = std::clamp(sunColour[i] / luma, 0.0f, 2.0f);
+        float pbrHue[3];
+        if (!moonlit && pbrShare > 0.0f && PbrSkySunHue((R.Cloud.base + 0.5f * R.Cloud.thickness) / 1000.0f, sun.z, pbrHue))
+            for (int i = 0; i < 3; ++i)
+                hue[i] += (pbrHue[i] - hue[i]) * pbrShare;
+        // Under the physical sky most of the air's colour: at the game's 0.3 a sunset's clouds took
+        // a pale peach for its orange.
+        const float sunTint = R.fVolumetricCloudsSunTint + (0.7f - R.fVolumetricCloudsSunTint) * pbrShare;
+        float tint[3];
+        for (int i = 0; i < 3; ++i)
+            tint[i] = 1.0f + (hue[i] - 1.0f) * sunTint;
         effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3SunTint"), tint, 3);
         // The glow is the sunlight straight through the cloud's edges: it takes the sun's hue
         // whole, gold in the evening, whatever VolumetricCloudsSunTint does to the lit sides.
         float glow[3];
         for (int i = 0; i < 3; ++i)
-            glow[i] = litColour[i] * (luma > 1e-4f ? std::clamp(sunColour[i] / luma, 0.0f, 2.0f) : 1.0f);
+            glow[i] = litColour[i] * hue[i];
         effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3GlowColour"), glow, 3);
+        if (!reflection)
+            std::memcpy(R.CloudLastSunHue, hue, sizeof(hue));
+    }
+    // The physical sky's SkyView table (s10) on screen: times HDRSunExposure as the sky takes it and the exposure, held
+    // to the sky's clamp where the sky is. CloudsSkyRef takes the sky's colour from it, and CloudsLight the sky the
+    // haze fades distant cloud into, each by the share.
+    {
+        static auto volumetricFog = FusionFixSettings.GetRef("PREF_VOLUMETRICFOG");
+        const float units = PbrSkySunExposure() * rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0];
+        const bool tableUsed = !reflection && pbrShare > 0.0f && units > 0.0f && R.SkyViewTex;
+        const D3DXVECTOR4 skyTable(tableUsed ? pbrShare : 0.0f, units, 0.0f, 0.0f);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4SkyTable"), &skyTable);
+        const auto& clamp = rage::grmShaderInfo::getShaderParamData(R.CloudExposureClampIdx);
+        const bool clamped = !(volumetricFog && volumetricFog->get()) && !bSkyHDR && (std::min)({ clamp[0], clamp[1], clamp[2] }) > 0.0f;
+        const float tableClamp[3] = { clamped ? clamp[0] : 1e6f, clamped ? clamp[1] : 1e6f, clamped ? clamp[2] : 1e6f };
+        effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3SkyTableClamp"), tableClamp, 3);
+        effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec3TableSun"), &tableSun.x, 3);
+        if (!reflection)
+        {
+            R.CloudLastPbrShare = skyTable.x;
+            R.CloudLastSkyUnits = units;
+        }
     }
     const D3DXVECTOR4 layer(R.Cloud.base, R.Cloud.thickness, 1.0f / R.fCloudShadowsScale, R.Cloud.coverage);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Layer"), &layer);
@@ -449,12 +501,13 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     IDirect3DSurface9* oldDepth = nullptr;
     IDirect3DPixelShader9* oldPS = nullptr;
     IDirect3DVertexShader9* oldVS = nullptr;
-    IDirect3DBaseTexture9* oldTextures[10] = {};
+    IDirect3DBaseTexture9* oldTextures[11] = {};
     D3DVIEWPORT9 oldViewport = {};
     DWORD savedRenderStates[std::size(kCloudRenderStates)] = {};
     static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW,
-                                                               D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER };
-    DWORD savedSamplerStates[10][std::size(kSamplerStates)] = {};
+                                                               D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER,
+                                                               D3DSAMP_SRGBTEXTURE };
+    DWORD savedSamplerStates[11][std::size(kSamplerStates)] = {};
 
     pDevice->GetRenderTarget(0, &oldTarget);
     pDevice->GetRenderTarget(1, &oldTarget1);
@@ -465,7 +518,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     pDevice->GetVertexShader(&oldVS);
     pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
     pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-    for (DWORD slot = 0; slot < 10; ++slot)
+    for (DWORD slot = 0; slot < 11; ++slot)
     {
         pDevice->GetTexture(slot, &oldTextures[slot]);
         for (size_t i = 0; i < std::size(kSamplerStates); ++i)
@@ -519,7 +572,8 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     {
         // The samplers have fixed registers: s0 depth, s1 coverage, s2 detail, s3 this frame's
         // half size clouds, s4 the history, s5 the accumulated clouds, s6 the scene, for the sky's
-        // brightness, never while drawing into it, s7 that brightness, s8 and s9 the march's sums.
+        // brightness, never while drawing into it, s7 that brightness, s8 and s9 the march's sums, s10 the
+        // physical sky's SkyView table.
         // The reflections have no depth texture of their own: none reads as sky everywhere.
         SetTextureBoth(pDevice, 0, reflection ? nullptr : R.mDepthRT->mD3DTexture);
         SetTextureBoth(pDevice, 1, coverage);
@@ -531,7 +585,8 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         SetTextureBoth(pDevice, 7, readSkyRef && R.CloudSkyRefTex ? R.CloudSkyRefTex->mD3DTexture : nullptr);
         SetTextureBoth(pDevice, 8, readMarch ? R.CloudMarchTex[0]->mD3DTexture : nullptr);
         SetTextureBoth(pDevice, 9, readMarch ? R.CloudMarchTex[1]->mD3DTexture : nullptr);
-        for (DWORD slot = 0; slot < 10; ++slot)
+        SetTextureBoth(pDevice, 10, !reflection && pbrShare > 0.0f && R.SkyViewTex ? R.SkyViewTex->mD3DTexture : nullptr);
+        for (DWORD slot = 0; slot < 11; ++slot)
         {
             const bool wrap = slot == 1 || slot == 2;
             const bool linear = slot != 0 && slot != 3 && slot != 8 && slot != 9;
@@ -542,6 +597,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
             SetSamplerStateBoth(pDevice, slot, D3DSAMP_MINFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
             SetSamplerStateBoth(pDevice, slot, D3DSAMP_MIPFILTER, slot == 1 ? D3DTEXF_LINEAR : D3DTEXF_NONE);
         }
+        SetSamplerStateBoth(pDevice, 10, D3DSAMP_SRGBTEXTURE, FALSE);
     };
     // The passes are timed apart only in the scene's clouds, not in the reflection map's.
     auto drawPass = [&](const char* techniqueName, IDirect3DSurface9* target, float w, float h, bool blend, int profile)
@@ -612,7 +668,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
 
     for (size_t i = 0; i < std::size(kCloudRenderStates); ++i)
         pDevice->SetRenderState(kCloudRenderStates[i].state, savedRenderStates[i]);
-    for (DWORD slot = 0; slot < 10; ++slot)
+    for (DWORD slot = 0; slot < 11; ++slot)
     {
         SetTextureBoth(pDevice, slot, oldTextures[slot]);
         for (size_t i = 0; i < std::size(kSamplerStates); ++i)

@@ -47,6 +47,7 @@ import contactshadows;
 import indirectlight;
 import skinscattering;
 import volumetricclouds;
+import pbrsky;
 import wetground;
 import headlightglints;
 import waterreflections;
@@ -268,6 +269,22 @@ private:
             PostFxResources.CloudSkyRefTex->Destroy();
             PostFxResources.CloudSkyRefTex = nullptr;
         }
+        {
+            auto& R = PostFxResources;
+            std::pair<rage::grcRenderTargetPC**, IDirect3DSurface9**> skyTables[] =
+                { { &R.SkyTransmittanceTex, &R.SkyTransmittanceSurf }, { &R.SkyMultiScatterTex, &R.SkyMultiScatterSurf }, { &R.SkyViewTex, &R.SkyViewSurf } };
+            for (auto [tex, surf] : skyTables)
+            {
+                SAFE_RELEASE(*surf);
+                if (*tex)
+                {
+                    (*tex)->Destroy();
+                    *tex = nullptr;
+                }
+            }
+            R.fSkyTablesHaze = -1.0f;
+            R.nSkyViewFrame = 0;
+        }
         for (int i = 0; i < 2; ++i)
         {
             SAFE_RELEASE(PostFxResources.CloudMarchSurf[i]);
@@ -340,6 +357,8 @@ private:
             PostFxResources.SSREffect->OnLostDevice();
         if (PostFxResources.CloudsEffect)
             PostFxResources.CloudsEffect->OnLostDevice();
+        if (PostFxResources.SkyEffect)
+            PostFxResources.SkyEffect->OnLostDevice();
         EffectBindings().clear();
         if (PostFxResources.WetGroundEffect)
             PostFxResources.WetGroundEffect->OnLostDevice();
@@ -439,6 +458,8 @@ private:
             PostFxResources.SSREffect->OnResetDevice();
         if (PostFxResources.CloudsEffect)
             PostFxResources.CloudsEffect->OnResetDevice();
+        if (PostFxResources.SkyEffect)
+            PostFxResources.SkyEffect->OnResetDevice();
         if (PostFxResources.WetGroundEffect)
             PostFxResources.WetGroundEffect->OnResetDevice();
         if (PostFxResources.HeadlightGlintsEffect)
@@ -517,6 +538,15 @@ private:
                 if (PostFxResources.CloudSkyRefSurf && pDevice)
                     pDevice->ColorFill(PostFxResources.CloudSkyRefSurf, nullptr, D3DCOLOR_ARGB(0, 0, 0, 0));
                 PostFxResources.nCloudSkyRefFrame = 0;
+            }
+            {
+                // The PBR sky's tables (pbrsky.ixx), of fixed sizes; drawn again before their first use.
+                auto& R = PostFxResources;
+                R.SkyTransmittanceTex = rage::CreateEmptyRenderTarget("SkyTransmittanceTex", 256, 64, 64, aoDesc, R.SkyTransmittanceSurf);
+                R.SkyMultiScatterTex = rage::CreateEmptyRenderTarget("SkyMultiScatterTex", 32, 32, 64, aoDesc, R.SkyMultiScatterSurf);
+                R.SkyViewTex = rage::CreateEmptyRenderTarget("SkyViewTex", 192, 108, 64, aoDesc, R.SkyViewSurf);
+                R.fSkyTablesHaze = -1.0f;
+                R.nSkyViewFrame = 0;
             }
             PostFxResources.SSRHalfDenoisedTex = rage::CreateEmptyRenderTarget("SSRHalfDenoisedTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfDenoisedSurf);
             {
@@ -1587,6 +1617,13 @@ private:
                         rage::grmShaderInfo::getShaderParamData(R.CloudExposureIdx)[0], top[0], top[1], top[2], sunset[0], sunset[1], sunset[2],
                         rage::grmShaderInfo::getShaderParamData(R.CloudInscatteringIdx)[0], sunDir[0], sunDir[1], sunDir[2],
                         sky[0], sky[1], sky[2], moon[0], moon[1], moon[2]);
+                log.Component("PbrSky");
+                log.Printf("physical sky: %s; effect %s (hr 0x%08lX); share %.2f, sun height %.3f, haze %.2f; tables for haze %.2f, view drawn frame %u of %u; skies drawn %u\n",
+                        R.szPbrSkyStatus, R.SkyEffect ? "built" : "missing", static_cast<unsigned long>(R.hrSkyEffect), R.fPbrSkyLastStrength,
+                        R.fPbrSkyLastSunHeight, R.fPbrSkyLastHaze, R.fSkyTablesHaze, unsigned(R.nSkyViewFrame), unsigned(FrameHistory::Frame()),
+                        unsigned(R.nPbrSkyDraws));
+                log.Printf("physical sky in the clouds: share %.2f, table times %.2f on screen, sun hue %.2f %.2f %.2f\n",
+                        R.CloudLastPbrShare, R.CloudLastSkyUnits, R.CloudLastSunHue[0], R.CloudLastSunHue[1], R.CloudLastSunHue[2]);
                 // The game's weather by name, and the cloud layer it gives, so a screenshot can be
                 // matched to its weather.
                 {
@@ -1783,7 +1820,10 @@ private:
     static int __fastcall DrawSky(int _this, void* edx, int a2, int a3, char a4, char a5, int a6, char a7)
     {
         auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!bDeviceLost)
+            PbrSkyBeforeDraw(pDevice);
         const int result = DrawSkyMain(_this, edx, a2, a3, a4, a5, a6, a7);
+        PbrSkyAfterDraw(pDevice);
         if (pDevice && !bDeviceLost && IsWaterReflectionTarget(pDevice))
         {
             ++PostFxResources.nCloudWaterReflectionCalls;
@@ -1848,7 +1888,11 @@ private:
     static inline injector::hook_back<int(__fastcall*)(int, void*, int, int, char, char, int, char)> hbDrawSkyReflection;
     static int __fastcall DrawSkyReflection(int _this, void* edx, int a2, int a3, char a4, char a5, int a6, char a7)
     {
+        auto pSkyDevice = rage::grcDevice::GetD3DDevice();
+        if (!bDeviceLost)
+            PbrSkyBeforeDraw(pSkyDevice);
         const int result = hbDrawSkyReflection.fun(_this, edx, a2, a3, a4, a5, a6, a7);
+        PbrSkyAfterDraw(pSkyDevice);
         ++PostFxResources.nCloudReflectionCalls;
         if (auto pDevice = rage::grcDevice::GetD3DDevice(); pDevice && !bDeviceLost)
             RenderVolumetricClouds(pDevice, nullptr, true);
@@ -2606,6 +2650,7 @@ public:
             {
                 PostFxResources.Readini();
                 PostFxResources.RegisterCloudParams();
+                RegisterPbrSkyParams();
                 FrameGeneration::SetSharpener(SharpenShownFrame);
 
                 auto pattern = find_pattern("E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 5F", "E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 33 C0");

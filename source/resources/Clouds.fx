@@ -53,6 +53,7 @@ sampler2D SceneTex : register(s6);     // the lit scene, the sky in it (CloudsSk
 sampler2D SkyRefTex : register(s7);    // the sky's mean colour this frame (CloudsSkyRef's target)
 sampler2D MarchTex0 : register(s8);    // the march's sums: transmittance, sun, shade, silver (CloudsLight)
 sampler2D MarchTex1 : register(s9);    // and glow, first hit
+sampler2D SkyViewTex : register(s10);  // the physical sky's view of the sky (pbrsky.ixx, SkyAtmosphere.fx), while vec4SkyTable.x > 0
 
 float2 vec2InvViewportSize;
 float4 vec4ProjInfo;
@@ -66,6 +67,9 @@ float4 vec4WorldY;
 float4 vec4WorldZ;
 
 float3 vec3SunDir;        // world, towards the sun, or the moon at night
+float4 vec4SkyTable;      // the physical sky: x its share in the clouds' sky (0 off), y its table's colour times this on screen
+float3 vec3SkyTableClamp; // the sky's clamp on screen, where it has one
+float3 vec3TableSun;      // world, towards the sun the table was drawn about
 float3 vec3LitColour;     // the game's cloud colour, exposed
 float3 vec3ShadeColour;   // the game's cloud colour darkened by VolumetricCloudsShade, exposed
 float3 vec3SunsetColour;  // the game's sunset colour, exposed
@@ -537,6 +541,19 @@ float3 SunScale(float share)
          : float3(1.0, 0.05, 0.05);
 }
 
+// The physical sky this way on screen, from its SkyView table, as sky_pbr.patch reads it in gta_atmoscatt_clouds:
+// u the angle between the view and the sun seen from above over pi, v 0 at the zenith, 0.5 at the horizon, as the
+// square root of the elevation's share of a right angle. Its own sun's glow, which the game draws apart, is not in it.
+float3 SkyTable(float3 dir)
+{
+    float2 flatView = dir.xy * rsqrt(max(dot(dir.xy, dir.xy), 1e-8));
+    float2 flatSun = vec3TableSun.xy * rsqrt(max(dot(vec3TableSun.xy, vec3TableSun.xy), 1e-8));
+    float u = acos(clamp(dot(flatView, flatSun), -1.0, 1.0)) * 0.318309886;
+    float elevation = asin(clamp(dir.z, -1.0, 1.0));
+    float v = 0.5 - 0.5 * sign(elevation) * sqrt(abs(elevation) * 0.636619772);
+    return min(tex2Dlod(SkyViewTex, float4(u, v, 0, 0)).rgb * vec4SkyTable.y, vec3SkyTableClamp);
+}
+
 // The clouds' colour from what the march gathered, premultiplied, with the share of the scene
 // behind that shows through in alpha. full is a constant: the one pass variant leaves the matching
 // to the sky (and its debug view), which the reflections do not use, the sun power, the tops'
@@ -658,6 +675,13 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         // halo behind it, many times the sky in the game's HDR, whole clouds near the sun came out
         // a flat cream. The horizon, near the frame's sky, fades as before.
         float3 hazeSky = sky * min(1.0, 2.0 * skyLuma / max(behind, 1e-4));
+        // With the physical sky, the air's own colour this way, by its share: the sky behind the cloud without the
+        // game's sun and its halo, which the cap above only held down.
+        // Held within twice the frame's sky as well: the table's glow about the sun is up to eight times the sky's,
+        // and the whole cloud would take it.
+        float3 tableSky = SkyTable(dir);
+        tableSky *= min(1.0, 2.0 * skyLuma / max(dot(tableSky, float3(0.2126, 0.7152, 0.0722)), 1e-4));
+        hazeSky = lerp(hazeSky, tableSky, vec4SkyTable.x);
         float3 termHaze = hazeSky * (cover * (1.0 - haze));
 
         // VolumetricCloudsDebug: 2 the clouds grey at the sky they are matched to; 3 to 10 one term of
@@ -850,6 +874,36 @@ technique CloudsResolve
 // over the screen, where the depth is clear and more than 25 degrees from the sun, so its halo
 // stays out. Blended into a 1 x 1 target a tenth a frame, so turning the camera does not flicker
 // the clouds; a frame with no sky in it leaves the target as it was.
+// With the physical sky, by its share, the mean of its table over the whole sky above the horizon
+// instead, more than 25 degrees from the sun too, each direction by its solid angle: the sky that
+// lights the clouds, the same wherever the camera looks, and there with no sky on screen.
+float3 SkyTableMean()
+{
+    float3 sum = 0.0;
+    float weight = 0.0;
+    [loop]
+    for (int j = 0; j < 4; ++j)
+    {
+        // Four bands from 10 to 80 degrees up: the haze along the horizon left out, as the grid mostly leaves it.
+        float elevation = 0.1745329 + (j + 0.5) * 0.3054326;
+        float ce = cos(elevation), se = sin(elevation);
+        [loop]
+        for (int i = 0; i < 8; ++i)
+        {
+            // Half the way round: the table is the same on either side of the sun.
+            float azimuth = (i + 0.5) * (3.14159265 / 8.0);
+            float sunUp = vec3TableSun.z;
+            float towardsSun = ce * cos(azimuth) * sqrt(saturate(1.0 - sunUp * sunUp)) + se * sunUp;
+            if (towardsSun > 0.906)
+                continue;
+            float v = 0.5 - 0.5 * sqrt(elevation * 0.636619772);
+            sum += min(tex2Dlod(SkyViewTex, float4(azimuth * 0.318309886, v, 0, 0)).rgb * vec4SkyTable.y, vec3SkyTableClamp) * ce;
+            weight += ce;
+        }
+    }
+    return weight > 0.0 ? sum / weight : 0.0;
+}
+
 float4 vec4SkyRefProj;    // ProjInfo for a 1 x 1 viewport: the view ray of a point in texture coordinates
 float4 CloudsSkyRef_PS(float2 uv : TEXCOORD0) : COLOR0
 {
@@ -871,6 +925,12 @@ float4 CloudsSkyRef_PS(float2 uv : TEXCOORD0) : COLOR0
             sum += tex2Dlod(SceneTex, float4(s, 0, 0)).rgb;
             count += 1.0;
         }
+    }
+    [branch]
+    if (vec4SkyTable.x > 0.0)
+    {
+        float3 table = SkyTableMean();
+        return float4(0.1 * lerp(count > 0.0 ? sum / count : table, table, vec4SkyTable.x), 0.9);
     }
     return count > 0.0 ? float4(0.1 * sum / count, 0.9) : float4(0.0, 0.0, 0.0, 1.0);
 }

@@ -361,6 +361,9 @@ Walls block headlights
 [VolumeClouds]
 Volumetric Clouds
 
+[PbrSky]
+Physical Sky
+
 [Zoomed Movement]
 ズーム中の移動を許可
 
