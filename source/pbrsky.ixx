@@ -344,8 +344,9 @@ constexpr UINT kAerialRegister = 104;
 // The air k times as thick as the Earth's, by the menu's level (Low, Medium, High). Through the real one the city's
 // 2 km of air keep 94% of the blue; at k = 4 the 200-800 m a street view reaches lost 3-10% of it, which in game showed
 // only in the far distance the game's fog hides anyway. Through 300 m and 1 km of air the blue keeps 91% and 72% at
-// k = 10, 82% and 52% at 20, 67% and 27% at 40; the red 94%, 89% and 79% at a kilometre.
-constexpr float kAerialScale[] = { 10.0f, 20.0f, 40.0f };
+// k = 10, 76% and 40% at 28, 67% and 27% at 40; the red 94%, 85% and 79% at a kilometre. Medium is 28: in game the
+// look between 20 and 40 read best at street level.
+constexpr float kAerialScale[] = { 10.0f, 28.0f, 40.0f };
 // Aerial Perspective Debug View: the air this much thicker again, to see where it falls and that it is drawn at all.
 constexpr float kAerialDebugScale = 25.0f;
 constexpr float kRayleighHeightM = 8000.0f, kMieHeightM = 1200.0f;
