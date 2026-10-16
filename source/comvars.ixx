@@ -2740,10 +2740,10 @@ public:
         return AfterBuildRenderListEvent;
     }
 
-    // An entity the camera's scene leaves out of its G-buffer while it stays in shadows and
-    // reflections (the player in first person); asked by the entity AddToDrawList hooks while the
-    // camera's scene list is built.
-    static inline bool (*SkipEntity)(void* entity) = nullptr;
+    // Called by the entity AddToDrawList hooks before (true) and after (false) each entity's draws
+    // while the camera's scene list is built, to append commands around them that leave shadows and
+    // reflections alone (the player's head in first person).
+    static inline void (*AroundEntity)(void* entity, bool before) = nullptr;
 
     static inline SafetyHookInline shBuildRenderList{};
     static void __fastcall BuildRenderList(CBaseDC* _this, void* edx)
