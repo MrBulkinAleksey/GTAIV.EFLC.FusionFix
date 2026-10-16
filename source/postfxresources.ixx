@@ -435,9 +435,9 @@ public:
     // times as bright so the masks read after the tone map; the rest of the frame keeps its colour.
     static bool ClothSheenEnabled() { static auto p = FusionFixSettings.GetRef("PREF_CLOTH_SHEEN"); return p && p->get() != 0; }
     static bool ClothDebug() { static auto p = FusionFixSettings.GetRef("PREF_CLOTH_DEBUG"); return p && p->get() != 0; }
-    float fClothSheen = 1.0f;
+    float fClothSheen = 0.5f;
     float fClothSheenPower = 3.0f;
-    float fClothSheenWhite = 0.2f;
+    float fClothSheenWhite = 0.1f;
     float fClothSpecularCut = 0.5f;
     float fClothGlossCut = 1.0f;
     float fClothGlossFade = 0.1f;
@@ -1936,9 +1936,9 @@ public:
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLowLightNarrow", &PostFxResource::fVehicleBoxShadowLowLightNarrow, 1.0f, 0.2f, 1.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLowLightHeight", &PostFxResource::fVehicleBoxShadowLowLightHeight, 0.6f, 0.2f, 1.0f),
             IniFloat("LIGHTING", "SkinLighting", &PostFxResource::fSkinLighting, 1.0f, 0.0f, 2.0f),
-            IniFloat("LIGHTING", "ClothSheenStrength", &PostFxResource::fClothSheen, 1.0f, 0.0f, 4.0f),
+            IniFloat("LIGHTING", "ClothSheenStrength", &PostFxResource::fClothSheen, 0.5f, 0.0f, 4.0f),
             IniFloat("LIGHTING", "ClothSheenPower", &PostFxResource::fClothSheenPower, 3.0f, 0.5f, 16.0f),
-            IniFloat("LIGHTING", "ClothSheenWhite", &PostFxResource::fClothSheenWhite, 0.2f, 0.0f, 1.0f),
+            IniFloat("LIGHTING", "ClothSheenWhite", &PostFxResource::fClothSheenWhite, 0.1f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "ClothSpecularCut", &PostFxResource::fClothSpecularCut, 0.5f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "ClothGlossCut", &PostFxResource::fClothGlossCut, 1.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "ClothGlossFade", &PostFxResource::fClothGlossFade, 0.1f, 0.01f, 1.0f),
