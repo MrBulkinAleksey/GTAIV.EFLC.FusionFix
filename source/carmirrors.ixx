@@ -259,9 +259,18 @@ namespace CarMirrors
     }
 
     // CRenderPhaseMirrorReflection: its draw list (vtable slot 8, CE 0xD76950) and its visibility (CE 0xD77430).
+    // The plane again as the phase's draw list is made, with the car where its draws of it are: the update's plane is
+    // from before the car moved this frame, and the reflected view then lagged the car's own side in the mirror.
     static void __fastcall PhaseBuild(uintptr_t phase, void*)
     {
         const double start = usedThisFrame ? NowMs() : 0.0;
+        if (usedThisFrame)
+        {
+            const auto glass = drawnGlass.load(std::memory_order_acquire);
+            const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
+            if (const float* m = glass && vehicle ? CEntity::GetMatrix(vehicle) : nullptr)
+                PlaceGlass(m, *glass, true, nullptr);
+        }
         phaseBuildHook.unsafe_thiscall<void>(phase);
         if (usedThisFrame)
         {
