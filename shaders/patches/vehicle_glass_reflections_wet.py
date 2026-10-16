@@ -10,7 +10,7 @@
 #    environment map along the view reflected off it, and its rim, where the dome turns away from the glass, shows
 #    dark, as light there bends out of the drop or reflects inside it: refraction alone shows nothing on a dark window
 #    at night, the reflection at the rim and the dark ring are what make drops on glass seen;
-#  - from inside the car the glass keeps less of its tint, so the street shows through dark windows.
+#  - from the driver's seat in first person the car's own glass keeps less of its tint (c204, source/postfx.ixx).
 # The drops need the glass reflections' parameter texture and scene copy; without them only the cover is left out too.
 #
 # Usage: vehicle_glass_reflections_wet.py <FusionShaders checkout with the other patches applied>; the patch is the
@@ -27,7 +27,7 @@ TAG = 'FusionFix vehicle_glass_reflections_wet.patch'
 PS_DEFS = DEFS + f'''\
     def c179, 0.0299999993, -0.0299999993, 0.899999976, 400 // {TAG}: refraction on the screen, a drop's cover, the glint's power
     def c198, 0.980000019, 0.0199999996, 4, 0.0799999982 // {TAG}: water's Fresnel (1 - F0, F0); the rim from 1 - n.n_glass 0.08, full by 0.33
-    def c199, 0.850000024, 0.625, -0.25, 0.400000006 // {TAG}: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2); the tint from inside
+    def c199, 0.850000024, 0.625, -0.25, 0 // {TAG}: how dark the rim; the game's Fresnel back from its 2 (0.8 F + 0.2)
 '''
 
 PS_DCLS = f'''\
@@ -92,11 +92,13 @@ SHADOW = f'''\
 '''
 
 INSIDE = f'''\
-    // {TAG}: seen from inside the car (the camera behind the glass's normal) the glass keeps 40% of its tint: through
-    // dark windows the street was hard to see from the driver's seat, while from outside they stay as dark as they were.
+    // {TAG}: from the driver's seat in first person (c204.x the share of the tint kept) the glass
+    // within c204.y (a distance squared) of the camera, the car's own, keeps less of its tint, both its outer and
+    // its inner layer: through dark windows the street was hard to see. Unset (zeros) changes nothing.
     add r8.xyz, -v4, c15
-    dp3 r8.w, r8, r19
-    mov r8.x, c199.w
+    dp3 r8.w, r8, r8
+    add r8.w, r8.w, -c204.y
+    mov r8.x, c204.x
     cmp r8.w, r8.w, c187.w, r8.x
     mul r0.x, r0.x, r8.w
 '''
