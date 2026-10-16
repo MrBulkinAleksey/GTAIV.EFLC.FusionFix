@@ -349,7 +349,10 @@ constexpr UINT kAerialRegister = 104;
 constexpr float kAerialScale[] = { 10.0f, 28.0f, 40.0f };
 // Aerial Perspective Debug View: the air this much thicker again, to see where it falls and that it is drawn at all.
 constexpr float kAerialDebugScale = 25.0f;
-constexpr float kRayleighHeightM = 8000.0f, kMieHeightM = 1200.0f;
+// The air k times as thick is the city's own, low: it thins out over 600 m (the Earth's Rayleigh air over 8 km), so a
+// street keeps all of it and the air from a helicopter at 250 m two thirds, at 400 m half; with 8 km the same k hid
+// the whole city seen from above. Mie's haze over its own 1.2 km.
+constexpr float kRayleighHeightM = 600.0f, kMieHeightM = 1200.0f;
 constexpr float kLog2e = 1.44269504f;
 
 static void SetAerialConstants(IDirect3DDevice9* pDevice, const float (&values)[12])
