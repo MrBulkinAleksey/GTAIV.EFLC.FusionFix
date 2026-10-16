@@ -54,6 +54,7 @@ import headlightglints;
 import waterreflections;
 import sharpening;
 import inireload;
+import impostors;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -1539,7 +1540,10 @@ private:
         hbDrawCallPostFX.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitivePostFX = false;
         if (!bDeviceLost)
+        {
             DrawSSRDebugOverlay();
+            Impostors::DrawDebugOverlay();
+        }
         SSRTrace::Tick();
         TickIniReload();
     }

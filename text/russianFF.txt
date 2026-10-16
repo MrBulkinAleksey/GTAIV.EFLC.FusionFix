@@ -280,6 +280,9 @@ Logitech LightSync RGB
 [FGDebug]
 Отладка генерации кадров
 
+[ImpostorDebug]
+Отладка запекания импосторов
+
 [FGDbgMarker]
 Метка кадров
 

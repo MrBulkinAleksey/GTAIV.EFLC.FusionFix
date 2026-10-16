@@ -110,6 +110,15 @@ export namespace EntityClass
     // The device draws one entity (or fragment type) of the model took in the scene's G-buffer the last time one was
     // drawn there, up to 255; 0 when none has been. Written on the render thread, read on any.
     uint32_t DrawsPerEntity(uint16_t model);
+
+    // Render thread: after each entity draw command (CDrawEntityDC) of the scene's G-buffer, once the draw hooks are
+    // done with it, with the command, its model, the place it keeps and its execute, which draws it again with whatever
+    // state is set then. One hook; the last set wins.
+    using GBufferEntityHook = void (*)(void* dc, uint16_t model, const float* place, void(__thiscall* execute)(void*));
+    void SetGBufferEntityHook(GBufferEntityHook hook);
+
+    // The model info of a model index (CE 0x1295cd8), or 0
+    uintptr_t ModelInfo(uint16_t model);
 }
 
 namespace
@@ -155,6 +164,7 @@ namespace
     uintptr_t modelInfos = 0;       // CE 0x1295cd8, model infos by index
     // DrawsPerEntity: by model index (CDrawEntityDC +0x30, CDrawFragTypeDC +0x58)
     volatile uint8_t modelDraws[0x10000] = {};
+    EntityClass::GBufferEntityHook gbufferEntityHook = nullptr;
     constexpr uint32_t kDrawLogFrames = 600;
     struct TargetStats
     {
@@ -980,6 +990,13 @@ namespace
         for (auto it = hooks.rbegin(); it != hooks.rend(); ++it)
             if (it->second)
                 it->second(kind);
+        if (gbufferEntityHook && learn && source == FromEntity)
+        {
+            uint16_t model;
+            const float* place;
+            if (ModelAndPlace(dc, source, model, place))
+                gbufferEntityHook(dc, model, place, original);
+        }
     }
 
     Kind MarkOf(void* dc, ptrdiff_t at)
@@ -1153,6 +1170,16 @@ namespace EntityClass
     uint32_t DrawsPerEntity(uint16_t model)
     {
         return modelDraws[model];
+    }
+
+    void SetGBufferEntityHook(GBufferEntityHook hook)
+    {
+        gbufferEntityHook = hook;
+    }
+
+    uintptr_t ModelInfo(uint16_t model)
+    {
+        return modelInfos ? *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4) : 0;
     }
 
     void AddDrawHooks(DrawHook before, DrawHook after)

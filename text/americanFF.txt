@@ -280,6 +280,9 @@ SSR March on Full Depth
 [FGDebug]
 Frame Generation Debug View
 
+[ImpostorDebug]
+Impostor Bake Debug View
+
 [FGDbgMarker]
 Frame Marker
 
