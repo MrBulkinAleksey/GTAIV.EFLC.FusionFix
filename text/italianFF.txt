@@ -220,6 +220,9 @@ Cloud Shadows Debug View
 [CloudsDebug]
 Volumetric Clouds Debug View
 
+[GrassWindDebug]
+Grass Wind Debug View
+
 [WetDbgMaterial]
 Material Categories
 
@@ -363,6 +366,9 @@ Tail light shadows
 
 [WorldLightShad]
 Building light shadows
+
+[GrassWind]
+Grass in the wind
 
 [BuildingShad]
 Walls block headlights

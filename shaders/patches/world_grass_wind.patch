@@ -1,0 +1,162 @@
+diff --git a/win32_30_nv8/gta_default/gta_defaultVS4.asm b/win32_30_nv8/gta_default/gta_defaultVS4.asm
+index 83b6ff0..feece17 100644
+--- a/win32_30_nv8/gta_default/gta_defaultVS4.asm
++++ b/win32_30_nv8/gta_default/gta_defaultVS4.asm
+@@ -26,6 +26,8 @@
+ //
+ 
+     vs_3_0
++    def c247, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_grass_wind.patch: 1 / 2pi, 1 / 2, 2pi, -pi
++    def c246, 0.349999994, 0.649999976, 0.699999988, 0 // FusionFix world_grass_wind.patch: the gust's swing and floor, the flutter's cycles a metre
+     def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.9777592367e-42 // 2125
+     def c4, 9.99999975e-006, 1, 0, -1
+     dcl_position v0
+@@ -38,9 +40,51 @@
+     dcl_texcoord1 o2
+     dcl_color o3
+     dcl_texcoord6 o4
+-    mul r0.xyz, c1, v0.y
+-    mad r0.xyz, v0.x, c0, r0
+-    mad r0.xyz, v0.z, c2, r0
++    // --- FusionFix world_grass_wind.patch: b12 = a grass prop. r1 = the position the rest of the shader takes instead of v0.
++    mov r1, v0
++    if b12
++      mul r3.xyz, c1, v0.y
++      mad r3.xyz, v0.x, c0, r3
++      mad r3.xyz, v0.z, c2, r3
++      add r3.xyz, r3, c3
++      mul r2.x, r3.x, c240.x
++      mad r2.x, r3.y, c240.y, r2.x
++      add r2.x, r2.x, c240.z
++      add r2.y, r3.x, r3.y
++      mul r2.y, r2.y, c246.z
++      add r2.y, r2.y, c240.w
++      frc r2.xy, r2
++      mad r2.xy, r2, c247.z, c247.w
++      sincos r4.xy, r2.x
++      sincos r5.xy, r2.y
++      mul_sat r2.z, v0.z, c241.x
++      mul r2.z, r2.z, r2.z
++      mad r4.x, r4.y, c246.x, c246.y
++      mul r4.x, r4.x, c241.y
++      mul r4.y, r5.y, c241.z
++      mul r4.xy, r4, r2.z
++      mul r6.xy, r4.x, c242
++      mad r6.x, -r4.y, c242.y, r6.x
++      mad r6.y, r4.y, c242.x, r6.y
++      mul r6.z, r6.x, r6.x
++      mad r6.z, r6.y, r6.y, r6.z
++      mul r6.z, r6.z, c241.x
++      mul r6.z, r6.z, -c247.y
++      dp3 r7.x, c0, c0
++      dp3 r7.y, c1, c1
++      dp3 r7.z, c2, c2
++      rcp r7.x, r7.x
++      rcp r7.y, r7.y
++      rcp r7.z, r7.z
++      dp3 r8.x, r6, c0
++      dp3 r8.y, r6, c1
++      dp3 r8.z, r6, c2
++      mad r1.xyz, r8, r7, v0
++    endif
++    // --- FusionFix world_grass_wind.patch end
++    mul r0.xyz, c1, r1.y
++    mad r0.xyz, r1.x, c0, r0
++    mad r0.xyz, r1.z, c2, r0
+     add o4.xyz, r0, c3
+     mul r0.xyz, c1, v3.y
+     mad r0.xyz, v3.x, c0, r0
+@@ -57,9 +101,9 @@
+     mov r0.yw, c4
+     mad r0.x, r0.x, c39.z, r0.w
+     mad o3.xy, c40.z, r0.x, r0.y
+-    mul r0, c9, v0.y
+-    mad r0, v0.x, c8, r0
+-    mad r0, v0.z, c10, r0
++    mul r0, c9, r1.y
++    mad r0, r1.x, c8, r0
++    mad r0, r1.z, c10, r0
+     add r0, r0, c11
+     mov o0, r0
+     mov o10.zw, r0
+diff --git a/win32_30_nv8/gta_default/gta_defaultVS5.asm b/win32_30_nv8/gta_default/gta_defaultVS5.asm
+index 5e7fa7f..879836b 100644
+--- a/win32_30_nv8/gta_default/gta_defaultVS5.asm
++++ b/win32_30_nv8/gta_default/gta_defaultVS5.asm
+@@ -26,6 +26,8 @@
+ //
+ 
+     vs_3_0
++    def c247, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_grass_wind.patch: 1 / 2pi, 1 / 2, 2pi, -pi
++    def c246, 0.349999994, 0.649999976, 0.699999988, 0 // FusionFix world_grass_wind.patch: the gust's swing and floor, the flutter's cycles a metre
+     def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.9791605352e-42 // 2126
+     def c4, 9.99999975e-006, 1, 0, -1
+     dcl_position v0
+@@ -38,9 +40,51 @@
+     dcl_texcoord1 o2
+     dcl_color o3
+     dcl_texcoord6 o4
+-    mul r0.xyz, c1, v0.y
+-    mad r0.xyz, v0.x, c0, r0
+-    mad r0.xyz, v0.z, c2, r0
++    // --- FusionFix world_grass_wind.patch: b12 = a grass prop. r1 = the position the rest of the shader takes instead of v0.
++    mov r1, v0
++    if b12
++      mul r3.xyz, c1, v0.y
++      mad r3.xyz, v0.x, c0, r3
++      mad r3.xyz, v0.z, c2, r3
++      add r3.xyz, r3, c3
++      mul r2.x, r3.x, c240.x
++      mad r2.x, r3.y, c240.y, r2.x
++      add r2.x, r2.x, c240.z
++      add r2.y, r3.x, r3.y
++      mul r2.y, r2.y, c246.z
++      add r2.y, r2.y, c240.w
++      frc r2.xy, r2
++      mad r2.xy, r2, c247.z, c247.w
++      sincos r4.xy, r2.x
++      sincos r5.xy, r2.y
++      mul_sat r2.z, v0.z, c241.x
++      mul r2.z, r2.z, r2.z
++      mad r4.x, r4.y, c246.x, c246.y
++      mul r4.x, r4.x, c241.y
++      mul r4.y, r5.y, c241.z
++      mul r4.xy, r4, r2.z
++      mul r6.xy, r4.x, c242
++      mad r6.x, -r4.y, c242.y, r6.x
++      mad r6.y, r4.y, c242.x, r6.y
++      mul r6.z, r6.x, r6.x
++      mad r6.z, r6.y, r6.y, r6.z
++      mul r6.z, r6.z, c241.x
++      mul r6.z, r6.z, -c247.y
++      dp3 r7.x, c0, c0
++      dp3 r7.y, c1, c1
++      dp3 r7.z, c2, c2
++      rcp r7.x, r7.x
++      rcp r7.y, r7.y
++      rcp r7.z, r7.z
++      dp3 r8.x, r6, c0
++      dp3 r8.y, r6, c1
++      dp3 r8.z, r6, c2
++      mad r1.xyz, r8, r7, v0
++    endif
++    // --- FusionFix world_grass_wind.patch end
++    mul r0.xyz, c1, r1.y
++    mad r0.xyz, r1.x, c0, r0
++    mad r0.xyz, r1.z, c2, r0
+     add o4.xyz, r0, c3
+     mul r0.xyz, c1, v3.y
+     mad r0.xyz, v3.x, c0, r0
+@@ -57,9 +101,9 @@
+     mov r0.yw, c4
+     mad r0.x, r0.x, c39.z, r0.w
+     mad o3.xy, c40.z, r0.x, r0.y
+-    mul r0, c9, v0.y
+-    mad r0, v0.x, c8, r0
+-    mad r0, v0.z, c10, r0
++    mul r0, c9, r1.y
++    mad r0, r1.x, c8, r0
++    mad r0, r1.z, c10, r0
+     add r0, r0, c11
+     mov o0, r0
+     mov o10.zw, r0

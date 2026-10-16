@@ -98,6 +98,13 @@ export namespace EntityClass
 
     // By the classes in the entity's vtable RTTI (its own and its bases).
     Kind OfEntity(void* entity);
+
+    // Inside a draw hook: the model index and position the draw's command keeps (entity, fragment and fragment
+    // type commands); false for the others and outside the hooks.
+    bool CurrentModel(uint16_t& model, const float*& place);
+
+    // A model index's model info (its name's hash at +0x3c, bounding sphere centre +0x10 and radius +0x1c), 0 if none.
+    uintptr_t ModelInfo(uint16_t model);
 }
 
 namespace
@@ -114,6 +121,8 @@ namespace
     constexpr size_t kPedCommands = 5;
     DrawExecute drawPedExecute[kPedCommands] = {};
     bool bInstalled = false;
+    // The command being executed, while the hooks run (render thread)
+    void* currentDc = nullptr;
 
     std::vector<std::pair<EntityClass::DrawHook, EntityClass::DrawHook>>& Hooks()
     {
@@ -123,6 +132,7 @@ namespace
 
     // Which draw command a draw came from
     enum Source : uint8_t { FromEntity, FromFrag, FromFragType, FromSkinned, FromPed, Sources };
+    Source currentSource = FromEntity;  // with currentDc
     constexpr const char* SourceNames[Sources] = { "entity", "fragment", "fragment type", "skinned", "ped" };
     constexpr const char* KindNames[size_t(Kind::Kinds)] = { "unmarked", "buildings", "props", "vehicles", "peds" };
 
@@ -573,6 +583,8 @@ namespace
         }
 
         const auto& hooks = Hooks();
+        currentDc = dc;
+        currentSource = source;
         for (const auto& [before, after] : hooks)
             if (before)
                 before(kind);
@@ -694,6 +706,7 @@ namespace
         for (auto it = hooks.rbegin(); it != hooks.rend(); ++it)
             if (it->second)
                 it->second(kind);
+        currentDc = nullptr;
     }
 
     Kind MarkOf(void* dc, ptrdiff_t at)
@@ -872,6 +885,16 @@ namespace EntityClass
     bool Installed()
     {
         return bInstalled;
+    }
+
+    bool CurrentModel(uint16_t& model, const float*& place)
+    {
+        return currentDc && ModelAndPlace(currentDc, currentSource, model, place);
+    }
+
+    uintptr_t ModelInfo(uint16_t model)
+    {
+        return modelInfos ? *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4) : 0;
     }
 
     Kind OfEntity(void* entity)

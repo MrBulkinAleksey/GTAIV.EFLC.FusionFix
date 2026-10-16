@@ -220,6 +220,9 @@ Logitech LightSync RGB
 [CloudsDebug]
 Отладка объёмных облаков
 
+[GrassWindDebug]
+Отладка травы на ветру
+
 [WetDbgMaterial]
 Категории материалов
 
@@ -363,6 +366,9 @@ Logitech LightSync RGB
 
 [WorldLightShad]
 Тени от огней зданий
+
+[GrassWind]
+Трава на ветру
 
 [BuildingShad]
 Здания в тенях фар
