@@ -430,7 +430,8 @@ public:
     // wrapped past the terminator, in the cloth's colour and ClothSheenWhite of it white, and the
     // game's highlight is scaled by 1 - ClothSpecularCut. Gloss above ClothGlossCut fades it out
     // over ClothGlossFade, for leather drawn as clothes (1 lets all through). ClothDebug (graphics
-    // menu, Debug) shows clothes red, their gloss green and skin blue.
+    // menu, Debug) shows clothes red, their gloss green and skin blue on people, ClothDebugBrightness
+    // times as bright so the masks read after the tone map; the rest of the frame keeps its colour.
     static bool ClothSheenEnabled() { static auto p = FusionFixSettings.GetRef("PREF_CLOTH_SHEEN"); return p && p->get() != 0; }
     static bool ClothDebug() { static auto p = FusionFixSettings.GetRef("PREF_CLOTH_DEBUG"); return p && p->get() != 0; }
     float fClothSheen = 0.6f;
@@ -439,6 +440,7 @@ public:
     float fClothSpecularCut = 0.5f;
     float fClothGlossCut = 1.0f;
     float fClothGlossFade = 0.1f;
+    float fClothDebugBrightness = 8.0f;
     int nClothComponents = 0x14E;
     // Materials with no specular map (c197.x; deferred_lighting_sun_sheen.patch) write no specular
     // intensity, so buildings and LOD roads got neither the sun's highlight nor the sky's
@@ -1939,6 +1941,7 @@ public:
             IniFloat("LIGHTING", "ClothSpecularCut", &PostFxResource::fClothSpecularCut, 0.5f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "ClothGlossCut", &PostFxResource::fClothGlossCut, 1.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "ClothGlossFade", &PostFxResource::fClothGlossFade, 0.1f, 0.01f, 1.0f),
+            IniFloat("LIGHTING", "ClothDebugBrightness", &PostFxResource::fClothDebugBrightness, 8.0f, 0.1f, 100.0f),
             IniInt("LIGHTING", "ClothComponents", &PostFxResource::nClothComponents, 0x14E, 0, 0x7FF),
             IniFloat("LIGHTING", "SpecularSheen", &PostFxResource::fSpecularSheen, 0.1f, 0.0f, 50.0f),
             IniFloat("LIGHTING", "GGXLights", &PostFxResource::fLightsGGX, 1.0f, 0.0f, 4.0f),

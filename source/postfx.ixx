@@ -2375,11 +2375,11 @@ public:
             pDevice->SetPixelShaderConstantF(205, offset, 1);
         }
         // Clothes (ped_cloth_sheen.patch). c164: the sheen, its power, its white share, the cut of
-        // the game's highlight. c191: the gloss the fade starts at, one over its width, the debug view.
+        // the game's highlight. c191: the gloss the fade starts at, one over its width, the debug view and its brightness.
         {
             const bool on = R.ClothSheenEnabled();
             const float c164[4] = { on ? R.fClothSheen : 0.0f, R.fClothSheenPower, R.fClothSheenWhite, on ? R.fClothSpecularCut : 0.0f };
-            const float c191[4] = { R.fClothGlossCut, 1.0f / (std::max)(R.fClothGlossFade, 0.01f), R.ClothDebug() ? 1.0f : 0.0f, 0.0f };
+            const float c191[4] = { R.fClothGlossCut, 1.0f / (std::max)(R.fClothGlossFade, 0.01f), R.ClothDebug() ? 1.0f : 0.0f, R.fClothDebugBrightness };
             pDevice->SetPixelShaderConstantF(164, c164, 1);
             pDevice->SetPixelShaderConstantF(191, c191, 1);
         }

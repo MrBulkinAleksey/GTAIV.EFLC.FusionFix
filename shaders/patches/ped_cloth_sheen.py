@@ -15,7 +15,8 @@
 # - the game's highlight and reflection are scaled by 1 - c164.w: its Phong lobe made cotton look plastic.
 # - c191.xy fades both out above a G-buffer gloss (c191.x where it starts, c191.y one over its width), for
 #   leather and vinyl drawn as clothes; c191.x 1 lets everything through.
-# - c191.z 1 shows the masks (ClothDebug): red clothes, green clothes times their gloss, blue skin.
+# - c191.z 1 shows the masks (ClothDebug) on people, c191.w times as bright: red clothes, green clothes times
+#   their gloss, blue skin; everything else keeps its colour.
 #
 # Usage: ped_cloth_sheen.py <FusionShaders checkout with the patches that sort before this one applied>
 # Commit that state first; the patch is the diff this script leaves (git diff).
@@ -118,7 +119,10 @@ def patch(number, s):
         f'mov r12.x, r26.y // {TAG}: ClothDebug shows clothes red, their gloss green and skin blue',
         'mul r12.y, r26.y, r26.z',
         'mov r12.z, r26.x',
-        'lrp oC0.xyz, c191.z, r12, r2',
+        'mul r12.xyz, r12, c191.w // bright enough to read after the tone map',
+        'max r30.w, r26.x, r26.y // only on people: the rest keeps its own colour',
+        'mul r30.w, r30.w, c191.z',
+        'lrp oC0.xyz, r30.w, r12, r2',
     ]]
 
     path.write_text('\n'.join(lines))

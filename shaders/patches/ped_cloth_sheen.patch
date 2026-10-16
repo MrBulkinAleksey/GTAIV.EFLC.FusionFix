@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-index fc37e20..310e4de 100644
+index fc37e203..f56a42da 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 @@ -79,6 +79,7 @@
@@ -37,7 +37,7 @@ index fc37e20..310e4de 100644
        mad r26.w, r1.x, c220.z, c220.w // the game's N.L curve, unclamped
        mul r24, c205, r26.x // wrap offset wrap / (1 + wrap) (xyz) and red penumbra (w), on skin only
        mul r25.xyz, c201, r26.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
-@@ -704,10 +710,33 @@
+@@ -704,10 +710,36 @@
        rcp r27.w, r27.w
        lrp r27.x, r24.w, r27.w, r0.y // red towards the square root of the shadow
        mov r27.yz, r0.y
@@ -68,12 +68,15 @@ index fc37e20..310e4de 100644
 +      mov r12.x, r26.y // FusionFix cloth sheen: ClothDebug shows clothes red, their gloss green and skin blue
 +      mul r12.y, r26.y, r26.z
 +      mov r12.z, r26.x
-+      lrp oC0.xyz, c191.z, r12, r2
++      mul r12.xyz, r12, c191.w // bright enough to read after the tone map
++      max r30.w, r26.x, r26.y // only on people: the rest keeps its own colour
++      mul r30.w, r30.w, c191.z
++      lrp oC0.xyz, r30.w, r12, r2
        mov oC0.w, c2.w
      else
        mov r8.x, r0.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-index 79a28da..b757c38 100644
+index 79a28da0..6ea1664a 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 @@ -80,6 +80,7 @@
@@ -111,7 +114,7 @@ index 79a28da..b757c38 100644
        mad r26.w, r1.x, c220.z, c220.w // the game's N.L curve, unclamped
        mul r24, c205, r26.x // wrap offset wrap / (1 + wrap) (xyz) and red penumbra (w), on skin only
        mul r25.xyz, c201, r26.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
-@@ -721,11 +727,34 @@
+@@ -721,11 +727,37 @@
        rcp r27.w, r27.w
        lrp r27.x, r24.w, r27.w, r0.y // red towards the square root of the shadow
        mov r27.yz, r0.y
@@ -143,12 +146,15 @@ index 79a28da..b757c38 100644
 +      mov r12.x, r26.y // FusionFix cloth sheen: ClothDebug shows clothes red, their gloss green and skin blue
 +      mul r12.y, r26.y, r26.z
 +      mov r12.z, r26.x
-+      lrp oC0.xyz, c191.z, r12, r2
++      mul r12.xyz, r12, c191.w // bright enough to read after the tone map
++      max r30.w, r26.x, r26.y // only on people: the rest keeps its own colour
++      mul r30.w, r30.w, c191.z
++      lrp oC0.xyz, r30.w, r12, r2
        mov oC0.w, c3.z
      else
        mov r8.x, r0.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
-index 65eff52..0fb5cdd 100644
+index 65eff52b..87520079 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
 @@ -50,6 +50,7 @@
@@ -186,7 +192,7 @@ index 65eff52..0fb5cdd 100644
        mad r26.w, r1.x, c220.z, c220.w // the game's N.L curve, unclamped
        mul r24, c205, r26.x // wrap offset wrap / (1 + wrap) (xyz) and red penumbra (w), on skin only
        mul r25.xyz, c201, r26.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
-@@ -207,10 +213,33 @@
+@@ -207,10 +213,36 @@
        mov r27.yz, r29.x
        mul r27.xyz, r25, r27
        lrp r25.xyz, r26.x, r27, r1.x // skin, or the game's
@@ -217,12 +223,15 @@ index 65eff52..0fb5cdd 100644
 +      mov r12.x, r26.y // FusionFix cloth sheen: ClothDebug shows clothes red, their gloss green and skin blue
 +      mul r12.y, r26.y, r26.z
 +      mov r12.z, r26.x
-+      lrp oC0.xyz, c191.z, r12, r2
++      mul r12.xyz, r12, c191.w // bright enough to read after the tone map
++      max r30.w, r26.x, r26.y // only on people: the rest keeps its own colour
++      mul r30.w, r30.w, c191.z
++      lrp oC0.xyz, r30.w, r12, r2
        mov oC0.w, c0.z
      else
        //dot(viewDir, normal)
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
-index f8570f0..ea16b56 100644
+index f8570f01..b57e86cc 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
 @@ -51,6 +51,7 @@
@@ -260,7 +269,7 @@ index f8570f0..ea16b56 100644
        mad r26.w, r1.x, c220.z, c220.w // the game's N.L curve, unclamped
        mul r24, c205, r26.x // wrap offset wrap / (1 + wrap) (xyz) and red penumbra (w), on skin only
        mul r25.xyz, c201, r26.x // 1 / (1 + wrap) - 1 on skin, 0 elsewhere (one constant per instruction)
-@@ -225,9 +231,32 @@
+@@ -225,9 +231,35 @@
        mov r27.yz, r29.x
        mul r27.xyz, r25, r27
        lrp r25.xyz, r26.x, r27, r1.x // skin, or the game's
@@ -290,7 +299,10 @@ index f8570f0..ea16b56 100644
 +      mov r12.x, r26.y // FusionFix cloth sheen: ClothDebug shows clothes red, their gloss green and skin blue
 +      mul r12.y, r26.y, r26.z
 +      mov r12.z, r26.x
-+      lrp oC0.xyz, c191.z, r12, r2
++      mul r12.xyz, r12, c191.w // bright enough to read after the tone map
++      max r30.w, r26.x, r26.y // only on people: the rest keeps its own colour
++      mul r30.w, r30.w, c191.z
++      lrp oC0.xyz, r30.w, r12, r2
        mov oC0.w, c3.z
      else
        //dot(viewDir, normal)
