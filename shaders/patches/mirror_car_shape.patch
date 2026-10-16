@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/mirror/mirrorPS1.asm b/win32_30_nv8/mirror/mirrorPS1.asm
-index f0752696..d65f631e 100644
+index f0752696..451e110a 100644
 --- a/win32_30_nv8/mirror/mirrorPS1.asm
 +++ b/win32_30_nv8/mirror/mirrorPS1.asm
-@@ -20,9 +20,20 @@
+@@ -20,12 +20,42 @@
      ps_3_0
      def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0691907283e-42 // 763
      def c0, -1.75, -0.5, -0.285714298, 0.5
@@ -23,3 +23,25 @@ index f0752696..d65f631e 100644
      rcp r0.x, v0_abs.w
      mul r0.x, r0.x, c0.y
      mad r0.xy, v0, r0.x, c0.w
++    // FusionFix mirror_car_shape.patch: a car's mirror shows a wider view (c152.y, the zoom out - 1; 0 for interior
++    // mirrors), as a convex one: the reflection, rendered for the whole screen, is read further from the mirror's middle
++    // on the screen, found from how the screen position and the quad's uv change across the pixels.
++    dsx r2.xy, r0
++    dsy r2.zw, r0.xyxy
++    dsx r3.xy, v6
++    dsy r3.zw, v6.xyxy
++    mul r4.x, r3.x, r3.w
++    mad r4.x, r3.z, -r3.y, r4.x
++    rcp r4.x, r4.x
++    add r4.zw, c0.w, -v6.xyxy
++    mul r5.x, r3.w, r4.z
++    mad r5.x, -r3.z, r4.w, r5.x
++    mul r5.y, r3.x, r4.w
++    mad r5.y, -r3.y, r4.z, r5.y
++    mul r5.xy, r5, r4.x
++    mul r6.xy, r2, r5.x
++    mad r6.xy, r2.zwzw, r5.y, r6
++    mad r0.xy, r6, -c152.y, r0
+     texld r0, r0, s0
+     mul oC0.xyz, r0, c39.y
+     mov oC0.w, c46.x

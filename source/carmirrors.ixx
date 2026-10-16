@@ -22,7 +22,7 @@ import temporal;
 // the glass as a quad on those corners (0xB59900, in front of the plane along n by a float in its code) with mirror.fx, which reads
 // MIRROR_RT at the screen position. With no interior mirror on, the mirror of the player's car the camera looks at
 // most goes in instead: its glass from carmirrorstable.hxx (tools/vehicle_mirrors, from vehicles.img), in the car's
-// space, placed with the car's matrix, rounded by mirror_car_shape.patch. One mirror at a time, as the game has one
+// space, placed with the car's matrix, rounded and widened as a convex mirror by mirror_car_shape.patch. One mirror at a time, as the game has one
 // target.
 namespace CarMirrors
 {
@@ -37,6 +37,7 @@ namespace CarMirrors
     static bool reverse = false;            // CarMirrorsReverse (hidden): the corners the other way round, if the quad is culled
     static bool rounded = true;             // CarMirrorsRounded (hidden): 0 draws the plain quad, to tell the shape from a missing quad
     static bool byDrawnCar = true;          // CarMirrorsByDrawnCar (hidden): 0 keeps the main thread's corners
+    static float zoomOut = 1.3f;            // CarMirrorsZoomOut (hidden): how much wider than a flat mirror they show, 1 flat
     // The game puts the quad along n by a float its quad code reads (0.035 m on PC, 0.0125 with shaders.ixx's Xbox
     // value): read where the code points as the corners are placed, which lands the quad 5 mm in front of the glass.
     // Taken as 0.035, the quad sat 1.75 cm behind the glass, inside the mirror's housing.
@@ -278,14 +279,14 @@ namespace CarMirrors
 
     // Render thread, the game's mirror quad about to be drawn: its corners by the matrix the G-buffer drew the player's
     // car with this frame (TemporalAA, with object motion vectors), else as the main thread put them.
-    // c152.x for mirror.fx (mirror_car_shape.patch): 1 rounds the quad as car mirrors are, 0 keeps an interior
-    // mirror's corners.
-    static void SetRounded(bool rounded)
+    // c152 for mirror.fx (mirror_car_shape.patch): x 1 rounds the quad as car mirrors are, y the zoom out - 1 widens
+    // the view as a convex mirror's; zeros keep an interior mirror as the game draws it.
+    static void SetShape(bool ours)
     {
         auto device = rage::grcDevice::GetD3DDevice();
         if (!device)
             return;
-        const float shape[4] = { rounded ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+        const float shape[4] = { ours && rounded ? 1.0f : 0.0f, ours ? zoomOut - 1.0f : 0.0f, 0.0f, 0.0f };
         device->SetPixelShaderConstantF(152, shape, 1);
         if (auto real = RageDirect3DDevice9::RealDevice(device); real != device)
             real->SetPixelShaderConstantF(152, shape, 1);
@@ -296,7 +297,7 @@ namespace CarMirrors
         const auto glass = drawnGlass.load(std::memory_order_acquire);
         const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
         const bool ours = glass && vehicle && mirrorOn && *mirrorOn;
-        SetRounded(ours && rounded);
+        SetShape(ours);
         if (!ours || !byDrawnCar)
             return;
         ++quadDrawn;
@@ -326,8 +327,9 @@ public:
                 CarMirrors::reverse = ini.ReadInteger("MISC", "CarMirrorsReverse", 0) != 0;
                 CarMirrors::rounded = ini.ReadInteger("MISC", "CarMirrorsRounded", 1) != 0;
                 CarMirrors::byDrawnCar = ini.ReadInteger("MISC", "CarMirrorsByDrawnCar", 1) != 0;
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d\n",
-                    int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar));
+                CarMirrors::zoomOut = std::clamp(ini.ReadFloat("MISC", "CarMirrorsZoomOut", 1.3f), 1.0f, 2.5f);
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f\n",
+                    int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut);
             };
             CIniReader iniReader("");
             readIni(iniReader);
