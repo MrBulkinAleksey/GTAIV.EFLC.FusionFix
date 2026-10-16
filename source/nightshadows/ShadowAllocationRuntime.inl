@@ -246,6 +246,15 @@ namespace PlayerShadowAllocation
         __except (EXCEPTION_EXECUTE_HANDLER) { owner = {}; owner.kind = 3; return true; }
         return false;
     }
+    // StreetLampsFirst: whether a light's key points into a building (a facade's light) rather than an object (street
+    // lamps, wall lamps)
+    static bool streetLampsFirst = true;
+    static std::atomic<uint32_t> buildingLightsLowered{0};
+    static bool BuildingLight(uint32_t key) noexcept
+    {
+        KeyOwner owner{};
+        return FindKeyOwner(key, owner) && owner.kind == 1;
+    }
     static std::string DescribeKeyOwner(uint32_t key)
     {
         KeyOwner owner{};
@@ -974,9 +983,11 @@ namespace PlayerShadowAllocation
             // props' shadow (bins are not in its cache) until you came near. Its light in view, it ranks off screen,
             // above those and any slot they hold; among themselves such lamps go by the game's distance, which
             // LampViewPriority already shortens for lamps in view.
+            // StreetLampsFirst: not a building's light (a skyscraper's crown 60 m above the street took a slot so).
             if(casterPriority && cachedLampViewSlots && kind==budget::Kind::Lamp && cached && gain==SlotGain::None &&
                volumeVisible && viewWeight>1.01f) {
-                gain=SlotGain::OffScreen; ++cachedLampsInView;
+                if(streetLampsFirst && BuildingLight(key)) ++buildingLightsLowered;
+                else { gain=SlotGain::OffScreen; ++cachedLampsInView; }
             }
             // An uncached lamp out of the frame (behind or beside the camera, view weight 1) whose light still
             // reaches it counted as a shadow in view, and in tunnels lamps 15-20 m behind took slots from those
@@ -998,6 +1009,12 @@ namespace PlayerShadowAllocation
                 const bool trafficSignal=(flags&rage::LF_TRAFFIC) && !(flags&rage::LF_MAP);
                 if(trafficSignal || origin==fusionfix::shadows::ShadowSlotTrace::OriginModelLight ||
                    origin==fusionfix::shadows::ShadowSlotTrace::OriginCorona) { gain=SlotGain::None; ++addedLightsYielded; }
+            }
+            // StreetLampsFirst: a facade's model light that reaches you ranks off screen, below the street lamps in view
+            // and those with a car or ped in their light.
+            if(casterPriority && streetLampsFirst && kind==budget::Kind::Lamp && !cached && lightsPlayer && gain==SlotGain::InView &&
+               lightOrigin && lightOrigin(key)==fusionfix::shadows::ShadowSlotTrace::OriginModelLight && BuildingLight(key)) {
+                gain=SlotGain::OffScreen; ++buildingLightsLowered;
             }
             if(casterPriority && kind==budget::Kind::Lamp && !cached && gain==SlotGain::InView &&
                geometry.distanceSquared<=reach*reach &&
