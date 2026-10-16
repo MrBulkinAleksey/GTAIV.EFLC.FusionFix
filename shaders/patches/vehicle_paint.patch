@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
-index 8e22fba..4385366 100644
+index 8e22fba..726c1ba 100644
 --- a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
-@@ -55,12 +55,33 @@
+@@ -55,12 +55,34 @@
      def c3, -13.2877121, 128, 8, 4
      def c4, 32, 4, 1, 0.00392156886
      def c100, 10, 1, 0, 0
@@ -24,6 +24,7 @@ index 8e22fba..4385366 100644
 +    def c195, 0, 1, 0, 0 // FusionFix rain on cars: the body's forward axis
 +    def c196, 0.00100000005, 0, 1, 0.75 // FusionFix rain on cars: the body's vertical, a little across so flat tops keep a frame
 +    def c197, 8, 6.28318548, -3.14159274, 0.00400000019 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
++    def c198, 0.0599999987, 6.25, 0.150000006, 0.5 // FusionFix vehicle_paint.patch: a drop's rim from 1 - n.n0, over 1 / 6.25; its extra specular, its darkening
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
@@ -36,7 +37,7 @@ index 8e22fba..4385366 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -97,6 +118,275 @@
+@@ -97,6 +119,287 @@
      else
        mov r4.x, c1.x
      endif
@@ -295,6 +296,7 @@ index 8e22fba..4385366 100644
 +      // and dark on the other, like dents with their own shadows; the drops' gloss of 0.97 still shows their highlights
 +      mul r24.zw, r24, c182.x
 +    endif
++    mov r28.xyz, r27 // the normal before the drops bend it, for their rims
 +    // The drops' height bends the normal: Mikkelsen's surface gradient from its screen slope (v2 is the camera minus
 +    // the position, which flips the gradient's sign and so its sum)
 +    mov r13.yz, r24.xzww
@@ -309,10 +311,21 @@ index 8e22fba..4385366 100644
 +    mul r14.xyz, r14, r13.w
 +    mad r14.xyz, r27, r13_abs.x, r14
 +    nrm r27.xyz, r14
++    // A drop's rim, where its dome turns away from the paint (1 - n.n0 from 0.06, full by 0.22 at the paint's 0.4 of
++    // the slope; drops are all 2 mm high, so small beads are steep and take an outer ring, big ones a thin edge):
++    // darker, as light there bends out of the drop, and a stronger specular, its Fresnel, so the game's reflection
++    // lights the drop's edge as it does on water
++    dp3 r28.w, r27, r28
++    add r28.w, -r28.w, c187.w
++    add r28.w, r28.w, -c198.x
++    mul_sat r28.w, r28.w, c198.y
++    mul r29.x, r28.w, c198.w
++    add r29.x, -r29.x, c187.w
++    mul r0.xyz, r0, r29.x
      mul r3.w, r3.x, r4.x
      mov r4.xyz, c1
      mul r4.z, r4.z, c78.x
-@@ -121,11 +411,14 @@
+@@ -121,11 +424,14 @@
      cmp r2.x, r2.x, r2.y, c3.x
      mul r2.x, r3.y, r2.x
      exp r2.x, r2.x
@@ -328,7 +341,7 @@ index 8e22fba..4385366 100644
      mul r2.xyz, r1, c3.y
      frc r3.xyz, r2
      add r2.xyz, r2, -r3
-@@ -136,10 +429,29 @@
+@@ -136,10 +442,31 @@
      dp3 r0.z, r1, c4
      mul oC1.w, r0.z, c4.w
      mul oC1.xyz, r2, c2.x
@@ -343,7 +356,9 @@ index 8e22fba..4385366 100644
 +    max r25.x, r25.x, r25.y // stored specular, and the Fresnel's 0.26 at a glance turned bonnets and roofs white
 +    mul r25.z, r20.x, c183.z
 +    max r25.x, r25.x, r25.z // a wet film
-+    lrp r26.x, r24.x, c183.w, r25.x // drops
++    mul r25.w, r28.w, c198.z
++    add r25.w, r25.w, c183.w
++    lrp r26.x, r24.x, r25.w, r25.x // drops, more at their rims
 +    mov oC2.x, r26.x
      mul r0.x, r0.y, c2.z
      rsq r0.x, r0.x
@@ -415,10 +430,10 @@ index 45aef76..6af4ae0 100644
  
  // approximately 238 instruction slots used (8 texture, 230 arithmetic)
 diff --git a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
-index 992eb2b..1125754 100644
+index 992eb2b..6e805a5 100644
 --- a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
-@@ -55,11 +55,32 @@
+@@ -55,11 +55,33 @@
      def c3, -13.2877121, 128, 8, 4
      def c4, 32, 4, 1, 0.00392156886
      def c100, 10, 1, 0, 0
@@ -440,6 +455,7 @@ index 992eb2b..1125754 100644
 +    def c195, 0, 1, 0, 0 // FusionFix rain on cars: the body's forward axis
 +    def c196, 0.00100000005, 0, 1, 0.75 // FusionFix rain on cars: the body's vertical, a little across so flat tops keep a frame
 +    def c197, 8, 6.28318548, -3.14159274, 0.00400000019 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
++    def c198, 0.0599999987, 6.25, 0.150000006, 0.5 // FusionFix vehicle_paint.patch: a drop's rim from 1 - n.n0, over 1 / 6.25; its extra specular, its darkening
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
@@ -451,7 +467,7 @@ index 992eb2b..1125754 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -96,6 +117,275 @@
+@@ -96,6 +118,287 @@
      else
        mov r4.x, c1.x
      endif
@@ -710,6 +726,7 @@ index 992eb2b..1125754 100644
 +      // and dark on the other, like dents with their own shadows; the drops' gloss of 0.97 still shows their highlights
 +      mul r24.zw, r24, c182.x
 +    endif
++    mov r28.xyz, r27 // the normal before the drops bend it, for their rims
 +    // The drops' height bends the normal: Mikkelsen's surface gradient from its screen slope (v2 is the camera minus
 +    // the position, which flips the gradient's sign and so its sum)
 +    mov r13.yz, r24.xzww
@@ -724,10 +741,21 @@ index 992eb2b..1125754 100644
 +    mul r14.xyz, r14, r13.w
 +    mad r14.xyz, r27, r13_abs.x, r14
 +    nrm r27.xyz, r14
++    // A drop's rim, where its dome turns away from the paint (1 - n.n0 from 0.06, full by 0.22 at the paint's 0.4 of
++    // the slope; drops are all 2 mm high, so small beads are steep and take an outer ring, big ones a thin edge):
++    // darker, as light there bends out of the drop, and a stronger specular, its Fresnel, so the game's reflection
++    // lights the drop's edge as it does on water
++    dp3 r28.w, r27, r28
++    add r28.w, -r28.w, c187.w
++    add r28.w, r28.w, -c198.x
++    mul_sat r28.w, r28.w, c198.y
++    mul r29.x, r28.w, c198.w
++    add r29.x, -r29.x, c187.w
++    mul r0.xyz, r0, r29.x
      mul r3.w, r3.x, r4.x
      mov r4.xyz, c1
      mul r4.z, r4.z, c78.x
-@@ -120,11 +410,14 @@
+@@ -120,11 +423,14 @@
      cmp r2.x, r2.x, r2.y, c3.x
      mul r2.x, r3.y, r2.x
      exp r2.x, r2.x
@@ -743,7 +771,7 @@ index 992eb2b..1125754 100644
      mul r2.xyz, r1, c3.y
      frc r3.xyz, r2
      add r2.xyz, r2, -r3
-@@ -135,10 +428,29 @@
+@@ -135,10 +441,31 @@
      dp3 r0.z, r1, c4
      mul oC1.w, r0.z, c4.w
      mul oC1.xyz, r2, c2.x
@@ -758,7 +786,9 @@ index 992eb2b..1125754 100644
 +    max r25.x, r25.x, r25.y // stored specular, and the Fresnel's 0.26 at a glance turned bonnets and roofs white
 +    mul r25.z, r20.x, c183.z
 +    max r25.x, r25.x, r25.z // a wet film
-+    lrp r26.x, r24.x, c183.w, r25.x // drops
++    mul r25.w, r28.w, c198.z
++    add r25.w, r25.w, c183.w
++    lrp r26.x, r24.x, r25.w, r25.x // drops, more at their rims
 +    mov oC2.x, r26.x
      mul r0.x, r0.y, c2.z
      rsq r0.x, r0.x
@@ -830,10 +860,10 @@ index cd862d2..0a1bed4 100644
  
  // approximately 237 instruction slots used (8 texture, 229 arithmetic)
 diff --git a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
-index 141b8ca..04c7c5f 100644
+index 141b8ca..da967b1 100644
 --- a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
-@@ -57,11 +57,32 @@
+@@ -57,11 +57,33 @@
      def c3, -13.2877121, 128, 8, 4
      def c4, 32, 4, 1, 0.00392156886
      def c100, 10, 1, 0, 0
@@ -855,6 +885,7 @@ index 141b8ca..04c7c5f 100644
 +    def c195, 0, 1, 0, 0 // FusionFix rain on cars: the body's forward axis
 +    def c196, 0.00100000005, 0, 1, 0.75 // FusionFix rain on cars: the body's vertical, a little across so flat tops keep a frame
 +    def c197, 8, 6.28318548, -3.14159274, 0.00400000019 // FusionFix rain on cars: a trail's meander: turns per metre, 2 pi, -pi, its reach (m)
++    def c198, 0.0599999987, 6.25, 0.150000006, 0.5 // FusionFix vehicle_paint.patch: a drop's rim from 1 - n.n0, over 1 / 6.25; its extra specular, its darkening
      dcl_texcoord v0
      dcl_texcoord1 v1.xyz
      dcl_texcoord3 v2.xyz
@@ -866,7 +897,7 @@ index 141b8ca..04c7c5f 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
-@@ -102,6 +123,275 @@
+@@ -102,6 +124,287 @@
      else
        mov r5.x, c1.x
      endif
@@ -1125,6 +1156,7 @@ index 141b8ca..04c7c5f 100644
 +      // and dark on the other, like dents with their own shadows; the drops' gloss of 0.97 still shows their highlights
 +      mul r24.zw, r24, c182.x
 +    endif
++    mov r28.xyz, r27 // the normal before the drops bend it, for their rims
 +    // The drops' height bends the normal: Mikkelsen's surface gradient from its screen slope (v2 is the camera minus
 +    // the position, which flips the gradient's sign and so its sum)
 +    mov r13.yz, r24.xzww
@@ -1139,10 +1171,21 @@ index 141b8ca..04c7c5f 100644
 +    mul r14.xyz, r14, r13.w
 +    mad r14.xyz, r27, r13_abs.x, r14
 +    nrm r27.xyz, r14
++    // A drop's rim, where its dome turns away from the paint (1 - n.n0 from 0.06, full by 0.22 at the paint's 0.4 of
++    // the slope; drops are all 2 mm high, so small beads are steep and take an outer ring, big ones a thin edge):
++    // darker, as light there bends out of the drop, and a stronger specular, its Fresnel, so the game's reflection
++    // lights the drop's edge as it does on water
++    dp3 r28.w, r27, r28
++    add r28.w, -r28.w, c187.w
++    add r28.w, r28.w, -c198.x
++    mul_sat r28.w, r28.w, c198.y
++    mul r29.x, r28.w, c198.w
++    add r29.x, -r29.x, c187.w
++    mul r0.xyz, r0, r29.x
      mul r1.x, r4.x, r5.x
      mov r5.xyz, c1
      mul r1.w, r5.z, c78.x
-@@ -126,11 +416,14 @@
+@@ -126,11 +429,14 @@
      cmp r1.z, r1.z, r1.w, c3.x
      mul r1.y, r1.y, r1.z
      exp r1.y, r1.y
@@ -1158,7 +1201,7 @@ index 141b8ca..04c7c5f 100644
      mul r2.xyz, r1, c3.y
      frc r3.xyz, r2
      add r2.xyz, r2, -r3
-@@ -141,10 +434,29 @@
+@@ -141,10 +447,31 @@
      dp3 r0.z, r1, c4
      mul oC1.w, r0.z, c4.w
      mul oC1.xyz, r2, c2.x
@@ -1173,7 +1216,9 @@ index 141b8ca..04c7c5f 100644
 +    max r25.x, r25.x, r25.y // stored specular, and the Fresnel's 0.26 at a glance turned bonnets and roofs white
 +    mul r25.z, r20.x, c183.z
 +    max r25.x, r25.x, r25.z // a wet film
-+    lrp r26.x, r24.x, c183.w, r25.x // drops
++    mul r25.w, r28.w, c198.z
++    add r25.w, r25.w, c183.w
++    lrp r26.x, r24.x, r25.w, r25.x // drops, more at their rims
 +    mov oC2.x, r26.x
      mul r0.x, r0.y, c2.z
      rsq r0.x, r0.x

@@ -18,7 +18,9 @@
 #  - beads, a drop at a random spot in some of the cells of a grid, more of them the harder it rains;
 #  - running drops on the sides: columns with drops sliding down at their own speed, a wet trail above each.
 # Their height bends the G-buffer normal (bump mapping from screen space derivatives, Mikkelsen's surface gradient,
-# so no tangent frame is needed); drops and trails turn glossy, the whole car gets a wet film's gloss.
+# so no tangent frame is needed); drops and trails turn glossy, the whole car gets a wet film's gloss. A drop's rim,
+# where its dome turns away from the paint, darkens and takes a stronger specular (its Fresnel), so the game's
+# reflection outlines the drop as on water.
 #
 # Usage: vehicle_paint.py <FusionShaders checkout>; the patch is the diff it leaves (git diff).
 import re
@@ -39,6 +41,10 @@ VARIANTS = {
     'gta_vehicle_paint3': dict(clean='r5.x', spec2='r4', spec2_add='mad r1.yzw, r4.xxyz, r1.y, r0.xxyz', normal='mad r1.xyz, r2, r2.w, c1.x'),
 }
 
+
+PAINT_DEFS = f'''\
+    def c198, 0.0599999987, 6.25, 0.150000006, 0.5 // {TAG}: a drop's rim from 1 - n.n0, over 1 / 6.25; its extra specular, its darkening
+'''
 
 PS_DCLS = f'''\
     dcl_texcoord2 v5 // {TAG}: position in the car's space
@@ -86,7 +92,19 @@ def finish_and_drops(clean):
       // and dark on the other, like dents with their own shadows; the drops' gloss of 0.97 still shows their highlights
       mul r24.zw, r24, c182.x
     endif
-{drops_bend()}'''
+    mov r28.xyz, r27 // the normal before the drops bend it, for their rims
+{drops_bend()}\
+    // A drop's rim, where its dome turns away from the paint (1 - n.n0 from 0.06, full by 0.22 at the paint's 0.4 of
+    // the slope; drops are all 2 mm high, so small beads are steep and take an outer ring, big ones a thin edge):
+    // darker, as light there bends out of the drop, and a stronger specular, its Fresnel, so the game's reflection
+    // lights the drop's edge as it does on water
+    dp3 r28.w, r27, r28
+    add r28.w, -r28.w, c187.w
+    add r28.w, r28.w, -c198.x
+    mul_sat r28.w, r28.w, c198.y
+    mul r29.x, r28.w, c198.w
+    add r29.x, -r29.x, c187.w
+    mul r0.xyz, r0, r29.x'''
 
 
 def spec2_cut(reg):
@@ -108,7 +126,9 @@ SPECULAR = f'''\
     max r25.x, r25.x, r25.y // stored specular, and the Fresnel's 0.26 at a glance turned bonnets and roofs white
     mul r25.z, r20.x, c183.z
     max r25.x, r25.x, r25.z // a wet film
-    lrp r26.x, r24.x, c183.w, r25.x // drops
+    mul r25.w, r28.w, c198.z
+    add r25.w, r25.w, c183.w
+    lrp r26.x, r24.x, r25.w, r25.x // drops, more at their rims
     mov oC2.x, r26.x
 '''
 
@@ -154,7 +174,7 @@ def patch_ps(name, v):
     text = body(path)
     if TAG in text:
         sys.exit(f'{path} is patched already')
-    text = insert_after(text, r'def c100,', PS_DEFS, path)
+    text = insert_after(text, r'def c100,', PS_DEFS + PAINT_DEFS, path)
     text = insert_after(text, r'dcl_texcoord9 v9', PS_DCLS, path)
     # The finish and the drops right after the dirt, which leaves the albedo in r0 and the cleanliness behind
     lines = text.split('\n')
