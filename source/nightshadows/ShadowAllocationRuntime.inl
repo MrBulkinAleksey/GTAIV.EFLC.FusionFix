@@ -173,6 +173,83 @@ namespace PlayerShadowAllocation
     static std::atomic<uint32_t> lightsFlickering{0}; // lights ranked off screen as they flicker out of the list, for the status line
     // Rear lamp keys (Liberty's Shadows 2.0 tail light shadows), set by Lighting20, which comes after
     static bool (*isTailLightKey)(uint32_t) = nullptr;
+    // Whose a light is (ShadowSlotTrace::Origin) by its key, set by Lighting20 as well; the slot trace only
+    static uint8_t (*lightOrigin)(uint32_t) = nullptr;
+    // The car whose headlight or rear lamp one of Lighting20's own keys is (LampKeys), 0 for others
+    static uintptr_t (*lampKeyOwner)(uint32_t) = nullptr;
+
+    // NightShadowsSlotLog: the entity a 2dfx light's key points into. The game keys such a light by its owner's
+    // address plus the effect's number (0xC1E183), so the owner is the building (pool stride 0x70) or object (0x320)
+    // whose slot holds the key. Reads only, under SEH: the pools change on the game's thread meanwhile.
+    struct KeyOwner { uint8_t kind{}; uint32_t slot{}, offset{}, hash{}; int32_t model{-1}; float position[3]{}; bool placed{}; };
+    static bool FindKeyOwner(uint32_t key, KeyOwner& owner) noexcept
+    {
+        constexpr uint32_t BuildingPoolRva = 0xEBD0E8, ObjectPoolRva = 0x1232C60, ModelInfoTableRva = 0xE95CD8;
+        __try
+        {
+            if (const auto car = lampKeyOwner ? lampKeyOwner(key) : 0)
+            {
+                owner.kind = 4;
+                const int index = *reinterpret_cast<const int16_t*>(car + 0x2E);
+                if (index >= 0 && index < 31000)
+                {
+                    owner.model = index;
+                    const auto info = *reinterpret_cast<const uintptr_t*>(gameBase + ModelInfoTableRva + index * 4);
+                    if (info >= 0x10000 && !(info & 3)) owner.hash = *reinterpret_cast<const uint32_t*>(info + 0x3C);
+                }
+                const auto matrix = *reinterpret_cast<const float* const*>(car + 0x20);
+                if (matrix)
+                {
+                    for (int i = 0; i < 3; ++i) owner.position[i] = matrix[12 + i];
+                    owner.placed = std::isfinite(owner.position[0] + owner.position[1] + owner.position[2]);
+                }
+                return true;
+            }
+            const struct { uint32_t rva, stride; uint8_t kind; } pools[] = { {BuildingPoolRva, 0x70, 1}, {ObjectPoolRva, 0x320, 2} };
+            for (const auto& p : pools)
+            {
+                const auto pool = *reinterpret_cast<rage::fwBasePool* const*>(gameBase + p.rva);
+                if (!pool || pool->m_nSize <= 0 || pool->m_nSize > 65536 || pool->m_nStorageSize != static_cast<int32_t>(p.stride) ||
+                    !pool->m_aStorage || !pool->m_aFlags) continue;
+                const auto storage = reinterpret_cast<uintptr_t>(pool->m_aStorage);
+                if (key < storage || uint64_t(key - storage) >= uint64_t(pool->m_nSize) * p.stride) continue;
+                owner.kind = p.kind;
+                owner.slot = (key - storage) / p.stride;
+                owner.offset = (key - storage) % p.stride;
+                if (pool->m_aFlags[owner.slot] & 0x80) { owner.model = -2; return true; } // a free slot
+                const auto entity = storage + owner.slot * p.stride;
+                const int index = *reinterpret_cast<const int16_t*>(entity + 0x2E);
+                if (index >= 0 && index < 31000)
+                {
+                    owner.model = index;
+                    const auto info = *reinterpret_cast<const uintptr_t*>(gameBase + ModelInfoTableRva + index * 4);
+                    if (info >= 0x10000 && !(info & 3)) owner.hash = *reinterpret_cast<const uint32_t*>(info + 0x3C);
+                }
+                const auto matrix = *reinterpret_cast<const float* const*>(entity + 0x20);
+                if (matrix)
+                {
+                    for (int i = 0; i < 3; ++i) owner.position[i] = matrix[12 + i];
+                    owner.placed = std::isfinite(owner.position[0] + owner.position[1] + owner.position[2]);
+                }
+                return true;
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { owner = {}; owner.kind = 3; return true; }
+        return false;
+    }
+    static std::string DescribeKeyOwner(uint32_t key)
+    {
+        KeyOwner owner{};
+        if (!FindKeyOwner(key, owner)) return " owner=-";
+        if (owner.kind == 3) return " owner=fault";
+        const char* kind = owner.kind == 1 ? "building" : owner.kind == 2 ? "object" : "vehicle";
+        if (owner.model == -2) return std::format(" owner={} slot={} +{:x} free", kind, owner.slot, owner.offset);
+        if (owner.kind == 4)
+            return std::format(" owner=vehicle model={} hash={:08x}{}", owner.model, owner.hash,
+                owner.placed ? std::format(" at={:.1f},{:.1f},{:.1f}", owner.position[0], owner.position[1], owner.position[2]) : std::string());
+        return std::format(" owner={} slot={} +{:x} model={} hash={:08x}{}", kind, owner.slot, owner.offset, owner.model, owner.hash,
+            owner.placed ? std::format(" at={:.1f},{:.1f},{:.1f}", owner.position[0], owner.position[1], owner.position[2]) : std::string());
+    }
     static std::atomic<uint32_t> tailLightsYielded{0};
 
     static void NoteSlotAcquires(const budget::PlayerShadowBudget::Selection& selection) noexcept
@@ -913,6 +990,12 @@ namespace PlayerShadowAllocation
                     fusionfix::shadows::ShadowSlotTrace::Light traced{key,static_cast<uint8_t>(kind),rawGain,gain,cached,volumeVisible,
                         {light.mPosition.x,light.mPosition.y,light.mPosition.z},geometry.distanceSquared,viewWeight,priorityDistance,spacedOut};
                     traced.reachSquared=reach*reach;
+                    traced.flags=flags; traced.type=static_cast<uint8_t>(light.mType);
+                    traced.radius=light.mRadius; traced.intensity=light.mIntensity;
+                    traced.color[0]=light.mColor.x; traced.color[1]=light.mColor.y; traced.color[2]=light.mColor.z;
+                    traced.cacheIndex=light.mShadowCacheIndex; traced.interior=light.mInteriorIndex; traced.room=light.mRoomIndex;
+                    traced.origin=lightOrigin ? lightOrigin(key)
+                        : static_cast<uint8_t>(fusionfix::shadows::ShadowSlotTrace::OriginGame);
                     if(caster>=0 && static_cast<unsigned>(caster)<state.casters.count) {
                         const auto& p=state.casters.points[caster];
                         traced.caster=state.casters.extents[caster]>=fusionfix::shadows::ShadowCasterPresence::VehicleExtent?1:2;

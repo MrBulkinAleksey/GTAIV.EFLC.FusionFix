@@ -1028,6 +1028,15 @@ namespace Lighting20
         Dual::Install();
         Tail::Install();
         PlayerShadowAllocation::isTailLightKey = Tail::IsKey;
+        PlayerShadowAllocation::lampKeyOwner = LampOwner;
+        PlayerShadowAllocation::lightOrigin = [](uint32_t key) noexcept -> uint8_t
+        {
+            using Trace = fusionfix::shadows::ShadowSlotTrace;
+            if (LampKeys::Contains(key))
+                return LampKeys::ChannelOf(key) >= LampKeys::TailLight0 ? Trace::OriginTailLight : Trace::OriginHeadlight;
+            const auto kind = Ours::Of(key);
+            return kind == Ours::ModelLight ? Trace::OriginModelLight : kind == Ours::CoronaLight ? Trace::OriginCorona : Trace::OriginGame;
+        };
         World::Install(ini);
         Buildings::Install();
         Sharing::enabled = ini.ReadInteger("NIGHTSHADOWS", "SharedMaps", 1) != 0;

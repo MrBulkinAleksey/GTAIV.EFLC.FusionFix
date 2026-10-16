@@ -571,6 +571,7 @@ public:
                 if (PlayerShadowAllocation::cameraPriority)
                     PlayerShadowAllocation::cameraPriority = PlayerShadowAllocation::InstallCameraCapture();
                 PlayerShadowAllocation::slotTrace.enabled = iniReader.ReadInteger("DEBUG", "NightShadowsSlotLog", 0) != 0;
+                PlayerShadowAllocation::slotTrace.describeOwner = PlayerShadowAllocation::DescribeKeyOwner;
                 PlayerShadowAllocation::lampSpacing.spacing = PlayerShadowAllocation::lampSpacing.base;
                 PlayerShadowAllocation::InstallLampSight(iniReader.ReadInteger("NIGHTSHADOWS", "LampsBehindWalls", 1) != 0,
                     static_cast<uint32_t>(iniReader.ReadInteger("NIGHTSHADOWS", "LampsBehindWallsFlags", 6)));
