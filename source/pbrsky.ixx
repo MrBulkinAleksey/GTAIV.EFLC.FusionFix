@@ -341,10 +341,11 @@ export bool PbrSkySunHue(float heightKm, float sunSine, float hue[3])
 // so reflections and anything else drawn before the next fog pass keep the game's fog.
 
 constexpr UINT kAerialRegister = 104;
-// The air k times as thick as the Earth's: through the real one the city's 2 km of air keep 94% of the blue, and at
-// k = 4 the 300-800 m a street view reaches lost 3-10% of it under the game's fog, nothing to see. At 10: a kilometre
-// keeps 72% of the blue and 94% of the red.
-constexpr float kAerialScale = 10.0f;
+// The air k times as thick as the Earth's, by the menu's level (Low, Medium, High). Through the real one the city's
+// 2 km of air keep 94% of the blue; at k = 4 the 200-800 m a street view reaches lost 3-10% of it, which in game showed
+// only in the far distance the game's fog hides anyway. Through 300 m and 1 km of air the blue keeps 91% and 72% at
+// k = 10, 82% and 52% at 20, 67% and 27% at 40; the red 94%, 89% and 79% at a kilometre.
+constexpr float kAerialScale[] = { 10.0f, 20.0f, 40.0f };
 // Aerial Perspective Debug View: the air this much thicker again, to see where it falls and that it is drawn at all.
 constexpr float kAerialDebugScale = 25.0f;
 constexpr float kRayleighHeightM = 8000.0f, kMieHeightM = 1200.0f;
@@ -378,9 +379,10 @@ export void AerialPerspectiveBind(IDirect3DDevice9* pDevice)
     else
         sunX = 1.0f, sunY = 0.0f;
 
-    const float strength = R.AerialPerspectiveEnabled() ? share * (R.AerialPerspectiveDebug() ? kAerialDebugScale : 1.0f) : 0.0f;
+    const int level = std::clamp(R.AerialPerspectiveLevel(), 0, int(std::size(kAerialScale)));
+    const float strength = level ? share * (R.AerialPerspectiveDebug() ? kAerialDebugScale : 1.0f) : 0.0f;
     const float haze = WeatherHaze();
-    const float perMetre = kAerialScale * kLog2e / 1000.0f;
+    const float perMetre = kAerialScale[std::max(level, 1) - 1] * kLog2e / 1000.0f;
     const float values[12] = {
         5.802e-3f * perMetre, 13.558e-3f * perMetre, 33.1e-3f * perMetre, 4.440e-3f * haze * perMetre,
         -kLog2e / kRayleighHeightM, -kLog2e / kMieHeightM, units, strength,

@@ -726,12 +726,13 @@ public:
         static auto p = FusionFixSettings.GetRef("PREF_PBR_SKY");
         return p ? p->get() != 0 : true;
     }
-    // Aerial Perspective in the graphics menu (PREF_AERIAL_PERSPECTIVE, [WEATHER] AerialPerspective); the fog takes the
-    // Physical Sky's colour without it too. What the last fog pass took, for the Ctrl+Shift+F10 log.
-    bool AerialPerspectiveEnabled() const
+    // Aerial Perspective in the graphics menu (PREF_AERIAL_PERSPECTIVE, [WEATHER] AerialPerspective): 0 off, 1 to 3 how
+    // thick the air is; the fog takes the Physical Sky's colour without it too. What the last fog pass took, for the
+    // Ctrl+Shift+F10 log.
+    int AerialPerspectiveLevel() const
     {
         static auto p = FusionFixSettings.GetRef("PREF_AERIAL_PERSPECTIVE");
-        return p ? p->get() != 0 : true;
+        return p ? p->get() : 2;
     }
     // Aerial Perspective Debug View in Graphics > Debug ([DEBUG] AerialPerspectiveDebug): the air 25 times as thick.
     bool AerialPerspectiveDebug() const

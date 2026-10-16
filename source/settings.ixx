@@ -2146,7 +2146,7 @@ public:
             { 0, "PREF_WORLD_LIGHT_SHADOWS",    "NIGHTSHADOWS", "WorldLightShadows",                "",                           1, nullptr, 0, 1 },
             { 0, "PREF_BUILDING_SHADOWS",       "NIGHTSHADOWS", "BuildingShadows",                  "",                           1, nullptr, 0, 1 },
             { 0, "PREF_PBR_SKY",                "WEATHER",    "PbrSky",                             "",                           1, nullptr, 0, 1 },
-            { 0, "PREF_AERIAL_PERSPECTIVE",     "WEATHER",    "AerialPerspective",                  "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_AERIAL_PERSPECTIVE",     "WEATHER",    "AerialPerspective",                  "MENU_DISPLAY_AERIAL",        2, nullptr, 0, 3 },
             // Car paint and rain drops on it (vehiclepaint.ixx)
             { 0, "PREF_VEHICLE_PAINT",          "TEXTURES",   "VehiclePaint",                       "",                           1, nullptr, 0, 1 },
             { 0, "PREF_CAR_RAINDROPS",          "WEATHER",    "CarRaindrops",                       "",                           1, nullptr, 0, 1 },
@@ -2200,6 +2200,7 @@ public:
         DefineDisplay("MENU_DISPLAY_TEXTURE_LOD_BIAS", { "MO_OFF", "LodBias1", "LodBias2", "LodBias3", "LodBias4" });
         DefineDisplay("MENU_DISPLAY_SSR_QUALITY", { "MO_OFF", "SSRHalf", "SSRFull" });
         DefineDisplay("MENU_DISPLAY_AO", { "MO_OFF", "SAO", "GTAO" });
+        DefineDisplay("MENU_DISPLAY_AERIAL", { "MO_OFF", "MO_LOW", "MO_MED", "MO_HIGH" });
         DefineDisplay("MENU_DISPLAY_SSR_DEBUG", { "MO_OFF", "SSRDbgColour", "SSRDbgHits", "SSRDbgNormals", "SSRDbgHorizon", "SSRDbgSpecular", "SSRDbgGlass", "SSRDbgContact", "SSRDbgGI", "SSRDbgSkin", "SSRDbgGIHistory" });
         DefineDisplay("MENU_DISPLAY_FG_DEBUG", { "MO_OFF", "FGDbgMarker", "FGDbgGenerated", "FGDbgBoth" });
         DefineDisplay("MENU_DISPLAY_WET_DEBUG", { "MO_OFF", "WetDbgMaterial", "WetDbgWetness" });
@@ -2403,7 +2404,7 @@ public:
             AddRow(category, "SunFlare", "PREF_SUN_FLARE", 2, toggle);
             AddRow(category, "VolumeClouds", "PREF_VOLUMETRIC_CLOUDS", 2, toggle);
             AddRow(category, "PbrSky", "PREF_PBR_SKY", 2, toggle);
-            AddRow(category, "AerialPersp", "PREF_AERIAL_PERSPECTIVE", 2, toggle);
+            AddRow(category, "AerialPersp", "PREF_AERIAL_PERSPECTIVE", 4, "MENU_DISPLAY_AERIAL");
             AddRow(category, "GGXLighting", "PREF_GGX_LIGHTING", 2, toggle);
             AddRow(category, "WetWeather", "PREF_WET_WEATHER", 2, toggle);
             AddRow(category, "CarRaindrops", "PREF_CAR_RAINDROPS", 2, toggle);
