@@ -35,6 +35,8 @@ namespace CarMirrors
     static SafetyHookInline phaseVisibilityHook;
 
     static bool reverse = false;            // CarMirrorsReverse (hidden): the corners the other way round, if the quad is culled
+    static bool rounded = true;             // CarMirrorsRounded (hidden): 0 draws the plain quad, to tell the shape from a missing quad
+    static bool byDrawnCar = true;          // CarMirrorsByDrawnCar (hidden): 0 keeps the main thread's corners
     static constexpr float AheadOfGlass = 0.03f; // the game puts the quad 0.035 m along n: 5 mm in front of the glass
     static constexpr float MinLook = 0.3f;  // cosine: a mirror further off the view than ~73 degrees is not taken
     static constexpr float Keep = 0.1f;     // the mirror in use stays until another is this much nearer the view
@@ -289,8 +291,8 @@ namespace CarMirrors
         const auto glass = drawnGlass.load(std::memory_order_acquire);
         const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
         const bool ours = glass && vehicle && mirrorOn && *mirrorOn;
-        SetRounded(ours);
-        if (!ours)
+        SetRounded(ours && rounded);
+        if (!ours || !byDrawnCar)
             return;
         ++quadDrawn;
         float around[3];
@@ -317,6 +319,10 @@ public:
             static auto readIni = [](CIniReader& ini)
             {
                 CarMirrors::reverse = ini.ReadInteger("MISC", "CarMirrorsReverse", 0) != 0;
+                CarMirrors::rounded = ini.ReadInteger("MISC", "CarMirrorsRounded", 1) != 0;
+                CarMirrors::byDrawnCar = ini.ReadInteger("MISC", "CarMirrorsByDrawnCar", 1) != 0;
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d\n",
+                    int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar));
             };
             CIniReader iniReader("");
             readIni(iniReader);
