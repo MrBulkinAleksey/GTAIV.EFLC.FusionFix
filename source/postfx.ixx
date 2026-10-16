@@ -1605,6 +1605,9 @@ private:
                         R.fVehicleBoxShadowLightSize, R.fVehicleBoxShadowRounding, int(R.bVehicleBoxShadowsFromCarLights), int(R.bVehicleBoxShadowsWithSlots),
                         R.fVehicleBoxShadowScale[0], R.fVehicleBoxShadowScale[1], R.fVehicleBoxShadowScale[2], R.fVehicleBoxShadowFollowLight,
                         R.fVehicleBoxShadowLowLightNarrow);
+                log.Printf("ped capsule shadows: %s, %u people shaded by lights since the last log; radius %.2f, height %.2f, foot %.2f below the position\n",
+                        R.bPedCapsuleShadows ? "on" : "off", VehicleBoxShadows::pedsWithShadows.exchange(0),
+                        R.fPedCapsuleRadius, R.fPedCapsuleHeight, R.fPedCapsuleFootBelow);
                 log.Printf("slot maps drawn without their lamp's boxed cars %u, cars left out %u\n",
                         VehicleBoxShadows::mapsWithoutBoxed.exchange(0), VehicleBoxShadows::carsLeftOut.exchange(0));
                 {

@@ -27,11 +27,20 @@ namespace PlayerShadowAllocation
     static SafetyHookMid preCacheHook;
     static bool stableOrdinals = false;
     static std::atomic<uint32_t> stableOrdinalPasses{0}, stableOrdinalMoves{0}, stableOrdinalRejected{0}, sharedMapsSkipped{0};
-    static SafetyHookMid collectHook, finalizeHook, lampDistanceHook, compareResultHook, cacheResultHook;
+    static SafetyHookMid collectHook, finalizeHook, lampDistanceHook, compareResultHook, cacheResultHook, cacheDistanceHook;
     static bool nativeLampPriority=false;
     static bool visibleReceiverRanking=false;
     static std::atomic<uint32_t> receiverRanked{0}, indoorRanked{0};
     static std::atomic<uint32_t> lampDistanceAdjusted{0};
+    // LampCacheViewPriority: the 8 static caches go to the nearest lamps without one, measured from 8 m behind the
+    // camera, so lamps behind you held them and the lamps down the street you look at had no shadow at all (no slot,
+    // no cache) until you came near. For the cache pick only, a lamp's distance is scaled by 3 / its view weight
+    // (1 out of view .. 3 in view): one out of view counts three times as far. Lamps within 10 m keep their distance.
+    // The slots' sort gets the distance back unchanged (Collect).
+    static bool cacheViewPriority=true;
+    static std::atomic<uint32_t> cacheDistanceAdjusted{0};
+    static thread_local float cacheSavedDistance=0;
+    static thread_local bool cacheDistanceSwapped=false;
     static std::atomic<uint32_t> cacheDependencyChecks{0}, cacheDependencyRedirected{0}, cacheDependencyDeferred{0}, cacheDependencyRejected{0};
     static std::atomic<uint32_t> continuityComparisons{0}, continuityOverrides{0}, continuityRejected{0};
     static std::atomic<bool> ready{false}, unsupportedThread{false};
@@ -41,10 +50,19 @@ namespace PlayerShadowAllocation
     static bool casterPriority = false;
     static uint32_t casterHoldMs = 0;
     static float casterLeadSeconds = 1.0f; // CasterAwarePriorityLead
+    static float boxedCarCasterDistance = 25.0f; // BoxedCarCasterDistance
+    static float pedCasterDistance = 35.0f; // PedCasterDistance
+    // InteriorLightsYieldOutside: while the scene is not an interior (IS_INTERIOR_SCENE, read once a frame in
+    // CaptureCasters), a light of an interior (mInteriorIndex set) takes no dynamic slot at all, a cached one keeps
+    // its cache: room lights shining out through a door took slots from the street lamps, by a ped in their light,
+    // by lighting you (uncached), or as the slots were free, and threw a second shadow of the cars and lamp posts.
+    static bool interiorLightsYield = true;
+    static std::atomic<bool> interiorScene{false};
+    static std::atomic<uint32_t> interiorLightsYielded{0};
     // Copied on the game-process callback, read by selection on the render side.
     static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
     static fusionfix::shadows::ShadowCasterPresence casters{};
-    static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0}, lightsOffScreen{0};
+    static std::atomic<uint32_t> casterCaptures{0}, lampsWithoutCasters{0}, lightsOffScreen{0}, cachedLampsInView{0}, carsLeftToBoxes{0}, pedsLeftOut{0};
     // NightShadowsSlotLog: filled by selection, written out from the game's thread.
     static fusionfix::shadows::ShadowSlotTrace slotTrace;
     // LampSpacing: lamps beside a nearer one in view give way to lamps further along
@@ -150,10 +168,106 @@ namespace PlayerShadowAllocation
     static uint32_t slotMinHoldMs = 0;
     static float behindLampReach = 12.0f; // BehindLampReach
     static float uncachedLampAdvantage = 1.5f; // UncachedLampAdvantage
+    static bool cachedLampViewSlots = true; // CachedLampViewSlots
+    // UncachedLampViewShare: the share of an uncached lamp's radius that counts for whether its light reaches the
+    // view or you; BehindLampByFixture: BehindLampReach goes by the fixture behind the camera, not the light's sphere
+    static float uncachedLampViewShare = 0.5f;
+    static bool behindLampByFixture = true;
+    // AddedLightsYield: the lights we give a shadow the game does not (model lights on facades, corona lights, traffic
+    // signals) rank None unless their light reaches you; for the slot trace's status line
+    static bool addedLightsYield = true;
+    static std::atomic<uint32_t> addedLightsYielded{0};
+    static std::atomic<uint32_t> uncachedLampsTrimmed{0}, lampsBehindCamera{0};
     static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
     static std::atomic<uint32_t> lightsFlickering{0}; // lights ranked off screen as they flicker out of the list, for the status line
     // Rear lamp keys (Liberty's Shadows 2.0 tail light shadows), set by Lighting20, which comes after
     static bool (*isTailLightKey)(uint32_t) = nullptr;
+    // Whose a light is (ShadowSlotTrace::Origin) by its key, set by Lighting20 as well; the slot trace only
+    static uint8_t (*lightOrigin)(uint32_t) = nullptr;
+    // The car whose headlight or rear lamp one of Lighting20's own keys is (LampKeys), 0 for others
+    static uintptr_t (*lampKeyOwner)(uint32_t) = nullptr;
+
+    // NightShadowsSlotLog: the entity a 2dfx light's key points into. The game keys such a light by its owner's
+    // address plus the effect's number (0xC1E183), so the owner is the building (pool stride 0x70) or object (0x320)
+    // whose slot holds the key. Reads only, under SEH: the pools change on the game's thread meanwhile.
+    struct KeyOwner { uint8_t kind{}; uint32_t slot{}, offset{}, hash{}; int32_t model{-1}; float position[3]{}; bool placed{}; };
+    static bool FindKeyOwner(uint32_t key, KeyOwner& owner) noexcept
+    {
+        constexpr uint32_t BuildingPoolRva = 0xEBD0E8, ObjectPoolRva = 0x1232C60, ModelInfoTableRva = 0xE95CD8;
+        __try
+        {
+            if (const auto car = lampKeyOwner ? lampKeyOwner(key) : 0)
+            {
+                owner.kind = 4;
+                const int index = *reinterpret_cast<const int16_t*>(car + 0x2E);
+                if (index >= 0 && index < 31000)
+                {
+                    owner.model = index;
+                    const auto info = *reinterpret_cast<const uintptr_t*>(gameBase + ModelInfoTableRva + index * 4);
+                    if (info >= 0x10000 && !(info & 3)) owner.hash = *reinterpret_cast<const uint32_t*>(info + 0x3C);
+                }
+                const auto matrix = *reinterpret_cast<const float* const*>(car + 0x20);
+                if (matrix)
+                {
+                    for (int i = 0; i < 3; ++i) owner.position[i] = matrix[12 + i];
+                    owner.placed = std::isfinite(owner.position[0] + owner.position[1] + owner.position[2]);
+                }
+                return true;
+            }
+            const struct { uint32_t rva, stride; uint8_t kind; } pools[] = { {BuildingPoolRva, 0x70, 1}, {ObjectPoolRva, 0x320, 2} };
+            for (const auto& p : pools)
+            {
+                const auto pool = *reinterpret_cast<rage::fwBasePool* const*>(gameBase + p.rva);
+                if (!pool || pool->m_nSize <= 0 || pool->m_nSize > 65536 || pool->m_nStorageSize != static_cast<int32_t>(p.stride) ||
+                    !pool->m_aStorage || !pool->m_aFlags) continue;
+                const auto storage = reinterpret_cast<uintptr_t>(pool->m_aStorage);
+                if (key < storage || uint64_t(key - storage) >= uint64_t(pool->m_nSize) * p.stride) continue;
+                owner.kind = p.kind;
+                owner.slot = (key - storage) / p.stride;
+                owner.offset = (key - storage) % p.stride;
+                if (pool->m_aFlags[owner.slot] & 0x80) { owner.model = -2; return true; } // a free slot
+                const auto entity = storage + owner.slot * p.stride;
+                const int index = *reinterpret_cast<const int16_t*>(entity + 0x2E);
+                if (index >= 0 && index < 31000)
+                {
+                    owner.model = index;
+                    const auto info = *reinterpret_cast<const uintptr_t*>(gameBase + ModelInfoTableRva + index * 4);
+                    if (info >= 0x10000 && !(info & 3)) owner.hash = *reinterpret_cast<const uint32_t*>(info + 0x3C);
+                }
+                const auto matrix = *reinterpret_cast<const float* const*>(entity + 0x20);
+                if (matrix)
+                {
+                    for (int i = 0; i < 3; ++i) owner.position[i] = matrix[12 + i];
+                    owner.placed = std::isfinite(owner.position[0] + owner.position[1] + owner.position[2]);
+                }
+                return true;
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { owner = {}; owner.kind = 3; return true; }
+        return false;
+    }
+    // StreetLampsFirst: whether a light's key points into a building (a facade's light) rather than an object (street
+    // lamps, wall lamps)
+    static bool streetLampsFirst = true;
+    static std::atomic<uint32_t> buildingLightsLowered{0};
+    static bool BuildingLight(uint32_t key) noexcept
+    {
+        KeyOwner owner{};
+        return FindKeyOwner(key, owner) && owner.kind == 1;
+    }
+    static std::string DescribeKeyOwner(uint32_t key)
+    {
+        KeyOwner owner{};
+        if (!FindKeyOwner(key, owner)) return " owner=-";
+        if (owner.kind == 3) return " owner=fault";
+        const char* kind = owner.kind == 1 ? "building" : owner.kind == 2 ? "object" : "vehicle";
+        if (owner.model == -2) return std::format(" owner={} slot={} +{:x} free", kind, owner.slot, owner.offset);
+        if (owner.kind == 4)
+            return std::format(" owner=vehicle model={} hash={:08x}{}", owner.model, owner.hash,
+                owner.placed ? std::format(" at={:.1f},{:.1f},{:.1f}", owner.position[0], owner.position[1], owner.position[2]) : std::string());
+        return std::format(" owner={} slot={} +{:x} model={} hash={:08x}{}", kind, owner.slot, owner.offset, owner.model, owner.hash,
+            owner.placed ? std::format(" at={:.1f},{:.1f},{:.1f}", owner.position[0], owner.position[1], owner.position[2]) : std::string());
+    }
     static std::atomic<uint32_t> tailLightsYielded{0};
 
     static void NoteSlotAcquires(const budget::PlayerShadowBudget::Selection& selection) noexcept
@@ -400,6 +514,7 @@ namespace PlayerShadowAllocation
     {
         using fusionfix::shadows::ShadowCasterPresence;
         if (!casterPriority || !Enabled() || !CTimer::m_snTimeInMilliseconds) return;
+        if (interiorLightsYield) interiorScene.store(Natives::IsInteriorScene(), std::memory_order_relaxed);
         PlayerCar::Focus focus;
         ShadowCasterPresence next{};
         next.timeMs = static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds);
@@ -422,14 +537,30 @@ namespace PlayerShadowAllocation
                 if (x * x + y * y + z * z <= ShadowCasterPresence::Range * ShadowCasterPresence::Range)
                     next.Add({p[0], p[1], p[2]}, extent, car);
             };
+            // BoxedCarCasterDistance: with box shadows, a car further from you than this gives no lamp a claim to a
+            // slot, its box shadows it there. A slot trace: lamps 30-60 m off took a slot in one grant of three for
+            // the cars under them, and the lamp you stood under gave its slot away and back, its props' shadow
+            // blinking. Your own car always counts; held under the boxes' fade-out (20 m before their end).
+            float boxedFrom = 0.0f;
+            if (boxedCarCasterDistance > 0 && VehicleBoxShadowsBridge::Enabled && VehicleBoxShadowsBridge::Enabled()) {
+                const float boxesEnd = VehicleBoxShadowsBridge::MaxDistance ? VehicleBoxShadowsBridge::MaxDistance() : 0.0f;
+                boxedFrom = boxesEnd > 0 ? (std::min)(boxedCarCasterDistance, (std::max)(boxesEnd - 20.0f, 0.0f)) : boxedCarCasterDistance;
+            }
+            uint32_t leftToBoxes = 0;
             next.valid = CVehicle::ForEachVehicle([&](uintptr_t v) {
-                add(v, ShadowCasterPresence::VehicleExtent, v);
+                float at[3];
+                const bool boxed = boxedFrom > 0 && v != focus.car && CEntity::GetPosition(v, at) &&
+                    (at[0] - focus.position[0]) * (at[0] - focus.position[0]) + (at[1] - focus.position[1]) * (at[1] - focus.position[1]) +
+                    (at[2] - focus.position[2]) * (at[2] - focus.position[2]) > boxedFrom * boxedFrom;
+                if (boxed) ++leftToBoxes;
+                else add(v, ShadowCasterPresence::VehicleExtent, v);
                 // CE: the driver followed by eight passengers
                 if (VehicleBoxShadowsBridge::CopyBoxedPairs && PlayerCar::driverOffset)
                     for (int i = 0; i < 9; ++i)
                         if (const auto ped = reinterpret_cast<const uintptr_t*>(v + PlayerCar::driverOffset)[i])
                             occupants.push_back(ped);
             });
+            carsLeftToBoxes.store(leftToBoxes, std::memory_order_relaxed);
             // Your car also counts where its speed takes it in CasterAwarePriorityLead: driving up to a cached lamp,
             // the lamp's slot went once the ped in its light had left and came back 0.4 s later as the car came in, a
             // blink of its shadow.
@@ -451,11 +582,23 @@ namespace PlayerShadowAllocation
                     lastCar = focus.car; lastMs = next.timeMs; std::copy_n(carAt, 3, lastAt);
                 }
             }
+            // PedCasterDistance: a ped further from you than this gives no lamp a claim to a slot either (they have
+            // no box shadow, so there they cast none). With the far cars left to their boxes, a slot trace had lamps
+            // 40-65 m off take slots for a ped 4-8 m from them, the lamp you stood under handing its slot round.
             std::sort(occupants.begin(), occupants.end());
+            uint32_t pedsOut = 0;
             next.valid = next.valid && CPed::ForEachPed([&](uintptr_t p) {
-                if (!std::binary_search(occupants.begin(), occupants.end(), p))
-                    add(p, ShadowCasterPresence::PedExtent, 0);
+                if (std::binary_search(occupants.begin(), occupants.end(), p)) return;
+                float at[3];
+                if (pedCasterDistance > 0 && p != focus.ped && CEntity::GetPosition(p, at) &&
+                    (at[0] - focus.position[0]) * (at[0] - focus.position[0]) + (at[1] - focus.position[1]) * (at[1] - focus.position[1]) +
+                    (at[2] - focus.position[2]) * (at[2] - focus.position[2]) > pedCasterDistance * pedCasterDistance) {
+                    ++pedsOut;
+                    return;
+                }
+                add(p, ShadowCasterPresence::PedExtent, 0);
             });
+            pedsLeftOut.store(pedsOut, std::memory_order_relaxed);
         }
         if (!castersLock.test_and_set(std::memory_order_acquire)) {
             casters = next; ++casterCaptures; castersLock.clear(std::memory_order_release);
@@ -656,8 +799,57 @@ namespace PlayerShadowAllocation
         }
     }
 
+    static void AdjustCacheDistance(SafetyHookContext& regs) noexcept {
+        cacheDistanceSwapped=false;
+        const FloatingPointState fp;
+        if(!cacheViewPriority || !publicationEnabled || !Enabled() || state.depth!=1 || !state.pass.Active() || !state.view.valid) return;
+        const auto* lights=CurrentLights(); const auto count=CurrentCount();
+        const auto address=reinterpret_cast<uintptr_t>(lights);
+        const auto index=*reinterpret_cast<const uint32_t*>(regs.esp+0x14);
+        if(address<0x10000 || count>4096 || index>=count || regs.edi!=address ||
+            regs.esi!=index*sizeof(rage::CLightSource)) return;
+        const auto& light=lights[index];
+        if(!(light.mFlags&rage::LF_STATIC_SHADOW) || (light.mFlags&rage::LF_VEHICLE)) return;
+        const Vec3 position{light.mPosition.x,light.mPosition.y,light.mPosition.z};
+        const float distanceSquared=fusionfix::shadows::EvaluateGeometry(state.player,position).distanceSquared;
+        if(!std::isfinite(distanceSquared) || distanceSquared<10.0f*10.0f) return;
+        const float weight=fusionfix::shadows::ShadowViewWeight(state.view,position,
+            {light.mDirection.x,light.mDirection.y,light.mDirection.z},light.mRadius,false);
+        const float original=regs.xmm0.f32[0];
+        if(!std::isfinite(weight) || weight<1 || weight>=3 || !std::isfinite(original) || original<=0) return;
+        cacheSavedDistance=original;
+        cacheDistanceSwapped=true;
+        regs.xmm0.f32[0]=original*3.0f/weight;
+        ++cacheDistanceAdjusted;
+    }
+
+    // CasterMinLightHeight: whether a light of the list other than skip, with a shadow, at least that high above the
+    // caster at p, reaches it (see ShadowCasterPresence::MinLightAbove).
+    static bool CoveredByHigherLight(const rage::CLightSource* lights, uint32_t count, uint32_t skip, Vec3 p, float extent) noexcept
+    {
+        for (uint32_t j = 0; j < count; ++j)
+        {
+            const auto& o = lights[j];
+            if (j == skip || !(o.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_DYNAMIC_SHADOW)) || (o.mFlags & rage::LF_VEHICLE) ||
+                o.mPosition.z - p.z < fusionfix::shadows::ShadowCasterPresence::MinLightAbove)
+                continue;
+            const Vec3 source{o.mPosition.x, o.mPosition.y, o.mPosition.z};
+            if (o.mType == rage::LT_SPOT
+                ? fusionfix::shadows::BeamTouchesReceiver(p, extent, source, {o.mDirection.x, o.mDirection.y, o.mDirection.z}, o.mOuterConeAngle, o.mRadius)
+                : (p.x - source.x) * (p.x - source.x) + (p.y - source.y) * (p.y - source.y) + (p.z - source.z) * (p.z - source.z) <=
+                    (o.mRadius + extent) * (o.mRadius + extent))
+                return true;
+        }
+        return false;
+    }
+
     static void Collect(SafetyHookContext& regs) noexcept
     {
+        if (cacheDistanceSwapped)
+        {
+            regs.xmm0.f32[0] = cacheSavedDistance;
+            cacheDistanceSwapped = false;
+        }
         const FloatingPointState fp;
         // A light drawn with another's map (the same projection, its key changed to that light's) is not
         // inserted: it would take a slot to draw the same map again.
@@ -691,6 +883,13 @@ namespace PlayerShadowAllocation
             ((flags & rage::LF_STATIC_SHADOW) && light.mShadowCacheIndex < 0))
         {
             RejectPass();
+            return;
+        }
+        if (interiorLightsYield && light.mInteriorIndex >= 0 && !(flags & rage::LF_VEHICLE) &&
+            !interiorScene.load(std::memory_order_relaxed))
+        {
+            regs.eip = gameBase + allocation::CollectSkipRva;
+            ++interiorLightsYielded;
             return;
         }
         const auto key = static_cast<uint32_t>(light.mCastShadows); // Audited opaque +60 key.
@@ -745,22 +944,78 @@ namespace PlayerShadowAllocation
                 gain=kind==budget::Kind::Lamp && cached
                     ? state.casters.Lights({light.mPosition.x,light.mPosition.y,light.mPosition.z},
                         {light.mDirection.x,light.mDirection.y,light.mDirection.z},
-                        static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle,&caster)
+                        static_cast<int>(light.mType),light.mRadius,light.mOuterConeAngle,&caster,
+                        [&](unsigned c) { return CoveredByHigherLight(lights,count,index,state.casters.points[c],state.casters.extents[c]); })
                     : volumeVisible ? SlotGain::InView : SlotGain::OffScreen;
+            // UncachedLampViewShare: a facade's point light, uncached with a 25 m radius, counted in view and as
+            // lighting you from 25 m behind you, its sphere's edge (where its light is all but gone) in the frame,
+            // and such lights took the slots from the street lamp you looked at 30 m ahead. Only the inner share
+            // of an uncached lamp's radius counts, here and for lighting you below. One whose inner part reaches
+            // neither ranks None, as a cached lamp with nobody in its light: off screen it went by distance against
+            // the cached lamps in view (CachedLampViewSlots) and, nearer, still won.
+            const bool trimmedLamp=casterPriority && kind==budget::Kind::Lamp && !cached && uncachedLampViewShare<1.0f;
+            const float viewRadius=trimmedLamp ? light.mRadius*uncachedLampViewShare : light.mRadius;
+            if(trimmedLamp && gain!=SlotGain::None && !fusionfix::shadows::ShadowVolumeMayReachView(state.frustum,
+                {light.mPosition.x,light.mPosition.y,light.mPosition.z},viewRadius)) {
+                gain=SlotGain::None; ++uncachedLampsTrimmed;
+            }
             // An uncached lamp whose light reaches you or your car throws its shadow round you, in view whichever
             // way the camera looks. Ranked by where it stood from the camera, the lamp next to the car in a tunnel
             // took and lost its slot as the camera turned or the car went back and forth, and the car's shadow
             // jumped between the lamp's map and its box.
             const bool lightsPlayer=casterPriority && kind==budget::Kind::Lamp && !cached &&
-                std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=light.mRadius*light.mRadius;
+                std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=viewRadius*viewRadius;
             if(lightsPlayer) gain=SlotGain::InView;
+            // A cached lamp you stand under, in view or not and up to 2 m outside its cone: a cobra head's light 28
+            // degrees off its axis took you in and lost you as you moved, and its slot came and went every second or so
+            // while you stood still, the post's and your shadow with it. Not a lamp lower above you than
+            // CasterMinLightHeight (a door's), which a street lamp above you covers.
+            if(casterPriority && kind==budget::Kind::Lamp && cached && gain!=SlotGain::InView &&
+               std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=light.mRadius*light.mRadius &&
+               light.mPosition.z-state.player.z>=fusionfix::shadows::ShadowCasterPresence::MinLightAbove) {
+                const Vec3 source{light.mPosition.x,light.mPosition.y,light.mPosition.z};
+                if(light.mType!=rage::LT_SPOT || fusionfix::shadows::BeamTouchesReceiver(state.player,2.0f,source,
+                    {light.mDirection.x,light.mDirection.y,light.mDirection.z},light.mOuterConeAngle,light.mRadius))
+                    gain=SlotGain::InView;
+            }
+            // CachedLampViewSlots: a cached lamp with no car or ped in its light ranked None, level with the lamps
+            // behind you, and took a free slot only by distance, so the lamps down the street you look at had no
+            // props' shadow (bins are not in its cache) until you came near. Its light in view, it ranks off screen,
+            // above those and any slot they hold; among themselves such lamps go by the game's distance, which
+            // LampViewPriority already shortens for lamps in view.
+            // StreetLampsFirst: not a building's light (a skyscraper's crown 60 m above the street took a slot so).
+            if(casterPriority && cachedLampViewSlots && kind==budget::Kind::Lamp && cached && gain==SlotGain::None &&
+               volumeVisible && viewWeight>1.01f) {
+                if(streetLampsFirst && BuildingLight(key)) ++buildingLightsLowered;
+                else { gain=SlotGain::OffScreen; ++cachedLampsInView; }
+            }
             // An uncached lamp out of the frame (behind or beside the camera, view weight 1) whose light still
             // reaches it counted as a shadow in view, and in tunnels lamps 15-20 m behind took slots from those
             // ahead. Close behind it throws your car's shadow forward into view, so it keeps that within
-            // BehindLampReach; further away it ranks as off screen.
+            // BehindLampReach; further away it ranks as off screen. BehindLampByFixture: a lamp whose fixture stands
+            // behind the camera counts too, however much of its sphere reaches the frame.
             if(casterPriority && kind==budget::Kind::Lamp && !cached && !lightsPlayer && gain==SlotGain::InView && behindLampReach>0 &&
-               state.view.valid && viewWeight<=1.01f && geometry.distanceSquared>behindLampReach*behindLampReach)
-                gain=SlotGain::OffScreen;
+               state.view.valid && geometry.distanceSquared>behindLampReach*behindLampReach) {
+                const bool behindCamera=behindLampByFixture && viewWeight>1.01f &&
+                    fusionfix::shadows::BehindCamera(state.view,{light.mPosition.x,light.mPosition.y,light.mPosition.z});
+                if(viewWeight<=1.01f || behindCamera) { gain=SlotGain::OffScreen; if(behindCamera) ++lampsBehindCamera; }
+            }
+            // AddedLightsYield: facades' model lights and traffic signals with a shadow of ours, uncached and in view,
+            // took four of the seven slots from street lamps (the game's, cached, with props under them) 25-40 m ahead:
+            // a facade's shadow falls mostly on its wall, a signal's goes with the street lamps'. Such a light ranks
+            // None, below a street lamp whose light is in view, unless its light reaches you (lightsPlayer).
+            if(casterPriority && addedLightsYield && kind==budget::Kind::Lamp && !cached && !lightsPlayer && gain!=SlotGain::None) {
+                const auto origin=lightOrigin ? lightOrigin(key) : static_cast<uint8_t>(fusionfix::shadows::ShadowSlotTrace::OriginGame);
+                const bool trafficSignal=(flags&rage::LF_TRAFFIC) && !(flags&rage::LF_MAP);
+                if(trafficSignal || origin==fusionfix::shadows::ShadowSlotTrace::OriginModelLight ||
+                   origin==fusionfix::shadows::ShadowSlotTrace::OriginCorona) { gain=SlotGain::None; ++addedLightsYielded; }
+            }
+            // StreetLampsFirst: a facade's model light that reaches you ranks off screen, below the street lamps in view
+            // and those with a car or ped in their light.
+            if(casterPriority && streetLampsFirst && kind==budget::Kind::Lamp && !cached && lightsPlayer && gain==SlotGain::InView &&
+               lightOrigin && lightOrigin(key)==fusionfix::shadows::ShadowSlotTrace::OriginModelLight && BuildingLight(key)) {
+                gain=SlotGain::OffScreen; ++buildingLightsLowered;
+            }
             if(casterPriority && kind==budget::Kind::Lamp && !cached && gain==SlotGain::InView &&
                geometry.distanceSquared<=reach*reach &&
                LampBehindWall(key,{light.mPosition.x,light.mPosition.y,light.mPosition.z})) {
@@ -787,6 +1042,12 @@ namespace PlayerShadowAllocation
                     fusionfix::shadows::ShadowSlotTrace::Light traced{key,static_cast<uint8_t>(kind),rawGain,gain,cached,volumeVisible,
                         {light.mPosition.x,light.mPosition.y,light.mPosition.z},geometry.distanceSquared,viewWeight,priorityDistance,spacedOut};
                     traced.reachSquared=reach*reach;
+                    traced.flags=flags; traced.type=static_cast<uint8_t>(light.mType);
+                    traced.radius=light.mRadius; traced.intensity=light.mIntensity;
+                    traced.color[0]=light.mColor.x; traced.color[1]=light.mColor.y; traced.color[2]=light.mColor.z;
+                    traced.cacheIndex=light.mShadowCacheIndex; traced.interior=light.mInteriorIndex; traced.room=light.mRoomIndex;
+                    traced.origin=lightOrigin ? lightOrigin(key)
+                        : static_cast<uint8_t>(fusionfix::shadows::ShadowSlotTrace::OriginGame);
                     if(caster>=0 && static_cast<unsigned>(caster)<state.casters.count) {
                         const auto& p=state.casters.points[caster];
                         traced.caster=state.casters.extents[caster]>=fusionfix::shadows::ShadowCasterPresence::VehicleExtent?1:2;
@@ -1054,6 +1315,8 @@ namespace PlayerShadowAllocation
             CompareNativeCandidates, safetyhook::MidHook::StartDisabled);
         auto cacheResult = safetyhook::MidHook::create(gameBase + allocation::CacheResultRva,
             ProtectCacheDependencies, safetyhook::MidHook::StartDisabled);
+        auto cacheDistance = safetyhook::MidHook::create(gameBase + allocation::CacheDistanceRva,
+            AdjustCacheDistance, safetyhook::MidHook::StartDisabled);
         if (!begin || !collect || !finish || !lampDistance || !compare || !cacheResult)
         {
             installStatus = std::string("hook_creation_failed begin=") + (begin ? "1" : "0") +
@@ -1066,6 +1329,9 @@ namespace PlayerShadowAllocation
         lampDistanceHook = std::move(*lampDistance);
         compareResultHook = std::move(*compare);
         cacheResultHook = std::move(*cacheResult);
+        // Optional: without it the caches go as the game picks them
+        if (cacheDistance && cacheDistance->enable())
+            cacheDistanceHook = std::move(*cacheDistance);
         if (!cacheResultHook.enable() || !compareResultHook.enable() || !lampDistanceHook.enable() || !collectHook.enable() || !finalizeHook.enable() || !selectionHook.enable())
         {
             installStatus = "hook_enable_failed";

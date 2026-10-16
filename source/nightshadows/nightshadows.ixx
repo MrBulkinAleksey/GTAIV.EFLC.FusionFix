@@ -472,14 +472,24 @@ class NightShadows
         NearbyVehicleLighting36::enabled.store(iniReader.ReadInteger("NIGHTSHADOWS", "NearbyVehicleReceivers", 0) != 0, std::memory_order_release);
         PlayerShadowAllocation::nativeLampPriority = iniReader.ReadInteger("NIGHTSHADOWS", "LampViewPriority", 0) != 0;
         PlayerShadowAllocation::visibleReceiverRanking = iniReader.ReadInteger("NIGHTSHADOWS", "VisibleReceiverRanking", 0) != 0;
+        PlayerShadowAllocation::cacheViewPriority = iniReader.ReadInteger("NIGHTSHADOWS", "LampCacheViewPriority", 1) != 0;
         PlayerShadowAllocation::casterPriority = iniReader.ReadInteger("NIGHTSHADOWS", "CasterAwarePriority", 0) != 0;
         PlayerShadowAllocation::casterHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "CasterAwarePriorityHold", 750), 0, 2000));
         PlayerShadowAllocation::casterLeadSeconds = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "CasterAwarePriorityLead", 1.0f), 0.0f, 3.0f);
+        PlayerShadowAllocation::boxedCarCasterDistance = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "BoxedCarCasterDistance", 25.0f), 0.0f, 150.0f);
+        PlayerShadowAllocation::pedCasterDistance = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "PedCasterDistance", 35.0f), 0.0f, 150.0f);
+        fusionfix::shadows::ShadowCasterPresence::MinLightAbove = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "CasterMinLightHeight", 2.5f), 0.0f, 10.0f);
+        PlayerShadowAllocation::interiorLightsYield = iniReader.ReadInteger("NIGHTSHADOWS", "InteriorLightsYieldOutside", 1) != 0;
         PlayerShadowAllocation::lampSpacing.base = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "LampSpacing", 0.0f), 0.0f, 40.0f);
         PlayerShadowAllocation::lampSpacing.seconds = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "LampSpacingSeconds", 0.5f), 0.0f, 5.0f);
         PlayerShadowAllocation::lampSpacing.alongRoad = iniReader.ReadInteger("NIGHTSHADOWS", "LampSpacingAlongRoad", 0) != 0;
         PlayerShadowAllocation::behindLampReach = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "BehindLampReach", 12.0f), 0.0f, 100.0f);
         PlayerShadowAllocation::uncachedLampAdvantage = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "UncachedLampAdvantage", 1.5f), 0.0f, 10.0f);
+        PlayerShadowAllocation::cachedLampViewSlots = iniReader.ReadInteger("NIGHTSHADOWS", "CachedLampViewSlots", 1) != 0;
+        PlayerShadowAllocation::uncachedLampViewShare = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "UncachedLampViewShare", 0.5f), 0.1f, 1.0f);
+        PlayerShadowAllocation::behindLampByFixture = iniReader.ReadInteger("NIGHTSHADOWS", "BehindLampByFixture", 1) != 0;
+        PlayerShadowAllocation::addedLightsYield = iniReader.ReadInteger("NIGHTSHADOWS", "AddedLightsYield", 1) != 0;
+        PlayerShadowAllocation::streetLampsFirst = iniReader.ReadInteger("NIGHTSHADOWS", "StreetLampsFirst", 1) != 0;
         fTailLightShadowDistance = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "TailLightShadowDistance", 25.0f), 0.0f, 500.0f);
         PlayerShadowAllocation::slotMinHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "SlotMinHold", 1000), 0, 5000));
         fusionfix::shadows::NativeShadowContinuity42::claimDistanceRatio =
@@ -565,6 +575,7 @@ public:
                 if (PlayerShadowAllocation::cameraPriority)
                     PlayerShadowAllocation::cameraPriority = PlayerShadowAllocation::InstallCameraCapture();
                 PlayerShadowAllocation::slotTrace.enabled = iniReader.ReadInteger("DEBUG", "NightShadowsSlotLog", 0) != 0;
+                PlayerShadowAllocation::slotTrace.describeOwner = PlayerShadowAllocation::DescribeKeyOwner;
                 PlayerShadowAllocation::lampSpacing.spacing = PlayerShadowAllocation::lampSpacing.base;
                 PlayerShadowAllocation::InstallLampSight(iniReader.ReadInteger("NIGHTSHADOWS", "LampsBehindWalls", 1) != 0,
                     static_cast<uint32_t>(iniReader.ReadInteger("NIGHTSHADOWS", "LampsBehindWallsFlags", 6)));

@@ -41,7 +41,16 @@ public:
         float casterDistance{};
         float reachSquared{};         // beyond it the light cannot take a slot; 0 unknown
         bool observed{};
+        // What the light is, for + and W lines: the game's flags and type, range, intensity, colour, cache index,
+        // interior and room; whose it is (Origin)
+        std::uint32_t flags{};
+        std::uint8_t type{}, origin{};
+        float radius{}, intensity{}, color[3]{};
+        std::int32_t cacheIndex{-1}, interior{-1}, room{-1};
     };
+    // Light::origin: the game's own light, a game light we gave a shadow (Liberty's Shadows world model lights),
+    // a light we made at a corona, a car's headlight or rear lamp of our own keys
+    enum Origin : std::uint8_t { OriginGame, OriginModelLight, OriginCorona, OriginHeadlight, OriginTailLight };
     struct Selected { std::uint32_t key{}; int index{-1}; };
     // The rule of NativeShadowContinuity42::Compare that decided, and two of the game's own:
     // native (categories, its result kept), distance (left to the game's distance).
@@ -50,6 +59,8 @@ public:
 
     bool enabled = false;
     float spacing = 0.0f; // LampSpacing in use, for the summary
+    // The entity a light's key points into (the key is the owner's address plus a little), as text; set by the runtime
+    std::string (*describeOwner)(std::uint32_t key) = nullptr;
 
     void Begin(std::uint32_t frame, std::uint32_t timeMs, Vec3 player, bool driving, const ShadowView& view, std::uint32_t count) {
         frame_ = frame; time_ = timeMs; player_ = player; driving_ = driving;
@@ -170,7 +181,7 @@ public:
                 Line(std::format("+ {} slot={} key={:08x} {} gain={} raw={} cached={} spaced={}{} weight={:.2f} prio={}{}{}{}{}{}", When(), slot, now.key,
                     Kind(light->kind), Gain(light->gain), Gain(light->raw), light->cached ? 1 : 0, light->spacedOut ? 1 : 0, Where(*light), light->viewWeight,
                     light->priorityDistanceSquared >= 0 ? std::format("{:.1f}", std::sqrt(light->priorityDistanceSquared)) : std::string("-"),
-                    waited, sinceLost, won, wanted, light ? Caster(*light) : std::string()));
+                    waited, sinceLost, won, wanted, light ? Caster(*light) : std::string()) + Details(*light));
             else
                 Line(std::format("+ {} slot={} key={:08x} unobserved", When(), slot, now.key));
             if (k.lostAt && time_ - k.lostAt < FlapMs) {
@@ -213,7 +224,7 @@ public:
                     by ? std::format(" by_{} by_gain={} by_d={:.1f}", Kind(by->kind), Gain(by->gain), std::sqrt((std::max)(by->distanceSquared, 0.0f))) : std::string());
             }
             Line(std::format("W {} key={:08x} {} raw={} cached={}{}{}{}", When(), light.key, Kind(light.kind), Gain(light.raw),
-                light.cached ? 1 : 0, Where(light), Caster(light), blocked));
+                light.cached ? 1 : 0, Where(light), Caster(light), blocked) + Details(light));
         }
 
         previous_ = selection;
@@ -339,6 +350,17 @@ private:
         return std::format(" caster={}{} caster_d={:.1f}", light.caster == 1 ? "vehicle" : "ped", light.casterInView ? "" : "_off", light.casterDistance);
     }
     std::string When() const { return std::format("t={} f={}", time_, frame_); }
+    // | type flags radius intensity colour cache interior/room, whose light, and its owner entity
+    std::string Details(const Light& light) const {
+        static constexpr const char* types[] = { "point", "dir", "spot", "ambocc", "clamped" };
+        static constexpr const char* origins[] = { "game", "model_light", "corona", "headlight", "tail_light" };
+        std::string text = std::format(" | type={} flags={:x} r={:.1f} i={:.2f} rgb={:.2f},{:.2f},{:.2f} cache={} interior={} room={} src={}",
+            light.type < 5 ? types[light.type] : "other", light.flags, light.radius, light.intensity,
+            light.color[0], light.color[1], light.color[2], light.cacheIndex, light.interior, light.room,
+            light.origin < 5 ? origins[light.origin] : "?");
+        if (describeOwner) text += describeOwner(light.key);
+        return text;
+    }
     // Where a light is: from the player (d) and off the camera's view (ang, 0 straight ahead)
     std::string Where(const Light& light) const {
         const float x = light.position.x - player_.x, y = light.position.y - player_.y, z = light.position.z - player_.z;
