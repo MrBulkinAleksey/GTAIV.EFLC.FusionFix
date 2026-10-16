@@ -125,9 +125,12 @@ float RawToFar(float raw)
 
 float SceneDistance(float2 uv, float rayScale)
 {
-    // Two diagonal texels of the four: the other two would take the march past its slots.
+    // Two diagonal texels of the four: the other two would take the march past its slots. The farther of them:
+    // with the nearer, a half size texel on an edge of a tree or a person against the sky held no cloud, spread
+    // onto the sky beside it at full size, and the sky behind the clouds outlined everything that moved (the
+    // history kept the gaps). CloudsComposite cuts the cloud off what is nearer at full size.
     float2 o = vec2DepthTexel * 0.5;
-    float raw = min(RawToFar(tex2Dlod(DepthTex, float4(uv - o, 0, 0)).r), RawToFar(tex2Dlod(DepthTex, float4(uv + o, 0, 0)).r));
+    float raw = max(RawToFar(tex2Dlod(DepthTex, float4(uv - o, 0, 0)).r), RawToFar(tex2Dlod(DepthTex, float4(uv + o, 0, 0)).r));
     return raw < 1.0 ? pow(fFarDivNear, raw) * fNearPlane * rayScale : 1e9;
 }
 
