@@ -418,16 +418,16 @@ namespace
                 }
                 if (s.models)
                 {
-                    std::vector<std::pair<uint16_t, TargetStats::ModelStats>> far;
+                    std::vector<std::pair<uint16_t, TargetStats::ModelStats>> distant;
                     for (auto& [model, m] : s.byModel)
                         if (m.farDraws)
-                            far.emplace_back(model, m);
-                    std::sort(far.begin(), far.end(), [](auto& a, auto& b) { return a.second.farTicks > b.second.farTicks; });
+                            distant.emplace_back(model, m);
+                    std::sort(distant.begin(), distant.end(), [](auto& a, auto& b) { return a.second.farTicks > b.second.farTicks; });
                     text += std::format("    {} models far; the costliest there (name hash, radius, kind, entities a frame, most in a lock, "
-                        "device draws an entity, ms, us an entity):\n", far.size());
-                    for (size_t i = 0; i < far.size() && i < 20; ++i)
+                        "device draws an entity, ms, us an entity):\n", distant.size());
+                    for (size_t i = 0; i < distant.size() && i < 20; ++i)
                     {
-                        const auto& [model, m] = far[i];
+                        const auto& [model, m] = distant[i];
                         const auto info = modelInfos ? *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4) : 0;
                         const uint32_t hash = info ? *reinterpret_cast<const uint32_t*>(info + 0x3c) : 0;
                         const float radius = info ? *reinterpret_cast<const float*>(info + 0x1c) : 0.0f;
