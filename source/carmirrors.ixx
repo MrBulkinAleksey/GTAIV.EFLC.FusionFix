@@ -33,6 +33,7 @@ namespace CarMirrors
     static SafetyHookInline updateHook;
     static SafetyHookInline phaseBuildHook;
     static SafetyHookInline phaseVisibilityHook;
+    static SafetyHookInline phaseViewHook;
 
     static bool reverse = false;            // CarMirrorsReverse (hidden): the corners the other way round, if the quad is culled
     static bool rounded = true;             // CarMirrorsRounded (hidden): 0 draws the plain quad, not cut to the glass's outline
@@ -417,6 +418,21 @@ namespace CarMirrors
         }
     }
 
+    // CRenderPhaseMirrorReflection's view (vtable slot 4, CE 0xD77600): it copies the camera's view (0x5DC220), reflects
+    // it in the plane (0xA87B50) and clips by it. The plane goes in right before, by the car as it is now: from the
+    // update's plane, a frame old where this runs first, the reflected view was off by twice the car's travel in a
+    // frame (0.7 m at 20 m/s), the reflection lagging and jerking while driving.
+    static void __fastcall PhaseView(uintptr_t phase, void*, uintptr_t view)
+    {
+        if (quadsThisFrame && active)
+        {
+            const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
+            if (const float* m = vehicle ? CEntity::GetMatrix(vehicle) : nullptr)
+                PlacePlane(m, *active);
+        }
+        phaseViewHook.unsafe_thiscall<void>(phase, view);
+    }
+
     // CRenderPhaseWaterReflection's visibility (vtable slot 3, CE 0xD77550): the same scan from the phase's own
     // viewport, with no interior gate; it does nothing while a mirror is on.
     static void (__fastcall* waterVisibility)(uintptr_t phase, void*) = nullptr;
@@ -581,6 +597,11 @@ public:
                 CarMirrors::phaseBuildHook = safetyhook::create_inline(build.get_first(0), CarMirrors::PhaseBuild);
             if (timeVisibility)
                 CarMirrors::phaseVisibilityHook = safetyhook::create_inline(visibility.get_first(0), CarMirrors::PhaseVisibility);
+            // push ebp / mov ebp, esp / and esp, -10 / sub esp, 88 / push esi / mov esi, [ebp+8] / push edi / mov edi, ecx /
+            // add esi, 10 / lea ecx, [edi+B0] / push esi / call (the view's copy)
+            auto view = hook::pattern("55 8B EC 83 E4 F0 81 EC 88 00 00 00 56 8B 75 08 57 8B F9 83 C6 10 8D 8F B0 00 00 00 56 E8");
+            if (!view.empty())
+                CarMirrors::phaseViewHook = safetyhook::create_inline(view.get_first(0), CarMirrors::PhaseView);
             // push ebp / mov ebp, esp / and esp, -10 / sub esp, 20 / call / test byte [eax], 40 / je / cmp byte [mirror on], 0 / je
             auto quad = hook::pattern("55 8B EC 83 E4 F0 83 EC 20 E8 ? ? ? ? F6 00 40 0F 84 ? ? ? ? 80 3D ? ? ? ? 00 0F 84");
             if (!quad.empty() && *quad.get_first<uint8_t*>(25) == CarMirrors::mirrorOn)
@@ -622,7 +643,9 @@ public:
                 uint32_t(std::size(CarMirrorTable)), timeBuild && timeVisibility ? "on" : "partly off",
                 CarMirrors::waterVisibility ? "found" : "not found (the mirrors stay empty outdoors)",
                 CarMirrors::quadHook ? "on" : "off (not found)", uint32_t(CarMirrors::queueHooks.size()));
-            FusionLog::Write("CarMirrors", "Init", "the mirror pass's glass tint %s\n", CarMirrors::callback.add ? "on" : "off (the game's callback command was not found)");
+            FusionLog::Write("CarMirrors", "Init", "the mirror pass's glass tint %s; the plane before the reflected view %s\n",
+                CarMirrors::callback.add ? "on" : "off (the game's callback command was not found)",
+                CarMirrors::phaseViewHook ? "on" : "off (not found)");
             if (CarMirrors::quadOffset)
                 FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
         };
