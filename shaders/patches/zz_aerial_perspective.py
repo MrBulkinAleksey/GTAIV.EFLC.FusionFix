@@ -14,7 +14,9 @@
 #  - Aerial Perspective: through d metres of air at the camera's height the light keeps T = exp(-k sigma(h) d) of
 #    itself, per channel (Rayleigh's blue far more than Mie's grey haze), and gains the sky's own colour this way
 #    times 1 - T: in air the same all along the ray that is exact, and the city's heights hardly change the air.
-#    The scene, after the fog, becomes scene T + sky (1 - T). By c105.w (0 off).
+#    The scene, after the fog, becomes scene T + sky (1 - T). By c105.w (0 off), and by 1 - the fog's own factor: the
+#    fog is that air already, and where it was thick (the sea's far end from a helicopter) the air on top of it took
+#    the blue out of the bright fog and put the darker sky's in, a yellow-green band along the horizon.
 #
 # c104: xyz k sigma Rayleigh per metre times log2(e), w the same for Mie's extinction with the weather's haze
 # c105: x, y -log2(e) / scale height in metres (Rayleigh, Mie), z the table's units on screen (HDRSunExposure.x times
@@ -168,7 +170,8 @@ def patch(path):
     into = swizzle_into(mask)
     air = (f'{m.group(1)}lrp {c}.xyz, {m.group(4)}{m.group(5)}\n'
            f'{m.group(1)}mad {b}.xyz, {b}, -{a}, {b} // {TAG}: the sky\'s light scattered in on the way\n'
-           f'{m.group(1)}mad {dst}.{mask}, {c}.{into}, {a}.{into}, {b}.{into}\n')
+           f'{m.group(1)}mad {b}.xyz, {c}, {a}, {b}\n'
+           f'{m.group(1)}lrp {dst}.{mask}, r20.x, {c}.{into}, {b}.{into} // {TAG}: none where the fog has it\n')
     block = block[:m.start()] + air + block[m.end():]
 
     text = text[:start.start()] + lookup(a, b, c, f, SKY_MASKED.get(path.name)) + block + text[end_of_block:]
