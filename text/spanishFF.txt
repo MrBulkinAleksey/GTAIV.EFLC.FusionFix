@@ -373,6 +373,9 @@ Grass in the wind
 [GrassBending]
 Grass bends under feet and wheels
 
+[GrassTrample]
+Trampled grass rises slowly
+
 [BuildingShad]
 Walls block headlights
 

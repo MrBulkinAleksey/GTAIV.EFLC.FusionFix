@@ -4,6 +4,7 @@ module;
 #include "FusionLog.hpp"
 #include <algorithm>
 #include <cfloat>
+#include <climits>
 #include <cmath>
 #include <atomic>
 #include <format>
@@ -12,6 +13,7 @@ module;
 #include <optional>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 export module grasswind;
@@ -40,8 +42,18 @@ import nearbybodies;
 // [PROCEDURAL] GrassWindStrength scales the sway; GrassWindModels adds model names (comma separated) to the list.
 // Grass Bending (Graphics > Lighting, [PROCEDURAL] GrassBending): the cars and people around the player (NearbyBodies,
 // 60 m) push the blades away and lay them down under a car, and the wind dies where they press. Per grass draw the two
-// bodies nearest the prop whose reach takes it (a car's footprint and half a metre past it, a person and 0.6 m around)
+// bodies nearest the prop whose reach takes it (a car's footprint and half a metre past it, a person's feet and a metre around)
 // and that stand on its ground go to c248-c251; none clears them.
+//
+// Helicopters within 30 m above a prop blow the grass away from under them (their downwash), wider and weaker the
+// higher they fly, pulsing with the blades.
+//
+// Grass Trample (Graphics > Lighting, [PROCEDURAL] GrassTrample): where people walked and wheels rolled the grass stays
+// down and rises again over GrassTrampleSeconds (12). A grid of 128 x 128 cells of 0.5 m around the player, tied to the
+// world (a cell's place in it is its world position modulo 64 m, so the grid only clears the rows and columns the player
+// leaves behind), is stamped along each body's path in the last frame (a person's feet, a car's four wheels, a bike's
+// two) with the way it went, and goes to a vertex texture (vs s1, A8R8G8B8: direction, strength, the ground's height
+// modulo 64 m) for the G-buffer pass; c243 = 1 / 64 m, the strength (0 = off). Needs vertex textures (DXVK has them).
 //
 // GrassWindDebug (Graphics > Debug) sways four times as hard, to see which draws take it. GrassWindLog = 1 ([DEBUG])
 // writes the wind and the grass draws to GTAIV.EFLC.FusionFix.GrassWind.log every 600 G-buffer passes.
@@ -50,6 +62,8 @@ class GrassWind
     static constexpr int kWindRegister = 240;       // c240: direction / wavelength, gust phase, flutter phase
     static constexpr int kModelRegister = 241;      // c241: 1 / height, bend and flutter at the tip (metres)
     static constexpr int kDirectionRegister = 242;  // c242.xy: the wind's unit direction
+    static constexpr int kTrampleRegister = 243;    // c243: 1 / the trample grid's side (m), its strength (0 = off)
+    static constexpr DWORD kTrampleSampler = D3DVERTEXTEXTURESAMPLER1;  // vs s1
     static constexpr int kBodyRegister = 248;       // c248-c251: two bodies (centre, forward; half length, half width, 1 / reach, strength)
     static constexpr int kSwayFlag = 12;            // b12 (vertex shader)
     static constexpr float kPushPerHeight = 0.75f;  // a body's push at the tip, of the plant's height
@@ -60,7 +74,18 @@ class GrassWind
     static constexpr float kWeatherWind[8] = { 0.15f, 0.25f, 0.8f, 0.2f, 0.5f, 0.3f, 0.1f, 1.0f };
     static constexpr float kGustWavelength = 5.0f;  // metres between gusts along the wind
 
+    // Downwash: from 2.5 m above the prop (a helicopter standing on it doesn't blow), gone at 30 m
+    static constexpr float kRotorLow = 2.5f, kRotorHigh = 30.0f;
+
+    // Trample grid
+    static constexpr int kCells = 128;
+    static constexpr float kCell = 0.5f;
+    static constexpr float kGridSide = kCells * kCell;  // 64 m
+    static constexpr float kHeightWrap = 64.0f;         // the ground's height in the texture, modulo this
+    static constexpr float kStampRange = 30.0f;         // bodies this near the player trample
+
     static inline float fStrength = 1.0f;
+    static inline float fTrampleSeconds = 12.0f;
     static inline bool bLog = false;
     // GrassWindModels, read on the ini's thread; the list is made again on the render thread
     static inline std::mutex extraModelsMutex;
@@ -77,6 +102,15 @@ class GrassWind
     static inline float fBendPerHeight = 0.0f, fFlutterPerHeight = 0.0f, fPushPerHeight = 0.0f;
     static inline std::vector<NearbyBodies::Body> bodies;
     static inline bool bBodiesBound = false;
+    static inline float rotorPulse = 1.0f;
+
+    // Trample grid, render thread: by world cell modulo kCells
+    struct Cell { float strength; float direction[2]; float ground; };
+    static inline std::vector<Cell> cells;
+    static inline int gridOrigin[2] = { INT_MIN, INT_MIN };   // the window's first cell, world cells
+    static inline IDirect3DTexture9* trampleTexture = nullptr;
+    static inline int trampleSupport = -1;                    // vertex textures: -1 not checked yet, 0 none, 1 there
+    static inline bool trampleAny = false, trampleUploaded = false, bTrampleBound = false;
 
     // By model index: the hash the entry was made for and the model's height, 0 if not grass
     struct ModelEntry { uint32_t hash = 0; float height = -1.0f; };
@@ -86,7 +120,7 @@ class GrassWind
     // GrassWindLog
     static inline uint32_t logPasses = 0;
     static inline uint64_t logGrassDraws = 0, logCheckedDraws = 0, logPressedDraws = 0;
-    static inline size_t logBodies = 0;
+    static inline size_t logBodies = 0, logTrampled = 0;
     static inline std::unordered_set<uint16_t> logModels;
 
     static int32_t Pref(std::optional<std::reference_wrapper<int32_t>>& ref, int32_t missing)
@@ -151,6 +185,7 @@ class GrassWind
     static void ReadIni(CIniReader& iniReader)
     {
         fStrength = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GrassWindStrength", 1.0f), 0.0f, 4.0f);
+        fTrampleSeconds = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GrassTrampleSeconds", 12.0f), 1.0f, 300.0f);
         bLog = iniReader.ReadInteger("DEBUG", "GrassWindLog", 0) != 0;
         {
             std::lock_guard lock(extraModelsMutex);
@@ -200,6 +235,199 @@ class GrassWind
         bBound = on;
     }
 
+    static Cell& CellAt(int x, int y)
+    {
+        return cells[(y & (kCells - 1)) * kCells + (x & (kCells - 1))];
+    }
+
+    // Keeps the window of cells around the player; cells it takes in from the far side are cleared.
+    static void MoveGrid(const float* focus)
+    {
+        const int ox = int(std::floor(focus[0] / kCell)) - kCells / 2, oy = int(std::floor(focus[1] / kCell)) - kCells / 2;
+        if (cells.empty())
+            cells.assign(kCells * kCells, {});
+        if (gridOrigin[0] == INT_MIN || std::abs(ox - gridOrigin[0]) >= kCells || std::abs(oy - gridOrigin[1]) >= kCells)
+        {
+            std::fill(cells.begin(), cells.end(), Cell{});
+            gridOrigin[0] = ox, gridOrigin[1] = oy;
+            return;
+        }
+        // Columns, then rows, that come in: those past the old window's end, or before its start
+        const auto clearColumns = [](int from, int to) { for (int x = from; x < to; ++x) for (int y = 0; y < kCells; ++y) CellAt(x, y) = {}; };
+        const auto clearRows = [](int from, int to) { for (int y = from; y < to; ++y) for (int x = 0; x < kCells; ++x) CellAt(x, y) = {}; };
+        if (ox > gridOrigin[0])
+            clearColumns(gridOrigin[0] + kCells, ox + kCells);
+        else if (ox < gridOrigin[0])
+            clearColumns(ox, gridOrigin[0]);
+        if (oy > gridOrigin[1])
+            clearRows(gridOrigin[1] + kCells, oy + kCells);
+        else if (oy < gridOrigin[1])
+            clearRows(oy, gridOrigin[1]);
+        gridOrigin[0] = ox, gridOrigin[1] = oy;
+    }
+
+    // Lays the grass down within `radius` of (x, y), fading out over the next half metre, towards `direction`.
+    static void Stamp(float x, float y, float ground, float radius, float strength, const float* direction)
+    {
+        const int x0 = int(std::floor((x - radius) / kCell)) - 2, x1 = int(std::floor((x + radius) / kCell)) + 2;
+        const int y0 = int(std::floor((y - radius) / kCell)) - 2, y1 = int(std::floor((y + radius) / kCell)) + 2;
+        for (int cy = (std::max)(y0, gridOrigin[1]); cy <= (std::min)(y1, gridOrigin[1] + kCells - 1); ++cy)
+        {
+            for (int cx = (std::max)(x0, gridOrigin[0]); cx <= (std::min)(x1, gridOrigin[0] + kCells - 1); ++cx)
+            {
+                auto& cell = CellAt(cx, cy);
+                const float dx = (cx + 0.5f) * kCell - x, dy = (cy + 0.5f) * kCell - y;
+                const float w = std::clamp(1.0f - (std::sqrt(dx * dx + dy * dy) - radius) / kCell, 0.0f, 1.0f);
+                if (w <= 0.0f)
+                {
+                    // An empty cell next to the stamp takes its ground, so the filtered height between them holds
+                    if (cell.strength <= 0.0f)
+                        cell.ground = ground;
+                    continue;
+                }
+                const float s = w * strength;
+                if (s <= cell.strength)
+                    continue;
+                float lx = direction[0] * s + cell.direction[0] * cell.strength, ly = direction[1] * s + cell.direction[1] * cell.strength;
+                const float length = std::sqrt(lx * lx + ly * ly);
+                if (length > 1e-4f)
+                    cell.direction[0] = lx / length, cell.direction[1] = ly / length;
+                cell.strength = s;
+                cell.ground = ground;
+                trampleAny = true;
+            }
+        }
+    }
+
+    // Stamps along the way a point went in the last `dt` seconds, a step every quarter metre.
+    static void StampPath(float x, float y, float ground, const float* velocity, float dt, float radius, float strength)
+    {
+        const float speed = std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1]);
+        if (speed < 0.3f)
+            return;
+        const float direction[2] = { velocity[0] / speed, velocity[1] / speed };
+        const float length = (std::min)(speed * dt, 3.0f);
+        const int steps = (std::max)(1, int(std::ceil(length / 0.25f)));
+        for (int i = 0; i < steps; ++i)
+        {
+            const float back = length * (1.0f - float(i + 1) / steps);
+            Stamp(x - direction[0] * back, y - direction[1] * back, ground, radius, strength, direction);
+        }
+    }
+
+    static bool MakeTrampleTexture(IDirect3DDevice9* pDevice)
+    {
+        if (trampleSupport < 0)
+        {
+            trampleSupport = 0;
+            IDirect3D9* d3d = nullptr;
+            if (pDevice->GetDirect3D(&d3d) == S_OK && d3d)
+            {
+                D3DDEVICE_CREATION_PARAMETERS cp{};
+                D3DDISPLAYMODE mode{};
+                pDevice->GetCreationParameters(&cp);
+                d3d->GetAdapterDisplayMode(cp.AdapterOrdinal, &mode);
+                trampleSupport = SUCCEEDED(d3d->CheckDeviceFormat(cp.AdapterOrdinal, cp.DeviceType, mode.Format,
+                    D3DUSAGE_QUERY_VERTEXTEXTURE, D3DRTYPE_TEXTURE, D3DFMT_A8R8G8B8)) ? 1 : 0;
+                d3d->Release();
+            }
+            if (bLog)
+                FusionLog::Write("GrassWind", "Trample", "vertex textures (A8R8G8B8): %s\n", trampleSupport ? "yes" : "no, no trampling");
+            if (trampleSupport && FAILED(RageDirect3DDevice9::RealDevice(pDevice)->CreateTexture(kCells, kCells, 1, 0, D3DFMT_A8R8G8B8,
+                    D3DPOOL_MANAGED, &trampleTexture, nullptr)))
+            {
+                trampleTexture = nullptr;
+                trampleSupport = 0;
+            }
+            // Its first contents are whatever the driver left: the first update writes it whole
+            trampleUploaded = true;
+        }
+        return trampleTexture != nullptr;
+    }
+
+    // The grid's cells to the texture: r, g the direction, b the strength, a the ground modulo kHeightWrap
+    static void UploadTrample()
+    {
+        D3DLOCKED_RECT locked{};
+        if (FAILED(trampleTexture->LockRect(0, &locked, nullptr, 0)))
+            return;
+        for (int y = 0; y < kCells; ++y)
+        {
+            auto row = reinterpret_cast<uint8_t*>(locked.pBits) + y * locked.Pitch;
+            for (int x = 0; x < kCells; ++x)
+            {
+                const auto& cell = cells[y * kCells + x];
+                const auto unorm = [](float v) { return uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+                const float wrapped = cell.ground / kHeightWrap - std::floor(cell.ground / kHeightWrap);
+                row[x * 4 + 0] = unorm(cell.strength);                     // B
+                row[x * 4 + 1] = unorm(cell.direction[1] * 0.5f + 0.5f);   // G
+                row[x * 4 + 2] = unorm(cell.direction[0] * 0.5f + 0.5f);   // R
+                row[x * 4 + 3] = uint8_t(int(wrapped * 256.0f) & 255);     // A
+            }
+        }
+        trampleTexture->UnlockRect(0);
+    }
+
+    // This frame's trampling: the grid follows the player, recovers by dt and takes the bodies' paths; to the texture.
+    static bool UpdateTrample(IDirect3DDevice9* pDevice, const float* focus, float dt)
+    {
+        if (!MakeTrampleTexture(pDevice))
+            return false;
+        MoveGrid(focus);
+        if (trampleAny && dt > 0.0f)
+        {
+            trampleAny = false;
+            const float recover = dt / fTrampleSeconds;
+            for (auto& cell : cells)
+            {
+                if (cell.strength <= 0.0f)
+                    continue;
+                cell.strength = (std::max)(cell.strength - recover, 0.0f);
+                trampleAny |= cell.strength > 0.0f;
+                logTrampled += bLog && cell.strength > 0.0f;
+            }
+        }
+        for (const auto& body : bodies)
+        {
+            if (body.distance2 > kStampRange * kStampRange || body.kind == NearbyBodies::Body::Rotor)
+                continue;
+            if (body.kind == NearbyBodies::Body::Person)
+            {
+                StampPath(body.centre[0], body.centre[1], body.bottom, body.velocity, dt, 0.3f, 0.7f);
+                continue;
+            }
+            // A car's four wheels, a bike's two
+            const float fx = body.forward[0], fy = body.forward[1];
+            const float along = body.halfLength * 0.7f, across = body.halfWidth < 0.6f ? 0.0f : body.halfWidth * 0.85f;
+            for (int i = 0; i < 4; ++i)
+            {
+                const float a = (i & 1) ? along : -along, c = (i & 2) ? across : -across;
+                if (across == 0.0f && (i & 2))
+                    break;
+                StampPath(body.centre[0] + fx * a + fy * c, body.centre[1] + fy * a - fx * c, body.bottom, body.velocity, dt, 0.3f, 1.0f);
+            }
+        }
+        if (trampleAny || trampleUploaded)
+        {
+            UploadTrample();
+            trampleUploaded = trampleAny;
+        }
+        return true;
+    }
+
+    static void BindTrample(IDirect3DDevice9* pDevice, bool on)
+    {
+        RageDirect3DDevice9::SetTextureBoth(pDevice, kTrampleSampler, on ? trampleTexture : nullptr);
+        if (on)
+        {
+            for (auto [type, value] : { std::pair{ D3DSAMP_ADDRESSU, DWORD(D3DTADDRESS_WRAP) }, std::pair{ D3DSAMP_ADDRESSV, DWORD(D3DTADDRESS_WRAP) },
+                     std::pair{ D3DSAMP_MINFILTER, DWORD(D3DTEXF_LINEAR) }, std::pair{ D3DSAMP_MAGFILTER, DWORD(D3DTEXF_LINEAR) },
+                     std::pair{ D3DSAMP_MIPFILTER, DWORD(D3DTEXF_NONE) } })
+                RageDirect3DDevice9::SetSamplerStateBoth(pDevice, kTrampleSampler, type, value);
+        }
+        bTrampleBound = on;
+    }
+
     // First command of the G-buffer pass: this frame's wind.
     static void BeginGBuffer()
     {
@@ -209,6 +437,7 @@ class GrassWind
         static auto windPref = FusionFixSettings.GetRef("PREF_GRASS_WIND");
         static auto debugPref = FusionFixSettings.GetRef("PREF_GRASS_WIND_DEBUG");
         static auto bendingPref = FusionFixSettings.GetRef("PREF_GRASS_BENDING");
+        static auto tramplePref = FusionFixSettings.GetRef("PREF_GRASS_TRAMPLE");
         auto& R = PostFxResources;
         MakeModelListIfAsked();
 
@@ -225,19 +454,28 @@ class GrassWind
 
         const bool windOn = Pref(windPref, 1) != 0 && fStrength > 0.0f;
         const bool bending = Pref(bendingPref, 1) != 0;
-        const bool on = (windOn || bending) && EntityClass::Installed();
+        const bool trampling = Pref(tramplePref, 1) != 0;
+        const bool on = (windOn || bending || trampling) && EntityClass::Installed();
         const float scale = on && windOn ? fStrength * (Pref(debugPref, 0) ? 4.0f : 1.0f) : 0.0f;
         fBendPerHeight = scale * (0.03f + 0.22f * fWind);
         fFlutterPerHeight = scale * (0.012f + 0.045f * fWind);
-        fPushPerHeight = on && bending ? kPushPerHeight : 0.0f;
+        // Trampled grass bends by the same push; the live bodies only with bending on
+        fPushPerHeight = on && (bending || trampling) ? kPushPerHeight : 0.0f;
         bodies.clear();
-        if (fPushPerHeight > 0.0f)
+        float focus[3] = {};
+        bool haveBodies = false;
+        if (on && (bending || trampling))
         {
             NearbyBodies::Want();
-            float focus[3];
-            if (!NearbyBodies::Copy(bodies, focus))
+            haveBodies = NearbyBodies::Copy(bodies, focus);
+            if (!haveBodies)
                 bodies.clear();
         }
+        const bool trample = on && trampling && haveBodies && UpdateTrample(pDevice, focus, dt);
+        if (!bending)
+            bodies.clear();
+        // The downwash pulses with the blades
+        rotorPulse = 0.8f + 0.12f * std::sin(now * 0.0215f) + 0.08f * std::sin(now * 0.0347f);
         if (bLog)
             logBodies += bodies.size();
 
@@ -247,6 +485,10 @@ class GrassWind
         };
         pDevice->SetVertexShaderConstantF(kWindRegister, wind, 1);
         pDevice->SetVertexShaderConstantF(kDirectionRegister, wind + 4, 1);
+        const float trampleParams[4] = { 1.0f / kGridSide, trample ? 1.0f : 0.0f, 0.0f, 0.0f };
+        pDevice->SetVertexShaderConstantF(kTrampleRegister, trampleParams, 1);
+        if (trample)
+            BindTrample(pDevice, true);
         SetFlag(pDevice, false);
         ClearBodies(pDevice);
         lastModel = -1;
@@ -257,12 +499,13 @@ class GrassWind
             std::string heights;
             for (const auto model : logModels)
                 heights += std::format(" {:08x}:{:.2f}", models[model].hash, models[model].height);
-            FusionLog::Write("GrassWind", "Stats", "wind %.2f (weather %.2f) scale %.2f, per pass: %.1f grass draws of %.1f building and prop draws, %.1f pressed by %.1f bodies near; %zu grass models (hash:height m):%s\n",
+            FusionLog::Write("GrassWind", "Stats", "wind %.2f (weather %.2f) scale %.2f, per pass: %.1f grass draws of %.1f building and prop draws, %.1f pressed by %.1f bodies near, %.1f trampled cells (trample %s); %zu grass models (hash:height m):%s\n",
                 fWind, target, scale, double(logGrassDraws) / logPasses, double(logCheckedDraws) / logPasses, double(logPressedDraws) / logPasses,
-                double(logBodies) / logPasses, logModels.size(), heights.c_str());
+                double(logBodies) / logPasses, double(logTrampled) / logPasses,
+                trampleSupport < 0 ? "not asked" : trampleSupport ? "on" : "no vertex textures", logModels.size(), heights.c_str());
             logPasses = 0;
             logGrassDraws = logCheckedDraws = logPressedDraws = 0;
-            logBodies = 0;
+            logBodies = logTrampled = 0;
             logModels.clear();
         }
     }
@@ -287,14 +530,20 @@ class GrassWind
             const float radius = sphere ? std::clamp(sphere[3] + std::sqrt(sphere[0] * sphere[0] + sphere[1] * sphere[1]), 0.0f, 8.0f) : 2.0f;
             for (const auto& body : bodies)
             {
-                if (std::abs(place[2] - body.bottom) > height + 1.0f)
+                if (body.kind == NearbyBodies::Body::Rotor)
+                {
+                    const float above = body.bottom - place[2];
+                    if (above < kRotorLow || above > kRotorHigh)
+                        continue;
+                }
+                else if (std::abs(place[2] - body.bottom) > height + 1.0f)
                     continue;
                 const float dx = place[0] - body.centre[0], dy = place[1] - body.centre[1];
                 const float along = std::abs(dx * body.forward[0] + dy * body.forward[1]) - body.halfLength;
                 const float across = std::abs(dx * body.forward[1] - dy * body.forward[0]) - body.halfWidth;
                 const float a = (std::max)(along, 0.0f), c = (std::max)(across, 0.0f);
                 const float gap = std::sqrt(a * a + c * c);
-                if (gap > body.reach + radius)
+                if (gap > Reach(body, place) + radius)
                     continue;
                 if (gap < nearestGap[0])
                 {
@@ -319,9 +568,16 @@ class GrassWind
                 break;
             float* v = values + i * 8;
             v[0] = body->centre[0], v[1] = body->centre[1], v[2] = body->forward[0], v[3] = body->forward[1];
-            v[4] = body->halfLength, v[5] = body->halfWidth, v[6] = 1.0f / body->reach;
+            v[4] = body->halfLength, v[5] = body->halfWidth, v[6] = 1.0f / Reach(*body, place);
             // Fading over the last 10 m of the bodies' range, so none pops
             v[7] = std::clamp((NearbyBodies::kRange - std::sqrt(body->distance2)) * 0.1f, 0.0f, 1.0f);
+            if (body->kind == NearbyBodies::Body::Rotor)
+            {
+                // Full from just above the ground, fading in from where it stands and out towards 30 m
+                const float above = body->bottom - place[2];
+                const float rise = std::clamp((above - kRotorLow) / 1.5f, 0.0f, 1.0f), fall = 1.0f - above / kRotorHigh;
+                v[7] *= rise * fall * fall * rotorPulse;
+            }
         }
         pDevice->SetVertexShaderConstantF(kBodyRegister, values, 4);
         bBodiesBound = true;
@@ -329,13 +585,24 @@ class GrassWind
             ++logPressedDraws;
     }
 
+    // How far past its box a body moves the grass of a prop at `place`: a helicopter's downwash spreads as it climbs
+    static float Reach(const NearbyBodies::Body& body, const float* place)
+    {
+        if (body.kind != NearbyBodies::Body::Rotor)
+            return body.reach;
+        return 6.0f + 0.4f * std::clamp(body.bottom - place[2], 0.0f, kRotorHigh);
+    }
+
     static void EndGBuffer()
     {
         if (!bInGBuffer)
             return;
         bInGBuffer = false;
-        if (auto pDevice = rage::grcDevice::GetD3DDevice(); pDevice && bBound)
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (pDevice && bBound)
             SetFlag(pDevice, false);
+        if (pDevice && bTrampleBound)
+            BindTrample(pDevice, false);
     }
 
     static void BeforeEntityDraw(EntityClass::Kind kind)
@@ -411,6 +678,7 @@ public:
         {
             bInGBuffer = false;
             bBound = false;
+            bTrampleBound = false;
         };
     }
 } GrassWind;

@@ -6,6 +6,7 @@ module;
 #include <atomic>
 #include <cmath>
 #include <mutex>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -13,13 +14,15 @@ export module nearbybodies;
 
 import common;
 import comvars;
+import natives;
 
 // The cars and people around the player, for effects that react to them (the grass bending under them, the box
 // shadows of cars).
 //  - VehicleBox: a car's box from its matrix and its model's bounds, from the wheels' bottom to the roof; cars, vans,
 //    buses and bikes only, upright and whole.
 //  - Bodies: taken on the main thread once a game frame while anyone asked for them in the last second (Want), the
-//    nearest the player first; the render thread copies the latest whole set (Copy).
+//    nearest the player first; the render thread copies the latest whole set (Copy). Each has its velocity on the
+//    ground from its last position. Helicopters come as rotors: their centre and height, for the downwash.
 export namespace NearbyBodies
 {
     struct CarBox
@@ -46,7 +49,8 @@ export namespace NearbyBodies
         float bottom;       // the ground it stands on: a car's wheels, a person's feet
         float reach;
         float distance2;    // from the player, squared
-        bool car;
+        float velocity[2];  // m/s on the ground, 0 for the first sight
+        enum Kind : uint8_t { Person, Car, Rotor } kind;
     };
     constexpr int kMaxBodies = 32;
     constexpr float kRange = 60.0f; // metres from the player
@@ -66,6 +70,57 @@ namespace
     float latestFocus[3] = {};
     bool latestTaken = false;
 
+    // Where each body was seen last, for its velocity; a slot taken by another entity jumps and gets none
+    struct Seen { float position[2]; float velocity[2]; int32_t time; uint32_t pass; };
+    std::unordered_map<uintptr_t, Seen> seen;
+    uint32_t seenPass = 0;
+
+    void TakeVelocity(uintptr_t entity, const float* position, int32_t now, float (&velocity)[2])
+    {
+        auto [it, added] = seen.try_emplace(entity, Seen{ { position[0], position[1] }, { 0.0f, 0.0f }, now, seenPass });
+        auto& s = it->second;
+        if (!added)
+        {
+            const float dt = (now - s.time) * 0.001f;
+            if (dt > 0.0f)
+            {
+                const float vx = (position[0] - s.position[0]) / dt, vy = (position[1] - s.position[1]) / dt;
+                const bool sane = dt < 0.5f && vx * vx + vy * vy < 80.0f * 80.0f;
+                s.velocity[0] = sane ? vx : 0.0f;
+                s.velocity[1] = sane ? vy : 0.0f;
+                s.position[0] = position[0], s.position[1] = position[1];
+                s.time = now;
+            }
+            s.pass = seenPass;
+        }
+        velocity[0] = s.velocity[0], velocity[1] = s.velocity[1];
+    }
+
+    // By model index: 1 a helicopter, 0 not, -1 not asked yet
+    std::vector<int8_t> heliModels;
+
+    bool IsHeli(uintptr_t vehicle)
+    {
+        static const uintptr_t modelInfos = GameBase() + 0xE95CD8; // CE 0x1295cd8, model infos by index
+        const auto index = *reinterpret_cast<const int16_t*>(vehicle + 0x2E);
+        if (index < 0 || index >= 31000)
+            return false;
+        if (heliModels.empty())
+            heliModels.assign(31000, -1);
+        auto& known = heliModels[index];
+        if (known < 0)
+        {
+            // Natives answer nothing while scripts are paused: ask again later
+            if (!CTimer::ms_bScriptPause || *CTimer::ms_bScriptPause)
+                return false;
+            const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + index * 4);
+            if (!info)
+                return false;
+            known = Natives::IsThisModelAHeli(*reinterpret_cast<const uint32_t*>(info + 0x3c)) ? 1 : 0;
+        }
+        return known == 1;
+    }
+
     void Gather()
     {
         using namespace NearbyBodies;
@@ -77,11 +132,30 @@ namespace
             return;
         static std::vector<Body> found;
         static std::vector<CarBox> boxes;
+        static std::vector<std::array<float, 3>> helis;
         found.clear();
         boxes.clear();
+        helis.clear();
+        const int32_t now = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds : 0;
+        ++seenPass;
         const auto near2 = [&](const float* p) { const float x = p[0] - focus[0], y = p[1] - focus[1], z = p[2] - focus[2]; return x * x + y * y + z * z; };
         CVehicle::ForEachVehicle([&](uintptr_t vehicle)
         {
+            if (IsHeli(vehicle))
+            {
+                // Its downwash, from its position down; how far it reaches is left to whoever takes the bodies
+                float p[3];
+                if (!CEntity::GetPosition(vehicle, p))
+                    return;
+                const float d2 = near2(p);
+                if (d2 > kRange * kRange)
+                    return;
+                Body rotor{ { p[0], p[1] }, { 1.0f, 0.0f }, 0.0f, 0.0f, p[2], 0.0f, d2, {}, Body::Rotor };
+                TakeVelocity(vehicle, p, now, rotor.velocity);
+                found.push_back(rotor);
+                helis.push_back({ p[0], p[1], p[2] });
+                return;
+            }
             CarBox box;
             if (!VehicleBox(vehicle, box))
                 return;
@@ -89,15 +163,23 @@ namespace
             if (d2 > kRange * kRange)
                 return;
             boxes.push_back(box);
-            found.push_back({ { box.centre[0], box.centre[1] }, { box.forward[0], box.forward[1] }, box.halfLength, box.halfWidth,
-                box.centre[2] - box.halfHeight, 0.5f, d2, true });
+            Body car{ { box.centre[0], box.centre[1] }, { box.forward[0], box.forward[1] }, box.halfLength, box.halfWidth,
+                box.centre[2] - box.halfHeight, 0.5f, d2, {}, Body::Car };
+            TakeVelocity(vehicle, box.centre, now, car.velocity);
+            found.push_back(car);
         });
-        // People on foot; one inside a car's box sits in it
+        // People on foot; one inside a car's box sits in it, one within 4 m of a helicopter flies in it
         CPed::ForEachPed([&](uintptr_t ped)
         {
             float p[3];
             if (!CEntity::GetPosition(ped, p))
                 return;
+            for (const auto& h : helis)
+            {
+                const float x = p[0] - h[0], y = p[1] - h[1], z = p[2] - h[2];
+                if (x * x + y * y + z * z < 16.0f)
+                    return;
+            }
             const float d2 = near2(p);
             if (d2 > kRange * kRange)
                 return;
@@ -110,8 +192,11 @@ namespace
             }
             // The ped's position is about a metre above its feet; the feet and legs as a square of 0.3 m, reaching a metre
             // past it, so the grass leans away from a step before it and rises again behind it
-            found.push_back({ { p[0], p[1] }, { 1.0f, 0.0f }, 0.15f, 0.15f, p[2] - 1.0f, 1.0f, d2, false });
+            Body person{ { p[0], p[1] }, { 1.0f, 0.0f }, 0.15f, 0.15f, p[2] - 1.0f, 1.0f, d2, {}, Body::Person };
+            TakeVelocity(ped, p, now, person.velocity);
+            found.push_back(person);
         });
+        std::erase_if(seen, [](const auto& entry) { return entry.second.pass != seenPass; });
         if (int(found.size()) > kMaxBodies)
         {
             std::nth_element(found.begin(), found.begin() + kMaxBodies, found.end(), [](const Body& a, const Body& b) { return a.distance2 < b.distance2; });

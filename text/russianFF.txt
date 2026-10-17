@@ -373,6 +373,9 @@ Logitech LightSync RGB
 [GrassBending]
 Трава приминается
 
+[GrassTrample]
+Примятая трава поднимается не сразу
+
 [BuildingShad]
 Здания в тенях фар
 

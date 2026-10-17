@@ -16,10 +16,15 @@
 #    The push's direction is the way out of the box rounded by c246.w, shortened to nothing at the box's middle rather
 #    than turned to unit length, so the blades under a body don't flip side as its centre passes over them; there they
 #    are pressed down instead, to half their height under the full press.
+#  - trampled ground: a grid of 0.5 m cells around the player (vs s1, 128 x 128, wrapping every 64 m of the world) holds
+#    where people walked and wheels rolled: the way the blades lie (r, g), how far down they still are (b) and the
+#    ground's height there, wrapping every 64 m (a); it counts like a body under the vertex where its height is within
+#    about 2 m of the prop's origin.
 # Registers: c240 (per frame) = wind direction over the gust's wavelength (cycles a metre), the gust's phase, the
 # flutter's phase (cycles); c241 (per model) = 1 / height, the bend and the flutter at the tip in metres, the push at the
 # tip in metres; c242.xy (per frame) = the wind's unit direction; c248/c249 and c250/c251 (per draw) = two bodies:
-# centre.xy and unit forward.xy on the ground, half length, half width, 1 / reach, strength (0 = none); defs c246/c247.
+# centre.xy and unit forward.xy on the ground, half length, half width, 1 / reach, strength (0 = none); c243 (per frame)
+# = 1 / the grid's side in metres, the trample's strength (0 = off); defs c245-c247.
 #
 # Usage: world_grass_wind.py <FusionShaders checkout with the other patches applied>
 # Commit that state first; the patch is the diff this script leaves (git diff).
@@ -33,6 +38,7 @@ SHADERS = ['gta_defaultVS4.asm', 'gta_defaultVS5.asm']
 
 DEF = f'''\
     def c247, 0.159154937, 0.5, 6.28318548, -3.14159274 // {TAG}: 1 / 2pi, 1 / 2, 2pi, -pi
+    def c245, 0.015625, 64, 2.5, 0 // {TAG}: 1 / and the trample grid's height wrap (m), the height it takes (m)
     def c246, 0.550000012, 0.600000024, 1.29999995, 0.300000012 // {TAG}: the gust's swing and floor, the flutter's cycles a metre, a body's rounding (m)
 '''
 
@@ -131,6 +137,24 @@ SWAY = f'''\
       mad r13.y, -r12.y, c250.z, r13.y
       mad r9.xy, r13, r10.w, r9
       max r9.w, r9.w, r10.w
+      // trampled: the grid under the vertex, where its height is near the prop's origin
+      mul r14.xy, r3, c243.x
+      mov r14.zw, c4.z
+      texldl r14, r14, s1
+      mov r15.x, c3.z
+      mad r15.x, r15.x, c245.x, -r14.w
+      add r15.x, r15.x, c247.y
+      frc r15.x, r15.x
+      add r15.x, r15.x, -c247.y
+      abs r15.x, r15.x
+      mul r15.x, r15.x, -c245.y
+      add_sat r15.x, r15.x, c245.z
+      mul r15.x, r15.x, r14.z
+      mul r15.x, r15.x, c243.y
+      add r14.xy, r14, r14
+      add r14.xy, r14, -c4.y
+      mad r9.xy, r14, r15.x, r9
+      max r9.w, r9.w, r15.x
       mul r10.z, r9.x, r9.x
       mad r10.z, r9.y, r9.y, r10.z
       add r10.z, r10.z, c4.x
@@ -172,6 +196,7 @@ def patch(path):
     # The shader must only use r0, so r1-r13 are free.
     used = set(re.findall(r'\br(\d+)', body))
     assert used == {'0'}, (path, used)
+    assert not re.search(r'\bs1\b', body), path
     last_dcl = max(i for i, line in enumerate(lines) if line.strip().startswith('dcl_'))
     first_def = next(i for i, line in enumerate(lines) if line.strip().startswith('def '))
     out = []
@@ -182,6 +207,7 @@ def patch(path):
             out.append(DEF.rstrip('\n'))
         out.append(line)
         if i == last_dcl:
+            out.append(f'    dcl_2d s1 // {TAG}: the trample grid')
             out.append(SWAY.rstrip('\n'))
     path.write_text(head + 'vs_3_0\n' + '\n'.join(out))
 
