@@ -34,6 +34,8 @@ import grasswind;
 #define IDR_GPUGRASS_FX 143
 
 using RageDirect3DDevice9::RealDevice;
+using RageDirect3DDevice9::SetTextureBoth;
+using RageDirect3DDevice9::SetSamplerStateBoth;
 using namespace PostFxProfiler;
 
 // GPU Grass (Graphics > Lighting, [PROCEDURAL] GpuGrass): blades of grass drawn by the GPU (GpuGrass.fx) on the
@@ -42,9 +44,12 @@ using namespace PostFxProfiler;
 //
 // Where: the manager's ground triangles (ProceduralGround, main thread) whose surface's procedural tag makes grass or
 // small plants: by procedural.dat's PROCOBJ records of that tag whose model is on the grass list (GrassShared), the
-// sum of their 1 / spacing^2 times 12, at most 1. The triangles are cut into pieces of at most kPieceArea square metres
+// sum of their 1 / spacing^2 times 12, at most 1; and the mix of grass, weeds and small plants among those props, which
+// the blades follow (GrassShared::GrassKind). The triangles are cut into pieces of at most kPieceArea square metres
 // when the set changes; each frame the pieces in view within the range take a share of the mesh's kBlades blades, full
 // up to GpuGrassFullRange and none at GpuGrassRange, and go to the instance buffer: one instanced draw for them all.
+// The blades take half their colour from the ground under them: _DEFERRED_GBUFFER_0_ is copied first (into Wet Ground's
+// copy, which that pass makes again after the grass).
 //
 // [PROCEDURAL] GpuGrassRange (35 m), GpuGrassFullRange (12 m), GpuGrassDensity (0.1..1). GpuGrassDebug (Graphics >
 // Debug) colours the blades by their surface's tag. GpuGrassLog = 1 ([DEBUG]) writes the triangles, pieces and blades
@@ -52,15 +57,15 @@ using namespace PostFxProfiler;
 namespace GpuGrass
 {
     constexpr int kBlades = 96;             // per piece of ground
-    constexpr int kVertsPerBlade = 5;       // two pairs up the blade and its tip
-    constexpr int kIndicesPerBlade = 9;     // three triangles
+    constexpr int kVertsPerBlade = 7;       // three pairs up the blade and its tip
+    constexpr int kIndicesPerBlade = 15;    // five triangles
     constexpr float kPieceArea = 1.5f;      // square metres: up to 64 blades a square metre
     constexpr int kMaxPieces = 65536;
     constexpr int kMaxInstances = 24576;
     constexpr float kForgetDistance = 400.0f;   // triangles further from the camera when the pieces are made are dropped
 
     struct MeshVertex { float blade[4]; float vertex[4]; };
-    struct Instance { float corner[4]; float edge1[4]; float edge2[4]; };
+    struct Instance { float corner[4]; float edge1[4]; float edge2[4]; float kinds[4]; };
 
     // Main thread: the manager's triangles by their record
     std::mutex groundMutex;
@@ -72,10 +77,11 @@ namespace GpuGrass
     float fRange = 35.0f, fFullRange = 12.0f, fDensity = 1.0f;
 
     // Render thread
-    struct Piece { float corner[3], edge1[3], edge2[3]; float centre[3]; float radius; float share; float seed; float tag; };
+    struct Piece { float corner[3], edge1[3], edge2[3]; float centre[3]; float radius; float share; float seed; float tag; int tagIndex; };
     std::vector<Piece> pieces;
     uint32_t piecesVersion = ~0u;
     std::array<float, 256> tagShare{};
+    std::array<std::array<float, 4>, 256> tagKinds{};   // the share of grass, of weeds, of small plants; tagShare
     const uint8_t* tagsFrom = nullptr;
     uint32_t tagsCount = 0;
 
@@ -85,7 +91,7 @@ namespace GpuGrass
     IDirect3DIndexBuffer9* meshIB = nullptr;
     IDirect3DVertexBuffer9* instanceVB = nullptr;
     IDirect3DVertexDeclaration9* declaration = nullptr;
-    struct Handles { D3DXHANDLE technique, viewProj, wind, windDir, blade, root, tip, nearPlane, farDivNear; } h{};
+    struct Handles { D3DXHANDLE technique, viewProj, wind, windDir, blade, eye, nearPlane, farDivNear; } h{};
     const char* status = "not drawn yet";
     bool depthLogged = false;
 
@@ -120,6 +126,7 @@ namespace GpuGrass
         if (defs == tagsFrom && count == tagsCount)
             return true;
         std::array<float, 256> sum{};
+        std::array<std::array<float, 3>, 256> kindSum{};
         for (uint32_t i = 0; i < count; ++i)
         {
             const uint8_t* record = defs + 8 + i * 0x44;
@@ -129,25 +136,34 @@ namespace GpuGrass
             if (tag < 0 || tag > 255 || model < 0 || model >= 31000 || !(spacing > 0.1f))
                 continue;
             const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4);
-            if (info && GrassShared::IsGrassModel(*reinterpret_cast<const uint32_t*>(info + 0x3c)))
+            const int kind = info ? GrassShared::GrassKind(*reinterpret_cast<const uint32_t*>(info + 0x3c)) : 0;
+            if (kind > 0)
+            {
                 sum[tag] += 1.0f / (spacing * spacing);
+                kindSum[tag][kind - 1] += 1.0f / (spacing * spacing);
+            }
         }
         std::string shares;
         for (int t = 0; t < 256; ++t)
         {
             tagShare[t] = std::clamp(sum[t] * 12.0f, 0.0f, 1.0f);
+            tagKinds[t] = { 1.0f, 0.0f, 0.0f, tagShare[t] };
+            if (sum[t] > 0.0f)
+                for (int k = 0; k < 3; ++k)
+                    tagKinds[t][k] = kindSum[t][k] / sum[t];
             if (tagShare[t] > 0.0f)
-                shares += std::format(" {}:{:.2f}", t, tagShare[t]);
+                shares += std::format(" {}:{:.2f}(g{:.0f}/w{:.0f}/p{:.0f})", t, tagShare[t], tagKinds[t][0] * 100.0f, tagKinds[t][1] * 100.0f,
+                                      tagKinds[t][2] * 100.0f);
         }
         if (bLog)
-            FusionLog::Write("GpuGrass", "Tags", "%u PROCOBJ records; grass by tag:%s\n", count, shares.c_str());
+            FusionLog::Write("GpuGrass", "Tags", "%u PROCOBJ records; grass by tag (share of grass/weeds/plants %%):%s\n", count, shares.c_str());
         tagsFrom = defs;
         tagsCount = count;
         piecesVersion = ~0u;
         return true;
     }
 
-    void AddPieces(const float* a, const float* b, const float* c, float share, float tag, int depth)
+    void AddPieces(const float* a, const float* b, const float* c, float share, int tag, int depth)
     {
         const float e1[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
         const float e2[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
@@ -196,7 +212,8 @@ namespace GpuGrass
         p.radius = std::sqrt(r2) + 1.0f; // the blades stand up to a metre above it
         p.share = share * (std::min)(area / kPieceArea, 1.0f);
         p.seed = Hash(p.centre[0], p.centre[1]);
-        p.tag = tag;
+        p.tag = tag / 255.0f;
+        p.tagIndex = tag;
         pieces.push_back(p);
     }
 
@@ -234,7 +251,7 @@ namespace GpuGrass
             const float length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
             if (!(length > 0.0f) || std::abs(n[2]) / length < 0.6f)
                 continue;
-            AddPieces(t.corner[0], t.corner[1], t.corner[2], tagShare[t.tag], t.tag / 255.0f, 0);
+            AddPieces(t.corner[0], t.corner[1], t.corner[2], tagShare[t.tag], t.tag, 0);
         }
         logGrassTriangles = triangles.size();
     }
@@ -260,8 +277,7 @@ namespace GpuGrass
                 h.wind = effect->GetParameterByName(nullptr, "vec4Wind");
                 h.windDir = effect->GetParameterByName(nullptr, "vec4WindDir");
                 h.blade = effect->GetParameterByName(nullptr, "vec4Blade");
-                h.root = effect->GetParameterByName(nullptr, "vec4ColourRoot");
-                h.tip = effect->GetParameterByName(nullptr, "vec4ColourTip");
+                h.eye = effect->GetParameterByName(nullptr, "vec4Eye");
                 h.nearPlane = effect->GetParameterByName(nullptr, "fNearPlane");
                 h.farDivNear = effect->GetParameterByName(nullptr, "fFarDivNear");
             }
@@ -278,6 +294,7 @@ namespace GpuGrass
                 { 1, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 2 },
                 { 1, 16, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 3 },
                 { 1, 32, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 4 },
+                { 1, 48, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 5 },
                 D3DDECL_END()
             };
             if (FAILED(real->CreateVertexDeclaration(elements, &declaration)))
@@ -298,8 +315,8 @@ namespace GpuGrass
             {
                 const float u = next(), w = next(), turn = next() * 6.2831853f, height = next(), random = next();
                 const float place = (b + 0.5f) / kBlades;
-                static constexpr float kUp[kVertsPerBlade] = { 0.0f, 0.0f, 0.45f, 0.45f, 1.0f };
-                static constexpr float kAcross[kVertsPerBlade] = { -1.0f, 1.0f, -1.0f, 1.0f, 0.0f };
+                static constexpr float kUp[kVertsPerBlade] = { 0.0f, 0.0f, 0.35f, 0.35f, 0.7f, 0.7f, 1.0f };
+                static constexpr float kAcross[kVertsPerBlade] = { -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 0.0f };
                 for (int k = 0; k < kVertsPerBlade; ++k)
                     v[b * kVertsPerBlade + k] = { { u, w, turn, height }, { kUp[k], kAcross[k], place, random } };
             }
@@ -316,7 +333,8 @@ namespace GpuGrass
             {
                 const uint16_t o = uint16_t(b * kVertsPerBlade);
                 const uint16_t list[kIndicesPerBlade] = { o, uint16_t(o + 1), uint16_t(o + 2), uint16_t(o + 2), uint16_t(o + 1), uint16_t(o + 3),
-                                                          uint16_t(o + 2), uint16_t(o + 3), uint16_t(o + 4) };
+                                                          uint16_t(o + 2), uint16_t(o + 3), uint16_t(o + 4), uint16_t(o + 4), uint16_t(o + 3), uint16_t(o + 5),
+                                                          uint16_t(o + 4), uint16_t(o + 5), uint16_t(o + 6) };
                 std::memcpy(i + b * kIndicesPerBlade, list, sizeof(list));
             }
             meshIB->Unlock();
@@ -423,8 +441,9 @@ export namespace GpuGrass
             const float share = p.share * fDensity * std::clamp((fRange - (std::max)(distance, 0.0f)) * fade, 0.0f, 1.0f);
             if (share * kBlades < 0.5f)
                 continue;
+            const auto& kinds = tagKinds[p.tagIndex];
             out[count] = { { p.corner[0], p.corner[1], p.corner[2], p.seed }, { p.edge1[0], p.edge1[1], p.edge1[2], share },
-                           { p.edge2[0], p.edge2[1], p.edge2[2], p.tag } };
+                           { p.edge2[0], p.edge2[1], p.edge2[2], p.tag }, { kinds[0], kinds[1], kinds[2], kinds[3] } };
             blades += share * kBlades;
             if (++count >= kMaxInstances)
                 break;
@@ -469,11 +488,38 @@ export namespace GpuGrass
         targets[0]->GetDesc(&desc);
 
         ProfilerScope timed(pDevice, kProfGpuGrass);
+        // The ground's colour before the grass, which the blades take half of: into Wet Ground's copy of the first target
+        auto& R = PostFxResources;
+        bool groundCopied = false;
+        {
+            D3DSURFACE_DESC copyDesc{};
+            if (R.WetCopySurf[0] && SUCCEEDED(R.WetCopySurf[0]->GetDesc(&copyDesc)) &&
+                (copyDesc.Width != desc.Width || copyDesc.Height != desc.Height || copyDesc.Format != desc.Format))
+            {
+                SAFE_RELEASE(R.WetCopySurf[0]);
+                SAFE_RELEASE(R.WetCopyTex[0]);
+            }
+            if (!R.WetCopyTex[0] && (FAILED(RealDevice(pDevice)->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format,
+                    D3DPOOL_DEFAULT, &R.WetCopyTex[0], nullptr)) || FAILED(R.WetCopyTex[0]->GetSurfaceLevel(0, &R.WetCopySurf[0]))))
+            {
+                SAFE_RELEASE(R.WetCopySurf[0]);
+                SAFE_RELEASE(R.WetCopyTex[0]);
+            }
+            groundCopied = R.WetCopySurf[0] && SUCCEEDED(pDevice->StretchRect(targets[0], nullptr, R.WetCopySurf[0], nullptr, D3DTEXF_NONE));
+        }
         // Kept besides what StateBackup keeps: every float constant (D3DX places the effect's from c0, over the game's
         // and FusionFix's cached ones such as the log depth's), the third target's colour mask, the streams' frequencies
         static float vsConstants[256 * 4], psConstants[224 * 4];
         pDevice->GetVertexShaderConstantF(0, vsConstants, 256);
         pDevice->GetPixelShaderConstantF(0, psConstants, 224);
+        static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER,
+                                                                  D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
+        static constexpr DWORD kSamplerValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, FALSE };
+        IDirect3DBaseTexture9* oldTexture = nullptr;
+        DWORD oldSampler[std::size(kSamplerStates)] = {};
+        pDevice->GetTexture(0, &oldTexture);
+        for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+            pDevice->GetSamplerState(0, kSamplerStates[i], &oldSampler[i]);
         DWORD colourWrite2 = 0, zfunc = D3DCMP_LESSEQUAL;
         pDevice->GetRenderState(D3DRS_COLORWRITEENABLE2, &colourWrite2);
         pDevice->GetRenderState(D3DRS_ZFUNC, &zfunc);
@@ -502,13 +548,12 @@ export namespace GpuGrass
         const D3DXVECTOR4 wind(GrassShared::Direction[0] / wl, GrassShared::Direction[1] / wl, -GrassShared::GustPhase, GrassShared::FlutterPhase);
         const D3DXVECTOR4 windDir(GrassShared::Direction[0], GrassShared::Direction[1], GrassShared::BendPerHeight, GrassShared::FlutterPerHeight);
         const bool debug = debugPref && debugPref->get() != 0;
-        const D3DXVECTOR4 blade(0.22f, 0.3f, 0.035f, debug ? 1.0f : 0.0f);
-        const D3DXVECTOR4 root(0.13f, 0.17f, 0.06f, 0.45f), tip(0.30f, 0.36f, 0.13f, 0.35f);
+        const D3DXVECTOR4 blade(1.0f, 1.0f, groundCopied ? 0.5f : 0.0f, debug ? 1.0f : 0.0f);
+        const D3DXVECTOR4 eyeVector(eye[0], eye[1], eye[2], 0.0f);
         effect->SetVector(h.wind, &wind);
         effect->SetVector(h.windDir, &windDir);
         effect->SetVector(h.blade, &blade);
-        effect->SetVector(h.root, &root);
-        effect->SetVector(h.tip, &tip);
+        effect->SetVector(h.eye, &eyeVector);
         effect->SetFloat(h.nearPlane, camera.Near);
         effect->SetFloat(h.farDivNear, camera.Far / camera.Near);
 
@@ -523,6 +568,10 @@ export namespace GpuGrass
         effect->SetTechnique(h.technique);
         effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
         effect->BeginPass(0);
+        effect->CommitChanges();
+        SetTextureBoth(pDevice, 0, groundCopied ? R.WetCopyTex[0] : nullptr);
+        for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+            SetSamplerStateBoth(pDevice, 0, kSamplerStates[i], kSamplerValues[i]);
         pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, kBlades * kVertsPerBlade, 0, kBlades * 3);
         effect->EndPass();
         effect->End();
@@ -530,6 +579,10 @@ export namespace GpuGrass
         pDevice->SetStreamSourceFreq(0, 1);
         pDevice->SetStreamSourceFreq(1, 1);
         pDevice->SetStreamSource(1, nullptr, 0, 0);
+        SetTextureBoth(pDevice, 0, oldTexture);
+        SAFE_RELEASE(oldTexture);
+        for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+            SetSamplerStateBoth(pDevice, 0, kSamplerStates[i], oldSampler[i]);
         pDevice->SetRenderState(D3DRS_COLORWRITEENABLE2, colourWrite2);
         pDevice->SetVertexShaderConstantF(0, vsConstants, 256);
         pDevice->SetPixelShaderConstantF(0, psConstants, 224);

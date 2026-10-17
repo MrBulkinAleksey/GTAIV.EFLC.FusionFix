@@ -12,6 +12,7 @@ module;
 #include <functional>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -31,6 +32,9 @@ import nearbybodies;
 export namespace GrassShared
 {
     bool IsGrassModel(uint32_t nameHash);
+    // What a grass model is, by its name: 0 not grass, 1 grass (proc_grass*, grass0_*, GrassWindModels), 2 weeds, 3 small
+    // plants with broad leaves (*proc_plant_*, sm_plant*)
+    int GrassKind(uint32_t nameHash);
     inline float BendPerHeight = 0.0f, FlutterPerHeight = 0.0f;   // at the tip, per metre of height
     inline float GustPhase = 0.0f, FlutterPhase = 0.0f;           // cycles
     inline float Direction[2] = { 0.929f, 0.370f };
@@ -126,7 +130,7 @@ class GrassWind
     // By model index: the hash the entry was made for and the model's height, 0 if not grass
     struct ModelEntry { uint32_t hash = 0; float height = -1.0f; };
     static inline std::vector<ModelEntry> models;
-    static inline std::unordered_set<uint32_t> grassHashes;
+    static inline std::unordered_map<uint32_t, int> grassHashes; // the kind, as GrassShared::GrassKind
 
     // GrassWindLog
     static inline uint32_t logPasses = 0;
@@ -139,10 +143,10 @@ class GrassWind
         return ref ? ref->get() : missing;
     }
 
-    static void AddName(std::string_view name)
+    static void AddName(std::string_view name, int kind = 1)
     {
         std::string text(name);
-        grassHashes.insert(hashStringLowercaseFromSeed(text.c_str(), 0));
+        grassHashes.emplace(hashStringLowercaseFromSeed(text.c_str(), 0), kind);
     }
 
     // The game's and our data's grass, weed and small plant props; names that do not exist cost nothing.
@@ -151,23 +155,23 @@ class GrassWind
         grassHashes.clear();
         for (int i = 0; i <= 40; ++i)
         {
-            AddName(std::format("cj_proc_plant_{}", i));
-            AddName(std::format("ag_proc_plant_{}", i));
-            AddName(std::format("proc_plant_{}", i));
+            AddName(std::format("cj_proc_plant_{}", i), 3);
+            AddName(std::format("ag_proc_plant_{}", i), 3);
+            AddName(std::format("proc_plant_{}", i), 3);
         }
         for (int i = 0; i <= 20; ++i)
         {
             AddName(std::format("proc_grass{:02}", i));
-            AddName(std::format("proc_weed{:02}", i));
-            AddName(std::format("ag_weed{:02}", i));
-            AddName(std::format("sm_weed{}_", i));
-            AddName(std::format("sm_weed{}", i));
-            AddName(std::format("sm_plant{}", i));
+            AddName(std::format("proc_weed{:02}", i), 2);
+            AddName(std::format("ag_weed{:02}", i), 2);
+            AddName(std::format("sm_weed{}_", i), 2);
+            AddName(std::format("sm_weed{}", i), 2);
+            AddName(std::format("sm_plant{}", i), 3);
             AddName(std::format("grass0_{}", i));
-            AddName(std::format("cj_proc_weed{}", i));
+            AddName(std::format("cj_proc_weed{}", i), 2);
         }
         AddName("proc_grass_dry");
-        AddName("cj_proc_weed");
+        AddName("cj_proc_weed", 2);
         for (size_t pos = 0; pos < sExtraModels.size();)
         {
             size_t end = sExtraModels.find(',', pos);
@@ -670,6 +674,13 @@ public:
         return grassHashes.contains(hash);
     }
 
+    static int Kind(uint32_t hash)
+    {
+        MakeModelListIfAsked();
+        const auto it = grassHashes.find(hash);
+        return it != grassHashes.end() ? it->second : 0;
+    }
+
     GrassWind()
     {
         FusionFix::onInitEventAsync() += []()
@@ -711,5 +722,10 @@ namespace GrassShared
     bool IsGrassModel(uint32_t nameHash)
     {
         return GrassWind::IsGrass(nameHash);
+    }
+
+    int GrassKind(uint32_t nameHash)
+    {
+        return GrassWind::Kind(nameHash);
     }
 }
