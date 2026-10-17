@@ -672,7 +672,7 @@ export namespace GpuGrass
             SetSamplerStateBoth(pDevice, 0, kSamplerStates[i], kSamplerValues[i]);
             SetSamplerStateBoth(pDevice, D3DVERTEXTEXTURESAMPLER1, kSamplerStates[i], kTrampleValues[i]);
         }
-        pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, kBlades * kVertsPerBlade, 0, kBlades * 3);
+        pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, kBlades * kVertsPerBlade, 0, kBlades * kIndicesPerBlade / 3);
         effect->EndPass();
         effect->End();
 
