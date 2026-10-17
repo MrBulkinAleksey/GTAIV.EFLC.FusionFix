@@ -84,6 +84,10 @@ import temporal;
 // moved out 2 m. An entity, fragment or fragment type draw whose sphere lies wholly outside one of them is left out of
 // the lamp's map. Only the dynamic maps (mode 4) are made so; the static caches, kept over frames, are not. With it
 // 0, EntityDrawLog counts what it would leave out.
+//
+// The water's reflection: as its first draw of each lock runs, the pixels a sphere's radius over its distance takes in
+// the reflection (its projection's [1][1] times half the device viewport's height) are kept for ReflectionSmallCull
+// (procedural.ixx), and EntityDrawLog counts its draws and time by their radius in those pixels.
 export namespace EntityClass
 {
     enum class Kind : uint8_t
@@ -118,6 +122,10 @@ export namespace EntityClass
 
     // A model index's model info (its name's hash at +0x3c, bounding sphere centre +0x10 and radius +0x1c), 0 if none.
     uintptr_t ModelInfo(uint16_t model);
+
+    // The water's reflection: the pixels of its target a radius over the distance takes, as of its last pass; 0 until
+    // one has been drawn. Written on the render thread, read on any.
+    float ReflectionPixelsPerSize();
 }
 
 namespace
@@ -166,6 +174,7 @@ namespace
     bool bViewCulling = false;          // and the face hooks in place
     constexpr float kViewHullMargin = 2.0f;
     bool bSkipLeftOut = true;           // SkipLeftOutDraws
+    volatile float reflectionPixelsPerSize = 0.0f;  // ReflectionPixelsPerSize
     uintptr_t modelInfos = 0;       // CE 0x1295cd8, model infos by index
     // DrawsPerEntity: by model index (CDrawEntityDC +0x30, CDrawFragTypeDC +0x58)
     volatile uint8_t modelDraws[0x10000] = {};
@@ -212,6 +221,12 @@ namespace
         bool camera = false, lamp = false;
         uint64_t distanceDraws[6]{}, sizeDraws[6]{};
         int64_t distanceTicks[6]{}, sizeTicks[6]{};
+        // The water's reflection: the same by the radius in the reflection's pixels
+        bool water = false;
+        uint64_t pixelDraws[6]{};
+        int64_t pixelTicks[6]{};
+        double pixelsPerSizeSum = 0.0;
+        uint64_t pixelsPerSizeLocks = 0;
         // The G-buffer: by model
         bool models = false;
         struct ModelStats { uint64_t draws = 0, placed = 0; int64_t ticks = 0; double distance = 0.0; Kind kind = Kind::Unknown; };
@@ -242,7 +257,8 @@ namespace
         {
             targetStats.push_back({ shown });
             it = targetStats.end() - 1;
-            it->camera = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || !std::strcmp(shown, "WATER_REFLECTION_COLOUR");
+            it->water = !std::strcmp(shown, "WATER_REFLECTION_COLOUR");
+            it->camera = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->water;
             it->lamp = !std::strcmp(shown, "SHADOW_MAP_COLOUR_POINT");
             it->camera |= it->lamp;
             it->models = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->lamp;
@@ -328,6 +344,15 @@ namespace
                 for (int i = 0; i < 6; ++i)
                     text += std::format("{} {} {:.1f} ({:.3f} ms)", i ? "," : "", sizes[i], s.sizeDraws[i] * perFrame, s.sizeTicks[i] * msPerFrame);
                 text += "\n";
+                if (s.water)
+                {
+                    static constexpr const char* pixelSizes[6] = { "under 1 px", "1-2 px", "2-4 px", "4-8 px", "8-16 px", "16+ px" };
+                    text += std::format("    by radius in the reflection's pixels ({:.0f} px a radius over distance of 1):",
+                        s.pixelsPerSizeLocks ? s.pixelsPerSizeSum / double(s.pixelsPerSizeLocks) : 0.0);
+                    for (int i = 0; i < 6; ++i)
+                        text += std::format("{} {} {:.1f} ({:.3f} ms)", i ? "," : "", pixelSizes[i], s.pixelDraws[i] * perFrame, s.pixelTicks[i] * msPerFrame);
+                    text += "\n";
+                }
             }
             if (s.models && !s.byModel.empty())
             {
@@ -410,6 +435,43 @@ namespace
             lastIs = target && !std::strcmp(target, "SHADOW_MAP_COLOUR_POINT");
         }
         return lastIs;
+    }
+
+    bool IsWaterReflection(const char* target)
+    {
+        static const char* lastName = nullptr;
+        static bool lastIs = false;
+        if (target != lastName)
+        {
+            lastName = target;
+            lastIs = target && !std::strcmp(target, "WATER_REFLECTION_COLOUR");
+        }
+        return lastIs;
+    }
+
+    // ReflectionPixelsPerSize, at the first draw of each lock of the water's reflection
+    void NoteReflectionView(const char* target)
+    {
+        static uint32_t noted = ~0u;
+        const auto lock = RenderSkip::LockCount();
+        if (lock == noted)
+            return;
+        noted = lock;
+        const auto viewport = rage::GetCurrentViewport();
+        const auto device = RageDirect3DDevice9::GetRuntimeDevice();
+        D3DVIEWPORT9 deviceViewport{};
+        if (!viewport || !device || FAILED(device->GetViewport(&deviceViewport)) || !deviceViewport.Height)
+            return;
+        const float scale = viewport->mProjectionMatrix[1][1];
+        if (!(scale > 0.1f && scale < 20.0f))
+            return;
+        reflectionPixelsPerSize = scale * float(deviceViewport.Height) * 0.5f;
+        if (bDrawLog)
+        {
+            auto& stats = StatsFor(target);
+            stats.pixelsPerSizeSum += reflectionPixelsPerSize;
+            stats.pixelsPerSizeLocks++;
+        }
     }
 
     // The halves of the lamps' maps: where each face command's lamp was as it was made (game thread), and on the
@@ -730,6 +792,15 @@ namespace
         stats.distanceTicks[d] += ticks;
         stats.sizeDraws[z]++;
         stats.sizeTicks[z] += ticks;
+        if (stats.water && reflectionPixelsPerSize > 0.0f)
+        {
+            const float pixels = size * reflectionPixelsPerSize;
+            int p = 0;
+            while (p < 5 && pixels >= float(1 << p))
+                ++p;
+            stats.pixelDraws[p]++;
+            stats.pixelTicks[p] += ticks;
+        }
         return distance;
     }
 
@@ -774,6 +845,9 @@ namespace
             }
             return;
         }
+
+        if (IsWaterReflection(target))
+            NoteReflectionView(target);
 
         const auto& hooks = Hooks();
         currentDc = dc;
@@ -1093,6 +1167,11 @@ namespace EntityClass
     void AddDrawHooks(DrawHook before, DrawHook after)
     {
         Hooks().emplace_back(before, after);
+    }
+
+    float ReflectionPixelsPerSize()
+    {
+        return reflectionPixelsPerSize;
     }
 
     bool Installed()

@@ -70,6 +70,11 @@ import entityclass;
 //    kept by the hash of their place, and under 1% of their distance (a 1.6 m bench past 160 m) none are drawn.
 //    Taken where the entity goes into the phases' lists (CE 0xae43a0): the render lists' hooks above miss most
 //    objects (a log: CJ_MH_CP_POST1 kept 30 cascade draws a frame 75 m out).
+//  - ReflectionSmallCull ([PERFORMANCE]): not the generator's either, any entity past kReflectionCullFrom whose radius
+//    takes under kReflectionMinPixels of the water's reflection (EntityClass::ReflectionPixelsPerSize, from its last
+//    pass) leaves the water reflection phases at the same place. Far buildings were 400-500 of the reflection's
+//    draws, 3-4 ms of the render thread a frame; there the image is small, squashed by the grazing view and broken
+//    up by the waves. Left out of the list, the game thread makes no command for them either.
 //
 // And what keeps the cost of more props down (the game already keeps them out of shadows: it sets
 // entity +0x24 0x10000 on each, and the render lists then drop the shadow phases, CE 0xae85a5/0xae7058):
@@ -107,6 +112,9 @@ namespace Procedural
     constexpr float kHeavyCascadesFrom = 40.0f;
     constexpr float kHeavyThinFrom = 80.0f;
     constexpr float kHeavyScreenSize = 0.01f;
+    bool bReflectionSmallCull = true;
+    constexpr float kReflectionCullFrom = 100.0f;
+    constexpr float kReflectionMinPixels = 4.0f;  // the radius in the reflection's pixels
     constexpr float SmallFarScreenSize = 0.005f;   // radius over distance under which a prop is left out
     constexpr float SmallPropRadius = 2.0f;        // smaller ones thin out past SmallFarThinFrom
     constexpr float SmallFarThinFrom = 60.0f;
@@ -369,7 +377,7 @@ namespace Procedural
     uint32_t nUsedMax = 0;
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
     uint32_t nQueueMax = 0, nWaitingMax = 0, nDropped = 0;
-    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0, nHeavyCascades = 0, nHeavyScene = 0;
+    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0, nHeavyCascades = 0, nHeavyScene = 0, nReflectionSmall = 0;
     uint32_t nConeFull = 0, nParkedNow = 0;
     uint32_t nUpdates = 0;
     double fUpdateMs = 0.0, fUpdateMaxMs = 0.0;
@@ -520,6 +528,7 @@ namespace Procedural
         bFarThinning = iniReader.ReadInteger("PROCEDURAL", "ProceduralFarThinning", 1) != 0;
         bSmallFarCull = iniReader.ReadInteger("PROCEDURAL", "ProceduralSmallFarCull", 1) != 0;
         bHeavyPropCull = iniReader.ReadInteger("PERFORMANCE", "HeavyPropCull", 1) != 0;
+        bReflectionSmallCull = iniReader.ReadInteger("PERFORMANCE", "ReflectionSmallCull", 1) != 0;
         fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
         fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
         bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
@@ -932,6 +941,27 @@ namespace Procedural
                 nHeavyScene++;
                 phases &= ~scene;
             }
+        }
+        return phases;
+    }
+
+    // ReflectionSmallCull: an entity too small in the water's reflection leaves its phases
+    uint32_t DropSmallInReflection(uintptr_t entity, uint32_t phases, float distance)
+    {
+        if (!(distance >= kReflectionCullFrom) || !modelInfos || !pReflectionPhases || !pScenePhase)
+            return phases;
+        const auto reflections = *pReflectionPhases & ~*pScenePhase;
+        if (!(phases & reflections))
+            return phases;
+        const float pixelsPerSize = EntityClass::ReflectionPixelsPerSize();
+        if (!(pixelsPerSize > 0.0f))
+            return phases;
+        const auto info = *(uintptr_t*)(modelInfos + *(uint16_t*)(entity + 0x2e) * 4);
+        const float radius = info ? *(float*)(info + 0x1c) : 0.0f;
+        if (radius > 0.0f && radius * pixelsPerSize < kReflectionMinPixels * distance)
+        {
+            nReflectionSmall++;
+            phases &= ~reflections;
         }
         return phases;
     }
@@ -1413,12 +1443,17 @@ public:
                 {
                     static auto AddHook = safetyhook::create_mid(add.get_first(0), [](SafetyHookContext& regs)
                     {
-                        if (!bHeavyPropCull)
+                        if (!bHeavyPropCull && !bReflectionSmallCull)
                             return;
                         auto& phases = *(uint32_t*)(regs.esp + 4);
                         const auto entity = *(uintptr_t*)(regs.esp + 8);
-                        if (phases && entity)
-                            phases = DropHeavy(entity, phases, *(float*)(regs.esp + 0xc));
+                        if (!phases || !entity)
+                            return;
+                        const float distance = *(float*)(regs.esp + 0xc);
+                        if (bHeavyPropCull)
+                            phases = DropHeavy(entity, phases, distance);
+                        if (bReflectionSmallCull)
+                            phases = DropSmallInReflection(entity, phases, distance);
                     });
                 }
             }
@@ -1462,13 +1497,14 @@ public:
             auto alive = props.size();
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, heavy out of cascades {}, heavy left out {}; box full {}, candidates capped {}",
+                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, heavy out of cascades {}, heavy left out {}, small out of the water's reflection {} ({:.0f} px a radius over distance of 1); box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
-                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nHeavyCascades, nHeavyScene, nEntitiesCapped, nCandidatesCapped));
+                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nHeavyCascades, nHeavyScene, nReflectionSmall,
+                EntityClass::ReflectionPixelsPerSize(), nEntitiesCapped, nCandidatesCapped));
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
-            nReflectionsSkipped = nSmallFarCulled = nHeavyCascades = nHeavyScene = 0;
+            nReflectionsSkipped = nSmallFarCulled = nHeavyCascades = nHeavyScene = nReflectionSmall = 0;
             nConeFull = 0;
             nConeReleased = 0;
         };
