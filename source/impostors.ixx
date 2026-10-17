@@ -73,6 +73,9 @@ namespace
     constexpr double kBakeBudgetMs = 1.5;
     constexpr float kFrom = 800.0f;
     constexpr float kCameraDistance = 6.0f;
+    constexpr float kViewElevation = 0.14f;    // radians, some 8 degrees: far buildings are seen from about level
+    constexpr float kMaxCardPixels = 1.5f * float(kFrame);    // bigger on screen: drawn as the game draws it
+    constexpr float kCardScale = 1.1f;
     constexpr uint32_t kIdleFrames = 120;   // a slot not drawn for that long may be baked over
     constexpr uint32_t kLogFrames = 600;
 
@@ -129,6 +132,7 @@ namespace
         float eye[3]{};
         float back[3]{};
         float zNear = 0.0f, zFar = 0.0f;
+        float pixelsPerReach = 0.0f;    // the sphere's diameter in pixels is reach / distance times this
         IDirect3DSurface9* targets[kLayers]{};
         IDirect3DSurface9* depth = nullptr;
         D3DVIEWPORT9 viewport{};
@@ -266,22 +270,24 @@ namespace
     // vs_3_0 / ps_3_0, compiled once on the real device
     constexpr char kCardVS[] = R"(
 float4x4 cViewProj : register(c0);
-struct VSIn { float3 pos : POSITION; float2 uv : TEXCOORD0; float4 bake : TEXCOORD1; float reach : TEXCOORD2; };
-struct VSOut { float4 pos : POSITION; float2 uv : TEXCOORD0; float4 bake : TEXCOORD1; float reach : TEXCOORD2; float3 world : TEXCOORD3; };
+struct VSIn { float3 pos : POSITION; float4 place : TEXCOORD0; float4 dir : TEXCOORD1; float4 axis : TEXCOORD2; };
+struct VSOut { float4 pos : POSITION; float4 place : TEXCOORD0; float4 dir : TEXCOORD1; float4 axis : TEXCOORD2; float3 world : TEXCOORD3; };
 VSOut main(VSIn i)
 {
     VSOut o;
     o.pos = mul(float4(i.pos, 1.0), cViewProj);
-    o.uv = i.uv;
-    o.bake = i.bake;
-    o.reach = i.reach;
+    o.place = i.place;
+    o.dir = i.dir;
+    o.axis = i.axis;
     o.world = i.pos;
     return o;
 }
 )";
 
-    // The surface the bake saw through this point of the card: on the ray from the bake's eye, as far off the card's
-    // plane as the depth layer keeps (in spheres); its log depth as the game's G-buffer shaders write it
+    // The card faces the camera; the camera's ray through this pixel is walked through the entity's sphere, each
+    // point projected into the chosen bake view's frame from the bake's eye, until it is no nearer to that eye than
+    // the surface the depth layer keeps there (in spheres off the frame's plane). The layers are read there, and the
+    // log depth of that point is written as the game's G-buffer shaders write it.
     constexpr char kCardPS[] = R"(
 sampler2D sAlbedo : register(s0);
 sampler2D sNormal : register(s1);
@@ -291,21 +297,77 @@ sampler2D sDepth : register(s4);
 float4 cEye : register(c0);
 float4 cBack : register(c1);
 float4 cDepth : register(c2);
-struct PSIn { float2 uv : TEXCOORD0; float4 bake : TEXCOORD1; float reach : TEXCOORD2; float3 world : TEXCOORD3; };
+float4 cFrame : register(c3);   // frame size in uv, bake bakeDist in spheres, frame halfSize size in spheres
+struct PSIn { float4 place : TEXCOORD0; float4 dir : TEXCOORD1; float4 axis : TEXCOORD2; float3 world : TEXCOORD3; };
 struct PSOut { float4 c0 : COLOR0; float4 c1 : COLOR1; float4 c2 : COLOR2; float4 c3 : COLOR3; float depth : DEPTH; };
+
+static const int kSteps = 24;
+
+// Where a point falls in the bake's frame (xy, uv) and how far off the frame's plane it is (z, spheres); w > 0 inside
+float4 Project(float3 p, float3 eye, float3 d, float3 x, float3 y, float bakeDist, float halfSize, float reach, float2 origin)
+{
+    float3 rel = p - eye;
+    float w = -dot(rel, d);
+    float3 q = rel * (bakeDist / max(w, 1e-3)) + d * bakeDist;
+    float2 f = float2(dot(q, x), dot(q, y)) / halfSize;
+    float2 uv = origin + float2(f.x * 0.5 + 0.5, 0.5 - f.y * 0.5) * cFrame.x;
+    float inside = (max(abs(f.x), abs(f.y)) <= 1.0) ? 1.0 : -1.0;
+    return float4(uv, (w - bakeDist) / reach, inside);
+}
+
 PSOut main(PSIn i)
 {
     PSOut o;
-    float s = tex2D(sDepth, i.uv).r;
-    clip(2.0 - s);
-    float t = 1.0 + s * i.reach / i.bake.w;
-    float3 surface = i.bake.xyz + (i.world - i.bake.xyz) * t;
+    float reach = i.place.w;
+    float3 d = normalize(i.dir.xyz);
+    float3 x = normalize(i.axis.xyz);
+    float3 y = cross(d, x);
+    float bakeDist = reach * cFrame.y;
+    float halfSize = reach * cFrame.z;
+    float3 eye = i.place.xyz + d * bakeDist;
+    float2 origin = float2(i.dir.w, i.axis.w);
+    float3 r = normalize(i.world - cEye.xyz);
+
+    float t0 = -1.1 * reach;
+    float dt = 2.2 * reach / kSteps;
+    float hitT = 0.0;
+    float found = -1.0;
+    [loop] for (int k = 0; k < kSteps; ++k)
+    {
+        float t = t0 + dt * k;
+        float4 p = Project(i.world + r * t, eye, d, x, y, bakeDist, halfSize, reach, origin);
+        float s = tex2Dlod(sDepth, float4(p.xy, 0, 0)).r;
+        if (p.w > 0.0 && s < 2.0 && p.z >= s)
+        {
+            hitT = t;
+            found = 1.0;
+            break;
+        }
+    }
+    clip(found);
+
+    // Halve the last step three times
+    float lo = hitT - dt, hi = hitT;
+    [unroll] for (int b = 0; b < 3; ++b)
+    {
+        float mid = 0.5 * (lo + hi);
+        float4 p = Project(i.world + r * mid, eye, d, x, y, bakeDist, halfSize, reach, origin);
+        float s = tex2Dlod(sDepth, float4(p.xy, 0, 0)).r;
+        if (p.w > 0.0 && s < 2.0 && p.z >= s)
+            hi = mid;
+        else
+            lo = mid;
+    }
+    float3 surface = i.world + r * hi;
+    float4 hit = Project(surface, eye, d, x, y, bakeDist, halfSize, reach, origin);
+    float4 uv = float4(hit.xy, 0, 0);
+
     float w = dot(cEye.xyz - surface, cBack.xyz);
     o.depth = saturate(log2(max(w * cDepth.x, 1.0)) * cDepth.y);
-    o.c0 = tex2D(sAlbedo, i.uv);
-    o.c1 = tex2D(sNormal, i.uv);
-    o.c2 = tex2D(sSpecular, i.uv);
-    o.c3 = tex2D(sMaterial, i.uv);
+    o.c0 = tex2Dlod(sAlbedo, uv);
+    o.c1 = tex2Dlod(sNormal, uv);
+    o.c2 = tex2Dlod(sSpecular, uv);
+    o.c3 = tex2Dlod(sMaterial, uv);
     return o;
 }
 )";
@@ -387,31 +449,23 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
         out[2] = a[0] * b[1] - a[1] * b[0];
     }
 
-    // The direction of view (i, j), from the model towards the camera
-    void ViewDirection(int i, int j, float (&d)[3])
+    constexpr int kViewCount = kViews * kViews;
+
+    // The direction of view k, from the model towards the camera: a ring of azimuths kViewElevation above level
+    void ViewDirection(int k, float (&d)[3])
     {
-        const float u = (float(i) + 0.5f) / float(kViews) * 2.0f - 1.0f;
-        const float v = (float(j) + 0.5f) / float(kViews) * 2.0f - 1.0f;
-        d[0] = (u + v) * 0.5f;
-        d[1] = (u - v) * 0.5f;
-        d[2] = 1.0f - std::fabs(d[0]) - std::fabs(d[1]);
-        Normalize(d);
+        const float azimuth = float(k) * 6.2831853f / float(kViewCount);
+        d[0] = std::cos(kViewElevation) * std::cos(azimuth);
+        d[1] = std::cos(kViewElevation) * std::sin(azimuth);
+        d[2] = std::sin(kViewElevation);
     }
 
-    // The view nearest to a direction from the model; below the horizon counts as on it
-    void NearestView(const float (&direction)[3], int& i, int& j)
+    // The view nearest in azimuth to a direction from the model
+    int NearestView(const float (&direction)[3])
     {
-        const float z = (std::max)(direction[2], 0.0f);
-        const float sum = std::fabs(direction[0]) + std::fabs(direction[1]) + z;
-        if (sum <= 0.0f)
-        {
-            i = j = kViews / 2;
-            return;
-        }
-        const float x = direction[0] / sum, y = direction[1] / sum;
-        const float u = x + y, v = x - y;
-        i = std::clamp(int((u * 0.5f + 0.5f) * float(kViews)), 0, kViews - 1);
-        j = std::clamp(int((v * 0.5f + 0.5f) * float(kViews)), 0, kViews - 1);
+        const float turns = std::atan2(direction[1], direction[0]) / 6.2831853f;
+        const int k = int(std::floor(turns * float(kViewCount) + 0.5f));
+        return ((k % kViewCount) + kViewCount) % kViewCount;
     }
 
     // The bake camera's right and up for a view direction
@@ -494,6 +548,16 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
         return dx * dx + dy * dy + dz * dz;
     }
 
+    // Far enough, and small enough on screen for a frame of kFrame px
+    bool FarAndSmall(const float* place, float reach)
+    {
+        const float distance2 = DistanceSquared(place);
+        if (distance2 < kFrom * kFrom)
+            return false;
+        const float pixels = reach * scene.pixelsPerReach;
+        return pixels * pixels <= kMaxCardPixels * kMaxCardPixels * distance2;
+    }
+
     // A free slot, else the ready one drawn longest ago if it has not been drawn for kIdleFrames; -1 when none
     int FreeSlot()
     {
@@ -566,6 +630,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
                 scene.targets[i] = nullptr;
         device->GetDepthStencilSurface(&scene.depth);
         device->GetViewport(&scene.viewport);
+        scene.pixelsPerReach = proj[1][1] * float(scene.viewport.Height);
         scene.valid = scene.targets[0] && scene.depth && scene.zNear > 0.0f && scene.zFar > scene.zNear;
     }
 
@@ -602,7 +667,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
         if (found == slotByKey.end())
             return false;
         auto& slot = slots[found->second];
-        if (!slot.ready)
+        if (!slot.ready || !FarAndSmall(place, slot.reach))
             return false;
         // An entity may have a command in more than one of the pass's buckets: one card
         if (slot.lastUsed != frame)
@@ -636,7 +701,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
         const float radius = *reinterpret_cast<const float*>(info + 0x1c);
         // Around the entity's place, which its sphere, however the entity is turned, never leaves by more
         const float reach = radius + std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
-        if (!(reach > 1.0f))
+        if (!(reach > 1.0f) || !FarAndSmall(place, reach))
             return;
 
         IDirect3DSurface9* bound[kLayers] = {};
@@ -689,7 +754,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
             for (int i = 0; i < kViews; ++i)
             {
                 float d[3];
-                ViewDirection(i, j, d);
+                ViewDirection(j * kViews + i, d);
                 SetCamera(*viewport, place, reach, d, invertedZ);
                 D3DVIEWPORT9 view = { DWORD(stripX + i * kFrame), DWORD(j * kFrame), DWORD(kFrame), DWORD(kFrame), 0.0f, 1.0f };
                 device->SetViewport(&view);
@@ -753,7 +818,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
         DWORD samplerStates[kSamplers][std::size(kSamplerStates)]{};
         DWORD states[std::size(kStates)]{};
         float vsConstants[4 * 4]{};
-        float psConstants[3 * 4]{};
+        float psConstants[4 * 4]{};
 
         explicit ExtraBackup(IDirect3DDevice9* d) : device(d)
         {
@@ -766,7 +831,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
             for (size_t i = 0; i < std::size(kStates); ++i)
                 device->GetRenderState(kStates[i], &states[i]);
             device->GetVertexShaderConstantF(0, vsConstants, 4);
-            device->GetPixelShaderConstantF(0, psConstants, 3);
+            device->GetPixelShaderConstantF(0, psConstants, 4);
         }
 
         ~ExtraBackup()
@@ -781,7 +846,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
             for (size_t i = 0; i < std::size(kStates); ++i)
                 device->SetRenderState(kStates[i], states[i]);
             device->SetVertexShaderConstantF(0, vsConstants, 4);
-            device->SetPixelShaderConstantF(0, psConstants, 3);
+            device->SetPixelShaderConstantF(0, psConstants, 4);
         }
     };
 
@@ -866,9 +931,9 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
     struct CardVertex
     {
         float position[3];
-        float uv[2];
-        float bake[4];  // the bake's eye, its distance from the entity's place
-        float reach;
+        float place[4];     // the entity's place, its reach
+        float dir[4];       // the bake view's direction, its frame's u in the atlas
+        float axis[4];      // the bake view's right, its frame's v
     };
     std::vector<CardVertex> cardVertices;
 
@@ -885,9 +950,6 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
         const double start = NowMs();
         // Half a texel: a D3D9 pixel holds what is at its corner, the frame's k / n
         const float halfTexel = 0.5f / float(kAtlas);
-        // The bake's frustum at the place's distance
-        const float half = kCameraDistance / std::sqrt(kCameraDistance * kCameraDistance - 1.0f);
-        const float frameUV = float(kFrame) / float(kAtlas);
         cardVertices.clear();
         cardVertices.reserve(instances.size() * 6);
         for (const int index : instances)
@@ -895,16 +957,16 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
             const auto& slot = slots[index];
             float toEye[3] = { scene.eye[0] - slot.place[0], scene.eye[1] - slot.place[1], scene.eye[2] - slot.place[2] };
             Normalize(toEye);
-            int i, j;
-            NearestView(toEye, i, j);
+            const int view = NearestView(toEye);
             float d[3], x[3], y[3];
-            ViewDirection(i, j, d);
+            ViewDirection(view, d);
             ViewAxes(d, x, y);
-            const float h = slot.reach * half;
-            const float distance = slot.reach * kCameraDistance;
-            const float u0 = float((index % kTilesAcross) * kTile + i * kFrame) / float(kAtlas) + halfTexel;
-            const float v0 = float((index / kTilesAcross) * kTile + j * kFrame) / float(kAtlas) + halfTexel;
-            // Corners 0 1 / 2 3, the frame's top (the bake's up) first
+            // The card faces the camera
+            float cu[3], cv[3];
+            ViewAxes(toEye, cu, cv);
+            const float h = slot.reach * kCardScale;
+            const float u0 = float((index % kTilesAcross) * kTile + (view % kViews) * kFrame) / float(kAtlas) + halfTexel;
+            const float v0 = float((index / kTilesAcross) * kTile + (view / kViews) * kFrame) / float(kAtlas) + halfTexel;
             CardVertex corners[4];
             for (int c = 0; c < 4; ++c)
             {
@@ -912,13 +974,14 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
                 auto& v = corners[c];
                 for (int k = 0; k < 3; ++k)
                 {
-                    v.position[k] = slot.place[k] + (x[k] * sx + y[k] * sy) * h;
-                    v.bake[k] = slot.place[k] + d[k] * distance;
+                    v.position[k] = slot.place[k] + (cu[k] * sx + cv[k] * sy) * h;
+                    v.place[k] = slot.place[k];
+                    v.dir[k] = d[k];
+                    v.axis[k] = x[k];
                 }
-                v.bake[3] = distance;
-                v.uv[0] = u0 + ((c & 1) ? frameUV : 0.0f);
-                v.uv[1] = v0 + ((c & 2) ? frameUV : 0.0f);
-                v.reach = slot.reach;
+                v.place[3] = slot.reach;
+                v.dir[3] = u0;
+                v.axis[3] = v0;
             }
             for (int c : { 0, 1, 2, 2, 1, 3 })
                 cardVertices.push_back(corners[c]);
@@ -936,20 +999,21 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
             device->SetRenderState(kStencilStates[i], sceneStencil[i]);
         device->SetVertexShader(cardVS);
         device->SetPixelShader(cardPS);
-        device->SetFVF(D3DFVF_XYZ | D3DFVF_TEX3 | D3DFVF_TEXCOORDSIZE2(0) | D3DFVF_TEXCOORDSIZE4(1) | D3DFVF_TEXCOORDSIZE1(2));
+        device->SetFVF(D3DFVF_XYZ | D3DFVF_TEX3 | D3DFVF_TEXCOORDSIZE4(0) | D3DFVF_TEXCOORDSIZE4(1) | D3DFVF_TEXCOORDSIZE4(2));
         // HLSL takes the matrix by columns
         float columns[4][4];
         for (int r = 0; r < 4; ++r)
             for (int c = 0; c < 4; ++c)
                 columns[c][r] = scene.viewProj[r][c];
         device->SetVertexShaderConstantF(0, &columns[0][0], 4);
-        const float psConstants[3][4] =
+        const float psConstants[4][4] =
         {
             { scene.eye[0], scene.eye[1], scene.eye[2], 0.0f },
             { scene.back[0], scene.back[1], scene.back[2], 0.0f },
             { 1.0f / scene.zNear, 1.0f / std::log2(scene.zFar / scene.zNear), 0.0f, 0.0f },
+            { float(kFrame) / float(kAtlas), kCameraDistance, kCameraDistance / std::sqrt(kCameraDistance * kCameraDistance - 1.0f), 0.0f },
         };
-        device->SetPixelShaderConstantF(0, &psConstants[0][0], 3);
+        device->SetPixelShaderConstantF(0, &psConstants[0][0], 4);
         for (DWORD i = 0; i < kLayers; ++i)
             SetPointSampler(device, i, layers[i]);
         SetPointSampler(device, kLayers, depthLayer);
