@@ -35,6 +35,7 @@ import renderskip;
 import temporal;
 import upscaler;
 import postfxresources;
+import nearbybodies;
 
 // VehicleBoxShadows: a light whose shadow map holds no cars (no dynamic slot this frame: lamps lit from their cache
 // or casting no shadows, most headlights) left the cars under it without a shadow, with only the dark frame of the
@@ -255,40 +256,20 @@ export struct VehicleBoxShadows
         {
             if (n >= int(found.size()))
                 return;
-            const float* m = CEntity::GetMatrix(vehicle);
-            const auto index = *reinterpret_cast<const int16_t*>(vehicle + 0x2E);
-            if (!m || index < 0 || index >= 31000)
+            NearbyBodies::CarBox car;
+            if (!NearbyBodies::VehicleBox(vehicle, car))
                 return;
-            const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + index * 4);
-            if (!info)
-                return;
-            // The model's bounds (+0x20 least, +0x30 most, as GET_MODEL_DIMENSIONS reads them): x right, y forward, z up.
-            const auto lo = reinterpret_cast<const float*>(info + 0x20), hi = reinterpret_cast<const float*>(info + 0x30);
-            const float halfWidth = (hi[0] - lo[0]) * 0.5f, halfLength = (hi[1] - lo[1]) * 0.5f;
-            // From the wheels' bottom, so the shadow always meets the car where its contact shadow is: the ground
-            // under the car lies in the box and is shadowed whole (only a car's or ped's pixel above the box's foot
-            // escapes it, by the material IDs).
-            const float bottom = lo[2];
-            const float halfHeight = (hi[2] - bottom) * 0.5f;
-            // Cars, vans, buses and bikes; not helicopters with their rotors, nor anything broken.
-            if (!(halfWidth > 0.1f && halfWidth < 2.0f && halfLength > 0.2f && halfLength < 10.0f && halfHeight > 0.1f && halfHeight < 2.5f))
-                return;
-            const float flat = std::sqrt(m[4] * m[4] + m[5] * m[5]);
-            if (!(flat > 0.5f))
-                return;
-            const float local[3] = { (lo[0] + hi[0]) * 0.5f, (lo[1] + hi[1]) * 0.5f, (bottom + hi[2]) * 0.5f };
+            const float* m = car.matrix;
+            const float* lo = car.lo;
+            const float* hi = car.hi;
             Box box{};
-            for (int i = 0; i < 3; ++i)
-                box.centre[i] = m[12 + i] + m[i] * local[0] + m[4 + i] * local[1] + m[8 + i] * local[2];
-            if (!std::isfinite(box.centre[0]) || !std::isfinite(box.centre[1]) || !std::isfinite(box.centre[2]))
-                return;
-            box.forward[0] = m[4] / flat;
-            box.forward[1] = m[5] / flat;
-            box.halfLength = halfLength;
-            box.halfWidth = halfWidth;
-            box.halfHeight = halfHeight;
+            std::copy_n(car.centre, 3, box.centre);
+            std::copy_n(car.forward, 2, box.forward);
+            box.halfLength = car.halfLength;
+            box.halfWidth = car.halfWidth;
+            box.halfHeight = car.halfHeight;
             box.vehicle = vehicle;
-            std::copy_n(local, 3, box.local);
+            std::copy_n(car.local, 3, box.local);
             box.slot = -1;
             if (pool && vehicle >= uintptr_t(pool->m_aStorage))
             {

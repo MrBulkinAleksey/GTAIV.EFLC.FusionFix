@@ -2151,6 +2151,7 @@ public:
             { 0, "PREF_SUN_FLARE",              "SUNSHAFTS",  "SunFlare",                           "",                           0, nullptr, 0, 1 },
             // The wind sways procedural grass (grasswind.ixx)
             { 0, "PREF_GRASS_WIND",             "PROCEDURAL", "GrassWind",                          "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_GRASS_BENDING",          "PROCEDURAL", "GrassBending",                       "",                           1, nullptr, 0, 1 },
             { 0, "PREF_GRASS_WIND_DEBUG",       "DEBUG",      "GrassWindDebug",                     "",                           0, nullptr, 0, 1 },
         };
 
@@ -2410,6 +2411,7 @@ public:
             AddRow(category, "VehBoxShadows", "PREF_VEHICLE_BOX_SHADOWS", 2, toggle);
             AddRow(category, "WorldLightShad", "PREF_WORLD_LIGHT_SHADOWS", 2, toggle);
             AddRow(category, "GrassWind", "PREF_GRASS_WIND", 2, toggle);
+            AddRow(category, "GrassBending", "PREF_GRASS_BENDING", 2, toggle);
             AddEmptyLine(category);
             // The number next to the slider is the reach in feet, 0 keeps the game's own
             for (auto [label, preference] : { std::pair{ "FF_HREACH", "PREF_HEADLIGHT_REACH" }, std::pair{ "FF_LREACH", "PREF_LAMP_REACH" } })

@@ -370,6 +370,9 @@ Logitech LightSync RGB
 [GrassWind]
 Трава на ветру
 
+[GrassBending]
+Трава приминается
+
 [BuildingShad]
 Здания в тенях фар
 

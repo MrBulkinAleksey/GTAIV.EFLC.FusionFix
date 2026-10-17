@@ -370,6 +370,9 @@ Building light shadows
 [GrassWind]
 Grass in the wind
 
+[GrassBending]
+Grass bends under feet and wheels
+
 [BuildingShad]
 Walls block headlights
 

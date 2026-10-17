@@ -11,9 +11,12 @@
 #  - across it: a quicker flutter, its phase from the position too, so neighbouring clumps move apart;
 #  - weighted by (height / model height)^2, so the base stays on the ground, and the tip drops by d^2 / 2h so the
 #    blade bends rather than stretches.
+#  - bodies (cars as their footprint, people as a point) push the blades away from them and lay them down under a car;
+#    the wind dies where they press: up to two per draw, each falling off to nothing `reach` metres past its box.
 # Registers: c240 (per frame) = wind direction over the gust's wavelength (cycles a metre), the gust's phase, the
-# flutter's phase (cycles); c241 (per model) = 1 / height, the bend and the flutter at the tip in metres; c242.xy (per
-# frame) = the wind's unit direction; def c247.
+# flutter's phase (cycles); c241 (per model) = 1 / height, the bend and the flutter at the tip in metres, the push at the
+# tip in metres; c242.xy (per frame) = the wind's unit direction; c248/c249 and c250/c251 (per draw) = two bodies:
+# centre.xy and unit forward.xy on the ground, half length, half width, 1 / reach, strength (0 = none); defs c246/c247.
 #
 # Usage: world_grass_wind.py <FusionShaders checkout with the other patches applied>
 # Commit that state first; the patch is the diff this script leaves (git diff).
@@ -27,7 +30,7 @@ SHADERS = ['gta_defaultVS4.asm', 'gta_defaultVS5.asm']
 
 DEF = f'''\
     def c247, 0.159154937, 0.5, 6.28318548, -3.14159274 // {TAG}: 1 / 2pi, 1 / 2, 2pi, -pi
-    def c246, 0.550000012, 0.600000024, 1.29999995, 0 // {TAG}: the gust's swing and floor, the flutter's cycles a metre
+    def c246, 0.550000012, 0.600000024, 1.29999995, 0.300000012 // {TAG}: the gust's swing and floor, the flutter's cycles a metre, a body's rounding (m)
 '''
 
 SWAY = f'''\
@@ -57,6 +60,82 @@ SWAY = f'''\
       mul r6.xy, r4.x, c242
       mad r6.x, -r4.y, c242.y, r6.x
       mad r6.y, r4.y, c242.x, r6.y
+      // bodies: r9.xy = the push's direction times its strength, r9.w = the strongest
+      mov r9, c4.z
+      add r10.xy, r3, -c248
+      mul r11.x, r10.x, c248.z
+      mad r11.x, r10.y, c248.w, r11.x
+      mul r11.y, r10.x, c248.w
+      mad r11.y, r10.y, -c248.z, r11.y
+      abs r10.xy, r11
+      add r10.xy, r10, -c249
+      max r10.xy, r10, c4.z
+      mul r10.z, r10.x, r10.x
+      mad r10.z, r10.y, r10.y, r10.z
+      add r10.z, r10.z, c4.x
+      rsq r10.z, r10.z
+      rcp r10.z, r10.z
+      mul r10.w, r10.z, c249.z
+      add_sat r10.w, -r10.w, c4.y
+      mul r10.w, r10.w, r10.w
+      mul r10.w, r10.w, c249.w
+      mov r12.xy, c249
+      add r12.xy, r12, c246.w
+      rcp r12.x, r12.x
+      rcp r12.y, r12.y
+      mul r12.xy, r11, r12
+      mul r12.z, r12.x, r12.x
+      mad r12.z, r12.y, r12.y, r12.z
+      add r12.z, r12.z, c4.x
+      rsq r12.z, r12.z
+      mul r12.xy, r12, r12.z
+      mul r13.xy, r12.x, c248.zwzw
+      mad r13.x, r12.y, c248.w, r13.x
+      mad r13.y, -r12.y, c248.z, r13.y
+      mad r9.xy, r13, r10.w, r9
+      max r9.w, r9.w, r10.w
+      add r10.xy, r3, -c250
+      mul r11.x, r10.x, c250.z
+      mad r11.x, r10.y, c250.w, r11.x
+      mul r11.y, r10.x, c250.w
+      mad r11.y, r10.y, -c250.z, r11.y
+      abs r10.xy, r11
+      add r10.xy, r10, -c251
+      max r10.xy, r10, c4.z
+      mul r10.z, r10.x, r10.x
+      mad r10.z, r10.y, r10.y, r10.z
+      add r10.z, r10.z, c4.x
+      rsq r10.z, r10.z
+      rcp r10.z, r10.z
+      mul r10.w, r10.z, c251.z
+      add_sat r10.w, -r10.w, c4.y
+      mul r10.w, r10.w, r10.w
+      mul r10.w, r10.w, c251.w
+      mov r12.xy, c251
+      add r12.xy, r12, c246.w
+      rcp r12.x, r12.x
+      rcp r12.y, r12.y
+      mul r12.xy, r11, r12
+      mul r12.z, r12.x, r12.x
+      mad r12.z, r12.y, r12.y, r12.z
+      add r12.z, r12.z, c4.x
+      rsq r12.z, r12.z
+      mul r12.xy, r12, r12.z
+      mul r13.xy, r12.x, c250.zwzw
+      mad r13.x, r12.y, c250.w, r13.x
+      mad r13.y, -r12.y, c250.z, r13.y
+      mad r9.xy, r13, r10.w, r9
+      max r9.w, r9.w, r10.w
+      mul r10.z, r9.x, r9.x
+      mad r10.z, r9.y, r9.y, r10.z
+      add r10.z, r10.z, c4.x
+      rsq r10.z, r10.z
+      mul r10.z, r10.z, r9.w
+      min r10.z, r10.z, c4.y
+      mul r9.xy, r9, r10.z
+      mad r6.xy, -r6, r9.w, r6
+      mul r9.xy, r9, c241.w
+      mad r6.xy, r9, r2.z, r6
       mul r6.z, r6.x, r6.x
       mad r6.z, r6.y, r6.y, r6.z
       mul r6.z, r6.z, c241.x
@@ -82,7 +161,7 @@ def patch(path):
         return
     head, body = text.split('vs_3_0\n', 1)
     lines = body.split('\n')
-    # The shader must only use r0, so r1-r8 are free.
+    # The shader must only use r0, so r1-r13 are free.
     used = set(re.findall(r'\br(\d+)', body))
     assert used == {'0'}, (path, used)
     last_dcl = max(i for i, line in enumerate(lines) if line.strip().startswith('dcl_'))
