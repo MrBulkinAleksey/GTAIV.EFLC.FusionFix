@@ -158,7 +158,7 @@ namespace GpuGrass
             const int kind = info ? GrassShared::GrassKind(*reinterpret_cast<const uint32_t*>(info + 0x3c)) : 0;
             if (kind > 0)
             {
-                grassModel[model & 0x7FFF] = 1;
+                grassModel[model] = 1;
                 sum[tag] += 1.0f / (spacing * spacing);
                 kindSum[tag][kind - 1] += 1.0f / (spacing * spacing);
             }
@@ -693,7 +693,7 @@ public:
         ProceduralGround::HideGrass = [](uint16_t model, float distance, float keep)
         {
             using namespace GpuGrass;
-            if (!bHideProps || !drawing || !grassModel[model & 0x7FFF])
+            if (!bHideProps || !drawing || model >= grassModel.size() || !grassModel[model])
                 return false;
             const float share = std::clamp((fRange - distance) / (std::max)(fRange - fFullRange, 0.5f), 0.0f, 1.0f);
             return keep < share;
