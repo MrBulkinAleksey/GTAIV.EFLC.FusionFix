@@ -8,9 +8,11 @@
 //
 // Each blade is one of three kinds, picked at random by the piece's mix of them, which is the mix of the props
 // procedural.dat puts on its surface: grass (proc_grass*), weeds (*weed*), small plants with broad leaves
-// (*proc_plant_*). Over the ground the grass grows in patches, taller and shorter, greener and drier, and its colour is
-// half the ground's under its root (GroundTex, a copy of the G-buffer's colour before the grass), so it takes the hue
-// of the lawn, dirt or verge it grows on.
+// (*proc_plant_*). Over the ground the grass grows in patches, taller and shorter, in tall tufts, greener and drier,
+// some in flower (heads of red, white, yellow, violet); a quarter of its colour is the ground's under its root
+// (GroundTex, a copy of the G-buffer's colour before the grass), so it takes the hue of the lawn, dirt or verge it grows
+// on. Blades are long and thin, arc over in four segments, rounded across, lighter and yellower to the tip, with a
+// faint broad highlight.
 //
 // Bending, as the grass props have it (world_grass_wind.patch): the cars and people near (up to kBodies, Grass Bending)
 // push the blades away from their box and lay them down under it, helicopters with their blades turning blow them
@@ -51,7 +53,7 @@ struct VSOutput
     float4 position : POSITION;
     float4 colour : TEXCOORD0;  // the blade's own colour, occlusion
     float3 normal : TEXCOORD1;
-    float w : TEXCOORD2;
+    float2 w : TEXCOORD2;       // clip w, specular (×0.5, as the G-buffer has it)
     float4 ground : TEXCOORD3;  // the root's clip x, y, w; light from root to tip
 };
 
@@ -61,9 +63,12 @@ float3 TagColour(float tag)
     return 0.15 + 0.7 * c;
 }
 
+// Cheap hash without sin (vertex slots are few)
 float Hash(float2 p)
 {
-    return frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+    float3 q = frac(p.xyx * 0.1031);
+    q += dot(q, q.yzx + 33.33);
+    return frac((q.x + q.y) * q.z);
 }
 
 // Smooth value noise, 0..1
@@ -130,7 +135,7 @@ VSOutput GrassVS(VSInput input)
         output.position = float4(0.0, 0.0, -1.0, 1.0);
         output.colour = 0.0;
         output.normal = float3(0.0, 0.0, 1.0);
-        output.w = 1.0;
+        output.w = float2(1.0, 0.0);
         output.ground = 0.0;
         return output;
     }
@@ -144,22 +149,29 @@ VSOutput GrassVS(VSInput input)
     float isPlant = pick >= input.kinds.x + input.kinds.y ? 1.0 : 0.0;
     float isGrass = 1.0 - isWeed - isPlant;
 
-    // Patches over the ground: some taller, some shorter, clumps within them, some drier
+    // Patches over the ground: some taller, some shorter, tall tufts within them, some drier, some in flower
     float patch = Noise(root.xy * 0.13);
     float clump = Noise(root.xy * 0.9 + 31.7);
     float dry = smoothstep(0.5, 0.85, Noise(root.xy * 0.06 + 17.3));
+    float bloom = smoothstep(0.55, 0.8, Noise(root.xy * 0.21 + 5.1));
+    float second = frac(random * 31.17 + input.corner.w * 3.73);
+    float isFlower = (1.0 - isPlant) * (second < bloom * 0.08 ? 1.0 : 0.0);
 
+    // Long thin blades, curving over; tufts stand taller
     float h = input.blade.w;
-    float height = isGrass * (0.14 + 0.28 * h * h) + isWeed * (0.28 + 0.45 * h) + isPlant * (0.10 + 0.16 * h);
-    height *= lerp(0.6, 1.3, patch) * lerp(0.75, 1.15, clump) * lerp(0.55, 1.0, input.kinds.w) * vec4Blade.x;
-    float width = (isGrass * 0.028 + isWeed * 0.04 + isPlant * 0.075) * vec4Blade.y;
+    float height = isGrass * (0.2 + 0.45 * h * h) + isWeed * (0.35 + 0.5 * h) + isPlant * (0.10 + 0.16 * h);
+    height *= lerp(0.6, 1.25, patch) * (clump > 0.62 ? 1.6 : lerp(0.75, 1.1, clump)) * lerp(0.4, 1.0, input.kinds.w) * vec4Blade.x;
+    height *= 1.0 + 0.25 * isFlower;
+    float width = (isGrass * 0.02 + isWeed * 0.03 + isPlant * 0.075) * vec4Blade.y;
     // Wider far off, where fewer of them stand and thin ones only flicker
     float distance = length(root - vec4Eye.xyz);
     width *= 1.0 + saturate((distance - 6.0) / 24.0) * 1.5;
-    // Grass and weeds narrow to the tip; leaves are widest in the middle
+    // Grass and weeds narrow to the tip; leaves are widest in the middle; a flower is a thin stalk with a head
     float profile = lerp(1.0 - t, sin(t * 3.1415927) * 1.1 + 0.2 * (1.0 - t), isPlant);
-    // How far the blade leans out from its root: leaves spread, grass and weeds stand
-    float lean = isGrass * 0.45 + isWeed * 0.3 + isPlant * 1.1;
+    profile = isFlower > 0.0 ? (t > 0.75 ? 3.0 : 0.4) : profile;
+    // How far the blade leans out from its root: grass arcs over, weeds stand, leaves spread
+    float lean = isGrass * 0.7 + isWeed * 0.3 + isPlant * 1.1;
+    lean *= 1.0 - 0.7 * isFlower;
 
     float turn = input.blade.z + input.corner.w * 6.2831853;
     float s, c;
@@ -187,19 +199,29 @@ VSOutput GrassVS(VSInput input)
     float3 position = root + across * (input.vertex.y * width * 0.5 * profile) + float3(offset, t * height * (1.0 - 0.5 * pressed.z) - drop);
 
     output.position = mul(float4(position, 1.0), matViewProj);
-    output.w = output.position.w;
-    // Lit mostly from above, as grass seen as a lawn; leaves lie flatter and face up more
-    output.normal = normalize(facing * lerp(0.35, 0.2, isPlant) + float3(0.0, 0.0, 1.0));
+    output.w = float2(output.position.w, 0.0);
+    // Lit mostly from above, as grass seen as a lawn, rounded across the blade; leaves and flowers face up more
+    float rounding = isFlower > 0.0 && t > 0.75 ? 0.0 : 0.45;
+    output.normal = normalize(facing * lerp(0.35, 0.15, max(isPlant, isFlower)) + across * (input.vertex.y * rounding) + float3(0.0, 0.0, 1.0));
 
-    // Its own colour: by kind, drier in dry patches (weeds most), each blade a little different
-    float3 colour = isGrass * float3(0.20, 0.27, 0.08) + isWeed * float3(0.27, 0.28, 0.11) + isPlant * float3(0.13, 0.24, 0.07);
-    colour = lerp(colour, float3(0.40, 0.35, 0.18), dry * lerp(0.55, 0.85, isWeed) * (1.0 - isPlant * 0.6));
-    colour *= 1.0 + (random - 0.5) * 0.4;
+    // Its own colour: a hue by patch, by kind, darker at the root and lighter, yellower at the tip; drier in dry
+    // patches (weeds most); each blade a little different
+    float3 base = lerp(float3(0.17, 0.31, 0.09), float3(0.30, 0.36, 0.08), patch);
+    float3 colour = isGrass * base + isWeed * float3(0.27, 0.30, 0.10) + isPlant * float3(0.13, 0.24, 0.07);
+    colour = lerp(colour, float3(0.42, 0.37, 0.17), dry * lerp(0.5, 0.85, isWeed) * (1.0 - isPlant * 0.6));
+    colour *= 1.0 + (random - 0.5) * 0.35;
+    colour = lerp(colour, colour * float3(1.25, 1.12, 0.9) + float3(0.04, 0.03, 0.0), t * t * (1.0 - isPlant));
+    // Flowers: red, white, yellow or violet heads
+    float hue = frac(second * 7.77 + patch * 2.0);
+    float3 petals = hue < 0.3 ? float3(0.55, 0.07, 0.04) : hue < 0.55 ? float3(0.72, 0.72, 0.66) : hue < 0.8 ? float3(0.75, 0.58, 0.08) : float3(0.38, 0.2, 0.55);
+    colour = isFlower > 0.0 && t > 0.75 ? petals : colour;
     colour = vec4Blade.w > 0.0 ? TagColour(input.edge2.w) : colour;
-    output.colour = float4(saturate(colour), lerp(0.45, 1.0, t));
+    output.colour = float4(saturate(colour), lerp(0.4, 1.0, t));
+    // A faint sheen on the blades, none on flowers and leaves
+    output.w.y = 0.06 * t * isGrass * (1.0 - isFlower) * (1.0 - dry * 0.5);
 
     float4 rootClip = mul(float4(root, 1.0), matViewProj);
-    output.ground = float4(rootClip.xy, rootClip.w, lerp(0.55, 1.1, t) * lerp(1.0, 0.85, clump * isGrass));
+    output.ground = float4(rootClip.xy, rootClip.w, lerp(0.5, 1.05, t) * lerp(1.0, 0.85, clump * isGrass));
     return output;
 }
 
@@ -221,13 +243,14 @@ PSOutput GrassPS(VSOutput input)
     ground *= min(1.0, 0.3 / max(luminance, 0.01)) * 1.15;
     bool onScreen = input.ground.z > 0.05 && all(screen == saturate(screen));
     float share = onScreen && vec4Blade.w <= 0.0 ? vec4Blade.z : 0.0;
-    float3 colour = lerp(input.colour.rgb, ground, share) * (vec4Blade.w > 0.0 ? lerp(0.6, 1.0, input.ground.w / 1.1) : input.ground.w);
+    float3 colour = lerp(input.colour.rgb, ground, share) * (vec4Blade.w > 0.0 ? lerp(0.6, 1.0, input.ground.w / 1.05) : input.ground.w);
 
     output.colour = float4(saturate(colour), 1.0);
     output.normal = float4(normalize(input.normal) * 0.5 + 0.5, 1.0);
-    // No specular; gloss 258 / 1023 marks a material without a specular map (world_no_specular_mark.patch)
-    output.specular = float4(0.0, 0.252199411, input.colour.a, 1.0);
-    output.depth = log2(max(input.w / fNearPlane, 1.0)) / log2(fFarDivNear);
+    // A faint broad highlight (gloss sqrt(24 / 512)); without one, gloss 258 / 1023 marks a material without a specular
+    // map (world_no_specular_mark.patch)
+    output.specular = float4(input.w.y, input.w.y > 0.001 ? 0.2165 : 0.252199411, input.colour.a, 1.0);
+    output.depth = log2(max(input.w.x / fNearPlane, 1.0)) / log2(fFarDivNear);
     return output;
 }
 

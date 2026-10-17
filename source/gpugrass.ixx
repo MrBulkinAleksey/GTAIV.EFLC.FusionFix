@@ -52,7 +52,7 @@ using namespace PostFxProfiler;
 // (LookOf). The triangles are cut into pieces of at most kPieceArea square metres
 // when the set changes; each frame the pieces in view within the range take a share of the mesh's kBlades blades, full
 // up to GpuGrassFullRange and none at GpuGrassRange, and go to the instance buffer: one instanced draw for them all.
-// The blades take half their colour from the ground under them: _DEFERRED_GBUFFER_0_ is copied first (into Wet Ground's
+// The blades take a quarter of their colour from the ground under them: _DEFERRED_GBUFFER_0_ is copied first (into Wet Ground's
 // copy, which that pass makes again after the grass).
 //
 // Bending (GpuGrass.fx): the bodies Grass Bending takes (GrassShared::Bodies), the kBodies nearest the camera within the
@@ -70,8 +70,8 @@ using namespace PostFxProfiler;
 namespace GpuGrass
 {
     constexpr int kBlades = 96;             // per piece of ground
-    constexpr int kVertsPerBlade = 7;       // three pairs up the blade and its tip
-    constexpr int kIndicesPerBlade = 15;    // five triangles
+    constexpr int kVertsPerBlade = 9;       // four pairs up the blade and its tip
+    constexpr int kIndicesPerBlade = 21;    // seven triangles
     constexpr float kPieceArea = 1.5f;      // square metres: up to 64 blades a square metre
     constexpr int kMaxPieces = 65536;
     constexpr int kMaxInstances = 24576;
@@ -359,8 +359,9 @@ namespace GpuGrass
             {
                 const float u = next(), w = next(), turn = next() * 6.2831853f, height = next(), random = next();
                 const float place = (b + 0.5f) / kBlades;
-                static constexpr float kUp[kVertsPerBlade] = { 0.0f, 0.0f, 0.35f, 0.35f, 0.7f, 0.7f, 1.0f };
-                static constexpr float kAcross[kVertsPerBlade] = { -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 0.0f };
+                // The last pair at 0.88: a flower's head between it and the tip
+                static constexpr float kUp[kVertsPerBlade] = { 0.0f, 0.0f, 0.3f, 0.3f, 0.6f, 0.6f, 0.88f, 0.88f, 1.0f };
+                static constexpr float kAcross[kVertsPerBlade] = { -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 0.0f };
                 for (int k = 0; k < kVertsPerBlade; ++k)
                     v[b * kVertsPerBlade + k] = { { u, w, turn, height }, { kUp[k], kAcross[k], place, random } };
             }
@@ -376,9 +377,16 @@ namespace GpuGrass
             for (int b = 0; b < kBlades; ++b)
             {
                 const uint16_t o = uint16_t(b * kVertsPerBlade);
-                const uint16_t list[kIndicesPerBlade] = { o, uint16_t(o + 1), uint16_t(o + 2), uint16_t(o + 2), uint16_t(o + 1), uint16_t(o + 3),
-                                                          uint16_t(o + 2), uint16_t(o + 3), uint16_t(o + 4), uint16_t(o + 4), uint16_t(o + 3), uint16_t(o + 5),
-                                                          uint16_t(o + 4), uint16_t(o + 5), uint16_t(o + 6) };
+                uint16_t list[kIndicesPerBlade];
+                int n = 0;
+                for (int pair = 0; pair < 3; ++pair)
+                {
+                    const uint16_t q = uint16_t(o + pair * 2);
+                    for (uint16_t index : { q, uint16_t(q + 1), uint16_t(q + 2), uint16_t(q + 2), uint16_t(q + 1), uint16_t(q + 3) })
+                        list[n++] = index;
+                }
+                for (uint16_t index : { uint16_t(o + 6), uint16_t(o + 7), uint16_t(o + 8) })
+                    list[n++] = index;
                 std::memcpy(i + b * kIndicesPerBlade, list, sizeof(list));
             }
             meshIB->Unlock();
@@ -539,7 +547,7 @@ export namespace GpuGrass
         targets[0]->GetDesc(&desc);
 
         ProfilerScope timed(pDevice, kProfGpuGrass);
-        // The ground's colour before the grass, which the blades take half of: into Wet Ground's copy of the first target
+        // The ground's colour before the grass, which the blades take a quarter of: into Wet Ground's copy of the first target
         auto& R = PostFxResources;
         bool groundCopied = false;
         {
@@ -604,7 +612,7 @@ export namespace GpuGrass
         const D3DXVECTOR4 wind(GrassShared::Direction[0] / wl, GrassShared::Direction[1] / wl, -GrassShared::GustPhase, GrassShared::FlutterPhase);
         const D3DXVECTOR4 windDir(GrassShared::Direction[0], GrassShared::Direction[1], GrassShared::BendPerHeight, GrassShared::FlutterPerHeight);
         const bool debug = debugPref && debugPref->get() != 0;
-        const D3DXVECTOR4 blade(1.0f, 1.0f, groundCopied ? 0.5f : 0.0f, debug ? 1.0f : 0.0f);
+        const D3DXVECTOR4 blade(1.0f, 1.0f, groundCopied ? 0.25f : 0.0f, debug ? 1.0f : 0.0f);
         const D3DXVECTOR4 eyeVector(eye[0], eye[1], eye[2], 0.0f);
         effect->SetVector(h.wind, &wind);
         effect->SetVector(h.windDir, &windDir);
