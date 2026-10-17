@@ -23,7 +23,10 @@
 # No pixel shader reads c104-c109 (game or FusionFix), and s14 only deferred_lighting's lamp shadow cache.
 #
 # The SkyView mapping, as sky_pbr.patch reads it: u the angle between the view and the sun seen from above over pi,
-# v 0.5 - 0.5 sqrt(elevation / (pi / 2)), the view held at the horizon or above (the air below it is lit as along it).
+# v 0.5 - 0.5 sqrt(elevation / (pi / 2)), the view held 4 degrees above the horizon or higher. The horizon's own row is
+# the light of an endless path, the sunlight's yellow-white at any hour; the fog and the air of a sea seen from a
+# helicopter took it, kilometres of air leave little of the path's own hue, and the sea's far end came out an olive
+# band under the blue sky just above it. 4 degrees up, the sky matches what is seen over that band.
 #
 # Usage: zz_aerial_perspective.py <FusionShaders checkout with every other patch applied>; the patch is the diff it
 # leaves (git diff).
@@ -38,7 +41,7 @@ SKY_MASKED = {'rage_postfxPS20.asm': 'r1.x'}  # the fog pass: 0 on the sky, whic
 DEFS = f'''\
     def c107, 1.57072878, -0.212114394, 0.0742610022, -0.0187292993 // {TAG}: acos cubic
     def c108, 1, -0.636619747, 0.5, 0 // {TAG}: one, -2 / pi, a half, zero
-    def c109, 0.318309873, 9.99999997e-007, 3.14159274, 0 // {TAG}: 1 / pi, tiny, pi
+    def c109, 0.318309873, 9.99999997e-007, 3.14159274, 0.0697564737 // {TAG}: 1 / pi, tiny, pi, sin 4 degrees
 '''
 
 
@@ -72,7 +75,7 @@ def lookup(a, b, c, f, mask):
         exp {a}.x, -{a}.x
         exp {a}.y, -{a}.y
         exp {a}.z, -{a}.z
-        max {c}.w, r20.z, c108.w
+        max {c}.w, r20.z, c109.w // 4 degrees up at least: the sky seen just above the horizon
         mad {c}.x, {c}.w, c107.w, c107.z
         mad {c}.x, {c}.x, {c}.w, c107.y
         mad {c}.x, {c}.x, {c}.w, c107.x
