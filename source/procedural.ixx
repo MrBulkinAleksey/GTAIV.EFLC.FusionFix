@@ -92,6 +92,9 @@ export namespace ProceduralGround
     };
     inline void (*OnAdded)(const void* key, const Triangle& triangle) = nullptr;
     inline void (*OnRemoved)(const void* key) = nullptr;
+    // A prop of `model` at `distance` from the camera left out of the scene, where other grass grows in its place
+    // (gpugrass.ixx); `keep` is the prop's own random value, 0..1, the same each time it is made there
+    inline bool (*HideGrass)(uint16_t model, float distance, float keep) = nullptr;
 
     // procedural.dat's PROCOBJ records (CE 0x16c8fb0): +4 count, records of 0x44 from +8: +0 tag, +4 model index,
     // +8 spacing; nullptr until loaded
@@ -386,6 +389,7 @@ namespace Procedural
     uint32_t nUsedMax = 0;
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
     uint32_t nQueueMax = 0, nWaitingMax = 0, nDropped = 0;
+    uint32_t nGrassHidden = 0;
     uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0, nHeavyCascades = 0, nHeavyScene = 0;
     uint32_t nConeFull = 0, nParkedNow = 0;
     uint32_t nUpdates = 0;
@@ -963,7 +967,8 @@ namespace Procedural
         if ((*(uint32_t*)(entity + 0x24) & propFlags) != propFlags)
             return phases;
         const auto reflections = bInReflections ? 0 : *pReflectionPhases & ~*pScenePhase;
-        const auto scene = bSmallFarCull ? *pScenePhase : 0;
+        const auto hideGrass = ProceduralGround::HideGrass;
+        const auto scene = bSmallFarCull || hideGrass ? *pScenePhase : 0;
         if (!(phases & (reflections | scene)))
             return phases;
         const auto [radius, keep] = FindProp(entity);
@@ -974,7 +979,12 @@ namespace Procedural
             nReflectionsSkipped++;
             phases &= ~reflections;
         }
-        if ((phases & scene) && radius > 0.0f && (radius < distance * SmallFarScreenSize ||
+        if ((phases & scene) && hideGrass && hideGrass(*(uint16_t*)(entity + 0x2e), distance, keep))
+        {
+            nGrassHidden++;
+            phases &= ~scene;
+        }
+        if ((phases & scene) && bSmallFarCull && radius > 0.0f && (radius < distance * SmallFarScreenSize ||
             (radius < SmallPropRadius && distance > SmallFarThinFrom && keep * distance > SmallFarThinFrom)))
         {
             nSmallFarCulled++;
@@ -1491,13 +1501,13 @@ public:
             auto alive = props.size();
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, heavy out of cascades {}, heavy left out {}; box full {}, candidates capped {}",
+                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, grass left to GPU grass {}, heavy out of cascades {}, heavy left out {}; box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
-                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nHeavyCascades, nHeavyScene, nEntitiesCapped, nCandidatesCapped));
+                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nGrassHidden, nHeavyCascades, nHeavyScene, nEntitiesCapped, nCandidatesCapped));
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
-            nReflectionsSkipped = nSmallFarCulled = nHeavyCascades = nHeavyScene = 0;
+            nReflectionsSkipped = nSmallFarCulled = nGrassHidden = nHeavyCascades = nHeavyScene = 0;
             nConeFull = 0;
             nConeReleased = 0;
         };

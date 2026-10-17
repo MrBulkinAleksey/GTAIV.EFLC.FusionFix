@@ -12,6 +12,10 @@
 // half the ground's under its root (GroundTex, a copy of the G-buffer's colour before the grass), so it takes the hue
 // of the lawn, dirt or verge it grows on.
 //
+// Bending, as the grass props have it (world_grass_wind.patch): the cars and people near (up to kBodies, Grass Bending)
+// push the blades away from their box and lay them down under it, helicopters with their blades turning blow them
+// away from under them, and the trample grid (TrampleTex, Grass Trample) keeps them down where something passed.
+//
 // G-buffer, as gta_default's deferred pixel shader writes it: colour, normal * 0.5 + 0.5, (no specular, the gloss of
 // a material with no specular map, the occlusion), and the log depth of FusionShaders (log2(w / near) / log2(far /
 // near)) to the depth buffer. The material ID target is left as the ground had it.
@@ -23,8 +27,14 @@ float4 vec4Blade;       // height scale, width scale, the ground's share in the 
 float4 vec4Eye;         // the camera's position
 float fNearPlane;
 float fFarDivNear;
+// The bodies, three each: (centre xy, forward xy), (half length, half width, 1 / reach, strength), (the ground they
+// stand on, 1 for a helicopter's rotor, 0, 0); none with no strength
+#define kBodies 8
+float4 vec4Bodies[kBodies * 3];
+float4 vec4Bend;        // a body's push at the tip per metre of height, 1 / the trample grid's side (m), its strength (0 = off)
 
 sampler2D GroundTex : register(s0);    // a copy of _DEFERRED_GBUFFER_0_ before the grass
+sampler2D TrampleTex : register(s1);   // vertex texture: direction (rg), strength (b), the ground's height modulo 64 m (a)
 
 struct VSInput
 {
@@ -64,6 +74,47 @@ float Noise(float2 p)
     f = f * f * (3.0 - 2.0 * f);
     float a = Hash(i), b = Hash(i + float2(1.0, 0.0)), c = Hash(i + float2(0.0, 1.0)), d = Hash(i + float2(1.0, 1.0));
     return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+}
+
+// What presses the grass at `root` (a blade of `height`): the push's direction times its strength (xy), the strongest (z)
+float3 Bending(float3 root, float height)
+{
+    float2 push = 0.0;
+    float most = 0.0;
+    [loop] for (int i = 0; i < kBodies; ++i)
+    {
+        float4 a = vec4Bodies[i * 3], b = vec4Bodies[i * 3 + 1], k = vec4Bodies[i * 3 + 2];
+        // In the body's own axes: along it, across it; how far past its box
+        float2 d = root.xy - a.xy;
+        float2 local = float2(dot(d, a.zw), d.x * a.w - d.y * a.z);
+        float gap = length(max(abs(local) - b.xy, 0.0));
+        float strength = b.w;
+        float invReach = b.z;
+        float above = k.x - root.z;
+        if (k.y > 0.5)
+        {
+            // A rotor's downwash: from 0.3 m above the ground, wider and weaker up to 30 m
+            invReach = 1.0 / (6.0 + 0.4 * clamp(above, 0.0, 30.0));
+            float fall = saturate(1.0 - above / 30.0);
+            strength *= saturate((above - 0.3) / 0.7) * fall * fall;
+        }
+        else
+            strength *= abs(above) <= height + 1.0 ? 1.0 : 0.0;
+        float w = saturate(1.0 - gap * invReach);
+        w = w * w * strength;
+        float2 away = local / (b.xy + 0.3);
+        away *= min(rsqrt(dot(away, away) + 1e-5), 1.0);
+        push += float2(away.x * a.z + away.y * a.w, away.x * a.w - away.y * a.z) * w;
+        most = max(most, w);
+    }
+    // Trampled: the grid's cell, where its ground is near the blade's
+    float4 trample = tex2Dlod(TrampleTex, float4(root.xy * vec4Bend.y, 0.0, 0.0));
+    float wrap = abs(frac(root.z / 64.0 - trample.a + 0.5) - 0.5) * 64.0;
+    float trampled = saturate(2.5 - wrap) * trample.b * vec4Bend.z;
+    push += (trample.rg * 2.0 - 1.0) * trampled;
+    most = max(most, trampled);
+    push *= min(most * rsqrt(dot(push, push) + 1e-5), 1.0);
+    return float3(push, most);
 }
 
 VSOutput GrassVS(VSInput input)
@@ -124,13 +175,16 @@ VSOutput GrassVS(VSInput input)
     float2 offset = vec4WindDir.xy * bend + float2(-vec4WindDir.y, vec4WindDir.x) * side;
     // Each blade's own lean, so the grass doesn't stand straight
     offset += facing.xy * (height * (random * 0.8 + 0.2) * lean);
+    // Pressed: the wind dies under the push, the blade lies down
+    float3 pressed = vec4Bend.x > 0.0 ? Bending(root, height) : 0.0;
+    offset = offset * (1.0 - pressed.z) + pressed.xy * (vec4Bend.x * height);
     offset *= t * t;
     // Never longer than the blade; the tip drops as it bends
     float reach = length(offset);
     offset *= min(1.0, 0.9 * height / max(reach, 1e-4));
     float drop = dot(offset, offset) / (2.0 * height);
 
-    float3 position = root + across * (input.vertex.y * width * 0.5 * profile) + float3(offset, t * height - drop);
+    float3 position = root + across * (input.vertex.y * width * 0.5 * profile) + float3(offset, t * height * (1.0 - 0.5 * pressed.z) - drop);
 
     output.position = mul(float4(position, 1.0), matViewProj);
     output.w = output.position.w;

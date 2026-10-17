@@ -39,6 +39,13 @@ export namespace GrassShared
     inline float GustPhase = 0.0f, FlutterPhase = 0.0f;           // cycles
     inline float Direction[2] = { 0.929f, 0.370f };
     inline float GustWavelength = 5.0f;                           // metres
+    // This G-buffer pass's bending: the bodies (none with Grass Bending off), a body's push at the tip of the plant's
+    // height (0 = off), the downwash's pulse; the trample grid (nullptr when not trampling) and its side (m)
+    inline const std::vector<NearbyBodies::Body>* Bodies = nullptr;
+    inline float PushPerHeight = 0.0f;
+    inline float RotorPulse = 1.0f;
+    inline IDirect3DTexture9* TrampleTexture = nullptr;
+    inline float TrampleGridSide = 64.0f;
 }
 
 // Grass Wind (Graphics > Lighting, [PROCEDURAL] GrassWind): the wind sways the grass, weeds and small plants the game
@@ -504,6 +511,11 @@ class GrassWind
         GrassShared::FlutterPhase = static_cast<float>(flutterPhase);
         GrassShared::Direction[0] = kDirection[0], GrassShared::Direction[1] = kDirection[1];
         GrassShared::GustWavelength = kGustWavelength;
+        GrassShared::Bodies = &bodies;
+        GrassShared::PushPerHeight = fPushPerHeight;
+        GrassShared::RotorPulse = rotorPulse;
+        GrassShared::TrampleTexture = trample ? trampleTexture : nullptr;
+        GrassShared::TrampleGridSide = kGridSide;
         pDevice->SetVertexShaderConstantF(kWindRegister, wind, 1);
         pDevice->SetVertexShaderConstantF(kDirectionRegister, wind + 4, 1);
         const float trampleParams[4] = { 1.0f / kGridSide, trample ? 1.0f : 0.0f, 0.0f, 0.0f };

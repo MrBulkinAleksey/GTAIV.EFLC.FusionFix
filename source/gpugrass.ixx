@@ -4,6 +4,7 @@ module;
 #include <d3dx9tex.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -26,6 +27,7 @@ import postfxresources;
 import postfxprofiler;
 import procedural;
 import grasswind;
+import nearbybodies;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -51,7 +53,14 @@ using namespace PostFxProfiler;
 // The blades take half their colour from the ground under them: _DEFERRED_GBUFFER_0_ is copied first (into Wet Ground's
 // copy, which that pass makes again after the grass).
 //
-// [PROCEDURAL] GpuGrassRange (35 m), GpuGrassFullRange (12 m), GpuGrassDensity (0.1..1). GpuGrassDebug (Graphics >
+// Bending (GpuGrass.fx): the bodies Grass Bending takes (GrassShared::Bodies), the kBodies nearest the camera within the
+// range, and Grass Trample's grid as a vertex texture (vs s1), as the grass props have them.
+//
+// GpuGrassHideProps ([PROCEDURAL], 1): the game's grass props (procedural.dat's models on the grass list) are left out
+// of the scene where the blades grow (ProceduralGround::HideGrass, at the render lists): a prop is hidden while its own
+// random value is under the blades' share at its distance, so they come back as the blades thin out.
+//
+// [PROCEDURAL] GpuGrassRange (70 m), GpuGrassFullRange (22 m), GpuGrassDensity (0.1..1). GpuGrassDebug (Graphics >
 // Debug) colours the blades by their surface's tag. GpuGrassLog = 1 ([DEBUG]) writes the triangles, pieces and blades
 // to GTAIV.EFLC.FusionFix.GpuGrass.log every 600 frames.
 namespace GpuGrass
@@ -63,6 +72,7 @@ namespace GpuGrass
     constexpr int kMaxPieces = 65536;
     constexpr int kMaxInstances = 24576;
     constexpr float kForgetDistance = 400.0f;   // triangles further from the camera when the pieces are made are dropped
+    constexpr int kBodies = 8;                  // as GpuGrass.fx
 
     struct MeshVertex { float blade[4]; float vertex[4]; };
     struct Instance { float corner[4]; float edge1[4]; float edge2[4]; float kinds[4]; };
@@ -74,7 +84,8 @@ namespace GpuGrass
 
     // Settings
     bool bLog = false;
-    float fRange = 35.0f, fFullRange = 12.0f, fDensity = 1.0f;
+    bool bHideProps = true;
+    float fRange = 70.0f, fFullRange = 22.0f, fDensity = 1.0f;
 
     // Render thread
     struct Piece { float corner[3], edge1[3], edge2[3]; float centre[3]; float radius; float share; float seed; float tag; int tagIndex; };
@@ -82,6 +93,10 @@ namespace GpuGrass
     uint32_t piecesVersion = ~0u;
     std::array<float, 256> tagShare{};
     std::array<std::array<float, 4>, 256> tagKinds{};   // the share of grass, of weeds, of small plants; tagShare
+    // By model index, read by the render lists (HideGrass): 1 for procedural.dat's grass models; whether the blades are
+    // drawn (the last frame got as far as the draw)
+    std::array<uint8_t, 32768> grassModel{};
+    std::atomic<bool> drawing = false;
     const uint8_t* tagsFrom = nullptr;
     uint32_t tagsCount = 0;
 
@@ -91,7 +106,7 @@ namespace GpuGrass
     IDirect3DIndexBuffer9* meshIB = nullptr;
     IDirect3DVertexBuffer9* instanceVB = nullptr;
     IDirect3DVertexDeclaration9* declaration = nullptr;
-    struct Handles { D3DXHANDLE technique, viewProj, wind, windDir, blade, eye, nearPlane, farDivNear; } h{};
+    struct Handles { D3DXHANDLE technique, viewProj, wind, windDir, blade, eye, nearPlane, farDivNear, bodies, bend; } h{};
     const char* status = "not drawn yet";
     bool depthLogged = false;
 
@@ -109,8 +124,9 @@ namespace GpuGrass
 
     void ReadIni(CIniReader& iniReader)
     {
-        fRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassRange", 35.0f), 5.0f, 150.0f);
-        fFullRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassFullRange", 12.0f), 0.0f, fRange - 1.0f);
+        fRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassRange", 70.0f), 5.0f, 150.0f);
+        fFullRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassFullRange", 22.0f), 0.0f, fRange - 1.0f);
+        bHideProps = iniReader.ReadInteger("PROCEDURAL", "GpuGrassHideProps", 1) != 0;
         fDensity = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassDensity", 1.0f), 0.1f, 1.0f);
         bLog = iniReader.ReadInteger("DEBUG", "GpuGrassLog", 0) != 0;
     }
@@ -127,6 +143,7 @@ namespace GpuGrass
             return true;
         std::array<float, 256> sum{};
         std::array<std::array<float, 3>, 256> kindSum{};
+        grassModel.fill(0);
         for (uint32_t i = 0; i < count; ++i)
         {
             const uint8_t* record = defs + 8 + i * 0x44;
@@ -139,6 +156,7 @@ namespace GpuGrass
             const int kind = info ? GrassShared::GrassKind(*reinterpret_cast<const uint32_t*>(info + 0x3c)) : 0;
             if (kind > 0)
             {
+                grassModel[model & 0x7FFF] = 1;
                 sum[tag] += 1.0f / (spacing * spacing);
                 kindSum[tag][kind - 1] += 1.0f / (spacing * spacing);
             }
@@ -278,6 +296,8 @@ namespace GpuGrass
                 h.windDir = effect->GetParameterByName(nullptr, "vec4WindDir");
                 h.blade = effect->GetParameterByName(nullptr, "vec4Blade");
                 h.eye = effect->GetParameterByName(nullptr, "vec4Eye");
+                h.bodies = effect->GetParameterByName(nullptr, "vec4Bodies");
+                h.bend = effect->GetParameterByName(nullptr, "vec4Bend");
                 h.nearPlane = effect->GetParameterByName(nullptr, "fNearPlane");
                 h.farDivNear = effect->GetParameterByName(nullptr, "fFarDivNear");
             }
@@ -389,7 +409,10 @@ export namespace GpuGrass
             logCpuMs = 0.0;
         }
         if (!pDevice || !pref || pref->get() == 0)
+        {
+            drawing = false;
             return void(status = "off");
+        }
         const auto start = std::chrono::steady_clock::now();
         const auto& camera = FrameHistory::Current();
         if (!camera.Valid || !(camera.Near > 0.0f) || !(camera.Far > camera.Near))
@@ -397,7 +420,11 @@ export namespace GpuGrass
         if (!MakeTagShares())
             return void(status = "procedural.dat not loaded");
         if (!MakeResources(pDevice))
+        {
+            drawing = false;
             return void(status = "no effect or buffers");
+        }
+        drawing = true;
 
         // The camera: a rigid view, its position -t R^T
         const auto& v = camera.View;
@@ -515,11 +542,16 @@ export namespace GpuGrass
         static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER,
                                                                   D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
         static constexpr DWORD kSamplerValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, FALSE };
-        IDirect3DBaseTexture9* oldTexture = nullptr;
-        DWORD oldSampler[std::size(kSamplerStates)] = {};
-        pDevice->GetTexture(0, &oldTexture);
-        for (size_t i = 0; i < std::size(kSamplerStates); ++i)
-            pDevice->GetSamplerState(0, kSamplerStates[i], &oldSampler[i]);
+        static constexpr DWORD kTrampleValues[] = { D3DTADDRESS_WRAP, D3DTADDRESS_WRAP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE };
+        static constexpr DWORD kSamplers[2] = { 0, D3DVERTEXTEXTURESAMPLER1 };
+        IDirect3DBaseTexture9* oldTexture[2] = {};
+        DWORD oldSampler[2][std::size(kSamplerStates)] = {};
+        for (int s = 0; s < 2; ++s)
+        {
+            pDevice->GetTexture(kSamplers[s], &oldTexture[s]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                pDevice->GetSamplerState(kSamplers[s], kSamplerStates[i], &oldSampler[s][i]);
+        }
         DWORD colourWrite2 = 0, zfunc = D3DCMP_LESSEQUAL;
         pDevice->GetRenderState(D3DRS_COLORWRITEENABLE2, &colourWrite2);
         pDevice->GetRenderState(D3DRS_ZFUNC, &zfunc);
@@ -554,6 +586,38 @@ export namespace GpuGrass
         effect->SetVector(h.windDir, &windDir);
         effect->SetVector(h.blade, &blade);
         effect->SetVector(h.eye, &eyeVector);
+        // The bodies that press grass in range, the nearest the camera first; their strength fades over the last 10 m
+        // of NearbyBodies' range, as the props have it
+        D3DXVECTOR4 bodyValues[kBodies * 3] = {};
+        if (GrassShared::Bodies && GrassShared::PushPerHeight > 0.0f)
+        {
+            struct Near { float distance; const NearbyBodies::Body* body; };
+            std::vector<Near> pressing;
+            for (const auto& body : *GrassShared::Bodies)
+            {
+                const float dx = body.centre[0] - eye[0], dy = body.centre[1] - eye[1];
+                const float reach = body.kind == NearbyBodies::Body::Rotor ? 18.0f : body.reach;
+                const float distance = std::sqrt(dx * dx + dy * dy) - (std::max)(body.halfLength, body.halfWidth) - reach;
+                if (distance < fRange)
+                    pressing.push_back({ distance, &body });
+            }
+            std::sort(pressing.begin(), pressing.end(), [](const Near& a, const Near& b) { return a.distance < b.distance; });
+            for (size_t i = 0; i < pressing.size() && i < kBodies; ++i)
+            {
+                const auto& body = *pressing[i].body;
+                const bool rotor = body.kind == NearbyBodies::Body::Rotor;
+                float strength = std::clamp((NearbyBodies::kRange - std::sqrt(body.distance2)) * 0.1f, 0.0f, 1.0f);
+                if (rotor)
+                    strength *= GrassShared::RotorPulse * body.rotorSpeed;
+                bodyValues[i * 3 + 0] = D3DXVECTOR4(body.centre[0], body.centre[1], body.forward[0], body.forward[1]);
+                bodyValues[i * 3 + 1] = D3DXVECTOR4(body.halfLength, body.halfWidth, rotor ? 0.0f : 1.0f / (std::max)(body.reach, 0.05f), strength);
+                bodyValues[i * 3 + 2] = D3DXVECTOR4(body.bottom, rotor ? 1.0f : 0.0f, 0.0f, 0.0f);
+            }
+        }
+        auto trample = GrassShared::TrampleTexture;
+        const D3DXVECTOR4 bend(GrassShared::PushPerHeight, 1.0f / GrassShared::TrampleGridSide, trample ? 1.0f : 0.0f, 0.0f);
+        effect->SetVectorArray(h.bodies, bodyValues, kBodies * 3);
+        effect->SetVector(h.bend, &bend);
         effect->SetFloat(h.nearPlane, camera.Near);
         effect->SetFloat(h.farDivNear, camera.Far / camera.Near);
 
@@ -570,8 +634,12 @@ export namespace GpuGrass
         effect->BeginPass(0);
         effect->CommitChanges();
         SetTextureBoth(pDevice, 0, groundCopied ? R.WetCopyTex[0] : nullptr);
+        SetTextureBoth(pDevice, D3DVERTEXTEXTURESAMPLER1, trample);
         for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+        {
             SetSamplerStateBoth(pDevice, 0, kSamplerStates[i], kSamplerValues[i]);
+            SetSamplerStateBoth(pDevice, D3DVERTEXTEXTURESAMPLER1, kSamplerStates[i], kTrampleValues[i]);
+        }
         pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, kBlades * kVertsPerBlade, 0, kBlades * 3);
         effect->EndPass();
         effect->End();
@@ -579,10 +647,13 @@ export namespace GpuGrass
         pDevice->SetStreamSourceFreq(0, 1);
         pDevice->SetStreamSourceFreq(1, 1);
         pDevice->SetStreamSource(1, nullptr, 0, 0);
-        SetTextureBoth(pDevice, 0, oldTexture);
-        SAFE_RELEASE(oldTexture);
-        for (size_t i = 0; i < std::size(kSamplerStates); ++i)
-            SetSamplerStateBoth(pDevice, 0, kSamplerStates[i], oldSampler[i]);
+        for (int s = 0; s < 2; ++s)
+        {
+            SetTextureBoth(pDevice, kSamplers[s], oldTexture[s]);
+            SAFE_RELEASE(oldTexture[s]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                SetSamplerStateBoth(pDevice, kSamplers[s], kSamplerStates[i], oldSampler[s][i]);
+        }
         pDevice->SetRenderState(D3DRS_COLORWRITEENABLE2, colourWrite2);
         pDevice->SetVertexShaderConstantF(0, vsConstants, 256);
         pDevice->SetPixelShaderConstantF(0, psConstants, 224);
@@ -616,6 +687,14 @@ public:
             std::lock_guard lock(GpuGrass::groundMutex);
             GpuGrass::ground[key] = triangle;
             ++GpuGrass::groundVersion;
+        };
+        ProceduralGround::HideGrass = [](uint16_t model, float distance, float keep)
+        {
+            using namespace GpuGrass;
+            if (!bHideProps || !drawing || !grassModel[model & 0x7FFF])
+                return false;
+            const float share = std::clamp((fRange - distance) / (std::max)(fRange - fFullRange, 0.5f), 0.0f, 1.0f);
+            return keep < share;
         };
         ProceduralGround::OnRemoved = [](const void* key)
         {
