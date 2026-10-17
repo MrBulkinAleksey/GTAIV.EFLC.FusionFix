@@ -274,6 +274,30 @@ public:
             FusionLog::Write("Threads", "Affinity", "Main thread affinity pin removed at %p\n", p);
         };
 
+        // On shutdown (0xb1ee80 → 0xaf7450 → 0xaf7400) the game lets go of the weapons' models: for each of the 60 weapon
+        // infos (0x15f8bc0, 0x110 bytes, model hash at +0x24) it looks the model info up and releases its index
+        // (movsx [edi+0x52]) in the streaming (0x8d8830) and in a pool (0xaf73b0: dec [base + index * size + 4]). An index
+        // of -1 (a model with nothing loaded) writes before the pool and corrupts the heap: MMA10 on exit. Both releases
+        // are skipped for a negative index.
+        FusionFix::onInitEventAsync() += []()
+        {
+            // movsx ecx, word [edi+52h]; push [streaming module]; push ecx; call; movsx eax, word [edi+52h]; push eax; call;
+            // add esp, 0Ch; add esi, 110h
+            auto pattern = hook::pattern("0F BF 4F 52 FF 35 ? ? ? ? 51 E8 ? ? ? ? 0F BF 47 52 50 E8 ? ? ? ? 83 C4 0C 81 C6 10 01 00 00");
+            if (pattern.empty())
+            {
+                FusionLog::Write("Fixes", "WeaponModels", "weapon model release on shutdown not found, not guarded\n");
+                return;
+            }
+            static uintptr_t next = reinterpret_cast<uintptr_t>(pattern.get_first(0x1d));
+            static auto releaseHook = safetyhook::create_mid(pattern.get_first(4), [](SafetyHookContext& regs)
+            {
+                if (int32_t(regs.ecx) < 0)
+                    regs.eip = next;
+            });
+            FusionLog::Write("Fixes", "WeaponModels", "weapon model release on shutdown guarded against index -1 at %p\n", pattern.get_first(0));
+        };
+
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
