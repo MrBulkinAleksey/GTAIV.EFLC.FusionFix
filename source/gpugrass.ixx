@@ -45,9 +45,11 @@ using namespace PostFxProfiler;
 // contact shadows see it), lit by the game like any surface.
 //
 // Where: the manager's ground triangles (ProceduralGround, main thread) whose surface's procedural tag makes grass or
-// small plants: by procedural.dat's PROCOBJ records of that tag whose model is on the grass list (GrassShared), the
-// sum of their 1 / spacing^2 times 12, at most 1; and the mix of grass, weeds and small plants among those props, which
-// the blades follow (GrassShared::GrassKind). The triangles are cut into pieces of at most kPieceArea square metres
+// weeds: by procedural.dat's PROCOBJ records of that tag whose model is grass or a weed on the grass list (GrassShared),
+// the sum of their 1 / spacing^2 times 12, at most 1; and the mix of grass and weeds among those props, which the blades
+// follow (GrassShared::GrassKind). Small plants (flower beds) stay the game's props. Lawns of the GRASS and SHORT_GRASS
+// materials whose tag has no props, which the manager gathers for us (GatherGrassSurfaces), grow grass of their own
+// (LookOf). The triangles are cut into pieces of at most kPieceArea square metres
 // when the set changes; each frame the pieces in view within the range take a share of the mesh's kBlades blades, full
 // up to GpuGrassFullRange and none at GpuGrassRange, and go to the instance buffer: one instanced draw for them all.
 // The blades take half their colour from the ground under them: _DEFERRED_GBUFFER_0_ is copied first (into Wet Ground's
@@ -90,7 +92,9 @@ namespace GpuGrass
     float fRange = 70.0f, fFullRange = 22.0f, fDensity = 1.0f;
 
     // Render thread
-    struct Piece { float corner[3], edge1[3], edge2[3]; float centre[3]; float radius; float share; float seed; float tag; int tagIndex; };
+    // What grows on a triangle: how much, the share of grass, of weeds, of small plants, the height (0..1), the debug colour
+    struct Look { float share; float kinds[4]; float tag; };
+    struct Piece { float corner[3], edge1[3], edge2[3]; float centre[3]; float radius; float share; float seed; Look look; };
     std::vector<Piece> pieces;
     uint32_t piecesVersion = ~0u;
     std::array<float, 256> tagShare{};
@@ -156,7 +160,8 @@ namespace GpuGrass
                 continue;
             const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4);
             const int kind = info ? GrassShared::GrassKind(*reinterpret_cast<const uint32_t*>(info + 0x3c)) : 0;
-            if (kind > 0)
+            // Small plants (flower beds) stay the game's props
+            if (kind == 1 || kind == 2)
             {
                 grassModel[model] = 1;
                 sum[tag] += 1.0f / (spacing * spacing);
@@ -183,7 +188,24 @@ namespace GpuGrass
         return true;
     }
 
-    void AddPieces(const float* a, const float* b, const float* c, float share, int tag, int depth)
+    // By the triangle's procedural tag where its props have grass or weeds, else by its material: lawns of GRASS and
+    // SHORT_GRASS without props (ProceduralGround::GatherGrassSurfaces), all grass, the short one lower and sparser
+    bool LookOf(const ProceduralGround::Triangle& t, Look& look)
+    {
+        if (tagShare[t.tag] > 0.0f)
+        {
+            const auto& k = tagKinds[t.tag];
+            look = { tagShare[t.tag], { k[0], k[1], k[2], k[3] }, t.tag / 255.0f };
+            return true;
+        }
+        if (t.surface == 1)
+            look = { 1.0f, { 1.0f, 0.0f, 0.0f, 0.8f }, 251.0f / 255.0f };
+        else if (t.surface == 2)
+            look = { 0.75f, { 1.0f, 0.0f, 0.0f, 0.15f }, 252.0f / 255.0f };
+        return t.surface != 0;
+    }
+
+    void AddPieces(const float* a, const float* b, const float* c, const Look& look, int depth)
     {
         const float e1[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
         const float e2[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
@@ -203,20 +225,20 @@ namespace GpuGrass
             if (ab >= ac && ab >= bc)
             {
                 mid(a, b, m);
-                AddPieces(a, m, c, share, tag, depth + 1);
-                AddPieces(m, b, c, share, tag, depth + 1);
+                AddPieces(a, m, c, look, depth + 1);
+                AddPieces(m, b, c, look, depth + 1);
             }
             else if (ac >= bc)
             {
                 mid(a, c, m);
-                AddPieces(a, b, m, share, tag, depth + 1);
-                AddPieces(m, b, c, share, tag, depth + 1);
+                AddPieces(a, b, m, look, depth + 1);
+                AddPieces(m, b, c, look, depth + 1);
             }
             else
             {
                 mid(b, c, m);
-                AddPieces(a, b, m, share, tag, depth + 1);
-                AddPieces(a, m, c, share, tag, depth + 1);
+                AddPieces(a, b, m, look, depth + 1);
+                AddPieces(a, m, c, look, depth + 1);
             }
             return;
         }
@@ -230,10 +252,9 @@ namespace GpuGrass
         for (const float* q : { a, b, c })
             r2 = (std::max)(r2, (q[0] - p.centre[0]) * (q[0] - p.centre[0]) + (q[1] - p.centre[1]) * (q[1] - p.centre[1]) + (q[2] - p.centre[2]) * (q[2] - p.centre[2]));
         p.radius = std::sqrt(r2) + 1.0f; // the blades stand up to a metre above it
-        p.share = share * (std::min)(area / kPieceArea, 1.0f);
+        p.share = look.share * (std::min)(area / kPieceArea, 1.0f);
         p.seed = Hash(p.centre[0], p.centre[1]);
-        p.tag = tag / 255.0f;
-        p.tagIndex = tag;
+        p.look = look;
         pieces.push_back(p);
     }
 
@@ -256,7 +277,7 @@ namespace GpuGrass
                     it = ground.erase(it);
                     continue;
                 }
-                if (tagShare[t.tag] > 0.0f)
+                if (tagShare[t.tag] > 0.0f || t.surface)
                     triangles.push_back(t);
                 ++it;
             }
@@ -269,9 +290,10 @@ namespace GpuGrass
             const float e2[3] = { t.corner[2][0] - t.corner[0][0], t.corner[2][1] - t.corner[0][1], t.corner[2][2] - t.corner[0][2] };
             const float n[3] = { e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0] };
             const float length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
-            if (!(length > 0.0f) || std::abs(n[2]) / length < 0.6f)
+            Look look;
+            if (!(length > 0.0f) || std::abs(n[2]) / length < 0.6f || !LookOf(t, look))
                 continue;
-            AddPieces(t.corner[0], t.corner[1], t.corner[2], tagShare[t.tag], t.tag, 0);
+            AddPieces(t.corner[0], t.corner[1], t.corner[2], look, 0);
         }
         logGrassTriangles = triangles.size();
     }
@@ -470,9 +492,9 @@ export namespace GpuGrass
             const float share = p.share * fDensity * std::clamp((fRange - (std::max)(distance, 0.0f)) * fade, 0.0f, 1.0f);
             if (share * kBlades < 0.5f)
                 continue;
-            const auto& kinds = tagKinds[p.tagIndex];
+            const auto& k = p.look.kinds;
             out[count] = { { p.corner[0], p.corner[1], p.corner[2], p.seed }, { p.edge1[0], p.edge1[1], p.edge1[2], share },
-                           { p.edge2[0], p.edge2[1], p.edge2[2], p.tag }, { kinds[0], kinds[1], kinds[2], kinds[3] } };
+                           { p.edge2[0], p.edge2[1], p.edge2[2], p.look.tag }, { k[0], k[1], k[2], k[3] } };
             blades += share * kBlades;
             if (++count >= kMaxInstances)
                 break;
@@ -690,6 +712,7 @@ public:
             GpuGrass::ground[key] = triangle;
             ++GpuGrass::groundVersion;
         };
+        ProceduralGround::GatherGrassSurfaces = true;
         ProceduralGround::HideGrass = [](uint16_t model, float distance, float keep)
         {
             using namespace GpuGrass;

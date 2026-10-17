@@ -89,7 +89,12 @@ export namespace ProceduralGround
     {
         float corner[3][3];
         uint8_t tag;        // the surface's procedural tag (material +0x4c, bits 8..15): PROCOBJ records by tag
+        uint8_t surface;    // its material (bits 0..7): 1 GRASS, 2 SHORT_GRASS, 0 any other (GrassSurface)
     };
+    // Set before the world loads (gpugrass.ixx): the manager also gathers ground of the GRASS and SHORT_GRASS materials
+    // whose procedural tag has neither plants nor props, as ground with props of a tag that has none (so the generator
+    // makes nothing there)
+    inline bool GatherGrassSurfaces = false;
     inline void (*OnAdded)(const void* key, const Triangle& triangle) = nullptr;
     inline void (*OnRemoved)(const void* key) = nullptr;
     // A prop of `model` at `distance` from the camera left out of the scene, where other grass grows in its place
@@ -1063,6 +1068,41 @@ namespace Procedural
         }
     }
 
+    // The GRASS and SHORT_GRASS materials' indices, from the material manager by their names (as the game takes them,
+    // CE 0xcf2d59: [0x18b8968] vtable +0x18 by name); -1 until found
+    uintptr_t* pMaterialManager = nullptr;
+    const char* szGrassNames[2] = {};
+    int32_t nGrassMaterials[2] = { -1, -1 };
+    uint8_t GrassSurface(uint32_t material)
+    {
+        if (nGrassMaterials[0] < 0 && pMaterialManager && *pMaterialManager)
+        {
+            auto manager = *pMaterialManager;
+            using Find = uint32_t(__thiscall*)(uintptr_t, const char*);
+            const auto find = (*(Find**)manager)[6];
+            for (int i = 0; i < 2; i++)
+                nGrassMaterials[i] = int32_t(find(manager, szGrassNames[i]) & 0xFF);
+            Log("GrassSurfaces", std::format("GRASS {}, SHORT_GRASS {}", nGrassMaterials[0], nGrassMaterials[1]));
+        }
+        const int32_t surface = int32_t(material & 0xFF);
+        return surface == nGrassMaterials[0] ? 1 : surface == nGrassMaterials[1] ? 2 : 0;
+    }
+
+    // GatherGrassSurfaces: where the manager marks each polygon of a bound for plants (bit 2i, the tag has a PLANT
+    // record) and props (bit 2i + 1, a PROCOBJ record) as it takes the bound (CE 0xc868f0), a grassy material with
+    // neither gets the props bit; the generator makes no props for a tag without PROCOBJ records (GeneratorProps)
+    bool bForceProps = false;
+
+    SafetyHookInline shGeneratorProps;
+    int32_t __fastcall GeneratorProps(uint8_t* generator, void* edx, uint8_t* triangle)
+    {
+        // The tag's first PROCOBJ record (CE 0x16c8fb0 + 0x5c10, -1 for none): the game reads the record before the
+        // table and compares its tag
+        if (ProceduralGround::GatherGrassSurfaces && pDefinitions && *(int32_t*)(pDefinitions + 0x5c10 + size_t(triangle[0x4d]) * 8) < 0)
+            return 0;
+        return shGeneratorProps.unsafe_fastcall<int32_t>(generator, edx, triangle);
+    }
+
     // Triangles of the ground the manager gathers (CE 0xc86540 fills one: centre +0x30, +0x55 bit 0 grass,
     // bit 1 props; null when it has neither) and lets go (CE 0xc87010)
     SafetyHookInline shAddTriangle;
@@ -1077,6 +1117,7 @@ namespace Procedural
                 for (int k = 0; k < 3; ++k)
                     t.corner[c][k] = *(float*)(result + c * 0x10 + k * 4);
             t.tag = uint8_t(*(uint32_t*)(result + 0x4c) >> 8);
+            t.surface = GrassSurface(*(uint32_t*)(result + 0x4c));
             ProceduralGround::OnAdded(result, t);
         }
         if (bTrace && result)
@@ -1431,6 +1472,36 @@ public:
                 pattern = hook::pattern("56 8B F1 F6 46 55 04 C7 46 48 00 00 00 00");
                 if (!pattern.empty())
                     shRemoveTriangle = safetyhook::create_inline(pattern.get_first(0), RemoveTriangle);
+            }
+
+            // GatherGrassSurfaces: the material manager and the names the game finds GRASS and SHORT_GRASS by (CE 0xcf2d59),
+            // the bound's polygon marks (CE 0xc86903 the material in eax, 0xc86926 the props bit in al) and the generator's
+            // props of a triangle (CE 0xc0a800)
+            {
+                auto names = hook::pattern("8B 0D ? ? ? ? 68 ? ? ? ? 8B 01 FF 50 18 89 47 44 8B 0D ? ? ? ? 68 ? ? ? ? 8B 01 FF 50 18 89 47 48");
+                auto material = hook::pattern("8B F0 C1 EE 08 81 E6 FF 00 00 00 56 B9");
+                auto marks = hook::pattern("8A D8 E8 ? ? ? ? 8B 7F 48 8B 4C 24 10 88 44 24 28");
+                auto props = hook::pattern("51 89 0C 24 E8 ? ? ? ? 84 C0 74 06 33 C0 59 C2 04 00 53 55 8B 6C 24 10 56 0F B6 5D 4D");
+                if (!names.empty() && !material.empty() && !marks.empty() && !props.empty())
+                {
+                    pMaterialManager = *names.get_first<uintptr_t*>(2);
+                    szGrassNames[0] = *names.get_first<const char*>(7);
+                    szGrassNames[1] = *names.get_first<const char*>(0x1A);
+                    static auto MaterialHook = safetyhook::create_mid(material.get_first(0), [](SafetyHookContext& regs)
+                    {
+                        bForceProps = ProceduralGround::GatherGrassSurfaces && GrassSurface(regs.eax) != 0;
+                    });
+                    static auto MarksHook = safetyhook::create_mid(marks.get_first(7), [](SafetyHookContext& regs)
+                    {
+                        // bl the plants bit, al the props bit
+                        if (bForceProps && !(regs.ebx & 0xFF) && !(regs.eax & 0xFF))
+                            regs.eax = (regs.eax & ~0xFFu) | 1;
+                        bForceProps = false;
+                    });
+                    shGeneratorProps = safetyhook::create_inline(props.get_first(0), GeneratorProps);
+                }
+                else
+                    Log("GrassSurfaces", "not found: no GPU grass on ground without props");
             }
 
             // The queue: before its loop of creations (esi the generator) and after it, the queue emptied
