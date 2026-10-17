@@ -75,6 +75,15 @@ import temporal;
 // and key (+0x60) are kept by slot, and the face command takes them while the slot still holds that key. Moving a
 // headlight's map back along its beam only narrows what it sees of the cone. With it 0, EntityDrawLog counts what it
 // would leave out.
+//
+// LampShadowViewCulling ([PERFORMANCE]): a lamp's map is only read where the camera sees, so a caster can only matter
+// on the segment from the lamp to a point in view: inside the convex hull of the camera's frustum and the lamp. The
+// slot render (its object in esi at the face command) has the scene's viewport copied to +0x4a0 by 0xd78410 for this
+// frame; as each face command is made, the hull's planes go into its ring entry: the frustum's planes with the lamp on
+// their inner side, and the planes through each frustum edge and the lamp that have all the corners on one side, all
+// moved out 2 m. An entity, fragment or fragment type draw whose sphere lies wholly outside one of them is left out of
+// the lamp's map. Only the dynamic maps (mode 4) are made so; the static caches, kept over frames, are not. With it
+// 0, EntityDrawLog counts what it would leave out.
 export namespace EntityClass
 {
     enum class Kind : uint8_t
@@ -143,6 +152,9 @@ namespace
     bool bConeCulling = false;          // and its hooks in place
     bool bConeHook = false;
     constexpr float kConeMargin = 5.0f * 3.14159265f / 180.0f;
+    bool bViewCullSetting = true;      // LampShadowViewCulling
+    bool bViewCulling = false;          // and the face hooks in place
+    constexpr float kViewHullMargin = 2.0f;
     bool bSkipLeftOut = true;           // SkipLeftOutDraws
     uintptr_t modelInfos = 0;       // CE 0x1295cd8, model infos by index
     // DrawsPerEntity: by model index (CDrawEntityDC +0x30, CDrawFragTypeDC +0x58)
@@ -181,6 +193,9 @@ namespace
         // the draws whose lamp was a spot, with its cone known
         uint64_t outsideCone = 0, spotDraws = 0;
         double spotConeSum = 0.0;
+        // Lamp maps: draws outside the hull of the camera's view and the lamp (left out with LampShadowViewCulling,
+        // else counted only), and the draws whose half had the hull
+        uint64_t outsideView = 0, viewKnown = 0;
         double radiusSum = 0.0;
         // The G-buffer and the water's reflection: draws and time by distance and by size on screen (keyed draws);
         // the lamps' maps: the same from the lamp
@@ -262,6 +277,9 @@ namespace
             if (s.outsideCone || s.spotDraws)
                 text += std::format(" outside the spot's cone {:.1f} ({}), drawn for spots {:.1f} with a mean cone of {:.0f} deg,", s.outsideCone * perFrame,
                     bConeCulling ? "left out" : "drawn", s.spotDraws * perFrame, s.spotDraws ? s.spotConeSum / double(s.spotDraws) : 0.0);
+            if (s.outsideView || s.viewKnown)
+                text += std::format(" out of the camera's view {:.1f} ({}), view known for {:.1f},", s.outsideView * perFrame,
+                    bViewCulling ? "left out" : "drawn", s.viewKnown * perFrame);
             if (s.lamp)
             {
                 static constexpr const char* radiusNames[4] = { "under 15 m", "15-30 m", "30-50 m", "50+ m" };
@@ -393,6 +411,10 @@ namespace
         float direction[3];
         float radius;
         float coneAngle;    // a spot's outer half angle in radians; negative when not a spot or not known
+        // The hull of the camera's view and the lamp (LampShadowViewCulling): inside where a x + b y + c z + d >= 0
+        // for each; none when not known
+        float viewPlanes[18][4];
+        uint8_t viewPlaneCount;
     };
     FaceOrigin faceOrigins[256]{};
     uint8_t nextFaceOrigin = 0;
@@ -413,7 +435,135 @@ namespace
     int currentFace = -1;
     FaceOrigin currentOrigin{};
 
-    void MarkFace(uintptr_t dc, uintptr_t slotOffset)
+    // The planes of the convex hull of the camera's frustum (viewport, row vectors: clip = world * view * projection)
+    // and the lamp, moved out by kViewHullMargin; 0 planes when the viewport makes no sense
+    uint8_t ViewHull(const rage::grcViewport& viewport, const float lamp[3], float (&planes)[18][4])
+    {
+        double m[4][4];
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
+            {
+                double sum = 0.0;
+                for (int k = 0; k < 4; ++k)
+                    sum += double(viewport.mViewMatrix[i][k]) * viewport.mProjectionMatrix[k][j];
+                if (!std::isfinite(sum))
+                    return 0;
+                m[i][j] = sum;
+            }
+        // The frustum's corners: the clip cube's (x, y -1 or 1; z 0 or 1) through the inverse
+        double a[4][8]{};
+        for (int i = 0; i < 4; ++i)
+        {
+            for (int j = 0; j < 4; ++j)
+                a[i][j] = m[i][j];
+            a[i][4 + i] = 1.0;
+        }
+        for (int col = 0; col < 4; ++col)
+        {
+            int pivot = col;
+            for (int row = col + 1; row < 4; ++row)
+                if (std::abs(a[row][col]) > std::abs(a[pivot][col]))
+                    pivot = row;
+            if (!(std::abs(a[pivot][col]) > 1e-12))
+                return 0;
+            for (int k = 0; k < 8; ++k)
+                std::swap(a[col][k], a[pivot][k]);
+            const double divisor = a[col][col];
+            for (int k = 0; k < 8; ++k)
+                a[col][k] /= divisor;
+            for (int row = 0; row < 4; ++row)
+                if (row != col)
+                {
+                    const double factor = a[row][col];
+                    for (int k = 0; k < 8; ++k)
+                        a[row][k] -= factor * a[col][k];
+                }
+        }
+        double corners[8][3];
+        for (int n = 0; n < 8; ++n)
+        {
+            const double clip[4] = { n & 1 ? 1.0 : -1.0, n & 2 ? 1.0 : -1.0, n & 4 ? 1.0 : 0.0, 1.0 };
+            double world[4]{};
+            for (int i = 0; i < 4; ++i)
+                for (int k = 0; k < 4; ++k)
+                    world[i] += clip[k] * a[k][4 + i];
+            if (!(world[3] > 1e-10))
+                return 0;
+            for (int i = 0; i < 3; ++i)
+            {
+                corners[n][i] = world[i] / world[3];
+                if (!std::isfinite(corners[n][i]))
+                    return 0;
+            }
+        }
+        uint8_t count = 0;
+        auto add = [&](double p[4])
+        {
+            if (count < std::size(planes))
+            {
+                for (int i = 0; i < 4; ++i)
+                    planes[count][i] = float(p[i]);
+                planes[count][3] += kViewHullMargin;
+                ++count;
+            }
+        };
+        const double l[3] = { lamp[0], lamp[1], lamp[2] };
+        // The frustum's own planes (column 3 ± column 0 and 1, column 2, column 3 - column 2), those the lamp is inside of
+        for (int f = 0; f < 6; ++f)
+        {
+            double p[4];
+            for (int i = 0; i < 4; ++i)
+                p[i] = f == 0 ? m[i][3] + m[i][0] : f == 1 ? m[i][3] - m[i][0] : f == 2 ? m[i][3] + m[i][1] :
+                    f == 3 ? m[i][3] - m[i][1] : f == 4 ? m[i][2] : m[i][3] - m[i][2];
+            const double length = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+            if (!(length > 1e-12))
+                return 0;
+            for (double& v : p)
+                v /= length;
+            if (p[0] * l[0] + p[1] * l[1] + p[2] * l[2] + p[3] >= 0.0)
+                add(p);
+        }
+        // The planes through each frustum edge and the lamp with every corner on one side
+        double scale = 1.0;
+        for (auto& c : corners)
+            for (double v : c)
+                scale = (std::max)(scale, std::abs(v));
+        const double tolerance = 1e-6 * scale;
+        for (int first = 0; first < 8; ++first)
+            for (int bit = 0; bit < 3; ++bit)
+            {
+                const int second = first ^ (1 << bit);
+                if (second < first)
+                    continue;
+                const double* x = corners[first];
+                const double e[3] = { corners[second][0] - x[0], corners[second][1] - x[1], corners[second][2] - x[2] };
+                const double t[3] = { l[0] - x[0], l[1] - x[1], l[2] - x[2] };
+                double p[4] = { e[1] * t[2] - e[2] * t[1], e[2] * t[0] - e[0] * t[2], e[0] * t[1] - e[1] * t[0], 0.0 };
+                const double length = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+                if (!(length > 1e-9))
+                    continue;
+                for (int i = 0; i < 3; ++i)
+                    p[i] /= length;
+                p[3] = -(p[0] * x[0] + p[1] * x[1] + p[2] * x[2]);
+                double low = 0.0, high = 0.0;
+                for (auto& c : corners)
+                {
+                    const double d = p[0] * c[0] + p[1] * c[1] + p[2] * c[2] + p[3];
+                    low = (std::min)(low, d);
+                    high = (std::max)(high, d);
+                }
+                if ((low < -tolerance && high > tolerance) || (low >= -tolerance && high <= tolerance))
+                    continue;
+                if (high <= tolerance)
+                    for (double& v : p)
+                        v = -v;
+                p[3] += tolerance;
+                add(p);
+            }
+        return count;
+    }
+
+    void MarkFace(uintptr_t dc, uintptr_t slotOffset, uintptr_t slotRender)
     {
         if (!dc || !slotRecords)
             return;
@@ -427,6 +577,8 @@ namespace
         if (const auto index = slotOffset / 0x110; index < std::size(slotLights) && slotLights[index].key &&
             slotLights[index].key == *reinterpret_cast<const uint32_t*>(slot + 0xf8))
             origin.coneAngle = slotLights[index].coneAngle;
+        origin.viewPlaneCount = bViewCullSetting || bDrawLog ?
+            ViewHull(*reinterpret_cast<const rage::grcViewport*>(slotRender + 0x4a0), origin.position, origin.viewPlanes) : 0;
         auto* bytes = reinterpret_cast<uint8_t*>(dc);
         bytes[kFaceOriginByte] = nextFaceOrigin++;
         bytes[kFaceMarkByte] = kFaceMark;
@@ -479,6 +631,7 @@ namespace
         bool beyond = false;
         bool tiny = false;
         bool outsideCone = false;
+        bool outsideView = false;
     };
     LampPlace SphereAtLamp(void* dc, Kind kind, Source source)
     {
@@ -527,6 +680,11 @@ namespace
                 result.outsideCone = off > o.coneAngle + std::asin(reach / distance) + kConeMargin;
             }
         }
+        for (int i = 0; i < o.viewPlaneCount && !result.outsideView; ++i)
+        {
+            const float* p = o.viewPlanes[i];
+            result.outsideView = p[0] * place[0] + p[1] * place[1] + p[2] * place[2] + p[3] < -reach;
+        }
         return result;
     }
 
@@ -574,7 +732,7 @@ namespace
                 StatsFor(RenderSkip::CurrentTarget()).leftOutPass++;
             return;
         }
-        const bool lampCulling = bFaceCulling || bRangeCulling || bSmallCulling || bConeCulling;
+        const bool lampCulling = bFaceCulling || bRangeCulling || bSmallCulling || bConeCulling || bViewCulling;
         const char* target = RenderSkip::CurrentTarget();
         const bool lampMaps = (bDrawLog || lampCulling) && IsLampMaps(target);
         const auto atLamp = lampMaps ? SphereAtLamp(dc, kind, source) : LampPlace{};
@@ -582,7 +740,7 @@ namespace
         // The half drawn faces away from the sphere
         const bool outside = side < 0;
         if ((outside && bFaceCulling) || (atLamp.beyond && bRangeCulling) || (atLamp.tiny && bSmallCulling) ||
-            (atLamp.outsideCone && bConeCulling))
+            (atLamp.outsideCone && bConeCulling) || (atLamp.outsideView && bViewCulling))
         {
             if (bDrawLog)
             {
@@ -595,6 +753,10 @@ namespace
                     stats.tiny++;
                 if (atLamp.outsideCone)
                     stats.outsideCone++;
+                if (atLamp.outsideView)
+                    stats.outsideView++;
+                if (currentOrigin.viewPlaneCount)
+                    stats.viewKnown++;
                 stats.faceKnown++;
                 stats.radiusDraws++;
                 stats.radiusSum += currentOrigin.radius;
@@ -643,8 +805,12 @@ namespace
                 stats.tiny++;
             if (atLamp.outsideCone)
                 stats.outsideCone++;
+            if (atLamp.outsideView)
+                stats.outsideView++;
             if (lampMaps && currentFace >= 0)
             {
+                if (currentOrigin.viewPlaneCount)
+                    stats.viewKnown++;
                 stats.radiusDraws++;
                 stats.radiusSum += currentOrigin.radius;
                 if (currentOrigin.coneAngle >= 0.0f)
@@ -789,8 +955,8 @@ namespace
                 slotRecords = *slots.get_first<uint32_t>(2) - 0xf0;
                 auto** faceVtable = *reinterpret_cast<void***>(faceCtor + 0x2a);
                 auto** colorWriteVtable = *reinterpret_cast<void***>(colorWriteCtor + 0x26);
-                static auto face0Hook = safetyhook::create_mid(face0.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp); });
-                static auto face1Hook = safetyhook::create_mid(face1.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp); });
+                static auto face0Hook = safetyhook::create_mid(face0.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp, regs.esi); });
+                static auto face1Hook = safetyhook::create_mid(face1.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp, regs.esi); });
                 faceExecute = reinterpret_cast<DrawExecute>(faceVtable[1]);
                 injector::WriteMemory(&faceVtable[1], reinterpret_cast<void*>(&FaceExecute), true);
                 colorWriteExecute = reinterpret_cast<DrawExecute>(colorWriteVtable[1]);
@@ -886,12 +1052,15 @@ namespace
                     bSmallCulling = bSmallCullSetting && bFaceHooks;
                     bConeCullSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowConeCulling", 1) != 0;
                     bConeCulling = bConeCullSetting && bFaceHooks && bConeHook;
+                    bViewCullSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowViewCulling", 1) != 0;
+                    bViewCulling = bViewCullSetting && bFaceHooks;
                     bSkipLeftOut = iniReader.ReadInteger("PERFORMANCE", "SkipLeftOutDraws", 1) != 0;
-                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s), LampShadowRangeCulling %d (%s), LampShadowSmallCull %d (%s), LampShadowConeCulling %d (%s), SkipLeftOutDraws %d\n",
+                    FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s), LampShadowRangeCulling %d (%s), LampShadowSmallCull %d (%s), LampShadowConeCulling %d (%s), LampShadowViewCulling %d (%s), SkipLeftOutDraws %d\n",
                         int(bDrawLog), int(bFaceCullingSetting), !bFaceCullingSetting ? "off" : bFaceCulling ? "on" : "no hooks",
                         int(bRangeCullingSetting), !bRangeCullingSetting ? "off" : bRangeCulling ? "on" : "no hooks",
                         int(bSmallCullSetting), !bSmallCullSetting ? "off" : bSmallCulling ? "on" : "no hooks",
-                        int(bConeCullSetting), !bConeCullSetting ? "off" : bConeCulling ? "on" : "no hooks", int(bSkipLeftOut));
+                        int(bConeCullSetting), !bConeCullSetting ? "off" : bConeCulling ? "on" : "no hooks",
+                        int(bViewCullSetting), !bViewCullSetting ? "off" : bViewCulling ? "on" : "no hooks", int(bSkipLeftOut));
                 };
                 CIniReader iniReader("");
                 readIni(iniReader);
