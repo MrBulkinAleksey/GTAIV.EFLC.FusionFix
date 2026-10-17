@@ -2243,6 +2243,8 @@ private:
     // clothes ClothComponents names (ped_cloth_sheen.patch), 0 for the rest. FACE, the last turn,
     // leaves it at 0 for whatever is drawn next. c150.y: the specular intensity from which a texel
     // of the clothes gets no mark (ClothSpecularGate, leather), out of reach for skin and for 0.
+    // c150.zw: the clothes' weave (ped_skin_scattering_mask_cloth_weave.patch), its tilt and threads
+    // per UV unit, with ClothSheen on only.
     static inline SafetyHookMid shPedSkinComponent[2]{};
 
     static void MarkPedSkin(uintptr_t component)
@@ -2250,7 +2252,7 @@ private:
         auto& R = PostFxResources;
         const bool skin = R.SkinScatteringEnabled() || R.SSRDebugMode() == R.kSkinDebugMode;
         const bool cloth = R.ClothSheenEnabled() || R.ClothDebug();
-        float id = 0.0f, gate = 1.0e6f;
+        float id = 0.0f, gate = 1.0e6f, weave = 0.0f;
         if (skin && (component == 0 || component == 4))
             id = 0.25f / 255.0f;
         else if (cloth && component < 11 && (R.nClothComponents & (1 << component)))
@@ -2258,8 +2260,10 @@ private:
             id = 0.125f / 255.0f;
             if (R.fClothSpecularGate > 0.0f)
                 gate = R.fClothSpecularGate;
+            if (R.ClothSheenEnabled())
+                weave = R.fClothWeave;
         }
-        const float mark[4] = { id, gate, 0.0f, 0.0f };
+        const float mark[4] = { id, gate, weave, R.fClothWeaveScale };
         if (auto pDevice = rage::grcDevice::GetD3DDevice())
             pDevice->SetPixelShaderConstantF(150, mark, 1);
     }

@@ -437,7 +437,10 @@ public:
     // and skin blue on people, ClothDebugBrightness times as bright so the masks read after the tone map; the
     // rest of the frame keeps its colour. In the rain the wet ground pass soaks the clothes, ClothWet times
     // the wetness (WetGround.fx): darker, a dull film of water; their sheen drops by 70% of it and the game's
-    // highlight is no longer cut (fClothWetDrawn, what the pass drew this frame).
+    // highlight is no longer cut (fClothWetDrawn, what the pass drew this frame). The weave: threads
+    // crossing over and under in the G-buffer normal (ped_skin_scattering_mask_cloth_weave.patch),
+    // ClothWeaveScale threads per unit of the texture's UV, tilting the normal by up to ClothWeave; it
+    // fades out where a thread gets thinner than about two pixels, so it shows from close up only.
     static bool ClothSheenEnabled() { static auto p = FusionFixSettings.GetRef("PREF_CLOTH_SHEEN"); return p && p->get() != 0; }
     static bool ClothDebug() { static auto p = FusionFixSettings.GetRef("PREF_CLOTH_DEBUG"); return p && p->get() != 0; }
     float fClothSheen = 0.5f;
@@ -446,6 +449,8 @@ public:
     float fClothSpecularCut = 0.5f;
     float fClothSpecularGate = 0.0f;
     float fClothWet = 1.0f;
+    float fClothWeave = 0.3f;
+    float fClothWeaveScale = 300.0f;
     float fClothWetDrawn = 0.0f;
     float fClothDebugBrightness = 8.0f;
     int nClothComponents = 0x14E;
@@ -1948,6 +1953,8 @@ public:
             IniFloat("LIGHTING", "ClothSpecularCut", &PostFxResource::fClothSpecularCut, 0.5f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "ClothSpecularGate", &PostFxResource::fClothSpecularGate, 0.0f, 0.0f, 16.0f),
             IniFloat("LIGHTING", "ClothWet", &PostFxResource::fClothWet, 1.0f, 0.0f, 1.0f),
+            IniFloat("LIGHTING", "ClothWeave", &PostFxResource::fClothWeave, 0.3f, 0.0f, 2.0f),
+            IniFloat("LIGHTING", "ClothWeaveScale", &PostFxResource::fClothWeaveScale, 300.0f, 1.0f, 4000.0f),
             IniFloat("LIGHTING", "ClothDebugBrightness", &PostFxResource::fClothDebugBrightness, 8.0f, 0.1f, 100.0f),
             IniInt("LIGHTING", "ClothComponents", &PostFxResource::nClothComponents, 0x14E, 0, 0x7FF),
             IniFloat("LIGHTING", "SpecularSheen", &PostFxResource::fSpecularSheen, 0.1f, 0.0f, 50.0f),

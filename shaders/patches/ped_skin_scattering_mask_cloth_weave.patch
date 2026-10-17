@@ -1,0 +1,80 @@
+diff --git a/win32_30_nv8/gta_ped/gta_pedPS5.asm b/win32_30_nv8/gta_ped/gta_pedPS5.asm
+index 76e8d723..8ee4ee96 100644
+--- a/win32_30_nv8/gta_ped/gta_pedPS5.asm
++++ b/win32_30_nv8/gta_ped/gta_pedPS5.asm
+@@ -44,6 +44,7 @@
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
++    def c158, 6.28318531, -3.14159265, 2, -4 // FusionFix cloth weave: a turn, half a turn, the fade
+     def c0, 4, 0.125, 0.25, -0.5
+     def c1, 9.99999975e-006, 0.00146484375, -2, 1
+     def c2, 0, 1, 0.333333343, 3.99600005
+@@ -102,6 +103,27 @@
+     cmp r1.xy, r1.z, r1.wyzw, r1
+     add r1.zw, r1.xyxy, c0.w
+     mul r1.zw, r1, c75.x
++    // --- FusionFix cloth weave (c150.zw, ClothWeave in postfx.ixx): threads crossing over and under, h = sin a sin b over
++    // --- the texture's UV, c150.w threads per UV unit, tilting the normal c150.z at most; only on the clothes the leather
++    // --- gate (c150.y) lets through, and fading out where a thread gets thinner than about two pixels.
++    mul r23.zw, v0.xyxy, c150.w
++    dsx r24.xy, r23.zw
++    dsy r24.zw, r23.zw
++    add r24.xy, r24_abs.xy, r24_abs.zw
++    max r24.x, r24.x, r24.y
++    mad_sat r24.x, r24.x, c158.w, c158.z // 1 up to a quarter of a thread per pixel, 0 from half
++    mul r23.x, r2.x, c66.w
++    add r23.x, r23.x, -c150.y
++    cmp r23.x, r23.x, c2.x, c2.y // below the leather gate
++    mul r24.x, r24.x, r23.x
++    mul r24.x, r24.x, c150.z
++    frc r23.zw, r23.zw
++    mad r23.zw, r23.zw, c158.x, c158.y
++    sincos r25.xy, r23.z // cos a, sin a
++    sincos r26.xy, r23.w // cos b, sin b
++    mul r23.x, r25.x, r26.y
++    mul r23.y, r25.y, r26.x // the slope of sin a sin b along u and v
++    mad r1.zw, r23.xyxy, r24.x, r1
+     dp2add r1.x, r1, -r1, c2.y
+     rsq r1.x, r1.x
+     rcp r1.x, r1.x
+diff --git a/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm b/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm
+index e5abdaca..0b9985fe 100644
+--- a/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm
++++ b/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm
+@@ -44,6 +44,7 @@
+     def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
+     def c153, 0.5, 2, 1, 0
+     def c154, 1.6, 0, 0, 0
++    def c158, 6.28318531, -3.14159265, 2, -4 // FusionFix cloth weave: a turn, half a turn, the fade
+     def c0, 4, 0.125, 0.25, -0.5
+     def c1, 9.99999975e-006, 0.00146484375, -2, 1
+     def c2, 0, 1, 0.333333343, 3.99600005
+@@ -102,6 +103,27 @@
+     cmp r1.xy, r1.z, r1.wyzw, r1
+     add r1.zw, r1.xyxy, c0.w
+     mul r1.zw, r1, c75.x
++    // --- FusionFix cloth weave (c150.zw, ClothWeave in postfx.ixx): threads crossing over and under, h = sin a sin b over
++    // --- the texture's UV, c150.w threads per UV unit, tilting the normal c150.z at most; only on the clothes the leather
++    // --- gate (c150.y) lets through, and fading out where a thread gets thinner than about two pixels.
++    mul r23.zw, v0.xyxy, c150.w
++    dsx r24.xy, r23.zw
++    dsy r24.zw, r23.zw
++    add r24.xy, r24_abs.xy, r24_abs.zw
++    max r24.x, r24.x, r24.y
++    mad_sat r24.x, r24.x, c158.w, c158.z // 1 up to a quarter of a thread per pixel, 0 from half
++    mul r23.x, r2.x, c66.w
++    add r23.x, r23.x, -c150.y
++    cmp r23.x, r23.x, c2.x, c2.y // below the leather gate
++    mul r24.x, r24.x, r23.x
++    mul r24.x, r24.x, c150.z
++    frc r23.zw, r23.zw
++    mad r23.zw, r23.zw, c158.x, c158.y
++    sincos r25.xy, r23.z // cos a, sin a
++    sincos r26.xy, r23.w // cos b, sin b
++    mul r23.x, r25.x, r26.y
++    mul r23.y, r25.y, r26.x // the slope of sin a sin b along u and v
++    mad r1.zw, r23.xyxy, r24.x, r1
+     dp2add r1.x, r1, -r1, c2.y
+     rsq r1.x, r1.x
+     rcp r1.x, r1.x
