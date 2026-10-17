@@ -150,6 +150,10 @@ export namespace TemporalAA
     // Called at the end of the camera scene's G-buffer pass, whatever the antialiasing, with the device state saved
     // around it: the depth there reads as the G-buffer pass wrote it, which it does not in the lighting phase.
     inline void (*OnGBufferEnd)(IDirect3DDevice9* device) = nullptr;
+    // Called first at the end of the camera scene's G-buffer pass, before the motion vectors are worked out from its
+    // depth, with the device state saved around it and the G-buffer's targets still bound: what is drawn there is
+    // part of the scene for everything after (impostors).
+    inline void (*OnGBufferDrawn)(IDirect3DDevice9* device) = nullptr;
     // Marks the motion vectors' passes for the PostFx profiler (begin, then end), when it is set.
     inline void (*ProfileMotion)(IDirect3DDevice9* device, bool begin) = nullptr;
 
@@ -1037,6 +1041,16 @@ public:
         bCapturing = false;
 
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
+        if (device && OnGBufferDrawn)
+        {
+            bInternalDraw = true;
+            {
+                StateBackup backup(device);
+                OnGBufferDrawn(device);
+            }
+            bInternalDraw = false;
+        }
+
         if (device && GetMode() != Mode::Off && CurrentCamera.Valid && ResourcesReady())
         {
             bInternalDraw = true;

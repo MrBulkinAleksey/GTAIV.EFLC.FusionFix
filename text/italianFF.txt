@@ -280,6 +280,9 @@ SSR March on Full Depth
 [FGDebug]
 Frame Generation Debug View
 
+[Impostors]
+Impostori (edifici lontani)
+
 [ImpostorDebug]
 Debug cottura impostor
 

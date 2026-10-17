@@ -2120,6 +2120,7 @@ public:
             { 0, "PREF_SSR_FULL_DEPTH",         "DEBUG",      "SSRMarchFullDepth",                  "",                           0, nullptr, 0, 1 },
             { 0, "PREF_FG_DEBUG_VIEW",          "DEBUG",      "FrameGenerationDebugView",           "MENU_DISPLAY_FG_DEBUG",      0, nullptr, 0, 3 },
             { 0, "PREF_IMPOSTOR_DEBUG",         "DEBUG",      "ImpostorDebug",                      "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_IMPOSTORS",              "PERFORMANCE", "Impostors",                         "",                           0, nullptr, 0, 1 },
             { 0, "PREF_VOLUMETRIC_LIGHT",       "LIGHTING",   "VolumetricLight",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_CONTACTSHADOWS",         "LIGHTING",   "ContactShadows",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSGI",                   "LIGHTING",   "IndirectLight",                      "",                           1, nullptr, 0, 1 },
@@ -2452,6 +2453,7 @@ public:
             AddEmptyLine(category);
             AddRow(category, "FGDebug", "PREF_FG_DEBUG_VIEW", 4, "MENU_DISPLAY_FG_DEBUG");
             AddEmptyLine(category);
+            AddRow(category, "Impostors", "PREF_IMPOSTORS", 2, toggle);
             AddRow(category, "ImpostorDebug", "PREF_IMPOSTOR_DEBUG", 2, toggle);
         }
     }

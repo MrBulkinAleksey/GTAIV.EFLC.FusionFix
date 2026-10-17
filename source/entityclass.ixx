@@ -112,10 +112,15 @@ export namespace EntityClass
     uint32_t DrawsPerEntity(uint16_t model);
 
     // Render thread: after each entity draw command (CDrawEntityDC) of the scene's G-buffer, once the draw hooks are
-    // done with it, with the command, its model, the place it keeps and its execute, which draws it again with whatever
-    // state is set then. One hook; the last set wins.
-    using GBufferEntityHook = void (*)(void* dc, uint16_t model, const float* place, void(__thiscall* execute)(void*));
+    // done with it, with the command, its entity's kind, its model, the place it keeps and its execute, which draws it
+    // again with whatever state is set then. One hook; the last set wins.
+    using GBufferEntityHook = void (*)(void* dc, Kind kind, uint16_t model, const float* place, void(__thiscall* execute)(void*));
     void SetGBufferEntityHook(GBufferEntityHook hook);
+
+    // Render thread: before each entity draw command (CDrawEntityDC) of the scene's G-buffer, before the draw hooks;
+    // true leaves the command out (not executed). One hook; the last set wins.
+    using GBufferEntitySkip = bool (*)(void* dc, Kind kind, uint16_t model, const float* place);
+    void SetGBufferEntitySkip(GBufferEntitySkip skip);
 
     // The model info of a model index (CE 0x1295cd8), or 0
     uintptr_t ModelInfo(uint16_t model);
@@ -165,6 +170,7 @@ namespace
     // DrawsPerEntity: by model index (CDrawEntityDC +0x30, CDrawFragTypeDC +0x58)
     volatile uint8_t modelDraws[0x10000] = {};
     EntityClass::GBufferEntityHook gbufferEntityHook = nullptr;
+    EntityClass::GBufferEntitySkip gbufferEntitySkip = nullptr;
     constexpr uint32_t kDrawLogFrames = 600;
     struct TargetStats
     {
@@ -853,6 +859,14 @@ namespace
             return;
         }
 
+        if (gbufferEntitySkip && source == FromEntity && IsGBuffer(target))
+        {
+            uint16_t model;
+            const float* place;
+            if (ModelAndPlace(dc, source, model, place) && gbufferEntitySkip(dc, kind, model, place))
+                return;
+        }
+
         const auto& hooks = Hooks();
         for (const auto& [before, after] : hooks)
             if (before)
@@ -995,7 +1009,7 @@ namespace
             uint16_t model;
             const float* place;
             if (ModelAndPlace(dc, source, model, place))
-                gbufferEntityHook(dc, model, place, original);
+                gbufferEntityHook(dc, kind, model, place, original);
         }
     }
 
@@ -1175,6 +1189,11 @@ namespace EntityClass
     void SetGBufferEntityHook(GBufferEntityHook hook)
     {
         gbufferEntityHook = hook;
+    }
+
+    void SetGBufferEntitySkip(GBufferEntitySkip skip)
+    {
+        gbufferEntitySkip = skip;
     }
 
     uintptr_t ModelInfo(uint16_t model)

@@ -280,6 +280,9 @@ Logitech LightSync RGB
 [FGDebug]
 Отладка генерации кадров
 
+[Impostors]
+Импосторы (дальние здания)
+
 [ImpostorDebug]
 Отладка запекания импосторов
 
