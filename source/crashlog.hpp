@@ -8,6 +8,7 @@
 #include <Windows.h>
 #include <DbgHelp.h>
 #include <Psapi.h>
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -89,6 +90,38 @@ namespace CrashLog
 
         // Values on the stack that point into code: most are return addresses, the callers
         // that led here, though some are stale or plain function pointers.
+        // A 32-bit process: a driver or DXVK that can't map anything more fails in odd places, so say how much is left.
+        MEMORYSTATUSEX status = { sizeof(status) };
+        PROCESS_MEMORY_COUNTERS_EX counters = { sizeof(counters) };
+        SIZE_T freeTotal = 0, freeLargest = 0, reserved = 0;
+        for (uintptr_t at = 0x10000;;)
+        {
+            MEMORY_BASIC_INFORMATION area = {};
+            if (!VirtualQuery(reinterpret_cast<LPCVOID>(at), &area, sizeof(area)) || !area.RegionSize)
+                break;
+            if (area.State == MEM_FREE)
+            {
+                freeTotal += area.RegionSize;
+                freeLargest = (std::max)(freeLargest, area.RegionSize);
+            }
+            else if (area.State == MEM_RESERVE)
+                reserved += area.RegionSize;
+            const uintptr_t next = reinterpret_cast<uintptr_t>(area.BaseAddress) + area.RegionSize;
+            if (next <= at)
+                break;
+            at = next;
+        }
+        fwprintf(f, L"\nAddress space: %Iu MB free, largest free block %Iu MB, %Iu MB reserved\n", freeTotal >> 20,
+                 freeLargest >> 20, reserved >> 20);
+        if (GlobalMemoryStatusEx(&status))
+            fwprintf(f, L"Virtual %llu of %llu MB available, system RAM %llu of %llu MB available\n", status.ullAvailVirtual >> 20,
+                     status.ullTotalVirtual >> 20, status.ullAvailPhys >> 20, status.ullTotalPhys >> 20);
+        DWORD handles = 0;
+        GetProcessHandleCount(GetCurrentProcess(), &handles);
+        if (K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters)))
+            fwprintf(f, L"Process: %Iu MB private, %Iu MB working set, %lu handles\n", counters.PrivateUsage >> 20,
+                     counters.WorkingSetSize >> 20, handles);
+
         fwprintf(f, L"\nCode addresses on the stack:\n");
         uint32_t stack[1024] = {};
         SIZE_T read = 0;
@@ -142,9 +175,19 @@ namespace CrashLog
         if (writeDump && file != INVALID_HANDLE_VALUE)
         {
             MINIDUMP_EXCEPTION_INFORMATION exception = { GetCurrentThreadId(), info, FALSE };
-            writeDump(GetCurrentProcess(), GetCurrentProcessId(), file,
-                      MINIDUMP_TYPE(MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules),
-                      &exception, nullptr, nullptr);
+            if (!writeDump(GetCurrentProcess(), GetCurrentProcessId(), file,
+                           MINIDUMP_TYPE(MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules),
+                           &exception, nullptr, nullptr))
+            {
+                // MiniDumpWriteDump returns an HRESULT in the last error
+                const DWORD error = GetLastError();
+                FILE* f = nullptr;
+                if (!_wfopen_s(&f, PathWithSuffix(L".crash.log").c_str(), L"a, ccs=UTF-8") && f)
+                {
+                    fwprintf(f, L"\nMinidump failed: %08lX\n", error);
+                    fclose(f);
+                }
+            }
         }
         if (file != INVALID_HANDLE_VALUE)
             CloseHandle(file);
