@@ -12,7 +12,8 @@
 // some in flower (heads of red, white, yellow, violet); a quarter of its colour is the ground's under its root
 // (GroundTex, a copy of the G-buffer's colour before the grass), so it takes the hue of the lawn, dirt or verge it grows
 // on. Blades are long and thin, arc over in four segments, rounded across, lighter and yellower to the tip, with a
-// faint broad highlight.
+// faint broad highlight. Seen against the sun they let it through (their normal turns to it, so the lighting and its
+// shadows take it).
 //
 // Bending, as the grass props have it (world_grass_wind.patch): the cars and people near (up to kBodies, Grass Bending)
 // push the blades away from their box and lay them down under it, helicopters with their blades turning blow them
@@ -27,6 +28,7 @@ float4 vec4Wind;        // the wind's direction over the gust's wavelength (xy),
 float4 vec4WindDir;     // the wind's unit direction (xy), bend and flutter at the tip per metre of height
 float4 vec4Blade;       // height scale, width scale, the ground's share in the colour, the debug colours (1 = by surface)
 float4 vec4Eye;         // the camera's position
+float4 vec4Sun;         // towards the sun (xyz), how much the blades let it through (0 at night)
 float fNearPlane;
 float fFarDivNear;
 // The bodies, three each: (centre xy, forward xy), (half length, half width, 1 / reach, strength), (the ground they
@@ -56,6 +58,7 @@ struct VSOutput
     float2 w : TEXCOORD2;       // clip w, specular (×0.5, as the G-buffer has it)
     float4 ground : TEXCOORD3;  // the root's clip x, y, w; light from root to tip
     float3 tuft : TEXCOORD4;    // across the blade (-1..1), up it (0..1), 1 + a random value for a tuft (0 for a blade)
+    float4 view : TEXCOORD5;    // from the camera to the vertex, how much the blade lets the sun through
 };
 
 float3 TagColour(float tag)
@@ -139,6 +142,7 @@ VSOutput GrassVS(VSInput input)
         output.w = float2(1.0, 0.0);
         output.ground = 0.0;
         output.tuft = 0.0;
+        output.view = 0.0;
         return output;
     }
 
@@ -228,6 +232,7 @@ VSOutput GrassVS(VSInput input)
     float4 rootClip = mul(float4(root, 1.0), matViewProj);
     output.ground = float4(rootClip.xy, rootClip.w, lerp(0.5, 1.05, t) * lerp(1.0, 0.85, clump * isGrass));
     output.tuft = float3(input.vertex.y, t, isTuft * (1.0 + random));
+    output.view = float4(position - vec4Eye.xyz, t * (1.0 - isPlant) * (1.0 - dry * 0.4));
     return output;
 }
 
@@ -259,8 +264,16 @@ PSOutput GrassPS(VSOutput input)
     float share = onScreen && vec4Blade.w <= 0.0 ? vec4Blade.z : 0.0;
     float3 colour = lerp(input.colour.rgb, ground, share) * (vec4Blade.w > 0.0 ? lerp(0.6, 1.0, input.ground.w / 1.05) : input.ground.w);
 
+    // Against the sun: a thin blade lets it through. Its normal turns to the sun, so the game's lighting (and its sun
+    // shadow) lights it as from the front, and it warms a little
+    float3 normal = normalize(input.normal);
+    float backlit = saturate(dot(normalize(input.view.xyz), vec4Sun.xyz));
+    backlit *= backlit * backlit * input.view.w * vec4Sun.w;
+    normal = normalize(lerp(normal, vec4Sun.xyz, backlit * 0.8));
+    colour *= 1.0 + backlit * float3(0.35, 0.3, 0.05);
+
     output.colour = float4(saturate(colour), 1.0);
-    output.normal = float4(normalize(input.normal) * 0.5 + 0.5, 1.0);
+    output.normal = float4(normal * 0.5 + 0.5, 1.0);
     // A faint broad highlight (gloss sqrt(24 / 512)); without one, gloss 258 / 1023 marks a material without a specular
     // map (world_no_specular_mark.patch)
     output.specular = float4(input.w.y, input.w.y > 0.001 ? 0.2165 : 0.252199411, input.colour.a, 1.0);

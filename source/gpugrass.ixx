@@ -28,6 +28,7 @@ import postfxprofiler;
 import procedural;
 import grasswind;
 import nearbybodies;
+import shaders;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -114,7 +115,7 @@ namespace GpuGrass
     IDirect3DIndexBuffer9* meshIB = nullptr;
     IDirect3DVertexBuffer9* instanceVB = nullptr;
     IDirect3DVertexDeclaration9* declaration = nullptr;
-    struct Handles { D3DXHANDLE technique, viewProj, wind, windDir, blade, eye, nearPlane, farDivNear, bodies, bend; } h{};
+    struct Handles { D3DXHANDLE technique, viewProj, wind, windDir, blade, eye, nearPlane, farDivNear, bodies, bend, sun; } h{};
     const char* status = "not drawn yet";
     bool depthLogged = false;
 
@@ -336,6 +337,7 @@ namespace GpuGrass
                 h.eye = effect->GetParameterByName(nullptr, "vec4Eye");
                 h.bodies = effect->GetParameterByName(nullptr, "vec4Bodies");
                 h.bend = effect->GetParameterByName(nullptr, "vec4Bend");
+                h.sun = effect->GetParameterByName(nullptr, "vec4Sun");
                 h.nearPlane = effect->GetParameterByName(nullptr, "fNearPlane");
                 h.farDivNear = effect->GetParameterByName(nullptr, "fFarDivNear");
             }
@@ -631,6 +633,14 @@ export namespace GpuGrass
         effect->SetVector(h.windDir, &windDir);
         effect->SetVector(h.blade, &blade);
         effect->SetVector(h.eye, &eyeVector);
+        // Towards the sun (c216's, which shaders.ixx keeps); the light through the blades fades as it sets
+        {
+            const float* sun = SunDirectionWorld;
+            const float length = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]);
+            const D3DXVECTOR4 sunVector = length > 0.01f ? D3DXVECTOR4(sun[0] / length, sun[1] / length, sun[2] / length,
+                std::clamp(sun[2] / length * 6.0f, 0.0f, 1.0f)) : D3DXVECTOR4(0.0f, 0.0f, 1.0f, 0.0f);
+            effect->SetVector(h.sun, &sunVector);
+        }
         // The bodies that press grass in range, the nearest the camera first; their strength fades over the last 10 m
         // of NearbyBodies' range, as the props have it
         D3DXVECTOR4 bodyValues[kBodies * 3] = {};
