@@ -87,7 +87,9 @@ import temporal;
 //
 // The water's reflection: as its first draw of each lock runs, the pixels a sphere's radius over its distance takes in
 // the reflection (its projection's [1][1] times half the device viewport's height) are kept for ReflectionSmallCull
-// (procedural.ixx), and EntityDrawLog counts its draws and time by their radius in those pixels.
+// (procedural.ixx), and EntityDrawLog counts its draws and time by their radius in those pixels, those whose sphere lies
+// wholly under its clip plane (ReflectionUnderWaterCull leaves them out) and by the water seen on screen a frame or two
+// before (RenderSkip's queries, WaterReflectionWhenSeen).
 export namespace EntityClass
 {
     enum class Kind : uint8_t
@@ -227,6 +229,8 @@ namespace
         int64_t pixelTicks[6]{};
         double pixelsPerSizeSum = 0.0;
         uint64_t pixelsPerSizeLocks = 0;
+        uint64_t underDraws = 0, seenDraws[6]{};
+        int64_t underTicks = 0, seenTicks[6]{};
         // The G-buffer: by model
         bool models = false;
         struct ModelStats { uint64_t draws = 0, placed = 0; int64_t ticks = 0; double distance = 0.0; Kind kind = Kind::Unknown; };
@@ -351,6 +355,11 @@ namespace
                         s.pixelsPerSizeLocks ? s.pixelsPerSizeSum / double(s.pixelsPerSizeLocks) : 0.0);
                     for (int i = 0; i < 6; ++i)
                         text += std::format("{} {} {:.1f} ({:.3f} ms)", i ? "," : "", pixelSizes[i], s.pixelDraws[i] * perFrame, s.pixelTicks[i] * msPerFrame);
+                    text += std::format("\n    wholly under the water's clip plane {:.1f} ({:.3f} ms); by the water's pixels seen a frame or two before:",
+                        s.underDraws * perFrame, s.underTicks * msPerFrame);
+                    static constexpr const char* seenSizes[6] = { "not known", "none", "under 1000", "1000-10000", "10000-100000", "100000+" };
+                    for (int i = 0; i < 6; ++i)
+                        text += std::format("{} {} {:.1f} ({:.3f} ms)", i ? "," : "", seenSizes[i], s.seenDraws[i] * perFrame, s.seenTicks[i] * msPerFrame);
                     text += "\n";
                 }
             }
@@ -800,6 +809,18 @@ namespace
                 ++p;
             stats.pixelDraws[p]++;
             stats.pixelTicks[p] += ticks;
+        }
+        if (stats.water)
+        {
+            if (CWaterLevel::GetReflectionHeight && place[2] + reach < CWaterLevel::GetReflectionHeight() - 0.5f)
+            {
+                stats.underDraws++;
+                stats.underTicks += ticks;
+            }
+            const int64_t seen = RenderSkip::WaterPixelsSeen();
+            int w = seen < 0 ? 0 : seen == 0 ? 1 : seen < 1000 ? 2 : seen < 10000 ? 3 : seen < 100000 ? 4 : 5;
+            stats.seenDraws[w]++;
+            stats.seenTicks[w] += ticks;
         }
         return distance;
     }

@@ -2334,6 +2334,13 @@ export namespace CWeather
     }
 }
 
+// The height of the water the game reflects: its reflection's clip plane is z = this - 0.5 (CE 0xd76d59). The game keeps
+// it for the update and the render threads apart (CE 0xad5db0 reads the calling thread's), so either may call it.
+export namespace CWaterLevel
+{
+    float(__cdecl* GetReflectionHeight)() = nullptr;
+}
+
 export namespace CClock
 {
     uint8_t* ms_nGameClockHours;
@@ -3477,6 +3484,11 @@ public:
 
         pattern = hook::pattern("F3 0F 10 05 ? ? ? ? 8B 44 24 0C 8B 4C 24 04");
         CWeather::InterpolationValue = *pattern.get_first<float*>(4);
+
+        // cmp byte [0x1056b48], 0; je; call 0xad5db0; fstp [esp+0xc]; movss xmm0, [0x1056b4c]: the water reflection's plane
+        pattern = hook::pattern("80 3D ? ? ? ? 00 0F 84 ? ? ? ? E8 ? ? ? ? D9 5C 24 0C F3 0F 10 05");
+        if (!pattern.empty())
+            CWaterLevel::GetReflectionHeight = reinterpret_cast<float(__cdecl*)()>(injector::GetBranchDestination(pattern.get_first(0xD)).get<void>());
 
         pattern = find_pattern("BF ? ? ? ? F3 AB B8", "BF ? ? ? ? F3 AB B8 ? ? ? ? B9");
         RageDirect3DDevice9::g_TexturesBySampler = *pattern.get_first<IDirect3DTexture9**>(1);

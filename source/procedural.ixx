@@ -75,6 +75,10 @@ import entityclass;
 //    pass) leaves the water reflection phases at the same place. Far buildings were 400-500 of the reflection's
 //    draws, 3-4 ms of the render thread a frame; there the image is small, squashed by the grazing view and broken
 //    up by the waves. Left out of the list, the game thread makes no command for them either.
+//  - ReflectionUnderWaterCull ([PERFORMANCE]): an entity whose sphere lies wholly under the water reflection's clip plane
+//    (the water's height less 0.5 m, CWaterLevel::GetReflectionHeight) leaves the water reflection phases at the same
+//    place: the plane cuts it out of the image anyway, after the render thread has paid for its draws. Quays, river
+//    banks, the sea floor and tunnels near the water.
 //
 // And what keeps the cost of more props down (the game already keeps them out of shadows: it sets
 // entity +0x24 0x10000 on each, and the render lists then drop the shadow phases, CE 0xae85a5/0xae7058):
@@ -115,6 +119,8 @@ namespace Procedural
     bool bReflectionSmallCull = true;
     constexpr float kReflectionCullFrom = 100.0f;
     constexpr float kReflectionMinPixels = 4.0f;  // the radius in the reflection's pixels
+    bool bReflectionUnderWaterCull = true;
+    constexpr float kReflectionClipBelow = 0.5f;  // the clip plane under the water's height (CE 0xd76d62: [0x1056b4c])
     constexpr float SmallFarScreenSize = 0.005f;   // radius over distance under which a prop is left out
     constexpr float SmallPropRadius = 2.0f;        // smaller ones thin out past SmallFarThinFrom
     constexpr float SmallFarThinFrom = 60.0f;
@@ -377,7 +383,7 @@ namespace Procedural
     uint32_t nUsedMax = 0;
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
     uint32_t nQueueMax = 0, nWaitingMax = 0, nDropped = 0;
-    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0, nHeavyCascades = 0, nHeavyScene = 0, nReflectionSmall = 0;
+    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0, nHeavyCascades = 0, nHeavyScene = 0, nReflectionSmall = 0, nReflectionUnderWater = 0;
     uint32_t nConeFull = 0, nParkedNow = 0;
     uint32_t nUpdates = 0;
     double fUpdateMs = 0.0, fUpdateMaxMs = 0.0;
@@ -529,6 +535,7 @@ namespace Procedural
         bSmallFarCull = iniReader.ReadInteger("PROCEDURAL", "ProceduralSmallFarCull", 1) != 0;
         bHeavyPropCull = iniReader.ReadInteger("PERFORMANCE", "HeavyPropCull", 1) != 0;
         bReflectionSmallCull = iniReader.ReadInteger("PERFORMANCE", "ReflectionSmallCull", 1) != 0;
+        bReflectionUnderWaterCull = iniReader.ReadInteger("PERFORMANCE", "ReflectionUnderWaterCull", 1) != 0;
         fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
         fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
         bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
@@ -961,6 +968,33 @@ namespace Procedural
         if (radius > 0.0f && radius * pixelsPerSize < kReflectionMinPixels * distance)
         {
             nReflectionSmall++;
+            phases &= ~reflections;
+        }
+        return phases;
+    }
+
+    // ReflectionUnderWaterCull: an entity wholly under the water reflection's clip plane leaves its phases. Its bound
+    // sphere's centre is placed by the entity's matrix: the model's centre offset is added to the radius instead
+    uint32_t DropUnderWater(uintptr_t entity, uint32_t phases)
+    {
+        if (!modelInfos || !pReflectionPhases || !pScenePhase || !CWaterLevel::GetReflectionHeight)
+            return phases;
+        const auto reflections = *pReflectionPhases & ~*pScenePhase;
+        if (!(phases & reflections))
+            return phases;
+        const auto info = *(uintptr_t*)(modelInfos + *(uint16_t*)(entity + 0x2e) * 4);
+        if (!info)
+            return phases;
+        const float* centre = (const float*)(info + 0x10);
+        const float radius = *(const float*)(info + 0x1c);
+        float place[3];
+        if (!(radius > 0.0f) || !CEntity::GetPosition(entity, place))
+            return phases;
+        const float reach = radius + std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
+        const float clip = CWaterLevel::GetReflectionHeight() - kReflectionClipBelow;
+        if (place[2] + reach < clip)
+        {
+            nReflectionUnderWater++;
             phases &= ~reflections;
         }
         return phases;
@@ -1443,7 +1477,7 @@ public:
                 {
                     static auto AddHook = safetyhook::create_mid(add.get_first(0), [](SafetyHookContext& regs)
                     {
-                        if (!bHeavyPropCull && !bReflectionSmallCull)
+                        if (!bHeavyPropCull && !bReflectionSmallCull && !bReflectionUnderWaterCull)
                             return;
                         auto& phases = *(uint32_t*)(regs.esp + 4);
                         const auto entity = *(uintptr_t*)(regs.esp + 8);
@@ -1454,6 +1488,8 @@ public:
                             phases = DropHeavy(entity, phases, distance);
                         if (bReflectionSmallCull)
                             phases = DropSmallInReflection(entity, phases, distance);
+                        if (bReflectionUnderWaterCull)
+                            phases = DropUnderWater(entity, phases);
                     });
                 }
             }
@@ -1497,14 +1533,14 @@ public:
             auto alive = props.size();
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, heavy out of cascades {}, heavy left out {}, small out of the water's reflection {} ({:.0f} px a radius over distance of 1); box full {}, candidates capped {}",
+                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, heavy out of cascades {}, heavy left out {}, small out of the water's reflection {} ({:.0f} px a radius over distance of 1), under the water out of its reflection {}; box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
                 nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nHeavyCascades, nHeavyScene, nReflectionSmall,
-                EntityClass::ReflectionPixelsPerSize(), nEntitiesCapped, nCandidatesCapped));
+                EntityClass::ReflectionPixelsPerSize(), nReflectionUnderWater, nEntitiesCapped, nCandidatesCapped));
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
-            nReflectionsSkipped = nSmallFarCulled = nHeavyCascades = nHeavyScene = nReflectionSmall = 0;
+            nReflectionsSkipped = nSmallFarCulled = nHeavyCascades = nHeavyScene = nReflectionSmall = nReflectionUnderWater = 0;
             nConeFull = 0;
             nConeReleased = 0;
         };
