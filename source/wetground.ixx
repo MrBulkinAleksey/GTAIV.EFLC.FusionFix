@@ -77,6 +77,7 @@ export void RenderWetGround(IDirect3DDevice9* pDevice)
             R.fWetness = R.fWetGroundDrying > 0.0f ? (std::max)(rain, R.fWetness - float(dt) / R.fWetGroundDrying) : rain;
     }
 
+    R.fClothWetDrawn = 0.0f;
     if (R.fWetGround <= 0.0f)
         return skip("off in the ini");
     if (!R.WetWeatherEnabled())
@@ -160,6 +161,10 @@ export void RenderWetGround(IDirect3DDevice9* pDevice)
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Allow0"), &allow0);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Allow1"), &allow1);
     effect->SetFloat(effect->GetParameterByName(nullptr, "fDebug"), float(R.WetGroundDebug()));
+    // Clothes carry their mark only with ClothSheen on (MarkPedSkin).
+    const float clothWet = R.ClothSheenEnabled() ? std::clamp(R.fWetness * R.fClothWet, 0.0f, 1.0f) : 0.0f;
+    effect->SetFloat(effect->GetParameterByName(nullptr, "fClothWet"), clothWet);
+    R.fClothWetDrawn = clothWet;
 
     // Saved besides what StateBackup keeps around OnGBufferEnd: the textures, sampler states and
     // constants the pass sets.

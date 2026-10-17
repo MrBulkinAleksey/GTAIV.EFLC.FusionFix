@@ -430,18 +430,23 @@ public:
     // There the fibres catch the sun at grazing angles (the Charlie sheen lobe, roughness 0.5, with its
     // shadow) and the ambient around the rim ((1 - N.V)^ClothSheenPower), ClothSheenStrength times, in
     // the square root of the albedo ClothSheenWhite of the way to white, added after the albedo so dark
-    // cloth keeps it. The game's highlight is scaled by 1 - ClothSpecularCut. Gloss above ClothGlossCut fades it out
-    // over ClothGlossFade, for leather drawn as clothes (1 lets all through). ClothDebug (graphics
-    // menu, Debug) shows clothes red, their gloss green and skin blue on people, ClothDebugBrightness
-    // times as bright so the masks read after the tone map; the rest of the frame keeps its colour.
+    // cloth keeps it. The game's highlight is scaled by 1 - ClothSpecularCut. Texels whose specular
+    // intensity reaches ClothSpecularGate get no mark (ped_skin_scattering_mask_cloth_gate.patch, c150.y),
+    // for leather and vinyl drawn as clothes; 0 marks them all (every ped writes the same gloss, so the gloss
+    // can't tell them). ClothDebug (graphics menu, Debug) shows clothes red, their specular intensity green
+    // and skin blue on people, ClothDebugBrightness times as bright so the masks read after the tone map; the
+    // rest of the frame keeps its colour. In the rain the wet ground pass soaks the clothes, ClothWet times
+    // the wetness (WetGround.fx): darker, a dull film of water; their sheen drops by 70% of it and the game's
+    // highlight is no longer cut (fClothWetDrawn, what the pass drew this frame).
     static bool ClothSheenEnabled() { static auto p = FusionFixSettings.GetRef("PREF_CLOTH_SHEEN"); return p && p->get() != 0; }
     static bool ClothDebug() { static auto p = FusionFixSettings.GetRef("PREF_CLOTH_DEBUG"); return p && p->get() != 0; }
     float fClothSheen = 0.5f;
     float fClothSheenPower = 3.0f;
     float fClothSheenWhite = 0.1f;
     float fClothSpecularCut = 0.5f;
-    float fClothGlossCut = 1.0f;
-    float fClothGlossFade = 0.1f;
+    float fClothSpecularGate = 0.0f;
+    float fClothWet = 1.0f;
+    float fClothWetDrawn = 0.0f;
     float fClothDebugBrightness = 8.0f;
     int nClothComponents = 0x14E;
     // Materials with no specular map (c197.x; deferred_lighting_sun_sheen.patch) write no specular
@@ -1941,8 +1946,8 @@ public:
             IniFloat("LIGHTING", "ClothSheenPower", &PostFxResource::fClothSheenPower, 3.0f, 0.5f, 16.0f),
             IniFloat("LIGHTING", "ClothSheenWhite", &PostFxResource::fClothSheenWhite, 0.1f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "ClothSpecularCut", &PostFxResource::fClothSpecularCut, 0.5f, 0.0f, 1.0f),
-            IniFloat("LIGHTING", "ClothGlossCut", &PostFxResource::fClothGlossCut, 1.0f, 0.0f, 1.0f),
-            IniFloat("LIGHTING", "ClothGlossFade", &PostFxResource::fClothGlossFade, 0.1f, 0.01f, 1.0f),
+            IniFloat("LIGHTING", "ClothSpecularGate", &PostFxResource::fClothSpecularGate, 0.0f, 0.0f, 16.0f),
+            IniFloat("LIGHTING", "ClothWet", &PostFxResource::fClothWet, 1.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "ClothDebugBrightness", &PostFxResource::fClothDebugBrightness, 8.0f, 0.1f, 100.0f),
             IniInt("LIGHTING", "ClothComponents", &PostFxResource::nClothComponents, 0x14E, 0, 0x7FF),
             IniFloat("LIGHTING", "SpecularSheen", &PostFxResource::fSpecularSheen, 0.1f, 0.0f, 50.0f),

@@ -1,0 +1,46 @@
+diff --git a/win32_30_nv8/gta_ped/gta_pedPS5.asm b/win32_30_nv8/gta_ped/gta_pedPS5.asm
+index c8c30824..76e8d723 100644
+--- a/win32_30_nv8/gta_ped/gta_pedPS5.asm
++++ b/win32_30_nv8/gta_ped/gta_pedPS5.asm
+@@ -114,6 +114,7 @@
+     mul r0.w, r0.w, v4.w
+     mul oC0.xyz, r0, c66.x
+     mul r0.xy, r2, c66.w
++    add r22.x, r0.x, -c150.y // FusionFix cloth: the specular intensity less ClothSpecularGate (postfx.ixx), for the mark below
+     mul r0.y, r0.y, c1.y
+     add r2.xyz, -c15, v5
+     add r2.xyz, r2, c1.x
+@@ -149,7 +150,9 @@
+     cmp oC2.w, r20.x, c2.x, c2.y
+     mov r0.xy, c2
+     mul r21, r0.yxxx, c52.x
+-    add r21.x, r21.x, c150.x // FusionFix: a quarter step on the material ID for the HEAD and HAND components, set per component (postfx.ixx), marks skin
++    cmp r22.x, r22.x, c2.x, c2.y // FusionFix: a quarter step on the material ID for the HEAD and HAND components, set per component (postfx.ixx), marks skin;
++    mul r22.x, r22.x, c150.x // an eighth marks clothes, but not on texels as shiny as leather or vinyl (c150.y; skin's is out of reach)
++    add r21.x, r21.x, r22.x
+     mov oC3, r21
+     
+     // LogDepth Write
+diff --git a/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm b/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm
+index 7c88b0fc..e5abdaca 100644
+--- a/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm
++++ b/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm
+@@ -114,6 +114,7 @@
+     mul r0.w, r0.w, v4.w
+     mul oC0.xyz, r0, c66.x
+     mul r0.xy, r2, c66.w
++    add r22.x, r0.x, -c150.y // FusionFix cloth: the specular intensity less ClothSpecularGate (postfx.ixx), for the mark below
+     mul r0.y, r0.y, c1.y
+     add r2.xyz, -c15, v5
+     add r2.xyz, r2, c1.x
+@@ -149,7 +150,9 @@
+     cmp oC2.w, r20.x, c2.x, c2.y
+     mov r0.xy, c2
+     mul r21, r0.yxxx, c52.x
+-    add r21.x, r21.x, c150.x // FusionFix: a quarter step on the material ID for the HEAD and HAND components, set per component (postfx.ixx), marks skin
++    cmp r22.x, r22.x, c2.x, c2.y // FusionFix: a quarter step on the material ID for the HEAD and HAND components, set per component (postfx.ixx), marks skin;
++    mul r22.x, r22.x, c150.x // an eighth marks clothes, but not on texels as shiny as leather or vinyl (c150.y; skin's is out of reach)
++    add r21.x, r21.x, r22.x
+     mov oC3, r21
+     
+     // LogDepth Write

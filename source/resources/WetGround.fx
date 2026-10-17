@@ -13,6 +13,10 @@
 // bits) vec4Allow0/1 lets through, so cars and people stay as they are, and only where the
 // G-buffer's vertex colour (_DEFERRED_GBUFFER_2_.z) says the sky reaches: under bridges and
 // awnings the ground stays dry.
+//
+// People's clothes (the eighth step ClothSheen puts on their ID, ped_cloth_sheen.patch) soak the
+// rain up wherever they are: darker and a little more saturated, with a dull film of water on top,
+// more on what faces the sky. No puddles, no rings. fClothWet is 0 with ClothSheen off.
 
 sampler2D DepthTex : register(s0);    // the log depth, copied at the end of the G-buffer pass
 sampler2D AlbedoTex : register(s1);   // copies of _DEFERRED_GBUFFER_0_ to _2_
@@ -32,7 +36,8 @@ float4 vec4Wet;     // wetness 0..1, the share of flat ground under puddles, rai
 float4 vec4Shape;   // 1 / puddle tile in metres, ripple strength, ripples' far end in metres, darkening
 float4 vec4Allow0;  // material categories 0..3 that get wet (1) or not (0)
 float4 vec4Allow1;  // and 4..7
-float fDebug;       // WetGroundDebug: 1 the material categories, 2 wetness, puddles and rings
+float fDebug;       // WetGroundDebug: 1 the material categories, 2 wetness, puddles and rings, wet clothes magenta
+float fClothWet;    // clothes' wetness 0..1: the wetness times ClothWet
 
 struct Targets
 {
@@ -103,6 +108,29 @@ Targets Wet_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS)
     float3 f = frac(g.w * float3(0.998046875, 7.984375, 63.875));
     f.xy -= f.yz * 0.125;
     float3 N = normalize(g.xyz * 256.0 + f - 127.999992);
+
+    // Clothes: the same test as the light shaders', 1 at an eighth over a whole step, 0 at a quarter (skin).
+    float fc = frac(tex2D(MaterialTex, uv).r * 255.0 + 0.25);
+    float clothWet = fClothWet * (saturate(16.0 * fc - 5.0) - saturate(16.0 * fc - 6.0));
+    [branch]
+    if (clothWet > 0.0)
+    {
+        // Shoulders and thighs take the rain first; the rest still soaks through. Gloss to about power 60 and a
+        // specular intensity of an eighth (stored halved, as for the ground): wet cotton dulls, it is no mirror.
+        float w = clothWet * lerp(0.6, 1.0, saturate(N.z));
+        float3 a = o.albedo.rgb;
+        float l = dot(a, float3(0.299, 0.587, 0.114));
+        o.albedo.rgb = max(lerp(l, a, 1.0 + 0.25 * w), 0.0) * (1.0 - 0.35 * w);
+        o.specular.x = lerp(o.specular.x, max(o.specular.x, 0.03), w);
+        o.specular.y = lerp(o.specular.y, max(o.specular.y, 0.35), w);
+        [branch]
+        if (fDebug == 2.0)
+        {
+            o.albedo.rgb = float3(w, 0.0, w);
+            o.specular.xy = 0.0;
+        }
+        return o;
+    }
 
     float sky = smoothstep(0.25, 0.6, o.specular.z);
     float wet = vec4Wet.x * allow * sky;

@@ -2241,7 +2241,8 @@ private:
     // component: a quarter step for HEAD and HAND, which gta_ped and gta_ped_reflect add to the
     // material ID as the skin shaders do (ped_skin_scattering_mask.patch), an eighth for the
     // clothes ClothComponents names (ped_cloth_sheen.patch), 0 for the rest. FACE, the last turn,
-    // leaves it at 0 for whatever is drawn next.
+    // leaves it at 0 for whatever is drawn next. c150.y: the specular intensity from which a texel
+    // of the clothes gets no mark (ClothSpecularGate, leather), out of reach for skin and for 0.
     static inline SafetyHookMid shPedSkinComponent[2]{};
 
     static void MarkPedSkin(uintptr_t component)
@@ -2249,12 +2250,16 @@ private:
         auto& R = PostFxResources;
         const bool skin = R.SkinScatteringEnabled() || R.SSRDebugMode() == R.kSkinDebugMode;
         const bool cloth = R.ClothSheenEnabled() || R.ClothDebug();
-        float id = 0.0f;
+        float id = 0.0f, gate = 1.0e6f;
         if (skin && (component == 0 || component == 4))
             id = 0.25f / 255.0f;
         else if (cloth && component < 11 && (R.nClothComponents & (1 << component)))
+        {
             id = 0.125f / 255.0f;
-        const float mark[4] = { id, 0.0f, 0.0f, 0.0f };
+            if (R.fClothSpecularGate > 0.0f)
+                gate = R.fClothSpecularGate;
+        }
+        const float mark[4] = { id, gate, 0.0f, 0.0f };
         if (auto pDevice = rage::grcDevice::GetD3DDevice())
             pDevice->SetPixelShaderConstantF(150, mark, 1);
     }
@@ -2375,11 +2380,14 @@ public:
             pDevice->SetPixelShaderConstantF(205, offset, 1);
         }
         // Clothes (ped_cloth_sheen.patch). c164: the sheen, the power of its ambient rim, its colour's share of white, the cut of
-        // the game's highlight. c191: the gloss the fade starts at, one over its width, the debug view and its brightness.
+        // the game's highlight; wet clothes (WetGround.fx) lose most of the sheen and keep the highlight of their water.
+        // c191: z the debug view, w its brightness.
         {
             const bool on = R.ClothSheenEnabled();
-            const float c164[4] = { on ? R.fClothSheen : 0.0f, R.fClothSheenPower, R.fClothSheenWhite, on ? R.fClothSpecularCut : 0.0f };
-            const float c191[4] = { R.fClothGlossCut, 1.0f / (std::max)(R.fClothGlossFade, 0.01f), R.ClothDebug() ? 1.0f : 0.0f, R.fClothDebugBrightness };
+            const float wet = R.fClothWetDrawn;
+            const float c164[4] = { on ? R.fClothSheen * (1.0f - 0.7f * wet) : 0.0f, R.fClothSheenPower, R.fClothSheenWhite,
+                                    on ? R.fClothSpecularCut * (1.0f - wet) : 0.0f };
+            const float c191[4] = { 0.0f, 0.0f, R.ClothDebug() ? 1.0f : 0.0f, R.fClothDebugBrightness };
             pDevice->SetPixelShaderConstantF(164, c164, 1);
             pDevice->SetPixelShaderConstantF(191, c191, 1);
         }
