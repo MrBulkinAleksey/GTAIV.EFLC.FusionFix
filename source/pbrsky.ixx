@@ -234,6 +234,10 @@ export void PbrSkyBeforeDraw(IDirect3DDevice9* pDevice)
     if (R.nSkyViewFrame != frame)
     {
         const float haze = WeatherHaze();
+        // After frames with no sky (a loading screen, the night) the first two tables are drawn again too: drawn
+        // once and kept, anything they caught on a frame the device was not ready would stay in every sky.
+        if (!R.nSkyViewFrame || frame - R.nSkyViewFrame > 2)
+            R.fSkyTablesHaze = -1.0f;
         R.fPbrSkyLastHaze = haze;
         // Never into SkyView while it is bound for the fog
         if (bAerialBound)
