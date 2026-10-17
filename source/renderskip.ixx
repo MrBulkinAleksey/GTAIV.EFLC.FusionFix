@@ -29,6 +29,11 @@ import inireload;
 //    REFLECTION_MAP_COLOUR, some 2.3 ms with what is drawn into them) are drawn every other frame; in between their
 //    targets keep the last one, nothing drawn, cleared or resolved into them. They are drawn every frame while the
 //    camera turns or moves fast, where one frame behind would show.
+//  - WaterReflectionWhenSeen = 1: the water's reflection is left out altogether while no water was seen on screen. An
+//    occlusion query goes around each of the game's water draws outside the reflections' own passes (postfx's water
+//    hook); the game draws the reflection whenever water is near, behind the houses or the camera too: 3.5 ms of the
+//    render thread's CPU in the city with 300-450 buildings in it. The answer is a frame or two old, so the first
+//    frames with water seen again show the reflection last drawn; with none known for 4 frames it is drawn.
 // The lamps' shadow maps (SHADOW_MAP_COLOUR_POINT, some 3.8 ms at night) can't be left out so: the game hands its tiles
 // to other lamps from one frame to the next, and a tile kept from the frame before lit a lamp with another's shadow.
 //  - FarCascadesHalfRate = 1: by day the two far cascades of the four, three in four of the cascades' draws, take turns:
@@ -46,6 +51,7 @@ export namespace RenderSkip
 {
     bool bCascadesAtNight = true;
     bool bReflectionsHalfRate = true;
+    bool bWaterReflectionWhenSeen = true;
     bool bFarCascadesHalfRate = true;
     bool bMidCascadeHalfRate = false;
     bool bTrace = false;
@@ -69,6 +75,11 @@ export namespace RenderSkip
     uint32_t DrawCount();
     // Render thread: the pass being drawn now is left out, its draws dropped (whatever else of it goes through)
     bool DropsDraws();
+    // Render thread, around the game's water draws: an occlusion query of the water seen, outside the reflections' passes
+    void BeginWaterQuery();
+    void EndWaterQuery();
+    // The water's pixels seen by the latest query answered (a frame or few old), -1 while none is known
+    int64_t WaterPixelsSeen();
 }
 
 namespace RenderSkip
@@ -116,6 +127,98 @@ namespace RenderSkip
             position[i] = pCamera[i];
             lastForward[i] = length > 0.0f ? forward[i] / length : 0.0f;
         }
+    }
+
+    // The water seen: the queries of the last few frames, up to 4 water draws in each
+    constexpr int WaterQueryFrames = 4, WaterQueriesPerFrame = 4;
+    constexpr uint32_t WaterAnswerMaxAge = 4;
+    struct WaterQueries
+    {
+        IDirect3DQuery9* queries[WaterQueriesPerFrame]{};
+        int issued = 0;
+        uint32_t frame = ~0u;
+        bool pending = false;
+    };
+    WaterQueries waterQueries[WaterQueryFrames];
+    int waterSlot = 0;
+    bool bWaterQueryOpen = false;
+    bool bWaterQueriesFailed = false;
+    uint32_t waterAnswerFrame = ~0u;    // the scene frame of the latest query answered
+    uint64_t waterAnswerPixels = 0;
+    uint32_t waterDecided = ~0u;
+    bool bWaterUnseen = false;
+    // Stats: frames of the water's reflection left out with no water seen, drawn with it seen or not known; water draws
+    // measured, answers that never came
+    uint32_t nWaterUnseenFrames = 0, nWaterSeenFrames = 0, nWaterUnknownFrames = 0, nWaterQueries = 0, nWaterLost = 0;
+    uint64_t waterPixelsSum = 0;
+
+    void ReleaseWaterQueries()
+    {
+        for (auto& w : waterQueries)
+        {
+            for (auto& q : w.queries)
+                if (q)
+                {
+                    q->Release();
+                    q = nullptr;
+                }
+            w = {};
+        }
+        bWaterQueryOpen = false;
+        waterAnswerFrame = ~0u;
+    }
+
+    // The answers back, without waiting: each frame's sum once all its queries have answered
+    void PollWaterQueries()
+    {
+        for (auto& w : waterQueries)
+        {
+            if (!w.pending)
+                continue;
+            uint64_t sum = 0;
+            bool ready = true, failed = false;
+            for (int i = 0; i < w.issued && ready; ++i)
+            {
+                DWORD pixels = 0;
+                const auto hr = w.queries[i]->GetData(&pixels, sizeof(pixels), 0);
+                if (hr == S_OK)
+                    sum += pixels;
+                else if (hr == S_FALSE)
+                    ready = false;
+                else
+                    failed = true, ready = false;
+            }
+            if (failed || (!ready && TemporalAA::SceneFrame - w.frame > WaterAnswerMaxAge))
+            {
+                w.pending = false;
+                nWaterLost++;
+                continue;
+            }
+            if (!ready)
+                continue;
+            w.pending = false;
+            if (waterAnswerFrame == ~0u || int32_t(w.frame - waterAnswerFrame) > 0)
+            {
+                waterAnswerFrame = w.frame;
+                waterAnswerPixels = sum;
+            }
+        }
+    }
+
+    // Once a scene frame: no water seen by an answer at most WaterAnswerMaxAge frames old
+    bool WaterUnseen()
+    {
+        const uint32_t frame = TemporalAA::SceneFrame;
+        if (waterDecided == frame)
+            return bWaterUnseen;
+        waterDecided = frame;
+        PollWaterQueries();
+        const bool known = waterAnswerFrame != ~0u && frame - waterAnswerFrame <= WaterAnswerMaxAge;
+        bWaterUnseen = known && waterAnswerPixels == 0;
+        (bWaterUnseen ? nWaterUnseenFrames : known ? nWaterSeenFrames : nWaterUnknownFrames)++;
+        if (known)
+            waterPixelsSum += waterAnswerPixels;
+        return bWaterUnseen;
     }
 
     // Once a scene frame for each kind: left out when it was drawn the frame before and the camera hardly moved since
@@ -442,6 +545,9 @@ namespace RenderSkip
             return leftOut ? Drop::Everything : Drop::Nothing;
         }
         case WaterReflection:
+            if (bWaterReflectionWhenSeen && WaterUnseen())
+                return Drop::Everything;
+            [[fallthrough]];
         case ReflectionMap: return bReflectionsHalfRate && SkipThisFrame(kind) ? Drop::Everything : Drop::Nothing;
         default: return Drop::Nothing;
         }
@@ -695,6 +801,62 @@ namespace RenderSkip
         return drop != Drop::Nothing;
     }
 
+    // In the reflections' own passes the water is drawn into them, or dropped with them: not the water seen
+    void BeginWaterQuery()
+    {
+        if (!bWaterReflectionWhenSeen || bWaterQueriesFailed || bWaterQueryOpen || !bLockHooked)
+            return;
+        for (int i = 0; i < depth; ++i)
+            if (stack[i].kind == WaterReflection || stack[i].kind == ReflectionMap)
+                return;
+        auto device = RageDirect3DDevice9::GetRuntimeDevice();
+        const uint32_t frame = TemporalAA::SceneFrame;
+        if (!device || !frame)
+            return;
+        auto* w = &waterQueries[waterSlot];
+        if (w->frame != frame)
+        {
+            PollWaterQueries();
+            waterSlot = (waterSlot + 1) % WaterQueryFrames;
+            w = &waterQueries[waterSlot];
+            if (w->pending)
+                nWaterLost++;
+            w->issued = 0;
+            w->pending = false;
+            w->frame = frame;
+        }
+        if (w->issued >= WaterQueriesPerFrame)
+            return;
+        auto& query = w->queries[w->issued];
+        if (!query && FAILED(device->CreateQuery(D3DQUERYTYPE_OCCLUSION, &query)))
+        {
+            query = nullptr;
+            bWaterQueriesFailed = true;  // no occlusion queries on this device: the reflection is drawn as the game says
+            return;
+        }
+        query->Issue(D3DISSUE_BEGIN);
+        bWaterQueryOpen = true;
+    }
+
+    void EndWaterQuery()
+    {
+        if (!bWaterQueryOpen)
+            return;
+        bWaterQueryOpen = false;
+        auto& w = waterQueries[waterSlot];
+        w.queries[w.issued++]->Issue(D3DISSUE_END);
+        w.pending = true;
+        nWaterQueries++;
+    }
+
+    int64_t WaterPixelsSeen()
+    {
+        const uint32_t frame = TemporalAA::SceneFrame;
+        if (waterAnswerFrame == ~0u || frame - waterAnswerFrame > WaterAnswerMaxAge)
+            return -1;
+        return int64_t(waterAnswerPixels);
+    }
+
     float SunElevation()
     {
         if (nSunDirectionIdx == SIZE_MAX)
@@ -736,6 +898,7 @@ public:
             CIniReader iniReader("");
             bCascadesAtNight = iniReader.ReadInteger("PERFORMANCE", "SunShadowsAtNight", 1) != 0;
             bReflectionsHalfRate = iniReader.ReadInteger("PERFORMANCE", "ReflectionsHalfRate", 1) != 0;
+            bWaterReflectionWhenSeen = iniReader.ReadInteger("PERFORMANCE", "WaterReflectionWhenSeen", 1) != 0;
             bFarCascadesHalfRate = iniReader.ReadInteger("PERFORMANCE", "FarCascadesHalfRate", 1) != 0;
             bMidCascadeHalfRate = iniReader.ReadInteger("PERFORMANCE", "MidCascadeHalfRate", 0) != 0;
             bTrace = iniReader.ReadInteger("DEBUG", "RenderSkipTrace", 0) != 0;
@@ -752,6 +915,7 @@ public:
             {
                 bCascadesAtNight = ini.ReadInteger("PERFORMANCE", "SunShadowsAtNight", 1) != 0;
                 bReflectionsHalfRate = ini.ReadInteger("PERFORMANCE", "ReflectionsHalfRate", 1) != 0;
+                bWaterReflectionWhenSeen = ini.ReadInteger("PERFORMANCE", "WaterReflectionWhenSeen", 1) != 0;
                 bFarCascadesHalfRate = ini.ReadInteger("PERFORMANCE", "FarCascadesHalfRate", 1) != 0;
                 bMidCascadeHalfRate = ini.ReadInteger("PERFORMANCE", "MidCascadeHalfRate", 0) != 0;
                 fSunLowBelow = ini.ReadFloat("PERFORMANCE", "SunShadowsMinElevation", 8.0f);
@@ -783,14 +947,21 @@ public:
 
         FusionFix::onGameInitEvent() += []()
         {
-            if (bCascadesAtNight && !bReflectionsHalfRate && !bFarCascadesHalfRate && !bMidCascadeHalfRate && !bTrace)
+            if (bCascadesAtNight && !bReflectionsHalfRate && !bWaterReflectionWhenSeen && !bFarCascadesHalfRate && !bMidCascadeHalfRate && !bTrace)
                 return;
             bool installed = Install();
-            FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, the far ones by day %s, reflections %s\n",
+            FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, the far ones by day %s, reflections %s, the water's %s\n",
                 installed ? "in place" : "no device or texture factory yet, nothing is left out",
                 bCascadesAtNight ? "drawn at night" : fSunLowBelow > -90.0f ? "not drawn while the sun is low" : "not drawn from 22:00 to 05:00",
                 bFarCascadesHalfRate ? (bFollow ? "in turns, following the camera" : "in turns while the camera keeps still") : "every frame",
-                bReflectionsHalfRate ? "every other frame" : "every frame");
+                bReflectionsHalfRate ? "every other frame" : "every frame",
+                bWaterReflectionWhenSeen ? "only while water is seen" : "whenever the game draws it");
+        };
+
+        // The queries are not kept over a reset
+        FusionFix::onBeforeReset() += []()
+        {
+            ReleaseWaterQueries();
         };
 
         // A trace starts some 20 seconds into the game; and every 3600 frames, what was left out
@@ -832,6 +1003,13 @@ public:
                 if (dropped[kind] || halfRates[kind].skipped || halfRates[kind].kept)
                     text += std::format("{}: {} calls left out, {} frames left out, {} drawn; ", KindNames[kind], dropped[kind],
                         halfRates[kind].skipped, halfRates[kind].kept);
+            if (nWaterQueries || nWaterUnseenFrames || nWaterSeenFrames || nWaterUnknownFrames)
+                text += std::format("the water's reflection: {} frames left out with no water seen, {} drawn with water seen ({:.0f} pixels of it on average), "
+                    "{} with none known; water draws measured {}, answers lost {}{}; ",
+                    nWaterUnseenFrames, nWaterSeenFrames, nWaterSeenFrames ? double(waterPixelsSum) / nWaterSeenFrames : 0.0,
+                    nWaterUnknownFrames, nWaterQueries, nWaterLost, bWaterQueriesFailed ? " (no occlusion queries on this device)" : "");
+            nWaterUnseenFrames = nWaterSeenFrames = nWaterUnknownFrames = nWaterQueries = nWaterLost = 0;
+            waterPixelsSum = 0;
             if (!text.empty())
                 FusionLog::WriteText("RenderSkip", "Stats", text);
             for (int kind = 0; kind < Kinds; kind++)

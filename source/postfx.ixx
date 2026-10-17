@@ -1506,7 +1506,10 @@ private:
                                !R.bWaterDoneThisFrame && RenderTargetIsScreenSized();
         R.bWaterMaskCaptured = mainScene && CopyRenderTargetToWaterMask(0);
         ProfilerMark(pProfileDevice, kProfWaterGame, true);
+        // The water seen, for WaterReflectionWhenSeen: the game's own draws alone
+        RenderSkip::BeginWaterQuery();
         shWaterRender.unsafe_ccall<void>(a1);
+        RenderSkip::EndWaterQuery();
         ProfilerMark(pProfileDevice, kProfWaterGame, false);
         if (mainScene)
         {

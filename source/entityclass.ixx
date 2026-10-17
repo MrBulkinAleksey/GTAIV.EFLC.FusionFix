@@ -84,6 +84,9 @@ import temporal;
 // moved out 2 m. An entity, fragment or fragment type draw whose sphere lies wholly outside one of them is left out of
 // the lamp's map. Only the dynamic maps (mode 4) are made so; the static caches, kept over frames, are not. With it
 // 0, EntityDrawLog counts what it would leave out.
+//
+// The water's reflection: EntityDrawLog counts its draws and time by the water seen on screen a frame or two before
+// (RenderSkip's queries, WaterReflectionWhenSeen).
 export namespace EntityClass
 {
     enum class Kind : uint8_t
@@ -211,6 +214,10 @@ namespace
         // the lamps' maps: the same from the lamp
         bool camera = false, lamp = false;
         uint64_t distanceDraws[6]{}, sizeDraws[6]{};
+        // The water's reflection: by the water's pixels seen
+        bool water = false;
+        uint64_t seenDraws[6]{};
+        int64_t seenTicks[6]{};
         int64_t distanceTicks[6]{}, sizeTicks[6]{};
         // The G-buffer: by model
         bool models = false;
@@ -242,7 +249,8 @@ namespace
         {
             targetStats.push_back({ shown });
             it = targetStats.end() - 1;
-            it->camera = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || !std::strcmp(shown, "WATER_REFLECTION_COLOUR");
+            it->water = !std::strcmp(shown, "WATER_REFLECTION_COLOUR");
+            it->camera = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->water;
             it->lamp = !std::strcmp(shown, "SHADOW_MAP_COLOUR_POINT");
             it->camera |= it->lamp;
             it->models = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->lamp;
@@ -328,6 +336,14 @@ namespace
                 for (int i = 0; i < 6; ++i)
                     text += std::format("{} {} {:.1f} ({:.3f} ms)", i ? "," : "", sizes[i], s.sizeDraws[i] * perFrame, s.sizeTicks[i] * msPerFrame);
                 text += "\n";
+                if (s.water)
+                {
+                    static constexpr const char* seenSizes[6] = { "not known", "none", "under 1000", "1000-10000", "10000-100000", "100000+" };
+                    text += "    by the water's pixels seen a frame or two before:";
+                    for (int i = 0; i < 6; ++i)
+                        text += std::format("{} {} {:.1f} ({:.3f} ms)", i ? "," : "", seenSizes[i], s.seenDraws[i] * perFrame, s.seenTicks[i] * msPerFrame);
+                    text += "\n";
+                }
             }
             if (s.models && !s.byModel.empty())
             {
@@ -730,6 +746,13 @@ namespace
         stats.distanceTicks[d] += ticks;
         stats.sizeDraws[z]++;
         stats.sizeTicks[z] += ticks;
+        if (stats.water)
+        {
+            const int64_t seen = RenderSkip::WaterPixelsSeen();
+            const int w = seen < 0 ? 0 : seen == 0 ? 1 : seen < 1000 ? 2 : seen < 10000 ? 3 : seen < 100000 ? 4 : 5;
+            stats.seenDraws[w]++;
+            stats.seenTicks[w] += ticks;
+        }
         return distance;
     }
 
