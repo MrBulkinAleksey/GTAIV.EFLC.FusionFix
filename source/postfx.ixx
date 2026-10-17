@@ -51,6 +51,7 @@ import volumetricclouds;
 import pbrsky;
 import wetground;
 import headlightglints;
+import gpugrass;
 import waterreflections;
 import sharpening;
 import inireload;
@@ -365,6 +366,7 @@ private:
             PostFxResources.WetGroundEffect->OnLostDevice();
         if (PostFxResources.HeadlightGlintsEffect)
             PostFxResources.HeadlightGlintsEffect->OnLostDevice();
+        GpuGrass::OnDeviceLost();
         PostFxResources.ReleaseWetCopies();
         ReleaseProfiler();
 
@@ -679,6 +681,7 @@ private:
         };
         TemporalAA::OnGBufferEnd = [](IDirect3DDevice9* device)
         {
+            GpuGrass::Render(device);
             CopySceneDepth(device);
             RenderWetGround(device);
         };

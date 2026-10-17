@@ -26,6 +26,17 @@ import entityclass;
 import postfxresources;
 import nearbybodies;
 
+// For other grass (gpugrass.ixx), render thread: the grass models' list and this frame's wind, set at the start of the
+// G-buffer pass.
+export namespace GrassShared
+{
+    bool IsGrassModel(uint32_t nameHash);
+    inline float BendPerHeight = 0.0f, FlutterPerHeight = 0.0f;   // at the tip, per metre of height
+    inline float GustPhase = 0.0f, FlutterPhase = 0.0f;           // cycles
+    inline float Direction[2] = { 0.929f, 0.370f };
+    inline float GustWavelength = 5.0f;                           // metres
+}
+
 // Grass Wind (Graphics > Lighting, [PROCEDURAL] GrassWind): the wind sways the grass, weeds and small plants the game
 // scatters on the ground (procedural props: proc_grass*, *_proc_plant_*, *weed*, sm_plant*). They are buildings from
 // the building pool (EntityClass counts them as buildings) drawn with gta_default (gta_cutout), whose deferred vertex
@@ -483,6 +494,12 @@ class GrassWind
             kDirection[0] / kGustWavelength, kDirection[1] / kGustWavelength, -static_cast<float>(gustPhase), static_cast<float>(flutterPhase),
             kDirection[0], kDirection[1], 0.0f, 0.0f,
         };
+        GrassShared::BendPerHeight = fBendPerHeight;
+        GrassShared::FlutterPerHeight = fFlutterPerHeight;
+        GrassShared::GustPhase = static_cast<float>(gustPhase);
+        GrassShared::FlutterPhase = static_cast<float>(flutterPhase);
+        GrassShared::Direction[0] = kDirection[0], GrassShared::Direction[1] = kDirection[1];
+        GrassShared::GustWavelength = kGustWavelength;
         pDevice->SetVertexShaderConstantF(kWindRegister, wind, 1);
         pDevice->SetVertexShaderConstantF(kDirectionRegister, wind + 4, 1);
         const float trampleParams[4] = { 1.0f / kGridSide, trample ? 1.0f : 0.0f, 0.0f, 0.0f };
@@ -647,6 +664,12 @@ class GrassWind
     }
 
 public:
+    static bool IsGrass(uint32_t hash)
+    {
+        MakeModelListIfAsked();
+        return grassHashes.contains(hash);
+    }
+
     GrassWind()
     {
         FusionFix::onInitEventAsync() += []()
@@ -682,3 +705,11 @@ public:
         };
     }
 } GrassWind;
+
+namespace GrassShared
+{
+    bool IsGrassModel(uint32_t nameHash)
+    {
+        return GrassWind::IsGrass(nameHash);
+    }
+}

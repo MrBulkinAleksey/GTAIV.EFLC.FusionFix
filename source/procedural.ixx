@@ -71,6 +71,23 @@ import inireload;
 //    area doesn't stall a frame. Waiting positions
 //    of a provider the game removed meanwhile (its requests at +0x522c, processed first) are dropped.
 //  - ProceduralLog: the log has the time of the generator's update (CE 0xc0aa90) and how many props are out.
+// The ground triangles the procedural manager holds, for effects that grow things on them (GPU grass): told on the main
+// thread as the manager takes and lets go of them; a record's address is its key until it is let go.
+export namespace ProceduralGround
+{
+    struct Triangle
+    {
+        float corner[3][3];
+        uint8_t tag;        // the surface's procedural tag (material +0x4c, bits 8..15): PROCOBJ records by tag
+    };
+    inline void (*OnAdded)(const void* key, const Triangle& triangle) = nullptr;
+    inline void (*OnRemoved)(const void* key) = nullptr;
+
+    // procedural.dat's PROCOBJ records (CE 0x16c8fb0): +4 count, records of 0x44 from +8: +0 tag, +4 model index,
+    // +8 spacing; nullptr until loaded
+    uint8_t* Definitions();
+}
+
 namespace Procedural
 {
     constexpr uint32_t VanillaRecords = 512;
@@ -960,6 +977,16 @@ namespace Procedural
     uint8_t* __fastcall AddTriangle(uint8_t* triangle, void* edx, void* a1, void* a2, void* a3, void* a4, void* a5, void* a6, void* a7, void* a8)
     {
         auto result = shAddTriangle.unsafe_fastcall<uint8_t*>(triangle, edx, a1, a2, a3, a4, a5, a6, a7, a8);
+        if (result && ProceduralGround::OnAdded)
+        {
+            // Corners at +0, +0x10, +0x20 (CE 0xc86540)
+            ProceduralGround::Triangle t{};
+            for (int c = 0; c < 3; ++c)
+                for (int k = 0; k < 3; ++k)
+                    t.corner[c][k] = *(float*)(result + c * 0x10 + k * 4);
+            t.tag = uint8_t(*(uint32_t*)(result + 0x4c) >> 8);
+            ProceduralGround::OnAdded(result, t);
+        }
         if (bTrace && result)
         {
             InterlockedIncrement(&nTriangles);
@@ -973,6 +1000,8 @@ namespace Procedural
     SafetyHookInline shRemoveTriangle;
     void __fastcall RemoveTriangle(uint8_t* triangle, void* edx)
     {
+        if (ProceduralGround::OnRemoved)
+            ProceduralGround::OnRemoved(triangle);
         if (bTrace)
         {
             InterlockedDecrement(&nTriangles);
@@ -1302,7 +1331,7 @@ public:
             if (!pattern.empty())
                 shUpdate = safetyhook::create_inline(pattern.get_first(0), Update);
 
-            if (bTrace)
+            // The trace's T/X lines and ProceduralGround (GPU grass)
             {
                 pattern = hook::pattern("55 8B EC 83 E4 F0 83 EC 18 8B 55 10 56 8B 75 0C 57 8B 7D 08");
                 if (!pattern.empty())
@@ -1401,3 +1430,11 @@ public:
         };
     }
 } ProceduralProps;
+
+namespace ProceduralGround
+{
+    uint8_t* Definitions()
+    {
+        return Procedural::pDefinitions;
+    }
+}

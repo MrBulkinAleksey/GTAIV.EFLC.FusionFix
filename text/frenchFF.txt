@@ -223,6 +223,9 @@ Volumetric Clouds Debug View
 [GrassWindDebug]
 Grass Wind Debug View
 
+[GpuGrassDebug]
+Dense grass: colour by surface
+
 [WetDbgMaterial]
 Material Categories
 
@@ -375,6 +378,9 @@ Grass bends under feet and wheels
 
 [GrassTrample]
 Trampled grass rises slowly
+
+[GpuGrass]
+Dense grass (GPU)
 
 [BuildingShad]
 Walls block headlights

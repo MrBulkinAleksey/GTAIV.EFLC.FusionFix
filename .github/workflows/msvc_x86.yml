@@ -67,6 +67,7 @@ jobs:
         call buildshaders.bat || exit 1
         "source\dxsdk\lib\x86\fxc.exe" /T fx_2_0 /nologo /Fo "%TEMP%\SSR.fxo" "source\resources\SSR.fx" || exit 1
         "source\dxsdk\lib\x86\fxc.exe" /T fx_2_0 /nologo /Fo "%TEMP%\AO.fxo" "source\resources\AO.fx" || exit 1
+        "source\dxsdk\lib\x86\fxc.exe" /T fx_2_0 /nologo /Fo "%TEMP%\GpuGrass.fxo" "source\resources\GpuGrass.fx" || exit 1
 
   build:
     runs-on: windows-2025-vs2026
