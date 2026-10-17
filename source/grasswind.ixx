@@ -282,7 +282,9 @@ class GrassWind
         if (!bodies.empty())
         {
             const auto info = EntityClass::ModelInfo(model);
-            const float radius = info ? std::clamp(*reinterpret_cast<const float*>(info + 0x1c), 0.0f, 8.0f) : 2.0f;
+            // How far the model's blades reach from its origin: the bounding sphere's radius plus its centre's offset
+            const auto sphere = info ? reinterpret_cast<const float*>(info + 0x10) : nullptr;
+            const float radius = sphere ? std::clamp(sphere[3] + std::sqrt(sphere[0] * sphere[0] + sphere[1] * sphere[1]), 0.0f, 8.0f) : 2.0f;
             for (const auto& body : bodies)
             {
                 if (std::abs(place[2] - body.bottom) > height + 1.0f)

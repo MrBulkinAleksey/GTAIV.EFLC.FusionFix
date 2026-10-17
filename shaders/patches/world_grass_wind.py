@@ -11,8 +11,11 @@
 #  - across it: a quicker flutter, its phase from the position too, so neighbouring clumps move apart;
 #  - weighted by (height / model height)^2, so the base stays on the ground, and the tip drops by d^2 / 2h so the
 #    blade bends rather than stretches.
-#  - bodies (cars as their footprint, people as a point) push the blades away from them and lay them down under a car;
-#    the wind dies where they press: up to two per draw, each falling off to nothing `reach` metres past its box.
+#  - bodies (cars as their footprint, people as a small square) push the blades away from them and lay them down under a
+#    car; the wind dies where they press: up to two per draw, each falling off to nothing `reach` metres past its box.
+#    The push's direction is the way out of the box rounded by c246.w, shortened to nothing at the box's middle rather
+#    than turned to unit length, so the blades under a body don't flip side as its centre passes over them; there they
+#    are pressed down instead, to half their height under the full press.
 # Registers: c240 (per frame) = wind direction over the gust's wavelength (cycles a metre), the gust's phase, the
 # flutter's phase (cycles); c241 (per model) = 1 / height, the bend and the flutter at the tip in metres, the push at the
 # tip in metres; c242.xy (per frame) = the wind's unit direction; c248/c249 and c250/c251 (per draw) = two bodies:
@@ -88,6 +91,7 @@ SWAY = f'''\
       mad r12.z, r12.y, r12.y, r12.z
       add r12.z, r12.z, c4.x
       rsq r12.z, r12.z
+      min r12.z, r12.z, c4.y
       mul r12.xy, r12, r12.z
       mul r13.xy, r12.x, c248.zwzw
       mad r13.x, r12.y, c248.w, r13.x
@@ -120,6 +124,7 @@ SWAY = f'''\
       mad r12.z, r12.y, r12.y, r12.z
       add r12.z, r12.z, c4.x
       rsq r12.z, r12.z
+      min r12.z, r12.z, c4.y
       mul r12.xy, r12, r12.z
       mul r13.xy, r12.x, c250.zwzw
       mad r13.x, r12.y, c250.w, r13.x
@@ -140,6 +145,9 @@ SWAY = f'''\
       mad r6.z, r6.y, r6.y, r6.z
       mul r6.z, r6.z, c241.x
       mul r6.z, r6.z, -c247.y
+      add r10.x, r3.z, -c3.z
+      mul r10.x, r10.x, r9.w
+      mad r6.z, r10.x, -c247.y, r6.z
       dp3 r7.x, c0, c0
       dp3 r7.y, c1, c1
       dp3 r7.z, c2, c2

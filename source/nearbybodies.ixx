@@ -36,7 +36,7 @@ export namespace NearbyBodies
     // False for what is not a car, van, bus or bike (helicopters with their rotors, anything broken) or lies on its side.
     bool VehicleBox(uintptr_t vehicle, CarBox& box);
 
-    // A body as a box on the ground: a car's footprint, or a person as a point (no length or width); its influence
+    // A body as a box on the ground: a car's footprint, or a person's feet as a small square; its influence
     // reaches `reach` metres past the box.
     struct Body
     {
@@ -108,8 +108,9 @@ namespace
                     std::abs(dx * box.forward[1] - dy * box.forward[0]) < box.halfWidth && std::abs(p[2] - box.centre[2]) < box.halfHeight + 0.5f)
                     return;
             }
-            // The ped's position is about a metre above its feet
-            found.push_back({ { p[0], p[1] }, { 1.0f, 0.0f }, 0.0f, 0.0f, p[2] - 1.0f, 0.6f, d2, false });
+            // The ped's position is about a metre above its feet; the feet and legs as a square of 0.3 m, reaching a metre
+            // past it, so the grass leans away from a step before it and rises again behind it
+            found.push_back({ { p[0], p[1] }, { 1.0f, 0.0f }, 0.15f, 0.15f, p[2] - 1.0f, 1.0f, d2, false });
         });
         if (int(found.size()) > kMaxBodies)
         {

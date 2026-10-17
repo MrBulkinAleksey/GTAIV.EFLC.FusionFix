@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_default/gta_defaultVS4.asm b/win32_30_nv8/gta_default/gta_defaultVS4.asm
-index 83b6ff0..61d2e88 100644
+index 83b6ff0..0144318 100644
 --- a/win32_30_nv8/gta_default/gta_defaultVS4.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultVS4.asm
 @@ -26,6 +26,8 @@
@@ -11,7 +11,7 @@ index 83b6ff0..61d2e88 100644
      def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.9777592367e-42 // 2125
      def c4, 9.99999975e-006, 1, 0, -1
      dcl_position v0
-@@ -38,9 +40,127 @@
+@@ -38,9 +40,132 @@
      dcl_texcoord1 o2
      dcl_color o3
      dcl_texcoord6 o4
@@ -72,6 +72,7 @@ index 83b6ff0..61d2e88 100644
 +      mad r12.z, r12.y, r12.y, r12.z
 +      add r12.z, r12.z, c4.x
 +      rsq r12.z, r12.z
++      min r12.z, r12.z, c4.y
 +      mul r12.xy, r12, r12.z
 +      mul r13.xy, r12.x, c248.zwzw
 +      mad r13.x, r12.y, c248.w, r13.x
@@ -104,6 +105,7 @@ index 83b6ff0..61d2e88 100644
 +      mad r12.z, r12.y, r12.y, r12.z
 +      add r12.z, r12.z, c4.x
 +      rsq r12.z, r12.z
++      min r12.z, r12.z, c4.y
 +      mul r12.xy, r12, r12.z
 +      mul r13.xy, r12.x, c250.zwzw
 +      mad r13.x, r12.y, c250.w, r13.x
@@ -124,6 +126,9 @@ index 83b6ff0..61d2e88 100644
 +      mad r6.z, r6.y, r6.y, r6.z
 +      mul r6.z, r6.z, c241.x
 +      mul r6.z, r6.z, -c247.y
++      add r10.x, r3.z, -c3.z
++      mul r10.x, r10.x, r9.w
++      mad r6.z, r10.x, -c247.y, r6.z
 +      dp3 r7.x, c0, c0
 +      dp3 r7.y, c1, c1
 +      dp3 r7.z, c2, c2
@@ -142,7 +147,7 @@ index 83b6ff0..61d2e88 100644
      add o4.xyz, r0, c3
      mul r0.xyz, c1, v3.y
      mad r0.xyz, v3.x, c0, r0
-@@ -57,9 +177,9 @@
+@@ -57,9 +182,9 @@
      mov r0.yw, c4
      mad r0.x, r0.x, c39.z, r0.w
      mad o3.xy, c40.z, r0.x, r0.y
@@ -156,7 +161,7 @@ index 83b6ff0..61d2e88 100644
      mov o0, r0
      mov o10.zw, r0
 diff --git a/win32_30_nv8/gta_default/gta_defaultVS5.asm b/win32_30_nv8/gta_default/gta_defaultVS5.asm
-index 5e7fa7f..2168e8f 100644
+index 5e7fa7f..a9dd1e7 100644
 --- a/win32_30_nv8/gta_default/gta_defaultVS5.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultVS5.asm
 @@ -26,6 +26,8 @@
@@ -168,7 +173,7 @@ index 5e7fa7f..2168e8f 100644
      def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.9791605352e-42 // 2126
      def c4, 9.99999975e-006, 1, 0, -1
      dcl_position v0
-@@ -38,9 +40,127 @@
+@@ -38,9 +40,132 @@
      dcl_texcoord1 o2
      dcl_color o3
      dcl_texcoord6 o4
@@ -229,6 +234,7 @@ index 5e7fa7f..2168e8f 100644
 +      mad r12.z, r12.y, r12.y, r12.z
 +      add r12.z, r12.z, c4.x
 +      rsq r12.z, r12.z
++      min r12.z, r12.z, c4.y
 +      mul r12.xy, r12, r12.z
 +      mul r13.xy, r12.x, c248.zwzw
 +      mad r13.x, r12.y, c248.w, r13.x
@@ -261,6 +267,7 @@ index 5e7fa7f..2168e8f 100644
 +      mad r12.z, r12.y, r12.y, r12.z
 +      add r12.z, r12.z, c4.x
 +      rsq r12.z, r12.z
++      min r12.z, r12.z, c4.y
 +      mul r12.xy, r12, r12.z
 +      mul r13.xy, r12.x, c250.zwzw
 +      mad r13.x, r12.y, c250.w, r13.x
@@ -281,6 +288,9 @@ index 5e7fa7f..2168e8f 100644
 +      mad r6.z, r6.y, r6.y, r6.z
 +      mul r6.z, r6.z, c241.x
 +      mul r6.z, r6.z, -c247.y
++      add r10.x, r3.z, -c3.z
++      mul r10.x, r10.x, r9.w
++      mad r6.z, r10.x, -c247.y, r6.z
 +      dp3 r7.x, c0, c0
 +      dp3 r7.y, c1, c1
 +      dp3 r7.z, c2, c2
@@ -299,7 +309,7 @@ index 5e7fa7f..2168e8f 100644
      add o4.xyz, r0, c3
      mul r0.xyz, c1, v3.y
      mad r0.xyz, v3.x, c0, r0
-@@ -57,9 +177,9 @@
+@@ -57,9 +182,9 @@
      mov r0.yw, c4
      mad r0.x, r0.x, c39.z, r0.w
      mad o3.xy, c40.z, r0.x, r0.y
