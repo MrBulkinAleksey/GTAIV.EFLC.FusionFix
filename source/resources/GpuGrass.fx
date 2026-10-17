@@ -55,6 +55,7 @@ struct VSOutput
     float3 normal : TEXCOORD1;
     float2 w : TEXCOORD2;       // clip w, specular (×0.5, as the G-buffer has it)
     float4 ground : TEXCOORD3;  // the root's clip x, y, w; light from root to tip
+    float3 tuft : TEXCOORD4;    // across the blade (-1..1), up it (0..1), 1 + a random value for a tuft (0 for a blade)
 };
 
 float3 TagColour(float tag)
@@ -137,6 +138,7 @@ VSOutput GrassVS(VSInput input)
         output.normal = float3(0.0, 0.0, 1.0);
         output.w = float2(1.0, 0.0);
         output.ground = 0.0;
+        output.tuft = 0.0;
         return output;
     }
 
@@ -163,9 +165,12 @@ VSOutput GrassVS(VSInput input)
     height *= lerp(0.6, 1.25, patch) * (clump > 0.62 ? 1.6 : lerp(0.75, 1.1, clump)) * lerp(0.4, 1.0, input.kinds.w) * vec4Blade.x;
     height *= 1.0 + 0.25 * isFlower;
     float width = (isGrass * 0.02 + isWeed * 0.03 + isPlant * 0.075) * vec4Blade.y;
-    // Wider far off, where fewer of them stand and thin ones only flicker
+    // Wider far off, where fewer of them stand and thin ones only flicker; past 12 m more and more grass and weed blades
+    // are tufts of three stalks on one wider quad (cut out in the pixel shader), all of them past 26 m
     float distance = length(root - vec4Eye.xyz);
     width *= 1.0 + saturate((distance - 6.0) / 24.0) * 1.5;
+    float isTuft = (1.0 - isPlant) * (1.0 - isFlower) * (frac(random * 3.31 + 0.17) < saturate((distance - 12.0) / 14.0) ? 1.0 : 0.0);
+    width *= 1.0 + 2.2 * isTuft;
     // Grass and weeds narrow to the tip; leaves are widest in the middle; a flower is a thin stalk with a head
     float profile = lerp(1.0 - t, sin(t * 3.1415927) * 1.1 + 0.2 * (1.0 - t), isPlant);
     profile = isFlower > 0.0 ? (t > 0.75 ? 3.0 : 0.4) : profile;
@@ -222,6 +227,7 @@ VSOutput GrassVS(VSInput input)
 
     float4 rootClip = mul(float4(root, 1.0), matViewProj);
     output.ground = float4(rootClip.xy, rootClip.w, lerp(0.5, 1.05, t) * lerp(1.0, 0.85, clump * isGrass));
+    output.tuft = float3(input.vertex.y, t, isTuft * (1.0 + random));
     return output;
 }
 
@@ -236,6 +242,14 @@ struct PSOutput
 PSOutput GrassPS(VSOutput input)
 {
     PSOutput output;
+    // A tuft: three stalks across the quad, each narrowing to its own height
+    [branch] if (input.tuft.z > 0.5)
+    {
+        float u = input.tuft.x * 1.5 + 1.5;
+        float strand = floor(u);
+        float top = 1.0 - 0.35 * frac(strand * 0.618 + input.tuft.z * 7.3);
+        clip(0.42 * saturate(1.0 - input.tuft.y / top) - abs(frac(u) - 0.5));
+    }
     // The ground's colour under the root, kept no brighter than a lawn so pavement doesn't bleach the weeds on it
     float2 screen = input.ground.xy / max(input.ground.z, 1e-3) * float2(0.5, -0.5) + 0.5;
     float3 ground = tex2Dlod(GroundTex, float4(screen, 0.0, 0.0)).rgb;

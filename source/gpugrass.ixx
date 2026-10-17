@@ -50,8 +50,9 @@ using namespace PostFxProfiler;
 // follow (GrassShared::GrassKind). Small plants (flower beds) stay the game's props. Lawns of the GRASS and SHORT_GRASS
 // materials whose tag has no props, which the manager gathers for us (GatherGrassSurfaces), grow grass of their own
 // (LookOf). The triangles are cut into pieces of at most kPieceArea square metres
-// when the set changes; each frame the pieces in view within the range take a share of the mesh's kBlades blades, full
-// up to GpuGrassFullRange and none at GpuGrassRange, and go to the instance buffer: one instanced draw for them all.
+// when the set changes; each frame the pieces in view within the range take a share of the mesh's kBlades blades
+// (BladeShare: all up to kDenseRange, half at GpuGrassFullRange, where far blades have become tufts of three, none at
+// GpuGrassRange), and go to the instance buffer: one instanced draw for them all.
 // The blades take a quarter of their colour from the ground under them: _DEFERRED_GBUFFER_0_ is copied first (into Wet Ground's
 // copy, which that pass makes again after the grass).
 //
@@ -69,10 +70,11 @@ using namespace PostFxProfiler;
 // to GTAIV.EFLC.FusionFix.GpuGrass.log every 600 frames.
 namespace GpuGrass
 {
-    constexpr int kBlades = 96;             // per piece of ground
+    constexpr int kBlades = 192;            // per piece of ground
     constexpr int kVertsPerBlade = 9;       // four pairs up the blade and its tip
     constexpr int kIndicesPerBlade = 21;    // seven triangles
-    constexpr float kPieceArea = 1.5f;      // square metres: up to 64 blades a square metre
+    constexpr float kPieceArea = 1.5f;      // square metres: up to 128 blades a square metre
+    constexpr float kDenseRange = 8.0f;     // metres: all of them this near, half at GpuGrassFullRange
     constexpr int kMaxPieces = 65536;
     constexpr int kMaxInstances = 24576;
     constexpr float kForgetDistance = 400.0f;   // triangles further from the camera when the pieces are made are dropped
@@ -121,6 +123,18 @@ namespace GpuGrass
     uint64_t logInstances = 0, logBlades = 0;
     double logCpuMs = 0.0;
     size_t logGrassTriangles = 0;
+
+    // The share of a piece's blades drawn at `distance`: all up to kDenseRange, half at GpuGrassFullRange (where, further
+    // off, each blade is a tuft of three: GpuGrass.fx), none at GpuGrassRange
+    float BladeShare(float distance)
+    {
+        const float d = (std::max)(distance, 0.0f);
+        if (d <= kDenseRange)
+            return 1.0f;
+        if (d <= fFullRange)
+            return 1.0f - 0.5f * (d - kDenseRange) / (std::max)(fFullRange - kDenseRange, 0.5f);
+        return 0.5f * std::clamp((fRange - d) / (std::max)(fRange - fFullRange, 0.5f), 0.0f, 1.0f);
+    }
 
     float Hash(float x, float y)
     {
@@ -485,7 +499,6 @@ export namespace GpuGrass
             return void(status = "instance buffer lock failed");
         int count = 0;
         double blades = 0.0;
-        const float fade = 1.0f / (std::max)(fRange - fFullRange, 0.5f);
         for (const auto& p : pieces)
         {
             const float dx = p.centre[0] - eye[0], dy = p.centre[1] - eye[1], dz = p.centre[2] - eye[2];
@@ -497,7 +510,7 @@ export namespace GpuGrass
                 inside = planes[i][0] * p.centre[0] + planes[i][1] * p.centre[1] + planes[i][2] * p.centre[2] + planes[i][3] >= -p.radius * planeLength[i];
             if (!inside)
                 continue;
-            const float share = p.share * fDensity * std::clamp((fRange - (std::max)(distance, 0.0f)) * fade, 0.0f, 1.0f);
+            const float share = p.share * fDensity * BladeShare(distance);
             if (share * kBlades < 0.5f)
                 continue;
             const auto& k = p.look.kinds;
@@ -726,8 +739,8 @@ public:
             using namespace GpuGrass;
             if (!bHideProps || !drawing || model >= grassModel.size() || !grassModel[model])
                 return false;
-            const float share = std::clamp((fRange - distance) / (std::max)(fRange - fFullRange, 0.5f), 0.0f, 1.0f);
-            return keep < share;
+            // All of them where the blades are full, fewer as they thin out past GpuGrassFullRange
+            return keep < (std::min)(BladeShare(distance) * 2.0f, 1.0f);
         };
         ProceduralGround::OnRemoved = [](const void* key)
         {
