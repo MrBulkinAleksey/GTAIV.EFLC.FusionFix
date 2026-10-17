@@ -65,6 +65,8 @@ export namespace RenderSkip
     uint32_t LockCount();
     // Render thread: how many device viewports have been set, to tell one face of a lamp's shadow map from the next
     uint32_t ViewportCount();
+    // Render thread: how many device draws (indexed or not, from buffers or user memory, dropped or not) there have been
+    uint32_t DrawCount();
     // Render thread: the pass being drawn now is left out, its draws dropped (whatever else of it goes through)
     bool DropsDraws();
 }
@@ -190,6 +192,7 @@ namespace RenderSkip
     bool bLockHooked = false;
     uint32_t nLocks = 0;
     uint32_t nViewports = 0;
+    uint32_t nDraws = 0;
     uint32_t dropped[Kinds]{};
 
     // The far cascades by day: the cascades' passes counted, and where the camera was at each one's last draw
@@ -572,6 +575,7 @@ namespace RenderSkip
 
     bool DropDraw()
     {
+        ++nDraws;
         if (Tracing())
             traceDraws++;
         if (drop == Drop::Nothing)
@@ -679,6 +683,11 @@ namespace RenderSkip
     uint32_t ViewportCount()
     {
         return nViewports;
+    }
+
+    uint32_t DrawCount()
+    {
+        return nDraws;
     }
 
     bool DropsDraws()

@@ -20,6 +20,7 @@ import common;
 import comvars;
 import settings;
 import inireload;
+import entityclass;
 
 // Grass and procedural props ([PROCEDURAL] in the ini, Grass & Props Distance in Display > Advanced).
 //
@@ -60,6 +61,15 @@ import inireload;
 //    get close (skipping them when made would lose them for good: a position is offered once). With the pool at
 //    16384 instead of 512 and the slider at its top, 4000+ weed draws 50-200 m out still took 3.5 ms.
 //  - The 64 candidates of one entity's 2dfx props are capped, which the game itself never checked.
+//  - HeavyPropCull ([PERFORMANCE]): not the generator's, any small entity (radius under 3 m, no LOD parent) whose model
+//    took kHeavyDraws or more device draws an entity in the G-buffer (EntityClass::DrawsPerEntity, learned as they are
+//    drawn): benches, posts, stands made of a dozen to forty geometries cost 20-180 us each where a lamp post costs 5,
+//    and 1-2 ms of a frame 40-140 m out (CJ_MH_CP_POST1, CJ_GB_bench_3/4, BM_knobelisk, GB_hotdogstand01). Past 40 m
+//    they leave the sun's cascades (the phases of type 0x15, CE 0x159b760, the same the game drops for props: past
+//    the second cascade their shadows are a few texels), past 80 m they thin out as the small props do, 80 / distance
+//    kept by the hash of their place, and under 1% of their distance (a 1.6 m bench past 160 m) none are drawn.
+//    Taken where the entity goes into the phases' lists (CE 0xae43a0): the render lists' hooks above miss most
+//    objects (a log: CJ_MH_CP_POST1 kept 30 cascade draws a frame 75 m out).
 //
 // And what keeps the cost of more props down (the game already keeps them out of shadows: it sets
 // entity +0x24 0x10000 on each, and the render lists then drop the shadow phases, CE 0xae85a5/0xae7058):
@@ -91,6 +101,12 @@ namespace Procedural
     float fDistance = 1.0f;
     bool bFarThinning = true;
     bool bSmallFarCull = true;
+    bool bHeavyPropCull = true;
+    constexpr uint32_t kHeavyDraws = 8;            // device draws an entity in the G-buffer from which a model is heavy
+    constexpr float kHeavyRadius = 3.0f;           // and its radius under this
+    constexpr float kHeavyCascadesFrom = 40.0f;
+    constexpr float kHeavyThinFrom = 80.0f;
+    constexpr float kHeavyScreenSize = 0.01f;
     constexpr float SmallFarScreenSize = 0.005f;   // radius over distance under which a prop is left out
     constexpr float SmallPropRadius = 2.0f;        // smaller ones thin out past SmallFarThinFrom
     constexpr float SmallFarThinFrom = 60.0f;
@@ -115,6 +131,7 @@ namespace Procedural
     float* pRadius[3] = {};             // the 30 m half extents of the 2dfx box, in code
     uint32_t* pReflectionPhases = nullptr; // CE 0x159af28: the phases of type 0x11 (water reflection) and 0x1f
     uint32_t* pScenePhase = nullptr;       // CE 0x159af24: the one of type 0x1f, the scene itself, kept
+    uint32_t* pCascadePhases = nullptr;    // CE 0x159b760: those of type 0x15, the sun's cascades
 
     // Map entities with 2dfx props the generator found this update. The game marks them with the world scan
     // stamp (CE 0x11a8908) in entity +0x3c, the field and stamp the render lists' sector scan swaps to skip
@@ -352,7 +369,7 @@ namespace Procedural
     uint32_t nUsedMax = 0;
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
     uint32_t nQueueMax = 0, nWaitingMax = 0, nDropped = 0;
-    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0;
+    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0, nHeavyCascades = 0, nHeavyScene = 0;
     uint32_t nConeFull = 0, nParkedNow = 0;
     uint32_t nUpdates = 0;
     double fUpdateMs = 0.0, fUpdateMaxMs = 0.0;
@@ -502,6 +519,7 @@ namespace Procedural
         // For the props made from now on
         bFarThinning = iniReader.ReadInteger("PROCEDURAL", "ProceduralFarThinning", 1) != 0;
         bSmallFarCull = iniReader.ReadInteger("PROCEDURAL", "ProceduralSmallFarCull", 1) != 0;
+        bHeavyPropCull = iniReader.ReadInteger("PERFORMANCE", "HeavyPropCull", 1) != 0;
         fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
         fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
         bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
@@ -881,18 +899,55 @@ namespace Procedural
         waiting.clear();
     }
 
+    // HeavyPropCull: a small entity whose model takes many draws, out of the cascades and thinned far off
+    uint32_t DropHeavy(uintptr_t entity, uint32_t phases, float distance)
+    {
+        if (!(distance >= kHeavyCascadesFrom) || !modelInfos)
+            return phases;
+        const auto cascades = pCascadePhases ? *pCascadePhases & ~*pScenePhase : 0;
+        const auto scene = *pScenePhase;
+        if (!(phases & (cascades | scene)))
+            return phases;
+        // A LOD parent takes its child's phases before this (CE 0xae8587), so leaving the child out would leave both out
+        if (*(uintptr_t*)(entity + 0x4c))
+            return phases;
+        const auto model = *(uint16_t*)(entity + 0x2e);
+        if (EntityClass::DrawsPerEntity(model) < kHeavyDraws)
+            return phases;
+        const auto info = *(uintptr_t*)(modelInfos + model * 4);
+        const float radius = info ? *(float*)(info + 0x1c) : 0.0f;
+        if (!(radius > 0.0f && radius < kHeavyRadius))
+            return phases;
+        if (phases & cascades)
+        {
+            nHeavyCascades++;
+            phases &= ~cascades;
+        }
+        if ((phases & scene) && distance > kHeavyThinFrom)
+        {
+            float place[3];
+            const float keep = CEntity::GetPosition(entity, place) ? float((PositionKey(place) >> 12) & 0xFFFFFF) / float(0x1000000) : 0.0f;
+            if (radius < distance * kHeavyScreenSize || keep * distance > kHeavyThinFrom)
+            {
+                nHeavyScene++;
+                phases &= ~scene;
+            }
+        }
+        return phases;
+    }
+
     // The render lists: reflection phases off for props, and the scene for small ones far off
     uint32_t DropPhases(uintptr_t entity, uint32_t phases, float distance)
     {
         if (!pReflectionPhases || !pScenePhase)
             return phases;
-        const auto reflections = bInReflections ? 0 : *pReflectionPhases & ~*pScenePhase;
-        const auto scene = bSmallFarCull ? *pScenePhase : 0;
-        if (!(phases & (reflections | scene)))
-            return phases;
         // Props have 0x10000 (no shadows) and 0x40000000 from the generator; few other entities have both
         constexpr uint32_t propFlags = 0x10000 | 0x40000000;
         if ((*(uint32_t*)(entity + 0x24) & propFlags) != propFlags)
+            return phases;
+        const auto reflections = bInReflections ? 0 : *pReflectionPhases & ~*pScenePhase;
+        const auto scene = bSmallFarCull ? *pScenePhase : 0;
+        if (!(phases & (reflections | scene)))
             return phases;
         const auto [radius, keep] = FindProp(entity);
         if (radius < 0.0f)
@@ -1339,6 +1394,9 @@ public:
                 if (auto infos = hook::pattern("0F B7 46 30 8B 04 85 ? ? ? ? 85 C0"); !infos.empty())
                     modelInfos = *infos.get_first<uintptr_t>(7);
                 pScenePhase = *listB.get_first<uint32_t*>(0xD); // test [0x159af24], edx after the je
+                // mov eax, [0x159b760]; not eax; and ecx, eax just before the first: the cascades the game drops for props
+                if (*listA.get_first<uint8_t>(-9) == 0xA1)
+                    pCascadePhases = *listA.get_first<uint32_t*>(-8);
                 static auto ListAHook = safetyhook::create_mid(listA.get_first(0), [](SafetyHookContext& regs)
                 {
                     regs.ecx = DropPhases(regs.esi, uint32_t(regs.ecx), *(float*)(regs.edi + 4));
@@ -1348,6 +1406,21 @@ public:
                     regs.ecx = DropPhases(regs.esi, uint32_t(regs.ecx), *(float*)(regs.edi + 4));
                     *(uint32_t*)(regs.esp + 0x28) = uint32_t(regs.ecx);
                 });
+                // HeavyPropCull: where every entity goes into the phases' lists (CE 0xae43a0(phases, entity, distance,
+                // bucket), called from twelve places: the two above see only some of them, objects made from the map's
+                // dummies come through others), at its entry: [esp+4] phases, [esp+8] entity, [esp+0xc] distance
+                if (auto add = hook::pattern("83 EC 10 53 8B 5C 24 18 85 DB 0F 84 ? ? ? ? 33 C9 8B C3 85 DB 78"); !add.empty())
+                {
+                    static auto AddHook = safetyhook::create_mid(add.get_first(0), [](SafetyHookContext& regs)
+                    {
+                        if (!bHeavyPropCull)
+                            return;
+                        auto& phases = *(uint32_t*)(regs.esp + 4);
+                        const auto entity = *(uintptr_t*)(regs.esp + 8);
+                        if (phases && entity)
+                            phases = DropHeavy(entity, phases, *(float*)(regs.esp + 0xc));
+                    });
+                }
             }
 
             FusionFixSettings.SetCallback("PREF_PROCEDURAL_DISTANCE", [](int32_t value)
@@ -1389,13 +1462,13 @@ public:
             auto alive = props.size();
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}; box full {}, candidates capped {}",
+                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, heavy out of cascades {}, heavy left out {}; box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
-                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nEntitiesCapped, nCandidatesCapped));
+                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nHeavyCascades, nHeavyScene, nEntitiesCapped, nCandidatesCapped));
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
-            nReflectionsSkipped = nSmallFarCulled = 0;
+            nReflectionsSkipped = nSmallFarCulled = nHeavyCascades = nHeavyScene = 0;
             nConeFull = 0;
             nConeReleased = 0;
         };
