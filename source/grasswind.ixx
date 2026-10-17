@@ -45,8 +45,8 @@ import nearbybodies;
 // bodies nearest the prop whose reach takes it (a car's footprint and half a metre past it, a person's feet and a metre around)
 // and that stand on its ground go to c248-c251; none clears them.
 //
-// Helicopters within 30 m above a prop blow the grass away from under them (their downwash), wider and weaker the
-// higher they fly, pulsing with the blades.
+// Helicopters with their blades turning, standing or up to 30 m above a prop, blow the grass away from under them (their
+// downwash), by the blades' speed, wider and weaker the higher they fly, pulsing with the blades.
 //
 // Grass Trample (Graphics > Lighting, [PROCEDURAL] GrassTrample): where people walked and wheels rolled the grass stays
 // down and rises again over GrassTrampleSeconds (12). A grid of 128 x 128 cells of 0.5 m around the player, tied to the
@@ -74,8 +74,8 @@ class GrassWind
     static constexpr float kWeatherWind[8] = { 0.15f, 0.25f, 0.8f, 0.2f, 0.5f, 0.3f, 0.1f, 1.0f };
     static constexpr float kGustWavelength = 5.0f;  // metres between gusts along the wind
 
-    // Downwash: from 2.5 m above the prop (a helicopter standing on it doesn't blow), gone at 30 m
-    static constexpr float kRotorLow = 2.5f, kRotorHigh = 30.0f;
+    // Downwash: from a helicopter's position (about a metre over its skids) above the prop, gone at 30 m
+    static constexpr float kRotorLow = 0.3f, kRotorHigh = 30.0f;
 
     // Trample grid
     static constexpr int kCells = 128;
@@ -573,10 +573,10 @@ class GrassWind
             v[7] = std::clamp((NearbyBodies::kRange - std::sqrt(body->distance2)) * 0.1f, 0.0f, 1.0f);
             if (body->kind == NearbyBodies::Body::Rotor)
             {
-                // Full from just above the ground, fading in from where it stands and out towards 30 m
+                // By the blades' speed, full from standing on the ground, weaker towards 30 m
                 const float above = body->bottom - place[2];
-                const float rise = std::clamp((above - kRotorLow) / 1.5f, 0.0f, 1.0f), fall = 1.0f - above / kRotorHigh;
-                v[7] *= rise * fall * fall * rotorPulse;
+                const float rise = std::clamp((above - kRotorLow) / 0.7f, 0.0f, 1.0f), fall = 1.0f - above / kRotorHigh;
+                v[7] *= rise * fall * fall * rotorPulse * body->rotorSpeed;
             }
         }
         pDevice->SetVertexShaderConstantF(kBodyRegister, values, 4);

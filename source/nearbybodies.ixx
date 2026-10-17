@@ -14,7 +14,6 @@ export module nearbybodies;
 
 import common;
 import comvars;
-import natives;
 
 // The cars and people around the player, for effects that react to them (the grass bending under them, the box
 // shadows of cars).
@@ -22,7 +21,8 @@ import natives;
 //    buses and bikes only, upright and whole.
 //  - Bodies: taken on the main thread once a game frame while anyone asked for them in the last second (Want), the
 //    nearest the player first; the render thread copies the latest whole set (Copy). Each has its velocity on the
-//    ground from its last position. Helicopters come as rotors: their centre and height, for the downwash.
+//    ground from its last position. Helicopters with their blades turning come as rotors: their centre, height and
+//    blade speed, for the downwash.
 export namespace NearbyBodies
 {
     struct CarBox
@@ -51,6 +51,7 @@ export namespace NearbyBodies
         float distance2;    // from the player, squared
         float velocity[2];  // m/s on the ground, 0 for the first sight
         enum Kind : uint8_t { Person, Car, Rotor } kind;
+        float rotorSpeed;   // a rotor's blades, 0..1 of full speed
     };
     constexpr int kMaxBodies = 32;
     constexpr float kRange = 60.0f; // metres from the player
@@ -96,29 +97,17 @@ namespace
         velocity[0] = s.velocity[0], velocity[1] = s.velocity[1];
     }
 
-    // By model index: 1 a helicopter, 0 not, -1 not asked yet
-    std::vector<int8_t> heliModels;
-
+    // CVehicle +0x1304: the vehicle's type, 4 a helicopter (SET_HELI_BLADES_FULL_SPEED's handler, CE 0xbce2f0, checks it)
     bool IsHeli(uintptr_t vehicle)
     {
-        static const uintptr_t modelInfos = GameBase() + 0xE95CD8; // CE 0x1295cd8, model infos by index
-        const auto index = *reinterpret_cast<const int16_t*>(vehicle + 0x2E);
-        if (index < 0 || index >= 31000)
-            return false;
-        if (heliModels.empty())
-            heliModels.assign(31000, -1);
-        auto& known = heliModels[index];
-        if (known < 0)
-        {
-            // Natives answer nothing while scripts are paused: ask again later
-            if (!CTimer::ms_bScriptPause || *CTimer::ms_bScriptPause)
-                return false;
-            const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + index * 4);
-            if (!info)
-                return false;
-            known = Natives::IsThisModelAHeli(*reinterpret_cast<const uint32_t*>(info + 0x3c)) ? 1 : 0;
-        }
-        return known == 1;
+        return *reinterpret_cast<const int32_t*>(vehicle + 0x1304) == 4;
+    }
+
+    // CHeli +0x1ED4: the blades' speed, 0..1, rising while the engine runs and falling after (CE 0xb6cd90)
+    float BladeSpeed(uintptr_t heli)
+    {
+        const float speed = *reinterpret_cast<const float*>(heli + 0x1ED4);
+        return std::isfinite(speed) ? std::clamp(speed, 0.0f, 1.0f) : 0.0f;
     }
 
     void Gather()
@@ -143,17 +132,19 @@ namespace
         {
             if (IsHeli(vehicle))
             {
-                // Its downwash, from its position down; how far it reaches is left to whoever takes the bodies
+                // Its downwash, from its position down, while the blades turn; how far it reaches is left to whoever
+                // takes the bodies
                 float p[3];
                 if (!CEntity::GetPosition(vehicle, p))
                     return;
+                helis.push_back({ p[0], p[1], p[2] });
+                const float blades = BladeSpeed(vehicle);
                 const float d2 = near2(p);
-                if (d2 > kRange * kRange)
+                if (blades < 0.05f || d2 > kRange * kRange)
                     return;
-                Body rotor{ { p[0], p[1] }, { 1.0f, 0.0f }, 0.0f, 0.0f, p[2], 0.0f, d2, {}, Body::Rotor };
+                Body rotor{ { p[0], p[1] }, { 1.0f, 0.0f }, 0.0f, 0.0f, p[2], 0.0f, d2, {}, Body::Rotor, blades };
                 TakeVelocity(vehicle, p, now, rotor.velocity);
                 found.push_back(rotor);
-                helis.push_back({ p[0], p[1], p[2] });
                 return;
             }
             CarBox box;
@@ -164,7 +155,7 @@ namespace
                 return;
             boxes.push_back(box);
             Body car{ { box.centre[0], box.centre[1] }, { box.forward[0], box.forward[1] }, box.halfLength, box.halfWidth,
-                box.centre[2] - box.halfHeight, 0.5f, d2, {}, Body::Car };
+                box.centre[2] - box.halfHeight, 0.5f, d2, {}, Body::Car, 0.0f };
             TakeVelocity(vehicle, box.centre, now, car.velocity);
             found.push_back(car);
         });
@@ -192,7 +183,7 @@ namespace
             }
             // The ped's position is about a metre above its feet; the feet and legs as a square of 0.3 m, reaching a metre
             // past it, so the grass leans away from a step before it and rises again behind it
-            Body person{ { p[0], p[1] }, { 1.0f, 0.0f }, 0.15f, 0.15f, p[2] - 1.0f, 1.0f, d2, {}, Body::Person };
+            Body person{ { p[0], p[1] }, { 1.0f, 0.0f }, 0.15f, 0.15f, p[2] - 1.0f, 1.0f, d2, {}, Body::Person, 0.0f };
             TakeVelocity(ped, p, now, person.velocity);
             found.push_back(person);
         });
