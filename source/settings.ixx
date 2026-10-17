@@ -2154,6 +2154,8 @@ public:
             { 0, "PREF_GRASS_BENDING",          "PROCEDURAL", "GrassBending",                       "",                           1, nullptr, 0, 1 },
             { 0, "PREF_GRASS_TRAMPLE",          "PROCEDURAL", "GrassTrample",                       "",                           1, nullptr, 0, 1 },
             { 0, "PREF_GRASS_WIND_DEBUG",       "DEBUG",      "GrassWindDebug",                     "",                           0, nullptr, 0, 1 },
+            // Real reflections in the player car's mirrors in first person (carmirrors.ixx)
+            { 0, "PREF_CAR_MIRRORS",            "MISC",       "CarMirrors",                         "",                           1, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2404,6 +2406,7 @@ public:
             AddRow(category, "SkinSSS", "PREF_SKIN_SSS", 2, toggle);
             AddRow(category, "VolumetricLight", "PREF_VOLUMETRIC_LIGHT", 2, toggle);
             AddRow(category, "SunFlare", "PREF_SUN_FLARE", 2, toggle);
+            AddRow(category, "CarMirrors", "PREF_CAR_MIRRORS", 2, toggle);
             AddRow(category, "VolumeClouds", "PREF_VOLUMETRIC_CLOUDS", 2, toggle);
             AddRow(category, "PbrSky", "PREF_PBR_SKY", 2, toggle);
             AddRow(category, "GGXLighting", "PREF_GGX_LIGHTING", 2, toggle);

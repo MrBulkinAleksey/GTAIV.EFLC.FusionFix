@@ -331,6 +331,9 @@ Car Raindrops
 [SunFlare]
 Sun Lens Flare
 
+[CarMirrors]
+Car Mirror Reflections
+
 [FF_PROCDIST]
 Grass & Props Distance
 
