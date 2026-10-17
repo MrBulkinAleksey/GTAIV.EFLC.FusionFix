@@ -640,7 +640,7 @@ namespace Procedural
                     queued ? Where((float*)entry) : std::string(), waited));
             }
         }
-        if (record && bConeRelease && pGenerator)
+        if (record && (bConeRelease || ProceduralGround::HideGrass) && pGenerator)
         {
             // Made from the queue (a1 its entry; the caller sets the record's provider, +0xc, right after)
             auto queue = *(uint8_t**)(pGenerator + 0x5224);
@@ -706,8 +706,35 @@ namespace Procedural
         shRelease.unsafe_fastcall(generator, edx, record, list);
     }
 
-    // Props made from the queue that are now well outside the cone go as the game lets them go (CE 0xc0a920, from the
-    // list of their procedural.dat record, +0x38 of the record the entry's +0xc points to), and their entries are parked
+    // GPU grass grows at a queue entry's place instead of its prop (ProceduralGround::HideGrass, by the model of the
+    // procedural.dat record its +0xc points to), taken `slack` metres further off than it is
+    bool GrassGivesWay(const uint8_t* entry, float slack = 0.0f)
+    {
+        const auto hide = ProceduralGround::HideGrass;
+        const auto definition = *(const uint8_t* const*)(entry + 0xC);
+        if (!hide || !pCamera || !pDefinitions || definition < pDefinitions + 8 ||
+            definition >= pDefinitions + 8 + size_t(*(uint32_t*)(pDefinitions + 4)) * 0x44)
+            return false;
+        const int32_t model = *(const int32_t*)(definition + 4);
+        if (model < 0 || model > 0xFFFF)
+            return false;
+        const float* position = (const float*)entry;
+        const float dx = position[0] - pCamera[0], dy = position[1] - pCamera[1], dz = position[2] - pCamera[2];
+        const float keep = float((PositionKey(position) >> 12) & 0xFFFFFF) / float(0x1000000);
+        return hide(uint16_t(model), std::sqrt(dx * dx + dy * dy + dz * dz) + slack, keep);
+    }
+
+    // Wanted now: inside the cone, and not where GPU grass grows instead
+    bool Wanted(const uint8_t* entry)
+    {
+        return InCone((const float*)entry) && !GrassGivesWay(entry);
+    }
+
+    // Props made from the queue that are now well outside the cone (ProceduralConeRelease), or grass props the camera
+    // came near enough for GPU grass to grow in their place (by GrassReleaseSlack more), go as the game lets them go
+    // (CE 0xc0a920, from the list of their procedural.dat record, +0x38 of the record the entry's +0xc points to), and
+    // their entries are parked
+    constexpr float GrassReleaseSlack = 5.0f;
     void ReleaseOutsideCone(uint8_t* generator)
     {
         std::vector<std::pair<uint8_t*, MadeFrom>> outside;
@@ -718,7 +745,7 @@ namespace Procedural
             // The game's own removal clears the provider before it lets a record go
             if (!*(uintptr_t*)(record + 8) || *(uintptr_t*)(record + 0xC) != *(uintptr_t*)(from.entry + 0x1C))
                 continue;
-            if (!InCone((float*)from.entry, ReleaseSlack))
+            if ((bConeRelease && !InCone((float*)from.entry, ReleaseSlack)) || GrassGivesWay(from.entry, GrassReleaseSlack))
                 outside.emplace_back(record, from);
         }
         for (auto& [record, from] : outside)
@@ -780,9 +807,9 @@ namespace Procedural
         // The cone: kept positions of a removed provider go, those now inside come back (nearest first is the sort
         // below), and those outside are kept, while there is room; past it they are made
         UpdateCone();
-        if (cone.active)
+        if (cone.active || ProceduralGround::HideGrass)
         {
-            if (bConeRelease)
+            if (bConeRelease || ProceduralGround::HideGrass)
                 ReleaseOutsideCone(generator);
             uint32_t capacity = *(uint32_t*)(generator + 0x5220);
             std::vector<uint8_t> keep;
@@ -802,7 +829,7 @@ namespace Procedural
                     nDropped++;
                     continue;
                 }
-                if (count < capacity && InCone((float*)entry))
+                if (count < capacity && Wanted(entry))
                 {
                     memcpy(queue + size_t(count) * QueueEntrySize, entry, QueueEntrySize);
                     count++;
@@ -814,7 +841,7 @@ namespace Procedural
             for (uint32_t i = 0; i < count; i++)
             {
                 auto entry = queue + size_t(i) * QueueEntrySize;
-                if (!InCone((float*)entry))
+                if (!Wanted(entry))
                 {
                     if (keep.size() < ParkedLimit * QueueEntrySize)
                     {

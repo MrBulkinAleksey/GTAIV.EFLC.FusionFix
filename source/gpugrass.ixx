@@ -56,9 +56,11 @@ using namespace PostFxProfiler;
 // Bending (GpuGrass.fx): the bodies Grass Bending takes (GrassShared::Bodies), the kBodies nearest the camera within the
 // range, and Grass Trample's grid as a vertex texture (vs s1), as the grass props have them.
 //
-// GpuGrassHideProps ([PROCEDURAL], 1): the game's grass props (procedural.dat's models on the grass list) are left out
-// of the scene where the blades grow (ProceduralGround::HideGrass, at the render lists): a prop is hidden while its own
-// random value is under the blades' share at its distance, so they come back as the blades thin out.
+// GpuGrassHideProps ([PROCEDURAL], 1): the game's grass props (procedural.dat's models on the grass list) give way where
+// the blades grow (ProceduralGround::HideGrass): one is in the way while its place's random value is under the blades'
+// share at its distance, so they come back as the blades thin out. The generator doesn't make those (their queue entries
+// wait parked, as outside the cone) and lets go of those the camera came near; the render lists leave out any made
+// meanwhile.
 //
 // [PROCEDURAL] GpuGrassRange (70 m), GpuGrassFullRange (22 m), GpuGrassDensity (0.1..1). GpuGrassDebug (Graphics >
 // Debug) colours the blades by their surface's tag. GpuGrassLog = 1 ([DEBUG]) writes the triangles, pieces and blades
