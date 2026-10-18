@@ -100,6 +100,10 @@ export namespace ProceduralGround
     // A prop of `model` at `distance` from the camera left out of the scene, where other grass grows in its place
     // (gpugrass.ixx); `keep` is the prop's own random value, 0..1, the same each time it is made there
     inline bool (*HideGrass)(uint16_t model, float distance, float keep) = nullptr;
+    // How far ahead of the camera ground should be gathered (GPU grass's range), 0 for the manager's own circle around
+    // it: its centre then moves ahead along the view by what its radius lacks of that, at most half the radius, so less
+    // is held behind (Procedural::ShiftGatherCentre)
+    inline float GatherAhead = 0.0f;
 
     // procedural.dat's PROCOBJ records (CE 0x16c8fb0): +4 count, records of 0x44 from +8: +0 tag, +4 model index,
     // +8 spacing; nullptr until loaded
@@ -517,6 +521,25 @@ namespace Procedural
             fGatherNow = std::min(fGatherFull, fGatherNow + 2.0f);
         fGatherNow = std::clamp(fGatherNow, low, fGatherFull);
         *(float*)(pManager + 0x20) = fGatherNow * fGatherNow;
+    }
+
+    // GatherAhead: the manager's centre (+0xf40), copied from the camera in its update (CE 0xc869e0) and what its
+    // collision query (box +0x1c, CE 0xc87920), gathering and letting go (CE 0xc874f0) all measure from, moved ahead
+    // along the view, flat
+    void ShiftGatherCentre(uint8_t* manager)
+    {
+        const float ahead = ProceduralGround::GatherAhead;
+        if (!(ahead > 0.0f) || !pCamera)
+            return;
+        const float radius = std::sqrt((std::max)(*(float*)(manager + 0x20), 0.0f));
+        const float shift = std::clamp(ahead - radius, 0.0f, radius * 0.5f);
+        const float* forward = pCamera - 8;
+        const float length = std::sqrt(forward[0] * forward[0] + forward[1] * forward[1]);
+        if (!(shift > 0.0f) || !(length > 0.1f))
+            return;
+        auto centre = (float*)(manager + 0xF40);
+        centre[0] += forward[0] / length * shift;
+        centre[1] += forward[1] / length * shift;
     }
 
     // The manager's grass and gathering distances, from what the game just set for Detail Quality
@@ -1455,6 +1478,15 @@ public:
             {
                 pDetailExtra = *pattern.get_first<float*>(4);
                 shUpdateDistances = safetyhook::create_inline(pattern.get_first(0), UpdateDistances);
+            }
+            // The manager's update, right after it copied the camera into its centre (edi the manager)
+            pattern = hook::pattern("89 43 0C E8 ? ? ? ? 83 C4 08 8B CF E8");
+            if (!pattern.empty())
+            {
+                static auto CentreHook = safetyhook::create_mid(pattern.get_first(8), [](SafetyHookContext& regs)
+                {
+                    ShiftGatherCentre((uint8_t*)regs.edi);
+                });
             }
 
             // procedural.dat's PROCOBJ records, kept as loaded so density and distance can change later

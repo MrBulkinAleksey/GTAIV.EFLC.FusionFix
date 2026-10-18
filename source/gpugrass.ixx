@@ -74,7 +74,7 @@ using namespace PostFxProfiler;
 // wait parked, as outside the cone) and lets go of those the camera came near; the render lists leave out any made
 // meanwhile.
 //
-// [PROCEDURAL] GpuGrassRange (70 m), GpuGrassFullRange (22 m), GpuGrassDensity (0.1..1). GpuGrassDebug (Graphics >
+// [PROCEDURAL] GpuGrassRange (100 m; the manager gathers ground that far ahead, less behind: ProceduralGround::GatherAhead), GpuGrassFullRange (22 m), GpuGrassDensity (0.1..1). GpuGrassDebug (Graphics >
 // Debug) colours the blades by their surface's tag. GpuGrassLog = 1 ([DEBUG]) writes the triangles, pieces and blades
 // to GTAIV.EFLC.FusionFix.GpuGrass.log every 600 frames.
 namespace GpuGrass
@@ -96,7 +96,7 @@ namespace GpuGrass
     // each cell gets its distance to an unmarked one, and each piece's corners that distance over kEdgeFade (1 off grid)
     constexpr float kEdgeFade = 2.0f;
     constexpr float kEdgeCell = 0.5f;
-    constexpr float kEdgeReach = 80.0f;     // GpuGrassRange is 70 m by default
+    constexpr float kEdgeReach = 110.0f;    // GpuGrassRange is 100 m by default
     constexpr int kEdgeSide = int(2.0f * kEdgeReach / kEdgeCell);
 
     struct Instance { float corner[4]; float edge1[4]; float edge2[4]; float kinds[4]; float edges[4]; };
@@ -109,7 +109,7 @@ namespace GpuGrass
     // Settings
     bool bLog = false;
     bool bHideProps = true;
-    float fRange = 70.0f, fFullRange = 22.0f, fDensity = 1.0f;
+    float fRange = 100.0f, fFullRange = 22.0f, fDensity = 1.0f;
 
     // Render thread
     // What grows on a triangle: how much, the share of grass, of weeds, of small plants, the height (0..1), the debug colour
@@ -173,7 +173,7 @@ namespace GpuGrass
 
     void ReadIni(CIniReader& iniReader)
     {
-        fRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassRange", 70.0f), 5.0f, 150.0f);
+        fRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassRange", 100.0f), 5.0f, 150.0f);
         fFullRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassFullRange", 22.0f), 0.0f, fRange - 1.0f);
         bHideProps = iniReader.ReadInteger("PROCEDURAL", "GpuGrassHideProps", 1) != 0;
         fDensity = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassDensity", 1.0f), 0.1f, 1.0f);
@@ -648,6 +648,7 @@ export namespace GpuGrass
         {
             drawing = false;
             windKnown = false;
+            ProceduralGround::GatherAhead = 0.0f;
             return void(status = "off");
         }
         const auto start = std::chrono::steady_clock::now();
@@ -662,6 +663,7 @@ export namespace GpuGrass
             return void(status = "no effect or buffers");
         }
         drawing = true;
+        ProceduralGround::GatherAhead = fRange;
 
         // The camera: a rigid view, its position -t R^T
         const auto& v = camera.View;
@@ -959,7 +961,7 @@ public:
             using namespace GpuGrass;
             if (!bHideProps || !drawing || model >= grassModel.size() || !grassModel[model])
                 return false;
-            // All of them until the blades are down to a quarter (46 m at the defaults), fewer as they thin out further: the
+            // All of them until the blades are down to a quarter (61 m at the defaults), fewer as they thin out further: the
             // props and the blades trade places far off, where the change shows least
             return keep < (std::min)(BladeShare(distance) * 4.0f, 1.0f);
         };
