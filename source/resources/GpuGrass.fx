@@ -130,7 +130,7 @@ float3 Bending(float3 root, float height)
 // A blade's place on its piece, and whether it is drawn: past the piece's share, thinned out by an edge of the grass
 // (a sixth of them kept at the edge itself) or past 15 m one in two going to make the others twice as wide (LOD: thin
 // blades far off only flicker), it is not
-bool BladeKept(VSInput input, out float3 root, out float edge, out float distance)
+bool BladeKept(VSInput input, out float3 root, out float edge, out float distance, out float keep)
 {
     float2 uv = input.blade.xy;
     if (uv.x + uv.y > 1.0)
@@ -139,8 +139,10 @@ bool BladeKept(VSInput input, out float3 root, out float edge, out float distanc
     edge = input.edges.x + (input.edges.y - input.edges.x) * uv.x + (input.edges.z - input.edges.x) * uv.y;
     distance = length(root - vec4Eye.xyz);
     float thinned = 0.5 * saturate((distance - 15.0) / 15.0);
-    return input.vertex.z < input.edge1.w && frac(input.vertex.w * 7.13 + 0.31) <= edge * 1.2 + 0.15 &&
-           frac(input.vertex.w * 5.37 + 0.71) >= thinned;
+    // How far each test is from leaving the blade out, in the share of blades: MakeBlade shortens it over the last
+    // tenth, so no blade appears or goes at once as the camera moves
+    keep = min(edge * 1.2 + 0.15 - frac(input.vertex.w * 7.13 + 0.31), frac(input.vertex.w * 5.37 + 0.71) - thinned);
+    return input.vertex.z < input.edge1.w && keep >= 0.0;
 }
 
 struct Blade
@@ -152,7 +154,7 @@ struct Blade
     float patch, clump, dry, second, distant;
 };
 
-Blade MakeBlade(VSInput input, float3 root, float edge, float distance)
+Blade MakeBlade(VSInput input, float3 root, float edge, float distance, float keep)
 {
     Blade b;
     b.root = root;
@@ -184,7 +186,7 @@ Blade MakeBlade(VSInput input, float3 root, float edge, float distance)
     height *= 1.0 + 0.25 * b.isFlower;
     // Shorter towards an edge; and the last twelfth of the blades kept rise out of the ground as the share grows (the
     // camera coming nearer), so they don't pop in
-    b.height = height * lerp(0.35, 1.0, edge) * saturate((input.edge1.w - input.vertex.z) * 12.0 + 0.05);
+    b.height = height * lerp(0.35, 1.0, edge) * saturate(min(input.edge1.w - input.vertex.z, keep) * 12.0 + 0.05);
     float width = (b.isGrass * 0.02 + b.isWeed * 0.03 + b.isPlant * 0.075) * vec4Blade.y;
     // Wider far off, where fewer of them stand and thin ones only flicker (twice past 30 m for the half BladeKept left
     // out); past 12 m more and more grass and weed blades are tufts of three stalks on one wider quad (cut out in the
@@ -233,9 +235,9 @@ VSOutput GrassVS(VSInput input)
 {
     VSOutput output;
     float3 root;
-    float edge, distance;
+    float edge, distance, keep;
     // Not drawn: all its vertices at one point behind the camera
-    [branch] if (!BladeKept(input, root, edge, distance))
+    [branch] if (!BladeKept(input, root, edge, distance, keep))
     {
         output.position = float4(0.0, 0.0, -1.0, 1.0);
         output.colour = 0.0;
@@ -246,7 +248,7 @@ VSOutput GrassVS(VSInput input)
         output.view = 0.0;
         return output;
     }
-    Blade b = MakeBlade(input, root, edge, distance);
+    Blade b = MakeBlade(input, root, edge, distance, keep);
     float t = b.t;
     float3 pressed = vec4Bend.x > 0.0 ? Bending(root, b.height) : 0.0;
     float3 position = BladePosition(input, b, vec4Wind, pressed);
@@ -304,8 +306,8 @@ MotionOutput MotionVS(VSInput input)
 {
     MotionOutput output;
     float3 root;
-    float edge, distance;
-    [branch] if (!BladeKept(input, root, edge, distance))
+    float edge, distance, keep;
+    [branch] if (!BladeKept(input, root, edge, distance, keep))
     {
         output.position = float4(0.0, 0.0, -1.0, 1.0);
         output.current = float3(0.0, 0.0, 1.0);
@@ -313,7 +315,7 @@ MotionOutput MotionVS(VSInput input)
         output.tuft = 0.0;
         return output;
     }
-    Blade b = MakeBlade(input, root, edge, distance);
+    Blade b = MakeBlade(input, root, edge, distance, keep);
     float3 pressed = vec4Bend.x > 0.0 ? Bending(root, b.height) : 0.0;
     float3 position = BladePosition(input, b, vec4Wind, pressed);
     float3 before = BladePosition(input, b, vec4WindPrev, pressed);

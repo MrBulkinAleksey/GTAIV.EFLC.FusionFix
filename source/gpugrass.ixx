@@ -373,7 +373,10 @@ namespace GpuGrass
             }
         }
         pieces.clear();
-        const float originX = camera[0] - kEdgeReach, originY = camera[1] - kEdgeReach;
+        // In whole cells of the world: a grid following the camera by fractions of a cell marked other cells of the same
+        // triangles each time, and the blades at an edge came and went as the camera moved
+        const float originX = std::floor((camera[0] - kEdgeReach) / kEdgeCell) * kEdgeCell;
+        const float originY = std::floor((camera[1] - kEdgeReach) / kEdgeCell) * kEdgeCell;
         static std::vector<float> distance;     // in cells; 0 where no grass grows
         distance.assign(size_t(kEdgeSide) * kEdgeSide, 0.0f);
         for (const auto& t : triangles)
