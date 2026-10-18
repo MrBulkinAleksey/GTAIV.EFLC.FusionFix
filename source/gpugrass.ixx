@@ -23,6 +23,7 @@ import d3dx9_43;
 import settings;
 import inireload;
 import framehistory;
+import temporal;
 import postfxresources;
 import postfxprofiler;
 import procedural;
