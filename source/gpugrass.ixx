@@ -48,7 +48,8 @@ using namespace PostFxProfiler;
 // Where: the manager's ground triangles (ProceduralGround, main thread) whose surface's procedural tag makes grass or
 // weeds: by procedural.dat's PROCOBJ records of that tag whose model is grass or a weed on the grass list (GrassShared),
 // the sum of their 1 / spacing^2 times 12, at most 1; and the mix of grass and weeds among those props, which the blades
-// follow (GrassShared::GrassKind). Small plants (flower beds) stay the game's props. Lawns of the GRASS and SHORT_GRASS
+// follow (GrassShared::GrassKind). Small plants (flower beds) stay the game's props; a tag with only those grows sparser
+// grass between them (kPlantGroundShare). Lawns of the GRASS and SHORT_GRASS
 // materials whose tag has no props, which the manager gathers for us (GatherGrassSurfaces), grow grass of their own
 // (LookOf). The triangles are cut into pieces of at most kPieceArea square metres
 // when the set changes; each frame the pieces in view within the range take a share of the mesh's kBlades blades
@@ -80,6 +81,7 @@ namespace GpuGrass
     constexpr int kMaxInstances = 24576;
     constexpr float kForgetDistance = 400.0f;   // triangles further from the camera when the pieces are made are dropped
     constexpr int kBodies = 8;                  // as GpuGrass.fx
+    constexpr float kPlantGroundShare = 0.5f;   // grass on ground whose props are only small plants
 
     struct MeshVertex { float blade[4]; float vertex[4]; };
     struct Instance { float corner[4]; float edge1[4]; float edge2[4]; float kinds[4]; };
@@ -164,6 +166,7 @@ namespace GpuGrass
             return true;
         std::array<float, 256> sum{};
         std::array<std::array<float, 3>, 256> kindSum{};
+        std::array<bool, 256> plants{};
         grassModel.fill(0);
         for (uint32_t i = 0; i < count; ++i)
         {
@@ -182,6 +185,8 @@ namespace GpuGrass
                 sum[tag] += 1.0f / (spacing * spacing);
                 kindSum[tag][kind - 1] += 1.0f / (spacing * spacing);
             }
+            else if (kind == 3)
+                plants[tag] = true;
         }
         std::string shares;
         for (int t = 0; t < 256; ++t)
@@ -191,6 +196,13 @@ namespace GpuGrass
             if (sum[t] > 0.0f)
                 for (int k = 0; k < 3; ++k)
                     tagKinds[t][k] = kindSum[t][k] / sum[t];
+            else if (plants[t])
+            {
+                // Small plants alone: the ground between them is a meadow too (whole collision triangles of it were bare
+                // amid grass), sparser, shorter, some weeds; the plants stay the game's props
+                tagShare[t] = kPlantGroundShare;
+                tagKinds[t] = { 0.7f, 0.3f, 0.0f, 0.4f };
+            }
             if (tagShare[t] > 0.0f)
                 shares += std::format(" {}:{:.2f}(g{:.0f}/w{:.0f}/p{:.0f})", t, tagShare[t], tagKinds[t][0] * 100.0f, tagKinds[t][1] * 100.0f,
                                       tagKinds[t][2] * 100.0f);
