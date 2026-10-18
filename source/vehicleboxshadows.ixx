@@ -65,8 +65,8 @@ export struct VehicleBoxShadows
     // two points or a box turned about the vertical. A light's shapes go into a 64 x 1 float texture on s7 just
     // before it is drawn, two texels each, their count in c115.x; up to 32, PropShapesPerLight of them. Posts are in
     // no light's map (the caster loop takes an object into the wd_local pass only with +0x210 bit 0x800, from a map
-    // dummy, which posts lack), so they shadow under every light, lamps with a slot too; other props only where the
-    // light has no map of its own this frame, or where they lack that bit as well.
+    // dummy, which posts lack), so they shadow under every light, lamps with a slot too; other props only under a
+    // light without a map this frame, and with the bit only under one without a cache either.
     struct Shape
     {
         // capsule: one end and the radius, the other end and -1; box: the centre and the half length, the forward
@@ -79,7 +79,8 @@ export struct VehicleBoxShadows
         int shapeCount;
         float centre[3], reach;     // a sphere round its shapes, to pick them by
         uintptr_t entity;
-        bool inMaps;    // +0x210 bit 0x800: drawn into the lamps' maps by the game
+        bool inMaps;    // +0x210 bit 0x800: drawn into the lamps' maps by the game, their caches too
+        bool post;      // a lamp post, which no lamp's map ever shows
     };
     static constexpr int kProps = 512, kShapesPerLight = 32, kShapeTexels = kShapesPerLight * 2;
     struct List
@@ -337,7 +338,8 @@ export struct VehicleBoxShadows
             prop.entity = object;
             prop.inMaps = (*reinterpret_cast<const uint32_t*>(object + 0x210) & 0x800) != 0;
             const bool upright = m[10] > 0.95f;
-            if (upright && IsPost(*reinterpret_cast<const uint32_t*>(info + 0x3C)))
+            prop.post = upright && IsPost(*reinterpret_cast<const uint32_t*>(info + 0x3C));
+            if (prop.post)
             {
                 const float radius = R.fPropShapePostRadius;
                 const float footLocal[3] = { 0.0f, 0.0f, lo[2] }, topLocal[3] = { 0.0f, 0.0f, hi[2] - radius };
@@ -382,12 +384,13 @@ export struct VehicleBoxShadows
                 if (!(flat > 0.5f))
                     return;
                 auto& shape = prop.shapes[prop.shapeCount++];
+                // no side under 5 cm: the shader divides by their squares, and a flat sign's 0 made its pixels NaN, black
                 world(mid, shape.t0);
-                shape.t0[3] = half[0];
+                shape.t0[3] = (std::max)(half[0], 0.05f);
                 shape.t1[0] = m[0] / flat;
                 shape.t1[1] = m[1] / flat;
-                shape.t1[2] = half[1];
-                shape.t1[3] = half[2];
+                shape.t1[2] = (std::max)(half[1], 0.05f);
+                shape.t1[3] = (std::max)(half[2], 0.05f);
             }
             else
             {
@@ -966,8 +969,10 @@ export struct VehicleBoxShadows
         for (int i = 0; i < drawn->propCount; ++i)
         {
             const auto& p = drawn->props[i];
-            // in this light's own map already
-            if (hasMap && p.inMaps)
+            // In this light's own map already. Its map of this frame shows every object but the posts: the caster loop
+            // draws the rest in modes 1 and 2 without the 0x800 bit, and only the posts' shaders (all in bucket 4) gave
+            // nothing there; its cache shows those with the bit (mode 0). Each a second, square shadow beside the real.
+            if ((hasMap && !p.post) || (light.mShadowCacheIndex >= 0 && p.inMaps))
                 continue;
             const float dx = p.centre[0] - at[0], dy = p.centre[1] - at[1], dz = p.centre[2] - at[2];
             const float d = std::sqrt(dx * dx + dy * dy + dz * dz);

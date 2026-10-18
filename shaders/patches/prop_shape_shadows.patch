@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 4305b000..063150f5 100644
+index 4305b000..f5a2b418 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -99,6 +99,9 @@
@@ -47,7 +47,7 @@ index 4305b000..063150f5 100644
        min r31.w, r31.w, r17.w // FusionFix: local_light_with_shadow_blend.patch: the darker of the contact shadow and the boxes, not both
      endif
      // --- FusionFix: local_light_with_shadow_blend.patch: the darkest of the shadow map, the contact shadow and the boxes, rather than all three
-@@ -714,6 +738,111 @@
+@@ -714,6 +738,112 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -119,6 +119,7 @@ index 4305b000..063150f5 100644
 +    mov r23.yz, r19.xzww
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
++    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
 +    rcp r25.x, r24.x
 +    rcp r25.y, r24.y
 +    rcp r25.z, r24.z
@@ -160,7 +161,7 @@ index 4305b000..063150f5 100644
      // --- (r15, the way to the light r16), into r17.w
      label l5
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 4ca6b053..da4c1463 100644
+index 4ca6b053..4ca19d38 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -69,6 +69,9 @@
@@ -208,7 +209,7 @@ index 4ca6b053..da4c1463 100644
        min r31.w, r31.w, r17.w // FusionFix: local_light_with_shadow_blend.patch: the darker of the contact shadow and the boxes, not both
      endif
      mul r26.xyz, r26, r31.w
-@@ -527,6 +551,111 @@
+@@ -527,6 +551,112 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -280,6 +281,7 @@ index 4ca6b053..da4c1463 100644
 +    mov r23.yz, r19.xzww
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
++    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
 +    rcp r25.x, r24.x
 +    rcp r25.y, r24.y
 +    rcp r25.z, r24.z
@@ -321,7 +323,7 @@ index 4ca6b053..da4c1463 100644
      // --- (r15, the way to the light r16), into r17.w
      label l5
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index b19777dd..fedf2ab5 100644
+index b19777dd..7e2c9096 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -101,6 +101,9 @@
@@ -369,7 +371,7 @@ index b19777dd..fedf2ab5 100644
        min r31.w, r31.w, r17.w // FusionFix: local_light_with_shadow_blend.patch: the darker of the contact shadow and the boxes, not both
      endif
      // --- FusionFix: local_light_with_shadow_blend.patch: the darkest of the shadow map, the contact shadow and the boxes, rather than all three
-@@ -730,6 +754,111 @@
+@@ -730,6 +754,112 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -441,6 +443,7 @@ index b19777dd..fedf2ab5 100644
 +    mov r23.yz, r19.xzww
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
++    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
 +    rcp r25.x, r24.x
 +    rcp r25.y, r24.y
 +    rcp r25.z, r24.z
@@ -482,7 +485,7 @@ index b19777dd..fedf2ab5 100644
      // --- (r15, the way to the light r16), into r17.w
      label l5
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index f3b45d36..c31f3eaa 100644
+index f3b45d36..7e6dfe67 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -64,6 +64,9 @@
@@ -530,7 +533,7 @@ index f3b45d36..c31f3eaa 100644
        mul r31.w, r31.w, r17.w
      endif
      mul r26.xyz, r26, r31.w
-@@ -493,6 +517,111 @@
+@@ -493,6 +517,112 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -602,6 +605,7 @@ index f3b45d36..c31f3eaa 100644
 +    mov r23.yz, r19.xzww
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
++    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
 +    rcp r25.x, r24.x
 +    rcp r25.y, r24.y
 +    rcp r25.z, r24.z
@@ -643,7 +647,7 @@ index f3b45d36..c31f3eaa 100644
      // --- (r15, the way to the light r16), into r17.w
      label l5
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 631918c6..1deea19a 100644
+index 631918c6..492acce5 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -67,6 +67,9 @@
@@ -691,7 +695,7 @@ index 631918c6..1deea19a 100644
        mul r31.w, r31.w, r17.w
      endif
      mul r26.xyz, r26, r31.w
-@@ -502,6 +526,111 @@
+@@ -502,6 +526,112 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -763,6 +767,7 @@ index 631918c6..1deea19a 100644
 +    mov r23.yz, r19.xzww
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
++    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
 +    rcp r25.x, r24.x
 +    rcp r25.y, r24.y
 +    rcp r25.z, r24.z
@@ -804,7 +809,7 @@ index 631918c6..1deea19a 100644
      // --- (r15, the way to the light r16), into r17.w
      label l5
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 03685891..86c3959a 100644
+index 03685891..4db2b2d4 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -67,6 +67,9 @@
@@ -852,7 +857,7 @@ index 03685891..86c3959a 100644
        mul r31.w, r31.w, r17.w
      endif
      mul r26.xyz, r26, r31.w
-@@ -504,6 +528,111 @@
+@@ -504,6 +528,112 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -924,6 +929,7 @@ index 03685891..86c3959a 100644
 +    mov r23.yz, r19.xzww
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
++    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
 +    rcp r25.x, r24.x
 +    rcp r25.y, r24.y
 +    rcp r25.z, r24.z
@@ -965,7 +971,7 @@ index 03685891..86c3959a 100644
      // --- (r15, the way to the light r16), into r17.w
      label l5
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 0fe181f0..f378232c 100644
+index 0fe181f0..001bde89 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -67,6 +67,9 @@
@@ -1013,7 +1019,7 @@ index 0fe181f0..f378232c 100644
        mul r31.w, r31.w, r17.w
      endif
      mul r26.xyz, r26, r31.w
-@@ -506,6 +530,111 @@
+@@ -506,6 +530,112 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -1085,6 +1091,7 @@ index 0fe181f0..f378232c 100644
 +    mov r23.yz, r19.xzww
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
++    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
 +    rcp r25.x, r24.x
 +    rcp r25.y, r24.y
 +    rcp r25.z, r24.z
