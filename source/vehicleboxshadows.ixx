@@ -60,18 +60,28 @@ export struct VehicleBoxShadows
     // PedCapsuleShadows: people on foot, each a standing capsule the same light shaders shadow (c150-c154,
     // shaders/patches/ped_capsule_shadows.patch), up to kPedsPerLight a light. Their position: x, y, z of the ped.
     static constexpr int kPeds = 96, kPedsPerLight = 4;
-    // PropCapsuleShadows: lamp posts, bins, hydrants, bollards and other upright props, each a standing capsule the
-    // same light shaders shadow (c115-c117, c125-c127, shaders/patches/prop_capsule_shadows.patch), up to
-    // kPropsPerLight a light. Posts are in no light's map (the caster loop takes an object into the wd_local pass only
-    // with +0x210 bit 0x800, from a map dummy, which posts lack), so they shadow under every light, lamps with a slot
-    // too; other props only where the light has no map of its own this frame, or lack that bit as well.
+    // PropShapeShadows: lamp posts, bins, hydrants, benches, containers, barriers, kiosks and other props, each one or
+    // two simple shapes the same light shaders shadow (shaders/patches/prop_shape_shadows.patch): a capsule between
+    // two points or a box turned about the vertical. A light's shapes go into a 64 x 1 float texture on s7 just
+    // before it is drawn, two texels each, their count in c115.x; up to 32, PropShapesPerLight of them. Posts are in
+    // no light's map (the caster loop takes an object into the wd_local pass only with +0x210 bit 0x800, from a map
+    // dummy, which posts lack), so they shadow under every light, lamps with a slot too; other props only where the
+    // light has no map of its own this frame, or where they lack that bit as well.
+    struct Shape
+    {
+        // capsule: one end and the radius, the other end and -1; box: the centre and the half length, the forward
+        // x and y, the half width and the half height (above 0)
+        float t0[4], t1[4];
+    };
     struct Prop
     {
-        float axis[2], foot, height, radius;
+        Shape shapes[2];
+        int shapeCount;
+        float centre[3], reach;     // a sphere round its shapes, to pick them by
         uintptr_t entity;
         bool inMaps;    // +0x210 bit 0x800: drawn into the lamps' maps by the game
     };
-    static constexpr int kProps = 256, kPropsPerLight = 6;
+    static constexpr int kProps = 512, kShapesPerLight = 32, kShapeTexels = kShapesPerLight * 2;
     struct List
     {
         std::atomic<uintptr_t> lights{0}; // the light list these boxes go with
@@ -130,7 +140,9 @@ export struct VehicleBoxShadows
     };
     static inline std::unordered_map<uint64_t, LampState> held;
     // The props each lamp took last, render thread
-    static inline std::unordered_map<uint64_t, std::array<uintptr_t, kPropsPerLight>> heldProps;
+    static inline std::unordered_map<uint64_t, std::array<uintptr_t, kShapesPerLight>> heldProps;
+    static inline IDirect3DTexture9* shapesTexture = nullptr; // on the real device, released when it is lost
+    static inline bool shapesBound = false;
     static inline std::atomic<uint32_t> propsWithShadows{0};
     // The lamps and the cars they keep boxes for (VehicleBoxShadowsUntilLeaving), gathered as a frame's lights are
     // drawn and handed to the night shadow slots on the next; render thread, main thread copies.
@@ -250,7 +262,8 @@ export struct VehicleBoxShadows
 
     // Main thread: every car's box, the nearest the player first when there are more than fit.
     // The lamp post models (their names' hashes, model info +0x3c): their bounds take in the arm out to the lamp, so
-    // their capsule stands at the entity's own position, the post's foot, with PropCapsulePostRadius
+    // their post stands at the entity's own position, its foot, PropShapePostRadius thick, and the arm reaches from
+    // its top to the far end of the bounds
     static bool IsPost(uint32_t hash)
     {
         switch (hash)
@@ -266,21 +279,35 @@ export struct VehicleBoxShadows
         }
     }
 
-    // Objects within PropCapsuleDistance of the player standing upright: posts, and props narrow enough for a capsule
-    // (PropCapsuleMaxWidth across at the widest) and at least half a metre tall; the nearest kProps
+    static void Capsule(Prop& prop, const float a[3], const float b[3], float radius)
+    {
+        auto& shape = prop.shapes[prop.shapeCount++];
+        std::copy_n(a, 3, shape.t0);
+        shape.t0[3] = radius;
+        std::copy_n(b, 3, shape.t1);
+        shape.t1[3] = -1.0f;
+    }
+
+    // Objects within PropShapeDistance of the player as shapes, the nearest kProps:
+    // - lamp posts: the post and its arm, two capsules;
+    // - upright and narrow (0.7 m across at most): a standing capsule as thick as its narrow way (a sign's plate is
+    //   no thicker than its pole);
+    // - upright and wider: a box turned as the prop, no taller than 3.2 m nor wider than 6 m (a billboard high on
+    //   its post would cast a wall);
+    // - leaning or lying, one way clearly the longest: a capsule along it.
     static void CaptureProps(List& list, const float focus[3])
     {
         const auto& R = PostFxResources;
-        static std::array<std::pair<float, Prop>, 1024> found{};
+        static std::array<std::pair<float, Prop>, 2048> found{};
         int n = 0;
-        const float reach2 = R.fPropCapsuleDistance * R.fPropCapsuleDistance;
+        const float reach2 = R.fPropShapeDistance * R.fPropShapeDistance;
         CObject::ForEachObject([&](uintptr_t object)
         {
             if (n >= int(found.size()))
                 return;
             const float* m = CEntity::GetMatrix(object);
             const auto index = *reinterpret_cast<const int16_t*>(object + 0x2E);
-            if (!m || index < 0 || index >= 31000 || !(m[10] > 0.95f))
+            if (!m || index < 0 || index >= 31000)
                 return;
             const float x = m[12] - focus[0], y = m[13] - focus[1], z = m[14] - focus[2];
             const float d2 = x * x + y * y + z * z;
@@ -291,32 +318,98 @@ export struct VehicleBoxShadows
                 return;
             const float* lo = reinterpret_cast<const float*>(info + 0x20);
             const float* hi = reinterpret_cast<const float*>(info + 0x30);
-            const float height = hi[2] - lo[2];
-            if (!(height >= 0.5f && height <= 15.0f))
+            float half[3], mid[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                half[k] = (hi[k] - lo[k]) * 0.5f;
+                mid[k] = (hi[k] + lo[k]) * 0.5f;
+            }
+            if (!(half[0] >= 0.0f && half[1] >= 0.0f && half[2] >= 0.0f) || (std::max)({ half[0], half[1], half[2] }) < 0.15f ||
+                (std::max)({ half[0], half[1], half[2] }) > 8.0f)
                 return;
+            // the model's place p in the world
+            const auto world = [m](const float p[3], float out[3])
+            {
+                for (int k = 0; k < 3; ++k)
+                    out[k] = m[12 + k] + m[k] * p[0] + m[4 + k] * p[1] + m[8 + k] * p[2];
+            };
             Prop prop{};
             prop.entity = object;
             prop.inMaps = (*reinterpret_cast<const uint32_t*>(object + 0x210) & 0x800) != 0;
-            prop.foot = m[14] + lo[2];
-            prop.height = height;
-            if (IsPost(*reinterpret_cast<const uint32_t*>(info + 0x3C)))
+            const bool upright = m[10] > 0.95f;
+            if (upright && IsPost(*reinterpret_cast<const uint32_t*>(info + 0x3C)))
             {
-                prop.axis[0] = m[12];
-                prop.axis[1] = m[13];
-                prop.radius = R.fPropCapsulePostRadius;
+                const float radius = R.fPropShapePostRadius;
+                const float footLocal[3] = { 0.0f, 0.0f, lo[2] }, topLocal[3] = { 0.0f, 0.0f, hi[2] - radius };
+                float foot[3], top[3];
+                world(footLocal, foot);
+                world(topLocal, top);
+                Capsule(prop, foot, top, radius);
+                // the arm out to the lamp: the bounds' far end along the way they reach furthest from the post
+                const float reachX = (std::max)(std::abs(lo[0]), std::abs(hi[0])), reachY = (std::max)(std::abs(lo[1]), std::abs(hi[1]));
+                const bool alongX = reachX >= reachY;
+                const float armReach = alongX ? reachX : reachY;
+                if (armReach > 1.0f)
+                {
+                    const float end = alongX ? (std::abs(hi[0]) >= std::abs(lo[0]) ? hi[0] : lo[0])
+                                             : (std::abs(hi[1]) >= std::abs(lo[1]) ? hi[1] : lo[1]);
+                    const float armZ = hi[2] - 0.35f;
+                    const float startLocal[3] = { 0.0f, 0.0f, armZ };
+                    const float endLocal[3] = { alongX ? end * 0.9f : 0.0f, alongX ? 0.0f : end * 0.9f, armZ };
+                    float start[3], tip[3];
+                    world(startLocal, start);
+                    world(endLocal, tip);
+                    Capsule(prop, start, tip, R.fPropShapeArmRadius);
+                }
+            }
+            else if (upright && (std::max)(half[0], half[1]) <= 0.35f)
+            {
+                if (half[2] < 0.25f)
+                    return;
+                const float radius = std::clamp((std::min)(half[0], half[1]), 0.05f, 0.35f);
+                const float a[3] = { mid[0], mid[1], lo[2] + (std::min)(radius, half[2]) };
+                const float b[3] = { mid[0], mid[1], hi[2] - (std::min)(radius, half[2]) };
+                float wa[3], wb[3];
+                world(a, wa);
+                world(b, wb);
+                Capsule(prop, wa, wb, radius);
+            }
+            else if (upright)
+            {
+                if (half[2] > 1.6f || (std::max)(half[0], half[1]) > 3.0f || half[2] < 0.15f)
+                    return;
+                const float flat = std::sqrt(m[0] * m[0] + m[1] * m[1]);
+                if (!(flat > 0.5f))
+                    return;
+                auto& shape = prop.shapes[prop.shapeCount++];
+                world(mid, shape.t0);
+                shape.t0[3] = half[0];
+                shape.t1[0] = m[0] / flat;
+                shape.t1[1] = m[1] / flat;
+                shape.t1[2] = half[1];
+                shape.t1[3] = half[2];
             }
             else
             {
-                const float halfX = (hi[0] - lo[0]) * 0.5f, halfY = (hi[1] - lo[1]) * 0.5f;
-                if (!((std::max)(halfX, halfY) * 2.0f <= R.fPropCapsuleMaxWidth))
+                int k = 0;
+                for (int j = 1; j < 3; ++j)
+                    if (half[j] > half[k])
+                        k = j;
+                const float other = (std::max)(half[(k + 1) % 3], half[(k + 2) % 3]);
+                if (half[k] < 1.5f * other || half[k] < 0.4f)
                     return;
-                const float cx = (lo[0] + hi[0]) * 0.5f, cy = (lo[1] + hi[1]) * 0.5f;
-                prop.axis[0] = m[12] + m[0] * cx + m[4] * cy;
-                prop.axis[1] = m[13] + m[1] * cx + m[5] * cy;
-                // the narrow way: a sign's plate is no thicker than its pole
-                prop.radius = std::clamp((std::min)(halfX, halfY), 0.05f, 0.5f);
+                const float radius = std::clamp(other, 0.05f, 0.5f);
+                float a[3] = { mid[0], mid[1], mid[2] }, b[3] = { mid[0], mid[1], mid[2] };
+                a[k] -= half[k] - radius;
+                b[k] += half[k] - radius;
+                float wa[3], wb[3];
+                world(a, wa);
+                world(b, wb);
+                Capsule(prop, wa, wb, radius);
             }
-            if (!std::isfinite(prop.axis[0] + prop.axis[1] + prop.foot))
+            world(mid, prop.centre);
+            prop.reach = std::sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2]);
+            if (!prop.shapeCount || !std::isfinite(prop.centre[0] + prop.centre[1] + prop.centre[2]))
                 return;
             found[n++] = { d2, prop };
         });
@@ -477,7 +570,7 @@ export struct VehicleBoxShadows
                 std::copy_n(p, 3, list.peds[list.pedCount++]);
             });
         list.propCount = 0;
-        if (PostFxResources.bPropCapsuleShadows)
+        if (PostFxResources.bPropShapeShadows)
             CaptureProps(list, focus);
         list.lights.store(*lightListBuilt, std::memory_order_release);
     }
@@ -811,10 +904,38 @@ export struct VehicleBoxShadows
         }
     }
 
-    // PropCapsuleShadows: the props nearest the light, weighed by how near the player they stand, as the cars; those
-    // it took last frame held at a quarter of that, so the choice does not flicker between two. Into c115-c117 and
-    // c125-c127: the axis's x, y, its foot and its height + 16 * the radius in centimetres (0 for none).
-    static int PropsForLight(const rage::CLightSource& light, bool hasMap, float (&props)[kPropsPerLight][4])
+    // How far the point q lies outside the shape (negative inside)
+    static float ShapeDistance(const Shape& shape, const float q[3])
+    {
+        if (shape.t1[3] < 0.0f)
+        {
+            float d[3], r[3], dd = 0.0f, dr = 0.0f;
+            for (int k = 0; k < 3; ++k)
+            {
+                d[k] = shape.t1[k] - shape.t0[k];
+                r[k] = q[k] - shape.t0[k];
+                dd += d[k] * d[k];
+                dr += d[k] * r[k];
+            }
+            const float t = dd > 1.0e-6f ? std::clamp(dr / dd, 0.0f, 1.0f) : 0.0f;
+            float l2 = 0.0f;
+            for (int k = 0; k < 3; ++k)
+                l2 += (r[k] - d[k] * t) * (r[k] - d[k] * t);
+            return std::sqrt(l2) - shape.t0[3];
+        }
+        const float px = q[0] - shape.t0[0], py = q[1] - shape.t0[1], pz = q[2] - shape.t0[2];
+        const float along = std::abs(px * shape.t1[0] + py * shape.t1[1]) - shape.t0[3];
+        const float across = std::abs(px * shape.t1[1] - py * shape.t1[0]) - shape.t1[2];
+        const float up = std::abs(pz) - shape.t1[3];
+        const float ox = (std::max)(along, 0.0f), oy = (std::max)(across, 0.0f), oz = (std::max)(up, 0.0f);
+        return std::sqrt(ox * ox + oy * oy + oz * oz) + (std::min)((std::max)({ along, across, up }), 0.0f);
+    }
+
+    // PropShapeShadows: the props nearest the light, weighed by how near the player they stand, as the cars, their
+    // shapes up to PropShapesPerLight; those it took last frame held at a quarter of that, so the choice does not
+    // flicker between two. Left out: props outside its light or its cone, the lamp's own post, a shape the light
+    // stands in.
+    static int ShapesForLight(const rage::CLightSource& light, bool hasMap, Shape (&shapes)[kShapesPerLight])
     {
         const auto& R = PostFxResources;
         if (!drawn || !drawn->propCount)
@@ -828,13 +949,20 @@ export struct VehicleBoxShadows
                 if (std::sqrt(ex * ex + ey * ey + ez * ez) - light.mRadius > R.fVehicleBoxShadowsMaxDistance)
                     return 0;
             }
+        const int most = std::clamp(R.nPropShapesPerLight, 1, kShapesPerLight);
         const uint64_t lightKey = LightKey(Cell(light.mPosition.x), Cell(light.mPosition.y), Cell(light.mPosition.z));
         if (heldProps.size() > 4096)
             heldProps.clear();
         auto& last = heldProps[lightKey];
         const auto key = static_cast<uint32_t>(light.mCastShadows);
-        std::pair<float, const Prop*> chosen[kPropsPerLight] = {};
-        int used = 0;
+        const float at[3] = { light.mPosition.x, light.mPosition.y, light.mPosition.z };
+        // a spot's cone: its direction and the cosine of its outer half angle (the game keeps the cosine)
+        const bool spot = light.mType == rage::LT_SPOT && light.mOuterConeAngle > 0.0f && light.mOuterConeAngle < 1.0f;
+        const float* dir = &light.mDirection.x;
+        const float dirLength = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+        const float cone = spot ? std::acos(light.mOuterConeAngle) : 0.0f;
+        std::pair<float, const Prop*> chosen[kShapesPerLight] = {};
+        int taken = 0;
         for (int i = 0; i < drawn->propCount; ++i)
         {
             const auto& p = drawn->props[i];
@@ -844,51 +972,88 @@ export struct VehicleBoxShadows
             // the lamp's own post: the light's key is the entity's address and the effect's place in it
             if (key - static_cast<uint32_t>(p.entity) < 0x320)
                 continue;
-            // the nearest point of its axis
-            const float z = std::clamp(light.mPosition.z, p.foot, p.foot + p.height);
-            const float dx = light.mPosition.x - p.axis[0], dy = light.mPosition.y - p.axis[1], dz = light.mPosition.z - z;
-            const float flat2 = dx * dx + dy * dy;
-            // a light in it or right by it (a lamp on its own post the key did not tell)
-            if (flat2 < (p.radius + 0.3f) * (p.radius + 0.3f))
+            const float dx = p.centre[0] - at[0], dy = p.centre[1] - at[1], dz = p.centre[2] - at[2];
+            const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            const float gap = (std::max)(d - p.reach, 0.0f);
+            if (gap > light.mRadius)
                 continue;
-            const float d2 = flat2 + dz * dz;
-            if (d2 > light.mRadius * light.mRadius)
-                continue;
-            const float falloff = std::clamp(1.0f - std::sqrt(d2) / (std::max)(light.mRadius, 0.1f), 0.0f, 1.0f);
+            if (spot && dirLength > 0.5f && d > p.reach)
+            {
+                const float off = std::acos(std::clamp((dx * dir[0] + dy * dir[1] + dz * dir[2]) / (dirLength * d), -1.0f, 1.0f));
+                if (off > cone + std::asin((std::min)(p.reach / d, 1.0f)) + 0.1f)
+                    continue;
+            }
+            const float falloff = std::clamp(1.0f - gap / (std::max)(light.mRadius, 0.1f), 0.0f, 1.0f);
             const bool holding = std::find(last.begin(), last.end(), p.entity) != last.end();
             if (falloff * falloff < R.fVehicleBoxShadowsMinLight * (holding ? 0.5f : 1.0f))
                 continue;
-            const float fx = p.axis[0] - drawn->focus[0], fy = p.axis[1] - drawn->focus[1], fz = z - drawn->focus[2];
-            float score = d2 * (1.0f + (fx * fx + fy * fy + fz * fz) / 400.0f);
+            const float fx = p.centre[0] - drawn->focus[0], fy = p.centre[1] - drawn->focus[1], fz = p.centre[2] - drawn->focus[2];
+            float score = gap * gap * (1.0f + (fx * fx + fy * fy + fz * fz) / 400.0f);
             if (holding)
                 score *= 0.25f;
-            if (used == kPropsPerLight && score >= chosen[kPropsPerLight - 1].first)
+            if (taken == most && score >= chosen[most - 1].first)
                 continue;
-            int at = used < kPropsPerLight ? used++ : kPropsPerLight - 1;
-            for (; at > 0 && chosen[at - 1].first > score; --at)
-                chosen[at] = chosen[at - 1];
-            chosen[at] = { score, &p };
+            int place = taken < most ? taken++ : most - 1;
+            for (; place > 0 && chosen[place - 1].first > score; --place)
+                chosen[place] = chosen[place - 1];
+            chosen[place] = { score, &p };
         }
         last = {};
-        for (int i = 0; i < used; ++i)
+        int used = 0;
+        for (int i = 0; i < taken && used < most; ++i)
         {
             const auto& p = *chosen[i].second;
             last[i] = p.entity;
-            props[i][0] = p.axis[0];
-            props[i][1] = p.axis[1];
-            props[i][2] = p.foot;
-            props[i][3] = (std::min)(p.height, 15.9f) + 16.0f * std::round(p.radius * 100.0f);
+            for (int j = 0; j < p.shapeCount && used < most; ++j)
+                if (ShapeDistance(p.shapes[j], at) > 0.2f)
+                    shapes[used++] = p.shapes[j];
         }
         propsWithShadows.fetch_add(uint32_t(used), std::memory_order_relaxed);
         return used;
+    }
+
+    // The light's shapes into the texture on s7; false where it could not be made or filled
+    static bool BindShapes(IDirect3DDevice9* pDevice, const Shape* shapes, int count)
+    {
+        auto real = RageDirect3DDevice9::RealDevice(pDevice);
+        if (!shapesTexture && FAILED(real->CreateTexture(kShapeTexels, 1, 1, D3DUSAGE_DYNAMIC, D3DFMT_A32B32G32R32F, D3DPOOL_DEFAULT, &shapesTexture, nullptr)))
+        {
+            shapesTexture = nullptr;
+            return false;
+        }
+        D3DLOCKED_RECT locked = {};
+        if (FAILED(shapesTexture->LockRect(0, &locked, nullptr, D3DLOCK_DISCARD)))
+            return false;
+        // A32B32G32R32F keeps each texel as r, g, b, a floats
+        std::memcpy(locked.pBits, shapes, sizeof(Shape) * size_t(count));
+        shapesTexture->UnlockRect(0);
+        RageDirect3DDevice9::SetTextureBoth(pDevice, 7, shapesTexture);
+        RageDirect3DDevice9::SetSamplerStateBoth(pDevice, 7, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        RageDirect3DDevice9::SetSamplerStateBoth(pDevice, 7, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        RageDirect3DDevice9::SetSamplerStateBoth(pDevice, 7, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+        RageDirect3DDevice9::SetSamplerStateBoth(pDevice, 7, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+        RageDirect3DDevice9::SetSamplerStateBoth(pDevice, 7, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        shapesBound = true;
+        return true;
+    }
+
+    // When the device is lost: the texture is in its default pool
+    static void ReleaseShapes()
+    {
+        if (shapesTexture)
+        {
+            shapesTexture->Release();
+            shapesTexture = nullptr;
+        }
+        shapesBound = false;
     }
 
     static float SetForLight(IDirect3DDevice9* pDevice, const rage::CLightSource& light, bool& mapHasCars)
     {
         auto& R = PostFxResources;
         const bool hasMap = mapHasCars;
-        // c115-c117, c125-c127: up to six props near the light
-        float props[kPropsPerLight][4] = {};
+        // The props' shapes near the light, on s7, their count in c115.x
+        Shape shapes[kShapesPerLight] = {};
         int propsUsed = 0;
         // Boxes 0-2 at c143-c148 with the lamp's own at c149, boxes 3 and 4 at c121-c124.
         float constants[kPerLight * 2 + 1][4] = {};
@@ -1241,11 +1406,13 @@ export struct VehicleBoxShadows
             }
         }
         // Props for car lights too: a post's shadow from the headlights is the one most often seen
-        if (R.VehicleBoxShadowsEnabled() && R.bPropCapsuleShadows && lightListDrawn &&
+        if (R.VehicleBoxShadowsEnabled() && R.bPropShapeShadows && lightListDrawn &&
             (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
         {
             FindDrawn();
-            propsUsed = PropsForLight(light, hasMap, props);
+            propsUsed = ShapesForLight(light, hasMap, shapes);
+            if (propsUsed && !BindShapes(pDevice, shapes, propsUsed))
+                propsUsed = 0;
         }
         if (!used && !pedsUsed && !propsUsed)
         {
@@ -1278,8 +1445,8 @@ export struct VehicleBoxShadows
         const float capsule[4] = { R.fPedCapsuleRadius, -(R.fPedCapsuleRadius + 0.3f), 0.0f, 0.0f };
         pDevice->SetPixelShaderConstantF(150, peds[0], kPedsPerLight);
         pDevice->SetPixelShaderConstantF(154, capsule, 1);
-        pDevice->SetPixelShaderConstantF(115, props[0], 3);
-        pDevice->SetPixelShaderConstantF(125, props[3], 3);
+        const float shapeCount[4] = { float(propsUsed), 0.0f, 0.0f, 0.0f };
+        pDevice->SetPixelShaderConstantF(115, shapeCount, 1);
         constantsOn = true;
         float strongest = 0.0f;
         for (int i = 0; i < used; ++i)
@@ -1303,6 +1470,12 @@ export struct VehicleBoxShadows
     {
         const float off[4] = {};
         pDevice->SetPixelShaderConstantF(149, off, 1);
+        pDevice->SetPixelShaderConstantF(115, off, 1);
+        if (shapesBound)
+        {
+            RageDirect3DDevice9::SetTextureBoth(pDevice, 7, nullptr);
+            shapesBound = false;
+        }
         constantsOn = false;
     }
 };

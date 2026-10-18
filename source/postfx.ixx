@@ -324,6 +324,7 @@ private:
         PostFxResources.ReleaseWaterMask();
         UnbindGlassReflections();
         SAFE_RELEASE(PostFxResources.GlassParamsTex);
+        VehicleBoxShadows::ReleaseShapes();
         ReleaseScreenSpaceTargets();
         TemporalAA::ReleaseResources();
         // PostFxResources.mSpecularAoRT    =nullptr;
@@ -1611,9 +1612,9 @@ private:
                 log.Printf("ped capsule shadows: %s, %u people shaded by lights since the last log; radius %.2f, height %.2f, foot %.2f below the position\n",
                         R.bPedCapsuleShadows ? "on" : "off", VehicleBoxShadows::pedsWithShadows.exchange(0),
                         R.fPedCapsuleRadius, R.fPedCapsuleHeight, R.fPedCapsuleFootBelow);
-                log.Printf("prop capsule shadows: %s, %u props shaded by lights since the last log; post radius %.2f, within %.0f m\n",
-                        R.bPropCapsuleShadows ? "on" : "off", VehicleBoxShadows::propsWithShadows.exchange(0),
-                        R.fPropCapsulePostRadius, R.fPropCapsuleDistance);
+                log.Printf("prop shape shadows: %s, %u shapes given to lights since the last log; up to %d a light, within %.0f m\n",
+                        R.bPropShapeShadows ? "on" : "off", VehicleBoxShadows::propsWithShadows.exchange(0),
+                        R.nPropShapesPerLight, R.fPropShapeDistance);
                 log.Printf("slot maps drawn without their lamp's boxed cars %u, cars left out %u\n",
                         VehicleBoxShadows::mapsWithoutBoxed.exchange(0), VehicleBoxShadows::carsLeftOut.exchange(0));
                 {
