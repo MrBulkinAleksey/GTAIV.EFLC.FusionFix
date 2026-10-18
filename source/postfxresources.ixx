@@ -853,6 +853,11 @@ public:
     // of that radius and height, its foot that far below the ped's position (see VehicleBoxShadows)
     bool bPedCapsuleShadows = true;
     float fPedCapsuleRadius = 0.25f, fPedCapsuleHeight = 1.75f, fPedCapsuleFootBelow = 1.0f;
+    // PropCapsuleShadows: lamp posts and narrow upright props within PropCapsuleDistance of the player get the shadow of
+    // a standing capsule from the lights near them (see VehicleBoxShadows): posts PropCapsulePostRadius thick, the rest
+    // as narrow as they are, no wider than PropCapsuleMaxWidth across
+    bool bPropCapsuleShadows = true;
+    float fPropCapsuleDistance = 80.0f, fPropCapsulePostRadius = 0.12f, fPropCapsuleMaxWidth = 1.0f;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
@@ -1908,6 +1913,10 @@ public:
             IniFloat("NIGHTSHADOWS", "PedCapsuleRadius", &PostFxResource::fPedCapsuleRadius, 0.25f, 0.05f, 1.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleHeight", &PostFxResource::fPedCapsuleHeight, 1.75f, 0.5f, 3.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleFootBelow", &PostFxResource::fPedCapsuleFootBelow, 1.0f, -1.0f, 2.0f),
+            IniFlag("NIGHTSHADOWS", "PropCapsuleShadows", &PostFxResource::bPropCapsuleShadows, 1),
+            IniFloat("NIGHTSHADOWS", "PropCapsuleDistance", &PostFxResource::fPropCapsuleDistance, 80.0f, 10.0f, 200.0f),
+            IniFloat("NIGHTSHADOWS", "PropCapsulePostRadius", &PostFxResource::fPropCapsulePostRadius, 0.12f, 0.03f, 0.5f),
+            IniFloat("NIGHTSHADOWS", "PropCapsuleMaxWidth", &PostFxResource::fPropCapsuleMaxWidth, 1.0f, 0.1f, 2.0f),
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerLamp", &PostFxResource::nVehicleBoxShadowsPerLamp, 3, 1, 5),
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerCar", &PostFxResource::nVehicleBoxShadowsPerCar, 2, 0, 8),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsMinLight", &PostFxResource::fVehicleBoxShadowsMinLight, 0.04f, 0.0f, 1.0f),

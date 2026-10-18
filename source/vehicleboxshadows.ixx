@@ -60,6 +60,18 @@ export struct VehicleBoxShadows
     // PedCapsuleShadows: people on foot, each a standing capsule the same light shaders shadow (c150-c154,
     // shaders/patches/ped_capsule_shadows.patch), up to kPedsPerLight a light. Their position: x, y, z of the ped.
     static constexpr int kPeds = 96, kPedsPerLight = 4;
+    // PropCapsuleShadows: lamp posts, bins, hydrants, bollards and other upright props, each a standing capsule the
+    // same light shaders shadow (c115-c117, c125-c127, shaders/patches/prop_capsule_shadows.patch), up to
+    // kPropsPerLight a light. Posts are in no light's map (the caster loop takes an object into the wd_local pass only
+    // with +0x210 bit 0x800, from a map dummy, which posts lack), so they shadow under every light, lamps with a slot
+    // too; other props only where the light has no map of its own this frame, or lack that bit as well.
+    struct Prop
+    {
+        float axis[2], foot, height, radius;
+        uintptr_t entity;
+        bool inMaps;    // +0x210 bit 0x800: drawn into the lamps' maps by the game
+    };
+    static constexpr int kProps = 256, kPropsPerLight = 6;
     struct List
     {
         std::atomic<uintptr_t> lights{0}; // the light list these boxes go with
@@ -72,6 +84,8 @@ export struct VehicleBoxShadows
         Box boxes[kBoxes];
         int pedCount = 0;
         float peds[kPeds][3];
+        int propCount = 0;
+        Prop props[kProps];
     };
     static inline List lists[kLists]{};
     static inline int nextList = 0;
@@ -115,6 +129,9 @@ export struct VehicleBoxShadows
         uint8_t watchedLatch = 0xFF;
     };
     static inline std::unordered_map<uint64_t, LampState> held;
+    // The props each lamp took last, render thread
+    static inline std::unordered_map<uint64_t, std::array<uintptr_t, kPropsPerLight>> heldProps;
+    static inline std::atomic<uint32_t> propsWithShadows{0};
     // The lamps and the cars they keep boxes for (VehicleBoxShadowsUntilLeaving), gathered as a frame's lights are
     // drawn and handed to the night shadow slots on the next; render thread, main thread copies.
     static constexpr int kPairs = 256;
@@ -232,6 +249,85 @@ export struct VehicleBoxShadows
     }
 
     // Main thread: every car's box, the nearest the player first when there are more than fit.
+    // The lamp post models (their names' hashes, model info +0x3c): their bounds take in the arm out to the lamp, so
+    // their capsule stands at the entity's own position, the post's foot, with PropCapsulePostRadius
+    static bool IsPost(uint32_t hash)
+    {
+        switch (hash)
+        {
+        case 0x67105BD6: case 0x46C33C49: case 0xD7B45B49: case 0x12272A5F: case 0xBA49A074: case 0xBAA79CDA:
+        case 0x3A8020FF: case 0x70AB8D51: case 0x9EED69D4: case 0x97DFDA59: case 0x4AF44083: case 0x5B38E534:
+        case 0x6CB90840: case 0x0B9145F2: case 0x1CD7687E: case 0x307B9012: case 0x2D7E0A07: case 0x2E9B0C05:
+        case 0x70A9D8E5: case 0xBEF47579: case 0x1485E82F: case 0xD4E8589D: case 0x9A978A05: case 0x3D4E4F74:
+        case 0x0F1C59B2: case 0x517FD33A:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    // Objects within PropCapsuleDistance of the player standing upright: posts, and props narrow enough for a capsule
+    // (PropCapsuleMaxWidth across at the widest) and at least half a metre tall; the nearest kProps
+    static void CaptureProps(List& list, const float focus[3])
+    {
+        const auto& R = PostFxResources;
+        static std::array<std::pair<float, Prop>, 1024> found{};
+        int n = 0;
+        const float reach2 = R.fPropCapsuleDistance * R.fPropCapsuleDistance;
+        CObject::ForEachObject([&](uintptr_t object)
+        {
+            if (n >= int(found.size()))
+                return;
+            const float* m = CEntity::GetMatrix(object);
+            const auto index = *reinterpret_cast<const int16_t*>(object + 0x2E);
+            if (!m || index < 0 || index >= 31000 || !(m[10] > 0.95f))
+                return;
+            const float x = m[12] - focus[0], y = m[13] - focus[1], z = m[14] - focus[2];
+            const float d2 = x * x + y * y + z * z;
+            if (!(d2 < reach2))
+                return;
+            const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + index * 4);
+            if (!info)
+                return;
+            const float* lo = reinterpret_cast<const float*>(info + 0x20);
+            const float* hi = reinterpret_cast<const float*>(info + 0x30);
+            const float height = hi[2] - lo[2];
+            if (!(height >= 0.5f && height <= 15.0f))
+                return;
+            Prop prop{};
+            prop.entity = object;
+            prop.inMaps = (*reinterpret_cast<const uint32_t*>(object + 0x210) & 0x800) != 0;
+            prop.foot = m[14] + lo[2];
+            prop.height = height;
+            if (IsPost(*reinterpret_cast<const uint32_t*>(info + 0x3C)))
+            {
+                prop.axis[0] = m[12];
+                prop.axis[1] = m[13];
+                prop.radius = R.fPropCapsulePostRadius;
+            }
+            else
+            {
+                const float halfX = (hi[0] - lo[0]) * 0.5f, halfY = (hi[1] - lo[1]) * 0.5f;
+                if (!((std::max)(halfX, halfY) * 2.0f <= R.fPropCapsuleMaxWidth))
+                    return;
+                const float cx = (lo[0] + hi[0]) * 0.5f, cy = (lo[1] + hi[1]) * 0.5f;
+                prop.axis[0] = m[12] + m[0] * cx + m[4] * cy;
+                prop.axis[1] = m[13] + m[1] * cx + m[5] * cy;
+                // the narrow way: a sign's plate is no thicker than its pole
+                prop.radius = std::clamp((std::min)(halfX, halfY), 0.05f, 0.5f);
+            }
+            if (!std::isfinite(prop.axis[0] + prop.axis[1] + prop.foot))
+                return;
+            found[n++] = { d2, prop };
+        });
+        if (n > kProps)
+            std::nth_element(found.begin(), found.begin() + kProps, found.begin() + n,
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+        list.propCount = (std::min)(n, kProps);
+        for (int i = 0; i < list.propCount; ++i)
+            list.props[i] = found[i].second;
+    }
+
     static void Capture()
     {
         auto& list = lists[nextList];
@@ -380,6 +476,9 @@ export struct VehicleBoxShadows
                 }
                 std::copy_n(p, 3, list.peds[list.pedCount++]);
             });
+        list.propCount = 0;
+        if (PostFxResources.bPropCapsuleShadows)
+            CaptureProps(list, focus);
         list.lights.store(*lightListBuilt, std::memory_order_release);
     }
 
@@ -668,9 +767,129 @@ export struct VehicleBoxShadows
     // without the car the light belongs to; none where the light's own map shows the cars.
     // Returns how much of a shadow its boxes give: the strongest box times the lamp's strength, 0 for none.
     // mapHasCars comes back false where the light's map left its boxed cars out (BoxedCars).
+    // The boxes handed over with the light list the render thread draws now, into drawn
+    static void FindDrawn()
+    {
+        auto& R = PostFxResources;
+        const uintptr_t list = *lightListDrawn;
+        // Looked up again once its entry has been reused for a later list too.
+        if (list == drawnFor)
+            return;
+        drawnFor = list;
+        PublishPairs();
+
+        // The newest with this list: the ring holds more hand overs than the game has lists, so an older
+        // one with the same list, three or six frames old, made the shadows lag the cars by fits
+        const List* found = nullptr;
+        for (auto& l : lists)
+            if (l.lights.load(std::memory_order_acquire) == list && (!found || int32_t(l.sequence - found->sequence) > 0))
+                found = &l;
+        (found ? framesMatched : framesUnmatched).fetch_add(1, std::memory_order_relaxed);
+        if (R.bVehicleBoxShadowsLog)
+        {
+            TraceFrame();
+            if (!found)
+                Trace("frame without its own boxes, drawn with the last ones");
+        }
+        // A frame whose boxes were not found keeps the last ones, a frame late, rather than shading with
+        // none: every box shadow blinked out for that frame.
+        if (found)
+        {
+            lastFound.count = found->count;
+            std::copy_n(found->boxes, found->count, lastFound.boxes);
+            lastFound.pedCount = found->pedCount;
+            std::copy_n(&found->peds[0][0], found->pedCount * 3, &lastFound.peds[0][0]);
+            lastFound.propCount = found->propCount;
+            std::copy_n(found->props, found->propCount, lastFound.props);
+            std::copy_n(found->focus, 3, lastFound.focus);
+            lastFound.watched = found->watched;
+            lastFound.sequence = found->sequence;
+            lastFound.handedAt = found->handedAt;
+            if (found->frameSeconds > 0.0f)
+                lastFound.frameSeconds = found->frameSeconds;
+            drawn = &lastFound;
+        }
+    }
+
+    // PropCapsuleShadows: the props nearest the light, weighed by how near the player they stand, as the cars; those
+    // it took last frame held at a quarter of that, so the choice does not flicker between two. Into c115-c117 and
+    // c125-c127: the axis's x, y, its foot and its height + 16 * the radius in centimetres (0 for none).
+    static int PropsForLight(const rage::CLightSource& light, bool hasMap, float (&props)[kPropsPerLight][4])
+    {
+        const auto& R = PostFxResources;
+        if (!drawn || !drawn->propCount)
+            return 0;
+        // Its light far from the camera: none, as the boxes
+        if (R.fVehicleBoxShadowsMaxDistance > 0.0f)
+            if (auto* vp = rage::GetCurrentViewport())
+            {
+                const float* eye = vp->mCameraMatrix[3];
+                const float ex = light.mPosition.x - eye[0], ey = light.mPosition.y - eye[1], ez = light.mPosition.z - eye[2];
+                if (std::sqrt(ex * ex + ey * ey + ez * ez) - light.mRadius > R.fVehicleBoxShadowsMaxDistance)
+                    return 0;
+            }
+        const uint64_t lightKey = LightKey(Cell(light.mPosition.x), Cell(light.mPosition.y), Cell(light.mPosition.z));
+        if (heldProps.size() > 4096)
+            heldProps.clear();
+        auto& last = heldProps[lightKey];
+        const auto key = static_cast<uint32_t>(light.mCastShadows);
+        std::pair<float, const Prop*> chosen[kPropsPerLight] = {};
+        int used = 0;
+        for (int i = 0; i < drawn->propCount; ++i)
+        {
+            const auto& p = drawn->props[i];
+            // in this light's own map already
+            if (hasMap && p.inMaps)
+                continue;
+            // the lamp's own post: the light's key is the entity's address and the effect's place in it
+            if (key - static_cast<uint32_t>(p.entity) < 0x320)
+                continue;
+            // the nearest point of its axis
+            const float z = std::clamp(light.mPosition.z, p.foot, p.foot + p.height);
+            const float dx = light.mPosition.x - p.axis[0], dy = light.mPosition.y - p.axis[1], dz = light.mPosition.z - z;
+            const float flat2 = dx * dx + dy * dy;
+            // a light in it or right by it (a lamp on its own post the key did not tell)
+            if (flat2 < (p.radius + 0.3f) * (p.radius + 0.3f))
+                continue;
+            const float d2 = flat2 + dz * dz;
+            if (d2 > light.mRadius * light.mRadius)
+                continue;
+            const float falloff = std::clamp(1.0f - std::sqrt(d2) / (std::max)(light.mRadius, 0.1f), 0.0f, 1.0f);
+            const bool holding = std::find(last.begin(), last.end(), p.entity) != last.end();
+            if (falloff * falloff < R.fVehicleBoxShadowsMinLight * (holding ? 0.5f : 1.0f))
+                continue;
+            const float fx = p.axis[0] - drawn->focus[0], fy = p.axis[1] - drawn->focus[1], fz = z - drawn->focus[2];
+            float score = d2 * (1.0f + (fx * fx + fy * fy + fz * fz) / 400.0f);
+            if (holding)
+                score *= 0.25f;
+            if (used == kPropsPerLight && score >= chosen[kPropsPerLight - 1].first)
+                continue;
+            int at = used < kPropsPerLight ? used++ : kPropsPerLight - 1;
+            for (; at > 0 && chosen[at - 1].first > score; --at)
+                chosen[at] = chosen[at - 1];
+            chosen[at] = { score, &p };
+        }
+        last = {};
+        for (int i = 0; i < used; ++i)
+        {
+            const auto& p = *chosen[i].second;
+            last[i] = p.entity;
+            props[i][0] = p.axis[0];
+            props[i][1] = p.axis[1];
+            props[i][2] = p.foot;
+            props[i][3] = (std::min)(p.height, 15.9f) + 16.0f * std::round(p.radius * 100.0f);
+        }
+        propsWithShadows.fetch_add(uint32_t(used), std::memory_order_relaxed);
+        return used;
+    }
+
     static float SetForLight(IDirect3DDevice9* pDevice, const rage::CLightSource& light, bool& mapHasCars)
     {
         auto& R = PostFxResources;
+        const bool hasMap = mapHasCars;
+        // c115-c117, c125-c127: up to six props near the light
+        float props[kPropsPerLight][4] = {};
+        int propsUsed = 0;
         // Boxes 0-2 at c143-c148 with the lamp's own at c149, boxes 3 and 4 at c121-c124.
         float constants[kPerLight * 2 + 1][4] = {};
         int used = 0;
@@ -685,43 +904,7 @@ export struct VehicleBoxShadows
             (R.bVehicleBoxShadowsFromCarLights || !(light.mFlags & rage::LF_VEHICLE)) &&
             (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
         {
-            const uintptr_t list = *lightListDrawn;
-            // Looked up again once its entry has been reused for a later list too.
-            if (list != drawnFor)
-            {
-                drawnFor = list;
-                PublishPairs();
-
-                // The newest with this list: the ring holds more hand overs than the game has lists, so an older
-                // one with the same list, three or six frames old, made the shadows lag the cars by fits
-                const List* found = nullptr;
-                for (auto& l : lists)
-                    if (l.lights.load(std::memory_order_acquire) == list && (!found || int32_t(l.sequence - found->sequence) > 0))
-                        found = &l;
-                (found ? framesMatched : framesUnmatched).fetch_add(1, std::memory_order_relaxed);
-                if (R.bVehicleBoxShadowsLog)
-                {
-                    TraceFrame();
-                    if (!found)
-                        Trace("frame without its own boxes, drawn with the last ones");
-                }
-                // A frame whose boxes were not found keeps the last ones, a frame late, rather than shading with
-                // none: every box shadow blinked out for that frame.
-                if (found)
-                {
-                    lastFound.count = found->count;
-                    std::copy_n(found->boxes, found->count, lastFound.boxes);
-                    lastFound.pedCount = found->pedCount;
-                    std::copy_n(&found->peds[0][0], found->pedCount * 3, &lastFound.peds[0][0]);
-                    std::copy_n(found->focus, 3, lastFound.focus);
-                    lastFound.watched = found->watched;
-                    lastFound.sequence = found->sequence;
-                    lastFound.handedAt = found->handedAt;
-                    if (found->frameSeconds > 0.0f)
-                        lastFound.frameSeconds = found->frameSeconds;
-                    drawn = &lastFound;
-                }
-            }
+            FindDrawn();
             // Which three: the nearest the light, weighed by how near the player they stand, where their shadows
             // are seen; those the light took last frame are held at a quarter of that, so a car passing by the lamp does
             // not push a standing one out, and its shadow from that lamp flickered. Lamps are told apart by where
@@ -1057,12 +1240,23 @@ export struct VehicleBoxShadows
                 c[3] = (std::min)(c[3], 15.9f) + 16.0f * std::round(std::clamp(boxStrength[i], 0.0f, 1.0f) * 15.0f);
             }
         }
-        if (!used && !pedsUsed)
+        // Props for car lights too: a post's shadow from the headlights is the one most often seen
+        if (R.VehicleBoxShadowsEnabled() && R.bPropCapsuleShadows && lightListDrawn &&
+            (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
+        {
+            FindDrawn();
+            propsUsed = PropsForLight(light, hasMap, props);
+        }
+        if (!used && !pedsUsed && !propsUsed)
         {
             if (constantsOn)
                 Off(pDevice);
             return 0.0f;
         }
+        // The shader works the shapes only where c149.w is above 0, and the props take none of it: a light whose boxes
+        // have faded out or never came in still lets them through
+        if (!used && !pedsUsed)
+            strength = 0.001f;
         lightsWithBoxes.fetch_add(1, std::memory_order_relaxed);
         // The boxes left over stand far away, small.
         for (int i = used; i < kPerLight; ++i)
@@ -1084,6 +1278,8 @@ export struct VehicleBoxShadows
         const float capsule[4] = { R.fPedCapsuleRadius, -(R.fPedCapsuleRadius + 0.3f), 0.0f, 0.0f };
         pDevice->SetPixelShaderConstantF(150, peds[0], kPedsPerLight);
         pDevice->SetPixelShaderConstantF(154, capsule, 1);
+        pDevice->SetPixelShaderConstantF(115, props[0], 3);
+        pDevice->SetPixelShaderConstantF(125, props[3], 3);
         constantsOn = true;
         float strongest = 0.0f;
         for (int i = 0; i < used; ++i)
