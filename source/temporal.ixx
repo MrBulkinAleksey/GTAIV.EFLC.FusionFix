@@ -403,14 +403,19 @@ public:
         if (TemporalAA::GetMode() == TemporalAA::Mode::Off)
             return false;
 
-        // Nothing in the menus is resolved, the camera's projection would only shake whatever draws with it
-        if (CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive)
-            return false;
-
         // Never jitter an image that is not resolved: e.g. post processing is off or failed to start. Counted in
         // frames, not scenes: frames without a scene would keep the last resolve recent forever.
         auto resolved = ResolvePresent.load();
-        return resolved != 0 && PresentFrame.load() - resolved < 10;
+        if (resolved == 0)
+            return false;
+        auto since = PresentFrame.load() - resolved;
+
+        // Menus: only while the scene behind them is resolved every frame, as in the graphics settings, where without
+        // the jitter DLSS and FSR had nothing to add and the scene stayed at the render size. A menu without the scene,
+        // the map, would only shake with the camera's projection: it stops the frame after the last resolve.
+        if (CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive)
+            return since < 2;
+        return since < 10;
     }
 
     static inline rage::grcViewport* CameraViewport = nullptr;
