@@ -59,6 +59,7 @@ import natives;
 import settings;
 import renderskip;
 import inireload;
+import entityclass;
 
 bool bHighResolutionNightShadows = false;
 static bool bCloseHeadlightRelevance = false;
@@ -423,6 +424,7 @@ static void __fastcall sub_D77A00(void* _this, void* edx)
     const fusionfix::shadows::caster::Scope scope(OwnHeadlightCaster::context,
                                                 OwnHeadlightCaster::Capture(_this));
     const Lighting20::Buildings::Scope buildings(_this);
+    const PostCarLightShadows::Scope posts(_this);
     return shsub_D77A00.unsafe_fastcall(_this, edx);
 }
 
@@ -640,6 +642,7 @@ public:
                 pattern = find_pattern("A1 ? ? ? ? 83 EC 40 56", "A1 ? ? ? ? 83 EC 40 85 C0");
                 auto registerTechniqueGroup = (int32_t(__cdecl*)(const char*))pattern.get_first(0);
                 static int32_t nLocalShadowTechId = registerTechniqueGroup("wd_local");
+                PostCarLightShadows::Install(iniReader.ReadInteger("NIGHTSHADOWS", "PostShadowsFromCarLights", 1) != 0, nLocalShadowTechId);
 
                 pattern = find_pattern("E8 ? ? ? ? 6A 00 6A 14 E8 ? ? ? ? 8B F8 83 C4 44", "E8 ? ? ? ? 53 6A 14 E8 ? ? ? ? 83 C4 44");
                 static void (__cdecl* AddToDrawListEntityListShadow)(int32_t, int32_t, int32_t, int32_t, int32_t) = injector::GetBranchDestination(pattern.get_first(0)).get();
@@ -698,6 +701,8 @@ public:
                 {
                     static auto loc_AE3867 = resolve_next_displacement(pattern.get_first(14)).value();
                     static auto loc_AE374F = resolve_next_displacement(pattern.get_first(3)).value();
+                    // mov [esp+0Ch], eax: where the type-4 eligibility (+0x210 bit 0x800) is stored
+                    static auto loc_AE3767 = reinterpret_cast<uintptr_t>(pattern.get_first(0x31));
                     struct ShadowsHook
                     {
                         void operator()(injector::reg_pack& regs)
@@ -709,6 +714,12 @@ public:
                                 // immediate headlight pass; retain their lamp shadows.
                                 if (OwnHeadlightCaster::Exclude(regs.esi, regs.eax, artificial))
                                     return_to(loc_AE3867);
+                                // A lamp post in a car light's map, as if it had the bit (PostShadowsFromCarLights)
+                                if (PostCarLightShadows::Admit(regs.esi, regs.eax, regs.edx, artificial))
+                                {
+                                    regs.eax = 1;
+                                    return_to(loc_AE3767);
+                                }
                             }
                             else if (bHeadlightShadows && bVehicleNightShadows)
                             {
