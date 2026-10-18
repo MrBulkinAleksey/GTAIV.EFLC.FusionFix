@@ -252,6 +252,7 @@ uniform float fDistanceFade;      // reflections fade out towards this distance 
 uniform float fTemporalBlend;     // share of last frame's SSR kept each frame, 0 while there is none to keep
 uniform float fTemporalAnySurface; // 1 while accumulating indirect light, which every surface gets, not only glossy ones
 uniform float fFallback;          // 0..1, strength of the fill where rays find next to nothing, see SSRFallback_PS
+uniform float fVehicleScale = 1.0; // SSRVehicleUnits / (10 x the game's c39.w) on car bodies, SkinIDTex their material IDs
 uniform float fSpreadRadius;      // pixels, how far SSRSpread_PS looks this step
 
 // Contact shadows, see ContactShadows_PS.
@@ -1019,7 +1020,19 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     }
     // On wet ground the game's reflection strength, which deferred_lighting multiplies SSR by,
     // is that of dry asphalt, so the reflection is drawn brighter there.
-    return float4(r.rgb * (1.0 + (fWetGroundBoost - 1.0) * wetOnly), saturate(r.a * surfaceWeight * fIntensity));
+    r.rgb *= 1.0 + (fWetGroundBoost - 1.0) * wetOnly;
+    // Car bodies (material category 2: the ID less its 128 and 8 bits): deferred_lighting scales the reflection by
+    // 10 x c39.w for its dim parabolic map, which SSR's scene light does not need. With Vehicle Paint's gloss SSR
+    // shows in full on clean paint, and at night lamp-lit poles and walls turned roofs white.
+    [branch]
+    if (fVehicleScale != 1.0)
+    {
+        float id = floor(tex2Dlod(SkinIDTex, float4(uv, 0, 0)).r * 255.0 + 0.5);
+        id -= id >= 128.0 ? 128.0 : 0.0;
+        if (fmod(id, 8.0) == 2.0)
+            r.rgb *= fVehicleScale;
+    }
+    return float4(r.rgb, saturate(r.a * surfaceWeight * fIntensity));
 }
 
 // One grid of the rain's rings on open water, as water_rain_rings.patch draws them in the game's

@@ -197,6 +197,11 @@ export void RenderScreenSpaceReflections()
     effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
     effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
     effect->SetFloat(h.fFallback, R.fSSRFallback);
+    // Car bodies: SSR's colour in the units of the game's parabolic map, see fSSRVehicleUnits (last frame's c39.w).
+    const bool vehicleUnits = R.fGameReflectionScale > 0.0f && R.mMaterialIdRT && R.mMaterialIdRT->mD3DTexture;
+    if (vehicleUnits)
+        effect->SetTexture(h.SkinIDTex2D, R.mMaterialIdRT->mD3DTexture);
+    effect->SetFloat(h.fVehicleScale, vehicleUnits ? R.fSSRVehicleUnits / (10.0f * R.fGameReflectionScale) : 1.0f);
     // Debug view 3 has SSRTrace_PS write where its rays hit in place of the hit, and SSR_PS pass it on.
     effect->SetFloat(h.fDebugMode, float(R.SSRDebugMode()));
 

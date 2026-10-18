@@ -335,7 +335,7 @@ public:
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth, vec2PrevDepthRange;
-        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fSpreadRadius;
+        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fSpreadRadius, fVehicleScale;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
@@ -933,6 +933,13 @@ public:
     static bool SSRMarchFullDepth() { static auto p = FusionFixSettings.GetRef("PREF_SSR_FULL_DEPTH"); return p && p->get() != 0; }
     float fSSRDistanceFade = 0.0f;
     float fSSRFallback = 0.8f;
+    // deferred_lighting draws SSR's colour, the scene's own light, through the game's reflection scale meant for its
+    // parabolic map: 10 times globalScalars.w (c39.w, read in BindLightingInputs, 0 until then) times 2 x specular times
+    // its Fresnel. On car bodies, whose clean paint takes SSR in full by its gloss, SSR_PS divides that 10 x c39.w back
+    // out, times SSRVehicleUnits (1 leaves the reflection at Fresnel x specular of the scene's light): lit poles and
+    // walls had turned roofs white at night.
+    float fSSRVehicleUnits = 1.0f;
+    float fGameReflectionScale = 0.0f;
     rage::grcRenderTargetPC* SSRDenoisedTex = nullptr;
     IDirect3DSurface9* SSRDenoisedSurf = nullptr;
     bool bSSRDenoised = false;
@@ -1615,6 +1622,7 @@ public:
                 h.fReflectionBlur = SSREffect->GetParameterByName(nullptr, "fReflectionBlur");
                 h.fDistanceFade = SSREffect->GetParameterByName(nullptr, "fDistanceFade");
                 h.fFallback = SSREffect->GetParameterByName(nullptr, "fFallback");
+                h.fVehicleScale = SSREffect->GetParameterByName(nullptr, "fVehicleScale");
                 h.fSpreadRadius = SSREffect->GetParameterByName(nullptr, "fSpreadRadius");
                 h.vec4SunView = SSREffect->GetParameterByName(nullptr, "vec4SunView");
                 h.fCSLength = SSREffect->GetParameterByName(nullptr, "fCSLength");
@@ -2006,6 +2014,7 @@ public:
             IniFloat("REFLECTIONS", "SSRTowardCamera", &PostFxResource::fSSRTowardCamera, 0.0f, 0.0f, 1.0f),
             IniFloat("REFLECTIONS", "SSRBlur", &PostFxResource::fSSRReflectionBlur, 0.0f, 0.0f, 32.0f),
             IniFloat("REFLECTIONS", "SSRDistanceFade", &PostFxResource::fSSRDistanceFade, 0.0f, 0.0f, 100.0f),
+            IniFloat("REFLECTIONS", "SSRVehicleUnits", &PostFxResource::fSSRVehicleUnits, 1.0f, 0.0f, 10.0f),
             IniFloat("LIGHTING", "ContactShadowsLength", &PostFxResource::fContactShadowLength, 0.3f, 0.05f, 10.0f),
             IniFloat("LIGHTING", "ContactShadowsThickness", &PostFxResource::fContactShadowThickness, 0.15f, 0.01f, 10.0f),
             IniFloat("LIGHTING", "ContactShadowsMaxDistance", &PostFxResource::fContactShadowMaxDistance, 60.0f, 1.0f, 1000.0f),
