@@ -1092,6 +1092,9 @@ export struct VehicleBoxShadows
     static bool BindShapes(IDirect3DDevice9* pDevice, const Shape* shapes, int count)
     {
         auto real = RageDirect3DDevice9::RealDevice(pDevice);
+        // Not made while the device is being reset: it would be alive at the Reset
+        if (!shapesTexture && rage::grcDevice::IsDeviceLost())
+            return false;
         if (!shapesTexture && FAILED(real->CreateTexture(kShapeTexels, 1, 1, D3DUSAGE_DYNAMIC, D3DFMT_A32B32G32R32F, D3DPOOL_DEFAULT, &shapesTexture, nullptr)))
         {
             shapesTexture = nullptr;
