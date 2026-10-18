@@ -35,6 +35,10 @@ public:
         // Within the shadow reach (a holder's a quarter further). One beyond it may still hold a slot when
         // nothing nearer wants it, and keeps a claim against others beyond it, but gives way to any within.
         bool inReach=true;
+        // AddedLightsLast: a light the map gave no shadow (a facade's or a glow's, a traffic signal) with one of ours
+        // takes a slot only no other light wants, and gives it up to any newcomer; meanwhile the shapes in the light
+        // shaders shadow the cars, people and props under it.
+        bool lastResort=false;
     };
     // ClaimDistanceRatio: a claim keeps its slot against a newcomer of the same gain unless
     // the claim is this many times further away than the newcomer; 0 always keeps it.
@@ -54,9 +58,10 @@ public:
         return held?reset|gap:0u;
     }
     Candidate Observe(Identity id,std::uint32_t flags,bool relevant,bool own,SlotGain gain=SlotGain::InView,
-                      float distanceSquared=-1.0f,bool byCaster=false,bool fresh=false,bool inReach=true) const noexcept {
+                      float distanceSquared=-1.0f,bool byCaster=false,bool fresh=false,bool inReach=true,bool lastResort=false) const noexcept {
         Candidate c{flags,Unclaimed,own,true,gain,distanceSquared,byCaster};
         c.inReach=inReach;
+        c.lastResort=lastResort;
         if(id.key && relevant)
             for(unsigned i=0;i<Slots;++i)
                 if(claims_[i].key==id.key && claims_[i].generation==id.generation) {c.claim=i;break;}
@@ -77,7 +82,7 @@ public:
     // unless the newcomer's shadow is in view and the claim's is not, or the
     // claim only redraws what the lamp's cache already shows.
     // Which rule of Compare decided, for the slot trace.
-    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Nearer, Fresh, Reach };
+    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Nearer, Fresh, Reach, LastResort };
     // Claims as one score per light rather than rules on pairs. Pairwise, a claim gave way to a newcomer with
     // someone in its light only when that one was ClaimDistanceRatio times nearer, while it beat any other
     // newcomer, and two newcomers went by distance: claim A at 30 m, caster newcomer B at 10 m, other newcomer
@@ -101,6 +106,7 @@ public:
         if(native<0 || native>2 || !challenger.observed || !incumbent.observed) return Rule::Native;
         if((challenger.flags|incumbent.flags)&0x400u) return Rule::Special;
         if(challenger.ownBeam!=incumbent.ownBeam) return Rule::OwnBeam;
+        if(challenger.lastResort!=incumbent.lastResort) return Rule::LastResort;
         if(challenger.fresh!=incumbent.fresh) return Rule::Fresh;
         if(challenger.gain!=incumbent.gain) return Rule::Gain;
         if(challenger.inReach!=incumbent.inReach) return Rule::Reach;
@@ -116,6 +122,8 @@ public:
         if(native<0 || native>2 || !challenger.observed || !incumbent.observed ||
            ((challenger.flags|incumbent.flags)&0x400u)) return native;
         if(challenger.ownBeam!=incumbent.ownBeam) return challenger.ownBeam?0:2;
+        // before the hold: a last resort holding a slot still gives it up to any other light
+        if(challenger.lastResort!=incumbent.lastResort) return challenger.lastResort?2:0;
         if(challenger.fresh!=incumbent.fresh) return challenger.fresh?0:2;
         if(challenger.gain!=incumbent.gain) return challenger.gain>incumbent.gain?0:2;
         if(challenger.inReach!=incumbent.inReach) return challenger.inReach?0:2;

@@ -489,6 +489,7 @@ class NightShadows
         PlayerShadowAllocation::uncachedLampViewShare = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "UncachedLampViewShare", 0.5f), 0.1f, 1.0f);
         PlayerShadowAllocation::behindLampByFixture = iniReader.ReadInteger("NIGHTSHADOWS", "BehindLampByFixture", 1) != 0;
         PlayerShadowAllocation::addedLightsYield = iniReader.ReadInteger("NIGHTSHADOWS", "AddedLightsYield", 1) != 0;
+        PlayerShadowAllocation::addedLightsLast = iniReader.ReadInteger("NIGHTSHADOWS", "AddedLightsLast", 1) != 0;
         PlayerShadowAllocation::streetLampsFirst = iniReader.ReadInteger("NIGHTSHADOWS", "StreetLampsFirst", 1) != 0;
         fTailLightShadowDistance = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "TailLightShadowDistance", 25.0f), 0.0f, 500.0f);
         PlayerShadowAllocation::slotMinHoldMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "SlotMinHold", 1000), 0, 5000));
@@ -597,7 +598,7 @@ public:
                     iniReader.ReadFloat("NIGHTSHADOWS", "PairedLampDistance", 2.5f) > 0.0f);
                 // CE 1.8: shadows from traffic signals and emergency vehicle lights.
                 EmergencyTrafficShadows::log.Name("NightShadows", "EmergencyTraffic");
-                EmergencyTrafficShadows::Install(static_cast<unsigned>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "TrafficSignalShadows", 0), 0, 7)),
+                EmergencyTrafficShadows::Install(static_cast<unsigned>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "TrafficSignalShadows", 2), 0, 7)),
                     iniReader.ReadInteger("NIGHTSHADOWS", "EmergencyLightShadows", 1) != 0,
                     iniReader.ReadFloat("NIGHTSHADOWS", "TrafficSignalIntensity", 1.05f));
                 LampShadowSizeGate::Install(iniReader.ReadFloat("NIGHTSHADOWS", "LampShadowSizeReach", 1.3f),
