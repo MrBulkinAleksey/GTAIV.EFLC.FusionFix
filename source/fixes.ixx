@@ -298,6 +298,41 @@ public:
             FusionLog::Write("Fixes", "WeaponModels", "weapon model release on shutdown guarded against index -1 at %p\n", pattern.get_first(0));
         };
 
+        // The four-head industrial floodlight CJ_IND_LIGHT_1 (docks, port, airport) has its point lights about 11 m up
+        // with a 10 m radius: the ground under it gets no light once its real lights replace the far LOD lights. In
+        // 0xc1e200 (2dfx light of an entity, only caller 0xc1e1a4 with the entity in ESI, saved at [esp+1Ch] here) the
+        // point light's radius is read from the effect (+0x38) for the submit 0xabcc50; for this model's lights that
+        // point straight down (+0x54 == 0: the default (0,0,-1)) it is raised to 32 m. Position, colour and power stay.
+        FusionFix::onInitEventAsync() += []()
+        {
+            // movss xmm0, [edi+38h]; movss [esp], xmm0; push [ebp+2Ch]; push [edi+54h]; ... push 0 (point); push [ebp+8]; call
+            auto pattern = hook::pattern("F3 0F 10 47 38 F3 0F 11 04 24 FF 75 2C FF 77 54 51 8D 8C 24 ? ? ? ? F3 0F 11 0C 24 51 50 8D 44 24 ? 50 8D 84 24 ? ? ? ? 50 FF 74 24 ? 6A 00 FF 75 08 E8");
+            if (pattern.empty())
+            {
+                FusionLog::Write("Fixes", "FloodlightRange", "point light submit of 2dfx lights not found, not changed\n");
+                return;
+            }
+            static const uintptr_t modelInfos = GameBase() + 0xE95CD8; // CE 0x1295cd8, model infos by index
+            static auto rangeHook = safetyhook::create_mid(pattern.get_first(5), [](SafetyHookContext& regs)
+            {
+                constexpr uint32_t IndustrialFloodlight = 0x42945123; // CJ_IND_LIGHT_1
+                constexpr float Range = 32.0f;
+                const float radius = regs.xmm0.f32[0];
+                if (!(radius > 0.0f && radius < Range) || *reinterpret_cast<const uint32_t*>(regs.edi + 0x54))
+                    return;
+                const auto entity = *reinterpret_cast<const uintptr_t*>(regs.esp + 0x1C);
+                if (entity < 0x10000)
+                    return;
+                const auto index = *reinterpret_cast<const int16_t*>(entity + 0x2E);
+                if (index < 0 || index >= 31000)
+                    return;
+                const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + index * 4);
+                if (info >= 0x10000 && *reinterpret_cast<const uint32_t*>(info + 0x3C) == IndustrialFloodlight)
+                    regs.xmm0.f32[0] = Range;
+            });
+            FusionLog::Write("Fixes", "FloodlightRange", "CJ_IND_LIGHT_1 point lights reach 32 m, hook at %p\n", pattern.get_first(5));
+        };
+
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");

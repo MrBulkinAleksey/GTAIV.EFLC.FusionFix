@@ -835,6 +835,8 @@ public:
     // Car lights (headlights, tail lights) shine low and close, so a box's shadow from them spreads over the whole road
     // ahead and shows its shape; off by default, lamps only.
     bool bVehicleBoxShadowsFromCarLights = false;
+    // Car lights' maps show the lamp posts (nightshadows' PostCarLightShadows): their post shapes are left out then
+    bool bPostShadowsFromCarLights = false;
     // A lamp that takes a shadow slot, whose map then shows the cars, fades its boxes out over SlotFade ms, so the
     // shadow under a car does not jump between the two; WithSlots keeps them under its real shadow for good.
     bool bVehicleBoxShadowsWithSlots = false;
@@ -853,6 +855,14 @@ public:
     // of that radius and height, its foot that far below the ped's position (see VehicleBoxShadows)
     bool bPedCapsuleShadows = true;
     float fPedCapsuleRadius = 0.25f, fPedCapsuleHeight = 1.75f, fPedCapsuleFootBelow = 1.0f;
+    // PropShapeShadows: props within PropShapeDistance of the player get the shadow of a capsule or a box from the
+    // lights near them, up to PropShapesPerLight shapes a light (see VehicleBoxShadows); a lamp post's post is
+    // PropShapePostRadius thick, its arm PropShapeArmRadius
+    bool bPropShapeShadows = true;
+    float fPropShapeDistance = 80.0f, fPropShapePostRadius = 0.12f, fPropShapeArmRadius = 0.08f;
+    float fPropShapeScale = 0.85f; // of the bounds across, for a capsule's radius and a box's length and width
+    bool bPropShapeViewCulling = true; // props whose shadow cannot fall in the camera's view take no shapes
+    int32_t nPropShapesPerLight = 12;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
     // the viewport hook runs for every view and the last before lighting is not the camera's.
@@ -1902,6 +1912,7 @@ public:
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsContact", &PostFxResource::fVehicleBoxShadowContact, 0.0f, 0.0f, 1.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsEndRounding", &PostFxResource::fVehicleBoxShadowEndRounding, 0.3f, 0.0f, 2.0f),
             IniFlag("NIGHTSHADOWS", "VehicleBoxShadowsFromCarLights", &PostFxResource::bVehicleBoxShadowsFromCarLights, 0),
+            IniFlag("NIGHTSHADOWS", "PostShadowsFromCarLights", &PostFxResource::bPostShadowsFromCarLights, 0),
             IniFlag("NIGHTSHADOWS", "VehicleBoxShadowsWithSlots", &PostFxResource::bVehicleBoxShadowsWithSlots, 0),
             IniFlag("NIGHTSHADOWS", "VehicleBoxShadowsUntilLeaving", &PostFxResource::bVehicleBoxShadowsUntilLeaving, 1),
             // VehicleBoxShadowsBlend: the light shaders take the darkest of a light's shadow map, contact shadow and boxes
@@ -1916,6 +1927,13 @@ public:
             IniFloat("NIGHTSHADOWS", "PedCapsuleRadius", &PostFxResource::fPedCapsuleRadius, 0.25f, 0.05f, 1.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleHeight", &PostFxResource::fPedCapsuleHeight, 1.75f, 0.5f, 3.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleFootBelow", &PostFxResource::fPedCapsuleFootBelow, 1.0f, -1.0f, 2.0f),
+            IniFlag("NIGHTSHADOWS", "PropShapeShadows", &PostFxResource::bPropShapeShadows, 1),
+            IniFloat("NIGHTSHADOWS", "PropShapeDistance", &PostFxResource::fPropShapeDistance, 80.0f, 10.0f, 200.0f),
+            IniFloat("NIGHTSHADOWS", "PropShapePostRadius", &PostFxResource::fPropShapePostRadius, 0.12f, 0.03f, 0.5f),
+            IniFloat("NIGHTSHADOWS", "PropShapeArmRadius", &PostFxResource::fPropShapeArmRadius, 0.08f, 0.02f, 0.5f),
+            IniInt("NIGHTSHADOWS", "PropShapesPerLight", &PostFxResource::nPropShapesPerLight, 12, 1, 32),
+            IniFloat("NIGHTSHADOWS", "PropShapeScale", &PostFxResource::fPropShapeScale, 0.85f, 0.3f, 1.2f),
+            IniFlag("NIGHTSHADOWS", "PropShapeViewCulling", &PostFxResource::bPropShapeViewCulling, 1),
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerLamp", &PostFxResource::nVehicleBoxShadowsPerLamp, 3, 1, 5),
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerCar", &PostFxResource::nVehicleBoxShadowsPerCar, 2, 0, 8),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsMinLight", &PostFxResource::fVehicleBoxShadowsMinLight, 0.04f, 0.0f, 1.0f),

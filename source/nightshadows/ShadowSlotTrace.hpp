@@ -54,7 +54,7 @@ public:
     struct Selected { std::uint32_t key{}; int index{-1}; };
     // The rule of NativeShadowContinuity42::Compare that decided, and two of the game's own:
     // native (categories, its result kept), distance (left to the game's distance).
-    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Distance, Grace, Nearer, Fresh, Reach };
+    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Distance, Grace, Nearer, Fresh, Reach, LastResort };
     static constexpr std::uint32_t FlapMs = 2000;
 
     bool enabled = false;
@@ -328,6 +328,7 @@ private:
         case Rule::Nearer: return "nearer";
         case Rule::Fresh: return "fresh";
         case Rule::Reach: return "reach";
+        case Rule::LastResort: return "last_resort";
         default: return "native";
         }
     }
