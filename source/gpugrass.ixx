@@ -93,13 +93,26 @@ namespace GpuGrass
     struct MeshVertex { float blade[4]; float vertex[4]; };
     // Edges: within kEdgeFade of ground without grass the blades thin out and shorten, so a lawn ends softly instead of
     // along its collision triangles. A grid of kEdgeCell cells kEdgeReach around the camera marks the grassy triangles;
-    // each cell gets its distance to an unmarked one, and each piece's corners that distance over kEdgeFade (1 off grid)
+    // each cell gets its distance to an unmarked one, over kEdgeFade (1 off grid)
     constexpr float kEdgeFade = 2.0f;
     constexpr float kEdgeCell = 0.5f;
     constexpr float kEdgeReach = 110.0f;    // GpuGrassRange is 100 m by default
     constexpr int kEdgeSide = int(2.0f * kEdgeReach / kEdgeCell);
 
-    struct Instance { float corner[4]; float edge1[4]; float edge2[4]; float kinds[4]; float edges[4]; };
+    // Rounder and less even than the cells: the distance blurred over a metre (contour lines round off at a lawn's
+    // corners) and moved by a smooth noise of the world, so the edge neither follows the cells nor runs straight
+    constexpr int kEdgeBlur = 2;                // cells each side
+    constexpr float kEdgeWobble = 0.6f, kEdgeWobbleLength = 2.5f;      // metres
+    constexpr float kEdgeRipple = 0.25f, kEdgeRippleLength = 0.9f;
+    // The edge factor of each cell (0..1), for EdgeTex (R16F, vertex sampler 2, filtered, read at each blade's root;
+    // without it the edges are hard)
+    std::vector<float> edgeField;
+    float edgeOrigin[2] = {};
+    bool edgeDirty = false;
+    IDirect3DTexture9* edgeTexture = nullptr;
+    bool edgeTextureTried = false;
+
+    struct Instance { float corner[4]; float edge1[4]; float edge2[4]; float kinds[4]; };
 
     // Main thread: the manager's triangles by their record
     std::mutex groundMutex;
@@ -114,7 +127,7 @@ namespace GpuGrass
     // Render thread
     // What grows on a triangle: how much, the share of grass, of weeds, of small plants, the height (0..1), the debug colour
     struct Look { float share; float kinds[4]; float tag; };
-    struct Piece { float corner[3], edge1[3], edge2[3]; float centre[3]; float radius; float share; float seed; Look look; float edges[3]; };
+    struct Piece { float corner[3], edge1[3], edge2[3]; float centre[3]; float radius; float share; float seed; Look look; };
     std::vector<Piece> pieces;
     uint32_t piecesVersion = ~0u;
     std::array<float, 256> tagShare{};
@@ -135,7 +148,7 @@ namespace GpuGrass
     struct Handles
     {
         D3DXHANDLE technique, viewProj, wind, windDir, blade, eye, nearPlane, farDivNear, bodies, bend, sun;
-        D3DXHANDLE motion, viewProjNoJitter, prevViewProj, windPrev, depthBias;
+        D3DXHANDLE motion, viewProjNoJitter, prevViewProj, windPrev, depthBias, edgeGrid;
     } h{};
     // What RenderMotion draws again: this frame's instances, if Render drew them, the depth test it drew with, and
     // the wind's vector of this frame and the one before
@@ -311,6 +324,24 @@ namespace GpuGrass
         pieces.push_back(p);
     }
 
+    // Smooth value noise of the world, 0..1
+    float ValueNoise(float x, float y)
+    {
+        const float fx0 = std::floor(x), fy0 = std::floor(y);
+        const int ix = int(fx0), iy = int(fy0);
+        const auto lattice = [](int i, int j)
+        {
+            uint32_t h = uint32_t(i) * 374761393u + uint32_t(j) * 668265263u;
+            h = (h ^ (h >> 13)) * 1274126177u;
+            return float((h ^ (h >> 16)) & 0xFFFFFF) / float(0x1000000);
+        };
+        float fx = x - fx0, fy = y - fy0;
+        fx = fx * fx * (3.0f - 2.0f * fx);
+        fy = fy * fy * (3.0f - 2.0f * fy);
+        const float a = lattice(ix, iy), b = lattice(ix + 1, iy), c = lattice(ix, iy + 1), d = lattice(ix + 1, iy + 1);
+        return (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy;
+    }
+
     // The edge grid's cells whose centre lies on the triangle seen from above, or within a fifth of a cell of it, so
     // slivers and the seams between triangles leave no false edges
     void MarkGrass(const ProceduralGround::Triangle& t, float originX, float originY, std::vector<float>& grid)
@@ -422,25 +453,96 @@ namespace GpuGrass
                 const float downLeft = x > 0 && y + 1 < kEdgeSide ? distance[at(x - 1, y + 1)] : kBig;
                 d = (std::min)({ d, right + 1.0f, down + 1.0f, downRight + kDiagonal, downLeft + kDiagonal });
             }
-        // Bilinear between cell centres, in metres over kEdgeFade
-        const auto edgeAt = [&](float wx, float wy)
+        // Blurred (a running box, rows then columns; past what the fade and the wobble reach it makes no difference),
+        // wobbled, as the edge factor
+        constexpr float kReach = (kEdgeFade + kEdgeWobble + kEdgeRipple) / kEdgeCell + 2.0f * kEdgeBlur + 1.0f;
+        for (auto& d : distance)
+            d = (std::min)(d, kReach);
+        static std::vector<float> blurred;
+        blurred.assign(distance.size(), 0.0f);
+        constexpr float kBox = 1.0f / float(2 * kEdgeBlur + 1);
+        for (int pass = 0; pass < 2; ++pass)
         {
-            const float gx = (wx - originX) / kEdgeCell - 0.5f, gy = (wy - originY) / kEdgeCell - 0.5f;
-            if (!(gx >= 0.0f && gy >= 0.0f && gx < float(kEdgeSide - 1) && gy < float(kEdgeSide - 1)))
-                return 1.0f;
-            const int x = int(gx), y = int(gy);
-            const float fx = gx - float(x), fy = gy - float(y);
-            const float top = distance[at(x, y)] * (1.0f - fx) + distance[at(x + 1, y)] * fx;
-            const float bottom = distance[at(x, y + 1)] * (1.0f - fx) + distance[at(x + 1, y + 1)] * fx;
-            // A marked cell next to an unmarked one is 1: the edge itself lies half a cell nearer
-            return std::clamp((top * (1.0f - fy) + bottom * fy - 0.5f) * kEdgeCell / kEdgeFade, 0.0f, 1.0f);
-        };
-        for (auto& p : pieces)
-        {
-            p.edges[0] = edgeAt(p.corner[0], p.corner[1]);
-            p.edges[1] = edgeAt(p.corner[0] + p.edge1[0], p.corner[1] + p.edge1[1]);
-            p.edges[2] = edgeAt(p.corner[0] + p.edge2[0], p.corner[1] + p.edge2[1]);
+            const auto& from = pass == 0 ? distance : blurred;
+            auto& to = pass == 0 ? blurred : distance;
+            for (int line = 0; line < kEdgeSide; ++line)
+            {
+                // Off the grid counts as grass, as for the distance
+                const auto value = [&](int i) { return i < 0 || i >= kEdgeSide ? kReach : (pass == 0 ? from[at(i, line)] : from[at(line, i)]); };
+                float sum = 0.0f;
+                for (int i = -kEdgeBlur; i <= kEdgeBlur; ++i)
+                    sum += value(i);
+                for (int i = 0; i < kEdgeSide; ++i)
+                {
+                    (pass == 0 ? to[at(i, line)] : to[at(line, i)]) = sum * kBox;
+                    sum += value(i + kEdgeBlur + 1) - value(i - kEdgeBlur);
+                }
+            }
         }
+        edgeField.assign(distance.size(), 0.0f);
+        for (int y = 0; y < kEdgeSide; ++y)
+            for (int x = 0; x < kEdgeSide; ++x)
+            {
+                const float d = distance[at(x, y)];
+                float& e = edgeField[at(x, y)];
+                // A marked cell next to an unmarked one is 1: the edge itself lies half a cell nearer
+                const float metres = (d - 0.5f) * kEdgeCell;
+                if (d <= 0.0f)
+                    e = 0.0f;
+                else if (metres - kEdgeWobble - kEdgeRipple >= kEdgeFade)
+                    e = 1.0f;
+                else
+                {
+                    const float wx = originX + (float(x) + 0.5f) * kEdgeCell, wy = originY + (float(y) + 0.5f) * kEdgeCell;
+                    const float wobble = (ValueNoise(wx / kEdgeWobbleLength, wy / kEdgeWobbleLength) - 0.5f) * 2.0f * kEdgeWobble +
+                                         (ValueNoise(wx / kEdgeRippleLength + 17.3f, wy / kEdgeRippleLength + 5.1f) - 0.5f) * 2.0f * kEdgeRipple;
+                    e = std::clamp((metres + wobble) / kEdgeFade, 0.0f, 1.0f);
+                }
+            }
+        edgeOrigin[0] = originX;
+        edgeOrigin[1] = originY;
+        edgeDirty = true;
+    }
+
+    // EdgeTex: made once where the GPU reads filtered R16F vertex textures, filled again when the edges were made anew.
+    // False while it doesn't hold this frame's edges (hard edges then)
+    bool UpdateEdgeTexture(IDirect3DDevice9* pDevice)
+    {
+        auto real = RealDevice(pDevice);
+        if (!edgeTexture && !edgeTextureTried)
+        {
+            edgeTextureTried = true;
+            IDirect3D9* d3d = nullptr;
+            bool supported = false;
+            if (SUCCEEDED(real->GetDirect3D(&d3d)) && d3d)
+            {
+                D3DDEVICE_CREATION_PARAMETERS cp{};
+                D3DDISPLAYMODE mode{};
+                real->GetCreationParameters(&cp);
+                d3d->GetAdapterDisplayMode(cp.AdapterOrdinal, &mode);
+                supported = SUCCEEDED(d3d->CheckDeviceFormat(cp.AdapterOrdinal, cp.DeviceType, mode.Format,
+                    D3DUSAGE_QUERY_VERTEXTEXTURE | D3DUSAGE_QUERY_FILTER, D3DRTYPE_TEXTURE, D3DFMT_R16F));
+                d3d->Release();
+            }
+            if (supported && FAILED(real->CreateTexture(kEdgeSide, kEdgeSide, 1, 0, D3DFMT_R16F, D3DPOOL_MANAGED, &edgeTexture, nullptr)))
+                edgeTexture = nullptr;
+            if (bLog)
+                FusionLog::Write("GpuGrass", "Edges", "edge texture %s\n", edgeTexture ? "made" : supported ? "failed" : "not supported (filtered R16F vertex texture)");
+        }
+        if (!edgeTexture || edgeField.size() != size_t(kEdgeSide) * kEdgeSide)
+            return false;
+        if (edgeDirty)
+        {
+            D3DLOCKED_RECT locked{};
+            if (FAILED(edgeTexture->LockRect(0, &locked, nullptr, 0)))
+                return false;
+            for (int y = 0; y < kEdgeSide; ++y)
+                D3DXFloat32To16Array(reinterpret_cast<D3DXFLOAT16*>(static_cast<uint8_t*>(locked.pBits) + size_t(y) * locked.Pitch),
+                    edgeField.data() + size_t(y) * kEdgeSide, kEdgeSide);
+            edgeTexture->UnlockRect(0);
+            edgeDirty = false;
+        }
+        return true;
     }
 
     bool MakeResources(IDirect3DDevice9* pDevice)
@@ -475,6 +577,7 @@ namespace GpuGrass
                 h.prevViewProj = effect->GetParameterByName(nullptr, "matPrevViewProj");
                 h.windPrev = effect->GetParameterByName(nullptr, "vec4WindPrev");
                 h.depthBias = effect->GetParameterByName(nullptr, "fDepthBias");
+                h.edgeGrid = effect->GetParameterByName(nullptr, "vec4EdgeGrid");
             }
         }
         if (!effect)
@@ -490,7 +593,6 @@ namespace GpuGrass
                 { 1, 16, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 3 },
                 { 1, 32, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 4 },
                 { 1, 48, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 5 },
-                { 1, 64, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 6 },
                 D3DDECL_END()
             };
             if (FAILED(real->CreateVertexDeclaration(elements, &declaration)))
@@ -573,17 +675,18 @@ export namespace GpuGrass
     }
 
     // The instances of this frame with `technique`: the ground's colour copy on s0 (or none), the trample grid on the
-    // vertex sampler s1; the samplers and the streams' frequencies put back
+    // vertex sampler s1, the edges on s2; the samplers and the streams' frequencies put back
     void DrawBlades(IDirect3DDevice9* pDevice, D3DXHANDLE technique, IDirect3DBaseTexture9* ground, int count)
     {
         static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER,
                                                                   D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
         static constexpr DWORD kSamplerValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, FALSE };
         static constexpr DWORD kTrampleValues[] = { D3DTADDRESS_WRAP, D3DTADDRESS_WRAP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE };
-        static constexpr DWORD kSamplers[2] = { 0, D3DVERTEXTEXTURESAMPLER1 };
-        IDirect3DBaseTexture9* oldTexture[2] = {};
-        DWORD oldSampler[2][std::size(kSamplerStates)] = {};
-        for (int s = 0; s < 2; ++s)
+        static constexpr DWORD kEdgeValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE };
+        static constexpr DWORD kSamplers[3] = { 0, D3DVERTEXTEXTURESAMPLER1, D3DVERTEXTEXTURESAMPLER2 };
+        IDirect3DBaseTexture9* oldTexture[3] = {};
+        DWORD oldSampler[3][std::size(kSamplerStates)] = {};
+        for (int s = 0; s < 3; ++s)
         {
             pDevice->GetTexture(kSamplers[s], &oldTexture[s]);
             for (size_t i = 0; i < std::size(kSamplerStates); ++i)
@@ -605,10 +708,12 @@ export namespace GpuGrass
         effect->CommitChanges();
         SetTextureBoth(pDevice, 0, ground);
         SetTextureBoth(pDevice, D3DVERTEXTEXTURESAMPLER1, trample);
+        SetTextureBoth(pDevice, D3DVERTEXTEXTURESAMPLER2, edgeTexture);
         for (size_t i = 0; i < std::size(kSamplerStates); ++i)
         {
             SetSamplerStateBoth(pDevice, 0, kSamplerStates[i], kSamplerValues[i]);
             SetSamplerStateBoth(pDevice, D3DVERTEXTEXTURESAMPLER1, kSamplerStates[i], kTrampleValues[i]);
+            SetSamplerStateBoth(pDevice, D3DVERTEXTEXTURESAMPLER2, kSamplerStates[i], kEdgeValues[i]);
         }
         pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, kBlades * kVertsPerBlade, 0, kBlades * kIndicesPerBlade / 3);
         effect->EndPass();
@@ -617,7 +722,7 @@ export namespace GpuGrass
         pDevice->SetStreamSourceFreq(0, 1);
         pDevice->SetStreamSourceFreq(1, 1);
         pDevice->SetStreamSource(1, nullptr, 0, 0);
-        for (int s = 0; s < 2; ++s)
+        for (int s = 0; s < 3; ++s)
         {
             SetTextureBoth(pDevice, kSamplers[s], oldTexture[s]);
             SAFE_RELEASE(oldTexture[s]);
@@ -676,6 +781,7 @@ export namespace GpuGrass
             -(v._41 * v._31 + v._42 * v._32 + v._43 * v._33),
         };
         MakePieces(eye);
+        const bool edgeTextureReady = UpdateEdgeTexture(pDevice);
 
         // The view's planes (row vectors: clip = p M), each (n, d) with n.p + d >= 0 inside
         const auto& m = camera.ViewProjection;
@@ -711,8 +817,7 @@ export namespace GpuGrass
                 continue;
             const auto& k = p.look.kinds;
             out[count] = { { p.corner[0], p.corner[1], p.corner[2], p.seed }, { p.edge1[0], p.edge1[1], p.edge1[2], share },
-                           { p.edge2[0], p.edge2[1], p.edge2[2], p.look.tag }, { k[0], k[1], k[2], k[3] },
-                           { p.edges[0], p.edges[1], p.edges[2], 0.0f } };
+                           { p.edge2[0], p.edge2[1], p.edge2[2], p.look.tag }, { k[0], k[1], k[2], k[3] } };
             blades += share * kBlades;
             if (++count >= kMaxInstances)
                 break;
@@ -818,6 +923,9 @@ export namespace GpuGrass
         effect->SetVector(h.windDir, &windDir);
         effect->SetVector(h.blade, &blade);
         effect->SetVector(h.eye, &eyeVector);
+        // The edge grid: its origin, 1 / its side, whether EdgeTex holds it
+        const D3DXVECTOR4 edgeGrid(edgeOrigin[0], edgeOrigin[1], 1.0f / (kEdgeCell * kEdgeSide), edgeTextureReady ? 1.0f : 0.0f);
+        effect->SetVector(h.edgeGrid, &edgeGrid);
         // Towards the sun (c216's, which shaders.ixx keeps); the light through the blades fades as it sets
         {
             const float* sun = SunDirectionWorld;

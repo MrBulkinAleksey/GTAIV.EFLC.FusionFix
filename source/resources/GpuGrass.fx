@@ -39,6 +39,8 @@ float4 vec4Bend;        // a body's push at the tip per metre of height, 1 / the
 
 sampler2D GroundTex : register(s0);    // a copy of _DEFERRED_GBUFFER_0_ before the grass
 sampler2D TrampleTex : register(s1);   // vertex texture: direction (rg), strength (b), the ground's height modulo 64 m (a)
+sampler2D EdgeTex : register(s2);      // vertex texture, R16F, linear: how far from ground without grass (0..1), per 0.5 m cell
+float4 vec4EdgeGrid;    // EdgeTex's origin (xy), 1 / its side (m), 1 with EdgeTex
 
 struct VSInput
 {
@@ -48,7 +50,6 @@ struct VSInput
     float4 edge1 : TEXCOORD3;   // its first edge, the share of its blades kept
     float4 edge2 : TEXCOORD4;   // its second edge, its surface's tag / 255 (debug colours)
     float4 kinds : TEXCOORD5;   // the share of grass, of weeds (the rest small plants), the surface's own grass (0..1)
-    float4 edges : TEXCOORD6;   // at the corner and the ends of the two edges: how far from ground without grass (0..1)
 };
 
 struct VSOutput
@@ -136,7 +137,8 @@ bool BladeKept(VSInput input, out float3 root, out float edge, out float distanc
     if (uv.x + uv.y > 1.0)
         uv = 1.0 - uv;
     root = input.corner.xyz + input.edge1.xyz * uv.x + input.edge2.xyz * uv.y;
-    edge = input.edges.x + (input.edges.y - input.edges.x) * uv.x + (input.edges.z - input.edges.x) * uv.y;
+    // At the root itself, filtered between the cells; without EdgeTex none (hard edges)
+    edge = vec4EdgeGrid.w > 0.0 ? tex2Dlod(EdgeTex, float4((root.xy - vec4EdgeGrid.xy) * vec4EdgeGrid.z, 0.0, 0.0)).r : 1.0;
     distance = length(root - vec4Eye.xyz);
     float thinned = 0.5 * saturate((distance - 15.0) / 15.0);
     // How far each test is from leaving the blade out, in the share of blades: MakeBlade shortens it over the last
