@@ -1113,9 +1113,13 @@ export struct VehicleBoxShadows
         return true;
     }
 
-    // When the device is lost: the texture is in its default pool
+    // When the device is lost: the texture is in its default pool. Unbound first: lost between a light's BindShapes
+    // and Off, it stayed on s7, and a default pool texture still bound keeps the Reset from going through (DD3D80)
     static void ReleaseShapes()
     {
+        if (shapesBound)
+            if (auto pDevice = rage::grcDevice::GetD3DDevice())
+                RageDirect3DDevice9::SetTextureBoth(pDevice, 7, nullptr);
         if (shapesTexture)
         {
             shapesTexture->Release();
