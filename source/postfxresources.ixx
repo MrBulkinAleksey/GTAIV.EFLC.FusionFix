@@ -835,6 +835,8 @@ public:
     // Car lights (headlights, tail lights) shine low and close, so a box's shadow from them spreads over the whole road
     // ahead and shows its shape; off by default, lamps only.
     bool bVehicleBoxShadowsFromCarLights = false;
+    // Car lights' maps show the lamp posts (nightshadows' PostCarLightShadows): their post shapes are left out then
+    bool bPostShadowsFromCarLights = false;
     // A lamp that takes a shadow slot, whose map then shows the cars, fades its boxes out over SlotFade ms, so the
     // shadow under a car does not jump between the two; WithSlots keeps them under its real shadow for good.
     bool bVehicleBoxShadowsWithSlots = false;
@@ -1910,6 +1912,7 @@ public:
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsContact", &PostFxResource::fVehicleBoxShadowContact, 0.0f, 0.0f, 1.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsEndRounding", &PostFxResource::fVehicleBoxShadowEndRounding, 0.3f, 0.0f, 2.0f),
             IniFlag("NIGHTSHADOWS", "VehicleBoxShadowsFromCarLights", &PostFxResource::bVehicleBoxShadowsFromCarLights, 0),
+            IniFlag("NIGHTSHADOWS", "PostShadowsFromCarLights", &PostFxResource::bPostShadowsFromCarLights, 0),
             IniFlag("NIGHTSHADOWS", "VehicleBoxShadowsWithSlots", &PostFxResource::bVehicleBoxShadowsWithSlots, 0),
             IniFlag("NIGHTSHADOWS", "VehicleBoxShadowsUntilLeaving", &PostFxResource::bVehicleBoxShadowsUntilLeaving, 1),
             // VehicleBoxShadowsBlend: the light shaders take the darkest of a light's shadow map, contact shadow and boxes

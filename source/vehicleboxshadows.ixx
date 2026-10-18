@@ -1039,6 +1039,9 @@ export struct VehicleBoxShadows
             // nothing there; its cache shows those with the bit (mode 0). Each a second, square shadow beside the real.
             if ((hasMap && !p.post) || (light.mShadowCacheIndex >= 0 && p.inMaps))
                 continue;
+            // A car light's map with the posts in it (PostShadowsFromCarLights)
+            if (hasMap && p.post && R.bPostShadowsFromCarLights && (light.mFlags & rage::LF_VEHICLE))
+                continue;
             const float dx = p.centre[0] - at[0], dy = p.centre[1] - at[1], dz = p.centre[2] - at[2];
             const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
             const float gap = (std::max)(d - p.reach, 0.0f);
