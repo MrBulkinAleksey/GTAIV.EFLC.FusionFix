@@ -938,9 +938,9 @@ public:
     // deferred_lighting draws SSR's colour, the scene's own light, through the game's reflection scale meant for its
     // parabolic map: 10 times globalScalars.w (c39.w, read in BindLightingInputs, 0 until then) times 2 x specular times
     // its Fresnel. On car bodies, whose clean paint takes SSR in full by its gloss, SSR_PS divides that 10 x c39.w back
-    // out, times SSRVehicleUnits (1 leaves the reflection at Fresnel x specular of the scene's light): lit poles and
-    // walls had turned roofs white at night.
-    float fSSRVehicleUnits = 1.0f;
+    // out, times SSRVehicleUnits (1 leaves the reflection at Fresnel x specular of the scene's light, too weak in game;
+    // 10 with c39.w at 1 is the old reflection, never exceeded): lit poles and walls had turned roofs white at night.
+    float fSSRVehicleUnits = 4.0f;
     float fGameReflectionScale = 0.0f;
     rage::grcRenderTargetPC* SSRDenoisedTex = nullptr;
     IDirect3DSurface9* SSRDenoisedSurf = nullptr;
@@ -2017,7 +2017,7 @@ public:
             IniFloat("REFLECTIONS", "SSRTowardCamera", &PostFxResource::fSSRTowardCamera, 0.0f, 0.0f, 1.0f),
             IniFloat("REFLECTIONS", "SSRBlur", &PostFxResource::fSSRReflectionBlur, 0.0f, 0.0f, 32.0f),
             IniFloat("REFLECTIONS", "SSRDistanceFade", &PostFxResource::fSSRDistanceFade, 0.0f, 0.0f, 100.0f),
-            IniFloat("REFLECTIONS", "SSRVehicleUnits", &PostFxResource::fSSRVehicleUnits, 1.0f, 0.0f, 10.0f),
+            IniFloat("REFLECTIONS", "SSRVehicleUnits", &PostFxResource::fSSRVehicleUnits, 4.0f, 0.0f, 100.0f),
             IniFloat("LIGHTING", "ContactShadowsLength", &PostFxResource::fContactShadowLength, 0.3f, 0.05f, 10.0f),
             IniFloat("LIGHTING", "ContactShadowsThickness", &PostFxResource::fContactShadowThickness, 0.15f, 0.01f, 10.0f),
             IniFloat("LIGHTING", "ContactShadowsMaxDistance", &PostFxResource::fContactShadowMaxDistance, 60.0f, 1.0f, 1000.0f),

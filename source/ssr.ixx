@@ -201,7 +201,7 @@ export void RenderScreenSpaceReflections()
     const bool vehicleUnits = R.fGameReflectionScale > 0.0f && R.mMaterialIdRT && R.mMaterialIdRT->mD3DTexture;
     if (vehicleUnits)
         effect->SetTexture(h.SkinIDTex2D, R.mMaterialIdRT->mD3DTexture);
-    effect->SetFloat(h.fVehicleScale, vehicleUnits ? R.fSSRVehicleUnits / (10.0f * R.fGameReflectionScale) : 1.0f);
+    effect->SetFloat(h.fVehicleScale, vehicleUnits ? (std::min)(R.fSSRVehicleUnits / (10.0f * R.fGameReflectionScale), 1.0f) : 1.0f);
     // Debug view 3 has SSRTrace_PS write where its rays hit in place of the hit, and SSR_PS pass it on.
     effect->SetFloat(h.fDebugMode, float(R.SSRDebugMode()));
 
