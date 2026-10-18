@@ -134,7 +134,7 @@ namespace
         // asyncGeneration, where the GPU can run it beside the game's next frame, on the direct queue otherwise. Their
         // allocators are reused once the GPU finished with them.
         static constexpr uint32_t Frames = 6;
-        enum class Work : uint32_t { None, Evaluate, Generate };
+        enum class Work : uint32_t { None, Evaluate, Generate, Present };
         struct Ring
         {
             ComPtr<ID3D12CommandQueue> queue;
@@ -297,9 +297,10 @@ namespace
         bool cpuSync = false;
         std::array<ComPtr<ID3D12Resource>, static_cast<size_t>(Protocol::Texture::Count)> uavs;
 
+        ComPtr<IDXGIFactory4> factory;      // also makes the swap chain of the presentation
+
         bool Create(LUID luid)
         {
-            ComPtr<IDXGIFactory4> factory;
             if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory))))
                 return false;
             if (FAILED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter))))
@@ -1108,6 +1109,252 @@ namespace
     };
 
     // -----------------------------------------------------------------------------------------------
+    // Presentation (ConfigureFlags::HelperPresent)
+    //
+    // A child window of this process over the game's window, made on a thread of its own that pumps its messages: a
+    // window in another process's window tree that leaves them unanswered holds that process up. It takes no input:
+    // disabled, it is passed over by the hit testing, so the game's window keeps the mouse and the keyboard (as the
+    // swap chains of Chromium's GPU process over the browser's window). The game shows and hides it. A flip model swap
+    // chain on it shows Present, presented after the request is answered, so the game's render thread doesn't wait for it.
+
+    class Display
+    {
+        HANDLE thread = nullptr;
+        HANDLE ready = nullptr;
+        HWND parent = nullptr;
+
+        static constexpr uint32_t BufferCount = 3;
+        std::array<ComPtr<ID3D12Resource>, BufferCount> buffers;
+        DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+        bool tearing = false;
+
+        // What Present cost the CPU, logged every 300 frames
+        uint32_t presents = 0;
+        double presentMs = 0.0, presentMax = 0.0;
+        uint32_t failures = 0;
+
+        static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+        {
+            switch (message)
+            {
+            case WM_NCHITTEST: return HTTRANSPARENT;
+            case WM_ERASEBKGND: return 1;
+            case WM_DESTROY: PostQuitMessage(0); return 0;
+            default: return DefWindowProcW(hwnd, message, wParam, lParam);
+            }
+        }
+
+        static DWORD WINAPI WindowThread(void* parameter)
+        {
+            auto& d = *static_cast<Display*>(parameter);
+            WNDCLASSEXW windowClass{ sizeof(windowClass) };
+            windowClass.lpfnWndProc = WindowProc;
+            windowClass.hInstance = GetModuleHandleW(nullptr);
+            windowClass.lpszClassName = L"GTAIV.EFLC.FusionFix.Present";
+            RegisterClassExW(&windowClass);
+
+            RECT client{};
+            GetClientRect(d.parent, &client);
+            d.window = CreateWindowExW(WS_EX_NOPARENTNOTIFY | WS_EX_TRANSPARENT | WS_EX_NOREDIRECTIONBITMAP, windowClass.lpszClassName, L"",
+                WS_CHILD | WS_DISABLED | WS_CLIPSIBLINGS, 0, 0, std::max<LONG>(client.right, 1), std::max<LONG>(client.bottom, 1), d.parent, nullptr,
+                windowClass.hInstance, nullptr);
+            if (!d.window)
+                Log("Present: the child window could not be made: error %lu", GetLastError());
+            SetEvent(d.ready);
+            if (!d.window)
+                return 1;
+
+            MSG message;
+            while (GetMessageW(&message, nullptr, 0, 0) > 0)
+            {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            return 0;
+        }
+
+        void ReleaseSwapChain()
+        {
+            for (auto& buffer : buffers)
+                buffer.Reset();
+            swapChain.Reset();
+            width = height = 0;
+            format = DXGI_FORMAT_UNKNOWN;
+        }
+
+    public:
+        HWND window = nullptr;
+        ComPtr<IDXGISwapChain3> swapChain;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        bool pending = false;           // a frame copied into the back buffer, presented once the request is answered
+        uint32_t syncInterval = 1;
+
+        // The window over parent, made once, and a swap chain of the size and format of Present. The GPU is idle.
+        bool Configure(Device& d, HWND gameWindow, uint32_t w, uint32_t h, DXGI_FORMAT f, bool hdr)
+        {
+            pending = false;
+            if (window && parent != gameWindow)
+                Release();
+            if (!window)
+            {
+                if (!gameWindow || !IsWindow(gameWindow))
+                {
+                    Log("Present: the game's window %p is not a window", gameWindow);
+                    return false;
+                }
+                parent = gameWindow;
+                ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+                thread = CreateThread(nullptr, 0, WindowThread, this, 0, nullptr);
+                if (!thread || WaitForSingleObject(ready, 5000) != WAIT_OBJECT_0 || !window)
+                {
+                    Release();
+                    return false;
+                }
+                Log("Present: child window %p over the game's window %p", window, parent);
+            }
+            if (swapChain && width == w && height == h && format == f)
+                return true;
+            ReleaseSwapChain();
+
+            ComPtr<IDXGIFactory5> factory5;
+            BOOL allowTearing = FALSE;
+            tearing = SUCCEEDED(d.factory.As(&factory5)) &&
+                SUCCEEDED(factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allowTearing, sizeof(allowTearing))) && allowTearing;
+
+            DXGI_SWAP_CHAIN_DESC1 desc{};
+            desc.Width = w;
+            desc.Height = h;
+            desc.Format = f;
+            desc.SampleDesc.Count = 1;
+            desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+            desc.BufferCount = BufferCount;
+            desc.Scaling = DXGI_SCALING_STRETCH;
+            desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+            desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+            desc.Flags = tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+            ComPtr<IDXGISwapChain1> swapChain1;
+            auto hr = d.factory->CreateSwapChainForHwnd(d.queue.Get(), window, &desc, nullptr, nullptr, &swapChain1);
+            if (FAILED(hr) || FAILED(swapChain1.As(&swapChain)))
+            {
+                Log("Present: the swap chain could not be made (0x%08X) at %ux%u, format %d", static_cast<uint32_t>(hr), w, h, int(f));
+                ReleaseSwapChain();
+                return false;
+            }
+            d.factory->MakeWindowAssociation(window, DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER);
+            if (hdr && FAILED(swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)))
+                Log("Present: scRGB could not be set on the swap chain");
+            for (uint32_t i = 0; i < BufferCount; ++i)
+            {
+                if (FAILED(swapChain->GetBuffer(i, IID_PPV_ARGS(&buffers[i]))))
+                {
+                    ReleaseSwapChain();
+                    return false;
+                }
+            }
+            width = w;
+            height = h;
+            format = f;
+            Log("Present: swap chain %ux%u, format %d%s%s", w, h, int(f), hdr ? ", scRGB" : "", tearing ? ", tearing allowed" : "");
+            return true;
+        }
+
+        // The window follows the size of the game's window's client area; the swap chain stretches into it
+        void FollowParent()
+        {
+            RECT client{}, own{};
+            if (!GetClientRect(parent, &client) || !GetClientRect(window, &own))
+                return;
+            if (client.right != own.right || client.bottom != own.bottom)
+                SetWindowPos(window, nullptr, 0, 0, std::max<LONG>(client.right, 1), std::max<LONG>(client.bottom, 1),
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+        }
+
+        // Present into the current back buffer, recorded into cmd
+        bool Record(ID3D12GraphicsCommandList* cmd, ID3D12Resource* present)
+        {
+            if (!swapChain || !present)
+                return false;
+            auto back = buffers[swapChain->GetCurrentBackBufferIndex()].Get();
+            D3D12_RESOURCE_BARRIER barriers[2]{};
+            for (auto& barrier : barriers)
+            {
+                barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            }
+            barriers[0].Transition.pResource = back;
+            barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+            barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            barriers[1].Transition.pResource = present;
+            barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+            barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            cmd->ResourceBarrier(2, barriers);
+            cmd->CopyResource(back, present);
+            for (auto& barrier : barriers)
+                std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+            cmd->ResourceBarrier(2, barriers);
+            return true;
+        }
+
+        // After the answer to Present
+        void Show()
+        {
+            if (!pending || !swapChain)
+                return;
+            pending = false;
+            FollowParent();
+            LARGE_INTEGER start, end, frequency;
+            QueryPerformanceCounter(&start);
+            auto hr = swapChain->Present(syncInterval, syncInterval == 0 && tearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
+            QueryPerformanceCounter(&end);
+            QueryPerformanceFrequency(&frequency);
+            if (FAILED(hr) && failures++ < 5)
+                Log("Present failed: 0x%08X", static_cast<uint32_t>(hr));
+            // Shown with its first frame, and again after the game hid it to present a frame itself
+            if (SUCCEEDED(hr) && !IsWindowVisible(window))
+                ShowWindowAsync(window, SW_SHOWNA);
+
+            auto ms = static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(frequency.QuadPart);
+            presentMs += ms;
+            presentMax = std::max(presentMax, ms);
+            if (++presents == 1)
+                Log("First frame presented");
+            if (presents % 300 == 0)
+            {
+                Log("Present over 300 frames, sync interval %u: %.3f ms of the CPU on average, %.3f at most", syncInterval, presentMs / 300.0, presentMax);
+                presentMs = presentMax = 0.0;
+            }
+        }
+
+        void Release()
+        {
+            ReleaseSwapChain();
+            pending = false;
+            if (window)
+                PostMessageW(window, WM_CLOSE, 0, 0);
+            if (thread)
+            {
+                WaitForSingleObject(thread, 2000);
+                CloseHandle(thread);
+            }
+            if (ready)
+                CloseHandle(ready);
+            thread = ready = nullptr;
+            window = nullptr;
+            parent = nullptr;
+        }
+
+        // Without the presentation: hidden, its swap chain released (the GPU is idle)
+        void Stop()
+        {
+            pending = false;
+            if (window)
+                ShowWindowAsync(window, SW_HIDE);
+            ReleaseSwapChain();
+        }
+    };
+
+    // -----------------------------------------------------------------------------------------------
 
     class Helper
     {
@@ -1115,6 +1362,7 @@ namespace
         Device device;
         DLSS dlss;
         FSR fsr;
+        Display display;
         Protocol::Backend backend = Protocol::Backend::None;
         uint32_t width = 0;
         uint32_t height = 0;
@@ -1173,6 +1421,7 @@ namespace
 
             // The GPU first: the contexts go before the textures, and nothing may still run with them
             device.Flush();
+            display.pending = false;
             dlss.Release();
             fsr.Release();
             fsr.ReleaseFrameGeneration();
@@ -1255,6 +1504,36 @@ namespace
                     shared.Flags = flags;
                 }
             }
+
+            // Presentation by the helper, not with the frame generation, whose Present it would share
+            if (flags & Protocol::ConfigureFlags::HelperPresent)
+            {
+                bool hdr = (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0;
+                auto format = hdr ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM;
+                bool presenting = !fsr.HasFrameGeneration() &&
+                    device.CreateTexture(T::Present, outputWidth, outputHeight, format, false) &&
+                    display.Configure(device, reinterpret_cast<HWND>(shared.PresentWindow), outputWidth, outputHeight, format, hdr);
+                if (!presenting)
+                {
+                    Log("Presentation could not be set up at %ux%u: the game presents", outputWidth, outputHeight);
+                    if (!fsr.HasFrameGeneration())
+                        device.ReleaseTexture(T::Present);
+                    display.Stop();
+                    flags &= ~Protocol::ConfigureFlags::HelperPresent;
+                }
+                else
+                {
+                    // The game's textures for Present are the back buffer's A8R8G8B8 without HDR
+                    if (!hdr)
+                        flags |= Protocol::ConfigureFlags::EightBitFrames;
+                }
+                shared.Flags = flags;
+            }
+            else
+            {
+                display.Stop();
+            }
+            shared.ChildWindow = (flags & Protocol::ConfigureFlags::HelperPresent) ? reinterpret_cast<uint64_t>(display.window) : 0;
 
             for (size_t i = 0; i < static_cast<size_t>(T::Count); ++i)
             {
@@ -1406,6 +1685,24 @@ namespace
             return generated;
         }
 
+        bool Present()
+        {
+            auto& shared = *connection.shared;
+            if (!display.swapChain || (!device.cpuSync && (!device.inputFence || !device.outputFence)))
+                return false;
+
+            using T = Protocol::Texture;
+            auto cmd = device.BeginFrame(Device::Work::Present);
+            bool recorded = display.Record(cmd, device.Texture(T::Present));
+            display.syncInterval = std::min(shared.SyncInterval, 4u);
+            if (device.cpuSync)
+                recorded = device.SubmitFrameAndWait() && recorded;
+            else
+                device.SubmitFrame(shared.WaitValue, shared.SignalValue, recorded);
+            display.pending = recorded;
+            return recorded;
+        }
+
     public:
         int Run(const std::wstring& name)
         {
@@ -1497,13 +1794,24 @@ namespace
                         Log("Generate failed");
                     break;
                 }
+                case Protocol::Command::Present:
+                {
+                    ok = Present();
+                    static uint32_t failed = 0;
+                    if (!ok && failed++ < 5)
+                        Log("Present failed");
+                    break;
+                }
                 default: break;
                 }
                 connection.Respond(ok ? Protocol::Status::Ok : Protocol::Status::Failed, serial);
+                // The game goes on meanwhile; the next request waits for it
+                display.Show();
             }
 
             // Both queues done before their work's resources go
             device.Flush();
+            display.Release();
             dlss.Shutdown();
             fsr.Shutdown();
             device.ReleaseTextures();

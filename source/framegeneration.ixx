@@ -69,6 +69,15 @@ namespace
     bool bAsyncCompute = true;      // FrameGenerationAsyncCompute: the helper generates on its compute queue
     bool bDeferredBroken = false;   // the game's Present did not come through the device: not deferred any more
 
+    // HelperPresent in [ANTIALIASING] (experimental): with DLAA or FSR and without the frame generation, the helper presents
+    // the frames through a flip model swap chain on a window of its own over the game's, the game's Present is left out
+    bool bHelperPresent = false;
+    bool bHelperPresentBroken = false;  // the game's Present did not come through the device
+    bool bPresentedByHelper = false;    // this frame
+    HWND GameWindow = nullptr;          // the swap chain's, for the helper's window
+    bool bGameWindowed = false;         // the helper's window can't show over exclusive fullscreen
+    uint32_t GameSyncInterval = 1;
+
     // FrameGenerationDebug in [DEBUG], the logs
     namespace Debug
     {
@@ -517,7 +526,7 @@ namespace
         // Reset (DD3D80), and the ones there may be released under it
         if (rage::grcDevice::IsDeviceLost())
             return false;
-        bool eightBit = Upscaler::IsFrameGenerationEightBit();
+        bool eightBit = Upscaler::IsPresentEightBit();
         if (PresentRT && GeneratedRT && HudLessRT && SavedRT && TargetWidth == width && TargetHeight == height && bTargetsEightBit == eightBit)
             return true;
         ReleaseTargets();
@@ -821,6 +830,8 @@ namespace
         return RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
     }
 
+    void InstallPresentHooks(IDirect3DDevice9* device);
+
     // On the D3D9 runtime's own device, as the render scale's hooks
     void InstallHooks(IDirect3DDevice9* device)
     {
@@ -834,7 +845,13 @@ namespace
         PatchVTable(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
         hooked = vtable;
         Log("Draw call hooks installed");
+        InstallPresentHooks(device);
+    }
 
+    // The game's Present, which a frame presented another way leaves out (bSkipPresent)
+    void InstallPresentHooks(IDirect3DDevice9* device)
+    {
+        auto vtable = *reinterpret_cast<void***>(device);
         if (!shPresent)
         {
             auto target = vtable[17];
@@ -864,10 +881,11 @@ namespace
         bDeferredSetting = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationDeferred", 1) != 0;
         bAsyncCompute = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationAsyncCompute", 1) != 0;
         fShowGeneratedAt = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FrameGenerationShowGeneratedAt", 0.2f), 0.0f, 0.9f);
+        bHelperPresent = iniReader.ReadInteger("ANTIALIASING", "HelperPresent", 0) != 0;
         // The aims may have changed
         TargetDraws[0] = TargetDraws[1] = 0.0;
-        Log("Frame generation settings: delay %.2f, pacing %d, deferred %d (generated frame at %.2f), compute queue %d, debug %d", fDelay, nPacing,
-            int(bDeferredSetting), fShowGeneratedAt, int(bAsyncCompute), nDebug);
+        Log("Frame generation settings: delay %.2f, pacing %d, deferred %d (generated frame at %.2f), compute queue %d, debug %d, helper presents %d", fDelay, nPacing,
+            int(bDeferredSetting), fShowGeneratedAt, int(bAsyncCompute), nDebug, int(bHelperPresent));
 
         // A fresh start for the statistics
         Stats = {};
@@ -972,6 +990,68 @@ namespace
         backBuffer->Release();
     }
 
+    // HelperPresent: the finished frame copied for the helper, which presents it; the game's Present is left out
+    bool PresentThroughHelper(IDirect3DDevice9* device)
+    {
+        if (!bHelperPresent || bHelperPresentBroken)
+            return false;
+
+        // The window and the mode the helper presents for, also before the presentation is set up: Evaluate asks for it
+        IDirect3DSwapChain9* swapChain = nullptr;
+        D3DPRESENT_PARAMETERS pp{};
+        if (FAILED(device->GetSwapChain(0, &swapChain)) || !swapChain || FAILED(swapChain->GetPresentParameters(&pp)))
+        {
+            SAFE_RELEASE(swapChain);
+            return false;
+        }
+        swapChain->Release();
+        GameWindow = pp.hDeviceWindow ? pp.hDeviceWindow : gWnd;
+        bGameWindowed = pp.Windowed != FALSE;
+        GameSyncInterval = pp.PresentationInterval == D3DPRESENT_INTERVAL_IMMEDIATE ? 0 :
+            pp.PresentationInterval == D3DPRESENT_INTERVAL_TWO ? 2 : pp.PresentationInterval == D3DPRESENT_INTERVAL_THREE ? 3 :
+            pp.PresentationInterval == D3DPRESENT_INTERVAL_FOUR ? 4 : 1;
+        if (!bGameWindowed || !Upscaler::IsPresentReady())
+            return false;
+
+        // The game's Present after the last frame should have been left out: it went another way, and both were shown
+        if (bSkipPresent)
+        {
+            bSkipPresent = false;
+            bHelperPresentBroken = true;
+            Log("The game's Present did not come through the device's Present: the game presents again");
+            return false;
+        }
+
+        RenderThread = GetCurrentThreadId();
+        InstallPresentHooks(device);
+        if (!shPresent)
+        {
+            bHelperPresentBroken = true;
+            return false;
+        }
+
+        IDirect3DSurface9* backBuffer = nullptr;
+        if (FAILED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) || !backBuffer)
+            return false;
+        D3DSURFACE_DESC desc{};
+        backBuffer->GetDesc(&desc);
+        bool posted = false;
+        if (CreateTargets(desc.Width, desc.Height) && CopyInto(device, backBuffer, PresentRT))
+            posted = Upscaler::PostPresent(PresentRT->mD3DTexture, GameSyncInterval);
+        backBuffer->Release();
+        if (!posted)
+        {
+            LogOnce(10, "A frame could not be handed to the helper to present: the game presents it");
+            return false;
+        }
+        static bool first = true;
+        if (first)
+            Log("First frame presented by the helper at %ux%u, sync interval %u", desc.Width, desc.Height, GameSyncInterval);
+        first = false;
+        bSkipPresent = true;
+        return true;
+    }
+
     // Render thread, after the frame is finished
     void OnBeforePresent()
     {
@@ -999,6 +1079,7 @@ namespace
         {
             if (sharpen)
                 SharpenBackBuffer(device, hudLess, false);
+            bPresentedByHelper = PresentThroughHelper(device);
             return;
         }
 
@@ -1223,6 +1304,12 @@ export namespace FrameGeneration
         return mode != Mode::Off;
     }
 
+    // HelperPresent: the window the helper presents over, null while it does not
+    HWND HelperPresentWindow()
+    {
+        return bHelperPresent && !bHelperPresentBroken && mode == Mode::Off && bGameWindowed ? GameWindow : nullptr;
+    }
+
     // The helper generates on its compute queue, beside the game's next frame
     bool UsesAsyncCompute()
     {
@@ -1305,7 +1392,10 @@ public:
             FusionFix::onBeforePresent() += []()
             {
                 auto start = Upscaler::TimingStart();
+                bPresentedByHelper = false;
                 OnBeforePresent();
+                if (!bPresentedByHelper)
+                    Upscaler::PresentedByGame();
                 if (mode != Mode::Off)
                     Upscaler::TimingAdd(Upscaler::TimingPart::FrameGenerationEnd, start);
             };

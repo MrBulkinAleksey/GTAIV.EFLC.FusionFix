@@ -1885,6 +1885,8 @@ public:
         frame.HighDynamicRange = HDROutput::IsActive();
         frame.HudLess = FrameGeneration::UsesHudLess();
         frame.AsyncGeneration = FrameGeneration::UsesAsyncCompute();
+        frame.PresentWindow = FrameGeneration::HelperPresentWindow();
+        frame.HelperPresent = frame.PresentWindow != nullptr;
         auto world = CurrentCamera.View.Inverse();
         auto normalized = [&](int row, float sign, float (&out)[3])
         {

@@ -258,8 +258,9 @@ namespace
         bool WaitOnCpu() const { return wine && !gameFence; }
         virtual void ReleaseImports() = 0;
         // Game textures -> shared textures, then the input fence reaches signalValue. Null inputs are skipped, a texture
-        // given twice is copied from once into both.
-        virtual bool SubmitInputs(const Textures& inputs, uint64_t signalValue) = 0;
+        // given twice is copied from once into both. waitValue: of the output fence, the helper done with the textures
+        // before (the frame it presented); 0 for none.
+        virtual bool SubmitInputs(const Textures& inputs, uint64_t signalValue, uint64_t waitValue = 0) = 0;
         // Once the output fence reaches waitValue: shared texture (Output or Generated) -> game texture. afterInputs: right after
         // SubmitInputs, with no D3D9 call in between, so the game's work has reached the queue already.
         virtual bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue, bool afterInputs) = 0;
@@ -784,7 +785,7 @@ namespace
             return result == VK_SUCCESS;
         }
 
-        bool SubmitInputs(const Textures& inputs, uint64_t signalValue) override
+        bool SubmitInputs(const Textures& inputs, uint64_t signalValue, uint64_t waitValue) override
         {
             // Everything the game rendered so far must reach the queue first. Before the images are asked for, too: DXVK
             // can give a texture new storage (relocation), which only its command thread knows about.
@@ -854,7 +855,7 @@ namespace
 
             if (!WaitOnCpu())
             {
-                if (!Submit(cmd, VK_NULL_HANDLE, 0, inputSemaphore, signalValue, s.fence))
+                if (!Submit(cmd, waitValue ? outputSemaphore : VK_NULL_HANDLE, waitValue, inputSemaphore, signalValue, s.fence))
                     return false;
                 s.submitted = true;
                 return true;
@@ -1148,7 +1149,7 @@ namespace
             return true;
         }
 
-        bool SubmitInputs(const Textures& inputs, uint64_t signalValue) override
+        bool SubmitInputs(const Textures& inputs, uint64_t signalValue, uint64_t waitValue) override
         {
             // D3D9on12 records into command lists of its own, which have to reach the GPU before this queue can
             // wait for them. An event query is the D3D9 way to submit them.
@@ -1211,6 +1212,8 @@ namespace
 
                 if (ok)
                 {
+                    if (waitValue)
+                        queue->Wait(outputFence, waitValue);
                     ID3D12CommandList* lists[] = { s.list };
                     queue->ExecuteCommandLists(1, lists);
                     queue->Signal(inputFence, signalValue);
@@ -1473,6 +1476,12 @@ namespace
     bool generatedReset = false;       // the last Generate had nothing to interpolate from
     uint64_t generatedValue = 0;       // the helper signals it once the frame posted by PostGenerate is generated; 0 when none waits
 
+    // Presentation by the helper (ConfigureFlags::HelperPresent): its child window over the game's window, until the next
+    // configuration; presentFailed until then once a Present failed
+    HWND presentWindow = nullptr;
+    bool presentFailed = false;
+    uint64_t presentedValue = 0;       // the helper signals it once the frame posted last by PostPresent is copied out
+
     std::filesystem::path HelperPath()
     {
         return GetThisModulePath() / L"GTAIV.EFLC.FusionFix.exe";
@@ -1519,6 +1528,8 @@ namespace
         generationFailed = false;
         preparedFrameId = 0;
         generatedValue = 0;
+        presentWindow = nullptr;    // went with the helper
+        presentedValue = 0;
         if (!helper.Start(HelperPath(), bridge->luid))
         {
             Log("The helper could not be started: error %lu", GetLastError());
@@ -1532,7 +1543,7 @@ namespace
 
     const char* CommandName(Protocol::Command command)
     {
-        return command == Protocol::Command::Generate ? "Generate" : "Evaluate";
+        return command == Protocol::Command::Generate ? "Generate" : command == Protocol::Command::Present ? "Present" : "Evaluate";
     }
 
     // No answer in time from a helper that still runs
@@ -1579,6 +1590,8 @@ namespace
         // A failed Generate leaves the upscaler working
         if (pendingCommand == Protocol::Command::Generate)
             generationFailed = true;
+        else if (pendingCommand == Protocol::Command::Present)
+            presentFailed = true;
         else
             configureFailed = true;
         return true;
@@ -1625,6 +1638,8 @@ export namespace Upscaler
         bool HighDynamicRange = false;    // the frame given to Generate is scRGB
         bool HudLess = false;             // Generate of this frame comes with the frame before the HUD
         bool AsyncGeneration = false;     // Generate on the helper's compute queue
+        bool HelperPresent = false;       // the helper presents the frames (PostPresent), not with FrameGeneration
+        HWND PresentWindow = nullptr;     // the game's window, for HelperPresent
         float CameraPosition[3]{};        // world space
         float CameraUp[3]{};
         float CameraRight[3]{};
@@ -1738,6 +1753,9 @@ export namespace Upscaler
             flags |= Protocol::ConfigureFlags::FrameGeneration |
                 (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : Protocol::ConfigureFlags::EightBitFrames) |
                 (frame.AsyncGeneration ? Protocol::ConfigureFlags::AsyncGeneration : 0u);
+        // Not on the CPU: every frame would wait for the GPU
+        if (frame.HelperPresent && frame.PresentWindow && !(flags & Protocol::ConfigureFlags::FrameGeneration) && !(bridge->wine && !bridge->gameFence))
+            flags |= Protocol::ConfigureFlags::HelperPresent | (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : 0u);
         auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
         auto outputHeight = frame.OutputHeight ? frame.OutputHeight : frame.Height;
         if (retryConfigureAt && GetTickCount64() >= retryConfigureAt)
@@ -1753,6 +1771,10 @@ export namespace Upscaler
             bridge->ReleaseImports();
             // A generated frame not taken yet went with the shared textures
             generatedValue = 0;
+            // The helper hides its window without the presentation, or shows it again with its first frame
+            presentWindow = nullptr;
+            presentFailed = false;
+            presentedValue = 0;
             configuredBackend = backendId;
             configuredWidth = frame.Width;
             configuredHeight = frame.Height;
@@ -1771,6 +1793,8 @@ export namespace Upscaler
             shared.DLSSPreset = frame.DLSSPreset;
             shared.Flags = flags;
             shared.InputFenceHandle = shared.OutputFenceHandle = 0;
+            shared.PresentWindow = reinterpret_cast<uint64_t>(frame.PresentWindow);
+            shared.ChildWindow = 0;
             if (bridge->PrepareGameFence(shared, helper.process))
                 shared.Flags |= Protocol::ConfigureFlags::GameFence;
             const auto configureStart = GetTickCount64();
@@ -1788,11 +1812,15 @@ export namespace Upscaler
                 Log("Synchronization: %s", bridge->gameFence ? "the game's semaphore, on the GPU" : "on the CPU");
             if ((flags & Protocol::ConfigureFlags::FrameGeneration) && !(shared.Flags & Protocol::ConfigureFlags::FrameGeneration))
                 Log("Frame generation could not be set up, the upscaler works without it");
+            if ((flags & Protocol::ConfigureFlags::HelperPresent) && !(shared.Flags & Protocol::ConfigureFlags::HelperPresent))
+                Log("The helper could not set up its presentation, the game presents");
             if (!bridge->Import(shared, frame.Width, frame.Height, outputWidth, outputHeight))
             {
                 Log("Configure %ux%u -> %ux%u: the shared resources could not be imported", frame.Width, frame.Height, outputWidth, outputHeight);
                 return false;
             }
+            if (shared.Flags & Protocol::ConfigureFlags::HelperPresent)
+                presentWindow = reinterpret_cast<HWND>(shared.ChildWindow);
             // The render thread waits for it: a long one holds the game, as the end of loading
             Log("Configured %ux%u -> %ux%u in %llu ms: %s", frame.Width, frame.Height, outputWidth, outputHeight,
                 GetTickCount64() - configureStart, shared.Message);
@@ -2003,6 +2031,59 @@ export namespace Upscaler
     bool Generate(IDirect3DTexture9* present, IDirect3DTexture9* hudLess, IDirect3DTexture9* generated, float maxLuminance)
     {
         return generated && PostGenerate(present, hudLess, maxLuminance) && TakeGenerated(generated, true);
+    }
+
+    // Presentation by the helper: set up, and no Present failed since
+    bool IsPresentReady()
+    {
+        // The helper answers with its window only once Present is made
+        return state == State::Ready && presentWindow && !presentFailed && !configureFailed && bridge;
+    }
+
+    // The game's textures for PostPresent are A8R8G8B8, A16B16G16R16F with HDR
+    bool IsPresentEightBit()
+    {
+        return bridge && bridge->eightBitFrames;
+    }
+
+    // Render thread, at the frame's end: the helper presents frame (the back buffer's copy, at the output size). The game
+    // leaves its own Present out on true.
+    bool PostPresent(IDirect3DTexture9* frame, uint32_t syncInterval)
+    {
+        if (!IsPresentReady() || !frame)
+            return false;
+        if (!CollectPending() || !IsPresentReady())
+            return false;
+
+        auto inputValue = ++fenceValue;
+        auto outputValue = ++fenceValue;
+        Textures inputs{};
+        inputs[static_cast<size_t>(Protocol::Texture::Present)] = frame;
+        // The copy waits on the GPU for the helper to have copied the frame before out of Present
+        if (!bridge->SubmitInputs(inputs, inputValue, presentedValue))
+        {
+            static uint32_t reported = 0;
+            if (Report(reported))
+                Log("The frame to present could not be submitted: the game presents");
+            presentFailed = true;
+            return false;
+        }
+
+        auto& shared = *helper.shared;
+        shared.WaitValue = inputValue;
+        shared.SignalValue = outputValue;
+        shared.SyncInterval = syncInterval;
+        Post(Protocol::Command::Present, outputValue);
+        presentedValue = outputValue;
+        return true;
+    }
+
+    // Render thread: the game presented this frame itself, the helper's window would hide it
+    void PresentedByGame()
+    {
+        // The helper shows it again with the next frame it presents
+        if (presentWindow && IsWindowVisible(presentWindow))
+            ShowWindowAsync(presentWindow, SW_HIDE);
     }
 
     // UpscalerTimingLog
