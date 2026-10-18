@@ -513,6 +513,10 @@ namespace
     // where the helper can write it, 16-bit float otherwise
     bool CreateTargets(uint32_t width, uint32_t height)
     {
+        // The game resets the device on the main thread while this thread draws: a target made now would be alive at the
+        // Reset (DD3D80), and the ones there may be released under it
+        if (rage::grcDevice::IsDeviceLost())
+            return false;
         bool eightBit = Upscaler::IsFrameGenerationEightBit();
         if (PresentRT && GeneratedRT && HudLessRT && SavedRT && TargetWidth == width && TargetHeight == height && bTargetsEightBit == eightBit)
             return true;
@@ -730,6 +734,9 @@ namespace
         if (GetCurrentThreadId() != RenderThread)
             return;
         ++DrawsThisFrame;
+        // The targets and the queries go at the Reset
+        if (rage::grcDevice::IsDeviceLost())
+            return;
         if (bGpuRecording && !bInPresent && DrawsThisFrame % CheckpointEvery == 0)
             Checkpoint(device);
         if (bInPresent || bEndOfFrameOnly)
@@ -979,6 +986,15 @@ namespace
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
         if (!device)
             return;
+        // While the device is reset the targets go (onBeforeReset) and none may be made: the frame goes as it is, and the
+        // waiting frames, which were in the targets, with them
+        if (rage::grcDevice::IsDeviceLost())
+        {
+            bPending = bPendingGenerated = bSkipPresent = false;
+            bGpuRecording = false;
+            Upscaler::DropGenerated();
+            return;
+        }
         if (mode == Mode::Off)
         {
             if (sharpen)
@@ -1238,7 +1254,7 @@ export namespace FrameGeneration
     // Render thread, right after the post processing: the back buffer holds the scene without the HUD
     void CaptureHudLess(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer)
     {
-        if (!UsesHudLess() || !Upscaler::IsFrameGenerationReady() || !device || !backBuffer)
+        if (!UsesHudLess() || !Upscaler::IsFrameGenerationReady() || !device || !backBuffer || rage::grcDevice::IsDeviceLost())
             return;
 
         D3DSURFACE_DESC desc{};

@@ -124,7 +124,8 @@ namespace
     public:
         ComPtr<IDXGIAdapter1> adapter;
         ComPtr<ID3D12Device> device;
-        ComPtr<ID3D12Fence> sharedFence;
+        ComPtr<ID3D12Fence> inputFence;     // signalled by the game when the inputs are copied
+        ComPtr<ID3D12Fence> outputFence;    // signalled here when the output is ready, by both queues in order
         ComPtr<ID3D12Fence> localFence;
         uint64_t localValue = 0;
         HANDLE fenceEvent = nullptr;
@@ -174,7 +175,8 @@ namespace
         ComPtr<ID3D12GraphicsCommandList> list;
 
         std::array<SharedTexture, static_cast<size_t>(Protocol::Texture::Count)> textures;
-        HANDLE sharedFenceHandle = nullptr;
+        HANDLE inputFenceHandle = nullptr;
+        HANDLE outputFenceHandle = nullptr;
 
         // GPU time of the helper's own work, a few timestamps a command list, read back once its allocator is reused
         // and logged every 300 frames: what the upscaler and the frame generation cost without the copies and the
@@ -290,7 +292,7 @@ namespace
 
         // Wine (see the protocol): the shared textures have no UAV flag, which keeps them plain for the game's Vulkan
         // import, the upscaler and the frame generation write into uavs, which are copied into the shared textures.
-        // sharedFence is then the game's semaphore, or without it (cpuSync) the GPU work is waited for on the CPU.
+        // The shared fences are then the game's semaphores, or without them (cpuSync) the GPU work is waited for on the CPU.
         bool wine = false;
         bool cpuSync = false;
         std::array<ComPtr<ID3D12Resource>, static_cast<size_t>(Protocol::Texture::Count)> uavs;
@@ -372,7 +374,7 @@ namespace
         // The fence the frames' allocators are tracked with
         ID3D12Fence* FrameFence()
         {
-            return cpuSync ? localFence.Get() : sharedFence.Get();
+            return cpuSync ? localFence.Get() : outputFence.Get();
         }
 
         // Wine: runs the frame and waits for it, the game copies the output once Evaluate is answered
@@ -394,18 +396,19 @@ namespace
             auto& r = *current;
             ResolveStamps();
             r.list->Close();
-            r.queue->Wait(sharedFence.Get(), waitValue);
+            r.queue->Wait(inputFence.Get(), waitValue);
             if (execute)
             {
                 ID3D12CommandList* lists[] = { r.list.Get() };
                 r.queue->ExecuteCommandLists(1, lists);
             }
-            // The shared fence only goes up: the value given to the other queue before this one is signalled first, or
+            // The output fence only goes up: the value given to the other queue before this one is signalled first, or
             // this one's would let the game take that queue's frame before it is ready. The work itself still overlaps.
+            // Only this process signals it, so the wait can't be passed by a value of the game's.
             auto& other = &r == &direct ? compute : direct;
             if (other.queue && other.lastSignal)
-                r.queue->Wait(sharedFence.Get(), other.lastSignal);
-            r.queue->Signal(sharedFence.Get(), signalValue);
+                r.queue->Wait(outputFence.Get(), other.lastSignal);
+            r.queue->Signal(outputFence.Get(), signalValue);
             r.lastSignal = signalValue;
             r.allocatorValues[r.frame] = signalValue;
         }
@@ -424,10 +427,14 @@ namespace
             }
             for (auto& uav : uavs)
                 uav.Reset();
-            if (sharedFenceHandle)
-                CloseHandle(sharedFenceHandle);
-            sharedFenceHandle = nullptr;
-            sharedFence.Reset();
+            for (auto handle : { &inputFenceHandle, &outputFenceHandle })
+            {
+                if (*handle)
+                    CloseHandle(*handle);
+                *handle = nullptr;
+            }
+            inputFence.Reset();
+            outputFence.Reset();
             for (auto ring : { &direct, &compute })
             {
                 ring->allocatorValues.fill(0);
@@ -520,11 +527,32 @@ namespace
             cmd->ResourceBarrier(2, barriers);
         }
 
-        bool CreateSharedFence()
+        bool CreateSharedFence(ComPtr<ID3D12Fence>& fence, HANDLE& handle)
         {
-            if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&sharedFence))))
+            if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&fence))))
                 return false;
-            return SUCCEEDED(device->CreateSharedHandle(sharedFence.Get(), nullptr, GENERIC_ALL, nullptr, &sharedFenceHandle));
+            return SUCCEEDED(device->CreateSharedHandle(fence.Get(), nullptr, GENERIC_ALL, nullptr, &handle));
+        }
+
+        bool CreateSharedFences()
+        {
+            return CreateSharedFence(inputFence, inputFenceHandle) && CreateSharedFence(outputFence, outputFenceHandle);
+        }
+
+        // Both queues done with everything submitted so far: before what their work uses goes, the upscaler's and the
+        // frame generation's contexts among it (a Generate the game dropped is waited for by nobody else)
+        void Flush()
+        {
+            if (!localFence)
+                return;
+            for (auto& q : { direct.queue, compute.queue })
+            {
+                if (q)
+                {
+                    q->Signal(localFence.Get(), ++localValue);
+                    WaitFence(localFence.Get(), localValue, 2000);
+                }
+            }
         }
 
         // What the upscaler and the frame generation read and write
@@ -1106,33 +1134,35 @@ namespace
             return true;
         }
 
-        // Wine: the game's timeline semaphore, duplicated into this process, as the shared fence. Without it GameFence
+        // Wine: the game's timeline semaphores, duplicated into this process, as the shared fences. Without them GameFence
         // is cleared in the answer and both sides wait on the CPU.
         void OpenGameFence()
         {
             auto& shared = *connection.shared;
-            auto handle = reinterpret_cast<HANDLE>(shared.FenceHandle);
-            shared.FenceHandle = 0;
-            if (!(flags & Protocol::ConfigureFlags::GameFence))
+            HANDLE handles[] = { reinterpret_cast<HANDLE>(shared.InputFenceHandle), reinterpret_cast<HANDLE>(shared.OutputFenceHandle) };
+            shared.InputFenceHandle = shared.OutputFenceHandle = 0;
+            ComPtr<ID3D12Fence> fences[2];
+            HRESULT hr = S_OK;
+            for (int i = 0; i < 2; ++i)
             {
-                if (handle)
-                    CloseHandle(handle);
-                return;
+                if ((flags & Protocol::ConfigureFlags::GameFence) && SUCCEEDED(hr))
+                    hr = handles[i] ? device.device->OpenSharedHandle(handles[i], IID_PPV_ARGS(&fences[i])) : E_INVALIDARG;
+                if (handles[i])
+                    CloseHandle(handles[i]);
             }
+            if (!(flags & Protocol::ConfigureFlags::GameFence))
+                return;
 
-            ComPtr<ID3D12Fence> fence;
-            auto hr = handle ? device.device->OpenSharedHandle(handle, IID_PPV_ARGS(&fence)) : E_INVALIDARG;
-            if (handle)
-                CloseHandle(handle);
-            if (SUCCEEDED(hr) && fence)
+            if (SUCCEEDED(hr) && fences[0] && fences[1])
             {
-                device.sharedFence = fence;
-                Log("The game's semaphore is the shared fence");
+                device.inputFence = fences[0];
+                device.outputFence = fences[1];
+                Log("The game's semaphores are the shared fences");
             }
             else
             {
                 flags &= ~Protocol::ConfigureFlags::GameFence;
-                Log("The game's semaphore could not be opened (0x%08X): waiting on the CPU", static_cast<uint32_t>(hr));
+                Log("The game's semaphores could not be opened (0x%08X): waiting on the CPU", static_cast<uint32_t>(hr));
             }
             shared.Flags = flags;
         }
@@ -1141,6 +1171,8 @@ namespace
         {
             auto& shared = *connection.shared;
 
+            // The GPU first: the contexts go before the textures, and nothing may still run with them
+            device.Flush();
             dlss.Release();
             fsr.Release();
             fsr.ReleaseFrameGeneration();
@@ -1166,7 +1198,7 @@ namespace
                 !device.CreateTexture(T::Motion, width, height, DXGI_FORMAT_R16G16_FLOAT, false) ||
                 !device.CreateTexture(T::Reactive, width, height, DXGI_FORMAT_R16_FLOAT, false) ||
                 !device.CreateTexture(T::Output, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, true) ||
-                (!device.wine && !device.CreateSharedFence()))
+                (!device.wine && !device.CreateSharedFences()))
             {
                 connection.Message("Shared textures could not be created");
                 return false;
@@ -1233,8 +1265,8 @@ namespace
                 if (!Duplicate(device.textures[i].handle, shared.TextureHandles[i]))
                     return false;
             }
-            shared.FenceHandle = 0;
-            if (!device.wine && !Duplicate(device.sharedFenceHandle, shared.FenceHandle))
+            shared.InputFenceHandle = shared.OutputFenceHandle = 0;
+            if (!device.wine && (!Duplicate(device.inputFenceHandle, shared.InputFenceHandle) || !Duplicate(device.outputFenceHandle, shared.OutputFenceHandle)))
                 return false;
 
             backend = shared.ConfigureBackend;
@@ -1248,7 +1280,7 @@ namespace
         bool Evaluate()
         {
             auto& shared = *connection.shared;
-            if (backend == Protocol::Backend::None || (!device.cpuSync && !device.sharedFence))
+            if (backend == Protocol::Backend::None || (!device.cpuSync && (!device.inputFence || !device.outputFence)))
                 return false;
 
             FrameParams frame;
@@ -1284,7 +1316,8 @@ namespace
             bool evaluated = backend == Protocol::Backend::DLSS ? dlss.Evaluate(cmd, device, frame) : fsr.Evaluate(cmd, device, frame);
             device.Stamp(cmd);
             // A failed preparation leaves the upscaled frame: Generate of this frame fails instead
-            preparedFrame = fsr.HasFrameGeneration() && fsr.PrepareFrame(cmd, device, frame);
+            // Recorded into the same command list, which is not executed when the upscaler failed
+            preparedFrame = fsr.HasFrameGeneration() && fsr.PrepareFrame(cmd, device, frame) && evaluated;
             if (fsr.HasFrameGeneration())
                 device.Stamp(cmd);
             if (fsr.HasFrameGeneration())
@@ -1324,7 +1357,7 @@ namespace
         bool Generate()
         {
             auto& shared = *connection.shared;
-            if (!fsr.HasFrameGeneration() || (!device.cpuSync && !device.sharedFence))
+            if (!fsr.HasFrameGeneration() || (!device.cpuSync && (!device.inputFence || !device.outputFence)))
                 return false;
 
             // Only after the preparation of the same frame
@@ -1470,14 +1503,7 @@ namespace
             }
 
             // Both queues done before their work's resources go
-            for (auto& q : { device.direct.queue, device.compute.queue })
-            {
-                if (q && device.localFence)
-                {
-                    q->Signal(device.localFence.Get(), ++device.localValue);
-                    device.WaitFence(device.localFence.Get(), device.localValue, 2000);
-                }
-            }
+            device.Flush();
             dlss.Shutdown();
             fsr.Shutdown();
             device.ReleaseTextures();
