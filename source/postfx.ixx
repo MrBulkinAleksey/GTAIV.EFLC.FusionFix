@@ -1598,6 +1598,9 @@ private:
                 log.Printf("GGX lights: %u headlights among %u lights drawn since the last log\n", R.nLightGGXHeadlights, R.nLightGGXLights);
                 R.nLightGGXHeadlights = 0;
                 R.nLightGGXLights = 0;
+                log.Component("SSR");
+                log.Printf("the game's reflection scale c39.w %.4f, SSR on car bodies x %.4f (SSRVehicleUnits %.2f)\n", R.fGameReflectionScale,
+                        R.fGameReflectionScale > 0.0f ? R.fSSRVehicleUnits / (10.0f * R.fGameReflectionScale) : 1.0f, R.fSSRVehicleUnits);
                 log.Printf("headlight glints: %s; effect %s (hr 0x%08lX); %u headlights drawn; their intensity %.3f to %.3f, outer cone %.3f to %.3f\n",
                         R.szGlintsStatus, R.HeadlightGlintsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrHeadlightGlintsEffect),
                         R.nGlintsLastLights, R.GlintsLastIntensity[0], R.GlintsLastIntensity[1], R.GlintsLastCone[0], R.GlintsLastCone[1]);
@@ -2338,6 +2341,12 @@ public:
                     R.nCloudLightFrame = FrameHistory::Frame();
                 }
             }
+        }
+        // globalScalars.w, the game's scale of its reflections (set from 0xaf3af6 each frame), for SSR on car bodies.
+        {
+            float scalars[4] = {};
+            if (SUCCEEDED(pDevice->GetPixelShaderConstantF(39, scalars, 1)) && scalars[3] > 0.0f && scalars[3] < 100.0f)
+                R.fGameReflectionScale = scalars[3];
         }
         // s9 is read by no game shader, and the car glass takes it over right after lighting.
         if (R.bContactValid && R.ContactResult)
