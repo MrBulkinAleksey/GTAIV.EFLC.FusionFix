@@ -366,6 +366,9 @@ public:
         HistoryFrame = 0;
         UpscalerFrame = 0;
         OpaqueFrame = 0;
+        // Declarations by address: one made after the reset at the address of a released one is another. Emptied on
+        // the render thread, which reads them; the reset runs on the main thread
+        bDeclCacheStale = true;
     }
 
     static bool ResourcesReady()
@@ -642,6 +645,7 @@ public:
     };
 
     static inline std::unordered_map<IDirect3DVertexDeclaration9*, DeclInfo> DeclCache;
+    static inline std::atomic<bool> bDeclCacheStale = false;
     static inline std::unordered_map<void*, EntityRecord> EntitiesCurrent;
     static inline std::unordered_map<void*, EntityRecord> EntitiesPrevious;
     static inline std::vector<float> BonesCurrent;
@@ -656,6 +660,8 @@ public:
     static void BeginCapture()
     {
         EndCaptureCleanup();
+        if (bDeclCacheStale.exchange(false))
+            DeclCache.clear();
 
         bCapturing = TemporalAA::GetMode() != TemporalAA::Mode::Off && TemporalAA::CurrentCamera.Valid && ResourcesReady() && bObjectMotionVectors;
         RenderThreadId = GetCurrentThreadId();
