@@ -1103,6 +1103,17 @@ namespace Procedural
         return shGeneratorProps.unsafe_fastcall<int32_t>(generator, edx, triangle);
     }
 
+    // And lets none go when the manager lets such a triangle go (CE 0xc0a880, the generator's requests at +0x522c:
+    // provider, tag): the game takes record -1 there too, and with its tag matching (lawns are tag 0) walked the
+    // bytes before the table as a list of props (AV in 0xc0a8c6)
+    SafetyHookInline shGeneratorRemoveProps;
+    void __fastcall GeneratorRemoveProps(uint8_t* generator, void* edx, void* provider, uint32_t tag)
+    {
+        if (pDefinitions && tag <= 0xFF && *(int32_t*)(pDefinitions + 0x5c10 + size_t(tag) * 8) < 0)
+            return;
+        shGeneratorRemoveProps.unsafe_fastcall(generator, edx, provider, tag);
+    }
+
     // Triangles of the ground the manager gathers (CE 0xc86540 fills one: centre +0x30, +0x55 bit 0 grass,
     // bit 1 props; null when it has neither) and lets go (CE 0xc87010)
     SafetyHookInline shAddTriangle;
@@ -1482,7 +1493,8 @@ public:
                 auto material = hook::pattern("8B F0 C1 EE 08 81 E6 FF 00 00 00 56 B9");
                 auto marks = hook::pattern("8A D8 E8 ? ? ? ? 8B 7F 48 8B 4C 24 10 88 44 24 28");
                 auto props = hook::pattern("51 89 0C 24 E8 ? ? ? ? 84 C0 74 06 33 C0 59 C2 04 00 53 55 8B 6C 24 10 56 0F B6 5D 4D");
-                if (!names.empty() && !material.empty() && !marks.empty() && !props.empty())
+                auto removeProps = hook::pattern("83 EC 08 8B 44 24 10 53 8B 1C C5 ? ? ? ? 56 8B F3 C1 E6 04 03 F3 C1 E6 02");
+                if (!names.empty() && !material.empty() && !marks.empty() && !props.empty() && !removeProps.empty())
                 {
                     pMaterialManager = *names.get_first<uintptr_t*>(2);
                     szGrassNames[0] = *names.get_first<const char*>(7);
@@ -1499,6 +1511,7 @@ public:
                         bForceProps = false;
                     });
                     shGeneratorProps = safetyhook::create_inline(props.get_first(0), GeneratorProps);
+                    shGeneratorRemoveProps = safetyhook::create_inline(removeProps.get_first(0), GeneratorRemoveProps);
                 }
                 else
                     Log("GrassSurfaces", "not found: no GPU grass on ground without props");
