@@ -332,6 +332,12 @@ private:
         OnDeviceReset();
     }
 
+    static bool ResourcesReady()
+    {
+        return mQuadVertexBuffer && mQuadVertexDecl && mBlitVS && mBlitPS && mSnowVS && mSnowPS &&
+            mDiffuseRT && mNormalRT && mSpecularAoRT && mStencilRT && mDepthRT && mNormalRtCopy && mSnowTexture;
+    }
+
     static auto OnBuildRenderList() -> void
     {
         static auto initialized = false;
@@ -345,11 +351,8 @@ private:
             return;
 
         // Skip if any required GPU resource is unavailable (e.g., during/after a device reset)
-        if (!mQuadVertexBuffer || !mQuadVertexDecl || !mBlitVS || !mBlitPS || !mSnowVS || !mSnowPS ||
-            !mDiffuseRT || !mNormalRT || !mSpecularAoRT || !mStencilRT || !mDepthRT || !mNormalRtCopy || !mSnowTexture)
-        {
+        if (!ResourcesReady())
             return;
-        }
 
         auto mBeforeLightingCB = new T_CB_Generic_NoArgs(OnBeforeLighting);
         if (mBeforeLightingCB)
@@ -363,7 +366,11 @@ private:
             return true;
         };
 
+        // Checked again here, on the render thread: the game resets the device on the main thread while this
+        // thread still draws, and the lost device callback has taken them since the render list was built
         auto device = rage::grcDevice::GetD3DDevice();
+        if (!device || !ResourcesReady())
+            return;
 
         static CWeather::eWeatherType currWeather;
 

@@ -3,6 +3,7 @@ module;
 #include <common.hxx>
 #include "FusionLog.hpp"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -168,6 +169,15 @@ namespace RenderSkip
         waterAnswerFrame = ~0u;
     }
 
+    // A device reset gives the queries back on the render thread, which uses them: the game resets on the main thread
+    // while this thread still draws
+    std::atomic<bool> bWaterQueriesStale = false;
+    void DropStaleWaterQueries()
+    {
+        if (bWaterQueriesStale.exchange(false))
+            ReleaseWaterQueries();
+    }
+
     // The answers back, without waiting: each frame's sum once all its queries have answered
     void PollWaterQueries()
     {
@@ -212,6 +222,7 @@ namespace RenderSkip
         if (waterDecided == frame)
             return bWaterUnseen;
         waterDecided = frame;
+        DropStaleWaterQueries();
         PollWaterQueries();
         const bool known = waterAnswerFrame != ~0u && frame - waterAnswerFrame <= WaterAnswerMaxAge;
         bWaterUnseen = known && waterAnswerPixels == 0;
@@ -804,6 +815,7 @@ namespace RenderSkip
     // In the reflections' own passes the water is drawn into them, or dropped with them: not the water seen
     void BeginWaterQuery()
     {
+        DropStaleWaterQueries();
         if (!bWaterReflectionWhenSeen || bWaterQueriesFailed || bWaterQueryOpen || !bLockHooked)
             return;
         for (int i = 0; i < depth; ++i)
@@ -958,10 +970,10 @@ public:
                 bWaterReflectionWhenSeen ? "only while water is seen" : "whenever the game draws it");
         };
 
-        // The queries are not kept over a reset
+        // The queries are not kept over a reset (released on the render thread)
         FusionFix::onBeforeReset() += []()
         {
-            ReleaseWaterQueries();
+            bWaterQueriesStale = true;
         };
 
         // A trace starts some 20 seconds into the game; and every 3600 frames, what was left out

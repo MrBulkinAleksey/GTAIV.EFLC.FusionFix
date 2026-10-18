@@ -1,6 +1,7 @@
 module;
 
 #include <common.hxx>
+#include <atomic>
 #include "FusionLog.hpp"
 #include <algorithm>
 #include <bit>
@@ -294,6 +295,7 @@ private:
         float score = 1.0f;
     };
     static inline std::unordered_map<IDirect3DBaseTexture9*, TileInfo> tileInfos;
+    static inline std::atomic<bool> bForgetAfterReset = false;
     static inline float lastTileScore = -1.0f;
     static inline uint32_t tileFrames = 0;
     static inline uint32_t tileLooksThisFrame = 0;
@@ -713,6 +715,11 @@ private:
     // First command of the G-buffer pass.
     static void BeginGBuffer()
     {
+        if (bForgetAfterReset.exchange(false))
+        {
+            shaderKinds.clear();
+            tileInfos.clear();
+        }
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
@@ -939,9 +946,9 @@ public:
             bLodBiasSet = false;
             memset(bRaisedMinFilter, 0, sizeof(bRaisedMinFilter));
             memset(lastDiffuseSize, 0, sizeof(lastDiffuseSize));
-            // Shaders made after the reset may reuse the old ones' addresses.
-            shaderKinds.clear();
-            tileInfos.clear();
+            // Shaders made after the reset may reuse the old ones' addresses. Emptied on the render thread, which
+            // fills them while the main thread resets the device
+            bForgetAfterReset = true;
         };
     }
 } TextureQuality;
