@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 4305b000..f5a2b418 100644
+index 4305b000..67cd84cc 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -99,6 +99,9 @@
@@ -7,7 +7,7 @@ index 4305b000..f5a2b418 100644
      def c188, -0.600000024, -3.33333325, 0.150000006, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it; FusionFix: local_light_with_shadow_blend.patch: -1 over the skirt's height (0.3 m), its width (0.15 m)
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
 +    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-+    def c140, 0.015625, 0.0001, 0.15, 0 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts
++    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
@@ -47,7 +47,7 @@ index 4305b000..f5a2b418 100644
        min r31.w, r31.w, r17.w // FusionFix: local_light_with_shadow_blend.patch: the darker of the contact shadow and the boxes, not both
      endif
      // --- FusionFix: local_light_with_shadow_blend.patch: the darkest of the shadow map, the contact shadow and the boxes, rather than all three
-@@ -714,6 +738,112 @@
+@@ -714,6 +738,120 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -117,6 +117,12 @@ index 4305b000..f5a2b418 100644
 +    mov r22.z, r16.z
 +    mov r23.x, r18.w
 +    mov r23.yz, r19.xzww
++    // its edges rounded by r22.w: up to c140.w, no more than half its shortest half side, the box that much smaller
++    min r22.w, r23.x, r23.y
++    min r22.w, r22.w, r23.z
++    mul r22.w, r22.w, c138.z
++    min r22.w, r22.w, c140.w
++    add r23.xyz, r23, -r22.w
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
 +    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
@@ -132,10 +138,12 @@ index 4305b000..f5a2b418 100644
 +    mul_sat r24.x, -r24.x, r24.y
 +    mad r20.xyz, r22, r24.x, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    call l4
 +    // the box's own surface keeps its light
 +    mov r20.xyz, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    add r20.w, r20.w, -c139.y
 +    // only above its bottom: the ground under a box standing on legs or wheels takes the shadow
 +    add r25.x, r18.z, -r19.w
@@ -161,7 +169,7 @@ index 4305b000..f5a2b418 100644
      // --- (r15, the way to the light r16), into r17.w
      label l5
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 4ca6b053..4ca19d38 100644
+index 4ca6b053..cad5264c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -69,6 +69,9 @@
@@ -169,7 +177,7 @@ index 4ca6b053..4ca19d38 100644
      def c188, -0.600000024, -3.33333325, 0.150000006, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it; FusionFix: local_light_with_shadow_blend.patch: -1 over the skirt's height (0.3 m), its width (0.15 m)
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
 +    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-+    def c140, 0.015625, 0.0001, 0.15, 0 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts
++    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
@@ -209,7 +217,7 @@ index 4ca6b053..4ca19d38 100644
        min r31.w, r31.w, r17.w // FusionFix: local_light_with_shadow_blend.patch: the darker of the contact shadow and the boxes, not both
      endif
      mul r26.xyz, r26, r31.w
-@@ -527,6 +551,112 @@
+@@ -527,6 +551,120 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -279,6 +287,12 @@ index 4ca6b053..4ca19d38 100644
 +    mov r22.z, r16.z
 +    mov r23.x, r18.w
 +    mov r23.yz, r19.xzww
++    // its edges rounded by r22.w: up to c140.w, no more than half its shortest half side, the box that much smaller
++    min r22.w, r23.x, r23.y
++    min r22.w, r22.w, r23.z
++    mul r22.w, r22.w, c138.z
++    min r22.w, r22.w, c140.w
++    add r23.xyz, r23, -r22.w
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
 +    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
@@ -294,10 +308,12 @@ index 4ca6b053..4ca19d38 100644
 +    mul_sat r24.x, -r24.x, r24.y
 +    mad r20.xyz, r22, r24.x, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    call l4
 +    // the box's own surface keeps its light
 +    mov r20.xyz, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    add r20.w, r20.w, -c139.y
 +    // only above its bottom: the ground under a box standing on legs or wheels takes the shadow
 +    add r25.x, r18.z, -r19.w
@@ -323,7 +339,7 @@ index 4ca6b053..4ca19d38 100644
      // --- (r15, the way to the light r16), into r17.w
      label l5
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index b19777dd..7e2c9096 100644
+index b19777dd..b7aad4d1 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -101,6 +101,9 @@
@@ -331,7 +347,7 @@ index b19777dd..7e2c9096 100644
      def c188, -0.600000024, -3.33333325, 0.150000006, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it; FusionFix: local_light_with_shadow_blend.patch: -1 over the skirt's height (0.3 m), its width (0.15 m)
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
 +    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-+    def c140, 0.015625, 0.0001, 0.15, 0 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts
++    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
@@ -371,7 +387,7 @@ index b19777dd..7e2c9096 100644
        min r31.w, r31.w, r17.w // FusionFix: local_light_with_shadow_blend.patch: the darker of the contact shadow and the boxes, not both
      endif
      // --- FusionFix: local_light_with_shadow_blend.patch: the darkest of the shadow map, the contact shadow and the boxes, rather than all three
-@@ -730,6 +754,112 @@
+@@ -730,6 +754,120 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -441,6 +457,12 @@ index b19777dd..7e2c9096 100644
 +    mov r22.z, r16.z
 +    mov r23.x, r18.w
 +    mov r23.yz, r19.xzww
++    // its edges rounded by r22.w: up to c140.w, no more than half its shortest half side, the box that much smaller
++    min r22.w, r23.x, r23.y
++    min r22.w, r22.w, r23.z
++    mul r22.w, r22.w, c138.z
++    min r22.w, r22.w, c140.w
++    add r23.xyz, r23, -r22.w
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
 +    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
@@ -456,10 +478,12 @@ index b19777dd..7e2c9096 100644
 +    mul_sat r24.x, -r24.x, r24.y
 +    mad r20.xyz, r22, r24.x, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    call l4
 +    // the box's own surface keeps its light
 +    mov r20.xyz, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    add r20.w, r20.w, -c139.y
 +    // only above its bottom: the ground under a box standing on legs or wheels takes the shadow
 +    add r25.x, r18.z, -r19.w
@@ -485,7 +509,7 @@ index b19777dd..7e2c9096 100644
      // --- (r15, the way to the light r16), into r17.w
      label l5
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index f3b45d36..7e6dfe67 100644
+index f3b45d36..744537d9 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -64,6 +64,9 @@
@@ -493,7 +517,7 @@ index f3b45d36..7e6dfe67 100644
      def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
 +    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-+    def c140, 0.015625, 0.0001, 0.15, 0 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts
++    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
@@ -533,7 +557,7 @@ index f3b45d36..7e6dfe67 100644
        mul r31.w, r31.w, r17.w
      endif
      mul r26.xyz, r26, r31.w
-@@ -493,6 +517,112 @@
+@@ -493,6 +517,120 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -603,6 +627,12 @@ index f3b45d36..7e6dfe67 100644
 +    mov r22.z, r16.z
 +    mov r23.x, r18.w
 +    mov r23.yz, r19.xzww
++    // its edges rounded by r22.w: up to c140.w, no more than half its shortest half side, the box that much smaller
++    min r22.w, r23.x, r23.y
++    min r22.w, r22.w, r23.z
++    mul r22.w, r22.w, c138.z
++    min r22.w, r22.w, c140.w
++    add r23.xyz, r23, -r22.w
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
 +    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
@@ -618,10 +648,12 @@ index f3b45d36..7e6dfe67 100644
 +    mul_sat r24.x, -r24.x, r24.y
 +    mad r20.xyz, r22, r24.x, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    call l4
 +    // the box's own surface keeps its light
 +    mov r20.xyz, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    add r20.w, r20.w, -c139.y
 +    // only above its bottom: the ground under a box standing on legs or wheels takes the shadow
 +    add r25.x, r18.z, -r19.w
@@ -647,7 +679,7 @@ index f3b45d36..7e6dfe67 100644
      // --- (r15, the way to the light r16), into r17.w
      label l5
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 631918c6..492acce5 100644
+index 631918c6..cfe5b855 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -67,6 +67,9 @@
@@ -655,7 +687,7 @@ index 631918c6..492acce5 100644
      def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
 +    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-+    def c140, 0.015625, 0.0001, 0.15, 0 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts
++    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
@@ -695,7 +727,7 @@ index 631918c6..492acce5 100644
        mul r31.w, r31.w, r17.w
      endif
      mul r26.xyz, r26, r31.w
-@@ -502,6 +526,112 @@
+@@ -502,6 +526,120 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -765,6 +797,12 @@ index 631918c6..492acce5 100644
 +    mov r22.z, r16.z
 +    mov r23.x, r18.w
 +    mov r23.yz, r19.xzww
++    // its edges rounded by r22.w: up to c140.w, no more than half its shortest half side, the box that much smaller
++    min r22.w, r23.x, r23.y
++    min r22.w, r22.w, r23.z
++    mul r22.w, r22.w, c138.z
++    min r22.w, r22.w, c140.w
++    add r23.xyz, r23, -r22.w
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
 +    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
@@ -780,10 +818,12 @@ index 631918c6..492acce5 100644
 +    mul_sat r24.x, -r24.x, r24.y
 +    mad r20.xyz, r22, r24.x, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    call l4
 +    // the box's own surface keeps its light
 +    mov r20.xyz, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    add r20.w, r20.w, -c139.y
 +    // only above its bottom: the ground under a box standing on legs or wheels takes the shadow
 +    add r25.x, r18.z, -r19.w
@@ -809,7 +849,7 @@ index 631918c6..492acce5 100644
      // --- (r15, the way to the light r16), into r17.w
      label l5
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 03685891..4db2b2d4 100644
+index 03685891..58972675 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -67,6 +67,9 @@
@@ -817,7 +857,7 @@ index 03685891..4db2b2d4 100644
      def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
 +    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-+    def c140, 0.015625, 0.0001, 0.15, 0 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts
++    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
@@ -857,7 +897,7 @@ index 03685891..4db2b2d4 100644
        mul r31.w, r31.w, r17.w
      endif
      mul r26.xyz, r26, r31.w
-@@ -504,6 +528,112 @@
+@@ -504,6 +528,120 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -927,6 +967,12 @@ index 03685891..4db2b2d4 100644
 +    mov r22.z, r16.z
 +    mov r23.x, r18.w
 +    mov r23.yz, r19.xzww
++    // its edges rounded by r22.w: up to c140.w, no more than half its shortest half side, the box that much smaller
++    min r22.w, r23.x, r23.y
++    min r22.w, r22.w, r23.z
++    mul r22.w, r22.w, c138.z
++    min r22.w, r22.w, c140.w
++    add r23.xyz, r23, -r22.w
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
 +    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
@@ -942,10 +988,12 @@ index 03685891..4db2b2d4 100644
 +    mul_sat r24.x, -r24.x, r24.y
 +    mad r20.xyz, r22, r24.x, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    call l4
 +    // the box's own surface keeps its light
 +    mov r20.xyz, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    add r20.w, r20.w, -c139.y
 +    // only above its bottom: the ground under a box standing on legs or wheels takes the shadow
 +    add r25.x, r18.z, -r19.w
@@ -971,7 +1019,7 @@ index 03685891..4db2b2d4 100644
      // --- (r15, the way to the light r16), into r17.w
      label l5
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index 0fe181f0..001bde89 100644
+index 0fe181f0..dfaffe50 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -67,6 +67,9 @@
@@ -979,7 +1027,7 @@ index 0fe181f0..001bde89 100644
      def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
 +    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-+    def c140, 0.015625, 0.0001, 0.15, 0 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts
++    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
@@ -1019,7 +1067,7 @@ index 0fe181f0..001bde89 100644
        mul r31.w, r31.w, r17.w
      endif
      mul r26.xyz, r26, r31.w
-@@ -506,6 +530,112 @@
+@@ -506,6 +530,120 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -1089,6 +1137,12 @@ index 0fe181f0..001bde89 100644
 +    mov r22.z, r16.z
 +    mov r23.x, r18.w
 +    mov r23.yz, r19.xzww
++    // its edges rounded by r22.w: up to c140.w, no more than half its shortest half side, the box that much smaller
++    min r22.w, r23.x, r23.y
++    min r22.w, r22.w, r23.z
++    mul r22.w, r22.w, c138.z
++    min r22.w, r22.w, c140.w
++    add r23.xyz, r23, -r22.w
 +    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
 +    mul r24.xyz, r23, r23
 +    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
@@ -1104,10 +1158,12 @@ index 0fe181f0..001bde89 100644
 +    mul_sat r24.x, -r24.x, r24.y
 +    mad r20.xyz, r22, r24.x, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    call l4
 +    // the box's own surface keeps its light
 +    mov r20.xyz, r21
 +    call l8
++    add r20.w, r20.w, -r22.w
 +    add r20.w, r20.w, -c139.y
 +    // only above its bottom: the ground under a box standing on legs or wheels takes the shadow
 +    add r25.x, r18.z, -r19.w
