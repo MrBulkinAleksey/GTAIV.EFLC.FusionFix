@@ -2,6 +2,7 @@ module;
 
 #include <common.hxx>
 #include <D3D9Types.h>
+#include <atomic>
 
 export module comvars;
 
@@ -1658,6 +1659,14 @@ export namespace rage
         VALIDATE_SIZE(Functor0, 0x10);
 
         void(__cdecl* RegisterDeviceCallbacks)(Functor0 onLost, Functor0 onReset);
+
+        // From the start of the game's lost device callbacks (CE 0x422d50) to the start of its reset callbacks (CE
+        // 0x422f60), the device Reset between them. The game resets on the main thread while the render thread still
+        // draws: a default pool resource the render thread makes meanwhile is alive at the Reset, which then fails
+        // (fatal DD3D80), and what the lost callbacks released is gone under it. Render thread code that makes such
+        // resources on first use, or draws with released ones, waits until it is false again.
+        inline std::atomic<bool> bDeviceLost = false;
+        inline bool IsDeviceLost() { return bDeviceLost.load(std::memory_order_acquire); }
     }
 
     class grcTextureFactoryPC;
@@ -3344,6 +3353,23 @@ public:
 
         pattern = find_pattern("8B 0D ? ? ? ? 53 56 33 F6", "53 56 8B 35 ? ? ? ? 33 D2");
         rage::grcDevice::RegisterDeviceCallbacks = pattern.get_first<void(__cdecl)(rage::grcDevice::Functor0, rage::grcDevice::Functor0)>(0);
+
+        pattern = hook::pattern("83 EC 58 53 56 57 8B 3D ? ? ? ? 85 FF 7E 14 BE ? ? ? ? 8B 46 0C 56 FF D0");
+        if (!pattern.empty())
+        {
+            static auto DeviceLostHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&)
+            {
+                rage::grcDevice::bDeviceLost.store(true, std::memory_order_release);
+            });
+        }
+        pattern = hook::pattern("51 56 57 8B 3D ? ? ? ? 85 FF 7E 14 BE ? ? ? ? 8B 46 0C 56 FF D0");
+        if (!pattern.empty())
+        {
+            static auto DeviceResetHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&)
+            {
+                rage::grcDevice::bDeviceLost.store(false, std::memory_order_release);
+            });
+        }
 
         pattern = find_pattern("8B 44 24 04 56 8B F1 85 C0 74 38", "8B 44 24 04 85 C0 56 8B F1 74 38");
         rage::grcDevice::SetCallbackAddr = pattern.get_first<void*>(0);

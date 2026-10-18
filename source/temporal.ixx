@@ -1472,7 +1472,8 @@ public:
             SAFE_RELEASE(surface);
             SAFE_RELEASE(texture);
         }
-        if (bSceneTargetsFailed)
+        // Not made while the device is being reset: it would be alive at the Reset
+        if (bSceneTargetsFailed || rage::grcDevice::IsDeviceLost())
             return nullptr;
         if (FAILED(device->CreateTexture(width, height, 1, D3DUSAGE_RENDERTARGET, format, D3DPOOL_DEFAULT, &texture, nullptr)) || !texture ||
             FAILED(texture->GetSurfaceLevel(0, &surface)) || !surface)

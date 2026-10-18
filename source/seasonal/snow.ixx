@@ -334,7 +334,7 @@ private:
 
     static bool ResourcesReady()
     {
-        return mQuadVertexBuffer && mQuadVertexDecl && mBlitVS && mBlitPS && mSnowVS && mSnowPS &&
+        return !rage::grcDevice::IsDeviceLost() && mQuadVertexBuffer && mQuadVertexDecl && mBlitVS && mBlitPS && mSnowVS && mSnowPS &&
             mDiffuseRT && mNormalRT && mSpecularAoRT && mStencilRT && mDepthRT && mNormalRtCopy && mSnowTexture;
     }
 
