@@ -933,8 +933,8 @@ export struct VehicleBoxShadows
 
     // PropShapeShadows: the props nearest the light, weighed by how near the player they stand, as the cars, their
     // shapes up to PropShapesPerLight; those it took last frame held at a quarter of that, so the choice does not
-    // flicker between two. Left out: props outside its light or its cone, the lamp's own post, a shape the light
-    // stands in.
+    // flicker between two. Left out: props outside its light or its cone, the arm of the lamp's own post, a shape the
+    // light stands in.
     static int ShapesForLight(const rage::CLightSource& light, bool hasMap, Shape (&shapes)[kShapesPerLight])
     {
         const auto& R = PostFxResources;
@@ -969,9 +969,6 @@ export struct VehicleBoxShadows
             // in this light's own map already
             if (hasMap && p.inMaps)
                 continue;
-            // the lamp's own post: the light's key is the entity's address and the effect's place in it
-            if (key - static_cast<uint32_t>(p.entity) < 0x320)
-                continue;
             const float dx = p.centre[0] - at[0], dy = p.centre[1] - at[1], dz = p.centre[2] - at[2];
             const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
             const float gap = (std::max)(d - p.reach, 0.0f);
@@ -1004,7 +1001,10 @@ export struct VehicleBoxShadows
         {
             const auto& p = *chosen[i].second;
             last[i] = p.entity;
-            for (int j = 0; j < p.shapeCount && used < most; ++j)
+            // The lamp's own post (the light's key is the entity's address and the effect's place in it): its post
+            // throws a shadow from the lamp out on the arm, the arm over the lamp none
+            const int count = key - static_cast<uint32_t>(p.entity) < 0x320 ? 1 : p.shapeCount;
+            for (int j = 0; j < count && used < most; ++j)
                 if (ShapeDistance(p.shapes[j], at) > 0.2f)
                     shapes[used++] = p.shapes[j];
         }
