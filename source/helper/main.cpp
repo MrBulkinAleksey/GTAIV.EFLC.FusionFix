@@ -22,6 +22,10 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
 
 #include <nvsdk_ngx.h>
 #include <nvsdk_ngx_helpers.h>
@@ -126,6 +130,10 @@ namespace
         ComPtr<ID3D12Device> device;
         ComPtr<ID3D12Fence> inputFence;     // signalled by the game when the inputs are copied
         ComPtr<ID3D12Fence> outputFence;    // signalled here when the output is ready, by both queues in order
+        ComPtr<ID3D12Fence> presentFence;   // presentation: signalled by the present thread once Present and HudLess are free
+        HANDLE presentFenceHandle = nullptr;
+        ComPtr<ID3D12Fence> generatedFence; // presentation: Generate done, for the present thread; this process only
+        uint64_t generatedValue = 0;
         ComPtr<ID3D12Fence> localFence;
         uint64_t localValue = 0;
         HANDLE fenceEvent = nullptr;
@@ -140,6 +148,7 @@ namespace
             ComPtr<ID3D12CommandQueue> queue;
             std::array<ComPtr<ID3D12CommandAllocator>, Frames> allocators;
             std::array<uint64_t, Frames> allocatorValues{};
+            std::array<ID3D12Fence*, Frames> allocatorFences{};   // the fence allocatorValues is of; null: FrameFence()
             ComPtr<ID3D12GraphicsCommandList> list;
             uint32_t frame = 0;
             uint64_t lastSignal = 0;        // the last value of the shared fence it was given to signal
@@ -318,7 +327,8 @@ namespace
                 compute = {};
             }
 
-            if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&localFence))))
+            if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&localFence))) ||
+                FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&generatedFence))))
                 return false;
 
             CreateTimestamps();
@@ -359,7 +369,7 @@ namespace
             current = work == Work::Generate && asyncGeneration && compute.queue ? &compute : &direct;
             auto& r = *current;
             r.frame = (r.frame + 1) % Frames;
-            auto fence = FrameFence();
+            auto fence = r.allocatorFences[r.frame] ? r.allocatorFences[r.frame] : FrameFence();
             if (fence)
                 WaitFence(fence, r.allocatorValues[r.frame], 1000);
             // Timestamps the GPU wrote: only once it is past the frame
@@ -389,6 +399,7 @@ namespace
             r.queue->ExecuteCommandLists(1, lists);
             r.queue->Signal(localFence.Get(), ++localValue);
             r.allocatorValues[r.frame] = localValue;
+            r.allocatorFences[r.frame] = nullptr;
             return WaitFence(localFence.Get(), localValue, 2000);
         }
 
@@ -412,6 +423,26 @@ namespace
             r.queue->Signal(outputFence.Get(), signalValue);
             r.lastSignal = signalValue;
             r.allocatorValues[r.frame] = signalValue;
+            r.allocatorFences[r.frame] = nullptr;
+        }
+
+        // Generate for the presentation: once the game's copies are in, signals generatedFence, which the present thread
+        // waits for; the game waits for nothing of it. Returns the value.
+        uint64_t SubmitGenerated(uint64_t waitValue, bool execute)
+        {
+            auto& r = *current;
+            ResolveStamps();
+            r.list->Close();
+            r.queue->Wait(inputFence.Get(), waitValue);
+            if (execute)
+            {
+                ID3D12CommandList* lists[] = { r.list.Get() };
+                r.queue->ExecuteCommandLists(1, lists);
+            }
+            r.queue->Signal(generatedFence.Get(), ++generatedValue);
+            r.allocatorValues[r.frame] = generatedValue;
+            r.allocatorFences[r.frame] = generatedFence.Get();
+            return generatedValue;
         }
 
         void ReleaseTextures()
@@ -434,11 +465,16 @@ namespace
                     CloseHandle(*handle);
                 *handle = nullptr;
             }
+            if (presentFenceHandle)
+                CloseHandle(presentFenceHandle);
+            presentFenceHandle = nullptr;
             inputFence.Reset();
             outputFence.Reset();
+            presentFence.Reset();
             for (auto ring : { &direct, &compute })
             {
                 ring->allocatorValues.fill(0);
+                ring->allocatorFences.fill(nullptr);
                 ring->lastSignal = 0;
             }
         }
@@ -1114,12 +1150,15 @@ namespace
     // A child window of this process over the game's window, made on a thread of its own that pumps its messages: a
     // window in another process's window tree that leaves them unanswered holds that process up. It takes no input:
     // disabled, it is passed over by the hit testing, so the game's window keeps the mouse and the keyboard (as the
-    // swap chains of Chromium's GPU process over the browser's window). The game shows and hides it. A flip model swap
-    // chain on it shows Present, presented after the request is answered, so the game's render thread doesn't wait for it.
+    // swap chains of Chromium's GPU process over the browser's window). The game hides it when it presents a frame itself.
+    //
+    // A flip model swap chain on it, on a queue of its own, presents from a thread of its own, so neither the requests nor
+    // the game wait for it: per frame the generated frame when there is one, and PresentDelay of the frame time after it
+    // the rendered one, sooner when the next frame comes first. Its frame latency waitable object paces the copies.
 
     class Display
     {
-        HANDLE thread = nullptr;
+        HANDLE windowThread = nullptr;
         HANDLE ready = nullptr;
         HWND parent = nullptr;
 
@@ -1127,11 +1166,58 @@ namespace
         std::array<ComPtr<ID3D12Resource>, BufferCount> buffers;
         DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
         bool tearing = false;
+        HANDLE latency = nullptr;
 
-        // What Present cost the CPU, logged every 300 frames
-        uint32_t presents = 0;
-        double presentMs = 0.0, presentMax = 0.0;
-        uint32_t failures = 0;
+        // The present thread's queue (the swap chain's), command lists and fence
+        ID3D12Device* device = nullptr;
+        ComPtr<ID3D12CommandQueue> queue;
+        static constexpr uint32_t Lists = 4;
+        std::array<ComPtr<ID3D12CommandAllocator>, Lists> allocators;
+        std::array<uint64_t, Lists> allocatorValues{};
+        uint32_t allocatorIndex = 0;
+        ComPtr<ID3D12GraphicsCommandList> list;
+        ComPtr<ID3D12Fence> fence;
+        uint64_t fenceValue = 0;
+        HANDLE fenceEvent = nullptr;
+
+        // What a frame presents from, set while the textures exist
+        ID3D12Resource* presentTexture = nullptr;
+        ID3D12Resource* generatedTexture = nullptr;
+        ID3D12Fence* inputFence = nullptr;
+        ID3D12Fence* presentFence = nullptr;
+        ID3D12Fence* generatedFence = nullptr;
+
+    public:
+        struct Job
+        {
+            uint64_t inputValue = 0;        // the game's copies into Present and HudLess, on the input fence
+            uint64_t presentValue = 0;      // on the present fence once both are free
+            uint64_t generatedValue = 0;    // Generate of the frame on generatedFence, 0 without
+            bool showGenerated = false;     // the generated frame is shown first
+            uint32_t syncInterval = 1;
+            float delay = 0.5f;
+            LARGE_INTEGER arrived{};        // when the game asked, for the frame time
+        };
+
+    private:
+        std::thread thread;
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::deque<Job> jobs;
+        bool stopping = false;
+        bool busy = false;
+
+        // Pacing, the present thread's
+        double frameMs = 0.0;               // smoothed time between two frames' jobs
+        LARGE_INTEGER lastJob{};
+        LARGE_INTEGER frequency{};
+
+        // Logged every 300 frames
+        struct Stats
+        {
+            uint32_t frames = 0, generated = 0, cut = 0, failures = 0;
+            double presentMs = 0.0, presentMax = 0.0, latencyMs = 0.0, gapMs = 0.0, aimMs = 0.0;
+        } stats;
 
         static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         {
@@ -1173,10 +1259,209 @@ namespace
             return 0;
         }
 
+        double Now()
+        {
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+            return static_cast<double>(now.QuadPart) * 1000.0 / static_cast<double>(frequency.QuadPart);
+        }
+
+        void WaitLocal(uint64_t value, DWORD timeout)
+        {
+            if (value && fence->GetCompletedValue() < value && SUCCEEDED(fence->SetEventOnCompletion(value, fenceEvent)))
+                WaitForSingleObject(fenceEvent, timeout);
+        }
+
+        // The window follows the size of the game's window's client area; the swap chain stretches into it
+        void FollowParent()
+        {
+            RECT client{}, own{};
+            if (!GetClientRect(parent, &client) || !GetClientRect(window, &own))
+                return;
+            if (client.right != own.right || client.bottom != own.bottom)
+                SetWindowPos(window, nullptr, 0, 0, std::max<LONG>(client.right, 1), std::max<LONG>(client.bottom, 1),
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+        }
+
+        // source into the next back buffer once waitFence reaches waitValue, then presented; signalFence reaches
+        // signalValue after the copy. Returns the value of the own fence the copy is done at.
+        uint64_t Show(ID3D12Resource* source, ID3D12Fence* waitFence, uint64_t waitValue, ID3D12Fence* signalFence, uint64_t signalValue, uint32_t syncInterval)
+        {
+            if (latency)
+            {
+                auto start = Now();
+                WaitForSingleObjectEx(latency, 100, TRUE);
+                stats.latencyMs += Now() - start;
+            }
+            allocatorIndex = (allocatorIndex + 1) % Lists;
+            WaitLocal(allocatorValues[allocatorIndex], 1000);
+            allocators[allocatorIndex]->Reset();
+            list->Reset(allocators[allocatorIndex].Get(), nullptr);
+
+            auto back = buffers[swapChain->GetCurrentBackBufferIndex()].Get();
+            D3D12_RESOURCE_BARRIER barriers[2]{};
+            for (auto& barrier : barriers)
+            {
+                barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            }
+            barriers[0].Transition.pResource = back;
+            barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+            barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            barriers[1].Transition.pResource = source;
+            barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+            barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            list->ResourceBarrier(2, barriers);
+            list->CopyResource(back, source);
+            for (auto& barrier : barriers)
+                std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+            list->ResourceBarrier(2, barriers);
+            list->Close();
+
+            queue->Wait(waitFence, waitValue);
+            ID3D12CommandList* lists[] = { list.Get() };
+            queue->ExecuteCommandLists(1, lists);
+            if (signalFence)
+                queue->Signal(signalFence, signalValue);
+            queue->Signal(fence.Get(), ++fenceValue);
+            allocatorValues[allocatorIndex] = fenceValue;
+            auto copied = fenceValue;
+
+            auto start = Now();
+            auto hr = swapChain->Present(syncInterval, syncInterval == 0 && tearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
+            auto ms = Now() - start;
+            stats.presentMs += ms;
+            stats.presentMax = std::max(stats.presentMax, ms);
+            if (FAILED(hr) && stats.failures++ < 5)
+                Log("Present failed: 0x%08X", static_cast<uint32_t>(hr));
+            // Shown with its first frame, and again after the game hid it to present a frame itself
+            if (SUCCEEDED(hr) && !IsWindowVisible(window))
+                ShowWindowAsync(window, SW_SHOWNA);
+            return copied;
+        }
+
+        void Process(const Job& job)
+        {
+            // Without a swap chain the textures are let go all the same, or the game waits for them
+            if (!swapChain || !presentTexture)
+            {
+                queue->Wait(inputFence, job.inputValue);
+                if (job.generatedValue)
+                    queue->Wait(generatedFence, job.generatedValue);
+                queue->Signal(presentFence, job.presentValue);
+                return;
+            }
+            FollowParent();
+
+            if (lastJob.QuadPart)
+            {
+                auto frame = static_cast<double>(job.arrived.QuadPart - lastJob.QuadPart) * 1000.0 / static_cast<double>(frequency.QuadPart);
+                if (frame > 0.0 && frame < 250.0)
+                    frameMs = frameMs > 0.0 ? frameMs + (frame - frameMs) * 0.1 : frame;
+            }
+            lastJob = job.arrived;
+
+            if (job.showGenerated && generatedTexture && frameMs > 0.0)
+            {
+                auto copied = Show(generatedTexture, generatedFence, job.generatedValue, nullptr, 0, job.syncInterval);
+                // From when the generated frame reached the swap chain, cut short by the next frame
+                WaitLocal(copied, 100);
+                auto shownAt = Now();
+                auto aim = std::clamp(frameMs * job.delay, 0.0, 50.0);
+                bool cut = false;
+                {
+                    std::unique_lock lock(mutex);
+                    auto remaining = aim - (Now() - shownAt);
+                    if (remaining > 1.5)
+                        cut = changed.wait_for(lock, std::chrono::microseconds(static_cast<int64_t>((remaining - 1.0) * 1000.0)),
+                            [&] { return stopping || !jobs.empty(); });
+                }
+                // The last millisecond spun, the sleep is coarser
+                while (!cut && Now() - shownAt < aim)
+                {
+                    std::lock_guard lock(mutex);
+                    cut = stopping || !jobs.empty();
+                }
+                ++stats.generated;
+                stats.cut += cut;
+                stats.gapMs += Now() - shownAt;
+                stats.aimMs += aim;
+                // The rendered frame after the generated one's copy, which waited for Generate
+                Show(presentTexture, fence.Get(), copied, presentFence, job.presentValue, job.syncInterval);
+            }
+            else
+            {
+                // The generation, when it ran, still read Present and HudLess
+                if (job.generatedValue)
+                    queue->Wait(generatedFence, job.generatedValue);
+                Show(presentTexture, inputFence, job.inputValue, presentFence, job.presentValue, job.syncInterval);
+            }
+
+            if (++stats.frames >= 300)
+            {
+                auto& s = stats;
+                Log("Present over %u frames (%.2f ms each, sync interval %u): %u generated frames shown, the rendered one %.2f ms after them "
+                    "(aimed at %.2f, %u cut short by the next frame); Present %.3f ms of the CPU on average (%.3f at most), "
+                    "the latency wait %.3f ms", s.frames, frameMs, job.syncInterval, s.generated, s.generated ? s.gapMs / s.generated : 0.0,
+                    s.generated ? s.aimMs / s.generated : 0.0, s.cut, s.presentMs / (s.frames + s.generated), s.presentMax,
+                    s.latencyMs / (s.frames + s.generated));
+                auto failures = s.failures;
+                s = {};
+                s.failures = failures;
+            }
+        }
+
+        void Run()
+        {
+            while (true)
+            {
+                Job job;
+                {
+                    std::unique_lock lock(mutex);
+                    changed.wait(lock, [&] { return stopping || !jobs.empty(); });
+                    if (jobs.empty())
+                        return;
+                    job = jobs.front();
+                    jobs.pop_front();
+                    busy = true;
+                }
+                Process(job);
+                {
+                    std::lock_guard lock(mutex);
+                    busy = false;
+                }
+                changed.notify_all();
+            }
+        }
+
+        bool CreateQueue(ID3D12Device* d3d)
+        {
+            device = d3d;
+            QueryPerformanceFrequency(&frequency);
+            D3D12_COMMAND_QUEUE_DESC queueDesc{};
+            queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+            if (FAILED(device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue))))
+                return false;
+            for (auto& allocator : allocators)
+                if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))))
+                    return false;
+            if (FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocators[0].Get(), nullptr, IID_PPV_ARGS(&list))))
+                return false;
+            list->Close();
+            if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))))
+                return false;
+            fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            thread = std::thread([this] { Run(); });
+            return fenceEvent != nullptr;
+        }
+
         void ReleaseSwapChain()
         {
             for (auto& buffer : buffers)
                 buffer.Reset();
+            if (latency)
+                CloseHandle(latency);
+            latency = nullptr;
             swapChain.Reset();
             width = height = 0;
             format = DXGI_FORMAT_UNKNOWN;
@@ -1187,15 +1472,17 @@ namespace
         ComPtr<IDXGISwapChain3> swapChain;
         uint32_t width = 0;
         uint32_t height = 0;
-        bool pending = false;           // a frame copied into the back buffer, presented once the request is answered
-        uint32_t syncInterval = 1;
 
-        // The window over parent, made once, and a swap chain of the size and format of Present. The GPU is idle.
-        bool Configure(Device& d, HWND gameWindow, uint32_t w, uint32_t h, DXGI_FORMAT f, bool hdr)
+        // The window over the game's, made once, and a swap chain of the size and format of Present. Drained, GPU idle.
+        bool Configure(ComPtr<IDXGIFactory4>& factory, ID3D12Device* d3d, HWND gameWindow, uint32_t w, uint32_t h, DXGI_FORMAT f, bool hdr)
         {
-            pending = false;
             if (window && parent != gameWindow)
                 Release();
+            if (!queue && !CreateQueue(d3d))
+            {
+                Log("Present: the queue could not be made");
+                return false;
+            }
             if (!window)
             {
                 if (!gameWindow || !IsWindow(gameWindow))
@@ -1205,8 +1492,8 @@ namespace
                 }
                 parent = gameWindow;
                 ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-                thread = CreateThread(nullptr, 0, WindowThread, this, 0, nullptr);
-                if (!thread || WaitForSingleObject(ready, 5000) != WAIT_OBJECT_0 || !window)
+                windowThread = CreateThread(nullptr, 0, WindowThread, this, 0, nullptr);
+                if (!windowThread || WaitForSingleObject(ready, 5000) != WAIT_OBJECT_0 || !window)
                 {
                     Release();
                     return false;
@@ -1219,7 +1506,7 @@ namespace
 
             ComPtr<IDXGIFactory5> factory5;
             BOOL allowTearing = FALSE;
-            tearing = SUCCEEDED(d.factory.As(&factory5)) &&
+            tearing = SUCCEEDED(factory.As(&factory5)) &&
                 SUCCEEDED(factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allowTearing, sizeof(allowTearing))) && allowTearing;
 
             DXGI_SWAP_CHAIN_DESC1 desc{};
@@ -1232,18 +1519,21 @@ namespace
             desc.Scaling = DXGI_SCALING_STRETCH;
             desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
             desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-            desc.Flags = tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+            desc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT | (tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
             ComPtr<IDXGISwapChain1> swapChain1;
-            auto hr = d.factory->CreateSwapChainForHwnd(d.queue.Get(), window, &desc, nullptr, nullptr, &swapChain1);
+            auto hr = factory->CreateSwapChainForHwnd(queue.Get(), window, &desc, nullptr, nullptr, &swapChain1);
             if (FAILED(hr) || FAILED(swapChain1.As(&swapChain)))
             {
                 Log("Present: the swap chain could not be made (0x%08X) at %ux%u, format %d", static_cast<uint32_t>(hr), w, h, int(f));
                 ReleaseSwapChain();
                 return false;
             }
-            d.factory->MakeWindowAssociation(window, DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER);
+            factory->MakeWindowAssociation(window, DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER);
             if (hdr && FAILED(swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)))
                 Log("Present: scRGB could not be set on the swap chain");
+            // Two frames queued: the generated and the rendered one
+            swapChain->SetMaximumFrameLatency(2);
+            latency = swapChain->GetFrameLatencyWaitableObject();
             for (uint32_t i = 0; i < BufferCount; ++i)
             {
                 if (FAILED(swapChain->GetBuffer(i, IID_PPV_ARGS(&buffers[i]))))
@@ -1259,95 +1549,77 @@ namespace
             return true;
         }
 
-        // The window follows the size of the game's window's client area; the swap chain stretches into it
-        void FollowParent()
+        // The textures and fences the frames come with, while they exist; null ones at release
+        void Bind(ID3D12Resource* present, ID3D12Resource* generated, ID3D12Fence* input, ID3D12Fence* presentDone, ID3D12Fence* generatedDone)
         {
-            RECT client{}, own{};
-            if (!GetClientRect(parent, &client) || !GetClientRect(window, &own))
-                return;
-            if (client.right != own.right || client.bottom != own.bottom)
-                SetWindowPos(window, nullptr, 0, 0, std::max<LONG>(client.right, 1), std::max<LONG>(client.bottom, 1),
-                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+            presentTexture = present;
+            generatedTexture = generated;
+            inputFence = input;
+            presentFence = presentDone;
+            generatedFence = generatedDone;
         }
 
-        // Present into the current back buffer, recorded into cmd
-        bool Record(ID3D12GraphicsCommandList* cmd, ID3D12Resource* present)
+        bool Ready() const
         {
-            if (!swapChain || !present)
-                return false;
-            auto back = buffers[swapChain->GetCurrentBackBufferIndex()].Get();
-            D3D12_RESOURCE_BARRIER barriers[2]{};
-            for (auto& barrier : barriers)
-            {
-                barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            }
-            barriers[0].Transition.pResource = back;
-            barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-            barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-            barriers[1].Transition.pResource = present;
-            barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-            barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-            cmd->ResourceBarrier(2, barriers);
-            cmd->CopyResource(back, present);
-            for (auto& barrier : barriers)
-                std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
-            cmd->ResourceBarrier(2, barriers);
-            return true;
+            return queue && presentFence && inputFence;
         }
 
-        // After the answer to Present
-        void Show()
+        void Post(Job job)
         {
-            if (!pending || !swapChain)
-                return;
-            pending = false;
-            FollowParent();
-            LARGE_INTEGER start, end, frequency;
-            QueryPerformanceCounter(&start);
-            auto hr = swapChain->Present(syncInterval, syncInterval == 0 && tearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
-            QueryPerformanceCounter(&end);
-            QueryPerformanceFrequency(&frequency);
-            if (FAILED(hr) && failures++ < 5)
-                Log("Present failed: 0x%08X", static_cast<uint32_t>(hr));
-            // Shown with its first frame, and again after the game hid it to present a frame itself
-            if (SUCCEEDED(hr) && !IsWindowVisible(window))
-                ShowWindowAsync(window, SW_SHOWNA);
-
-            auto ms = static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(frequency.QuadPart);
-            presentMs += ms;
-            presentMax = std::max(presentMax, ms);
-            if (++presents == 1)
-                Log("First frame presented");
-            if (presents % 300 == 0)
+            QueryPerformanceCounter(&job.arrived);
             {
-                Log("Present over 300 frames, sync interval %u: %.3f ms of the CPU on average, %.3f at most", syncInterval, presentMs / 300.0, presentMax);
-                presentMs = presentMax = 0.0;
+                std::lock_guard lock(mutex);
+                jobs.push_back(job);
             }
+            changed.notify_all();
+        }
+
+        // Every job presented and the queue idle, before what they use goes
+        void Drain()
+        {
+            if (!queue)
+                return;
+            {
+                std::unique_lock lock(mutex);
+                changed.wait_for(lock, std::chrono::seconds(2), [&] { return jobs.empty() && !busy; });
+            }
+            queue->Signal(fence.Get(), ++fenceValue);
+            WaitLocal(fenceValue, 2000);
         }
 
         void Release()
         {
+            Drain();
+            Bind(nullptr, nullptr, nullptr, nullptr, nullptr);
+            if (thread.joinable())
+            {
+                {
+                    std::lock_guard lock(mutex);
+                    stopping = true;
+                }
+                changed.notify_all();
+                thread.join();
+            }
             ReleaseSwapChain();
-            pending = false;
             if (window)
                 PostMessageW(window, WM_CLOSE, 0, 0);
-            if (thread)
+            if (windowThread)
             {
-                WaitForSingleObject(thread, 2000);
-                CloseHandle(thread);
+                WaitForSingleObject(windowThread, 2000);
+                CloseHandle(windowThread);
             }
             if (ready)
                 CloseHandle(ready);
-            thread = ready = nullptr;
+            windowThread = ready = nullptr;
             window = nullptr;
             parent = nullptr;
         }
 
-        // Without the presentation: hidden, its swap chain released (the GPU is idle)
+        // Without the presentation: drained, hidden, its swap chain released
         void Stop()
         {
-            pending = false;
+            Drain();
+            Bind(nullptr, nullptr, nullptr, nullptr, nullptr);
             if (window)
                 ShowWindowAsync(window, SW_HIDE);
             ReleaseSwapChain();
@@ -1419,9 +1691,11 @@ namespace
         {
             auto& shared = *connection.shared;
 
-            // The GPU first: the contexts go before the textures, and nothing may still run with them
+            // The GPU first: the contexts go before the textures, and nothing may still run with them, the frames waiting to
+            // be presented included
+            display.Drain();
+            display.Bind(nullptr, nullptr, nullptr, nullptr, nullptr);
             device.Flush();
-            display.pending = false;
             dlss.Release();
             fsr.Release();
             fsr.ReleaseFrameGeneration();
@@ -1505,27 +1779,38 @@ namespace
                 }
             }
 
-            // Presentation by the helper, not with the frame generation, whose Present it would share
+            // Presentation by the helper, the frame generation's frames too, whose Present it shares. Not under Wine, nor with
+            // 16-bit frames without HDR (the frame generation could not write 8 bits): sRGB encoded, a 16-bit swap chain would
+            // show them as linear.
             if (flags & Protocol::ConfigureFlags::HelperPresent)
             {
                 bool hdr = (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0;
-                auto format = hdr ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM;
-                bool presenting = !fsr.HasFrameGeneration() &&
-                    device.CreateTexture(T::Present, outputWidth, outputHeight, format, false) &&
-                    display.Configure(device, reinterpret_cast<HWND>(shared.PresentWindow), outputWidth, outputHeight, format, hdr);
-                if (!presenting)
+                bool generation = fsr.HasFrameGeneration();
+                bool eightBit = generation ? (flags & Protocol::ConfigureFlags::EightBitFrames) != 0 : !hdr;
+                auto format = eightBit ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT;
+                bool presenting = !device.wine && (hdr || eightBit) &&
+                    (generation || device.CreateTexture(T::Present, outputWidth, outputHeight, format, false)) &&
+                    device.CreateSharedFence(device.presentFence, device.presentFenceHandle) &&
+                    display.Configure(device.factory, device.device.Get(), reinterpret_cast<HWND>(shared.PresentWindow), outputWidth, outputHeight, format, hdr);
+                if (presenting)
                 {
-                    Log("Presentation could not be set up at %ux%u: the game presents", outputWidth, outputHeight);
-                    if (!fsr.HasFrameGeneration())
-                        device.ReleaseTexture(T::Present);
-                    display.Stop();
-                    flags &= ~Protocol::ConfigureFlags::HelperPresent;
+                    display.Bind(device.Texture(T::Present), generation ? device.Texture(T::Generated) : nullptr, device.inputFence.Get(),
+                        device.presentFence.Get(), device.generatedFence.Get());
+                    // The game's textures for Present are the back buffer's A8R8G8B8 without HDR
+                    if (eightBit)
+                        flags |= Protocol::ConfigureFlags::EightBitFrames;
                 }
                 else
                 {
-                    // The game's textures for Present are the back buffer's A8R8G8B8 without HDR
-                    if (!hdr)
-                        flags |= Protocol::ConfigureFlags::EightBitFrames;
+                    Log("Presentation could not be set up at %ux%u: the game presents", outputWidth, outputHeight);
+                    if (!generation)
+                        device.ReleaseTexture(T::Present);
+                    device.presentFence.Reset();
+                    if (device.presentFenceHandle)
+                        CloseHandle(device.presentFenceHandle);
+                    device.presentFenceHandle = nullptr;
+                    display.Stop();
+                    flags &= ~Protocol::ConfigureFlags::HelperPresent;
                 }
                 shared.Flags = flags;
             }
@@ -1544,8 +1829,10 @@ namespace
                 if (!Duplicate(device.textures[i].handle, shared.TextureHandles[i]))
                     return false;
             }
-            shared.InputFenceHandle = shared.OutputFenceHandle = 0;
+            shared.InputFenceHandle = shared.OutputFenceHandle = shared.PresentFenceHandle = 0;
             if (!device.wine && (!Duplicate(device.inputFenceHandle, shared.InputFenceHandle) || !Duplicate(device.outputFenceHandle, shared.OutputFenceHandle)))
+                return false;
+            if ((flags & Protocol::ConfigureFlags::HelperPresent) && !Duplicate(device.presentFenceHandle, shared.PresentFenceHandle))
                 return false;
 
             backend = shared.ConfigureBackend;
@@ -1685,22 +1972,66 @@ namespace
             return generated;
         }
 
+        // Presentation: with PresentGenerate the frame between the one before and this one is generated first, on the
+        // compute queue with FrameGenerationAsyncCompute; the present thread shows both
         bool Present()
         {
             auto& shared = *connection.shared;
-            if (!display.swapChain || (!device.cpuSync && (!device.inputFence || !device.outputFence)))
+            if (!display.Ready())
                 return false;
 
-            using T = Protocol::Texture;
-            auto cmd = device.BeginFrame(Device::Work::Present);
-            bool recorded = display.Record(cmd, device.Texture(T::Present));
-            display.syncInterval = std::min(shared.SyncInterval, 4u);
-            if (device.cpuSync)
-                recorded = device.SubmitFrameAndWait() && recorded;
-            else
-                device.SubmitFrame(shared.WaitValue, shared.SignalValue, recorded);
-            display.pending = recorded;
-            return recorded;
+            Display::Job job;
+            job.inputValue = shared.WaitValue;
+            job.presentValue = shared.SignalValue;
+            job.syncInterval = std::min(shared.SyncInterval, 4u);
+            job.delay = std::clamp(shared.PresentDelay, 0.0f, 1.0f);
+            bool ok = true;
+            if (shared.PresentGenerate && fsr.HasFrameGeneration())
+            {
+                // Only after the preparation of the same frame
+                bool prepared = preparedFrame && preparedFrameId == shared.FrameId;
+                preparedFrame = false;
+                auto& g = generationStats;
+                ++g.generates;
+                g.unprepared += !prepared;
+                g.resets += shared.GenerateReset != 0;
+                g.gaps += g.lastId != 0 && shared.FrameId != g.lastId + 1;
+                g.lastId = shared.FrameId;
+
+                if (prepared)
+                {
+                    using T = Protocol::Texture;
+                    auto cmd = device.BeginFrame(Device::Work::Generate);
+                    device.Transition(cmd, true, { T::Present, T::Generated, T::HudLess });
+                    device.Stamp(cmd);
+                    bool generated = fsr.GenerateFrame(cmd, device, shared.FrameId, shared.GenerateReset != 0,
+                        (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0, shared.MaxLuminance);
+                    device.Stamp(cmd);
+                    device.Transition(cmd, false, { T::Present, T::Generated, T::HudLess });
+                    g.failed += !generated;
+                    ok = generated;
+                    job.generatedValue = device.SubmitGenerated(shared.WaitValue, generated);
+                    // Nothing to interpolate from after a reset: the rendered frame alone
+                    job.showGenerated = generated && shared.GenerateReset == 0;
+                }
+
+                if (g.generates >= 300)
+                {
+                    if (g.unprepared || g.failed || g.gaps || g.prepareFailed || g.prepareGaps || g.resets > 2)
+                        Log("Frame generation over %u Present: %u not prepared, %u reset, %u failed, %u with a gap in the frame numbers; "
+                        "%u Prepare: %u failed, %u reset, %u with a gap, %u with the frame before the HUD",
+                        g.generates, g.unprepared, g.resets, g.failed, g.gaps, g.prepares, g.prepareFailed, g.prepareResets, g.prepareGaps, g.hudLess);
+                    auto lastId = g.lastId;
+                    g = {};
+                    g.lastId = lastId;
+                }
+            }
+            display.Post(job);
+            // A failed generation still presents the rendered frame (counted above)
+            static uint32_t reported = 0;
+            if (!ok && reported++ < 5)
+                Log("Frame generation failed: the rendered frame alone");
+            return true;
         }
 
     public:
@@ -1805,13 +2136,11 @@ namespace
                 default: break;
                 }
                 connection.Respond(ok ? Protocol::Status::Ok : Protocol::Status::Failed, serial);
-                // The game goes on meanwhile; the next request waits for it
-                display.Show();
             }
 
             // Both queues done before their work's resources go
-            device.Flush();
             display.Release();
+            device.Flush();
             dlss.Shutdown();
             fsr.Shutdown();
             device.ReleaseTextures();

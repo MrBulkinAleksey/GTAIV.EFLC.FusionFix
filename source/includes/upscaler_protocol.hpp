@@ -22,9 +22,13 @@
 // Where the helper can't open them (older Proton), it clears GameFence in Flags, and then both sides wait for their
 // GPU work on the CPU: the game for its copies before Evaluate, the helper before it answers Evaluate.
 //
-// Presentation by the helper (ConfigureFlags::HelperPresent): the helper puts a child window of its own over the game's
-// window (PresentWindow) and a flip model swap chain on it. Present takes the finished frame (Present, as for the frame
-// generation) and shows it; the game leaves its own Present out. The game shows and hides the window (ChildWindow).
+// Presentation by the helper (ConfigureFlags::HelperPresent, not under Wine): the helper puts a child window of its own over
+// the game's window (PresentWindow) and a flip model swap chain on it. Present takes the finished frame (Present, as for
+// the frame generation) and shows it from a thread of its own; the game leaves its own Present out and hides the window
+// when it presents a frame itself (ChildWindow). With PresentGenerate the helper also generates the frame between the one
+// before and this one (HudLess too, FrameId, MaxLuminance and GenerateReset as for Generate) and shows it first, the
+// rendered frame PresentDelay of the frame time after it. The helper signals SignalValue on its present fence
+// (PresentFenceHandle) once it is done with Present and HudLess, which the game's next copy into them waits for.
 //
 // Frame generation (ConfigureFlags::FrameGeneration, FSR only): Evaluate also prepares the frame generation with
 // the depth and motion vectors of the frame. Generate then takes the finished frame (Present, the size of the
@@ -35,7 +39,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 14;
+    constexpr uint32_t Version = 15;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -104,7 +108,7 @@ namespace UpscalerProtocol
         constexpr uint32_t HighDynamicRange = 1 << 4; // Present is scRGB
         constexpr uint32_t EightBitFrames = 1 << 5;   // the frame generation's textures are B8G8R8A8_UNORM; cleared by the helper if the GPU can't write them
         constexpr uint32_t AsyncGeneration = 1 << 6;  // Generate runs on a compute queue of the helper; cleared if it has none
-        constexpr uint32_t HelperPresent = 1 << 7;    // the helper presents the frames; cleared if its window or swap chain can't be made
+        constexpr uint32_t HelperPresent = 1 << 7;    // the helper presents the frames, with the frame generation too; cleared if it can't
     }
 
 #pragma pack(push, 8)
@@ -167,11 +171,15 @@ namespace UpscalerProtocol
         float MaxLuminance;           // nits, HDR output
         uint32_t GenerateReset;
 
-        // Presentation by the helper. Configure: the game's window; answer: the helper's child window over it.
+        // Presentation by the helper. Configure: the game's window; answer: the helper's child window over it and its
+        // present fence, duplicated into the game.
         uint64_t PresentWindow;
         uint64_t ChildWindow;
-        // Present (WaitValue and SignalValue as for Evaluate; SignalValue once Present was copied out)
+        uint64_t PresentFenceHandle;
+        // Present (WaitValue on the input fence; SignalValue on the present fence once Present and HudLess are copied out)
         uint32_t SyncInterval;        // 0: no wait for the vertical blank, torn where the display allows it
+        uint32_t PresentGenerate;     // the generated frame first
+        float PresentDelay;           // of the frame time, from the generated frame to the rendered one
         uint32_t Reserved2;
 
         // Response
@@ -190,7 +198,7 @@ namespace UpscalerProtocol
     static_assert(sizeof(wchar_t) == 2);
     static_assert(offsetof(Shared, WaitValue) % 8 == 0);
     static_assert(offsetof(Shared, TextureHandles) % 8 == 0);
-    static_assert(sizeof(Shared) == 4008, "The layout must be identical in the x86 and x64 builds");
+    static_assert(sizeof(Shared) == 4024, "The layout must be identical in the x86 and x64 builds");
 
     inline const wchar_t* MappingSuffix = L".Mapping";
     inline const wchar_t* RequestSuffix = L".Request";

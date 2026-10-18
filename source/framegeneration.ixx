@@ -69,8 +69,11 @@ namespace
     bool bAsyncCompute = true;      // FrameGenerationAsyncCompute: the helper generates on its compute queue
     bool bDeferredBroken = false;   // the game's Present did not come through the device: not deferred any more
 
-    // HelperPresent in [ANTIALIASING] (experimental): with DLAA or FSR and without the frame generation, the helper presents
-    // the frames through a flip model swap chain on a window of its own over the game's, the game's Present is left out
+    // HelperPresent in [ANTIALIASING] (experimental): with DLAA or FSR the helper presents the frames through a flip model
+    // swap chain on a window of its own over the game's, the game's Present is left out. With the frame generation it also
+    // generates the frames and shows them, the rendered frame FrameGenerationDelay of the frame time after the generated one,
+    // paced on a thread of its own: nothing comes back to the game, which neither waits for Generate nor presents inside its
+    // next frame. The frame generation's sharpening of the shown frames is then left to the post processing.
     bool bHelperPresent = false;
     bool bHelperPresentBroken = false;  // the game's Present did not come through the device
     bool bPresentedByHelper = false;    // this frame
@@ -519,26 +522,32 @@ namespace
     }
 
     // All at the back buffer's size, in the format of the helper's textures: A8R8G8B8 as the back buffer without HDR,
-    // where the helper can write it, 16-bit float otherwise
-    bool CreateTargets(uint32_t width, uint32_t height)
+    // where the helper can write it, 16-bit float otherwise. The finished frame and the one before the HUD always; full:
+    // also the generated frame and the saved back buffer, which only the game's own presentation of the frames needs.
+    bool CreateTargets(uint32_t width, uint32_t height, bool full = false)
     {
         // The game resets the device on the main thread while this thread draws: a target made now would be alive at the
         // Reset (DD3D80), and the ones there may be released under it
         if (rage::grcDevice::IsDeviceLost())
             return false;
         bool eightBit = Upscaler::IsPresentEightBit();
-        if (PresentRT && GeneratedRT && HudLessRT && SavedRT && TargetWidth == width && TargetHeight == height && bTargetsEightBit == eightBit)
+        bool same = TargetWidth == width && TargetHeight == height && bTargetsEightBit == eightBit;
+        if (same && PresentRT && HudLessRT && (!full || (GeneratedRT && SavedRT)))
             return true;
-        ReleaseTargets();
+        if (!same)
+            ReleaseTargets();
 
         auto desc = rage::OwnRenderTargetDesc(eightBit ? rage::GRCFMT_A8R8G8B8 : rage::GRCFMT_A16B16G16R16F);
         uint32_t bits = eightBit ? 32 : 64;
-        PresentRT = rage::CreateEmptyRenderTarget("FrameGenerationPresent", width, height, bits, desc);
-        GeneratedRT = rage::CreateEmptyRenderTarget("FrameGenerationGenerated", width, height, bits, desc);
-        HudLessRT = rage::CreateEmptyRenderTarget("FrameGenerationHudLess", width, height, bits, desc);
-        SavedRT = rage::CreateEmptyRenderTarget("FrameGenerationSaved", width, height, bits, desc);
-        if (!PresentRT || !PresentRT->mD3DTexture || !GeneratedRT || !GeneratedRT->mD3DTexture || !HudLessRT || !HudLessRT->mD3DTexture ||
-            !SavedRT || !SavedRT->mD3DTexture)
+        auto make = [&](rage::grcRenderTargetPC*& rt, const char* name)
+        {
+            if (!rt)
+                rt = rage::CreateEmptyRenderTarget(name, width, height, bits, desc);
+            return rt && rt->mD3DTexture;
+        };
+        bool made = make(PresentRT, "FrameGenerationPresent") && make(HudLessRT, "FrameGenerationHudLess") &&
+            (!full || (make(GeneratedRT, "FrameGenerationGenerated") && make(SavedRT, "FrameGenerationSaved")));
+        if (!made)
         {
             ReleaseTargets();
             return false;
@@ -546,7 +555,7 @@ namespace
         TargetWidth = width;
         TargetHeight = height;
         bTargetsEightBit = eightBit;
-        Log("Targets: %ux%u, %s", width, height, eightBit ? "A8R8G8B8" : "A16B16G16R16F");
+        Log("Targets: %ux%u, %s%s", width, height, eightBit ? "A8R8G8B8" : "A16B16G16R16F", full ? "" : ", the finished frame and the one before the HUD");
         return true;
     }
 
@@ -990,8 +999,15 @@ namespace
         backBuffer->Release();
     }
 
-    // HelperPresent: the finished frame copied for the helper, which presents it; the game's Present is left out
-    bool PresentThroughHelper(IDirect3DDevice9* device)
+    // HelperPresent: the presentation is set up
+    bool IsHelperPresenting()
+    {
+        return bHelperPresent && !bHelperPresentBroken && bGameWindowed && Upscaler::IsPresentReady();
+    }
+
+    // HelperPresent: the finished frame copied for the helper, which presents it, with generate the generated frame before
+    // it too, from the frame before the HUD (hudLess: captured this frame); the game's Present is left out
+    bool PresentThroughHelper(IDirect3DDevice9* device, bool generate, bool hudLess)
     {
         if (!bHelperPresent || bHelperPresentBroken)
             return false;
@@ -1036,18 +1052,29 @@ namespace
         D3DSURFACE_DESC desc{};
         backBuffer->GetDesc(&desc);
         bool posted = false;
+        bool generated = false;
         if (CreateTargets(desc.Width, desc.Height) && CopyInto(device, backBuffer, PresentRT))
-            posted = Upscaler::PostPresent(PresentRT->mD3DTexture, GameSyncInterval);
+        {
+            if (generate && hudLess)
+                ApplyFinishingPasses();
+            auto hdr = HDROutput::IsActive();
+            posted = Upscaler::PostPresent(PresentRT->mD3DTexture, generate && hudLess ? HudLessRT->mD3DTexture : nullptr, GameSyncInterval,
+                generate, hdr ? HDROutput::GetPeakNits() : 0.0f, fDelay, &generated);
+        }
         backBuffer->Release();
         if (!posted)
         {
             LogOnce(10, "A frame could not be handed to the helper to present: the game presents it");
             return false;
         }
-        static bool first = true;
+        static bool first = true, firstGenerated = true;
         if (first)
             Log("First frame presented by the helper at %ux%u, sync interval %u", desc.Width, desc.Height, GameSyncInterval);
+        if (firstGenerated && generated)
+            Log("First generated frame presented by the helper");
         first = false;
+        firstGenerated = firstGenerated && !generated;
+        FusionFix::bFrameGenerationPresenting = generated;
         bSkipPresent = true;
         return true;
     }
@@ -1075,11 +1102,28 @@ namespace
             Upscaler::DropGenerated();
             return;
         }
+        // The helper presents the frames, and generates them: the game neither keeps nor presents any
+        if (bHelperPresent && !bHelperPresentBroken)
+        {
+            if (bPending || bPendingGenerated)
+            {
+                bPending = bPendingGenerated = false;
+                Upscaler::DropGenerated();
+            }
+            bool generate = mode != Mode::Off && Upscaler::IsFrameGenerationReady() && !IsMenuActive();
+            bPresentedByHelper = PresentThroughHelper(device, generate, hudLess);
+            if (bPresentedByHelper)
+            {
+                // Sharpened by the post processing as without the frame generation (DefersSharpening)
+                if (sharpen)
+                    LogOnce(11, "The frame was left unsharpened for the frame generation while the helper presents it");
+                return;
+            }
+        }
         if (mode == Mode::Off)
         {
             if (sharpen)
                 SharpenBackBuffer(device, hudLess, false);
-            bPresentedByHelper = PresentThroughHelper(device);
             return;
         }
 
@@ -1150,7 +1194,7 @@ namespace
 
         D3DSURFACE_DESC desc{};
         backBuffer->GetDesc(&desc);
-        if (!CreateTargets(desc.Width, desc.Height))
+        if (!CreateTargets(desc.Width, desc.Height, true))
         {
             LogOnce(1, "The targets could not be created");
             backBuffer->Release();
@@ -1307,7 +1351,7 @@ export namespace FrameGeneration
     // HelperPresent: the window the helper presents over, null while it does not
     HWND HelperPresentWindow()
     {
-        return bHelperPresent && !bHelperPresentBroken && mode == Mode::Off && bGameWindowed ? GameWindow : nullptr;
+        return bHelperPresent && !bHelperPresentBroken && bGameWindowed ? GameWindow : nullptr;
     }
 
     // The helper generates on its compute queue, beside the game's next frame
@@ -1328,7 +1372,8 @@ export namespace FrameGeneration
     // generation moves a sharpened shadow under a moving car with the ground, and the shadow is shown twice.
     bool DefersSharpening()
     {
-        bSharpenDeferred = Sharpen && mode != Mode::Off && Upscaler::IsFrameGenerationReady() && !IsMenuActive();
+        // Not while the helper presents: it shows the generated frames itself, unsharpened
+        bSharpenDeferred = Sharpen && mode != Mode::Off && Upscaler::IsFrameGenerationReady() && !IsMenuActive() && !IsHelperPresenting();
         return bSharpenDeferred;
     }
 
