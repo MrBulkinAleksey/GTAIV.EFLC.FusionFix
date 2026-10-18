@@ -62,8 +62,8 @@ using namespace PostFxProfiler;
 // range, and Grass Trample's grid as a vertex texture (vs s1), as the grass props have them.
 //
 // GpuGrassHideProps ([PROCEDURAL], 1): the game's grass props (procedural.dat's models on the grass list) give way where
-// the blades grow (ProceduralGround::HideGrass): one is in the way while its place's random value is under the blades'
-// share at its distance, so they come back as the blades thin out. The generator doesn't make those (their queue entries
+// the blades grow (ProceduralGround::HideGrass): one is in the way while its place's random value is under four times the
+// blades' share at its distance, so they come back as the blades thin out, far off. The generator doesn't make those (their queue entries
 // wait parked, as outside the cone) and lets go of those the camera came near; the render lists leave out any made
 // meanwhile.
 //
@@ -84,7 +84,15 @@ namespace GpuGrass
     constexpr float kPlantGroundShare = 0.5f;   // grass on ground whose props are only small plants
 
     struct MeshVertex { float blade[4]; float vertex[4]; };
-    struct Instance { float corner[4]; float edge1[4]; float edge2[4]; float kinds[4]; };
+    // Edges: within kEdgeFade of ground without grass the blades thin out and shorten, so a lawn ends softly instead of
+    // along its collision triangles. A grid of kEdgeCell cells kEdgeReach around the camera marks the grassy triangles;
+    // each cell gets its distance to an unmarked one, and each piece's corners that distance over kEdgeFade (1 off grid)
+    constexpr float kEdgeFade = 2.0f;
+    constexpr float kEdgeCell = 0.5f;
+    constexpr float kEdgeReach = 80.0f;     // GpuGrassRange is 70 m by default
+    constexpr int kEdgeSide = int(2.0f * kEdgeReach / kEdgeCell);
+
+    struct Instance { float corner[4]; float edge1[4]; float edge2[4]; float kinds[4]; float edges[4]; };
 
     // Main thread: the manager's triangles by their record
     std::mutex groundMutex;
@@ -99,7 +107,7 @@ namespace GpuGrass
     // Render thread
     // What grows on a triangle: how much, the share of grass, of weeds, of small plants, the height (0..1), the debug colour
     struct Look { float share; float kinds[4]; float tag; };
-    struct Piece { float corner[3], edge1[3], edge2[3]; float centre[3]; float radius; float share; float seed; Look look; };
+    struct Piece { float corner[3], edge1[3], edge2[3]; float centre[3]; float radius; float share; float seed; Look look; float edges[3]; };
     std::vector<Piece> pieces;
     uint32_t piecesVersion = ~0u;
     std::array<float, 256> tagShare{};
@@ -285,6 +293,43 @@ namespace GpuGrass
         pieces.push_back(p);
     }
 
+    // The edge grid's cells whose centre lies on the triangle seen from above, or within a fifth of a cell of it, so
+    // slivers and the seams between triangles leave no false edges
+    void MarkGrass(const ProceduralGround::Triangle& t, float originX, float originY, std::vector<float>& grid)
+    {
+        float x[3], y[3];
+        for (int k = 0; k < 3; ++k)
+            x[k] = (t.corner[k][0] - originX) / kEdgeCell, y[k] = (t.corner[k][1] - originY) / kEdgeCell;
+        const float area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
+        if (std::abs(area) < 1e-6f)
+            return;
+        const float sign = area > 0.0f ? 1.0f : -1.0f;
+        float edgeLength[3];
+        for (int k = 0; k < 3; ++k)
+        {
+            const int j = (k + 1) % 3;
+            edgeLength[k] = std::sqrt((x[j] - x[k]) * (x[j] - x[k]) + (y[j] - y[k]) * (y[j] - y[k]));
+        }
+        const int x0 = (std::max)(int(std::floor((std::min)({ x[0], x[1], x[2] }))), 0);
+        const int x1 = (std::min)(int(std::ceil((std::max)({ x[0], x[1], x[2] }))), kEdgeSide - 1);
+        const int y0 = (std::max)(int(std::floor((std::min)({ y[0], y[1], y[2] }))), 0);
+        const int y1 = (std::min)(int(std::ceil((std::max)({ y[0], y[1], y[2] }))), kEdgeSide - 1);
+        for (int cy = y0; cy <= y1; ++cy)
+            for (int cx = x0; cx <= x1; ++cx)
+            {
+                const float px = float(cx) + 0.5f, py = float(cy) + 0.5f;
+                bool inside = true;
+                for (int k = 0; k < 3 && inside; ++k)
+                {
+                    const int j = (k + 1) % 3;
+                    const float side = sign * ((x[j] - x[k]) * (py - y[k]) - (y[j] - y[k]) * (px - x[k]));
+                    inside = side >= -0.2f * edgeLength[k];
+                }
+                if (inside)
+                    grid[size_t(cy) * kEdgeSide + cx] = 1.0f;
+            }
+    }
+
     // The pieces of the grassy triangles, when the manager's set changed
     void MakePieces(const float* camera)
     {
@@ -310,6 +355,9 @@ namespace GpuGrass
             }
         }
         pieces.clear();
+        const float originX = camera[0] - kEdgeReach, originY = camera[1] - kEdgeReach;
+        static std::vector<float> distance;     // in cells; 0 where no grass grows
+        distance.assign(size_t(kEdgeSide) * kEdgeSide, 0.0f);
         for (const auto& t : triangles)
         {
             // Ground facing up: not walls or steep banks
@@ -321,8 +369,57 @@ namespace GpuGrass
             if (!(length > 0.0f) || std::abs(n[2]) / length < 0.6f || !LookOf(t, look))
                 continue;
             AddPieces(t.corner[0], t.corner[1], t.corner[2], look, 0);
+            MarkGrass(t, originX, originY, distance);
         }
         logGrassTriangles = triangles.size();
+
+        // Each marked cell's distance to an unmarked one (chamfer, 1 and sqrt 2), then the pieces' corners
+        constexpr float kBig = 1e6f, kDiagonal = 1.41421356f;
+        for (auto& d : distance)
+            d = d > 0.0f ? kBig : 0.0f;
+        const auto at = [](int x, int y) { return size_t(y) * kEdgeSide + x; };
+        for (int y = 0; y < kEdgeSide; ++y)
+            for (int x = 0; x < kEdgeSide; ++x)
+            {
+                float& d = distance[at(x, y)];
+                if (d == 0.0f)
+                    continue;
+                // Off the grid counts as grass, so the grid's own border is no edge
+                const float left = x > 0 ? distance[at(x - 1, y)] : kBig, up = y > 0 ? distance[at(x, y - 1)] : kBig;
+                const float upLeft = x > 0 && y > 0 ? distance[at(x - 1, y - 1)] : kBig;
+                const float upRight = x + 1 < kEdgeSide && y > 0 ? distance[at(x + 1, y - 1)] : kBig;
+                d = (std::min)({ d, left + 1.0f, up + 1.0f, upLeft + kDiagonal, upRight + kDiagonal });
+            }
+        for (int y = kEdgeSide - 1; y >= 0; --y)
+            for (int x = kEdgeSide - 1; x >= 0; --x)
+            {
+                float& d = distance[at(x, y)];
+                if (d == 0.0f)
+                    continue;
+                const float right = x + 1 < kEdgeSide ? distance[at(x + 1, y)] : kBig, down = y + 1 < kEdgeSide ? distance[at(x, y + 1)] : kBig;
+                const float downRight = x + 1 < kEdgeSide && y + 1 < kEdgeSide ? distance[at(x + 1, y + 1)] : kBig;
+                const float downLeft = x > 0 && y + 1 < kEdgeSide ? distance[at(x - 1, y + 1)] : kBig;
+                d = (std::min)({ d, right + 1.0f, down + 1.0f, downRight + kDiagonal, downLeft + kDiagonal });
+            }
+        // Bilinear between cell centres, in metres over kEdgeFade
+        const auto edgeAt = [&](float wx, float wy)
+        {
+            const float gx = (wx - originX) / kEdgeCell - 0.5f, gy = (wy - originY) / kEdgeCell - 0.5f;
+            if (!(gx >= 0.0f && gy >= 0.0f && gx < float(kEdgeSide - 1) && gy < float(kEdgeSide - 1)))
+                return 1.0f;
+            const int x = int(gx), y = int(gy);
+            const float fx = gx - float(x), fy = gy - float(y);
+            const float top = distance[at(x, y)] * (1.0f - fx) + distance[at(x + 1, y)] * fx;
+            const float bottom = distance[at(x, y + 1)] * (1.0f - fx) + distance[at(x + 1, y + 1)] * fx;
+            // A marked cell next to an unmarked one is 1: the edge itself lies half a cell nearer
+            return std::clamp((top * (1.0f - fy) + bottom * fy - 0.5f) * kEdgeCell / kEdgeFade, 0.0f, 1.0f);
+        };
+        for (auto& p : pieces)
+        {
+            p.edges[0] = edgeAt(p.corner[0], p.corner[1]);
+            p.edges[1] = edgeAt(p.corner[0] + p.edge1[0], p.corner[1] + p.edge1[1]);
+            p.edges[2] = edgeAt(p.corner[0] + p.edge2[0], p.corner[1] + p.edge2[1]);
+        }
     }
 
     bool MakeResources(IDirect3DDevice9* pDevice)
@@ -367,6 +464,7 @@ namespace GpuGrass
                 { 1, 16, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 3 },
                 { 1, 32, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 4 },
                 { 1, 48, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 5 },
+                { 1, 64, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 6 },
                 D3DDECL_END()
             };
             if (FAILED(real->CreateVertexDeclaration(elements, &declaration)))
@@ -529,7 +627,8 @@ export namespace GpuGrass
                 continue;
             const auto& k = p.look.kinds;
             out[count] = { { p.corner[0], p.corner[1], p.corner[2], p.seed }, { p.edge1[0], p.edge1[1], p.edge1[2], share },
-                           { p.edge2[0], p.edge2[1], p.edge2[2], p.look.tag }, { k[0], k[1], k[2], k[3] } };
+                           { p.edge2[0], p.edge2[1], p.edge2[2], p.look.tag }, { k[0], k[1], k[2], k[3] },
+                           { p.edges[0], p.edges[1], p.edges[2], 0.0f } };
             blades += share * kBlades;
             if (++count >= kMaxInstances)
                 break;
@@ -761,8 +860,9 @@ public:
             using namespace GpuGrass;
             if (!bHideProps || !drawing || model >= grassModel.size() || !grassModel[model])
                 return false;
-            // All of them where the blades are full, fewer as they thin out past GpuGrassFullRange
-            return keep < (std::min)(BladeShare(distance) * 2.0f, 1.0f);
+            // All of them until the blades are down to a quarter (46 m at the defaults), fewer as they thin out further: the
+            // props and the blades trade places far off, where the change shows least
+            return keep < (std::min)(BladeShare(distance) * 4.0f, 1.0f);
         };
         ProceduralGround::OnRemoved = [](const void* key)
         {

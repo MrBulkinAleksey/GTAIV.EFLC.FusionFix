@@ -48,6 +48,7 @@ struct VSInput
     float4 edge1 : TEXCOORD3;   // its first edge, the share of its blades kept
     float4 edge2 : TEXCOORD4;   // its second edge, its surface's tag / 255 (debug colours)
     float4 kinds : TEXCOORD5;   // the share of grass, of weeds (the rest small plants), the surface's own grass (0..1)
+    float4 edges : TEXCOORD6;   // at the corner and the ends of the two edges: how far from ground without grass (0..1)
 };
 
 struct VSOutput
@@ -133,8 +134,11 @@ VSOutput GrassVS(VSInput input)
     if (uv.x + uv.y > 1.0)
         uv = 1.0 - uv;
     float3 root = input.corner.xyz + input.edge1.xyz * uv.x + input.edge2.xyz * uv.y;
-    // Blades past the piece's share: all their vertices at one point behind the camera, nothing drawn
-    [branch] if (input.vertex.z >= input.edge1.w)
+    // Towards ground without grass the blades thin out (a sixth of them at its edge) and shorten
+    float edge = input.edges.x + (input.edges.y - input.edges.x) * uv.x + (input.edges.z - input.edges.x) * uv.y;
+    // Blades past the piece's share, or thinned out by an edge: all their vertices at one point behind the camera,
+    // nothing drawn
+    [branch] if (input.vertex.z >= input.edge1.w || frac(input.vertex.w * 7.13 + 0.31) > edge * 1.2 + 0.15)
     {
         output.position = float4(0.0, 0.0, -1.0, 1.0);
         output.colour = 0.0;
@@ -168,6 +172,9 @@ VSOutput GrassVS(VSInput input)
     float height = isGrass * (0.2 + 0.45 * h * h) + isWeed * (0.35 + 0.5 * h) + isPlant * (0.10 + 0.16 * h);
     height *= lerp(0.6, 1.25, patch) * (clump > 0.62 ? 1.6 : lerp(0.75, 1.1, clump)) * lerp(0.4, 1.0, input.kinds.w) * vec4Blade.x;
     height *= 1.0 + 0.25 * isFlower;
+    // Shorter towards an edge; and the last twelfth of the blades kept rise out of the ground as the share grows (the
+    // camera coming nearer), so they don't pop in
+    height *= lerp(0.35, 1.0, edge) * saturate((input.edge1.w - input.vertex.z) * 12.0 + 0.05);
     float width = (isGrass * 0.02 + isWeed * 0.03 + isPlant * 0.075) * vec4Blade.y;
     // Wider far off, where fewer of them stand and thin ones only flicker; past 12 m more and more grass and weed blades
     // are tufts of three stalks on one wider quad (cut out in the pixel shader), all of them past 26 m
