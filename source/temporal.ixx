@@ -366,6 +366,9 @@ public:
         HistoryFrame = 0;
         UpscalerFrame = 0;
         OpaqueFrame = 0;
+        // Declarations by address: one made after the reset at the address of a released one is another. Emptied on
+        // the render thread, which reads them; the reset runs on the main thread
+        bDeclCacheStale = true;
     }
 
     static bool ResourcesReady()
@@ -400,14 +403,19 @@ public:
         if (TemporalAA::GetMode() == TemporalAA::Mode::Off)
             return false;
 
-        // Nothing in the menus is resolved, the camera's projection would only shake whatever draws with it
-        if (CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive)
-            return false;
-
         // Never jitter an image that is not resolved: e.g. post processing is off or failed to start. Counted in
         // frames, not scenes: frames without a scene would keep the last resolve recent forever.
         auto resolved = ResolvePresent.load();
-        return resolved != 0 && PresentFrame.load() - resolved < 10;
+        if (resolved == 0)
+            return false;
+        auto since = PresentFrame.load() - resolved;
+
+        // Menus: only while the scene behind them is resolved every frame, as in the graphics settings, where without
+        // the jitter DLSS and FSR had nothing to add and the scene stayed at the render size. A menu without the scene,
+        // the map, would only shake with the camera's projection: it stops the frame after the last resolve.
+        if (CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive)
+            return since < 2;
+        return since < 10;
     }
 
     static inline rage::grcViewport* CameraViewport = nullptr;
@@ -642,6 +650,7 @@ public:
     };
 
     static inline std::unordered_map<IDirect3DVertexDeclaration9*, DeclInfo> DeclCache;
+    static inline std::atomic<bool> bDeclCacheStale = false;
     static inline std::unordered_map<void*, EntityRecord> EntitiesCurrent;
     static inline std::unordered_map<void*, EntityRecord> EntitiesPrevious;
     static inline std::vector<float> BonesCurrent;
@@ -656,6 +665,8 @@ public:
     static void BeginCapture()
     {
         EndCaptureCleanup();
+        if (bDeclCacheStale.exchange(false))
+            DeclCache.clear();
 
         bCapturing = TemporalAA::GetMode() != TemporalAA::Mode::Off && TemporalAA::CurrentCamera.Valid && ResourcesReady() && bObjectMotionVectors;
         RenderThreadId = GetCurrentThreadId();
@@ -1466,7 +1477,8 @@ public:
             SAFE_RELEASE(surface);
             SAFE_RELEASE(texture);
         }
-        if (bSceneTargetsFailed)
+        // Not made while the device is being reset: it would be alive at the Reset
+        if (bSceneTargetsFailed || rage::grcDevice::IsDeviceLost())
             return nullptr;
         if (FAILED(device->CreateTexture(width, height, 1, D3DUSAGE_RENDERTARGET, format, D3DPOOL_DEFAULT, &texture, nullptr)) || !texture ||
             FAILED(texture->GetSurfaceLevel(0, &surface)) || !surface)

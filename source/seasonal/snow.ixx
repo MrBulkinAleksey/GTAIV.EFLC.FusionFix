@@ -201,12 +201,6 @@ private:
             mQuadVertexDecl = nullptr;
         }
 
-        if (mSnowTexture)
-        {
-            mSnowTexture->Release();
-            mSnowTexture = nullptr;
-        }
-
         if (mNormalRtCopy)
         {
             mNormalRtCopy->Destroy();
@@ -242,11 +236,12 @@ private:
         if (!device)
             return;
 
-        // Load snow texture
+        // Load snow texture: managed, so it outlives resets, and on the real device, off the game's video memory books
+        if (!mSnowTexture)
         {
             HMODULE hm = NULL;
             GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&OnDeviceReset, &hm);
-            if (FAILED(D3DXCreateTextureFromResource(device, hm, MAKEINTRESOURCE(IDR_SNOWTX), &mSnowTexture)))
+            if (FAILED(D3DXCreateTextureFromResource(RageDirect3DDevice9::RealDevice(device), hm, MAKEINTRESOURCE(IDR_SNOWTX), &mSnowTexture)))
                 mSnowTexture = nullptr;
         }
 
@@ -270,7 +265,7 @@ private:
         // Create and fill the fullscreen-quad VB
         if (!mQuadVertexBuffer)
         {
-            auto hr = device->CreateVertexBuffer(
+            auto hr = RageDirect3DDevice9::RealDevice(device)->CreateVertexBuffer(
                 6u * sizeof(VertexFormat),
                 D3DUSAGE_WRITEONLY,
                 0,
@@ -337,6 +332,12 @@ private:
         OnDeviceReset();
     }
 
+    static bool ResourcesReady()
+    {
+        return !rage::grcDevice::IsDeviceLost() && mQuadVertexBuffer && mQuadVertexDecl && mBlitVS && mBlitPS && mSnowVS && mSnowPS &&
+            mDiffuseRT && mNormalRT && mSpecularAoRT && mStencilRT && mDepthRT && mNormalRtCopy && mSnowTexture;
+    }
+
     static auto OnBuildRenderList() -> void
     {
         static auto initialized = false;
@@ -350,11 +351,8 @@ private:
             return;
 
         // Skip if any required GPU resource is unavailable (e.g., during/after a device reset)
-        if (!mQuadVertexBuffer || !mQuadVertexDecl || !mBlitVS || !mBlitPS || !mSnowVS || !mSnowPS ||
-            !mDiffuseRT || !mNormalRT || !mSpecularAoRT || !mStencilRT || !mDepthRT || !mNormalRtCopy || !mSnowTexture)
-        {
+        if (!ResourcesReady())
             return;
-        }
 
         auto mBeforeLightingCB = new T_CB_Generic_NoArgs(OnBeforeLighting);
         if (mBeforeLightingCB)
@@ -368,7 +366,11 @@ private:
             return true;
         };
 
+        // Checked again here, on the render thread: the game resets the device on the main thread while this
+        // thread still draws, and the lost device callback has taken them since the render list was built
         auto device = rage::grcDevice::GetD3DDevice();
+        if (!device || !ResourcesReady())
+            return;
 
         static CWeather::eWeatherType currWeather;
 

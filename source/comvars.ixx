@@ -2,6 +2,7 @@ module;
 
 #include <common.hxx>
 #include <D3D9Types.h>
+#include <atomic>
 
 export module comvars;
 
@@ -1665,6 +1666,14 @@ export namespace rage
         VALIDATE_SIZE(Functor0, 0x10);
 
         void(__cdecl* RegisterDeviceCallbacks)(Functor0 onLost, Functor0 onReset);
+
+        // From the start of the game's lost device callbacks (CE 0x422d50) to the start of its reset callbacks (CE
+        // 0x422f60), the device Reset between them. The game resets on the main thread while the render thread still
+        // draws: a default pool resource the render thread makes meanwhile is alive at the Reset, which then fails
+        // (fatal DD3D80), and what the lost callbacks released is gone under it. Render thread code that makes such
+        // resources on first use, or draws with released ones, waits until it is false again.
+        inline std::atomic<bool> bDeviceLost = false;
+        inline bool IsDeviceLost() { return bDeviceLost.load(std::memory_order_acquire); }
     }
 
     class grcTextureFactoryPC;
@@ -1735,15 +1744,13 @@ export namespace rage
             func(this, index, resolveFlags, unused);
         }
 
-        static inline std::unordered_map<std::string, grcTexturePC*> TextureCache;
-        static inline std::unordered_map<std::string, grcRenderTargetPC*> RTCache;
-        static inline SafetyHookInline shCreateTexture{};
-        static grcTexturePC* __fastcall CreateTexture(grcTextureFactoryPC* _this, void* edx, const char* name, void* a3)
+        // The game's render targets by name, looked up without making a string each time
+        struct NameHash
         {
-            auto ret = shCreateTexture.fastcall<grcTexturePC*>(_this, edx, name, a3);
-            TextureCache[name] = ret;
-            return ret;
-        }
+            using is_transparent = void;
+            size_t operator()(std::string_view name) const { return std::hash<std::string_view>{}(name); }
+        };
+        static inline std::unordered_map<std::string, grcRenderTargetPC*, NameHash, std::equal_to<>> RTCache;
 
         static inline SafetyHookInline shCreateRT{};
         // Lets the render scale size the scene's targets (renderscale.ixx)
@@ -1784,38 +1791,10 @@ export namespace rage
             return ret;
         }
 
-        static grcTexturePC* GetTextureByName(const char* name)
+        static grcRenderTargetPC* GetRTByName(std::string_view name)
         {
-            if (TextureCache.contains(name))
-                return TextureCache[name];
-            return nullptr;
-        }
-
-        static grcRenderTargetPC* GetRTByName(const char* name)
-        {
-            if (RTCache.contains(name))
-                return RTCache[name];
-            return nullptr;
-        }
-
-        static grcTexturePC* FindTextureByRawPointer(IDirect3DTexture9* ptr)
-        {
-            for (auto& [name, tex] : TextureCache)
-            {
-                if (tex->mD3DTexture == ptr)
-                    return tex;
-            }
-            return nullptr;
-        }
-
-        static grcRenderTargetPC* FindRTByRawPointer(IDirect3DTexture9* ptr)
-        {
-            for (auto& [name, rt] : RTCache)
-            {
-                if (rt->mD3DTexture == ptr)
-                    return rt;
-            }
-            return nullptr;
+            auto it = RTCache.find(name);
+            return it != RTCache.end() ? it->second : nullptr;
         }
     };
 
@@ -3382,6 +3361,23 @@ public:
         pattern = find_pattern("8B 0D ? ? ? ? 53 56 33 F6", "53 56 8B 35 ? ? ? ? 33 D2");
         rage::grcDevice::RegisterDeviceCallbacks = pattern.get_first<void(__cdecl)(rage::grcDevice::Functor0, rage::grcDevice::Functor0)>(0);
 
+        pattern = hook::pattern("83 EC 58 53 56 57 8B 3D ? ? ? ? 85 FF 7E 14 BE ? ? ? ? 8B 46 0C 56 FF D0");
+        if (!pattern.empty())
+        {
+            static auto DeviceLostHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&)
+            {
+                rage::grcDevice::bDeviceLost.store(true, std::memory_order_release);
+            });
+        }
+        pattern = hook::pattern("51 56 57 8B 3D ? ? ? ? 85 FF 7E 14 BE ? ? ? ? 8B 46 0C 56 FF D0");
+        if (!pattern.empty())
+        {
+            static auto DeviceResetHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&)
+            {
+                rage::grcDevice::bDeviceLost.store(false, std::memory_order_release);
+            });
+        }
+
         pattern = find_pattern("8B 44 24 04 56 8B F1 85 C0 74 38", "8B 44 24 04 85 C0 56 8B F1 74 38");
         rage::grcDevice::SetCallbackAddr = pattern.get_first<void*>(0);
 
@@ -3487,9 +3483,6 @@ public:
 
         pattern = find_pattern("BF ? ? ? ? F3 AB B8", "BF ? ? ? ? F3 AB B8 ? ? ? ? B9");
         RageDirect3DDevice9::g_TexturesBySampler = *pattern.get_first<IDirect3DTexture9**>(1);
-
-        pattern = find_pattern("81 EC ? ? ? ? 8D 04 24 68 ? ? ? ? FF B4 24", "8B 44 24 04 81 EC ? ? ? ? 68");
-        rage::grcTextureFactoryPC::shCreateTexture = safetyhook::create_inline(pattern.get_first(0), rage::grcTextureFactoryPC::CreateTexture);
 
         pattern = find_pattern("53 8B 5C 24 08 56 33 F6 57 39 35 ? ? ? ? 7E 25 8B 3C B5", "53 8B 5C 24 08 56 57 33 FF 39 3D", "53 8B 5C 24 08 56 33 F6 39 35 ? ? ? ? 57 7E 29 8B 3C B5 ? ? ? ? 8B 07 8B 50 14 53 8B CF FF D2 50 E8 ? ? ? ? 83 C4 08 85 C0");
         rage::grcTextureFactoryPC::shCreateRT = safetyhook::create_inline(pattern.get_first(0), rage::grcTextureFactoryPC::CreateRT);

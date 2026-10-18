@@ -6,18 +6,20 @@
 // the helper with their base name. Every request is: the game writes the parameters and the command,
 // signals <name>.Request and waits for <name>.Response. The helper answers each request exactly once.
 //
-// GPU synchronization uses a D3D12 fence created by the helper, which the game opens on its own queue:
-// imported as a Vulkan timeline semaphore with DXVK, or opened on the D3D12 device of D3D9on12. The game
-// signals WaitValue once the inputs are copied into the shared textures, the helper waits for it on its
-// queue, runs the upscaler and signals SignalValue, which the game waits for before copying the output
-// back. The helper answers Evaluate after its GPU work is submitted, so the game never waits on the GPU
-// for a value that nobody will signal.
+// GPU synchronization uses two D3D12 fences created by the helper, which the game opens on its own queue:
+// imported as Vulkan timeline semaphores with DXVK, or opened on the D3D12 device of D3D9on12. The game
+// signals WaitValue on the input fence once the inputs are copied into the shared textures, the helper waits
+// for it on its queue, runs the upscaler and signals SignalValue on the output fence, which the game waits for
+// before copying the output back. One writer each, so each fence only goes up: with a single fence the game's
+// next inputs could signal it past a Generate still running on the helper's compute queue, which let the copy
+// of the generated frame through early and then took the fence back down. The helper answers Evaluate after
+// its GPU work is submitted, so the game never waits on the GPU for a value that nobody will signal.
 //
 // Under Wine (ConfigureFlags::Wine) the shared textures have no UAV flag, and the game imports them as opaque
 // Win32 handles, which every Wine supports. Only textures can be shared: vkd3d-proton gives a buffer an empty
-// handle. Wine can't import a D3D12 fence of another process (it crashes the importer), so the game shares a
-// Vulkan timeline semaphore of its own instead (ConfigureFlags::GameFence), which the helper opens as its fence.
-// Where the helper can't open it (older Proton), it clears GameFence in Flags, and then both sides wait for their
+// handle. Wine can't import a D3D12 fence of another process (it crashes the importer), so the game shares two
+// Vulkan timeline semaphores of its own instead (ConfigureFlags::GameFence), which the helper opens as its fences.
+// Where the helper can't open them (older Proton), it clears GameFence in Flags, and then both sides wait for their
 // GPU work on the CPU: the game for its copies before Evaluate, the helper before it answers Evaluate.
 //
 // Frame generation (ConfigureFlags::FrameGeneration, FSR only): Evaluate also prepares the frame generation with
@@ -29,7 +31,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 12;
+    constexpr uint32_t Version = 13;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -92,7 +94,7 @@ namespace UpscalerProtocol
     {
         constexpr uint32_t ReactiveMask = 1 << 0;   // Reactive is written every frame and used by FSR
         constexpr uint32_t Wine = 1 << 1;           // textures without the UAV flag, for opaque handles
-        constexpr uint32_t GameFence = 1 << 2;      // FenceHandle is the game's semaphore; cleared by the helper if it can't open it
+        constexpr uint32_t GameFence = 1 << 2;      // the fence handles are the game's semaphores; cleared by the helper if it can't open them
         constexpr uint32_t FrameGeneration = 1 << 3; // FSR frame generation; cleared by the helper if it can't create it
         constexpr uint32_t HighDynamicRange = 1 << 4; // Present is scRGB
         constexpr uint32_t EightBitFrames = 1 << 5;   // the frame generation's textures are B8G8R8A8_UNORM; cleared by the helper if the GPU can't write them
@@ -166,14 +168,16 @@ namespace UpscalerProtocol
         // Configure results, handles already duplicated into the game process
         uint64_t TextureHandles[static_cast<size_t>(Texture::Count)];
         uint64_t TextureSizes[static_cast<size_t>(Texture::Count)];
-        uint64_t FenceHandle;         // the helper's fence; with GameFence, the game's semaphore duplicated into the helper
+        // The helper's fences; with GameFence, the game's semaphores duplicated into the helper
+        uint64_t InputFenceHandle;    // signalled by the game: WaitValue
+        uint64_t OutputFenceHandle;   // signalled by the helper: SignalValue
     };
 #pragma pack(pop)
 
     static_assert(sizeof(wchar_t) == 2);
     static_assert(offsetof(Shared, WaitValue) % 8 == 0);
     static_assert(offsetof(Shared, TextureHandles) % 8 == 0);
-    static_assert(sizeof(Shared) == 3976, "The layout must be identical in the x86 and x64 builds");
+    static_assert(sizeof(Shared) == 3984, "The layout must be identical in the x86 and x64 builds");
 
     inline const wchar_t* MappingSuffix = L".Mapping";
     inline const wchar_t* RequestSuffix = L".Request";

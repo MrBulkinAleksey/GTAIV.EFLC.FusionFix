@@ -118,7 +118,7 @@ private:
         if (!pDevice)
             return;
 
-        if (!ReflectionMapColourRT || !RefMipBlur_VS || !RefMipBlur_PS || !RefMipBlurBlend_PS || !mQuadVertexDecl || !mQuadVertexBuffer)
+        if (rage::grcDevice::IsDeviceLost() || !ReflectionMapColourRT || !RefMipBlur_VS || !RefMipBlur_PS || !RefMipBlurBlend_PS || !mQuadVertexDecl || !mQuadVertexBuffer)
             return;
 
         DWORD prevAddressV = 0;

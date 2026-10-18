@@ -1092,6 +1092,9 @@ export struct VehicleBoxShadows
     static bool BindShapes(IDirect3DDevice9* pDevice, const Shape* shapes, int count)
     {
         auto real = RageDirect3DDevice9::RealDevice(pDevice);
+        // Not made while the device is being reset: it would be alive at the Reset
+        if (!shapesTexture && rage::grcDevice::IsDeviceLost())
+            return false;
         if (!shapesTexture && FAILED(real->CreateTexture(kShapeTexels, 1, 1, D3DUSAGE_DYNAMIC, D3DFMT_A32B32G32R32F, D3DPOOL_DEFAULT, &shapesTexture, nullptr)))
         {
             shapesTexture = nullptr;
@@ -1113,9 +1116,13 @@ export struct VehicleBoxShadows
         return true;
     }
 
-    // When the device is lost: the texture is in its default pool
+    // When the device is lost: the texture is in its default pool. Unbound first: lost between a light's BindShapes
+    // and Off, it stayed on s7, and a default pool texture still bound keeps the Reset from going through (DD3D80)
     static void ReleaseShapes()
     {
+        if (shapesBound)
+            if (auto pDevice = rage::grcDevice::GetD3DDevice())
+                RageDirect3DDevice9::SetTextureBoth(pDevice, 7, nullptr);
         if (shapesTexture)
         {
             shapesTexture->Release();

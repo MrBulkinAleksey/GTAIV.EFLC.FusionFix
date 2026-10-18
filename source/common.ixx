@@ -807,6 +807,7 @@ private:
                 return 0;
             }
         };
+        CloseHandle(hTimer);
 
         params.fn();
 

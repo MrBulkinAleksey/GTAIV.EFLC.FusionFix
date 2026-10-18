@@ -254,6 +254,9 @@ namespace
     // Pairs the scene's depth buffer with targets of its size, and the full size one with the others
     void MatchDepth(IDirect3DDevice9* device)
     {
+        // Nothing made or bound while the device is being reset: FullDepth made or bound again then is alive at the Reset
+        if (rage::grcDevice::IsDeviceLost())
+            return;
         uint32_t rtWidth = 0, rtHeight = 0;
         if (!TargetSize(device, rtWidth, rtHeight))
             return;
@@ -543,7 +546,7 @@ export namespace RenderScale
     // full size surface from it.
     bool BeginPost(IDirect3DDevice9* device, IDirect3DTexture9*& scene, IDirect3DSurface9*& sceneSurface, IDirect3DSurface9*& output)
     {
-        if (!bActive || bInPost)
+        if (!bActive || bInPost || rage::grcDevice::IsDeviceLost())
             return false;
         auto rt = rage::grcTextureFactoryPC::GetRTByName("FullScreenCopy");
         if (!rt || !rt->mD3DTexture)
@@ -561,7 +564,10 @@ export namespace RenderScale
 
         if (!OutputTexture)
         {
-            if (FAILED(device->CreateTexture(DisplayWidth, DisplayHeight, 1, D3DUSAGE_RENDERTARGET, desc.Format, D3DPOOL_DEFAULT, &OutputTexture, nullptr)) || !OutputTexture)
+            // On the real device: made through the game's wrapper it went on the game's video memory books at every
+            // reset, and the plain Release in ReleaseOutput never took it off
+            if (FAILED(RageDirect3DDevice9::RealDevice(device)->CreateTexture(DisplayWidth, DisplayHeight, 1, D3DUSAGE_RENDERTARGET, desc.Format,
+                    D3DPOOL_DEFAULT, &OutputTexture, nullptr)) || !OutputTexture)
             {
                 LogOnce(2, "post: the full size texture could not be created");
                 return false;

@@ -21,6 +21,8 @@ import vtablepatch;
 // surface and buffer made on the device is booked here with what it is and the code on the stack that made it; a
 // COM object of ours rides in its private data (D3DSPD_IUNKNOWN), which the runtime releases with the resource and so
 // takes it off the books. A Reset that fails lists the ones still alive in GTAIV.EFLC.FusionFix.DeviceReset.log.
+// The booking scans the stack and formats a line for every such resource the game streams in, so it runs only with
+// DeviceResetLog = 1 in [DEBUG]; without it a failed Reset is still logged, without the list.
 namespace DeviceReset
 {
     // {6D3A1F52-9C47-4E0B-A8B1-2F5C7E9D0A13}
@@ -41,6 +43,7 @@ namespace DeviceReset
     std::unordered_map<IUnknown*, Entry> Alive;
     uint64_t NextId = 1;
     uint32_t Resets = 0;
+    bool bBooking = false;
 
     struct Module { uintptr_t begin = 0, end = 0; std::string name; };
     std::vector<Module> Modules;   // the game's and ours, where code on the stack is looked for
@@ -288,8 +291,19 @@ namespace DeviceReset
         }
         if (SUCCEEDED(hr))
         {
-            FusionLog::Write("DeviceReset", "Reset", "reset %u to %ux%u: done, %zu default pool resources alive after it\n", Resets,
-                parameters ? parameters->BackBufferWidth : 0, parameters ? parameters->BackBufferHeight : 0, alive.size());
+            if (bBooking)
+                FusionLog::Write("DeviceReset", "Reset", "reset %u to %ux%u: done, %zu default pool resources alive after it\n", Resets,
+                    parameters ? parameters->BackBufferWidth : 0, parameters ? parameters->BackBufferHeight : 0, alive.size());
+            else
+                FusionLog::Write("DeviceReset", "Reset", "reset %u to %ux%u: done\n", Resets,
+                    parameters ? parameters->BackBufferWidth : 0, parameters ? parameters->BackBufferHeight : 0);
+            return hr;
+        }
+        if (!bBooking)
+        {
+            FusionLog::Write("DeviceReset", "Failed", "reset %u to %ux%u FAILED with %08X: a default pool resource is still alive; "
+                "DeviceResetLog = 1 in [DEBUG] lists them\n", Resets, parameters ? parameters->BackBufferWidth : 0,
+                parameters ? parameters->BackBufferHeight : 0, static_cast<uint32_t>(hr));
             return hr;
         }
 
@@ -328,6 +342,11 @@ namespace DeviceReset
             AddModule(self, "FusionFix");
         }
         PatchVTable(vtable, 16, RealReset, &Reset);
+        hooked = vtable;
+        static const bool booking = [] { CIniReader iniReader(""); return iniReader.ReadInteger("DEBUG", "DeviceResetLog", 0) != 0; }();
+        bBooking = booking;
+        if (!bBooking)
+            return;
         PatchVTable(vtable, 23, RealCreateTexture, &CreateTexture);
         PatchVTable(vtable, 24, RealCreateVolumeTexture, &CreateVolumeTexture);
         PatchVTable(vtable, 25, RealCreateCubeTexture, &CreateCubeTexture);
@@ -336,7 +355,6 @@ namespace DeviceReset
         PatchVTable(vtable, 28, RealCreateRenderTarget, &CreateRenderTarget);
         PatchVTable(vtable, 29, RealCreateDepthStencilSurface, &CreateDepthStencilSurface);
         PatchVTable(vtable, 36, RealCreateOffscreenPlainSurface, &CreateOffscreenPlainSurface);
-        hooked = vtable;
     }
 }
 
