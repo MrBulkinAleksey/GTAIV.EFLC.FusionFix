@@ -201,12 +201,6 @@ private:
             mQuadVertexDecl = nullptr;
         }
 
-        if (mSnowTexture)
-        {
-            mSnowTexture->Release();
-            mSnowTexture = nullptr;
-        }
-
         if (mNormalRtCopy)
         {
             mNormalRtCopy->Destroy();
@@ -242,11 +236,12 @@ private:
         if (!device)
             return;
 
-        // Load snow texture
+        // Load snow texture: managed, so it outlives resets, and on the real device, off the game's video memory books
+        if (!mSnowTexture)
         {
             HMODULE hm = NULL;
             GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&OnDeviceReset, &hm);
-            if (FAILED(D3DXCreateTextureFromResource(device, hm, MAKEINTRESOURCE(IDR_SNOWTX), &mSnowTexture)))
+            if (FAILED(D3DXCreateTextureFromResource(RageDirect3DDevice9::RealDevice(device), hm, MAKEINTRESOURCE(IDR_SNOWTX), &mSnowTexture)))
                 mSnowTexture = nullptr;
         }
 
@@ -270,7 +265,7 @@ private:
         // Create and fill the fullscreen-quad VB
         if (!mQuadVertexBuffer)
         {
-            auto hr = device->CreateVertexBuffer(
+            auto hr = RageDirect3DDevice9::RealDevice(device)->CreateVertexBuffer(
                 6u * sizeof(VertexFormat),
                 D3DUSAGE_WRITEONLY,
                 0,

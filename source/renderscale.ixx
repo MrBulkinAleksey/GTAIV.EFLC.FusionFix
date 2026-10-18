@@ -561,7 +561,10 @@ export namespace RenderScale
 
         if (!OutputTexture)
         {
-            if (FAILED(device->CreateTexture(DisplayWidth, DisplayHeight, 1, D3DUSAGE_RENDERTARGET, desc.Format, D3DPOOL_DEFAULT, &OutputTexture, nullptr)) || !OutputTexture)
+            // On the real device: made through the game's wrapper it went on the game's video memory books at every
+            // reset, and the plain Release in ReleaseOutput never took it off
+            if (FAILED(RageDirect3DDevice9::RealDevice(device)->CreateTexture(DisplayWidth, DisplayHeight, 1, D3DUSAGE_RENDERTARGET, desc.Format,
+                    D3DPOOL_DEFAULT, &OutputTexture, nullptr)) || !OutputTexture)
             {
                 LogOnce(2, "post: the full size texture could not be created");
                 return false;
