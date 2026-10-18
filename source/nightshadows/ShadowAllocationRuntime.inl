@@ -177,6 +177,8 @@ namespace PlayerShadowAllocation
     // signals) rank None unless their light reaches you; for the slot trace's status line
     static bool addedLightsYield = true;
     static std::atomic<uint32_t> addedLightsYielded{0};
+    static bool addedLightsLast = true; // AddedLightsLast, see NativeShadowContinuity42::Candidate::lastResort
+    static std::atomic<uint32_t> addedLightsLastResort{0};
     static std::atomic<uint32_t> uncachedLampsTrimmed{0}, lampsBehindCamera{0};
     static std::atomic<uint32_t> lampsHidden{0}, sightProbes{0}, sightHits{0}; // LampsBehindWalls, for the status line
     static std::atomic<uint32_t> lightsFlickering{0}; // lights ranked off screen as they flicker out of the list, for the status line
@@ -1068,10 +1070,21 @@ namespace PlayerShadowAllocation
             if(wholeShadow && rankedSquared>=0) rankedSquared/=uncachedLampAdvantage*uncachedLampAdvantage;
             if(gain==SlotGain::None) ++lampsWithoutCasters;
             else if(gain==SlotGain::OffScreen) ++lightsOffScreen;
+            // AddedLightsLast: traffic signals, and facades' model and glow lights with a shadow of ours (the light's
+            // key in a building: street lamps such as bm_nylamp1 have no shadow in their 2dfx either and shadow only
+            // through ours, but stand as objects), cached or not, whether their light reaches you or not
+            bool lastResort=false;
+            if(addedLightsLast && kind==budget::Kind::Lamp) {
+                const auto origin=lightOrigin ? lightOrigin(key) : static_cast<uint8_t>(fusionfix::shadows::ShadowSlotTrace::OriginGame);
+                lastResort=((flags&rage::LF_TRAFFIC) && !(flags&rage::LF_MAP)) ||
+                    ((origin==fusionfix::shadows::ShadowSlotTrace::OriginModelLight || origin==fusionfix::shadows::ShadowSlotTrace::OriginCorona) &&
+                     BuildingLight(key));
+                if(lastResort) ++addedLightsLastResort;
+            }
             labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(
                 {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam,gain,
                 rankedSquared,(caster>=0 && rawGain!=SlotGain::None) || wholeShadow,
-                kind!=budget::Kind::PlayerBeam && SlotIsFresh(key),inReach);
+                kind!=budget::Kind::PlayerBeam && SlotIsFresh(key),inReach,lastResort);
             // Record why a prior choice loses its claim, independently of
             // whether native sorting eventually drops it. Bounded to 7/pass.
             for(const auto& old:state.previousSelection) if(old.key==key) {
@@ -1119,7 +1132,7 @@ namespace PlayerShadowAllocation
                 : decider==Rule::Special ? Trace::Rule::Special : decider==Rule::OwnBeam ? Trace::Rule::OwnBeam
                 : decider==Rule::Gain ? Trace::Rule::Gain : decider==Rule::Claim ? Trace::Rule::Claim
                 : decider==Rule::Nearer ? Trace::Rule::Nearer : decider==Rule::Fresh ? Trace::Rule::Fresh
-                : decider==Rule::Reach ? Trace::Rule::Reach
+                : decider==Rule::Reach ? Trace::Rule::Reach : decider==Rule::LastResort ? Trace::Rule::LastResort
                 : result==1 ? Trace::Rule::Distance : Trace::Rule::Native;
             const auto* lights=CurrentLights();
             try { slotTrace.Compared(static_cast<uint32_t>(lights[challenger].mCastShadows),

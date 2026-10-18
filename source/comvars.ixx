@@ -746,6 +746,13 @@ namespace CObject
     {
         return *pObjectsPool;
     }
+
+    // Calls visit(object) for every object in the pool; false where the pool is not usable.
+    export template <typename Visit>
+    bool ForEachObject(Visit&& visit)
+    {
+        return ForEachInPool(CheckedPool(pObjectsPool, 0x24), visit);
+    }
 }
 
 namespace CTask
