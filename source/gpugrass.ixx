@@ -58,6 +58,12 @@ using namespace PostFxProfiler;
 // The blades take a quarter of their colour from the ground under them: _DEFERRED_GBUFFER_0_ is copied first (into Wet Ground's
 // copy, which that pass makes again after the grass).
 //
+// Temporal AA, DLAA and FSR: the grass is drawn before the motion vectors are made from depth (OnGBufferBeforeMotion),
+// so they have the camera's motion of the blades, and after them drawn again into the motion target (RenderMotion)
+// with the wind's own: where each vertex was at the wind's phases of the previous frame. Without it the swaying tips
+// were taken for wrong history and the grass shimmered. Far off (GpuGrass.fx) the blades' normals and colours go over
+// to the lawn's, and one in two goes to make the others twice as wide, so thin blades don't flicker.
+//
 // Bending (GpuGrass.fx): the bodies Grass Bending takes (GrassShared::Bodies), the kBodies nearest the camera within the
 // range, and Grass Trample's grid as a vertex texture (vs s1), as the grass props have them.
 //
