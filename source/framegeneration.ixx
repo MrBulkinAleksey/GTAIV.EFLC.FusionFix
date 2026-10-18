@@ -1105,7 +1105,9 @@ namespace
         // The helper presents the frames, and generates them: the game neither keeps nor presents any
         if (bHelperPresent && !bHelperPresentBroken)
         {
-            if (bPending || bPendingGenerated)
+            // Frames of the game's own presentation still waiting are stale once the helper presents; while it does not
+            // (Wine, exclusive fullscreen, before it is set up) they go below, as without HelperPresent
+            if (IsHelperPresenting() && (bPending || bPendingGenerated))
             {
                 bPending = bPendingGenerated = false;
                 Upscaler::DropGenerated();
