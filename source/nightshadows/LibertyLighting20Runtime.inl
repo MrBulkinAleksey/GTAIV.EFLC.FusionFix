@@ -301,9 +301,11 @@ namespace Lighting20
         static std::atomic<uint32_t> lampsPromoted{0}, modelLightsPromoted{0}, coronaLights{0}, coronasRefused{0}, coronasCapped{0};
         static std::atomic<uint32_t> coronasMerged{0}, modelLightsMerged{0}, modelLightsIdle{0};
         static bool modelLightsNeedCasters = true; // ModelLightShadowsNeedCasters
-        // WorldLightsWithoutSlots: the model lights keep the game's no shadow and the coronas' lights take none, so
-        // they never race the lamps for the seven slots; the cars, people and props under them still shadow through the
-        // light shaders' shapes (VehicleBoxShadows), which every light without a map of its own takes
+        // WorldLightsWithoutSlots: the point model lights (windows, shop fronts, neon) keep the game's no shadow and
+        // the coronas' lights take none, so they never race the lamps for the seven slots; the cars, people and props
+        // under them still shadow through the light shaders' shapes (VehicleBoxShadows), which every light without a
+        // map of its own takes. Spot model lights still get theirs: street lamps such as bm_nylamp1 have no shadow in
+        // their 2dfx and shadow only through this promotion.
         static bool withoutSlots = true;
         static float mergeDistance = 1.5f; // ExtraLightMergeDistance
 
@@ -345,8 +347,9 @@ namespace Lighting20
         // the game clears right after for lights without shadow flags.
         static bool PromoteModelLight(uint32_t flags, uintptr_t descriptor, uint32_t key) noexcept
         {
-            if (!On() || !modelLights || withoutSlots || (flags & 6) || !descriptor) return false;
+            if (!On() || !modelLights || (flags & 6) || !descriptor) return false;
             const auto type = *reinterpret_cast<const uint8_t*>(descriptor + 0x5B);
+            if (withoutSlots && type == 1) return false;
             const float radius = *reinterpret_cast<const float*>(descriptor + 0x38);
             if ((type != 1 && type != 2) || !std::isfinite(radius) || radius <= 0 || !key || key == UINT32_MAX) return false;
             Ours::Add(key, Ours::ModelLight);
