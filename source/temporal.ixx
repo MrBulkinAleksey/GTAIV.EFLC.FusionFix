@@ -149,6 +149,9 @@ export namespace TemporalAA
 
     // Called at the end of the camera scene's G-buffer pass, whatever the antialiasing, with the device state saved
     // around it: the depth there reads as the G-buffer pass wrote it, which it does not in the lighting phase.
+    // The same, before the motion vectors are made from the depth: what is drawn into the G-buffer there (GPU grass)
+    // gets the camera's motion, and its depth reaches the resolve, DLAA and FSR. OnGBufferEnd follows, after them.
+    inline void (*OnGBufferBeforeMotion)(IDirect3DDevice9* device) = nullptr;
     inline void (*OnGBufferEnd)(IDirect3DDevice9* device) = nullptr;
     // Marks the motion vectors' passes for the PostFx profiler (begin, then end), when it is set.
     inline void (*ProfileMotion)(IDirect3DDevice9* device, bool begin) = nullptr;
@@ -181,6 +184,9 @@ export namespace TemporalAA
     Mode GetMode();
     bool IsMotionVectorsReady();
     IDirect3DTexture9* GetMotionVectors();
+    // [ANTIALIASING] ObjectDepthBias: how much nearer than the G-buffer's depth a pass drawing motion vectors over it
+    // writes its own, so the depth test keeps it where its surface is what is seen
+    float ObjectDepthBias();
     bool HistoryValid();
     void OnFogDrawn();
 }
@@ -1037,6 +1043,15 @@ public:
         bCapturing = false;
 
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
+        if (device && OnGBufferBeforeMotion)
+        {
+            bInternalDraw = true;
+            {
+                StateBackup backup(device);
+                OnGBufferBeforeMotion(device);
+            }
+            bInternalDraw = false;
+        }
         if (device && GetMode() != Mode::Off && CurrentCamera.Valid && ResourcesReady())
         {
             bInternalDraw = true;
@@ -2264,6 +2279,11 @@ export namespace TemporalAA
     bool IsMotionVectorsReady()
     {
         return Temporal::MotionFrame == SceneFrame && Temporal::MotionRT;
+    }
+
+    float ObjectDepthBias()
+    {
+        return Temporal::fObjectDepthBias;
     }
 
     // Render thread, after the G-buffer pass: the world matrix this frame's G-buffer drew the entity with, in CEntity's

@@ -125,7 +125,18 @@ namespace GpuGrass
     IDirect3DIndexBuffer9* meshIB = nullptr;
     IDirect3DVertexBuffer9* instanceVB = nullptr;
     IDirect3DVertexDeclaration9* declaration = nullptr;
-    struct Handles { D3DXHANDLE technique, viewProj, wind, windDir, blade, eye, nearPlane, farDivNear, bodies, bend, sun; } h{};
+    struct Handles
+    {
+        D3DXHANDLE technique, viewProj, wind, windDir, blade, eye, nearPlane, farDivNear, bodies, bend, sun;
+        D3DXHANDLE motion, viewProjNoJitter, prevViewProj, windPrev, depthBias;
+    } h{};
+    // What RenderMotion draws again: this frame's instances, if Render drew them, the depth test it drew with, and
+    // the wind's vector of this frame and the one before
+    uint32_t drawnFrame = 0;
+    int drawnCount = 0;
+    DWORD drawnZFunc = D3DCMP_LESSEQUAL;
+    D3DXVECTOR4 windNow(0.0f, 0.0f, 0.0f, 0.0f), windBefore(0.0f, 0.0f, 0.0f, 0.0f);
+    bool windKnown = false;
     const char* status = "not drawn yet";
     bool depthLogged = false;
 
@@ -449,6 +460,11 @@ namespace GpuGrass
                 h.sun = effect->GetParameterByName(nullptr, "vec4Sun");
                 h.nearPlane = effect->GetParameterByName(nullptr, "fNearPlane");
                 h.farDivNear = effect->GetParameterByName(nullptr, "fFarDivNear");
+                h.motion = effect->GetTechniqueByName("Motion");
+                h.viewProjNoJitter = effect->GetParameterByName(nullptr, "matViewProjNoJitter");
+                h.prevViewProj = effect->GetParameterByName(nullptr, "matPrevViewProj");
+                h.windPrev = effect->GetParameterByName(nullptr, "vec4WindPrev");
+                h.depthBias = effect->GetParameterByName(nullptr, "fDepthBias");
             }
         }
         if (!effect)
@@ -546,8 +562,63 @@ export namespace GpuGrass
             effect->OnLostDevice();
     }
 
-    // At the end of the G-buffer pass (TemporalAA::OnGBufferEnd, the device state saved around it), before the depth
-    // copy: the grass into the G-buffer.
+    // The instances of this frame with `technique`: the ground's colour copy on s0 (or none), the trample grid on the
+    // vertex sampler s1; the samplers and the streams' frequencies put back
+    void DrawBlades(IDirect3DDevice9* pDevice, D3DXHANDLE technique, IDirect3DBaseTexture9* ground, int count)
+    {
+        static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER,
+                                                                  D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
+        static constexpr DWORD kSamplerValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, FALSE };
+        static constexpr DWORD kTrampleValues[] = { D3DTADDRESS_WRAP, D3DTADDRESS_WRAP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE };
+        static constexpr DWORD kSamplers[2] = { 0, D3DVERTEXTEXTURESAMPLER1 };
+        IDirect3DBaseTexture9* oldTexture[2] = {};
+        DWORD oldSampler[2][std::size(kSamplerStates)] = {};
+        for (int s = 0; s < 2; ++s)
+        {
+            pDevice->GetTexture(kSamplers[s], &oldTexture[s]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                pDevice->GetSamplerState(kSamplers[s], kSamplerStates[i], &oldSampler[s][i]);
+        }
+        auto trample = GrassShared::TrampleTexture;
+
+        pDevice->SetVertexDeclaration(declaration);
+        pDevice->SetStreamSource(0, meshVB, 0, sizeof(MeshVertex));
+        pDevice->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | UINT(count));
+        pDevice->SetStreamSource(1, instanceVB, 0, sizeof(Instance));
+        pDevice->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1u);
+        pDevice->SetIndices(meshIB);
+
+        UINT passes = 0;
+        effect->SetTechnique(technique);
+        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
+        effect->BeginPass(0);
+        effect->CommitChanges();
+        SetTextureBoth(pDevice, 0, ground);
+        SetTextureBoth(pDevice, D3DVERTEXTEXTURESAMPLER1, trample);
+        for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+        {
+            SetSamplerStateBoth(pDevice, 0, kSamplerStates[i], kSamplerValues[i]);
+            SetSamplerStateBoth(pDevice, D3DVERTEXTEXTURESAMPLER1, kSamplerStates[i], kTrampleValues[i]);
+        }
+        pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, kBlades * kVertsPerBlade, 0, kBlades * kIndicesPerBlade / 3);
+        effect->EndPass();
+        effect->End();
+
+        pDevice->SetStreamSourceFreq(0, 1);
+        pDevice->SetStreamSourceFreq(1, 1);
+        pDevice->SetStreamSource(1, nullptr, 0, 0);
+        for (int s = 0; s < 2; ++s)
+        {
+            SetTextureBoth(pDevice, kSamplers[s], oldTexture[s]);
+            SAFE_RELEASE(oldTexture[s]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                SetSamplerStateBoth(pDevice, kSamplers[s], kSamplerStates[i], oldSampler[s][i]);
+        }
+    }
+
+    // At the end of the G-buffer pass, before temporal AA's motion vectors (TemporalAA::OnGBufferBeforeMotion, the
+    // device state saved around it), so the camera's motion is made from depth with the grass in it: the grass into
+    // the G-buffer.
     void Render(IDirect3DDevice9* pDevice)
     {
         static auto pref = FusionFixSettings.GetRef("PREF_GPU_GRASS");
@@ -569,6 +640,7 @@ export namespace GpuGrass
         if (!pDevice || !pref || pref->get() == 0)
         {
             drawing = false;
+            windKnown = false;
             return void(status = "off");
         }
         const auto start = std::chrono::steady_clock::now();
@@ -697,19 +769,6 @@ export namespace GpuGrass
         static float vsConstants[256 * 4], psConstants[224 * 4];
         pDevice->GetVertexShaderConstantF(0, vsConstants, 256);
         pDevice->GetPixelShaderConstantF(0, psConstants, 224);
-        static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER,
-                                                                  D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
-        static constexpr DWORD kSamplerValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, FALSE };
-        static constexpr DWORD kTrampleValues[] = { D3DTADDRESS_WRAP, D3DTADDRESS_WRAP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE };
-        static constexpr DWORD kSamplers[2] = { 0, D3DVERTEXTEXTURESAMPLER1 };
-        IDirect3DBaseTexture9* oldTexture[2] = {};
-        DWORD oldSampler[2][std::size(kSamplerStates)] = {};
-        for (int s = 0; s < 2; ++s)
-        {
-            pDevice->GetTexture(kSamplers[s], &oldTexture[s]);
-            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
-                pDevice->GetSamplerState(kSamplers[s], kSamplerStates[i], &oldSampler[s][i]);
-        }
         DWORD colourWrite2 = 0, zfunc = D3DCMP_LESSEQUAL;
         pDevice->GetRenderState(D3DRS_COLORWRITEENABLE2, &colourWrite2);
         pDevice->GetRenderState(D3DRS_ZFUNC, &zfunc);
@@ -741,6 +800,9 @@ export namespace GpuGrass
         const D3DXVECTOR4 blade(1.0f, 1.0f, groundCopied ? 0.25f : 0.0f, debug ? 1.0f : 0.0f);
         const D3DXVECTOR4 eyeVector(eye[0], eye[1], eye[2], 0.0f);
         effect->SetVector(h.wind, &wind);
+        windBefore = windKnown ? windNow : wind;
+        windNow = wind;
+        windKnown = true;
         effect->SetVector(h.windDir, &windDir);
         effect->SetVector(h.blade, &blade);
         effect->SetVector(h.eye, &eyeVector);
@@ -787,39 +849,10 @@ export namespace GpuGrass
         effect->SetFloat(h.nearPlane, camera.Near);
         effect->SetFloat(h.farDivNear, camera.Far / camera.Near);
 
-        pDevice->SetVertexDeclaration(declaration);
-        pDevice->SetStreamSource(0, meshVB, 0, sizeof(MeshVertex));
-        pDevice->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | UINT(count));
-        pDevice->SetStreamSource(1, instanceVB, 0, sizeof(Instance));
-        pDevice->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1u);
-        pDevice->SetIndices(meshIB);
-
-        UINT passes = 0;
-        effect->SetTechnique(h.technique);
-        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
-        effect->BeginPass(0);
-        effect->CommitChanges();
-        SetTextureBoth(pDevice, 0, groundCopied ? R.WetCopyTex[0] : nullptr);
-        SetTextureBoth(pDevice, D3DVERTEXTEXTURESAMPLER1, trample);
-        for (size_t i = 0; i < std::size(kSamplerStates); ++i)
-        {
-            SetSamplerStateBoth(pDevice, 0, kSamplerStates[i], kSamplerValues[i]);
-            SetSamplerStateBoth(pDevice, D3DVERTEXTEXTURESAMPLER1, kSamplerStates[i], kTrampleValues[i]);
-        }
-        pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, kBlades * kVertsPerBlade, 0, kBlades * kIndicesPerBlade / 3);
-        effect->EndPass();
-        effect->End();
-
-        pDevice->SetStreamSourceFreq(0, 1);
-        pDevice->SetStreamSourceFreq(1, 1);
-        pDevice->SetStreamSource(1, nullptr, 0, 0);
-        for (int s = 0; s < 2; ++s)
-        {
-            SetTextureBoth(pDevice, kSamplers[s], oldTexture[s]);
-            SAFE_RELEASE(oldTexture[s]);
-            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
-                SetSamplerStateBoth(pDevice, kSamplers[s], kSamplerStates[i], oldSampler[s][i]);
-        }
+        DrawBlades(pDevice, h.technique, groundCopied ? R.WetCopyTex[0] : nullptr, count);
+        drawnFrame = FrameHistory::Frame();
+        drawnCount = count;
+        drawnZFunc = zfunc == D3DCMP_ALWAYS || zfunc == D3DCMP_NEVER ? D3DCMP_LESSEQUAL : zfunc;
         pDevice->SetRenderState(D3DRS_COLORWRITEENABLE2, colourWrite2);
         pDevice->SetVertexShaderConstantF(0, vsConstants, 256);
         pDevice->SetPixelShaderConstantF(0, psConstants, 224);
@@ -829,6 +862,65 @@ export namespace GpuGrass
         status = "drawn";
         if (bLog)
             logCpuMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    }
+
+    // After the motion vectors (TemporalAA::OnGBufferEnd): the blades drawn this frame again into the motion target,
+    // with their wind's motion over the camera's, where the depth test finds them what is seen
+    void RenderMotion(IDirect3DDevice9* pDevice)
+    {
+        if (!pDevice || !effect || !h.motion || drawnFrame != FrameHistory::Frame() || drawnCount <= 0 || !TemporalAA::IsMotionVectorsReady())
+            return;
+        auto motionTexture = TemporalAA::GetMotionVectors();
+        const auto& camera = FrameHistory::Current();
+        const auto& previous = FrameHistory::Previous();
+        if (!motionTexture || !camera.Valid)
+            return;
+        IDirect3DSurface9* motion = nullptr;
+        IDirect3DSurface9* depth = nullptr;
+        motionTexture->GetSurfaceLevel(0, &motion);
+        pDevice->GetDepthStencilSurface(&depth);
+        D3DSURFACE_DESC motionDesc{}, depthDesc{};
+        if (!motion || !depth || FAILED(motion->GetDesc(&motionDesc)) || FAILED(depth->GetDesc(&depthDesc)) ||
+            motionDesc.Width != depthDesc.Width || motionDesc.Height != depthDesc.Height)
+        {
+            SAFE_RELEASE(motion);
+            SAFE_RELEASE(depth);
+            return;
+        }
+
+        ProfilerScope timed(pDevice, kProfGpuGrass);
+        static float vsConstants[256 * 4], psConstants[224 * 4];
+        pDevice->GetVertexShaderConstantF(0, vsConstants, 256);
+        pDevice->GetPixelShaderConstantF(0, psConstants, 224);
+        pDevice->SetRenderTarget(0, motion);
+        for (DWORD i = 1; i < 4; ++i)
+            pDevice->SetRenderTarget(i, nullptr);
+        pDevice->SetDepthStencilSurface(depth);
+        D3DVIEWPORT9 viewport = { 0, 0, motionDesc.Width, motionDesc.Height, 0.0f, 1.0f };
+        pDevice->SetViewport(&viewport);
+        static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kStates[] =
+        {
+            { D3DRS_ZENABLE, TRUE }, { D3DRS_ZWRITEENABLE, FALSE }, { D3DRS_ALPHABLENDENABLE, FALSE }, { D3DRS_ALPHATESTENABLE, FALSE },
+            { D3DRS_STENCILENABLE, FALSE }, { D3DRS_CULLMODE, D3DCULL_NONE },
+            { D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN }, { D3DRS_SCISSORTESTENABLE, FALSE },
+            { D3DRS_SRGBWRITEENABLE, FALSE }, { D3DRS_FILLMODE, D3DFILL_SOLID }, { D3DRS_CLIPPLANEENABLE, 0 }, { D3DRS_FOGENABLE, FALSE },
+            { D3DRS_DEPTHBIAS, 0 }, { D3DRS_SLOPESCALEDEPTHBIAS, 0 },
+        };
+        for (auto [state, value] : kStates)
+            pDevice->SetRenderState(state, value);
+        pDevice->SetRenderState(D3DRS_ZFUNC, drawnZFunc);
+
+        // The rest of the effect's values are Render's of this frame
+        effect->SetMatrix(h.viewProjNoJitter, &camera.ViewProjectionNoJitter);
+        effect->SetMatrix(h.prevViewProj, previous.Valid ? &previous.ViewProjectionNoJitter : &camera.ViewProjectionNoJitter);
+        effect->SetVector(h.windPrev, &windBefore);
+        effect->SetFloat(h.depthBias, TemporalAA::ObjectDepthBias());
+        DrawBlades(pDevice, h.motion, nullptr, drawnCount);
+
+        pDevice->SetVertexShaderConstantF(0, vsConstants, 256);
+        pDevice->SetPixelShaderConstantF(0, psConstants, 224);
+        SAFE_RELEASE(motion);
+        SAFE_RELEASE(depth);
     }
 
     const char* Status()

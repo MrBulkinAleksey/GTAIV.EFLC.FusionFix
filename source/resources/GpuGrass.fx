@@ -127,18 +127,115 @@ float3 Bending(float3 root, float height)
     return float3(push, most);
 }
 
-VSOutput GrassVS(VSInput input)
+// A blade's place on its piece, and whether it is drawn: past the piece's share, thinned out by an edge of the grass
+// (a sixth of them kept at the edge itself) or past 15 m one in two going to make the others twice as wide (LOD: thin
+// blades far off only flicker), it is not
+bool BladeKept(VSInput input, out float3 root, out float edge, out float distance)
 {
-    VSOutput output;
     float2 uv = input.blade.xy;
     if (uv.x + uv.y > 1.0)
         uv = 1.0 - uv;
-    float3 root = input.corner.xyz + input.edge1.xyz * uv.x + input.edge2.xyz * uv.y;
-    // Towards ground without grass the blades thin out (a sixth of them at its edge) and shorten
-    float edge = input.edges.x + (input.edges.y - input.edges.x) * uv.x + (input.edges.z - input.edges.x) * uv.y;
-    // Blades past the piece's share, or thinned out by an edge: all their vertices at one point behind the camera,
-    // nothing drawn
-    [branch] if (input.vertex.z >= input.edge1.w || frac(input.vertex.w * 7.13 + 0.31) > edge * 1.2 + 0.15)
+    root = input.corner.xyz + input.edge1.xyz * uv.x + input.edge2.xyz * uv.y;
+    edge = input.edges.x + (input.edges.y - input.edges.x) * uv.x + (input.edges.z - input.edges.x) * uv.y;
+    distance = length(root - vec4Eye.xyz);
+    float thinned = 0.5 * saturate((distance - 15.0) / 15.0);
+    return input.vertex.z < input.edge1.w && frac(input.vertex.w * 7.13 + 0.31) <= edge * 1.2 + 0.15 &&
+           frac(input.vertex.w * 5.37 + 0.71) >= thinned;
+}
+
+struct Blade
+{
+    float3 root;
+    float t, random, height, width, profile, lean;
+    float3 across, facing;
+    float isGrass, isWeed, isPlant, isFlower, isTuft;
+    float patch, clump, dry, second, distant;
+};
+
+Blade MakeBlade(VSInput input, float3 root, float edge, float distance)
+{
+    Blade b;
+    b.root = root;
+    b.random = input.vertex.w;
+    b.t = input.vertex.x;
+    // How far off, for what blurs into a lawn there: 0 within 8 m, 1 past 28 m
+    b.distant = saturate((distance - 8.0) / 20.0);
+
+    // The blade's kind: grass, weed or small plant
+    float pick = frac(b.random * 13.713 + input.corner.w * 7.31 + input.blade.w * 3.17);
+    b.isWeed = pick >= input.kinds.x && pick < input.kinds.x + input.kinds.y ? 1.0 : 0.0;
+    b.isPlant = pick >= input.kinds.x + input.kinds.y ? 1.0 : 0.0;
+    b.isGrass = 1.0 - b.isWeed - b.isPlant;
+
+    // Patches over the ground: some taller, some shorter, tall tufts within them, some drier, some in flower (both of
+    // those from the patches' noise, a second field of it costs too many vertex slots)
+    b.patch = Noise(root.xy * 0.13);
+    b.clump = Noise(root.xy * 0.9 + 31.7);
+    float wide = Noise(root.xy * 0.06 + 17.3);
+    b.dry = smoothstep(0.5, 0.85, wide);
+    float bloom = smoothstep(0.55, 0.8, frac(wide * 2.7 + b.patch * 0.6));
+    b.second = frac(b.random * 31.17 + input.corner.w * 3.73);
+    b.isFlower = (1.0 - b.isPlant) * (b.second < bloom * 0.08 ? 1.0 : 0.0);
+
+    // Long thin blades, curving over; tufts stand taller
+    float h = input.blade.w;
+    float height = b.isGrass * (0.2 + 0.45 * h * h) + b.isWeed * (0.35 + 0.5 * h) + b.isPlant * (0.10 + 0.16 * h);
+    height *= lerp(0.6, 1.25, b.patch) * (b.clump > 0.62 ? 1.6 : lerp(0.75, 1.1, b.clump)) * lerp(0.4, 1.0, input.kinds.w) * vec4Blade.x;
+    height *= 1.0 + 0.25 * b.isFlower;
+    // Shorter towards an edge; and the last twelfth of the blades kept rise out of the ground as the share grows (the
+    // camera coming nearer), so they don't pop in
+    b.height = height * lerp(0.35, 1.0, edge) * saturate((input.edge1.w - input.vertex.z) * 12.0 + 0.05);
+    float width = (b.isGrass * 0.02 + b.isWeed * 0.03 + b.isPlant * 0.075) * vec4Blade.y;
+    // Wider far off, where fewer of them stand and thin ones only flicker (twice past 30 m for the half BladeKept left
+    // out); past 12 m more and more grass and weed blades are tufts of three stalks on one wider quad (cut out in the
+    // pixel shader), all of them past 26 m
+    width *= (1.0 + saturate((distance - 6.0) / 24.0) * 1.5) / (1.0 - 0.5 * saturate((distance - 15.0) / 15.0));
+    b.isTuft = (1.0 - b.isPlant) * (1.0 - b.isFlower) * (frac(b.random * 3.31 + 0.17) < saturate((distance - 12.0) / 14.0) ? 1.0 : 0.0);
+    b.width = width * (1.0 + 2.2 * b.isTuft);
+    // Grass and weeds narrow to the tip; leaves are widest in the middle; a flower is a thin stalk with a head
+    float t = b.t;
+    float profile = lerp(1.0 - t, sin(t * 3.1415927) * 1.1 + 0.2 * (1.0 - t), b.isPlant);
+    b.profile = b.isFlower > 0.0 ? (t > 0.75 ? 3.0 : 0.4) : profile;
+    // How far the blade leans out from its root: grass arcs over, weeds stand, leaves spread
+    b.lean = (b.isGrass * 0.7 + b.isWeed * 0.3 + b.isPlant * 1.1) * (1.0 - 0.7 * b.isFlower);
+
+    float turn = input.blade.z + input.corner.w * 6.2831853;
+    float s, c;
+    sincos(turn, s, c);
+    b.across = float3(c, s, 0.0);
+    b.facing = float3(-s, c, 0.0);
+    return b;
+}
+
+// The vertex at the wind's phases `wind.zw` (gust, flutter), pressed as `pressed` (Bending)
+float3 BladePosition(VSInput input, Blade b, float4 wind, float3 pressed)
+{
+    float height = b.height;
+    // The wind as the props have it: a gust travelling downwind and a flutter across it, both by position
+    float gust = frac(dot(b.root.xy, wind.xy) + wind.z) * 6.2831853 - 3.1415927;
+    float flutter = frac((b.root.x + b.root.y) * 1.3 + wind.w + b.random) * 6.2831853 - 3.1415927;
+    float bend = (sin(gust) * 0.55 + 0.6) * vec4WindDir.z * height;
+    float side = sin(flutter) * vec4WindDir.w * height;
+    float2 offset = vec4WindDir.xy * bend + float2(-vec4WindDir.y, vec4WindDir.x) * side;
+    // Each blade's own lean, so the grass doesn't stand straight
+    offset += b.facing.xy * (height * (b.random * 0.8 + 0.2) * b.lean);
+    // Pressed: the wind dies under the push, the blade lies down
+    offset = offset * (1.0 - pressed.z) + pressed.xy * (vec4Bend.x * height);
+    offset *= b.t * b.t;
+    // Never longer than the blade; the tip drops as it bends
+    float reach = length(offset);
+    offset *= min(1.0, 0.9 * height / max(reach, 1e-4));
+    float drop = dot(offset, offset) / (2.0 * height);
+    return b.root + b.across * (input.vertex.y * b.width * 0.5 * b.profile) + float3(offset, b.t * height * (1.0 - 0.5 * pressed.z) - drop);
+}
+
+VSOutput GrassVS(VSInput input)
+{
+    VSOutput output;
+    float3 root;
+    float edge, distance;
+    // Not drawn: all its vertices at one point behind the camera
+    [branch] if (!BladeKept(input, root, edge, distance))
     {
         output.position = float4(0.0, 0.0, -1.0, 1.0);
         output.colour = 0.0;
@@ -149,98 +246,104 @@ VSOutput GrassVS(VSInput input)
         output.view = 0.0;
         return output;
     }
-
-    float random = input.vertex.w;
-    float t = input.vertex.x;
-
-    // The blade's kind: grass, weed or small plant
-    float pick = frac(random * 13.713 + input.corner.w * 7.31 + input.blade.w * 3.17);
-    float isWeed = pick >= input.kinds.x && pick < input.kinds.x + input.kinds.y ? 1.0 : 0.0;
-    float isPlant = pick >= input.kinds.x + input.kinds.y ? 1.0 : 0.0;
-    float isGrass = 1.0 - isWeed - isPlant;
-
-    // Patches over the ground: some taller, some shorter, tall tufts within them, some drier, some in flower
-    float patch = Noise(root.xy * 0.13);
-    float clump = Noise(root.xy * 0.9 + 31.7);
-    float dry = smoothstep(0.5, 0.85, Noise(root.xy * 0.06 + 17.3));
-    float bloom = smoothstep(0.55, 0.8, Noise(root.xy * 0.21 + 5.1));
-    float second = frac(random * 31.17 + input.corner.w * 3.73);
-    float isFlower = (1.0 - isPlant) * (second < bloom * 0.08 ? 1.0 : 0.0);
-
-    // Long thin blades, curving over; tufts stand taller
-    float h = input.blade.w;
-    float height = isGrass * (0.2 + 0.45 * h * h) + isWeed * (0.35 + 0.5 * h) + isPlant * (0.10 + 0.16 * h);
-    height *= lerp(0.6, 1.25, patch) * (clump > 0.62 ? 1.6 : lerp(0.75, 1.1, clump)) * lerp(0.4, 1.0, input.kinds.w) * vec4Blade.x;
-    height *= 1.0 + 0.25 * isFlower;
-    // Shorter towards an edge; and the last twelfth of the blades kept rise out of the ground as the share grows (the
-    // camera coming nearer), so they don't pop in
-    height *= lerp(0.35, 1.0, edge) * saturate((input.edge1.w - input.vertex.z) * 12.0 + 0.05);
-    float width = (isGrass * 0.02 + isWeed * 0.03 + isPlant * 0.075) * vec4Blade.y;
-    // Wider far off, where fewer of them stand and thin ones only flicker; past 12 m more and more grass and weed blades
-    // are tufts of three stalks on one wider quad (cut out in the pixel shader), all of them past 26 m
-    float distance = length(root - vec4Eye.xyz);
-    width *= 1.0 + saturate((distance - 6.0) / 24.0) * 1.5;
-    float isTuft = (1.0 - isPlant) * (1.0 - isFlower) * (frac(random * 3.31 + 0.17) < saturate((distance - 12.0) / 14.0) ? 1.0 : 0.0);
-    width *= 1.0 + 2.2 * isTuft;
-    // Grass and weeds narrow to the tip; leaves are widest in the middle; a flower is a thin stalk with a head
-    float profile = lerp(1.0 - t, sin(t * 3.1415927) * 1.1 + 0.2 * (1.0 - t), isPlant);
-    profile = isFlower > 0.0 ? (t > 0.75 ? 3.0 : 0.4) : profile;
-    // How far the blade leans out from its root: grass arcs over, weeds stand, leaves spread
-    float lean = isGrass * 0.7 + isWeed * 0.3 + isPlant * 1.1;
-    lean *= 1.0 - 0.7 * isFlower;
-
-    float turn = input.blade.z + input.corner.w * 6.2831853;
-    float s, c;
-    sincos(turn, s, c);
-    float3 across = float3(c, s, 0.0);
-    float3 facing = float3(-s, c, 0.0);
-
-    // The wind as the props have it: a gust travelling downwind and a flutter across it, both by position
-    float gust = frac(dot(root.xy, vec4Wind.xy) + vec4Wind.z) * 6.2831853 - 3.1415927;
-    float flutter = frac((root.x + root.y) * 1.3 + vec4Wind.w + random) * 6.2831853 - 3.1415927;
-    float bend = (sin(gust) * 0.55 + 0.6) * vec4WindDir.z * height;
-    float side = sin(flutter) * vec4WindDir.w * height;
-    float2 offset = vec4WindDir.xy * bend + float2(-vec4WindDir.y, vec4WindDir.x) * side;
-    // Each blade's own lean, so the grass doesn't stand straight
-    offset += facing.xy * (height * (random * 0.8 + 0.2) * lean);
-    // Pressed: the wind dies under the push, the blade lies down
-    float3 pressed = vec4Bend.x > 0.0 ? Bending(root, height) : 0.0;
-    offset = offset * (1.0 - pressed.z) + pressed.xy * (vec4Bend.x * height);
-    offset *= t * t;
-    // Never longer than the blade; the tip drops as it bends
-    float reach = length(offset);
-    offset *= min(1.0, 0.9 * height / max(reach, 1e-4));
-    float drop = dot(offset, offset) / (2.0 * height);
-
-    float3 position = root + across * (input.vertex.y * width * 0.5 * profile) + float3(offset, t * height * (1.0 - 0.5 * pressed.z) - drop);
+    Blade b = MakeBlade(input, root, edge, distance);
+    float t = b.t;
+    float3 pressed = vec4Bend.x > 0.0 ? Bending(root, b.height) : 0.0;
+    float3 position = BladePosition(input, b, vec4Wind, pressed);
 
     output.position = mul(float4(position, 1.0), matViewProj);
     output.w = float2(output.position.w, 0.0);
-    // Lit mostly from above, as grass seen as a lawn, rounded across the blade; leaves and flowers face up more
-    float rounding = isFlower > 0.0 && t > 0.75 ? 0.0 : 0.45;
-    output.normal = normalize(facing * lerp(0.35, 0.15, max(isPlant, isFlower)) + across * (input.vertex.y * rounding) + float3(0.0, 0.0, 1.0));
+    // Lit mostly from above, as grass seen as a lawn, rounded across the blade; leaves and flowers face up more. Far off
+    // the blades' own normals go over to the lawn's (up), so the light doesn't sparkle blade by blade
+    float rounding = b.isFlower > 0.0 && t > 0.75 ? 0.0 : 0.45;
+    float3 normal = b.facing * lerp(0.35, 0.15, max(b.isPlant, b.isFlower)) + b.across * (input.vertex.y * rounding);
+    output.normal = normalize(normal * (1.0 - 0.8 * b.distant) + float3(0.0, 0.0, 1.0));
 
     // Its own colour: a hue by patch, by kind, darker at the root and lighter, yellower at the tip; drier in dry
-    // patches (weeds most); each blade a little different
-    float3 base = lerp(float3(0.17, 0.31, 0.09), float3(0.30, 0.36, 0.08), patch);
-    float3 colour = isGrass * base + isWeed * float3(0.27, 0.30, 0.10) + isPlant * float3(0.13, 0.24, 0.07);
-    colour = lerp(colour, float3(0.42, 0.37, 0.17), dry * lerp(0.5, 0.85, isWeed) * (1.0 - isPlant * 0.6));
-    colour *= 1.0 + (random - 0.5) * 0.35;
-    colour = lerp(colour, colour * float3(1.25, 1.12, 0.9) + float3(0.04, 0.03, 0.0), t * t * (1.0 - isPlant));
+    // patches (weeds most); each blade a little different, more so near (so the blades part) than far (where they blur)
+    float3 base = lerp(float3(0.17, 0.31, 0.09), float3(0.30, 0.36, 0.08), b.patch);
+    float3 colour = b.isGrass * base + b.isWeed * float3(0.27, 0.30, 0.10) + b.isPlant * float3(0.13, 0.24, 0.07);
+    colour = lerp(colour, float3(0.42, 0.37, 0.17), b.dry * lerp(0.5, 0.85, b.isWeed) * (1.0 - b.isPlant * 0.6));
+    colour *= 1.0 + (b.random - 0.5) * lerp(0.5, 0.12, b.distant);
+    colour = lerp(colour, colour * float3(1.25, 1.12, 0.9) + float3(0.04, 0.03, 0.0), t * t * (1.0 - b.isPlant));
     // Flowers: red, white, yellow or violet heads
-    float hue = frac(second * 7.77 + patch * 2.0);
+    float hue = frac(b.second * 7.77 + b.patch * 2.0);
     float3 petals = hue < 0.3 ? float3(0.55, 0.07, 0.04) : hue < 0.55 ? float3(0.72, 0.72, 0.66) : hue < 0.8 ? float3(0.75, 0.58, 0.08) : float3(0.38, 0.2, 0.55);
-    colour = isFlower > 0.0 && t > 0.75 ? petals : colour;
+    colour = b.isFlower > 0.0 && t > 0.75 ? petals : colour;
     colour = vec4Blade.w > 0.0 ? TagColour(input.edge2.w) : colour;
-    output.colour = float4(saturate(colour), lerp(0.4, 1.0, t));
-    // A faint sheen on the blades, none on flowers and leaves
-    output.w.y = 0.06 * t * isGrass * (1.0 - isFlower) * (1.0 - dry * 0.5);
+    // Occlusion: the roots of dense grass near are in the dark of the blades around them
+    float dense = saturate(input.edge1.w) * (1.0 - b.distant);
+    output.colour = float4(saturate(colour), lerp(lerp(0.4, 0.2, dense), 1.0, t));
+    // A faint sheen on the blades, none on flowers and leaves, nor far off
+    output.w.y = 0.06 * t * b.isGrass * (1.0 - b.isFlower) * (1.0 - b.dry * 0.5) * (1.0 - b.distant);
 
     float4 rootClip = mul(float4(root, 1.0), matViewProj);
-    output.ground = float4(rootClip.xy, rootClip.w, lerp(0.5, 1.05, t) * lerp(1.0, 0.85, clump * isGrass));
-    output.tuft = float3(input.vertex.y, t, isTuft * (1.0 + random));
-    output.view = float4(position - vec4Eye.xyz, t * (1.0 - isPlant) * (1.0 - dry * 0.4));
+    output.ground = float4(rootClip.xy, rootClip.w, lerp(lerp(0.5, 0.32, dense), 1.05, t) * lerp(1.0, 0.85, b.clump * b.isGrass));
+    output.tuft = float3(input.vertex.y, t, b.isTuft * (1.0 + b.random));
+    output.view = float4(position - vec4Eye.xyz, t * (1.0 - b.isPlant) * (1.0 - b.dry * 0.4) * (1.0 - 0.5 * b.distant));
     return output;
+}
+
+// Motion vectors (temporal AA, DLAA, FSR): the blades drawn again into the motion target over the camera's motion,
+// which only knows the depth: where they are now and where they were at the wind's phases of the previous frame, both
+// without jitter. Bending is taken as it is now.
+float4x4 matViewProjNoJitter;
+float4x4 matPrevViewProj;
+float4 vec4WindPrev;    // vec4Wind of the previous frame
+float fDepthBias;
+
+struct MotionOutput
+{
+    float4 position : POSITION;
+    float3 current : TEXCOORD0;
+    float3 previous : TEXCOORD1;
+    float4 tuft : TEXCOORD2;    // as VSOutput's, clip w
+};
+
+MotionOutput MotionVS(VSInput input)
+{
+    MotionOutput output;
+    float3 root;
+    float edge, distance;
+    [branch] if (!BladeKept(input, root, edge, distance))
+    {
+        output.position = float4(0.0, 0.0, -1.0, 1.0);
+        output.current = float3(0.0, 0.0, 1.0);
+        output.previous = float3(0.0, 0.0, 1.0);
+        output.tuft = 0.0;
+        return output;
+    }
+    Blade b = MakeBlade(input, root, edge, distance);
+    float3 pressed = vec4Bend.x > 0.0 ? Bending(root, b.height) : 0.0;
+    float3 position = BladePosition(input, b, vec4Wind, pressed);
+    float3 before = BladePosition(input, b, vec4WindPrev, pressed);
+    output.position = mul(float4(position, 1.0), matViewProj);
+    output.current = mul(float4(position, 1.0), matViewProjNoJitter).xyw;
+    output.previous = mul(float4(before, 1.0), matPrevViewProj).xyw;
+    output.tuft = float4(input.vertex.y, b.t, b.isTuft * (1.0 + b.random), output.position.w);
+    return output;
+}
+
+// The tufts' stalks as GrassPS cuts them
+void ClipTuft(float3 tuft)
+{
+    [branch] if (tuft.z > 0.5)
+    {
+        float u = tuft.x * 1.5 + 1.5;
+        float strand = floor(u);
+        float top = 1.0 - 0.35 * frac(strand * 0.618 + tuft.z * 7.3);
+        clip(0.42 * saturate(1.0 - tuft.y / top) - abs(frac(u) - 0.5));
+    }
+}
+
+float4 MotionPS(MotionOutput input, out float depth : DEPTH) : COLOR0
+{
+    ClipTuft(input.tuft.xyz);
+    // A hair nearer than the grass wrote itself, so the depth test keeps it where the grass is what is seen
+    depth = log2(max(input.tuft.w / fNearPlane, 1.0)) / log2(fFarDivNear) - fDepthBias;
+    float2 current = input.current.xy / input.current.z;
+    float2 previous = input.previous.xy / input.previous.z;
+    return float4((previous - current) * float2(0.5, -0.5), 0.0, 1.0);
 }
 
 struct PSOutput
@@ -255,13 +358,7 @@ PSOutput GrassPS(VSOutput input)
 {
     PSOutput output;
     // A tuft: three stalks across the quad, each narrowing to its own height
-    [branch] if (input.tuft.z > 0.5)
-    {
-        float u = input.tuft.x * 1.5 + 1.5;
-        float strand = floor(u);
-        float top = 1.0 - 0.35 * frac(strand * 0.618 + input.tuft.z * 7.3);
-        clip(0.42 * saturate(1.0 - input.tuft.y / top) - abs(frac(u) - 0.5));
-    }
+    ClipTuft(input.tuft);
     // The ground's colour under the root, kept no brighter than a lawn so pavement doesn't bleach the weeds on it
     float2 screen = input.ground.xy / max(input.ground.z, 1e-3) * float2(0.5, -0.5) + 0.5;
     float3 ground = tex2Dlod(GroundTex, float4(screen, 0.0, 0.0)).rgb;
@@ -294,5 +391,14 @@ technique Grass
     {
         VertexShader = compile vs_3_0 GrassVS();
         PixelShader = compile ps_3_0 GrassPS();
+    }
+}
+
+technique Motion
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 MotionVS();
+        PixelShader = compile ps_3_0 MotionPS();
     }
 }

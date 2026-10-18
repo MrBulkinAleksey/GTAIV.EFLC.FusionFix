@@ -679,9 +679,13 @@ private:
             if (i < std::size(kSections))
                 ProfilerMark(device, kSections[i], begin);
         };
-        TemporalAA::OnGBufferEnd = [](IDirect3DDevice9* device)
+        TemporalAA::OnGBufferBeforeMotion = [](IDirect3DDevice9* device)
         {
             GpuGrass::Render(device);
+        };
+        TemporalAA::OnGBufferEnd = [](IDirect3DDevice9* device)
+        {
+            GpuGrass::RenderMotion(device);
             CopySceneDepth(device);
             RenderWetGround(device);
         };
