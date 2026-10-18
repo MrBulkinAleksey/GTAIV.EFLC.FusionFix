@@ -936,10 +936,70 @@ export struct VehicleBoxShadows
         return std::sqrt(ox * ox + oy * oy + oz * oz) + (std::min)((std::max)({ along, across, up }), 0.0f);
     }
 
-    // PropShapeShadows: the props nearest the light, weighed by how near the player they stand, as the cars, their
-    // shapes up to PropShapesPerLight; those it took last frame held at a quarter of that, so the choice does not
-    // flicker between two. Left out: props outside its light or its cone, the arm of the lamp's own post, a shape the
-    // light stands in.
+    // The camera's frustum planes, inside where a x + b y + c z + d >= 0 with (a, b, c) of length 1, from the viewport's
+    // view and projection (row vectors, D3D clip space): left, right, bottom, top, near; the far one left out. 0 when
+    // the viewport makes no sense.
+    static int FrustumPlanes(const rage::grcViewport& viewport, float (&planes)[5][4])
+    {
+        float m[4][4];
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
+            {
+                float sum = 0.0f;
+                for (int k = 0; k < 4; ++k)
+                    sum += viewport.mViewMatrix[i][k] * viewport.mProjectionMatrix[k][j];
+                if (!std::isfinite(sum))
+                    return 0;
+                m[i][j] = sum;
+            }
+        // clip = p * m: x within -w..w, y within -w..w, z from 0
+        static constexpr struct { int column; float sign; bool withW; } kPlanes[5] = {
+            { 0, 1.0f, true }, { 0, -1.0f, true }, { 1, 1.0f, true }, { 1, -1.0f, true }, { 2, 1.0f, false } };
+        for (int n = 0; n < 5; ++n)
+        {
+            float length2 = 0.0f;
+            for (int i = 0; i < 4; ++i)
+            {
+                planes[n][i] = kPlanes[n].sign * m[i][kPlanes[n].column] + (kPlanes[n].withW ? m[i][3] : 0.0f);
+                if (i < 3)
+                    length2 += planes[n][i] * planes[n][i];
+            }
+            if (!(length2 > 1.0e-12f))
+                return 0;
+            const float scale = 1.0f / std::sqrt(length2);
+            for (auto& v : planes[n])
+                v *= scale;
+        }
+        return 5;
+    }
+
+    // Whether the shadow the light at, reaching radius, throws of the sphere c, r may fall where the camera sees: it
+    // lies within the hull of that sphere and the one where the light ends, along the way from the light through it
+    // and grown with the distance. The hull is out of view only where both spheres lie wholly outside one plane.
+    static bool ShadowMayShow(const float (&planes)[5][4], int count, const float at[3], float radius, const float c[3], float r)
+    {
+        float d[3] = { c[0] - at[0], c[1] - at[1], c[2] - at[2] };
+        const float distance = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (distance <= r)
+            return true;
+        const float k = (std::max)(radius / distance, 1.0f);
+        const float end[3] = { at[0] + d[0] * k, at[1] + d[1] * k, at[2] + d[2] * k };
+        const float endRadius = r * k;
+        for (int i = 0; i < count; ++i)
+        {
+            const float* p = planes[i];
+            if (p[0] * c[0] + p[1] * c[1] + p[2] * c[2] + p[3] < -r &&
+                p[0] * end[0] + p[1] * end[1] + p[2] * end[2] + p[3] < -endRadius)
+                return false;
+        }
+        return true;
+    }
+
+    // PropShapeShadows: the props nearest the light, weighed by how near the player they stand, as the cars, and by
+    // their size (the radius of a sphere round them, 0.3 to 3 m: a container's shadow shows more than a hydrant's),
+    // their shapes up to PropShapesPerLight; those it took last frame held at a quarter of that, so the choice does
+    // not flicker between two. Left out: props outside its light or its cone, those whose shadow cannot fall where
+    // the camera sees, the arm of the lamp's own post, a shape the light stands in.
     static int ShapesForLight(const rage::CLightSource& light, bool hasMap, Shape (&shapes)[kShapesPerLight])
     {
         const auto& R = PostFxResources;
@@ -955,6 +1015,9 @@ export struct VehicleBoxShadows
                     return 0;
             }
         const int most = std::clamp(R.nPropShapesPerLight, 1, kShapesPerLight);
+        float planes[5][4];
+        const auto* viewport = rage::GetCurrentViewport();
+        const int planeCount = viewport ? FrustumPlanes(*viewport, planes) : 0;
         const uint64_t lightKey = LightKey(Cell(light.mPosition.x), Cell(light.mPosition.y), Cell(light.mPosition.z));
         if (heldProps.size() > 4096)
             heldProps.clear();
@@ -991,8 +1054,11 @@ export struct VehicleBoxShadows
             const bool holding = std::find(last.begin(), last.end(), p.entity) != last.end();
             if (falloff * falloff < R.fVehicleBoxShadowsMinLight * (holding ? 0.5f : 1.0f))
                 continue;
+            if (planeCount && !ShadowMayShow(planes, planeCount, at, light.mRadius, p.centre, p.reach))
+                continue;
             const float fx = p.centre[0] - drawn->focus[0], fy = p.centre[1] - drawn->focus[1], fz = p.centre[2] - drawn->focus[2];
-            float score = gap * gap * (1.0f + (fx * fx + fy * fy + fz * fz) / 400.0f);
+            // a quarter square metre more, so props the light stands among still go by their size
+            float score = (gap * gap + 0.25f) * (1.0f + (fx * fx + fy * fy + fz * fz) / 400.0f) / std::clamp(p.reach, 0.3f, 3.0f);
             if (holding)
                 score *= 0.25f;
             if (taken == most && score >= chosen[most - 1].first)
