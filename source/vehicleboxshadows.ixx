@@ -368,7 +368,9 @@ export struct VehicleBoxShadows
             {
                 if (half[2] < 0.25f)
                     return;
-                const float radius = std::clamp((std::min)(half[0], half[1]), 0.05f, 0.35f);
+                // PropShapeScale: the bounds take in a bin's lid, wider than its body, and some room; a capsule as wide
+                // threw a shadow a fifth wider than the game's own of the bin
+                const float radius = std::clamp((std::min)(half[0], half[1]) * R.fPropShapeScale, 0.05f, 0.35f);
                 const float a[3] = { mid[0], mid[1], lo[2] + (std::min)(radius, half[2]) };
                 const float b[3] = { mid[0], mid[1], hi[2] - (std::min)(radius, half[2]) };
                 float wa[3], wb[3];
@@ -386,10 +388,10 @@ export struct VehicleBoxShadows
                 auto& shape = prop.shapes[prop.shapeCount++];
                 // no side under 5 cm: the shader divides by their squares, and a flat sign's 0 made its pixels NaN, black
                 world(mid, shape.t0);
-                shape.t0[3] = (std::max)(half[0], 0.05f);
+                shape.t0[3] = (std::max)(half[0] * R.fPropShapeScale, 0.05f);
                 shape.t1[0] = m[0] / flat;
                 shape.t1[1] = m[1] / flat;
-                shape.t1[2] = (std::max)(half[1], 0.05f);
+                shape.t1[2] = (std::max)(half[1] * R.fPropShapeScale, 0.05f);
                 shape.t1[3] = (std::max)(half[2], 0.05f);
             }
             else
@@ -401,7 +403,7 @@ export struct VehicleBoxShadows
                 const float other = (std::max)(half[(k + 1) % 3], half[(k + 2) % 3]);
                 if (half[k] < 1.5f * other || half[k] < 0.4f)
                     return;
-                const float radius = std::clamp(other, 0.05f, 0.5f);
+                const float radius = std::clamp(other * R.fPropShapeScale, 0.05f, 0.5f);
                 float a[3] = { mid[0], mid[1], mid[2] }, b[3] = { mid[0], mid[1], mid[2] };
                 a[k] -= half[k] - radius;
                 b[k] += half[k] - radius;
