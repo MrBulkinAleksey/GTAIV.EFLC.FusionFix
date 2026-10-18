@@ -859,6 +859,7 @@ public:
     bool bPropShapeShadows = true;
     float fPropShapeDistance = 80.0f, fPropShapePostRadius = 0.12f, fPropShapeArmRadius = 0.08f;
     float fPropShapeScale = 0.85f; // of the bounds across, for a capsule's radius and a box's length and width
+    bool bPropShapeViewCulling = true; // props whose shadow cannot fall in the camera's view take no shapes
     int32_t nPropShapesPerLight = 12;
     // c202 ray length, thickness, max view distance and strength; c203 the main camera's _34 and
     // 12345 in w while they are on; c204 its _11, _22, _31, _32. Set right before lighting, as
@@ -1921,6 +1922,7 @@ public:
             IniFloat("NIGHTSHADOWS", "PropShapeArmRadius", &PostFxResource::fPropShapeArmRadius, 0.08f, 0.02f, 0.5f),
             IniInt("NIGHTSHADOWS", "PropShapesPerLight", &PostFxResource::nPropShapesPerLight, 12, 1, 32),
             IniFloat("NIGHTSHADOWS", "PropShapeScale", &PostFxResource::fPropShapeScale, 0.85f, 0.3f, 1.2f),
+            IniFlag("NIGHTSHADOWS", "PropShapeViewCulling", &PostFxResource::bPropShapeViewCulling, 1),
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerLamp", &PostFxResource::nVehicleBoxShadowsPerLamp, 3, 1, 5),
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerCar", &PostFxResource::nVehicleBoxShadowsPerCar, 2, 0, 8),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsMinLight", &PostFxResource::fVehicleBoxShadowsMinLight, 0.04f, 0.0f, 1.0f),

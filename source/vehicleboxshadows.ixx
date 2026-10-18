@@ -1017,7 +1017,7 @@ export struct VehicleBoxShadows
         const int most = std::clamp(R.nPropShapesPerLight, 1, kShapesPerLight);
         float planes[5][4];
         const auto* viewport = rage::GetCurrentViewport();
-        const int planeCount = viewport ? FrustumPlanes(*viewport, planes) : 0;
+        const int planeCount = viewport && R.bPropShapeViewCulling ? FrustumPlanes(*viewport, planes) : 0;
         const uint64_t lightKey = LightKey(Cell(light.mPosition.x), Cell(light.mPosition.y), Cell(light.mPosition.z));
         if (heldProps.size() > 4096)
             heldProps.clear();
