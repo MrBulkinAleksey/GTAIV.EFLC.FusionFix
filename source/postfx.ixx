@@ -1601,7 +1601,7 @@ private:
                 R.nLightGGXLights = 0;
                 log.Component("SSR");
                 log.Printf("the game's reflection scale c39.w %.4f, SSR on car bodies x %.4f (SSRVehicleUnits %.2f)\n", R.fGameReflectionScale,
-                        R.fGameReflectionScale > 0.0f ? R.fSSRVehicleUnits / (10.0f * R.fGameReflectionScale) : 1.0f, R.fSSRVehicleUnits);
+                        R.fGameReflectionScale > 0.0f ? (std::min)(R.fSSRVehicleUnits / (10.0f * R.fGameReflectionScale), 1.0f) : 1.0f, R.fSSRVehicleUnits);
                 log.Printf("headlight glints: %s; effect %s (hr 0x%08lX); %u headlights drawn; their intensity %.3f to %.3f, outer cone %.3f to %.3f\n",
                         R.szGlintsStatus, R.HeadlightGlintsEffect ? "built" : "missing", static_cast<unsigned long>(R.hrHeadlightGlintsEffect),
                         R.nGlintsLastLights, R.GlintsLastIntensity[0], R.GlintsLastIntensity[1], R.GlintsLastCone[0], R.GlintsLastCone[1]);
