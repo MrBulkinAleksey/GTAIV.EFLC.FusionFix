@@ -301,6 +301,10 @@ namespace Lighting20
         static std::atomic<uint32_t> lampsPromoted{0}, modelLightsPromoted{0}, coronaLights{0}, coronasRefused{0}, coronasCapped{0};
         static std::atomic<uint32_t> coronasMerged{0}, modelLightsMerged{0}, modelLightsIdle{0};
         static bool modelLightsNeedCasters = true; // ModelLightShadowsNeedCasters
+        // WorldLightsWithoutSlots: the model lights keep the game's no shadow and the coronas' lights take none, so
+        // they never race the lamps for the seven slots; the cars, people and props under them still shadow through the
+        // light shaders' shapes (VehicleBoxShadows), which every light without a map of its own takes
+        static bool withoutSlots = true;
         static float mergeDistance = 1.5f; // ExtraLightMergeDistance
 
         struct CoronaSettings
@@ -341,7 +345,7 @@ namespace Lighting20
         // the game clears right after for lights without shadow flags.
         static bool PromoteModelLight(uint32_t flags, uintptr_t descriptor, uint32_t key) noexcept
         {
-            if (!On() || !modelLights || (flags & 6) || !descriptor) return false;
+            if (!On() || !modelLights || withoutSlots || (flags & 6) || !descriptor) return false;
             const auto type = *reinterpret_cast<const uint8_t*>(descriptor + 0x5B);
             const float radius = *reinterpret_cast<const float*>(descriptor + 0x38);
             if ((type != 1 && type != 2) || !std::isfinite(radius) || radius <= 0 || !key || key == UINT32_MAX) return false;
@@ -401,13 +405,15 @@ namespace Lighting20
             alignas(16) const float at[4] = { position[0], position[1], position[2], 1 };
             alignas(16) const float colour[4] = { words[1] / 255.0f, words[2] / 255.0f, words[3] / 255.0f, 1 };
             auto bits = [](float f) { int i; std::memcpy(&i, &f, 4); return i; };
-            // The game's wrapper copies the vectors at once; a point light (type 0), dynamic shadow only (4).
-            CShadows::hbStoreStaticShadow.fun(static_cast<int>(frame[2]), 0, rage::LF_DYNAMIC_SHADOW,
+            // The game's wrapper copies the vectors at once; a point light (type 0), dynamic shadow only (4), or none
+            // with WorldLightsWithoutSlots.
+            CShadows::hbStoreStaticShadow.fun(static_cast<int>(frame[2]), 0, withoutSlots ? 0 : rage::LF_DYNAMIC_SHADOW,
                 static_cast<int>(reinterpret_cast<uintptr_t>(direction)), static_cast<int>(reinterpret_cast<uintptr_t>(up)),
                 static_cast<int>(reinterpret_cast<uintptr_t>(at)), static_cast<int>(reinterpret_cast<uintptr_t>(colour)),
                 bits(intensity), 0, static_cast<int>(frame[11]), bits(radius), 0, 0,
                 static_cast<int>(frame[9]), static_cast<int>(frame[10]), static_cast<int>(key));
-            Ours::Add(key, Ours::CoronaLight);
+            if (!withoutSlots)
+                Ours::Add(key, Ours::CoronaLight);
             ++coronaLights;
         }
 
@@ -428,6 +434,7 @@ namespace Lighting20
             corona.perFrame = static_cast<uint32_t>(std::clamp(ini.ReadInteger("NIGHTSHADOWS", "CoronaLightMaxCount", 48), 0, 256));
             mergeDistance = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "ExtraLightMergeDistance", 1.5f), 0.0f, 10.0f);
             modelLightsNeedCasters = ini.ReadInteger("NIGHTSHADOWS", "ModelLightShadowsNeedCasters", 1) != 0;
+            withoutSlots = ini.ReadInteger("NIGHTSHADOWS", "WorldLightsWithoutSlots", 1) != 0;
             installed = true;
             if (coronas)
             {
@@ -435,7 +442,8 @@ namespace Lighting20
                     coronaHook = safetyhook::create_mid(game + 0x81EB27, Corona);
                 installStatus += coronaHook ? " coronas=1" : " coronas=code_differs";
             }
-            installStatus += std::string(" world=1 cached_lamps=") + (cachedLamps ? "1" : "0") + " model_lights=" + (modelLights ? "1" : "0");
+            installStatus += std::string(" world=1 cached_lamps=") + (cachedLamps ? "1" : "0") + " model_lights=" + (modelLights ? "1" : "0") +
+                " without_slots=" + (withoutSlots ? "1" : "0");
         }
     }
 
