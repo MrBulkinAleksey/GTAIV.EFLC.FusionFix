@@ -632,8 +632,71 @@ public:
         // How softly the density rises inside a cloud, 0 to 1: at 1 the edges thin out into smoke
         // over a deeper band (the density's compressor from 1 to 3 instead of 3 to 12).
         float softness;
+        // Cloud streets along the wind, 0 to 1 (Clouds.fx's RowBand; the cloud shadows take them too).
+        float rows;
+        // The high layer (Clouds.fx's HighLayer): its share of the sky (0 none), its height in metres, the
+        // fibres' share (0 the cells of altocumulus and cirrocumulus, 1 cirrus) and its rows.
+        float highCover, highBase, highFibres, highRows;
     };
-    CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f, 0.0f };
+    static constexpr size_t kCloudLayerFloats = 20;
+    static_assert(sizeof(CloudLayer) == kCloudLayerFloats * sizeof(float), "CloudLayer is blended as an array of floats");
+    // a + (b - a) k, field by field.
+    static CloudLayer MixCloudLayers(const CloudLayer& a, const CloudLayer& b, float k)
+    {
+        float x[kCloudLayerFloats], y[kCloudLayerFloats];
+        std::memcpy(x, &a, sizeof(x));
+        std::memcpy(y, &b, sizeof(y));
+        for (size_t i = 0; i < kCloudLayerFloats; ++i)
+            x[i] += (y[i] - x[i]) * k;
+        CloudLayer mixed;
+        std::memcpy(&mixed, x, sizeof(x));
+        return mixed;
+    }
+    CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f, 0.0f, 0.0f, 0.0f, 7000.0f, 0.0f, 0.0f };
+    // Cloud Variety in the graphics menu (PREF_CLOUD_VARIETY, [WEATHER] CloudVariety): each weather's sky goes through
+    // a few kinds of cloud in turn (kCloudRegimes in postfxresources.ixx), each held for about CloudVarietyHold
+    // minutes and blended into the next over CloudVarietyBlend seconds; off, one kind per weather as before.
+    bool CloudVarietyEnabled() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_CLOUD_VARIETY");
+        return p ? p->get() != 0 : true;
+    }
+    float fCloudVarietyHold = 8.0f;
+    float fCloudVarietyBlend = 150.0f;
+    // Each weather's kinds of cloud: the one it blends from, the one it blends to (indices in kCloudRegimes, -1
+    // none picked yet), when that blend started and when the next kind is picked, in game seconds.
+    struct CloudRegimeState { int from = -1, to = -1; double blendStart = 0.0, nextPick = 0.0; };
+    CloudRegimeState CloudRegimes[8];
+    std::mt19937_64 CloudRegimeRandom{ std::random_device{}() };
+    // Ctrl+Shift+F6: every weather picks its next kind of cloud now.
+    bool bCloudRegimesNext = false;
+    double fCloudRegimeLastSeconds = -1.0;
+    void UpdateCloudRegimes(double seconds, bool restart);
+    CloudLayer RegimeLayer(int weather, double seconds) const;
+    static const char* CloudRegimeName(int regime);
+    // The high layer's drift along the wind, in its texture's widths, kept within 4 (its patches are read at a quarter).
+    double fCloudHighDrift = 0.0;
+    // Lightning inside the clouds ([WEATHER] CloudLightning): the game's own flashes (CWeather::LightningFlash), and
+    // in a storm flashes of our own between them deeper in the clouds, which the game leaves without light or thunder.
+    // The flash this frame: its offset from the camera (xy), its height (z), its strength (w, 0 none).
+    bool bCloudLightning = true;
+    float fCloudLightningBrightness = 6.0f;
+    float CloudFlash[4] = {};
+    float CloudLastFlashUnit = 0.0f;  // the flash's brightness at strength 1, for the Ctrl+Shift+F10 log
+    struct CloudFlashState
+    {
+        double nextOwn = -1.0;        // when the next flash of our own starts
+        double pulseStart = 0.0, pulseEnd = 0.0;
+        double fadeFrom = -10.0;      // when the last flicker went out
+        int pulsesLeft = 0;           // the flickers left in this one
+        float strength = 0.0f;        // its strength at its peak
+        float offset[3] = {};         // and where it is
+        bool own = false;             // ours, not the game's
+        bool gameSequence = false;    // the game's flashes were on last frame
+        float gameStrength = 1.0f;
+        uint32_t gameFlashes = 0, ownFlashes = 0;
+    } CloudFlashing;
+    void UpdateCloudFlash(double seconds, float stormShare);
     // How far the wind has carried the coverage and the detail, in tiles, and how far the detail
     // has drifted up through itself; summed frame by frame, as the wind changes with the weather.
     double fCloudDrift = 0.0, fCloudDetailDrift = 0.0, fCloudEvolution = 0.0, fCloudLastSeconds = -1.0;
@@ -697,6 +760,9 @@ public:
     uint32_t nCloudAccumFrame = 0; // FrameHistory::Frame() of the accumulation, 0 if none
     IDirect3DVolumeTexture9* CloudDetailTexture = nullptr;
     IDirect3DVolumeTexture9* CloudDetailTex();
+    // The high layer's texture (Clouds.fx's HighLayer, s11): 512 x 512, tiling, with mips.
+    IDirect3DTexture9* CloudHighTexture = nullptr;
+    IDirect3DTexture9* CloudHighTex();
     // Volumetric Clouds in the graphics menu (PREF_VOLUMETRIC_CLOUDS, the same VolumetricClouds key)
     // turns them on and off at once; the game's flat clouds and the cloud shadows follow.
     bool VolumetricCloudsEnabled() const
@@ -1974,6 +2040,10 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.25f, 0.0f, 0.9f),
             IniFloat("WEATHER", "VolumetricCloudsSkyMatch", &PostFxResource::fVolumetricCloudsSkyMatch, 2.0f, 0.0f, 20.0f),
             IniFlag("WEATHER", "VolumetricCloudsWeather", &PostFxResource::bVolumetricCloudsWeather, 1),
+            IniFloat("WEATHER", "CloudVarietyHold", &PostFxResource::fCloudVarietyHold, 8.0f, 0.1f, 600.0f),
+            IniFloat("WEATHER", "CloudVarietyBlend", &PostFxResource::fCloudVarietyBlend, 150.0f, 1.0f, 3600.0f),
+            IniFlag("WEATHER", "CloudLightning", &PostFxResource::bCloudLightning, 1),
+            IniFloat("WEATHER", "CloudLightningBrightness", &PostFxResource::fCloudLightningBrightness, 6.0f, 0.0f, 100.0f),
             IniFlag("WEATHER", "PbrSkyHorizonHue", &PostFxResource::bPbrSkyHorizonHue, 0),
             IniFloat("WEATHER", "VolumetricCloudsVanilla", &PostFxResource::fVolumetricCloudsVanilla, 0.0f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsTranslucency", &PostFxResource::fVolumetricCloudsTranslucency, 0.25f, 0.0f, 0.9f),
@@ -2379,6 +2449,134 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
     return CloudDetailTexture;
 }
 
+// The high layer's texture (Clouds.fx's HighLayer): 512 x 512, tiling over 8 km, each channel equalised so that a
+// threshold of 1 - c leaves a share c of it:
+// - red, cells: two sizes of jittered round cells (40 and 80 a tile, 200 and 100 m), warped so they are no grid
+//   and frayed at their edges by a fine noise; altocumulus and cirrocumulus;
+// - green, fibres: noise stretched 32 to 1 along x, bent by a slow wave across, and a finer set; cirrus;
+// - blue, patches: broad noise, where the layer is (read four times larger, so 32 km across);
+// - alpha, clumps: a middle scale noise, where the cells gather and where they thin out.
+// The same as the offline copy it was tuned in. Mips by a box filter; managed, so it survives a reset.
+IDirect3DTexture9* PostFxResource::CloudHighTex()
+{
+    if (CloudHighTexture)
+        return CloudHighTexture;
+    auto pDevice = rage::grcDevice::GetD3DDevice();
+    if (!pDevice)
+        return nullptr;
+
+    constexpr int size = 512;
+    auto lattice = [](int x, int y, int seed) {
+        uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u + static_cast<uint32_t>(seed) * 2246822519u;
+        h = (h ^ (h >> 13)) * 1274126177u;
+        return static_cast<float>((h ^ (h >> 16)) & 0xffff) / 65535.0f;
+    };
+    auto wrap = [](int i, int n) { return ((i % n) + n) % n; };
+    // Value noise from cx by cy cells a tile, both doubled each octave, 0 to 1.
+    auto valueNoise = [&](float x, float y, int cx, int cy, int octaves, int seed0, float gain) {
+        float sum = 0.0f, total = 0.0f, amplitude = 1.0f;
+        for (int octave = 0; octave < octaves; ++octave, cx *= 2, cy *= 2, amplitude *= gain)
+        {
+            const float fx = x / (static_cast<float>(size) / cx), fy = y / (static_cast<float>(size) / cy);
+            const float x0f = std::floor(fx), y0f = std::floor(fy);
+            float tx = fx - x0f, ty = fy - y0f;
+            tx = tx * tx * (3.0f - 2.0f * tx);
+            ty = ty * ty * (3.0f - 2.0f * ty);
+            const int x0 = static_cast<int>(x0f), y0 = static_cast<int>(y0f);
+            const int xa = wrap(x0, cx), ya = wrap(y0, cy), xb = wrap(x0 + 1, cx), yb = wrap(y0 + 1, cy);
+            const int seed = seed0 + octave;
+            const float a = lattice(xa, ya, seed), b = lattice(xb, ya, seed), c = lattice(xa, yb, seed), d = lattice(xb, yb, seed);
+            const float ab = a + (b - a) * tx, cd = c + (d - c) * tx;
+            sum += amplitude * (ab + (cd - ab) * ty);
+            total += amplitude;
+        }
+        return sum / total;
+    };
+    // The highest cell over the cells around: 1 at its middle, 0 at its radius (0.45 to 0.7 of a cell).
+    auto cells = [&](float x, float y, int n, int seed) {
+        const float cell = static_cast<float>(size) / n;
+        const float fx = x / cell, fy = y / cell;
+        const int cx = static_cast<int>(std::floor(fx)), cy = static_cast<int>(std::floor(fy));
+        float best = 0.0f;
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx)
+            {
+                const int nx = cx + dx, ny = cy + dy, wx = wrap(nx, n), wy = wrap(ny, n);
+                const float px = nx + 0.2f + 0.6f * lattice(wx, wy, seed), py = ny + 0.2f + 0.6f * lattice(wy, wx, seed + 1);
+                const float radius = 0.45f + 0.25f * lattice(wx, wy, seed + 2);
+                const float distance = std::sqrt((px - fx) * (px - fx) + (py - fy) * (py - fy));
+                best = (std::max)(best, std::clamp(1.0f - distance / radius, 0.0f, 1.0f));
+            }
+        return best;
+    };
+    auto equalise = [](std::vector<float>& value) {
+        std::vector<int> order(value.size());
+        for (size_t i = 0; i < order.size(); ++i)
+            order[i] = static_cast<int>(i);
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return value[a] < value[b]; });
+        const float last = static_cast<float>(order.size() - 1);
+        for (size_t rank = 0; rank < order.size(); ++rank)
+            value[order[rank]] = rank / last;
+    };
+
+    std::vector<float> value[4];
+    for (auto& channel : value)
+        channel.assign(size * size, 0.0f);
+    for (int y = 0; y < size; ++y)
+        for (int x = 0; x < size; ++x)
+        {
+            const float fx = static_cast<float>(x), fy = static_cast<float>(y);
+            const size_t i = static_cast<size_t>(y) * size + x;
+            const float warp = static_cast<float>(size) / 40.0f * 1.2f;
+            const float wx = fx + (valueNoise(fx, fy, 16, 16, 2, 500, 0.5f) - 0.5f) * warp;
+            const float wy = fy + (valueNoise(fx, fy, 16, 16, 2, 510, 0.5f) - 0.5f) * warp;
+            value[0][i] = 0.75f * cells(wx, wy, 40, 520) + 0.35f * cells(wx, wy, 80, 530) - 0.35f * valueNoise(fx, fy, 128, 128, 2, 540, 0.5f);
+            const float bend = (valueNoise(fx, fy, 4, 4, 2, 600, 0.5f) - 0.5f) * size * 0.1f;
+            value[1][i] = 0.65f * valueNoise(fx, fy + bend, 2, 64, 3, 610, 0.5f) + 0.35f * valueNoise(fx + 37.0f, fy + bend * 1.2f, 4, 160, 2, 620, 0.5f);
+            value[2][i] = valueNoise(fx, fy, 4, 4, 4, 700, 0.55f);
+            value[3][i] = valueNoise(fx, fy, 10, 10, 3, 800, 0.5f);
+        }
+    for (auto& channel : value)
+        equalise(channel);
+
+    if (FAILED(RealDevice(pDevice)->CreateTexture(size, size, 0, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &CloudHighTexture, nullptr)))
+    {
+        CloudHighTexture = nullptr;
+        return nullptr;
+    }
+    for (DWORD level = 0, n = size; level < CloudHighTexture->GetLevelCount(); ++level, n /= 2)
+    {
+        D3DLOCKED_RECT locked = {};
+        if (SUCCEEDED(CloudHighTexture->LockRect(level, &locked, nullptr, 0)))
+        {
+            for (DWORD y = 0; y < n; ++y)
+            {
+                auto row = static_cast<uint8_t*>(locked.pBits) + y * locked.Pitch;
+                for (DWORD x = 0; x < n; ++x)
+                {
+                    auto byte = [&](int channel) { return static_cast<uint8_t>(std::clamp(value[channel][y * n + x], 0.0f, 1.0f) * 255.0f + 0.5f); };
+                    // A8R8G8B8: blue, green, red, alpha in memory.
+                    row[x * 4 + 0] = byte(2);
+                    row[x * 4 + 1] = byte(1);
+                    row[x * 4 + 2] = byte(0);
+                    row[x * 4 + 3] = byte(3);
+                }
+            }
+            CloudHighTexture->UnlockRect(level);
+        }
+        if (n > 1)
+        {
+            const DWORD half = n / 2;
+            for (auto& channel : value)
+                for (DWORD y = 0; y < half; ++y)
+                    for (DWORD x = 0; x < half; ++x)
+                        channel[y * half + x] = 0.25f * (channel[2 * y * n + 2 * x] + channel[2 * y * n + 2 * x + 1] +
+                                                         channel[(2 * y + 1) * n + 2 * x] + channel[(2 * y + 1) * n + 2 * x + 1]);
+        }
+    }
+    return CloudHighTexture;
+}
+
 // The weathers' cloud layers, in CWeather::eWeatherType order:
 // - coverage, the share of the sky the clouds take (the middle of the weather's range, which the
 //   weather map spreads either way), base and thickness in metres, density against
@@ -2410,11 +2608,225 @@ static constexpr PostFxResource::CloudLayer kWeatherClouds[8] =
     { 0.95f,  300.0f, 1200.0f, 0.80f, 0.5f, 1.00f, 2.2f, 0.5f, 0.35f, 2.0f, 0.25f, 1.4f, 0.08f, 1.00f, 0.0f }, // LIGHTNING
 };
 
+// Cloud Variety's kinds of cloud (CloudVarietyEnabled): each a whole cloud layer, in kWeatherClouds' columns and
+// then the streets and the high layer (rows; its cover, height, fibres' share and rows), and how often it comes
+// in the morning (6 to 11), the afternoon (11 to 17), the evening (17 to 21) and at night. Tuned in an offline
+// copy of Clouds.fx against photographs:
+// - small fair weather heaps, flat and far apart (cumulus humilis), more in the morning; the same under cirrus;
+// - middling heaps (mediocris), and towers 2.2 km deep (congestus), most in the afternoon; heaps lined up in
+//   streets along the wind;
+// - a high sheet of cells, altocumulus at 4 to 4.5 km (in rows too) or the finer cirrocumulus at 7 km, and
+//   cirrus at 8.5 km, each over a few small heaps;
+// - torn windy cloud, broken stratocumulus (more in the evening), an overcast deck, drizzle and rain, a storm's
+//   deck and its towers (cumulonimbus); fog has none.
+// The weathers' own layers (kWeatherClouds) are among them, so a weather's sky still looks like it.
+struct CloudRegime
+{
+    const char* name;
+    PostFxResource::CloudLayer layer;
+    float timeOfDay[4];
+};
+static constexpr CloudRegime kCloudRegimes[] =
+{
+    //                       cover   base   thick  dens  strat  wind  abs   transl detail glow  sun   evol  round match soft   rows  high   height   fibres rows
+    { "humilis",           { 0.15f,  800.0f, 500.0f, 1.67f, 0.0f, 0.50f, 0.8f, 1.3f, 1.2f,  7.0f, 0.70f, 0.4f, 0.10f, 1.00f, 0.0f, 0.0f, 0.00f, 7000.0f, 0.0f, 0.0f }, { 1.6f, 0.7f, 1.0f, 1.0f } },
+    { "humilis+cirrus",    { 0.12f,  800.0f, 500.0f, 1.67f, 0.0f, 0.60f, 0.8f, 1.3f, 1.2f,  7.0f, 0.70f, 0.4f, 0.10f, 1.00f, 0.0f, 0.0f, 0.45f, 8000.0f, 1.0f, 0.0f }, { 1.2f, 1.0f, 1.2f, 1.0f } },
+    { "mediocris",         { 0.30f,  700.0f, 900.0f, 1.50f, 0.0f, 0.80f, 0.85f, 1.25f, 1.15f, 6.5f, 0.60f, 0.6f, 0.12f, 1.00f, 0.0f, 0.0f, 0.00f, 7000.0f, 0.0f, 0.0f }, { 0.8f, 1.3f, 1.0f, 1.0f } },
+    { "congestus",         { 0.32f,  800.0f, 2200.0f, 1.50f, 0.0f, 0.70f, 0.9f, 1.2f, 1.1f, 6.0f, 0.55f, 0.7f, 0.15f, 1.00f, 0.0f, 0.0f, 0.00f, 7000.0f, 0.0f, 0.0f }, { 0.3f, 1.8f, 0.8f, 0.5f } },
+    { "streets",           { 0.32f,  700.0f, 700.0f, 1.50f, 0.0f, 1.20f, 0.85f, 1.25f, 1.1f, 6.5f, 0.60f, 0.6f, 0.12f, 1.00f, 0.0f, 1.0f, 0.00f, 7000.0f, 0.0f, 0.0f }, { 1.0f, 1.2f, 0.8f, 0.8f } },
+    { "altocumulus",       { 0.06f,  800.0f, 500.0f, 1.67f, 0.0f, 0.60f, 0.8f, 1.3f, 1.2f,  7.0f, 0.70f, 0.4f, 0.10f, 1.00f, 0.0f, 0.0f, 0.60f, 4500.0f, 0.0f, 0.0f }, { 1.3f, 0.8f, 1.2f, 1.0f } },
+    { "altocumulus rows",  { 0.06f,  800.0f, 500.0f, 1.67f, 0.0f, 0.90f, 0.8f, 1.3f, 1.2f,  7.0f, 0.70f, 0.4f, 0.10f, 1.00f, 0.0f, 0.0f, 0.65f, 4000.0f, 0.0f, 0.8f }, { 1.2f, 0.8f, 1.3f, 1.0f } },
+    { "cirrus",            { 0.04f,  900.0f, 400.0f, 1.67f, 0.0f, 0.80f, 0.8f, 1.3f, 1.2f,  7.0f, 0.70f, 0.4f, 0.10f, 1.00f, 0.0f, 0.0f, 0.65f, 8500.0f, 1.0f, 0.0f }, { 1.0f, 1.0f, 1.3f, 1.0f } },
+    { "cirrocumulus",      { 0.04f,  900.0f, 400.0f, 1.67f, 0.0f, 0.60f, 0.8f, 1.3f, 1.2f,  7.0f, 0.70f, 0.4f, 0.10f, 1.00f, 0.0f, 0.0f, 0.55f, 7000.0f, 0.0f, 0.3f }, { 1.2f, 0.8f, 1.2f, 1.0f } },
+    { "windy",             { 0.45f,  700.0f, 1100.0f, 0.67f, 0.0f, 1.17f, 1.0f, 1.2f, 0.87f, 6.0f, 0.50f, 0.7f, 0.12f, 1.00f, 1.0f, 0.3f, 0.30f, 8000.0f, 1.0f, 0.0f }, { 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "broken stratocumulus", { 0.62f, 600.0f, 700.0f, 1.00f, 0.3f, 0.70f, 1.2f, 1.0f, 0.6f, 5.0f, 0.30f, 0.7f, 0.15f, 0.75f, 1.0f, 0.0f, 0.00f, 7000.0f, 0.0f, 0.0f }, { 1.0f, 0.8f, 1.5f, 1.2f } },
+    { "overcast",          { 0.80f,  500.0f, 900.0f, 1.00f, 0.4f, 0.67f, 1.3f, 1.0f, 0.5f,  4.0f, 0.20f, 0.7f, 0.15f, 0.65f, 1.0f, 0.0f, 0.00f, 7000.0f, 0.0f, 0.0f }, { 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "drizzle",           { 0.85f,  400.0f, 900.0f, 0.67f, 0.4f, 1.00f, 1.6f, 0.7f, 0.4f,  3.0f, 0.40f, 0.8f, 0.15f, 0.80f, 1.0f, 0.0f, 0.00f, 7000.0f, 0.0f, 0.0f }, { 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "rain",              { 0.95f,  300.0f, 1000.0f, 0.83f, 0.6f, 0.33f, 2.0f, 0.5f, 0.3f, 2.0f, 0.25f, 1.5f, 0.15f, 1.00f, 0.0f, 0.0f, 0.00f, 7000.0f, 0.0f, 0.0f }, { 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "fog",               { 0.00f,  600.0f, 600.0f, 0.20f, 0.3f, 1.67f, 1.0f, 1.0f, 0.8f,  3.0f, 0.30f, 0.4f, 0.15f, 1.00f, 0.0f, 0.0f, 0.00f, 7000.0f, 0.0f, 0.0f }, { 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "storm",             { 0.95f,  300.0f, 1200.0f, 0.80f, 0.5f, 1.00f, 2.2f, 0.5f, 0.35f, 2.0f, 0.25f, 1.4f, 0.08f, 1.00f, 0.0f, 0.0f, 0.00f, 7000.0f, 0.0f, 0.0f }, { 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "cumulonimbus",      { 0.80f,  500.0f, 3000.0f, 1.20f, 0.3f, 1.00f, 1.6f, 0.8f, 0.8f, 3.0f, 0.35f, 1.2f, 0.12f, 0.90f, 0.3f, 0.0f, 0.00f, 8000.0f, 1.0f, 0.0f }, { 1.0f, 1.3f, 1.2f, 1.0f } },
+};
+enum : int { kHumilis, kHumilisCirrus, kMediocris, kCongestus, kStreets, kAltocumulus, kAltocumulusRows, kCirrus, kCirrocumulus,
+             kWindy, kStratocumulus, kOvercast, kDrizzle, kRain, kFog, kStorm, kCumulonimbus, kCloudRegimeCount };
+static_assert(std::size(kCloudRegimes) == kCloudRegimeCount);
+
+// The kinds of cloud each weather takes and how often, in CWeather::eWeatherType order. Rain and storms keep
+// closed decks, so the sky never clears while it rains.
+struct CloudRegimeChoice { int regime; float weight; };
+static constexpr CloudRegimeChoice kWeatherRegimes[8][6] =
+{
+    { { kHumilis, 3.0f }, { kHumilisCirrus, 2.0f }, { kCirrus, 2.0f }, { kCirrocumulus, 1.5f }, { kAltocumulus, 1.0f } },                      // EXTRASUNNY
+    { { kMediocris, 3.0f }, { kCongestus, 2.0f }, { kStreets, 1.5f }, { kHumilisCirrus, 1.0f }, { kAltocumulus, 1.0f }, { kAltocumulusRows, 1.0f } }, // SUNNY
+    { { kWindy, 3.0f }, { kStreets, 2.0f }, { kAltocumulusRows, 1.0f }, { kStratocumulus, 1.0f } },                                          // SUNNY_WINDY
+    { { kStratocumulus, 3.0f }, { kOvercast, 2.0f }, { kCongestus, 1.0f } },                                                                   // CLOUDY
+    { { kRain, 3.0f }, { kDrizzle, 1.0f } },                                                                                                    // RAIN
+    { { kDrizzle, 2.0f }, { kOvercast, 1.5f }, { kStratocumulus, 0.5f } },                                                                      // DRIZZLE
+    { { kFog, 1.0f } },                                                                                                                         // FOGGY
+    { { kStorm, 2.0f }, { kCumulonimbus, 1.0f } },                                                                                              // LIGHTNING
+};
+
+const char* PostFxResource::CloudRegimeName(int regime)
+{
+    return regime >= 0 && regime < kCloudRegimeCount ? kCloudRegimes[regime].name : "-";
+}
+
+// One of the weather's kinds of cloud by their weights and the hour, other than avoid while there is another.
+static int PickCloudRegime(std::mt19937_64& random, int weather, int avoid)
+{
+    const int hour = CClock::ms_nGameClockHours ? CClock::GetHours() : 12;
+    const int part = hour >= 6 && hour < 11 ? 0 : hour >= 11 && hour < 17 ? 1 : hour >= 17 && hour < 21 ? 2 : 3;
+    const auto& choices = kWeatherRegimes[weather < 8 ? weather : 1];
+    float total = 0.0f;
+    int options = 0;
+    for (const auto& choice : choices)
+        if (choice.weight > 0.0f)
+            ++options;
+    for (const auto& choice : choices)
+        if (choice.weight > 0.0f && (choice.regime != avoid || options == 1))
+            total += choice.weight * kCloudRegimes[choice.regime].timeOfDay[part];
+    float pick = std::uniform_real_distribution<float>(0.0f, total)(random);
+    int last = choices[0].regime;
+    for (const auto& choice : choices)
+    {
+        if (choice.weight <= 0.0f || (choice.regime == avoid && options > 1))
+            continue;
+        last = choice.regime;
+        pick -= choice.weight * kCloudRegimes[choice.regime].timeOfDay[part];
+        if (pick <= 0.0f)
+            break;
+    }
+    return last;
+}
+
+// Each weather moves on to its next kind of cloud once the last has been held, about CloudVarietyHold minutes
+// (0.6 to 1.4 times it), and blends into it over CloudVarietyBlend seconds; every weather keeps its own turn, so
+// the game's weather changing blends between two skies that are each on their way. With restart (a new game, a
+// load, a jump of the clock, Ctrl+Shift+F9) each takes a kind at once, without a blend.
+void PostFxResource::UpdateCloudRegimes(double seconds, bool restart)
+{
+    const double blend = (std::max)(fCloudVarietyBlend, 1.0f);
+    auto hold = [&] { return 60.0 * fCloudVarietyHold * std::uniform_real_distribution<double>(0.6, 1.4)(CloudRegimeRandom); };
+    for (int weather = 0; weather < 8; ++weather)
+    {
+        auto& state = CloudRegimes[weather];
+        if (restart || state.to < 0)
+        {
+            state.from = state.to = PickCloudRegime(CloudRegimeRandom, weather, -1);
+            state.blendStart = seconds - blend;
+            state.nextPick = seconds + hold();
+            continue;
+        }
+        // Only once the last blend is done: a new one started halfway would jump from where that one stood.
+        if ((seconds >= state.nextPick || bCloudRegimesNext) && seconds >= state.blendStart + blend)
+        {
+            state.from = state.to;
+            state.to = PickCloudRegime(CloudRegimeRandom, weather, state.from);
+            state.blendStart = seconds;
+            state.nextPick = seconds + blend + hold();
+        }
+    }
+    bCloudRegimesNext = false;
+}
+
+PostFxResource::CloudLayer PostFxResource::RegimeLayer(int weather, double seconds) const
+{
+    const auto& state = CloudRegimes[weather < 8 ? weather : 1];
+    if (state.to < 0)
+        return kCloudRegimes[kMediocris].layer;
+    float k = std::clamp(static_cast<float>((seconds - state.blendStart) / (std::max)(fCloudVarietyBlend, 1.0f)), 0.0f, 1.0f);
+    k = k * k * (3.0f - 2.0f * k);
+    return MixCloudLayers(kCloudRegimes[state.from].layer, kCloudRegimes[state.to].layer, k);
+}
+
+// The flash inside the clouds this frame (CloudFlash). While the game flashes (CWeather::LightningFlash, flickering
+// through a run of them) the flash is the game's, somewhere 2 to 8 km off in the lower half of the deck, a new place
+// for each run. Between runs, in the storm's share of the weather, flashes of our own deeper in the clouds, 3 to 18 km
+// off: every 7 seconds on average (less often in a weaker share), each one to four flickers of 40 to 120 ms with
+// gaps of 50 to 200 ms, at a third to four fifths of the game's strength. Each flicker fades out over some 60 ms.
+void PostFxResource::UpdateCloudFlash(double seconds, float stormShare)
+{
+    auto& f = CloudFlashing;
+    std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+    auto place = [&](float nearest, float farthest)
+    {
+        const float distance = nearest + (farthest - nearest) * unit(CloudRegimeRandom);
+        const float angle = 6.2831853f * unit(CloudRegimeRandom);
+        f.offset[0] = std::cos(angle) * distance;
+        f.offset[1] = std::sin(angle) * distance;
+        f.offset[2] = Cloud.base + Cloud.thickness * (0.2f + 0.45f * unit(CloudRegimeRandom));
+    };
+    const bool gameOn = CWeather::LightningFlash && *CWeather::LightningFlash;
+    const bool gameRun = CWeather::LightningSequence && *CWeather::LightningSequence;
+    float strength = 0.0f;
+    if (!bCloudLightning || !VolumetricCloudsEnabled())
+    {
+        f.pulsesLeft = 0;
+        f.gameSequence = gameRun;
+    }
+    else if (gameRun || gameOn)
+    {
+        if (!f.gameSequence)
+        {
+            place(2000.0f, 8000.0f);
+            f.gameStrength = 0.7f + 0.3f * unit(CloudRegimeRandom);
+            ++f.gameFlashes;
+        }
+        f.gameSequence = true;
+        f.own = false;
+        f.pulsesLeft = 0;
+        if (gameOn)
+            f.fadeFrom = seconds;
+        strength = f.gameStrength * std::exp(-static_cast<float>((std::max)(seconds - f.fadeFrom, 0.0)) / 0.06f);
+    }
+    else
+    {
+        f.gameSequence = false;
+        if (stormShare > 0.3f)
+        {
+            if (f.nextOwn < 0.0 || f.nextOwn > seconds + 120.0)
+                f.nextOwn = seconds + 2.0 + 5.0 * unit(CloudRegimeRandom);
+            if (f.pulsesLeft == 0 && seconds >= f.nextOwn)
+            {
+                place(3000.0f, 18000.0f);
+                f.own = true;
+                f.pulsesLeft = 1 + static_cast<int>(unit(CloudRegimeRandom) * 3.99f);
+                f.strength = 0.33f + 0.47f * unit(CloudRegimeRandom);
+                f.pulseStart = seconds;
+                f.pulseEnd = seconds + 0.04 + 0.08 * unit(CloudRegimeRandom);
+                ++f.ownFlashes;
+            }
+            if (f.pulsesLeft > 0 && seconds >= f.pulseEnd)
+            {
+                // The next flicker after a gap, or the next flash once these are done.
+                f.fadeFrom = f.pulseEnd;
+                if (--f.pulsesLeft > 0)
+                {
+                    f.pulseStart = f.pulseEnd + 0.05 + 0.15 * unit(CloudRegimeRandom);
+                    f.pulseEnd = f.pulseStart + 0.04 + 0.08 * unit(CloudRegimeRandom);
+                }
+                else
+                    f.nextOwn = seconds - 7.0 / stormShare * std::log((std::max)(unit(CloudRegimeRandom), 0.01f)) + 0.5;
+            }
+        }
+        const float fade = std::exp(-static_cast<float>((std::max)(seconds - f.fadeFrom, 0.0)) / 0.06f);
+        if (f.own && f.pulsesLeft > 0 && seconds >= f.pulseStart && seconds < f.pulseEnd)
+            strength = f.strength;
+        else
+            strength = (f.own ? f.strength : f.gameStrength) * fade;
+    }
+    CloudFlash[0] = f.offset[0];
+    CloudFlash[1] = f.offset[1];
+    CloudFlash[2] = f.offset[2];
+    CloudFlash[3] = strength > 0.01f ? strength : 0.0f;
+}
+
 void PostFxResource::UpdateCloudLayer(double seconds)
 {
     // Each game starts the clouds somewhere else: how far the wind has carried them, how far the
     // map has morphed and the billows have turned over. From zero, every session opened on the same
-    // sky.
+    // sky. Each weather's kind of cloud is picked anew too.
+    bool restartRegimes = false;
     if (!bCloudDriftSeeded)
     {
         std::mt19937_64 random(std::random_device{}());
@@ -2423,24 +2835,34 @@ void PostFxResource::UpdateCloudLayer(double seconds)
         fCloudDetailDrift = unit(random) * 1000.0;
         fCloudEvolution = unit(random) * 1000.0;
         fCloudMorph = unit(random) * 31.415926535897932;
+        fCloudHighDrift = unit(random) * 4.0;
         bCloudDriftSeeded = true;
+        restartRegimes = true;
     }
+    // Past a jump of the clock (a load, a cutscene's skip, sleeping) the skies are picked anew rather than
+    // blended through minutes of change in a frame.
+    if (fCloudRegimeLastSeconds < 0.0 || seconds < fCloudRegimeLastSeconds || seconds - fCloudRegimeLastSeconds > 120.0)
+        restartRegimes = true;
+    fCloudRegimeLastSeconds = seconds;
+    const bool variety = CloudVarietyEnabled();
+    if (variety)
+        UpdateCloudRegimes(seconds, restartRegimes);
+
+    float stormShare = 0.0f;
     if (bVolumetricCloudsWeather && CWeather::OldWeatherType && CWeather::NewWeatherType && CWeather::InterpolationValue)
     {
         const auto from = static_cast<uint32_t>(*CWeather::OldWeatherType);
         const auto to = static_cast<uint32_t>(*CWeather::NewWeatherType);
         const float k = std::clamp(*CWeather::InterpolationValue, 0.0f, 1.0f);
-        const auto& a = kWeatherClouds[from < 8 ? from : 1];
-        const auto& b = kWeatherClouds[to < 8 ? to : 1];
-        auto mix = [k](float x, float y) { return x + (y - x) * k; };
-        Cloud = { mix(a.coverage, b.coverage), mix(a.base, b.base), mix(a.thickness, b.thickness),
-                  mix(a.density, b.density), mix(a.stratus, b.stratus), mix(a.wind, b.wind),
-                  mix(a.absorption, b.absorption), mix(a.translucency, b.translucency), mix(a.detail, b.detail), mix(a.glow, b.glow),
-                  mix(a.sunPower, b.sunPower), mix(a.evolution, b.evolution), mix(a.baseRound, b.baseRound), mix(a.skyMatch, b.skyMatch),
-                  mix(a.softness, b.softness) };
+        if (variety)
+            Cloud = MixCloudLayers(RegimeLayer(from < 8 ? from : 1, seconds), RegimeLayer(to < 8 ? to : 1, seconds), k);
+        else
+            Cloud = MixCloudLayers(kWeatherClouds[from < 8 ? from : 1], kWeatherClouds[to < 8 ? to : 1], k);
+        stormShare = (from == CWeather::LIGHTNING ? 1.0f - k : 0.0f) + (to == CWeather::LIGHTNING ? k : 0.0f);
     }
     else
-        Cloud = { fVolumetricCloudsCoverage, fVolumetricCloudsBase, fVolumetricCloudsThickness, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f, 0.0f };
+        Cloud = { fVolumetricCloudsCoverage, fVolumetricCloudsBase, fVolumetricCloudsThickness, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f, 0.0f,
+                  0.0f, 0.0f, 7000.0f, 0.0f, 0.0f };
 
     // The drift moves on by this frame's time at this frame's wind; across a jump of the clock (a
     // load, a cutscene) it stays where it was.
@@ -2451,9 +2873,12 @@ void PostFxResource::UpdateCloudLayer(double seconds)
     const double wind = fCloudShadowsWind * Cloud.wind;
     fCloudDrift = std::fmod(fCloudDrift + dt * wind / fCloudShadowsScale, 1000.0);
     fCloudDetailDrift = std::fmod(fCloudDetailDrift + dt * wind * 0.5 / fVolumetricCloudsDetailScale, 1000.0);
+    // The wind blows harder up high: the high layer goes three times as fast.
+    fCloudHighDrift = std::fmod(fCloudHighDrift + dt * wind * 3.0 / 8000.0, 4.0);
     // About a metre a second up through the detail at 1: the billows turn over in a few minutes.
     fCloudEvolution = std::fmod(fCloudEvolution + dt * fVolumetricCloudsEvolution * Cloud.evolution / fVolumetricCloudsDetailScale, 1000.0);
     fCloudMorph = std::fmod(fCloudMorph + dt * 0.03 * fVolumetricCloudsEvolution * Cloud.evolution, 31.415926535897932);
+    UpdateCloudFlash(seconds, stormShare);
 }
 
 export PostFxResource PostFxResources;

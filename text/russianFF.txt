@@ -385,6 +385,9 @@ Logitech LightSync RGB
 [VolumeClouds]
 Объёмные облака
 
+[CloudVariety]
+Разнообразие облаков
+
 [PbrSky]
 Физическое небо
 

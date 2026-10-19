@@ -2303,6 +2303,11 @@ export namespace CWeather
     eWeatherType* OldWeatherType = nullptr;
     eWeatherType* NewWeatherType = nullptr;
     float* InterpolationValue = nullptr;
+    // A storm's lightning (CE 0xa2ec4c, in the weather's update): a run of flashes under way, and the flash
+    // light on this frame, which flickers on and off through the run; the timecycle's "lightning" modifier
+    // follows it. Null where the pattern is missing.
+    uint8_t* LightningSequence = nullptr;
+    uint8_t* LightningFlash = nullptr;
 
     eWeatherType GetOldWeatherType()
     {
@@ -3471,6 +3476,14 @@ public:
         if (pattern.empty())
             pattern = hook::pattern("F3 0F 11 05 ? ? ? ? E8 ? ? ? ? 84 C0 74 15 E8 ? ? ? ? 84 C0");
         CWeather::Rain = *pattern.get_first<float*>(4);
+
+        // mov byte [sequence], 1; mov byte [flash], 1; mov [last flicker], eax: a storm's run of flashes starts
+        pattern = hook::pattern("C6 05 ? ? ? ? 01 C6 05 ? ? ? ? 01 A3");
+        if (!pattern.empty())
+        {
+            CWeather::LightningSequence = *pattern.get_first<uint8_t*>(2);
+            CWeather::LightningFlash = *pattern.get_first<uint8_t*>(9);
+        }
 
         pattern = find_pattern("A1 ? ? ? ? 83 C4 08 8B CF 68 ? ? ? ? 89", "A1 ? ? ? ? 80 3F 04");
         CWeather::OldWeatherType = *pattern.get_first<CWeather::eWeatherType*>(1);

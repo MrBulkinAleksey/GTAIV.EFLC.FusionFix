@@ -2157,6 +2157,8 @@ public:
             { 0, "PREF_GRASS_WIND_DEBUG",       "DEBUG",      "GrassWindDebug",                     "",                           0, nullptr, 0, 1 },
             // Real reflections in the player car's mirrors in first person (carmirrors.ixx)
             { 0, "PREF_CAR_MIRRORS",            "MISC",       "CarMirrors",                         "",                           1, nullptr, 0, 1 },
+            // Kinds of cloud taking turns in each weather, blended from one to the next (postfxresources.ixx, UpdateCloudRegimes)
+            { 0, "PREF_CLOUD_VARIETY",          "WEATHER",    "CloudVariety",                       "",                           1, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2410,6 +2412,7 @@ public:
             AddRow(category, "SunFlare", "PREF_SUN_FLARE", 2, toggle);
             AddRow(category, "CarMirrors", "PREF_CAR_MIRRORS", 2, toggle);
             AddRow(category, "VolumeClouds", "PREF_VOLUMETRIC_CLOUDS", 2, toggle);
+            AddRow(category, "CloudVariety", "PREF_CLOUD_VARIETY", 2, toggle);
             AddRow(category, "PbrSky", "PREF_PBR_SKY", 2, toggle);
             AddRow(category, "AerialPersp", "PREF_AERIAL_PERSPECTIVE", 4, "MENU_DISPLAY_AERIAL");
             AddRow(category, "GGXLighting", "PREF_GGX_LIGHTING", 2, toggle);

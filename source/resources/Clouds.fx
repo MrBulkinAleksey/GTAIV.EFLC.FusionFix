@@ -42,6 +42,10 @@
 // fair weathers' share as it was (the cloudy and wet ones, held at the top of the range, take less
 // detail instead). The shadows, on a flat deck, take the cover as it is.
 #define COVER_GAIN 2.75
+// How far round a lightning flash inside the clouds its light spreads, in metres.
+#define FLASH_RADIUS 1500.0
+// The high layer's texture across, in metres.
+#define HIGH_TILE 8000.0
 
 sampler2D DepthTex : register(s0);
 sampler2D CoverageTex : register(s1);
@@ -54,6 +58,7 @@ sampler2D SkyRefTex : register(s7);    // the sky's mean colour this frame (Clou
 sampler2D MarchTex0 : register(s8);    // the march's sums: transmittance, sun, shade, silver (CloudsLight)
 sampler2D MarchTex1 : register(s9);    // and glow, first hit
 sampler2D SkyViewTex : register(s10);  // the physical sky's view of the sky (pbrsky.ixx, SkyAtmosphere.fx), while vec4SkyTable.x > 0
+sampler2D HighTex : register(s11);     // the high layer (CloudHighTex): cells, fibres, patches, clumps
 
 float2 vec2InvViewportSize;
 float4 vec4ProjInfo;
@@ -114,6 +119,16 @@ float fDebug;             // VolumetricCloudsDebug + 1, the numbers in the comme
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
+float fRows;              // the sky's cloud streets, 0 to 1 (RowBand)
+// The high layer (HighLayer): its cover (0 none), height in metres, the fibres' share (0 cells of altocumulus
+// and cirrocumulus, 1 cirrus) and its rows; its texture's offset by the wind (xy, along the wind and across),
+// and one relief step towards the sun in its texture (zw).
+float4 vec4High;
+float4 vec4HighWind;
+float fHighPixel;         // a half size pixel's angle in radians, for the high layer's mip
+// A lightning flash inside the clouds: where (xyz) and how strong (w, 0 none), and its colour at strength 1, exposed.
+float4 vec4Flash;
+float3 vec3FlashColour;
 
 // How far the scene is along the view ray at uv, the nearest of the full size pixels around it (a
 // half size pixel covers four): with the farthest, the clouds behind a roof spilled onto its edge.
@@ -201,7 +216,19 @@ struct Place
     float2 morph;
     float base;       // the base's height there
     float thickness;  // and the layer's thickness
+    float band;       // where it lies between the cloud streets (RowBand)
 };
+
+// Cloud streets (fRows): lines along the wind, which carries the map along (0.93, 0.37), nearly (5, 2) / sqrt(29),
+// one every 16 km / sqrt(29), some 3 km, meandering by up to 0.3 of that with the map's blurred 4 x 4 mip. Whole
+// numbers in the dot product keep the pattern tiling with the map, whose offset the wind wraps. 0 in a street, 1
+// halfway between two.
+float RowBand(float2 uv0)
+{
+    float wobble = (tex2Dlod(CoverageTex, float4(uv0 + 0.17, 0, 8)).r - 0.5) * 0.6;
+    float b = 1.0 - abs(frac(dot(uv0, float2(-2.0, 5.0)) + wobble) - 0.5) * 2.0;
+    return b * b * (3.0 - 2.0 * b);
+}
 
 Place PlaceAt(float3 p)
 {
@@ -215,6 +242,7 @@ Place PlaceAt(float3 p)
     // whose deck would open a strip of sky at the horizon.
     place.thickness = vec4Layer.y * (1.0 + 0.25 * place.weather);
     place.base = vec4Layer.x + vec4Layer.y * 0.1 * (0.5 - 0.5 * place.weather) * (1.0 - fStratus);
+    place.band = RowBand(uv0);
     return place;
 }
 
@@ -228,7 +256,7 @@ bool MayBeCloud(float3 p)
         return false;
     float c = tex2Dlod(CoverageTex, float4(p.xy * vec4Layer.z + vec4Wind.xy, 0, 5)).r;
     float cover = saturate(max(vec4Layer.w, 0.02) * COVER_GAIN * (1.0 + abs(vec4Morph.w)));
-    return c > 0.9 - cover;
+    return c > 0.9 - cover - fRows * 0.45;
 }
 
 // crease: the coarse billows' noise at p, high in the folds between them (0 without the detail).
@@ -267,6 +295,9 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
     float cover = saturate(max(vec4Layer.w, 0.02) * COVER_GAIN * (1.0 + vec4Morph.w * weather));
     // Overcast: the map evens out towards a sheet.
     c = lerp(c, max(c, 1.0 - cover * 0.5), fStratus);
+    // Streets: the cover thickens along them and thins out between, the heaps lined up along the wind
+    // (the deferred lighting's cloud shadows take the same).
+    c -= fRows * (place.band - 0.45);
     float threshold = 1.0 - cover;
     float d = saturate((c - threshold) / max(cover, 0.01));
     d *= d;
@@ -616,6 +647,7 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     float3 termSunPower = 0.0;
     float3 termTop = 0.0;
     float shadeMul = 1.0;
+    float fleck = 0.0;
     [branch]
     if (full)
     {
@@ -638,7 +670,7 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         float3 hit = float3(vec4WorldX.w, vec4WorldY.w, vec4WorldZ.w) + dir * sums.firstHit;
         hit.z += max(1.0 - dir.z * dir.z, 1e-6) / (2.0 * EARTH_RADIUS) * sums.firstHit * sums.firstHit;
         float3 q = hit * (vec4Shape.y * 1.5) + float3(vec4Wind.zw, fEvolution) + 0.53;
-        float fleck = 0.65 * tex3Dlod(DetailTex, float4(q, 0)).r + 0.35 * tex3Dlod(DetailTex, float4(q * 2.7 + 0.21, 0)).g - 0.5;
+        fleck = 0.65 * tex3Dlod(DetailTex, float4(q, 0)).r + 0.35 * tex3Dlod(DetailTex, float4(q * 2.7 + 0.21, 0)).g - 0.5;
         shadeMul *= 1.0 + 2.0 * fMottle * fleck * exp(-sums.firstHit / 12000.0);
     }
     float3 body = (termBase + termSilver + termSunset + termSunPower + termTop) * shadeMul;
@@ -672,6 +704,22 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         float behind = dot(sky, float3(0.2126, 0.7152, 0.0722));
         float skyMul = skyLuma > 1e-4 ? clamp(fSkyMatch * skyLuma, 0.1, 2.0) : 1.0;
         colour *= skyMul;
+        // A lightning flash inside the cloud lights it from within: brightest along the rays that pass
+        // nearest the flash, within some FLASH_RADIUS of it, with a faint wide skirt, and dimmer the more
+        // cloud lies between the flash and where the ray met the cloud. Mottled by the billows and more in
+        // the shaded body, where the light scattered inside shows. Past the sky match, so the flash is as
+        // bright under a black night sky as by day.
+        [branch]
+        if (vec4Flash.w > 0.0)
+        {
+            float3 toFlash = vec4Flash.xyz - float3(vec4WorldX.w, vec4WorldY.w, vec4WorldZ.w);
+            float along = max(dot(toFlash, dir), 0.0);
+            float off2 = max(dot(toFlash, toFlash) - along * along, 0.0);
+            float depth = max(along - (sums.firstHit >= 0.0 ? sums.firstHit : along), 0.0);
+            float flash = (exp(-off2 / (FLASH_RADIUS * FLASH_RADIUS)) + 0.2 * exp(-sqrt(off2) / (3.0 * FLASH_RADIUS))) *
+                          exp(-depth / (2.0 * FLASH_RADIUS));
+            colour += vec3FlashColour * (vec4Flash.w * flash * (cover * (0.6 + 0.8 * fleck) + 0.4 * sums.shade));
+        }
         // The silver lining against the sun: the half lit band at a cloud's edge, where it is there
         // but still lets the sky through, takes the glow the sky has right behind it past the sky's
         // brightness away from the sun, the halo, which is the same sunlight scattered forwards.
@@ -745,7 +793,58 @@ void CloudsMarch_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS, out float4 sums0 
     sums1 = float4(sums.glow, sums.firstHit, sums.top, sums.height);
 }
 
-// The light from the march's sums, at half size, for the accumulation.
+// The high layer (vec4High), premultiplied, its transmittance in alpha: a thin sheet at its height, drawn
+// behind the volumetric layer and over the sky alone. Altocumulus and cirrocumulus as cells, cirrus as fibres
+// along the wind with a thin veil, from HighTex: cells (r), fibres (g), patches (b), clumps (a), tiling over
+// HIGH_TILE. The patches, read four times larger, hold the layer to its cover's share of the sky; inside them
+// the cells gather into clumps where a is high and thin out where it is low. The cells are lit as the sun
+// would light their relief: their texture a step towards the sun, brighter where a cell rises that way, and
+// greyer in the middles of the thicker ones; cirrus, of ice, scatters the sun forwards strongly.
+float4 HighLayer(float3 dir, float2 uv)
+{
+    [branch]
+    if (vec4High.x <= 0.0 || dir.z < -0.05 || SceneDistance(uv, 1.0) < 1e8)
+        return float4(0.0, 0.0, 0.0, 1.0);
+    float3 origin = float3(vec4WorldX.w, vec4WorldY.w, vec4WorldZ.w);
+    float curve = max(1.0 - dir.z * dir.z, 1e-6) / (2.0 * EARTH_RADIUS);
+    float t = ShellCross(curve, dir.z, origin.z - vec4High.y).y;
+    [branch]
+    if (t <= 0.0)
+        return float4(0.0, 0.0, 0.0, 1.0);
+    // The texture's x, its fibres, along the wind (0.93, 0.37), and the wind's offset in that frame.
+    float2 p = (origin.xy + dir.xy * t) / HIGH_TILE;
+    float2 uvh = float2(dot(p, float2(0.9293, 0.3697)), dot(p, float2(-0.3697, 0.9293))) + vec4HighWind.xy;
+    // The mip by a pixel's footprint on the sheet, longer the flatter the ray meets it.
+    float incidence = max(abs(dir.z + 2.0 * curve * t), 0.03);
+    float lod = log2(max(t * fHighPixel * rsqrt(incidence) * (512.0 / HIGH_TILE), 1e-3));
+    float4 tex = tex2Dlod(HighTex, float4(uvh, 0, lod));
+    float patch = tex2Dlod(HighTex, float4(uvh * 0.25 + 0.37, 0, lod - 2.0)).b;
+    float mask = smoothstep(0.88 - vec4High.x, 1.12 - vec4High.x, patch);
+    float cells = saturate(0.5 * mask * (0.3 + 1.6 * tex.a));
+    float dc = saturate((tex.r - 1.0 + cells) * 4.0);
+    float towards = saturate((tex2Dlod(HighTex, float4(uvh + vec4HighWind.zw, 0, lod)).r - 1.0 + cells) * 4.0);
+    float df = saturate((tex.g - 1.0 + 0.4 * mask) * 2.0);
+    df += 0.2 * mask * (1.0 - df);
+    float d = lerp(dc, df, vec4High.z);
+    // Rows across the cells, some 700 m apart, along the wind, waving with the clumps.
+    float b = 1.0 - abs(frac(uvh.y * 11.0 + tex.a * 0.5) - 0.5) * 2.0;
+    d *= 1.0 - vec4High.w * b * b * (3.0 - 2.0 * b);
+    float alpha = d * lerp(0.9, 0.45, vec4High.z) * exp(-t / (2.0 * vec4Shape.w)) * smoothstep(0.0, 0.06, dir.z);
+
+    float cosTheta = dot(dir, vec3SunDir);
+    float lobe2 = exp(2.0 * (cosTheta - 1.0));
+    float lobe4 = lobe2 * lobe2;
+    float phase = 0.8 + 0.6 * lobe4 * lobe4 + 0.4 * lobe2 + vec4High.z * (0.8 * lobe4 + 0.3 * lobe2);
+    float relief = 1.0 - (1.0 - vec4High.z) * ((0.35 + 0.6 * cells) * dc * dc + 1.2 * saturate(towards - dc) - 0.6 * saturate(dc - towards));
+    float3 colour = vec3LitColour * vec3SunTint * (phase * relief * fLightStrength) + vec3ShadeColour * 0.6 +
+                    vec3SunsetColour * ((0.5 + 0.5 * cosTheta) * fLightStrength);
+    // At the volumetric clouds' brightness against the sky.
+    float skyLuma = dot(Finite(tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).rgb), float3(0.2126, 0.7152, 0.0722));
+    colour *= skyLuma > 1e-4 && fSkyMatch > 0.0 ? clamp(fSkyMatch * skyLuma, 0.1, 2.0) : 1.0;
+    return float4(colour * alpha, 1.0 - alpha);
+}
+
+// The light from the march's sums, at half size, for the accumulation, over the high layer.
 float4 CloudsLight_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
 {
     float4 sums0 = tex2Dlod(MarchTex0, float4(uv, 0, 0));
@@ -759,7 +858,10 @@ float4 CloudsLight_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     sums.firstHit = sums1.y;
     sums.top = sums1.z;
     sums.height = sums1.w;
-    return Light(sums, WorldRay(vpos), true, uv);
+    float3 dir = WorldRay(vpos);
+    float4 low = Light(sums, dir, true, uv);
+    float4 high = HighLayer(dir, uv);
+    return float4(low.rgb + low.a * high.rgb, low.a * high.a);
 }
 
 // The history read with a Catmull-Rom filter in five bilinear reads: read bilinearly each frame as the

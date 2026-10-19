@@ -1683,8 +1683,28 @@ private:
                     };
                     const float k = CWeather::InterpolationValue ? *CWeather::InterpolationValue : 0.0f;
                     const auto& c = R.Cloud;
-                    log.Printf("weather %s -> %s at %.2f; cloud layer: cover %.2f, base %.0f m, thickness %.0f m, sheet %.2f, wind %.2f\n",
-                            name(CWeather::OldWeatherType), name(CWeather::NewWeatherType), k, c.coverage, c.base, c.thickness, c.stratus, c.wind);
+                    log.Printf("weather %s -> %s at %.2f; cloud layer: cover %.2f, base %.0f m, thickness %.0f m, sheet %.2f, wind %.2f, streets %.2f; "
+                               "high layer: cover %.2f at %.0f m, fibres %.2f, rows %.2f\n",
+                            name(CWeather::OldWeatherType), name(CWeather::NewWeatherType), k, c.coverage, c.base, c.thickness, c.stratus, c.wind, c.rows,
+                            c.highCover, c.highBase, c.highFibres, c.highRows);
+                    // Cloud Variety: each weather's kind of cloud, the one it blends from, how far, and when it moves on.
+                    const double now = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds * 0.001 : 0.0;
+                    log.Printf("cloud variety %s (hold %.1f min, blend %.0f s):", R.CloudVarietyEnabled() ? "on" : "off", R.fCloudVarietyHold, R.fCloudVarietyBlend);
+                    for (int w = 0; w < 8; ++w)
+                    {
+                        const auto& st = R.CloudRegimes[w];
+                        const float share = std::clamp(static_cast<float>((now - st.blendStart) / (std::max)(R.fCloudVarietyBlend, 1.0f)), 0.0f, 1.0f);
+                        if (st.from != st.to && share < 1.0f)
+                            log.Printf(" %s: %s -> %s %.0f%%, next in %.0f s;", kWeatherNames[w], R.CloudRegimeName(st.from), R.CloudRegimeName(st.to), share * 100.0f, st.nextPick - now);
+                        else
+                            log.Printf(" %s: %s, next in %.0f s;", kWeatherNames[w], R.CloudRegimeName(st.to), st.nextPick - now);
+                    }
+                    log.Printf("\n");
+                    const auto& f = R.CloudFlashing;
+                    log.Printf("lightning in the clouds %s: the game's flash %s (run %d, flash %d), runs of the game's %u, ours %u; flash now %.2f at %.0f %.0f %.0f, at 1 %.2f\n",
+                            R.bCloudLightning ? "on" : "off", CWeather::LightningFlash ? "found" : "missing",
+                            CWeather::LightningSequence ? int(*CWeather::LightningSequence) : -1, CWeather::LightningFlash ? int(*CWeather::LightningFlash) : -1,
+                            f.gameFlashes, f.ownFlashes, R.CloudFlash[3], R.CloudFlash[0], R.CloudFlash[1], R.CloudFlash[2], R.CloudLastFlashUnit);
                 }
             }
         }
@@ -1710,6 +1730,18 @@ private:
             MessageBeep(MB_OK);
         }
         reseedWasDown = reseed;
+
+        // Ctrl+Shift+F6: each weather blends into its next kind of cloud now (Cloud Variety), to see them without
+        // waiting.
+        static bool nextWasDown = false;
+        const bool next = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+            (GetAsyncKeyState(VK_F6) & 0x8000);
+        if (next && !nextWasDown)
+        {
+            PostFxResources.bCloudRegimesNext = true;
+            MessageBeep(MB_OK);
+        }
+        nextWasDown = next;
     }
 
     // The first pass of the game's post processing downsamples the scene for bloom and exposure
@@ -2492,7 +2524,9 @@ public:
             R.fCloudWindY = windY;
             R.fCloudSeconds = seconds;
             float c197[4] = { R.fSpecularSheen, strength, deckHeight, invScale };
-            float c198[4] = { windX, windY, cover, R.kCloudWeatherReach };
+            // c198.w: the cloud streets (Clouds.fx's RowBand), while the volumetric clouds are on; the weather map's
+            // reach, kCloudWeatherReach, is the patch's own c157.y.
+            float c198[4] = { windX, windY, cover, R.VolumetricCloudsOn() ? R.Cloud.rows : 0.0f };
             float c199[4] = { 0.0f, R.fCloudShadowsSoftness, R.CloudMorphPhase(), R.kCloudMorphReach / R.fCloudShadowsScale };
             if (R.CloudShadowsDebug() == 1)
             {

@@ -2,18 +2,21 @@ diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_
 index 97b5dab2..7a8a6fe0 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
-@@ -81,6 +81,10 @@
+@@ -81,6 +81,13 @@
      def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
      def c163, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
-+    def c157, 0.05, 0, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at
++    def c157, 0.05, 0.45, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at; the weather map's reach
++    def c196, 5, 2, 0, 0.5 // FusionFix cloud shadows: along the cloud streets; zero; half
++    def c195, -2, 5, -2, 3 // FusionFix cloud shadows: across the cloud streets; the smoothstep's 3 - 2x
++    def c194, 0.6, 0.45, 8, 0.17 // FusionFix cloud shadows: the streets' meander, the cover they add, the map's mip and offset for the meander
 +    def c160, 0.08, 0.31, 6, 0.05 // FusionFix cloud shadows: the weather map's scale, offset and mip; the height's lowering
 +    def c161, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix cloud shadows: angles into -pi..pi for sincos
 +    def c162, 31.4159265, 25.1327412, 1.2, 0.4 // FusionFix cloud shadows: the morph's waves and phase rate; the compressor's power
      def c111, 0.159154937, 0.5, 6.28318548, -3.14159274
      def c112, 3, 7.13800001, 0, 0
      def c113, 0.75, -0.5, 0.5, 0.0008
-@@ -113,6 +117,7 @@
+@@ -113,6 +120,7 @@
      dcl_2d s3	// FusionFix SSR
      dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
      dcl_2d s8	// FusionFix screen space indirect light (black when off)
@@ -21,7 +24,7 @@ index 97b5dab2..7a8a6fe0 100644
      texld r1, v0, s1
      mul r2.xyz, r1.w, c0.yzww
      frc r2.xyz, r2
-@@ -127,6 +132,7 @@
+@@ -127,6 +135,7 @@
      mul r0.x, r19.x, c209.w
      
      mad r0.yzw, v1.xxyz, -r0.x, c15.xxyz
@@ -29,7 +32,7 @@ index 97b5dab2..7a8a6fe0 100644
      dp3 r1.x, c14, r0.yzww
      add r1.xyz, -r1.x, -c54
      cmp r1.yzw, r1.xxyz, c3.x, c3.y
-@@ -461,6 +467,67 @@
+@@ -461,6 +470,86 @@
      add r28.w, c110.y, -r28.w // FusionFix: how much of the ambient indirect light leaves in place
      add r29.x, c110.y, -r29.x
      mul r0.y, r0.y, r29.x
@@ -38,7 +41,8 @@ index 97b5dab2..7a8a6fe0 100644
 +    // --- the volumetric clouds' layer, and the sun's light is dimmed by the clouds' coverage there, worked
 +    // --- out as Clouds.fx's Density has it: the weather map's cover (c198.zw), the map read through the
 +    // --- slow morph (c199.zw), saturate((n - t) / (1 - t)) with t = 1 - cover, less 0.05 for the
-+    // --- height, its soft compressor taken as a power of 0.4; c199.x forces full cover (debug).
++    // --- height, its soft compressor taken as a power of 0.4; c199.x forces full cover (debug); the
++    // --- threshold raised between the cloud streets and lowered along them by c198.w (Clouds.fx's RowBand).
 +    mov r15.x, c197.y
 +    if_lt c158.z, r15.x
 +      mov r15.xyz, -c17 // towards the sun
@@ -57,10 +61,28 @@ index 97b5dab2..7a8a6fe0 100644
 +      texldl r12, r17, s12
 +      add r12.x, r12.x, r12.x
 +      add r12.x, r12.x, -c158.x
-+      mul r12.x, r12.x, c198.w
++      mul r12.x, r12.x, c157.y
 +      add r12.x, r12.x, c158.x
 +      mul_sat r12.x, r12.x, c198.z
 +      add r12.x, -r12.x, c158.x // t
++      // the cloud streets: their meander from the map's 4 x 4 mip, then 0 in a street and 1 between
++      add r17.xy, r16.xy, c194.w
++      mov r17.z, c158.z
++      mov r17.w, c194.z
++      texldl r13, r17, s12
++      add r13.x, r13.x, -c196.w
++      mul r13.x, r13.x, c194.x
++      dp2add r13.y, r16, c195, r13.x
++      frc r13.y, r13.y
++      add r13.y, r13.y, -c196.w
++      abs r13.y, r13.y
++      add r13.y, r13.y, r13.y
++      add r13.y, -r13.y, c158.x
++      mul r13.z, r13.y, r13.y
++      mad r13.y, r13.y, c195.z, c195.w
++      mul r13.y, r13.y, r13.z
++      add r13.y, r13.y, -c194.y
++      mad r12.x, r13.y, c198.w, r12.x
 +      add r12.y, -r12.x, c158.x
 +      max r12.y, r12.y, c158.y
 +      rcp r12.y, r12.y
@@ -101,18 +123,21 @@ diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_
 index 4f2b2eb4..c05c5756 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
-@@ -82,6 +82,10 @@
+@@ -82,6 +82,13 @@
      def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
      def c163, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
      def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
-+    def c157, 0.05, 0, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at
++    def c157, 0.05, 0.45, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at; the weather map's reach
++    def c196, 5, 2, 0, 0.5 // FusionFix cloud shadows: along the cloud streets; zero; half
++    def c195, -2, 5, -2, 3 // FusionFix cloud shadows: across the cloud streets; the smoothstep's 3 - 2x
++    def c194, 0.6, 0.45, 8, 0.17 // FusionFix cloud shadows: the streets' meander, the cover they add, the map's mip and offset for the meander
 +    def c160, 0.08, 0.31, 6, 0.05 // FusionFix cloud shadows: the weather map's scale, offset and mip; the height's lowering
 +    def c161, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix cloud shadows: angles into -pi..pi for sincos
 +    def c162, 31.4159265, 25.1327412, 1.2, 0.4 // FusionFix cloud shadows: the morph's waves and phase rate; the compressor's power
      def c111, 0.159154937, 0.5, 6.28318548, -3.14159274
      def c112, 3, 7.13800001, 0, 0
      def c113, 0.75, -0.5, 0.5, 0.0008
-@@ -114,6 +118,7 @@
+@@ -114,6 +121,7 @@
      dcl_2d s3	// FusionFix SSR
      dcl_2d s9	// FusionFix contact shadows (occlusion, so an unbound sampler changes nothing)
      dcl_2d s8	// FusionFix screen space indirect light (black when off)
@@ -120,7 +145,7 @@ index 4f2b2eb4..c05c5756 100644
      texld r1, v0, s1
      mul r2.xyz, r1.w, c1
      frc r2.xyz, r2
-@@ -128,6 +133,7 @@
+@@ -128,6 +136,7 @@
      mul r0.x, r19.x, c209.w
      
      mad r0.yzw, v1.xxyz, -r0.x, c15.xxyz
@@ -128,7 +153,7 @@ index 4f2b2eb4..c05c5756 100644
      dp3 r1.x, c14, r0.yzww
      add r1.xyz, -r1.x, -c54
      cmp r1.yzw, r1.xxyz, c4.z, c4.w
-@@ -462,6 +468,67 @@
+@@ -462,6 +471,86 @@
      add r28.w, c110.y, -r28.w // FusionFix: how much of the ambient indirect light leaves in place
      add r29.x, c110.y, -r29.x
      mul r0.y, r0.y, r29.x
@@ -137,7 +162,8 @@ index 4f2b2eb4..c05c5756 100644
 +    // --- the volumetric clouds' layer, and the sun's light is dimmed by the clouds' coverage there, worked
 +    // --- out as Clouds.fx's Density has it: the weather map's cover (c198.zw), the map read through the
 +    // --- slow morph (c199.zw), saturate((n - t) / (1 - t)) with t = 1 - cover, less 0.05 for the
-+    // --- height, its soft compressor taken as a power of 0.4; c199.x forces full cover (debug).
++    // --- height, its soft compressor taken as a power of 0.4; c199.x forces full cover (debug); the
++    // --- threshold raised between the cloud streets and lowered along them by c198.w (Clouds.fx's RowBand).
 +    mov r15.x, c197.y
 +    if_lt c158.z, r15.x
 +      mov r15.xyz, -c17 // towards the sun
@@ -156,10 +182,28 @@ index 4f2b2eb4..c05c5756 100644
 +      texldl r12, r17, s12
 +      add r12.x, r12.x, r12.x
 +      add r12.x, r12.x, -c158.x
-+      mul r12.x, r12.x, c198.w
++      mul r12.x, r12.x, c157.y
 +      add r12.x, r12.x, c158.x
 +      mul_sat r12.x, r12.x, c198.z
 +      add r12.x, -r12.x, c158.x // t
++      // the cloud streets: their meander from the map's 4 x 4 mip, then 0 in a street and 1 between
++      add r17.xy, r16.xy, c194.w
++      mov r17.z, c158.z
++      mov r17.w, c194.z
++      texldl r13, r17, s12
++      add r13.x, r13.x, -c196.w
++      mul r13.x, r13.x, c194.x
++      dp2add r13.y, r16, c195, r13.x
++      frc r13.y, r13.y
++      add r13.y, r13.y, -c196.w
++      abs r13.y, r13.y
++      add r13.y, r13.y, r13.y
++      add r13.y, -r13.y, c158.x
++      mul r13.z, r13.y, r13.y
++      mad r13.y, r13.y, c195.z, c195.w
++      mul r13.y, r13.y, r13.z
++      add r13.y, r13.y, -c194.y
++      mad r12.x, r13.y, c198.w, r12.x
 +      add r12.y, -r12.x, c158.x
 +      max r12.y, r12.y, c158.y
 +      rcp r12.y, r12.y
