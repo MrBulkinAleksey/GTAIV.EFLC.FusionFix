@@ -79,6 +79,7 @@ namespace CarMirrors
     static double buildMs = 0.0, visibilityMs = 0.0;
     static uint32_t timedFrames = 0;
     static uint32_t outdoorScans = 0;      // frames the outdoor scan ran for the mirror
+    static uint32_t waterQueued = 0;       // the water's commands put in the mirror phase's draw list
     // The car, for the draw list's snapshots and the phase's plane.
     static std::atomic<uintptr_t> drawnVehicle{ 0 };
     static SafetyHookMid quadHook;
@@ -411,7 +412,6 @@ namespace CarMirrors
     static constexpr uint32_t PhaseWaterFlag = 0x10;
     static uintptr_t waterFlagPhase = 0;      // the phase the flag was set on by us, 0 none
     static void* waterFunction = nullptr;     // CE 0xAD7EF0, cdecl(the phase's list)
-    static uint32_t waterQueued = 0;
 
     static void SetWaterFlag(uintptr_t phase)
     {
