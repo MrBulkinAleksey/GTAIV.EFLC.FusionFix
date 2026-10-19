@@ -640,7 +640,10 @@ public:
     };
     static constexpr size_t kCloudLayerFloats = 20;
     static_assert(sizeof(CloudLayer) == kCloudLayerFloats * sizeof(float), "CloudLayer is blended as an array of floats");
-    // a + (b - a) k, field by field.
+    // a + (b - a) k, field by field, but the high layer's: a sheet that only one of them has comes and goes in that
+    // one's shape, and two that differ in height or kind (altocumulus at 4.5 km into cirrus at 8.5 km) do not
+    // morph into each other: the first thins out over the first half, the second fills in over the second. Mixed
+    // field by field the sheet rose through the sky for minutes and its cells drew out into fibres on the way.
     static CloudLayer MixCloudLayers(const CloudLayer& a, const CloudLayer& b, float k)
     {
         float x[kCloudLayerFloats], y[kCloudLayerFloats];
@@ -650,6 +653,25 @@ public:
             x[i] += (y[i] - x[i]) * k;
         CloudLayer mixed;
         std::memcpy(&mixed, x, sizeof(x));
+        auto shapeOf = [&](const CloudLayer& from, float cover) {
+            mixed.highCover = cover;
+            mixed.highBase = from.highBase;
+            mixed.highFibres = from.highFibres;
+            mixed.highRows = from.highRows;
+        };
+        auto smooth = [](float t) { t = std::clamp(t, 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
+        if (a.highCover <= 0.0f && b.highCover > 0.0f)
+            shapeOf(b, mixed.highCover);
+        else if (b.highCover <= 0.0f && a.highCover > 0.0f)
+            shapeOf(a, mixed.highCover);
+        else if (a.highCover > 0.0f && b.highCover > 0.0f &&
+                 (std::fabs(a.highBase - b.highBase) > 500.0f || std::fabs(a.highFibres - b.highFibres) > 0.5f || std::fabs(a.highRows - b.highRows) > 0.5f))
+        {
+            if (k < 0.5f)
+                shapeOf(a, a.highCover * smooth(1.0f - 2.0f * k));
+            else
+                shapeOf(b, b.highCover * smooth(2.0f * k - 1.0f));
+        }
         return mixed;
     }
     CloudLayer Cloud = { 0.4f, 800.0f, 600.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 6.0f, 0.5f, 1.0f, 0.5f, 1.0f, 0.0f, 0.0f, 0.0f, 7000.0f, 0.0f, 0.0f };
