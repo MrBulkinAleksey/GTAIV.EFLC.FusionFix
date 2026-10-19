@@ -48,7 +48,7 @@ export namespace GrassShared
     inline float TrampleGridSide = 64.0f;
 }
 
-// Grass Wind (Graphics > Lighting, [PROCEDURAL] GrassWind): the wind sways the grass, weeds and small plants the game
+// Grass Wind ([PROCEDURAL] GrassWind): the wind sways the grass, weeds and small plants the game
 // scatters on the ground (procedural props: proc_grass*, *_proc_plant_*, *weed*, sm_plant*). They are buildings from
 // the building pool (EntityClass counts them as buildings) drawn with gta_default (gta_cutout), whose deferred vertex
 // shaders move each vertex when b12 is on (shaders/patches/world_grass_wind.patch). Around each G-buffer draw of such a
@@ -62,7 +62,7 @@ export namespace GrassShared
 // while the game is paused.
 //
 // [PROCEDURAL] GrassWindStrength scales the sway; GrassWindModels adds model names (comma separated) to the list.
-// Grass Bending (Graphics > Lighting, [PROCEDURAL] GrassBending): the cars and people around the player (NearbyBodies,
+// Grass Bending ([PROCEDURAL] GrassBending): the cars and people around the player (NearbyBodies,
 // 60 m) push the blades away and lay them down under a car, and the wind dies where they press. Per grass draw the two
 // bodies nearest the prop whose reach takes it (a car's footprint and half a metre past it, a person's feet and a metre around)
 // and that stand on its ground go to c248-c251; none clears them.
@@ -70,7 +70,7 @@ export namespace GrassShared
 // Helicopters with their blades turning, standing or up to 30 m above a prop, blow the grass away from under them (their
 // downwash), by the blades' speed, wider and weaker the higher they fly, pulsing with the blades.
 //
-// Grass Trample (Graphics > Lighting, [PROCEDURAL] GrassTrample): where people walked and wheels rolled the grass stays
+// Grass Trample ([PROCEDURAL] GrassTrample): where people walked and wheels rolled the grass stays
 // down and rises again over GrassTrampleSeconds (12). A grid of 128 x 128 cells of 0.5 m around the player, tied to the
 // world (a cell's place in it is its world position modulo 64 m, so the grid only clears the rows and columns the player
 // leaves behind), is stamped along each body's path in the last frame (a person's feet, a car's four wheels, a bike's
@@ -106,6 +106,7 @@ class GrassWind
     static constexpr float kHeightWrap = 64.0f;         // the ground's height in the texture, modulo this
     static constexpr float kStampRange = 30.0f;         // bodies this near the player trample
 
+    static inline bool bWind = true, bBending = true, bTrample = true;
     static inline float fStrength = 1.0f;
     static inline float fTrampleSeconds = 12.0f;
     static inline bool bLog = false;
@@ -206,6 +207,9 @@ class GrassWind
 
     static void ReadIni(CIniReader& iniReader)
     {
+        bWind = iniReader.ReadInteger("PROCEDURAL", "GrassWind", 1) != 0;
+        bBending = iniReader.ReadInteger("PROCEDURAL", "GrassBending", 1) != 0;
+        bTrample = iniReader.ReadInteger("PROCEDURAL", "GrassTrample", 1) != 0;
         fStrength = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GrassWindStrength", 1.0f), 0.0f, 4.0f);
         fTrampleSeconds = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GrassTrampleSeconds", 12.0f), 1.0f, 300.0f);
         bLog = iniReader.ReadInteger("DEBUG", "GrassWindLog", 0) != 0;
@@ -456,10 +460,7 @@ class GrassWind
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
-        static auto windPref = FusionFixSettings.GetRef("PREF_GRASS_WIND");
         static auto debugPref = FusionFixSettings.GetRef("PREF_GRASS_WIND_DEBUG");
-        static auto bendingPref = FusionFixSettings.GetRef("PREF_GRASS_BENDING");
-        static auto tramplePref = FusionFixSettings.GetRef("PREF_GRASS_TRAMPLE");
         auto& R = PostFxResources;
         MakeModelListIfAsked();
 
@@ -474,9 +475,9 @@ class GrassWind
         gustPhase = std::fmod(gustPhase + dt * (3.0f + 8.0f * fWind) / kGustWavelength, 1.0);
         flutterPhase = std::fmod(flutterPhase + dt * (1.4f + 3.0f * fWind), 1.0);
 
-        const bool windOn = Pref(windPref, 1) != 0 && fStrength > 0.0f;
-        const bool bending = Pref(bendingPref, 1) != 0;
-        const bool trampling = Pref(tramplePref, 1) != 0;
+        const bool windOn = bWind && fStrength > 0.0f;
+        const bool bending = bBending;
+        const bool trampling = bTrample;
         const bool on = (windOn || bending || trampling) && EntityClass::Installed();
         const float scale = on && windOn ? fStrength * (Pref(debugPref, 0) ? 4.0f : 1.0f) : 0.0f;
         fBendPerHeight = scale * (0.03f + 0.22f * fWind);

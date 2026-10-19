@@ -42,7 +42,7 @@ using RageDirect3DDevice9::SetTextureBoth;
 using RageDirect3DDevice9::SetSamplerStateBoth;
 using namespace PostFxProfiler;
 
-// GPU Grass (Graphics > Lighting, [PROCEDURAL] GpuGrass): blades of grass drawn by the GPU (GpuGrass.fx) on the
+// GPU Grass (Improved Grass in Graphics > Lighting, [PROCEDURAL] GpuGrass): blades of grass drawn by the GPU (GpuGrass.fx) on the
 // ground the procedural manager gathers, into the G-buffer at the end of its pass (before the depth copy, so SSR, AO and
 // contact shadows see it), lit by the game like any surface.
 //

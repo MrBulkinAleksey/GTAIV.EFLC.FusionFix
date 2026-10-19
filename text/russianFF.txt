@@ -370,17 +370,8 @@ Logitech LightSync RGB
 [WorldLightShad]
 Тени от огней зданий
 
-[GrassWind]
-Трава на ветру
-
-[GrassBending]
-Трава приминается
-
-[GrassTrample]
-Примятая трава поднимается не сразу
-
-[GpuGrass]
-Густая трава (GPU)
+[ImprovedGrass]
+Улучшенная трава
 
 [BuildingShad]
 Здания в тенях фар

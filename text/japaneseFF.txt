@@ -370,17 +370,8 @@ Tail light shadows
 [WorldLightShad]
 Building light shadows
 
-[GrassWind]
-Grass in the wind
-
-[GrassBending]
-Grass bends under feet and wheels
-
-[GrassTrample]
-Trampled grass rises slowly
-
-[GpuGrass]
-Dense grass (GPU)
+[ImprovedGrass]
+Improved grass
 
 [BuildingShad]
 Walls block headlights
