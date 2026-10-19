@@ -1,6 +1,7 @@
 module;
 
 #include <common.hxx>
+#include <d3dx9tex.h>
 #include "FusionLog.hpp"
 #include <algorithm>
 #include <cmath>
@@ -13,6 +14,7 @@ export module skytrace;
 
 import common;
 import comvars;
+import d3dx9_43;
 import vtablepatch;
 
 // [DEBUG] SkyTrace: what the sky dome's draws (gta_atmoscatt_clouds, within postfx's DrawSky) are drawn with, to
@@ -49,6 +51,11 @@ namespace SkyTrace
     bool seen[kSlots] = {};
     int drawInSky = 0;
     uint32_t frame = 0, lines = 0;
+
+    // Ctrl+Shift+F6 saves what the sky's calls of the next frame leave in the target: the sky as the game drew it,
+    // before the fog, the post effects and the upscaler, to set beside a screenshot taken at the same time.
+    bool captureWasDown = false;
+    int captureArmed = 0, captureCount = 0, captureCall = 0;
 
     HRESULT(__stdcall* RealDrawIndexedPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT) = nullptr;
     HRESULT(__stdcall* RealDrawPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT) = nullptr;
@@ -211,11 +218,40 @@ export namespace SkyTrace
         ++frame;
         drawInSky = 0;
         bInSky = true;
+
+        const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+            (GetAsyncKeyState(VK_F6) & 0x8000);
+        if (down && !captureWasDown && !captureArmed)
+        {
+            // The main view's sky and the water reflection's take a call each; a few calls catch both.
+            captureArmed = 4;
+            captureCall = 0;
+            ++captureCount;
+        }
+        captureWasDown = down;
     }
 
     void End()
     {
         bInSky = false;
+        if (!captureArmed)
+            return;
+        --captureArmed;
+        auto device = RageDirect3DDevice9::GetRuntimeDevice();
+        IDirect3DSurface9* target = nullptr;
+        if (!device || FAILED(device->GetRenderTarget(0, &target)) || !target)
+            return;
+        D3DSURFACE_DESC desc{};
+        target->GetDesc(&desc);
+        const int call = captureCall++;
+        char name[64];
+        std::snprintf(name, sizeof(name), "SkyCapture%d_%d", captureCount, call);
+        const auto path = FusionLog::PathFor(name, L".png");
+        const HRESULT hr = D3DXSaveSurfaceToFileW(path.c_str(), D3DXIFF_PNG, target, nullptr, nullptr);
+        FusionLog::Write("SkyTrace", "Capture", "capture %d call %d frame %u: target %p %ux%u fmt %lu -> %s (hr %08lx)\n", captureCount, call,
+                         frame, static_cast<void*>(target), desc.Width, desc.Height, static_cast<unsigned long>(desc.Format),
+                         path.filename().string().c_str(), static_cast<unsigned long>(hr));
+        target->Release();
     }
 }
 
