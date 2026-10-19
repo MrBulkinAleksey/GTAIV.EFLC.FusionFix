@@ -468,6 +468,31 @@ namespace CarMirrors
         waterFlagPhase = 0;
     }
 
+    // The mirror phase draws no sky (a bathroom mirror sees none): the car mirror's showed whatever MIRROR_RT held,
+    // black once it was cleared. The water reflection's sky is a callback (CE 0xC107A0, queued at 0xD76D38) drawing it
+    // (CE 0xDBC170, clip planes off round it) for draw lists with flag 0x20; in the sky the draw list's 0x20000 sets
+    // the timecycle's sky colours (0xDBC2C6) and picks how it is drawn (0xDBC743), 0x40000 the reflection map's branch
+    // (left out, the sky goes through the main branch and the volumetric clouds follow, postfx.ixx). The car mirror's
+    // pass queues the same callback (MirrorSkyDraw) and its three tests are given flags 0x20 | 0x20000 for it.
+    static SafetyHookMid skyHooks[3];
+    static constexpr uint32_t SkyFlags = 0x20 | 0x20000;
+    static void* skyFunction = nullptr;   // CE 0xC107A0
+    static bool inMirrorSky = false;      // render thread
+
+    static void MirrorSkyFlags(SafetyHookContext& regs)
+    {
+        if (inMirrorSky)
+            regs.eax = reinterpret_cast<uintptr_t>(&SkyFlags);
+    }
+
+    static void __cdecl MirrorSkyDraw(uint32_t)
+    {
+        inMirrorSky = true;
+        reinterpret_cast<void (__cdecl*)()>(skyFunction)();
+        inMirrorSky = false;
+        ++skyDraws;
+    }
+
     // CRenderPhaseMirrorReflection: its draw list (vtable slot 8, CE 0xD76950) and its visibility (CE 0xD77430).
     // The plane again as the phase's draw list is made, with the car where its draws of it are: the update's plane is
     // from before the car moved this frame, and the reflected view then lagged the car's own side in the mirror.
@@ -756,31 +781,6 @@ namespace CarMirrors
             techniquePushed = true;
             ++techniqueDraws;
         }
-    }
-
-    // The mirror phase draws no sky (a bathroom mirror sees none): the car mirror's showed whatever MIRROR_RT held,
-    // black once it was cleared. The water reflection's sky is a callback (CE 0xC107A0, queued at 0xD76D38) drawing it
-    // (CE 0xDBC170, clip planes off round it) for draw lists with flag 0x20; in the sky the draw list's 0x20000 sets
-    // the timecycle's sky colours (0xDBC2C6) and picks how it is drawn (0xDBC743), 0x40000 the reflection map's branch
-    // (left out, the sky goes through the main branch and the volumetric clouds follow, postfx.ixx). The car mirror's
-    // pass queues the same callback (MirrorSkyDraw) and its three tests are given flags 0x20 | 0x20000 for it.
-    static SafetyHookMid skyHooks[3];
-    static constexpr uint32_t SkyFlags = 0x20 | 0x20000;
-    static void* skyFunction = nullptr;   // CE 0xC107A0
-    static bool inMirrorSky = false;      // render thread
-
-    static void MirrorSkyFlags(SafetyHookContext& regs)
-    {
-        if (inMirrorSky)
-            regs.eax = reinterpret_cast<uintptr_t>(&SkyFlags);
-    }
-
-    static void __cdecl MirrorSkyDraw(uint32_t)
-    {
-        inMirrorSky = true;
-        reinterpret_cast<void (__cdecl*)()>(skyFunction)();
-        inMirrorSky = false;
-        ++skyDraws;
     }
 
     // The coronas (CE 0xC106F0: CE 0xC85080 the coronas, CE 0xD8C8E0 the lens flares, clip planes off round them) are
