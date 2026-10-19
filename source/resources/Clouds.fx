@@ -113,6 +113,9 @@ float4 vec4History;
 // the scene bilinearly at half its resolution, softer than everything around them.
 float2 vec2SubPixel;
 float4 vec4Upsample;
+// The half size passes and the accumulation take the projection without temporal AA's jitter; CloudsComposite
+// reads them this far off its own jittered pixel, in texture coordinates.
+float2 vec2SteadyShift;
 float fStratus;           // 0 separate heaps of cloud, 1 a sheet: the weather's overcast
 float fEvolution;         // how far the detail has drifted up through itself, so the billows change
 float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
@@ -899,8 +902,8 @@ float4 SampleCatmullRom(sampler2D tex, float2 uv, float2 texel)
 // pixel is found by the camera's turn alone, as a direction; its colour is held within the range of this
 // frame's 3x3 half size neighbourhood, so drifting clouds and a moving camera leave no trails. The full size
 // pixel whose ray this frame's half size sample took (vec4Upsample.xy) takes vec4History.y of it; the other
-// three take vec4History.z of the samples around them, weighted by how far each stood, which keeps them
-// from going stale while their own turn comes round.
+// three take vec4History.z of the samples around them, weighted by how far each stood (0: they wait for their
+// own turn, held to the neighbourhood meanwhile).
 float4 CloudsResolve_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
 {
     float2 cell = floor(vpos * 0.5);
@@ -957,7 +960,8 @@ float4 CloudsComposite_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
         if (pow(fFarDivNear, raw) * fNearPlane * rayScale < tEnter)
             return float4(0.0, 0.0, 0.0, 1.0);
     }
-    return tex2Dlod(CloudTex, float4(uv, 0, 0));
+    float4 c = SampleCatmullRom(CloudTex, uv + vec2SteadyShift, vec2DepthTexel);
+    return float4(max(c.rgb, 0.0), saturate(c.a));
 }
 
 void FullscreenQuadVS(in float4 iPos : POSITION, in float2 iUV : TEXCOORD0,

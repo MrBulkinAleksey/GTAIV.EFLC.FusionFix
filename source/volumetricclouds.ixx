@@ -250,6 +250,16 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
 
     ID3DXEffect* effect = R.CloudsEffect;
     const D3DMATRIX& proj = *(const D3DMATRIX*)vp->mProjectionMatrix;
+    // The projection without temporal AA's jitter (TemporalAA keeps the offsets it replaced in field_2D8 and
+    // field_2DC). The half size clouds are marched and accumulated through it: marched jittered and
+    // reprojected unjittered, the history slid by the jitter's change every frame and smeared, worse at full
+    // size. CloudsComposite lays them over the jittered scene by vec2SteadyShift.
+    D3DMATRIX projSteady = proj;
+    if (vp->mIsPerspective)
+    {
+        projSteady._31 = vp->field_2D8;
+        projSteady._32 = vp->field_2DC;
+    }
     const D3DXVECTOR4 projInfo = ProjInfo(proj, width, height);
     const float invViewportSize[] = { 1.0f / width, 1.0f / height };
     effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2InvViewportSize"), invViewportSize, 2);
@@ -585,6 +595,13 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     const float halfWidth = halfSize ? float(halfDesc.Width) : width, halfHeight = halfSize ? float(halfDesc.Height) : height;
     effect->SetFloat(effect->GetParameterByName(nullptr, "fHighPixel"), std::fabs(ProjInfo(proj, halfWidth, halfHeight).x));
     const float depthTexel[2] = { 1.0f / width, 1.0f / height };
+    {
+        // The accumulation's texture coordinates for this frame's jittered pixel: the two projections' rays differ by
+        // their offsets alone.
+        const D3DXVECTOR4 jittered = ProjInfo(proj, width, height), steadyInfo = ProjInfo(projSteady, width, height);
+        const float shift[2] = { (jittered.z - steadyInfo.z) / jittered.x / width, (jittered.w - steadyInfo.w) / jittered.y / height };
+        effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2SteadyShift"), shift, 2);
+    }
     effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2DepthTexel"), depthTexel, 2);
 
     // Last frame's view projection by columns: a direction (w 0) leaves its translation out.
@@ -595,10 +612,11 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4PrevX"), &prevX);
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4PrevY"), &prevY);
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4PrevW"), &prevW);
-        // A full size pixel's own sample comes round every fourth frame and takes a fifth, the samples around it
-        // a fiftieth in between. A third and a twentieth left the march's noise half as strong again as a sixth
-        // every frame at half size did (offline, over a still frame); this keeps the same.
-        const D3DXVECTOR4 historyInfo(history ? 1.0f : 0.0f, 0.2f, 0.02f, 0.0f);
+        // A full size pixel's own sample comes round every fourth frame and takes a fifth: a third left the march's
+        // noise half as strong again as a sixth every frame at half size did (offline, over a still frame). The
+        // samples around it take nothing in between: a fiftieth already held a third of the picture at their half
+        // size blend.
+        const D3DXVECTOR4 historyInfo(history ? 1.0f : 0.0f, 0.2f, 0.0f, 0.0f);
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4History"), &historyInfo);
     }
     // The full size pixel of each 2 x 2 the half size rays go through this frame, all four in turn, the
@@ -658,7 +676,8 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         pDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, blend ? TRUE : FALSE);
         pDevice->SetRenderState(D3DRS_COLORWRITEENABLE, blend ? (D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE) : 0xF);
         // VPOS counts from the target's corner: the rays start from the viewport's.
-        D3DXVECTOR4 info = ProjInfo(proj, w, h);
+        const bool steady = halfSize && target != sceneSurface;
+        D3DXVECTOR4 info = ProjInfo(steady ? projSteady : proj, w, h);
         info.z -= x0 * info.x;
         info.w -= y0 * info.y;
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4ProjInfo"), &info);
