@@ -1187,7 +1187,6 @@ namespace
             DestroySwapChain();
             ffxCreateContextDescFrameGenerationSwapChainVersionDX12 version{};
             version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_VERSION_DX12;
-            version.version = FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION;
             IDXGISwapChain4* created = nullptr;
             ffxCreateContextDescFrameGenerationSwapChainForHwndDX12 create{};
             create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_FOR_HWND_DX12;
@@ -1198,7 +1197,24 @@ namespace
             create.fullscreenDesc = nullptr;
             create.dxgiFactory = factory;
             create.gameQueue = queue;
-            auto result = functions.CreateContext(&swapChainContext, &create.header, nullptr);
+            // A runtime refuses an API version newer than its own (3.1.6 ships with SDK 2.1 and 2.2): down to 3.1.5, the
+            // first with a stable ABI
+            ffxReturnCode_t result = FFX_API_RETURN_ERROR_PARAMETER;
+            for (uint32_t patch = FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_PATCH; patch >= 5; --patch)
+            {
+                version.version = FFX_FRAMEGENERATION_SWAPCHAIN_DX12_MAKE_VERSION(3, 1, patch);
+                created = nullptr;
+                swapChainContext = nullptr;
+                result = functions.CreateContext(&swapChainContext, &create.header, nullptr);
+                if (result == FFX_API_RETURN_OK && created)
+                {
+                    Log("AMD's frame generation swap chain, API version 3.1.%u", patch);
+                    break;
+                }
+                // Only a refused version is worth another try
+                if (result != FFX_API_RETURN_ERROR_PARAMETER)
+                    break;
+            }
             ComPtr<IDXGISwapChain4> swapChain;
             if (result != FFX_API_RETURN_OK || !created)
             {
