@@ -136,6 +136,10 @@ export void RenderContactShadows()
     effect->SetFloat(h.fCSThickness, R.fContactShadowThickness);
     effect->SetFloat(h.fCSMaxViewDistance, R.fContactShadowMaxDistance);
     effect->SetFloat(h.fCSIntensity, R.fContactShadowIntensity);
+    // GPU grass is marked by its gloss in the G-buffer's specular target (221 / 1023, GpuGrass.fx)
+    const bool grassMark = R.mSpecularRT && R.mSpecularRT->mD3DTexture;
+    effect->SetTexture(h.SpecularTex2D, grassMark ? R.mSpecularRT->mD3DTexture : nullptr);
+    effect->SetFloat(h.fCSGrassGloss, grassMark ? 221.0f : 0.0f);
 
     // Put back in the reverse order as the function ends.
     SavedVertexInput savedVertexInput(pDevice);

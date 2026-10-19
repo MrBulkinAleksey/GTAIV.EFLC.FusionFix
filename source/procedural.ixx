@@ -81,6 +81,35 @@ import entityclass;
 //    area doesn't stall a frame. Waiting positions
 //    of a provider the game removed meanwhile (its requests at +0x522c, processed first) are dropped.
 //  - ProceduralLog: the log has the time of the generator's update (CE 0xc0aa90) and how many props are out.
+// The ground triangles the procedural manager holds, for effects that grow things on them (GPU grass): told on the main
+// thread as the manager takes and lets go of them; a record's address is its key until it is let go.
+export namespace ProceduralGround
+{
+    struct Triangle
+    {
+        float corner[3][3];
+        uint8_t tag;        // the surface's procedural tag (material +0x4c, bits 8..15): PROCOBJ records by tag
+        uint8_t surface;    // its material (bits 0..7): 1 GRASS, 2 SHORT_GRASS, 0 any other (GrassSurface)
+    };
+    // Set before the world loads (gpugrass.ixx): the manager also gathers ground of the GRASS and SHORT_GRASS materials
+    // whose procedural tag has neither plants nor props, as ground with props of a tag that has none (so the generator
+    // makes nothing there)
+    inline bool GatherGrassSurfaces = false;
+    inline void (*OnAdded)(const void* key, const Triangle& triangle) = nullptr;
+    inline void (*OnRemoved)(const void* key) = nullptr;
+    // A prop of `model` at `distance` from the camera left out of the scene, where other grass grows in its place
+    // (gpugrass.ixx); `keep` is the prop's own random value, 0..1, the same each time it is made there
+    inline bool (*HideGrass)(uint16_t model, float distance, float keep) = nullptr;
+    // How far ahead of the camera ground should be gathered (GPU grass's range), 0 for the manager's own circle around
+    // it: its centre then moves ahead along the view by what its radius lacks of that, at most half the radius, so less
+    // is held behind (Procedural::ShiftGatherCentre)
+    inline float GatherAhead = 0.0f;
+
+    // procedural.dat's PROCOBJ records (CE 0x16c8fb0): +4 count, records of 0x44 from +8: +0 tag, +4 model index,
+    // +8 spacing; nullptr until loaded
+    uint8_t* Definitions();
+}
+
 namespace Procedural
 {
     constexpr uint32_t VanillaRecords = 512;
@@ -369,6 +398,7 @@ namespace Procedural
     uint32_t nUsedMax = 0;
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
     uint32_t nQueueMax = 0, nWaitingMax = 0, nDropped = 0;
+    uint32_t nGrassHidden = 0;
     uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0, nHeavyCascades = 0, nHeavyScene = 0;
     uint32_t nConeFull = 0, nParkedNow = 0;
     uint32_t nUpdates = 0;
@@ -491,6 +521,25 @@ namespace Procedural
             fGatherNow = std::min(fGatherFull, fGatherNow + 2.0f);
         fGatherNow = std::clamp(fGatherNow, low, fGatherFull);
         *(float*)(pManager + 0x20) = fGatherNow * fGatherNow;
+    }
+
+    // GatherAhead: the manager's centre (+0xf40), copied from the camera in its update (CE 0xc869e0) and what its
+    // collision query (box +0x1c, CE 0xc87920), gathering and letting go (CE 0xc874f0) all measure from, moved ahead
+    // along the view, flat
+    void ShiftGatherCentre(uint8_t* manager)
+    {
+        const float ahead = ProceduralGround::GatherAhead;
+        if (!(ahead > 0.0f) || !pCamera)
+            return;
+        const float radius = std::sqrt((std::max)(*(float*)(manager + 0x20), 0.0f));
+        const float shift = std::clamp(ahead - radius, 0.0f, radius * 0.5f);
+        const float* forward = pCamera - 8;
+        const float length = std::sqrt(forward[0] * forward[0] + forward[1] * forward[1]);
+        if (!(shift > 0.0f) || !(length > 0.1f))
+            return;
+        auto centre = (float*)(manager + 0xF40);
+        centre[0] += forward[0] / length * shift;
+        centre[1] += forward[1] / length * shift;
     }
 
     // The manager's grass and gathering distances, from what the game just set for Detail Quality
@@ -619,7 +668,7 @@ namespace Procedural
                     queued ? Where((float*)entry) : std::string(), waited));
             }
         }
-        if (record && bConeRelease && pGenerator)
+        if (record && (bConeRelease || ProceduralGround::HideGrass) && pGenerator)
         {
             // Made from the queue (a1 its entry; the caller sets the record's provider, +0xc, right after)
             auto queue = *(uint8_t**)(pGenerator + 0x5224);
@@ -685,8 +734,35 @@ namespace Procedural
         shRelease.unsafe_fastcall(generator, edx, record, list);
     }
 
-    // Props made from the queue that are now well outside the cone go as the game lets them go (CE 0xc0a920, from the
-    // list of their procedural.dat record, +0x38 of the record the entry's +0xc points to), and their entries are parked
+    // GPU grass grows at a queue entry's place instead of its prop (ProceduralGround::HideGrass, by the model of the
+    // procedural.dat record its +0xc points to), taken `slack` metres further off than it is
+    bool GrassGivesWay(const uint8_t* entry, float slack = 0.0f)
+    {
+        const auto hide = ProceduralGround::HideGrass;
+        const auto definition = *(const uint8_t* const*)(entry + 0xC);
+        if (!hide || !pCamera || !pDefinitions || definition < pDefinitions + 8 ||
+            definition >= pDefinitions + 8 + size_t(*(uint32_t*)(pDefinitions + 4)) * 0x44)
+            return false;
+        const int32_t model = *(const int32_t*)(definition + 4);
+        if (model < 0 || model > 0xFFFF)
+            return false;
+        const float* position = (const float*)entry;
+        const float dx = position[0] - pCamera[0], dy = position[1] - pCamera[1], dz = position[2] - pCamera[2];
+        const float keep = float((PositionKey(position) >> 12) & 0xFFFFFF) / float(0x1000000);
+        return hide(uint16_t(model), std::sqrt(dx * dx + dy * dy + dz * dz) + slack, keep);
+    }
+
+    // Wanted now: inside the cone, and not where GPU grass grows instead
+    bool Wanted(const uint8_t* entry)
+    {
+        return InCone((const float*)entry) && !GrassGivesWay(entry);
+    }
+
+    // Props made from the queue that are now well outside the cone (ProceduralConeRelease), or grass props the camera
+    // came near enough for GPU grass to grow in their place (by GrassReleaseSlack more), go as the game lets them go
+    // (CE 0xc0a920, from the list of their procedural.dat record, +0x38 of the record the entry's +0xc points to), and
+    // their entries are parked
+    constexpr float GrassReleaseSlack = 5.0f;
     void ReleaseOutsideCone(uint8_t* generator)
     {
         std::vector<std::pair<uint8_t*, MadeFrom>> outside;
@@ -697,7 +773,7 @@ namespace Procedural
             // The game's own removal clears the provider before it lets a record go
             if (!*(uintptr_t*)(record + 8) || *(uintptr_t*)(record + 0xC) != *(uintptr_t*)(from.entry + 0x1C))
                 continue;
-            if (!InCone((float*)from.entry, ReleaseSlack))
+            if ((bConeRelease && !InCone((float*)from.entry, ReleaseSlack)) || GrassGivesWay(from.entry, GrassReleaseSlack))
                 outside.emplace_back(record, from);
         }
         for (auto& [record, from] : outside)
@@ -759,9 +835,9 @@ namespace Procedural
         // The cone: kept positions of a removed provider go, those now inside come back (nearest first is the sort
         // below), and those outside are kept, while there is room; past it they are made
         UpdateCone();
-        if (cone.active)
+        if (cone.active || ProceduralGround::HideGrass)
         {
-            if (bConeRelease)
+            if (bConeRelease || ProceduralGround::HideGrass)
                 ReleaseOutsideCone(generator);
             uint32_t capacity = *(uint32_t*)(generator + 0x5220);
             std::vector<uint8_t> keep;
@@ -781,7 +857,7 @@ namespace Procedural
                     nDropped++;
                     continue;
                 }
-                if (count < capacity && InCone((float*)entry))
+                if (count < capacity && Wanted(entry))
                 {
                     memcpy(queue + size_t(count) * QueueEntrySize, entry, QueueEntrySize);
                     count++;
@@ -793,7 +869,7 @@ namespace Procedural
             for (uint32_t i = 0; i < count; i++)
             {
                 auto entry = queue + size_t(i) * QueueEntrySize;
-                if (!InCone((float*)entry))
+                if (!Wanted(entry))
                 {
                     if (keep.size() < ParkedLimit * QueueEntrySize)
                     {
@@ -946,7 +1022,8 @@ namespace Procedural
         if ((*(uint32_t*)(entity + 0x24) & propFlags) != propFlags)
             return phases;
         const auto reflections = bInReflections ? 0 : *pReflectionPhases & ~*pScenePhase;
-        const auto scene = bSmallFarCull ? *pScenePhase : 0;
+        const auto hideGrass = ProceduralGround::HideGrass;
+        const auto scene = bSmallFarCull || hideGrass ? *pScenePhase : 0;
         if (!(phases & (reflections | scene)))
             return phases;
         const auto [radius, keep] = FindProp(entity);
@@ -957,7 +1034,12 @@ namespace Procedural
             nReflectionsSkipped++;
             phases &= ~reflections;
         }
-        if ((phases & scene) && radius > 0.0f && (radius < distance * SmallFarScreenSize ||
+        if ((phases & scene) && hideGrass && hideGrass(*(uint16_t*)(entity + 0x2e), distance, keep))
+        {
+            nGrassHidden++;
+            phases &= ~scene;
+        }
+        if ((phases & scene) && bSmallFarCull && radius > 0.0f && (radius < distance * SmallFarScreenSize ||
             (radius < SmallPropRadius && distance > SmallFarThinFrom && keep * distance > SmallFarThinFrom)))
         {
             nSmallFarCulled++;
@@ -1009,12 +1091,69 @@ namespace Procedural
         }
     }
 
+    // The GRASS and SHORT_GRASS materials' indices, from the material manager by their names (as the game takes them,
+    // CE 0xcf2d59: [0x18b8968] vtable +0x18 by name); -1 until found
+    uintptr_t* pMaterialManager = nullptr;
+    const char* szGrassNames[2] = {};
+    int32_t nGrassMaterials[2] = { -1, -1 };
+    uint8_t GrassSurface(uint32_t material)
+    {
+        if (nGrassMaterials[0] < 0 && pMaterialManager && *pMaterialManager)
+        {
+            auto manager = *pMaterialManager;
+            using Find = uint32_t(__thiscall*)(uintptr_t, const char*);
+            const auto find = (*(Find**)manager)[6];
+            for (int i = 0; i < 2; i++)
+                nGrassMaterials[i] = int32_t(find(manager, szGrassNames[i]) & 0xFF);
+            Log("GrassSurfaces", std::format("GRASS {}, SHORT_GRASS {}", nGrassMaterials[0], nGrassMaterials[1]));
+        }
+        const int32_t surface = int32_t(material & 0xFF);
+        return surface == nGrassMaterials[0] ? 1 : surface == nGrassMaterials[1] ? 2 : 0;
+    }
+
+    // GatherGrassSurfaces: where the manager marks each polygon of a bound for plants (bit 2i, the tag has a PLANT
+    // record) and props (bit 2i + 1, a PROCOBJ record) as it takes the bound (CE 0xc868f0), a grassy material with
+    // neither gets the props bit; the generator makes no props for a tag without PROCOBJ records (GeneratorProps)
+    bool bForceProps = false;
+
+    SafetyHookInline shGeneratorProps;
+    int32_t __fastcall GeneratorProps(uint8_t* generator, void* edx, uint8_t* triangle)
+    {
+        // The tag's first PROCOBJ record (CE 0x16c8fb0 + 0x5c10, -1 for none): the game reads the record before the
+        // table and compares its tag
+        if (ProceduralGround::GatherGrassSurfaces && pDefinitions && *(int32_t*)(pDefinitions + 0x5c10 + size_t(triangle[0x4d]) * 8) < 0)
+            return 0;
+        return shGeneratorProps.unsafe_fastcall<int32_t>(generator, edx, triangle);
+    }
+
+    // And lets none go when the manager lets such a triangle go (CE 0xc0a880, the generator's requests at +0x522c:
+    // provider, tag): the game takes record -1 there too, and with its tag matching (lawns are tag 0) walked the
+    // bytes before the table as a list of props (AV in 0xc0a8c6)
+    SafetyHookInline shGeneratorRemoveProps;
+    void __fastcall GeneratorRemoveProps(uint8_t* generator, void* edx, void* provider, uint32_t tag)
+    {
+        if (pDefinitions && tag <= 0xFF && *(int32_t*)(pDefinitions + 0x5c10 + size_t(tag) * 8) < 0)
+            return;
+        shGeneratorRemoveProps.unsafe_fastcall(generator, edx, provider, tag);
+    }
+
     // Triangles of the ground the manager gathers (CE 0xc86540 fills one: centre +0x30, +0x55 bit 0 grass,
     // bit 1 props; null when it has neither) and lets go (CE 0xc87010)
     SafetyHookInline shAddTriangle;
     uint8_t* __fastcall AddTriangle(uint8_t* triangle, void* edx, void* a1, void* a2, void* a3, void* a4, void* a5, void* a6, void* a7, void* a8)
     {
         auto result = shAddTriangle.unsafe_fastcall<uint8_t*>(triangle, edx, a1, a2, a3, a4, a5, a6, a7, a8);
+        if (result && ProceduralGround::OnAdded)
+        {
+            // Corners at +0, +0x10, +0x20 (CE 0xc86540)
+            ProceduralGround::Triangle t{};
+            for (int c = 0; c < 3; ++c)
+                for (int k = 0; k < 3; ++k)
+                    t.corner[c][k] = *(float*)(result + c * 0x10 + k * 4);
+            t.tag = uint8_t(*(uint32_t*)(result + 0x4c) >> 8);
+            t.surface = GrassSurface(*(uint32_t*)(result + 0x4c));
+            ProceduralGround::OnAdded(result, t);
+        }
         if (bTrace && result)
         {
             InterlockedIncrement(&nTriangles);
@@ -1028,6 +1167,8 @@ namespace Procedural
     SafetyHookInline shRemoveTriangle;
     void __fastcall RemoveTriangle(uint8_t* triangle, void* edx)
     {
+        if (ProceduralGround::OnRemoved)
+            ProceduralGround::OnRemoved(triangle);
         if (bTrace)
         {
             InterlockedDecrement(&nTriangles);
@@ -1338,6 +1479,15 @@ public:
                 pDetailExtra = *pattern.get_first<float*>(4);
                 shUpdateDistances = safetyhook::create_inline(pattern.get_first(0), UpdateDistances);
             }
+            // The manager's update, right after it copied the camera into its centre (edi the manager)
+            pattern = hook::pattern("89 43 0C E8 ? ? ? ? 83 C4 08 8B CF E8");
+            if (!pattern.empty())
+            {
+                static auto CentreHook = safetyhook::create_mid(pattern.get_first(8), [](SafetyHookContext& regs)
+                {
+                    ShiftGatherCentre((uint8_t*)regs.edi);
+                });
+            }
 
             // procedural.dat's PROCOBJ records, kept as loaded so density and distance can change later
             pattern = hook::pattern("B8 F8 42 00 00 E8 ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 F4 42 00 00");
@@ -1357,7 +1507,7 @@ public:
             if (!pattern.empty())
                 shUpdate = safetyhook::create_inline(pattern.get_first(0), Update);
 
-            if (bTrace)
+            // The trace's T/X lines and ProceduralGround (GPU grass)
             {
                 pattern = hook::pattern("55 8B EC 83 E4 F0 83 EC 18 8B 55 10 56 8B 75 0C 57 8B 7D 08");
                 if (!pattern.empty())
@@ -1365,6 +1515,38 @@ public:
                 pattern = hook::pattern("56 8B F1 F6 46 55 04 C7 46 48 00 00 00 00");
                 if (!pattern.empty())
                     shRemoveTriangle = safetyhook::create_inline(pattern.get_first(0), RemoveTriangle);
+            }
+
+            // GatherGrassSurfaces: the material manager and the names the game finds GRASS and SHORT_GRASS by (CE 0xcf2d59),
+            // the bound's polygon marks (CE 0xc86903 the material in eax, 0xc86926 the props bit in al) and the generator's
+            // props of a triangle (CE 0xc0a800)
+            {
+                auto names = hook::pattern("8B 0D ? ? ? ? 68 ? ? ? ? 8B 01 FF 50 18 89 47 44 8B 0D ? ? ? ? 68 ? ? ? ? 8B 01 FF 50 18 89 47 48");
+                auto material = hook::pattern("8B F0 C1 EE 08 81 E6 FF 00 00 00 56 B9");
+                auto marks = hook::pattern("8A D8 E8 ? ? ? ? 8B 7F 48 8B 4C 24 10 88 44 24 28");
+                auto props = hook::pattern("51 89 0C 24 E8 ? ? ? ? 84 C0 74 06 33 C0 59 C2 04 00 53 55 8B 6C 24 10 56 0F B6 5D 4D");
+                auto removeProps = hook::pattern("83 EC 08 8B 44 24 10 53 8B 1C C5 ? ? ? ? 56 8B F3 C1 E6 04 03 F3 C1 E6 02");
+                if (!names.empty() && !material.empty() && !marks.empty() && !props.empty() && !removeProps.empty())
+                {
+                    pMaterialManager = *names.get_first<uintptr_t*>(2);
+                    szGrassNames[0] = *names.get_first<const char*>(7);
+                    szGrassNames[1] = *names.get_first<const char*>(0x1A);
+                    static auto MaterialHook = safetyhook::create_mid(material.get_first(0), [](SafetyHookContext& regs)
+                    {
+                        bForceProps = ProceduralGround::GatherGrassSurfaces && GrassSurface(regs.eax) != 0;
+                    });
+                    static auto MarksHook = safetyhook::create_mid(marks.get_first(7), [](SafetyHookContext& regs)
+                    {
+                        // bl the plants bit, al the props bit
+                        if (bForceProps && !(regs.ebx & 0xFF) && !(regs.eax & 0xFF))
+                            regs.eax = (regs.eax & ~0xFFu) | 1;
+                        bForceProps = false;
+                    });
+                    shGeneratorProps = safetyhook::create_inline(props.get_first(0), GeneratorProps);
+                    shGeneratorRemoveProps = safetyhook::create_inline(removeProps.get_first(0), GeneratorRemoveProps);
+                }
+                else
+                    Log("GrassSurfaces", "not found: no GPU grass on ground without props");
             }
 
             // The queue: before its loop of creations (esi the generator) and after it, the queue emptied
@@ -1462,15 +1644,23 @@ public:
             auto alive = props.size();
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, heavy out of cascades {}, heavy left out {}; box full {}, candidates capped {}",
+                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, grass left to GPU grass {}, heavy out of cascades {}, heavy left out {}; box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
-                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nHeavyCascades, nHeavyScene, nEntitiesCapped, nCandidatesCapped));
+                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nGrassHidden, nHeavyCascades, nHeavyScene, nEntitiesCapped, nCandidatesCapped));
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
-            nReflectionsSkipped = nSmallFarCulled = nHeavyCascades = nHeavyScene = 0;
+            nReflectionsSkipped = nSmallFarCulled = nGrassHidden = nHeavyCascades = nHeavyScene = 0;
             nConeFull = 0;
             nConeReleased = 0;
         };
     }
 } ProceduralProps;
+
+namespace ProceduralGround
+{
+    uint8_t* Definitions()
+    {
+        return Procedural::pDefinitions;
+    }
+}

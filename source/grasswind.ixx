@@ -12,6 +12,7 @@ module;
 #include <functional>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -26,7 +27,31 @@ import entityclass;
 import postfxresources;
 import nearbybodies;
 
-// Grass Wind (Graphics > Lighting, [PROCEDURAL] GrassWind): the wind sways the grass, weeds and small plants the game
+// For other grass (gpugrass.ixx), render thread: the grass models' list and this frame's wind, set at the start of the
+// G-buffer pass.
+export namespace GrassShared
+{
+    bool IsGrassModel(uint32_t nameHash);
+    // What a grass model is, by its name: 0 not grass, 1 grass (proc_grass*, grass0_*, GrassWindModels), 2 weeds, 3 small
+    // plants with broad leaves (*proc_plant_*, sm_plant*)
+    int GrassKind(uint32_t nameHash);
+    inline float BendPerHeight = 0.0f, FlutterPerHeight = 0.0f;   // at the tip, per metre of height
+    inline float GustPhase = 0.0f, FlutterPhase = 0.0f;           // cycles
+    inline float Direction[2] = { 0.929f, 0.370f };
+    inline float GustWavelength = 5.0f;                           // metres
+    // This G-buffer pass's bending: the bodies (none with Grass Bending off), a body's push at the tip of the plant's
+    // height (0 = off), the downwash's pulse; the trample grid (nullptr when not trampling) and its side (m)
+    inline const std::vector<NearbyBodies::Body>* Bodies = nullptr;
+    inline float PushPerHeight = 0.0f;
+    inline float RotorPulse = 1.0f;
+    inline IDirect3DTexture9* TrampleTexture = nullptr;
+    inline float TrampleGridSide = 64.0f;
+    // What the texture coordinate (world position / TrampleGridSide) is moved by: the texture holds the window of cells
+    // around the player from its corner, edge texels empty, sampled clamped, so ground outside it is not trampled
+    inline float TrampleUVOffset[2] = {};
+}
+
+// Grass Wind ([PROCEDURAL] GrassWind): the wind sways the grass, weeds and small plants the game
 // scatters on the ground (procedural props: proc_grass*, *_proc_plant_*, *weed*, sm_plant*). They are buildings from
 // the building pool (EntityClass counts them as buildings) drawn with gta_default (gta_cutout), whose deferred vertex
 // shaders move each vertex when b12 is on (shaders/patches/world_grass_wind.patch). Around each G-buffer draw of such a
@@ -40,7 +65,7 @@ import nearbybodies;
 // while the game is paused.
 //
 // [PROCEDURAL] GrassWindStrength scales the sway; GrassWindModels adds model names (comma separated) to the list.
-// Grass Bending (Graphics > Lighting, [PROCEDURAL] GrassBending): the cars and people around the player (NearbyBodies,
+// Grass Bending ([PROCEDURAL] GrassBending): the cars and people around the player (NearbyBodies,
 // 60 m) push the blades away and lay them down under a car, and the wind dies where they press. Per grass draw the two
 // bodies nearest the prop whose reach takes it (a car's footprint and half a metre past it, a person's feet and a metre around)
 // and that stand on its ground go to c248-c251; none clears them.
@@ -48,12 +73,13 @@ import nearbybodies;
 // Helicopters with their blades turning, standing or up to 30 m above a prop, blow the grass away from under them (their
 // downwash), by the blades' speed, wider and weaker the higher they fly, pulsing with the blades.
 //
-// Grass Trample (Graphics > Lighting, [PROCEDURAL] GrassTrample): where people walked and wheels rolled the grass stays
+// Grass Trample ([PROCEDURAL] GrassTrample): where people walked and wheels rolled the grass stays
 // down and rises again over GrassTrampleSeconds (12). A grid of 128 x 128 cells of 0.5 m around the player, tied to the
 // world (a cell's place in it is its world position modulo 64 m, so the grid only clears the rows and columns the player
 // leaves behind), is stamped along each body's path in the last frame (a person's feet, a car's four wheels, a bike's
 // two) with the way it went, and goes to a vertex texture (vs s1, A8R8G8B8: direction, strength, the ground's height
-// modulo 64 m) for the G-buffer pass; c243 = 1 / 64 m, the strength (0 = off). Needs vertex textures (DXVK has them).
+// modulo 64 m; from the window's corner, clamped, edge texels empty) for the G-buffer pass; c243 = 1 / 64 m, the
+// strength (0 = off), the texture coordinate's offset. Needs vertex textures (DXVK has them).
 //
 // GrassWindDebug (Graphics > Debug) sways four times as hard, to see which draws take it. GrassWindLog = 1 ([DEBUG])
 // writes the wind and the grass draws to GTAIV.EFLC.FusionFix.GrassWind.log every 600 G-buffer passes.
@@ -62,7 +88,7 @@ class GrassWind
     static constexpr int kWindRegister = 240;       // c240: direction / wavelength, gust phase, flutter phase
     static constexpr int kModelRegister = 241;      // c241: 1 / height, bend and flutter at the tip (metres)
     static constexpr int kDirectionRegister = 242;  // c242.xy: the wind's unit direction
-    static constexpr int kTrampleRegister = 243;    // c243: 1 / the trample grid's side (m), its strength (0 = off)
+    static constexpr int kTrampleRegister = 243;    // c243: 1 / the trample grid's side (m), its strength (0 = off), the texture coordinate's offset
     static constexpr DWORD kTrampleSampler = D3DVERTEXTEXTURESAMPLER1;  // vs s1
     static constexpr int kBodyRegister = 248;       // c248-c251: two bodies (centre, forward; half length, half width, 1 / reach, strength)
     static constexpr int kSwayFlag = 12;            // b12 (vertex shader)
@@ -84,6 +110,7 @@ class GrassWind
     static constexpr float kHeightWrap = 64.0f;         // the ground's height in the texture, modulo this
     static constexpr float kStampRange = 30.0f;         // bodies this near the player trample
 
+    static inline bool bWind = true, bBending = true, bTrample = true;
     static inline float fStrength = 1.0f;
     static inline float fTrampleSeconds = 12.0f;
     static inline bool bLog = false;
@@ -115,7 +142,7 @@ class GrassWind
     // By model index: the hash the entry was made for and the model's height, 0 if not grass
     struct ModelEntry { uint32_t hash = 0; float height = -1.0f; };
     static inline std::vector<ModelEntry> models;
-    static inline std::unordered_set<uint32_t> grassHashes;
+    static inline std::unordered_map<uint32_t, int> grassHashes; // the kind, as GrassShared::GrassKind
 
     // GrassWindLog
     static inline uint32_t logPasses = 0;
@@ -128,10 +155,10 @@ class GrassWind
         return ref ? ref->get() : missing;
     }
 
-    static void AddName(std::string_view name)
+    static void AddName(std::string_view name, int kind = 1)
     {
         std::string text(name);
-        grassHashes.insert(hashStringLowercaseFromSeed(text.c_str(), 0));
+        grassHashes.emplace(hashStringLowercaseFromSeed(text.c_str(), 0), kind);
     }
 
     // The game's and our data's grass, weed and small plant props; names that do not exist cost nothing.
@@ -140,23 +167,23 @@ class GrassWind
         grassHashes.clear();
         for (int i = 0; i <= 40; ++i)
         {
-            AddName(std::format("cj_proc_plant_{}", i));
-            AddName(std::format("ag_proc_plant_{}", i));
-            AddName(std::format("proc_plant_{}", i));
+            AddName(std::format("cj_proc_plant_{}", i), 3);
+            AddName(std::format("ag_proc_plant_{}", i), 3);
+            AddName(std::format("proc_plant_{}", i), 3);
         }
         for (int i = 0; i <= 20; ++i)
         {
             AddName(std::format("proc_grass{:02}", i));
-            AddName(std::format("proc_weed{:02}", i));
-            AddName(std::format("ag_weed{:02}", i));
-            AddName(std::format("sm_weed{}_", i));
-            AddName(std::format("sm_weed{}", i));
-            AddName(std::format("sm_plant{}", i));
+            AddName(std::format("proc_weed{:02}", i), 2);
+            AddName(std::format("ag_weed{:02}", i), 2);
+            AddName(std::format("sm_weed{}_", i), 2);
+            AddName(std::format("sm_weed{}", i), 2);
+            AddName(std::format("sm_plant{}", i), 3);
             AddName(std::format("grass0_{}", i));
-            AddName(std::format("cj_proc_weed{}", i));
+            AddName(std::format("cj_proc_weed{}", i), 2);
         }
         AddName("proc_grass_dry");
-        AddName("cj_proc_weed");
+        AddName("cj_proc_weed", 2);
         for (size_t pos = 0; pos < sExtraModels.size();)
         {
             size_t end = sExtraModels.find(',', pos);
@@ -184,6 +211,9 @@ class GrassWind
 
     static void ReadIni(CIniReader& iniReader)
     {
+        bWind = iniReader.ReadInteger("PROCEDURAL", "GrassWind", 1) != 0;
+        bBending = iniReader.ReadInteger("PROCEDURAL", "GrassBending", 1) != 0;
+        bTrample = iniReader.ReadInteger("PROCEDURAL", "GrassTrample", 1) != 0;
         fStrength = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GrassWindStrength", 1.0f), 0.0f, 4.0f);
         fTrampleSeconds = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GrassTrampleSeconds", 12.0f), 1.0f, 300.0f);
         bLog = iniReader.ReadInteger("DEBUG", "GrassWindLog", 0) != 0;
@@ -345,7 +375,10 @@ class GrassWind
         return trampleTexture != nullptr;
     }
 
-    // The grid's cells to the texture: r, g the direction, b the strength, a the ground modulo kHeightWrap
+    // The grid's cells to the texture: r, g the direction, b the strength, a the ground modulo kHeightWrap. From the
+    // window's corner, not by world cell modulo kCells: sampled with wrapping, ground 32-64 m off took the cells of the
+    // other side of the player, so grass ahead lay down along the path behind and rose as the player came nearer.
+    // The edge texels stay empty, so the clamped sampler gives nothing outside the window.
     static void UploadTrample()
     {
         D3DLOCKED_RECT locked{};
@@ -356,7 +389,8 @@ class GrassWind
             auto row = reinterpret_cast<uint8_t*>(locked.pBits) + y * locked.Pitch;
             for (int x = 0; x < kCells; ++x)
             {
-                const auto& cell = cells[y * kCells + x];
+                const bool edge = x == 0 || y == 0 || x == kCells - 1 || y == kCells - 1;
+                const auto& cell = edge ? Cell{} : CellAt(gridOrigin[0] + x, gridOrigin[1] + y);
                 const auto unorm = [](float v) { return uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
                 const float wrapped = cell.ground / kHeightWrap - std::floor(cell.ground / kHeightWrap);
                 row[x * 4 + 0] = unorm(cell.strength);                     // B
@@ -420,7 +454,7 @@ class GrassWind
         RageDirect3DDevice9::SetTextureBoth(pDevice, kTrampleSampler, on ? trampleTexture : nullptr);
         if (on)
         {
-            for (auto [type, value] : { std::pair{ D3DSAMP_ADDRESSU, DWORD(D3DTADDRESS_WRAP) }, std::pair{ D3DSAMP_ADDRESSV, DWORD(D3DTADDRESS_WRAP) },
+            for (auto [type, value] : { std::pair{ D3DSAMP_ADDRESSU, DWORD(D3DTADDRESS_CLAMP) }, std::pair{ D3DSAMP_ADDRESSV, DWORD(D3DTADDRESS_CLAMP) },
                      std::pair{ D3DSAMP_MINFILTER, DWORD(D3DTEXF_LINEAR) }, std::pair{ D3DSAMP_MAGFILTER, DWORD(D3DTEXF_LINEAR) },
                      std::pair{ D3DSAMP_MIPFILTER, DWORD(D3DTEXF_NONE) } })
                 RageDirect3DDevice9::SetSamplerStateBoth(pDevice, kTrampleSampler, type, value);
@@ -434,10 +468,7 @@ class GrassWind
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
-        static auto windPref = FusionFixSettings.GetRef("PREF_GRASS_WIND");
         static auto debugPref = FusionFixSettings.GetRef("PREF_GRASS_WIND_DEBUG");
-        static auto bendingPref = FusionFixSettings.GetRef("PREF_GRASS_BENDING");
-        static auto tramplePref = FusionFixSettings.GetRef("PREF_GRASS_TRAMPLE");
         auto& R = PostFxResources;
         MakeModelListIfAsked();
 
@@ -452,9 +483,9 @@ class GrassWind
         gustPhase = std::fmod(gustPhase + dt * (3.0f + 8.0f * fWind) / kGustWavelength, 1.0);
         flutterPhase = std::fmod(flutterPhase + dt * (1.4f + 3.0f * fWind), 1.0);
 
-        const bool windOn = Pref(windPref, 1) != 0 && fStrength > 0.0f;
-        const bool bending = Pref(bendingPref, 1) != 0;
-        const bool trampling = Pref(tramplePref, 1) != 0;
+        const bool windOn = bWind && fStrength > 0.0f;
+        const bool bending = bBending;
+        const bool trampling = bTrample;
         const bool on = (windOn || bending || trampling) && EntityClass::Installed();
         const float scale = on && windOn ? fStrength * (Pref(debugPref, 0) ? 4.0f : 1.0f) : 0.0f;
         fBendPerHeight = scale * (0.03f + 0.22f * fWind);
@@ -483,9 +514,22 @@ class GrassWind
             kDirection[0] / kGustWavelength, kDirection[1] / kGustWavelength, -static_cast<float>(gustPhase), static_cast<float>(flutterPhase),
             kDirection[0], kDirection[1], 0.0f, 0.0f,
         };
+        GrassShared::BendPerHeight = fBendPerHeight;
+        GrassShared::FlutterPerHeight = fFlutterPerHeight;
+        GrassShared::GustPhase = static_cast<float>(gustPhase);
+        GrassShared::FlutterPhase = static_cast<float>(flutterPhase);
+        GrassShared::Direction[0] = kDirection[0], GrassShared::Direction[1] = kDirection[1];
+        GrassShared::GustWavelength = kGustWavelength;
+        GrassShared::Bodies = &bodies;
+        GrassShared::PushPerHeight = fPushPerHeight;
+        GrassShared::RotorPulse = rotorPulse;
+        GrassShared::TrampleTexture = trample ? trampleTexture : nullptr;
+        GrassShared::TrampleGridSide = kGridSide;
+        GrassShared::TrampleUVOffset[0] = -float(gridOrigin[0]) / kCells;
+        GrassShared::TrampleUVOffset[1] = -float(gridOrigin[1]) / kCells;
         pDevice->SetVertexShaderConstantF(kWindRegister, wind, 1);
         pDevice->SetVertexShaderConstantF(kDirectionRegister, wind + 4, 1);
-        const float trampleParams[4] = { 1.0f / kGridSide, trample ? 1.0f : 0.0f, 0.0f, 0.0f };
+        const float trampleParams[4] = { 1.0f / kGridSide, trample ? 1.0f : 0.0f, GrassShared::TrampleUVOffset[0], GrassShared::TrampleUVOffset[1] };
         pDevice->SetVertexShaderConstantF(kTrampleRegister, trampleParams, 1);
         if (trample)
             BindTrample(pDevice, true);
@@ -647,6 +691,19 @@ class GrassWind
     }
 
 public:
+    static bool IsGrass(uint32_t hash)
+    {
+        MakeModelListIfAsked();
+        return grassHashes.contains(hash);
+    }
+
+    static int Kind(uint32_t hash)
+    {
+        MakeModelListIfAsked();
+        const auto it = grassHashes.find(hash);
+        return it != grassHashes.end() ? it->second : 0;
+    }
+
     GrassWind()
     {
         FusionFix::onInitEventAsync() += []()
@@ -682,3 +739,16 @@ public:
         };
     }
 } GrassWind;
+
+namespace GrassShared
+{
+    bool IsGrassModel(uint32_t nameHash)
+    {
+        return GrassWind::IsGrass(nameHash);
+    }
+
+    int GrassKind(uint32_t nameHash)
+    {
+        return GrassWind::Kind(nameHash);
+    }
+}

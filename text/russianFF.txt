@@ -223,6 +223,9 @@ Logitech LightSync RGB
 [GrassWindDebug]
 Отладка травы на ветру
 
+[GpuGrassDebug]
+Густая трава: цвет по поверхности
+
 [WetDbgMaterial]
 Категории материалов
 
@@ -370,14 +373,8 @@ Logitech LightSync RGB
 [WorldLightShad]
 Тени от огней зданий
 
-[GrassWind]
-Трава на ветру
-
-[GrassBending]
-Трава приминается
-
-[GrassTrample]
-Примятая трава поднимается не сразу
+[ImprovedGrass]
+Улучшенная трава
 
 [BuildingShad]
 Здания в тенях фар

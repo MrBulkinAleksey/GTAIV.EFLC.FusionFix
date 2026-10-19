@@ -24,7 +24,8 @@
 # flutter's phase (cycles); c241 (per model) = 1 / height, the bend and the flutter at the tip in metres, the push at the
 # tip in metres; c242.xy (per frame) = the wind's unit direction; c248/c249 and c250/c251 (per draw) = two bodies:
 # centre.xy and unit forward.xy on the ground, half length, half width, 1 / reach, strength (0 = none); c243 (per frame)
-# = 1 / the grid's side in metres, the trample's strength (0 = off); defs c245-c247.
+# = 1 / the grid's side in metres, the trample's strength (0 = off), the texture coordinate's offset (the texture holds
+# the window around the player from its corner, clamped); defs c245-c247.
 #
 # Usage: world_grass_wind.py <FusionShaders checkout with the other patches applied>
 # Commit that state first; the patch is the diff this script leaves (git diff).
@@ -138,7 +139,7 @@ SWAY = f'''\
       mad r9.xy, r13, r10.w, r9
       max r9.w, r9.w, r10.w
       // trampled: the grid under the vertex, where its height is near the prop's origin
-      mul r14.xy, r3, c243.x
+      mad r14.xy, r3, c243.x, c243.zw
       mov r14.zw, c4.z
       texldl r14, r14, s1
       mov r15.x, c3.z
