@@ -35,6 +35,7 @@
 #include <ffx_upscale.h>
 #include <ffx_framegeneration.h>
 #include <dx12/ffx_api_dx12.h>
+#include <dx12/ffx_api_framegeneration_dx12.h>
 
 #include "upscaler_protocol.hpp"
 
@@ -830,6 +831,13 @@ namespace
         uint32_t displayWidth = 0;
         uint32_t displayHeight = 0;
 
+        // AMD's frame generation swap chain (ConfigureFlags::AmdPacing), while it exists, and what its callback needs
+        ffxContext swapChainContext = nullptr;
+        IDXGISwapChain4* amdSwapChain = nullptr;    // the reference is the Display's
+        ID3D12Resource* swapChainHudLess = nullptr; // configured for the frame it generates, moved into the read state there
+        bool swapChainReset = false;
+        bool swapChainEnabled = false;              // generating, as configured last
+
         // The versions of an effect the runtime has for this GPU, logged
         uint64_t LogVersions(uint64_t createDescType, const char* effect)
         {
@@ -987,7 +995,8 @@ namespace
         }
 
         // -------------------------------------------------------------------------------------------
-        // Frame generation, without AMD's swap chain: the game presents the frames itself
+        // Frame generation: the game or the present thread below shows the frames, or AMD's swap chain (AmdPacing), which
+        // generates them itself in its Present and paces them
 
         bool CreateFrameGeneration(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, bool hdr, bool eightBit)
         {
@@ -1042,25 +1051,10 @@ namespace
             if (!frameGeneration)
                 return false;
 
-            ffxConfigureDescFrameGeneration configure{};
-            configure.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
-            configure.swapChain = nullptr;
-            configure.frameGenerationEnabled = true;
-            configure.allowAsyncWorkloads = false;
-            configure.flags = FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY;
-            configure.generationRect = { 0, 0, static_cast<int32_t>(displayWidth), static_cast<int32_t>(displayHeight) };
-            configure.frameID = frame.frameId;
-            // Written by Generate of this frame, read by its dispatch: the HUD is what differs from Present
-            if (frame.hudLess)
-                configure.HUDLessColor = ffxApiGetResourceDX12(d.Texture(Protocol::Texture::HudLess), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-            auto result = functions.Configure(&frameGeneration, &configure.header);
-            if (result != FFX_API_RETURN_OK)
-            {
-                static uint32_t reported = 0;
-                if (reported++ < 5)
-                    Log("Frame generation configure failed: %u", result);
+            // Written by Generate of this frame, read by its dispatch: the HUD is what differs from Present. AMD's swap chain
+            // keeps what the last Present chose: it restarts its present thread on every change.
+            if (!ConfigureGeneration(amdSwapChain ? swapChainEnabled : true, frame.frameId, frame.hudLess ? d.Texture(Protocol::Texture::HudLess) : nullptr))
                 return false;
-            }
 
             ffxDispatchDescFrameGenerationPrepareV2 prepare{};
             prepare.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2;
@@ -1086,7 +1080,7 @@ namespace
                 prepare.cameraForward[i] = frame.cameraForward[i];
             }
 
-            result = functions.Dispatch(&frameGeneration, &prepare.header);
+            auto result = functions.Dispatch(&frameGeneration, &prepare.header);
             if (result != FFX_API_RETURN_OK)
             {
                 static uint32_t reported = 0;
@@ -1127,8 +1121,142 @@ namespace
             return true;
         }
 
+        // The frame generation's configuration of frameId: once a frame before its preparation, and with AMD's swap chain
+        // again before its Present, which generates the frame from the last configuration (another frame's resets it)
+        bool ConfigureGeneration(bool enabled, uint64_t frameId, ID3D12Resource* hudLess)
+        {
+            ffxConfigureDescFrameGeneration configure{};
+            configure.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
+            configure.swapChain = amdSwapChain;
+            configure.frameGenerationEnabled = enabled;
+            // On the game queue: the frame before the HUD is the game's again once Present returned
+            configure.allowAsyncWorkloads = false;
+            configure.flags = amdSwapChain ? 0u : static_cast<uint32_t>(FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY);
+            if (amdSwapChain)
+            {
+                configure.frameGenerationCallback = GenerateCallback;
+                configure.frameGenerationCallbackUserContext = this;
+            }
+            configure.generationRect = { 0, 0, static_cast<int32_t>(displayWidth), static_cast<int32_t>(displayHeight) };
+            configure.frameID = frameId;
+            if (hudLess)
+                configure.HUDLessColor = ffxApiGetResourceDX12(hudLess, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+            swapChainHudLess = hudLess;
+            if (amdSwapChain)
+                swapChainEnabled = enabled;
+            auto result = functions.Configure(&frameGeneration, &configure.header);
+            if (result != FFX_API_RETURN_OK)
+            {
+                static uint32_t reported = 0;
+                if (reported++ < 5)
+                    Log("Frame generation configure failed: %u", result);
+                return false;
+            }
+            return true;
+        }
+
+        // AMD's swap chain, inside its Present on the game queue: the frame between the last one and this
+        static ffxReturnCode_t GenerateCallback(ffxDispatchDescFrameGeneration* params, void* user)
+        {
+            auto& f = *static_cast<FSR*>(user);
+            params->reset = params->reset || f.swapChainReset;
+            f.swapChainReset = false;
+            auto cmd = static_cast<ID3D12GraphicsCommandList*>(params->commandList);
+            D3D12_RESOURCE_BARRIER barrier{};
+            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Transition.pResource = f.swapChainHudLess;
+            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            if (f.swapChainHudLess)
+                cmd->ResourceBarrier(1, &barrier);
+            auto result = f.functions.Dispatch(&f.frameGeneration, &params->header);
+            std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+            if (f.swapChainHudLess)
+                cmd->ResourceBarrier(1, &barrier);
+            static uint32_t reported = 0;
+            if (result != FFX_API_RETURN_OK && reported++ < 5)
+                Log("Frame generation dispatch from AMD's swap chain failed: %u", result);
+            return result;
+        }
+
+        // AMD's frame generation swap chain on window, its frames from queue (the game queue, where it generates); null when
+        // the runtime has none
+        ComPtr<IDXGISwapChain4> CreateSwapChain(HWND window, DXGI_SWAP_CHAIN_DESC1& desc, IDXGIFactory* factory, ID3D12CommandQueue* queue)
+        {
+            DestroySwapChain();
+            ffxCreateContextDescFrameGenerationSwapChainVersionDX12 version{};
+            version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_VERSION_DX12;
+            version.version = FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION;
+            IDXGISwapChain4* created = nullptr;
+            ffxCreateContextDescFrameGenerationSwapChainForHwndDX12 create{};
+            create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_FOR_HWND_DX12;
+            create.header.pNext = &version.header;
+            create.swapchain = &created;
+            create.hwnd = window;
+            create.desc = &desc;
+            create.fullscreenDesc = nullptr;
+            create.dxgiFactory = factory;
+            create.gameQueue = queue;
+            auto result = functions.CreateContext(&swapChainContext, &create.header, nullptr);
+            ComPtr<IDXGISwapChain4> swapChain;
+            if (result != FFX_API_RETURN_OK || !created)
+            {
+                Log("AMD's frame generation swap chain could not be made: %u", result);
+                swapChainContext = nullptr;
+                return swapChain;
+            }
+            // The context keeps a reference of its own
+            swapChain.Attach(created);
+            amdSwapChain = created;
+            return swapChain;
+        }
+
+        // The next frame it generates has nothing before it to interpolate from
+        void SetSwapChainReset(bool reset)
+        {
+            swapChainReset = reset;
+        }
+
+        // Its presents done, before what they read goes
+        void WaitForPresents()
+        {
+            if (!swapChainContext)
+                return;
+            ffxDispatchDescFrameGenerationSwapChainWaitForPresentsDX12 wait{};
+            wait.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_WAIT_FOR_PRESENTS_DX12;
+            functions.Dispatch(&swapChainContext, &wait.header);
+        }
+
+        // The swap chain keeps the frame generation's context for its callback: told to generate nothing before that goes
+        void StopSwapChainGeneration()
+        {
+            if (!amdSwapChain || !frameGeneration)
+                return;
+            ffxConfigureDescFrameGeneration configure{};
+            configure.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
+            configure.swapChain = amdSwapChain;
+            configure.frameGenerationEnabled = false;
+            configure.generationRect = { 0, 0, static_cast<int32_t>(displayWidth), static_cast<int32_t>(displayHeight) };
+            functions.Configure(&frameGeneration, &configure.header);
+            WaitForPresents();
+            swapChainHudLess = nullptr;
+            swapChainEnabled = false;
+        }
+
+        // After the Display let its reference go
+        void DestroySwapChain()
+        {
+            if (swapChainContext)
+                functions.DestroyContext(&swapChainContext, nullptr);
+            swapChainContext = nullptr;
+            amdSwapChain = nullptr;
+            swapChainHudLess = nullptr;
+        }
+
         void ReleaseFrameGeneration()
         {
+            StopSwapChainGeneration();
             if (frameGeneration)
                 functions.DestroyContext(&frameGeneration, nullptr);
             frameGeneration = nullptr;
@@ -1137,6 +1265,7 @@ namespace
         void Shutdown()
         {
             ReleaseFrameGeneration();
+            DestroySwapChain();
             Release();
             if (module)
                 FreeLibrary(module);
@@ -1155,12 +1284,19 @@ namespace
     // A flip model swap chain on it, on a queue of its own, presents from a thread of its own, so neither the requests nor
     // the game wait for it: per frame the generated frame when there is one, and PresentDelay of the frame time after it
     // the rendered one, sooner when the next frame comes first. Its frame latency waitable object paces the copies.
+    //
+    // With AmdPacing and the frame generation, AMD's frame generation swap chain instead, presented on the request's
+    // thread: it generates the frame in its Present on the game queue (the direct queue, after the frame's preparation and
+    // before the next one's) and paces both frames on its own threads; its Present holds the next request back.
 
     class Display
     {
         HANDLE windowThread = nullptr;
         HANDLE ready = nullptr;
         HWND parent = nullptr;
+
+        FSR* amd = nullptr;                     // AMD's swap chain, made by it
+        ID3D12CommandQueue* gameQueue = nullptr; // with it: where the frames are copied and generated
 
         static constexpr uint32_t BufferCount = 3;
         std::array<ComPtr<ID3D12Resource>, BufferCount> buffers;
@@ -1216,7 +1352,7 @@ namespace
         // Logged every 300 frames
         struct Stats
         {
-            uint32_t frames = 0, generated = 0, cut = 0, failures = 0;
+            uint32_t frames = 0, generated = 0, cut = 0, failures = 0, amdGenerated = 0;
             double presentMs = 0.0, presentMax = 0.0, latencyMs = 0.0, gapMs = 0.0, aimMs = 0.0;
         } stats;
 
@@ -1319,17 +1455,21 @@ namespace
             list->ResourceBarrier(2, barriers);
             list->Close();
 
-            queue->Wait(waitFence, waitValue);
+            auto q = amd ? gameQueue : queue.Get();
+            q->Wait(waitFence, waitValue);
             ID3D12CommandList* lists[] = { list.Get() };
-            queue->ExecuteCommandLists(1, lists);
-            if (signalFence)
-                queue->Signal(signalFence, signalValue);
-            queue->Signal(fence.Get(), ++fenceValue);
+            q->ExecuteCommandLists(1, lists);
+            // AMD's swap chain still reads the frame before the HUD in its Present
+            if (signalFence && !amd)
+                q->Signal(signalFence, signalValue);
+            q->Signal(fence.Get(), ++fenceValue);
             allocatorValues[allocatorIndex] = fenceValue;
             auto copied = fenceValue;
 
             auto start = Now();
             auto hr = swapChain->Present(syncInterval, syncInterval == 0 && tearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
+            if (signalFence && amd)
+                q->Signal(signalFence, signalValue);
             auto ms = Now() - start;
             stats.presentMs += ms;
             stats.presentMax = std::max(stats.presentMax, ms);
@@ -1416,6 +1556,37 @@ namespace
             }
         }
 
+    public:
+        // AmdPacing: the frame shown on the calling thread, generated before it by the swap chain when generated is set
+        void ShowAmd(const Job& job, bool generated)
+        {
+            if (!swapChain || !presentTexture)
+            {
+                gameQueue->Wait(inputFence, job.inputValue);
+                gameQueue->Signal(presentFence, job.presentValue);
+                return;
+            }
+            FollowParent();
+            Show(presentTexture, inputFence, job.inputValue, presentFence, job.presentValue, job.syncInterval);
+            stats.amdGenerated += generated;
+            if (++stats.frames >= 300)
+            {
+                auto& s = stats;
+                Log("Present over %u frames through AMD's swap chain (sync interval %u): %u with a generated frame before them; "
+                    "Present %.3f ms of the CPU on average (%.3f at most)", s.frames, job.syncInterval, s.amdGenerated,
+                    s.presentMs / s.frames, s.presentMax);
+                auto failures = s.failures;
+                s = {};
+                s.failures = failures;
+            }
+        }
+
+        bool AmdPacing() const
+        {
+            return amd != nullptr;
+        }
+
+    private:
         void Run()
         {
             while (true)
@@ -1468,6 +1639,10 @@ namespace
                 CloseHandle(latency);
             latency = nullptr;
             swapChain.Reset();
+            if (amd)
+                amd->DestroySwapChain();
+            amd = nullptr;
+            gameQueue = nullptr;
             width = height = 0;
             format = DXGI_FORMAT_UNKNOWN;
         }
@@ -1479,7 +1654,9 @@ namespace
         uint32_t height = 0;
 
         // The window over the game's, made once, and a swap chain of the size and format of Present. Drained, GPU idle.
-        bool Configure(ComPtr<IDXGIFactory4>& factory, ID3D12Device* d3d, HWND gameWindow, uint32_t w, uint32_t h, DXGI_FORMAT f, bool hdr)
+        // With amdSwapChain AMD's frame generation swap chain, its frames from directQueue.
+        bool Configure(ComPtr<IDXGIFactory4>& factory, ID3D12Device* d3d, HWND gameWindow, uint32_t w, uint32_t h, DXGI_FORMAT f, bool hdr,
+            FSR* amdSwapChain = nullptr, ID3D12CommandQueue* directQueue = nullptr)
         {
             if (window && parent != gameWindow)
                 Release();
@@ -1505,7 +1682,7 @@ namespace
                 }
                 Log("Present: child window %p over the game's window %p", window, parent);
             }
-            if (swapChain && width == w && height == h && format == f)
+            if (swapChain && width == w && height == h && format == f && amd == amdSwapChain)
                 return true;
             ReleaseSwapChain();
 
@@ -1525,20 +1702,41 @@ namespace
             desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
             desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
             desc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT | (tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
-            ComPtr<IDXGISwapChain1> swapChain1;
-            auto hr = factory->CreateSwapChainForHwnd(queue.Get(), window, &desc, nullptr, nullptr, &swapChain1);
-            if (FAILED(hr) || FAILED(swapChain1.As(&swapChain)))
+            if (amdSwapChain)
             {
-                Log("Present: the swap chain could not be made (0x%08X) at %ux%u, format %d", static_cast<uint32_t>(hr), w, h, int(f));
-                ReleaseSwapChain();
-                return false;
+                // Its Present waits for its buffers itself, and it allows tearing where it can
+                auto created = amdSwapChain->CreateSwapChain(window, desc, factory.Get(), directQueue);
+                if (!created)
+                    return false;
+                amd = amdSwapChain;
+                gameQueue = directQueue;
+                if (FAILED(created.As(&swapChain)))
+                {
+                    created.Reset();
+                    ReleaseSwapChain();
+                    return false;
+                }
+            }
+            else
+            {
+                ComPtr<IDXGISwapChain1> swapChain1;
+                auto hr = factory->CreateSwapChainForHwnd(queue.Get(), window, &desc, nullptr, nullptr, &swapChain1);
+                if (FAILED(hr) || FAILED(swapChain1.As(&swapChain)))
+                {
+                    Log("Present: the swap chain could not be made (0x%08X) at %ux%u, format %d", static_cast<uint32_t>(hr), w, h, int(f));
+                    ReleaseSwapChain();
+                    return false;
+                }
             }
             factory->MakeWindowAssociation(window, DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER);
             if (hdr && FAILED(swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)))
                 Log("Present: scRGB could not be set on the swap chain");
-            // Two frames queued: the generated and the rendered one
-            swapChain->SetMaximumFrameLatency(2);
-            latency = swapChain->GetFrameLatencyWaitableObject();
+            if (!amd)
+            {
+                // Two frames queued: the generated and the rendered one
+                swapChain->SetMaximumFrameLatency(2);
+                latency = swapChain->GetFrameLatencyWaitableObject();
+            }
             for (uint32_t i = 0; i < BufferCount; ++i)
             {
                 if (FAILED(swapChain->GetBuffer(i, IID_PPV_ARGS(&buffers[i]))))
@@ -1550,7 +1748,8 @@ namespace
             width = w;
             height = h;
             format = f;
-            Log("Present: swap chain %ux%u, format %d%s%s", w, h, int(f), hdr ? ", scRGB" : "", tearing ? ", tearing allowed" : "");
+            Log("Present: %sswap chain %ux%u, format %d%s%s", amd ? "AMD's frame generation " : "", w, h, int(f), hdr ? ", scRGB" : "",
+                tearing ? ", tearing allowed" : "");
             return true;
         }
 
@@ -1589,7 +1788,9 @@ namespace
                 std::unique_lock lock(mutex);
                 changed.wait_for(lock, std::chrono::seconds(2), [&] { return jobs.empty() && !busy; });
             }
-            queue->Signal(fence.Get(), ++fenceValue);
+            if (amd)
+                amd->WaitForPresents();
+            (amd ? gameQueue : queue.Get())->Signal(fence.Get(), ++fenceValue);
             WaitLocal(fenceValue, 2000);
         }
 
@@ -1707,7 +1908,8 @@ namespace
             auto& shared = *connection.shared;
 
             // The GPU first: the contexts go before the textures, and nothing may still run with them, the frames waiting to
-            // be presented included
+            // be presented included. AMD's swap chain is told first to generate nothing: it keeps the context.
+            fsr.StopSwapChainGeneration();
             display.Drain();
             display.Bind(nullptr, nullptr, nullptr, nullptr, nullptr);
             device.Flush();
@@ -1803,10 +2005,22 @@ namespace
                 bool generation = fsr.HasFrameGeneration();
                 bool eightBit = generation ? (flags & Protocol::ConfigureFlags::EightBitFrames) != 0 : !hdr;
                 auto format = eightBit ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT;
+                // AMD's swap chain only with its frame generation; ours where it can't be made
+                bool amd = generation && (flags & Protocol::ConfigureFlags::AmdPacing);
+                auto window = reinterpret_cast<HWND>(shared.PresentWindow);
                 bool presenting = !device.wine && (hdr || eightBit) &&
                     (generation || device.CreateTexture(T::Present, outputWidth, outputHeight, format, false)) &&
-                    device.CreateSharedFence(device.presentFence, device.presentFenceHandle) &&
-                    display.Configure(device.factory, device.device.Get(), reinterpret_cast<HWND>(shared.PresentWindow), outputWidth, outputHeight, format, hdr);
+                    device.CreateSharedFence(device.presentFence, device.presentFenceHandle);
+                if (presenting && amd && !display.Configure(device.factory, device.device.Get(), window, outputWidth, outputHeight, format, hdr,
+                    &fsr, device.queue.Get()))
+                {
+                    Log("Presentation through AMD's swap chain could not be set up: the helper paces the frames itself");
+                    amd = false;
+                }
+                if (presenting && !amd)
+                    presenting = display.Configure(device.factory, device.device.Get(), window, outputWidth, outputHeight, format, hdr);
+                if (!amd)
+                    flags &= ~Protocol::ConfigureFlags::AmdPacing;
                 if (presenting)
                 {
                     display.Bind(device.Texture(T::Present), generation ? device.Texture(T::Generated) : nullptr, device.inputFence.Get(),
@@ -1825,13 +2039,15 @@ namespace
                         CloseHandle(device.presentFenceHandle);
                     device.presentFenceHandle = nullptr;
                     display.Stop();
-                    flags &= ~Protocol::ConfigureFlags::HelperPresent;
+                    flags &= ~(Protocol::ConfigureFlags::HelperPresent | Protocol::ConfigureFlags::AmdPacing);
                 }
                 shared.Flags = flags;
             }
             else
             {
                 display.Stop();
+                flags &= ~Protocol::ConfigureFlags::AmdPacing;
+                shared.Flags = flags;
             }
             shared.ChildWindow = (flags & Protocol::ConfigureFlags::HelperPresent) ? reinterpret_cast<uint64_t>(display.window) : 0;
 
@@ -1910,6 +2126,7 @@ namespace
                 generationStats.hudLess += frame.hudLess;
             }
             preparedFrameId = frame.frameId;
+            preparedHudLess = frame.hudLess;
             device.Transition(cmd, false, { T::Color, T::Depth, T::Motion, T::Reactive, T::Output });
 
             if (device.wine)
@@ -1926,6 +2143,7 @@ namespace
 
         bool preparedFrame = false;
         uint64_t preparedFrameId = 0;
+        bool preparedHudLess = false;
 
         // What the frame generation was asked, logged every 300 Generate requests
         struct GenerationStats
@@ -2000,6 +2218,8 @@ namespace
             job.presentValue = shared.SignalValue;
             job.syncInterval = std::min(shared.SyncInterval, 4u);
             job.delay = std::clamp(shared.PresentDelay, 0.0f, 1.0f);
+            if (display.AmdPacing())
+                return PresentAmd(job);
             bool ok = true;
             if (shared.PresentGenerate && fsr.HasFrameGeneration())
             {
@@ -2046,6 +2266,44 @@ namespace
             static uint32_t reported = 0;
             if (!ok && reported++ < 5)
                 Log("Frame generation failed: the rendered frame alone");
+            return true;
+        }
+
+        // AmdPacing: configured for this frame again, the last configuration before its Present, which generates the frame
+        // before it when asked and prepared; shown here, so the next request waits for AMD's Present
+        bool PresentAmd(const Display::Job& job)
+        {
+            auto& shared = *connection.shared;
+            bool prepared = preparedFrame && preparedFrameId == shared.FrameId;
+            preparedFrame = false;
+            bool generate = shared.PresentGenerate && prepared;
+            if (shared.PresentGenerate)
+            {
+                auto& g = generationStats;
+                ++g.generates;
+                g.unprepared += !prepared;
+                g.resets += shared.GenerateReset != 0;
+                g.gaps += g.lastId != 0 && shared.FrameId != g.lastId + 1;
+                g.lastId = shared.FrameId;
+                if (g.generates >= 300)
+                {
+                    if (g.unprepared || g.gaps || g.prepareFailed || g.prepareGaps || g.resets > 2)
+                        Log("Frame generation over %u Present: %u not prepared, %u reset, %u with a gap in the frame numbers; "
+                        "%u Prepare: %u failed, %u reset, %u with a gap, %u with the frame before the HUD",
+                        g.generates, g.unprepared, g.resets, g.gaps, g.prepares, g.prepareFailed, g.prepareResets, g.prepareGaps, g.hudLess);
+                    auto lastId = g.lastId;
+                    g = {};
+                    g.lastId = lastId;
+                }
+            }
+            fsr.SetSwapChainReset(shared.GenerateReset != 0);
+            using T = Protocol::Texture;
+            if (!fsr.ConfigureGeneration(generate, shared.FrameId, generate && preparedHudLess ? device.Texture(T::HudLess) : nullptr) && generate)
+            {
+                generate = false;
+                fsr.ConfigureGeneration(false, shared.FrameId, nullptr);
+            }
+            display.ShowAmd(job, generate);
             return true;
         }
 

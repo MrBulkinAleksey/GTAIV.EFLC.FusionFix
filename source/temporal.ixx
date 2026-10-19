@@ -1887,6 +1887,7 @@ public:
         frame.AsyncGeneration = FrameGeneration::UsesAsyncCompute();
         frame.PresentWindow = FrameGeneration::HelperPresentWindow();
         frame.HelperPresent = frame.PresentWindow != nullptr;
+        frame.AmdPacing = FrameGeneration::UsesAmdPacing();
         auto world = CurrentCamera.View.Inverse();
         auto normalized = [&](int row, float sign, float (&out)[3])
         {

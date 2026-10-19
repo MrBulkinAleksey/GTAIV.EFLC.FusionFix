@@ -1654,6 +1654,7 @@ export namespace Upscaler
         bool AsyncGeneration = false;     // Generate on the helper's compute queue
         bool HelperPresent = false;       // the helper presents the frames (PostPresent), not with FrameGeneration
         HWND PresentWindow = nullptr;     // the game's window, for HelperPresent
+        bool AmdPacing = false;           // with HelperPresent and FrameGeneration: AMD's swap chain generates and paces the frames
         float CameraPosition[3]{};        // world space
         float CameraUp[3]{};
         float CameraRight[3]{};
@@ -1769,7 +1770,8 @@ export namespace Upscaler
                 (frame.AsyncGeneration ? Protocol::ConfigureFlags::AsyncGeneration : 0u);
         // Not under Wine: the game's own semaphores would be three, and Wine's child windows of another process are unknown
         if (frame.HelperPresent && frame.PresentWindow && !bridge->wine)
-            flags |= Protocol::ConfigureFlags::HelperPresent | (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : 0u);
+            flags |= Protocol::ConfigureFlags::HelperPresent | (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : 0u) |
+                (frame.AmdPacing && (flags & Protocol::ConfigureFlags::FrameGeneration) ? Protocol::ConfigureFlags::AmdPacing : 0u);
         auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
         auto outputHeight = frame.OutputHeight ? frame.OutputHeight : frame.Height;
         if (retryConfigureAt && GetTickCount64() >= retryConfigureAt)
@@ -1830,6 +1832,8 @@ export namespace Upscaler
                 Log("Frame generation could not be set up, the upscaler works without it");
             if ((flags & Protocol::ConfigureFlags::HelperPresent) && !(shared.Flags & Protocol::ConfigureFlags::HelperPresent))
                 Log("The helper could not set up its presentation, the game presents");
+            else if ((flags & Protocol::ConfigureFlags::AmdPacing) && !(shared.Flags & Protocol::ConfigureFlags::AmdPacing))
+                Log("AMD's frame generation swap chain could not be set up: the helper paces the frames itself");
             if (!bridge->Import(shared, frame.Width, frame.Height, outputWidth, outputHeight))
             {
                 Log("Configure %ux%u -> %ux%u: the shared resources could not be imported", frame.Width, frame.Height, outputWidth, outputHeight);

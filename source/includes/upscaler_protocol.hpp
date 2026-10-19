@@ -28,7 +28,8 @@
 // when it presents a frame itself: the helper hides its window (ChildWindow), and a Present still queued then does not show it again. With PresentGenerate the helper also generates the frame between the one
 // before and this one (HudLess too, FrameId, MaxLuminance and GenerateReset as for Generate) and shows it first, the
 // rendered frame PresentDelay of the frame time after it. The helper signals SignalValue on its present fence
-// (PresentFenceHandle) once it is done with Present and HudLess, which the game's next copy into them waits for.
+// (PresentFenceHandle) once it is done with Present and HudLess, which the game's next copy into them waits for. With
+// AmdPacing, AMD's frame generation swap chain generates the frame in its Present and paces both (PresentDelay unused).
 //
 // Frame generation (ConfigureFlags::FrameGeneration, FSR only): Evaluate also prepares the frame generation with
 // the depth and motion vectors of the frame. Generate then takes the finished frame (Present, the size of the
@@ -39,7 +40,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 16;
+    constexpr uint32_t Version = 17;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -110,6 +111,7 @@ namespace UpscalerProtocol
         constexpr uint32_t EightBitFrames = 1 << 5;   // the frame generation's textures are B8G8R8A8_UNORM; cleared by the helper if the GPU can't write them
         constexpr uint32_t AsyncGeneration = 1 << 6;  // Generate runs on a compute queue of the helper; cleared if it has none
         constexpr uint32_t HelperPresent = 1 << 7;    // the helper presents the frames, with the frame generation too; cleared if it can't
+        constexpr uint32_t AmdPacing = 1 << 8;        // with HelperPresent and the frame generation, AMD's swap chain generates and paces the frames; cleared if it can't
     }
 
 #pragma pack(push, 8)

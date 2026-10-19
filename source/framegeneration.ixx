@@ -74,7 +74,10 @@ namespace
     // generates the frames and shows them, the rendered frame FrameGenerationDelay of the frame time after the generated one,
     // paced on a thread of its own: nothing comes back to the game, which neither waits for Generate nor presents inside its
     // next frame. The frame generation's sharpening of the shown frames is then left to the post processing.
+    // HelperPresent 1: AMD's frame generation swap chain generates and paces the frames instead (FrameGenerationDelay
+    // unused); 2: the helper's own pacing above.
     bool bHelperPresent = false;
+    bool bAmdPacing = false;
     bool bHelperPresentBroken = false;  // the game's Present did not come through the device
     bool bPresentedByHelper = false;    // this frame
     HWND GameWindow = nullptr;          // the swap chain's, for the helper's window
@@ -890,11 +893,13 @@ namespace
         bDeferredSetting = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationDeferred", 1) != 0;
         bAsyncCompute = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationAsyncCompute", 1) != 0;
         fShowGeneratedAt = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FrameGenerationShowGeneratedAt", 0.2f), 0.0f, 0.9f);
-        bHelperPresent = iniReader.ReadInteger("ANTIALIASING", "HelperPresent", 0) != 0;
+        auto helperPresent = std::clamp(iniReader.ReadInteger("ANTIALIASING", "HelperPresent", 0), 0, 2);
+        bHelperPresent = helperPresent != 0;
+        bAmdPacing = helperPresent == 1;
         // The aims may have changed
         TargetDraws[0] = TargetDraws[1] = 0.0;
         Log("Frame generation settings: delay %.2f, pacing %d, deferred %d (generated frame at %.2f), compute queue %d, debug %d, helper presents %d", fDelay, nPacing,
-            int(bDeferredSetting), fShowGeneratedAt, int(bAsyncCompute), nDebug, int(bHelperPresent));
+            int(bDeferredSetting), fShowGeneratedAt, int(bAsyncCompute), nDebug, bAmdPacing ? 1 : bHelperPresent ? 2 : 0);
 
         // A fresh start for the statistics
         Stats = {};
@@ -1354,6 +1359,12 @@ export namespace FrameGeneration
     HWND HelperPresentWindow()
     {
         return bHelperPresent && !bHelperPresentBroken && bGameWindowed ? GameWindow : nullptr;
+    }
+
+    // HelperPresent 1: AMD's swap chain paces the frames the helper generates
+    bool UsesAmdPacing()
+    {
+        return bAmdPacing;
     }
 
     // The helper generates on its compute queue, beside the game's next frame
