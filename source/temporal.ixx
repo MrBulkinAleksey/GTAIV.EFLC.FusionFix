@@ -417,10 +417,11 @@ public:
         auto since = PresentFrame.load() - resolved;
 
         // Menus: only while the scene behind them is resolved every frame, as in the graphics settings, where without
-        // the jitter DLSS and FSR had nothing to add and the scene stayed at the render size. A menu without the scene,
-        // the map, would only shake with the camera's projection: it stops the frame after the last resolve.
+        // the jitter DLSS and FSR had nothing to add and the scene stayed at the render size. A menu without the scene
+        // stops the frame after the last resolve. Never on the map screen (3): the game still resolves a scene there,
+        // and the map, drawn with the camera's projection, shook with FSR.
         if (CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive)
-            return since < 2;
+            return since < 2 && !(pMenuTab && *pMenuTab == 3);
         return since < 10;
     }
 
@@ -727,7 +728,25 @@ public:
         return DeclCache.emplace(decl, info).first->second;
     }
 
-    static const DrawRecord* FindPrevious(void* entity, size_t ordinal, IDirect3DIndexBuffer9* ib, IDirect3DVertexBuffer9* vb, UINT startIndex, UINT primitiveCount)
+    // Where a draw stands, to tell draws of one mesh apart: skinned, its first bone's offset from the entity (a car's
+    // draws hold only the car's position, each wheel's own place is in its bone), which the car's speed does not move;
+    // otherwise its world matrix's position (rows or columns, whichever holds it)
+    static void DrawPosition(const float* world, const float* bones, float out[3])
+    {
+        const bool rows = std::abs(world[12]) + std::abs(world[13]) + std::abs(world[14]) >= std::abs(world[3]) + std::abs(world[7]) + std::abs(world[11]);
+        for (int k = 0; k < 3; ++k)
+            out[k] = bones ? bones[k * 4 + 3] : rows ? world[12 + k] : world[k * 4 + 3];
+    }
+
+    static const float* PreviousBones(const DrawRecord& d)
+    {
+        return d.Bones >= 0 && static_cast<size_t>(d.Bones + BoneTexels * 4) <= BonesPrevious.size() ? &BonesPrevious[d.Bones] : nullptr;
+    }
+
+    // The same draw in the previous frame: the same mesh, and of those, a car's four wheels drawing one, the one that
+    // stood nearest (the same place in the entity's list first, as a tie). By the list's place alone, a draw more or
+    // fewer before them (lights, damage, a LOD) took another wheel's matrix, and the wheel smeared towards it.
+    static const DrawRecord* FindPrevious(void* entity, size_t ordinal, const DrawRecord& current)
     {
         auto it = EntitiesPrevious.find(entity);
         if (it == EntitiesPrevious.end())
@@ -736,17 +755,34 @@ public:
         auto& draws = it->second.Draws;
         auto matches = [&](const DrawRecord& d)
         {
-            return d.IndexBuffer == ib && d.VertexBuffer == vb && d.StartIndex == startIndex && d.PrimitiveCount == primitiveCount;
+            return d.IndexBuffer == current.IndexBuffer && d.VertexBuffer == current.VertexBuffer && d.StartIndex == current.StartIndex &&
+                d.PrimitiveCount == current.PrimitiveCount;
         };
 
-        if (ordinal < draws.size() && matches(draws[ordinal]))
-            return &draws[ordinal];
+        float position[3];
+        const float* bones = current.Bones >= 0 && static_cast<size_t>(current.Bones + BoneTexels * 4) <= BonesCurrent.size() ? &BonesCurrent[current.Bones] : nullptr;
+        DrawPosition(current.World, bones, position);
+        auto distance = [&](const DrawRecord& d)
+        {
+            float p[3];
+            DrawPosition(d.World, PreviousBones(d), p);
+            return (p[0] - position[0]) * (p[0] - position[0]) + (p[1] - position[1]) * (p[1] - position[1]) + (p[2] - position[2]) * (p[2] - position[2]);
+        };
 
+        const DrawRecord* best = ordinal < draws.size() && matches(draws[ordinal]) ? &draws[ordinal] : nullptr;
+        float bestDistance = best ? distance(*best) : 0.0f;
         for (auto& d : draws)
-            if (matches(d))
-                return &d;
-
-        return nullptr;
+        {
+            if (&d == best || !matches(d))
+                continue;
+            const float dd = distance(d);
+            if (!best || dd < bestDistance)
+            {
+                best = &d;
+                bestDistance = dd;
+            }
+        }
+        return best;
     }
 
     static void CaptureDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT baseVertex, UINT minIndex, UINT numVertices, UINT startIndex, UINT primitiveCount)
@@ -795,7 +831,7 @@ public:
 
         // Only draws that moved since the previous frame need their own motion vectors, the rest is
         // covered by the camera motion reprojected from depth
-        auto previous = FindPrevious(entity, ordinal, indices, stream0, startIndex, primitiveCount);
+        auto previous = FindPrevious(entity, ordinal, draw);
         bool moved = false;
         int32_t prevBones = -1;
         if (previous)
@@ -1900,6 +1936,9 @@ public:
         frame.HighDynamicRange = HDROutput::IsActive();
         frame.HudLess = FrameGeneration::UsesHudLess();
         frame.AsyncGeneration = FrameGeneration::UsesAsyncCompute();
+        frame.PresentWindow = FrameGeneration::HelperPresentWindow();
+        frame.HelperPresent = frame.PresentWindow != nullptr;
+        frame.AmdPacing = FrameGeneration::UsesAmdPacing();
         auto world = CurrentCamera.View.Inverse();
         auto normalized = [&](int row, float sign, float (&out)[3])
         {
