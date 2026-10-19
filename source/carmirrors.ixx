@@ -90,6 +90,7 @@ namespace CarMirrors
     static uint32_t waterDrawn = 0;        // the mirror pass's water draws (render thread)
     static uint32_t techniqueDraws = 0;    // frames the mirror's entities went in the reflection techniques
     static uint32_t skyDraws = 0;          // the car mirror's skies drawn (render thread)
+    static uint32_t waterFlagMissing = 0;  // the mirror's water draws whose draw list had no flag 0x10 (render thread)
     static const uint32_t* waterTotals[2]{}; // CE 0x1550EAC, 0x154E300: water.dat's quads and triangles
     // The car, for the draw list's snapshots and the phase's plane.
     static std::atomic<uintptr_t> drawnVehicle{ 0 };
@@ -432,11 +433,11 @@ namespace CarMirrors
         // items: the water's quads, triangles and far cells, summed over the frames
         FusionLog::Write("CarMirrors", "Water", "water.dat %u quads, %u triangles; gathered %u frames, rolled back %u (over the buffers); "
             "the mirror's items %u/%u/%u, the main scene's %u/%u/%u; buffers filled up to %u/1000, %u/40, %u/400; queued %u, drawn %u, "
-            "items drawn %u/%u/%u\n", waterTotals[0] ? *waterTotals[0] : 0, waterTotals[1] ? *waterTotals[1] : 0,
+            "items drawn %u/%u/%u, without the flag in the draw list %u\n", waterTotals[0] ? *waterTotals[0] : 0, waterTotals[1] ? *waterTotals[1] : 0,
             waterGathered, waterRolledBack, mirrorWaterItems[0], mirrorWaterItems[1], mirrorWaterItems[2],
             mainWaterItems[0], mainWaterItems[1], mainWaterItems[2], waterFill[0], waterFill[1], waterFill[2],
-            waterQueued, waterDrawn, drawnWaterItems[0], drawnWaterItems[1], drawnWaterItems[2]);
-        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = waterGathered = waterRolledBack = waterDrawn = techniqueDraws = skyDraws = 0;
+            waterQueued, waterDrawn, drawnWaterItems[0], drawnWaterItems[1], drawnWaterItems[2], waterFlagMissing);
+        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = waterGathered = waterRolledBack = waterDrawn = techniqueDraws = skyDraws = waterFlagMissing = 0;
         for (int i = 0; i < 3; ++i)
             mirrorWaterItems[i] = mainWaterItems[i] = drawnWaterItems[i] = waterFill[i] = 0;
         buildMs = visibilityMs = 0.0;
@@ -683,6 +684,21 @@ namespace CarMirrors
     {
         if (inMirrorWater)
             regs.eax = 0;
+    }
+
+    // The water's draw goes on only with the draw list's flag 0x10 (test byte [eax], 10 at CE 0xAD7F03, eax the
+    // flags the draw list took as it was made): set on the phase from the gather to its draw list's end, it is given
+    // here too, in case the copy was taken without it. waterFlagMissing counts the draws it was not in the copy.
+    static SafetyHookMid waterFlagHook;
+
+    static void MirrorWaterFlag(SafetyHookContext& regs)
+    {
+        static constexpr uint32_t flags = PhaseWaterFlag;
+        if (!inMirrorWater)
+            return;
+        if (!(*reinterpret_cast<const uint8_t*>(regs.eax) & PhaseWaterFlag))
+            ++waterFlagMissing;
+        regs.eax = reinterpret_cast<uintptr_t>(&flags);
     }
 
     static void __cdecl MirrorWater(uint32_t list)
@@ -1022,6 +1038,10 @@ public:
                 if (found)
                     for (size_t i = 0; i < std::size(sites); ++i)
                         CarMirrors::waterTargetHooks[i] = safetyhook::create_mid(at + sites[i], CarMirrors::WaterTargetMode);
+                // test byte [eax], 10 / je (near), right after the call for the draw list's flags
+                static constexpr uint8_t flagTest[] = { 0xF6, 0x00, 0x10, 0x0F, 0x84 };
+                if (std::memcmp(at + 0x13, flagTest, sizeof(flagTest)) == 0)
+                    CarMirrors::waterFlagHook = safetyhook::create_mid(at + 0x13, CarMirrors::MirrorWaterFlag);
             }
             // in the mirror phase's draw list: push [edi+938] / call (what is drawn with blending) / add esp, 4 /
             // cmp byte [clip plane on], 0 / je
@@ -1059,10 +1079,10 @@ public:
                 CarMirrors::callback.add ? "on" : "off (the game's callback command was not found)",
                 CarMirrors::phaseViewHook ? "on" : "off (not found)", CarMirrors::perspective ? "on" : "off (not found)");
             FusionLog::Write("CarMirrors", "Init", "water reflection gates %s/%s; water in the mirror %s, its gather after the scans %s, "
-                "without the material ID target %s\n",
+                "without the material ID target %s, its flag given %s\n",
                 CarMirrors::waterGateHooks[0] ? "on" : "off", CarMirrors::waterGateHooks[1] ? "on" : "off",
                 CarMirrors::phaseWaterHook ? "on" : "off (not found)", CarMirrors::gatherHook ? "on" : "off (not found)",
-                CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)");
+                CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)", CarMirrors::waterFlagHook ? "on" : "off (not found)");
             FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s\n",
                 CarMirrors::techniqueHooks[1] ? "on" : "off (not found)", CarMirrors::skyHook ? "on" : "off (not found)");
             if (CarMirrors::quadOffset)
