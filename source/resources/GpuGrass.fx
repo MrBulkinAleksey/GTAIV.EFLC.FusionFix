@@ -58,7 +58,7 @@ struct VSOutput
 {
     float4 position : POSITION;
     float4 colour : TEXCOORD0;  // the blade's own colour, occlusion
-    float3 normal : TEXCOORD1;
+    float4 normal : TEXCOORD1;  // its normal, how far it has faded in (Blade.fade)
     float2 w : TEXCOORD2;       // clip w, specular (×0.5, as the G-buffer has it)
     float4 ground : TEXCOORD3;  // the root's clip x, y, w; light from root to tip
     float3 tuft : TEXCOORD4;    // across the blade (-1..1), up it (0..1), 1 + a random value for a tuft (0 for a blade)
@@ -156,6 +156,7 @@ struct Blade
     float3 across, facing;
     float isGrass, isWeed, isPlant, isFlower, isTuft;
     float patch, clump, dry, second, distant;
+    float fade;     // 0..1: a flower fading in as it appears, by a dither the temporal AA smooths (ClipFade)
 };
 
 Blade MakeBlade(VSInput input, float3 root, float edge, float distance, float keep)
@@ -191,10 +192,11 @@ Blade MakeBlade(VSInput input, float3 root, float edge, float distance, float ke
     // Shorter towards an edge; and the blades last kept rise out of the ground as the share grows (the camera coming
     // nearer) over about two metres of the way, so they neither pop in nor grow slowly over tens of metres far off,
     // where the share changes slowly (a twelfth of the share was 13 m past GpuGrassFullRange); by edges and LOD over
-    // the last twelfth. Flowers just appear: a tall bright head shooting up out of the ground caught the eye more than
-    // one coming at once
+    // the last twelfth. Flowers fade in at their full height instead: a tall bright head shooting up out of the ground
+    // caught the eye
     float rise = saturate(min((input.edge1.w - input.vertex.z) * input.kinds.z, keep * 12.0) + 0.05);
     b.height = height * lerp(0.35, 1.0, edge) * (b.isFlower > 0.0 ? 1.0 : rise);
+    b.fade = b.isFlower > 0.0 ? rise : 1.0;
     float width = (b.isGrass * 0.02 + b.isWeed * 0.03 + b.isPlant * 0.075) * vec4Blade.y;
     // Wider far off, where fewer of them stand and thin ones only flicker (twice past 30 m for the half BladeKept left
     // out); past 12 m more and more grass and weed blades are tufts of three stalks on one wider quad (cut out in the
@@ -249,7 +251,7 @@ VSOutput GrassVS(VSInput input)
     {
         output.position = float4(0.0, 0.0, -1.0, 1.0);
         output.colour = 0.0;
-        output.normal = float3(0.0, 0.0, 1.0);
+        output.normal = float4(0.0, 0.0, 1.0, 1.0);
         output.w = float2(1.0, 0.0);
         output.ground = 0.0;
         output.tuft = 0.0;
@@ -267,7 +269,7 @@ VSOutput GrassVS(VSInput input)
     // the blades' own normals go over to the lawn's (up), so the light doesn't sparkle blade by blade
     float rounding = b.isFlower > 0.0 && t > 0.75 ? 0.0 : 0.45;
     float3 normal = b.facing * lerp(0.35, 0.15, max(b.isPlant, b.isFlower)) + b.across * (input.vertex.y * rounding);
-    output.normal = normalize(normal * (1.0 - 0.8 * b.distant) + float3(0.0, 0.0, 1.0));
+    output.normal = float4(normalize(normal * (1.0 - 0.8 * b.distant) + float3(0.0, 0.0, 1.0)), b.fade);
 
     // Its own colour, dull and grey as the city's (Liberty City, not a meadow in spring): a hue by patch, by kind,
     // darker at the root and a little lighter at the tip; drier, browner in dry patches (weeds most); each blade a
@@ -306,7 +308,7 @@ float fDepthBias;
 struct MotionOutput
 {
     float4 position : POSITION;
-    float3 current : TEXCOORD0;
+    float4 current : TEXCOORD0;  // clip x, y, w; Blade.fade
     float3 previous : TEXCOORD1;
     float4 tuft : TEXCOORD2;    // as VSOutput's, clip w
 };
@@ -319,7 +321,7 @@ MotionOutput MotionVS(VSInput input)
     [branch] if (!BladeKept(input, root, edge, distance, keep))
     {
         output.position = float4(0.0, 0.0, -1.0, 1.0);
-        output.current = float3(0.0, 0.0, 1.0);
+        output.current = float4(0.0, 0.0, 1.0, 1.0);
         output.previous = float3(0.0, 0.0, 1.0);
         output.tuft = 0.0;
         return output;
@@ -329,10 +331,22 @@ MotionOutput MotionVS(VSInput input)
     float3 position = BladePosition(input, b, vec4Wind, pressed);
     float3 before = BladePosition(input, b, vec4WindPrev, pressed);
     output.position = mul(float4(position, 1.0), matViewProj);
-    output.current = mul(float4(position, 1.0), matViewProjNoJitter).xyw;
+    output.current = float4(mul(float4(position, 1.0), matViewProjNoJitter).xyw, b.fade);
     output.previous = mul(float4(before, 1.0), matPrevViewProj).xyw;
     output.tuft = float4(input.vertex.y, b.t, b.isTuft * (1.0 + b.random), output.position.w);
     return output;
+}
+
+float fDitherFrame;     // the frame's turn of the fade's dither (0..63), so the temporal AA averages it out
+
+// Fading in: pixels left out by interleaved gradient noise, other ones each frame
+void ClipFade(float fade, float2 vPos)
+{
+    [branch] if (fade < 1.0)
+    {
+        float2 p = vPos + fDitherFrame * 5.588238;
+        clip(fade - frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715)))));
+    }
 }
 
 // The tufts' stalks as GrassPS cuts them
@@ -347,9 +361,10 @@ void ClipTuft(float3 tuft)
     }
 }
 
-float4 MotionPS(MotionOutput input, out float depth : DEPTH) : COLOR0
+float4 MotionPS(MotionOutput input, float2 vPos : VPOS, out float depth : DEPTH) : COLOR0
 {
     ClipTuft(input.tuft.xyz);
+    ClipFade(input.current.w, vPos);
     // A hair nearer than the grass wrote itself, so the depth test keeps it where the grass is what is seen
     depth = log2(max(input.tuft.w / fNearPlane, 1.0)) / log2(fFarDivNear) - fDepthBias;
     float2 current = input.current.xy / input.current.z;
@@ -365,11 +380,12 @@ struct PSOutput
     float depth : DEPTH;
 };
 
-PSOutput GrassPS(VSOutput input)
+PSOutput GrassPS(VSOutput input, float2 vPos : VPOS)
 {
     PSOutput output;
     // A tuft: three stalks across the quad, each narrowing to its own height
     ClipTuft(input.tuft);
+    ClipFade(input.normal.w, vPos);
     // The ground's colour under the root, kept no brighter than a lawn so pavement doesn't bleach the weeds on it
     float2 screen = input.ground.xy / max(input.ground.z, 1e-3) * float2(0.5, -0.5) + 0.5;
     float3 ground = tex2Dlod(GroundTex, float4(screen, 0.0, 0.0)).rgb;
@@ -381,7 +397,7 @@ PSOutput GrassPS(VSOutput input)
 
     // Against the sun: a thin blade lets it through. Its normal turns to the sun, so the game's lighting (and its sun
     // shadow) lights it as from the front, and it warms a little
-    float3 normal = normalize(input.normal);
+    float3 normal = normalize(input.normal.xyz);
     float backlit = saturate(dot(normalize(input.view.xyz), vec4Sun.xyz));
     backlit *= backlit * backlit * input.view.w * vec4Sun.w;
     normal = normalize(lerp(normal, vec4Sun.xyz, backlit * 0.8));

@@ -148,7 +148,7 @@ namespace GpuGrass
     struct Handles
     {
         D3DXHANDLE technique, viewProj, wind, windDir, blade, eye, nearPlane, farDivNear, bodies, bend, sun;
-        D3DXHANDLE motion, viewProjNoJitter, prevViewProj, windPrev, depthBias, edgeGrid;
+        D3DXHANDLE motion, viewProjNoJitter, prevViewProj, windPrev, depthBias, edgeGrid, ditherFrame;
     } h{};
     // What RenderMotion draws again: this frame's instances, if Render drew them, the depth test it drew with, and
     // the wind's vector of this frame and the one before
@@ -591,6 +591,7 @@ namespace GpuGrass
                 h.windPrev = effect->GetParameterByName(nullptr, "vec4WindPrev");
                 h.depthBias = effect->GetParameterByName(nullptr, "fDepthBias");
                 h.edgeGrid = effect->GetParameterByName(nullptr, "vec4EdgeGrid");
+                h.ditherFrame = effect->GetParameterByName(nullptr, "fDitherFrame");
             }
         }
         if (!effect)
@@ -936,6 +937,9 @@ export namespace GpuGrass
         effect->SetVector(h.windDir, &windDir);
         effect->SetVector(h.blade, &blade);
         effect->SetVector(h.eye, &eyeVector);
+        // The fade's dither moves on each frame (the motion pass draws in this frame's)
+        static uint32_t ditherFrame = 0;
+        effect->SetFloat(h.ditherFrame, float(ditherFrame++ & 63));
         // The edge grid: its origin, 1 / its side, whether EdgeTex holds it
         const D3DXVECTOR4 edgeGrid(edgeOrigin[0], edgeOrigin[1], 1.0f / (kEdgeCell * kEdgeSide), edgeTextureReady ? 1.0f : 0.0f);
         effect->SetVector(h.edgeGrid, &edgeGrid);
