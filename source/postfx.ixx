@@ -2451,7 +2451,9 @@ public:
             // The game's flat clouds under the volumetric ones, by VolumetricCloudsVanilla:
             // gta_atmoscatt_clouds draws them where CloudThreshold * noise - CloudBias is above
             // 0, so threshold * v and bias towards 1 by 1 - v fade them out at 0. Its high layer
-            // stays.
+            // (TopCloudBiasDetailThresholdHeight: x bias, z threshold, saturate(z * noise - x)) fades
+            // the same way: it is mapped by the dome's texture coordinates, not by direction, and
+            // came out drawn out in streaks at some angles under the volumetric clouds.
             if (R.bCloudParamsRegistered)
             {
                 const bool fade = R.VolumetricCloudsOn() && R.fVolumetricCloudsVanilla < 1.0f;
@@ -2464,6 +2466,10 @@ public:
                 biasOverride.add = { 1.0f - v, 0.0f, 0.0f, 0.0f };
                 thresholdOverride.on = fade;
                 biasOverride.on = fade;
+                auto& topOverride = rage::grmShaderInfo::getShaderParamOverride(R.TopCloudIdx);
+                topOverride.mul = { v, 1.0f, v, 1.0f };
+                topOverride.add = { 1.0f - v, 0.0f, 0.0f, 0.0f };
+                topOverride.on = fade;
             }
             // The shadows work out the clouds' coverage as Clouds.fx does (deferred_lighting_sun_under_clouds
             // patch): from the volumetric clouds' layer while they are on, otherwise from CloudShadowsCoverage
