@@ -133,10 +133,36 @@ namespace SkyTrace
         ++lines;
     }
 
+    // The dome's world matrix (gWorld, vertex c0-c3) against the camera the game renders with: the dome is meant to be
+    // centred on the eye, and one that lags behind it or sits elsewhere would show the clouds from another place as the
+    // camera swings around the player. Written at every draw, as it changes with the camera.
+    void WriteGeometry(IDirect3DDevice9* device, int slot)
+    {
+        float world[16] = {};
+        device->GetVertexShaderConstantF(0, world, 4);
+        const float* eye = nullptr;
+        const float* forward = nullptr;
+        if (auto vp = rage::pCurrentViewport ? rage::GetCurrentViewport() : nullptr)
+        {
+            eye = vp->mViewInverseMatrix[3];
+            forward = vp->mViewInverseMatrix[2];
+        }
+        const float zero[4] = {};
+        if (!eye)
+            eye = forward = zero;
+        // gWorld is row_major in the shader and set transposed: the translation is in the fourth column.
+        const float tx = world[3], ty = world[7], tz = world[11];
+        FusionLog::Write("SkyTrace", "Geometry", "frame %u draw %d world x (%g %g %g) y (%g %g %g) z (%g %g %g) t (%g %g %g) row3 (%g %g %g %g) eye (%g %g %g) forward (%g %g %g) eye - t (%g %g %g)\n",
+                         frame, slot, world[0], world[1], world[2], world[4], world[5], world[6], world[8], world[9], world[10], tx, ty, tz,
+                         world[12], world[13], world[14], world[15], eye[0], eye[1], eye[2], forward[0], forward[1], forward[2],
+                         eye[0] - tx, eye[1] - ty, eye[2] - tz);
+        ++lines;
+    }
+
     void OnDraw(IDirect3DDevice9* device)
     {
-        // Some 20000 lines are plenty to turn the camera around in; the log stops there.
-        if (!bInSky || lines > 20000)
+        // Some 40000 lines are plenty to turn the camera around in; the log stops there.
+        if (!bInSky || lines > 40000)
             return;
         int slot = drawInSky++;
         if (slot >= kSlots)
@@ -144,6 +170,7 @@ namespace SkyTrace
         DrawState s;
         Read(device, s);
         Write(slot, s, seen[slot] ? &last[slot] : nullptr);
+        WriteGeometry(device, slot);
         last[slot] = s;
         seen[slot] = true;
     }
