@@ -50,8 +50,10 @@ constexpr float kGroundAlbedo = 0.3f;
 constexpr float kCameraHeight = 0.1f;
 // The haze, times an Earth-like clear day's, in CWeather::eWeatherType order.
 constexpr float kWeatherHaze[] = { 1.0f, 1.3f, 1.1f, 2.5f, 4.0f, 3.0f, 8.0f, 4.0f };
-// The two tables drawn again once the haze has moved this much from what they were drawn for.
+// The two tables drawn again once the haze has moved this much from what they were drawn for, and every few seconds
+// all the same: one drawn wrong stays until it is drawn again.
 constexpr float kHazeRedraw = 0.02f;
+constexpr uint32_t kTablesRedrawFrames = 300;
 // Below the horizon the sky hands back to the timecycle: all the table's from a sun height (sine) of -0.07 (4
 // degrees below), none from -0.17 (10 degrees).
 constexpr float kNightStart = -0.07f;
@@ -104,6 +106,16 @@ static void TimecycleSky(D3DXVECTOR4& sky, D3DXVECTOR4& azimuth)
                           0.5f * (west[2] + east[2]) * strength, azimuthHeight);
 }
 
+// What the tables are drawn with besides kSSRRenderStates. The frame's first sky can be the water reflection's, drawn
+// with a clip plane and scissors: a table cut by them stayed dark until the next device reset redrew it.
+static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kTableRenderStates[] =
+{
+    { D3DRS_SCISSORTESTENABLE,        FALSE },
+    { D3DRS_CLIPPLANEENABLE,          0 },
+    { D3DRS_SRGBWRITEENABLE,          FALSE },
+    { D3DRS_SEPARATEALPHABLENDENABLE, FALSE },
+};
+
 // Draws the tables the frame needs into their targets. Leaves the device as it found it.
 static bool DrawTables(IDirect3DDevice9* pDevice, float sunHeight, float haze)
 {
@@ -119,8 +131,22 @@ static bool DrawTables(IDirect3DDevice9* pDevice, float sunHeight, float haze)
     SavedSamplerSlots samplers(pDevice);
     SavedVertexInput vertexInput(pDevice);
     pDevice->SetDepthStencilSurface(nullptr);
-    for (const auto& [state, value] : kSSRRenderStates)
+    // On the game's caching wrapper and on the device behind it: the wrapper leaves out a value it believes is set
+    auto real = RealDevice(pDevice);
+    auto setBoth = [&](D3DRENDERSTATETYPE state, DWORD value)
+    {
         pDevice->SetRenderState(state, value);
+        if (real && real != pDevice)
+            real->SetRenderState(state, value);
+    };
+    DWORD savedTableStates[std::size(kTableRenderStates)] = {};
+    for (size_t i = 0; i < std::size(kTableRenderStates); ++i)
+    {
+        (real ? real : pDevice)->GetRenderState(kTableRenderStates[i].state, &savedTableStates[i]);
+        setBoth(kTableRenderStates[i].state, kTableRenderStates[i].value);
+    }
+    for (const auto& [state, value] : kSSRRenderStates)
+        setBoth(state, value);
     pDevice->SetFVF(kScreenVertexFVF);
 
     const D3DXVECTOR4 air(haze, kCameraHeight, kGroundAlbedo, kMieG);
@@ -165,14 +191,20 @@ static bool DrawTables(IDirect3DDevice9* pDevice, float sunHeight, float haze)
         effect->End();
     };
 
-    if (R.fSkyTablesHaze < 0.0f || std::abs(haze - R.fSkyTablesHaze) > kHazeRedraw * R.fSkyTablesHaze)
+    static uint32_t tablesFrame = 0;
+    const uint32_t frame = FrameHistory::Frame();
+    if (R.fSkyTablesHaze < 0.0f || std::abs(haze - R.fSkyTablesHaze) > kHazeRedraw * R.fSkyTablesHaze ||
+        frame - tablesFrame >= kTablesRedrawFrames)
     {
         draw("SkyTransmittance", R.SkyTransmittanceSurf, 256.0f, 64.0f);
         draw("SkyMultiScatter", R.SkyMultiScatterSurf, 32.0f, 32.0f);
         R.fSkyTablesHaze = haze;
+        tablesFrame = frame;
     }
     draw("SkyView", R.SkyViewSurf, 192.0f, 108.0f);
 
+    for (size_t i = 0; i < std::size(kTableRenderStates); ++i)
+        setBoth(kTableRenderStates[i].state, savedTableStates[i]);
     pDevice->SetRenderTarget(1, oldTarget1);
     SAFE_RELEASE(oldTarget1);
     return true;
