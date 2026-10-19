@@ -191,8 +191,10 @@ Blade MakeBlade(VSInput input, float3 root, float edge, float distance, float ke
     // Shorter towards an edge; and the blades last kept rise out of the ground as the share grows (the camera coming
     // nearer) over about two metres of the way, so they neither pop in nor grow slowly over tens of metres far off,
     // where the share changes slowly (a twelfth of the share was 13 m past GpuGrassFullRange); by edges and LOD over
-    // the last twelfth
-    b.height = height * lerp(0.35, 1.0, edge) * saturate(min((input.edge1.w - input.vertex.z) * input.kinds.z, keep * 12.0) + 0.05);
+    // the last twelfth. Flowers just appear: a tall bright head shooting up out of the ground caught the eye more than
+    // one coming at once
+    float rise = saturate(min((input.edge1.w - input.vertex.z) * input.kinds.z, keep * 12.0) + 0.05);
+    b.height = height * lerp(0.35, 1.0, edge) * (b.isFlower > 0.0 ? 1.0 : rise);
     float width = (b.isGrass * 0.02 + b.isWeed * 0.03 + b.isPlant * 0.075) * vec4Blade.y;
     // Wider far off, where fewer of them stand and thin ones only flicker (twice past 30 m for the half BladeKept left
     // out); past 12 m more and more grass and weed blades are tufts of three stalks on one wider quad (cut out in the
