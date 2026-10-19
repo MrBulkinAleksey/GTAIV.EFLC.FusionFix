@@ -154,7 +154,8 @@ namespace CarMirrors
     // interior mirror's rear window showed the phone and ghosts of trees). Unbound as the mirror's pass starts, s9
     // empty keeping the game's environment map; not put back (no reference held over a device reset): the main
     // scene's glass is drawn by then, and the next frame binds them again.
-    // c204.z 1 has the water opaque (water_mirror_opaque.patch, see MirrorWaterPass).
+    // c204.z 1 has the water opaque and reflect the sky's colour at the horizon, not the main view's water reflection read
+    // at the mirror's pixels (water_mirror_opaque.patch, see MirrorWaterPass).
     // The phase clears depth and stencil only (CE 0xD769CE, its colour flag 0), the sky meant to cover the rest: in a
     // tunnel nothing did, and the mirror kept its frames before where nothing was drawn (trails). Cleared to black
     // as the pass starts, MIRROR_RT bound and its viewport set by then.
