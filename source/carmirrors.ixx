@@ -80,6 +80,8 @@ namespace CarMirrors
     static uint32_t timedFrames = 0;
     static uint32_t outdoorScans = 0;      // frames the outdoor scan ran for the mirror
     static uint32_t waterQueued = 0;       // the water's commands put in the mirror phase's draw list
+    static uint32_t waterQuads = 0;        // the water's quads the scan gathered in the mirror phase's list
+    static uintptr_t (__cdecl* waterLists)() = nullptr; // CE 0xAD61A0: the main thread's water lists, quads of list i at +0xFEC + 4i
     // The car, for the draw list's snapshots and the phase's plane.
     static std::atomic<uintptr_t> drawnVehicle{ 0 };
     static SafetyHookMid quadHook;
@@ -133,6 +135,12 @@ namespace CarMirrors
     // set for the main view by postfx.ixx): the player's car's own glass keeps 40% of its tint in the mirror too, within
     // 4 m of the reflected eye, which stands further from the rear window than the driver; an interior mirror showed
     // the dark tinted rear window and little else.
+    // The car glass's screen space reflections (vehicle_glass_reflections.patch) read the main view's camera (s9), its
+    // depth (s11) and its lit scene (s13), bound by postfx.ixx after the deferred lighting until the post processing:
+    // the mirror's phase, drawn in between, had its glass reflect the main view's screen at the mirror's pixels (an
+    // interior mirror's rear window showed the phone and ghosts of trees). Unbound as the mirror's pass starts, s9
+    // empty keeping the game's environment map; not put back (no reference held over a device reset): the main
+    // scene's glass is drawn by then, and the next frame binds them again.
     static void __cdecl MirrorPassTint(uint32_t on)
     {
         auto device = rage::grcDevice::GetD3DDevice();
@@ -142,6 +150,9 @@ namespace CarMirrors
         device->SetPixelShaderConstantF(204, tint, 1);
         if (auto real = RageDirect3DDevice9::RealDevice(device); real != device)
             real->SetPixelShaderConstantF(204, tint, 1);
+        if (on)
+            for (DWORD stage : { 9u, 11u, 13u })
+                RageDirect3DDevice9::SetTextureBoth(device, stage, nullptr);
     }
 
     static double NowMs()
@@ -399,9 +410,9 @@ namespace CarMirrors
         if (++timedFrames < 300)
             return;
         FusionLog::Write("CarMirrors", "Cost", "mirror phase CPU per frame: draw list %.3f ms, visibility %.3f ms; outdoor scans %u of %u frames; "
-            "quads drawn %u, by the draw list's car %u, dark %u; water queued %u\n",
-            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark, waterQueued);
-        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = 0;
+            "quads drawn %u, by the draw list's car %u, dark %u; water queued %u, its quads gathered %u\n",
+            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark, waterQueued, waterQuads);
+        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = waterQuads = 0;
         buildMs = visibilityMs = 0.0;
         timedFrames = 0;
     }
@@ -557,8 +568,11 @@ namespace CarMirrors
         const uintptr_t phase = regs.edi;
         if (!waterFlagPhase || phase != waterFlagPhase)
             return;
-        callback.Queue(waterFunction, *reinterpret_cast<const uint32_t*>(phase + 0x938));
+        const uint32_t list = *reinterpret_cast<const uint32_t*>(phase + 0x938);
+        callback.Queue(waterFunction, list);
         ++waterQueued;
+        if (waterLists && list < 24)
+            waterQuads += *reinterpret_cast<const uint32_t*>(waterLists() + 0xFEC + 4 * list);
     }
 
     // c152 for mirror.fx (mirror_car_shape.patch): x 1 cuts the quad to the glass's outline, y the zoom out - 1 widens
@@ -769,6 +783,10 @@ public:
                 CarMirrors::waterGateHooks[1] = safetyhook::create_mid(waterBuild.get_first(19), CarMirrors::WaterGate);
             // in the mirror phase's draw list: push [edi+938] / call (what is drawn with blending) / add esp, 4 /
             // cmp byte [clip plane on], 0 / je
+            // mov eax, [index] / imul eax, eax, 10C4 / add eax, lists / ret
+            auto lists = hook::pattern("A1 ? ? ? ? 69 C0 C4 10 00 00 05 ? ? ? ? C3");
+            if (!lists.empty())
+                CarMirrors::waterLists = lists.get_first<uintptr_t(__cdecl)()>(0);
             auto phaseWater = hook::pattern("FF B7 38 09 00 00 E8 ? ? ? ? 83 C4 04 80 3D ? ? ? ? 00 74");
             if (!phaseWater.empty() && CarMirrors::waterFunction && CarMirrors::callback.add)
                 CarMirrors::phaseWaterHook = safetyhook::create_mid(phaseWater.get_first(0), CarMirrors::PhaseWater);
