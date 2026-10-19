@@ -260,6 +260,7 @@ uniform float fCSLength;            // world units a contact shadow ray travels
 uniform float fCSThickness;         // how deep behind the scene a sample may land and still occlude
 uniform float fCSMaxViewDistance;   // contact shadows fade out towards this view distance
 uniform float fCSIntensity;         // strength, 0..1
+uniform float fCSGrassGloss;        // GPU grass's gloss in 1023ths (GpuGrass.fx), 0 = none: no contact shadows on it
 
 // Screen space indirect light, see SSGI_PS.
 uniform float fGIRayLength;         // world units an indirect light ray travels
@@ -1263,6 +1264,10 @@ float4 ContactShadows_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
     if (rawDepth >= 0.9999 || vec4SunView.w <= 0.0)
+        return float4(0.0, 0.0, 0.0, 1.0);
+    // GPU grass: its blades sway into each other's rays and its flat flower heads face other ways than their
+    // normals, so the shadow flickered on them
+    if (fCSGrassGloss > 0.0 && abs(tex2Dlod(SpecularTex, float4(uv, 0, 0)).g * 1023.0 - fCSGrassGloss) < 0.5)
         return float4(0.0, 0.0, 0.0, 1.0);
 
     float3 C = ViewPosFromUVZ(uv, pow(fFarDivNear, rawDepth) * fNearPlane);

@@ -336,7 +336,7 @@ public:
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth, vec2PrevDepthRange;
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fSpreadRadius;
-        D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, techContactShadows;
+        D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, fCSGrassGloss, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
@@ -1613,6 +1613,7 @@ public:
                 h.fCSThickness = SSREffect->GetParameterByName(nullptr, "fCSThickness");
                 h.fCSMaxViewDistance = SSREffect->GetParameterByName(nullptr, "fCSMaxViewDistance");
                 h.fCSIntensity = SSREffect->GetParameterByName(nullptr, "fCSIntensity");
+                h.fCSGrassGloss = SSREffect->GetParameterByName(nullptr, "fCSGrassGloss");
                 h.techContactShadows = SSREffect->GetTechniqueByName("ContactShadows");
                 h.techContactTemporal = SSREffect->GetTechniqueByName("ContactTemporal");
                 h.techContactUpsample = SSREffect->GetTechniqueByName("ContactUpsample");

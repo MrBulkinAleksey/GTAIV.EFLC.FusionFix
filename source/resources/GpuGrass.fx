@@ -387,9 +387,9 @@ PSOutput GrassPS(VSOutput input)
 
     output.colour = float4(saturate(colour), 1.0);
     output.normal = float4(normal * 0.5 + 0.5, 1.0);
-    // A faint broad highlight (gloss sqrt(24 / 512)); without one, gloss 258 / 1023 marks a material without a specular
-    // map (world_no_specular_mark.patch)
-    output.specular = float4(input.w.y, input.w.y > 0.001 ? 0.2165 : 0.252199411, input.colour.a, 1.0);
+    // A faint broad highlight, gloss 221 / 1023 (power 24) on all of it: the mark by which contact shadows (SSR.fx
+    // fCSGrassGloss) leave the grass out, where swaying blades and the flower heads made them flicker
+    output.specular = float4(input.w.y, 221.0 / 1023.0, input.colour.a, 1.0);
     output.depth = log2(max(input.w.x / fNearPlane, 1.0)) / log2(fFarDivNear);
     return output;
 }
