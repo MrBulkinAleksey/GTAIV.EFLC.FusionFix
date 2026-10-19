@@ -90,6 +90,7 @@ namespace CarMirrors
     static uint32_t waterDrawn = 0;        // the mirror pass's water draws (render thread)
     static uint32_t techniqueDraws = 0;    // frames the mirror's entities went in the reflection techniques
     static uint32_t skyDraws = 0;          // the car mirror's skies drawn (render thread)
+    static uint32_t coronaDraws = 0;       // and its coronas
     static uint32_t waterFlagMissing = 0;  // the mirror's water draws whose draw list had no flag 0x10 (render thread)
     static const uint32_t* waterTotals[2]{}; // CE 0x1550EAC, 0x154E300: water.dat's quads and triangles
     // The car, for the draw list's snapshots and the phase's plane.
@@ -426,8 +427,8 @@ namespace CarMirrors
         if (++timedFrames < 300)
             return;
         FusionLog::Write("CarMirrors", "Cost", "mirror phase CPU per frame: draw list %.3f ms, visibility %.3f ms; outdoor scans %u of %u frames; "
-            "quads drawn %u, by the draw list's car %u, dark %u; entities in the reflection techniques %u, skies %u\n",
-            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark, techniqueDraws, skyDraws);
+            "quads drawn %u, by the draw list's car %u, dark %u; entities in the reflection techniques %u, skies %u, coronas %u\n",
+            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark, techniqueDraws, skyDraws, coronaDraws);
         // items: the water's quads, triangles and far cells, summed over the frames
         FusionLog::Write("CarMirrors", "Water", "water.dat %u quads, %u triangles; gathered %u frames, rolled back %u (over the buffers); "
             "the mirror's items %u/%u/%u, the main scene's %u/%u/%u; buffers filled up to %u/1000, %u/40, %u/400; queued %u, drawn %u, "
@@ -435,7 +436,7 @@ namespace CarMirrors
             waterGathered, waterRolledBack, mirrorWaterItems[0], mirrorWaterItems[1], mirrorWaterItems[2],
             mainWaterItems[0], mainWaterItems[1], mainWaterItems[2], waterFill[0], waterFill[1], waterFill[2],
             waterQueued, waterDrawn, drawnWaterItems[0], drawnWaterItems[1], drawnWaterItems[2], waterFlagMissing);
-        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = waterGathered = waterRolledBack = waterDrawn = techniqueDraws = skyDraws = waterFlagMissing = 0;
+        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = waterGathered = waterRolledBack = waterDrawn = techniqueDraws = skyDraws = coronaDraws = waterFlagMissing = 0;
         for (int i = 0; i < 3; ++i)
             mirrorWaterItems[i] = mainWaterItems[i] = drawnWaterItems[i] = waterFill[i] = 0;
         buildMs = visibilityMs = 0.0;
@@ -782,6 +783,43 @@ namespace CarMirrors
         ++skyDraws;
     }
 
+    // The coronas (CE 0xC106F0: CE 0xC85080 the coronas, CE 0xD8C8E0 the lens flares, clip planes off round them) are
+    // drawn for draw lists with flag 8, which the mirror phase has not; it queues them before its entities (0xD76AEC),
+    // which drawn after would cover them (they write no depth). The car mirror's pass queues them again after what is
+    // drawn with blending (MirrorCoronasDraw, at 0xD76BBF), its flag test (0xC106F5) given 8 for it and the lens
+    // flares' gate (the je at 0xD8C8E7) taken: a flare across the screen made no sense in a small mirror.
+    static SafetyHookMid coronaHooks[3];
+    static constexpr uint32_t CoronaFlags = 8;
+    static void* coronaFunction = nullptr;  // CE 0xC106F0
+    static bool inMirrorCoronas = false;    // render thread
+
+    static void MirrorCoronaFlags(SafetyHookContext& regs)
+    {
+        if (inMirrorCoronas)
+            regs.eax = reinterpret_cast<uintptr_t>(&CoronaFlags);
+    }
+
+    static void MirrorNoFlares(SafetyHookContext& regs)
+    {
+        if (inMirrorCoronas)
+            regs.eflags |= 0x40u; // ZF: the je over the flares taken
+    }
+
+    static void __cdecl MirrorCoronasDraw(uint32_t)
+    {
+        inMirrorCoronas = true;
+        reinterpret_cast<void (__cdecl*)()>(coronaFunction)();
+        inMirrorCoronas = false;
+        ++coronaDraws;
+    }
+
+    // Main thread, in the mirror phase's draw list right after what is drawn with blending
+    static void QueueMirrorCoronas(SafetyHookContext&)
+    {
+        if (usedThisFrame && coronaHooks[2])
+            callback.Queue(reinterpret_cast<const void*>(&MirrorCoronasDraw), 0);
+    }
+
     static void PopReflectionTechniques(SafetyHookContext&)
     {
         if (!techniquePushed)
@@ -1101,6 +1139,21 @@ public:
                     CarMirrors::skyHooks[2] = safetyhook::create_mid(sky.get_first(5), CarMirrors::MirrorSkyFlags);
                 }
             }
+            // the coronas' callback: call (the draw list's flags) / test byte [eax], 8 (hooked) / je / push esi / call /
+            // mov esi, [clip planes] / push 0 / call / call (the coronas) / call (the lens flares)
+            auto coronas = hook::pattern("E8 ? ? ? ? F6 00 08 74 ? 56 E8 ? ? ? ? 8B 35 ? ? ? ? 6A 00 E8 ? ? ? ? E8 ? ? ? ? E8");
+            if (!coronas.empty() && !phaseWater.empty() && CarMirrors::callback.add)
+            {
+                // the flares: cmp byte [on], 0 / je (hooked)
+                const auto flares = reinterpret_cast<uint8_t*>(injector::GetBranchDestination(coronas.get_first(34)).as_int());
+                if (flares && flares[0] == 0x80 && flares[1] == 0x3D && flares[7] == 0x0F && flares[8] == 0x84)
+                {
+                    CarMirrors::coronaFunction = coronas.get_first(0);
+                    CarMirrors::coronaHooks[0] = safetyhook::create_mid(flares + 7, CarMirrors::MirrorNoFlares);
+                    CarMirrors::coronaHooks[1] = safetyhook::create_mid(phaseWater.get_first(14), CarMirrors::QueueMirrorCoronas);
+                    CarMirrors::coronaHooks[2] = safetyhook::create_mid(coronas.get_first(5), CarMirrors::MirrorCoronaFlags);
+                }
+            }
             if (!techniques.empty() && !mirrorEntities.empty() && CarMirrors::callback.add)
             {
                 CarMirrors::techniqueGroup.group = *techniques.get_first<const uint32_t*>(18);
@@ -1123,8 +1176,9 @@ public:
                 CarMirrors::phaseWaterHook ? "on" : "off (not found)", CarMirrors::gatherHook ? "on" : "off (not found)",
                 CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)", CarMirrors::waterFlagHook ? "on" : "off (not found)",
                 CarMirrors::waterPassHook ? "on" : "off (not found)");
-            FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s\n",
-                CarMirrors::techniqueHooks[1] ? "on" : "off (not found)", CarMirrors::skyHooks[2] ? "on" : "off (not found)");
+            FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s; its coronas %s\n",
+                CarMirrors::techniqueHooks[1] ? "on" : "off (not found)", CarMirrors::skyHooks[2] ? "on" : "off (not found)",
+                CarMirrors::coronaHooks[2] ? "on" : "off (not found)");
             if (CarMirrors::quadOffset)
                 FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
         };
