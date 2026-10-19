@@ -26,6 +26,8 @@ export namespace SkyTrace
 {
     bool bEnabled = false;
     bool bInSky = false;
+    // [DEBUG] SkyMoonPass = 0: the sky never draws the moon pass, to tell whether it is what changes the clouds.
+    bool bMoonPass = true;
 }
 
 namespace SkyTrace
@@ -294,6 +296,7 @@ public:
         {
             CIniReader iniReader("");
             SkyTrace::bEnabled = iniReader.ReadInteger("DEBUG", "SkyTrace", 0) != 0;
+            SkyTrace::bMoonPass = iniReader.ReadInteger("DEBUG", "SkyMoonPass", 1) != 0;
         };
     }
 } SkyTraceInitInstance;

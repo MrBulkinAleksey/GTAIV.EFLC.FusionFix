@@ -1948,6 +1948,8 @@ private:
     static inline injector::hook_back<bool(__fastcall*)(void*, void*, rage::grcViewport*)> hbSkyMoonScissor;
     static bool __fastcall SkyMoonScissor(void* sky, void* edx, rage::grcViewport* viewport)
     {
+        if (!SkyTrace::bMoonPass)
+            return false;
         if (sky && viewport)
         {
             const float* centre = reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(sky) + 0x90);
