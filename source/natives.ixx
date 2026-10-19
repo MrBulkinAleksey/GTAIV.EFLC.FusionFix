@@ -6404,8 +6404,16 @@ public:
     static auto Register(auto hash, auto fn, std::string_view dest_pattern_str, size_t fn_size)
     {
         auto nativeHash = std::to_underlying(hash);
-        auto pattern = hook::pattern(pattern_str(0x68, to_bytes(nativeHash))); // push 0x...
-        auto addr = *pattern.get_first<uintptr_t>(-4);
+        // push offset handler; push hash: the hash's bytes can also turn up inside relocated operands at some exe bases,
+        // the handler pointer before a real one is relocated
+        uintptr_t addr = 0;
+        hook::pattern(pattern_str(0x68, to_bytes(nativeHash))).for_each_result([&](hook::pattern_match match)
+        {
+            if (!addr && IsRelocatedDword(match.get<void>(-4)))
+                addr = *match.get<uintptr_t>(-4);
+        });
+        if (!addr)
+            return injector::auto_pointer(nullptr);
         auto range = hook::range_pattern(addr, addr + fn_size, dest_pattern_str);
         if (!range.empty())
         {

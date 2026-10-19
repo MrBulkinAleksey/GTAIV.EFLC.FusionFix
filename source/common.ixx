@@ -859,6 +859,45 @@ std::string format(const char* fmt, ...)
     }
 }
 
+// A real absolute reference to a global (or a pointer in code) is a relocated dword, so the exe's base relocation table
+// lists it. A search for an address's bytes also finds unaligned bytes inside other instructions, which change with the
+// base the exe was loaded at: at base 0xE20000 the bytes of mov [0x104F0E0], 2 (CE 0xE6BAAC) read as WeaponInfo + 0x1B30,
+// the limit patch rewrote them and the game crashed at start under some bases. Check every such operand with this.
+export bool IsRelocatedDword(const void* address)
+{
+    static std::vector<uint32_t> rvas = []
+    {
+        std::vector<uint32_t> list;
+        auto base = reinterpret_cast<uint8_t*>(GetModuleHandle(nullptr));
+        auto nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + reinterpret_cast<IMAGE_DOS_HEADER*>(base)->e_lfanew);
+        auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+        auto block = base + dir.VirtualAddress;
+        auto end = block + dir.Size;
+        while (dir.VirtualAddress && block + sizeof(IMAGE_BASE_RELOCATION) <= end)
+        {
+            auto reloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(block);
+            if (reloc->SizeOfBlock < sizeof(IMAGE_BASE_RELOCATION))
+                break;
+            auto entries = reinterpret_cast<uint16_t*>(reloc + 1);
+            auto count = (reloc->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(uint16_t);
+            for (size_t i = 0; i < count; i++)
+            {
+                if ((entries[i] >> 12) == IMAGE_REL_BASED_HIGHLOW)
+                    list.push_back(reloc->VirtualAddress + (entries[i] & 0xFFF));
+            }
+            block += reloc->SizeOfBlock;
+        }
+        std::sort(list.begin(), list.end());
+        return list;
+    }();
+
+    // An exe without relocations sits at its preferred base, where the address bytes can't be shifted into a match
+    if (rvas.empty())
+        return true;
+    auto rva = uint32_t(reinterpret_cast<uintptr_t>(address) - reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr)));
+    return std::binary_search(rvas.begin(), rvas.end(), rva);
+}
+
 export template<typename T>
 std::array<uint8_t, sizeof(T)> to_bytes(const T& object)
 {

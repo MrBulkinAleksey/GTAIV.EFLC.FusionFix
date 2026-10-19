@@ -8,45 +8,6 @@ export module limits;
 import common;
 import settings;
 
-// A real absolute reference to a global is a relocated dword, so the exe's base relocation table lists it. A bare
-// address byte search also finds unaligned bytes inside other instructions: at base 0xE20000 the bytes of
-// mov [0x104F0E0], 2 (CE 0xE6BAAC) read as WeaponInfo + 0x1B30, the patch broke a static initializer and the game
-// crashed at start under some bases.
-static bool IsRelocatedDword(const void* address)
-{
-    static std::vector<uint32_t> rvas = []
-    {
-        std::vector<uint32_t> list;
-        auto base = reinterpret_cast<uint8_t*>(GetModuleHandle(nullptr));
-        auto nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + reinterpret_cast<IMAGE_DOS_HEADER*>(base)->e_lfanew);
-        auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
-        auto block = base + dir.VirtualAddress;
-        auto end = block + dir.Size;
-        while (dir.VirtualAddress && block + sizeof(IMAGE_BASE_RELOCATION) <= end)
-        {
-            auto reloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(block);
-            if (reloc->SizeOfBlock < sizeof(IMAGE_BASE_RELOCATION))
-                break;
-            auto entries = reinterpret_cast<uint16_t*>(reloc + 1);
-            auto count = (reloc->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(uint16_t);
-            for (size_t i = 0; i < count; i++)
-            {
-                if ((entries[i] >> 12) == IMAGE_REL_BASED_HIGHLOW)
-                    list.push_back(reloc->VirtualAddress + (entries[i] & 0xFFF));
-            }
-            block += reloc->SizeOfBlock;
-        }
-        std::sort(list.begin(), list.end());
-        return list;
-    }();
-
-    // An exe without relocations sits at its preferred base, where the address bytes can't be shifted into a match
-    if (rvas.empty())
-        return true;
-    auto rva = uint32_t(reinterpret_cast<uintptr_t>(address) - reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr)));
-    return std::binary_search(rvas.begin(), rvas.end(), rva);
-}
-
 class LimitAdjuster
 {
 private:
@@ -519,7 +480,8 @@ public:
                 auto newEnd = uintptr_t(WeaponInfo.GetNewArrayPointer() + 0x110 * WeaponInfo.GetNewElementsCount() + 0x24);
                 hook::pattern("81 ? " + pattern_str(to_bytes(oldEnd)) + "7C").for_each_result([&](hook::pattern_match match)
                 {
-                    injector::WriteMemory(match.get<void>(2), newEnd, true);
+                    if (IsRelocatedDword(match.get<void>(2)))
+                        injector::WriteMemory(match.get<void>(2), newEnd, true);
                 });
 
                 pattern = hook::pattern("8B 44 24 04 83 F8 3C 7D ? 69 C0 10 01 00 00 05");

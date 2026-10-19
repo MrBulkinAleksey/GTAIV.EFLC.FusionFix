@@ -1772,10 +1772,17 @@ private:
         std::vector<std::pair<uint32_t*, uintptr_t>> references;
         auto replaceReferences = [&](const std::string& signature, size_t count, ptrdiff_t operandOffset, uintptr_t replacement)
         {
-            auto pattern = hook::pattern(signature).count(count);
-            pattern.for_each_result([&](hook::pattern_match match)
+            // count() stops at the count'th match, so a base-dependent false match before a real one would push it out:
+            // take the first count matches whose address operand is relocated
+            size_t found = 0;
+            hook::pattern(signature).for_each_result([&](hook::pattern_match match)
             {
-                references.emplace_back(match.get<uint32_t>(operandOffset), replacement);
+                auto operand = match.get<uint32_t>(operandOffset);
+                if (found < count && IsRelocatedDword(operand))
+                {
+                    references.emplace_back(operand, replacement);
+                    found++;
+                }
             });
         };
 

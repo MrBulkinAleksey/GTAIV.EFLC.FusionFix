@@ -196,11 +196,15 @@ public:
                 return;
 
             auto launcher = *call.get_first<decltype(hbStartNewScript.fun)*>(2);
-            pattern = hook::pattern("C7 05 " + pattern_str(to_bytes(launcher))); // mov launcher, offset GtaLauncher
-            if (pattern.empty())
+            decltype(hbStartNewScript.fun)* store = nullptr;
+            hook::pattern("C7 05 " + pattern_str(to_bytes(launcher))).for_each_result([&](hook::pattern_match match) // mov launcher, offset GtaLauncher
+            {
+                if (!store && IsRelocatedDword(match.get<void>(2)))
+                    store = match.get<decltype(hbStartNewScript.fun)>(6);
+            });
+            if (!store)
                 return;
 
-            auto store = pattern.get_first<decltype(hbStartNewScript.fun)>(6);
             hbStartNewScript.fun = *store;
             injector::WriteMemory(store, &StartNewScript, true);
 
