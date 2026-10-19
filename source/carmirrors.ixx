@@ -443,6 +443,12 @@ namespace CarMirrors
         FusionLog::Write("CarMirrors", "Cost", "mirror phase CPU per frame: draw list %.3f ms, visibility %.3f ms; outdoor scans %u of %u frames; "
             "quads drawn %u, by the draw list's car %u, dark %u; entities in the reflection techniques %u, skies %u, coronas %u\n",
             buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark, techniqueDraws, skyDraws, coronaDraws);
+        // per mirror draw: the coronas the game listed this frame, how many of them behind its camera, how many drawn
+        if (coronaDraws)
+            FusionLog::Write("CarMirrors", "Coronas", "per mirror draw: %.1f listed, %.1f of them behind the game camera, %.1f drawn\n",
+                float(CoronaRender::nOtherListed) / coronaDraws, float(CoronaRender::nOtherBehind) / coronaDraws,
+                float(CoronaRender::nOtherDrawn) / coronaDraws);
+        CoronaRender::nOtherListed = CoronaRender::nOtherBehind = CoronaRender::nOtherDrawn = 0;
         // items: the water's quads, triangles and far cells, summed over the frames
         FusionLog::Write("CarMirrors", "Water", "water.dat %u quads, %u triangles; gathered %u frames, rolled back %u (over the buffers); "
             "the mirror's items %u/%u/%u, the main scene's %u/%u/%u; buffers filled up to %u/1000, %u/40, %u/400; queued %u, drawn %u, "
@@ -903,7 +909,9 @@ namespace CarMirrors
     {
         inMirrorCoronas = true;
         CoronaRender::pBeforeDraw = &BindFarDepth;
+        CoronaRender::bOtherView = true;
         reinterpret_cast<void (__cdecl*)()>(coronaFunction)();
+        CoronaRender::bOtherView = false;
         CoronaRender::pBeforeDraw = nullptr;
         inMirrorCoronas = false;
         ++coronaDraws;

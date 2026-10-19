@@ -236,6 +236,11 @@ namespace CoronaRender
     // Run before each batch is drawn, the technique set: a pass from another view puts its own depth for the
     // coronas' visibility test in (carmirrors.ixx)
     export void (*pBeforeDraw)() = nullptr;
+    // A pass from another view than the game camera's, near it (a car's mirror, its reflected camera within half a metre
+    // of the eye and looking back): none left out as behind or outside the view, which took the main view's. Counted:
+    // the coronas listed, those behind the game camera, those drawn (carmirrors.ixx's log)
+    export bool bOtherView = false;
+    export uint32_t nOtherListed = 0, nOtherBehind = 0, nOtherDrawn = 0;
 
     int32_t nMode = 1;                      // 0: the game's, 1: ours without what is out of view, 2: ours, all of them
     float* pCamera = nullptr;               // CE 0x128e340, the game camera's position, where it looks 8 floats before
@@ -358,7 +363,7 @@ namespace CoronaRender
         auto eye = (const float*)(viewport + 0x70);
         float forward[3] = {};
         bool skipBehind = false;
-        if (nMode == 1 && !reflection && pCamera)
+        if (nMode == 1 && !reflection && pCamera && !bOtherView)
         {
             auto right = (const float*)(viewport + 0x40), up = (const float*)(viewport + 0x50);
             const float* look = pCamera - 8;
@@ -423,6 +428,21 @@ namespace CoronaRender
                 }
             }
             drawn.push_back(uint32_t(i));
+        }
+        if (bOtherView)
+        {
+            nOtherListed += uint32_t(count);
+            nOtherDrawn += uint32_t(drawn.size());
+            if (pCamera)
+            {
+                const float* look = pCamera - 8;
+                for (int32_t i = 0; i < count; i++)
+                {
+                    auto pos = (const float*)(list + size_t(i) * 0x20);
+                    if ((pos[0] - pCamera[0]) * look[0] + (pos[1] - pCamera[1]) * look[1] + (pos[2] - pCamera[2]) * look[2] < 0.0f)
+                        ++nOtherBehind;
+                }
+            }
         }
         if (drawn.empty())
             return true;
