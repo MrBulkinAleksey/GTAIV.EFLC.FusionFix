@@ -178,6 +178,19 @@ namespace GpuGrass
         return 0.5f * std::clamp((fRange - d) / (std::max)(fRange - fFullRange, 0.5f), 0.0f, 1.0f);
     }
 
+    // 1 / the share of a piece's blades over which the last ones kept rise out of the ground (GpuGrass.fx MakeBlade):
+    // what the share grows by over kRiseDistance as the camera comes nearer, so a blade rises over that much of the
+    // way at any distance; BladeShare's slopes blend around GpuGrassFullRange so no blade jumps in height there
+    float RiseScale(float distance, float pieceShare)
+    {
+        constexpr float kRiseDistance = 2.0f;
+        const float nearSlope = 0.5f / (std::max)(fFullRange - kDenseRange, 0.5f);
+        const float farSlope = 0.5f / (std::max)(fRange - fFullRange, 0.5f);
+        const float blend = std::clamp((distance - fFullRange + 4.0f) / 8.0f, 0.0f, 1.0f);
+        const float slope = pieceShare * (nearSlope + (farSlope - nearSlope) * blend * blend * (3.0f - 2.0f * blend));
+        return (std::max)(12.0f, 1.0f / (std::max)(slope * kRiseDistance, 1e-4f));
+    }
+
     float Hash(float x, float y)
     {
         const float v = std::sin(x * 12.9898f + y * 78.233f) * 43758.5453f;
@@ -817,7 +830,7 @@ export namespace GpuGrass
                 continue;
             const auto& k = p.look.kinds;
             out[count] = { { p.corner[0], p.corner[1], p.corner[2], p.seed }, { p.edge1[0], p.edge1[1], p.edge1[2], share },
-                           { p.edge2[0], p.edge2[1], p.edge2[2], p.look.tag }, { k[0], k[1], k[2], k[3] } };
+                           { p.edge2[0], p.edge2[1], p.edge2[2], p.look.tag }, { k[0], k[1], RiseScale(distance, p.share * fDensity), k[3] } };
             blades += share * kBlades;
             if (++count >= kMaxInstances)
                 break;

@@ -49,7 +49,8 @@ struct VSInput
     float4 corner : TEXCOORD2;  // the piece's corner, a random value for its turn
     float4 edge1 : TEXCOORD3;   // its first edge, the share of its blades kept
     float4 edge2 : TEXCOORD4;   // its second edge, its surface's tag / 255 (debug colours)
-    float4 kinds : TEXCOORD5;   // the share of grass, of weeds (the rest small plants), the surface's own grass (0..1)
+    float4 kinds : TEXCOORD5;   // the share of grass, of weeds (the rest small plants), 1 / the share over which a
+                                // blade rises (GpuGrass::RiseScale), the surface's own grass (0..1)
 };
 
 struct VSOutput
@@ -186,9 +187,11 @@ Blade MakeBlade(VSInput input, float3 root, float edge, float distance, float ke
     float height = b.isGrass * (0.2 + 0.45 * h * h) + b.isWeed * (0.35 + 0.5 * h) + b.isPlant * (0.10 + 0.16 * h);
     height *= lerp(0.6, 1.25, b.patch) * (b.clump > 0.62 ? 1.6 : lerp(0.75, 1.1, b.clump)) * lerp(0.4, 1.0, input.kinds.w) * vec4Blade.x;
     height *= 1.0 + 0.25 * b.isFlower;
-    // Shorter towards an edge; and the last twelfth of the blades kept rise out of the ground as the share grows (the
-    // camera coming nearer), so they don't pop in
-    b.height = height * lerp(0.35, 1.0, edge) * saturate(min(input.edge1.w - input.vertex.z, keep) * 12.0 + 0.05);
+    // Shorter towards an edge; and the blades last kept rise out of the ground as the share grows (the camera coming
+    // nearer) over about two metres of the way, so they neither pop in nor grow slowly over tens of metres far off,
+    // where the share changes slowly (a twelfth of the share was 13 m past GpuGrassFullRange); by edges and LOD over
+    // the last twelfth
+    b.height = height * lerp(0.35, 1.0, edge) * saturate(min((input.edge1.w - input.vertex.z) * input.kinds.z, keep * 12.0) + 0.05);
     float width = (b.isGrass * 0.02 + b.isWeed * 0.03 + b.isPlant * 0.075) * vec4Blade.y;
     // Wider far off, where fewer of them stand and thin ones only flicker (twice past 30 m for the half BladeKept left
     // out); past 12 m more and more grass and weed blades are tufts of three stalks on one wider quad (cut out in the
