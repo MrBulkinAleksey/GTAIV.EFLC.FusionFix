@@ -593,13 +593,16 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     if (halfSize)
         R.CloudSurf[0]->GetDesc(&halfDesc);
     const float halfWidth = halfSize ? float(halfDesc.Width) : width, halfHeight = halfSize ? float(halfDesc.Height) : height;
+    // VolumetricCloudsFullSize: the march's targets made at full size, each pixel its own ray through the jittered
+    // projection, laid over without the accumulation.
+    const bool fullSize = halfSize && halfWidth >= width && halfHeight >= height;
     effect->SetFloat(effect->GetParameterByName(nullptr, "fHighPixel"), std::fabs(ProjInfo(proj, halfWidth, halfHeight).x));
     const float depthTexel[2] = { 1.0f / width, 1.0f / height };
     {
         // The accumulation's texture coordinates for this frame's jittered pixel: the two projections' rays differ by
         // their offsets alone.
         const D3DXVECTOR4 jittered = ProjInfo(proj, width, height), steadyInfo = ProjInfo(projSteady, width, height);
-        const float shift[2] = { (jittered.z - steadyInfo.z) / jittered.x / width, (jittered.w - steadyInfo.w) / jittered.y / height };
+        const float shift[2] = { fullSize ? 0.0f : (jittered.z - steadyInfo.z) / jittered.x / width, fullSize ? 0.0f : (jittered.w - steadyInfo.w) / jittered.y / height };
         effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2SteadyShift"), shift, 2);
     }
     effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2DepthTexel"), depthTexel, 2);
@@ -641,7 +644,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         SetTextureBoth(pDevice, 2, detail);
         SetTextureBoth(pDevice, 3, halfSize && !readMarch ? R.CloudTex[0]->mD3DTexture : nullptr);
         SetTextureBoth(pDevice, 4, halfSize ? R.CloudTex[prevAccum]->mD3DTexture : reflectionHalf);
-        SetTextureBoth(pDevice, 5, halfSize ? R.CloudTex[nextAccum]->mD3DTexture : nullptr);
+        SetTextureBoth(pDevice, 5, halfSize ? R.CloudTex[fullSize ? 0 : nextAccum]->mD3DTexture : nullptr);
         SetTextureBoth(pDevice, 6, readScene ? sceneBase : nullptr);
         SetTextureBoth(pDevice, 7, readSkyRef && R.CloudSkyRefTex ? R.CloudSkyRefTex->mD3DTexture : nullptr);
         SetTextureBoth(pDevice, 8, readMarch ? R.CloudMarchTex[0]->mD3DTexture : nullptr);
@@ -676,13 +679,13 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         pDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, blend ? TRUE : FALSE);
         pDevice->SetRenderState(D3DRS_COLORWRITEENABLE, blend ? (D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE) : 0xF);
         // VPOS counts from the target's corner: the rays start from the viewport's.
-        const bool steady = halfSize && target != sceneSurface;
+        const bool steady = halfSize && !fullSize && target != sceneSurface;
         D3DXVECTOR4 info = ProjInfo(steady ? projSteady : proj, w, h);
         info.z -= x0 * info.x;
         info.w -= y0 * info.y;
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4ProjInfo"), &info);
         // The half size passes' rays through this frame's full size pixel of each 2 x 2.
-        const bool subPixelRays = halfSize && (target == R.CloudMarchSurf[0] || target == R.CloudSurf[0]);
+        const bool subPixelRays = halfSize && !fullSize && (target == R.CloudMarchSurf[0] || target == R.CloudSurf[0]);
         const float rayOffset[2] = { subPixelRays ? (subPixel[0] - 0.5f) * 0.5f : 0.0f, subPixelRays ? (subPixel[1] - 0.5f) * 0.5f : 0.0f };
         effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2SubPixel"), rayOffset, 2);
         const ScreenQuad screenQuad = ScreenQuad::Rect(x0, y0, w, h, quadZ);
@@ -721,9 +724,12 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         drawPass("CloudsMarch", R.CloudMarchSurf[0], halfWidth, halfHeight, false, kProfCloudsMarch);
         pDevice->SetRenderTarget(1, nullptr);
         drawPass("CloudsLight", R.CloudSurf[0], halfWidth, halfHeight, false, kProfCloudsLight);
-        D3DSURFACE_DESC accumDesc = {};
-        R.CloudSurf[nextAccum]->GetDesc(&accumDesc);
-        drawPass("CloudsResolve", R.CloudSurf[nextAccum], float(accumDesc.Width), float(accumDesc.Height), false, kProfCloudsResolve);
+        if (!fullSize)
+        {
+            D3DSURFACE_DESC accumDesc = {};
+            R.CloudSurf[nextAccum]->GetDesc(&accumDesc);
+            drawPass("CloudsResolve", R.CloudSurf[nextAccum], float(accumDesc.Width), float(accumDesc.Height), false, kProfCloudsResolve);
+        }
         drawPass("CloudsComposite", sceneSurface, width, height, true, kProfCloudsComposite);
         R.nCloudAccumIndex ^= 1;
         R.nCloudAccumFrame = FrameHistory::Frame();

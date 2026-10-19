@@ -605,6 +605,10 @@ public:
     float fVolumetricCloudsReflectionBrightness = 1.0f;
     // CloudReflectionsHalfResolution: the reflections' clouds worked out at half size and laid over at full
     bool bVolumetricCloudsReflectionsHalfRes = true;
+    // [DEBUG] VolumetricCloudsFullSize (restart): the scene's clouds marched and lit at full size every frame, laid
+    // straight over the scene without the accumulation, to tell what the clouds are from what the half size
+    // and the history make of them. About four times the march's cost.
+    bool bVolumetricCloudsFullSize = false;
     // One a size: the water's reflection (1280x512) and the reflection map (1024x1024) take turns every frame, and one
     // target made again for each had the game's books of its video memory (made through the device wrapper, freed
     // past them) grow by a gigabyte in 10 s, until the streaming let the whole world go
@@ -2159,6 +2163,7 @@ public:
             IniInt("POSTFX", "AmbientOcclusionGTAOSteps", &PostFxResource::nAmbientOcclusionGTAOSteps, 4, 1, 16),
             IniFloat("POSTFX", "AmbientOcclusionGTAOTemporal", &PostFxResource::fAmbientOcclusionTemporal, 0.9f, 0.0f, 0.98f),
             IniFlag("PERFORMANCE", "AmbientOcclusionHalfResolution", &PostFxResource::bAmbientOcclusionHalfRes, 1),
+            IniFlag("DEBUG", "VolumetricCloudsFullSize", &PostFxResource::bVolumetricCloudsFullSize, 0),
         };
         ReadIniSettings(iniReader, kSettings);
 

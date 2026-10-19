@@ -530,15 +530,17 @@ private:
 
             PostFxResources.SSRHalfTex = rage::CreateEmptyRenderTarget("SSRHalfTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfSurf);
             {
-                // This frame's clouds at half size, the two accumulations at full size (Clouds.fx's CloudsResolve).
+                // This frame's clouds at half size, the two accumulations at full size (Clouds.fx's CloudsResolve); all
+                // at full size with VolumetricCloudsFullSize.
+                const int cloudDiv = PostFxResources.bVolumetricCloudsFullSize ? 1 : 2;
                 static const char* cloudNames[3] = { "CloudTex", "CloudAccumTex0", "CloudAccumTex1" };
                 for (int i = 0; i < 3; ++i)
-                    PostFxResources.CloudTex[i] = rage::CreateEmptyRenderTarget(cloudNames[i], i ? width : width / 2, i ? height : height / 2, 64, aoDesc, PostFxResources.CloudSurf[i]);
+                    PostFxResources.CloudTex[i] = rage::CreateEmptyRenderTarget(cloudNames[i], i ? width : width / cloudDiv, i ? height : height / cloudDiv, 64, aoDesc, PostFxResources.CloudSurf[i]);
                 PostFxResources.nCloudAccumFrame = 0;
                 PostFxResources.CloudSkyRefTex = rage::CreateEmptyRenderTarget("CloudSkyRefTex", 1, 1, 64, aoDesc, PostFxResources.CloudSkyRefSurf);
                 static const char* marchNames[2] = { "CloudMarchTex0", "CloudMarchTex1" };
                 for (int i = 0; i < 2; ++i)
-                    PostFxResources.CloudMarchTex[i] = rage::CreateEmptyRenderTarget(marchNames[i], width / 2, height / 2, 64, aoDesc, PostFxResources.CloudMarchSurf[i]);
+                    PostFxResources.CloudMarchTex[i] = rage::CreateEmptyRenderTarget(marchNames[i], width / cloudDiv, height / cloudDiv, 64, aoDesc, PostFxResources.CloudMarchSurf[i]);
                 // Cleared: it is only ever blended into, and a NaN left in it would stay for good.
                 if (PostFxResources.CloudSkyRefSurf && pDevice)
                     pDevice->ColorFill(PostFxResources.CloudSkyRefSurf, nullptr, D3DCOLOR_ARGB(0, 0, 0, 0));
