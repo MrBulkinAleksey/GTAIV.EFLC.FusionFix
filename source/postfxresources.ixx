@@ -743,7 +743,7 @@ public:
             SAFE_RELEASE(WetCopyTex[i]);
         }
     }
-    // The clouds at half the render size: [0] this frame's march, [1] and [2] the accumulation,
+    // The clouds: [0] this frame's at half the render size, [1] and [2] the accumulation at the full size,
     // which swap every frame; nCloudAccumIndex picks last frame's ([1 + index]).
     rage::grcRenderTargetPC* CloudTex[3] = {};
     IDirect3DSurface9* CloudSurf[3] = {};

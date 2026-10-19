@@ -530,9 +530,10 @@ private:
 
             PostFxResources.SSRHalfTex = rage::CreateEmptyRenderTarget("SSRHalfTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfSurf);
             {
+                // This frame's clouds at half size, the two accumulations at full size (Clouds.fx's CloudsResolve).
                 static const char* cloudNames[3] = { "CloudTex", "CloudAccumTex0", "CloudAccumTex1" };
                 for (int i = 0; i < 3; ++i)
-                    PostFxResources.CloudTex[i] = rage::CreateEmptyRenderTarget(cloudNames[i], width / 2, height / 2, 64, aoDesc, PostFxResources.CloudSurf[i]);
+                    PostFxResources.CloudTex[i] = rage::CreateEmptyRenderTarget(cloudNames[i], i ? width : width / 2, i ? height : height / 2, 64, aoDesc, PostFxResources.CloudSurf[i]);
                 PostFxResources.nCloudAccumFrame = 0;
                 PostFxResources.CloudSkyRefTex = rage::CreateEmptyRenderTarget("CloudSkyRefTex", 1, 1, 64, aoDesc, PostFxResources.CloudSkyRefSurf);
                 static const char* marchNames[2] = { "CloudMarchTex0", "CloudMarchTex1" };

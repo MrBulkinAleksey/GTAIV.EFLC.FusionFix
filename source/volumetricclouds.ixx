@@ -574,7 +574,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     pDevice->SetFVF(kScreenVertexFVF);
     const float quadZ = reflection ? 1.0f : 0.0f;
 
-    // Half size, accumulated, laid over the scene at full size; one full size pass straight into
+    // Half size, accumulated at full size (CloudsResolve), laid over the scene; one full size pass straight into
     // the scene while the half size targets are missing, and for the reflections.
     const bool halfSize = !reflection && R.CloudSurf[0] && R.CloudSurf[1] && R.CloudSurf[2] && R.CloudMarchSurf[0] && R.CloudMarchSurf[1];
     const int prevAccum = 1 + R.nCloudAccumIndex;
@@ -595,10 +595,19 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4PrevX"), &prevX);
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4PrevY"), &prevY);
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4PrevW"), &prevW);
-        // A sixth of each frame: with the march's offset moving on every frame, its noise
-        // averages out over about a dozen frames.
-        const D3DXVECTOR4 historyInfo(history ? 1.0f : 0.0f, 0.15f, 1.0f / halfWidth, 1.0f / halfHeight);
+        // A full size pixel's own sample comes round every fourth frame and takes a fifth, the samples around it
+        // a fiftieth in between. A third and a twentieth left the march's noise half as strong again as a sixth
+        // every frame at half size did (offline, over a still frame); this keeps the same.
+        const D3DXVECTOR4 historyInfo(history ? 1.0f : 0.0f, 0.2f, 0.02f, 0.0f);
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4History"), &historyInfo);
+    }
+    // The full size pixel of each 2 x 2 the half size rays go through this frame, all four in turn, the
+    // diagonals first.
+    static constexpr int kSubPixels[4][2] = { { 0, 0 }, { 1, 1 }, { 1, 0 }, { 0, 1 } };
+    const int* subPixel = kSubPixels[FrameHistory::Frame() & 3];
+    {
+        const D3DXVECTOR4 upsample(float(subPixel[0]), float(subPixel[1]), 1.0f / halfWidth, 1.0f / halfHeight);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4Upsample"), &upsample);
     }
 
     IDirect3DTexture9* reflectionHalf = nullptr;    // while CloudsUpscale lays it over the reflection
@@ -653,6 +662,10 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         info.z -= x0 * info.x;
         info.w -= y0 * info.y;
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4ProjInfo"), &info);
+        // The half size passes' rays through this frame's full size pixel of each 2 x 2.
+        const bool subPixelRays = halfSize && (target == R.CloudMarchSurf[0] || target == R.CloudSurf[0]);
+        const float rayOffset[2] = { subPixelRays ? (subPixel[0] - 0.5f) * 0.5f : 0.0f, subPixelRays ? (subPixel[1] - 0.5f) * 0.5f : 0.0f };
+        effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2SubPixel"), rayOffset, 2);
         const ScreenQuad screenQuad = ScreenQuad::Rect(x0, y0, w, h, quadZ);
         UINT passes = 0;
         // By handle: the effect is large address aware, a name would be taken for one.
@@ -689,7 +702,9 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         drawPass("CloudsMarch", R.CloudMarchSurf[0], halfWidth, halfHeight, false, kProfCloudsMarch);
         pDevice->SetRenderTarget(1, nullptr);
         drawPass("CloudsLight", R.CloudSurf[0], halfWidth, halfHeight, false, kProfCloudsLight);
-        drawPass("CloudsResolve", R.CloudSurf[nextAccum], halfWidth, halfHeight, false, kProfCloudsResolve);
+        D3DSURFACE_DESC accumDesc = {};
+        R.CloudSurf[nextAccum]->GetDesc(&accumDesc);
+        drawPass("CloudsResolve", R.CloudSurf[nextAccum], float(accumDesc.Width), float(accumDesc.Height), false, kProfCloudsResolve);
         drawPass("CloudsComposite", sceneSurface, width, height, true, kProfCloudsComposite);
         R.nCloudAccumIndex ^= 1;
         R.nCloudAccumFrame = FrameHistory::Frame();

@@ -1,7 +1,7 @@
 // Volumetric clouds (RenderVolumetricClouds in postfx.ixx): one layer of cloud marched from the camera at
 // half size (CloudsMarch, which keeps sums of what the light needs), lit from those sums
-// (CloudsLight, matched to the sky's brightness from CloudsSkyRef), accumulated over frames
-// (CloudsResolve) and blended into the lit scene at full size right before the fog pass
+// (CloudsLight, matched to the sky's brightness from CloudsSkyRef), accumulated over frames at full size
+// (CloudsResolve, the half size rays through each full size pixel in turn) and blended into the lit scene at full size right before the fog pass
 // (CloudsComposite), so the fog, SSR's history and everything after see them. The march and the
 // light are apart so each has ps_3_0's 512 slots to itself; the reflections take both in one pass
 // (Clouds). Wherever the scene is nearer than the cloud the ray stops at it, so clouds show over
@@ -101,11 +101,18 @@ float fMaxDistance;
 float2 vec2DepthTexel;    // one texel of the full size depth target, in texture coordinates
 // Last frame's view projection without translation or jitter, by columns (xyz) of its x, y and w, to
 // find where a direction stood then; vec4History.x is 1 when there is a history to use, .y the share
-// of this frame, .zw one texel of the half size targets.
+// a full size pixel takes of its own sample, .z of its neighbours' between them.
 float4 vec4PrevX;
 float4 vec4PrevY;
 float4 vec4PrevW;
 float4 vec4History;
+// The half size passes' rays go through one full size pixel of each 2 x 2 in turn, a different one every frame,
+// and CloudsResolve accumulates them at full size: vec2SubPixel is that pixel's offset from the 2 x 2's middle in
+// half size pixels (+-0.25; 0 in the full size passes), vec4Upsample.xy which one it is (0 or 1), .zw a half
+// size texel. Sampled at the 2 x 2's middle every frame and accumulated at half size, the clouds were laid over
+// the scene bilinearly at half its resolution, softer than everything around them.
+float2 vec2SubPixel;
+float4 vec4Upsample;
 float fStratus;           // 0 separate heaps of cloud, 1 a sheet: the weather's overcast
 float fEvolution;         // how far the detail has drifted up through itself, so the billows change
 float fTranslucency;      // how much less the thinnest cloud hides of what is behind it
@@ -160,7 +167,7 @@ float SceneDistance(float2 uv, float rayScale)
 
 float3 ViewRay(float2 pixel)
 {
-    return float3((pixel + 0.5) * vec4ProjInfo.xy + vec4ProjInfo.zw, 1.0);
+    return float3((pixel + 0.5 + vec2SubPixel) * vec4ProjInfo.xy + vec4ProjInfo.zw, 1.0);
 }
 
 // Interleaved gradient noise in [0, 1), fixed per pixel.
@@ -888,12 +895,33 @@ float4 SampleCatmullRom(sampler2D tex, float2 uv, float2 texel)
     return sum / weight;
 }
 
-// Accumulates the half size clouds over frames. The clouds are kilometres away, so last frame's
-// pixel is found by the camera's turn alone, as a direction; its colour is held within the range
-// of this frame's 3x3 neighbourhood, so drifting clouds and a moving camera leave no trails.
+// Accumulates the half size clouds over frames at full size. The clouds are kilometres away, so last frame's
+// pixel is found by the camera's turn alone, as a direction; its colour is held within the range of this
+// frame's 3x3 half size neighbourhood, so drifting clouds and a moving camera leave no trails. The full size
+// pixel whose ray this frame's half size sample took (vec4Upsample.xy) takes vec4History.y of it; the other
+// three take vec4History.z of the samples around them, weighted by how far each stood, which keeps them
+// from going stale while their own turn comes round.
 float4 CloudsResolve_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
 {
-    float4 current = tex2Dlod(CurrentTex, float4(uv, 0, 0));
+    float2 cell = floor(vpos * 0.5);
+    float2 offset = (vpos - cell * 2.0 - vec4Upsample.xy) * 0.5;  // this pixel from its cell's sample, in half size pixels
+    float2 centre = (cell + 0.5) * vec4Upsample.zw;
+    float4 own = tex2Dlod(CurrentTex, float4(centre, 0, 0));
+    float4 lo = own, hi = own, between = 0.0;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            float4 s = tex2Dlod(CurrentTex, float4(centre + float2(x, y) * vec4Upsample.zw, 0, 0));
+            lo = min(lo, s);
+            hi = max(hi, s);
+            between += s * (max(1.0 - abs(x - offset.x), 0.0) * max(1.0 - abs(y - offset.y), 0.0));
+        }
+    }
+    bool hit = all(abs(offset) < 0.25);
+    float4 current = hit ? own : between;
     [branch]
     if (vec4History.x <= 0.0)
         return current;
@@ -906,23 +934,11 @@ float4 CloudsResolve_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     if (any(prev < 0.0) || any(prev > 1.0))
         return current;
 
-    float4 lo = current, hi = current;
-    [unroll]
-    for (int y = -1; y <= 1; ++y)
-    {
-        [unroll]
-        for (int x = -1; x <= 1; ++x)
-        {
-            float4 s = tex2Dlod(CurrentTex, float4(uv + float2(x, y) * vec4History.zw, 0, 0));
-            lo = min(lo, s);
-            hi = max(hi, s);
-        }
-    }
-    float4 history = SampleCatmullRom(HistoryTex, prev, vec4History.zw);
+    float4 history = SampleCatmullRom(HistoryTex, prev, vec2DepthTexel);
     // A NaN in the history would stay there as long as the camera keeps no cut
     float h = dot(history, 1.0);
     history = (h >= -65504.0 && h < 65504.0) ? clamp(history, lo, hi) : current;
-    return lerp(history, current, vec4History.y);
+    return lerp(history, current, hit ? vec4History.y : vec4History.z);
 }
 
 // Lays the accumulated clouds over the scene at full size. Where the pixel is something nearer than
