@@ -35,6 +35,116 @@ namespace SkyTrace
     constexpr UINT kVSFirst = 64, kVSCount = 13, kPSFirst = 64, kPSCount = 24, kSamplers = 6;
     constexpr D3DSAMPLERSTATETYPE kStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER };
 
+    // The moon pass against the plain sky of the same call: everything the two draws read, compared exactly, the
+    // registers and states that differ written for the first few calls with a moon pass. The moon technique's
+    // shader matches the plain one's clouds line for line, yet the clouds change where it draws.
+    uint32_t frame = 0, lines = 0;
+
+    constexpr UINT kAllConstants = 96;
+    constexpr DWORD kAllSamplers = 8;
+    constexpr D3DSAMPLERSTATETYPE kAllSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW, D3DSAMP_BORDERCOLOR,
+        D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_MIPMAPLODBIAS, D3DSAMP_MAXMIPLEVEL, D3DSAMP_MAXANISOTROPY,
+        D3DSAMP_SRGBTEXTURE };
+    constexpr D3DRENDERSTATETYPE kAllRenderStates[] = { D3DRS_ZENABLE, D3DRS_ZWRITEENABLE, D3DRS_ZFUNC, D3DRS_ALPHATESTENABLE,
+        D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP, D3DRS_SEPARATEALPHABLENDENABLE, D3DRS_COLORWRITEENABLE,
+        D3DRS_COLORWRITEENABLE1, D3DRS_SRGBWRITEENABLE, D3DRS_STENCILENABLE, D3DRS_CULLMODE, D3DRS_SCISSORTESTENABLE, D3DRS_CLIPPLANEENABLE,
+        D3DRS_FILLMODE };
+    struct FullState
+    {
+        float vsc[kAllConstants * 4] = {};
+        float psc[kAllConstants * 4] = {};
+        BOOL psb[16] = {};
+        void* texture[kAllSamplers] = {};
+        DWORD samplers[kAllSamplers][std::size(kAllSamplerStates)] = {};
+        DWORD render[std::size(kAllRenderStates)] = {};
+        void* target[2] = {};
+    };
+    FullState plainSky;
+    bool plainSkyRead = false;
+    int moonCompares = 0;
+
+    void ReadFull(IDirect3DDevice9* device, FullState& s)
+    {
+        device->GetVertexShaderConstantF(0, s.vsc, kAllConstants);
+        device->GetPixelShaderConstantF(0, s.psc, kAllConstants);
+        device->GetPixelShaderConstantB(0, s.psb, 16);
+        for (DWORD i = 0; i < kAllSamplers; ++i)
+        {
+            IDirect3DBaseTexture9* texture = nullptr;
+            device->GetTexture(i, &texture);
+            s.texture[i] = texture;
+            if (texture)
+                texture->Release();
+            for (size_t j = 0; j < std::size(kAllSamplerStates); ++j)
+                device->GetSamplerState(i, kAllSamplerStates[j], &s.samplers[i][j]);
+        }
+        for (size_t j = 0; j < std::size(kAllRenderStates); ++j)
+            device->GetRenderState(kAllRenderStates[j], &s.render[j]);
+        for (DWORD i = 0; i < 2; ++i)
+        {
+            IDirect3DSurface9* target = nullptr;
+            device->GetRenderTarget(i, &target);
+            s.target[i] = target;
+            if (target)
+                target->Release();
+        }
+    }
+
+    void CompareMoon(const FullState& a, const FullState& b)
+    {
+        std::string text;
+        char buf[256];
+        for (UINT r = 0; r < kAllConstants; ++r)
+        {
+            if (std::memcmp(a.vsc + r * 4, b.vsc + r * 4, 16) != 0)
+            {
+                std::snprintf(buf, sizeof(buf), " vc%u (%g %g %g %g)/(%g %g %g %g);", r, a.vsc[r * 4], a.vsc[r * 4 + 1], a.vsc[r * 4 + 2],
+                              a.vsc[r * 4 + 3], b.vsc[r * 4], b.vsc[r * 4 + 1], b.vsc[r * 4 + 2], b.vsc[r * 4 + 3]);
+                text += buf;
+            }
+        }
+        for (UINT r = 0; r < kAllConstants; ++r)
+        {
+            if (std::memcmp(a.psc + r * 4, b.psc + r * 4, 16) != 0)
+            {
+                std::snprintf(buf, sizeof(buf), " pc%u (%g %g %g %g)/(%g %g %g %g);", r, a.psc[r * 4], a.psc[r * 4 + 1], a.psc[r * 4 + 2],
+                              a.psc[r * 4 + 3], b.psc[r * 4], b.psc[r * 4 + 1], b.psc[r * 4 + 2], b.psc[r * 4 + 3]);
+                text += buf;
+            }
+        }
+        for (UINT r = 0; r < 16; ++r)
+        {
+            if (a.psb[r] != b.psb[r])
+            {
+                std::snprintf(buf, sizeof(buf), " pb%u %d/%d;", r, a.psb[r], b.psb[r]);
+                text += buf;
+            }
+        }
+        for (DWORD i = 0; i < kAllSamplers; ++i)
+        {
+            std::snprintf(buf, sizeof(buf), " s%lu %p/%p", static_cast<unsigned long>(i), a.texture[i], b.texture[i]);
+            text += buf;
+            for (size_t j = 0; j < std::size(kAllSamplerStates); ++j)
+            {
+                std::snprintf(buf, sizeof(buf), " %lu/%lu", static_cast<unsigned long>(a.samplers[i][j]), static_cast<unsigned long>(b.samplers[i][j]));
+                text += buf;
+            }
+            text += ";";
+        }
+        text += " render";
+        for (size_t j = 0; j < std::size(kAllRenderStates); ++j)
+        {
+            std::snprintf(buf, sizeof(buf), " %lu/%lu", static_cast<unsigned long>(a.render[j]), static_cast<unsigned long>(b.render[j]));
+            text += buf;
+        }
+        std::snprintf(buf, sizeof(buf), "; targets %p %p / %p %p", a.target[0], a.target[1], b.target[0], b.target[1]);
+        text += buf;
+        FusionLog::Write("SkyTrace", "MoonVsPlain", "frame %u plain/moon (sampler states: address u v w, border, mag min mip, lod bias, max mip, anisotropy, srgb; "
+                         "render: z, zwrite, zfunc, alphatest, blend, src, dest, op, separate alpha, write, write1, srgb write, stencil, cull, scissor, clip planes, fill):%s\n",
+                         frame, text.c_str());
+        ++lines;
+    }
+
     constexpr D3DRENDERSTATETYPE kRenderStates[] = { D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_COLORWRITEENABLE,
                                                      D3DRS_ZENABLE, D3DRS_ZWRITEENABLE, D3DRS_ALPHATESTENABLE };
 
@@ -56,7 +166,6 @@ namespace SkyTrace
     DrawState last[kSlots];
     bool seen[kSlots] = {};
     int drawInSky = 0;
-    uint32_t frame = 0, lines = 0;
 
     // Ctrl+Shift+F6 saves what the sky's calls of the next frame leave in the target: the sky as the game drew it,
     // before the fog, the post effects and the upscaler, to set beside a screenshot taken at the same time.
@@ -180,6 +289,23 @@ namespace SkyTrace
         ++lines;
     }
 
+    void SaveTarget(IDirect3DDevice9* device, const char* what)
+    {
+        IDirect3DSurface9* target = nullptr;
+        if (FAILED(device->GetRenderTarget(0, &target)) || !target)
+            return;
+        D3DSURFACE_DESC desc{};
+        target->GetDesc(&desc);
+        char name[64];
+        std::snprintf(name, sizeof(name), "SkyCapture%d_%d_%s", captureCount, captureCall, what);
+        const auto path = FusionLog::PathFor(name, L".png");
+        const HRESULT hr = D3DXSaveSurfaceToFileW(path.c_str(), D3DXIFF_PNG, target, nullptr, nullptr);
+        FusionLog::Write("SkyTrace", "Capture", "capture %d call %d frame %u %s: target %p %ux%u fmt %lu -> %s (hr %08lx)\n", captureCount,
+                         captureCall, frame, what, static_cast<void*>(target), desc.Width, desc.Height, static_cast<unsigned long>(desc.Format),
+                         path.filename().string().c_str(), static_cast<unsigned long>(hr));
+        target->Release();
+    }
+
     void OnDraw(IDirect3DDevice9* device)
     {
         // Some 40000 lines are plenty to turn the camera around in; the log stops there.
@@ -188,6 +314,23 @@ namespace SkyTrace
         int slot = drawInSky++;
         if (slot >= kSlots)
             return;
+        if (slot == 1)
+        {
+            ReadFull(device, plainSky);
+            plainSkyRead = true;
+        }
+        else if (slot == 2)
+        {
+            if (plainSkyRead && moonCompares < 40)
+            {
+                FullState moon;
+                ReadFull(device, moon);
+                CompareMoon(plainSky, moon);
+                ++moonCompares;
+            }
+            if (captureArmed)
+                SaveTarget(device, "beforeMoon");
+        }
         DrawState s;
         Read(device, s);
         Write(slot, s, seen[slot] ? &last[slot] : nullptr);
@@ -266,24 +409,13 @@ export namespace SkyTrace
     void End()
     {
         bInSky = false;
+        plainSkyRead = false;
         if (!captureArmed)
             return;
         --captureArmed;
-        auto device = RageDirect3DDevice9::GetRuntimeDevice();
-        IDirect3DSurface9* target = nullptr;
-        if (!device || FAILED(device->GetRenderTarget(0, &target)) || !target)
-            return;
-        D3DSURFACE_DESC desc{};
-        target->GetDesc(&desc);
-        const int call = captureCall++;
-        char name[64];
-        std::snprintf(name, sizeof(name), "SkyCapture%d_%d", captureCount, call);
-        const auto path = FusionLog::PathFor(name, L".png");
-        const HRESULT hr = D3DXSaveSurfaceToFileW(path.c_str(), D3DXIFF_PNG, target, nullptr, nullptr);
-        FusionLog::Write("SkyTrace", "Capture", "capture %d call %d frame %u: target %p %ux%u fmt %lu -> %s (hr %08lx)\n", captureCount, call,
-                         frame, static_cast<void*>(target), desc.Width, desc.Height, static_cast<unsigned long>(desc.Format),
-                         path.filename().string().c_str(), static_cast<unsigned long>(hr));
-        target->Release();
+        if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
+            SaveTarget(device, "after");
+        ++captureCall;
     }
 }
 
