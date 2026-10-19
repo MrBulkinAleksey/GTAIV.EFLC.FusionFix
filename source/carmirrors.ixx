@@ -34,11 +34,14 @@ namespace CarMirrors
     static SafetyHookInline phaseBuildHook;
     static SafetyHookInline phaseVisibilityHook;
     static SafetyHookInline phaseViewHook;
+    static SafetyHookMid waterGateHooks[2];
+    static SafetyHookMid phaseWaterHook;
 
     static bool reverse = false;            // CarMirrorsReverse (hidden): the corners the other way round, if the quad is culled
     static bool rounded = true;             // CarMirrorsRounded (hidden): 0 draws the plain quad, not cut to the glass's outline
     static bool byDrawnCar = true;          // CarMirrorsByDrawnCar (hidden): 0 keeps the update's corners, no dark glass
     static float zoomOut = 1.5f;            // CarMirrorsZoomOut (hidden): how much wider than a flat mirror they show, 1 flat
+    static bool water = true;               // CarMirrorsWater (hidden): 0 leaves the water out of the reflection
     // The game puts the quad along n by a float its quad code reads (0.035 m on PC, 0.0125 with shaders.ixx's Xbox
     // value): read where the code points as the corners are placed, which lands the quad 5 mm in front of the glass.
     // Taken as 0.035, the quad sat 1.75 cm behind the glass, inside the mirror's housing.
@@ -395,11 +398,36 @@ namespace CarMirrors
         if (++timedFrames < 300)
             return;
         FusionLog::Write("CarMirrors", "Cost", "mirror phase CPU per frame: draw list %.3f ms, visibility %.3f ms; outdoor scans %u of %u frames; "
-            "quads drawn %u, by the draw list's car %u, dark %u\n",
-            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark);
-        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = 0;
+            "quads drawn %u, by the draw list's car %u, dark %u; water queued %u\n",
+            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark, waterQueued);
+        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = 0;
         buildMs = visibilityMs = 0.0;
         timedFrames = 0;
+    }
+
+    // The phase's flags (+0x8E8, the draw list takes a copy as it is made): 0x10 has the scan gather the water seen
+    // in the phase's list (CE 0xB1E810 -> 0xAD7D80) and the water's draw (CE 0xAD7EF0) draw it; the mirror phase has
+    // it not. Set from the car mirror's scan to its draw list's end, with the water queued in that list (PhaseWater).
+    static constexpr uint32_t PhaseWaterFlag = 0x10;
+    static uintptr_t waterFlagPhase = 0;      // the phase the flag was set on by us, 0 none
+    static void* waterFunction = nullptr;     // CE 0xAD7EF0, cdecl(the phase's list)
+    static uint32_t waterQueued = 0;
+
+    static void SetWaterFlag(uintptr_t phase)
+    {
+        auto& flags = *reinterpret_cast<uint32_t*>(phase + 0x8E8);
+        if (flags & PhaseWaterFlag)
+            return; // the game's own
+        flags |= PhaseWaterFlag;
+        waterFlagPhase = phase;
+    }
+
+    static void ClearWaterFlag()
+    {
+        if (!waterFlagPhase)
+            return;
+        *reinterpret_cast<uint32_t*>(waterFlagPhase + 0x8E8) &= ~PhaseWaterFlag;
+        waterFlagPhase = 0;
     }
 
     // CRenderPhaseMirrorReflection: its draw list (vtable slot 8, CE 0xD76950) and its visibility (CE 0xD77430).
@@ -416,6 +444,7 @@ namespace CarMirrors
             callback.Queue(reinterpret_cast<const void*>(&MirrorPassTint), 1);
         }
         phaseBuildHook.unsafe_thiscall<void>(phase);
+        ClearWaterFlag();
         if (usedThisFrame)
         {
             callback.Queue(reinterpret_cast<const void*>(&MirrorPassTint), 0);
@@ -479,29 +508,57 @@ namespace CarMirrors
     }
 
     // CRenderPhaseWaterReflection's visibility (vtable slot 3, CE 0xD77550): the same scan from the phase's own
-    // viewport, with no interior gate; it does nothing while a mirror is on.
+    // viewport, with no interior gate.
     static void (__fastcall* waterVisibility)(uintptr_t phase, void*) = nullptr;
+
+    // The water reflection's visibility (CE 0xD77550) and draw list (CE 0xD76C10) are skipped while a mirror is on
+    // (0x166DA20 == 1): a bathroom mirror has no water to see. A car's mirror is on all the time in first person, and
+    // the water by the road lost its reflection (and the mirrors the water). Each gate's je, right after the compare,
+    // is not taken while the mirror on is the car's: a flag in the compare's result, not the mirror flag itself,
+    // which the render thread reads as it draws the mirror's quad.
+    static void WaterGate(SafetyHookContext& regs)
+    {
+        if (quadsThisFrame)
+            regs.eflags &= ~0x40u; // ZF
+    }
+
     // The mirror's scan runs only from an interior's room: it skips unless the phase's scene start (+0x940) has an
     // interior (+0x30) and a room above 0 (+0x38), as a bathroom mirror's has. Outdoors the car mirror's phase then
     // had nothing to draw (0.000 ms), so there it takes the water's scan, which starts from the phase's viewport like
-    // the main camera, with the mirror flag down for the call. The water reflection is left out while a mirror is on.
+    // the main camera (its mirror gate let through by WaterGate), gathering the water too.
     static void __fastcall PhaseVisibility(uintptr_t phase, void*)
     {
+        ClearWaterFlag();
         const double start = usedThisFrame ? NowMs() : 0.0;
         const auto scene = *reinterpret_cast<const uintptr_t*>(phase + 0x940);
         const bool inRoom = scene && *reinterpret_cast<const uintptr_t*>(scene + 0x30) &&
                             *reinterpret_cast<const int32_t*>(scene + 0x38) > 0;
         if (usedThisFrame && !inRoom && waterVisibility)
         {
-            *mirrorOn = 0;
+            if (water && waterFunction && phaseWaterHook)
+                SetWaterFlag(phase);
+            const bool gated = !waterGateHooks[0];
+            if (gated) *mirrorOn = 0;
             waterVisibility(phase, nullptr);
-            *mirrorOn = 1;
+            if (gated) *mirrorOn = 1;
             ++outdoorScans;
         }
         else
             phaseVisibilityHook.unsafe_thiscall<void>(phase);
         if (usedThisFrame)
             visibilityMs += NowMs() - start;
+    }
+
+    // In the mirror phase's draw list, after its entities and before what is drawn with blending (CE 0xC0FA50): the
+    // water, as the main scene queues it after its own (the stencil states it sets round it there left out: the
+    // mirror's pass reads no stencil after).
+    static void PhaseWater(SafetyHookContext& regs)
+    {
+        const uintptr_t phase = regs.edi;
+        if (!waterFlagPhase || phase != waterFlagPhase)
+            return;
+        callback.Queue(waterFunction, *reinterpret_cast<const uint32_t*>(phase + 0x938));
+        ++waterQueued;
     }
 
     // c152 for mirror.fx (mirror_car_shape.patch): x 1 cuts the quad to the glass's outline, y the zoom out - 1 widens
@@ -607,12 +664,13 @@ public:
                 CarMirrors::rounded = ini.ReadInteger("MISC", "CarMirrorsRounded", 1) != 0;
                 CarMirrors::byDrawnCar = ini.ReadInteger("MISC", "CarMirrorsByDrawnCar", 1) != 0;
                 CarMirrors::zoomOut = std::clamp(ini.ReadFloat("MISC", "CarMirrorsZoomOut", 1.5f), 1.0f, 2.5f);
+                CarMirrors::water = ini.ReadInteger("MISC", "CarMirrorsWater", 1) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
                 CarMirrors::interiorAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::interiorAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimY", -3.0f), -30.0f, 30.0f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
-                    int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut,
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
+                    int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut, int(CarMirrors::water),
                     CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
             };
             CIniReader iniReader("");
@@ -679,8 +737,19 @@ public:
                 // jmp +2 (over xor edx, edx, a jump's target, left alone)
                 auto queue = hook::pattern("C7 42 08 ? ? ? ? 8B 87 38 09 00 00 89 42 0C EB 02");
                 for (size_t i = 0; i < queue.size(); ++i)
-                    if (*queue.get(i).get<void*>(3) == quad.get_first(0))
-                        CarMirrors::queueHooks.emplace_back(safetyhook::create_mid(queue.get(i).get<void>(13), CarMirrors::QueueQuad));
+                {
+                    if (*queue.get(i).get<void*>(3) != quad.get_first(0))
+                        continue;
+                    CarMirrors::queueHooks.emplace_back(safetyhook::create_mid(queue.get(i).get<void>(13), CarMirrors::QueueQuad));
+                    // the water's command the same way, made right before (CE 0xADD4C2 before 0xADD519)
+                    const auto at = reinterpret_cast<uintptr_t>(queue.get(i).get<void>(0));
+                    for (size_t j = 0; j < queue.size() && !CarMirrors::waterFunction; ++j)
+                    {
+                        const auto before = reinterpret_cast<uintptr_t>(queue.get(j).get<void>(0));
+                        if (before < at && at - before < 0x80)
+                            CarMirrors::waterFunction = *queue.get(j).get<void*>(3);
+                    }
+                }
             }
             // in it: movss xmm2, [the offset] / movaps xmm1, xmm4 / mulss xmm1, xmm3 (the pattern shaders.ixx patches)
             auto offset = hook::pattern("F3 0F 10 15 ? ? ? ? 0F 28 CC F3 0F 59 CB");
@@ -689,7 +758,20 @@ public:
             // cmp byte [mirror on], 1 / push esi / mov esi, ecx / je / mov eax, [..] / test eax, eax / je / mov al, [eax+22] / and al, 1 / jne
             auto water = hook::pattern("80 3D ? ? ? ? 01 56 8B F1 74 ? A1 ? ? ? ? 85 C0 74 ? 8A 40 22 24 01 75");
             if (!water.empty() && *water.get_first<uint8_t*>(2) == CarMirrors::mirrorOn)
+            {
                 CarMirrors::waterVisibility = water.get_first<void(__fastcall)(uintptr_t, void*)>(0);
+                CarMirrors::waterGateHooks[0] = safetyhook::create_mid(water.get_first(10), CarMirrors::WaterGate);
+            }
+            // the water reflection's draw list: push ebp / mov ebp, esp / and esp, -10 / sub esp, 1C / cmp byte [mirror on], 1 /
+            // push esi / mov esi, ecx / je
+            auto waterBuild = hook::pattern("55 8B EC 83 E4 F0 83 EC 1C 80 3D ? ? ? ? 01 56 8B F1 0F 84");
+            if (!waterBuild.empty() && *waterBuild.get_first<uint8_t*>(11) == CarMirrors::mirrorOn)
+                CarMirrors::waterGateHooks[1] = safetyhook::create_mid(waterBuild.get_first(19), CarMirrors::WaterGate);
+            // in the mirror phase's draw list: push [edi+938] / call (what is drawn with blending) / add esp, 4 /
+            // cmp byte [clip plane on], 0 / je
+            auto phaseWater = hook::pattern("FF B7 38 09 00 00 E8 ? ? ? ? 83 C4 04 80 3D ? ? ? ? 00 74");
+            if (!phaseWater.empty() && CarMirrors::waterFunction && CarMirrors::callback.add)
+                CarMirrors::phaseWaterHook = safetyhook::create_mid(phaseWater.get_first(0), CarMirrors::PhaseWater);
             FusionLog::Write("CarMirrors", "Init", "%u mirror glasses in the table; phase timing %s; outdoor scan %s; quad by the drawn car %s, %u draw list sites\n",
                 uint32_t(std::size(CarMirrorTable)), timeBuild && timeVisibility ? "on" : "partly off",
                 CarMirrors::waterVisibility ? "found" : "not found (the mirrors stay empty outdoors)",
@@ -697,6 +779,9 @@ public:
             FusionLog::Write("CarMirrors", "Init", "the mirror pass's glass tint %s; the plane before the reflected view %s; wider reflection %s\n",
                 CarMirrors::callback.add ? "on" : "off (the game's callback command was not found)",
                 CarMirrors::phaseViewHook ? "on" : "off (not found)", CarMirrors::perspective ? "on" : "off (not found)");
+            FusionLog::Write("CarMirrors", "Init", "water reflection gates %s/%s; water in the mirror %s\n",
+                CarMirrors::waterGateHooks[0] ? "on" : "off", CarMirrors::waterGateHooks[1] ? "on" : "off",
+                CarMirrors::phaseWaterHook ? "on" : "off (not found)");
             if (CarMirrors::quadOffset)
                 FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
         };
