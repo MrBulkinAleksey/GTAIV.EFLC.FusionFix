@@ -837,6 +837,16 @@ namespace CarMirrors
         }
     }
 
+    // The entities' render buckets (the draw's second argument, 0x307 at 0xD76B8F) leave out bit 8, bucket 4, which
+    // the water reflection's 0x90D has: the trees' leaves, the car mirror showed bare branches. Given to the car's.
+    static SafetyHookMid bucketHook;
+
+    static void MirrorBuckets(SafetyHookContext& regs)
+    {
+        if (usedThisFrame)
+            *reinterpret_cast<uint32_t*>(regs.esp) |= 8;
+    }
+
     // The coronas (CE 0xC106F0: CE 0xC85080 the coronas, CE 0xD8C8E0 the lens flares, clip planes off round them) are
     // drawn for draw lists with flag 8, which the mirror phase has not; it queues them before its entities (0xD76AEC),
     // which drawn after would cover them (they write no depth). The car mirror's pass queues them again after what is
@@ -1217,6 +1227,9 @@ public:
                 CarMirrors::techniqueHooks[0] = safetyhook::create_mid(mirrorEntities.get_first(0), CarMirrors::PushReflectionTechniques);
                 CarMirrors::techniqueHooks[1] = safetyhook::create_mid(mirrorEntities.get_first(45), CarMirrors::PopReflectionTechniques);
             }
+            // push 0x307 (the buckets, now on the stack) / push [edi + 0x938] (hooked)
+            if (!mirrorEntities.empty())
+                CarMirrors::bucketHook = safetyhook::create_mid(mirrorEntities.get_first(34), CarMirrors::MirrorBuckets);
             FusionLog::Write("CarMirrors", "Init", "%u mirror glasses in the table; phase timing %s; outdoor scan %s; quad by the drawn car %s, %u draw list sites\n",
                 uint32_t(std::size(CarMirrorTable)), timeBuild && timeVisibility ? "on" : "partly off",
                 CarMirrors::waterVisibility ? "found" : "not found (the mirrors stay empty outdoors)",
@@ -1230,9 +1243,9 @@ public:
                 CarMirrors::phaseWaterHook ? "on" : "off (not found)", CarMirrors::gatherHook ? "on" : "off (not found)",
                 CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)", CarMirrors::waterFlagHook ? "on" : "off (not found)",
                 CarMirrors::waterPassHook ? "on" : "off (not found)");
-            FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s; its coronas %s\n",
-                CarMirrors::techniqueHooks[1] ? "on" : "off (not found)", CarMirrors::skyHooks[2] ? "on" : "off (not found)",
-                CarMirrors::coronaHooks[2] ? "on" : "off (not found)");
+            FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s; its coronas %s; "
+                "the trees' leaves %s\n", CarMirrors::techniqueHooks[1] ? "on" : "off (not found)", CarMirrors::skyHooks[2] ? "on" : "off (not found)",
+                CarMirrors::coronaHooks[2] ? "on" : "off (not found)", CarMirrors::bucketHook ? "on" : "off (not found)");
             if (CarMirrors::quadOffset)
                 FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
         };
