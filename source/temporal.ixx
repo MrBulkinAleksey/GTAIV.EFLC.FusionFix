@@ -411,10 +411,11 @@ public:
         auto since = PresentFrame.load() - resolved;
 
         // Menus: only while the scene behind them is resolved every frame, as in the graphics settings, where without
-        // the jitter DLSS and FSR had nothing to add and the scene stayed at the render size. A menu without the scene,
-        // the map, would only shake with the camera's projection: it stops the frame after the last resolve.
+        // the jitter DLSS and FSR had nothing to add and the scene stayed at the render size. A menu without the scene
+        // stops the frame after the last resolve. Never on the map screen (3): the game still resolves a scene there,
+        // and the map, drawn with the camera's projection, shook with FSR.
         if (CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive)
-            return since < 2;
+            return since < 2 && !(pMenuTab && *pMenuTab == 3);
         return since < 10;
     }
 
