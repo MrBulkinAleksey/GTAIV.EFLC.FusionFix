@@ -12,6 +12,7 @@ import natives;
 import settings;
 import inireload;
 import firstperson;
+import coronas;
 
 // Real reflections in the player car's mirrors, from the driver's seat in first person (Car Mirrors in the menu).
 // The game has planar mirrors for interiors (bathrooms): each frame CE 0xB59DD0 asks 0xA0F820 for the nearest
@@ -869,10 +870,40 @@ namespace CarMirrors
             regs.eflags |= 0x40u; // ZF: the je over the flares taken
     }
 
+    // The coronas' vertex shader (deferred_lighting VS11) hides a corona whose depth is behind the depth texture's
+    // (vs s0) round its spot on screen: the main view's, which at the mirror's pixels is the car's inside, every
+    // corona hidden. A 1 x 1 texture far away takes its place for the mirror's; the mirror's own depth buffer still
+    // hides them behind what it drew.
+    static IDirect3DTexture9* farDepth = nullptr;
+
+    static void BindFarDepth()
+    {
+        auto device = rage::grcDevice::GetD3DDevice();
+        if (!device)
+            return;
+        if (!farDepth)
+        {
+            if (FAILED(RageDirect3DDevice9::RealDevice(device)->CreateTexture(1, 1, 1, 0, D3DFMT_R32F, D3DPOOL_MANAGED, &farDepth, nullptr)) || !farDepth)
+            {
+                farDepth = nullptr;
+                return;
+            }
+            D3DLOCKED_RECT locked{};
+            if (SUCCEEDED(farDepth->LockRect(0, &locked, nullptr, 0)))
+            {
+                *static_cast<float*>(locked.pBits) = 1e6f;
+                farDepth->UnlockRect(0);
+            }
+        }
+        RageDirect3DDevice9::SetTextureBoth(device, D3DVERTEXTEXTURESAMPLER0, farDepth);
+    }
+
     static void __cdecl MirrorCoronasDraw(uint32_t)
     {
         inMirrorCoronas = true;
+        CoronaRender::pBeforeDraw = &BindFarDepth;
         reinterpret_cast<void (__cdecl*)()>(coronaFunction)();
+        CoronaRender::pBeforeDraw = nullptr;
         inMirrorCoronas = false;
         ++coronaDraws;
     }

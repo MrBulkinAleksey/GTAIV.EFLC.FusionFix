@@ -233,6 +233,10 @@ namespace CoronaRender
     struct Vertex { float x, y, z, nx, ny, nz; uint32_t colour; float u, v; };
     static_assert(sizeof(Vertex) == 0x24);
 
+    // Run before each batch is drawn, the technique set: a pass from another view puts its own depth for the
+    // coronas' visibility test in (carmirrors.ixx)
+    export void (*pBeforeDraw)() = nullptr;
+
     int32_t nMode = 1;                      // 0: the game's, 1: ours without what is out of view, 2: ours, all of them
     float* pCamera = nullptr;               // CE 0x128e340, the game camera's position, where it looks 8 floats before
     uint8_t* pFunction = nullptr;
@@ -505,6 +509,8 @@ namespace CoronaRender
                 memcpy(v, quad, sizeof(quad));
                 *ppVertex = v + 6;
             }
+            if (pBeforeDraw)
+                pBeforeDraw();
             End();
             first += n;
         }
