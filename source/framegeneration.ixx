@@ -69,7 +69,7 @@ namespace
     bool bAsyncCompute = true;      // FrameGenerationAsyncCompute: the helper generates on its compute queue
     bool bDeferredBroken = false;   // the game's Present did not come through the device: not deferred any more
 
-    // HelperPresent in [ANTIALIASING] (experimental): with DLAA or FSR the helper presents the frames through a flip model
+    // HelperPresent in [ANTIALIASING], 1 by default: with DLAA or FSR the helper presents the frames through a flip model
     // swap chain on a window of its own over the game's, the game's Present is left out. With the frame generation it also
     // generates the frames and shows them, the rendered frame FrameGenerationDelay of the frame time after the generated one,
     // paced on a thread of its own: nothing comes back to the game, which neither waits for Generate nor presents inside its
@@ -895,7 +895,7 @@ namespace
         bDeferredSetting = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationDeferred", 1) != 0;
         bAsyncCompute = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationAsyncCompute", 1) != 0;
         fShowGeneratedAt = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FrameGenerationShowGeneratedAt", 0.2f), 0.0f, 0.9f);
-        auto helperPresent = std::clamp(iniReader.ReadInteger("ANTIALIASING", "HelperPresent", 0), 0, 2);
+        auto helperPresent = std::clamp(iniReader.ReadInteger("ANTIALIASING", "HelperPresent", 1), 0, 2);
         bHelperPresent = helperPresent != 0;
         bAmdPacing = helperPresent == 1;
         // The aims may have changed
