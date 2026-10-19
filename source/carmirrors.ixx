@@ -36,12 +36,15 @@ namespace CarMirrors
     static SafetyHookInline phaseViewHook;
     static SafetyHookMid waterGateHooks[2];
     static SafetyHookMid phaseWaterHook;
+    static SafetyHookMid gatherHook;
+    static SafetyHookMid waterTargetHooks[2];
 
     static bool reverse = false;            // CarMirrorsReverse (hidden): the corners the other way round, if the quad is culled
     static bool rounded = true;             // CarMirrorsRounded (hidden): 0 draws the plain quad, not cut to the glass's outline
     static bool byDrawnCar = true;          // CarMirrorsByDrawnCar (hidden): 0 keeps the update's corners, no dark glass
     static float zoomOut = 1.5f;            // CarMirrorsZoomOut (hidden): how much wider than a flat mirror they show, 1 flat
     static bool water = true;               // CarMirrorsWater (hidden): 0 leaves the water out of the reflection
+    static bool waterReflection = true;     // CarMirrorsWaterReflection (hidden): 0 keeps the game's rule, no water reflection while a mirror is on
     // The game puts the quad along n by a float its quad code reads (0.035 m on PC, 0.0125 with shaders.ixx's Xbox
     // value): read where the code points as the corners are placed, which lands the quad 5 mm in front of the glass.
     // Taken as 0.035, the quad sat 1.75 cm behind the glass, inside the mirror's housing.
@@ -80,8 +83,11 @@ namespace CarMirrors
     static uint32_t timedFrames = 0;
     static uint32_t outdoorScans = 0;      // frames the outdoor scan ran for the mirror
     static uint32_t waterQueued = 0;       // the water's commands put in the mirror phase's draw list
-    static uint32_t waterQuads = 0;        // the water's quads the scan gathered in the mirror phase's list
-    static uintptr_t (__cdecl* waterLists)() = nullptr; // CE 0xAD61A0: the main thread's water lists, quads of list i at +0xFEC + 4i
+    static uint32_t waterGathered = 0, waterRolledBack = 0;
+    static uint32_t mirrorWaterItems[3]{}, mainWaterItems[3]{}, drawnWaterItems[3]{};
+    static uint32_t waterFill[3]{};        // the most of each buffer the frame used, after the mirror's
+    static uint32_t waterDrawn = 0;        // the mirror pass's water draws (render thread)
+    static const uint32_t* waterTotals[2]{}; // CE 0x1550EAC, 0x154E300: water.dat's quads and triangles
     // The car, for the draw list's snapshots and the phase's plane.
     static std::atomic<uintptr_t> drawnVehicle{ 0 };
     static SafetyHookMid quadHook;
@@ -410,16 +416,26 @@ namespace CarMirrors
         if (++timedFrames < 300)
             return;
         FusionLog::Write("CarMirrors", "Cost", "mirror phase CPU per frame: draw list %.3f ms, visibility %.3f ms; outdoor scans %u of %u frames; "
-            "quads drawn %u, by the draw list's car %u, dark %u; water queued %u, its quads gathered %u\n",
-            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark, waterQueued, waterQuads);
-        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = waterQuads = 0;
+            "quads drawn %u, by the draw list's car %u, dark %u\n",
+            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark);
+        // items: the water's quads, triangles and far cells, summed over the frames
+        FusionLog::Write("CarMirrors", "Water", "water.dat %u quads, %u triangles; gathered %u frames, rolled back %u (over the buffers); "
+            "the mirror's items %u/%u/%u, the main scene's %u/%u/%u; buffers filled up to %u/1000, %u/40, %u/400; queued %u, drawn %u, "
+            "items drawn %u/%u/%u\n", waterTotals[0] ? *waterTotals[0] : 0, waterTotals[1] ? *waterTotals[1] : 0,
+            waterGathered, waterRolledBack, mirrorWaterItems[0], mirrorWaterItems[1], mirrorWaterItems[2],
+            mainWaterItems[0], mainWaterItems[1], mainWaterItems[2], waterFill[0], waterFill[1], waterFill[2],
+            waterQueued, waterDrawn, drawnWaterItems[0], drawnWaterItems[1], drawnWaterItems[2]);
+        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = waterGathered = waterRolledBack = waterDrawn = 0;
+        for (int i = 0; i < 3; ++i)
+            mirrorWaterItems[i] = mainWaterItems[i] = drawnWaterItems[i] = waterFill[i] = 0;
         buildMs = visibilityMs = 0.0;
         timedFrames = 0;
     }
 
     // The phase's flags (+0x8E8, the draw list takes a copy as it is made): 0x10 has the scan gather the water seen
     // in the phase's list (CE 0xB1E810 -> 0xAD7D80) and the water's draw (CE 0xAD7EF0) draw it; the mirror phase has
-    // it not. Set from the car mirror's scan to its draw list's end, with the water queued in that list (PhaseWater).
+    // it not. Set from the mirror's water gathered (GatherMirrorWater) to its draw list's end, with the water queued
+    // in that list (PhaseWater).
     static constexpr uint32_t PhaseWaterFlag = 0x10;
     static uintptr_t waterFlagPhase = 0;      // the phase the flag was set on by us, 0 none
     static void* waterFunction = nullptr;     // CE 0xAD7EF0, cdecl(the phase's list)
@@ -526,17 +542,29 @@ namespace CarMirrors
     // (0x166DA20 == 1): a bathroom mirror has no water to see. A car's mirror is on all the time in first person, and
     // the water by the road lost its reflection (and the mirrors the water). Each gate's je, right after the compare,
     // is not taken while the mirror on is the car's: a flag in the compare's result, not the mirror flag itself,
-    // which the render thread reads as it draws the mirror's quad.
-    static void WaterGate(SafetyHookContext& regs)
+    // which the render thread reads as it draws the mirror's quad. CarMirrorsWaterReflection 0 keeps the game's rule
+    // for the water reflection's own phase; the car mirror's scan (the water's, see PhaseVisibility) still goes through.
+    static bool inMirrorScan = false;
+
+    static void WaterVisibilityGate(SafetyHookContext& regs)
     {
-        if (quadsThisFrame)
+        if (quadsThisFrame && (waterReflection || inMirrorScan))
+            regs.eflags &= ~0x40u; // ZF
+    }
+
+    static void WaterBuildGate(SafetyHookContext& regs)
+    {
+        if (quadsThisFrame && waterReflection)
             regs.eflags &= ~0x40u; // ZF
     }
 
     // The mirror's scan runs only from an interior's room: it skips unless the phase's scene start (+0x940) has an
     // interior (+0x30) and a room above 0 (+0x38), as a bathroom mirror's has. Outdoors the car mirror's phase then
     // had nothing to draw (0.000 ms), so there it takes the water's scan, which starts from the phase's viewport like
-    // the main camera (its mirror gate let through by WaterGate), gathering the water too.
+    // the main camera (its mirror gate let through by WaterVisibilityGate). Its water is gathered after every phase's
+    // scan (GatherMirrorWater).
+    static uintptr_t waterScanPhase = 0;      // the phase the outdoor scan ran for this frame, for GatherMirrorWater
+
     static void __fastcall PhaseVisibility(uintptr_t phase, void*)
     {
         ClearWaterFlag();
@@ -546,18 +574,118 @@ namespace CarMirrors
                             *reinterpret_cast<const int32_t*>(scene + 0x38) > 0;
         if (usedThisFrame && !inRoom && waterVisibility)
         {
-            if (water && waterFunction && phaseWaterHook)
-                SetWaterFlag(phase);
             const bool gated = !waterGateHooks[0];
             if (gated) *mirrorOn = 0;
+            inMirrorScan = true;
             waterVisibility(phase, nullptr);
+            inMirrorScan = false;
             if (gated) *mirrorOn = 1;
             ++outdoorScans;
+            waterScanPhase = phase;
         }
         else
             phaseVisibilityHook.unsafe_thiscall<void>(phase);
         if (usedThisFrame)
             visibilityMs += NowMs() - start;
+    }
+
+    // The water seen by a phase (CE 0xAD7D80, cdecl(the phase's list), the phase in [0x12FB1B8]) goes into one buffer
+    // of the frame (CE 0xAD61A0, main thread; the render thread's other one CE 0xAD5CD0, 0x10C4 bytes each): quads
+    // (+0, 1000 of them, count +0xE60), triangles (+0x7D0, 40, +0xE64) and far cells (+0x820 / +0xB40, 400, +0xE68), a
+    // list's start and count of each at +0xE6C / +0xF8C, +0xECC / +0xFEC, +0xF2C / +0x104C (+ 4 x list, 24 lists).
+    // Only the far cells' 400 are checked; the game gathers the main scene's alone. The mirror's, gathered among the
+    // scans, could run the buffers over for whichever came after it (the 40 triangles into the far cells, the main
+    // scene's water then left out where they were overwritten, the frame before showing through), so it is gathered
+    // last, as every phase's scan (CE 0x8F7400) is done (the water reflection's after the others), and put back from
+    // a copy if it ran over.
+    static uintptr_t (__cdecl* waterBuffer)() = nullptr;        // CE 0xAD61A0
+    static uintptr_t (__cdecl* waterRenderBuffer)() = nullptr;  // CE 0xAD5CD0
+    static void (__cdecl* gatherWater)(uint32_t list) = nullptr; // CE 0xAD7D80
+    static uintptr_t* scanningPhase = nullptr;                 // CE 0x12FB1B8
+    static const uintptr_t* gameState = nullptr;               // CE 0x16DD67C, +0x22 & 1: no water gathered
+    static const uint8_t* noWater = nullptr;                   // CE 0x12BD0F2
+    static constexpr uint32_t WaterBufferSize = 0x10C4, WaterLists = 24;
+    static constexpr uint32_t WaterCountOffsets[3] = { 0xF8C, 0xFEC, 0x104C };
+    static constexpr uint32_t WaterStartOffsets[3] = { 0xE6C, 0xECC, 0xF2C };
+    static constexpr uint32_t WaterCapacity[3] = { 1000, 40, 400 };
+    static uint8_t waterBufferCopy[WaterBufferSize];
+
+    static uint32_t& WaterField(uintptr_t buffer, uint32_t offset)
+    {
+        return *reinterpret_cast<uint32_t*>(buffer + offset);
+    }
+
+    static void GatherMirrorWater(SafetyHookContext& regs)
+    {
+        const uintptr_t phase = waterScanPhase;
+        waterScanPhase = 0;
+        if (!phase || !usedThisFrame || !water || !waterFunction || !phaseWaterHook || !gatherWater || !waterBuffer || !scanningPhase)
+            return;
+        if (*noWater || (*gameState && (*reinterpret_cast<const uint8_t*>(*gameState + 0x22) & 1)))
+            return; // as the scan's own gather
+        const uint32_t list = *reinterpret_cast<const uint32_t*>(phase + 0x938);
+        if (list >= WaterLists)
+            return;
+        const uintptr_t buffer = waterBuffer();
+        if (const uintptr_t main = regs.ebx) // the main scene's phase (its kind 0x1F), as the loop found it
+        {
+            const uint32_t mainList = *reinterpret_cast<const uint32_t*>(main + 0x938);
+            if (mainList < WaterLists)
+                for (int i = 0; i < 3; ++i)
+                    mainWaterItems[i] += WaterField(buffer, WaterCountOffsets[i] + 4 * mainList);
+        }
+        std::memcpy(waterBufferCopy, reinterpret_cast<const void*>(buffer), WaterBufferSize);
+        const auto flags = *reinterpret_cast<uint32_t*>(phase + 0x8E8);
+        *reinterpret_cast<uint32_t*>(phase + 0x8E8) = flags | PhaseWaterFlag;
+        *scanningPhase = phase;
+        gatherWater(list);
+        *scanningPhase = 0;
+        *reinterpret_cast<uint32_t*>(phase + 0x8E8) = flags;
+        bool over = false;
+        for (int i = 0; i < 3; ++i)
+        {
+            const uint32_t used = WaterField(buffer, 0xE60 + 4 * i);
+            waterFill[i] = (std::max)(waterFill[i], used);
+            over |= used > WaterCapacity[i];
+        }
+        if (over)
+        {
+            std::memcpy(reinterpret_cast<void*>(buffer), waterBufferCopy, WaterBufferSize);
+            for (int i = 0; i < 3; ++i)
+                WaterField(buffer, WaterCountOffsets[i] + 4 * list) = WaterField(buffer, WaterStartOffsets[i] + 4 * list) = 0;
+            ++waterRolledBack;
+            return;
+        }
+        for (int i = 0; i < 3; ++i)
+            mirrorWaterItems[i] += WaterField(buffer, WaterCountOffsets[i] + 4 * list);
+        ++waterGathered;
+        SetWaterFlag(phase);
+    }
+
+    // Render thread, the water in the mirror's pass. In some of the game's modes ([0x1045538] 1 or 5) its draw sets
+    // the material ID target (_STENCIL_BUFFER_, the main view's, screen sized) as the second target and writes the
+    // water's ID there: from the mirror's view, into the main frame's IDs. The two compares of that mode (CE 0xAD7F11,
+    // 0xAD88AA, each cmp eax, 1 / je) are made to fail for it.
+    static bool inMirrorWater = false;
+
+    static void WaterTargetMode(SafetyHookContext& regs)
+    {
+        if (inMirrorWater)
+            regs.eax = 0;
+    }
+
+    static void __cdecl MirrorWater(uint32_t list)
+    {
+        if (waterRenderBuffer && list < WaterLists)
+        {
+            const uintptr_t buffer = waterRenderBuffer();
+            for (int i = 0; i < 3; ++i)
+                drawnWaterItems[i] += WaterField(buffer, WaterCountOffsets[i] + 4 * list);
+        }
+        ++waterDrawn;
+        inMirrorWater = true;
+        reinterpret_cast<void (__cdecl*)(uint32_t)>(waterFunction)(list);
+        inMirrorWater = false;
     }
 
     // In the mirror phase's draw list, after its entities and before what is drawn with blending (CE 0xC0FA50): the
@@ -569,10 +697,8 @@ namespace CarMirrors
         if (!waterFlagPhase || phase != waterFlagPhase)
             return;
         const uint32_t list = *reinterpret_cast<const uint32_t*>(phase + 0x938);
-        callback.Queue(waterFunction, list);
+        callback.Queue(reinterpret_cast<const void*>(&MirrorWater), list);
         ++waterQueued;
-        if (waterLists && list < 24)
-            waterQuads += *reinterpret_cast<const uint32_t*>(waterLists() + 0xFEC + 4 * list);
     }
 
     // c152 for mirror.fx (mirror_car_shape.patch): x 1 cuts the quad to the glass's outline, y the zoom out - 1 widens
@@ -679,12 +805,14 @@ public:
                 CarMirrors::byDrawnCar = ini.ReadInteger("MISC", "CarMirrorsByDrawnCar", 1) != 0;
                 CarMirrors::zoomOut = std::clamp(ini.ReadFloat("MISC", "CarMirrorsZoomOut", 1.5f), 1.0f, 2.5f);
                 CarMirrors::water = ini.ReadInteger("MISC", "CarMirrorsWater", 1) != 0;
+                CarMirrors::waterReflection = ini.ReadInteger("MISC", "CarMirrorsWaterReflection", 1) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
                 CarMirrors::interiorAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::interiorAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimY", -3.0f), -30.0f, 30.0f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
                     int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut, int(CarMirrors::water),
+                    int(CarMirrors::waterReflection),
                     CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
             };
             CIniReader iniReader("");
@@ -774,21 +902,59 @@ public:
             if (!water.empty() && *water.get_first<uint8_t*>(2) == CarMirrors::mirrorOn)
             {
                 CarMirrors::waterVisibility = water.get_first<void(__fastcall)(uintptr_t, void*)>(0);
-                CarMirrors::waterGateHooks[0] = safetyhook::create_mid(water.get_first(10), CarMirrors::WaterGate);
+                CarMirrors::waterGateHooks[0] = safetyhook::create_mid(water.get_first(10), CarMirrors::WaterVisibilityGate);
             }
             // the water reflection's draw list: push ebp / mov ebp, esp / and esp, -10 / sub esp, 1C / cmp byte [mirror on], 1 /
             // push esi / mov esi, ecx / je
             auto waterBuild = hook::pattern("55 8B EC 83 E4 F0 83 EC 1C 80 3D ? ? ? ? 01 56 8B F1 0F 84");
             if (!waterBuild.empty() && *waterBuild.get_first<uint8_t*>(11) == CarMirrors::mirrorOn)
-                CarMirrors::waterGateHooks[1] = safetyhook::create_mid(waterBuild.get_first(19), CarMirrors::WaterGate);
+                CarMirrors::waterGateHooks[1] = safetyhook::create_mid(waterBuild.get_first(19), CarMirrors::WaterBuildGate);
+            // the water's buffers: mov eax, [index] / imul eax, eax, 10C4 / add eax, buffers / ret (main thread), and
+            // mov ecx, [index] / imul ecx, ecx, 10C4 / mov eax, the other / sub eax, ecx / ret (render thread)
+            auto buffer = hook::pattern("A1 ? ? ? ? 69 C0 C4 10 00 00 05 ? ? ? ? C3");
+            auto renderBuffer = hook::pattern("8B 0D ? ? ? ? 69 C9 C4 10 00 00 B8 ? ? ? ? 2B C1 C3");
+            // the gather: mov eax, [scanning phase] / mov eax, [eax+8E8] / test al, 10 / jne / test eax, 400 / je
+            auto gather = hook::pattern("A1 ? ? ? ? 8B 80 E8 08 00 00 A8 10 75 ? A9 00 04 00 00 0F 84");
+            // the scan's call of it: ... / mov eax, [game state] / test eax, eax / je / mov al, [eax+22] / and al, 1 / jne
+            auto scanGather = hook::pattern("A1 ? ? ? ? 56 F7 80 E8 08 00 00 00 04 00 00 8B 74 24 08 74 ? 56 E8 ? ? ? ? 83 C4 04 56 E8 ? ? ? ? A1 ? ? ? ? 83 C4 04 F6 80 E8 08 00 00 10 74 ? F6 40 19 01 74 ? A1");
+            // every phase's scan done, the water reflection's last: test byte [main+19], 1 / je / cmp byte [no water], 0 /
+            // jne / mov ecx, ebp / call / push 80 (hooked) / push 0 / push
+            auto scansDone = hook::pattern("F6 43 19 01 74 10 80 3D ? ? ? ? 00 75 07 8B CD E8 ? ? ? ? 68 80 00 00 00 6A 00 68");
+            // the water's totals: mov ecx, [quads] / test ecx, ecx / jle / mov eax, [their flags] / and word [eax], FFFE / ...
+            // mov ecx, [triangles]
+            auto totals = hook::pattern("8B 0D ? ? ? ? 85 C9 7E ? B8 ? ? ? ? 66 83 20 FE 8D 40 10 49 75 ? 8B 0D");
+            if (!totals.empty())
+            {
+                CarMirrors::waterTotals[0] = *totals.get_first<const uint32_t*>(2);
+                CarMirrors::waterTotals[1] = *totals.get_first<const uint32_t*>(27);
+            }
+            if (!buffer.empty() && !renderBuffer.empty() && !gather.empty() && !scanGather.empty() && !scansDone.empty())
+            {
+                CarMirrors::waterBuffer = buffer.get_first<uintptr_t(__cdecl)()>(0);
+                CarMirrors::waterRenderBuffer = renderBuffer.get_first<uintptr_t(__cdecl)()>(0);
+                CarMirrors::gatherWater = gather.get_first<void(__cdecl)(uint32_t)>(0);
+                CarMirrors::scanningPhase = *gather.get_first<uintptr_t*>(1);
+                CarMirrors::gameState = *scanGather.get_first<const uintptr_t*>(61);
+                CarMirrors::noWater = *scansDone.get_first<const uint8_t*>(8);
+                CarMirrors::gatherHook = safetyhook::create_mid(scansDone.get_first(22), CarMirrors::GatherMirrorWater);
+            }
+            // in the water's draw: mov eax, [mode] / cmp eax, 1 (hooked) / je +5 / cmp eax, 5, at its start and end
+            if (CarMirrors::waterFunction)
+            {
+                const auto at = reinterpret_cast<uint8_t*>(CarMirrors::waterFunction);
+                static constexpr uint8_t compare[] = { 0x83, 0xF8, 0x01, 0x74, 0x05, 0x83, 0xF8, 0x05 };
+                const size_t sites[] = { 0x21, 0x9BA };
+                bool found = true;
+                for (size_t site : sites)
+                    found &= std::memcmp(at + site, compare, sizeof(compare)) == 0;
+                if (found)
+                    for (size_t i = 0; i < std::size(sites); ++i)
+                        CarMirrors::waterTargetHooks[i] = safetyhook::create_mid(at + sites[i], CarMirrors::WaterTargetMode);
+            }
             // in the mirror phase's draw list: push [edi+938] / call (what is drawn with blending) / add esp, 4 /
             // cmp byte [clip plane on], 0 / je
-            // mov eax, [index] / imul eax, eax, 10C4 / add eax, lists / ret
-            auto lists = hook::pattern("A1 ? ? ? ? 69 C0 C4 10 00 00 05 ? ? ? ? C3");
-            if (!lists.empty())
-                CarMirrors::waterLists = lists.get_first<uintptr_t(__cdecl)()>(0);
             auto phaseWater = hook::pattern("FF B7 38 09 00 00 E8 ? ? ? ? 83 C4 04 80 3D ? ? ? ? 00 74");
-            if (!phaseWater.empty() && CarMirrors::waterFunction && CarMirrors::callback.add)
+            if (!phaseWater.empty() && CarMirrors::waterFunction && CarMirrors::callback.add && CarMirrors::gatherHook)
                 CarMirrors::phaseWaterHook = safetyhook::create_mid(phaseWater.get_first(0), CarMirrors::PhaseWater);
             FusionLog::Write("CarMirrors", "Init", "%u mirror glasses in the table; phase timing %s; outdoor scan %s; quad by the drawn car %s, %u draw list sites\n",
                 uint32_t(std::size(CarMirrorTable)), timeBuild && timeVisibility ? "on" : "partly off",
@@ -797,9 +963,11 @@ public:
             FusionLog::Write("CarMirrors", "Init", "the mirror pass's glass tint %s; the plane before the reflected view %s; wider reflection %s\n",
                 CarMirrors::callback.add ? "on" : "off (the game's callback command was not found)",
                 CarMirrors::phaseViewHook ? "on" : "off (not found)", CarMirrors::perspective ? "on" : "off (not found)");
-            FusionLog::Write("CarMirrors", "Init", "water reflection gates %s/%s; water in the mirror %s\n",
+            FusionLog::Write("CarMirrors", "Init", "water reflection gates %s/%s; water in the mirror %s, its gather after the scans %s, "
+                "without the material ID target %s\n",
                 CarMirrors::waterGateHooks[0] ? "on" : "off", CarMirrors::waterGateHooks[1] ? "on" : "off",
-                CarMirrors::phaseWaterHook ? "on" : "off (not found)");
+                CarMirrors::phaseWaterHook ? "on" : "off (not found)", CarMirrors::gatherHook ? "on" : "off (not found)",
+                CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)");
             if (CarMirrors::quadOffset)
                 FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
         };
