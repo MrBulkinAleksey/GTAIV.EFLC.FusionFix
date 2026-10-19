@@ -1954,9 +1954,16 @@ private:
             const float* m = &viewport->mMatrix_200[0][0];
             const float w = centre[0] * m[3] + centre[1] * m[7] + centre[2] * m[11] + m[15];
             if (!(w > 0.0f))
+            {
+                SkyTrace::Moon(centre, w, false, false);
+                return false;
+            }
+            const bool drawn = hbSkyMoonScissor.fun(sky, edx, viewport);
+            SkyTrace::Moon(centre, w, true, drawn);
+            if (!drawn)
                 return false;
         }
-        if (!hbSkyMoonScissor.fun(sky, edx, viewport))
+        else if (!hbSkyMoonScissor.fun(sky, edx, viewport))
             return false;
         if (auto pDevice = rage::grcDevice::GetD3DDevice(); pDevice && !bDeviceLost)
         {

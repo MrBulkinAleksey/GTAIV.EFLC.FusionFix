@@ -243,6 +243,24 @@ export namespace SkyTrace
         captureWasDown = down;
     }
 
+    // The moon pass's test (postfx's SkyMoonScissor): the moon's centre as the game projects it, its w, whether it was
+    // in front and whether the game then drew the moon pass.
+    void Moon(const float* centre, float w, bool front, bool drawn)
+    {
+        if (!bEnabled || lines > 40000)
+            return;
+        D3DRECT scissor{};
+        if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
+        {
+            RECT rect{};
+            device->GetScissorRect(&rect);
+            scissor = { rect.left, rect.top, rect.right, rect.bottom };
+        }
+        FusionLog::Write("SkyTrace", "Moon", "frame %u centre (%g %g %g %g) w %g front %d drawn %d scissor (%ld %ld %ld %ld)\n", frame, centre[0],
+                         centre[1], centre[2], centre[3], w, int(front), int(drawn), scissor.x1, scissor.y1, scissor.x2, scissor.y2);
+        ++lines;
+    }
+
     void End()
     {
         bInSky = false;
