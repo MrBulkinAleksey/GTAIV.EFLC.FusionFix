@@ -18,8 +18,8 @@ import d3dx9_43;
 import vtablepatch;
 
 // [DEBUG] SkyTrace: what the sky dome's draws (gta_atmoscatt_clouds, within postfx's DrawSky) are drawn with, to
-// GTAIV.EFLC.FusionFix.SkyTrace.log: the shaders, samplers 0 to 2 (the stars, the clouds' noise and its detail) with
-// their textures and states, and the vertex (c64-c76) and pixel (c64-c83) constants that hold the sky's parameters,
+// GTAIV.EFLC.FusionFix.SkyTrace.log: the shaders, samplers 0 to 5 (the moon's technique reads the clouds' noise from s3-s5) with
+// their textures and states, and the vertex (c64-c76) and pixel (c64-c87) constants that hold the sky's parameters,
 // read back from the device at each draw. The first draw of each kind is written whole, later ones only where they
 // differ from the draw before them, so a value that changes as the camera turns shows up.
 export namespace SkyTrace
@@ -30,11 +30,15 @@ export namespace SkyTrace
 
 namespace SkyTrace
 {
-    constexpr UINT kVSFirst = 64, kVSCount = 13, kPSFirst = 64, kPSCount = 20, kSamplers = 3;
+    constexpr UINT kVSFirst = 64, kVSCount = 13, kPSFirst = 64, kPSCount = 24, kSamplers = 6;
     constexpr D3DSAMPLERSTATETYPE kStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER };
+
+    constexpr D3DRENDERSTATETYPE kRenderStates[] = { D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_COLORWRITEENABLE,
+                                                     D3DRS_ZENABLE, D3DRS_ZWRITEENABLE, D3DRS_ALPHATESTENABLE };
 
     struct DrawState
     {
+        DWORD render[std::size(kRenderStates)] = {};
         void* vs = nullptr;
         void* ps = nullptr;
         void* texture[kSamplers] = {};
@@ -91,6 +95,8 @@ namespace SkyTrace
             for (size_t j = 0; j < std::size(kStates); ++j)
                 device->GetSamplerState(i, kStates[j], &s.states[i][j]);
         }
+        for (size_t j = 0; j < std::size(kRenderStates); ++j)
+            device->GetRenderState(kRenderStates[j], &s.render[j]);
         device->GetVertexShaderConstantF(kVSFirst, s.vsc, kVSCount);
         device->GetPixelShaderConstantF(kPSFirst, s.psc, kPSCount);
     }
@@ -107,6 +113,12 @@ namespace SkyTrace
         if (!before || before->vs != s.vs || before->ps != s.ps)
         {
             std::snprintf(buf, sizeof(buf), " vs %p ps %p;", s.vs, s.ps);
+            text += buf;
+        }
+        if (!before || std::memcmp(before->render, s.render, sizeof(s.render)) != 0)
+        {
+            std::snprintf(buf, sizeof(buf), " blend %lu src %lu dest %lu write %lx z %lu/%lu alphatest %lu;", s.render[0], s.render[1], s.render[2],
+                          s.render[3], s.render[4], s.render[5], s.render[6]);
             text += buf;
         }
         for (UINT i = 0; i < kSamplers; ++i)
@@ -212,7 +224,7 @@ export namespace SkyTrace
             PatchVTable(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
             PatchVTable(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
             installed = true;
-            FusionLog::Write("SkyTrace", "Init", "tracing the sky's draws: samplers 0-2, vertex c%u-c%u, pixel c%u-c%u\n",
+            FusionLog::Write("SkyTrace", "Init", "tracing the sky's draws: samplers 0-5, blending, vertex c%u-c%u, pixel c%u-c%u\n",
                              kVSFirst, kVSFirst + kVSCount - 1, kPSFirst, kPSFirst + kPSCount - 1);
         }
         ++frame;
