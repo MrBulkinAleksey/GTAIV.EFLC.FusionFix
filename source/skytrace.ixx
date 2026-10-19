@@ -61,8 +61,8 @@ namespace SkyTrace
         device->GetPixelShader(&ps);
         s.vs = vs;
         s.ps = ps;
-        SAFE_RELEASE(vs);
-        SAFE_RELEASE(ps);
+        if (vs) vs->Release();
+        if (ps) ps->Release();
         for (DWORD i = 0; i < kSamplers; ++i)
         {
             IDirect3DBaseTexture9* texture = nullptr;
@@ -80,7 +80,7 @@ namespace SkyTrace
                     s.format[i] = desc.Format;
                 }
             }
-            SAFE_RELEASE(texture);
+            if (texture) texture->Release();
             for (size_t j = 0; j < std::size(kStates); ++j)
                 device->GetSamplerState(i, kStates[j], &s.states[i][j]);
         }
