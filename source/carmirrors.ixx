@@ -62,6 +62,7 @@ namespace CarMirrors
     // the model's glass faced anywhere.
     static float sideAimX = 0.0f, sideAimY = -1.5f, interiorAimX = 0.0f, interiorAimY = -3.0f;
     static float eyeInCar[3]{};
+    static float eyeInWorld[3]{};            // the camera's, as the mirror was last set (diagnostics)
     static bool eyeKnown = false;
     static constexpr float MinLook = 0.3f;  // cosine: a mirror further off the view than ~73 degrees is not taken
     static constexpr float Keep = 0.15f;    // the mirror reflected stays until another is this much nearer the view
@@ -342,6 +343,7 @@ namespace CarMirrors
             return Off("no camera");
         float eye[3]{}, rotation[3]{};
         Natives::GetCamPos(camera, &eye[0], &eye[1], &eye[2]);
+        std::copy_n(eye, 3, eyeInWorld);
         Natives::GetCamRot(camera, &rotation[0], &rotation[1], &rotation[2]);
         const float pitch = rotation[0] * 0.01745329f, heading = rotation[2] * 0.01745329f;
         const float forward[3] = { -std::sin(heading) * std::cos(pitch), std::cos(heading) * std::cos(pitch), std::sin(pitch) };
@@ -422,6 +424,16 @@ namespace CarMirrors
         quadsThisFrame = true;
     }
 
+    // What the sky is drawn with, the last time (render thread, read by LogTiming): the reflected camera, its
+    // projection's depth column, the near and far planes, the clip plane, the target's viewport.
+    static struct
+    {
+        float camera[3], forward[3], up[3], depthColumn[4], nearFar[2], clipPlane[4], plane[4];
+        DWORD clipEnable, cull;
+        D3DVIEWPORT9 viewport;
+        bool known;
+    } skyState{};
+
     static void LogTiming()
     {
         if (++timedFrames < 300)
@@ -436,6 +448,20 @@ namespace CarMirrors
             waterGathered, waterRolledBack, mirrorWaterItems[0], mirrorWaterItems[1], mirrorWaterItems[2],
             mainWaterItems[0], mainWaterItems[1], mainWaterItems[2], waterFill[0], waterFill[1], waterFill[2],
             waterQueued, waterDrawn, drawnWaterItems[0], drawnWaterItems[1], drawnWaterItems[2], waterFlagMissing);
+        if (skyState.known)
+        {
+            const auto& k = skyState;
+            const float eyeToPlane = k.plane[0] * eyeInWorld[0] + k.plane[1] * eyeInWorld[1] + k.plane[2] * eyeInWorld[2] - k.plane[3];
+            const float cameraToPlane = k.plane[0] * k.camera[0] + k.plane[1] * k.camera[1] + k.plane[2] * k.camera[2] - k.plane[3];
+            FusionLog::Write("CarMirrors", "Sky", "%s mirror: eye %.2f %.2f %.2f (%.2f m from the plane), reflected camera %.2f %.2f %.2f "
+                "(%.2f m), forward %.2f %.2f %.2f, up %.2f %.2f %.2f; plane %.3f %.3f %.3f %.2f; near %.3f far %.1f, projection depth column "
+                "%.4f %.4f %.4f %.4f; clip planes %lu, plane 0 %.3f %.3f %.3f %.3f; cull %lu; viewport %lu %lu %lu x %lu, z %.2f..%.2f\n",
+                KindName(active), eyeInWorld[0], eyeInWorld[1], eyeInWorld[2], eyeToPlane, k.camera[0], k.camera[1], k.camera[2], cameraToPlane,
+                k.forward[0], k.forward[1], k.forward[2], k.up[0], k.up[1], k.up[2], k.plane[0], k.plane[1], k.plane[2], k.plane[3],
+                k.nearFar[0], k.nearFar[1], k.depthColumn[0], k.depthColumn[1], k.depthColumn[2], k.depthColumn[3], k.clipEnable,
+                k.clipPlane[0], k.clipPlane[1], k.clipPlane[2], k.clipPlane[3], k.cull, k.viewport.X, k.viewport.Y, k.viewport.Width,
+                k.viewport.Height, k.viewport.MinZ, k.viewport.MaxZ);
+        }
         outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = waterGathered = waterRolledBack = waterDrawn = techniqueDraws = skyDraws = coronaDraws = waterFlagMissing = 0;
         for (int i = 0; i < 3; ++i)
             mirrorWaterItems[i] = mainWaterItems[i] = drawnWaterItems[i] = waterFill[i] = 0;
@@ -485,8 +511,36 @@ namespace CarMirrors
             regs.eax = reinterpret_cast<uintptr_t>(&SkyFlags);
     }
 
+    static void CaptureSkyState()
+    {
+        auto device = rage::grcDevice::GetD3DDevice();
+        auto* vp = rage::GetCurrentViewport();
+        if (!device || !vp)
+            return;
+        for (int i = 0; i < 3; ++i)
+        {
+            skyState.camera[i] = vp->mViewInverseMatrix[3][i];
+            skyState.forward[i] = vp->mViewInverseMatrix[2][i];
+            skyState.up[i] = vp->mViewInverseMatrix[1][i];
+        }
+        for (int i = 0; i < 4; ++i)
+        {
+            skyState.depthColumn[i] = vp->mProjectionMatrix[i][2];
+            skyState.plane[i] = plane ? plane[i] : 0.0f;
+        }
+        skyState.nearFar[0] = vp->mNearClip;
+        skyState.nearFar[1] = vp->mFarClip;
+        auto real = RageDirect3DDevice9::RealDevice(device);
+        real->GetRenderState(D3DRS_CLIPPLANEENABLE, &skyState.clipEnable);
+        real->GetRenderState(D3DRS_CULLMODE, &skyState.cull);
+        real->GetClipPlane(0, skyState.clipPlane);
+        real->GetViewport(&skyState.viewport);
+        skyState.known = true;
+    }
+
     static void __cdecl MirrorSkyDraw(uint32_t)
     {
+        CaptureSkyState();
         inMirrorSky = true;
         reinterpret_cast<void (__cdecl*)()>(skyFunction)();
         inMirrorSky = false;
