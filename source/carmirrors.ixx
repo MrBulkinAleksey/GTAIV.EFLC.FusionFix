@@ -89,6 +89,7 @@ namespace CarMirrors
     static uint32_t waterFill[3]{};        // the most of each buffer the frame used, after the mirror's
     static uint32_t waterDrawn = 0;        // the mirror pass's water draws (render thread)
     static uint32_t techniqueDraws = 0;    // frames the mirror's entities went in the reflection techniques
+    static uint32_t skyDraws = 0;          // the car mirror's skies drawn (render thread)
     static const uint32_t* waterTotals[2]{}; // CE 0x1550EAC, 0x154E300: water.dat's quads and triangles
     // The car, for the draw list's snapshots and the phase's plane.
     static std::atomic<uintptr_t> drawnVehicle{ 0 };
@@ -152,8 +153,11 @@ namespace CarMirrors
     // The phase clears depth and stencil only (CE 0xD769CE, its colour flag 0), the sky meant to cover the rest: in a
     // tunnel nothing did, and the mirror kept its frames before where nothing was drawn (trails). Cleared to black
     // as the pass starts, MIRROR_RT bound and its viewport set by then.
+    static bool inCarMirrorPass = false;    // render thread, between the car mirror pass's two calls
+
     static void __cdecl MirrorPassTint(uint32_t on)
     {
+        inCarMirrorPass = on != 0;
         auto device = rage::grcDevice::GetD3DDevice();
         if (!device)
             return;
@@ -423,8 +427,8 @@ namespace CarMirrors
         if (++timedFrames < 300)
             return;
         FusionLog::Write("CarMirrors", "Cost", "mirror phase CPU per frame: draw list %.3f ms, visibility %.3f ms; outdoor scans %u of %u frames; "
-            "quads drawn %u, by the draw list's car %u, dark %u; entities in the reflection techniques %u\n",
-            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark, techniqueDraws);
+            "quads drawn %u, by the draw list's car %u, dark %u; entities in the reflection techniques %u, skies %u\n",
+            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark, techniqueDraws, skyDraws);
         // items: the water's quads, triangles and far cells, summed over the frames
         FusionLog::Write("CarMirrors", "Water", "water.dat %u quads, %u triangles; gathered %u frames, rolled back %u (over the buffers); "
             "the mirror's items %u/%u/%u, the main scene's %u/%u/%u; buffers filled up to %u/1000, %u/40, %u/400; queued %u, drawn %u, "
@@ -432,7 +436,7 @@ namespace CarMirrors
             waterGathered, waterRolledBack, mirrorWaterItems[0], mirrorWaterItems[1], mirrorWaterItems[2],
             mainWaterItems[0], mainWaterItems[1], mainWaterItems[2], waterFill[0], waterFill[1], waterFill[2],
             waterQueued, waterDrawn, drawnWaterItems[0], drawnWaterItems[1], drawnWaterItems[2]);
-        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = waterGathered = waterRolledBack = waterDrawn = techniqueDraws = 0;
+        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = waterGathered = waterRolledBack = waterDrawn = techniqueDraws = skyDraws = 0;
         for (int i = 0; i < 3; ++i)
             mirrorWaterItems[i] = mainWaterItems[i] = drawnWaterItems[i] = waterFill[i] = 0;
         buildMs = visibilityMs = 0.0;
@@ -721,6 +725,22 @@ namespace CarMirrors
             techniquePushed = true;
             ++techniqueDraws;
         }
+    }
+
+    // The mirror phase's sky (a callback, CE 0xC106F0, queued at 0xD76AEC) is drawn only for draw lists with flag 8,
+    // which the mirror phase has not (a bathroom mirror sees no sky): the car mirror's sky stayed whatever MIRROR_RT
+    // held, black once it was cleared. Its test (test byte [eax], 8 at 0xC106F5, eax the draw list's flags) is given
+    // flags with 8 in the car mirror's pass; it draws the sky (and the clouds) through the main branch as the water
+    // reflection does, clip planes off round it.
+    static SafetyHookMid skyHook;
+    static constexpr uint32_t SkyFlags = 8;
+
+    static void MirrorSky(SafetyHookContext& regs)
+    {
+        if (!inCarMirrorPass)
+            return;
+        regs.eax = reinterpret_cast<uintptr_t>(&SkyFlags);
+        ++skyDraws;
     }
 
     static void PopReflectionTechniques(SafetyHookContext&)
@@ -1017,6 +1037,11 @@ public:
             // round the mirror phase's entities: cmp byte [..], 0 (push hooked) / mov eax, 2 / jne / cmp byte [..], 0 / je /
             // mov eax, 1 / push eax / push 307 / push [edi+938] / call / add esp, C (pop hooked) / test esi, esi
             auto mirrorEntities = hook::pattern("80 3D ? ? ? ? 00 B8 02 00 00 00 75 09 80 3D ? ? ? ? 00 74 05 B8 01 00 00 00 50 68 07 03 00 00 FF B7 38 09 00 00 E8 ? ? ? ? 83 C4 0C 85 F6");
+            // the sky's callback: call (the draw list's flags) / test byte [eax], 8 (hooked) / je / push esi / call / mov esi, [clip planes] /
+            // push 0 / call / call (the sky) / call
+            auto sky = hook::pattern("E8 ? ? ? ? F6 00 08 74 ? 56 E8 ? ? ? ? 8B 35 ? ? ? ? 6A 00 E8 ? ? ? ? E8 ? ? ? ? E8");
+            if (!sky.empty())
+                CarMirrors::skyHook = safetyhook::create_mid(sky.get_first(5), CarMirrors::MirrorSky);
             if (!techniques.empty() && !mirrorEntities.empty() && CarMirrors::callback.add)
             {
                 CarMirrors::techniqueGroup.group = *techniques.get_first<const uint32_t*>(18);
@@ -1038,8 +1063,8 @@ public:
                 CarMirrors::waterGateHooks[0] ? "on" : "off", CarMirrors::waterGateHooks[1] ? "on" : "off",
                 CarMirrors::phaseWaterHook ? "on" : "off (not found)", CarMirrors::gatherHook ? "on" : "off (not found)",
                 CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)");
-            FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s\n",
-                CarMirrors::techniqueHooks[1] ? "on" : "off (not found)");
+            FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s\n",
+                CarMirrors::techniqueHooks[1] ? "on" : "off (not found)", CarMirrors::skyHook ? "on" : "off (not found)");
             if (CarMirrors::quadOffset)
                 FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
         };
