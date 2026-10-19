@@ -40,8 +40,8 @@ namespace SkyTrace
     // shader matches the plain one's clouds line for line, yet the clouds change where it draws.
     uint32_t frame = 0, lines = 0;
 
-    constexpr UINT kAllConstants = 96;
-    constexpr DWORD kAllSamplers = 8;
+    constexpr UINT kAllVSConstants = 256, kAllPSConstants = 224;
+    constexpr DWORD kAllSamplers = 16;
     constexpr D3DSAMPLERSTATETYPE kAllSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW, D3DSAMP_BORDERCOLOR,
         D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_MIPMAPLODBIAS, D3DSAMP_MAXMIPLEVEL, D3DSAMP_MAXANISOTROPY,
         D3DSAMP_SRGBTEXTURE };
@@ -51,9 +51,14 @@ namespace SkyTrace
         D3DRS_FILLMODE };
     struct FullState
     {
-        float vsc[kAllConstants * 4] = {};
-        float psc[kAllConstants * 4] = {};
+        float vsc[kAllVSConstants * 4] = {};
+        float psc[kAllPSConstants * 4] = {};
         BOOL psb[16] = {};
+        int psi[16 * 4] = {};
+        void* stream = nullptr;
+        UINT streamOffset = 0, streamStride = 0;
+        void* declaration = nullptr;
+        void* indices = nullptr;
         void* texture[kAllSamplers] = {};
         DWORD samplers[kAllSamplers][std::size(kAllSamplerStates)] = {};
         DWORD render[std::size(kAllRenderStates)] = {};
@@ -65,9 +70,25 @@ namespace SkyTrace
 
     void ReadFull(IDirect3DDevice9* device, FullState& s)
     {
-        device->GetVertexShaderConstantF(0, s.vsc, kAllConstants);
-        device->GetPixelShaderConstantF(0, s.psc, kAllConstants);
+        device->GetVertexShaderConstantF(0, s.vsc, kAllVSConstants);
+        device->GetPixelShaderConstantF(0, s.psc, kAllPSConstants);
         device->GetPixelShaderConstantB(0, s.psb, 16);
+        device->GetPixelShaderConstantI(0, s.psi, 16);
+        IDirect3DVertexBuffer9* stream = nullptr;
+        device->GetStreamSource(0, &stream, &s.streamOffset, &s.streamStride);
+        s.stream = stream;
+        if (stream)
+            stream->Release();
+        IDirect3DVertexDeclaration9* declaration = nullptr;
+        device->GetVertexDeclaration(&declaration);
+        s.declaration = declaration;
+        if (declaration)
+            declaration->Release();
+        IDirect3DIndexBuffer9* indices = nullptr;
+        device->GetIndices(&indices);
+        s.indices = indices;
+        if (indices)
+            indices->Release();
         for (DWORD i = 0; i < kAllSamplers; ++i)
         {
             IDirect3DBaseTexture9* texture = nullptr;
@@ -94,7 +115,7 @@ namespace SkyTrace
     {
         std::string text;
         char buf[256];
-        for (UINT r = 0; r < kAllConstants; ++r)
+        for (UINT r = 0; r < kAllVSConstants; ++r)
         {
             if (std::memcmp(a.vsc + r * 4, b.vsc + r * 4, 16) != 0)
             {
@@ -103,7 +124,7 @@ namespace SkyTrace
                 text += buf;
             }
         }
-        for (UINT r = 0; r < kAllConstants; ++r)
+        for (UINT r = 0; r < kAllPSConstants; ++r)
         {
             if (std::memcmp(a.psc + r * 4, b.psc + r * 4, 16) != 0)
             {
@@ -120,6 +141,18 @@ namespace SkyTrace
                 text += buf;
             }
         }
+        for (UINT r = 0; r < 16; ++r)
+        {
+            if (std::memcmp(a.psi + r * 4, b.psi + r * 4, 16) != 0)
+            {
+                std::snprintf(buf, sizeof(buf), " pi%u (%d %d %d %d)/(%d %d %d %d);", r, a.psi[r * 4], a.psi[r * 4 + 1], a.psi[r * 4 + 2],
+                              a.psi[r * 4 + 3], b.psi[r * 4], b.psi[r * 4 + 1], b.psi[r * 4 + 2], b.psi[r * 4 + 3]);
+                text += buf;
+            }
+        }
+        std::snprintf(buf, sizeof(buf), " stream %p+%u/%u / %p+%u/%u decl %p/%p indices %p/%p;", a.stream, a.streamOffset, a.streamStride, b.stream,
+                      b.streamOffset, b.streamStride, a.declaration, b.declaration, a.indices, b.indices);
+        text += buf;
         for (DWORD i = 0; i < kAllSamplers; ++i)
         {
             std::snprintf(buf, sizeof(buf), " s%lu %p/%p", static_cast<unsigned long>(i), a.texture[i], b.texture[i]);
