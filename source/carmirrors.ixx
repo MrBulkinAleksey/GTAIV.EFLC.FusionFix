@@ -151,6 +151,7 @@ namespace CarMirrors
     // interior mirror's rear window showed the phone and ghosts of trees). Unbound as the mirror's pass starts, s9
     // empty keeping the game's environment map; not put back (no reference held over a device reset): the main
     // scene's glass is drawn by then, and the next frame binds them again.
+    // c204.z 1 has the water opaque (water_mirror_opaque.patch, see MirrorWaterPass).
     // The phase clears depth and stencil only (CE 0xD769CE, its colour flag 0), the sky meant to cover the rest: in a
     // tunnel nothing did, and the mirror kept its frames before where nothing was drawn (trails). Cleared to black
     // as the pass starts, MIRROR_RT bound and its viewport set by then.
@@ -164,7 +165,7 @@ namespace CarMirrors
             return;
         if (on)
             device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
-        const float tint[4] = { on ? 0.4f : 0.0f, on ? 4.0f * 4.0f : 0.0f, 0.0f, 0.0f };
+        const float tint[4] = { on ? 0.4f : 0.0f, on ? 4.0f * 4.0f : 0.0f, on ? 1.0f : 0.0f, 0.0f };
         device->SetPixelShaderConstantF(204, tint, 1);
         if (auto real = RageDirect3DDevice9::RealDevice(device); real != device)
             real->SetPixelShaderConstantF(204, tint, 1);
@@ -691,6 +692,20 @@ namespace CarMirrors
     // here too, in case the copy was taken without it. waterFlagMissing counts the draws it was not in the copy.
     static SafetyHookMid waterFlagHook;
 
+    // The water's look comes from how deep it is: its pixel shader (water.fxc, waterPS1) takes its alpha from the scene's
+    // depth (DepthBufferSampler, s2) behind it. That is the main view's depth, read at the mirror's pixels, mostly
+    // near: the water came out nearly clear over the mirror's black, cleared target. water_mirror_opaque.patch keeps
+    // it opaque with c204.z 1 (MirrorPassTint). The draw picks its second pass (waterPS2, with the sun's shadow from
+    // cascades fitted to the main view) when [0x103F4D0] is 1: in the mirror the first, its jne at CE 0xAD8576
+    // taken (push 0 for the pass, not push 1).
+    static SafetyHookMid waterPassHook;
+
+    static void MirrorWaterPass(SafetyHookContext& regs)
+    {
+        if (inMirrorWater)
+            regs.eflags &= ~0x40u; // ZF
+    }
+
     static void MirrorWaterFlag(SafetyHookContext& regs)
     {
         static constexpr uint32_t flags = PhaseWaterFlag;
@@ -1042,6 +1057,10 @@ public:
                 static constexpr uint8_t flagTest[] = { 0xF6, 0x00, 0x10, 0x0F, 0x84 };
                 if (std::memcmp(at + 0x13, flagTest, sizeof(flagTest)) == 0)
                     CarMirrors::waterFlagHook = safetyhook::create_mid(at + 0x13, CarMirrors::MirrorWaterFlag);
+                // cmp byte [shadows], 1 / mov ecx, [..] / jne +4 (hooked) / push 1 / jmp +2 / push 0 / call (the pass)
+                static constexpr uint8_t passPick[] = { 0x75, 0x04, 0x6A, 0x01, 0xEB, 0x02, 0x6A, 0x00, 0xE8 };
+                if (std::memcmp(at + 0x686, passPick, sizeof(passPick)) == 0 && at[0x679] == 0x80 && at[0x67A] == 0x3D)
+                    CarMirrors::waterPassHook = safetyhook::create_mid(at + 0x686, CarMirrors::MirrorWaterPass);
             }
             // in the mirror phase's draw list: push [edi+938] / call (what is drawn with blending) / add esp, 4 /
             // cmp byte [clip plane on], 0 / je
@@ -1079,10 +1098,11 @@ public:
                 CarMirrors::callback.add ? "on" : "off (the game's callback command was not found)",
                 CarMirrors::phaseViewHook ? "on" : "off (not found)", CarMirrors::perspective ? "on" : "off (not found)");
             FusionLog::Write("CarMirrors", "Init", "water reflection gates %s/%s; water in the mirror %s, its gather after the scans %s, "
-                "without the material ID target %s, its flag given %s\n",
+                "without the material ID target %s, its flag given %s, its pass without shadows %s\n",
                 CarMirrors::waterGateHooks[0] ? "on" : "off", CarMirrors::waterGateHooks[1] ? "on" : "off",
                 CarMirrors::phaseWaterHook ? "on" : "off (not found)", CarMirrors::gatherHook ? "on" : "off (not found)",
-                CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)", CarMirrors::waterFlagHook ? "on" : "off (not found)");
+                CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)", CarMirrors::waterFlagHook ? "on" : "off (not found)",
+                CarMirrors::waterPassHook ? "on" : "off (not found)");
             FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s\n",
                 CarMirrors::techniqueHooks[1] ? "on" : "off (not found)", CarMirrors::skyHook ? "on" : "off (not found)");
             if (CarMirrors::quadOffset)
