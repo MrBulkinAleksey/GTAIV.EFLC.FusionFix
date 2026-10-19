@@ -1935,6 +1935,40 @@ private:
         return hr;
     }
 
+    // The sky draws the dome a second time with the moon's technique (gta_atmoscatt_clouds PS7/PS9, the clouds as well
+    // as the moon) inside a scissor rectangle around the moon: CE 0x618310 projects the moon's corners with the
+    // viewport's matrix at +0x200, divides by w, clamps the rectangle to the screen and draws if it is not empty. It
+    // never asks whether the moon is in front: with the moon behind the camera w is negative, the corners land mirrored
+    // on the screen, and the clouds the camera looks at were drawn again, in daylight too, so turning the camera
+    // through the direction opposite the moon (and the moon's own) changed the clouds at once. The moon's centre
+    // (sky + 0x90, as CE 0x6164a0 hands it to the projection) behind the camera now draws no moon pass. Before one is
+    // drawn, the moon technique's samplers for the clouds' noise (s3 and s4, s4 and s5 with the stars) wrap as the
+    // plain sky's do: the lighting phase leaves s3 clamped (BindLightingInputs), SMAA s4, and a clamped noise
+    // stretched the clouds into streaks inside the rectangle.
+    static inline injector::hook_back<bool(__fastcall*)(void*, void*, rage::grcViewport*)> hbSkyMoonScissor;
+    static bool __fastcall SkyMoonScissor(void* sky, void* edx, rage::grcViewport* viewport)
+    {
+        if (sky && viewport)
+        {
+            const float* centre = reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(sky) + 0x90);
+            const float* m = &viewport->mMatrix_200[0][0];
+            const float w = centre[0] * m[3] + centre[1] * m[7] + centre[2] * m[11] + m[15];
+            if (!(w > 0.0f))
+                return false;
+        }
+        if (!hbSkyMoonScissor.fun(sky, edx, viewport))
+            return false;
+        if (auto pDevice = rage::grcDevice::GetD3DDevice(); pDevice && !bDeviceLost)
+        {
+            for (DWORD i = 2; i <= 5; ++i)
+            {
+                pDevice->SetSamplerState(i, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+                pDevice->SetSamplerState(i, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+            }
+        }
+        return true;
+    }
+
     // The reflection map's sky (CE 0xdbc2ab, the sky draw's branch for render phases with flag
     // 0x40000): the volumetric clouds go in right after it, through the reflection's viewport.
     static inline injector::hook_back<int(__fastcall*)(int, void*, int, int, char, char, int, char)> hbDrawSkyReflection;
@@ -2738,6 +2772,10 @@ public:
 
                 pattern = find_pattern("E8 ? ? ? ? 8D 44 24 ? 50 8B CF E8 ? ? ? ? 8D 84 24", "E8 ? ? ? ? 8D 44 24 ? 50 8B CE E8 ? ? ? ? 8D 8C 24 ? ? ? ? 51 8B CE E8 ? ? ? ? 8D 94 24");
                 hbDrawSkyHook.fun = injector::MakeCALL(pattern.get_first(0), DrawSky).get();
+
+                pattern = hook::pattern("57 8B CE E8 ? ? ? ? 84 C0 0F 84 ? ? ? ? F3 0F 10 8E D0 02 00 00");
+                if (!pattern.empty())
+                    hbSkyMoonScissor.fun = injector::MakeCALL(pattern.get_first(3), SkyMoonScissor).get();
 
                 pattern = hook::pattern("6A 00 6A 00 6A 00 6A 00 6A 03 57 E8 ? ? ? ? 5F 5E 8B E5 5D C3");
                 if (!pattern.empty())
