@@ -963,6 +963,8 @@ private:
                     pDevice->SetPixelShader(prevPS);
 
                     SetTextureBoth(pDevice, 1, scene);
+                    // The air the fog pass and the forward shaders after it look through
+                    AerialPerspectiveBind(pDevice);
                     ProfilerMark(pDevice, kProfFog, true);
                     hbDrawPrimitivePostFX.fun();
                     ProfilerMark(pDevice, kProfFog, false);
@@ -1668,6 +1670,9 @@ private:
                         unsigned(R.nPbrSkyDraws));
                 log.Printf("physical sky in the clouds: share %.2f, table times %.2f on screen, sun hue %.2f %.2f %.2f\n",
                         R.CloudLastPbrShare, R.CloudLastSkyUnits, R.CloudLastSunHue[0], R.CloudLastSunHue[1], R.CloudLastSunHue[2]);
+                log.Printf("physical sky in the fog: share %.2f, aerial perspective %.2f (level %d%s), table times %.2f on screen, haze %.2f\n",
+                        R.fAerialLastShare, R.fAerialLastStrength, R.AerialPerspectiveLevel(), R.AerialPerspectiveDebug() ? ", debug x25" : "",
+                        R.fAerialLastUnits, R.fAerialLastHaze);
                 // The game's weather by name, and the cloud layer it gives, so a screenshot can be
                 // matched to its weather.
                 {
@@ -2720,6 +2725,10 @@ public:
                 PostFxResources.Readini();
                 PostFxResources.RegisterCloudParams();
                 RegisterPbrSkyParams();
+                FusionFix::onEndScene() += []()
+                {
+                    AerialPerspectiveEndFrame(rage::grcDevice::GetD3DDevice());
+                };
                 FrameGeneration::SetSharpener(SharpenShownFrame);
 
                 auto pattern = find_pattern("E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 5F", "E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 8B 4F ? E8 ? ? ? ? 33 C0");

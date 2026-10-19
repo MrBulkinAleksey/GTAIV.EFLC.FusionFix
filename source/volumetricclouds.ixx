@@ -635,9 +635,14 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         // The sky's brightness first, blended into its 1 x 1 target; the march reads it.
         if (R.CloudSkyRefSurf)
         {
+            // Cleared after frames without it (a loading screen), since it keeps 0.9 of itself a frame and whatever
+            // a loading frame left in it stayed, then blended 30 times to 96% of this frame's sky.
+            if (!skyRefRecent)
+                RealDevice(pDevice)->ColorFill(R.CloudSkyRefSurf, nullptr, D3DCOLOR_ARGB(0, 0, 0, 0));
             const D3DXVECTOR4 skyRefProj = ProjInfo(proj, 1.0f, 1.0f);
             effect->SetVector(effect->GetParameterByName(nullptr, "vec4SkyRefProj"), &skyRefProj);
-            drawPass("CloudsSkyRef", R.CloudSkyRefSurf, 1.0f, 1.0f, true, kProfCloudsSkyRef);
+            for (int i = skyRefRecent ? 1 : 30; i > 0; --i)
+                drawPass("CloudsSkyRef", R.CloudSkyRefSurf, 1.0f, 1.0f, true, kProfCloudsSkyRef);
             R.nCloudSkyRefFrame = FrameHistory::Frame();
         }
         // The march into its two targets, then its light into the half size clouds.

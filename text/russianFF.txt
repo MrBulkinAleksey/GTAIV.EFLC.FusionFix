@@ -226,6 +226,9 @@ Logitech LightSync RGB
 [GpuGrassDebug]
 Густая трава: цвет по поверхности
 
+[AerialDebug]
+Отладка воздушной перспективы
+
 [WetDbgMaterial]
 Категории материалов
 
@@ -384,6 +387,9 @@ Logitech LightSync RGB
 
 [PbrSky]
 Физическое небо
+
+[AerialPersp]
+Воздушная перспектива
 
 [Zoomed Movement]
 Разрешить движение при прицеливании

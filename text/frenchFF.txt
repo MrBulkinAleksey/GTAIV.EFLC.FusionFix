@@ -226,6 +226,9 @@ Grass Wind Debug View
 [GpuGrassDebug]
 Dense grass: colour by surface
 
+[AerialDebug]
+Aerial Perspective Debug View
+
 [WetDbgMaterial]
 Material Categories
 
@@ -384,6 +387,9 @@ Volumetric Clouds
 
 [PbrSky]
 Physical Sky
+
+[AerialPersp]
+Aerial Perspective
 
 [Zoomed Movement]
 Permettre le mouvement en zoomant
