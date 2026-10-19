@@ -585,6 +585,9 @@ public:
     // The clouds' sunlit side against the sky behind them, in times its brightness.
     float fVolumetricCloudsSkyMatch = 2.0f;
     bool bVolumetricCloudsWeather = true;
+    // [WEATHER] PbrSkyHorizonHue: the Physical Sky takes the timecycle's hue (fPalette of it) down to the horizon, as
+    // before; off, only its brightness within 10 degrees of the horizon, and the hue there is the air's own.
+    bool bPbrSkyHorizonHue = false;
     float fVolumetricCloudsVanilla = 0.0f;
     float fVolumetricCloudsTranslucency = 0.25f;
     float fVolumetricCloudsEvolution = 1.0f;
@@ -726,6 +729,21 @@ public:
         static auto p = FusionFixSettings.GetRef("PREF_PBR_SKY");
         return p ? p->get() != 0 : true;
     }
+    // Aerial Perspective in the graphics menu (PREF_AERIAL_PERSPECTIVE, [WEATHER] AerialPerspective): 0 off, 1 to 3 how
+    // thick the air is; the fog takes the Physical Sky's colour without it too. What the last fog pass took, for the
+    // Ctrl+Shift+F10 log.
+    int AerialPerspectiveLevel() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_AERIAL_PERSPECTIVE");
+        return p ? p->get() : 2;
+    }
+    // Aerial Perspective Debug View in Graphics > Debug ([DEBUG] AerialPerspectiveDebug): the air 25 times as thick.
+    bool AerialPerspectiveDebug() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_AERIAL_DEBUG");
+        return p && p->get() != 0;
+    }
+    float fAerialLastShare = 0.0f, fAerialLastStrength = 0.0f, fAerialLastUnits = 0.0f, fAerialLastHaze = 0.0f;
     // Why the last frame drew no volumetric clouds, or that it did, for the Ctrl+Shift+F10 log.
     const char* szCloudsStatus = "not run yet";
     // The same for the reflection map (DrawSkyReflection): what the last call did, how many calls
@@ -1956,6 +1974,7 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.25f, 0.0f, 0.9f),
             IniFloat("WEATHER", "VolumetricCloudsSkyMatch", &PostFxResource::fVolumetricCloudsSkyMatch, 2.0f, 0.0f, 20.0f),
             IniFlag("WEATHER", "VolumetricCloudsWeather", &PostFxResource::bVolumetricCloudsWeather, 1),
+            IniFlag("WEATHER", "PbrSkyHorizonHue", &PostFxResource::bPbrSkyHorizonHue, 0),
             IniFloat("WEATHER", "VolumetricCloudsVanilla", &PostFxResource::fVolumetricCloudsVanilla, 0.0f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsTranslucency", &PostFxResource::fVolumetricCloudsTranslucency, 0.25f, 0.0f, 0.9f),
             IniFloat("WEATHER", "VolumetricCloudsEvolution", &PostFxResource::fVolumetricCloudsEvolution, 1.0f, 0.0f, 10.0f),

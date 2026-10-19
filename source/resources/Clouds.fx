@@ -118,6 +118,15 @@ float4 vec4Morph;         // the map's slow morph: phase, reach in texture units
 // How far the scene is along the view ray at uv, the nearest of the full size pixels around it (a
 // half size pixel covers four): with the farthest, the clouds behind a roof spilled onto its edge.
 // The sky leaves the depth target as it was cleared, at one end or the other, and counts as far.
+// A colour with a NaN or an infinity in it as black. The sky's colour (CloudsSkyRef) feeds itself: it is the mean of
+// the sky on screen, the clouds in that sky are lit by it, and its target keeps 0.9 of itself a frame, so one NaN
+// from a loading frame stayed in it for good and the sky came out black until the targets were made anew.
+float3 Finite(float3 c)
+{
+    float s = c.r + c.g + c.b;
+    return (s >= 0.0 && s < 65504.0) ? max(c, 0.0) : 0.0;
+}
+
 float RawToFar(float raw)
 {
     return (raw > 0.0 && raw < 0.99999) ? raw : 1.0;
@@ -591,7 +600,7 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     // The sky lights the clouds too, in the colour it has on screen: pink at dusk, grey in rain. The
     // game's SkyColor is not that colour, and the clouds took a bluish white under a pink sky. The
     // reflections take the scene's sky of the frame before.
-    float3 skyRef = tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).rgb;
+    float3 skyRef = Finite(tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).rgb);
     float skyLuma = dot(skyRef, float3(0.2126, 0.7152, 0.0722));
     float3 hue = skyLuma > 1e-4 ? lerp(1.0, clamp(skyRef / skyLuma, 0.0, 3.0), vec3SkyHue.z) : 1.0;
     shadeColour = lerp(shadeColour, dot(shadeColour, float3(0.2126, 0.7152, 0.0722)) * hue, vec3SkyHue.x);
@@ -807,7 +816,10 @@ float4 CloudsResolve_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             hi = max(hi, s);
         }
     }
-    float4 history = clamp(SampleCatmullRom(HistoryTex, prev, vec4History.zw), lo, hi);
+    float4 history = SampleCatmullRom(HistoryTex, prev, vec4History.zw);
+    // A NaN in the history would stay there as long as the camera keeps no cut
+    float h = dot(history, 1.0);
+    history = (h >= -65504.0 && h < 65504.0) ? clamp(history, lo, hi) : current;
     return lerp(history, current, vec4History.y);
 }
 
@@ -925,14 +937,14 @@ float4 CloudsSkyRef_PS(float2 uv : TEXCOORD0) : COLOR0
             float3 dir = normalize(float3(dot(v, vec4WorldX.xyz), dot(v, vec4WorldY.xyz), dot(v, vec4WorldZ.xyz)));
             if (dot(dir, vec3SunDir) > 0.906)
                 continue;
-            sum += tex2Dlod(SceneTex, float4(s, 0, 0)).rgb;
+            sum += Finite(tex2Dlod(SceneTex, float4(s, 0, 0)).rgb);
             count += 1.0;
         }
     }
     [branch]
     if (vec4SkyTable.x > 0.0)
     {
-        float3 table = SkyTableMean();
+        float3 table = Finite(SkyTableMean());
         return float4(0.1 * lerp(count > 0.0 ? sum / count : table, table, vec4SkyTable.x), 0.9);
     }
     return count > 0.0 ? float4(0.1 * sum / count, 0.9) : float4(0.0, 0.0, 0.0, 1.0);

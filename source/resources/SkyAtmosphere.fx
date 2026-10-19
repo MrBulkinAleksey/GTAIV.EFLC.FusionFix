@@ -46,6 +46,7 @@ float3 vec3SkyColour;  // the timecycle's SkyColor
 float4 vec4Azimuth;    // xyz the mean of its azimuth colours times AzimuthStrength, w AzimuthHeight
 float4 vec4Match;      // x fPalette: 0 brightness only, 1 the timecycle's hue too; y the ceiling next to the sun; z, w the
                        // knee and the ceiling of the sky's brightness elsewhere, in times the timecycle's at that height
+float fHorizonPalette; // 1: fPalette of the timecycle's hue down to the horizon; 0: none at it, all from 10 degrees up
 
 struct Medium
 {
@@ -301,7 +302,10 @@ float4 SkyView_PS(float2 uv : TEXCOORD0) : COLOR0
     // hue is the air's own, the sunlight's.
     const float aureole = saturate((dot(dir, vec3Sun) - 0.9397) / (1.0 - 0.9397));
     const float nearSun = aureole * aureole;
-    const float3 matched = sky * MatchScale(side, target, vec4Match.x * (1.0 - nearSun));
+    // The timecycle's azimuth colours at the horizon are an evening's brown; with fHorizonPalette 0 the hue there is
+    // the air's own, the timecycle's coming in over the first 10 degrees up.
+    const float horizon = lerp(saturate(dir.z / 0.1736), 1.0, fHorizonPalette);
+    const float3 matched = sky * MatchScale(side, target, vec4Match.x * (1.0 - nearSun) * horizon);
     // Towards a low sun the sky comes out many times the side's: past the knee its brightness rolls off towards the
     // ceiling, keeping the hue.
     const float l = Luminance(matched) / max(Luminance(target), 1e-7);
