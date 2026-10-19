@@ -1206,6 +1206,7 @@ namespace
         std::deque<Job> jobs;
         bool stopping = false;
         bool busy = false;
+        bool hidden = false;                // Hide: the game presents itself, until the next job
 
         // Pacing, the present thread's
         double frameMs = 0.0;               // smoothed time between two frames' jobs
@@ -1334,9 +1335,13 @@ namespace
             stats.presentMax = std::max(stats.presentMax, ms);
             if (FAILED(hr) && stats.failures++ < 5)
                 Log("Present failed: 0x%08X", static_cast<uint32_t>(hr));
-            // Shown with its first frame, and again after the game hid it to present a frame itself
-            if (SUCCEEDED(hr) && !IsWindowVisible(window))
-                ShowWindowAsync(window, SW_SHOWNA);
+            // Shown with its first frame, and again after Hide with the next Present: not by one queued before Hide
+            if (SUCCEEDED(hr))
+            {
+                std::lock_guard lock(mutex);
+                if (!hidden && !IsWindowVisible(window))
+                    ShowWindowAsync(window, SW_SHOWNA);
+            }
             return copied;
         }
 
@@ -1570,6 +1575,7 @@ namespace
             {
                 std::lock_guard lock(mutex);
                 jobs.push_back(job);
+                hidden = false;
             }
             changed.notify_all();
         }
@@ -1613,6 +1619,15 @@ namespace
             windowThread = ready = nullptr;
             window = nullptr;
             parent = nullptr;
+        }
+
+        // The game presents itself (Hide): the window's show and hide messages are posted in this order under the lock
+        void Hide()
+        {
+            std::lock_guard lock(mutex);
+            hidden = true;
+            if (window)
+                ShowWindowAsync(window, SW_HIDE);
         }
 
         // Without the presentation: drained, hidden, its swap chain released
@@ -2133,6 +2148,10 @@ namespace
                         Log("Present failed");
                     break;
                 }
+                case Protocol::Command::Hide:
+                    display.Hide();
+                    ok = true;
+                    break;
                 default: break;
                 }
                 connection.Respond(ok ? Protocol::Status::Ok : Protocol::Status::Failed, serial);

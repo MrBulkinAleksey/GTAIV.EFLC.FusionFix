@@ -24,8 +24,8 @@
 //
 // Presentation by the helper (ConfigureFlags::HelperPresent, not under Wine): the helper puts a child window of its own over
 // the game's window (PresentWindow) and a flip model swap chain on it. Present takes the finished frame (Present, as for
-// the frame generation) and shows it from a thread of its own; the game leaves its own Present out and hides the window
-// when it presents a frame itself (ChildWindow). With PresentGenerate the helper also generates the frame between the one
+// the frame generation) and shows it from a thread of its own; the game leaves its own Present out and asks for Hide
+// when it presents a frame itself: the helper hides its window (ChildWindow), and a Present still queued then does not show it again. With PresentGenerate the helper also generates the frame between the one
 // before and this one (HudLess too, FrameId, MaxLuminance and GenerateReset as for Generate) and shows it first, the
 // rendered frame PresentDelay of the frame time after it. The helper signals SignalValue on its present fence
 // (PresentFenceHandle) once it is done with Present and HudLess, which the game's next copy into them waits for.
@@ -39,7 +39,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 15;
+    constexpr uint32_t Version = 16;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -52,6 +52,7 @@ namespace UpscalerProtocol
         Generate,       // the frame between the last Present and the one before, after an Evaluate of the same frame
         Shutdown,
         Present,        // ConfigureFlags::HelperPresent: Present to the screen, through the helper's swap chain
+        Hide,           // ConfigureFlags::HelperPresent: the game presents itself, the helper's window hidden until the next Present
     };
 
     enum class Backend : uint32_t

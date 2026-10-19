@@ -1491,6 +1491,7 @@ namespace
     HWND presentWindow = nullptr;
     bool presentFailed = false;
     uint64_t presentedValue = 0;       // the helper signals it once the frame posted last by PostPresent is copied out
+    bool hideSent = false;             // Hide asked for since the last PostPresent
 
     std::filesystem::path HelperPath()
     {
@@ -1553,7 +1554,8 @@ namespace
 
     const char* CommandName(Protocol::Command command)
     {
-        return command == Protocol::Command::Generate ? "Generate" : command == Protocol::Command::Present ? "Present" : "Evaluate";
+        return command == Protocol::Command::Generate ? "Generate" : command == Protocol::Command::Present ? "Present" :
+            command == Protocol::Command::Hide ? "Hide" : "Evaluate";
     }
 
     // No answer in time from a helper that still runs
@@ -1597,8 +1599,10 @@ namespace
             ScheduleRetry();
             return false;
         }
-        // A failed Generate leaves the upscaler working
-        if (pendingCommand == Protocol::Command::Generate)
+        // A failed Generate leaves the upscaler working, a failed Hide too
+        if (pendingCommand == Protocol::Command::Hide)
+            ;
+        else if (pendingCommand == Protocol::Command::Generate)
             generationFailed = true;
         else if (pendingCommand == Protocol::Command::Present)
             presentFailed = true;
@@ -1783,6 +1787,7 @@ export namespace Upscaler
             generatedValue = 0;
             // The helper hides its window without the presentation, or shows it again with its first frame
             presentWindow = nullptr;
+            hideSent = false;
             presentFailed = false;
             presentedValue = 0;
             configuredBackend = backendId;
@@ -2111,15 +2116,20 @@ export namespace Upscaler
         }
         Post(Protocol::Command::Present, presentValue);
         presentedValue = presentValue;
+        hideSent = false;
         return true;
     }
 
     // Render thread: the game presented this frame itself, the helper's window would hide it
     void PresentedByGame()
     {
-        // The helper shows it again with the next frame it presents
-        if (presentWindow && IsWindowVisible(presentWindow))
-            ShowWindowAsync(presentWindow, SW_HIDE);
+        // Hidden by the helper, which shows it again with the next frame it presents: a hide from here lost the race with
+        // the frame it still had queued, which showed the window again over the game's own frames (switched to exclusive
+        // fullscreen, the picture froze)
+        if (!presentWindow || hideSent || state != State::Ready || !CollectPending())
+            return;
+        Post(Protocol::Command::Hide, 0);
+        hideSent = true;
     }
 
     // UpscalerTimingLog
