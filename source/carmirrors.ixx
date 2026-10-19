@@ -867,6 +867,10 @@ namespace CarMirrors
     static SafetyHookMid coronaHooks[3];
     static constexpr uint32_t CoronaFlags = 8;
     static void* coronaFunction = nullptr;  // CE 0xC106F0
+    // The lamps' coronas themselves (CCoronas::Render, CE 0xC1F170, coronas.ixx's in its place): what is drawn with
+    // blending (CE 0xC0FA50, called at 0xD76BB7) queues them only for draw lists with flag 0x20 (0xC0FA61), which the
+    // mirror's has not; 0xC106F0 draws other lights. Drawn after it: none had been in a car's mirror, 0 listed.
+    static void* coronaSprites = nullptr;
     static bool inMirrorCoronas = false;    // render thread
 
     static void MirrorCoronaFlags(SafetyHookContext& regs)
@@ -915,6 +919,8 @@ namespace CarMirrors
         CoronaRender::pBeforeDraw = &BindFarDepth;
         CoronaRender::bOtherView = true;
         reinterpret_cast<void (__cdecl*)()>(coronaFunction)();
+        if (coronaSprites)
+            reinterpret_cast<void (__cdecl*)()>(coronaSprites)();
         CoronaRender::bOtherView = false;
         CoronaRender::pBeforeDraw = nullptr;
         inMirrorCoronas = false;
@@ -1250,6 +1256,13 @@ public:
             auto phaseWater = hook::pattern("FF B7 38 09 00 00 E8 ? ? ? ? 83 C4 04 80 3D ? ? ? ? 00 74");
             if (!phaseWater.empty() && CarMirrors::waterFunction && CarMirrors::callback.add && CarMirrors::gatherHook)
                 CarMirrors::phaseWaterHook = safetyhook::create_mid(phaseWater.get_first(0), CarMirrors::PhaseWater);
+            // in what is drawn with blending: mov dword [eax + 8], CCoronas::Render (the callback's function)
+            if (!phaseWater.empty())
+            {
+                const auto blended = reinterpret_cast<uint8_t*>(injector::GetBranchDestination(phaseWater.get_first(6)).as_int());
+                if (blended && blended[0x4F] == 0xC7 && blended[0x50] == 0x40 && blended[0x51] == 0x08)
+                    CarMirrors::coronaSprites = *reinterpret_cast<void**>(blended + 0x52);
+            }
             // the water reflection's techniques: push 0 / push C / call allocate / add esp, C / test eax, eax / je /
             // push [group] / mov ecx, eax / call (the push command) / jmp +2 / xor eax, eax / push eax / call add /
             // push 2 / push 90D / push [esi+938] / call (its entities) / push 0 / push 8 / call allocate / add esp, 18 /
@@ -1324,9 +1337,9 @@ public:
                 CarMirrors::phaseWaterHook ? "on" : "off (not found)", CarMirrors::gatherHook ? "on" : "off (not found)",
                 CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)", CarMirrors::waterFlagHook ? "on" : "off (not found)",
                 CarMirrors::waterPassHook ? "on" : "off (not found)");
-            FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s; its coronas %s; "
+            FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s; its coronas %s (the lamps' %s); "
                 "the trees' leaves %s, buckets 5 and 4 the main scene's fourth way %s\n", CarMirrors::techniqueHooks[0] ? "on" : "off (not found)", CarMirrors::skyHooks[2] ? "on" : "off (not found)",
-                CarMirrors::coronaHooks[2] ? "on" : "off (not found)", CarMirrors::bucketHook ? "on" : "off (not found)",
+                CarMirrors::coronaHooks[2] ? "on" : "off (not found)", CarMirrors::coronaSprites ? "on" : "off (not found)", CarMirrors::bucketHook ? "on" : "off (not found)",
                 CarMirrors::drawBucket && CarMirrors::techniqueHooks[1] ? "on" : "off (not found)");
             if (CarMirrors::quadOffset)
                 FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
