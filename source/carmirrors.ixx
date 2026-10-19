@@ -45,6 +45,7 @@ namespace CarMirrors
     static float zoomOut = 1.5f;            // CarMirrorsZoomOut (hidden): how much wider than a flat mirror they show, 1 flat
     static bool water = true;               // CarMirrorsWater (hidden): 0 leaves the water out of the reflection
     static bool waterReflection = true;     // CarMirrorsWaterReflection (hidden): 0 keeps the game's rule, no water reflection while a mirror is on
+    static bool reflectionShaders = true;   // CarMirrorsReflectionShaders (hidden): 0 draws the mirror's entities with the main view's techniques
     // The game puts the quad along n by a float its quad code reads (0.035 m on PC, 0.0125 with shaders.ixx's Xbox
     // value): read where the code points as the corners are placed, which lands the quad 5 mm in front of the glass.
     // Taken as 0.035, the quad sat 1.75 cm behind the glass, inside the mirror's housing.
@@ -87,6 +88,7 @@ namespace CarMirrors
     static uint32_t mirrorWaterItems[3]{}, mainWaterItems[3]{}, drawnWaterItems[3]{};
     static uint32_t waterFill[3]{};        // the most of each buffer the frame used, after the mirror's
     static uint32_t waterDrawn = 0;        // the mirror pass's water draws (render thread)
+    static uint32_t techniqueDraws = 0;    // frames the mirror's entities went in the reflection techniques
     static const uint32_t* waterTotals[2]{}; // CE 0x1550EAC, 0x154E300: water.dat's quads and triangles
     // The car, for the draw list's snapshots and the phase's plane.
     static std::atomic<uintptr_t> drawnVehicle{ 0 };
@@ -147,11 +149,16 @@ namespace CarMirrors
     // interior mirror's rear window showed the phone and ghosts of trees). Unbound as the mirror's pass starts, s9
     // empty keeping the game's environment map; not put back (no reference held over a device reset): the main
     // scene's glass is drawn by then, and the next frame binds them again.
+    // The phase clears depth and stencil only (CE 0xD769CE, its colour flag 0), the sky meant to cover the rest: in a
+    // tunnel nothing did, and the mirror kept its frames before where nothing was drawn (trails). Cleared to black
+    // as the pass starts, MIRROR_RT bound and its viewport set by then.
     static void __cdecl MirrorPassTint(uint32_t on)
     {
         auto device = rage::grcDevice::GetD3DDevice();
         if (!device)
             return;
+        if (on)
+            device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
         const float tint[4] = { on ? 0.4f : 0.0f, on ? 4.0f * 4.0f : 0.0f, 0.0f, 0.0f };
         device->SetPixelShaderConstantF(204, tint, 1);
         if (auto real = RageDirect3DDevice9::RealDevice(device); real != device)
@@ -416,8 +423,8 @@ namespace CarMirrors
         if (++timedFrames < 300)
             return;
         FusionLog::Write("CarMirrors", "Cost", "mirror phase CPU per frame: draw list %.3f ms, visibility %.3f ms; outdoor scans %u of %u frames; "
-            "quads drawn %u, by the draw list's car %u, dark %u\n",
-            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark);
+            "quads drawn %u, by the draw list's car %u, dark %u; entities in the reflection techniques %u\n",
+            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark, techniqueDraws);
         // items: the water's quads, triangles and far cells, summed over the frames
         FusionLog::Write("CarMirrors", "Water", "water.dat %u quads, %u triangles; gathered %u frames, rolled back %u (over the buffers); "
             "the mirror's items %u/%u/%u, the main scene's %u/%u/%u; buffers filled up to %u/1000, %u/40, %u/400; queued %u, drawn %u, "
@@ -425,7 +432,7 @@ namespace CarMirrors
             waterGathered, waterRolledBack, mirrorWaterItems[0], mirrorWaterItems[1], mirrorWaterItems[2],
             mainWaterItems[0], mainWaterItems[1], mainWaterItems[2], waterFill[0], waterFill[1], waterFill[2],
             waterQueued, waterDrawn, drawnWaterItems[0], drawnWaterItems[1], drawnWaterItems[2]);
-        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = waterGathered = waterRolledBack = waterDrawn = 0;
+        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = waterGathered = waterRolledBack = waterDrawn = techniqueDraws = 0;
         for (int i = 0; i < 3; ++i)
             mirrorWaterItems[i] = mainWaterItems[i] = drawnWaterItems[i] = waterFill[i] = 0;
         buildMs = visibilityMs = 0.0;
@@ -688,6 +695,50 @@ namespace CarMirrors
         inMirrorWater = false;
     }
 
+    // The mirror phase draws its entities (CE 0xB1DEE0 at 0xD76B9A) with the shaders' main techniques, which outdoors
+    // read the sun's shadow cascades fitted to the main camera: shadows in the mirror that moved and changed with the
+    // camera's turn. The water reflection draws its own in the "reflection" technique group (CE 0xD76E31: a push
+    // command with the group in [0x1797690], and a pop command after, vtable CE 0xEA76C4); the car mirror's the same.
+    struct TechniqueGroup
+    {
+        const uint32_t* group = nullptr;
+        void (__fastcall* pushCommand)(void* command, void*, uint32_t group) = nullptr; // CE 0x8DC290
+        uint32_t popVtable = 0;
+    };
+    static TechniqueGroup techniqueGroup;
+    static SafetyHookMid techniqueHooks[2];
+    static bool techniquePushed = false;
+
+    static void PushReflectionTechniques(SafetyHookContext&)
+    {
+        techniquePushed = false;
+        if (!usedThisFrame || !reflectionShaders || !callback.allocate || !callback.add || !*techniqueGroup.group)
+            return;
+        if (auto command = callback.allocate(0xC, 0))
+        {
+            techniqueGroup.pushCommand(command, nullptr, *techniqueGroup.group);
+            callback.add(command);
+            techniquePushed = true;
+            ++techniqueDraws;
+        }
+    }
+
+    static void PopReflectionTechniques(SafetyHookContext&)
+    {
+        if (!techniquePushed)
+            return;
+        techniquePushed = false;
+        auto command = static_cast<uint32_t*>(callback.allocate(0x8, 0));
+        if (command)
+        {
+            command[0] = callback.baseVtable;
+            command[1] ^= (command[1] ^ *callback.counter) & 0x3FFF;
+            ++*callback.counter;
+            command[0] = techniqueGroup.popVtable;
+        }
+        callback.add(command);
+    }
+
     // In the mirror phase's draw list, after its entities and before what is drawn with blending (CE 0xC0FA50): the
     // water, as the main scene queues it after its own (the stencil states it sets round it there left out: the
     // mirror's pass reads no stencil after).
@@ -806,13 +857,14 @@ public:
                 CarMirrors::zoomOut = std::clamp(ini.ReadFloat("MISC", "CarMirrorsZoomOut", 1.5f), 1.0f, 2.5f);
                 CarMirrors::water = ini.ReadInteger("MISC", "CarMirrorsWater", 1) != 0;
                 CarMirrors::waterReflection = ini.ReadInteger("MISC", "CarMirrorsWaterReflection", 1) != 0;
+                CarMirrors::reflectionShaders = ini.ReadInteger("MISC", "CarMirrorsReflectionShaders", 1) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
                 CarMirrors::interiorAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::interiorAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimY", -3.0f), -30.0f, 30.0f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
                     int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut, int(CarMirrors::water),
-                    int(CarMirrors::waterReflection),
+                    int(CarMirrors::waterReflection), int(CarMirrors::reflectionShaders),
                     CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
             };
             CIniReader iniReader("");
@@ -956,6 +1008,24 @@ public:
             auto phaseWater = hook::pattern("FF B7 38 09 00 00 E8 ? ? ? ? 83 C4 04 80 3D ? ? ? ? 00 74");
             if (!phaseWater.empty() && CarMirrors::waterFunction && CarMirrors::callback.add && CarMirrors::gatherHook)
                 CarMirrors::phaseWaterHook = safetyhook::create_mid(phaseWater.get_first(0), CarMirrors::PhaseWater);
+            // the water reflection's techniques: push 0 / push C / call allocate / add esp, C / test eax, eax / je /
+            // push [group] / mov ecx, eax / call (the push command) / jmp +2 / xor eax, eax / push eax / call add /
+            // push 2 / push 90D / push [esi+938] / call (its entities) / push 0 / push 8 / call allocate / add esp, 18 /
+            // test eax, eax / je / mov ecx, [eax+4] / mov [eax], base / xor ecx, [counter] / and ecx, 3FFF /
+            // xor [eax+4], ecx / inc [counter] / mov [eax], (the pop command)
+            auto techniques = hook::pattern("6A 00 6A 0C E8 ? ? ? ? 83 C4 0C 85 C0 74 ? FF 35 ? ? ? ? 8B C8 E8 ? ? ? ? EB 02 33 C0 50 E8 ? ? ? ? 6A 02 68 0D 09 00 00 FF B6 38 09 00 00 E8 ? ? ? ? 6A 00 6A 08 E8 ? ? ? ? 83 C4 18 85 C0 74 ? 8B 48 04 C7 00 ? ? ? ? 33 0D ? ? ? ? 81 E1 FF 3F 00 00 31 48 04 FF 05 ? ? ? ? C7 00");
+            // round the mirror phase's entities: cmp byte [..], 0 (push hooked) / mov eax, 2 / jne / cmp byte [..], 0 / je /
+            // mov eax, 1 / push eax / push 307 / push [edi+938] / call / add esp, C (pop hooked) / test esi, esi
+            auto mirrorEntities = hook::pattern("80 3D ? ? ? ? 00 B8 02 00 00 00 75 09 80 3D ? ? ? ? 00 74 05 B8 01 00 00 00 50 68 07 03 00 00 FF B7 38 09 00 00 E8 ? ? ? ? 83 C4 0C 85 F6");
+            if (!techniques.empty() && !mirrorEntities.empty() && CarMirrors::callback.add)
+            {
+                CarMirrors::techniqueGroup.group = *techniques.get_first<const uint32_t*>(18);
+                CarMirrors::techniqueGroup.pushCommand = reinterpret_cast<void (__fastcall*)(void*, void*, uint32_t)>(
+                    injector::GetBranchDestination(techniques.get_first(24)).as_int());
+                CarMirrors::techniqueGroup.popVtable = *techniques.get_first<uint32_t>(105);
+                CarMirrors::techniqueHooks[0] = safetyhook::create_mid(mirrorEntities.get_first(0), CarMirrors::PushReflectionTechniques);
+                CarMirrors::techniqueHooks[1] = safetyhook::create_mid(mirrorEntities.get_first(45), CarMirrors::PopReflectionTechniques);
+            }
             FusionLog::Write("CarMirrors", "Init", "%u mirror glasses in the table; phase timing %s; outdoor scan %s; quad by the drawn car %s, %u draw list sites\n",
                 uint32_t(std::size(CarMirrorTable)), timeBuild && timeVisibility ? "on" : "partly off",
                 CarMirrors::waterVisibility ? "found" : "not found (the mirrors stay empty outdoors)",
@@ -968,6 +1038,8 @@ public:
                 CarMirrors::waterGateHooks[0] ? "on" : "off", CarMirrors::waterGateHooks[1] ? "on" : "off",
                 CarMirrors::phaseWaterHook ? "on" : "off (not found)", CarMirrors::gatherHook ? "on" : "off (not found)",
                 CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)");
+            FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s\n",
+                CarMirrors::techniqueHooks[1] ? "on" : "off (not found)");
             if (CarMirrors::quadOffset)
                 FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
         };
