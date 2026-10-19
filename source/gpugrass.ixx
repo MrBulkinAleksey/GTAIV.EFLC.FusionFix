@@ -694,7 +694,7 @@ export namespace GpuGrass
         static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER,
                                                                   D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
         static constexpr DWORD kSamplerValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, FALSE };
-        static constexpr DWORD kTrampleValues[] = { D3DTADDRESS_WRAP, D3DTADDRESS_WRAP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE };
+        static constexpr DWORD kTrampleValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE };
         static constexpr DWORD kEdgeValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE };
         static constexpr DWORD kSamplers[3] = { 0, D3DVERTEXTEXTURESAMPLER1, D3DVERTEXTEXTURESAMPLER2 };
         IDirect3DBaseTexture9* oldTexture[3] = {};
@@ -927,7 +927,7 @@ export namespace GpuGrass
         const D3DXVECTOR4 wind(GrassShared::Direction[0] / wl, GrassShared::Direction[1] / wl, -GrassShared::GustPhase, GrassShared::FlutterPhase);
         const D3DXVECTOR4 windDir(GrassShared::Direction[0], GrassShared::Direction[1], GrassShared::BendPerHeight, GrassShared::FlutterPerHeight);
         const bool debug = debugPref && debugPref->get() != 0;
-        const D3DXVECTOR4 blade(1.0f, 1.0f, groundCopied ? 0.25f : 0.0f, debug ? 1.0f : 0.0f);
+        const D3DXVECTOR4 blade(1.0f, 1.0f, groundCopied ? 0.35f : 0.0f, debug ? 1.0f : 0.0f);
         const D3DXVECTOR4 eyeVector(eye[0], eye[1], eye[2], 0.0f);
         effect->SetVector(h.wind, &wind);
         windBefore = windKnown ? windNow : wind;
@@ -976,7 +976,9 @@ export namespace GpuGrass
             }
         }
         auto trample = GrassShared::TrampleTexture;
-        const D3DXVECTOR4 bend(GrassShared::PushPerHeight, 1.0f / GrassShared::TrampleGridSide, trample ? 1.0f : 0.0f, 0.0f);
+        // Without the grid its coordinates go far outside it, where the clamped sampler reads its empty edge
+        const D3DXVECTOR4 bend(GrassShared::PushPerHeight, 1.0f / GrassShared::TrampleGridSide, trample ? GrassShared::TrampleUVOffset[0] : 1000.0f,
+                               trample ? GrassShared::TrampleUVOffset[1] : 1000.0f);
         effect->SetVectorArray(h.bodies, bodyValues, kBodies * 3);
         effect->SetVector(h.bend, &bend);
         effect->SetFloat(h.nearPlane, camera.Near);

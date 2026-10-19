@@ -46,6 +46,9 @@ export namespace GrassShared
     inline float RotorPulse = 1.0f;
     inline IDirect3DTexture9* TrampleTexture = nullptr;
     inline float TrampleGridSide = 64.0f;
+    // What the texture coordinate (world position / TrampleGridSide) is moved by: the texture holds the window of cells
+    // around the player from its corner, edge texels empty, sampled clamped, so ground outside it is not trampled
+    inline float TrampleUVOffset[2] = {};
 }
 
 // Grass Wind ([PROCEDURAL] GrassWind): the wind sways the grass, weeds and small plants the game
@@ -75,7 +78,8 @@ export namespace GrassShared
 // world (a cell's place in it is its world position modulo 64 m, so the grid only clears the rows and columns the player
 // leaves behind), is stamped along each body's path in the last frame (a person's feet, a car's four wheels, a bike's
 // two) with the way it went, and goes to a vertex texture (vs s1, A8R8G8B8: direction, strength, the ground's height
-// modulo 64 m) for the G-buffer pass; c243 = 1 / 64 m, the strength (0 = off). Needs vertex textures (DXVK has them).
+// modulo 64 m; from the window's corner, clamped, edge texels empty) for the G-buffer pass; c243 = 1 / 64 m, the
+// strength (0 = off), the texture coordinate's offset. Needs vertex textures (DXVK has them).
 //
 // GrassWindDebug (Graphics > Debug) sways four times as hard, to see which draws take it. GrassWindLog = 1 ([DEBUG])
 // writes the wind and the grass draws to GTAIV.EFLC.FusionFix.GrassWind.log every 600 G-buffer passes.
@@ -84,7 +88,7 @@ class GrassWind
     static constexpr int kWindRegister = 240;       // c240: direction / wavelength, gust phase, flutter phase
     static constexpr int kModelRegister = 241;      // c241: 1 / height, bend and flutter at the tip (metres)
     static constexpr int kDirectionRegister = 242;  // c242.xy: the wind's unit direction
-    static constexpr int kTrampleRegister = 243;    // c243: 1 / the trample grid's side (m), its strength (0 = off)
+    static constexpr int kTrampleRegister = 243;    // c243: 1 / the trample grid's side (m), its strength (0 = off), the texture coordinate's offset
     static constexpr DWORD kTrampleSampler = D3DVERTEXTEXTURESAMPLER1;  // vs s1
     static constexpr int kBodyRegister = 248;       // c248-c251: two bodies (centre, forward; half length, half width, 1 / reach, strength)
     static constexpr int kSwayFlag = 12;            // b12 (vertex shader)
@@ -371,7 +375,10 @@ class GrassWind
         return trampleTexture != nullptr;
     }
 
-    // The grid's cells to the texture: r, g the direction, b the strength, a the ground modulo kHeightWrap
+    // The grid's cells to the texture: r, g the direction, b the strength, a the ground modulo kHeightWrap. From the
+    // window's corner, not by world cell modulo kCells: sampled with wrapping, ground 32-64 m off took the cells of the
+    // other side of the player, so grass ahead lay down along the path behind and rose as the player came nearer.
+    // The edge texels stay empty, so the clamped sampler gives nothing outside the window.
     static void UploadTrample()
     {
         D3DLOCKED_RECT locked{};
@@ -382,7 +389,8 @@ class GrassWind
             auto row = reinterpret_cast<uint8_t*>(locked.pBits) + y * locked.Pitch;
             for (int x = 0; x < kCells; ++x)
             {
-                const auto& cell = cells[y * kCells + x];
+                const bool edge = x == 0 || y == 0 || x == kCells - 1 || y == kCells - 1;
+                const auto& cell = edge ? Cell{} : CellAt(gridOrigin[0] + x, gridOrigin[1] + y);
                 const auto unorm = [](float v) { return uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
                 const float wrapped = cell.ground / kHeightWrap - std::floor(cell.ground / kHeightWrap);
                 row[x * 4 + 0] = unorm(cell.strength);                     // B
@@ -446,7 +454,7 @@ class GrassWind
         RageDirect3DDevice9::SetTextureBoth(pDevice, kTrampleSampler, on ? trampleTexture : nullptr);
         if (on)
         {
-            for (auto [type, value] : { std::pair{ D3DSAMP_ADDRESSU, DWORD(D3DTADDRESS_WRAP) }, std::pair{ D3DSAMP_ADDRESSV, DWORD(D3DTADDRESS_WRAP) },
+            for (auto [type, value] : { std::pair{ D3DSAMP_ADDRESSU, DWORD(D3DTADDRESS_CLAMP) }, std::pair{ D3DSAMP_ADDRESSV, DWORD(D3DTADDRESS_CLAMP) },
                      std::pair{ D3DSAMP_MINFILTER, DWORD(D3DTEXF_LINEAR) }, std::pair{ D3DSAMP_MAGFILTER, DWORD(D3DTEXF_LINEAR) },
                      std::pair{ D3DSAMP_MIPFILTER, DWORD(D3DTEXF_NONE) } })
                 RageDirect3DDevice9::SetSamplerStateBoth(pDevice, kTrampleSampler, type, value);
@@ -517,9 +525,11 @@ class GrassWind
         GrassShared::RotorPulse = rotorPulse;
         GrassShared::TrampleTexture = trample ? trampleTexture : nullptr;
         GrassShared::TrampleGridSide = kGridSide;
+        GrassShared::TrampleUVOffset[0] = -float(gridOrigin[0]) / kCells;
+        GrassShared::TrampleUVOffset[1] = -float(gridOrigin[1]) / kCells;
         pDevice->SetVertexShaderConstantF(kWindRegister, wind, 1);
         pDevice->SetVertexShaderConstantF(kDirectionRegister, wind + 4, 1);
-        const float trampleParams[4] = { 1.0f / kGridSide, trample ? 1.0f : 0.0f, 0.0f, 0.0f };
+        const float trampleParams[4] = { 1.0f / kGridSide, trample ? 1.0f : 0.0f, GrassShared::TrampleUVOffset[0], GrassShared::TrampleUVOffset[1] };
         pDevice->SetVertexShaderConstantF(kTrampleRegister, trampleParams, 1);
         if (trample)
             BindTrample(pDevice, true);

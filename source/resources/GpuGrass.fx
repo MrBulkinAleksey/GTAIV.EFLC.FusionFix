@@ -35,7 +35,8 @@ float fFarDivNear;
 // stand on, 1 for a helicopter's rotor, 0, 0); none with no strength
 #define kBodies 8
 float4 vec4Bodies[kBodies * 3];
-float4 vec4Bend;        // a body's push at the tip per metre of height, 1 / the trample grid's side (m), its strength (0 = off)
+float4 vec4Bend;        // a body's push at the tip per metre of height, 1 / the trample grid's side (m), the grid's texture
+                        // coordinate offset (GrassShared::TrampleUVOffset; far off without the grid)
 
 sampler2D GroundTex : register(s0);    // a copy of _DEFERRED_GBUFFER_0_ before the grass
 sampler2D TrampleTex : register(s1);   // vertex texture: direction (rg), strength (b), the ground's height modulo 64 m (a)
@@ -120,9 +121,9 @@ float3 Bending(float3 root, float height)
         most = max(most, w);
     }
     // Trampled: the grid's cell, where its ground is near the blade's
-    float4 trample = tex2Dlod(TrampleTex, float4(root.xy * vec4Bend.y, 0.0, 0.0));
+    float4 trample = tex2Dlod(TrampleTex, float4(root.xy * vec4Bend.y + vec4Bend.zw, 0.0, 0.0));
     float wrap = abs(frac(root.z / 64.0 - trample.a + 0.5) - 0.5) * 64.0;
-    float trampled = saturate(2.5 - wrap) * trample.b * vec4Bend.z;
+    float trampled = saturate(2.5 - wrap) * trample.b;
     push += (trample.rg * 2.0 - 1.0) * trampled;
     most = max(most, trampled);
     push *= min(most * rsqrt(dot(push, push) + 1e-5), 1.0);
@@ -180,7 +181,7 @@ Blade MakeBlade(VSInput input, float3 root, float edge, float distance, float ke
     b.dry = smoothstep(0.5, 0.85, wide);
     float bloom = smoothstep(0.55, 0.8, frac(wide * 2.7 + b.patch * 0.6));
     b.second = frac(b.random * 31.17 + input.corner.w * 3.73);
-    b.isFlower = (1.0 - b.isPlant) * (b.second < bloom * 0.08 ? 1.0 : 0.0);
+    b.isFlower = (1.0 - b.isPlant) * (b.second < bloom * 0.04 ? 1.0 : 0.0);
 
     // Long thin blades, curving over; tufts stand taller
     float h = input.blade.w;
@@ -266,23 +267,24 @@ VSOutput GrassVS(VSInput input)
     float3 normal = b.facing * lerp(0.35, 0.15, max(b.isPlant, b.isFlower)) + b.across * (input.vertex.y * rounding);
     output.normal = normalize(normal * (1.0 - 0.8 * b.distant) + float3(0.0, 0.0, 1.0));
 
-    // Its own colour: a hue by patch, by kind, darker at the root and lighter, yellower at the tip; drier in dry
-    // patches (weeds most); each blade a little different, more so near (so the blades part) than far (where they blur)
-    float3 base = lerp(float3(0.17, 0.31, 0.09), float3(0.30, 0.36, 0.08), b.patch);
-    float3 colour = b.isGrass * base + b.isWeed * float3(0.27, 0.30, 0.10) + b.isPlant * float3(0.13, 0.24, 0.07);
-    colour = lerp(colour, float3(0.42, 0.37, 0.17), b.dry * lerp(0.5, 0.85, b.isWeed) * (1.0 - b.isPlant * 0.6));
+    // Its own colour, dull and grey as the city's (Liberty City, not a meadow in spring): a hue by patch, by kind,
+    // darker at the root and a little lighter at the tip; drier, browner in dry patches (weeds most); each blade a
+    // little different, more so near (so the blades part) than far (where they blur)
+    float3 base = lerp(float3(0.13, 0.18, 0.08), float3(0.19, 0.20, 0.09), b.patch);
+    float3 colour = b.isGrass * base + b.isWeed * float3(0.18, 0.18, 0.10) + b.isPlant * float3(0.10, 0.14, 0.07);
+    colour = lerp(colour, float3(0.27, 0.24, 0.16), b.dry * lerp(0.5, 0.85, b.isWeed) * (1.0 - b.isPlant * 0.6));
     colour *= 1.0 + (b.random - 0.5) * lerp(0.5, 0.12, b.distant);
-    colour = lerp(colour, colour * float3(1.25, 1.12, 0.9) + float3(0.04, 0.03, 0.0), t * t * (1.0 - b.isPlant));
-    // Flowers: red, white, yellow or violet heads
+    colour = lerp(colour, colour * float3(1.12, 1.06, 0.95) + float3(0.02, 0.02, 0.01), t * t * (1.0 - b.isPlant));
+    // Flowers, few and faded: red, white, yellow or violet heads
     float hue = frac(b.second * 7.77 + b.patch * 2.0);
-    float3 petals = hue < 0.3 ? float3(0.55, 0.07, 0.04) : hue < 0.55 ? float3(0.72, 0.72, 0.66) : hue < 0.8 ? float3(0.75, 0.58, 0.08) : float3(0.38, 0.2, 0.55);
+    float3 petals = hue < 0.3 ? float3(0.36, 0.10, 0.08) : hue < 0.55 ? float3(0.48, 0.47, 0.43) : hue < 0.8 ? float3(0.46, 0.38, 0.13) : float3(0.27, 0.19, 0.32);
     colour = b.isFlower > 0.0 && t > 0.75 ? petals : colour;
     colour = vec4Blade.w > 0.0 ? TagColour(input.edge2.w) : colour;
     // Occlusion: the roots of dense grass near are in the dark of the blades around them
     float dense = saturate(input.edge1.w) * (1.0 - b.distant);
     output.colour = float4(saturate(colour), lerp(lerp(0.4, 0.2, dense), 1.0, t));
     // A faint sheen on the blades, none on flowers and leaves, nor far off
-    output.w.y = 0.06 * t * b.isGrass * (1.0 - b.isFlower) * (1.0 - b.dry * 0.5) * (1.0 - b.distant);
+    output.w.y = 0.04 * t * b.isGrass * (1.0 - b.isFlower) * (1.0 - b.dry * 0.5) * (1.0 - b.distant);
 
     float4 rootClip = mul(float4(root, 1.0), matViewProj);
     output.ground = float4(rootClip.xy, rootClip.w, lerp(lerp(0.5, 0.32, dense), 1.05, t) * lerp(1.0, 0.85, b.clump * b.isGrass));
@@ -381,7 +383,7 @@ PSOutput GrassPS(VSOutput input)
     float backlit = saturate(dot(normalize(input.view.xyz), vec4Sun.xyz));
     backlit *= backlit * backlit * input.view.w * vec4Sun.w;
     normal = normalize(lerp(normal, vec4Sun.xyz, backlit * 0.8));
-    colour *= 1.0 + backlit * float3(0.35, 0.3, 0.05);
+    colour *= 1.0 + backlit * float3(0.2, 0.17, 0.03);
 
     output.colour = float4(saturate(colour), 1.0);
     output.normal = float4(normal * 0.5 + 0.5, 1.0);

@@ -115,7 +115,7 @@ index 83b6ff0..d13e2c5 100644
 +      mad r9.xy, r13, r10.w, r9
 +      max r9.w, r9.w, r10.w
 +      // trampled: the grid under the vertex, where its height is near the prop's origin
-+      mul r14.xy, r3, c243.x
++      mad r14.xy, r3, c243.x, c243.zw
 +      mov r14.zw, c4.z
 +      texldl r14, r14, s1
 +      mov r15.x, c3.z
@@ -297,7 +297,7 @@ index 5e7fa7f..3729e12 100644
 +      mad r9.xy, r13, r10.w, r9
 +      max r9.w, r9.w, r10.w
 +      // trampled: the grid under the vertex, where its height is near the prop's origin
-+      mul r14.xy, r3, c243.x
++      mad r14.xy, r3, c243.x, c243.zw
 +      mov r14.zw, c4.z
 +      texldl r14, r14, s1
 +      mov r15.x, c3.z
