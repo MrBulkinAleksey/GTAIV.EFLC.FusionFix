@@ -525,9 +525,10 @@ namespace
     }
 
     // All at the back buffer's size, in the format of the helper's textures: A8R8G8B8 as the back buffer without HDR,
-    // where the helper can write it, 16-bit float otherwise. The finished frame and the one before the HUD always; full:
-    // also the generated frame and the saved back buffer, which only the game's own presentation of the frames needs.
-    bool CreateTargets(uint32_t width, uint32_t height, bool full = false)
+    // where the helper can write it, 16-bit float otherwise. The finished frame always, the one before the HUD with hudLess
+    // (not while the helper only presents, without the frame generation); full: also the generated frame and the saved
+    // back buffer, which only the game's own presentation of the frames needs.
+    bool CreateTargets(uint32_t width, uint32_t height, bool full = false, bool hudLess = true)
     {
         // The game resets the device on the main thread while this thread draws: a target made now would be alive at the
         // Reset (DD3D80), and the ones there may be released under it
@@ -535,7 +536,7 @@ namespace
             return false;
         bool eightBit = Upscaler::IsPresentEightBit();
         bool same = TargetWidth == width && TargetHeight == height && bTargetsEightBit == eightBit;
-        if (same && PresentRT && HudLessRT && (!full || (GeneratedRT && SavedRT)))
+        if (same && PresentRT && (!hudLess || HudLessRT) && (!full || (GeneratedRT && SavedRT)))
             return true;
         if (!same)
             ReleaseTargets();
@@ -548,7 +549,7 @@ namespace
                 rt = rage::CreateEmptyRenderTarget(name, width, height, bits, desc);
             return rt && rt->mD3DTexture;
         };
-        bool made = make(PresentRT, "FrameGenerationPresent") && make(HudLessRT, "FrameGenerationHudLess") &&
+        bool made = make(PresentRT, "FrameGenerationPresent") && (!hudLess || make(HudLessRT, "FrameGenerationHudLess")) &&
             (!full || (make(GeneratedRT, "FrameGenerationGenerated") && make(SavedRT, "FrameGenerationSaved")));
         if (!made)
         {
@@ -558,7 +559,8 @@ namespace
         TargetWidth = width;
         TargetHeight = height;
         bTargetsEightBit = eightBit;
-        Log("Targets: %ux%u, %s%s", width, height, eightBit ? "A8R8G8B8" : "A16B16G16R16F", full ? "" : ", the finished frame and the one before the HUD");
+        Log("Targets: %ux%u, %s%s", width, height, eightBit ? "A8R8G8B8" : "A16B16G16R16F",
+            full ? "" : HudLessRT ? ", the finished frame and the one before the HUD" : ", the finished frame");
         return true;
     }
 
@@ -1058,7 +1060,7 @@ namespace
         backBuffer->GetDesc(&desc);
         bool posted = false;
         bool generated = false;
-        if (CreateTargets(desc.Width, desc.Height) && CopyInto(device, backBuffer, PresentRT))
+        if (CreateTargets(desc.Width, desc.Height, false, mode != Mode::Off) && CopyInto(device, backBuffer, PresentRT))
         {
             if (generate && hudLess)
                 ApplyFinishingPasses();
