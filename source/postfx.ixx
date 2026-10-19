@@ -55,6 +55,7 @@ import gpugrass;
 import waterreflections;
 import sharpening;
 import inireload;
+import skytrace;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -1871,7 +1872,9 @@ private:
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!bDeviceLost)
             PbrSkyBeforeDraw(pDevice);
+        SkyTrace::Begin();
         const int result = DrawSkyMain(_this, edx, a2, a3, a4, a5, a6, a7);
+        SkyTrace::End();
         PbrSkyAfterDraw(pDevice);
         if (pDevice && !bDeviceLost && IsWaterReflectionTarget(pDevice))
         {
