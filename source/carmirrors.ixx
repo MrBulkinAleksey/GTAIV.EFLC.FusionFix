@@ -47,7 +47,7 @@ namespace CarMirrors
     static bool water = true;               // CarMirrorsWater (hidden): 0 leaves the water out of the reflection
     static bool waterReflection = true;     // CarMirrorsWaterReflection (hidden): 0 keeps the game's rule, no water reflection while a mirror is on
     static bool reflectionShaders = true;   // CarMirrorsReflectionShaders (hidden): 0 draws the mirror's entities with the main view's techniques
-    static bool skyAfterEntities = true;    // CarMirrorsSkyAfterEntities (hidden): 0 draws the mirror's sky before its entities, as before
+    static bool skyAfterEntities = false;   // CarMirrorsSkyAfterEntities (hidden): 1 draws the mirror's sky after its entities, where they left the depth far
     static bool extraBuckets = true;        // CarMirrorsExtraBuckets (hidden): 0 leaves out the main scene's buckets 5 and 4 the fourth way
     static bool afterEntitiesHooked = false; // the hook after the mirror's entities is in (AfterMirrorEntities)
     // The game puts the quad along n by a float its quad code reads (0.035 m on PC, 0.0125 with shaders.ixx's Xbox
@@ -948,9 +948,10 @@ namespace CarMirrors
         ++extraBucketDraws;
     }
 
-    // The sky after the mirror's entities, where they left the depth far, as the main scene draws it: drawn first, the
-    // player's car's rear window (its reflection technique sets no blend states) covered it, an interior mirror's sky
-    // black where the glass was, the sky back once it was broken.
+    // The sky after the mirror's entities, where they left the depth far, as the main scene draws it (CarMirrorsSkyAfterEntities 1).
+    // Not the fix for an interior mirror's black sky: the player's car's rear window covered it either way, its reflection
+    // technique setting no blend states and drawn opaque, writing depth (the sky back once it was broken); the glass's
+    // reflection techniques blend as its main one (vehicle_glass_reflection_blend.patch), the sky drawn first again.
     static void PopReflectionTechniques(SafetyHookContext& regs);
 
     static void AfterMirrorEntities(SafetyHookContext& regs)
@@ -1096,7 +1097,7 @@ public:
                 CarMirrors::water = ini.ReadInteger("MISC", "CarMirrorsWater", 1) != 0;
                 CarMirrors::waterReflection = ini.ReadInteger("MISC", "CarMirrorsWaterReflection", 1) != 0;
                 CarMirrors::reflectionShaders = ini.ReadInteger("MISC", "CarMirrorsReflectionShaders", 1) != 0;
-                CarMirrors::skyAfterEntities = ini.ReadInteger("MISC", "CarMirrorsSkyAfterEntities", 1) != 0;
+                CarMirrors::skyAfterEntities = ini.ReadInteger("MISC", "CarMirrorsSkyAfterEntities", 0) != 0;
                 CarMirrors::extraBuckets = ini.ReadInteger("MISC", "CarMirrorsExtraBuckets", 1) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
