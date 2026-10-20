@@ -2405,7 +2405,7 @@ private:
     }
 
     // Building Fill Lights: the map lights, no vehicle, traffic light or fire. Outside, 0: the large ones go
-    // dark; 2: the model's filler lights are capped (see nFillLights). With Indirect Light on, filler lights,
+    // dark; 2: all are capped (see nFillLights). Lights a ModelLights.dat line changes stay as it made them. With Indirect Light on, filler lights,
     // inside too, keep FillLightsIndirectScale of their intensity: they stand in for light bounced off the
     // surfaces around, which the indirect light now bounces itself from the lit frame.
     static void FillLight(rage::CLightSource* light)
@@ -2418,9 +2418,13 @@ private:
         const bool exterior = (light->mFlags & (rage::LF_INTERIOR | rage::LF_EXTERIOR)) == rage::LF_EXTERIOR;
         const float radius = light->mRadius;
         const float intensity = light->mIntensity;
-        if (exterior && R.nFillLights == 0 && light->mRadius >= R.fFillLightsMinRadius)
+        const auto model = ModelLights::Current();
+        if (model && model->changed)
+        {
+        }
+        else if (exterior && R.nFillLights == 0 && light->mRadius >= R.fFillLightsMinRadius)
             light->mIntensity = 0.0f;
-        else if (exterior && R.nFillLights == 2 && filler)
+        else if (exterior && R.nFillLights == 2)
         {
             light->mRadius = std::min(light->mRadius, R.fFillLightsMaxRadius);
             light->mIntensity = std::min(light->mIntensity, R.fFillLightsMaxIntensity);

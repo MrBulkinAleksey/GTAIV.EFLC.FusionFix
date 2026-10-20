@@ -39,6 +39,7 @@ export namespace ModelLights
         uintptr_t entity = 0;
         uintptr_t descriptor = 0;
         uint32_t model = 0; // the model's name hash, 0 if unknown
+        bool changed = false; // a ModelLights.dat line covers this light: Building Fill Lights leaves it be
     };
 
     // The model light being submitted, nullptr outside a model light's submit (main thread only).
@@ -162,16 +163,27 @@ namespace
         FusionLog::Write("ModelLights", "Load", "%zu rules", rules.size());
     }
 
-    void Apply(uintptr_t descriptor, uint32_t model)
+    bool Covered(uintptr_t descriptor, uint32_t model)
     {
-        if (!descriptor || !model || rules.empty())
-            return;
+        const auto type = *reinterpret_cast<const uint8_t*>(descriptor + 0x5B);
+        const auto [first, last] = rules.equal_range(model);
+        for (auto it = first; it != last; ++it)
+            if (!it->second.type || it->second.type == type)
+                return true;
+        return false;
+    }
+
+    // Writes the rules into the descriptor; true where a rule covers this light.
+    bool Apply(uintptr_t descriptor, uint32_t model)
+    {
+        if (!descriptor || !model || rules.empty() || !Covered(descriptor, model))
+            return false;
         auto& radius = *reinterpret_cast<float*>(descriptor + 0x38);
         auto& intensity = *reinterpret_cast<float*>(descriptor + 0x3C);
         auto& flags = *reinterpret_cast<uint32_t*>(descriptor + 0x4C);
         if (const auto it = written.find(descriptor); it != written.end() && it->second.model == model &&
             it->second.radius == radius && it->second.intensity == intensity && it->second.flags == flags)
-            return;
+            return true;
         const auto type = *reinterpret_cast<const uint8_t*>(descriptor + 0x5B);
         const auto [first, last] = rules.equal_range(model);
         bool changed = false;
@@ -188,12 +200,13 @@ namespace
             changed = true;
         }
         if (!changed)
-            return;
+            return false;
         written[descriptor] = { model, radius, intensity, flags };
         static int logged = 0;
         if (logged < 200 && ++logged)
             FusionLog::Write("ModelLights", "Apply", "model 0x%08X type %u: radius %.1f -> %.1f, intensity %.2f -> %.2f, flags 0x%X -> 0x%X",
                              model, unsigned(type), oldRadius, radius, oldIntensity, intensity, oldFlags, flags);
+        return true;
     }
 }
 
@@ -226,7 +239,7 @@ public:
                 const auto entity = *reinterpret_cast<const uintptr_t*>(regs.esp + 4);
                 context = { entity, uintptr_t(regs.eax), ModelOf(entity) };
                 inside = true;
-                Apply(context.descriptor, context.model);
+                context.changed = Apply(context.descriptor, context.model);
             });
             static auto leave = safetyhook::create_mid(call.get_first(12), [](SafetyHookContext&)
             {

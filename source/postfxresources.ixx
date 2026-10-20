@@ -916,9 +916,12 @@ public:
     // x -900 in Algonquin) the game stops sending them with a step of the camera.
     // - 0: those reaching at least FillLightsMinRadius go dark, whatever the model says of them.
     // - 1: all stay, as the game.
-    // - 2: the lights the model's author marked filler (2dfx flag 0x100000, LF_FILLER) stay as
-    //   the author made them, but reach no more than FillLightsMaxRadius and are no brighter than
-    //   FillLightsMaxIntensity; the other lights stay as the game.
+    // - 2: they stay as the model's author made them, but reach no more than FillLightsMaxRadius
+    //   and are no brighter than FillLightsMaxIntensity. The flooding ones are mostly not marked
+    //   filler (a night's log: 187 large exterior lights not filler, 51 filler; spots of 30-90 m),
+    //   so all exterior map lights are capped; the caps are about the 90th percentile of the
+    //   filler lights' intensity (12) and the old darkening radius (30).
+    // Lights a ModelLights.dat line changes are left as it made them, by both 0 and 2.
     // FillLightsIndirectScale: with Indirect Light on, the share of their intensity filler lights keep,
     // inside and out (they fake the bounced light the indirect light then adds).
     // FillLightsLog (DEBUG) writes each large or filler map light once, and a count every 10 s,
@@ -926,7 +929,7 @@ public:
     int32_t nFillLights = 0;
     float fFillLightsMinRadius = 30.0f;
     float fFillLightsMaxRadius = 30.0f;
-    float fFillLightsMaxIntensity = 2.0f;
+    float fFillLightsMaxIntensity = 12.0f;
     float fFillLightsIndirectScale = 0.5f;
     bool bFillLightsLog = false;
     rage::grcRenderTargetPC* ContactRawTex = nullptr;
@@ -2036,7 +2039,7 @@ public:
             IniInt("LIGHTING", "FillLights", &PostFxResource::nFillLights, 0, 0, 2),
             IniFloat("LIGHTING", "FillLightsMinRadius", &PostFxResource::fFillLightsMinRadius, 30.0f, 0.0f, 1000.0f),
             IniFloat("LIGHTING", "FillLightsMaxRadius", &PostFxResource::fFillLightsMaxRadius, 30.0f, 0.0f, 1000.0f),
-            IniFloat("LIGHTING", "FillLightsMaxIntensity", &PostFxResource::fFillLightsMaxIntensity, 2.0f, 0.0f, 100.0f),
+            IniFloat("LIGHTING", "FillLightsMaxIntensity", &PostFxResource::fFillLightsMaxIntensity, 12.0f, 0.0f, 100.0f),
             IniFloat("LIGHTING", "FillLightsIndirectScale", &PostFxResource::fFillLightsIndirectScale, 0.5f, 0.0f, 1.0f),
             IniFlag("DEBUG", "FillLightsLog", &PostFxResource::bFillLightsLog, 0),
             IniFloat("LIGHTING", "VolumetricLightHeadlightPitch", &PostFxResource::fVolumetricLightHeadlightPitch, 6.0f, -45.0f, 45.0f),
