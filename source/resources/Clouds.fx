@@ -30,11 +30,6 @@
 // for the far clouds to be crossed at all.
 #define FAR_STEP 0.005
 #define FINE_MISSES 4.0
-// The coverage map's floor between the heaps left out of the clouds, as a share of its range above the threshold.
-#define SHELF 0.3
-// The fair weather clouds' shape: the share of ShapeTex cut out against the layer's cover. Its tile is some 2.5 km
-// (vec4ShapeWind).
-#define SHAPE_GAIN 2.7
 // The fine step at a cloud's edge, in metres, where the layer's own (a 24th of its thickness) is longer: Cloud
 // Variety's heaps 2.2 and 3 km tall were crossed in 92 and 125 m steps against billows of 60 and 15 m, and each
 // step's slice of them came out as a terrace across the clouds' sides.
@@ -193,16 +188,10 @@ float PixelJitter(float2 pixel)
 }
 
 // Density 0 to 1 at p.
-// - The coverage map holds separate heaps spread evenly over the sky (CloudNoiseTex), equalised so
-//   that cloud, where the map is above 1 - cover, takes that share of the sky.
-// - The density across a heap is squared, soft at its edges, and at height h only what is above
-//   1.15 h^1.5 of it stays: the heap narrows from its flat base up to a dome, and a weaker heap stops
-//   lower, so heaps differ in height as they do in size. At 0.9 h a heap's dense core still stood
-//   at the layer's top and was cut flat there: seen from the side, a slab. Lowering the density by a quarter with
-//   height left the evenly spread heaps standing as pillars with walls, and 0.8 h^2 still ran each
-//   one up the layer's whole thickness with flat sides. An overcast sheet, (1 - stratus)^2, keeps
-//   most of its depth. It fades out over the top seventh, and at the base it is half as dense,
-//   which softens the bottom.
+// - The coverage map's heaps (CloudNoiseTex), blurred to some 250 m, say where the sky is cloudy and how much of it
+//   (PlaceAt's share); a fractal noise in 3D (ShapeTex) cut at a threshold that rises with the height makes the
+//   clouds there, flat based, rounding off towards the top and thinning out over its upper part. An overcast sheet
+//   fills the share in and flattens the rise into a deck with a lumpy base.
 // - The detail eats through the whole cloud: round Worley billows of about a sixteenth to a quarter
 //   of DetailScale break it into ragged pieces with gaps, and a finer octave at about a fifth of that
 //   frays the edges, more where the density is low. Eroded near the edges alone, the clouds had soft
@@ -240,6 +229,7 @@ struct Place
     float base;       // the base's height there
     float thickness;  // and the layer's thickness
     float band;       // where it lies between the cloud streets (RowBand)
+    float share;      // the share of ShapeTex that is cloud round about (Density)
 };
 
 // Cloud streets (fRows): lines along the wind, which carries the map along (0.93, 0.37), nearly (5, 2) / sqrt(29),
@@ -266,6 +256,17 @@ Place PlaceAt(float3 p)
     place.thickness = vec4Layer.y * (1.0 + 0.25 * place.weather);
     place.base = vec4Layer.x + vec4Layer.y * 0.1 * (0.5 - 0.5 * place.weather) * (1.0 - fStratus);
     place.band = RowBand(uv0);
+    // How much of the sky round about is cloud: the map blurred to some 250 m against the cover, the streets' bands,
+    // and an overcast sheet filling in; ShapeTex's equalised noise is cloud where it is above 1 - share. Once for a
+    // sample, taken for its steps towards the sun as well.
+    float cover = saturate(max(vec4Layer.w, 0.02) * COVER_GAIN * (1.0 + vec4Morph.w * place.weather));
+    float local = saturate((tex2Dlod(CoverageTex, float4(uv0 + place.morph, 0, 4)).r - fRows * (place.band - 0.45) - 1.0 + cover) / max(cover, 0.01));
+    local = lerp(local, 1.0, fStratus);
+    // Measured offline over the whole map, from above, so the sky the clouds hide is their cover: the noise's lumps
+    // overlap in the view through the layer's thickness, half again as much sky as the share for a share of 0.2 to 0.4.
+    // At the cover times 2.7, small cumulus at 0.15 hid 3% of the sky and broken stratocumulus at 0.62 all of it.
+    float coverHere = vec4Layer.w * (1.0 + vec4Morph.w * place.weather);
+    place.share = saturate((0.8 - 0.2 * coverHere) * local + 0.5 * fStratus);
     return place;
 }
 
@@ -279,7 +280,8 @@ bool MayBeCloud(float3 p)
         return false;
     float c = tex2Dlod(CoverageTex, float4(p.xy * vec4Layer.z + vec4Wind.xy, 0, 5)).r;
     float cover = saturate(max(vec4Layer.w, 0.02) * COVER_GAIN * (1.0 + abs(vec4Morph.w)));
-    return c > 0.9 - cover - fRows * 0.45;
+    // Under an overcast sheet the cloud fills the gaps between the heaps too.
+    return fStratus > 0.0 || c > 0.9 - cover - fRows * 0.45;
 }
 
 // crease: the coarse billows' noise at p, high in the folds between them (0 without the detail).
@@ -294,82 +296,38 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
     float h = (p.z - place.base) / place.thickness;
     if (h <= 0.0 || h >= 1.0)
         return 0.0;
-    // The wind's shear leans the heaps' tops downwind and draws them out.
-    float2 uv = uv0 + place.morph + vec2Shear * h;
+    // The clouds are cut out of a fractal noise in 3D (ShapeTex): place.share says how much of the sky round about is
+    // cloud, and the noise, cut at a threshold that rises with the height, makes the clouds of it, their bases flat,
+    // their tops rounding off and thinning; an overcast sheet flattens the rise into a deck. Cut out of the coverage
+    // map itself, each heap rose from its outline in a wall, its middle a third of the layer up within the first
+    // hundred metres: from below the clouds came out as boxes and loaves, from the side in tiers. One model for every
+    // kind of cloud leaves the march the temp registers for the noise in its steps towards the sun too; with a share
+    // of cloud there in its place, every cloud was lit alike through and through and came out flat as watercolour.
+    // An overcast deck's base rises and falls with the noise over its bottom third, so it has a relief of its own:
+    // flat, it came out as an even grey fog from below.
+    float flat = (1.0 - fStratus) * (1.0 - fStratus);
+    float rise = max(1.0 - h / 0.15, 0.0);
+    float deck = max(1.0 - h / 0.3, 0.0);
+    float cut = 1.0 - place.share + 0.35 * h * h * flat + fBaseRound * rise * rise * flat + 0.6 * fStratus * deck * deck;
+    // In the map's frame, so the clouds drift with it, and reshaping slowly as the billows do.
+    float3 q = float3(p.xy * vec4ShapeWind.y + vec4Wind.xy * vec4ShapeWind.x, p.z * vec4ShapeWind.y + fEvolution);
     float2 wander = 0.0;
-    // The outline wanders with height: the coverage is read a little off, by a coarse octave of the
-    // detail that changes up through the layer, so the heaps do not stand as walls drawn up from a
-    // map. The steps towards the sun and the coarse search leave it out.
+    float n;
     [branch]
     if (detail)
     {
+        // The noise swept by a coarse octave of the detail that changes up through the layer, so its lumps swirl
+        // instead of sitting as blobs, and a finer octave of it for the outline's ragged edges. The steps towards
+        // the sun take the coarse octave alone.
         float3 w = p * (vec4Shape.y * 0.35) + float3(vec4Wind.zw, fEvolution);
         wander = tex3Dlod(DetailTex, float4(w, 0)).rg - 0.5;
-        uv += wander * fWarp;
+        q.xy += wander * 0.12;
+        n = lerp(tex3Dlod(ShapeTex, float4(q, 0)).r, tex3Dlod(ShapeTex, float4(q * 3.7 + 0.29, 0)).r, 0.4);
     }
-    float cover = saturate(max(vec4Layer.w, 0.02) * COVER_GAIN * (1.0 + vec4Morph.w * weather));
-    float threshold = 1.0 - cover;
-    float puffs = saturate(1.0 - fStratus * 2.5);
-    float d = 0.0;
-    // The heaps out of the map, while there is overcast sheet in the sky to blend with (below).
-    [branch]
-    if (puffs < 1.0)
-    {
-        // Filtered with a quintic curve between texels: linear filtering's kinks at the texel edges stood
-        // out as creases down the clouds' sides.
-        float2 texel = uv * COVERAGE_SIZE - 0.5;
-        float2 cell = floor(texel);
-        float2 f = texel - cell;
-        f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-        float c = tex2Dlod(CoverageTex, float4((cell + f + 0.5) / COVERAGE_SIZE, 0, 0)).r;
-
-        // Overcast: the map evens out towards a sheet.
-        c = lerp(c, max(c, 1.0 - cover * 0.5), fStratus);
-        // Streets: the cover thickens along them and thins out between, the heaps lined up along the wind
-        // (the deferred lighting's cloud shadows take the same).
-        c -= fRows * (place.band - 0.45);
-        d = saturate((c - threshold) / max(cover, 0.01));
-        // The map's floor between the heaps left out, the first SHELF of its range (less under an overcast sheet): it
-        // lay round every heap as a flat sheet some 100 m thick and 300 to 400 m wide, out of which the heap rose
-        // steeply, and seen from the side heaps at different bases stood on their sheets in tiers, like a layer cake.
-        float shelf = SHELF * (1.0 - fStratus);
-        d = saturate((d - shelf) / (1.0 - shelf));
-        d *= d;
-        // The base's edges curl in by fBaseRound over its bottom quarter, so a heap sits on a rounded
-        // base rather than a sheared off one.
-        // The one pass variant for the reflections (full false) leaves it out, and keeps a linear dome,
-        // for the slots.
-        float curl = full ? max(1.0 - 4.0 * h, 0.0) : 0.0;
-        float dome = ((full ? h * sqrt(h) : h) * 1.15 + fBaseRound * curl * curl) * (1.0 - fStratus) * (1.0 - fStratus);
-        d = saturate((d - dome) / max(1.0 - dome, 0.05)) * smoothstep(1.0, 0.85, h);
-    }
-    // Fair weather clouds (the more the less overcast sheet, none from 0.4 of it) cut out of a fractal noise in 3D
-    // instead: the map, blurred to some 250 m, only says how much of the sky round about is cloud, and ShapeTex, cut
-    // at a threshold that rises with the height, makes the clouds of it; their bases flat, their tops rounding off.
-    // Out of the map alone each heap rose from its outline in a wall, its middle a third of the layer up within the
-    // first hundred metres, and seen from below the clouds came out as boxes and loaves.
-    [branch]
-    if (puffs > 0.0)
-    {
-        float local = saturate((tex2Dlod(CoverageTex, float4(uv, 0, 4)).r - fRows * (place.band - 0.45) - threshold) / max(cover, 0.01));
-        float share = saturate(vec4Layer.w * SHAPE_GAIN * (1.0 + vec4Morph.w * weather) * local);
-        float base = max(1.0 - h / 0.15, 0.0);
-        float cut = 1.0 - share + 0.35 * h * h + fBaseRound * base * base;
-        // The steps towards the sun take the share of cloud about the point instead of the noise, at three tenths of
-        // full density, for what the noise leaves on average (offline, as near the noise's own light as matters; at
-        // six tenths the sunlit sides came out grey). The noise there ran the march past its temp registers.
-        float d3 = saturate(1.0 - cut) * 0.3;
-        [branch]
-        if (detail)
-        {
-            // In the map's frame, so the clouds drift with it; reshaping slowly as the billows do.
-            float3 q = float3(p.xy * vec4ShapeWind.y + vec4Wind.xy * vec4ShapeWind.x, p.z * vec4ShapeWind.y + fEvolution);
-            float n = lerp(tex3Dlod(ShapeTex, float4(q, 0)).r, tex3Dlod(ShapeTex, float4(q * 3.7 + 0.29, 0)).r, 0.4);
-            d3 = saturate((n - cut) / 0.1);
-        }
-        d3 *= smoothstep(0.0, 0.06, h) * (1.0 - 0.5 * smoothstep(0.6, 1.0, h)) * smoothstep(1.0, 0.9, h);
-        d = lerp(d, d3, puffs);
-    }
+    else
+        n = tex3Dlod(ShapeTex, float4(q, 0)).r;
+    float d = saturate((n - cut) / 0.1);
+    d *= smoothstep(0.0, 0.06, h) * (1.0 - 0.5 * smoothstep(0.6, 1.0, h) * flat) * smoothstep(1.0, 0.9, h);
     if (d <= 0.0)
         return 0.0;
 
