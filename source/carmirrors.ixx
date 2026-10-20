@@ -14,6 +14,7 @@ import inireload;
 import firstperson;
 import coronas;
 import entityclass;
+import renderskip;
 
 // Real reflections in the player car's mirrors, from the driver's seat in first person (Car Mirrors in the menu).
 // The game has planar mirrors for interiors (bathrooms): each frame CE 0xB59DD0 asks 0xA0F820 for the nearest
@@ -112,9 +113,17 @@ namespace CarMirrors
     {
         UINT colourWidth, colourHeight, depthWidth, depthHeight;
         D3DFORMAT colourFormat, depthFormat;
-        DWORD zEnable, zFunc, zWrite;
+        const void* colourSurface;
+        const void* depthSurface;
+        const char* targetName;
+        DWORD zEnable, zFunc, zWrite, stencilEnable, stencilFunc, colourWrite, cull;
+        float depthBias, slopeBias;
+        D3DVIEWPORT9 viewport;
+        float logDepthPS[4], logDepthVS[4];
+        uint32_t drawsSincePass;
         bool known;
     };
+    static uint32_t passStartDraws = 0;   // RenderSkip's draw count as the mirror's pass started
     enum { TargetsEntities, TargetsWater, TargetsCoronas, TargetSites };
     static PassTargets passTargets[TargetSites]{};
 
@@ -131,6 +140,7 @@ namespace CarMirrors
         {
             if (SUCCEEDED(surface->GetDesc(&desc)))
                 t.colourWidth = desc.Width, t.colourHeight = desc.Height, t.colourFormat = desc.Format;
+            t.colourSurface = surface;
             surface->Release();
         }
         surface = nullptr;
@@ -138,11 +148,26 @@ namespace CarMirrors
         {
             if (SUCCEEDED(surface->GetDesc(&desc)))
                 t.depthWidth = desc.Width, t.depthHeight = desc.Height, t.depthFormat = desc.Format;
+            t.depthSurface = surface;
             surface->Release();
         }
         real->GetRenderState(D3DRS_ZENABLE, &t.zEnable);
         real->GetRenderState(D3DRS_ZFUNC, &t.zFunc);
         real->GetRenderState(D3DRS_ZWRITEENABLE, &t.zWrite);
+        real->GetRenderState(D3DRS_STENCILENABLE, &t.stencilEnable);
+        real->GetRenderState(D3DRS_STENCILFUNC, &t.stencilFunc);
+        real->GetRenderState(D3DRS_COLORWRITEENABLE, &t.colourWrite);
+        real->GetRenderState(D3DRS_CULLMODE, &t.cull);
+        DWORD bias = 0;
+        real->GetRenderState(D3DRS_DEPTHBIAS, &bias);
+        std::memcpy(&t.depthBias, &bias, sizeof(float));
+        real->GetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, &bias);
+        std::memcpy(&t.slopeBias, &bias, sizeof(float));
+        real->GetViewport(&t.viewport);
+        real->GetPixelShaderConstantF(209, t.logDepthPS, 1);
+        real->GetVertexShaderConstantF(227, t.logDepthVS, 1);
+        t.targetName = RenderSkip::CurrentTarget();
+        t.drawsSincePass = RenderSkip::DrawCount() - passStartDraws;
         t.known = true;
         passTargets[site] = t;
     }
@@ -238,6 +263,8 @@ namespace CarMirrors
         if (on)
             device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
         mirrorPass = on != 0;
+        if (on)
+            passStartDraws = RenderSkip::DrawCount();
         interiorPass = (on & 0xff) == 2;
         if (interiorPass)
             std::copy_n(ownPlaces[(on >> 8) & 3], 3, ownPlace);
@@ -585,9 +612,14 @@ namespace CarMirrors
         {
             const auto t = passTargets[i];
             if (t.known)
-                FusionLog::Write("CarMirrors", "Targets", "%s: colour %ux%u format %d, depth %ux%u format %d; z enable %u, func %u, write %u\n",
-                    siteNames[i], t.colourWidth, t.colourHeight, int(t.colourFormat), t.depthWidth, t.depthHeight, int(t.depthFormat),
-                    t.zEnable, t.zFunc, t.zWrite);
+                FusionLog::Write("CarMirrors", "Targets", "%s (draw %u of the pass, target %s): colour %p %ux%u format %d, depth %p %ux%u format %d; "
+                    "z enable %u, func %u, write %u, bias %g, slope bias %g; stencil %u func %u; colour write 0x%X, cull %u; "
+                    "viewport %u,%u %ux%u z %g..%g; log depth ps c209 %g %g %g %g, vs c227 %g %g %g %g\n",
+                    siteNames[i], t.drawsSincePass, t.targetName ? t.targetName : "?", t.colourSurface, t.colourWidth, t.colourHeight,
+                    int(t.colourFormat), t.depthSurface, t.depthWidth, t.depthHeight, int(t.depthFormat), t.zEnable, t.zFunc, t.zWrite,
+                    t.depthBias, t.slopeBias, t.stencilEnable, t.stencilFunc, t.colourWrite, t.cull, t.viewport.X, t.viewport.Y,
+                    t.viewport.Width, t.viewport.Height, t.viewport.MinZ, t.viewport.MaxZ, t.logDepthPS[0], t.logDepthPS[1],
+                    t.logDepthPS[2], t.logDepthPS[3], t.logDepthVS[0], t.logDepthVS[1], t.logDepthVS[2], t.logDepthVS[3]);
             passTargets[i].known = false;
         }
         if (mirrorCoronaFrames)
