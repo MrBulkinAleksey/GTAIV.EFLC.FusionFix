@@ -142,6 +142,8 @@ namespace CarMirrors
     static void __cdecl CaptureBegin(uint32_t glass);
     static void __cdecl CaptureEnd(uint32_t);
     static void CaptureSnapshot(uint32_t point);
+    static void CaptureQuad(IDirect3DDevice9* device);
+    static bool captureQuadPending = false;     // render thread: the mirror quad's source still to be taken after the pass
     static void __cdecl CaptureSnapshotCallback(uint32_t point) { CaptureSnapshot(point); }
     enum SnapshotPoint : uint32_t { AfterSky, BeforeEntities, AfterEntities, AfterWater, AfterCoronas, PassEnd };
     // The frame capture (2026-10-20) showed nearly every entity of the mirror's pass drawn with blending one and one, the
@@ -1168,7 +1170,11 @@ namespace CarMirrors
     static void CaptureDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT primitives)
     {
         if (!capturing)
+        {
+            if (captureQuadPending)
+                CaptureQuad(device);
             return;
+        }
         static constexpr const char* kindNames[] = { "unknown", "building", "prop", "vehicle", "ped" };
         DWORD z = 0, zFunc = 0, zWrite = 0, blend = 0, source = 0, destination = 0, alphaTest = 0, alphaRef = 0, colourWrite = 0, cull = 0, stencil = 0;
         device->GetRenderState(D3DRS_ZENABLE, &z);
@@ -1299,6 +1305,7 @@ namespace CarMirrors
             return;
         CaptureSnapshot(PassEnd);
         capturing = false;
+        captureQuadPending = true;
         FusionLog::WriteText("CarMirrorsCapture", "Pass", captureText);
         captureText.clear();
         captureText.shrink_to_fit();
@@ -1330,20 +1337,8 @@ namespace CarMirrors
 
     // The mirror's target as a picture (half the size, 24-bit BMP, x / (1 + x) and gamma 2.2 for the HDR colour) next to
     // the log, GTAIV.EFLC.FusionFix.CarMirrorsCapture.<capture>.<n>-<point>.bmp, and a line in the log where it was taken
-    static void CaptureSnapshot(uint32_t point)
+    static std::string SaveSurface(IDirect3DDevice9* real, IDirect3DSurface9* target, uint32_t index, const char* pointName)
     {
-        if (!capturing)
-            return;
-        static constexpr const char* pointNames[] = { "after-sky", "before-entities", "after-entities", "after-water", "after-coronas", "end" };
-        const char* pointName = point < std::size(pointNames) ? pointNames[point] : "other";
-        uint32_t& taken = captureTaken;
-        auto device = rage::grcDevice::GetD3DDevice();
-        if (!device)
-            return;
-        auto real = RageDirect3DDevice9::RealDevice(device);
-        IDirect3DSurface9* target = nullptr;
-        if (FAILED(real->GetRenderTarget(0, &target)) || !target)
-            return;
         D3DSURFACE_DESC desc{};
         target->GetDesc(&desc);
         std::string result = "not taken";
@@ -1385,7 +1380,7 @@ namespace CarMirrors
                     }
                 }
                 copy->UnlockRect();
-                const auto name = std::format(L"CarMirrorsCapture.{}.{}-{}", captureNumber, taken, std::wstring(pointName, pointName + std::strlen(pointName)));
+                const auto name = std::format(L"CarMirrorsCapture.{}.{}-{}", captureNumber, index, std::wstring(pointName, pointName + std::strlen(pointName)));
                 const auto path = FusionLog::Directory() / (L"GTAIV.EFLC.FusionFix." + name + L".bmp");
                 if (FILE* file = _wfopen(path.c_str(), L"wb"))
                 {
@@ -1403,16 +1398,80 @@ namespace CarMirrors
                     fwrite(header, 1, sizeof(header), file);
                     fwrite(pixels.data(), 1, pixels.size(), file);
                     fclose(file);
-                    result = std::format("GTAIV.EFLC.FusionFix.CarMirrorsCapture.{}.{}-{}.bmp", captureNumber, taken, pointName);
+                    result = std::format("GTAIV.EFLC.FusionFix.CarMirrorsCapture.{}.{}-{}.bmp", captureNumber, index, pointName);
                 }
             }
             copy->Release();
         }
         else
             result = std::format("not taken (format {}, {} samples)", int(desc.Format), int(desc.MultiSampleType));
+        return result;
+    }
+
+    static void CaptureSnapshot(uint32_t point)
+    {
+        if (!capturing)
+            return;
+        static constexpr const char* pointNames[] = { "after-sky", "before-entities", "after-entities", "after-water", "after-coronas", "end" };
+        const char* pointName = point < std::size(pointNames) ? pointNames[point] : "other";
+        uint32_t& taken = captureTaken;
+        auto device = rage::grcDevice::GetD3DDevice();
+        if (!device)
+            return;
+        auto real = RageDirect3DDevice9::RealDevice(device);
+        IDirect3DSurface9* target = nullptr;
+        if (FAILED(real->GetRenderTarget(0, &target)) || !target)
+            return;
+        const std::string result = SaveSurface(real, target, taken, pointName);
         target->Release();
         captureText += std::format("----- picture {} {} after draw {}: {}\n", taken, pointName, int(captureDraws) - 1, result);
         ++taken;
+    }
+
+    // The main view's draw of the mirror's quad (mirror.fxc, PS 763) after a captured pass: the picture of what it reads
+    // on s0 (water black on the screen but not in the mirror's target at the pass's end), the target it draws into,
+    // and its constants
+    static constexpr uint32_t MirrorQuadPS = 763;
+
+    static void CaptureQuad(IDirect3DDevice9* device)
+    {
+        IDirect3DPixelShader9* ps = nullptr;
+        device->GetPixelShader(&ps);
+        const uint32_t psNumber = ShaderNumber(ps, true);
+        if (ps) ps->Release();
+        if (psNumber != MirrorQuadPS)
+            return;
+        captureQuadPending = false;
+        auto real = RageDirect3DDevice9::RealDevice(device);
+        std::string text = std::format("mirror quad drawn into {}", RenderSkip::CurrentTarget() ? RenderSkip::CurrentTarget() : "?");
+        IDirect3DBaseTexture9* texture = nullptr;
+        real->GetTexture(0, &texture);
+        if (texture && texture->GetType() == D3DRTYPE_TEXTURE)
+        {
+            IDirect3DSurface9* surface = nullptr;
+            if (SUCCEEDED(static_cast<IDirect3DTexture9*>(texture)->GetSurfaceLevel(0, &surface)) && surface)
+            {
+                text += std::format(", s0 {}: {}", static_cast<const void*>(texture), SaveSurface(real, surface, captureTaken, "quad-source"));
+                surface->Release();
+            }
+        }
+        else
+            text += std::format(", s0 {} not a texture", static_cast<const void*>(texture));
+        if (texture)
+            texture->Release();
+        for (UINT reg : { 39u, 46u })
+        {
+            float c[4]{};
+            real->GetPixelShaderConstantF(reg, c, 1);
+            text += std::format(", c{} {:.4f} {:.4f} {:.4f} {:.4f}", reg, c[0], c[1], c[2], c[3]);
+        }
+        DWORD blend = 0, source = 0, destination = 0, srgb = 0;
+        real->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
+        real->GetRenderState(D3DRS_SRCBLEND, &source);
+        real->GetRenderState(D3DRS_DESTBLEND, &destination);
+        real->GetSamplerState(0, D3DSAMP_SRGBTEXTURE, &srgb);
+        text += std::format(", blend {} {}/{}, sRGB read {}\n", blend, source, destination, srgb);
+        FusionLog::WriteText("CarMirrorsCapture", "Quad", text);
     }
 
     static void MirrorCoronaFlags(SafetyHookContext& regs)
