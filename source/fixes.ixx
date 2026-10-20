@@ -301,8 +301,9 @@ public:
         // The four-head industrial floodlight CJ_IND_LIGHT_1 (docks, port, airport) has its point lights about 11 m up
         // with a 10 m radius: the ground under it gets no light once its real lights replace the far LOD lights. In
         // 0xc1e200 (2dfx light of an entity, only caller 0xc1e1a4 with the entity in ESI, saved at [esp+1Ch] here) the
-        // point light's radius is read from the effect (+0x38) for the submit 0xabcc50; for this model's lights that
-        // point straight down (+0x54 == 0: the default (0,0,-1)) it is raised to 32 m. Position, colour and power stay.
+        // point light's radius is read from the effect (+0x38) for the submit 0xabcc50; for this model's lights with no
+        // projected texture (+0x54 == 0, which also leaves them the default direction (0,0,-1)) it is raised to 32 m.
+        // Position, colour and power stay.
         FusionFix::onInitEventAsync() += []()
         {
             // movss xmm0, [edi+38h]; movss [esp], xmm0; push [ebp+2Ch]; push [edi+54h]; ... push 0 (point); push [ebp+8]; call

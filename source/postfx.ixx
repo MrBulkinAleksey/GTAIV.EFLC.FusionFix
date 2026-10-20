@@ -2393,7 +2393,7 @@ private:
         const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
 
         // Spot lights of 8 to 20 m, most of lamppost.img, none of a vehicle, traffic light, the
-        // unculled source or LF_10, and none with a shaft already; headlights are the spot lights
+        // unculled source or a filler light, and none with a shaft already; headlights are the spot lights
         // of at least 8 m with the headlight flag (smaller ones are tail and brake lights),
         // whatever their other flags.
         if (light->mType != rage::LT_SPOT || (light->mFlags & rage::LF_SHAFT))
@@ -2401,7 +2401,7 @@ private:
         const uint32_t headlightFlag = R.nVolumetricLightHeadlightFlag;
         const bool headlight = headlightFlag && (light->mFlags & headlightFlag) && light->mRadius >= 8.0f &&
                                R.fVolumetricLightHeadlightIntensity > 0.0f;
-        constexpr uint32_t noShaft = rage::LF_TRAFFIC | rage::LF_VEHICLE | rage::LF_UNCULLED | rage::LF_10 | rage::LF_SHAFT;
+        constexpr uint32_t noShaft = rage::LF_TRAFFIC | rage::LF_VEHICLE | rage::LF_UNCULLED | rage::LF_FILLER | rage::LF_SHAFT;
         if (!headlight && (light->mRadius < 8.0f || light->mRadius > 20.0f || (light->mFlags & noShaft)))
             return;
         const float fadeStart = R.fVolumetricLightMaxDistance * 0.3f;
