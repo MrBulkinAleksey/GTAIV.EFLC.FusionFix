@@ -166,10 +166,11 @@ namespace CarMirrors
     // tunnel nothing did, and the mirror kept its frames before where nothing was drawn (trails). Cleared to black
     // as the pass starts, MIRROR_RT bound and its viewport set by then.
     // Low byte 2: the interior mirror's pass, the player's car's position (as its draw command keeps it) in ownPlaces at
-    // the index in the second byte: OwnCarDrawBegin leaves its glass out (vehicle_glass_reflections_wet_mirror.patch).
+    // the index in the second byte: MirrorDrawBegin leaves its glass out (vehicle_glass_reflections_wet_mirror.patch).
     static float ownPlaces[4][3] = {};
     static uint32_t ownPlaceNext = 0;
     static bool interiorPass = false; // render thread
+    static bool mirrorPass = false;   // render thread, any car mirror's pass
     static float ownPlace[3] = {};
     static bool ownDrawOn = false;
 
@@ -188,6 +189,7 @@ namespace CarMirrors
             return;
         if (on)
             device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+        mirrorPass = on != 0;
         interiorPass = (on & 0xff) == 2;
         if (interiorPass)
             std::copy_n(ownPlaces[(on >> 8) & 3], 3, ownPlace);
@@ -198,12 +200,28 @@ namespace CarMirrors
                 RageDirect3DDevice9::SetTextureBoth(device, stage, nullptr);
     }
 
-    // Entity draw hooks (render thread): in the interior mirror's pass, the player's car's draws (a vehicle's command
-    // placed where the car stood as the mirror's list was made) have c204.w 1, and its glass shaders draw none of it:
-    // the rear window covered the mirror's sky black even with the blend states of
-    // vehicle_glass_reflection_blend.patch, and the sky was there once the window was broken.
-    static void OwnCarDrawBegin(EntityClass::Kind kind)
+    // The technique group drawn with (CE [0x106B308], -1 the default group; its setter CE 0x42F0A0).
+    static int32_t* currentTechniqueGroup = nullptr;
+    static int32_t pedSavedGroup = -1;
+    static bool pedGroupSwapped = false;
+
+    // Entity draw hooks (render thread).
+    // Peds in a car mirror's pass are drawn in the default technique group, as in the game's own mirrors: in the
+    // "reflection" group (PushReflectionTechniques) the ped shaders (gta_ped, gta_ped_skin, the hair) have no technique,
+    // and a shader without one in the group draws nothing (CE 0x42EBCB); the parts drawn with gta_default and its kin
+    // took their reflection_drawskinned, whose vertex shader is the unskinned one: peds walked in the bind pose.
+    // In the interior mirror's pass, the player's car's draws (a vehicle's command placed where the car stood as the
+    // mirror's list was made) have c204.w 1, and its glass shaders draw none of it: the rear window covered the
+    // mirror's sky black even with the blend states of vehicle_glass_reflection_blend.patch, and the sky was there once
+    // the window was broken.
+    static void MirrorDrawBegin(EntityClass::Kind kind)
     {
+        if (mirrorPass && kind == EntityClass::Kind::Ped && currentTechniqueGroup && *currentTechniqueGroup != -1)
+        {
+            pedSavedGroup = *currentTechniqueGroup;
+            *currentTechniqueGroup = -1;
+            pedGroupSwapped = true;
+        }
         if (!interiorPass || kind != EntityClass::Kind::Vehicle)
             return;
         uint16_t model;
@@ -222,8 +240,13 @@ namespace CarMirrors
         }
     }
 
-    static void OwnCarDrawEnd(EntityClass::Kind)
+    static void MirrorDrawEnd(EntityClass::Kind)
     {
+        if (pedGroupSwapped)
+        {
+            *currentTechniqueGroup = pedSavedGroup;
+            pedGroupSwapped = false;
+        }
         if (!ownDrawOn)
             return;
         ownDrawOn = false;
@@ -1145,7 +1168,7 @@ class CarMirrorsHooks
 public:
     CarMirrorsHooks()
     {
-        EntityClass::AddDrawHooks(CarMirrors::OwnCarDrawBegin, CarMirrors::OwnCarDrawEnd);
+        EntityClass::AddDrawHooks(CarMirrors::MirrorDrawBegin, CarMirrors::MirrorDrawEnd);
 
         FusionFix::onInitEventAsync() += []()
         {
@@ -1367,6 +1390,10 @@ public:
                     CarMirrors::coronaHooks[2] = safetyhook::create_mid(coronas.get_first(5), CarMirrors::MirrorCoronaFlags);
                 }
             }
+            // the technique group's setter: mov eax, [esp+4] / mov [group], eax / ret / int3 x6 / mov eax, [group] / ret
+            auto groupSetter = hook::pattern("8B 44 24 04 A3 ? ? ? ? C3 CC CC CC CC CC CC A1 ? ? ? ? C3");
+            if (!groupSetter.empty() && *groupSetter.get_first<int32_t*>(5) == *groupSetter.get_first<int32_t*>(17))
+                CarMirrors::currentTechniqueGroup = *groupSetter.get_first<int32_t*>(5);
             if (!techniques.empty() && !mirrorEntities.empty() && CarMirrors::callback.add)
             {
                 CarMirrors::techniqueGroup.group = *techniques.get_first<const uint32_t*>(18);

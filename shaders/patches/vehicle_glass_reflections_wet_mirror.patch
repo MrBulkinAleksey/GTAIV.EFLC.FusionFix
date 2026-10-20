@@ -7,7 +7,7 @@ index 3e5af028..e42960a5 100644
      dp3 r8.w, r8, r8
      add r8.w, r8.w, -c204.y
 +    // FusionFix vehicle_glass_reflections_wet_mirror.patch: none of the glass while c204.w is 1: the player's car's in its interior mirror
-+    // (carmirrors.ixx OwnCarDrawBegin), its rear window covered the sky there black.
++    // (carmirrors.ixx MirrorDrawBegin), its rear window covered the sky there black.
 +    mov r26, -c204.w
 +    texkill r26
      mov r8.x, c204.x
@@ -22,7 +22,7 @@ index 8988f5b6..d1f0db62 100644
      dp3 r8.w, r8, r8
      add r8.w, r8.w, -c204.y
 +    // FusionFix vehicle_glass_reflections_wet_mirror.patch: none of the glass while c204.w is 1: the player's car's in its interior mirror
-+    // (carmirrors.ixx OwnCarDrawBegin), its rear window covered the sky there black.
++    // (carmirrors.ixx MirrorDrawBegin), its rear window covered the sky there black.
 +    mov r26, -c204.w
 +    texkill r26
      mov r8.x, c204.x
@@ -37,7 +37,7 @@ index 0fa1a7c2..c402ede8 100644
      dp3 r8.w, r8, r8
      add r8.w, r8.w, -c204.y
 +    // FusionFix vehicle_glass_reflections_wet_mirror.patch: none of the glass while c204.w is 1: the player's car's in its interior mirror
-+    // (carmirrors.ixx OwnCarDrawBegin), its rear window covered the sky there black.
++    // (carmirrors.ixx MirrorDrawBegin), its rear window covered the sky there black.
 +    mov r26, -c204.w
 +    texkill r26
      mov r8.x, c204.x
