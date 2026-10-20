@@ -870,12 +870,14 @@ float4 HighLayer(float3 dir, float2 uv)
     float4 tex = tex2Dlod(HighTex, float4(uvh, 0, lod));
     float patch = tex2Dlod(HighTex, float4(uvh * 0.25 + 0.37, 0, lod - 2.0)).b;
     float mask = smoothstep(0.88 - vec4High.x, 1.12 - vec4High.x, patch);
-    float cells = saturate(0.5 * mask * (0.3 + 1.6 * tex.a));
+    // The cells gather into flocks with clear sky between them, by the clumps: at 0.3 + 1.6 a they spread over the
+    // whole patch evenly, one size, one spacing, like a leopard's spots.
+    float cells = saturate(0.5 * mask * (2.4 * tex.a - 0.6));
     // The cells over half the texture's range: over a quarter their outlines were cut hard, flat as paper.
     float dc = saturate((tex.r - 1.0 + cells) * 2.0);
     float towards = saturate((tex2Dlod(HighTex, float4(uvh + vec4HighWind.zw, 0, lod)).r - 1.0 + cells) * 2.0);
     // The fibres' density as it is, without a threshold: cut at one, the streaks came out solid with a hard outline.
-    float df = saturate(tex.g * 2.5 * mask);
+    float df = saturate(tex.g * 2.0 * mask);
     // A faint veil over the patch: at a fifth, the sky between two patches came out a deeper blue than around
     // them, in the patches' shapes, and read as dark clouds under the cirrus.
     df += 0.06 * mask * (1.0 - df);
@@ -895,7 +897,8 @@ float4 HighLayer(float3 dir, float2 uv)
     float3 colour = vec3LitColour * vec3SunTint * (phase * relief * fLightStrength) + vec3ShadeColour * 0.6 +
                     vec3SunsetColour * ((0.5 + 0.5 * cosTheta) * fLightStrength);
     // The glow of thin cloud round the sun, the volumetric clouds' own (their termGlow), the thin parts most.
-    colour += vec3GlowColour * ((lobe4 * lobe4 + 0.3 * lobe2) * fSilver * fGlow * fLightStrength * (1.0 - 0.5 * d));
+    // Not the cirrus': their phase already scatters forwards, and with this too they blew out white round the sun.
+    colour += vec3GlowColour * ((lobe4 * lobe4 + 0.3 * lobe2) * fSilver * fGlow * fLightStrength * (1.0 - 0.5 * d) * (1.0 - vec4High.z));
     // At the volumetric clouds' brightness against the sky.
     float skyLuma = dot(Finite(tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).rgb), float3(0.2126, 0.7152, 0.0722));
     colour *= skyLuma > 1e-4 && fSkyMatch > 0.0 ? clamp(fSkyMatch * skyLuma, 0.1, 2.0) : 1.0;
