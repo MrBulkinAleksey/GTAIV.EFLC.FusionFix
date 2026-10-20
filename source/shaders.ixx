@@ -16,6 +16,7 @@ import settings;
 import shadows;
 import timecycext;
 import inireload;
+import morningfog;
 
 template<typename T, typename ... U>
 concept IsAnyOf = (std::same_as<T, U> || ...);
@@ -596,6 +597,7 @@ public:
                         arr10[1] = std::max(CTimeCycleExt::GetVolFogHeightFalloff(), 0.0000001f);
                         arr10[2] = std::max(CTimeCycleExt::GetVolFogPower(), 0.0f);
                         arr10[3] = std::clamp(CTimeCycleExt::GetVolFogAltitudeTweak(), 0.0f, 1.0f);
+                        ApplyMorningFog(arr10); // a low fog in the streets around dawn
                         pDevice->SetPixelShaderConstantF(211, &arr10[0], 1);
                         pDevice->SetVertexShaderConstantF(235, &arr10[0], 1);
 
