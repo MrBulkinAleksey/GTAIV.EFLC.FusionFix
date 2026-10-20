@@ -913,6 +913,9 @@ namespace CarMirrors
     // added over what is below it, which in the main view the fog pass has coloured. In a car mirror's pass nothing is
     // below it but the cleared black, and the water showed black: there the destination is zero and the source its
     // alpha (one, water_mirror_opaque.patch), the water drawn in place of the target.
+    // Its pass sets no depth states, and in the mirror's pass the depth test came to it off: the far water, opaque,
+    // made a dark line along the horizon over the cars and buildings in the mirror. Depth on, less or equal (the
+    // game's state ids 0 and 7, as the techniques' pass states have them).
     static SafetyHookMid waterBlendHook;
     static void (__cdecl* setRenderState)(uint32_t state, uint32_t value) = nullptr; // CE 0x432C20
 
@@ -922,7 +925,11 @@ namespace CarMirrors
             return;
         reinterpret_cast<uint32_t*>(regs.esp)[1] = 1; // D3DBLEND_ZERO
         if (setRenderState)
+        {
             setRenderState(4, 5);                     // the source by its alpha (D3DBLEND_SRCALPHA)
+            setRenderState(0, 1);                     // depth test on
+            setRenderState(7, D3DCMP_LESSEQUAL);
+        }
     }
 
     static void MirrorWaterFlag(SafetyHookContext& regs)
