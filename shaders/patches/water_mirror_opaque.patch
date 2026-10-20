@@ -34,9 +34,9 @@ index 6601c7c2..aaa9b65b 100644
      mul r0.xyz, r0, r0.w
      mul r0.w, r1.y, c72.w
      mad r0.xyz, c66, r0.w, r0
-+    // FusionFix car mirrors: the water is added over what is below it (the fog pass's colour there) in the main view;
-+    // a car mirror's pass (c204.z 1) has nothing below it and draws it in place of the target (carmirrors.ixx,
-+    // MirrorWaterBlend): the water's colour going over to the sky's by the Fresnel term
++    // FusionFix car mirrors: in a car mirror's pass (c204.z 1) the water's own colour going over to the sky's by the
++    // Fresnel term, opaque (above): the main view's reflection on s1 and the scene's depth on s2 are not the
++    // mirror's
 +    mov r20.xyz, c72
 +    add r20.xyz, r20, -c66
 +    mad r20.xyz, r20, r20.w, c66

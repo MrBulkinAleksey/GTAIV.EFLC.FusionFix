@@ -113,7 +113,13 @@ namespace CarMirrors
     static constexpr float NearCorona = 60.0f;
     static uint32_t nearRegistered[2]{}, nearOutOfView[2]{}, nearListed[2]{};
     static uintptr_t mirrorPhase = 0;      // CRenderPhaseMirrorReflection, as PhaseView last saw it for our mirror
-    static void (__cdecl* setRenderState)(uint32_t state, uint32_t value) = nullptr; // CE 0x432C20, the game's state ids
+    // The game's render states as the techniques' pass states have them (0 ZENABLE, 2 ZWRITEENABLE, 3 ALPHATESTENABLE,
+    // 4 SRCBLEND, 5 DESTBLEND, 6 CULLMODE, 7 ZFUNC, 8 ALPHAREF, 9 ALPHAFUNC, 10 ALPHABLENDENABLE, 19 COLORWRITEENABLE,
+    // 23 BLENDOP; CE 0x437140 sets one on the device, its value kept at [0x108B420 + 4 x type]). Not CE 0x432C20's own
+    // numbers (the draw lists' render state commands, 0x8DBF20): there 2 is a blend preset (0 source alpha over the
+    // rest, 1 one and one), 5 the depth compare by its own table (2 less, 3 less or equal), 8 the blend on.
+    static void (__cdecl* setPassState)(uint32_t type, uint32_t value) = nullptr;
+    static const uint32_t* passStateCache = nullptr;
     // Frame capture (CarMirrorsCapture, hidden, 1 by default for now): every device draw of two of the mirror's passes
     // to GTAIV.EFLC.FusionFix.CarMirrorsCapture.log, with what draws it and the states it draws with. The 600th pass
     // with the mirror on as set, the 1200th with CarMirrorsWaterStyle the other way for that one pass.
@@ -137,46 +143,24 @@ namespace CarMirrors
     static void CaptureSnapshot(uint32_t point);
     static void __cdecl CaptureSnapshotCallback(uint32_t point) { CaptureSnapshot(point); }
     enum SnapshotPoint : uint32_t { AfterSky, BeforeEntities, AfterEntities, AfterWater, AfterCoronas, PassEnd };
-    // CarMirrorsForceDepthWrite (hidden, 0 leaves it out): depth test and write set (the game's states, before the entity's
-    // technique applies its own) for every entity in the mirror's pass. A technique that turns the write off (decals and
-    // the like) left it off for every entity after it, the reflection techniques setting none: the cars drawn later wrote
-    // no depth, and peds drawn after them showed through them.
-    // The frame capture (2026-10-20) showed it whole: in the mirror's pass nearly every entity drew with blending on, one
-    // and one (903 buildings, 330 props, 140 vehicles' draws: gta_spec, gta_default, gta_normal_spec, the cars' mesh and
-    // tyres), the alpha reference 100 and here and there the depth write off, all from whatever drew before (a ped's
-    // technique turns the blend on and the reference to 100), the reflection techniques setting none of their own: the
-    // whole reflection added up, see-through and washed out, the asphalt's layers summed into patches, peds through cars.
-    // Before each entity the states the mirror phase means are set (the game's: blend off, source alpha over the rest,
-    // reference 1 as the phase's own command has it, depth tested and written); a technique with its own sets them after.
-    static bool forceDepthWrite = true;
-    // CarMirrorsBuildingsInOrder (hidden, off; 1 compares the buildings always): the map's buildings and ground write depth but pass whatever
-    // is there (compare always), drawn in the list's order as the game's mirror drew them all with no depth: tested, the
-    // road's overlapping meshes fought (the asphalt's textures broken into patches). Cars, peds and props still test.
-    static bool buildingsInOrder = false;
-    // The mirror phase's draw list turns the depth write off before its entities (CE 0xD76B13: a render state command,
-    // the game's state 2 to 0), and the reflection techniques set none of their own: nothing of the mirror's scene was
-    // in its depth buffer, and the water and coronas drawn after it showed through the cars, the car's inside and the
-    // buildings (two dark lines along the horizon where the water's far edges were). For a car mirror it is left on.
-    static bool depthWrite = false;       // CarMirrorsDepthWrite (hidden): 1 leaves the depth write on
-    // With it on the mirror's scene was not right either: the asphalt broke into patches or went (an unseen mesh above
-    // the road written first), peds showed through cars; the game's mirror scene is made to be drawn in order. So the
-    // depth is left off as the game has it and the water and coronas are drawn first, before the mirror's entities,
-    // which cover them in order (CarMirrorsWaterCoronasFirst, hidden, 0 draws them after as before).
-    static bool waterCoronasFirst = true;
+    // The frame capture (2026-10-20) showed nearly every entity of the mirror's pass drawn with blending one and one, the
+    // alpha reference 100 and here and there no depth write: what a technique sets stays for every entity after it, the
+    // reflection techniques setting nothing of their own. The one and one came from this code (the mirror's blend preset
+    // command, taken for a depth write, made 1); the reference and the rest from the techniques of what the mirror draws
+    // that the game's mirrors never did (peds, CarMirrorsReflectionShaders' group, hair turning the depth write off).
+    // CarMirrorsEntityStates (hidden, 0 leaves it): each entity of the mirror's pass gets the states it began with put
+    // back after it, as if every technique had set only its own.
+    static bool isolateStates = true;
+    static constexpr uint32_t IsolatedTypes[] = { 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 19, 23 };
+    static uint32_t isolatedSaved[std::size(IsolatedTypes)]{};
+    static bool isolatedOn = false;      // render thread
+    // CarMirrorsWaterCoronasFirst (hidden, 0 by default): the water and coronas before the mirror's entities instead of
+    // after them, tried while the mirror seemed to keep no depth.
+    static bool waterCoronasFirst = false;
     static bool queuedFirst = false;      // main thread: this build's water and coronas are queued before the entities
-    // CarMirrorsWaterStyle (hidden, 0 the mirror's own): the mirror's entities drawn as the water's reflection draws its
-    // own (CE 0xD76E55: buckets 0x90D, way 2, where the mirror's has 0x307 and 1 or 2 at 0xD76B9A), the depth written
-    // (the water reflection's draw list leaves it on), the water and coronas after them. The mirror's buckets have
-    // bucket 1 (0x307's bit 1), the water's not: with the depth on, something unseen there covered the asphalt.
-    static bool waterStyle = true;
-    static SafetyHookMid depthWriteHook;
-
-    static void MirrorDepthWrite(SafetyHookContext& regs)
-    {
-        // push 0 (the value) / push 2 (the state) / mov ecx, eax / call (hooked): the value at [esp + 4]
-        if (usedThisFrame && (depthWrite || waterStyle))
-            reinterpret_cast<uint32_t*>(regs.esp)[1] = 1;
-    }
+    // CarMirrorsWaterStyle (hidden, 0 by default): the mirror's entities drawn with the water reflection's buckets and way
+    // (CE 0xD76E55: 0x90D and 2, where the mirror's has 0x307 and 1 or 2 at 0xD76B9A)
+    static bool waterStyle = false;
     static uint32_t extraBucketDraws = 0;  // and the main scene's extra buckets (ExtraBuckets)
     static uint32_t waterFlagMissing = 0;  // the mirror's water draws whose draw list had no flag 0x10 (render thread)
     static const uint32_t* waterTotals[2]{}; // CE 0x1550EAC, 0x154E300: water.dat's quads and triangles
@@ -310,15 +294,11 @@ namespace CarMirrors
         }
         if (mirrorPass)
         {
-            if (forceDepthWrite && setRenderState)
+            if (isolateStates && passStateCache && setPassState && !isolatedOn)
             {
-                setRenderState(0, 1);                // depth test on
-                setRenderState(7, buildingsInOrder && kind == EntityClass::Kind::Building ? D3DCMP_ALWAYS : D3DCMP_LESSEQUAL);
-                setRenderState(2, 1);                // depth written
-                setRenderState(10, 0);               // no blend
-                setRenderState(4, D3DBLEND_SRCALPHA);
-                setRenderState(5, D3DBLEND_INVSRCALPHA);
-                setRenderState(8, 1);                // alpha reference, as the mirror phase's command (state 8 to 1)
+                for (size_t i = 0; i < std::size(IsolatedTypes); ++i)
+                    isolatedSaved[i] = passStateCache[IsolatedTypes[i]];
+                isolatedOn = true;
             }
         }
         if (mirrorPass && kind == EntityClass::Kind::Ped && currentTechniqueGroup && *currentTechniqueGroup != -1)
@@ -348,6 +328,13 @@ namespace CarMirrors
     static void MirrorDrawEnd(EntityClass::Kind)
     {
         captureContext.inEntity = false;
+        if (isolatedOn)
+        {
+            for (size_t i = 0; i < std::size(IsolatedTypes); ++i)
+                if (passStateCache[IsolatedTypes[i]] != isolatedSaved[i])
+                    setPassState(IsolatedTypes[i], isolatedSaved[i]);
+            isolatedOn = false;
+        }
         if (pedGroupSwapped)
         {
             *currentTechniqueGroup = pedSavedGroup;
@@ -1028,27 +1015,6 @@ namespace CarMirrors
             regs.eflags &= ~0x40u; // ZF
     }
 
-    // The water's draw sets its blend's destination to one (CE 0xAD84EE: push 2 / push 5 / ... / call SetState): it is
-    // added over what is below it, which in the main view the fog pass has coloured. In a car mirror's pass nothing is
-    // below it but the cleared black, and the water showed black: there the destination is zero and the source its
-    // alpha (one, water_mirror_opaque.patch), the water drawn in place of the target.
-    // Its pass sets no depth states, and in the mirror's pass the depth test came to it off: the far water, opaque,
-    // made a dark line along the horizon over the cars and buildings in the mirror. Depth on, less or equal (the
-    // game's state ids 0 and 7, as the techniques' pass states have them).
-    static SafetyHookMid waterBlendHook;
-
-    static void MirrorWaterBlend(SafetyHookContext& regs)
-    {
-        if (!inMirrorWater)
-            return;
-        reinterpret_cast<uint32_t*>(regs.esp)[1] = 1; // D3DBLEND_ZERO
-        if (setRenderState)
-        {
-            setRenderState(4, 5);                     // the source by its alpha (D3DBLEND_SRCALPHA)
-            setRenderState(0, 1);                     // depth test on
-            setRenderState(7, D3DCMP_LESSEQUAL);
-        }
-    }
 
     static void MirrorWaterFlag(SafetyHookContext& regs)
     {
@@ -1281,8 +1247,8 @@ namespace CarMirrors
         ++captureNumber;
         captureDraws = captureEntity = captureTaken = 0;
         captureContext = {};
-        captureText = std::format("mirror pass, water style {} (flipped for the capture {}), depth write {}, force depth write {}, water and coronas first {}, target {}\n",
-            int(waterStyle != (flipped != 0)), flipped, int(depthWrite), int(forceDepthWrite), int(waterCoronasFirst),
+        captureText = std::format("mirror pass, water style {} (flipped for the capture {}), entities' states kept apart {}, water and coronas first {}, target {}\n",
+            int(waterStyle != (flipped != 0)), flipped, int(isolateStates), int(waterCoronasFirst),
             RenderSkip::CurrentTarget() ? RenderSkip::CurrentTarget() : "?");
         captureText += "draw  what                                                          primitive | z enable func write | blend src/dst | alpha test ref | colour write, cull, stencil | shaders (FusionShaders number)\n";
     }
@@ -1799,20 +1765,18 @@ public:
                 CarMirrors::extraBuckets = ini.ReadInteger("MISC", "CarMirrorsExtraBuckets", 1) != 0;
                 CarMirrors::ownGlassInInterior = ini.ReadInteger("MISC", "CarMirrorsOwnGlass", 0) != 0;
                 CarMirrors::lampCoronas = ini.ReadInteger("MISC", "CarMirrorsLampCoronas", 1) != 0;
-                CarMirrors::forceDepthWrite = ini.ReadInteger("MISC", "CarMirrorsForceDepthWrite", 1) != 0;
-                CarMirrors::buildingsInOrder = ini.ReadInteger("MISC", "CarMirrorsBuildingsInOrder", 0) != 0;
-                CarMirrors::depthWrite = ini.ReadInteger("MISC", "CarMirrorsDepthWrite", 0) != 0;
-                CarMirrors::waterCoronasFirst = ini.ReadInteger("MISC", "CarMirrorsWaterCoronasFirst", 1) != 0;
-                CarMirrors::waterStyle = ini.ReadInteger("MISC", "CarMirrorsWaterStyle", 1) != 0;
+                CarMirrors::isolateStates = ini.ReadInteger("MISC", "CarMirrorsEntityStates", 1) != 0;
+                CarMirrors::waterCoronasFirst = ini.ReadInteger("MISC", "CarMirrorsWaterCoronasFirst", 0) != 0;
+                CarMirrors::waterStyle = ini.ReadInteger("MISC", "CarMirrorsWaterStyle", 0) != 0;
                 CarMirrors::captureEnabled = ini.ReadInteger("MISC", "CarMirrorsCapture", 1) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
                 CarMirrors::interiorAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::interiorAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimY", -3.0f), -30.0f, 30.0f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d, force depth write %d, depth write %d, buildings in order %d, water and coronas first %d, water style %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d, entities' states kept apart %d, water and coronas first %d, water style %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
                     int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut, int(CarMirrors::water),
                     int(CarMirrors::waterReflection), int(CarMirrors::reflectionShaders), int(CarMirrors::skyAfterEntities), int(CarMirrors::extraBuckets),
-                    int(CarMirrors::ownGlassInInterior), int(CarMirrors::lampCoronas), int(CarMirrors::forceDepthWrite), int(CarMirrors::depthWrite), int(CarMirrors::buildingsInOrder), int(CarMirrors::waterCoronasFirst), int(CarMirrors::waterStyle), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
+                    int(CarMirrors::ownGlassInInterior), int(CarMirrors::lampCoronas), int(CarMirrors::isolateStates), int(CarMirrors::waterCoronasFirst), int(CarMirrors::waterStyle), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
             };
             CIniReader iniReader("");
             readIni(iniReader);
@@ -1957,14 +1921,6 @@ public:
                 static constexpr uint8_t passPick[] = { 0x75, 0x04, 0x6A, 0x01, 0xEB, 0x02, 0x6A, 0x00, 0xE8 };
                 if (std::memcmp(at + 0x686, passPick, sizeof(passPick)) == 0 && at[0x679] == 0x80 && at[0x67A] == 0x3D)
                     CarMirrors::waterPassHook = safetyhook::create_mid(at + 0x686, CarMirrors::MirrorWaterPass);
-                // push 2 / push 5 / mov [esp+34], eax / call (SetState, hooked): the blend's destination
-                static constexpr uint8_t blend[] = { 0x6A, 0x02, 0x6A, 0x05, 0x89, 0x44, 0x24, 0x34, 0xE8 };
-                if (std::memcmp(at + 0x5FE, blend, sizeof(blend)) == 0)
-                {
-                    CarMirrors::setRenderState = reinterpret_cast<void (__cdecl*)(uint32_t, uint32_t)>(
-                        injector::GetBranchDestination(at + 0x606).as_int());
-                    CarMirrors::waterBlendHook = safetyhook::create_mid(at + 0x606, CarMirrors::MirrorWaterBlend);
-                }
             }
             // in the mirror phase's draw list: push [edi+938] / call (what is drawn with blending) / add esp, 4 /
             // cmp byte [clip plane on], 0 / je
@@ -2050,12 +2006,15 @@ public:
                     CoronaRender::pOtherRange = &CarMirrors::MirrorCoronaRange;
                 }
             }
-            // in the mirror phase's draw list: test eax, eax / je / push 0 / push 2 / mov ecx, eax / call (the render state
-            // command, hooked) / jmp / xor eax, eax / push eax / call add / ... / push 1 / push 8
-            auto depthOff = hook::pattern("85 C0 74 0D 6A 00 6A 02 8B C8 E8 ? ? ? ? EB 02 33 C0 50 E8 ? ? ? ? 6A 00 6A 10 E8 ? ? ? ? 83 C4 0C 85 C0 74 0D 6A 01 6A 08");
-            if (!depthOff.empty())
-                CarMirrors::depthWriteHook = safetyhook::create_mid(depthOff.get_first(10), CarMirrors::MirrorDepthWrite);
-            FusionLog::Write("CarMirrors", "Init", "the mirror's depth write kept on %s\n", CarMirrors::depthWriteHook ? "on" : "off (not found)");
+            // the pass state setter: mov eax, [esp+4] / mov edx, [esp+8] / push esi / mov esi, [types + eax*4] /
+            // mov [values + eax*4], edx / cmp esi, -1 / je
+            auto passState = hook::pattern("8B 44 24 04 8B 54 24 08 56 8B 34 85 ? ? ? ? 89 14 85 ? ? ? ? 83 FE FF 74");
+            if (!passState.empty())
+            {
+                CarMirrors::setPassState = passState.get_first<void (__cdecl)(uint32_t, uint32_t)>(0);
+                CarMirrors::passStateCache = *passState.get_first<const uint32_t*>(19);
+            }
+            FusionLog::Write("CarMirrors", "Init", "the entities' states kept apart in the mirror's pass %s\n", CarMirrors::setPassState ? "on" : "off (not found)");
             RenderSkip::pDrawObserver = &CarMirrors::CaptureDraw;
             // the technique group's setter: mov eax, [esp+4] / mov [group], eax / ret / int3 x6 / mov eax, [group] / ret
             auto groupSetter = hook::pattern("8B 44 24 04 A3 ? ? ? ? C3 CC CC CC CC CC CC A1 ? ? ? ? C3");
@@ -2089,11 +2048,11 @@ public:
                 CarMirrors::callback.add ? "on" : "off (the game's callback command was not found)",
                 CarMirrors::phaseViewHook ? "on" : "off (not found)", CarMirrors::perspective ? "on" : "off (not found)");
             FusionLog::Write("CarMirrors", "Init", "water reflection gates %s/%s; water in the mirror %s, its gather after the scans %s, "
-                "without the material ID target %s, its flag given %s, its pass without shadows %s, drawn in place of the target %s\n",
+                "without the material ID target %s, its flag given %s, its pass without shadows %s\n",
                 CarMirrors::waterGateHooks[0] ? "on" : "off", CarMirrors::waterGateHooks[1] ? "on" : "off",
                 CarMirrors::phaseWaterHook ? "on" : "off (not found)", CarMirrors::gatherHook ? "on" : "off (not found)",
                 CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)", CarMirrors::waterFlagHook ? "on" : "off (not found)",
-                CarMirrors::waterPassHook ? "on" : "off (not found)", CarMirrors::waterBlendHook ? "on" : "off (not found)");
+                CarMirrors::waterPassHook ? "on" : "off (not found)");
             FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s; its coronas %s (the lamps' %s, listed by the mirror's view %s); "
                 "the trees' leaves %s, buckets 5 and 4 the main scene's fourth way %s\n", CarMirrors::techniqueHooks[0] ? "on" : "off (not found)", CarMirrors::skyHooks[2] ? "on" : "off (not found)",
                 CarMirrors::coronaHooks[2] ? "on" : "off (not found)", CarMirrors::coronaSprites ? "on" : "off (not found)",
