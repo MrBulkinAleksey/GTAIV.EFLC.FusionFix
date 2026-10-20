@@ -129,6 +129,7 @@ namespace CarMirrors
     static bool capturing = false;              // render thread
     static std::string captureText;             // render thread
     static uint32_t captureDraws = 0, captureEntity = 0;
+    static bool captureWaterConstants = false;  // render thread: the water's constants logged in this capture
     static uint32_t captureNumber = 0, captureTaken = 0; // render thread: the capture's number and its pictures, for their names
     struct CaptureContext
     {
@@ -1260,6 +1261,18 @@ namespace CarMirrors
         }
         else
             what = inMirrorWater ? "water" : inMirrorCoronas ? "coronas" : inMirrorSky ? "sky" : "other";
+        if (inMirrorWater && !captureWaterConstants)
+        {
+            // The water's colour in a mirror (water_mirror_opaque.patch): c66 waterColour over to c72 bottomSkyColour by
+            // the Fresnel term, times c39.y, with c204.z 1; c73 the reflection's scale
+            captureWaterConstants = true;
+            for (UINT reg : { 39u, 66u, 72u, 73u, 204u })
+            {
+                float c[4]{};
+                device->GetPixelShaderConstantF(reg, c, 1);
+                captureText += std::format("      water c{} {:.4f} {:.4f} {:.4f} {:.4f}\n", reg, c[0], c[1], c[2], c[3]);
+            }
+        }
         captureText += std::format("{:5} {:<60} prim {} x{} | z {} {} w{} | blend {} {}/{} | atest {} {} | cw {:X} cull {} st {} | vs {} ps {}\n",
             captureDraws++, what, int(type), primitives, z, zFunc, zWrite, blend, source, destination, alphaTest, alphaRef, colourWrite, cull, stencil,
             vsNumber, psNumber);
@@ -1272,6 +1285,7 @@ namespace CarMirrors
         capturing = true;
         ++captureNumber;
         captureDraws = captureEntity = captureTaken = 0;
+        captureWaterConstants = false;
         captureContext = {};
         captureText = std::format("{} mirror's pass, far models {}, water style {}, water's far cells {}, entities' states kept apart {}, water and coronas first {}, target {}\n",
             glassNames[glass < std::size(glassNames) ? glass : 0], int(farModels), int(waterStyle), int(waterFarCells), int(isolateStates), int(waterCoronasFirst),
