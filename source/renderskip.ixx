@@ -81,6 +81,8 @@ export namespace RenderSkip
     void EndWaterQuery();
     // The water's pixels seen by the latest query answered (a frame or few old), -1 while none is known
     int64_t WaterPixelsSeen();
+    // Render thread: called before each device draw that is not dropped (carmirrors.ixx's frame capture); set once at init
+    void (*pDrawObserver)(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT primitives) = nullptr;
 }
 
 namespace RenderSkip
@@ -703,23 +705,39 @@ namespace RenderSkip
 
     HRESULT __stdcall DrawPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT start, UINT count)
     {
-        return DropDraw() ? D3D_OK : RealDrawPrimitive(device, type, start, count);
+        if (DropDraw())
+            return D3D_OK;
+        if (pDrawObserver)
+            pDrawObserver(device, type, count);
+        return RealDrawPrimitive(device, type, start, count);
     }
 
     HRESULT __stdcall DrawIndexedPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count)
     {
-        return DropDraw() ? D3D_OK : RealDrawIndexedPrimitive(device, type, base, minIndex, vertices, start, count);
+        if (DropDraw())
+            return D3D_OK;
+        if (pDrawObserver)
+            pDrawObserver(device, type, count);
+        return RealDrawIndexedPrimitive(device, type, base, minIndex, vertices, start, count);
     }
 
     HRESULT __stdcall DrawPrimitiveUP(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT count, const void* data, UINT stride)
     {
-        return DropDraw() ? D3D_OK : RealDrawPrimitiveUP(device, type, count, data, stride);
+        if (DropDraw())
+            return D3D_OK;
+        if (pDrawObserver)
+            pDrawObserver(device, type, count);
+        return RealDrawPrimitiveUP(device, type, count, data, stride);
     }
 
     HRESULT __stdcall DrawIndexedPrimitiveUP(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT minIndex, UINT vertices, UINT count, const void* indices,
         D3DFORMAT format, const void* data, UINT stride)
     {
-        return DropDraw() ? D3D_OK : RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
+        if (DropDraw())
+            return D3D_OK;
+        if (pDrawObserver)
+            pDrawObserver(device, type, count);
+        return RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
     }
 
     HRESULT __stdcall Clear(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR colour, float z, DWORD stencil)

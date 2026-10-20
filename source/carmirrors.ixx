@@ -3,6 +3,10 @@ module;
 #include <common.hxx>
 #include "FusionLog.hpp"
 #include "carmirrorstable.hxx"
+#include <format>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 export module carmirrors;
 
@@ -106,26 +110,26 @@ namespace CarMirrors
     static constexpr float NearCorona = 60.0f;
     static uint32_t nearRegistered[2]{}, nearOutOfView[2]{}, nearListed[2]{};
     static uintptr_t mirrorPhase = 0;      // CRenderPhaseMirrorReflection, as PhaseView last saw it for our mirror
-    // Diagnostics (render thread, logged every 300 frames): the targets and depth states on the device as the mirror's
-    // entities, its water and its coronas are drawn (the water and coronas showed through the mirror's geometry with
-    // the depth test set on)
-    struct PassTargets
-    {
-        UINT colourWidth, colourHeight, depthWidth, depthHeight;
-        D3DFORMAT colourFormat, depthFormat;
-        const void* colourSurface;
-        const void* depthSurface;
-        const char* targetName;
-        DWORD zEnable, zFunc, zWrite, stencilEnable, stencilFunc, colourWrite, cull;
-        float depthBias, slopeBias;
-        D3DVIEWPORT9 viewport;
-        float logDepthPS[4], logDepthVS[4];
-        uint32_t drawsSincePass;
-        bool known;
-    };
-    static uint32_t passStartDraws = 0;   // RenderSkip's draw count as the mirror's pass started
-    enum { TargetsEntities, TargetsWater, TargetsCoronas, TargetsLastEntity, TargetsFirstVehicle, TargetSites };
     static void (__cdecl* setRenderState)(uint32_t state, uint32_t value) = nullptr; // CE 0x432C20, the game's state ids
+    // Frame capture (CarMirrorsCapture, hidden, 1 by default for now): every device draw of two of the mirror's passes
+    // to GTAIV.EFLC.FusionFix.CarMirrorsCapture.log, with what draws it and the states it draws with. The 600th pass
+    // with the mirror on as set, the 1200th with CarMirrorsWaterStyle the other way for that one pass.
+    static bool captureEnabled = true;
+    static uint32_t captureBuilds = 0;          // main thread: draw lists made with the mirror on
+    static bool captureFlipped = false;         // main thread: this build has waterStyle turned the other way
+    static bool capturing = false;              // render thread
+    static std::string captureText;             // render thread
+    static uint32_t captureDraws = 0, captureEntity = 0;
+    struct CaptureContext
+    {
+        bool inEntity;
+        EntityClass::Kind kind;
+        uint32_t modelHash;
+        float place[3];
+    };
+    static CaptureContext captureContext{};
+    static void __cdecl CaptureBegin(uint32_t flipped);
+    static void __cdecl CaptureEnd(uint32_t);
     // CarMirrorsForceDepthWrite (hidden, 0 leaves it out): depth test and write set (the game's states, before the entity's
     // technique applies its own) for every entity in the mirror's pass. A technique that turns the write off (decals and
     // the like) left it off for every entity after it, the reflection techniques setting none: the cars drawn later wrote
@@ -158,52 +162,6 @@ namespace CarMirrors
         // push 0 (the value) / push 2 (the state) / mov ecx, eax / call (hooked): the value at [esp + 4]
         if (usedThisFrame && (depthWrite || waterStyle))
             reinterpret_cast<uint32_t*>(regs.esp)[1] = 1;
-    }
-    static PassTargets passTargets[TargetSites]{};
-
-    static void CaptureTargets(int site)
-    {
-        auto device = rage::grcDevice::GetD3DDevice();
-        if (!device)
-            return;
-        auto real = RageDirect3DDevice9::RealDevice(device);
-        PassTargets t{};
-        IDirect3DSurface9* surface = nullptr;
-        D3DSURFACE_DESC desc{};
-        if (SUCCEEDED(real->GetRenderTarget(0, &surface)) && surface)
-        {
-            if (SUCCEEDED(surface->GetDesc(&desc)))
-                t.colourWidth = desc.Width, t.colourHeight = desc.Height, t.colourFormat = desc.Format;
-            t.colourSurface = surface;
-            surface->Release();
-        }
-        surface = nullptr;
-        if (SUCCEEDED(real->GetDepthStencilSurface(&surface)) && surface)
-        {
-            if (SUCCEEDED(surface->GetDesc(&desc)))
-                t.depthWidth = desc.Width, t.depthHeight = desc.Height, t.depthFormat = desc.Format;
-            t.depthSurface = surface;
-            surface->Release();
-        }
-        real->GetRenderState(D3DRS_ZENABLE, &t.zEnable);
-        real->GetRenderState(D3DRS_ZFUNC, &t.zFunc);
-        real->GetRenderState(D3DRS_ZWRITEENABLE, &t.zWrite);
-        real->GetRenderState(D3DRS_STENCILENABLE, &t.stencilEnable);
-        real->GetRenderState(D3DRS_STENCILFUNC, &t.stencilFunc);
-        real->GetRenderState(D3DRS_COLORWRITEENABLE, &t.colourWrite);
-        real->GetRenderState(D3DRS_CULLMODE, &t.cull);
-        DWORD bias = 0;
-        real->GetRenderState(D3DRS_DEPTHBIAS, &bias);
-        std::memcpy(&t.depthBias, &bias, sizeof(float));
-        real->GetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, &bias);
-        std::memcpy(&t.slopeBias, &bias, sizeof(float));
-        real->GetViewport(&t.viewport);
-        real->GetPixelShaderConstantF(209, t.logDepthPS, 1);
-        real->GetVertexShaderConstantF(227, t.logDepthVS, 1);
-        t.targetName = RenderSkip::CurrentTarget();
-        t.drawsSincePass = RenderSkip::DrawCount() - passStartDraws;
-        t.known = true;
-        passTargets[site] = t;
     }
     static uint32_t extraBucketDraws = 0;  // and the main scene's extra buckets (ExtraBuckets)
     static uint32_t waterFlagMissing = 0;  // the mirror's water draws whose draw list had no flag 0x10 (render thread)
@@ -297,8 +255,6 @@ namespace CarMirrors
         if (on)
             device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
         mirrorPass = on != 0;
-        if (on)
-            passStartDraws = RenderSkip::DrawCount();
         interiorPass = (on & 0xff) == 2;
         if (interiorPass)
             std::copy_n(ownPlaces[(on >> 8) & 3], 3, ownPlace);
@@ -325,6 +281,19 @@ namespace CarMirrors
     // the window was broken.
     static void MirrorDrawBegin(EntityClass::Kind kind)
     {
+        if (capturing)
+        {
+            captureContext = { true, kind, 0, {} };
+            uint16_t model;
+            const float* place;
+            if (EntityClass::CurrentModel(model, place))
+            {
+                if (const uintptr_t info = EntityClass::ModelInfo(model))
+                    captureContext.modelHash = *reinterpret_cast<const uint32_t*>(info + 0x3C);
+                std::copy_n(place, 3, captureContext.place);
+            }
+            ++captureEntity;
+        }
         if (mirrorPass)
         {
             if (forceDepthWrite && setRenderState)
@@ -333,11 +302,6 @@ namespace CarMirrors
                 setRenderState(7, buildingsInOrder && kind == EntityClass::Kind::Building ? D3DCMP_ALWAYS : D3DCMP_LESSEQUAL);
                 setRenderState(2, 1);                // depth written
             }
-            if (!passTargets[TargetsEntities].known)
-                CaptureTargets(TargetsEntities);
-            CaptureTargets(TargetsLastEntity);
-            if (kind == EntityClass::Kind::Vehicle && !passTargets[TargetsFirstVehicle].known)
-                CaptureTargets(TargetsFirstVehicle);
         }
         if (mirrorPass && kind == EntityClass::Kind::Ped && currentTechniqueGroup && *currentTechniqueGroup != -1)
         {
@@ -365,6 +329,7 @@ namespace CarMirrors
 
     static void MirrorDrawEnd(EntityClass::Kind)
     {
+        captureContext.inEntity = false;
         if (pedGroupSwapped)
         {
             *currentTechniqueGroup = pedSavedGroup;
@@ -653,21 +618,6 @@ namespace CarMirrors
         if (mirrorCoronaFrames)
             FusionLog::Write("CarMirrors", "Coronas", "listed for the mirror per frame: %.1f tested in front of its plane, %.1f seen (%u frames)\n",
                 float(mirrorCoronaTested) / mirrorCoronaFrames, float(mirrorCoronaListed) / mirrorCoronaFrames, mirrorCoronaFrames);
-        static constexpr const char* siteNames[] = { "entities", "water", "coronas", "the last entity (before its states)", "the first vehicle (before its states)" };
-        for (int i = 0; i < TargetSites; ++i)
-        {
-            const auto t = passTargets[i];
-            if (t.known)
-                FusionLog::Write("CarMirrors", "Targets", "%s (draw %u of the pass, target %s): colour %p %ux%u format %d, depth %p %ux%u format %d; "
-                    "z enable %u, func %u, write %u, bias %g, slope bias %g; stencil %u func %u; colour write 0x%X, cull %u; "
-                    "viewport %u,%u %ux%u z %g..%g; log depth ps c209 %g %g %g %g, vs c227 %g %g %g %g\n",
-                    siteNames[i], t.drawsSincePass, t.targetName ? t.targetName : "?", t.colourSurface, t.colourWidth, t.colourHeight,
-                    int(t.colourFormat), t.depthSurface, t.depthWidth, t.depthHeight, int(t.depthFormat), t.zEnable, t.zFunc, t.zWrite,
-                    t.depthBias, t.slopeBias, t.stencilEnable, t.stencilFunc, t.colourWrite, t.cull, t.viewport.X, t.viewport.Y,
-                    t.viewport.Width, t.viewport.Height, t.viewport.MinZ, t.viewport.MaxZ, t.logDepthPS[0], t.logDepthPS[1],
-                    t.logDepthPS[2], t.logDepthPS[3], t.logDepthVS[0], t.logDepthVS[1], t.logDepthVS[2], t.logDepthVS[3]);
-            passTargets[i].known = false;
-        }
         if (mirrorCoronaFrames)
             FusionLog::Write("CarMirrors", "Coronas", "within %.0f m of the mirror per frame, headlights / the rest: registered %.1f / %.1f, "
                 "of them out of the game camera's view %.1f / %.1f, listed by the mirror's %.1f / %.1f\n", NearCorona,
@@ -789,6 +739,17 @@ namespace CarMirrors
     static void __fastcall PhaseBuild(uintptr_t phase, void*)
     {
         queuedFirst = false;
+        bool capture = false;
+        if (usedThisFrame && captureEnabled)
+        {
+            ++captureBuilds;
+            capture = captureBuilds == 600 || captureBuilds == 1200;
+            captureFlipped = captureBuilds == 1200;
+            if (captureFlipped)
+                waterStyle = !waterStyle;
+            if (capture)
+                callback.Queue(reinterpret_cast<const void*>(&CaptureBegin), captureFlipped ? 1 : 0);
+        }
         const double start = usedThisFrame ? NowMs() : 0.0;
         if (usedThisFrame)
         {
@@ -808,6 +769,13 @@ namespace CarMirrors
         }
         phaseBuildHook.unsafe_thiscall<void>(phase);
         ClearWaterFlag();
+        if (captureFlipped)
+        {
+            waterStyle = !waterStyle;
+            captureFlipped = false;
+        }
+        if (capture)
+            callback.Queue(reinterpret_cast<const void*>(&CaptureEnd), 0);
         if (usedThisFrame)
         {
             callback.Queue(reinterpret_cast<const void*>(&MirrorPassTint), 0);
@@ -1055,8 +1023,6 @@ namespace CarMirrors
         if (!inMirrorWater)
             return;
         reinterpret_cast<uint32_t*>(regs.esp)[1] = 1; // D3DBLEND_ZERO
-        if (!passTargets[TargetsWater].known)
-            CaptureTargets(TargetsWater);
         if (setRenderState)
         {
             setRenderState(4, 5);                     // the source by its alpha (D3DBLEND_SRCALPHA)
@@ -1153,6 +1119,97 @@ namespace CarMirrors
     static void* coronaSprites = nullptr;
     static bool inMirrorCoronas = false;    // render thread
 
+    // A shader's FusionShaders signature (a def of "FusionShaders" and its number, put in by the shader patches), 0 for
+    // one without, as GTAIV.EFLC.FusionShaders' .asm files have it: "// 852" after the def
+    static uint32_t ShaderNumber(IUnknown* shader, bool pixel)
+    {
+        static std::unordered_map<const void*, uint32_t> known;
+        if (!shader)
+            return 0;
+        if (auto it = known.find(shader); it != known.end())
+            return it->second;
+        UINT size = 0;
+        uint32_t number = 0;
+        auto getFunction = [&](void* data, UINT* bytes)
+        {
+            return pixel ? static_cast<IDirect3DPixelShader9*>(shader)->GetFunction(data, bytes)
+                         : static_cast<IDirect3DVertexShader9*>(shader)->GetFunction(data, bytes);
+        };
+        if (SUCCEEDED(getFunction(nullptr, &size)) && size >= 16)
+        {
+            std::vector<uint32_t> code(size / 4);
+            if (SUCCEEDED(getFunction(code.data(), &size)))
+                for (size_t i = 0; i + 3 < code.size(); ++i)
+                    if (code[i] == 0x69737546 && code[i + 1] == 0x68536E6F && code[i + 2] == 0x72656461)
+                    {
+                        number = code[i + 3];
+                        break;
+                    }
+            if (!number)
+                number = 0x80000000u | size; // no signature: its size, to tell it apart
+        }
+        known.emplace(shader, number);
+        return number;
+    }
+
+    static void CaptureDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT primitives)
+    {
+        if (!capturing)
+            return;
+        static constexpr const char* kindNames[] = { "unknown", "building", "prop", "vehicle", "ped" };
+        DWORD z = 0, zFunc = 0, zWrite = 0, blend = 0, source = 0, destination = 0, alphaTest = 0, alphaRef = 0, colourWrite = 0, cull = 0, stencil = 0;
+        device->GetRenderState(D3DRS_ZENABLE, &z);
+        device->GetRenderState(D3DRS_ZFUNC, &zFunc);
+        device->GetRenderState(D3DRS_ZWRITEENABLE, &zWrite);
+        device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
+        device->GetRenderState(D3DRS_SRCBLEND, &source);
+        device->GetRenderState(D3DRS_DESTBLEND, &destination);
+        device->GetRenderState(D3DRS_ALPHATESTENABLE, &alphaTest);
+        device->GetRenderState(D3DRS_ALPHAREF, &alphaRef);
+        device->GetRenderState(D3DRS_COLORWRITEENABLE, &colourWrite);
+        device->GetRenderState(D3DRS_CULLMODE, &cull);
+        device->GetRenderState(D3DRS_STENCILENABLE, &stencil);
+        IDirect3DVertexShader9* vs = nullptr;
+        IDirect3DPixelShader9* ps = nullptr;
+        device->GetVertexShader(&vs);
+        device->GetPixelShader(&ps);
+        const uint32_t vsNumber = ShaderNumber(vs, false), psNumber = ShaderNumber(ps, true);
+        if (vs) vs->Release();
+        if (ps) ps->Release();
+        std::string what;
+        if (captureContext.inEntity)
+        {
+            what = std::format("entity {} {} {:08X} at {:.1f} {:.1f} {:.1f}", captureEntity, kindNames[size_t(captureContext.kind) < std::size(kindNames) ? size_t(captureContext.kind) : 0],
+                captureContext.modelHash, captureContext.place[0], captureContext.place[1], captureContext.place[2]);
+        }
+        else
+            what = inMirrorWater ? "water" : inMirrorCoronas ? "coronas" : inMirrorSky ? "sky" : "other";
+        captureText += std::format("{:5} {:<60} prim {} x{} | z {} {} w{} | blend {} {}/{} | atest {} {} | cw {:X} cull {} st {} | vs {} ps {}\n",
+            captureDraws++, what, int(type), primitives, z, zFunc, zWrite, blend, source, destination, alphaTest, alphaRef, colourWrite, cull, stencil,
+            vsNumber, psNumber);
+    }
+
+    static void __cdecl CaptureBegin(uint32_t flipped)
+    {
+        capturing = true;
+        captureDraws = captureEntity = 0;
+        captureContext = {};
+        captureText = std::format("mirror pass, water style {} (flipped for the capture {}), depth write {}, force depth write {}, water and coronas first {}, target {}\n",
+            int(waterStyle != (flipped != 0)), flipped, int(depthWrite), int(forceDepthWrite), int(waterCoronasFirst),
+            RenderSkip::CurrentTarget() ? RenderSkip::CurrentTarget() : "?");
+        captureText += "draw  what                                                          primitive | z enable func write | blend src/dst | alpha test ref | colour write, cull, stencil | shaders (FusionShaders number)\n";
+    }
+
+    static void __cdecl CaptureEnd(uint32_t)
+    {
+        if (!capturing)
+            return;
+        capturing = false;
+        FusionLog::WriteText("CarMirrorsCapture", "Pass", captureText);
+        captureText.clear();
+        captureText.shrink_to_fit();
+    }
+
     static void MirrorCoronaFlags(SafetyHookContext& regs)
     {
         if (inMirrorCoronas)
@@ -1213,8 +1270,6 @@ namespace CarMirrors
         auto real = RageDirect3DDevice9::RealDevice(device);
         if (!coronaStatesSaved)
         {
-            if (!passTargets[TargetsCoronas].known)
-                CaptureTargets(TargetsCoronas);
             for (size_t i = 0; i < std::size(CoronaStates); ++i)
                 real->GetRenderState(CoronaStates[i], &coronaSavedStates[i]);
             coronaStatesSaved = true;
@@ -1547,6 +1602,7 @@ public:
                 CarMirrors::depthWrite = ini.ReadInteger("MISC", "CarMirrorsDepthWrite", 0) != 0;
                 CarMirrors::waterCoronasFirst = ini.ReadInteger("MISC", "CarMirrorsWaterCoronasFirst", 1) != 0;
                 CarMirrors::waterStyle = ini.ReadInteger("MISC", "CarMirrorsWaterStyle", 1) != 0;
+                CarMirrors::captureEnabled = ini.ReadInteger("MISC", "CarMirrorsCapture", 1) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
                 CarMirrors::interiorAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimX", 0.0f), -30.0f, 30.0f);
@@ -1798,6 +1854,7 @@ public:
             if (!depthOff.empty())
                 CarMirrors::depthWriteHook = safetyhook::create_mid(depthOff.get_first(10), CarMirrors::MirrorDepthWrite);
             FusionLog::Write("CarMirrors", "Init", "the mirror's depth write kept on %s\n", CarMirrors::depthWriteHook ? "on" : "off (not found)");
+            RenderSkip::pDrawObserver = &CarMirrors::CaptureDraw;
             // the technique group's setter: mov eax, [esp+4] / mov [group], eax / ret / int3 x6 / mov eax, [group] / ret
             auto groupSetter = hook::pattern("8B 44 24 04 A3 ? ? ? ? C3 CC CC CC CC CC CC A1 ? ? ? ? C3");
             if (!groupSetter.empty() && *groupSetter.get_first<int32_t*>(5) == *groupSetter.get_first<int32_t*>(17))
