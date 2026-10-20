@@ -54,6 +54,7 @@ namespace CarMirrors
     static bool byDrawnCar = true;          // CarMirrorsByDrawnCar (hidden): 0 keeps the update's corners, no dark glass
     static float zoomOut = 1.5f;            // CarMirrorsZoomOut (hidden): how much wider than a flat mirror they show, 1 flat
     static bool water = true;               // CarMirrorsWater (hidden): 0 leaves the water out of the reflection
+    static bool farModels = true;           // CarMirrorsFarModels (hidden): 0 leaves the far LOD models out of the reflection, as the game's mirror
     static bool waterFarCells = true;       // CarMirrorsWaterFarCells (hidden): 0 leaves the water's far cells (open sea to the horizon) out of the reflection
     static bool waterReflection = true;     // CarMirrorsWaterReflection (hidden): 0 keeps the game's rule, no water reflection while a mirror is on
     static bool reflectionShaders = true;   // CarMirrorsReflectionShaders (hidden): 0 draws the mirror's entities with the main view's techniques
@@ -874,6 +875,11 @@ namespace CarMirrors
     // CE 0xAE4880 under 0xB1E810), which the mirror phase has not: no lamp behind the camera had a corona for the
     // mirror (14-27 within 60 m of it registered, 1-10 of them out of the game camera's view). Given for its scan.
     static constexpr uint32_t PhaseLightsFlag = 0x2000000;
+    // The far LOD models (entity +0x24 & 0x40) go only to a phase with the flag 0x100 (CE 0xAE7906), which also has the
+    // scan walk the far cells (CE 0xAE9EFC); the water reflection's phase has it, the mirror's not: the city across
+    // the river was missing behind the near streets, the bare sky and the water in its place. Given for its scan
+    // (CarMirrorsFarModels, hidden).
+    static constexpr uint32_t PhaseFarModelsFlag = 0x100;
 
     static void __fastcall PhaseVisibility(uintptr_t phase, void*)
     {
@@ -890,10 +896,13 @@ namespace CarMirrors
             const uint32_t before = flags;
             if (lampCoronas)
                 flags |= PhaseLightsFlag;
+            if (farModels)
+                flags |= PhaseFarModelsFlag;
             inMirrorScan = true;
             waterVisibility(phase, nullptr);
             inMirrorScan = false;
-            flags = (flags & ~PhaseLightsFlag) | (before & PhaseLightsFlag);
+            constexpr uint32_t given = PhaseLightsFlag | PhaseFarModelsFlag;
+            flags = (flags & ~given) | (before & given);
             if (gated) *mirrorOn = 1;
             ++outdoorScans;
             waterScanPhase = phase;
@@ -1249,8 +1258,8 @@ namespace CarMirrors
         ++captureNumber;
         captureDraws = captureEntity = captureTaken = 0;
         captureContext = {};
-        captureText = std::format("{} mirror's pass, water style {}, water's far cells {}, entities' states kept apart {}, water and coronas first {}, target {}\n",
-            glassNames[glass < std::size(glassNames) ? glass : 0], int(waterStyle), int(waterFarCells), int(isolateStates), int(waterCoronasFirst),
+        captureText = std::format("{} mirror's pass, far models {}, water style {}, water's far cells {}, entities' states kept apart {}, water and coronas first {}, target {}\n",
+            glassNames[glass < std::size(glassNames) ? glass : 0], int(farModels), int(waterStyle), int(waterFarCells), int(isolateStates), int(waterCoronasFirst),
             RenderSkip::CurrentTarget() ? RenderSkip::CurrentTarget() : "?");
         captureText += "draw  what                                                          primitive | z enable func write | blend src/dst | alpha test ref | colour write, cull, stencil | shaders (FusionShaders number)\n";
     }
@@ -1761,6 +1770,7 @@ public:
                 CarMirrors::byDrawnCar = ini.ReadInteger("MISC", "CarMirrorsByDrawnCar", 1) != 0;
                 CarMirrors::zoomOut = std::clamp(ini.ReadFloat("MISC", "CarMirrorsZoomOut", 1.5f), 1.0f, 2.5f);
                 CarMirrors::water = ini.ReadInteger("MISC", "CarMirrorsWater", 1) != 0;
+                CarMirrors::farModels = ini.ReadInteger("MISC", "CarMirrorsFarModels", 1) != 0;
                 CarMirrors::waterFarCells = ini.ReadInteger("MISC", "CarMirrorsWaterFarCells", 1) != 0;
                 CarMirrors::waterReflection = ini.ReadInteger("MISC", "CarMirrorsWaterReflection", 1) != 0;
                 CarMirrors::reflectionShaders = ini.ReadInteger("MISC", "CarMirrorsReflectionShaders", 1) != 0;
@@ -1776,8 +1786,8 @@ public:
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
                 CarMirrors::interiorAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::interiorAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimY", -3.0f), -30.0f, 30.0f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, its far cells %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d, entities' states kept apart %d, water and coronas first %d, water style %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
-                    int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut, int(CarMirrors::water), int(CarMirrors::waterFarCells),
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, far models %d, water %d, its far cells %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d, entities' states kept apart %d, water and coronas first %d, water style %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
+                    int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut, int(CarMirrors::farModels), int(CarMirrors::water), int(CarMirrors::waterFarCells),
                     int(CarMirrors::waterReflection), int(CarMirrors::reflectionShaders), int(CarMirrors::skyAfterEntities), int(CarMirrors::extraBuckets),
                     int(CarMirrors::ownGlassInInterior), int(CarMirrors::lampCoronas), int(CarMirrors::isolateStates), int(CarMirrors::waterCoronasFirst), int(CarMirrors::waterStyle), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
             };
