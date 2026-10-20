@@ -694,7 +694,7 @@ public:
     struct CloudRegimeState { int from = -1, to = -1; double blendStart = 0.0, nextPick = 0.0; };
     CloudRegimeState CloudRegimes[8];
     std::mt19937_64 CloudRegimeRandom{ std::random_device{}() };
-    // Ctrl+Shift+F6: every weather picks its next kind of cloud now.
+    // Ctrl+Shift+F6: every weather switches to its next kind of cloud now, without a blend.
     bool bCloudRegimesNext = false;
     double fCloudRegimeLastSeconds = -1.0;
     void UpdateCloudRegimes(double seconds, bool restart);
@@ -2729,23 +2729,27 @@ static int PickCloudRegime(std::mt19937_64& random, int weather, int avoid)
 // Each weather moves on to its next kind of cloud once the last has been held, about CloudVarietyHold minutes
 // (0.6 to 1.4 times it), and blends into it over CloudVarietyBlend seconds; every weather keeps its own turn, so
 // the game's weather changing blends between two skies that are each on their way. With restart (a new game, a
-// load, a jump of the clock, Ctrl+Shift+F9) each takes a kind at once, without a blend.
+// load, a jump of the clock, Ctrl+Shift+F9) each takes a kind at once, without a blend; Ctrl+Shift+F6 the same, a
+// kind other than the one it was going to. It used to start the next blend only once the last was done and took its
+// two and a half minutes over it: pressed during one it did nothing, and after one the sky changed too slowly to see.
 void PostFxResource::UpdateCloudRegimes(double seconds, bool restart)
 {
     const double blend = (std::max)(fCloudVarietyBlend, 1.0f);
     auto hold = [&] { return 60.0 * fCloudVarietyHold * std::uniform_real_distribution<double>(0.6, 1.4)(CloudRegimeRandom); };
+    if (bCloudRegimesNext)
+        nCloudAccumFrame = 0;
     for (int weather = 0; weather < 8; ++weather)
     {
         auto& state = CloudRegimes[weather];
-        if (restart || state.to < 0)
+        if (restart || state.to < 0 || bCloudRegimesNext)
         {
-            state.from = state.to = PickCloudRegime(CloudRegimeRandom, weather, -1);
+            state.from = state.to = PickCloudRegime(CloudRegimeRandom, weather, restart ? -1 : state.to);
             state.blendStart = seconds - blend;
             state.nextPick = seconds + hold();
             continue;
         }
         // Only once the last blend is done: a new one started halfway would jump from where that one stood.
-        if ((seconds >= state.nextPick || bCloudRegimesNext) && seconds >= state.blendStart + blend)
+        if (seconds >= state.nextPick && seconds >= state.blendStart + blend)
         {
             state.from = state.to;
             state.to = PickCloudRegime(CloudRegimeRandom, weather, state.from);

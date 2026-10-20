@@ -30,6 +30,12 @@
 // for the far clouds to be crossed at all.
 #define FAR_STEP 0.005
 #define FINE_MISSES 4.0
+// The fine step at a cloud's edge, in metres, where the layer's own (a 24th of its thickness) is longer: Cloud
+// Variety's heaps 2.2 and 3 km tall were crossed in 92 and 125 m steps against billows of 60 and 15 m, and each
+// step's slice of them came out as a terrace across the clouds' sides.
+#define EDGE_STEP 25.0
+// The transmittance down to which the steps into a cloud stay short.
+#define EDGE_TRANSMITTANCE 0.5
 #ifndef LIGHT_STEPS
 #define LIGHT_STEPS 5
 #endif
@@ -447,9 +453,17 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
     // clouds came out smeared down the screen.
     // Each pixel starts up to a coarse step later: with the same coarse steps for every pixel,
     // thin cloud between two of them went missing in whole bands across the screen.
+    // The fine steps are the layer's own through empty sky and deep in a cloud, and EDGE_STEP into it while it is
+    // still thin: a sample that finds cloud straight after one that found none goes back by its step and the ray
+    // comes up to the edge again in short ones. Without this the long steps' slices of a tall cloud's billows
+    // lay across its sides in terraces; short steps all the way cost three times the steps.
+    // Every step back stops a share of a step past the layer's bottom, the pixel's own: stopped at the bottom
+    // itself, all the rays took their samples at the same distances from it, and the bases came out in rings.
     float jitter = frac(PixelJitter(vpos) + fFrameJitter);
     float t = t0 + max(vec4Layer.y / 24.0, t0 * FAR_STEP) * stepScale * COARSE_STEP * jitter;
     float fineLeft = 0.0;
+    bool inCloud = false;
+    bool edge = false;
     // Looking away from the sun, how much the powder effect darkens the sun's light (below).
     float powderView = full ? 0.35 - 0.35 * dot(dir, vec3SunDir) : 0.0;
 
@@ -460,6 +474,7 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
         if (t >= t1 || sums.transmittance < 0.01)
             break;
         float fine = max(vec4Layer.y / 24.0, t * FAR_STEP) * stepScale;
+        float edgeStep = full ? min(max(EDGE_STEP, t * FAR_STEP) * stepScale, fine) : fine;
         float3 p = origin + dir * t;
         p.z += curve * t * t;
 
@@ -472,11 +487,13 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
                 // then run at least past where the cloud was found and FINE_MISSES more: stopping
                 // as soon as they missed, where the detail had eaten the cloud at that point, the
                 // coarse step found it again, stepped back again and spent the ray going in circles.
-                t = max(t - fine * COARSE_STEP, t0);
+                t = max(t - fine * COARSE_STEP, t0 + fine * jitter);
                 fineLeft = COARSE_STEP + FINE_MISSES;
             }
             else
                 t += fine * COARSE_STEP;
+            inCloud = false;
+            edge = false;
             continue;
         }
 
@@ -484,9 +501,19 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
         float crease, soft;
         float d = Density(p, true, place, full, crease, soft);
         [branch]
+        if (d > 0.01 && !inCloud && !edge && fine > 1.5 * edgeStep)
+        {
+            t = max(t - fine, t0 + edgeStep * jitter);
+            edge = true;
+            continue;
+        }
+        [branch]
         if (d > 0.01)
         {
             fineLeft = FINE_MISSES;
+            inCloud = true;
+            edge = false;
+            fine = sums.transmittance > EDGE_TRANSMITTANCE ? edgeStep : fine;
             if (sums.firstHit < 0.0)
                 sums.firstHit = t;
 
@@ -577,7 +604,13 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
             sums.transmittance *= stepTransmittance;
         }
         else
-            fineLeft -= 1.0;
+        {
+            // Coming up to the edge, the short steps do not count against the misses: they would run out before
+            // the ray got back to where it found the cloud.
+            fineLeft -= edge ? 0.0 : 1.0;
+            fine = edge ? edgeStep : fine;
+            inCloud = false;
+        }
         t += fine;
     }
     return sums;

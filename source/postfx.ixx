@@ -1734,7 +1734,7 @@ private:
         }
         reseedWasDown = reseed;
 
-        // Ctrl+Shift+F6: each weather blends into its next kind of cloud now (Cloud Variety), to see them without
+        // Ctrl+Shift+F6: each weather switches to its next kind of cloud now (Cloud Variety), to see them without
         // waiting.
         static bool nextWasDown = false;
         const bool next = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
