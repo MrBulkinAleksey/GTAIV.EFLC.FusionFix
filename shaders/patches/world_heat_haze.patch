@@ -1,0 +1,1354 @@
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS11.asm b/win32_30_nv8/rage_postfx/rage_postfxPS11.asm
+index 21ff0ee8..0b0c987f 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS11.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS11.asm
+@@ -82,6 +82,10 @@
+     def c118, 0.75487766, 0.56984029, 0, 0
+     
+     defi i0, 7, 0, 0, 0
++    def c190, 180, 23, 140, 31 // FusionFix world_heat_haze.patch: the waves across the screen: up, the warp across, the second up, its slant
++    def c191, 3.0999999, 1.29999995, 2.29999995, 1.29999995 // FusionFix world_heat_haze.patch: their speeds (radians a second) and the warp's size
++    def c192, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_heat_haze.patch: angles into -pi..pi for sincos
++    def c193, 1, 0, 0, 0 // FusionFix world_heat_haze.patch: one, zero
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -94,7 +98,40 @@
+     dcl_2d s10 // StippleTexture set to linear clamp in gta_im
+     
+     // https://www.desmos.com/calculator/w5c2lj0chl
+-    mov r20.xy, v0
++    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
++    texld r31, v0, s1
++    pow r31.x, c209_abs.z, r31.x
++    mul r31.x, r31.x, c209.w // the depth
++    mad_sat r31.y, r31.x, c189.y, c189.x
++    add r31.z, r31.x, -c189.z
++    mov r31.w, c189.w
++    cmp r31.z, r31.z, r31.w, c193.x
++    mul r31.y, r31.y, r31.z
++    mul r31.y, r31.y, c188.w // how much it wavers here
++    mov r28.w, c188.z // seconds
++    mul r28.x, v0.x, c190.y
++    mad r28.x, r28.w, c191.y, r28.x
++    mad r28.x, r28.x, c192.x, c192.y
++    frc r28.x, r28.x
++    mad r28.x, r28.x, c192.z, c192.w
++    sincos r29.xy, r28.x // the warp
++    mul r28.y, v0.y, c190.x
++    mad r28.y, r28.w, c191.x, r28.y
++    mad r28.y, r29.y, c191.w, r28.y
++    mul r28.z, v0.y, c190.z
++    mad r28.z, v0.x, c190.w, r28.z
++    mad r28.z, r28.w, c191.z, r28.z
++    mad r28.yz, r28, c192.x, c192.y
++    frc r28.yz, r28
++    mad r28.yz, r28, c192.z, c192.w
++    sincos r29.xy, r28.y
++    mov r28.x, r29.y
++    sincos r29.xy, r28.z
++    mov r28.y, r29.y
++    mul r28.xy, r28, c188
++    mov r30.zw, c193.y
++    mad r30.xy, r28, r31.y, v0
++    mov r20.xy, r30
+     mad r20.x, r20.x, c7.x, c7.y
+     mul r20.z, c44.y, c44.z
+     mad r20.x, r20.x, r20.z, c7.z
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS12.asm b/win32_30_nv8/rage_postfx/rage_postfxPS12.asm
+index 2a2e7aa6..4eb8caa1 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS12.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS12.asm
+@@ -81,6 +81,10 @@
+     def c118, 0.75487766, 0.56984029, 0, 0
+     
+     defi i0, 7, 0, 0, 0
++    def c190, 180, 23, 140, 31 // FusionFix world_heat_haze.patch: the waves across the screen: up, the warp across, the second up, its slant
++    def c191, 3.0999999, 1.29999995, 2.29999995, 1.29999995 // FusionFix world_heat_haze.patch: their speeds (radians a second) and the warp's size
++    def c192, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_heat_haze.patch: angles into -pi..pi for sincos
++    def c193, 1, 0, 0, 0 // FusionFix world_heat_haze.patch: one, zero
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -91,17 +95,50 @@
+     dcl_2d s6
+     dcl_2d s7
+     dcl_2d s10 // StippleTexture set to linear clamp in gta_im
+-    texld r3, v0, s2
++    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
++    texld r31, v0, s1
++    pow r31.x, c209_abs.z, r31.x
++    mul r31.x, r31.x, c209.w // the depth
++    mad_sat r31.y, r31.x, c189.y, c189.x
++    add r31.z, r31.x, -c189.z
++    mov r31.w, c189.w
++    cmp r31.z, r31.z, r31.w, c193.x
++    mul r31.y, r31.y, r31.z
++    mul r31.y, r31.y, c188.w // how much it wavers here
++    mov r28.w, c188.z // seconds
++    mul r28.x, v0.x, c190.y
++    mad r28.x, r28.w, c191.y, r28.x
++    mad r28.x, r28.x, c192.x, c192.y
++    frc r28.x, r28.x
++    mad r28.x, r28.x, c192.z, c192.w
++    sincos r29.xy, r28.x // the warp
++    mul r28.y, v0.y, c190.x
++    mad r28.y, r28.w, c191.x, r28.y
++    mad r28.y, r29.y, c191.w, r28.y
++    mul r28.z, v0.y, c190.z
++    mad r28.z, v0.x, c190.w, r28.z
++    mad r28.z, r28.w, c191.z, r28.z
++    mad r28.yz, r28, c192.x, c192.y
++    frc r28.yz, r28
++    mad r28.yz, r28, c192.z, c192.w
++    sincos r29.xy, r28.y
++    mov r28.x, r29.y
++    sincos r29.xy, r28.z
++    mov r28.y, r29.y
++    mul r28.xy, r28, c188
++    mov r30.zw, c193.y
++    mad r30.xy, r28, r31.y, v0
++    texld r3, r30, s2
+     
+     // motion blur
+     if_ne -c222_abs.w, c222_abs.w
+-      texld r0, v0, s1
++      texldl r0, r30, s1
+       
+       // LogDepth Read
+       pow r19.x, c209_abs.z, r0.x
+       mul r0.y, r19.x, c209.w
+       
+-      mad r4.xyz, v0.yxyw, c5.x, c5.y
++      mad r4.xyz, r30.yxyw, c5.x, c5.y
+       mul r0.z, r4.y, c77.z
+       mul r0.z, r0.y, r0.z
+       mul r1.w, -r4.x, c77.w
+@@ -121,15 +158,15 @@
+       mul_sat r20.x, r20.x, c80.x
+       mul r0.yz, r0, r20.x // fix motion blur at high fps
+       mul r4.xy, r0.yzzw, c5.z
+-      texld r5, v0, s7
++      texldl r5, r30, s7
+       add r1.w, r5.x, -c86.x
+       add r1.w, r1.w, c13.z
+-      mul r4.zw, c0.xyxy, v0.xyxy
++      mul r4.zw, c0.xyxy, r30.xyxy
+       mad r8.xy, r3.xyxy, c3.w, r4.zw
+       mov r8.zw, c1.x
+       texldl r5, r8, s6
+       add r2.w, r5.x, c4.x
+-      mad r4.zw, r4.xyxy, r2.w, v0.xyxy
++      mad r4.zw, r4.xyxy, r2.w, r30.xyxy
+       mov r5.xyz, r3
+       mov r2.w, c2.y
+       mov r3.w, c2.y
+@@ -163,7 +200,7 @@
+     // bloom
+     rcp r1.x, r0.w
+     mul r1.x, r1.x, c81.x
+-    texld r2, v0, s4
++    texld r2, r30, s4
+     if_eq -c217_abs.w, c217_abs.w // bloom threshold color shift removal
+       mad r1.xyz, r2, c66.x, -r1.x
+       mul r2.xyz, r1, c81.z
+@@ -281,7 +318,7 @@
+     endif
+     
+     // dithering
+-    mul r1.xy, v0.xy, c44.xy
++    mul r1.xy, r30.xy, c44.xy
+     dp2add r1.x, r1.xy, c118.xy, c118.w
+     frc r1.x, r1.x
+     mad r1.x, r1.x, c11.x, -c11.y
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS13.asm b/win32_30_nv8/rage_postfx/rage_postfxPS13.asm
+index 158fc615..9d5d25fd 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS13.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS13.asm
+@@ -46,13 +46,50 @@
+     def c2, 0, 2, 4, 8
+     def c3, 0.25, 1, 256, 0
+     def c4, 256, 2, 4, 8
++    def c190, 180, 23, 140, 31 // FusionFix world_heat_haze.patch: the waves across the screen: up, the warp across, the second up, its slant
++    def c191, 3.0999999, 1.29999995, 2.29999995, 1.29999995 // FusionFix world_heat_haze.patch: their speeds (radians a second) and the warp's size
++    def c192, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_heat_haze.patch: angles into -pi..pi for sincos
++    def c193, 1, 0, 0, 0 // FusionFix world_heat_haze.patch: one, zero
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s3
+     dcl_2d s4
+-    texld r0, v0, s1
++    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
++    texld r31, v0, s1
++    pow r31.x, c209_abs.z, r31.x
++    mul r31.x, r31.x, c209.w // the depth
++    mad_sat r31.y, r31.x, c189.y, c189.x
++    add r31.z, r31.x, -c189.z
++    mov r31.w, c189.w
++    cmp r31.z, r31.z, r31.w, c193.x
++    mul r31.y, r31.y, r31.z
++    mul r31.y, r31.y, c188.w // how much it wavers here
++    mov r28.w, c188.z // seconds
++    mul r28.x, v0.x, c190.y
++    mad r28.x, r28.w, c191.y, r28.x
++    mad r28.x, r28.x, c192.x, c192.y
++    frc r28.x, r28.x
++    mad r28.x, r28.x, c192.z, c192.w
++    sincos r29.xy, r28.x // the warp
++    mul r28.y, v0.y, c190.x
++    mad r28.y, r28.w, c191.x, r28.y
++    mad r28.y, r29.y, c191.w, r28.y
++    mul r28.z, v0.y, c190.z
++    mad r28.z, v0.x, c190.w, r28.z
++    mad r28.z, r28.w, c191.z, r28.z
++    mad r28.yz, r28, c192.x, c192.y
++    frc r28.yz, r28
++    mad r28.yz, r28, c192.z, c192.w
++    sincos r29.xy, r28.y
++    mov r28.x, r29.y
++    sincos r29.xy, r28.z
++    mov r28.y, r29.y
++    mul r28.xy, r28, c188
++    mov r30.zw, c193.y
++    mad r30.xy, r28, r31.y, v0
++    texld r0, r30, s1
+     
+     // LogDepth Read
+     pow r19.x, c209_abs.z, r0.x
+@@ -75,22 +112,22 @@
+     min r0.y, c75.z, r2.x
+     max r2.x, r0.x, r0.y
+     mul r0.x, r2.x, r2.x
+-    mad r0.yz, c72.xxyw, r1.xxyw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xxyw, r30.xxyw
+     texld r2, r0.yzzw, s2
+     dp3 r3.x, r2, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xzxw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xzxw, r30.xxyw
+     texld r4, r0.yzzw, s2
+     dp3 r3.y, r4, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xwzw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xwzw, r30.xxyw
+     texld r5, r0.yzzw, s2
+     dp3 r3.z, r5, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xyww, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xyww, r30.xxyw
+     texld r1, r0.yzzw, s2
+     dp3 r3.w, r1, c1.yzww
+     dp4 r0.y, r3, c3.x
+     add r3, r3, -r0.y
+     dp4 r0.z, r3, r3
+-    texld r3, v0, s2
++    texld r3, r30, s2
+     dp3 r0.w, r3, c1.yzww
+     add r0.y, -r0.y, r0.w
+     mad r0.y, r0.y, r0.y, -r0.z
+@@ -98,7 +135,7 @@
+     add r0.y, -r0.x, c3.y
+     mul r0.x, r0.x, c3.x
+     mul r6.xyz, r2, r0.x
+-    texld r7, v0, s0
++    texld r7, r30, s0
+     mov r7.yz, c3
+     mad r8, r7.w, -r7.z, c2
+     mad r9, r7.w, -c4.x, c4.yzwx
+@@ -119,7 +156,7 @@
+     mad r0.yzw, r4.xxyz, r0.x, r0
+     mad r0.yzw, r5.xxyz, r0.x, r0
+     mad r0.xyz, r1, r0.x, r0.yzww
+-    texld r1, v0, s3
++    texld r1, r30, s3
+     texld r2, c1.x, s4
+     rcp r0.w, r2.x
+     mul r0.w, r0.w, c76.y
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS14.asm b/win32_30_nv8/rage_postfx/rage_postfxPS14.asm
+index 7f001ff1..944633bf 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS14.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS14.asm
+@@ -81,6 +81,10 @@
+     def c118, 0.75487766, 0.56984029, 0, 0
+     
+     defi i0, 7, 0, 0, 0
++    def c190, 180, 23, 140, 31 // FusionFix world_heat_haze.patch: the waves across the screen: up, the warp across, the second up, its slant
++    def c191, 3.0999999, 1.29999995, 2.29999995, 1.29999995 // FusionFix world_heat_haze.patch: their speeds (radians a second) and the warp's size
++    def c192, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_heat_haze.patch: angles into -pi..pi for sincos
++    def c193, 1, 0, 0, 0 // FusionFix world_heat_haze.patch: one, zero
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -91,17 +95,50 @@
+     dcl_2d s6
+     dcl_2d s7
+     dcl_2d s10 // StippleTexture set to linear clamp in gta_im
+-    texld r3, v0, s2
++    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
++    texld r31, v0, s1
++    pow r31.x, c209_abs.z, r31.x
++    mul r31.x, r31.x, c209.w // the depth
++    mad_sat r31.y, r31.x, c189.y, c189.x
++    add r31.z, r31.x, -c189.z
++    mov r31.w, c189.w
++    cmp r31.z, r31.z, r31.w, c193.x
++    mul r31.y, r31.y, r31.z
++    mul r31.y, r31.y, c188.w // how much it wavers here
++    mov r28.w, c188.z // seconds
++    mul r28.x, v0.x, c190.y
++    mad r28.x, r28.w, c191.y, r28.x
++    mad r28.x, r28.x, c192.x, c192.y
++    frc r28.x, r28.x
++    mad r28.x, r28.x, c192.z, c192.w
++    sincos r29.xy, r28.x // the warp
++    mul r28.y, v0.y, c190.x
++    mad r28.y, r28.w, c191.x, r28.y
++    mad r28.y, r29.y, c191.w, r28.y
++    mul r28.z, v0.y, c190.z
++    mad r28.z, v0.x, c190.w, r28.z
++    mad r28.z, r28.w, c191.z, r28.z
++    mad r28.yz, r28, c192.x, c192.y
++    frc r28.yz, r28
++    mad r28.yz, r28, c192.z, c192.w
++    sincos r29.xy, r28.y
++    mov r28.x, r29.y
++    sincos r29.xy, r28.z
++    mov r28.y, r29.y
++    mul r28.xy, r28, c188
++    mov r30.zw, c193.y
++    mad r30.xy, r28, r31.y, v0
++    texld r3, r30, s2
+     
+     // motion blur
+     if_ne -c222_abs.w, c222_abs.w
+-      texld r0, v0, s1
++      texldl r0, r30, s1
+       
+       // LogDepth Read
+       pow r19.x, c209_abs.z, r0.x
+       mul r0.y, r19.x, c209.w
+       
+-      mad r4.xyz, v0.yxyw, c5.x, c5.y
++      mad r4.xyz, r30.yxyw, c5.x, c5.y
+       mul r0.z, r4.y, c77.z
+       mul r0.z, r0.y, r0.z
+       mul r1.w, -r4.x, c77.w
+@@ -121,15 +158,15 @@
+       mul_sat r20.x, r20.x, c80.x
+       mul r0.yz, r0, r20.x // fix motion blur at high fps
+       mul r4.xy, r0.yzzw, c5.z
+-      texld r5, v0, s7
++      texldl r5, r30, s7
+       add r1.w, r5.x, -c86.x
+       add r1.w, r1.w, c13.z
+-      mul r4.zw, c0.xyxy, v0.xyxy
++      mul r4.zw, c0.xyxy, r30.xyxy
+       mad r8.xy, r3.xyxy, c3.w, r4.zw
+       mov r8.zw, c1.x
+       texldl r5, r8, s6
+       add r2.w, r5.x, c4.x
+-      mad r4.zw, r4.xyxy, r2.w, v0.xyxy
++      mad r4.zw, r4.xyxy, r2.w, r30.xyxy
+       mov r5.xyz, r3
+       mov r2.w, c2.y
+       mov r3.w, c2.y
+@@ -163,7 +200,7 @@
+     // bloom
+     rcp r1.x, r0.w
+     mul r1.x, r1.x, c81.x
+-    texld r2, v0, s4
++    texld r2, r30, s4
+     if_eq -c217_abs.w, c217_abs.w // bloom threshold color shift removal
+       mad r1.xyz, r2, c66.x, -r1.x
+       mul r2.xyz, r1, c81.z
+@@ -281,7 +318,7 @@
+     endif
+     
+     // dithering
+-    mul r1.xy, v0.xy, c44.xy
++    mul r1.xy, r30.xy, c44.xy
+     dp2add r1.x, r1.xy, c118.xy, c118.w
+     frc r1.x, r1.x
+     mad r1.x, r1.x, c11.x, -c11.y
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS15.asm b/win32_30_nv8/rage_postfx/rage_postfxPS15.asm
+index 4872c040..28f16688 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS15.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS15.asm
+@@ -46,13 +46,50 @@
+     def c2, 0.25, 1, 256, 0
+     def c3, 0, 2, 4, 8
+     def c4, 256, 2, 4, 8
++    def c190, 180, 23, 140, 31 // FusionFix world_heat_haze.patch: the waves across the screen: up, the warp across, the second up, its slant
++    def c191, 3.0999999, 1.29999995, 2.29999995, 1.29999995 // FusionFix world_heat_haze.patch: their speeds (radians a second) and the warp's size
++    def c192, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_heat_haze.patch: angles into -pi..pi for sincos
++    def c193, 1, 0, 0, 0 // FusionFix world_heat_haze.patch: one, zero
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s3
+     dcl_2d s4
+-    texld r0, v0, s1
++    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
++    texld r31, v0, s1
++    pow r31.x, c209_abs.z, r31.x
++    mul r31.x, r31.x, c209.w // the depth
++    mad_sat r31.y, r31.x, c189.y, c189.x
++    add r31.z, r31.x, -c189.z
++    mov r31.w, c189.w
++    cmp r31.z, r31.z, r31.w, c193.x
++    mul r31.y, r31.y, r31.z
++    mul r31.y, r31.y, c188.w // how much it wavers here
++    mov r28.w, c188.z // seconds
++    mul r28.x, v0.x, c190.y
++    mad r28.x, r28.w, c191.y, r28.x
++    mad r28.x, r28.x, c192.x, c192.y
++    frc r28.x, r28.x
++    mad r28.x, r28.x, c192.z, c192.w
++    sincos r29.xy, r28.x // the warp
++    mul r28.y, v0.y, c190.x
++    mad r28.y, r28.w, c191.x, r28.y
++    mad r28.y, r29.y, c191.w, r28.y
++    mul r28.z, v0.y, c190.z
++    mad r28.z, v0.x, c190.w, r28.z
++    mad r28.z, r28.w, c191.z, r28.z
++    mad r28.yz, r28, c192.x, c192.y
++    frc r28.yz, r28
++    mad r28.yz, r28, c192.z, c192.w
++    sincos r29.xy, r28.y
++    mov r28.x, r29.y
++    sincos r29.xy, r28.z
++    mov r28.y, r29.y
++    mul r28.xy, r28, c188
++    mov r30.zw, c193.y
++    mad r30.xy, r28, r31.y, v0
++    texld r0, r30, s1
+     add r0.y, -c73.x, c73.y
+     rcp r0.y, r0.y
+     mad r0.x, c73.y, -r0.y, r0.x
+@@ -68,22 +105,22 @@
+     lrp r2.x, r0.x, c75.z, c75.y
+     min r0.x, c75.z, r2.x
+     mul r0.x, r0.x, r0.x
+-    mad r0.yz, c72.xxyw, r1.xxyw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xxyw, r30.xxyw
+     texld r2, r0.yzzw, s2
+     dp3 r3.x, r2, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xzxw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xzxw, r30.xxyw
+     texld r4, r0.yzzw, s2
+     dp3 r3.y, r4, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xwzw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xwzw, r30.xxyw
+     texld r5, r0.yzzw, s2
+     dp3 r3.z, r5, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xyww, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xyww, r30.xxyw
+     texld r1, r0.yzzw, s2
+     dp3 r3.w, r1, c1.yzww
+     dp4 r0.y, r3, c2.x
+     add r3, r3, -r0.y
+     dp4 r0.z, r3, r3
+-    texld r3, v0, s2
++    texld r3, r30, s2
+     dp3 r0.w, r3, c1.yzww
+     add r0.y, -r0.y, r0.w
+     mad r0.y, r0.y, r0.y, -r0.z
+@@ -91,7 +128,7 @@
+     add r0.y, -r0.x, c2.y
+     mul r0.z, r0.x, c2.x
+     mul r6.xyz, r2, r0.z
+-    texld r7, v0, s0
++    texld r7, r30, s0
+     mov r7.yz, c2
+     mad r8, r7.w, -r7.z, c3
+     mad r9, r7.w, -c4.x, c4.yzwx
+@@ -113,7 +150,7 @@
+     mad r2.xyz, r5, r0.z, r2
+     mad r1.yzw, r1.xxyz, r0.z, r2.xxyz
+     mul r1.x, r0.x, r1.y
+-    texld r0, v0, s3
++    texld r0, r30, s3
+     texld r2, c1.x, s4
+     rcp r0.w, r2.x
+     mul r0.w, r0.w, c76.y
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS16.asm b/win32_30_nv8/rage_postfx/rage_postfxPS16.asm
+index a9f15810..c454a10c 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS16.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS16.asm
+@@ -61,6 +61,10 @@
+     def c5, 2, -1, 0.125, 0
+     def c6, 256, 2, 4, 8
+     defi i0, 7, 0, 0, 0
++    def c190, 180, 23, 140, 31 // FusionFix world_heat_haze.patch: the waves across the screen: up, the warp across, the second up, its slant
++    def c191, 3.0999999, 1.29999995, 2.29999995, 1.29999995 // FusionFix world_heat_haze.patch: their speeds (radians a second) and the warp's size
++    def c192, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_heat_haze.patch: angles into -pi..pi for sincos
++    def c193, 1, 0, 0, 0 // FusionFix world_heat_haze.patch: one, zero
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -69,7 +73,40 @@
+     dcl_2d s4
+     dcl_2d s5
+     dcl_2d s6
+-    texld r0, v0, s1
++    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
++    texld r31, v0, s1
++    pow r31.x, c209_abs.z, r31.x
++    mul r31.x, r31.x, c209.w // the depth
++    mad_sat r31.y, r31.x, c189.y, c189.x
++    add r31.z, r31.x, -c189.z
++    mov r31.w, c189.w
++    cmp r31.z, r31.z, r31.w, c193.x
++    mul r31.y, r31.y, r31.z
++    mul r31.y, r31.y, c188.w // how much it wavers here
++    mov r28.w, c188.z // seconds
++    mul r28.x, v0.x, c190.y
++    mad r28.x, r28.w, c191.y, r28.x
++    mad r28.x, r28.x, c192.x, c192.y
++    frc r28.x, r28.x
++    mad r28.x, r28.x, c192.z, c192.w
++    sincos r29.xy, r28.x // the warp
++    mul r28.y, v0.y, c190.x
++    mad r28.y, r28.w, c191.x, r28.y
++    mad r28.y, r29.y, c191.w, r28.y
++    mul r28.z, v0.y, c190.z
++    mad r28.z, v0.x, c190.w, r28.z
++    mad r28.z, r28.w, c191.z, r28.z
++    mad r28.yz, r28, c192.x, c192.y
++    frc r28.yz, r28
++    mad r28.yz, r28, c192.z, c192.w
++    sincos r29.xy, r28.y
++    mov r28.x, r29.y
++    sincos r29.xy, r28.z
++    mov r28.y, r29.y
++    mul r28.xy, r28, c188
++    mov r30.zw, c193.y
++    mad r30.xy, r28, r31.y, v0
++    texld r0, r30, s1
+     add r0.y, -c77.x, c77.y
+     rcp r0.y, r0.y
+     mul r0.z, r0.y, c77.y
+@@ -77,17 +114,17 @@
+     mad r0.x, c77.y, -r0.y, r0.x
+     rcp r0.x, r0.x
+     mul r0.y, r0.z, r0.x
+-    texld r1, v0, s2
+-    texld r2, v0, s3
++    texld r1, r30, s2
++    texld r2, r30, s3
+     abs r0.w, c79.w
+     mov r3, c4
+-    mad r4.xy, c76, r3, v0
++    mad r4.xy, c76, r3, r30
+     texld r4, r4, s2
+-    mad r5.xy, c76, r3.zxzw, v0
++    mad r5.xy, c76, r3.zxzw, r30
+     texld r5, r5, s2
+-    mad r3.xz, c76.xyyw, r3.wyzw, v0.xyyw
++    mad r3.xz, c76.xyyw, r3.wyzw, r30.xyyw
+     texld r6, r3.xzzw, s2
+-    mad r3.xy, c76, r3.ywzw, v0
++    mad r3.xy, c76, r3.ywzw, r30
+     texld r7, r3, s2
+     dp3 r1.w, r4, r4
+     rcp r1.w, r1.w
+@@ -123,7 +160,7 @@
+     mad r0.z, r0.z, r0.z, -r2.w
+     mul r0.x, r0.x, r0.x
+     cmp r0.x, r0.z, c2.y, r0.x
+-    texld r8, v0, s0
++    texld r8, r30, s0
+     mov r8.yz, c2
+     mad r9, r8.w, -r8.z, c3
+     cmp r9, r9, c2.y, c2.w
+@@ -148,7 +185,7 @@
+     mad r3.xyz, r5, r1.w, r3
+     mad r3.yzw, r6.xxyz, r1.w, r3.xxyz
+     mul r3.x, r0.x, r3.y
+-    mad r4.xyz, v0.yxyw, c5.x, c5.y
++    mad r4.xyz, r30.yxyw, c5.x, c5.y
+     mul r0.z, r4.y, c77.z
+     mul r0.z, r0.y, r0.z
+     mul r1.w, -r4.x, c77.w
+@@ -166,13 +203,13 @@
+     add r0.yz, -r4, r6.xxyw
+     mul r0.yz, r0, c80.x
+     mul r4.xy, r0.yzzw, c5.z
+-    texld r5, v0, s6
++    texld r5, r30, s6
+     add r1.w, r5.x, -c85.x
+     mul r4.zw, r3.xyxz, c3.w
+-    mad r4.zw, v0.xyxy, c0.xyxy, r4
++    mad r4.zw, r30.xyxy, c0.xyxy, r4
+     texld r5, r4.zwzw, s5
+     add r2.w, r5.x, c4.x
+-    mad r4.zw, r4.xyxy, r2.w, v0.xyxy
++    mad r4.zw, r4.xyxy, r2.w, r30.xyxy
+     mov r5.xyz, r3.xzww
+     mov r2.w, c2.y
+     mov r3.y, c2.y
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS17.asm b/win32_30_nv8/rage_postfx/rage_postfxPS17.asm
+index 8d3b1a7d..3e7c5351 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS17.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS17.asm
+@@ -46,13 +46,50 @@
+     def c2, 0, 2, 4, 8
+     def c3, 0.25, 1, 256, 0
+     def c4, 256, 2, 4, 8
++    def c190, 180, 23, 140, 31 // FusionFix world_heat_haze.patch: the waves across the screen: up, the warp across, the second up, its slant
++    def c191, 3.0999999, 1.29999995, 2.29999995, 1.29999995 // FusionFix world_heat_haze.patch: their speeds (radians a second) and the warp's size
++    def c192, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_heat_haze.patch: angles into -pi..pi for sincos
++    def c193, 1, 0, 0, 0 // FusionFix world_heat_haze.patch: one, zero
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s3
+     dcl_2d s4
+-    texld r0, v0, s1
++    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
++    texld r31, v0, s1
++    pow r31.x, c209_abs.z, r31.x
++    mul r31.x, r31.x, c209.w // the depth
++    mad_sat r31.y, r31.x, c189.y, c189.x
++    add r31.z, r31.x, -c189.z
++    mov r31.w, c189.w
++    cmp r31.z, r31.z, r31.w, c193.x
++    mul r31.y, r31.y, r31.z
++    mul r31.y, r31.y, c188.w // how much it wavers here
++    mov r28.w, c188.z // seconds
++    mul r28.x, v0.x, c190.y
++    mad r28.x, r28.w, c191.y, r28.x
++    mad r28.x, r28.x, c192.x, c192.y
++    frc r28.x, r28.x
++    mad r28.x, r28.x, c192.z, c192.w
++    sincos r29.xy, r28.x // the warp
++    mul r28.y, v0.y, c190.x
++    mad r28.y, r28.w, c191.x, r28.y
++    mad r28.y, r29.y, c191.w, r28.y
++    mul r28.z, v0.y, c190.z
++    mad r28.z, v0.x, c190.w, r28.z
++    mad r28.z, r28.w, c191.z, r28.z
++    mad r28.yz, r28, c192.x, c192.y
++    frc r28.yz, r28
++    mad r28.yz, r28, c192.z, c192.w
++    sincos r29.xy, r28.y
++    mov r28.x, r29.y
++    sincos r29.xy, r28.z
++    mov r28.y, r29.y
++    mul r28.xy, r28, c188
++    mov r30.zw, c193.y
++    mad r30.xy, r28, r31.y, v0
++    texld r0, r30, s1
+     add r0.y, -c73.x, c73.y
+     rcp r0.y, r0.y
+     mad r0.x, c73.y, -r0.y, r0.x
+@@ -76,22 +113,22 @@
+     min r0.y, c75.z, r2.x
+     max r2.x, r0.x, r0.y
+     mul r0.x, r2.x, r2.x
+-    mad r0.yz, c72.xxyw, r1.xxyw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xxyw, r30.xxyw
+     texld r2, r0.yzzw, s2
+     dp3 r3.x, r2, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xzxw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xzxw, r30.xxyw
+     texld r4, r0.yzzw, s2
+     dp3 r3.y, r4, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xwzw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xwzw, r30.xxyw
+     texld r5, r0.yzzw, s2
+     dp3 r3.z, r5, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xyww, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xyww, r30.xxyw
+     texld r1, r0.yzzw, s2
+     dp3 r3.w, r1, c1.yzww
+     dp4 r0.y, r3, c3.x
+     add r3, r3, -r0.y
+     dp4 r0.z, r3, r3
+-    texld r3, v0, s2
++    texld r3, r30, s2
+     dp3 r0.w, r3, c1.yzww
+     add r0.y, -r0.y, r0.w
+     mad r0.y, r0.y, r0.y, -r0.z
+@@ -99,7 +136,7 @@
+     add r0.y, -r0.x, c3.y
+     mul r0.z, r0.x, c3.x
+     mul r6.xyz, r2, r0.z
+-    texld r7, v0, s0
++    texld r7, r30, s0
+     mov r7.yz, c3
+     mad r8, r7.w, -r7.z, c2
+     mad r9, r7.w, -c4.x, c4.yzwx
+@@ -121,7 +158,7 @@
+     mad r2.xyz, r5, r0.z, r2
+     mad r1.yzw, r1.xxyz, r0.z, r2.xxyz
+     mul r1.x, r0.x, r1.y
+-    texld r0, v0, s3
++    texld r0, r30, s3
+     texld r2, c1.x, s4
+     rcp r0.w, r2.x
+     mul r0.w, r0.w, c76.y
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS18.asm b/win32_30_nv8/rage_postfx/rage_postfxPS18.asm
+index 1dde72b0..fd1dac39 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS18.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS18.asm
+@@ -61,6 +61,10 @@
+     def c5, 2, -1, 0.125, 0
+     def c6, 256, 2, 4, 8
+     defi i0, 7, 0, 0, 0
++    def c190, 180, 23, 140, 31 // FusionFix world_heat_haze.patch: the waves across the screen: up, the warp across, the second up, its slant
++    def c191, 3.0999999, 1.29999995, 2.29999995, 1.29999995 // FusionFix world_heat_haze.patch: their speeds (radians a second) and the warp's size
++    def c192, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_heat_haze.patch: angles into -pi..pi for sincos
++    def c193, 1, 0, 0, 0 // FusionFix world_heat_haze.patch: one, zero
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -69,7 +73,40 @@
+     dcl_2d s4
+     dcl_2d s5
+     dcl_2d s6
+-    texld r0, v0, s1
++    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
++    texld r31, v0, s1
++    pow r31.x, c209_abs.z, r31.x
++    mul r31.x, r31.x, c209.w // the depth
++    mad_sat r31.y, r31.x, c189.y, c189.x
++    add r31.z, r31.x, -c189.z
++    mov r31.w, c189.w
++    cmp r31.z, r31.z, r31.w, c193.x
++    mul r31.y, r31.y, r31.z
++    mul r31.y, r31.y, c188.w // how much it wavers here
++    mov r28.w, c188.z // seconds
++    mul r28.x, v0.x, c190.y
++    mad r28.x, r28.w, c191.y, r28.x
++    mad r28.x, r28.x, c192.x, c192.y
++    frc r28.x, r28.x
++    mad r28.x, r28.x, c192.z, c192.w
++    sincos r29.xy, r28.x // the warp
++    mul r28.y, v0.y, c190.x
++    mad r28.y, r28.w, c191.x, r28.y
++    mad r28.y, r29.y, c191.w, r28.y
++    mul r28.z, v0.y, c190.z
++    mad r28.z, v0.x, c190.w, r28.z
++    mad r28.z, r28.w, c191.z, r28.z
++    mad r28.yz, r28, c192.x, c192.y
++    frc r28.yz, r28
++    mad r28.yz, r28, c192.z, c192.w
++    sincos r29.xy, r28.y
++    mov r28.x, r29.y
++    sincos r29.xy, r28.z
++    mov r28.y, r29.y
++    mul r28.xy, r28, c188
++    mov r30.zw, c193.y
++    mad r30.xy, r28, r31.y, v0
++    texld r0, r30, s1
+     add r0.y, -c77.x, c77.y
+     rcp r0.y, r0.y
+     mul r0.z, r0.y, c77.y
+@@ -77,17 +114,17 @@
+     mad r0.x, c77.y, -r0.y, r0.x
+     rcp r0.x, r0.x
+     mul r0.y, r0.z, r0.x
+-    texld r1, v0, s2
+-    texld r2, v0, s3
++    texld r1, r30, s2
++    texld r2, r30, s3
+     abs r0.w, c79.w
+     mov r3, c4
+-    mad r4.xy, c76, r3, v0
++    mad r4.xy, c76, r3, r30
+     texld r4, r4, s2
+-    mad r5.xy, c76, r3.zxzw, v0
++    mad r5.xy, c76, r3.zxzw, r30
+     texld r5, r5, s2
+-    mad r3.xz, c76.xyyw, r3.wyzw, v0.xyyw
++    mad r3.xz, c76.xyyw, r3.wyzw, r30.xyyw
+     texld r6, r3.xzzw, s2
+-    mad r3.xy, c76, r3.ywzw, v0
++    mad r3.xy, c76, r3.ywzw, r30
+     texld r7, r3, s2
+     dp3 r1.w, r4, r4
+     rcp r1.w, r1.w
+@@ -131,7 +168,7 @@
+     mad r0.x, r0.x, r0.x, -r2.w
+     mul r0.z, r1.w, r1.w
+     cmp r0.x, r0.x, c2.y, r0.z
+-    texld r8, v0, s0
++    texld r8, r30, s0
+     mov r8.yz, c2
+     mad r9, r8.w, -r8.z, c3
+     cmp r9, r9, c2.y, c2.w
+@@ -156,7 +193,7 @@
+     mad r3.xyz, r5, r1.w, r3
+     mad r3.yzw, r6.xxyz, r1.w, r3.xxyz
+     mul r3.x, r0.x, r3.y
+-    mad r4.xyz, v0.yxyw, c5.x, c5.y
++    mad r4.xyz, r30.yxyw, c5.x, c5.y
+     mul r0.z, r4.y, c77.z
+     mul r0.z, r0.y, r0.z
+     mul r1.w, -r4.x, c77.w
+@@ -174,13 +211,13 @@
+     add r0.yz, -r4, r6.xxyw
+     mul r0.yz, r0, c80.x
+     mul r4.xy, r0.yzzw, c5.z
+-    texld r5, v0, s6
++    texld r5, r30, s6
+     add r1.w, r5.x, -c85.x
+     mul r4.zw, r3.xyxz, c3.w
+-    mad r4.zw, v0.xyxy, c0.xyxy, r4
++    mad r4.zw, r30.xyxy, c0.xyxy, r4
+     texld r5, r4.zwzw, s5
+     add r2.w, r5.x, c4.x
+-    mad r4.zw, r4.xyxy, r2.w, v0.xyxy
++    mad r4.zw, r4.xyxy, r2.w, r30.xyxy
+     mov r5.xyz, r3.xzww
+     mov r2.w, c2.y
+     mov r3.y, c2.y
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS23.asm b/win32_30_nv8/rage_postfx/rage_postfxPS23.asm
+index 9b124d11..216f3530 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS23.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS23.asm
+@@ -51,6 +51,10 @@
+     def c3, 0, 2, 4, 8
+     def c4, 3.20000005, 1.79999995, 1.10000002, 0
+     def c5, 256, 2, 4, 8
++    def c190, 180, 23, 140, 31 // FusionFix world_heat_haze.patch: the waves across the screen: up, the warp across, the second up, its slant
++    def c191, 3.0999999, 1.29999995, 2.29999995, 1.29999995 // FusionFix world_heat_haze.patch: their speeds (radians a second) and the warp's size
++    def c192, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_heat_haze.patch: angles into -pi..pi for sincos
++    def c193, 1, 0, 0, 0 // FusionFix world_heat_haze.patch: one, zero
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -58,7 +62,40 @@
+     dcl_2d s3
+     dcl_2d s4
+     dcl_2d s5
+-    texld r0, v0, s1
++    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
++    texld r31, v0, s1
++    pow r31.x, c209_abs.z, r31.x
++    mul r31.x, r31.x, c209.w // the depth
++    mad_sat r31.y, r31.x, c189.y, c189.x
++    add r31.z, r31.x, -c189.z
++    mov r31.w, c189.w
++    cmp r31.z, r31.z, r31.w, c193.x
++    mul r31.y, r31.y, r31.z
++    mul r31.y, r31.y, c188.w // how much it wavers here
++    mov r28.w, c188.z // seconds
++    mul r28.x, v0.x, c190.y
++    mad r28.x, r28.w, c191.y, r28.x
++    mad r28.x, r28.x, c192.x, c192.y
++    frc r28.x, r28.x
++    mad r28.x, r28.x, c192.z, c192.w
++    sincos r29.xy, r28.x // the warp
++    mul r28.y, v0.y, c190.x
++    mad r28.y, r28.w, c191.x, r28.y
++    mad r28.y, r29.y, c191.w, r28.y
++    mul r28.z, v0.y, c190.z
++    mad r28.z, v0.x, c190.w, r28.z
++    mad r28.z, r28.w, c191.z, r28.z
++    mad r28.yz, r28, c192.x, c192.y
++    frc r28.yz, r28
++    mad r28.yz, r28, c192.z, c192.w
++    sincos r29.xy, r28.y
++    mov r28.x, r29.y
++    sincos r29.xy, r28.z
++    mov r28.y, r29.y
++    mul r28.xy, r28, c188
++    mov r30.zw, c193.y
++    mad r30.xy, r28, r31.y, v0
++    texld r0, r30, s1
+     
+     // LogDepth Read
+     pow r19.x, c209_abs.z, r0.x
+@@ -73,22 +110,22 @@
+     lrp r2.x, r0.x, c75.z, c75.y
+     min r0.x, c75.z, r2.x
+     mul r0.x, r0.x, r0.x
+-    mad r0.yz, c72.xxyw, r1.xxyw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xxyw, r30.xxyw
+     texld r2, r0.yzzw, s2
+     dp3 r3.x, r2, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xzxw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xzxw, r30.xxyw
+     texld r4, r0.yzzw, s2
+     dp3 r3.y, r4, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xwzw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xwzw, r30.xxyw
+     texld r5, r0.yzzw, s2
+     dp3 r3.z, r5, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xyww, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xyww, r30.xxyw
+     texld r1, r0.yzzw, s2
+     dp3 r3.w, r1, c1.yzww
+     dp4 r0.y, r3, c2.x
+     add r3, r3, -r0.y
+     dp4 r0.z, r3, r3
+-    texld r3, v0, s2
++    texld r3, r30, s2
+     dp3 r0.w, r3, c1.yzww
+     add r0.y, -r0.y, r0.w
+     mad r0.y, r0.y, r0.y, -r0.z
+@@ -96,7 +133,7 @@
+     add r0.y, -r0.x, c2.y
+     mul r0.x, r0.x, c2.x
+     mul r6.xyz, r2, r0.x
+-    texld r7, v0, s0
++    texld r7, r30, s0
+     mov r7.yz, c2
+     mad r8, r7.w, -r7.z, c3
+     mad r9, r7.w, -c5.x, c5.yzwx
+@@ -118,13 +155,13 @@
+     mad r0.yzw, r5.xxyz, r0.x, r0
+     mad r0.xyz, r1, r0.x, r0.yzww
+     mov r1.xy, c4
+-    mad r1.xy, v0, r1, c80
++    mad r1.xy, r30, r1, c80
+     frc r1.xy, r1
+     texld r1, r1, s3
+     add r0.w, r1.z, c0.x
+     mul r0.w, r0.w, c80.z
+     mad r0.xyz, r0.w, c4.z, r0
+-    texld r1, v0, s4
++    texld r1, r30, s4
+     texld r2, c1.x, s5
+     rcp r0.w, r2.x
+     mul r0.w, r0.w, c76.y
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS24.asm b/win32_30_nv8/rage_postfx/rage_postfxPS24.asm
+index 19b348aa..2356f0ee 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS24.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS24.asm
+@@ -81,6 +81,10 @@
+     def c118, 0.75487766, 0.56984029, 0, 0
+     
+     defi i0, 7, 0, 0, 0
++    def c190, 180, 23, 140, 31 // FusionFix world_heat_haze.patch: the waves across the screen: up, the warp across, the second up, its slant
++    def c191, 3.0999999, 1.29999995, 2.29999995, 1.29999995 // FusionFix world_heat_haze.patch: their speeds (radians a second) and the warp's size
++    def c192, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_heat_haze.patch: angles into -pi..pi for sincos
++    def c193, 1, 0, 0, 0 // FusionFix world_heat_haze.patch: one, zero
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -91,17 +95,50 @@
+     dcl_2d s6
+     dcl_2d s7
+     dcl_2d s10 // StippleTexture set to linear clamp in gta_im
+-    texld r3, v0, s2
++    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
++    texld r31, v0, s1
++    pow r31.x, c209_abs.z, r31.x
++    mul r31.x, r31.x, c209.w // the depth
++    mad_sat r31.y, r31.x, c189.y, c189.x
++    add r31.z, r31.x, -c189.z
++    mov r31.w, c189.w
++    cmp r31.z, r31.z, r31.w, c193.x
++    mul r31.y, r31.y, r31.z
++    mul r31.y, r31.y, c188.w // how much it wavers here
++    mov r28.w, c188.z // seconds
++    mul r28.x, v0.x, c190.y
++    mad r28.x, r28.w, c191.y, r28.x
++    mad r28.x, r28.x, c192.x, c192.y
++    frc r28.x, r28.x
++    mad r28.x, r28.x, c192.z, c192.w
++    sincos r29.xy, r28.x // the warp
++    mul r28.y, v0.y, c190.x
++    mad r28.y, r28.w, c191.x, r28.y
++    mad r28.y, r29.y, c191.w, r28.y
++    mul r28.z, v0.y, c190.z
++    mad r28.z, v0.x, c190.w, r28.z
++    mad r28.z, r28.w, c191.z, r28.z
++    mad r28.yz, r28, c192.x, c192.y
++    frc r28.yz, r28
++    mad r28.yz, r28, c192.z, c192.w
++    sincos r29.xy, r28.y
++    mov r28.x, r29.y
++    sincos r29.xy, r28.z
++    mov r28.y, r29.y
++    mul r28.xy, r28, c188
++    mov r30.zw, c193.y
++    mad r30.xy, r28, r31.y, v0
++    texld r3, r30, s2
+     
+     // motion blur
+     if_ne -c222_abs.w, c222_abs.w
+-      texld r0, v0, s1
++      texldl r0, r30, s1
+       
+       // LogDepth Read
+       pow r19.x, c209_abs.z, r0.x
+       mul r0.y, r19.x, c209.w
+       
+-      mad r4.xyz, v0.yxyw, c5.x, c5.y
++      mad r4.xyz, r30.yxyw, c5.x, c5.y
+       mul r0.z, r4.y, c77.z
+       mul r0.z, r0.y, r0.z
+       mul r1.w, -r4.x, c77.w
+@@ -121,15 +158,15 @@
+       mul_sat r20.x, r20.x, c80.x
+       mul r0.yz, r0, r20.x // fix motion blur at high fps
+       mul r4.xy, r0.yzzw, c5.z
+-      texld r5, v0, s7
++      texldl r5, r30, s7
+       add r1.w, r5.x, -c86.x
+       add r1.w, r1.w, c13.z
+-      mul r4.zw, c0.xyxy, v0.xyxy
++      mul r4.zw, c0.xyxy, r30.xyxy
+       mad r8.xy, r3.xyxy, c3.w, r4.zw
+       mov r8.zw, c1.x
+       texldl r5, r8, s6
+       add r2.w, r5.x, c4.x
+-      mad r4.zw, r4.xyxy, r2.w, v0.xyxy
++      mad r4.zw, r4.xyxy, r2.w, r30.xyxy
+       mov r5.xyz, r3
+       mov r2.w, c2.y
+       mov r3.w, c2.y
+@@ -157,7 +194,7 @@
+     
+     // TLAD noise
+     mov r1.zw, c0
+-    mad r1.xy, v0, r1.zwzw, c85
++    mad r1.xy, r30, r1.zwzw, c85
+     frc r1.xy, r1
+     mul r1.x, r1.x, c44.x
+     mul r1.x, r1.x, c44.w // fix noise aspect ratio
+@@ -174,7 +211,7 @@
+     // bloom
+     rcp r1.x, r0.w
+     mul r1.x, r1.x, c81.x
+-    texld r2, v0, s4
++    texld r2, r30, s4
+     if_eq -c217_abs.w, c217_abs.w // bloom threshold color shift removal
+       mad r1.xyz, r2, c66.x, -r1.x
+       mul r2.xyz, r1, c81.z
+@@ -292,7 +329,7 @@
+     endif
+     
+     // dithering
+-    mul r1.xy, v0.xy, c44.xy
++    mul r1.xy, r30.xy, c44.xy
+     dp2add r1.x, r1.xy, c118.xy, c118.w
+     frc r1.x, r1.x
+     mad r1.x, r1.x, c11.x, -c11.y
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS25.asm b/win32_30_nv8/rage_postfx/rage_postfxPS25.asm
+index d27fe7e2..14488ffe 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS25.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS25.asm
+@@ -51,6 +51,10 @@
+     def c3, 0.25, 1, 256, 0
+     def c4, 3.20000005, 1.79999995, 1.10000002, 0
+     def c5, 256, 2, 4, 8
++    def c190, 180, 23, 140, 31 // FusionFix world_heat_haze.patch: the waves across the screen: up, the warp across, the second up, its slant
++    def c191, 3.0999999, 1.29999995, 2.29999995, 1.29999995 // FusionFix world_heat_haze.patch: their speeds (radians a second) and the warp's size
++    def c192, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_heat_haze.patch: angles into -pi..pi for sincos
++    def c193, 1, 0, 0, 0 // FusionFix world_heat_haze.patch: one, zero
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -58,7 +62,40 @@
+     dcl_2d s3
+     dcl_2d s4
+     dcl_2d s5
+-    texld r0, v0, s1
++    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
++    texld r31, v0, s1
++    pow r31.x, c209_abs.z, r31.x
++    mul r31.x, r31.x, c209.w // the depth
++    mad_sat r31.y, r31.x, c189.y, c189.x
++    add r31.z, r31.x, -c189.z
++    mov r31.w, c189.w
++    cmp r31.z, r31.z, r31.w, c193.x
++    mul r31.y, r31.y, r31.z
++    mul r31.y, r31.y, c188.w // how much it wavers here
++    mov r28.w, c188.z // seconds
++    mul r28.x, v0.x, c190.y
++    mad r28.x, r28.w, c191.y, r28.x
++    mad r28.x, r28.x, c192.x, c192.y
++    frc r28.x, r28.x
++    mad r28.x, r28.x, c192.z, c192.w
++    sincos r29.xy, r28.x // the warp
++    mul r28.y, v0.y, c190.x
++    mad r28.y, r28.w, c191.x, r28.y
++    mad r28.y, r29.y, c191.w, r28.y
++    mul r28.z, v0.y, c190.z
++    mad r28.z, v0.x, c190.w, r28.z
++    mad r28.z, r28.w, c191.z, r28.z
++    mad r28.yz, r28, c192.x, c192.y
++    frc r28.yz, r28
++    mad r28.yz, r28, c192.z, c192.w
++    sincos r29.xy, r28.y
++    mov r28.x, r29.y
++    sincos r29.xy, r28.z
++    mov r28.y, r29.y
++    mul r28.xy, r28, c188
++    mov r30.zw, c193.y
++    mad r30.xy, r28, r31.y, v0
++    texld r0, r30, s1
+     
+     // LogDepth Read
+     pow r19.x, c209_abs.z, r0.x
+@@ -81,22 +118,22 @@
+     min r0.y, c75.z, r2.x
+     max r2.x, r0.x, r0.y
+     mul r0.x, r2.x, r2.x
+-    mad r0.yz, c72.xxyw, r1.xxyw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xxyw, r30.xxyw
+     texld r2, r0.yzzw, s2
+     dp3 r3.x, r2, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xzxw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xzxw, r30.xxyw
+     texld r4, r0.yzzw, s2
+     dp3 r3.y, r4, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xwzw, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xwzw, r30.xxyw
+     texld r5, r0.yzzw, s2
+     dp3 r3.z, r5, c1.yzww
+-    mad r0.yz, c72.xxyw, r1.xyww, v0.xxyw
++    mad r0.yz, c72.xxyw, r1.xyww, r30.xxyw
+     texld r1, r0.yzzw, s2
+     dp3 r3.w, r1, c1.yzww
+     dp4 r0.y, r3, c3.x
+     add r3, r3, -r0.y
+     dp4 r0.z, r3, r3
+-    texld r3, v0, s2
++    texld r3, r30, s2
+     dp3 r0.w, r3, c1.yzww
+     add r0.y, -r0.y, r0.w
+     mad r0.y, r0.y, r0.y, -r0.z
+@@ -104,7 +141,7 @@
+     add r0.y, -r0.x, c3.y
+     mul r0.x, r0.x, c3.x
+     mul r6.xyz, r2, r0.x
+-    texld r7, v0, s0
++    texld r7, r30, s0
+     mov r7.yz, c3
+     mad r8, r7.w, -r7.z, c2
+     mad r9, r7.w, -c5.x, c5.yzwx
+@@ -126,13 +163,13 @@
+     mad r0.yzw, r5.xxyz, r0.x, r0
+     mad r0.xyz, r1, r0.x, r0.yzww
+     mov r1.xy, c4
+-    mad r1.xy, v0, r1, c80
++    mad r1.xy, r30, r1, c80
+     frc r1.xy, r1
+     texld r1, r1, s3
+     add r0.w, r1.z, c0.x
+     mul r0.w, r0.w, c80.z
+     mad r0.xyz, r0.w, c4.z, r0
+-    texld r1, v0, s4
++    texld r1, r30, s4
+     texld r2, c1.x, s5
+     rcp r0.w, r2.x
+     mul r0.w, r0.w, c76.y
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS26.asm b/win32_30_nv8/rage_postfx/rage_postfxPS26.asm
+index e14da885..ebd3bc2a 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS26.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS26.asm
+@@ -81,6 +81,10 @@
+     def c118, 0.75487766, 0.56984029, 0, 0
+     
+     defi i0, 7, 0, 0, 0
++    def c190, 180, 23, 140, 31 // FusionFix world_heat_haze.patch: the waves across the screen: up, the warp across, the second up, its slant
++    def c191, 3.0999999, 1.29999995, 2.29999995, 1.29999995 // FusionFix world_heat_haze.patch: their speeds (radians a second) and the warp's size
++    def c192, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_heat_haze.patch: angles into -pi..pi for sincos
++    def c193, 1, 0, 0, 0 // FusionFix world_heat_haze.patch: one, zero
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -91,17 +95,50 @@
+     dcl_2d s6
+     dcl_2d s7
+     dcl_2d s10 // StippleTexture set to linear clamp in gta_im
+-    texld r3, v0, s2
++    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
++    texld r31, v0, s1
++    pow r31.x, c209_abs.z, r31.x
++    mul r31.x, r31.x, c209.w // the depth
++    mad_sat r31.y, r31.x, c189.y, c189.x
++    add r31.z, r31.x, -c189.z
++    mov r31.w, c189.w
++    cmp r31.z, r31.z, r31.w, c193.x
++    mul r31.y, r31.y, r31.z
++    mul r31.y, r31.y, c188.w // how much it wavers here
++    mov r28.w, c188.z // seconds
++    mul r28.x, v0.x, c190.y
++    mad r28.x, r28.w, c191.y, r28.x
++    mad r28.x, r28.x, c192.x, c192.y
++    frc r28.x, r28.x
++    mad r28.x, r28.x, c192.z, c192.w
++    sincos r29.xy, r28.x // the warp
++    mul r28.y, v0.y, c190.x
++    mad r28.y, r28.w, c191.x, r28.y
++    mad r28.y, r29.y, c191.w, r28.y
++    mul r28.z, v0.y, c190.z
++    mad r28.z, v0.x, c190.w, r28.z
++    mad r28.z, r28.w, c191.z, r28.z
++    mad r28.yz, r28, c192.x, c192.y
++    frc r28.yz, r28
++    mad r28.yz, r28, c192.z, c192.w
++    sincos r29.xy, r28.y
++    mov r28.x, r29.y
++    sincos r29.xy, r28.z
++    mov r28.y, r29.y
++    mul r28.xy, r28, c188
++    mov r30.zw, c193.y
++    mad r30.xy, r28, r31.y, v0
++    texld r3, r30, s2
+     
+     // motion blur
+     if_ne -c222_abs.w, c222_abs.w
+-      texld r0, v0, s1
++      texldl r0, r30, s1
+       
+       // LogDepth Read
+       pow r19.x, c209_abs.z, r0.x
+       mul r0.y, r19.x, c209.w
+       
+-      mad r4.xyz, v0.yxyw, c5.x, c5.y
++      mad r4.xyz, r30.yxyw, c5.x, c5.y
+       mul r0.z, r4.y, c77.z
+       mul r0.z, r0.y, r0.z
+       mul r1.w, -r4.x, c77.w
+@@ -121,15 +158,15 @@
+       mul_sat r20.x, r20.x, c80.x
+       mul r0.yz, r0, r20.x // fix motion blur at high fps
+       mul r4.xy, r0.yzzw, c5.z
+-      texld r5, v0, s7
++      texldl r5, r30, s7
+       add r1.w, r5.x, -c86.x
+       add r1.w, r1.w, c13.z
+-      mul r4.zw, c0.xyxy, v0.xyxy
++      mul r4.zw, c0.xyxy, r30.xyxy
+       mad r8.xy, r3.xyxy, c3.w, r4.zw
+       mov r8.zw, c1.x
+       texldl r5, r8, s6
+       add r2.w, r5.x, c4.x
+-      mad r4.zw, r4.xyxy, r2.w, v0.xyxy
++      mad r4.zw, r4.xyxy, r2.w, r30.xyxy
+       mov r5.xyz, r3
+       mov r2.w, c2.y
+       mov r3.w, c2.y
+@@ -157,7 +194,7 @@
+     
+     // TLAD noise
+     mov r1.zw, c0
+-    mad r1.xy, v0, r1.zwzw, c85
++    mad r1.xy, r30, r1.zwzw, c85
+     frc r1.xy, r1
+     mul r1.x, r1.x, c44.x
+     mul r1.x, r1.x, c44.w // fix noise aspect ratio
+@@ -174,7 +211,7 @@
+     // bloom
+     rcp r1.x, r0.w
+     mul r1.x, r1.x, c81.x
+-    texld r2, v0, s4
++    texld r2, r30, s4
+     if_eq -c217_abs.w, c217_abs.w // bloom threshold color shift removal
+       mad r1.xyz, r2, c66.x, -r1.x
+       mul r2.xyz, r1, c81.z
+@@ -292,7 +329,7 @@
+     endif
+     
+     // dithering
+-    mul r1.xy, v0.xy, c44.xy
++    mul r1.xy, r30.xy, c44.xy
+     dp2add r1.x, r1.xy, c118.xy, c118.w
+     frc r1.x, r1.x
+     mad r1.x, r1.x, c11.x, -c11.y
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS28.asm b/win32_30_nv8/rage_postfx/rage_postfxPS28.asm
+index eb6f4303..fb1059bc 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS28.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS28.asm
+@@ -81,6 +81,10 @@
+     def c118, 0.75487766, 0.56984029, 0, 0
+     
+     defi i0, 7, 0, 0, 0
++    def c190, 180, 23, 140, 31 // FusionFix world_heat_haze.patch: the waves across the screen: up, the warp across, the second up, its slant
++    def c191, 3.0999999, 1.29999995, 2.29999995, 1.29999995 // FusionFix world_heat_haze.patch: their speeds (radians a second) and the warp's size
++    def c192, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix world_heat_haze.patch: angles into -pi..pi for sincos
++    def c193, 1, 0, 0, 0 // FusionFix world_heat_haze.patch: one, zero
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -91,17 +95,50 @@
+     dcl_2d s6
+     dcl_2d s7
+     dcl_2d s10 // StippleTexture set to linear clamp in gta_im
+-    texld r3, v0, s2
++    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
++    texld r31, v0, s1
++    pow r31.x, c209_abs.z, r31.x
++    mul r31.x, r31.x, c209.w // the depth
++    mad_sat r31.y, r31.x, c189.y, c189.x
++    add r31.z, r31.x, -c189.z
++    mov r31.w, c189.w
++    cmp r31.z, r31.z, r31.w, c193.x
++    mul r31.y, r31.y, r31.z
++    mul r31.y, r31.y, c188.w // how much it wavers here
++    mov r28.w, c188.z // seconds
++    mul r28.x, v0.x, c190.y
++    mad r28.x, r28.w, c191.y, r28.x
++    mad r28.x, r28.x, c192.x, c192.y
++    frc r28.x, r28.x
++    mad r28.x, r28.x, c192.z, c192.w
++    sincos r29.xy, r28.x // the warp
++    mul r28.y, v0.y, c190.x
++    mad r28.y, r28.w, c191.x, r28.y
++    mad r28.y, r29.y, c191.w, r28.y
++    mul r28.z, v0.y, c190.z
++    mad r28.z, v0.x, c190.w, r28.z
++    mad r28.z, r28.w, c191.z, r28.z
++    mad r28.yz, r28, c192.x, c192.y
++    frc r28.yz, r28
++    mad r28.yz, r28, c192.z, c192.w
++    sincos r29.xy, r28.y
++    mov r28.x, r29.y
++    sincos r29.xy, r28.z
++    mov r28.y, r29.y
++    mul r28.xy, r28, c188
++    mov r30.zw, c193.y
++    mad r30.xy, r28, r31.y, v0
++    texld r3, r30, s2
+     
+     // motion blur
+     if_ne -c222_abs.w, c222_abs.w
+-      texld r0, v0, s1
++      texldl r0, r30, s1
+       
+       // LogDepth Read
+       pow r19.x, c209_abs.z, r0.x
+       mul r0.y, r19.x, c209.w
+       
+-      mad r4.xyz, v0.yxyw, c5.x, c5.y
++      mad r4.xyz, r30.yxyw, c5.x, c5.y
+       mul r0.z, r4.y, c77.z
+       mul r0.z, r0.y, r0.z
+       mul r1.w, -r4.x, c77.w
+@@ -121,15 +158,15 @@
+       mul_sat r20.x, r20.x, c80.x
+       mul r0.yz, r0, r20.x // fix motion blur at high fps
+       mul r4.xy, r0.yzzw, c5.z
+-      texld r5, v0, s7
++      texldl r5, r30, s7
+       add r1.w, r5.x, -c86.x
+       add r1.w, r1.w, c13.z
+-      mul r4.zw, c0.xyxy, v0.xyxy
++      mul r4.zw, c0.xyxy, r30.xyxy
+       mad r8.xy, r3.xyxy, c3.w, r4.zw
+       mov r8.zw, c1.x
+       texldl r5, r8, s6
+       add r2.w, r5.x, c4.x
+-      mad r4.zw, r4.xyxy, r2.w, v0.xyxy
++      mad r4.zw, r4.xyxy, r2.w, r30.xyxy
+       mov r5.xyz, r3
+       mov r2.w, c2.y
+       mov r3.w, c2.y
+@@ -257,7 +294,7 @@
+     endif
+     
+     // dithering
+-    mul r1.xy, v0.xy, c44.xy
++    mul r1.xy, r30.xy, c44.xy
+     dp2add r1.x, r1.xy, c118.xy, c118.w
+     frc r1.x, r1.x
+     mad r1.x, r1.x, c11.x, -c11.y
