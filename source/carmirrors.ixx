@@ -886,6 +886,22 @@ namespace CarMirrors
             regs.eflags &= ~0x40u; // ZF
     }
 
+    // The water's draw sets its blend's destination to one (CE 0xAD84EE: push 2 / push 5 / ... / call SetState): it is
+    // added over what is below it, which in the main view the fog pass has coloured. In a car mirror's pass nothing is
+    // below it but the cleared black, and the water showed black: there the destination is zero and the source its
+    // alpha (one, water_mirror_opaque.patch), the water drawn in place of the target.
+    static SafetyHookMid waterBlendHook;
+    static void (__cdecl* setRenderState)(uint32_t state, uint32_t value) = nullptr; // CE 0x432C20
+
+    static void MirrorWaterBlend(SafetyHookContext& regs)
+    {
+        if (!inMirrorWater)
+            return;
+        reinterpret_cast<uint32_t*>(regs.esp)[1] = 1; // D3DBLEND_ZERO
+        if (setRenderState)
+            setRenderState(4, 5);                     // the source by its alpha (D3DBLEND_SRCALPHA)
+    }
+
     static void MirrorWaterFlag(SafetyHookContext& regs)
     {
         static constexpr uint32_t flags = PhaseWaterFlag;
@@ -1431,6 +1447,14 @@ public:
                 static constexpr uint8_t passPick[] = { 0x75, 0x04, 0x6A, 0x01, 0xEB, 0x02, 0x6A, 0x00, 0xE8 };
                 if (std::memcmp(at + 0x686, passPick, sizeof(passPick)) == 0 && at[0x679] == 0x80 && at[0x67A] == 0x3D)
                     CarMirrors::waterPassHook = safetyhook::create_mid(at + 0x686, CarMirrors::MirrorWaterPass);
+                // push 2 / push 5 / mov [esp+34], eax / call (SetState, hooked): the blend's destination
+                static constexpr uint8_t blend[] = { 0x6A, 0x02, 0x6A, 0x05, 0x89, 0x44, 0x24, 0x34, 0xE8 };
+                if (std::memcmp(at + 0x5FE, blend, sizeof(blend)) == 0)
+                {
+                    CarMirrors::setRenderState = reinterpret_cast<void (__cdecl*)(uint32_t, uint32_t)>(
+                        injector::GetBranchDestination(at + 0x606).as_int());
+                    CarMirrors::waterBlendHook = safetyhook::create_mid(at + 0x606, CarMirrors::MirrorWaterBlend);
+                }
             }
             // in the mirror phase's draw list: push [edi+938] / call (what is drawn with blending) / add esp, 4 /
             // cmp byte [clip plane on], 0 / je
@@ -1548,11 +1572,11 @@ public:
                 CarMirrors::callback.add ? "on" : "off (the game's callback command was not found)",
                 CarMirrors::phaseViewHook ? "on" : "off (not found)", CarMirrors::perspective ? "on" : "off (not found)");
             FusionLog::Write("CarMirrors", "Init", "water reflection gates %s/%s; water in the mirror %s, its gather after the scans %s, "
-                "without the material ID target %s, its flag given %s, its pass without shadows %s\n",
+                "without the material ID target %s, its flag given %s, its pass without shadows %s, drawn in place of the target %s\n",
                 CarMirrors::waterGateHooks[0] ? "on" : "off", CarMirrors::waterGateHooks[1] ? "on" : "off",
                 CarMirrors::phaseWaterHook ? "on" : "off (not found)", CarMirrors::gatherHook ? "on" : "off (not found)",
                 CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)", CarMirrors::waterFlagHook ? "on" : "off (not found)",
-                CarMirrors::waterPassHook ? "on" : "off (not found)");
+                CarMirrors::waterPassHook ? "on" : "off (not found)", CarMirrors::waterBlendHook ? "on" : "off (not found)");
             FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s; its coronas %s (the lamps' %s, listed by the mirror's view %s); "
                 "the trees' leaves %s, buckets 5 and 4 the main scene's fourth way %s\n", CarMirrors::techniqueHooks[0] ? "on" : "off (not found)", CarMirrors::skyHooks[2] ? "on" : "off (not found)",
                 CarMirrors::coronaHooks[2] ? "on" : "off (not found)", CarMirrors::coronaSprites ? "on" : "off (not found)",

@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/water/waterPS1.asm b/win32_30_nv8/water/waterPS1.asm
-index 6601c7c..c85ed6e 100644
+index 6601c7c2..aaa9b65b 100644
 --- a/win32_30_nv8/water/waterPS1.asm
 +++ b/win32_30_nv8/water/waterPS1.asm
 @@ -84,6 +84,10 @@
@@ -23,3 +23,25 @@ index 6601c7c..c85ed6e 100644
      rcp r1.z, r1.x
      mul r0.xyz, r0, r1.z
      add r1.z, r0.w, c1.w
+@@ -105,12 +112,21 @@
+     mul r1.z, r1.z, r1.z
+     mul r0.w, r0_abs.w, r1.z
+     mad r0.w, r0.w, c4.x, c4.y
++    mov r20.w, r0.w // FusionFix car mirrors: the Fresnel term, kept
+     mul r0.w, r1.x, r0.w
+     mov oC0.w, r1.x
+     mul r0.w, r0.w, c0.y
+     mul r0.xyz, r0, r0.w
+     mul r0.w, r1.y, c72.w
+     mad r0.xyz, c66, r0.w, r0
++    // FusionFix car mirrors: the water is added over what is below it (the fog pass's colour there) in the main view;
++    // a car mirror's pass (c204.z 1) has nothing below it and draws it in place of the target (carmirrors.ixx,
++    // MirrorWaterBlend): the water's colour going over to the sky's by the Fresnel term
++    mov r20.xyz, c72
++    add r20.xyz, r20, -c66
++    mad r20.xyz, r20, r20.w, c66
++    add r20.xyz, r20, -r0
++    mad r0.xyz, c204.z, r20, r0
+     mul oC0.xyz, r0, c39.y
+     
+     // LogDepth Write
