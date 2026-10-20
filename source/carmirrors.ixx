@@ -3,6 +3,9 @@ module;
 #include <common.hxx>
 #include "FusionLog.hpp"
 #include "carmirrorstable.hxx"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <format>
 #include <string>
 #include <unordered_map>
@@ -120,6 +123,7 @@ namespace CarMirrors
     static bool capturing = false;              // render thread
     static std::string captureText;             // render thread
     static uint32_t captureDraws = 0, captureEntity = 0;
+    static uint32_t captureNumber = 0, captureTaken = 0; // render thread: the capture's number and its pictures, for their names
     struct CaptureContext
     {
         bool inEntity;
@@ -130,6 +134,9 @@ namespace CarMirrors
     static CaptureContext captureContext{};
     static void __cdecl CaptureBegin(uint32_t flipped);
     static void __cdecl CaptureEnd(uint32_t);
+    static void CaptureSnapshot(uint32_t point);
+    static void __cdecl CaptureSnapshotCallback(uint32_t point) { CaptureSnapshot(point); }
+    enum SnapshotPoint : uint32_t { AfterSky, BeforeEntities, AfterEntities, AfterWater, AfterCoronas, PassEnd };
     // CarMirrorsForceDepthWrite (hidden, 0 leaves it out): depth test and write set (the game's states, before the entity's
     // technique applies its own) for every entity in the mirror's pass. A technique that turns the write off (decals and
     // the like) left it off for every entity after it, the reflection techniques setting none: the cars drawn later wrote
@@ -731,6 +738,7 @@ namespace CarMirrors
         reinterpret_cast<void (__cdecl*)()>(skyFunction)();
         inMirrorSky = false;
         ++skyDraws;
+        CaptureSnapshot(AfterSky);
     }
 
     // CRenderPhaseMirrorReflection: its draw list (vtable slot 8, CE 0xD76950) and its visibility (CE 0xD77430).
@@ -1053,6 +1061,7 @@ namespace CarMirrors
         inMirrorWater = true;
         reinterpret_cast<void (__cdecl*)(uint32_t)>(waterFunction)(list);
         inMirrorWater = false;
+        CaptureSnapshot(AfterWater);
     }
 
     // The mirror phase draws its entities (CE 0xB1DEE0 at 0xD76B9A) with the shaders' main techniques, which outdoors
@@ -1075,6 +1084,8 @@ namespace CarMirrors
     {
         if (usedThisFrame && waterCoronasFirst && !waterStyle)
             QueueWaterAndCoronasFirst(regs.edi); // edi the phase, as at its entities' draw
+        if (usedThisFrame)
+            callback.Queue(reinterpret_cast<const void*>(&CaptureSnapshotCallback), BeforeEntities);
         techniquePushed = false;
         if (!usedThisFrame || !reflectionShaders || !callback.allocate || !callback.add || !*techniqueGroup.group)
             return;
@@ -1176,6 +1187,70 @@ namespace CarMirrors
         const uint32_t vsNumber = ShaderNumber(vs, false), psNumber = ShaderNumber(ps, true);
         if (vs) vs->Release();
         if (ps) ps->Release();
+        // What changes rarely goes on lines of its own as it changes
+        static const char* lastTarget = nullptr;
+        static D3DVIEWPORT9 lastViewport{};
+        static RECT lastScissor{};
+        static DWORD lastScissorOn = 2, lastClip = 0xFFFFFFFF;
+        static const void* lastTexture = reinterpret_cast<const void*>(1);
+        if (captureDraws == 0)
+        {
+            lastTarget = nullptr;
+            lastViewport = {};
+            lastScissor = {};
+            lastScissorOn = 2;
+            lastClip = 0xFFFFFFFF;
+            lastTexture = reinterpret_cast<const void*>(1);
+        }
+        const char* target = RenderSkip::CurrentTarget();
+        if (target != lastTarget)
+        {
+            captureText += std::format("      target {}\n", target ? target : "?");
+            lastTarget = target;
+        }
+        D3DVIEWPORT9 viewport{};
+        device->GetViewport(&viewport);
+        if (std::memcmp(&viewport, &lastViewport, sizeof(viewport)) != 0)
+        {
+            captureText += std::format("      viewport {},{} {}x{} z {}..{}\n", viewport.X, viewport.Y, viewport.Width, viewport.Height, viewport.MinZ, viewport.MaxZ);
+            lastViewport = viewport;
+        }
+        DWORD scissorOn = 0, clip = 0;
+        RECT scissor{};
+        device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissorOn);
+        device->GetScissorRect(&scissor);
+        if (scissorOn != lastScissorOn || (scissorOn && std::memcmp(&scissor, &lastScissor, sizeof(scissor)) != 0))
+        {
+            captureText += std::format("      scissor {} {},{}..{},{}\n", scissorOn, scissor.left, scissor.top, scissor.right, scissor.bottom);
+            lastScissorOn = scissorOn;
+            lastScissor = scissor;
+        }
+        device->GetRenderState(D3DRS_CLIPPLANEENABLE, &clip);
+        if (clip != lastClip)
+        {
+            float planeValues[4]{};
+            device->GetClipPlane(0, planeValues);
+            captureText += std::format("      clip planes {:X}, plane 0 {:.3f} {:.3f} {:.3f} {:.3f}\n", clip, planeValues[0], planeValues[1], planeValues[2], planeValues[3]);
+            lastClip = clip;
+        }
+        IDirect3DBaseTexture9* texture = nullptr;
+        device->GetTexture(0, &texture);
+        if (texture != lastTexture)
+        {
+            std::string desc = "none";
+            if (texture && texture->GetType() == D3DRTYPE_TEXTURE)
+            {
+                D3DSURFACE_DESC d{};
+                if (SUCCEEDED(static_cast<IDirect3DTexture9*>(texture)->GetLevelDesc(0, &d)))
+                    desc = std::format("{}x{} format {} levels {}", d.Width, d.Height, int(d.Format), texture->GetLevelCount());
+            }
+            else if (texture)
+                desc = std::format("type {}", int(texture->GetType()));
+            captureText += std::format("      s0 {} {}\n", static_cast<const void*>(texture), desc);
+            lastTexture = texture;
+        }
+        if (texture)
+            texture->Release();
         std::string what;
         if (captureContext.inEntity)
         {
@@ -1192,7 +1267,8 @@ namespace CarMirrors
     static void __cdecl CaptureBegin(uint32_t flipped)
     {
         capturing = true;
-        captureDraws = captureEntity = 0;
+        ++captureNumber;
+        captureDraws = captureEntity = captureTaken = 0;
         captureContext = {};
         captureText = std::format("mirror pass, water style {} (flipped for the capture {}), depth write {}, force depth write {}, water and coronas first {}, target {}\n",
             int(waterStyle != (flipped != 0)), flipped, int(depthWrite), int(forceDepthWrite), int(waterCoronasFirst),
@@ -1204,10 +1280,122 @@ namespace CarMirrors
     {
         if (!capturing)
             return;
+        CaptureSnapshot(PassEnd);
         capturing = false;
         FusionLog::WriteText("CarMirrorsCapture", "Pass", captureText);
         captureText.clear();
         captureText.shrink_to_fit();
+    }
+
+
+    static float HalfToFloat(uint16_t h)
+    {
+        const uint32_t sign = uint32_t(h & 0x8000) << 16, exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF;
+        uint32_t bits;
+        if (exponent == 0)
+        {
+            if (mantissa == 0)
+                bits = sign;
+            else
+            {
+                float f = float(mantissa) / 1024.0f / 16384.0f;
+                return sign ? -f : f;
+            }
+        }
+        else if (exponent == 31)
+            bits = sign | 0x7F800000 | (mantissa << 13);
+        else
+            bits = sign | ((exponent + 112) << 23) | (mantissa << 13);
+        float f;
+        std::memcpy(&f, &bits, sizeof(f));
+        return f;
+    }
+
+    // The mirror's target as a picture (half the size, 24-bit BMP, x / (1 + x) and gamma 2.2 for the HDR colour) next to
+    // the log, GTAIV.EFLC.FusionFix.CarMirrorsCapture.<capture>.<n>-<point>.bmp, and a line in the log where it was taken
+    static void CaptureSnapshot(uint32_t point)
+    {
+        if (!capturing)
+            return;
+        static constexpr const char* pointNames[] = { "after-sky", "before-entities", "after-entities", "after-water", "after-coronas", "end" };
+        const char* pointName = point < std::size(pointNames) ? pointNames[point] : "other";
+        uint32_t& taken = captureTaken;
+        auto device = rage::grcDevice::GetD3DDevice();
+        if (!device)
+            return;
+        auto real = RageDirect3DDevice9::RealDevice(device);
+        IDirect3DSurface9* target = nullptr;
+        if (FAILED(real->GetRenderTarget(0, &target)) || !target)
+            return;
+        D3DSURFACE_DESC desc{};
+        target->GetDesc(&desc);
+        std::string result = "not taken";
+        IDirect3DSurface9* copy = nullptr;
+        const bool half = desc.Format == D3DFMT_A16B16G16R16F, bytes = desc.Format == D3DFMT_A8R8G8B8 || desc.Format == D3DFMT_X8R8G8B8;
+        if ((half || bytes) && desc.MultiSampleType == D3DMULTISAMPLE_NONE &&
+            SUCCEEDED(real->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &copy, nullptr)) && copy)
+        {
+            D3DLOCKED_RECT locked{};
+            if (SUCCEEDED(real->GetRenderTargetData(target, copy)) && SUCCEEDED(copy->LockRect(&locked, nullptr, D3DLOCK_READONLY)))
+            {
+                const UINT w = desc.Width / 2, h = desc.Height / 2, row = (w * 3 + 3) & ~3u;
+                std::vector<uint8_t> pixels(size_t(row) * h);
+                auto toByte = [](float v)
+                {
+                    if (!(v > 0.0f))
+                        return uint8_t(0);
+                    v = std::pow(v / (1.0f + v), 1.0f / 2.2f);
+                    return uint8_t(std::min(255.0f, v * 255.0f + 0.5f));
+                };
+                for (UINT y = 0; y < h; ++y)
+                {
+                    const auto* line = static_cast<const uint8_t*>(locked.pBits) + size_t(locked.Pitch) * (y * 2);
+                    uint8_t* out = pixels.data() + size_t(row) * (h - 1 - y);
+                    for (UINT x = 0; x < w; ++x)
+                    {
+                        float r, g, b;
+                        if (half)
+                        {
+                            const auto* p = reinterpret_cast<const uint16_t*>(line) + size_t(x * 2) * 4;
+                            r = HalfToFloat(p[0]), g = HalfToFloat(p[1]), b = HalfToFloat(p[2]);
+                            out[x * 3 + 0] = toByte(b), out[x * 3 + 1] = toByte(g), out[x * 3 + 2] = toByte(r);
+                        }
+                        else
+                        {
+                            const uint8_t* p = line + size_t(x * 2) * 4;
+                            out[x * 3 + 0] = p[0], out[x * 3 + 1] = p[1], out[x * 3 + 2] = p[2];
+                        }
+                    }
+                }
+                copy->UnlockRect();
+                const auto name = std::format(L"CarMirrorsCapture.{}.{}-{}", captureNumber, taken, std::wstring(pointName, pointName + std::strlen(pointName)));
+                const auto path = FusionLog::Directory() / (L"GTAIV.EFLC.FusionFix." + name + L".bmp");
+                if (FILE* file = _wfopen(path.c_str(), L"wb"))
+                {
+                    const uint32_t imageSize = uint32_t(pixels.size()), fileSize = 54 + imageSize;
+                    uint8_t header[54]{ 'B', 'M' };
+                    auto put32 = [&](size_t at, uint32_t v) { std::memcpy(header + at, &v, 4); };
+                    put32(2, fileSize);
+                    put32(10, 54);
+                    put32(14, 40);
+                    put32(18, w);
+                    put32(22, h);
+                    header[26] = 1;
+                    header[28] = 24;
+                    put32(34, imageSize);
+                    fwrite(header, 1, sizeof(header), file);
+                    fwrite(pixels.data(), 1, pixels.size(), file);
+                    fclose(file);
+                    result = std::format("GTAIV.EFLC.FusionFix.CarMirrorsCapture.{}.{}-{}.bmp", captureNumber, taken, pointName);
+                }
+            }
+            copy->Release();
+        }
+        else
+            result = std::format("not taken (format {}, {} samples)", int(desc.Format), int(desc.MultiSampleType));
+        target->Release();
+        captureText += std::format("----- picture {} {} after draw {}: {}\n", taken, pointName, int(captureDraws) - 1, result);
+        ++taken;
     }
 
     static void MirrorCoronaFlags(SafetyHookContext& regs)
@@ -1304,6 +1492,7 @@ namespace CarMirrors
         RestoreCoronaStates();
         inMirrorCoronas = false;
         ++coronaDraws;
+        CaptureSnapshot(AfterCoronas);
     }
 
     // The coronas the mirror sees. The game lists a corona for drawing (CE 0xC1EE40, main thread, once a frame) only if
@@ -1437,6 +1626,8 @@ namespace CarMirrors
     {
         ExtraBuckets(regs.edi);
         PopReflectionTechniques(regs);
+        if (usedThisFrame)
+            callback.Queue(reinterpret_cast<const void*>(&CaptureSnapshotCallback), AfterEntities);
         if (usedThisFrame && skyAfterEntities && skyHooks[2])
             callback.Queue(reinterpret_cast<const void*>(&MirrorSkyDraw), 0);
     }
