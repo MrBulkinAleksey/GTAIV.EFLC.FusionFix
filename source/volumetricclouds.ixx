@@ -200,7 +200,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
 
     auto coverage = R.CloudNoiseTex();
     auto detail = R.CloudDetailTex();
-    auto shape = R.CloudShapeTex();
+    auto shapeTexture = R.CloudShapeTex();
     // The high layer's texture, made as soon as Cloud Variety is on (a few hundred milliseconds once), so the first
     // high sky does not stall a frame; bound only while there is a high layer (Clouds.fx reads vec4High.x first).
     auto highTexture = R.CloudVarietyEnabled() && !reflection ? R.CloudHighTex() : nullptr;
@@ -209,7 +209,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         return skip("no coverage texture");
     if (!detail)
         return skip("no detail texture");
-    if (!shape)
+    if (!shapeTexture)
         return skip("no shape texture");
 
     IDirect3DSurface9* sceneSurface = nullptr;
@@ -662,7 +662,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         SetTextureBoth(pDevice, 9, readMarch ? R.CloudMarchTex[1]->mD3DTexture : nullptr);
         SetTextureBoth(pDevice, 10, !reflection && pbrShare > 0.0f && R.SkyViewTex ? R.SkyViewTex->mD3DTexture : nullptr);
         SetTextureBoth(pDevice, 11, high);
-        SetTextureBoth(pDevice, 12, shape);
+        SetTextureBoth(pDevice, 12, shapeTexture);
         for (DWORD slot = 0; slot < 13; ++slot)
         {
             const bool wrap = slot == 1 || slot == 2 || slot == 11 || slot == 12;
