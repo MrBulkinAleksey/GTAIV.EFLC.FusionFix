@@ -343,15 +343,13 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
         float2 billow = tex3Dlod(DetailTex, float4(q, 0)).rg;
         float n = 1.0 - billow.r;
         crease = n;
-        // Eroded by a remap, (d - e) / (1 - e): what is left of the cloud keeps its full range, so the billows'
-        // edges stay sharp and the inside dense; taken away alone, the erosion thinned every cloud into a haze.
-        float e = vec4Shape.z * 1.5 * n * n;
-        d = (d - e) / max(1.0 - e, 0.1);
+        // Taken away, not remapped: (d - e) / (1 - e) leaves the inside, near 1, as it was, and the clouds came out
+        // smooth as plastic, their billows only round the outline.
+        d -= vec4Shape.z * 1.5 * n * n;
         // The fine billows are read through the coarse ones' two channels, so they swirl around
         // them instead of sitting on an even grid: about their own size either way.
         float m = 1.0 - tex3Dlod(DetailTex, float4(q * 5.5 + 0.37 + (billow.rgr - 0.5), 0)).r;
-        e = vec4Shape.z * 0.8 * m * (0.6 * m + 0.4) * sqrt(EdgeWeight(saturate(d)));
-        d = (d - e) / max(1.0 - e, 0.1);
+        d -= vec4Shape.z * 0.8 * m * (0.6 * m + 0.4) * sqrt(EdgeWeight(d));
         // A ragged fringe under the base: the coarse billows eat the bottom eighth harder.
         d -= vec4Shape.z * 0.7 * n * saturate(1.0 - h * 8.0);
         if (d <= 0.0)
