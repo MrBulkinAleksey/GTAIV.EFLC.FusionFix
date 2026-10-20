@@ -889,9 +889,13 @@ float4 HighLayer(float3 dir, float2 uv)
     float lobe2 = exp(2.0 * (cosTheta - 1.0));
     float lobe4 = lobe2 * lobe2;
     float phase = 0.8 + 0.6 * lobe4 * lobe4 + 0.4 * lobe2 + vec4High.z * (0.8 * lobe4 + 0.3 * lobe2);
-    float relief = 1.0 - (1.0 - vec4High.z) * ((0.35 + 0.6 * cells) * dc * dc + 1.2 * saturate(towards - dc) - 0.6 * saturate(dc - towards));
+    // The thicker cells' middles greyer, less so towards the sun, through which their light comes forwards: at up to
+    // 95% darker the cells round the sun came out as dark grey patches with bright rims against its halo.
+    float relief = 1.0 - (1.0 - vec4High.z) * ((0.2 + 0.25 * cells) * dc * dc * (1.0 - 0.8 * lobe2) + 0.8 * saturate(towards - dc) - 0.4 * saturate(dc - towards));
     float3 colour = vec3LitColour * vec3SunTint * (phase * relief * fLightStrength) + vec3ShadeColour * 0.6 +
                     vec3SunsetColour * ((0.5 + 0.5 * cosTheta) * fLightStrength);
+    // The glow of thin cloud round the sun, the volumetric clouds' own (their termGlow), the thin parts most.
+    colour += vec3GlowColour * ((lobe4 * lobe4 + 0.3 * lobe2) * fSilver * fGlow * fLightStrength * (1.0 - 0.5 * d));
     // At the volumetric clouds' brightness against the sky.
     float skyLuma = dot(Finite(tex2Dlod(SkyRefTex, float4(0.5, 0.5, 0, 0)).rgb), float3(0.2126, 0.7152, 0.0722));
     colour *= skyLuma > 1e-4 && fSkyMatch > 0.0 ? clamp(fSkyMatch * skyLuma, 0.1, 2.0) : 1.0;
