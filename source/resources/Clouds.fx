@@ -30,6 +30,8 @@
 // for the far clouds to be crossed at all.
 #define FAR_STEP 0.005
 #define FINE_MISSES 4.0
+// The coverage map's floor between the heaps left out of the clouds, as a share of its range above the threshold.
+#define SHELF 0.3
 // The fine step at a cloud's edge, in metres, where the layer's own (a 24th of its thickness) is longer: Cloud
 // Variety's heaps 2.2 and 3 km tall were crossed in 92 and 125 m steps against billows of 60 and 15 m, and each
 // step's slice of them came out as a terrace across the clouds' sides.
@@ -316,6 +318,11 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
     c -= fRows * (place.band - 0.45);
     float threshold = 1.0 - cover;
     float d = saturate((c - threshold) / max(cover, 0.01));
+    // The map's floor between the heaps left out, the first SHELF of its range (less under an overcast sheet): it
+    // lay round every heap as a flat sheet some 100 m thick and 300 to 400 m wide, out of which the heap rose
+    // steeply, and seen from the side heaps at different bases stood on their sheets in tiers, like a layer cake.
+    float shelf = SHELF * (1.0 - fStratus);
+    d = saturate((d - shelf) / (1.0 - shelf));
     d *= d;
     // The base's edges curl in by fBaseRound over its bottom quarter, so a heap sits on a rounded
     // base rather than a sheared off one.
