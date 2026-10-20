@@ -18,6 +18,7 @@ module;
 #include <filesystem>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include "FusionLog.hpp"
 
 export module postfx;
@@ -2370,18 +2371,63 @@ private:
             shPedSkinComponent[1] = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs) { MarkPedSkin(regs.esi); });
     }
 
+    // FillLightsLog: each large or filler exterior map light once, by where it stands, and every 10 s how
+    // many of each kind the game sent, to see which lights flood squares and whether their models mark
+    // them filler.
+    static void LogFillLight(const rage::CLightSource* light, bool filler, float radius, float intensity, bool changed)
+    {
+        static std::unordered_set<uint64_t> seen;
+        static uint32_t counts[4]{}; // filler small, filler large, other large, darkened or capped
+        static ULONGLONG last = 0;
+        const bool large = radius >= PostFxResources.fFillLightsMinRadius;
+        counts[filler ? (large ? 1 : 0) : 2]++;
+        counts[3] += changed;
+        const auto cell = [](float v) { return uint64_t(uint32_t(int32_t(std::floor(v * 4.0f))) & 0x1FFFFF); };
+        const uint64_t key = cell(light->mPosition.x) | (cell(light->mPosition.y) << 21) | (cell(light->mPosition.z) << 42);
+        if (seen.size() < 20000 && seen.insert(key).second)
+            FusionLog::Write("FillLights", "Light", "pos %.1f %.1f %.1f type %d flags 0x%X %s radius %.1f intensity %.2f colour %.2f %.2f %.2f",
+                             light->mPosition.x, light->mPosition.y, light->mPosition.z, int(light->mType), light->mFlags,
+                             filler ? "filler" : "other", radius, intensity, light->mColor.x, light->mColor.y, light->mColor.z);
+        const ULONGLONG now = GetTickCount64();
+        if (now - last >= 10000)
+        {
+            if (last)
+                FusionLog::Write("FillLights", "Count", "10 s: filler small %u, filler large %u, other large %u, changed %u, mode %d, %zu lights seen",
+                                 counts[0], counts[1], counts[2], counts[3], PostFxResources.nFillLights, seen.size());
+            std::fill(std::begin(counts), std::end(counts), 0u);
+            last = now;
+        }
+    }
+
+    // Building Fill Lights: the exterior map lights, no interior, vehicle, traffic light or fire.
+    // 0: the large ones go dark; 2: the model's filler lights are capped (see nFillLights).
+    static void FillLight(rage::CLightSource* light)
+    {
+        auto& R = PostFxResources;
+        constexpr uint32_t mask = rage::LF_MAP | rage::LF_INTERIOR | rage::LF_EXTERIOR | rage::LF_VEHICLE | rage::LF_TRAFFIC;
+        if ((light->mFlags & mask) != (rage::LF_MAP | rage::LF_EXTERIOR) || (light->mType != rage::LT_POINT && light->mType != rage::LT_SPOT))
+            return;
+        const bool filler = (light->mFlags & rage::LF_FILLER) != 0;
+        const float radius = light->mRadius;
+        const float intensity = light->mIntensity;
+        if (R.nFillLights == 0 && light->mRadius >= R.fFillLightsMinRadius)
+            light->mIntensity = 0.0f;
+        else if (R.nFillLights == 2 && filler)
+        {
+            light->mRadius = std::min(light->mRadius, R.fFillLightsMaxRadius);
+            light->mIntensity = std::min(light->mIntensity, R.fFillLightsMaxIntensity);
+        }
+        if (R.bFillLightsLog && (filler || radius >= R.fFillLightsMinRadius))
+            LogFillLight(light, filler, radius, intensity, light->mRadius != radius || light->mIntensity != intensity);
+    }
+
     // Runs as the game copies each light into the frame's draw list, on the main thread.
     static void OnAfterCopyLight(rage::CLightSource* light)
     {
         auto& R = PostFxResources;
         if (!light)
             return;
-        // Building Fill Lights off: the large exterior map lights, no interior, vehicle, traffic
-        // light or fire, that flood whole squares go dark.
-        constexpr uint32_t fillMask = rage::LF_MAP | rage::LF_INTERIOR | rage::LF_EXTERIOR | rage::LF_VEHICLE | rage::LF_TRAFFIC;
-        if (!R.bFillLights && (light->mFlags & fillMask) == (rage::LF_MAP | rage::LF_EXTERIOR) &&
-            (light->mType == rage::LT_POINT || light->mType == rage::LT_SPOT) && light->mRadius >= R.fFillLightsMinRadius)
-            light->mIntensity = 0.0f;
+        FillLight(light);
         if (!R.VolumetricLight() || R.fVolumetricLightIntensity <= 0.0f)
             return;
 
