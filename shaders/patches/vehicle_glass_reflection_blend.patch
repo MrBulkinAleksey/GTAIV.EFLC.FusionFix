@@ -1,0 +1,56 @@
+diff --git a/win32_30_nv8/gta_vehicle_vehglass.fxc.xml b/win32_30_nv8/gta_vehicle_vehglass.fxc.xml
+index 66600afb..66cc4d2a 100644
+--- a/win32_30_nv8/gta_vehicle_vehglass.fxc.xml
++++ b/win32_30_nv8/gta_vehicle_vehglass.fxc.xml
+@@ -2160,7 +2160,24 @@
+ 				<Item>
+ 					<VertexShader>1</VertexShader>
+ 					<PixelShader>3</PixelShader>
+-					<Params />
++					<Params value="4" >
++						<Item>
++							<Type value="10" />
++							<Value value="1" />
++						</Item>
++						<Item>
++							<Type value="3" />
++							<Value value="1" />
++						</Item>
++						<Item>
++							<Type value="4" />
++							<Value value="5" />
++						</Item>
++						<Item>
++							<Type value="5" />
++							<Value value="6" />
++						</Item>
++					</Params>
+ 				</Item>
+ 			</Passes>
+ 		</Item>
+@@ -2170,7 +2187,24 @@
+ 				<Item>
+ 					<VertexShader>2</VertexShader>
+ 					<PixelShader>3</PixelShader>
+-					<Params />
++					<Params value="4" >
++						<Item>
++							<Type value="10" />
++							<Value value="1" />
++						</Item>
++						<Item>
++							<Type value="3" />
++							<Value value="1" />
++						</Item>
++						<Item>
++							<Type value="4" />
++							<Value value="5" />
++						</Item>
++						<Item>
++							<Type value="5" />
++							<Value value="6" />
++						</Item>
++					</Params>
+ 				</Item>
+ 			</Passes>
+ 		</Item>

@@ -1846,26 +1846,33 @@ private:
         }
     }
 
-    // Whether the bound target is the water's reflection (WATER_REFLECTION_COLOUR). Its sky is drawn
-    // through the sky's main branch, not the reflection map's (REFLECTION_MAP_COLOUR, the paraboloids
-    // the surfaces' sky reflection comes from, phases with flag 0x40000).
-    static bool IsWaterReflectionTarget(IDirect3DDevice9* pDevice)
+    // Whether the bound target is the water's reflection (WATER_REFLECTION_COLOUR) or a mirror's
+    // (MIRROR_RT, a car's mirror outdoors, carmirrors.ixx). Their sky is drawn through the sky's main
+    // branch, not the reflection map's (REFLECTION_MAP_COLOUR, the paraboloids the surfaces' sky
+    // reflection comes from, phases with flag 0x40000).
+    static bool IsReflectionTarget(IDirect3DDevice9* pDevice)
     {
-        auto rt = rage::grcTextureFactoryPC::GetRTByName("WATER_REFLECTION_COLOUR");
-        if (!pDevice || !rt || !rt->mD3DTexture)
+        if (!pDevice)
             return false;
-        IDirect3DSurface9* water = nullptr;
         IDirect3DSurface9* bound = nullptr;
-        rt->mD3DTexture->GetSurfaceLevel(0, &water);
         pDevice->GetRenderTarget(0, &bound);
-        const bool same = water && water == bound;
-        SAFE_RELEASE(water);
+        bool same = false;
+        for (const char* name : { "WATER_REFLECTION_COLOUR", "MIRROR_RT" })
+        {
+            auto rt = rage::grcTextureFactoryPC::GetRTByName(name);
+            if (same || !rt || !rt->mD3DTexture)
+                continue;
+            IDirect3DSurface9* surface = nullptr;
+            rt->mD3DTexture->GetSurfaceLevel(0, &surface);
+            same = surface && surface == bound;
+            SAFE_RELEASE(surface);
+        }
         SAFE_RELEASE(bound);
         return same;
     }
 
     static inline injector::hook_back<int(__fastcall*)(int, void*, int, int, char, char, int, char)> hbDrawSkyHook;
-    // The sky's main branch, which also draws the water reflection's sky: the volumetric clouds go in
+    // The sky's main branch, which also draws the water reflection's and a car mirror's sky: the volumetric clouds go in
     // right after it there, as into the reflection map (DrawSkyReflection).
     static int __fastcall DrawSky(int _this, void* edx, int a2, int a3, char a4, char a5, int a6, char a7)
     {
@@ -1876,7 +1883,7 @@ private:
         const int result = DrawSkyMain(_this, edx, a2, a3, a4, a5, a6, a7);
         SkyTrace::End();
         PbrSkyAfterDraw(pDevice);
-        if (pDevice && !bDeviceLost && IsWaterReflectionTarget(pDevice))
+        if (pDevice && !bDeviceLost && IsReflectionTarget(pDevice))
         {
             ++PostFxResources.nCloudWaterReflectionCalls;
             RenderVolumetricClouds(pDevice, nullptr, true, kProfCloudReflectionWater);

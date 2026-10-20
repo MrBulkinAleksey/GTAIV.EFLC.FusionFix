@@ -233,6 +233,18 @@ namespace CoronaRender
     struct Vertex { float x, y, z, nx, ny, nz; uint32_t colour; float u, v; };
     static_assert(sizeof(Vertex) == 0x24);
 
+    // Run before each batch is drawn, the technique set: a pass from another view puts its own depth for the
+    // coronas' visibility test in (carmirrors.ixx)
+    export void (*pBeforeDraw)() = nullptr;
+    // A pass from another view than the game camera's, near it (a car's mirror, its reflected camera within half a metre
+    // of the eye and looking back): none left out as behind or outside the view, which took the main view's. Counted:
+    // the coronas listed, those behind the game camera, those drawn (carmirrors.ixx's log)
+    export bool bOtherView = false;
+    export uint32_t nOtherListed = 0, nOtherBehind = 0, nOtherDrawn = 0;
+    // For a pass from another view: the part of the list made for it (carmirrors.ixx puts the coronas its mirror sees
+    // after the game camera's), by the list's buffer; false draws none. Unset, the whole list.
+    export bool (*pOtherRange)(uint32_t buffer, int32_t& first, int32_t& count) = nullptr;
+
     int32_t nMode = 1;                      // 0: the game's, 1: ours without what is out of view, 2: ours, all of them
     float* pCamera = nullptr;               // CE 0x128e340, the game camera's position, where it looks 8 floats before
     uint8_t* pFunction = nullptr;
@@ -344,8 +356,16 @@ namespace CoronaRender
         bool reflection = (flags >> 0x12) & 1;  // technique 0xf, and coronas with +0x1b set left out
         bool dim = (flags >> 0x11) & 1;
         uint32_t buffer = *pBufferIndex;
+        int32_t first = 0;
         int32_t count = pCounts[buffer];
-        if (count <= 0)
+        if (bOtherView && pOtherRange)
+        {
+            int32_t otherCount = 0;
+            if (!pOtherRange(buffer, first, otherCount))
+                return true;
+            count = first + otherCount;
+        }
+        if (count <= first)
             return true;
         auto list = (uint8_t*)(uintptr_t(*pFlagAddress) - 0x1B) + (size_t(buffer) * (3u << *pShift)) * 0x20;
 
@@ -354,7 +374,7 @@ namespace CoronaRender
         auto eye = (const float*)(viewport + 0x70);
         float forward[3] = {};
         bool skipBehind = false;
-        if (nMode == 1 && !reflection && pCamera)
+        if (nMode == 1 && !reflection && pCamera && !bOtherView)
         {
             auto right = (const float*)(viewport + 0x40), up = (const float*)(viewport + 0x50);
             const float* look = pCamera - 8;
@@ -391,7 +411,7 @@ namespace CoronaRender
 
         static std::vector<uint32_t> drawn;
         drawn.clear();
-        for (int32_t i = 0; i < count; i++)
+        for (int32_t i = first; i < count; i++)
         {
             auto item = list + size_t(i) * 0x20;
             if (reflection && item[0x1B])
@@ -420,6 +440,21 @@ namespace CoronaRender
             }
             drawn.push_back(uint32_t(i));
         }
+        if (bOtherView)
+        {
+            nOtherListed += uint32_t(count - first);
+            nOtherDrawn += uint32_t(drawn.size());
+            if (pCamera)
+            {
+                const float* look = pCamera - 8;
+                for (int32_t i = first; i < count; i++)
+                {
+                    auto pos = (const float*)(list + size_t(i) * 0x20);
+                    if ((pos[0] - pCamera[0]) * look[0] + (pos[1] - pCamera[1]) * look[1] + (pos[2] - pCamera[2]) * look[2] < 0.0f)
+                        ++nOtherBehind;
+                }
+            }
+        }
         if (drawn.empty())
             return true;
 
@@ -435,7 +470,10 @@ namespace CoronaRender
         const float axisRight[3] = { ((float*)(viewport + 0x40))[0], ((float*)(viewport + 0x40))[1], ((float*)(viewport + 0x40))[2] };
         const float axisUp[3] = { -((float*)(viewport + 0x50))[0], -((float*)(viewport + 0x50))[1], -((float*)(viewport + 0x50))[2] };
         const float camera[3] = { ((float*)(viewport + 0x70))[0], ((float*)(viewport + 0x70))[1], ((float*)(viewport + 0x70))[2] };
-        SetTechnique(reflection ? 0xF : 0xE, reflection ? 0 : (dim ? 1 : 0));
+        // Another view's pass takes the corona technique's second pass, as the dimmed ones do: tested against the depth
+        // buffer (ZEnable 1), not against the main view's depth texture in the vertex shader (the first pass, depth off),
+        // which had a car mirror show the city's lights through the buildings
+        SetTechnique(reflection ? 0xF : 0xE, reflection ? 0 : ((dim || bOtherView) ? 1 : 0));
 
         for (size_t first = 0; first < drawn.size();)
         {
@@ -505,6 +543,8 @@ namespace CoronaRender
                 memcpy(v, quad, sizeof(quad));
                 *ppVertex = v + 6;
             }
+            if (pBeforeDraw)
+                pBeforeDraw();
             End();
             first += n;
         }

@@ -3,6 +3,13 @@ module;
 #include <common.hxx>
 #include "FusionLog.hpp"
 #include "carmirrorstable.hxx"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <format>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 export module carmirrors;
 
@@ -12,6 +19,9 @@ import natives;
 import settings;
 import inireload;
 import firstperson;
+import coronas;
+import entityclass;
+import renderskip;
 
 // Real reflections in the player car's mirrors, from the driver's seat in first person (Car Mirrors in the menu).
 // The game has planar mirrors for interiors (bathrooms): each frame CE 0xB59DD0 asks 0xA0F820 for the nearest
@@ -34,11 +44,24 @@ namespace CarMirrors
     static SafetyHookInline phaseBuildHook;
     static SafetyHookInline phaseVisibilityHook;
     static SafetyHookInline phaseViewHook;
+    static SafetyHookMid waterGateHooks[2];
+    static SafetyHookMid phaseWaterHook;
+    static SafetyHookMid gatherHook;
+    static SafetyHookMid waterTargetHooks[2];
 
     static bool reverse = false;            // CarMirrorsReverse (hidden): the corners the other way round, if the quad is culled
     static bool rounded = true;             // CarMirrorsRounded (hidden): 0 draws the plain quad, not cut to the glass's outline
     static bool byDrawnCar = true;          // CarMirrorsByDrawnCar (hidden): 0 keeps the update's corners, no dark glass
     static float zoomOut = 1.5f;            // CarMirrorsZoomOut (hidden): how much wider than a flat mirror they show, 1 flat
+    static bool water = true;               // CarMirrorsWater (hidden): 0 leaves the water out of the reflection
+    static bool waterFarCells = true;       // CarMirrorsWaterFarCells (hidden): 0 leaves the water's far cells (open sea to the horizon) out of the reflection
+    static bool waterReflection = true;     // CarMirrorsWaterReflection (hidden): 0 keeps the game's rule, no water reflection while a mirror is on
+    static bool reflectionShaders = true;   // CarMirrorsReflectionShaders (hidden): 0 draws the mirror's entities with the main view's techniques
+    static bool skyAfterEntities = false;   // CarMirrorsSkyAfterEntities (hidden): 1 draws the mirror's sky after its entities, where they left the depth far
+    static bool extraBuckets = true;        // CarMirrorsExtraBuckets (hidden): 0 leaves out the main scene's buckets 5 and 4 the fourth way
+    static bool ownGlassInInterior = false; // CarMirrorsOwnGlass (hidden): 1 keeps the car's own glass in its interior mirror
+    static bool lampCoronas = true;         // CarMirrorsLampCoronas (hidden): 0 leaves the lamps only the mirror sees unreadied (no corona, no light)
+    static bool afterEntitiesHooked = false; // the hook after the mirror's entities is in (AfterMirrorEntities)
     // The game puts the quad along n by a float its quad code reads (0.035 m on PC, 0.0125 with shaders.ixx's Xbox
     // value): read where the code points as the corners are placed, which lands the quad 5 mm in front of the glass.
     // Taken as 0.035, the quad sat 1.75 cm behind the glass, inside the mirror's housing.
@@ -55,6 +78,7 @@ namespace CarMirrors
     // the model's glass faced anywhere.
     static float sideAimX = 0.0f, sideAimY = -1.5f, interiorAimX = 0.0f, interiorAimY = -3.0f;
     static float eyeInCar[3]{};
+    static float eyeInWorld[3]{};            // the camera's, as the mirror was last set (diagnostics)
     static bool eyeKnown = false;
     static constexpr float MinLook = 0.3f;  // cosine: a mirror further off the view than ~73 degrees is not taken
     static constexpr float Keep = 0.15f;    // the mirror reflected stays until another is this much nearer the view
@@ -76,6 +100,69 @@ namespace CarMirrors
     static double buildMs = 0.0, visibilityMs = 0.0;
     static uint32_t timedFrames = 0;
     static uint32_t outdoorScans = 0;      // frames the outdoor scan ran for the mirror
+    static uint32_t waterQueued = 0;       // the water's commands put in the mirror phase's draw list
+    static uint32_t waterGathered = 0, waterRolledBack = 0;
+    static uint32_t mirrorWaterItems[3]{}, mainWaterItems[3]{}, drawnWaterItems[3]{};
+    static uint32_t waterFill[3]{};        // the most of each buffer the frame used, after the mirror's
+    static uint32_t waterDrawn = 0;        // the mirror pass's water draws (render thread)
+    static uint32_t techniqueDraws = 0;    // frames the mirror's entities went in the reflection techniques
+    static uint32_t skyDraws = 0;          // the car mirror's skies drawn (render thread)
+    static uint32_t coronaDraws = 0;       // and its coronas
+    static uint32_t mirrorCoronaFrames = 0, mirrorCoronaTested = 0, mirrorCoronaListed = 0; // listed for the mirror's view (main thread)
+    // within NearCorona of the mirror, registered on its side of the plane: [directional (headlights), the rest],
+    // all of them, those the game camera's view left out, those the mirror's view lists
+    static constexpr float NearCorona = 60.0f;
+    static uint32_t nearRegistered[2]{}, nearOutOfView[2]{}, nearListed[2]{};
+    static uintptr_t mirrorPhase = 0;      // CRenderPhaseMirrorReflection, as PhaseView last saw it for our mirror
+    // The game's render states as the techniques' pass states have them (0 ZENABLE, 2 ZWRITEENABLE, 3 ALPHATESTENABLE,
+    // 4 SRCBLEND, 5 DESTBLEND, 6 CULLMODE, 7 ZFUNC, 8 ALPHAREF, 9 ALPHAFUNC, 10 ALPHABLENDENABLE, 19 COLORWRITEENABLE,
+    // 23 BLENDOP; CE 0x437140 sets one on the device, its value kept at [0x108B420 + 4 x type]). Not CE 0x432C20's own
+    // numbers (the draw lists' render state commands, 0x8DBF20): there 2 is a blend preset (0 source alpha over the
+    // rest, 1 one and one), 5 the depth compare by its own table (2 less, 3 less or equal), 8 the blend on.
+    static void (__cdecl* setPassState)(uint32_t type, uint32_t value) = nullptr;
+    static const uint32_t* passStateCache = nullptr;
+    // Frame capture (CarMirrorsCapture, hidden, 1 by default for now): Ctrl+Shift+F5 takes every device draw of the
+    // mirror's next pass to GTAIV.EFLC.FusionFix.CarMirrorsCapture.log, with what draws it and the states it draws with.
+    static bool captureEnabled = true;
+    static bool captureKeyWasDown = false;      // main thread
+    static bool capturing = false;              // render thread
+    static std::string captureText;             // render thread
+    static uint32_t captureDraws = 0, captureEntity = 0;
+    static uint32_t captureNumber = 0, captureTaken = 0; // render thread: the capture's number and its pictures, for their names
+    struct CaptureContext
+    {
+        bool inEntity;
+        EntityClass::Kind kind;
+        uint32_t modelHash;
+        float place[3];
+    };
+    static CaptureContext captureContext{};
+    static void __cdecl CaptureBegin(uint32_t glass);
+    static void __cdecl CaptureEnd(uint32_t);
+    static void CaptureSnapshot(uint32_t point);
+    static void __cdecl CaptureSnapshotCallback(uint32_t point) { CaptureSnapshot(point); }
+    enum SnapshotPoint : uint32_t { AfterSky, BeforeEntities, AfterEntities, AfterWater, AfterCoronas, PassEnd };
+    // The frame capture (2026-10-20) showed nearly every entity of the mirror's pass drawn with blending one and one, the
+    // alpha reference 100 and here and there no depth write: what a technique sets stays for every entity after it, the
+    // reflection techniques setting nothing of their own. The one and one came from this code (the mirror's blend preset
+    // command, taken for a depth write, made 1); the reference and the rest from the techniques of what the mirror draws
+    // that the game's mirrors never did (peds, CarMirrorsReflectionShaders' group, hair turning the depth write off).
+    // CarMirrorsEntityStates (hidden, 0 leaves it): each entity of the mirror's pass gets the states it began with put
+    // back after it, as if every technique had set only its own.
+    static bool isolateStates = true;
+    static constexpr uint32_t IsolatedTypes[] = { 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 19, 23 };
+    static uint32_t isolatedSaved[std::size(IsolatedTypes)]{};
+    static bool isolatedOn = false;      // render thread
+    // CarMirrorsWaterCoronasFirst (hidden, 0 by default): the water and coronas before the mirror's entities instead of
+    // after them, tried while the mirror seemed to keep no depth.
+    static bool waterCoronasFirst = false;
+    static bool queuedFirst = false;      // main thread: this build's water and coronas are queued before the entities
+    // CarMirrorsWaterStyle (hidden, 0 by default): the mirror's entities drawn with the water reflection's buckets and way
+    // (CE 0xD76E55: 0x90D and 2, where the mirror's has 0x307 and 1 or 2 at 0xD76B9A)
+    static bool waterStyle = false;
+    static uint32_t extraBucketDraws = 0;  // and the main scene's extra buckets (ExtraBuckets)
+    static uint32_t waterFlagMissing = 0;  // the mirror's water draws whose draw list had no flag 0x10 (render thread)
+    static const uint32_t* waterTotals[2]{}; // CE 0x1550EAC, 0x154E300: water.dat's quads and triangles
     // The car, for the draw list's snapshots and the phase's plane.
     static std::atomic<uintptr_t> drawnVehicle{ 0 };
     static SafetyHookMid quadHook;
@@ -129,15 +216,134 @@ namespace CarMirrors
     // set for the main view by postfx.ixx): the player's car's own glass keeps 40% of its tint in the mirror too, within
     // 4 m of the reflected eye, which stands further from the rear window than the driver; an interior mirror showed
     // the dark tinted rear window and little else.
+    // The car glass's screen space reflections (vehicle_glass_reflections.patch) read the main view's camera (s9), its
+    // depth (s11) and its lit scene (s13), bound by postfx.ixx after the deferred lighting until the post processing:
+    // the mirror's phase, drawn in between, had its glass reflect the main view's screen at the mirror's pixels (an
+    // interior mirror's rear window showed the phone and ghosts of trees). Unbound as the mirror's pass starts, s9
+    // empty keeping the game's environment map; not put back (no reference held over a device reset): the main
+    // scene's glass is drawn by then, and the next frame binds them again.
+    // c204.z 1 has the water opaque and reflect the sky's colour at the horizon, not the main view's water reflection read
+    // at the mirror's pixels (water_mirror_opaque.patch, see MirrorWaterPass).
+    // The phase clears depth and stencil only (CE 0xD769CE, its colour flag 0), the sky meant to cover the rest: in a
+    // tunnel nothing did, and the mirror kept its frames before where nothing was drawn (trails). Cleared to black
+    // as the pass starts, MIRROR_RT bound and its viewport set by then.
+    // Low byte 2: the interior mirror's pass, the player's car's position (as its draw command keeps it) in ownPlaces at
+    // the index in the second byte: MirrorDrawBegin leaves its glass out (vehicle_glass_reflections_wet_mirror.patch).
+    static float ownPlaces[4][3] = {};
+    static uint32_t ownPlaceNext = 0;
+    static bool interiorPass = false; // render thread
+    static bool mirrorPass = false;   // render thread, any car mirror's pass
+    static float ownPlace[3] = {};
+    static bool ownDrawOn = false;
+
+    static void SetGlassConstant(IDirect3DDevice9* device, bool on, bool leaveOut)
+    {
+        const float tint[4] = { on ? 0.4f : 0.0f, on ? 4.0f * 4.0f : 0.0f, on ? 1.0f : 0.0f, leaveOut ? 1.0f : 0.0f };
+        device->SetPixelShaderConstantF(204, tint, 1);
+        if (auto real = RageDirect3DDevice9::RealDevice(device); real != device)
+            real->SetPixelShaderConstantF(204, tint, 1);
+    }
+
     static void __cdecl MirrorPassTint(uint32_t on)
     {
         auto device = rage::grcDevice::GetD3DDevice();
         if (!device)
             return;
-        const float tint[4] = { on ? 0.4f : 0.0f, on ? 4.0f * 4.0f : 0.0f, 0.0f, 0.0f };
-        device->SetPixelShaderConstantF(204, tint, 1);
-        if (auto real = RageDirect3DDevice9::RealDevice(device); real != device)
-            real->SetPixelShaderConstantF(204, tint, 1);
+        if (on)
+            device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+        mirrorPass = on != 0;
+        interiorPass = (on & 0xff) == 2;
+        if (interiorPass)
+            std::copy_n(ownPlaces[(on >> 8) & 3], 3, ownPlace);
+        ownDrawOn = false;
+        SetGlassConstant(device, on != 0, false);
+        if (on)
+            for (DWORD stage : { 9u, 11u, 13u })
+                RageDirect3DDevice9::SetTextureBoth(device, stage, nullptr);
+    }
+
+    // The technique group drawn with (CE [0x106B308], -1 the default group; its setter CE 0x42F0A0).
+    static int32_t* currentTechniqueGroup = nullptr;
+    static int32_t pedSavedGroup = -1;
+    static bool pedGroupSwapped = false;
+
+    // Entity draw hooks (render thread).
+    // Peds in a car mirror's pass are drawn in the default technique group, as in the game's own mirrors: in the
+    // "reflection" group (PushReflectionTechniques) the ped shaders (gta_ped, gta_ped_skin, the hair) have no technique,
+    // and a shader without one in the group draws nothing (CE 0x42EBCB); the parts drawn with gta_default and its kin
+    // took their reflection_drawskinned, whose vertex shader is the unskinned one: peds walked in the bind pose.
+    // In the interior mirror's pass, the player's car's draws (a vehicle's command placed where the car stood as the
+    // mirror's list was made) have c204.w 1, and its glass shaders draw none of it: the rear window covered the
+    // mirror's sky black even with the blend states of vehicle_glass_reflection_blend.patch, and the sky was there once
+    // the window was broken.
+    static void MirrorDrawBegin(EntityClass::Kind kind)
+    {
+        if (capturing)
+        {
+            captureContext = { true, kind, 0, {} };
+            uint16_t model;
+            const float* place;
+            if (EntityClass::CurrentModel(model, place))
+            {
+                if (const uintptr_t info = EntityClass::ModelInfo(model))
+                    captureContext.modelHash = *reinterpret_cast<const uint32_t*>(info + 0x3C);
+                std::copy_n(place, 3, captureContext.place);
+            }
+            ++captureEntity;
+        }
+        if (mirrorPass)
+        {
+            if (isolateStates && passStateCache && setPassState && !isolatedOn)
+            {
+                for (size_t i = 0; i < std::size(IsolatedTypes); ++i)
+                    isolatedSaved[i] = passStateCache[IsolatedTypes[i]];
+                isolatedOn = true;
+            }
+        }
+        if (mirrorPass && kind == EntityClass::Kind::Ped && currentTechniqueGroup && *currentTechniqueGroup != -1)
+        {
+            pedSavedGroup = *currentTechniqueGroup;
+            *currentTechniqueGroup = -1;
+            pedGroupSwapped = true;
+        }
+        if (!interiorPass || kind != EntityClass::Kind::Vehicle)
+            return;
+        uint16_t model;
+        const float* place;
+        if (!EntityClass::CurrentModel(model, place))
+            return;
+        float d2 = 0.0f;
+        for (int i = 0; i < 3; ++i)
+            d2 += (place[i] - ownPlace[i]) * (place[i] - ownPlace[i]);
+        if (d2 > 0.25f * 0.25f)
+            return;
+        if (auto device = rage::grcDevice::GetD3DDevice())
+        {
+            SetGlassConstant(device, true, true);
+            ownDrawOn = true;
+        }
+    }
+
+    static void MirrorDrawEnd(EntityClass::Kind)
+    {
+        captureContext.inEntity = false;
+        if (isolatedOn)
+        {
+            for (size_t i = 0; i < std::size(IsolatedTypes); ++i)
+                if (passStateCache[IsolatedTypes[i]] != isolatedSaved[i])
+                    setPassState(IsolatedTypes[i], isolatedSaved[i]);
+            isolatedOn = false;
+        }
+        if (pedGroupSwapped)
+        {
+            *currentTechniqueGroup = pedSavedGroup;
+            pedGroupSwapped = false;
+        }
+        if (!ownDrawOn)
+            return;
+        ownDrawOn = false;
+        if (auto device = rage::grcDevice::GetD3DDevice())
+            SetGlassConstant(device, true, false);
     }
 
     static double NowMs()
@@ -310,6 +516,7 @@ namespace CarMirrors
             return Off("no camera");
         float eye[3]{}, rotation[3]{};
         Natives::GetCamPos(camera, &eye[0], &eye[1], &eye[2]);
+        std::copy_n(eye, 3, eyeInWorld);
         Natives::GetCamRot(camera, &rotation[0], &rotation[1], &rotation[2]);
         const float pitch = rotation[0] * 0.01745329f, heading = rotation[2] * 0.01745329f;
         const float forward[3] = { -std::sin(heading) * std::cos(pitch), std::cos(heading) * std::cos(pitch), std::sin(pitch) };
@@ -390,16 +597,145 @@ namespace CarMirrors
         quadsThisFrame = true;
     }
 
+    // What the sky is drawn with, the last time (render thread, read by LogTiming): the reflected camera, its
+    // projection's depth column, the near and far planes, the clip plane, the target's viewport.
+    static struct
+    {
+        float camera[3], forward[3], up[3], depthColumn[4], nearFar[2], clipPlane[4], plane[4];
+        DWORD clipEnable, cull;
+        D3DVIEWPORT9 viewport;
+        bool known;
+    } skyState{};
+
     static void LogTiming()
     {
         if (++timedFrames < 300)
             return;
         FusionLog::Write("CarMirrors", "Cost", "mirror phase CPU per frame: draw list %.3f ms, visibility %.3f ms; outdoor scans %u of %u frames; "
-            "quads drawn %u, by the draw list's car %u, dark %u\n",
-            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark);
-        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = 0;
+            "quads drawn %u, by the draw list's car %u, dark %u; entities in the reflection techniques %u, skies %u, coronas %u, extra buckets %u\n",
+            buildMs / timedFrames, visibilityMs / timedFrames, outdoorScans, timedFrames, quadDrawn, quadBySnapshot, quadsDark, techniqueDraws, skyDraws, coronaDraws, extraBucketDraws);
+        // per mirror draw: the coronas the game listed this frame, how many of them behind its camera, how many drawn
+        if (coronaDraws)
+            FusionLog::Write("CarMirrors", "Coronas", "per mirror draw: %.1f listed, %.1f of them behind the game camera, %.1f drawn\n",
+                float(CoronaRender::nOtherListed) / coronaDraws, float(CoronaRender::nOtherBehind) / coronaDraws,
+                float(CoronaRender::nOtherDrawn) / coronaDraws);
+        if (mirrorCoronaFrames)
+            FusionLog::Write("CarMirrors", "Coronas", "listed for the mirror per frame: %.1f tested in front of its plane, %.1f seen (%u frames)\n",
+                float(mirrorCoronaTested) / mirrorCoronaFrames, float(mirrorCoronaListed) / mirrorCoronaFrames, mirrorCoronaFrames);
+        if (mirrorCoronaFrames)
+            FusionLog::Write("CarMirrors", "Coronas", "within %.0f m of the mirror per frame, headlights / the rest: registered %.1f / %.1f, "
+                "of them out of the game camera's view %.1f / %.1f, listed by the mirror's %.1f / %.1f\n", NearCorona,
+                float(nearRegistered[0]) / mirrorCoronaFrames, float(nearRegistered[1]) / mirrorCoronaFrames,
+                float(nearOutOfView[0]) / mirrorCoronaFrames, float(nearOutOfView[1]) / mirrorCoronaFrames,
+                float(nearListed[0]) / mirrorCoronaFrames, float(nearListed[1]) / mirrorCoronaFrames);
+        mirrorCoronaFrames = mirrorCoronaTested = mirrorCoronaListed = 0;
+        nearRegistered[0] = nearRegistered[1] = nearOutOfView[0] = nearOutOfView[1] = nearListed[0] = nearListed[1] = 0;
+        CoronaRender::nOtherListed = CoronaRender::nOtherBehind = CoronaRender::nOtherDrawn = 0;
+        // items: the water's quads, triangles and far cells, summed over the frames
+        FusionLog::Write("CarMirrors", "Water", "water.dat %u quads, %u triangles; gathered %u frames, rolled back %u (over the buffers); "
+            "the mirror's items %u/%u/%u, the main scene's %u/%u/%u; buffers filled up to %u/1000, %u/40, %u/400; queued %u, drawn %u, "
+            "items drawn %u/%u/%u, without the flag in the draw list %u\n", waterTotals[0] ? *waterTotals[0] : 0, waterTotals[1] ? *waterTotals[1] : 0,
+            waterGathered, waterRolledBack, mirrorWaterItems[0], mirrorWaterItems[1], mirrorWaterItems[2],
+            mainWaterItems[0], mainWaterItems[1], mainWaterItems[2], waterFill[0], waterFill[1], waterFill[2],
+            waterQueued, waterDrawn, drawnWaterItems[0], drawnWaterItems[1], drawnWaterItems[2], waterFlagMissing);
+        if (skyState.known)
+        {
+            const auto& k = skyState;
+            const float eyeToPlane = k.plane[0] * eyeInWorld[0] + k.plane[1] * eyeInWorld[1] + k.plane[2] * eyeInWorld[2] - k.plane[3];
+            const float cameraToPlane = k.plane[0] * k.camera[0] + k.plane[1] * k.camera[1] + k.plane[2] * k.camera[2] - k.plane[3];
+            FusionLog::Write("CarMirrors", "Sky", "%s mirror: eye %.2f %.2f %.2f (%.2f m from the plane), reflected camera %.2f %.2f %.2f "
+                "(%.2f m), forward %.2f %.2f %.2f, up %.2f %.2f %.2f; plane %.3f %.3f %.3f %.2f; near %.3f far %.1f, projection depth column "
+                "%.4f %.4f %.4f %.4f; clip planes %lu, plane 0 %.3f %.3f %.3f %.3f; cull %lu; viewport %lu %lu %lu x %lu, z %.2f..%.2f\n",
+                KindName(active), eyeInWorld[0], eyeInWorld[1], eyeInWorld[2], eyeToPlane, k.camera[0], k.camera[1], k.camera[2], cameraToPlane,
+                k.forward[0], k.forward[1], k.forward[2], k.up[0], k.up[1], k.up[2], k.plane[0], k.plane[1], k.plane[2], k.plane[3],
+                k.nearFar[0], k.nearFar[1], k.depthColumn[0], k.depthColumn[1], k.depthColumn[2], k.depthColumn[3], k.clipEnable,
+                k.clipPlane[0], k.clipPlane[1], k.clipPlane[2], k.clipPlane[3], k.cull, k.viewport.X, k.viewport.Y, k.viewport.Width,
+                k.viewport.Height, k.viewport.MinZ, k.viewport.MaxZ);
+        }
+        outdoorScans = quadDrawn = quadBySnapshot = quadsDark = waterQueued = waterGathered = waterRolledBack = waterDrawn = techniqueDraws = skyDraws = coronaDraws = extraBucketDraws = waterFlagMissing = 0;
+        for (int i = 0; i < 3; ++i)
+            mirrorWaterItems[i] = mainWaterItems[i] = drawnWaterItems[i] = waterFill[i] = 0;
         buildMs = visibilityMs = 0.0;
         timedFrames = 0;
+    }
+
+    // The phase's flags (+0x8E8, the draw list takes a copy as it is made): 0x10 has the scan gather the water seen
+    // in the phase's list (CE 0xB1E810 -> 0xAD7D80) and the water's draw (CE 0xAD7EF0) draw it; the mirror phase has
+    // it not. Set from the mirror's water gathered (GatherMirrorWater) to its draw list's end, with the water queued
+    // in that list (PhaseWater).
+    static constexpr uint32_t PhaseWaterFlag = 0x10;
+    static uintptr_t waterFlagPhase = 0;      // the phase the flag was set on by us, 0 none
+    static void* waterFunction = nullptr;     // CE 0xAD7EF0, cdecl(the phase's list)
+
+    static void SetWaterFlag(uintptr_t phase)
+    {
+        auto& flags = *reinterpret_cast<uint32_t*>(phase + 0x8E8);
+        if (flags & PhaseWaterFlag)
+            return; // the game's own
+        flags |= PhaseWaterFlag;
+        waterFlagPhase = phase;
+    }
+
+    static void ClearWaterFlag()
+    {
+        if (!waterFlagPhase)
+            return;
+        *reinterpret_cast<uint32_t*>(waterFlagPhase + 0x8E8) &= ~PhaseWaterFlag;
+        waterFlagPhase = 0;
+    }
+
+    // The mirror phase draws no sky (a bathroom mirror sees none): the car mirror's showed whatever MIRROR_RT held,
+    // black once it was cleared. The water reflection's sky is a callback (CE 0xC107A0, queued at 0xD76D38) drawing it
+    // (CE 0xDBC170, clip planes off round it) for draw lists with flag 0x20; in the sky the draw list's 0x20000 sets
+    // the timecycle's sky colours (0xDBC2C6) and picks how it is drawn (0xDBC743), 0x40000 the reflection map's branch
+    // (left out, the sky goes through the main branch and the volumetric clouds follow, postfx.ixx). The car mirror's
+    // pass queues the same callback (MirrorSkyDraw) and its three tests are given flags 0x20 | 0x20000 for it.
+    static SafetyHookMid skyHooks[3];
+    static constexpr uint32_t SkyFlags = 0x20 | 0x20000;
+    static void* skyFunction = nullptr;   // CE 0xC107A0
+    static bool inMirrorSky = false;      // render thread
+
+    static void MirrorSkyFlags(SafetyHookContext& regs)
+    {
+        if (inMirrorSky)
+            regs.eax = reinterpret_cast<uintptr_t>(&SkyFlags);
+    }
+
+    static void CaptureSkyState()
+    {
+        auto device = rage::grcDevice::GetD3DDevice();
+        auto* vp = rage::GetCurrentViewport();
+        if (!device || !vp)
+            return;
+        for (int i = 0; i < 3; ++i)
+        {
+            skyState.camera[i] = vp->mViewInverseMatrix[3][i];
+            skyState.forward[i] = vp->mViewInverseMatrix[2][i];
+            skyState.up[i] = vp->mViewInverseMatrix[1][i];
+        }
+        for (int i = 0; i < 4; ++i)
+        {
+            skyState.depthColumn[i] = vp->mProjectionMatrix[i][2];
+            skyState.plane[i] = plane ? plane[i] : 0.0f;
+        }
+        skyState.nearFar[0] = vp->mNearClip;
+        skyState.nearFar[1] = vp->mFarClip;
+        auto real = RageDirect3DDevice9::RealDevice(device);
+        real->GetRenderState(D3DRS_CLIPPLANEENABLE, &skyState.clipEnable);
+        real->GetRenderState(D3DRS_CULLMODE, &skyState.cull);
+        real->GetClipPlane(0, skyState.clipPlane);
+        real->GetViewport(&skyState.viewport);
+        skyState.known = true;
+    }
+
+    static void __cdecl MirrorSkyDraw(uint32_t)
+    {
+        CaptureSkyState();
+        inMirrorSky = true;
+        reinterpret_cast<void (__cdecl*)()>(skyFunction)();
+        inMirrorSky = false;
+        ++skyDraws;
+        CaptureSnapshot(AfterSky);
     }
 
     // CRenderPhaseMirrorReflection: its draw list (vtable slot 8, CE 0xD76950) and its visibility (CE 0xD77430).
@@ -407,15 +743,38 @@ namespace CarMirrors
     // from before the car moved this frame, and the reflected view then lagged the car's own side in the mirror.
     static void __fastcall PhaseBuild(uintptr_t phase, void*)
     {
+        queuedFirst = false;
+        bool capture = false;
+        if (usedThisFrame && captureEnabled)
+        {
+            const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+                (GetAsyncKeyState(VK_F5) & 0x8000);
+            capture = down && !captureKeyWasDown;
+            captureKeyWasDown = down;
+            if (capture)
+                callback.Queue(reinterpret_cast<const void*>(&CaptureBegin), active ? active->kind + 1u : 0u);
+        }
         const double start = usedThisFrame ? NowMs() : 0.0;
         if (usedThisFrame)
         {
             const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
             if (const float* m = active && vehicle ? CEntity::GetMatrix(vehicle) : nullptr)
                 PlacePlane(m, *active);
-            callback.Queue(reinterpret_cast<const void*>(&MirrorPassTint), 1);
+            uint32_t pass = 1;
+            if (const float* m = active && active->kind == 2 && !ownGlassInInterior && vehicle ? CEntity::GetMatrix(vehicle) : nullptr)
+            {
+                const uint32_t slot = ownPlaceNext++ & 3;
+                std::copy_n(m + 12, 3, ownPlaces[slot]);
+                pass = 2 | slot << 8;
+            }
+            callback.Queue(reinterpret_cast<const void*>(&MirrorPassTint), pass);
+            if (skyHooks[2] && !(skyAfterEntities && afterEntitiesHooked))
+                callback.Queue(reinterpret_cast<const void*>(&MirrorSkyDraw), 0);
         }
         phaseBuildHook.unsafe_thiscall<void>(phase);
+        ClearWaterFlag();
+        if (capture)
+            callback.Queue(reinterpret_cast<const void*>(&CaptureEnd), 0);
         if (usedThisFrame)
         {
             callback.Queue(reinterpret_cast<const void*>(&MirrorPassTint), 0);
@@ -447,6 +806,7 @@ namespace CarMirrors
         const bool ours = quadsThisFrame && active;
         if (ours)
         {
+            mirrorPhase = phase;
             const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
             if (const float* m = vehicle ? CEntity::GetMatrix(vehicle) : nullptr)
                 PlacePlane(m, *active);
@@ -479,29 +839,820 @@ namespace CarMirrors
     }
 
     // CRenderPhaseWaterReflection's visibility (vtable slot 3, CE 0xD77550): the same scan from the phase's own
-    // viewport, with no interior gate; it does nothing while a mirror is on.
+    // viewport, with no interior gate.
     static void (__fastcall* waterVisibility)(uintptr_t phase, void*) = nullptr;
+
+    // The water reflection's visibility (CE 0xD77550) and draw list (CE 0xD76C10) are skipped while a mirror is on
+    // (0x166DA20 == 1): a bathroom mirror has no water to see. A car's mirror is on all the time in first person, and
+    // the water by the road lost its reflection (and the mirrors the water). Each gate's je, right after the compare,
+    // is not taken while the mirror on is the car's: a flag in the compare's result, not the mirror flag itself,
+    // which the render thread reads as it draws the mirror's quad. CarMirrorsWaterReflection 0 keeps the game's rule
+    // for the water reflection's own phase; the car mirror's scan (the water's, see PhaseVisibility) still goes through.
+    static bool inMirrorScan = false;
+
+    static void WaterVisibilityGate(SafetyHookContext& regs)
+    {
+        if (quadsThisFrame && (waterReflection || inMirrorScan))
+            regs.eflags &= ~0x40u; // ZF
+    }
+
+    static void WaterBuildGate(SafetyHookContext& regs)
+    {
+        if (quadsThisFrame && waterReflection)
+            regs.eflags &= ~0x40u; // ZF
+    }
+
     // The mirror's scan runs only from an interior's room: it skips unless the phase's scene start (+0x940) has an
     // interior (+0x30) and a room above 0 (+0x38), as a bathroom mirror's has. Outdoors the car mirror's phase then
     // had nothing to draw (0.000 ms), so there it takes the water's scan, which starts from the phase's viewport like
-    // the main camera, with the mirror flag down for the call. The water reflection is left out while a mirror is on.
+    // the main camera (its mirror gate let through by WaterVisibilityGate). Its water is gathered after every phase's
+    // scan (GatherMirrorWater).
+    static uintptr_t waterScanPhase = 0;      // the phase the outdoor scan ran for this frame, for GatherMirrorWater
+    // The map's lamps register their lights and coronas as an entity is readied for the frame (CEntity vtable +0x84,
+    // CE 0xA32640 -> 0xC1DB60), skipped beyond 35 m of the camera unless the entity is seen by a phase in the lights'
+    // mask ([0x1FBB75C], CE 0xC1DBA7). The scan puts a phase in that mask by its flag 0x2000000 (+0x8E8, read in
+    // CE 0xAE4880 under 0xB1E810), which the mirror phase has not: no lamp behind the camera had a corona for the
+    // mirror (14-27 within 60 m of it registered, 1-10 of them out of the game camera's view). Given for its scan.
+    static constexpr uint32_t PhaseLightsFlag = 0x2000000;
+
     static void __fastcall PhaseVisibility(uintptr_t phase, void*)
     {
+        ClearWaterFlag();
         const double start = usedThisFrame ? NowMs() : 0.0;
         const auto scene = *reinterpret_cast<const uintptr_t*>(phase + 0x940);
         const bool inRoom = scene && *reinterpret_cast<const uintptr_t*>(scene + 0x30) &&
                             *reinterpret_cast<const int32_t*>(scene + 0x38) > 0;
         if (usedThisFrame && !inRoom && waterVisibility)
         {
-            *mirrorOn = 0;
+            const bool gated = !waterGateHooks[0];
+            if (gated) *mirrorOn = 0;
+            auto& flags = *reinterpret_cast<uint32_t*>(phase + 0x8E8);
+            const uint32_t before = flags;
+            if (lampCoronas)
+                flags |= PhaseLightsFlag;
+            inMirrorScan = true;
             waterVisibility(phase, nullptr);
-            *mirrorOn = 1;
+            inMirrorScan = false;
+            flags = (flags & ~PhaseLightsFlag) | (before & PhaseLightsFlag);
+            if (gated) *mirrorOn = 1;
             ++outdoorScans;
+            waterScanPhase = phase;
         }
         else
             phaseVisibilityHook.unsafe_thiscall<void>(phase);
         if (usedThisFrame)
             visibilityMs += NowMs() - start;
+    }
+
+    // The water seen by a phase (CE 0xAD7D80, cdecl(the phase's list), the phase in [0x12FB1B8]) goes into one buffer
+    // of the frame (CE 0xAD61A0, main thread; the render thread's other one CE 0xAD5CD0, 0x10C4 bytes each): quads
+    // (+0, 1000 of them, count +0xE60), triangles (+0x7D0, 40, +0xE64) and far cells (+0x820 / +0xB40, 400, +0xE68), a
+    // list's start and count of each at +0xE6C / +0xF8C, +0xECC / +0xFEC, +0xF2C / +0x104C (+ 4 x list, 24 lists).
+    // Only the far cells' 400 are checked; the game gathers the main scene's alone. The mirror's, gathered among the
+    // scans, could run the buffers over for whichever came after it (the 40 triangles into the far cells, the main
+    // scene's water then left out where they were overwritten, the frame before showing through), so it is gathered
+    // last, as every phase's scan (CE 0x8F7400) is done (the water reflection's after the others), and put back from
+    // a copy if it ran over.
+    static uintptr_t (__cdecl* waterBuffer)() = nullptr;        // CE 0xAD61A0
+    static uintptr_t (__cdecl* waterRenderBuffer)() = nullptr;  // CE 0xAD5CD0
+    static void (__cdecl* gatherWater)(uint32_t list) = nullptr; // CE 0xAD7D80
+    static uintptr_t* scanningPhase = nullptr;                 // CE 0x12FB1B8
+    static const uintptr_t* gameState = nullptr;               // CE 0x16DD67C, +0x22 & 1: no water gathered
+    static const uint8_t* noWater = nullptr;                   // CE 0x12BD0F2
+    static constexpr uint32_t WaterBufferSize = 0x10C4, WaterLists = 24;
+    static constexpr uint32_t WaterCountOffsets[3] = { 0xF8C, 0xFEC, 0x104C };
+    static constexpr uint32_t WaterStartOffsets[3] = { 0xE6C, 0xECC, 0xF2C };
+    static constexpr uint32_t WaterCapacity[3] = { 1000, 40, 400 };
+    static uint8_t waterBufferCopy[WaterBufferSize];
+
+    static uint32_t& WaterField(uintptr_t buffer, uint32_t offset)
+    {
+        return *reinterpret_cast<uint32_t*>(buffer + offset);
+    }
+
+    static void GatherMirrorWater(SafetyHookContext& regs)
+    {
+        const uintptr_t phase = waterScanPhase;
+        waterScanPhase = 0;
+        if (!phase || !usedThisFrame || !water || !waterFunction || !phaseWaterHook || !gatherWater || !waterBuffer || !scanningPhase)
+            return;
+        if (*noWater || (*gameState && (*reinterpret_cast<const uint8_t*>(*gameState + 0x22) & 1)))
+            return; // as the scan's own gather
+        const uint32_t list = *reinterpret_cast<const uint32_t*>(phase + 0x938);
+        if (list >= WaterLists)
+            return;
+        const uintptr_t buffer = waterBuffer();
+        if (const uintptr_t main = regs.ebx) // the main scene's phase (its kind 0x1F), as the loop found it
+        {
+            const uint32_t mainList = *reinterpret_cast<const uint32_t*>(main + 0x938);
+            if (mainList < WaterLists)
+                for (int i = 0; i < 3; ++i)
+                    mainWaterItems[i] += WaterField(buffer, WaterCountOffsets[i] + 4 * mainList);
+        }
+        std::memcpy(waterBufferCopy, reinterpret_cast<const void*>(buffer), WaterBufferSize);
+        const auto flags = *reinterpret_cast<uint32_t*>(phase + 0x8E8);
+        *reinterpret_cast<uint32_t*>(phase + 0x8E8) = flags | PhaseWaterFlag;
+        *scanningPhase = phase;
+        gatherWater(list);
+        *scanningPhase = 0;
+        *reinterpret_cast<uint32_t*>(phase + 0x8E8) = flags;
+        bool over = false;
+        for (int i = 0; i < 3; ++i)
+        {
+            const uint32_t used = WaterField(buffer, 0xE60 + 4 * i);
+            waterFill[i] = (std::max)(waterFill[i], used);
+            over |= used > WaterCapacity[i];
+        }
+        if (over)
+        {
+            std::memcpy(reinterpret_cast<void*>(buffer), waterBufferCopy, WaterBufferSize);
+            for (int i = 0; i < 3; ++i)
+                WaterField(buffer, WaterCountOffsets[i] + 4 * list) = WaterField(buffer, WaterStartOffsets[i] + 4 * list) = 0;
+            ++waterRolledBack;
+            return;
+        }
+        const uint32_t farStart = WaterField(buffer, WaterStartOffsets[2] + 4 * list);
+        uint32_t& farCount = WaterField(buffer, WaterCountOffsets[2] + 4 * list);
+        if (!waterFarCells && farStart + farCount == WaterField(buffer, 0xE68)) // the mirror's gathered last: its far cells end the buffer's
+        {
+            WaterField(buffer, 0xE68) = farStart;
+            farCount = 0;
+        }
+        for (int i = 0; i < 3; ++i)
+            mirrorWaterItems[i] += WaterField(buffer, WaterCountOffsets[i] + 4 * list);
+        ++waterGathered;
+        SetWaterFlag(phase);
+    }
+
+    // Render thread, the water in the mirror's pass. In some of the game's modes ([0x1045538] 1 or 5) its draw sets
+    // the material ID target (_STENCIL_BUFFER_, the main view's, screen sized) as the second target and writes the
+    // water's ID there: from the mirror's view, into the main frame's IDs. The two compares of that mode (CE 0xAD7F11,
+    // 0xAD88AA, each cmp eax, 1 / je) are made to fail for it.
+    static bool inMirrorWater = false;
+
+    static void WaterTargetMode(SafetyHookContext& regs)
+    {
+        if (inMirrorWater)
+            regs.eax = 0;
+    }
+
+    // The water's draw goes on only with the draw list's flag 0x10 (test byte [eax], 10 at CE 0xAD7F03, eax the
+    // flags the draw list took as it was made): set on the phase from the gather to its draw list's end, it is given
+    // here too, in case the copy was taken without it. waterFlagMissing counts the draws it was not in the copy.
+    static SafetyHookMid waterFlagHook;
+
+    // The water's look comes from how deep it is: its pixel shader (water.fxc, waterPS1) takes its alpha from the scene's
+    // depth (DepthBufferSampler, s2) behind it. That is the main view's depth, read at the mirror's pixels, mostly
+    // near: the water came out nearly clear over the mirror's black, cleared target. water_mirror_opaque.patch keeps
+    // it opaque with c204.z 1 (MirrorPassTint). The draw picks its second pass (waterPS2, with the sun's shadow from
+    // cascades fitted to the main view) when [0x103F4D0] is 1: in the mirror the first, its jne at CE 0xAD8576
+    // taken (push 0 for the pass, not push 1).
+    static SafetyHookMid waterPassHook;
+
+    static void MirrorWaterPass(SafetyHookContext& regs)
+    {
+        if (inMirrorWater)
+            regs.eflags &= ~0x40u; // ZF
+    }
+
+
+    static void MirrorWaterFlag(SafetyHookContext& regs)
+    {
+        static constexpr uint32_t flags = PhaseWaterFlag;
+        if (!inMirrorWater)
+            return;
+        if (!(*reinterpret_cast<const uint8_t*>(regs.eax) & PhaseWaterFlag))
+            ++waterFlagMissing;
+        regs.eax = reinterpret_cast<uintptr_t>(&flags);
+    }
+
+    static void __cdecl MirrorWater(uint32_t list)
+    {
+        if (waterRenderBuffer && list < WaterLists)
+        {
+            const uintptr_t buffer = waterRenderBuffer();
+            for (int i = 0; i < 3; ++i)
+                drawnWaterItems[i] += WaterField(buffer, WaterCountOffsets[i] + 4 * list);
+        }
+        ++waterDrawn;
+        inMirrorWater = true;
+        reinterpret_cast<void (__cdecl*)(uint32_t)>(waterFunction)(list);
+        inMirrorWater = false;
+        CaptureSnapshot(AfterWater);
+    }
+
+    // The mirror phase draws its entities (CE 0xB1DEE0 at 0xD76B9A) with the shaders' main techniques, which outdoors
+    // read the sun's shadow cascades fitted to the main camera: shadows in the mirror that moved and changed with the
+    // camera's turn. The water reflection draws its own in the "reflection" technique group (CE 0xD76E31: a push
+    // command with the group in [0x1797690], and a pop command after, vtable CE 0xEA76C4); the car mirror's the same.
+    struct TechniqueGroup
+    {
+        const uint32_t* group = nullptr;
+        void (__fastcall* pushCommand)(void* command, void*, uint32_t group) = nullptr; // CE 0x8DC290
+        uint32_t popVtable = 0;
+    };
+    static TechniqueGroup techniqueGroup;
+    static SafetyHookMid techniqueHooks[2];
+    static bool techniquePushed = false;
+
+    static void QueueWaterAndCoronasFirst(uintptr_t phase);
+
+    static void PushReflectionTechniques(SafetyHookContext& regs)
+    {
+        if (usedThisFrame && waterCoronasFirst && !waterStyle)
+            QueueWaterAndCoronasFirst(regs.edi); // edi the phase, as at its entities' draw
+        if (usedThisFrame)
+            callback.Queue(reinterpret_cast<const void*>(&CaptureSnapshotCallback), BeforeEntities);
+        techniquePushed = false;
+        if (!usedThisFrame || !reflectionShaders || !callback.allocate || !callback.add || !*techniqueGroup.group)
+            return;
+        if (auto command = callback.allocate(0xC, 0))
+        {
+            techniqueGroup.pushCommand(command, nullptr, *techniqueGroup.group);
+            callback.add(command);
+            techniquePushed = true;
+            ++techniqueDraws;
+        }
+    }
+
+    // The entities' render buckets (the draw's second argument, 0x307 at 0xD76B8F) leave out bit 8, bucket 4, which
+    // the water reflection's 0x90D has: the trees' leaves, the car mirror showed bare branches. Given to the car's.
+    static SafetyHookMid bucketHook;
+
+    static void MirrorBuckets(SafetyHookContext& regs)
+    {
+        if (!usedThisFrame)
+            return;
+        auto* arguments = reinterpret_cast<uint32_t*>(regs.esp); // the buckets, then the way
+        if (waterStyle)
+        {
+            arguments[0] = 0x90D;
+            arguments[1] = 2;
+        }
+        else
+            arguments[0] |= 8;
+    }
+
+    // The coronas (CE 0xC106F0: CE 0xC85080 the coronas, CE 0xD8C8E0 the lens flares, clip planes off round them) are
+    // drawn for draw lists with flag 8, which the mirror phase has not; it queues them before its entities (0xD76AEC),
+    // which drawn after would cover them (they write no depth). The car mirror's pass queues them again after what is
+    // drawn with blending (MirrorCoronasDraw, at 0xD76BBF), its flag test (0xC106F5) given 8 for it and the lens
+    // flares' gate (the je at 0xD8C8E7) taken: a flare across the screen made no sense in a small mirror.
+    static SafetyHookMid coronaHooks[3];
+    static constexpr uint32_t CoronaFlags = 8;
+    static void* coronaFunction = nullptr;  // CE 0xC106F0
+    // The lamps' coronas themselves (CCoronas::Render, CE 0xC1F170, coronas.ixx's in its place): what is drawn with
+    // blending (CE 0xC0FA50, called at 0xD76BB7) queues them only for draw lists with flag 0x20 (0xC0FA61), which the
+    // mirror's has not; 0xC106F0 draws other lights. Drawn after it: none had been in a car's mirror, 0 listed.
+    static void* coronaSprites = nullptr;
+    static bool inMirrorCoronas = false;    // render thread
+
+    // A shader's FusionShaders signature (a def of "FusionShaders" and its number, put in by the shader patches), 0 for
+    // one without, as GTAIV.EFLC.FusionShaders' .asm files have it: "// 852" after the def
+    static uint32_t ShaderNumber(IUnknown* shader, bool pixel)
+    {
+        static std::unordered_map<const void*, uint32_t> known;
+        if (!shader)
+            return 0;
+        if (auto it = known.find(shader); it != known.end())
+            return it->second;
+        UINT size = 0;
+        uint32_t number = 0;
+        auto getFunction = [&](void* data, UINT* bytes)
+        {
+            return pixel ? static_cast<IDirect3DPixelShader9*>(shader)->GetFunction(data, bytes)
+                         : static_cast<IDirect3DVertexShader9*>(shader)->GetFunction(data, bytes);
+        };
+        if (SUCCEEDED(getFunction(nullptr, &size)) && size >= 16)
+        {
+            std::vector<uint32_t> code(size / 4);
+            if (SUCCEEDED(getFunction(code.data(), &size)))
+                for (size_t i = 0; i + 3 < code.size(); ++i)
+                    if (code[i] == 0x69737546 && code[i + 1] == 0x68536E6F && code[i + 2] == 0x72656461)
+                    {
+                        number = code[i + 3];
+                        break;
+                    }
+            if (!number)
+                number = 0x80000000u | size; // no signature: its size, to tell it apart
+        }
+        known.emplace(shader, number);
+        return number;
+    }
+
+    static void CaptureDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT primitives)
+    {
+        if (!capturing)
+            return;
+        static constexpr const char* kindNames[] = { "unknown", "building", "prop", "vehicle", "ped" };
+        DWORD z = 0, zFunc = 0, zWrite = 0, blend = 0, source = 0, destination = 0, alphaTest = 0, alphaRef = 0, colourWrite = 0, cull = 0, stencil = 0;
+        device->GetRenderState(D3DRS_ZENABLE, &z);
+        device->GetRenderState(D3DRS_ZFUNC, &zFunc);
+        device->GetRenderState(D3DRS_ZWRITEENABLE, &zWrite);
+        device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
+        device->GetRenderState(D3DRS_SRCBLEND, &source);
+        device->GetRenderState(D3DRS_DESTBLEND, &destination);
+        device->GetRenderState(D3DRS_ALPHATESTENABLE, &alphaTest);
+        device->GetRenderState(D3DRS_ALPHAREF, &alphaRef);
+        device->GetRenderState(D3DRS_COLORWRITEENABLE, &colourWrite);
+        device->GetRenderState(D3DRS_CULLMODE, &cull);
+        device->GetRenderState(D3DRS_STENCILENABLE, &stencil);
+        IDirect3DVertexShader9* vs = nullptr;
+        IDirect3DPixelShader9* ps = nullptr;
+        device->GetVertexShader(&vs);
+        device->GetPixelShader(&ps);
+        const uint32_t vsNumber = ShaderNumber(vs, false), psNumber = ShaderNumber(ps, true);
+        if (vs) vs->Release();
+        if (ps) ps->Release();
+        // What changes rarely goes on lines of its own as it changes
+        static const char* lastTarget = nullptr;
+        static D3DVIEWPORT9 lastViewport{};
+        static RECT lastScissor{};
+        static DWORD lastScissorOn = 2, lastClip = 0xFFFFFFFF;
+        static const void* lastTexture = reinterpret_cast<const void*>(1);
+        if (captureDraws == 0)
+        {
+            lastTarget = nullptr;
+            lastViewport = {};
+            lastScissor = {};
+            lastScissorOn = 2;
+            lastClip = 0xFFFFFFFF;
+            lastTexture = reinterpret_cast<const void*>(1);
+        }
+        const char* target = RenderSkip::CurrentTarget();
+        if (target != lastTarget)
+        {
+            captureText += std::format("      target {}\n", target ? target : "?");
+            lastTarget = target;
+        }
+        D3DVIEWPORT9 viewport{};
+        device->GetViewport(&viewport);
+        if (std::memcmp(&viewport, &lastViewport, sizeof(viewport)) != 0)
+        {
+            captureText += std::format("      viewport {},{} {}x{} z {}..{}\n", viewport.X, viewport.Y, viewport.Width, viewport.Height, viewport.MinZ, viewport.MaxZ);
+            lastViewport = viewport;
+        }
+        DWORD scissorOn = 0, clip = 0;
+        RECT scissor{};
+        device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissorOn);
+        device->GetScissorRect(&scissor);
+        if (scissorOn != lastScissorOn || (scissorOn && std::memcmp(&scissor, &lastScissor, sizeof(scissor)) != 0))
+        {
+            captureText += std::format("      scissor {} {},{}..{},{}\n", scissorOn, scissor.left, scissor.top, scissor.right, scissor.bottom);
+            lastScissorOn = scissorOn;
+            lastScissor = scissor;
+        }
+        device->GetRenderState(D3DRS_CLIPPLANEENABLE, &clip);
+        if (clip != lastClip)
+        {
+            float planeValues[4]{};
+            device->GetClipPlane(0, planeValues);
+            captureText += std::format("      clip planes {:X}, plane 0 {:.3f} {:.3f} {:.3f} {:.3f}\n", clip, planeValues[0], planeValues[1], planeValues[2], planeValues[3]);
+            lastClip = clip;
+        }
+        IDirect3DBaseTexture9* texture = nullptr;
+        device->GetTexture(0, &texture);
+        if (texture != lastTexture)
+        {
+            std::string desc = "none";
+            if (texture && texture->GetType() == D3DRTYPE_TEXTURE)
+            {
+                D3DSURFACE_DESC d{};
+                if (SUCCEEDED(static_cast<IDirect3DTexture9*>(texture)->GetLevelDesc(0, &d)))
+                    desc = std::format("{}x{} format {} levels {}", d.Width, d.Height, int(d.Format), texture->GetLevelCount());
+            }
+            else if (texture)
+                desc = std::format("type {}", int(texture->GetType()));
+            captureText += std::format("      s0 {} {}\n", static_cast<const void*>(texture), desc);
+            lastTexture = texture;
+        }
+        if (texture)
+            texture->Release();
+        std::string what;
+        if (captureContext.inEntity)
+        {
+            what = std::format("entity {} {} {:08X} at {:.1f} {:.1f} {:.1f}", captureEntity, kindNames[size_t(captureContext.kind) < std::size(kindNames) ? size_t(captureContext.kind) : 0],
+                captureContext.modelHash, captureContext.place[0], captureContext.place[1], captureContext.place[2]);
+        }
+        else
+            what = inMirrorWater ? "water" : inMirrorCoronas ? "coronas" : inMirrorSky ? "sky" : "other";
+        captureText += std::format("{:5} {:<60} prim {} x{} | z {} {} w{} | blend {} {}/{} | atest {} {} | cw {:X} cull {} st {} | vs {} ps {}\n",
+            captureDraws++, what, int(type), primitives, z, zFunc, zWrite, blend, source, destination, alphaTest, alphaRef, colourWrite, cull, stencil,
+            vsNumber, psNumber);
+    }
+
+    // glass: the mirror's kind + 1, 0 none
+    static void __cdecl CaptureBegin(uint32_t glass)
+    {
+        static constexpr const char* glassNames[] = { "none", "left", "right", "interior" };
+        capturing = true;
+        ++captureNumber;
+        captureDraws = captureEntity = captureTaken = 0;
+        captureContext = {};
+        captureText = std::format("{} mirror's pass, water style {}, water's far cells {}, entities' states kept apart {}, water and coronas first {}, target {}\n",
+            glassNames[glass < std::size(glassNames) ? glass : 0], int(waterStyle), int(waterFarCells), int(isolateStates), int(waterCoronasFirst),
+            RenderSkip::CurrentTarget() ? RenderSkip::CurrentTarget() : "?");
+        captureText += "draw  what                                                          primitive | z enable func write | blend src/dst | alpha test ref | colour write, cull, stencil | shaders (FusionShaders number)\n";
+    }
+
+    static void __cdecl CaptureEnd(uint32_t)
+    {
+        if (!capturing)
+            return;
+        CaptureSnapshot(PassEnd);
+        capturing = false;
+        FusionLog::WriteText("CarMirrorsCapture", "Pass", captureText);
+        captureText.clear();
+        captureText.shrink_to_fit();
+    }
+
+
+    static float HalfToFloat(uint16_t h)
+    {
+        const uint32_t sign = uint32_t(h & 0x8000) << 16, exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF;
+        uint32_t bits;
+        if (exponent == 0)
+        {
+            if (mantissa == 0)
+                bits = sign;
+            else
+            {
+                float f = float(mantissa) / 1024.0f / 16384.0f;
+                return sign ? -f : f;
+            }
+        }
+        else if (exponent == 31)
+            bits = sign | 0x7F800000 | (mantissa << 13);
+        else
+            bits = sign | ((exponent + 112) << 23) | (mantissa << 13);
+        float f;
+        std::memcpy(&f, &bits, sizeof(f));
+        return f;
+    }
+
+    // The mirror's target as a picture (half the size, 24-bit BMP, x / (1 + x) and gamma 2.2 for the HDR colour) next to
+    // the log, GTAIV.EFLC.FusionFix.CarMirrorsCapture.<capture>.<n>-<point>.bmp, and a line in the log where it was taken
+    static void CaptureSnapshot(uint32_t point)
+    {
+        if (!capturing)
+            return;
+        static constexpr const char* pointNames[] = { "after-sky", "before-entities", "after-entities", "after-water", "after-coronas", "end" };
+        const char* pointName = point < std::size(pointNames) ? pointNames[point] : "other";
+        uint32_t& taken = captureTaken;
+        auto device = rage::grcDevice::GetD3DDevice();
+        if (!device)
+            return;
+        auto real = RageDirect3DDevice9::RealDevice(device);
+        IDirect3DSurface9* target = nullptr;
+        if (FAILED(real->GetRenderTarget(0, &target)) || !target)
+            return;
+        D3DSURFACE_DESC desc{};
+        target->GetDesc(&desc);
+        std::string result = "not taken";
+        IDirect3DSurface9* copy = nullptr;
+        const bool half = desc.Format == D3DFMT_A16B16G16R16F, bytes = desc.Format == D3DFMT_A8R8G8B8 || desc.Format == D3DFMT_X8R8G8B8;
+        if ((half || bytes) && desc.MultiSampleType == D3DMULTISAMPLE_NONE &&
+            SUCCEEDED(real->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &copy, nullptr)) && copy)
+        {
+            D3DLOCKED_RECT locked{};
+            if (SUCCEEDED(real->GetRenderTargetData(target, copy)) && SUCCEEDED(copy->LockRect(&locked, nullptr, D3DLOCK_READONLY)))
+            {
+                const UINT w = desc.Width / 2, h = desc.Height / 2, row = (w * 3 + 3) & ~3u;
+                std::vector<uint8_t> pixels(size_t(row) * h);
+                auto toByte = [](float v)
+                {
+                    if (!(v > 0.0f))
+                        return uint8_t(0);
+                    v = std::pow(v / (1.0f + v), 1.0f / 2.2f);
+                    return uint8_t(std::min(255.0f, v * 255.0f + 0.5f));
+                };
+                for (UINT y = 0; y < h; ++y)
+                {
+                    const auto* line = static_cast<const uint8_t*>(locked.pBits) + size_t(locked.Pitch) * (y * 2);
+                    uint8_t* out = pixels.data() + size_t(row) * (h - 1 - y);
+                    for (UINT x = 0; x < w; ++x)
+                    {
+                        float r, g, b;
+                        if (half)
+                        {
+                            const auto* p = reinterpret_cast<const uint16_t*>(line) + size_t(x * 2) * 4;
+                            r = HalfToFloat(p[0]), g = HalfToFloat(p[1]), b = HalfToFloat(p[2]);
+                            out[x * 3 + 0] = toByte(b), out[x * 3 + 1] = toByte(g), out[x * 3 + 2] = toByte(r);
+                        }
+                        else
+                        {
+                            const uint8_t* p = line + size_t(x * 2) * 4;
+                            out[x * 3 + 0] = p[0], out[x * 3 + 1] = p[1], out[x * 3 + 2] = p[2];
+                        }
+                    }
+                }
+                copy->UnlockRect();
+                const auto name = std::format(L"CarMirrorsCapture.{}.{}-{}", captureNumber, taken, std::wstring(pointName, pointName + std::strlen(pointName)));
+                const auto path = FusionLog::Directory() / (L"GTAIV.EFLC.FusionFix." + name + L".bmp");
+                if (FILE* file = _wfopen(path.c_str(), L"wb"))
+                {
+                    const uint32_t imageSize = uint32_t(pixels.size()), fileSize = 54 + imageSize;
+                    uint8_t header[54]{ 'B', 'M' };
+                    auto put32 = [&](size_t at, uint32_t v) { std::memcpy(header + at, &v, 4); };
+                    put32(2, fileSize);
+                    put32(10, 54);
+                    put32(14, 40);
+                    put32(18, w);
+                    put32(22, h);
+                    header[26] = 1;
+                    header[28] = 24;
+                    put32(34, imageSize);
+                    fwrite(header, 1, sizeof(header), file);
+                    fwrite(pixels.data(), 1, pixels.size(), file);
+                    fclose(file);
+                    result = std::format("GTAIV.EFLC.FusionFix.CarMirrorsCapture.{}.{}-{}.bmp", captureNumber, taken, pointName);
+                }
+            }
+            copy->Release();
+        }
+        else
+            result = std::format("not taken (format {}, {} samples)", int(desc.Format), int(desc.MultiSampleType));
+        target->Release();
+        captureText += std::format("----- picture {} {} after draw {}: {}\n", taken, pointName, int(captureDraws) - 1, result);
+        ++taken;
+    }
+
+    static void MirrorCoronaFlags(SafetyHookContext& regs)
+    {
+        if (inMirrorCoronas)
+            regs.eax = reinterpret_cast<uintptr_t>(&CoronaFlags);
+    }
+
+    static void MirrorNoFlares(SafetyHookContext& regs)
+    {
+        if (inMirrorCoronas)
+            regs.eflags |= 0x40u; // ZF: the je over the flares taken
+    }
+
+    // The coronas' vertex shader (deferred_lighting VS11) hides a corona whose depth is behind the depth texture's
+    // (vs s0) round its spot on screen: the main view's, which at the mirror's pixels is the car's inside, every
+    // corona hidden. A 1 x 1 texture far away takes its place for the mirror's; the mirror's own depth buffer still
+    // hides them behind what it drew.
+    static IDirect3DTexture9* farDepth = nullptr;
+
+    static void BindFarDepth()
+    {
+        auto device = rage::grcDevice::GetD3DDevice();
+        if (!device)
+            return;
+        if (!farDepth)
+        {
+            if (FAILED(RageDirect3DDevice9::RealDevice(device)->CreateTexture(1, 1, 1, 0, D3DFMT_R32F, D3DPOOL_MANAGED, &farDepth, nullptr)) || !farDepth)
+            {
+                farDepth = nullptr;
+                return;
+            }
+            D3DLOCKED_RECT locked{};
+            if (SUCCEEDED(farDepth->LockRect(0, &locked, nullptr, 0)))
+            {
+                *static_cast<float*>(locked.pBits) = 1e6f;
+                farDepth->UnlockRect(0);
+            }
+        }
+        RageDirect3DDevice9::SetTextureBoth(device, D3DVERTEXTEXTURESAMPLER0, farDepth);
+    }
+
+    // The coronas are added to what is drawn (the corona technique's blend: one and one). In the mirror's pass they
+    // came out opaque, their quads' black corners over the reflection: the city's far lights made a black band with
+    // dots along the horizon. The blend is set on the device right before each batch and put back after the coronas.
+    // The depth test of the technique's second pass went the same way (headlights through the car's inside and through
+    // other cars in the mirror): on, less or equal, no depth written, likewise.
+    static constexpr D3DRENDERSTATETYPE CoronaStates[] = { D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP,
+                                                           D3DRS_ZENABLE, D3DRS_ZFUNC, D3DRS_ZWRITEENABLE };
+    static constexpr DWORD CoronaValues[] = { TRUE, D3DBLEND_ONE, D3DBLEND_ONE, D3DBLENDOP_ADD, D3DZB_TRUE, D3DCMP_LESSEQUAL, FALSE };
+    static DWORD coronaSavedStates[std::size(CoronaStates)]{};
+    static bool coronaStatesSaved = false;
+
+    static void MirrorCoronaBatch()
+    {
+        BindFarDepth();
+        auto device = rage::grcDevice::GetD3DDevice();
+        if (!device)
+            return;
+        auto real = RageDirect3DDevice9::RealDevice(device);
+        if (!coronaStatesSaved)
+        {
+            for (size_t i = 0; i < std::size(CoronaStates); ++i)
+                real->GetRenderState(CoronaStates[i], &coronaSavedStates[i]);
+            coronaStatesSaved = true;
+        }
+        for (size_t i = 0; i < std::size(CoronaStates); ++i)
+            real->SetRenderState(CoronaStates[i], CoronaValues[i]);
+    }
+
+    static void RestoreCoronaStates()
+    {
+        if (!coronaStatesSaved)
+            return;
+        coronaStatesSaved = false;
+        if (auto device = rage::grcDevice::GetD3DDevice())
+        {
+            auto real = RageDirect3DDevice9::RealDevice(device);
+            for (size_t i = 0; i < std::size(CoronaStates); ++i)
+                real->SetRenderState(CoronaStates[i], coronaSavedStates[i]);
+        }
+    }
+
+    static void __cdecl MirrorCoronasDraw(uint32_t)
+    {
+        inMirrorCoronas = true;
+        CoronaRender::pBeforeDraw = &MirrorCoronaBatch;
+        CoronaRender::bOtherView = true;
+        reinterpret_cast<void (__cdecl*)()>(coronaFunction)();
+        if (coronaSprites)
+            reinterpret_cast<void (__cdecl*)()>(coronaSprites)();
+        CoronaRender::bOtherView = false;
+        CoronaRender::pBeforeDraw = nullptr;
+        RestoreCoronaStates();
+        inMirrorCoronas = false;
+        ++coronaDraws;
+        CaptureSnapshot(AfterCoronas);
+    }
+
+    // The coronas the mirror sees. The game lists a corona for drawing (CE 0xC1EE40, main thread, once a frame) only if
+    // its ball is in the game camera's view (0x431E40 on the camera's grcViewport), a headlight's brightness times
+    // the cosine between its beam and the camera's axis: what a car's mirror sees, behind the camera, was never listed
+    // (15800 listed at night, ~12 behind the camera), and cars behind had their headlights pointed away. Right as the
+    // list is closed, every corona registered this frame is put through the same test and brightness with the mirror
+    // phase's own view (phase + 0xB0, reflected, clipped and widened by PhaseView), those it sees written after the
+    // game camera's in the same buffer; the count stays the camera's, and the mirror's pass draws only its own part
+    // (CoronaRender::pOtherRange).
+    struct CoronaCopy
+    {
+        int32_t* registered = nullptr;  // the coronas registered this frame
+        uint8_t* source = nullptr;      // their list, 0x40 bytes each
+        float* sizeScale = nullptr;
+        float* ballExtra = nullptr;     // added to the ball's radius unless the corona's flag 0x20
+        int (__fastcall* visible)(uintptr_t viewport, void*, float x, float y, float z, float radius, int) = nullptr;
+        int32_t cap = 0;
+        uint8_t* shift = nullptr;       // the list's size exponent (3 << shift a buffer)
+        uint8_t* list = nullptr;        // the drawing list, 0x20 bytes each
+    };
+    static CoronaCopy coronaCopy;
+    static SafetyHookMid coronaCopyHook;
+    static int32_t mirrorCoronaFirst[4]{}, mirrorCoronaCount[4]{};
+
+    // mov [counts + eax * 4], ecx: eax the buffer, ecx the game camera's count
+    static void MirrorCoronaList(SafetyHookContext& regs)
+    {
+        const uint32_t buffer = regs.eax & 3;
+        const int32_t count = int32_t(regs.ecx);
+        mirrorCoronaFirst[buffer] = count;
+        mirrorCoronaCount[buffer] = 0;
+        if (!usedThisFrame || !mirrorPhase || !plane || !coronaSprites)
+            return;
+        const auto& c = coronaCopy;
+        const uintptr_t viewport = mirrorPhase + 0xB0;
+        const float* axis = reinterpret_cast<const float*>(viewport + 0x60);
+        uint8_t* out = c.list + size_t(regs.eax) * (3u << *c.shift) * 0x20;
+        const int32_t registered = *c.registered;
+        int32_t n = count;
+        for (int32_t i = 0; i < registered && n < c.cap; ++i)
+        {
+            const uint8_t* item = c.source + size_t(i) * 0x40;
+            if (!*reinterpret_cast<const uint32_t*>(item + 0x20))
+                continue;
+            const float* pos = reinterpret_cast<const float*>(item);
+            const uint32_t flags = *reinterpret_cast<const uint32_t*>(item + 0x3C);
+            const float size = *reinterpret_cast<const float*>(item + 0x24) * *c.sizeScale;
+            const float radius = (flags & 0x20) ? size : size + *c.ballExtra;
+            // behind the mirror's plane: clipped away
+            if (plane[0] * pos[0] + plane[1] * pos[1] + plane[2] * pos[2] - plane[3] < -radius)
+                continue;
+            ++mirrorCoronaTested;
+            const float* eye = reinterpret_cast<const float*>(viewport + 0x70);
+            const float dx = pos[0] - eye[0], dy = pos[1] - eye[1], dz = pos[2] - eye[2];
+            const bool nearby = dx * dx + dy * dy + dz * dz < NearCorona * NearCorona;
+            const int kind = (flags & 0x10) ? 0 : 1;
+            if (nearby)
+            {
+                ++nearRegistered[kind];
+                if (flags & 2)
+                    ++nearOutOfView[kind];
+            }
+            if (!c.visible(viewport, nullptr, pos[0], pos[1], pos[2], radius, 0))
+                continue;
+            if (nearby)
+                ++nearListed[kind];
+            float brightness = *reinterpret_cast<const float*>(item + 0x34) * *reinterpret_cast<const float*>(item + 0x30);
+            if (flags & 0x10)
+            {
+                const float* beam = reinterpret_cast<const float*>(item + 0x10);
+                brightness *= beam[0] * axis[0] + beam[1] * axis[1] + beam[2] * axis[2];
+            }
+            if (!(brightness > 0.0f))
+                continue;
+            uint8_t* to = out + size_t(n) * 0x20;
+            auto* f = reinterpret_cast<float*>(to);
+            f[0] = pos[0];
+            f[1] = pos[1];
+            f[2] = pos[2];
+            f[3] = size;
+            f[4] = brightness;
+            *reinterpret_cast<uint32_t*>(to + 0x14) = *reinterpret_cast<const uint32_t*>(item + 0x28);
+            to[0x18] = item[0x38];
+            to[0x19] = item[0x39];
+            to[0x1A] = item[0x3A];
+            to[0x1B] = uint8_t((flags >> 5) & 1);
+            ++n;
+        }
+        mirrorCoronaCount[buffer] = n - count;
+        mirrorCoronaListed += uint32_t(n - count);
+        ++mirrorCoronaFrames;
+    }
+
+    // Render thread, the mirror's pass (CoronaRender::bOtherView)
+    static bool MirrorCoronaRange(uint32_t buffer, int32_t& first, int32_t& count)
+    {
+        first = mirrorCoronaFirst[buffer & 3];
+        count = mirrorCoronaCount[buffer & 3];
+        return count > 0;
+    }
+
+    // Main thread, in the mirror phase's draw list right after what is drawn with blending
+    static void QueueMirrorCoronas(SafetyHookContext&)
+    {
+        if (usedThisFrame && coronaHooks[2] && !queuedFirst)
+            callback.Queue(reinterpret_cast<const void*>(&MirrorCoronasDraw), 0);
+    }
+
+    // The main scene's G-buffer (mode 4, CE 0xB1E0A8) also draws bucket 5 and bucket 4 in a fourth way (0xAE2A90's
+    // third argument 4: (5, 4) always, (4, 4) with bit 8), which the mirror's mode (CE 0xB1E1CB) has not: still no
+    // leaves with bit 8 given, in either technique group. Queued after its entities, as the mirror's own.
+    static void (__cdecl* drawBucket)(uint32_t list, uint32_t bucket, uint32_t way, uint32_t mode, uint32_t) = nullptr; // CE 0xAE2A90
+    static void ExtraBuckets(uintptr_t phase)
+    {
+        if (!usedThisFrame || !drawBucket || !extraBuckets)
+            return;
+        const uint32_t list = *reinterpret_cast<const uint32_t*>(phase + 0x938);
+        drawBucket(list, 5, 4, 0, 0);
+        drawBucket(list, 4, 4, 0, 0);
+        ++extraBucketDraws;
+    }
+
+    // The sky after the mirror's entities, where they left the depth far, as the main scene draws it (CarMirrorsSkyAfterEntities 1).
+    // Not the fix for an interior mirror's black sky: the player's car's rear window covered it either way, its reflection
+    // technique setting no blend states and drawn opaque, writing depth (the sky back once it was broken); the glass's
+    // reflection techniques blend as its main one (vehicle_glass_reflection_blend.patch), the sky drawn first again.
+    static void PopReflectionTechniques(SafetyHookContext& regs);
+
+    static void AfterMirrorEntities(SafetyHookContext& regs)
+    {
+        ExtraBuckets(regs.edi);
+        PopReflectionTechniques(regs);
+        if (usedThisFrame)
+            callback.Queue(reinterpret_cast<const void*>(&CaptureSnapshotCallback), AfterEntities);
+        if (usedThisFrame && skyAfterEntities && skyHooks[2])
+            callback.Queue(reinterpret_cast<const void*>(&MirrorSkyDraw), 0);
+    }
+
+    static void PopReflectionTechniques(SafetyHookContext&)
+    {
+        if (!techniquePushed)
+            return;
+        techniquePushed = false;
+        auto command = static_cast<uint32_t*>(callback.allocate(0x8, 0));
+        if (command)
+        {
+            command[0] = callback.baseVtable;
+            command[1] ^= (command[1] ^ *callback.counter) & 0x3FFF;
+            ++*callback.counter;
+            command[0] = techniqueGroup.popVtable;
+        }
+        callback.add(command);
+    }
+
+    // In the mirror phase's draw list, after its entities and before what is drawn with blending (CE 0xC0FA50): the
+    // water, as the main scene queues it after its own (the stencil states it sets round it there left out: the
+    // mirror's pass reads no stencil after).
+    static void QueueMirrorWater(uintptr_t phase)
+    {
+        if (!waterFlagPhase || phase != waterFlagPhase)
+            return;
+        const uint32_t list = *reinterpret_cast<const uint32_t*>(phase + 0x938);
+        callback.Queue(reinterpret_cast<const void*>(&MirrorWater), list);
+        ++waterQueued;
+    }
+
+    static void PhaseWater(SafetyHookContext& regs)
+    {
+        if (!queuedFirst)
+            QueueMirrorWater(regs.edi);
+    }
+
+    // Main thread, right before the mirror's entities (PushReflectionTechniques): the water, then the coronas
+    static void QueueWaterAndCoronasFirst(uintptr_t phase)
+    {
+        if (phaseWaterHook)
+            QueueMirrorWater(phase);
+        if (coronaHooks[2])
+            callback.Queue(reinterpret_cast<const void*>(&MirrorCoronasDraw), 0);
+        queuedFirst = true;
     }
 
     // c152 for mirror.fx (mirror_car_shape.patch): x 1 cuts the quad to the glass's outline, y the zoom out - 1 widens
@@ -599,6 +1750,8 @@ class CarMirrorsHooks
 public:
     CarMirrorsHooks()
     {
+        EntityClass::AddDrawHooks(CarMirrors::MirrorDrawBegin, CarMirrors::MirrorDrawEnd);
+
         FusionFix::onInitEventAsync() += []()
         {
             static auto readIni = [](CIniReader& ini)
@@ -607,13 +1760,26 @@ public:
                 CarMirrors::rounded = ini.ReadInteger("MISC", "CarMirrorsRounded", 1) != 0;
                 CarMirrors::byDrawnCar = ini.ReadInteger("MISC", "CarMirrorsByDrawnCar", 1) != 0;
                 CarMirrors::zoomOut = std::clamp(ini.ReadFloat("MISC", "CarMirrorsZoomOut", 1.5f), 1.0f, 2.5f);
+                CarMirrors::water = ini.ReadInteger("MISC", "CarMirrorsWater", 1) != 0;
+                CarMirrors::waterFarCells = ini.ReadInteger("MISC", "CarMirrorsWaterFarCells", 1) != 0;
+                CarMirrors::waterReflection = ini.ReadInteger("MISC", "CarMirrorsWaterReflection", 1) != 0;
+                CarMirrors::reflectionShaders = ini.ReadInteger("MISC", "CarMirrorsReflectionShaders", 1) != 0;
+                CarMirrors::skyAfterEntities = ini.ReadInteger("MISC", "CarMirrorsSkyAfterEntities", 0) != 0;
+                CarMirrors::extraBuckets = ini.ReadInteger("MISC", "CarMirrorsExtraBuckets", 1) != 0;
+                CarMirrors::ownGlassInInterior = ini.ReadInteger("MISC", "CarMirrorsOwnGlass", 0) != 0;
+                CarMirrors::lampCoronas = ini.ReadInteger("MISC", "CarMirrorsLampCoronas", 1) != 0;
+                CarMirrors::isolateStates = ini.ReadInteger("MISC", "CarMirrorsEntityStates", 1) != 0;
+                CarMirrors::waterCoronasFirst = ini.ReadInteger("MISC", "CarMirrorsWaterCoronasFirst", 0) != 0;
+                CarMirrors::waterStyle = ini.ReadInteger("MISC", "CarMirrorsWaterStyle", 0) != 0;
+                CarMirrors::captureEnabled = ini.ReadInteger("MISC", "CarMirrorsCapture", 1) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
                 CarMirrors::interiorAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::interiorAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimY", -3.0f), -30.0f, 30.0f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
-                    int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut,
-                    CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, its far cells %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d, entities' states kept apart %d, water and coronas first %d, water style %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
+                    int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut, int(CarMirrors::water), int(CarMirrors::waterFarCells),
+                    int(CarMirrors::waterReflection), int(CarMirrors::reflectionShaders), int(CarMirrors::skyAfterEntities), int(CarMirrors::extraBuckets),
+                    int(CarMirrors::ownGlassInInterior), int(CarMirrors::lampCoronas), int(CarMirrors::isolateStates), int(CarMirrors::waterCoronasFirst), int(CarMirrors::waterStyle), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
             };
             CIniReader iniReader("");
             readIni(iniReader);
@@ -679,8 +1845,19 @@ public:
                 // jmp +2 (over xor edx, edx, a jump's target, left alone)
                 auto queue = hook::pattern("C7 42 08 ? ? ? ? 8B 87 38 09 00 00 89 42 0C EB 02");
                 for (size_t i = 0; i < queue.size(); ++i)
-                    if (*queue.get(i).get<void*>(3) == quad.get_first(0))
-                        CarMirrors::queueHooks.emplace_back(safetyhook::create_mid(queue.get(i).get<void>(13), CarMirrors::QueueQuad));
+                {
+                    if (*queue.get(i).get<void*>(3) != quad.get_first(0))
+                        continue;
+                    CarMirrors::queueHooks.emplace_back(safetyhook::create_mid(queue.get(i).get<void>(13), CarMirrors::QueueQuad));
+                    // the water's command the same way, made right before (CE 0xADD4C2 before 0xADD519)
+                    const auto at = reinterpret_cast<uintptr_t>(queue.get(i).get<void>(0));
+                    for (size_t j = 0; j < queue.size() && !CarMirrors::waterFunction; ++j)
+                    {
+                        const auto before = reinterpret_cast<uintptr_t>(queue.get(j).get<void>(0));
+                        if (before < at && at - before < 0x80)
+                            CarMirrors::waterFunction = *queue.get(j).get<void*>(3);
+                    }
+                }
             }
             // in it: movss xmm2, [the offset] / movaps xmm1, xmm4 / mulss xmm1, xmm3 (the pattern shaders.ixx patches)
             auto offset = hook::pattern("F3 0F 10 15 ? ? ? ? 0F 28 CC F3 0F 59 CB");
@@ -689,7 +1866,183 @@ public:
             // cmp byte [mirror on], 1 / push esi / mov esi, ecx / je / mov eax, [..] / test eax, eax / je / mov al, [eax+22] / and al, 1 / jne
             auto water = hook::pattern("80 3D ? ? ? ? 01 56 8B F1 74 ? A1 ? ? ? ? 85 C0 74 ? 8A 40 22 24 01 75");
             if (!water.empty() && *water.get_first<uint8_t*>(2) == CarMirrors::mirrorOn)
+            {
                 CarMirrors::waterVisibility = water.get_first<void(__fastcall)(uintptr_t, void*)>(0);
+                CarMirrors::waterGateHooks[0] = safetyhook::create_mid(water.get_first(10), CarMirrors::WaterVisibilityGate);
+            }
+            // the water reflection's draw list: push ebp / mov ebp, esp / and esp, -10 / sub esp, 1C / cmp byte [mirror on], 1 /
+            // push esi / mov esi, ecx / je
+            auto waterBuild = hook::pattern("55 8B EC 83 E4 F0 83 EC 1C 80 3D ? ? ? ? 01 56 8B F1 0F 84");
+            if (!waterBuild.empty() && *waterBuild.get_first<uint8_t*>(11) == CarMirrors::mirrorOn)
+                CarMirrors::waterGateHooks[1] = safetyhook::create_mid(waterBuild.get_first(19), CarMirrors::WaterBuildGate);
+            // the water's buffers: mov eax, [index] / imul eax, eax, 10C4 / add eax, buffers / ret (main thread), and
+            // mov ecx, [index] / imul ecx, ecx, 10C4 / mov eax, the other / sub eax, ecx / ret (render thread)
+            auto buffer = hook::pattern("A1 ? ? ? ? 69 C0 C4 10 00 00 05 ? ? ? ? C3");
+            auto renderBuffer = hook::pattern("8B 0D ? ? ? ? 69 C9 C4 10 00 00 B8 ? ? ? ? 2B C1 C3");
+            // the gather: mov eax, [scanning phase] / mov eax, [eax+8E8] / test al, 10 / jne / test eax, 400 / je
+            auto gather = hook::pattern("A1 ? ? ? ? 8B 80 E8 08 00 00 A8 10 75 ? A9 00 04 00 00 0F 84");
+            // the scan's call of it: ... / mov eax, [game state] / test eax, eax / je / mov al, [eax+22] / and al, 1 / jne
+            auto scanGather = hook::pattern("A1 ? ? ? ? 56 F7 80 E8 08 00 00 00 04 00 00 8B 74 24 08 74 ? 56 E8 ? ? ? ? 83 C4 04 56 E8 ? ? ? ? A1 ? ? ? ? 83 C4 04 F6 80 E8 08 00 00 10 74 ? F6 40 19 01 74 ? A1");
+            // every phase's scan done, the water reflection's last: test byte [main+19], 1 / je / cmp byte [no water], 0 /
+            // jne / mov ecx, ebp / call / push 80 (hooked) / push 0 / push
+            auto scansDone = hook::pattern("F6 43 19 01 74 10 80 3D ? ? ? ? 00 75 07 8B CD E8 ? ? ? ? 68 80 00 00 00 6A 00 68");
+            // the water's totals: mov ecx, [quads] / test ecx, ecx / jle / mov eax, [their flags] / and word [eax], FFFE / ...
+            // mov ecx, [triangles]
+            auto totals = hook::pattern("8B 0D ? ? ? ? 85 C9 7E ? B8 ? ? ? ? 66 83 20 FE 8D 40 10 49 75 ? 8B 0D");
+            if (!totals.empty())
+            {
+                CarMirrors::waterTotals[0] = *totals.get_first<const uint32_t*>(2);
+                CarMirrors::waterTotals[1] = *totals.get_first<const uint32_t*>(27);
+            }
+            if (!buffer.empty() && !renderBuffer.empty() && !gather.empty() && !scanGather.empty() && !scansDone.empty())
+            {
+                CarMirrors::waterBuffer = buffer.get_first<uintptr_t(__cdecl)()>(0);
+                CarMirrors::waterRenderBuffer = renderBuffer.get_first<uintptr_t(__cdecl)()>(0);
+                CarMirrors::gatherWater = gather.get_first<void(__cdecl)(uint32_t)>(0);
+                CarMirrors::scanningPhase = *gather.get_first<uintptr_t*>(1);
+                CarMirrors::gameState = *scanGather.get_first<const uintptr_t*>(61);
+                CarMirrors::noWater = *scansDone.get_first<const uint8_t*>(8);
+                CarMirrors::gatherHook = safetyhook::create_mid(scansDone.get_first(22), CarMirrors::GatherMirrorWater);
+            }
+            // in the water's draw: mov eax, [mode] / cmp eax, 1 (hooked) / je +5 / cmp eax, 5, at its start and end
+            if (CarMirrors::waterFunction)
+            {
+                const auto at = reinterpret_cast<uint8_t*>(CarMirrors::waterFunction);
+                static constexpr uint8_t compare[] = { 0x83, 0xF8, 0x01, 0x74, 0x05, 0x83, 0xF8, 0x05 };
+                const size_t sites[] = { 0x21, 0x9BA };
+                bool found = true;
+                for (size_t site : sites)
+                    found &= std::memcmp(at + site, compare, sizeof(compare)) == 0;
+                if (found)
+                    for (size_t i = 0; i < std::size(sites); ++i)
+                        CarMirrors::waterTargetHooks[i] = safetyhook::create_mid(at + sites[i], CarMirrors::WaterTargetMode);
+                // test byte [eax], 10 / je (near), right after the call for the draw list's flags
+                static constexpr uint8_t flagTest[] = { 0xF6, 0x00, 0x10, 0x0F, 0x84 };
+                if (std::memcmp(at + 0x13, flagTest, sizeof(flagTest)) == 0)
+                    CarMirrors::waterFlagHook = safetyhook::create_mid(at + 0x13, CarMirrors::MirrorWaterFlag);
+                // cmp byte [shadows], 1 / mov ecx, [..] / jne +4 (hooked) / push 1 / jmp +2 / push 0 / call (the pass)
+                static constexpr uint8_t passPick[] = { 0x75, 0x04, 0x6A, 0x01, 0xEB, 0x02, 0x6A, 0x00, 0xE8 };
+                if (std::memcmp(at + 0x686, passPick, sizeof(passPick)) == 0 && at[0x679] == 0x80 && at[0x67A] == 0x3D)
+                    CarMirrors::waterPassHook = safetyhook::create_mid(at + 0x686, CarMirrors::MirrorWaterPass);
+            }
+            // in the mirror phase's draw list: push [edi+938] / call (what is drawn with blending) / add esp, 4 /
+            // cmp byte [clip plane on], 0 / je
+            auto phaseWater = hook::pattern("FF B7 38 09 00 00 E8 ? ? ? ? 83 C4 04 80 3D ? ? ? ? 00 74");
+            if (!phaseWater.empty() && CarMirrors::waterFunction && CarMirrors::callback.add && CarMirrors::gatherHook)
+                CarMirrors::phaseWaterHook = safetyhook::create_mid(phaseWater.get_first(0), CarMirrors::PhaseWater);
+            // in what is drawn with blending: mov dword [eax + 8], CCoronas::Render (the callback's function)
+            if (!phaseWater.empty())
+            {
+                const auto blended = reinterpret_cast<uint8_t*>(injector::GetBranchDestination(phaseWater.get_first(6)).as_int());
+                if (blended && blended[0x4F] == 0xC7 && blended[0x50] == 0x40 && blended[0x51] == 0x08)
+                    CarMirrors::coronaSprites = *reinterpret_cast<void**>(blended + 0x52);
+            }
+            // the water reflection's techniques: push 0 / push C / call allocate / add esp, C / test eax, eax / je /
+            // push [group] / mov ecx, eax / call (the push command) / jmp +2 / xor eax, eax / push eax / call add /
+            // push 2 / push 90D / push [esi+938] / call (its entities) / push 0 / push 8 / call allocate / add esp, 18 /
+            // test eax, eax / je / mov ecx, [eax+4] / mov [eax], base / xor ecx, [counter] / and ecx, 3FFF /
+            // xor [eax+4], ecx / inc [counter] / mov [eax], (the pop command)
+            auto techniques = hook::pattern("6A 00 6A 0C E8 ? ? ? ? 83 C4 0C 85 C0 74 ? FF 35 ? ? ? ? 8B C8 E8 ? ? ? ? EB 02 33 C0 50 E8 ? ? ? ? 6A 02 68 0D 09 00 00 FF B6 38 09 00 00 E8 ? ? ? ? 6A 00 6A 08 E8 ? ? ? ? 83 C4 18 85 C0 74 ? 8B 48 04 C7 00 ? ? ? ? 33 0D ? ? ? ? 81 E1 FF 3F 00 00 31 48 04 FF 05 ? ? ? ? C7 00");
+            // round the mirror phase's entities: cmp byte [..], 0 (push hooked) / mov eax, 2 / jne / cmp byte [..], 0 / je /
+            // mov eax, 1 / push eax / push 307 / push [edi+938] / call / add esp, C (pop hooked) / test esi, esi
+            auto mirrorEntities = hook::pattern("80 3D ? ? ? ? 00 B8 02 00 00 00 75 09 80 3D ? ? ? ? 00 74 05 B8 01 00 00 00 50 68 07 03 00 00 FF B7 38 09 00 00 E8 ? ? ? ? 83 C4 0C 85 F6");
+            // the water reflection's sky callback: call (the draw list's flags) / test byte [eax], 20 (hooked) / je / push esi /
+            // call / mov esi, [clip planes] / push 0 / call / add esp, 4 / cmp byte [sky on], 0 / je / call (the sky)
+            auto sky = hook::pattern("E8 ? ? ? ? F6 00 20 74 ? 56 E8 ? ? ? ? 8B 35 ? ? ? ? 6A 00 E8 ? ? ? ? 83 C4 04 80 3D ? ? ? ? 00 74 ? E8");
+            if (!sky.empty() && CarMirrors::callback.add)
+            {
+                const auto drawSky = reinterpret_cast<uint8_t*>(injector::GetBranchDestination(sky.get_first(41)).as_int());
+                // in it: test dword [eax], 20000 (the timecycle's colours, how it is drawn)
+                static constexpr uint8_t colourTest[] = { 0xF7, 0x00, 0x00, 0x00, 0x02, 0x00 };
+                if (drawSky && std::memcmp(drawSky + 0x156, colourTest, sizeof(colourTest)) == 0 &&
+                    std::memcmp(drawSky + 0x5D3, colourTest, sizeof(colourTest)) == 0)
+                {
+                    CarMirrors::skyFunction = sky.get_first(0);
+                    CarMirrors::skyHooks[0] = safetyhook::create_mid(drawSky + 0x156, CarMirrors::MirrorSkyFlags);
+                    CarMirrors::skyHooks[1] = safetyhook::create_mid(drawSky + 0x5D3, CarMirrors::MirrorSkyFlags);
+                    CarMirrors::skyHooks[2] = safetyhook::create_mid(sky.get_first(5), CarMirrors::MirrorSkyFlags);
+                }
+            }
+            // the coronas' callback: call (the draw list's flags) / test byte [eax], 8 (hooked) / je / push esi / call /
+            // mov esi, [clip planes] / push 0 / call / call (the coronas) / call (the lens flares)
+            auto coronas = hook::pattern("E8 ? ? ? ? F6 00 08 74 ? 56 E8 ? ? ? ? 8B 35 ? ? ? ? 6A 00 E8 ? ? ? ? E8 ? ? ? ? E8");
+            if (!coronas.empty() && !phaseWater.empty() && CarMirrors::callback.add)
+            {
+                // the flares: cmp byte [on], 0 / je (hooked)
+                const auto flares = reinterpret_cast<uint8_t*>(injector::GetBranchDestination(coronas.get_first(34)).as_int());
+                if (flares && flares[0] == 0x80 && flares[1] == 0x3D && flares[7] == 0x0F && flares[8] == 0x84)
+                {
+                    CarMirrors::coronaFunction = coronas.get_first(0);
+                    CarMirrors::coronaHooks[0] = safetyhook::create_mid(flares + 7, CarMirrors::MirrorNoFlares);
+                    CarMirrors::coronaHooks[1] = safetyhook::create_mid(phaseWater.get_first(14), CarMirrors::QueueMirrorCoronas);
+                    CarMirrors::coronaHooks[2] = safetyhook::create_mid(coronas.get_first(5), CarMirrors::MirrorCoronaFlags);
+                }
+            }
+            // the coronas' drawing list made (CE 0xC1EE40): push ebp / mov ebp, esp / and esp, -16 / sub esp, 44 /
+            // mov eax, [buffer] / push ebx / mov ebx, [viewport] / push esi / xor ecx, ecx / push edi / xor edi, edi /
+            // mov [esp+18], ecx / mov [esp+1C], eax / cmp [registered], ecx / jle / mov esi, list + 8
+            auto coronaList = hook::pattern("55 8B EC 83 E4 F0 83 EC 44 A1 ? ? ? ? 53 8B 1D ? ? ? ? 56 33 C9 57 33 FF 89 4C 24 18 89 44 24 1C 39 0D ? ? ? ? 0F 8E ? ? ? ? BE");
+            if (!coronaList.empty() && CarMirrors::plane)
+            {
+                auto f = coronaList.get_first<uint8_t>(0);
+                auto is = [&](uint32_t offset, std::initializer_list<uint8_t> bytes)
+                {
+                    uint32_t i = 0;
+                    for (auto b : bytes)
+                        if (f[offset + i++] != b)
+                            return false;
+                    return true;
+                };
+                if (is(0x55, { 0xF3, 0x0F, 0x59, 0x05 }) && is(0x71, { 0xF3, 0x0F, 0x58, 0x05 }) && is(0x98, { 0xE8 }) &&
+                    is(0x101, { 0x3D }) && is(0x12A, { 0xC1, 0xE1 }) && is(0x13A, { 0xF3, 0x0F, 0x11, 0x89 }) && is(0x1BF, { 0x89, 0x0C, 0x85 }))
+                {
+                    auto& c = CarMirrors::coronaCopy;
+                    c.registered = *reinterpret_cast<int32_t**>(f + 0x25);
+                    c.source = *reinterpret_cast<uint8_t**>(f + 0x30) - 8;
+                    c.sizeScale = *reinterpret_cast<float**>(f + 0x59);
+                    c.ballExtra = *reinterpret_cast<float**>(f + 0x75);
+                    c.visible = reinterpret_cast<decltype(c.visible)>(f + 0x98 + 5 + *reinterpret_cast<int32_t*>(f + 0x99));
+                    c.cap = *reinterpret_cast<int32_t*>(f + 0x102);
+                    c.shift = f + 0x12C;
+                    c.list = *reinterpret_cast<uint8_t**>(f + 0x13E); // movss [ecx + list], xmm1: the item's x
+                    CarMirrors::coronaCopyHook = safetyhook::create_mid(f + 0x1BF, CarMirrors::MirrorCoronaList);
+                    CoronaRender::pOtherRange = &CarMirrors::MirrorCoronaRange;
+                }
+            }
+            // the pass state setter: mov eax, [esp+4] / mov edx, [esp+8] / push esi / mov esi, [types + eax*4] /
+            // mov [values + eax*4], edx / cmp esi, -1 / je
+            auto passState = hook::pattern("8B 44 24 04 8B 54 24 08 56 8B 34 85 ? ? ? ? 89 14 85 ? ? ? ? 83 FE FF 74");
+            if (!passState.empty())
+            {
+                CarMirrors::setPassState = passState.get_first<void (__cdecl)(uint32_t, uint32_t)>(0);
+                CarMirrors::passStateCache = *passState.get_first<const uint32_t*>(19);
+            }
+            FusionLog::Write("CarMirrors", "Init", "the entities' states kept apart in the mirror's pass %s\n", CarMirrors::setPassState ? "on" : "off (not found)");
+            RenderSkip::pDrawObserver = &CarMirrors::CaptureDraw;
+            // the technique group's setter: mov eax, [esp+4] / mov [group], eax / ret / int3 x6 / mov eax, [group] / ret
+            auto groupSetter = hook::pattern("8B 44 24 04 A3 ? ? ? ? C3 CC CC CC CC CC CC A1 ? ? ? ? C3");
+            if (!groupSetter.empty() && *groupSetter.get_first<int32_t*>(5) == *groupSetter.get_first<int32_t*>(17))
+                CarMirrors::currentTechniqueGroup = *groupSetter.get_first<int32_t*>(5);
+            if (!techniques.empty() && !mirrorEntities.empty() && CarMirrors::callback.add)
+            {
+                CarMirrors::techniqueGroup.group = *techniques.get_first<const uint32_t*>(18);
+                CarMirrors::techniqueGroup.pushCommand = reinterpret_cast<void (__fastcall*)(void*, void*, uint32_t)>(
+                    injector::GetBranchDestination(techniques.get_first(24)).as_int());
+                CarMirrors::techniqueGroup.popVtable = *techniques.get_first<uint32_t>(105);
+                CarMirrors::techniqueHooks[0] = safetyhook::create_mid(mirrorEntities.get_first(0), CarMirrors::PushReflectionTechniques);
+            }
+            // push 0x307 (the buckets, now on the stack) / push [edi + 0x938] (hooked) / call (CE 0xB1DEE0, in it at +0x77
+            // a call of the bucket draw) / add esp, 0xC (hooked: the extra buckets, the techniques popped)
+            if (!mirrorEntities.empty())
+            {
+                CarMirrors::bucketHook = safetyhook::create_mid(mirrorEntities.get_first(34), CarMirrors::MirrorBuckets);
+                const auto entities = reinterpret_cast<uint8_t*>(injector::GetBranchDestination(mirrorEntities.get_first(40)).as_int());
+                if (entities && entities[0x77] == 0xE8)
+                    CarMirrors::drawBucket = reinterpret_cast<decltype(CarMirrors::drawBucket)>(
+                        injector::GetBranchDestination(entities + 0x77).as_int());
+                CarMirrors::techniqueHooks[1] = safetyhook::create_mid(mirrorEntities.get_first(45), CarMirrors::AfterMirrorEntities);
+                CarMirrors::afterEntitiesHooked = bool(CarMirrors::techniqueHooks[1]);
+            }
             FusionLog::Write("CarMirrors", "Init", "%u mirror glasses in the table; phase timing %s; outdoor scan %s; quad by the drawn car %s, %u draw list sites\n",
                 uint32_t(std::size(CarMirrorTable)), timeBuild && timeVisibility ? "on" : "partly off",
                 CarMirrors::waterVisibility ? "found" : "not found (the mirrors stay empty outdoors)",
@@ -697,6 +2050,17 @@ public:
             FusionLog::Write("CarMirrors", "Init", "the mirror pass's glass tint %s; the plane before the reflected view %s; wider reflection %s\n",
                 CarMirrors::callback.add ? "on" : "off (the game's callback command was not found)",
                 CarMirrors::phaseViewHook ? "on" : "off (not found)", CarMirrors::perspective ? "on" : "off (not found)");
+            FusionLog::Write("CarMirrors", "Init", "water reflection gates %s/%s; water in the mirror %s, its gather after the scans %s, "
+                "without the material ID target %s, its flag given %s, its pass without shadows %s\n",
+                CarMirrors::waterGateHooks[0] ? "on" : "off", CarMirrors::waterGateHooks[1] ? "on" : "off",
+                CarMirrors::phaseWaterHook ? "on" : "off (not found)", CarMirrors::gatherHook ? "on" : "off (not found)",
+                CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)", CarMirrors::waterFlagHook ? "on" : "off (not found)",
+                CarMirrors::waterPassHook ? "on" : "off (not found)");
+            FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s; its coronas %s (the lamps' %s, listed by the mirror's view %s); "
+                "the trees' leaves %s, buckets 5 and 4 the main scene's fourth way %s\n", CarMirrors::techniqueHooks[0] ? "on" : "off (not found)", CarMirrors::skyHooks[2] ? "on" : "off (not found)",
+                CarMirrors::coronaHooks[2] ? "on" : "off (not found)", CarMirrors::coronaSprites ? "on" : "off (not found)",
+                CarMirrors::coronaCopyHook ? "on" : "off (not found)", CarMirrors::bucketHook ? "on" : "off (not found)",
+                CarMirrors::drawBucket && CarMirrors::techniqueHooks[1] ? "on" : "off (not found)");
             if (CarMirrors::quadOffset)
                 FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
         };
