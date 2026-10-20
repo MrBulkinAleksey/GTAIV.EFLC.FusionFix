@@ -1044,8 +1044,11 @@ namespace CarMirrors
     // The coronas are added to what is drawn (the corona technique's blend: one and one). In the mirror's pass they
     // came out opaque, their quads' black corners over the reflection: the city's far lights made a black band with
     // dots along the horizon. The blend is set on the device right before each batch and put back after the coronas.
-    static constexpr D3DRENDERSTATETYPE CoronaStates[] = { D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP };
-    static constexpr DWORD CoronaValues[] = { TRUE, D3DBLEND_ONE, D3DBLEND_ONE, D3DBLENDOP_ADD };
+    // The depth test of the technique's second pass went the same way (headlights through the car's inside and through
+    // other cars in the mirror): on, less or equal, no depth written, likewise.
+    static constexpr D3DRENDERSTATETYPE CoronaStates[] = { D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP,
+                                                           D3DRS_ZENABLE, D3DRS_ZFUNC, D3DRS_ZWRITEENABLE };
+    static constexpr DWORD CoronaValues[] = { TRUE, D3DBLEND_ONE, D3DBLEND_ONE, D3DBLENDOP_ADD, D3DZB_TRUE, D3DCMP_LESSEQUAL, FALSE };
     static DWORD coronaSavedStates[std::size(CoronaStates)]{};
     static bool coronaStatesSaved = false;
 
