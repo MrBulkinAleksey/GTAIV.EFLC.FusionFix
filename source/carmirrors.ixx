@@ -131,6 +131,10 @@ namespace CarMirrors
     // the like) left it off for every entity after it, the reflection techniques setting none: the cars drawn later wrote
     // no depth, and peds drawn after them showed through them.
     static bool forceDepthWrite = true;
+    // CarMirrorsBuildingsInOrder (hidden, 0 tests them too): the map's buildings and ground write depth but pass whatever
+    // is there (compare always), drawn in the list's order as the game's mirror drew them all with no depth: tested, the
+    // road's overlapping meshes fought (the asphalt's textures broken into patches). Cars, peds and props still test.
+    static bool buildingsInOrder = true;
     // The mirror phase's draw list turns the depth write off before its entities (CE 0xD76B13: a render state command,
     // the game's state 2 to 0), and the reflection techniques set none of their own: nothing of the mirror's scene was
     // in its depth buffer, and the water and coronas drawn after it showed through the cars, the car's inside and the
@@ -315,7 +319,7 @@ namespace CarMirrors
             if (forceDepthWrite && setRenderState)
             {
                 setRenderState(0, 1);                // depth test on
-                setRenderState(7, D3DCMP_LESSEQUAL);
+                setRenderState(7, buildingsInOrder && kind == EntityClass::Kind::Building ? D3DCMP_ALWAYS : D3DCMP_LESSEQUAL);
                 setRenderState(2, 1);                // depth written
             }
             if (!passTargets[TargetsEntities].known)
@@ -1500,15 +1504,16 @@ public:
                 CarMirrors::ownGlassInInterior = ini.ReadInteger("MISC", "CarMirrorsOwnGlass", 0) != 0;
                 CarMirrors::lampCoronas = ini.ReadInteger("MISC", "CarMirrorsLampCoronas", 1) != 0;
                 CarMirrors::forceDepthWrite = ini.ReadInteger("MISC", "CarMirrorsForceDepthWrite", 1) != 0;
+                CarMirrors::buildingsInOrder = ini.ReadInteger("MISC", "CarMirrorsBuildingsInOrder", 1) != 0;
                 CarMirrors::depthWrite = ini.ReadInteger("MISC", "CarMirrorsDepthWrite", 1) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
                 CarMirrors::interiorAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::interiorAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimY", -3.0f), -30.0f, 30.0f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d, force depth write %d, depth write %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d, force depth write %d, depth write %d, buildings in order %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
                     int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut, int(CarMirrors::water),
                     int(CarMirrors::waterReflection), int(CarMirrors::reflectionShaders), int(CarMirrors::skyAfterEntities), int(CarMirrors::extraBuckets),
-                    int(CarMirrors::ownGlassInInterior), int(CarMirrors::lampCoronas), int(CarMirrors::forceDepthWrite), int(CarMirrors::depthWrite), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
+                    int(CarMirrors::ownGlassInInterior), int(CarMirrors::lampCoronas), int(CarMirrors::forceDepthWrite), int(CarMirrors::depthWrite), int(CarMirrors::buildingsInOrder), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
             };
             CIniReader iniReader("");
             readIni(iniReader);
