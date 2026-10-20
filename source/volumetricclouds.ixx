@@ -471,12 +471,14 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     }
     const D3DXVECTOR4 layer(R.Cloud.base, R.Cloud.thickness, 1.0f / R.fCloudShadowsScale, R.Cloud.coverage);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Layer"), &layer);
-    // The fair weather clouds' shape (Clouds.fx's ShapeTex) tiles some 2.5 km, a whole number of times to the map's
-    // tile, so it wraps with the map's offset without a jump.
+    // The clouds' shape (Clouds.fx's ShapeTex) tiles some VolumetricCloudsShapeSize metres, a whole number of times
+    // to the map's tile, so it wraps with the map's offset without a jump; its edge's softness and its swirl in the
+    // noise's own range and tiles; how much of it is cloud, against the cover.
     {
-        const float tiles = (std::max)(std::round(R.fCloudShadowsScale / 2500.0f), 1.0f);
-        const D3DXVECTOR4 shapeWind(tiles, tiles / R.fCloudShadowsScale, 0.0f, 0.0f);
+        const float tiles = (std::max)(std::round(R.fCloudShadowsScale / R.fVolumetricCloudsShapeSize), 1.0f);
+        const D3DXVECTOR4 shapeWind(tiles, tiles / R.fCloudShadowsScale, R.fVolumetricCloudsShapeSoftness, R.fVolumetricCloudsShapeSwirl);
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4ShapeWind"), &shapeWind);
+        effect->SetFloat(effect->GetParameterByName(nullptr, "fShapeCover"), R.fVolumetricCloudsShapeCover);
     }
     // The detail drifts with the wind too, half as fast, so the billows change as they go.
     const D3DXVECTOR4 wind(R.fCloudWindX, R.fCloudWindY, float(std::fmod(R.fCloudDetailDrift * 0.93, 1.0)),
@@ -524,6 +526,8 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     {
         const D3DXVECTOR4 highLayer(high ? R.Cloud.highCover : 0.0f, R.Cloud.highBase, R.Cloud.highFibres, R.Cloud.highRows);
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4High"), &highLayer);
+        const D3DXVECTOR4 highTune(R.fCloudHighFibres, R.fCloudHighCells, 0.0f, 0.0f);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4HighTune"), &highTune);
         // The sun's way across the sheet in its texture, whose x lies along the wind (0.93, 0.37): three texels
         // of 512, the cells' relief.
         const float flatSun = std::sqrt(sun.x * sun.x + sun.y * sun.y);

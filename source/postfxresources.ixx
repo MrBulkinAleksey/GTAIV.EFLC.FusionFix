@@ -597,6 +597,16 @@ public:
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
     float fVolumetricCloudsShade = 0.65f;
     float fVolumetricCloudsAbsorption = 0.35f;
+    // The clouds' shape (Clouds.fx's ShapeTex), hidden [WEATHER] tweaks read again on Ctrl+Shift+F10: how much of it is
+    // cloud against the cover, its tile in metres (lumps about a quarter of it), its edge's softness and how far the
+    // detail swirls it, in its own range and tiles.
+    float fVolumetricCloudsShapeCover = 1.0f;
+    float fVolumetricCloudsShapeSize = 2500.0f;
+    float fVolumetricCloudsShapeSoftness = 0.1f;
+    float fVolumetricCloudsShapeSwirl = 0.12f;
+    // The high layer's cirrus fibres' density and its cells' share, against their kinds' (hidden [WEATHER] tweaks).
+    float fCloudHighFibres = 2.0f;
+    float fCloudHighCells = 1.0f;
     // VolumetricCloudsDebug (graphics menu, Debug): the view Clouds.fx shows, 2 to 15, from menu steps 1 to 14; 0 off.
     static int VolumetricCloudsDebug() { static auto p = FusionFixSettings.GetRef("PREF_CLOUDS_DEBUG"); const int step = p ? p->get() : 0; return step > 0 ? step + 1 : 0; }
     // The clouds in the reflection map (water, mirrors), at this brightness against the clouds.
@@ -2080,6 +2090,12 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsMottle", &PostFxResource::fVolumetricCloudsMottle, 0.4f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsShade", &PostFxResource::fVolumetricCloudsShade, 0.65f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsAbsorption", &PostFxResource::fVolumetricCloudsAbsorption, 0.35f, 0.05f, 3.0f),
+            IniFloat("WEATHER", "VolumetricCloudsShapeCover", &PostFxResource::fVolumetricCloudsShapeCover, 1.0f, 0.0f, 3.0f),
+            IniFloat("WEATHER", "VolumetricCloudsShapeSize", &PostFxResource::fVolumetricCloudsShapeSize, 2500.0f, 500.0f, 16000.0f),
+            IniFloat("WEATHER", "VolumetricCloudsShapeSoftness", &PostFxResource::fVolumetricCloudsShapeSoftness, 0.1f, 0.01f, 0.5f),
+            IniFloat("WEATHER", "VolumetricCloudsShapeSwirl", &PostFxResource::fVolumetricCloudsShapeSwirl, 0.12f, 0.0f, 1.0f),
+            IniFloat("WEATHER", "CloudHighFibres", &PostFxResource::fCloudHighFibres, 2.0f, 0.0f, 10.0f),
+            IniFloat("WEATHER", "CloudHighCells", &PostFxResource::fCloudHighCells, 1.0f, 0.0f, 3.0f),
             IniFlag("REFLECTIONS", "CloudReflections", &PostFxResource::bVolumetricCloudsReflections, 1),
             IniFlag("PERFORMANCE", "CloudReflectionsAtNight", &PostFxResource::bVolumetricCloudsReflectionsAtNight, 0),
             IniFloat("REFLECTIONS", "CloudReflectionsBrightness", &PostFxResource::fVolumetricCloudsReflectionBrightness, 1.0f, 0.0f, 10.0f),

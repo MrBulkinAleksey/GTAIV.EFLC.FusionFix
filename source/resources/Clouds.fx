@@ -133,7 +133,8 @@ float2 vec2Shear;
 float fCurl;              // how far the billows are swept along the coarse noise at the tops, in their own size         // the coverage's offset at the layer's top: the tops lean downwind, drawn out by the wind              // the glow's strength around the sun, by the weather
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
 float fDebug;             // VolumetricCloudsDebug + 1, the numbers in the comments here:2 the sky brightness matched to, 3 to 11 one term of the light alone (Light)
-float4 vec4ShapeWind;      // ShapeTex's tiles to the map's (whole, so the wind's offset wraps with the map's) and to a metre
+float4 vec4ShapeWind;      // ShapeTex's tiles to the map's (whole, so the wind's offset wraps with the map's) and to a metre; its edge's softness, the detail's swirl
+float fShapeCover;         // how much of ShapeTex is cloud, against the cover (VolumetricCloudsShapeCover)
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
@@ -142,6 +143,7 @@ float fRows;              // the sky's cloud streets, 0 to 1 (RowBand)
 // and cirrocumulus, 1 cirrus) and its rows; its texture's offset by the wind (xy, along the wind and across),
 // and one relief step towards the sun in its texture (zw).
 float4 vec4High;
+float4 vec4HighTune;       // the cirrus fibres' density, the cells' share (CloudHighFibres, CloudHighCells)
 float4 vec4HighWind;
 float fHighPixel;         // a half size pixel's angle in radians, for the high layer's mip
 // A lightning flash inside the clouds: where (xyz) and how strong (w, 0 none), and its colour at strength 1, exposed.
@@ -266,7 +268,7 @@ Place PlaceAt(float3 p)
     // overlap in the view through the layer's thickness, half again as much sky as the share for a share of 0.2 to 0.4.
     // At the cover times 2.7, small cumulus at 0.15 hid 3% of the sky and broken stratocumulus at 0.62 all of it.
     float coverHere = vec4Layer.w * (1.0 + vec4Morph.w * place.weather);
-    place.share = saturate((0.8 - 0.2 * coverHere) * local + 0.5 * fStratus);
+    place.share = saturate(((0.8 - 0.2 * coverHere) * local + 0.5 * fStratus) * fShapeCover);
     return place;
 }
 
@@ -321,12 +323,12 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
         // the sun take the coarse octave alone.
         float3 w = p * (vec4Shape.y * 0.35) + float3(vec4Wind.zw, fEvolution);
         wander = tex3Dlod(DetailTex, float4(w, 0)).rg - 0.5;
-        q.xy += wander * 0.12;
+        q.xy += wander * vec4ShapeWind.w;
         n = lerp(tex3Dlod(ShapeTex, float4(q, 0)).r, tex3Dlod(ShapeTex, float4(q * 3.7 + 0.29, 0)).r, 0.4);
     }
     else
         n = tex3Dlod(ShapeTex, float4(q, 0)).r;
-    float d = saturate((n - cut) / 0.1);
+    float d = saturate((n - cut) / vec4ShapeWind.z);
     d *= smoothstep(0.0, 0.06, h) * (1.0 - 0.5 * smoothstep(0.6, 1.0, h) * flat) * smoothstep(1.0, 0.9, h);
     if (d <= 0.0)
         return 0.0;
@@ -869,7 +871,7 @@ float4 HighLayer(float3 dir, float2 uv)
     float mask = smoothstep(0.88 - vec4High.x, 1.12 - vec4High.x, patch);
     // The cells gather into flocks with clear sky between them, by the clumps: at 0.3 + 1.6 a they spread over the
     // whole patch evenly, one size, one spacing, like a leopard's spots.
-    float cells = saturate(0.5 * mask * (2.4 * tex.a - 0.6));
+    float cells = saturate(0.5 * mask * (2.4 * tex.a - 0.6) * vec4HighTune.y);
     // The cells over half the texture's range: over a quarter their outlines were cut hard, flat as paper.
     float dc = saturate((tex.r - 1.0 + cells) * 2.0);
     float towards = saturate((tex2Dlod(HighTex, float4(uvh + vec4HighWind.zw, 0, lod)).r - 1.0 + cells) * 2.0);
@@ -877,7 +879,7 @@ float4 HighLayer(float3 dir, float2 uv)
     // In their own, far wider patches: within the cells' narrow ones the sheets' outlines stood out as the edges of
     // smears across the sky.
     float fibreMask = smoothstep(0.6 - vec4High.x, 1.4 - vec4High.x, patch);
-    float df = saturate(tex.g * 2.0 * fibreMask);
+    float df = saturate(tex.g * vec4HighTune.x * fibreMask);
     // A faint veil over the patch: at a fifth, the sky between two patches came out a deeper blue than around
     // them, in the patches' shapes, and read as dark clouds under the cirrus.
     df += 0.06 * fibreMask * (1.0 - df);
