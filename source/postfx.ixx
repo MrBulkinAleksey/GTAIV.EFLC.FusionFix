@@ -53,6 +53,7 @@ import wetground;
 import headlightglints;
 import gpugrass;
 import waterreflections;
+import waterdetails;
 import sharpening;
 import inireload;
 import skytrace;
@@ -1507,6 +1508,7 @@ private:
     {
         auto& R = PostFxResources;
         SetWaterRainRings();
+        SetWaterFoamConstants();
         auto pProfileDevice = rage::grcDevice::GetD3DDevice();
         ProfilerScope timedWater(pProfileDevice, kProfWaterAll);
         // The game renders water for other views too, into targets of other sizes: each call

@@ -1,0 +1,270 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+index fc37e203..2ccb2084 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+@@ -82,6 +82,10 @@
+     def c163, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
+     def c157, 0.05, 0, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at
++    def c188, 0.800000012, 0.899999976, 0.699999988, -0.600000024 // FusionFix world_water_details.patch: the warps' waves per unit (along y, along x) and their drift a second
++    def c189, 1.20000005, 0.5, -0.400000006, 1.10000002 // FusionFix world_water_details.patch: the warps' size, the first layer's drift a second, the second wave's scale
++    def c190, 0.919238806, 0.919238806, 0.300000012, -0.600000024 // FusionFix world_water_details.patch: the second layer, turned 45 degrees, and its drift
++    def c191, 1.60000002, 0.5, 1, 0 // FusionFix world_water_details.patch: the net's gain about its mean, a half, one, zero
+     def c160, 0.08, 0.31, 6, 0.05 // FusionFix cloud shadows: the weather map's scale, offset and mip; the height's lowering
+     def c161, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix cloud shadows: angles into -pi..pi for sincos
+     def c162, 31.4159265, 25.1327412, 1.2, 0.4 // FusionFix cloud shadows: the morph's waves and phase rate; the compressor's power
+@@ -537,6 +541,62 @@
+       add r17.x, -r17.x, c158.x
+       mul r0.y, r0.y, r17.x
+     endif
++    // --- FusionFix world_water_details.patch: caustics under the water (c195, c196; waterdetails.ixx): the sun's light focused by the waves, worked
++    // --- out where the ray towards the sun meets the water's level (r14 the world position), on the sun's term r0.y
++    mov r15.x, c195.z
++    add r15.y, c195.x, -r14.z // how deep under the surface
++    min r15.x, r15.x, r15.y
++    if_lt c158.z, r15.x
++      mov r16.xyz, -c17 // towards the sun
++      max r16.z, r16.z, c157.x
++      rcp r16.z, r16.z
++      mul r16.z, r16.z, r15.y
++      mad r16.xy, r16, r16.z, r14 // where the ray meets the surface
++      mul r16.xy, r16, c195.w
++      mov r16.w, c195.y // seconds
++      mul r17.x, r16.y, c188.x
++      mad r17.x, r16.w, c188.z, r17.x
++      mul r17.y, r16.x, c188.y
++      mad r17.y, r16.w, c188.w, r17.y
++      mad r17.xy, r17, c161.x, c161.y
++      frc r17.xy, r17
++      mad r17.xy, r17, c161.z, c161.w
++      sincos r12.xy, r17.x
++      sincos r13.xy, r17.y // the warps
++      mad r17.x, r12.y, c189.x, r16.x
++      mad r17.x, r16.w, c189.y, r17.x
++      mul r17.y, r16.y, c189.w
++      mad r17.y, r13.y, c189.x, r17.y
++      mad r17.y, r16.w, c189.z, r17.y
++      add r17.z, r16.x, r16.y
++      mul r17.z, r17.z, c190.x
++      mad r17.z, r13.x, c189.x, r17.z
++      mad r17.z, r16.w, c190.z, r17.z
++      add r17.w, r16.y, -r16.x
++      mul r17.w, r17.w, c190.y
++      mad r17.w, r12.x, c189.x, r17.w
++      mad r17.w, r16.w, c190.w, r17.w
++      mad r17, r17, c161.x, c161.y
++      frc r17, r17
++      mad r17, r17, c161.z, c161.w
++      sincos r12.xy, r17.x
++      sincos r13.xy, r17.y
++      add r16.x, r12.y, r13.y
++      sincos r12.xy, r17.z
++      sincos r13.xy, r17.w
++      add r16.y, r12.y, r13.y
++      mad r16.xy, r16_abs, -c191.y, c191.z // near 1 on the lines, where the waves cancel
++      mul r16.zw, r16.xyxy, r16.xyxy
++      mul r12.xy, r16.zwzw, r16.zwzw
++      mul r16.xy, r12, r16.zwzw // to the 6th: thin lines
++      add r16.x, r16.x, r16.y
++      mul_sat r16.y, r15.y, c196.x
++      add r16.y, -r16.y, c191.z
++      mul r16.y, r16.y, c195.z // the strength, fading with the depth
++      mad r16.x, r16.x, c191.x, -c191.z
++      mad r16.x, r16.x, r16.y, c191.z
++      mul r0.y, r0.y, r16.x
++    endif
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     mov r2.xyz, r31.xyz
+     mad r1.xyz, v1, -r0.x, c1.w
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+index 79a28da0..9bd92142 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+@@ -83,6 +83,10 @@
+     def c163, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     def c158, 1, 0.0001, 0, 0 // FusionFix specular sheen
+     def c157, 0.05, 0, 0, 0 // FusionFix cloud shadows: the lowest sun height the plane is traced at
++    def c188, 0.800000012, 0.899999976, 0.699999988, -0.600000024 // FusionFix world_water_details.patch: the warps' waves per unit (along y, along x) and their drift a second
++    def c189, 1.20000005, 0.5, -0.400000006, 1.10000002 // FusionFix world_water_details.patch: the warps' size, the first layer's drift a second, the second wave's scale
++    def c190, 0.919238806, 0.919238806, 0.300000012, -0.600000024 // FusionFix world_water_details.patch: the second layer, turned 45 degrees, and its drift
++    def c191, 1.60000002, 0.5, 1, 0 // FusionFix world_water_details.patch: the net's gain about its mean, a half, one, zero
+     def c160, 0.08, 0.31, 6, 0.05 // FusionFix cloud shadows: the weather map's scale, offset and mip; the height's lowering
+     def c161, 0.159154937, 0.5, 6.28318548, -3.14159274 // FusionFix cloud shadows: angles into -pi..pi for sincos
+     def c162, 31.4159265, 25.1327412, 1.2, 0.4 // FusionFix cloud shadows: the morph's waves and phase rate; the compressor's power
+@@ -538,6 +542,62 @@
+       add r17.x, -r17.x, c158.x
+       mul r0.y, r0.y, r17.x
+     endif
++    // --- FusionFix world_water_details.patch: caustics under the water (c195, c196; waterdetails.ixx): the sun's light focused by the waves, worked
++    // --- out where the ray towards the sun meets the water's level (r14 the world position), on the sun's term r0.y
++    mov r15.x, c195.z
++    add r15.y, c195.x, -r14.z // how deep under the surface
++    min r15.x, r15.x, r15.y
++    if_lt c158.z, r15.x
++      mov r16.xyz, -c17 // towards the sun
++      max r16.z, r16.z, c157.x
++      rcp r16.z, r16.z
++      mul r16.z, r16.z, r15.y
++      mad r16.xy, r16, r16.z, r14 // where the ray meets the surface
++      mul r16.xy, r16, c195.w
++      mov r16.w, c195.y // seconds
++      mul r17.x, r16.y, c188.x
++      mad r17.x, r16.w, c188.z, r17.x
++      mul r17.y, r16.x, c188.y
++      mad r17.y, r16.w, c188.w, r17.y
++      mad r17.xy, r17, c161.x, c161.y
++      frc r17.xy, r17
++      mad r17.xy, r17, c161.z, c161.w
++      sincos r12.xy, r17.x
++      sincos r13.xy, r17.y // the warps
++      mad r17.x, r12.y, c189.x, r16.x
++      mad r17.x, r16.w, c189.y, r17.x
++      mul r17.y, r16.y, c189.w
++      mad r17.y, r13.y, c189.x, r17.y
++      mad r17.y, r16.w, c189.z, r17.y
++      add r17.z, r16.x, r16.y
++      mul r17.z, r17.z, c190.x
++      mad r17.z, r13.x, c189.x, r17.z
++      mad r17.z, r16.w, c190.z, r17.z
++      add r17.w, r16.y, -r16.x
++      mul r17.w, r17.w, c190.y
++      mad r17.w, r12.x, c189.x, r17.w
++      mad r17.w, r16.w, c190.w, r17.w
++      mad r17, r17, c161.x, c161.y
++      frc r17, r17
++      mad r17, r17, c161.z, c161.w
++      sincos r12.xy, r17.x
++      sincos r13.xy, r17.y
++      add r16.x, r12.y, r13.y
++      sincos r12.xy, r17.z
++      sincos r13.xy, r17.w
++      add r16.y, r12.y, r13.y
++      mad r16.xy, r16_abs, -c191.y, c191.z // near 1 on the lines, where the waves cancel
++      mul r16.zw, r16.xyxy, r16.xyxy
++      mul r12.xy, r16.zwzw, r16.zwzw
++      mul r16.xy, r12, r16.zwzw // to the 6th: thin lines
++      add r16.x, r16.x, r16.y
++      mul_sat r16.y, r15.y, c196.x
++      add r16.y, -r16.y, c191.z
++      mul r16.y, r16.y, c195.z // the strength, fading with the depth
++      mad r16.x, r16.x, c191.x, -c191.z
++      mad r16.x, r16.x, r16.y, c191.z
++      mul r0.y, r0.y, r16.x
++    endif
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     mov r2.xyz, r31.xyz
+     mad r1.xyz, v1, -r0.x, c3.w
+diff --git a/win32_30_nv8/water/waterPS1.asm b/win32_30_nv8/water/waterPS1.asm
+index 669d87b6..64d783f6 100644
+--- a/win32_30_nv8/water/waterPS1.asm
++++ b/win32_30_nv8/water/waterPS1.asm
+@@ -42,6 +42,8 @@
+     def c184, 0.0671105608, 0.00583714992, 0, 52.9829178 // FusionFix rain rings: the cell hash
+     def c185, 0.5, 0.300000012, 0.400000006, -144.269501 // FusionFix rain rings: the drop's place, how far the ring runs, its width (-100 / ln 2, some 7 cm)
+     def c186, 7, 17, 0.00100000005, 1 // FusionFix rain rings: the tilt, the second hash's offset, a small number, one
++    def c188, 0.150000006, 0.0299999993, 1.70000005, 0 // FusionFix world_water_details.patch: the foam's noise per metre, its drift a second, the second read's scale, zero
++    def c189, -0.699999988, 1.60000002, 4, 1 // FusionFix world_water_details.patch: the noise's centre and contrast, the edge's sharpness, one
+     dcl_texcoord v0.xyz
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord2 v2.xyz
+@@ -222,6 +224,26 @@
+     mul r1.x, r19.x, c209.w
+     
+     add r1.x, r1.x, -v0.z
++    // --- FusionFix world_water_details.patch: foam where the bottom is close behind the surface (r1.x the depth behind it along the view, metres)
++    mov r27.x, r1.x
++    mul r28.xy, v2.xy, c188.x
++    mov r27.w, c178.y
++    mad r29.xy, r27.w, c188.y, r28
++    mul r28.xy, r28, c188.z
++    mad r30.xy, r27.w, -c188.y, r28
++    texld r29, r29, s0
++    texld r30, r30, s0
++    add r28.x, r29.z, r30.w
++    add r28.x, r28.x, c189.x
++    mul_sat r28.x, r28.x, c189.y // the noise
++    mul_sat r28.y, r27.x, c187.y // the depth in widths
++    add r28.z, r28.x, -r28.y
++    mul_sat r28.z, r28.z, c189.z
++    add r28.y, -r28.y, c189.w
++    mul r28.z, r28.z, r28.y
++    mul r27.y, r28.z, c187.x // the foam
++    mov r28.xyz, c72
++    mul r27.xzw, r28.xyyz, c187.z // its colour
+     mov r1.yz, c0
+     mul r1.z, r1.z, c66.w
+     mul r1.z, r1.x, r1.z
+@@ -231,6 +253,7 @@
+     // FusionFix car mirrors: the depth on s2 is the main view's, read at the mirror's pixels; c204.z 1 in a car
+     // mirror's pass (carmirrors.ixx) keeps the water opaque, as over deep water
+     max r1.x, r1.x, c204.z
++    max r1.x, r1.x, r27.y // FusionFix world_water_details.patch: opaque under the foam
+     rcp r1.z, r1.x
+     mul r0.xyz, r0, r1.z
+     add r1.z, r0.w, c1.w
+@@ -254,6 +277,8 @@
+     mad r20.xyz, r20, r20.w, c66
+     add r20.xyz, r20, -r0
+     mad r0.xyz, c204.z, r20, r0
++    lrp r28.xyz, r27.y, r27.xzww, r0 // FusionFix world_water_details.patch: the foam's colour
++    mov r0.xyz, r28
+     mul oC0.xyz, r0, c39.y
+     
+     // LogDepth Write
+diff --git a/win32_30_nv8/water/waterPS2.asm b/win32_30_nv8/water/waterPS2.asm
+index e608f296..1cb67b83 100644
+--- a/win32_30_nv8/water/waterPS2.asm
++++ b/win32_30_nv8/water/waterPS2.asm
+@@ -110,6 +110,8 @@
+     def c184, 0.0671105608, 0.00583714992, 0, 52.9829178 // FusionFix rain rings: the cell hash
+     def c185, 0.5, 0.300000012, 0.400000006, -144.269501 // FusionFix rain rings: the drop's place, how far the ring runs, its width (-100 / ln 2, some 7 cm)
+     def c186, 7, 17, 0.00100000005, 1 // FusionFix rain rings: the tilt, the second hash's offset, a small number, one
++    def c188, 0.150000006, 0.0299999993, 1.70000005, 0 // FusionFix world_water_details.patch: the foam's noise per metre, its drift a second, the second read's scale, zero
++    def c189, -0.699999988, 1.60000002, 4, 1 // FusionFix world_water_details.patch: the noise's centre and contrast, the edge's sharpness, one
+     dcl_texcoord v0
+     dcl_texcoord1 v1
+     dcl_texcoord2 v2
+@@ -645,6 +647,26 @@
+     mul r0.x, r19.x, c209.w
+     
+     add r0.x, r0.x, -v0.z
++    // --- FusionFix world_water_details.patch: foam where the bottom is close behind the surface (r0.x the depth behind it along the view, metres)
++    mov r27.x, r0.x
++    mul r28.xy, v2.xy, c188.x
++    mov r27.w, c178.y
++    mad r29.xy, r27.w, c188.y, r28
++    mul r28.xy, r28, c188.z
++    mad r30.xy, r27.w, -c188.y, r28
++    texld r29, r29, s0
++    texld r30, r30, s0
++    add r28.x, r29.z, r30.w
++    add r28.x, r28.x, c189.x
++    mul_sat r28.x, r28.x, c189.y // the noise
++    mul_sat r28.y, r27.x, c187.y // the depth in widths
++    add r28.z, r28.x, -r28.y
++    mul_sat r28.z, r28.z, c189.z
++    add r28.y, -r28.y, c189.w
++    mul r28.z, r28.z, r28.y
++    mul r27.y, r28.z, c187.x // the foam
++    mov r28.xyz, c73
++    mul r27.xzw, r28.xyyz, c187.z // its colour
+     pow r0.w, v0_abs.z, c4.z
+     mul_sat r0.w, r0.w, c4.w
+     add r0.w, r0.w, c5.x
+@@ -662,6 +684,7 @@
+       pow r1.x, r0_abs.x, c3.w
+       add_sat r0.x, r1.x, c0.x
+     endif
++    max r0.x, r0.x, r27.y // FusionFix world_water_details.patch: opaque under the foam
+     
+     add r0.w, -r0.w, c3.z
+     mul r0.w, r0.w, r0.w
+@@ -737,6 +760,8 @@
+     mul r2.xyz, r2, c9.w
+     mad r1.xyz, r1.xzww, c9.w, r2
+     lrp r2.xyz, r0.z, r1, r0.xyww
++    lrp r28.xyz, r27.y, r27.xzww, r2 // FusionFix world_water_details.patch: the foam's colour
++    mov r2.xyz, r28
+     mul oC0.xyz, r2, c39.y
+     
+     // LogDepth Write
