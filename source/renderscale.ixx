@@ -5,6 +5,7 @@ module;
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <mutex>
 #include <string_view>
 
 #include "FusionLog.hpp"
@@ -88,6 +89,10 @@ namespace
     // Depth buffer of the screen size for targets of the screen size, and the scene's one it stands in for
     IDirect3DSurface9* FullDepth = nullptr;
     IDirect3DSurface9* SceneDepth = nullptr;
+    // Made and released under this lock: while the game loads, the main thread draws the loading screens as the render
+    // thread draws too, and both made a full size depth buffer at once; the one written over had no owner left and
+    // failed every device reset after it with D3DERR_INVALIDCALL (DD3D80), when the game started at a render scale
+    std::mutex FullDepthMutex;
 
     constexpr std::string_view ScaledTargets[] =
     {
@@ -268,7 +273,16 @@ namespace
         {
             // INTZ is a texture format, a plain depth surface takes D24S8
             if (!FullDepth)
-                device->CreateDepthStencilSurface(DisplayWidth, DisplayHeight, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, FALSE, &FullDepth, nullptr);
+            {
+                std::lock_guard lock(FullDepthMutex);
+                if (!FullDepth)
+                {
+                    IDirect3DSurface9* depth = nullptr;
+                    device->CreateDepthStencilSurface(DisplayWidth, DisplayHeight, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, FALSE, &depth, nullptr);
+                    FullDepth = depth;
+                    Log("full size depth %ux%u %s on thread %lu", DisplayWidth, DisplayHeight, depth ? "made" : "NOT made", GetCurrentThreadId());
+                }
+            }
             if (FullDepth && rtWidth <= DisplayWidth && rtHeight <= DisplayHeight)
             {
                 SceneDepth = ds.surface;
@@ -454,11 +468,14 @@ namespace
             OutputSurface->Release();
         if (OutputTexture)
             OutputTexture->Release();
-        if (FullDepth)
-            FullDepth->Release();
+        {
+            std::lock_guard lock(FullDepthMutex);
+            if (FullDepth)
+                FullDepth->Release();
+            FullDepth = nullptr;
+        }
         OutputSurface = nullptr;
         OutputTexture = nullptr;
-        FullDepth = nullptr;
         SceneDepth = nullptr;
         BoundTarget = {};
         BoundDepth = {};
