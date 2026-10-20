@@ -141,11 +141,18 @@ namespace CarMirrors
     // technique applies its own) for every entity in the mirror's pass. A technique that turns the write off (decals and
     // the like) left it off for every entity after it, the reflection techniques setting none: the cars drawn later wrote
     // no depth, and peds drawn after them showed through them.
-    static bool forceDepthWrite = false;
-    // CarMirrorsBuildingsInOrder (hidden, 0 tests them too): the map's buildings and ground write depth but pass whatever
+    // The frame capture (2026-10-20) showed it whole: in the mirror's pass nearly every entity drew with blending on, one
+    // and one (903 buildings, 330 props, 140 vehicles' draws: gta_spec, gta_default, gta_normal_spec, the cars' mesh and
+    // tyres), the alpha reference 100 and here and there the depth write off, all from whatever drew before (a ped's
+    // technique turns the blend on and the reference to 100), the reflection techniques setting none of their own: the
+    // whole reflection added up, see-through and washed out, the asphalt's layers summed into patches, peds through cars.
+    // Before each entity the states the mirror phase means are set (the game's: blend off, source alpha over the rest,
+    // reference 1 as the phase's own command has it, depth tested and written); a technique with its own sets them after.
+    static bool forceDepthWrite = true;
+    // CarMirrorsBuildingsInOrder (hidden, off; 1 compares the buildings always): the map's buildings and ground write depth but pass whatever
     // is there (compare always), drawn in the list's order as the game's mirror drew them all with no depth: tested, the
     // road's overlapping meshes fought (the asphalt's textures broken into patches). Cars, peds and props still test.
-    static bool buildingsInOrder = true;
+    static bool buildingsInOrder = false;
     // The mirror phase's draw list turns the depth write off before its entities (CE 0xD76B13: a render state command,
     // the game's state 2 to 0), and the reflection techniques set none of their own: nothing of the mirror's scene was
     // in its depth buffer, and the water and coronas drawn after it showed through the cars, the car's inside and the
@@ -308,6 +315,10 @@ namespace CarMirrors
                 setRenderState(0, 1);                // depth test on
                 setRenderState(7, buildingsInOrder && kind == EntityClass::Kind::Building ? D3DCMP_ALWAYS : D3DCMP_LESSEQUAL);
                 setRenderState(2, 1);                // depth written
+                setRenderState(10, 0);               // no blend
+                setRenderState(4, D3DBLEND_SRCALPHA);
+                setRenderState(5, D3DBLEND_INVSRCALPHA);
+                setRenderState(8, 1);                // alpha reference, as the mirror phase's command (state 8 to 1)
             }
         }
         if (mirrorPass && kind == EntityClass::Kind::Ped && currentTechniqueGroup && *currentTechniqueGroup != -1)
@@ -1788,8 +1799,8 @@ public:
                 CarMirrors::extraBuckets = ini.ReadInteger("MISC", "CarMirrorsExtraBuckets", 1) != 0;
                 CarMirrors::ownGlassInInterior = ini.ReadInteger("MISC", "CarMirrorsOwnGlass", 0) != 0;
                 CarMirrors::lampCoronas = ini.ReadInteger("MISC", "CarMirrorsLampCoronas", 1) != 0;
-                CarMirrors::forceDepthWrite = ini.ReadInteger("MISC", "CarMirrorsForceDepthWrite", 0) != 0;
-                CarMirrors::buildingsInOrder = ini.ReadInteger("MISC", "CarMirrorsBuildingsInOrder", 1) != 0;
+                CarMirrors::forceDepthWrite = ini.ReadInteger("MISC", "CarMirrorsForceDepthWrite", 1) != 0;
+                CarMirrors::buildingsInOrder = ini.ReadInteger("MISC", "CarMirrorsBuildingsInOrder", 0) != 0;
                 CarMirrors::depthWrite = ini.ReadInteger("MISC", "CarMirrorsDepthWrite", 0) != 0;
                 CarMirrors::waterCoronasFirst = ini.ReadInteger("MISC", "CarMirrorsWaterCoronasFirst", 1) != 0;
                 CarMirrors::waterStyle = ini.ReadInteger("MISC", "CarMirrorsWaterStyle", 1) != 0;
