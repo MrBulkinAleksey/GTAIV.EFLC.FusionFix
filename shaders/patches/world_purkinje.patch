@@ -1,0 +1,377 @@
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS11.asm b/win32_30_nv8/rage_postfx/rage_postfxPS11.asm
+index 21ff0ee8..d03f2839 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS11.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS11.asm
+@@ -80,6 +80,8 @@
+     def c21, 18.6875, 1, 78.84375, 0
+     
+     def c118, 0.75487766, 0.56984029, 0, 0
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 1 // FusionFix world_purkinje.patch: luminance, one
++    def c186, 0.720000029, 0.949999988, 1.39999998, 0 // FusionFix world_purkinje.patch: the rods' cool tint
+     
+     defi i0, 7, 0, 0, 0
+     dcl_texcoord v0.xy
+@@ -271,6 +273,15 @@
+       lrp r0.xyz, r2.w, r1, r2
+     endif
+     
++    // --- FusionFix world_purkinje.patch: dark pixels (r0.xyz) towards their luminance in a cool tint, as the rods see
++    dp3 r30.w, r0, c185
++    mul_sat r29.w, r30.w, c181.y
++    add r29.w, -r29.w, c185.w
++    mul r29.w, r29.w, r29.w
++    mul r29.w, r29.w, c181.x
++    mul r30.xyz, r30.w, c186
++    lrp r31.xyz, r29.w, r30, r0
++    mov r0.xyz, r31
+     mov oC0.xyz, r0
+     mov oC0.w, c2.y
+ 
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS12.asm b/win32_30_nv8/rage_postfx/rage_postfxPS12.asm
+index 2a2e7aa6..b8f4499d 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS12.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS12.asm
+@@ -79,6 +79,8 @@
+     def c21, 18.6875, 1, 78.84375, 0
+     
+     def c118, 0.75487766, 0.56984029, 0, 0
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 1 // FusionFix world_purkinje.patch: luminance, one
++    def c186, 0.720000029, 0.949999988, 1.39999998, 0 // FusionFix world_purkinje.patch: the rods' cool tint
+     
+     defi i0, 7, 0, 0, 0
+     dcl_texcoord v0.xy
+@@ -286,6 +288,15 @@
+     frc r1.x, r1.x
+     mad r1.x, r1.x, c11.x, -c11.y
+     add r0.xyz, r0, r1.x
++    // --- FusionFix world_purkinje.patch: dark pixels (r0.xyz) towards their luminance in a cool tint, as the rods see
++    dp3 r30.w, r0, c185
++    mul_sat r29.w, r30.w, c181.y
++    add r29.w, -r29.w, c185.w
++    mul r29.w, r29.w, r29.w
++    mul r29.w, r29.w, c181.x
++    mul r30.xyz, r30.w, c186
++    lrp r31.xyz, r29.w, r30, r0
++    mov r0.xyz, r31
+     max oC0.xyz, r0, c1.x
+     dp3 oC0.w, r0, c1.yzw // compute luma for FXAA
+ 
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS13.asm b/win32_30_nv8/rage_postfx/rage_postfxPS13.asm
+index 158fc615..17a20240 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS13.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS13.asm
+@@ -46,6 +46,8 @@
+     def c2, 0, 2, 4, 8
+     def c3, 0.25, 1, 256, 0
+     def c4, 256, 2, 4, 8
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 1 // FusionFix world_purkinje.patch: luminance, one
++    def c186, 0.720000029, 0.949999988, 1.39999998, 0 // FusionFix world_purkinje.patch: the rods' cool tint
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -144,6 +146,15 @@
+     add r0.xyz, r0, r0
+     add r0.w, -r7.y, c77.z
+     pow r2.x, r1.x, r0.w
++    // --- FusionFix world_purkinje.patch: dark pixels (r0.xyz) towards their luminance in a cool tint, as the rods see
++    dp3 r30.w, r0, c185
++    mul_sat r29.w, r30.w, c181.y
++    add r29.w, -r29.w, c185.w
++    mul r29.w, r29.w, r29.w
++    mul r29.w, r29.w, c181.x
++    mul r30.xyz, r30.w, c186
++    lrp r31.xyz, r29.w, r30, r0
++    mov r0.xyz, r31
+     mul oC0.xyz, r0, r2.x
+     mov oC0.w, c3.y
+ 
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS14.asm b/win32_30_nv8/rage_postfx/rage_postfxPS14.asm
+index 7f001ff1..40d795c7 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS14.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS14.asm
+@@ -79,6 +79,8 @@
+     def c21, 18.6875, 1, 78.84375, 0
+     
+     def c118, 0.75487766, 0.56984029, 0, 0
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 1 // FusionFix world_purkinje.patch: luminance, one
++    def c186, 0.720000029, 0.949999988, 1.39999998, 0 // FusionFix world_purkinje.patch: the rods' cool tint
+     
+     defi i0, 7, 0, 0, 0
+     dcl_texcoord v0.xy
+@@ -286,6 +288,15 @@
+     frc r1.x, r1.x
+     mad r1.x, r1.x, c11.x, -c11.y
+     add r0.xyz, r0, r1.x
++    // --- FusionFix world_purkinje.patch: dark pixels (r0.xyz) towards their luminance in a cool tint, as the rods see
++    dp3 r30.w, r0, c185
++    mul_sat r29.w, r30.w, c181.y
++    add r29.w, -r29.w, c185.w
++    mul r29.w, r29.w, r29.w
++    mul r29.w, r29.w, c181.x
++    mul r30.xyz, r30.w, c186
++    lrp r31.xyz, r29.w, r30, r0
++    mov r0.xyz, r31
+     max oC0.xyz, r0, c1.x
+     dp3 oC0.w, r0, c1.yzw // compute luma for FXAA
+ 
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS15.asm b/win32_30_nv8/rage_postfx/rage_postfxPS15.asm
+index 4872c040..d7fc6b70 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS15.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS15.asm
+@@ -46,6 +46,8 @@
+     def c2, 0.25, 1, 256, 0
+     def c3, 0, 2, 4, 8
+     def c4, 256, 2, 4, 8
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 1 // FusionFix world_purkinje.patch: luminance, one
++    def c186, 0.720000029, 0.949999988, 1.39999998, 0 // FusionFix world_purkinje.patch: the rods' cool tint
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -138,6 +140,15 @@
+     add r0.xyz, r0, r0
+     add r0.w, -r7.y, c77.z
+     pow r2.x, r1.x, r0.w
++    // --- FusionFix world_purkinje.patch: dark pixels (r0.xyz) towards their luminance in a cool tint, as the rods see
++    dp3 r30.w, r0, c185
++    mul_sat r29.w, r30.w, c181.y
++    add r29.w, -r29.w, c185.w
++    mul r29.w, r29.w, r29.w
++    mul r29.w, r29.w, c181.x
++    mul r30.xyz, r30.w, c186
++    lrp r31.xyz, r29.w, r30, r0
++    mov r0.xyz, r31
+     mul oC0.xyz, r0, r2.x
+     mov oC0.w, c2.y
+ 
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS16.asm b/win32_30_nv8/rage_postfx/rage_postfxPS16.asm
+index a9f15810..5fe5c51b 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS16.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS16.asm
+@@ -60,6 +60,8 @@
+     def c4, -0.5, -1.5, 1.5, 0.5
+     def c5, 2, -1, 0.125, 0
+     def c6, 256, 2, 4, 8
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 1 // FusionFix world_purkinje.patch: luminance, one
++    def c186, 0.720000029, 0.949999988, 1.39999998, 0 // FusionFix world_purkinje.patch: the rods' cool tint
+     defi i0, 7, 0, 0, 0
+     dcl_texcoord v0.xy
+     dcl_2d s0
+@@ -223,6 +225,15 @@
+     mov_sat r1.x, r1.x
+     add r0.w, -r8.y, c82.z
+     pow r2.x, r1.x, r0.w
++    // --- FusionFix world_purkinje.patch: dark pixels (r0.xyz) towards their luminance in a cool tint, as the rods see
++    dp3 r30.w, r0, c185
++    mul_sat r29.w, r30.w, c181.y
++    add r29.w, -r29.w, c185.w
++    mul r29.w, r29.w, r29.w
++    mul r29.w, r29.w, c181.x
++    mul r30.xyz, r30.w, c186
++    lrp r31.xyz, r29.w, r30, r0
++    mov r0.xyz, r31
+     mul oC0.xyz, r0, r2.x
+     mov oC0.w, c2.y
+ 
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS17.asm b/win32_30_nv8/rage_postfx/rage_postfxPS17.asm
+index 8d3b1a7d..db3bc5b9 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS17.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS17.asm
+@@ -46,6 +46,8 @@
+     def c2, 0, 2, 4, 8
+     def c3, 0.25, 1, 256, 0
+     def c4, 256, 2, 4, 8
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 1 // FusionFix world_purkinje.patch: luminance, one
++    def c186, 0.720000029, 0.949999988, 1.39999998, 0 // FusionFix world_purkinje.patch: the rods' cool tint
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -146,6 +148,15 @@
+     add r0.xyz, r0, r0
+     add r0.w, -r7.y, c77.z
+     pow r2.x, r1.x, r0.w
++    // --- FusionFix world_purkinje.patch: dark pixels (r0.xyz) towards their luminance in a cool tint, as the rods see
++    dp3 r30.w, r0, c185
++    mul_sat r29.w, r30.w, c181.y
++    add r29.w, -r29.w, c185.w
++    mul r29.w, r29.w, r29.w
++    mul r29.w, r29.w, c181.x
++    mul r30.xyz, r30.w, c186
++    lrp r31.xyz, r29.w, r30, r0
++    mov r0.xyz, r31
+     mul oC0.xyz, r0, r2.x
+     mov oC0.w, c3.y
+ 
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS18.asm b/win32_30_nv8/rage_postfx/rage_postfxPS18.asm
+index 1dde72b0..56c66652 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS18.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS18.asm
+@@ -60,6 +60,8 @@
+     def c4, -0.5, -1.5, 1.5, 0.5
+     def c5, 2, -1, 0.125, 0
+     def c6, 256, 2, 4, 8
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 1 // FusionFix world_purkinje.patch: luminance, one
++    def c186, 0.720000029, 0.949999988, 1.39999998, 0 // FusionFix world_purkinje.patch: the rods' cool tint
+     defi i0, 7, 0, 0, 0
+     dcl_texcoord v0.xy
+     dcl_2d s0
+@@ -231,6 +233,15 @@
+     mov_sat r1.x, r1.x
+     add r0.w, -r8.y, c82.z
+     pow r2.x, r1.x, r0.w
++    // --- FusionFix world_purkinje.patch: dark pixels (r0.xyz) towards their luminance in a cool tint, as the rods see
++    dp3 r30.w, r0, c185
++    mul_sat r29.w, r30.w, c181.y
++    add r29.w, -r29.w, c185.w
++    mul r29.w, r29.w, r29.w
++    mul r29.w, r29.w, c181.x
++    mul r30.xyz, r30.w, c186
++    lrp r31.xyz, r29.w, r30, r0
++    mov r0.xyz, r31
+     mul oC0.xyz, r0, r2.x
+     mov oC0.w, c2.y
+ 
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS23.asm b/win32_30_nv8/rage_postfx/rage_postfxPS23.asm
+index 9b124d11..9d02eecb 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS23.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS23.asm
+@@ -51,6 +51,8 @@
+     def c3, 0, 2, 4, 8
+     def c4, 3.20000005, 1.79999995, 1.10000002, 0
+     def c5, 256, 2, 4, 8
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 1 // FusionFix world_purkinje.patch: luminance, one
++    def c186, 0.720000029, 0.949999988, 1.39999998, 0 // FusionFix world_purkinje.patch: the rods' cool tint
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -149,6 +151,15 @@
+     add r0.xyz, r0, r0
+     add r0.w, -r7.y, c77.z
+     pow r2.x, r1.x, r0.w
++    // --- FusionFix world_purkinje.patch: dark pixels (r0.xyz) towards their luminance in a cool tint, as the rods see
++    dp3 r30.w, r0, c185
++    mul_sat r29.w, r30.w, c181.y
++    add r29.w, -r29.w, c185.w
++    mul r29.w, r29.w, r29.w
++    mul r29.w, r29.w, c181.x
++    mul r30.xyz, r30.w, c186
++    lrp r31.xyz, r29.w, r30, r0
++    mov r0.xyz, r31
+     mul oC0.xyz, r0, r2.x
+     mov oC0.w, c2.y
+ 
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS24.asm b/win32_30_nv8/rage_postfx/rage_postfxPS24.asm
+index 19b348aa..0be9326f 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS24.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS24.asm
+@@ -79,6 +79,8 @@
+     def c21, 18.6875, 1, 78.84375, 0
+     
+     def c118, 0.75487766, 0.56984029, 0, 0
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 1 // FusionFix world_purkinje.patch: luminance, one
++    def c186, 0.720000029, 0.949999988, 1.39999998, 0 // FusionFix world_purkinje.patch: the rods' cool tint
+     
+     defi i0, 7, 0, 0, 0
+     dcl_texcoord v0.xy
+@@ -297,6 +299,15 @@
+     frc r1.x, r1.x
+     mad r1.x, r1.x, c11.x, -c11.y
+     add r0.xyz, r0, r1.x
++    // --- FusionFix world_purkinje.patch: dark pixels (r0.xyz) towards their luminance in a cool tint, as the rods see
++    dp3 r30.w, r0, c185
++    mul_sat r29.w, r30.w, c181.y
++    add r29.w, -r29.w, c185.w
++    mul r29.w, r29.w, r29.w
++    mul r29.w, r29.w, c181.x
++    mul r30.xyz, r30.w, c186
++    lrp r31.xyz, r29.w, r30, r0
++    mov r0.xyz, r31
+     max oC0.xyz, r0, c1.x
+     dp3 oC0.w, r0, c1.yzw // compute luma for FXAA
+ 
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS25.asm b/win32_30_nv8/rage_postfx/rage_postfxPS25.asm
+index d27fe7e2..5a1b803c 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS25.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS25.asm
+@@ -51,6 +51,8 @@
+     def c3, 0.25, 1, 256, 0
+     def c4, 3.20000005, 1.79999995, 1.10000002, 0
+     def c5, 256, 2, 4, 8
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 1 // FusionFix world_purkinje.patch: luminance, one
++    def c186, 0.720000029, 0.949999988, 1.39999998, 0 // FusionFix world_purkinje.patch: the rods' cool tint
+     dcl_texcoord v0.xy
+     dcl_2d s0
+     dcl_2d s1
+@@ -157,6 +159,15 @@
+     add r0.xyz, r0, r0
+     add r0.w, -r7.y, c77.z
+     pow r2.x, r1.x, r0.w
++    // --- FusionFix world_purkinje.patch: dark pixels (r0.xyz) towards their luminance in a cool tint, as the rods see
++    dp3 r30.w, r0, c185
++    mul_sat r29.w, r30.w, c181.y
++    add r29.w, -r29.w, c185.w
++    mul r29.w, r29.w, r29.w
++    mul r29.w, r29.w, c181.x
++    mul r30.xyz, r30.w, c186
++    lrp r31.xyz, r29.w, r30, r0
++    mov r0.xyz, r31
+     mul oC0.xyz, r0, r2.x
+     mov oC0.w, c3.y
+ 
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS26.asm b/win32_30_nv8/rage_postfx/rage_postfxPS26.asm
+index e14da885..fd7a5591 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS26.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS26.asm
+@@ -79,6 +79,8 @@
+     def c21, 18.6875, 1, 78.84375, 0
+     
+     def c118, 0.75487766, 0.56984029, 0, 0
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 1 // FusionFix world_purkinje.patch: luminance, one
++    def c186, 0.720000029, 0.949999988, 1.39999998, 0 // FusionFix world_purkinje.patch: the rods' cool tint
+     
+     defi i0, 7, 0, 0, 0
+     dcl_texcoord v0.xy
+@@ -297,6 +299,15 @@
+     frc r1.x, r1.x
+     mad r1.x, r1.x, c11.x, -c11.y
+     add r0.xyz, r0, r1.x
++    // --- FusionFix world_purkinje.patch: dark pixels (r0.xyz) towards their luminance in a cool tint, as the rods see
++    dp3 r30.w, r0, c185
++    mul_sat r29.w, r30.w, c181.y
++    add r29.w, -r29.w, c185.w
++    mul r29.w, r29.w, r29.w
++    mul r29.w, r29.w, c181.x
++    mul r30.xyz, r30.w, c186
++    lrp r31.xyz, r29.w, r30, r0
++    mov r0.xyz, r31
+     max oC0.xyz, r0, c1.x
+     dp3 oC0.w, r0, c1.yzw // compute luma for FXAA
+ 
+diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS28.asm b/win32_30_nv8/rage_postfx/rage_postfxPS28.asm
+index eb6f4303..9aaa5426 100644
+--- a/win32_30_nv8/rage_postfx/rage_postfxPS28.asm
++++ b/win32_30_nv8/rage_postfx/rage_postfxPS28.asm
+@@ -79,6 +79,8 @@
+     def c21, 18.6875, 1, 78.84375, 0
+     
+     def c118, 0.75487766, 0.56984029, 0, 0
++    def c185, 0.212599993, 0.715200007, 0.0722000003, 1 // FusionFix world_purkinje.patch: luminance, one
++    def c186, 0.720000029, 0.949999988, 1.39999998, 0 // FusionFix world_purkinje.patch: the rods' cool tint
+     
+     defi i0, 7, 0, 0, 0
+     dcl_texcoord v0.xy
+@@ -262,6 +264,15 @@
+     frc r1.x, r1.x
+     mad r1.x, r1.x, c11.x, -c11.y
+     add r0.xyz, r0, r1.x
++    // --- FusionFix world_purkinje.patch: dark pixels (r0.xyz) towards their luminance in a cool tint, as the rods see
++    dp3 r30.w, r0, c185
++    mul_sat r29.w, r30.w, c181.y
++    add r29.w, -r29.w, c185.w
++    mul r29.w, r29.w, r29.w
++    mul r29.w, r29.w, c181.x
++    mul r30.xyz, r30.w, c186
++    lrp r31.xyz, r29.w, r30, r0
++    mov r0.xyz, r31
+     max oC0.xyz, r0, c1.x
+     dp3 oC0.w, r0, c1.yzw // compute luma for FXAA
+ 
