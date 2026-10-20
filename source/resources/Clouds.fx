@@ -65,7 +65,7 @@ sampler2D MarchTex0 : register(s8);    // the march's sums: transmittance, sun, 
 sampler2D MarchTex1 : register(s9);    // and glow, first hit
 sampler2D SkyViewTex : register(s10);  // the physical sky's view of the sky (pbrsky.ixx, SkyAtmosphere.fx), while vec4SkyTable.x > 0
 sampler2D HighTex : register(s11);
-sampler3D ShapeTex : register(s12);     // the fair weather clouds' shape (CloudShapeTex): equalised fractal noise     // the high layer (CloudHighTex): cells, fibres, patches, clumps
+sampler3D ShapeTex : register(s12);     // the fair weather clouds' shape (CloudShapeTex): equalised Perlin-Worley noise
 
 float2 vec2InvViewportSize;
 float4 vec4ProjInfo;
@@ -191,7 +191,7 @@ float PixelJitter(float2 pixel)
 
 // Density 0 to 1 at p.
 // - The coverage map's heaps (CloudNoiseTex), blurred to some 250 m, say where the sky is cloudy and how much of it
-//   (PlaceAt's share); a fractal noise in 3D (ShapeTex) cut at a threshold that rises with the height makes the
+//   (PlaceAt's share); a Perlin-Worley noise in 3D (ShapeTex) cut at a threshold that rises with the height makes the
 //   clouds there, flat based, rounding off towards the top and thinning out over its upper part. An overcast sheet
 //   fills the share in and flattens the rise into a deck with a lumpy base.
 // - The detail eats through the whole cloud: round Worley billows of about a sixteenth to a quarter
@@ -319,12 +319,12 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
     if (detail)
     {
         // The noise swept by a coarse octave of the detail that changes up through the layer, so its lumps swirl
-        // instead of sitting as blobs, and a finer octave of it for the outline's ragged edges. The steps towards
-        // the sun take the coarse octave alone.
+        // instead of sitting as blobs. One read: a finer octave mixed in at 3.7 times evened out the Perlin-Worley
+        // billows' lobes and clefts, as any mix of two noises does, and the clouds came out soft.
         float3 w = p * (vec4Shape.y * 0.35) + float3(vec4Wind.zw, fEvolution);
         wander = tex3Dlod(DetailTex, float4(w, 0)).rg - 0.5;
         q.xy += wander * vec4ShapeWind.w;
-        n = lerp(tex3Dlod(ShapeTex, float4(q, 0)).r, tex3Dlod(ShapeTex, float4(q * 3.7 + 0.29, 0)).r, 0.4);
+        n = tex3Dlod(ShapeTex, float4(q, 0)).r;
     }
     else
         n = tex3Dlod(ShapeTex, float4(q, 0)).r;
@@ -343,11 +343,15 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
         float2 billow = tex3Dlod(DetailTex, float4(q, 0)).rg;
         float n = 1.0 - billow.r;
         crease = n;
-        d -= vec4Shape.z * 1.5 * n * n;
+        // Eroded by a remap, (d - e) / (1 - e): what is left of the cloud keeps its full range, so the billows'
+        // edges stay sharp and the inside dense; taken away alone, the erosion thinned every cloud into a haze.
+        float e = vec4Shape.z * 1.5 * n * n;
+        d = (d - e) / max(1.0 - e, 0.1);
         // The fine billows are read through the coarse ones' two channels, so they swirl around
         // them instead of sitting on an even grid: about their own size either way.
         float m = 1.0 - tex3Dlod(DetailTex, float4(q * 5.5 + 0.37 + (billow.rgr - 0.5), 0)).r;
-        d -= vec4Shape.z * 0.8 * m * (0.6 * m + 0.4) * sqrt(EdgeWeight(d));
+        e = vec4Shape.z * 0.8 * m * (0.6 * m + 0.4) * sqrt(EdgeWeight(saturate(d)));
+        d = (d - e) / max(1.0 - e, 0.1);
         // A ragged fringe under the base: the coarse billows eat the bottom eighth harder.
         d -= vec4Shape.z * 0.7 * n * saturate(1.0 - h * 8.0);
         if (d <= 0.0)

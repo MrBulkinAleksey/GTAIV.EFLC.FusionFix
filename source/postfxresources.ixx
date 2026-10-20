@@ -9,6 +9,7 @@ module;
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <thread>
 #include <random>
 #include <regex>
 #include <array>
@@ -2494,10 +2495,12 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
     return CloudDetailTexture;
 }
 
-// The fair weather clouds' shape (Clouds.fx's Density, ShapeTex): 64 x 64 x 64, tiling, value noise in four octaves
-// of 4, 8, 16 and 32 cells a tile, each half as strong as the one before, between the cells by a quintic curve, and
-// equalised, so a threshold of 1 - c leaves a share c of it. The same in both channels. Managed, so it survives a
-// device reset.
+// The clouds' shape (Clouds.fx's Density, ShapeTex): 128 x 128 x 128, tiling, Perlin-Worley noise: gradient noise of
+// 4, 8 and 16 cells a tile dilated by Worley billows of 4, 8 and 16 cells (each two thirds stronger than the next), then
+// cut back by finer billows of 8, 16 and 32 the same way, and equalised, so a threshold of 1 - c leaves a share c of it.
+// The billows give the clouds round lobes with clefts between them; value noise alone came out in smooth blobs, soft
+// as soap. The same in both channels. Made over the CPU's threads, a few hundred milliseconds once. Managed, so it
+// survives a device reset.
 IDirect3DVolumeTexture9* PostFxResource::CloudShapeTex()
 {
     if (CloudShapeTexture)
@@ -2506,48 +2509,82 @@ IDirect3DVolumeTexture9* PostFxResource::CloudShapeTex()
     if (!pDevice)
         return nullptr;
 
-    constexpr int size = 64;
-    auto lattice = [](int x, int y, int z, int seed) {
+    constexpr int size = 128;
+    auto hash = [](int x, int y, int z, int seed) {
         uint32_t h = static_cast<uint32_t>(x) * 73856093u ^ static_cast<uint32_t>(y) * 19349663u ^ static_cast<uint32_t>(z) * 83492791u ^
                      static_cast<uint32_t>(seed) * 2654435761u;
         h = (h ^ (h >> 15)) * 2246822519u;
         h = (h ^ (h >> 13)) * 3266489917u;
-        return static_cast<float>((h ^ (h >> 16)) & 0xffff) / 65535.0f;
+        return h ^ (h >> 16);
     };
-    std::vector<float> value(size * size * size, 0.0f);
-    float amplitude = 1.0f;
-    for (int cells = 4; cells <= 32; cells *= 2, amplitude *= 0.5f)
-    {
-        // The curve's weights and lattice indices along one axis, the same for x, y and z.
-        std::vector<float> t(size);
-        std::vector<int> i0(size), i1(size);
-        for (int i = 0; i < size; ++i)
+    auto unit = [](uint32_t h) { return static_cast<float>(h & 0xffff) / 65536.0f; };
+    // Gradient noise of cells a tile, about -1 to 1, at x, y, z in cells.
+    auto gradient = [&](float x, float y, float z, int cells, int seed) {
+        static constexpr float g[12][3] = { { 1, 1, 0 }, { -1, 1, 0 }, { 1, -1, 0 }, { -1, -1, 0 }, { 1, 0, 1 }, { -1, 0, 1 },
+                                            { 1, 0, -1 }, { -1, 0, -1 }, { 0, 1, 1 }, { 0, -1, 1 }, { 0, 1, -1 }, { 0, -1, -1 } };
+        const int x0 = static_cast<int>(std::floor(x)), y0 = static_cast<int>(std::floor(y)), z0 = static_cast<int>(std::floor(z));
+        const float fx = x - x0, fy = y - y0, fz = z - z0;
+        auto fade = [](float u) { return u * u * u * (u * (u * 6.0f - 15.0f) + 10.0f); };
+        const float u = fade(fx), v = fade(fy), w = fade(fz);
+        float r = 0.0f;
+        for (int c = 0; c < 8; ++c)
         {
-            const float f = static_cast<float>(i) * cells / size;
-            i0[i] = static_cast<int>(f);
-            i1[i] = (i0[i] + 1) % cells;
-            const float u = f - i0[i];
-            t[i] = u * u * u * (u * (u * 6.0f - 15.0f) + 10.0f);
+            const int cx = c & 1, cy = (c >> 1) & 1, cz = (c >> 2) & 1;
+            const auto& d = g[hash((x0 + cx) % cells, (y0 + cy) % cells, (z0 + cz) % cells, seed) % 12];
+            const float dot = d[0] * (fx - cx) + d[1] * (fy - cy) + d[2] * (fz - cz);
+            r += dot * (cx ? u : 1.0f - u) * (cy ? v : 1.0f - v) * (cz ? w : 1.0f - w);
         }
-        for (int z = 0; z < size; ++z)
+        return r;
+    };
+    // Worley noise of cells a tile: 1 at a cell's point, 0 a cell's width from the nearest.
+    auto worley = [&](float x, float y, float z, int cells, int seed) {
+        const int x0 = static_cast<int>(x), y0 = static_cast<int>(y), z0 = static_cast<int>(z);
+        float nearest = 1.0f;
+        for (int dz = -1; dz <= 1; ++dz)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx)
+                {
+                    const int cx = x0 + dx, cy = y0 + dy, cz = z0 + dz;
+                    const uint32_t h = hash((cx + cells) % cells, (cy + cells) % cells, (cz + cells) % cells, seed);
+                    const float px = cx + unit(h) - x, py = cy + unit(h * 747796405u + 1u) - y, pz = cz + unit(h * 2891336453u + 7u) - z;
+                    nearest = (std::min)(nearest, px * px + py * py + pz * pz);
+                }
+        return 1.0f - std::sqrt(nearest);
+    };
+    auto worleyFbm = [&](float x, float y, float z, int cells, int seed) {
+        return 0.625f * worley(x * cells, y * cells, z * cells, cells, seed) +
+               0.25f * worley(x * cells * 2, y * cells * 2, z * cells * 2, cells * 2, seed + 1) +
+               0.125f * worley(x * cells * 4, y * cells * 4, z * cells * 4, cells * 4, seed + 2);
+    };
+
+    std::vector<float> value(static_cast<size_t>(size) * size * size);
+    auto slab = [&](int zBegin, int zEnd) {
+        for (int z = zBegin; z < zEnd; ++z)
             for (int y = 0; y < size; ++y)
                 for (int x = 0; x < size; ++x)
                 {
-                    float v = 0.0f;
-                    for (int c = 0; c < 8; ++c)
-                    {
-                        const int lx = c & 1 ? i1[x] : i0[x], ly = c & 2 ? i1[y] : i0[y], lz = c & 4 ? i1[z] : i0[z];
-                        const float w = (c & 1 ? t[x] : 1.0f - t[x]) * (c & 2 ? t[y] : 1.0f - t[y]) * (c & 4 ? t[z] : 1.0f - t[z]);
-                        v += w * lattice(lx, ly, lz, 900 + cells);
-                    }
-                    value[(z * size + y) * size + x] += amplitude * v;
+                    const float fx = static_cast<float>(x) / size, fy = static_cast<float>(y) / size, fz = static_cast<float>(z) / size;
+                    float perlin = 0.0f, amplitude = 1.0f;
+                    for (int cells = 4; cells <= 16; cells *= 2, amplitude *= 0.5f)
+                        perlin += amplitude * gradient(fx * cells, fy * cells, fz * cells, cells, 900 + cells);
+                    perlin = std::clamp(0.5f + perlin / 1.75f, 0.0f, 1.0f);
+                    const float billows = worleyFbm(fx, fy, fz, 4, 950);
+                    const float perlinWorley = billows + perlin * (1.0f - billows);
+                    const float fine = worleyFbm(fx, fy, fz, 8, 970);
+                    value[(static_cast<size_t>(z) * size + y) * size + x] = (perlinWorley - (fine - 1.0f)) / (2.0f - fine);
                 }
-    }
+    };
+    const int threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()), 1, 16);
+    std::vector<std::thread> workers;
+    for (int i = 0; i < threads; ++i)
+        workers.emplace_back(slab, size * i / threads, size * (i + 1) / threads);
+    for (auto& worker : workers)
+        worker.join();
     {
         std::vector<int> order(value.size());
         for (size_t i = 0; i < order.size(); ++i)
             order[i] = static_cast<int>(i);
-        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return value[a] < value[b]; });
+        std::sort(order.begin(), order.end(), [&](int a, int b) { return value[a] < value[b] || (value[a] == value[b] && a < b); });
         const float last = static_cast<float>(order.size() - 1);
         for (size_t rank = 0; rank < order.size(); ++rank)
             value[order[rank]] = rank / last;
