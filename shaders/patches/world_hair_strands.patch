@@ -1,0 +1,94 @@
+diff --git a/win32_30_nv8/gta_hair_sorted_alpha/gta_hair_sorted_alphaPS5.asm b/win32_30_nv8/gta_hair_sorted_alpha/gta_hair_sorted_alphaPS5.asm
+index ce372da3..44e79d5a 100644
+--- a/win32_30_nv8/gta_hair_sorted_alpha/gta_hair_sorted_alphaPS5.asm
++++ b/win32_30_nv8/gta_hair_sorted_alpha/gta_hair_sorted_alphaPS5.asm
+@@ -49,6 +49,9 @@
+     def c2, 0, 1, 0.333333343, 3.99600005
+     def c3, 128, 8, 4, 0.00392156886
+     def c4, 32, 4, 1, 0.00390625
++    def c5, 37, 89, 0.370000005, 0 // FusionFix world_hair_strands.patch: the waves across the strands per texture unit, the second's phase
++    def c6, 6.28318548, -3.14159274, 0.600000024, 0.400000006 // FusionFix world_hair_strands.patch: cycles into -pi..pi, the two waves' shares
++    def c7, 1, 0.600000024, 0, 0 // FusionFix world_hair_strands.patch: one, the gloss raised at full strength
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord4 v2.xyz
+@@ -114,6 +117,27 @@
+     add r1.xyz, r1, c1.x
+     dp3 r1.w, r1, r1
+     rsq r1.w, r1.w
++    // --- FusionFix world_hair_strands.patch: the normal (r1, r1.w its 1 / length) leans along the strand, by a wave across the strands
++    mul r1.xyz, r1, r1.w
++    mov r5.y, v0.y
++    lrp r5.x, c186.w, r5.y, v0.x // across the strands
++    mul r5.xy, r5.x, c5
++    add r5.y, r5.y, c5.z
++    frc r5.xy, r5
++    mad r5.xy, r5, c6.x, c6.y
++    sincos r6.xy, r5.x
++    mov r5.z, r6.y
++    sincos r6.xy, r5.y
++    mul r5.z, r5.z, c6.z
++    mad r5.z, r6.y, c6.w, r5.z // -1..1, each strand its own
++    mad r5.z, r5.z, c186.y, c186.z
++    mul r5.z, r5.z, c186.x
++    mov r6.xyz, v3
++    lrp r7.xyz, c186.w, v2, r6
++    nrm r6.xyz, r7 // along the strand
++    mad r1.xyz, r6, r5.z, r1
++    dp3 r1.w, r1, r1
++    rsq r1.w, r1.w
+     mul oC0.xyz, r0, c66.x
+     mul r0.xy, r2, c66.w
+     mul r0.y, r0.y, c1.y
+@@ -142,6 +166,9 @@
+     mul oC1.w, r0.z, c3.w
+     mul oC1.xyz, r2, c4.w
+     mul oC2.x, r0.x, -c0.w
++    mov r5.w, c186.x // FusionFix world_hair_strands.patch: a sharper highlight
++    mad r5.w, r5.w, c7.y, c7.x
++    mul r0.y, r0.y, r5.w
+     rsq r0.x, r0.y
+     rcp oC2.y, r0.x
+     mov oC0.w, r0.w
+diff --git a/win32_30_nv8/gta_hair_sorted_alpha_exp/gta_hair_sorted_alpha_expPS6.asm b/win32_30_nv8/gta_hair_sorted_alpha_exp/gta_hair_sorted_alpha_expPS6.asm
+index 323eae4e..d6479d87 100644
+--- a/win32_30_nv8/gta_hair_sorted_alpha_exp/gta_hair_sorted_alpha_expPS6.asm
++++ b/win32_30_nv8/gta_hair_sorted_alpha_exp/gta_hair_sorted_alpha_expPS6.asm
+@@ -34,6 +34,9 @@
+     def c0, 0.125, 0.25, -0.5, 9.99999975e-006
+     def c1, -2, 1, 0, 0.3125
+     def c2, 0, 1, 3.99600005, 4
++    def c5, 37, 89, 0.370000005, 0 // FusionFix world_hair_strands.patch: the waves across the strands per texture unit, the second's phase
++    def c6, 6.28318548, -3.14159274, 0.600000024, 0.400000006 // FusionFix world_hair_strands.patch: cycles into -pi..pi, the two waves' shares
++    def c7, 1, 0.600000024, 0, 0 // FusionFix world_hair_strands.patch: one, the gloss raised at full strength
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord4 v2.xyz
+@@ -72,6 +75,27 @@
+     add r1.xyz, r1, c0.w
+     dp3 r1.w, r1, r1
+     rsq r1.w, r1.w
++    // --- FusionFix world_hair_strands.patch: the normal (r1, r1.w its 1 / length) leans along the strand, by a wave across the strands
++    mul r1.xyz, r1, r1.w
++    mov r5.y, v0.y
++    lrp r5.x, c186.w, r5.y, v0.x // across the strands
++    mul r5.xy, r5.x, c5
++    add r5.y, r5.y, c5.z
++    frc r5.xy, r5
++    mad r5.xy, r5, c6.x, c6.y
++    sincos r6.xy, r5.x
++    mov r5.z, r6.y
++    sincos r6.xy, r5.y
++    mul r5.z, r5.z, c6.z
++    mad r5.z, r6.y, c6.w, r5.z // -1..1, each strand its own
++    mad r5.z, r5.z, c186.y, c186.z
++    mul r5.z, r5.z, c186.x
++    mov r6.xyz, v3
++    lrp r7.xyz, c186.w, v2, r6
++    nrm r6.xyz, r7 // along the strand
++    mad r1.xyz, r6, r5.z, r1
++    dp3 r1.w, r1, r1
++    rsq r1.w, r1.w
+     mul r0.w, r0.w, v4.w
+     mul oC0.xyz, r0, c66.x
+     add r0.xyz, -c15, v5

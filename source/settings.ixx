@@ -2164,6 +2164,9 @@ public:
             { 0, "PREF_GRASS_WIND_DEBUG",       "DEBUG",      "GrassWindDebug",                     "",                           0, nullptr, 0, 1 },
             // Real reflections in the player car's mirrors in first person (carmirrors.ixx)
             { 0, "PREF_CAR_MIRRORS",            "MISC",       "CarMirrors",                         "",                           1, nullptr, 0, 1 },
+            // Hair highlights in streaks along the strands (hairstrands.ixx)
+            { 0, "PREF_HAIR_STRANDS",           "LIGHTING",   "HairStrands",                        "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_HAIR_STRANDS_DEBUG",     "DEBUG",      "HairStrandsDebug",                   "",                           0, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2425,6 +2428,7 @@ public:
             AddRow(category, "VehBoxShadows", "PREF_VEHICLE_BOX_SHADOWS", 2, toggle);
             AddRow(category, "WorldLightShad", "PREF_WORLD_LIGHT_SHADOWS", 2, toggle);
             AddRow(category, "ImprovedGrass", "PREF_GPU_GRASS", 2, toggle);
+            AddRow(category, "HairStrands", "PREF_HAIR_STRANDS", 2, toggle);
             AddEmptyLine(category);
             // The number next to the slider is the reach in feet, 0 keeps the game's own
             for (auto [label, preference] : { std::pair{ "FF_HREACH", "PREF_HEADLIGHT_REACH" }, std::pair{ "FF_LREACH", "PREF_LAMP_REACH" } })
@@ -2470,6 +2474,7 @@ public:
             AddRow(category, "GrassWindDebug", "PREF_GRASS_WIND_DEBUG", 2, toggle);
             AddRow(category, "GpuGrassDebug", "PREF_GPU_GRASS_DEBUG", 2, toggle);
             AddRow(category, "AerialDebug", "PREF_AERIAL_DEBUG", 2, toggle);
+            AddRow(category, "HairStrandsDbg", "PREF_HAIR_STRANDS_DEBUG", 2, toggle);
             AddEmptyLine(category);
             AddRow(category, "FGDebug", "PREF_FG_DEBUG_VIEW", 4, "MENU_DISPLAY_FG_DEBUG");
         }

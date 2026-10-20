@@ -226,6 +226,9 @@ Grass Wind Debug View
 [GpuGrassDebug]
 Dense grass: colour by surface
 
+[HairStrandsDbg]
+Hair Strands Debug View
+
 [AerialDebug]
 Aerial Perspective Debug View
 
@@ -339,6 +342,9 @@ Sun Lens Flare
 
 [CarMirrors]
 Car Mirror Reflections
+
+[HairStrands]
+Hair Strands
 
 [FF_PROCDIST]
 Grass & Props Distance
