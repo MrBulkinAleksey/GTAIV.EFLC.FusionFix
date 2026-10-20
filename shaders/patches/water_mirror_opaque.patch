@@ -1,19 +1,21 @@
 diff --git a/win32_30_nv8/water/waterPS1.asm b/win32_30_nv8/water/waterPS1.asm
-index 6601c7c2..aaa9b65b 100644
+index 6601c7c..6da0583 100644
 --- a/win32_30_nv8/water/waterPS1.asm
 +++ b/win32_30_nv8/water/waterPS1.asm
-@@ -84,6 +84,10 @@
+@@ -84,6 +84,12 @@
      texld r1, r1.zyzw, s2
      mov r2.zw, c0.w
      texldl r2, r2, s1
 +    // FusionFix car mirrors: the reflection on s1 is the main view's water reflection, read at the mirror's pixels,
-+    // whatever stood in front of the car there; in a car mirror's pass (c204.z 1) the sky's colour at the horizon
-+    add r19.xyz, -r2, c72
++    // whatever stood in front of the car there; in a car mirror's pass (c204.z 1) the sky's colour at the horizon,
++    // brought to the reflection's HDR scale by c72.w as the water's own colour below is
++    mul r19.xyz, c72, c72.w
++    add r19.xyz, r19, -r2
 +    mad r2.xyz, c204.z, r19, r2
      mul r0.xyz, r2, c73.x
      
      // LogDepth Read
-@@ -97,6 +101,9 @@
+@@ -97,6 +103,9 @@
      cmp r1.x, r1.x, r1.z, c0.w
      pow r2.x, r1_abs.x, c0.z
      add_sat r1.x, r2.x, c3.w
@@ -23,25 +25,3 @@ index 6601c7c2..aaa9b65b 100644
      rcp r1.z, r1.x
      mul r0.xyz, r0, r1.z
      add r1.z, r0.w, c1.w
-@@ -105,12 +112,21 @@
-     mul r1.z, r1.z, r1.z
-     mul r0.w, r0_abs.w, r1.z
-     mad r0.w, r0.w, c4.x, c4.y
-+    mov r20.w, r0.w // FusionFix car mirrors: the Fresnel term, kept
-     mul r0.w, r1.x, r0.w
-     mov oC0.w, r1.x
-     mul r0.w, r0.w, c0.y
-     mul r0.xyz, r0, r0.w
-     mul r0.w, r1.y, c72.w
-     mad r0.xyz, c66, r0.w, r0
-+    // FusionFix car mirrors: in a car mirror's pass (c204.z 1) the water's own colour going over to the sky's by the
-+    // Fresnel term, opaque (above): the main view's reflection on s1 and the scene's depth on s2 are not the
-+    // mirror's
-+    mov r20.xyz, c72
-+    add r20.xyz, r20, -c66
-+    mad r20.xyz, r20, r20.w, c66
-+    add r20.xyz, r20, -r0
-+    mad r0.xyz, c204.z, r20, r0
-     mul oC0.xyz, r0, c39.y
-     
-     // LogDepth Write
