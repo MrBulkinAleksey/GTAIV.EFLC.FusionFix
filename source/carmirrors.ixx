@@ -105,6 +105,47 @@ namespace CarMirrors
     static constexpr float NearCorona = 60.0f;
     static uint32_t nearRegistered[2]{}, nearOutOfView[2]{}, nearListed[2]{};
     static uintptr_t mirrorPhase = 0;      // CRenderPhaseMirrorReflection, as PhaseView last saw it for our mirror
+    // Diagnostics (render thread, logged every 300 frames): the targets and depth states on the device as the mirror's
+    // entities, its water and its coronas are drawn (the water and coronas showed through the mirror's geometry with
+    // the depth test set on)
+    struct PassTargets
+    {
+        UINT colourWidth, colourHeight, depthWidth, depthHeight;
+        D3DFORMAT colourFormat, depthFormat;
+        DWORD zEnable, zFunc, zWrite;
+        bool known;
+    };
+    enum { TargetsEntities, TargetsWater, TargetsCoronas, TargetSites };
+    static PassTargets passTargets[TargetSites]{};
+
+    static void CaptureTargets(int site)
+    {
+        auto device = rage::grcDevice::GetD3DDevice();
+        if (!device)
+            return;
+        auto real = RageDirect3DDevice9::RealDevice(device);
+        PassTargets t{};
+        IDirect3DSurface9* surface = nullptr;
+        D3DSURFACE_DESC desc{};
+        if (SUCCEEDED(real->GetRenderTarget(0, &surface)) && surface)
+        {
+            if (SUCCEEDED(surface->GetDesc(&desc)))
+                t.colourWidth = desc.Width, t.colourHeight = desc.Height, t.colourFormat = desc.Format;
+            surface->Release();
+        }
+        surface = nullptr;
+        if (SUCCEEDED(real->GetDepthStencilSurface(&surface)) && surface)
+        {
+            if (SUCCEEDED(surface->GetDesc(&desc)))
+                t.depthWidth = desc.Width, t.depthHeight = desc.Height, t.depthFormat = desc.Format;
+            surface->Release();
+        }
+        real->GetRenderState(D3DRS_ZENABLE, &t.zEnable);
+        real->GetRenderState(D3DRS_ZFUNC, &t.zFunc);
+        real->GetRenderState(D3DRS_ZWRITEENABLE, &t.zWrite);
+        t.known = true;
+        passTargets[site] = t;
+    }
     static uint32_t extraBucketDraws = 0;  // and the main scene's extra buckets (ExtraBuckets)
     static uint32_t waterFlagMissing = 0;  // the mirror's water draws whose draw list had no flag 0x10 (render thread)
     static const uint32_t* waterTotals[2]{}; // CE 0x1550EAC, 0x154E300: water.dat's quads and triangles
@@ -223,6 +264,8 @@ namespace CarMirrors
     // the window was broken.
     static void MirrorDrawBegin(EntityClass::Kind kind)
     {
+        if (mirrorPass && !passTargets[TargetsEntities].known)
+            CaptureTargets(TargetsEntities);
         if (mirrorPass && kind == EntityClass::Kind::Ped && currentTechniqueGroup && *currentTechniqueGroup != -1)
         {
             pedSavedGroup = *currentTechniqueGroup;
@@ -537,6 +580,16 @@ namespace CarMirrors
         if (mirrorCoronaFrames)
             FusionLog::Write("CarMirrors", "Coronas", "listed for the mirror per frame: %.1f tested in front of its plane, %.1f seen (%u frames)\n",
                 float(mirrorCoronaTested) / mirrorCoronaFrames, float(mirrorCoronaListed) / mirrorCoronaFrames, mirrorCoronaFrames);
+        static constexpr const char* siteNames[] = { "entities", "water", "coronas" };
+        for (int i = 0; i < TargetSites; ++i)
+        {
+            const auto t = passTargets[i];
+            if (t.known)
+                FusionLog::Write("CarMirrors", "Targets", "%s: colour %ux%u format %d, depth %ux%u format %d; z enable %u, func %u, write %u\n",
+                    siteNames[i], t.colourWidth, t.colourHeight, int(t.colourFormat), t.depthWidth, t.depthHeight, int(t.depthFormat),
+                    t.zEnable, t.zFunc, t.zWrite);
+            passTargets[i].known = false;
+        }
         if (mirrorCoronaFrames)
             FusionLog::Write("CarMirrors", "Coronas", "within %.0f m of the mirror per frame, headlights / the rest: registered %.1f / %.1f, "
                 "of them out of the game camera's view %.1f / %.1f, listed by the mirror's %.1f / %.1f\n", NearCorona,
@@ -924,6 +977,8 @@ namespace CarMirrors
         if (!inMirrorWater)
             return;
         reinterpret_cast<uint32_t*>(regs.esp)[1] = 1; // D3DBLEND_ZERO
+        if (!passTargets[TargetsWater].known)
+            CaptureTargets(TargetsWater);
         if (setRenderState)
         {
             setRenderState(4, 5);                     // the source by its alpha (D3DBLEND_SRCALPHA)
@@ -1068,6 +1123,8 @@ namespace CarMirrors
         auto real = RageDirect3DDevice9::RealDevice(device);
         if (!coronaStatesSaved)
         {
+            if (!passTargets[TargetsCoronas].known)
+                CaptureTargets(TargetsCoronas);
             for (size_t i = 0; i < std::size(CoronaStates); ++i)
                 real->GetRenderState(CoronaStates[i], &coronaSavedStates[i]);
             coronaStatesSaved = true;
