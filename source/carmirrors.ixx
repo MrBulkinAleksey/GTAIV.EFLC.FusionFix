@@ -98,6 +98,8 @@ namespace CarMirrors
     static uint32_t techniqueDraws = 0;    // frames the mirror's entities went in the reflection techniques
     static uint32_t skyDraws = 0;          // the car mirror's skies drawn (render thread)
     static uint32_t coronaDraws = 0;       // and its coronas
+    static uint32_t mirrorCoronaFrames = 0, mirrorCoronaTested = 0, mirrorCoronaListed = 0; // listed for the mirror's view (main thread)
+    static uintptr_t mirrorPhase = 0;      // CRenderPhaseMirrorReflection, as PhaseView last saw it for our mirror
     static uint32_t extraBucketDraws = 0;  // and the main scene's extra buckets (ExtraBuckets)
     static uint32_t waterFlagMissing = 0;  // the mirror's water draws whose draw list had no flag 0x10 (render thread)
     static const uint32_t* waterTotals[2]{}; // CE 0x1550EAC, 0x154E300: water.dat's quads and triangles
@@ -1035,9 +1037,7 @@ namespace CarMirrors
     };
     static CoronaCopy coronaCopy;
     static SafetyHookMid coronaCopyHook;
-    static uintptr_t mirrorPhase = 0;    // CRenderPhaseMirrorReflection, as PhaseView last saw it for our mirror
     static int32_t mirrorCoronaFirst[4]{}, mirrorCoronaCount[4]{};
-    static uint32_t mirrorCoronaFrames = 0, mirrorCoronaTested = 0, mirrorCoronaListed = 0;
 
     // mov [counts + eax * 4], ecx: eax the buffer, ecx the game camera's count
     static void MirrorCoronaList(SafetyHookContext& regs)
