@@ -99,6 +99,10 @@ namespace CarMirrors
     static uint32_t skyDraws = 0;          // the car mirror's skies drawn (render thread)
     static uint32_t coronaDraws = 0;       // and its coronas
     static uint32_t mirrorCoronaFrames = 0, mirrorCoronaTested = 0, mirrorCoronaListed = 0; // listed for the mirror's view (main thread)
+    // within NearCorona of the mirror, registered on its side of the plane: [directional (headlights), the rest],
+    // all of them, those the game camera's view left out, those the mirror's view lists
+    static constexpr float NearCorona = 60.0f;
+    static uint32_t nearRegistered[2]{}, nearOutOfView[2]{}, nearListed[2]{};
     static uintptr_t mirrorPhase = 0;      // CRenderPhaseMirrorReflection, as PhaseView last saw it for our mirror
     static uint32_t extraBucketDraws = 0;  // and the main scene's extra buckets (ExtraBuckets)
     static uint32_t waterFlagMissing = 0;  // the mirror's water draws whose draw list had no flag 0x10 (render thread)
@@ -532,7 +536,14 @@ namespace CarMirrors
         if (mirrorCoronaFrames)
             FusionLog::Write("CarMirrors", "Coronas", "listed for the mirror per frame: %.1f tested in front of its plane, %.1f seen (%u frames)\n",
                 float(mirrorCoronaTested) / mirrorCoronaFrames, float(mirrorCoronaListed) / mirrorCoronaFrames, mirrorCoronaFrames);
+        if (mirrorCoronaFrames)
+            FusionLog::Write("CarMirrors", "Coronas", "within %.0f m of the mirror per frame, headlights / the rest: registered %.1f / %.1f, "
+                "of them out of the game camera's view %.1f / %.1f, listed by the mirror's %.1f / %.1f\n", NearCorona,
+                float(nearRegistered[0]) / mirrorCoronaFrames, float(nearRegistered[1]) / mirrorCoronaFrames,
+                float(nearOutOfView[0]) / mirrorCoronaFrames, float(nearOutOfView[1]) / mirrorCoronaFrames,
+                float(nearListed[0]) / mirrorCoronaFrames, float(nearListed[1]) / mirrorCoronaFrames);
         mirrorCoronaFrames = mirrorCoronaTested = mirrorCoronaListed = 0;
+        nearRegistered[0] = nearRegistered[1] = nearOutOfView[0] = nearOutOfView[1] = nearListed[0] = nearListed[1] = 0;
         CoronaRender::nOtherListed = CoronaRender::nOtherBehind = CoronaRender::nOtherDrawn = 0;
         // items: the water's quads, triangles and far cells, summed over the frames
         FusionLog::Write("CarMirrors", "Water", "water.dat %u quads, %u triangles; gathered %u frames, rolled back %u (over the buffers); "
@@ -1083,8 +1094,20 @@ namespace CarMirrors
             if (plane[0] * pos[0] + plane[1] * pos[1] + plane[2] * pos[2] - plane[3] < -radius)
                 continue;
             ++mirrorCoronaTested;
+            const float* eye = reinterpret_cast<const float*>(viewport + 0x70);
+            const float dx = pos[0] - eye[0], dy = pos[1] - eye[1], dz = pos[2] - eye[2];
+            const bool nearby = dx * dx + dy * dy + dz * dz < NearCorona * NearCorona;
+            const int kind = (flags & 0x10) ? 0 : 1;
+            if (nearby)
+            {
+                ++nearRegistered[kind];
+                if (flags & 2)
+                    ++nearOutOfView[kind];
+            }
             if (!c.visible(viewport, nullptr, pos[0], pos[1], pos[2], radius, 0))
                 continue;
+            if (nearby)
+                ++nearListed[kind];
             float brightness = *reinterpret_cast<const float*>(item + 0x34) * *reinterpret_cast<const float*>(item + 0x30);
             if (flags & 0x10)
             {
