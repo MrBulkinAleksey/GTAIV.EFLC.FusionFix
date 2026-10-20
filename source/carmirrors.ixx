@@ -13,6 +13,7 @@ import settings;
 import inireload;
 import firstperson;
 import coronas;
+import entityclass;
 
 // Real reflections in the player car's mirrors, from the driver's seat in first person (Car Mirrors in the menu).
 // The game has planar mirrors for interiors (bathrooms): each frame CE 0xB59DD0 asks 0xA0F820 for the nearest
@@ -49,6 +50,7 @@ namespace CarMirrors
     static bool reflectionShaders = true;   // CarMirrorsReflectionShaders (hidden): 0 draws the mirror's entities with the main view's techniques
     static bool skyAfterEntities = false;   // CarMirrorsSkyAfterEntities (hidden): 1 draws the mirror's sky after its entities, where they left the depth far
     static bool extraBuckets = true;        // CarMirrorsExtraBuckets (hidden): 0 leaves out the main scene's buckets 5 and 4 the fourth way
+    static bool ownGlassInInterior = false; // CarMirrorsOwnGlass (hidden): 1 keeps the car's own glass in its interior mirror
     static bool afterEntitiesHooked = false; // the hook after the mirror's entities is in (AfterMirrorEntities)
     // The game puts the quad along n by a float its quad code reads (0.035 m on PC, 0.0125 with shaders.ixx's Xbox
     // value): read where the code points as the corners are placed, which lands the quad 5 mm in front of the glass.
@@ -163,6 +165,22 @@ namespace CarMirrors
     // The phase clears depth and stencil only (CE 0xD769CE, its colour flag 0), the sky meant to cover the rest: in a
     // tunnel nothing did, and the mirror kept its frames before where nothing was drawn (trails). Cleared to black
     // as the pass starts, MIRROR_RT bound and its viewport set by then.
+    // Low byte 2: the interior mirror's pass, the player's car's position (as its draw command keeps it) in ownPlaces at
+    // the index in the second byte: OwnCarDrawBegin leaves its glass out (vehicle_glass_reflections_wet_mirror.patch).
+    static float ownPlaces[4][3] = {};
+    static uint32_t ownPlaceNext = 0;
+    static bool interiorPass = false; // render thread
+    static float ownPlace[3] = {};
+    static bool ownDrawOn = false;
+
+    static void SetGlassConstant(IDirect3DDevice9* device, bool on, bool leaveOut)
+    {
+        const float tint[4] = { on ? 0.4f : 0.0f, on ? 4.0f * 4.0f : 0.0f, on ? 1.0f : 0.0f, leaveOut ? 1.0f : 0.0f };
+        device->SetPixelShaderConstantF(204, tint, 1);
+        if (auto real = RageDirect3DDevice9::RealDevice(device); real != device)
+            real->SetPixelShaderConstantF(204, tint, 1);
+    }
+
     static void __cdecl MirrorPassTint(uint32_t on)
     {
         auto device = rage::grcDevice::GetD3DDevice();
@@ -170,13 +188,47 @@ namespace CarMirrors
             return;
         if (on)
             device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
-        const float tint[4] = { on ? 0.4f : 0.0f, on ? 4.0f * 4.0f : 0.0f, on ? 1.0f : 0.0f, 0.0f };
-        device->SetPixelShaderConstantF(204, tint, 1);
-        if (auto real = RageDirect3DDevice9::RealDevice(device); real != device)
-            real->SetPixelShaderConstantF(204, tint, 1);
+        interiorPass = (on & 0xff) == 2;
+        if (interiorPass)
+            std::copy_n(ownPlaces[(on >> 8) & 3], 3, ownPlace);
+        ownDrawOn = false;
+        SetGlassConstant(device, on != 0, false);
         if (on)
             for (DWORD stage : { 9u, 11u, 13u })
                 RageDirect3DDevice9::SetTextureBoth(device, stage, nullptr);
+    }
+
+    // Entity draw hooks (render thread): in the interior mirror's pass, the player's car's draws (a vehicle's command
+    // placed where the car stood as the mirror's list was made) have c204.w 1, and its glass shaders draw none of it:
+    // the rear window covered the mirror's sky black even with the blend states of
+    // vehicle_glass_reflection_blend.patch, and the sky was there once the window was broken.
+    static void OwnCarDrawBegin(EntityClass::Kind kind)
+    {
+        if (!interiorPass || kind != EntityClass::Kind::Vehicle)
+            return;
+        uint16_t model;
+        const float* place;
+        if (!EntityClass::CurrentModel(model, place))
+            return;
+        float d2 = 0.0f;
+        for (int i = 0; i < 3; ++i)
+            d2 += (place[i] - ownPlace[i]) * (place[i] - ownPlace[i]);
+        if (d2 > 0.25f * 0.25f)
+            return;
+        if (auto device = rage::grcDevice::GetD3DDevice())
+        {
+            SetGlassConstant(device, true, true);
+            ownDrawOn = true;
+        }
+    }
+
+    static void OwnCarDrawEnd(EntityClass::Kind)
+    {
+        if (!ownDrawOn)
+            return;
+        ownDrawOn = false;
+        if (auto device = rage::grcDevice::GetD3DDevice())
+            SetGlassConstant(device, true, false);
     }
 
     static double NowMs()
@@ -570,7 +622,14 @@ namespace CarMirrors
             const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
             if (const float* m = active && vehicle ? CEntity::GetMatrix(vehicle) : nullptr)
                 PlacePlane(m, *active);
-            callback.Queue(reinterpret_cast<const void*>(&MirrorPassTint), 1);
+            uint32_t pass = 1;
+            if (const float* m = active && active->kind == 2 && !ownGlassInInterior && vehicle ? CEntity::GetMatrix(vehicle) : nullptr)
+            {
+                const uint32_t slot = ownPlaceNext++ & 3;
+                std::copy_n(m + 12, 3, ownPlaces[slot]);
+                pass = 2 | slot << 8;
+            }
+            callback.Queue(reinterpret_cast<const void*>(&MirrorPassTint), pass);
             if (skyHooks[2] && !(skyAfterEntities && afterEntitiesHooked))
                 callback.Queue(reinterpret_cast<const void*>(&MirrorSkyDraw), 0);
         }
@@ -1086,6 +1145,8 @@ class CarMirrorsHooks
 public:
     CarMirrorsHooks()
     {
+        EntityClass::AddDrawHooks(CarMirrors::OwnCarDrawBegin, CarMirrors::OwnCarDrawEnd);
+
         FusionFix::onInitEventAsync() += []()
         {
             static auto readIni = [](CIniReader& ini)
@@ -1099,14 +1160,15 @@ public:
                 CarMirrors::reflectionShaders = ini.ReadInteger("MISC", "CarMirrorsReflectionShaders", 1) != 0;
                 CarMirrors::skyAfterEntities = ini.ReadInteger("MISC", "CarMirrorsSkyAfterEntities", 0) != 0;
                 CarMirrors::extraBuckets = ini.ReadInteger("MISC", "CarMirrorsExtraBuckets", 1) != 0;
+                CarMirrors::ownGlassInInterior = ini.ReadInteger("MISC", "CarMirrorsOwnGlass", 0) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
                 CarMirrors::interiorAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::interiorAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimY", -3.0f), -30.0f, 30.0f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
                     int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut, int(CarMirrors::water),
                     int(CarMirrors::waterReflection), int(CarMirrors::reflectionShaders), int(CarMirrors::skyAfterEntities), int(CarMirrors::extraBuckets),
-                    CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
+                    int(CarMirrors::ownGlassInInterior), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
             };
             CIniReader iniReader("");
             readIni(iniReader);
