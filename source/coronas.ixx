@@ -470,7 +470,10 @@ namespace CoronaRender
         const float axisRight[3] = { ((float*)(viewport + 0x40))[0], ((float*)(viewport + 0x40))[1], ((float*)(viewport + 0x40))[2] };
         const float axisUp[3] = { -((float*)(viewport + 0x50))[0], -((float*)(viewport + 0x50))[1], -((float*)(viewport + 0x50))[2] };
         const float camera[3] = { ((float*)(viewport + 0x70))[0], ((float*)(viewport + 0x70))[1], ((float*)(viewport + 0x70))[2] };
-        SetTechnique(reflection ? 0xF : 0xE, reflection ? 0 : (dim ? 1 : 0));
+        // Another view's pass takes the corona technique's second pass, as the dimmed ones do: tested against the depth
+        // buffer (ZEnable 1), not against the main view's depth texture in the vertex shader (the first pass, depth off),
+        // which had a car mirror show the city's lights through the buildings
+        SetTechnique(reflection ? 0xF : 0xE, reflection ? 0 : ((dim || bOtherView) ? 1 : 0));
 
         for (size_t first = 0; first < drawn.size();)
         {
