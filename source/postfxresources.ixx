@@ -2476,11 +2476,15 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
     return CloudDetailTexture;
 }
 
-// The high layer's texture (Clouds.fx's HighLayer): 512 x 512, tiling over 8 km, each channel equalised so that a
+// The high layer's texture (Clouds.fx's HighLayer): 512 x 512, tiling over 8 km, each channel but green equalised so that a
 // threshold of 1 - c leaves a share c of it:
 // - red, cells: two sizes of jittered round cells (40 and 80 a tile, 200 and 100 m), warped so they are no grid
 //   and frayed at their edges by a fine noise; altocumulus and cirrocumulus;
-// - green, fibres: noise stretched 32 to 1 along x, bent by a slow wave across, and a finer set; cirrus;
+// - green, fibres, not equalised but the density itself, 0 to 1: soft streaks along x some 600 m wide, broken
+//   into lengths of 1 to 3 km, of a gauze of fibres 80 m apart and hair-thin ones 30 m apart that curl a little,
+//   all bent by a slow wave across; cirrus. As noise stretched 32 to 1 everywhere, cut at a threshold, the fibres
+//   ran across the whole sky in even, parallel, solid strands, like combed hair, and cut out of streaks they
+//   came out as brush strokes;
 // - blue, patches: broad noise, where the layer is (read four times larger, so 32 km across);
 // - alpha, clumps: a middle scale noise, where the cells gather and where they thin out.
 // The same as the offline copy it was tuned in. Mips by a box filter; managed, so it survives a reset.
@@ -2558,13 +2562,31 @@ IDirect3DTexture9* PostFxResource::CloudHighTex()
             const float wx = fx + (valueNoise(fx, fy, 16, 16, 2, 500, 0.5f) - 0.5f) * warp;
             const float wy = fy + (valueNoise(fx, fy, 16, 16, 2, 510, 0.5f) - 0.5f) * warp;
             value[0][i] = 0.75f * cells(wx, wy, 40, 520) + 0.35f * cells(wx, wy, 80, 530) - 0.35f * valueNoise(fx, fy, 128, 128, 2, 540, 0.5f);
-            const float bend = (valueNoise(fx, fy, 4, 4, 2, 600, 0.5f) - 0.5f) * size * 0.1f;
-            value[1][i] = 0.65f * valueNoise(fx, fy + bend, 2, 64, 3, 610, 0.5f) + 0.35f * valueNoise(fx + 37.0f, fy + bend * 1.2f, 4, 160, 2, 620, 0.5f);
+            auto smooth = [](float v, float from, float to) {
+                const float u = std::clamp((v - from) / (to - from), 0.0f, 1.0f);
+                return u * u * (3.0f - 2.0f * u);
+            };
+            const float bentY = fy + (valueNoise(fx, fy, 2, 4, 2, 600, 0.5f) - 0.5f) * size * 0.08f;
+            const float curl = (valueNoise(fx, fy, 16, 32, 2, 660, 0.5f) - 0.5f) * 6.0f;
+            const float streak = smooth(valueNoise(fx, bentY, 1, 12, 2, 630, 0.4f), 0.4f, 0.85f);
+            const float length = smooth(valueNoise(fx, bentY, 3, 12, 2, 640, 0.5f), 0.3f, 0.8f);
+            const float gauze = smooth(valueNoise(fx, bentY + curl, 4, 96, 2, 650, 0.5f), 0.2f, 0.8f);
+            const float hair = smooth(valueNoise(fx, bentY + curl * 1.3f, 8, 256, 2, 680, 0.5f), 0.45f, 0.9f);
+            value[1][i] = streak * length * (0.45f * gauze + 0.55f * hair);
             value[2][i] = valueNoise(fx, fy, 4, 4, 4, 700, 0.55f);
             value[3][i] = valueNoise(fx, fy, 10, 10, 3, 800, 0.5f);
         }
-    for (auto& channel : value)
-        equalise(channel);
+    for (int channel = 0; channel < 4; ++channel)
+    {
+        if (channel != 1)
+        {
+            equalise(value[channel]);
+            continue;
+        }
+        const float peak = (std::max)(*std::max_element(value[1].begin(), value[1].end()), 1e-5f);
+        for (auto& v : value[1])
+            v /= peak;
+    }
 
     if (FAILED(RealDevice(pDevice)->CreateTexture(size, size, 0, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &CloudHighTexture, nullptr)))
     {
