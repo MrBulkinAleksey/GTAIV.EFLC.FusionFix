@@ -570,7 +570,7 @@ public:
     float fVolumetricCloudsBase = 800.0f;
     float fVolumetricCloudsThickness = 600.0f;
     float fVolumetricCloudsDensity = 0.03f;
-    float fVolumetricCloudsDetail = 0.6f;
+    float fVolumetricCloudsDetail = 1.0f;
     float fVolumetricCloudsDetailScale = 1300.0f;
     float fVolumetricCloudsHaze = 25000.0f;
     float fVolumetricCloudsMaxDistance = 40000.0f;
@@ -603,7 +603,7 @@ public:
     // detail swirls it, in its own range and tiles.
     float fVolumetricCloudsShapeCover = 1.0f;
     float fVolumetricCloudsShapeSize = 2500.0f;
-    float fVolumetricCloudsShapeSoftness = 0.1f;
+    float fVolumetricCloudsShapeSoftness = 0.3f;
     float fVolumetricCloudsShapeSwirl = 0.12f;
     // The high layer's cirrus fibres' density and its cells' share, against their kinds' (hidden [WEATHER] tweaks).
     float fCloudHighFibres = 2.0f;
@@ -2068,7 +2068,7 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsBase", &PostFxResource::fVolumetricCloudsBase, 800.0f, 50.0f, 10000.0f),
             IniFloat("WEATHER", "VolumetricCloudsThickness", &PostFxResource::fVolumetricCloudsThickness, 600.0f, 50.0f, 5000.0f),
             IniFloat("WEATHER", "VolumetricCloudsDensity", &PostFxResource::fVolumetricCloudsDensity, 0.03f, 0.0005f, 1.0f),
-            IniFloat("WEATHER", "VolumetricCloudsDetail", &PostFxResource::fVolumetricCloudsDetail, 0.6f, 0.0f, 1.0f),
+            IniFloat("WEATHER", "VolumetricCloudsDetail", &PostFxResource::fVolumetricCloudsDetail, 1.0f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsDetailScale", &PostFxResource::fVolumetricCloudsDetailScale, 1300.0f, 20.0f, 10000.0f),
             IniFloat("WEATHER", "VolumetricCloudsHaze", &PostFxResource::fVolumetricCloudsHaze, 25000.0f, 1000.0f, 200000.0f),
             IniFloat("WEATHER", "VolumetricCloudsMaxDistance", &PostFxResource::fVolumetricCloudsMaxDistance, 40000.0f, 1000.0f, 200000.0f),
@@ -2093,7 +2093,7 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsAbsorption", &PostFxResource::fVolumetricCloudsAbsorption, 0.35f, 0.05f, 3.0f),
             IniFloat("WEATHER", "VolumetricCloudsShapeCover", &PostFxResource::fVolumetricCloudsShapeCover, 1.0f, 0.0f, 3.0f),
             IniFloat("WEATHER", "VolumetricCloudsShapeSize", &PostFxResource::fVolumetricCloudsShapeSize, 2500.0f, 500.0f, 16000.0f),
-            IniFloat("WEATHER", "VolumetricCloudsShapeSoftness", &PostFxResource::fVolumetricCloudsShapeSoftness, 0.1f, 0.01f, 0.5f),
+            IniFloat("WEATHER", "VolumetricCloudsShapeSoftness", &PostFxResource::fVolumetricCloudsShapeSoftness, 0.3f, 0.01f, 0.5f),
             IniFloat("WEATHER", "VolumetricCloudsShapeSwirl", &PostFxResource::fVolumetricCloudsShapeSwirl, 0.12f, 0.0f, 1.0f),
             IniFloat("WEATHER", "CloudHighFibres", &PostFxResource::fCloudHighFibres, 2.0f, 0.0f, 10.0f),
             IniFloat("WEATHER", "CloudHighCells", &PostFxResource::fCloudHighCells, 1.0f, 0.0f, 3.0f),
@@ -2495,12 +2495,12 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
     return CloudDetailTexture;
 }
 
-// The clouds' shape (Clouds.fx's Density, ShapeTex): 128 x 128 x 128, tiling, Perlin-Worley noise: gradient noise of
-// 4, 8 and 16 cells a tile dilated by Worley billows of 4, 8 and 16 cells (each two thirds stronger than the next), then
-// cut back by finer billows of 8, 16 and 32 the same way, and equalised, so a threshold of 1 - c leaves a share c of it.
-// The billows give the clouds round lobes with clefts between them; value noise alone came out in smooth blobs, soft
-// as soap. The same in both channels. Made over the CPU's threads, a few hundred milliseconds once. Managed, so it
-// survives a device reset.
+// The clouds' shape (Clouds.fx's Density, ShapeTex): 128 x 128 x 128, tiling, Worley noise of 4, 8 and 16 cells a
+// tile (each 0.625, 0.25 and 0.125 of it), 1 at a cell's point, equalised, so a threshold of 1 - c leaves a share c of
+// it: cut, it falls apart into round heaps with clear sky between them, lumpier towards their edges. Value noise came
+// out in smooth blobs, soft as soap; gradient noise dilated by Worley's (Perlin-Worley) in long smooth sausages. Made
+// over the CPU's threads, a few hundred milliseconds once. The same in both channels. Managed, so it survives a device
+// reset.
 IDirect3DVolumeTexture9* PostFxResource::CloudShapeTex()
 {
     if (CloudShapeTexture)
@@ -2518,25 +2518,7 @@ IDirect3DVolumeTexture9* PostFxResource::CloudShapeTex()
         return h ^ (h >> 16);
     };
     auto unit = [](uint32_t h) { return static_cast<float>(h & 0xffff) / 65536.0f; };
-    // Gradient noise of cells a tile, about -1 to 1, at x, y, z in cells.
-    auto gradient = [&](float x, float y, float z, int cells, int seed) {
-        static constexpr float g[12][3] = { { 1, 1, 0 }, { -1, 1, 0 }, { 1, -1, 0 }, { -1, -1, 0 }, { 1, 0, 1 }, { -1, 0, 1 },
-                                            { 1, 0, -1 }, { -1, 0, -1 }, { 0, 1, 1 }, { 0, -1, 1 }, { 0, 1, -1 }, { 0, -1, -1 } };
-        const int x0 = static_cast<int>(std::floor(x)), y0 = static_cast<int>(std::floor(y)), z0 = static_cast<int>(std::floor(z));
-        const float fx = x - x0, fy = y - y0, fz = z - z0;
-        auto fade = [](float u) { return u * u * u * (u * (u * 6.0f - 15.0f) + 10.0f); };
-        const float u = fade(fx), v = fade(fy), w = fade(fz);
-        float r = 0.0f;
-        for (int c = 0; c < 8; ++c)
-        {
-            const int cx = c & 1, cy = (c >> 1) & 1, cz = (c >> 2) & 1;
-            const auto& d = g[hash((x0 + cx) % cells, (y0 + cy) % cells, (z0 + cz) % cells, seed) % 12];
-            const float dot = d[0] * (fx - cx) + d[1] * (fy - cy) + d[2] * (fz - cz);
-            r += dot * (cx ? u : 1.0f - u) * (cy ? v : 1.0f - v) * (cz ? w : 1.0f - w);
-        }
-        return r;
-    };
-    // Worley noise of cells a tile: 1 at a cell's point, 0 a cell's width from the nearest.
+    // Worley noise of cells a tile at x, y, z in cells: 1 at a cell's point, 0 a cell's width from the nearest.
     auto worley = [&](float x, float y, float z, int cells, int seed) {
         const int x0 = static_cast<int>(x), y0 = static_cast<int>(y), z0 = static_cast<int>(z);
         float nearest = 1.0f;
@@ -2551,11 +2533,6 @@ IDirect3DVolumeTexture9* PostFxResource::CloudShapeTex()
                 }
         return 1.0f - std::sqrt(nearest);
     };
-    auto worleyFbm = [&](float x, float y, float z, int cells, int seed) {
-        return 0.625f * worley(x * cells, y * cells, z * cells, cells, seed) +
-               0.25f * worley(x * cells * 2, y * cells * 2, z * cells * 2, cells * 2, seed + 1) +
-               0.125f * worley(x * cells * 4, y * cells * 4, z * cells * 4, cells * 4, seed + 2);
-    };
 
     std::vector<float> value(static_cast<size_t>(size) * size * size);
     auto slab = [&](int zBegin, int zEnd) {
@@ -2563,15 +2540,10 @@ IDirect3DVolumeTexture9* PostFxResource::CloudShapeTex()
             for (int y = 0; y < size; ++y)
                 for (int x = 0; x < size; ++x)
                 {
-                    const float fx = static_cast<float>(x) / size, fy = static_cast<float>(y) / size, fz = static_cast<float>(z) / size;
-                    float perlin = 0.0f, amplitude = 1.0f;
-                    for (int cells = 4; cells <= 16; cells *= 2, amplitude *= 0.5f)
-                        perlin += amplitude * gradient(fx * cells, fy * cells, fz * cells, cells, 900 + cells);
-                    perlin = std::clamp(0.5f + perlin / 1.75f, 0.0f, 1.0f);
-                    const float billows = worleyFbm(fx, fy, fz, 4, 950);
-                    const float perlinWorley = billows + perlin * (1.0f - billows);
-                    const float fine = worleyFbm(fx, fy, fz, 8, 970);
-                    value[(static_cast<size_t>(z) * size + y) * size + x] = (perlinWorley - (fine - 1.0f)) / (2.0f - fine);
+                    const float fx = static_cast<float>(x) * 4 / size, fy = static_cast<float>(y) * 4 / size, fz = static_cast<float>(z) * 4 / size;
+                    value[(static_cast<size_t>(z) * size + y) * size + x] = 0.625f * worley(fx, fy, fz, 4, 950) +
+                                                                             0.25f * worley(fx * 2, fy * 2, fz * 2, 8, 951) +
+                                                                             0.125f * worley(fx * 4, fy * 4, fz * 4, 16, 952);
                 }
     };
     const int threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()), 1, 16);
