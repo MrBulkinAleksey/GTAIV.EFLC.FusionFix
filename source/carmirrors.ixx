@@ -51,6 +51,7 @@ namespace CarMirrors
     static bool skyAfterEntities = false;   // CarMirrorsSkyAfterEntities (hidden): 1 draws the mirror's sky after its entities, where they left the depth far
     static bool extraBuckets = true;        // CarMirrorsExtraBuckets (hidden): 0 leaves out the main scene's buckets 5 and 4 the fourth way
     static bool ownGlassInInterior = false; // CarMirrorsOwnGlass (hidden): 1 keeps the car's own glass in its interior mirror
+    static bool lampCoronas = true;         // CarMirrorsLampCoronas (hidden): 0 leaves the lamps only the mirror sees unreadied (no corona, no light)
     static bool afterEntitiesHooked = false; // the hook after the mirror's entities is in (AfterMirrorEntities)
     // The game puts the quad along n by a float its quad code reads (0.035 m on PC, 0.0125 with shaders.ixx's Xbox
     // value): read where the code points as the corners are placed, which lands the quad 5 mm in front of the glass.
@@ -768,6 +769,12 @@ namespace CarMirrors
     // the main camera (its mirror gate let through by WaterVisibilityGate). Its water is gathered after every phase's
     // scan (GatherMirrorWater).
     static uintptr_t waterScanPhase = 0;      // the phase the outdoor scan ran for this frame, for GatherMirrorWater
+    // The map's lamps register their lights and coronas as an entity is readied for the frame (CEntity vtable +0x84,
+    // CE 0xA32640 -> 0xC1DB60), skipped beyond 35 m of the camera unless the entity is seen by a phase in the lights'
+    // mask ([0x1FBB75C], CE 0xC1DBA7). The scan puts a phase in that mask by its flag 0x2000000 (+0x8E8, read in
+    // CE 0xAE4880 under 0xB1E810), which the mirror phase has not: no lamp behind the camera had a corona for the
+    // mirror (14-27 within 60 m of it registered, 1-10 of them out of the game camera's view). Given for its scan.
+    static constexpr uint32_t PhaseLightsFlag = 0x2000000;
 
     static void __fastcall PhaseVisibility(uintptr_t phase, void*)
     {
@@ -780,9 +787,14 @@ namespace CarMirrors
         {
             const bool gated = !waterGateHooks[0];
             if (gated) *mirrorOn = 0;
+            auto& flags = *reinterpret_cast<uint32_t*>(phase + 0x8E8);
+            const uint32_t before = flags;
+            if (lampCoronas)
+                flags |= PhaseLightsFlag;
             inMirrorScan = true;
             waterVisibility(phase, nullptr);
             inMirrorScan = false;
+            flags = (flags & ~PhaseLightsFlag) | (before & PhaseLightsFlag);
             if (gated) *mirrorOn = 1;
             ++outdoorScans;
             waterScanPhase = phase;
@@ -1357,14 +1369,15 @@ public:
                 CarMirrors::skyAfterEntities = ini.ReadInteger("MISC", "CarMirrorsSkyAfterEntities", 0) != 0;
                 CarMirrors::extraBuckets = ini.ReadInteger("MISC", "CarMirrorsExtraBuckets", 1) != 0;
                 CarMirrors::ownGlassInInterior = ini.ReadInteger("MISC", "CarMirrorsOwnGlass", 0) != 0;
+                CarMirrors::lampCoronas = ini.ReadInteger("MISC", "CarMirrorsLampCoronas", 1) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
                 CarMirrors::interiorAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::interiorAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimY", -3.0f), -30.0f, 30.0f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
                     int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut, int(CarMirrors::water),
                     int(CarMirrors::waterReflection), int(CarMirrors::reflectionShaders), int(CarMirrors::skyAfterEntities), int(CarMirrors::extraBuckets),
-                    int(CarMirrors::ownGlassInInterior), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
+                    int(CarMirrors::ownGlassInInterior), int(CarMirrors::lampCoronas), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
             };
             CIniReader iniReader("");
             readIni(iniReader);
