@@ -355,6 +355,17 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
         if (d <= 0.0)
             return 0.0;
     }
+    else
+    {
+        // The steps towards the sun: the coarse billows without their swirl, and the fine ones' share on average,
+        // measured offline from the lit points of every kind. Without the detail the steps found some ten times the
+        // cloud the eye sees in fair weather, which takes the detail at full strength: every face turned from the sun
+        // fell into deep shade and those towards it blazed, the clouds lit either too much or too little.
+        float n = 1.0 - tex3Dlod(DetailTex, float4(p * vec4Shape.y + float3(vec4Wind.zw, fEvolution), 0)).r;
+        d -= vec4Shape.z * (1.5 * n * n + 0.45 + 0.7 * n * saturate(1.0 - h * 8.0));
+        if (d <= 0.0)
+            return 0.0;
+    }
 
     soft = d;
     float k = lerp(vec2Compress.x, vec2Compress.y, h);
