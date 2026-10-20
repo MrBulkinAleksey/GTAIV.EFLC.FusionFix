@@ -926,6 +926,7 @@ public:
     // inside and out (they fake the bounced light the indirect light then adds).
     // FillLightsLog (DEBUG) writes each large or filler map light once, and a count every 10 s,
     // to GTAIV.EFLC.FusionFix.FillLights.log.
+    static bool FillLightsDebug() { static auto p = FusionFixSettings.GetRef("PREF_FILL_LIGHTS_DEBUG"); return p && p->get() != 0; }
     int32_t nFillLights = 0;
     float fFillLightsMinRadius = 30.0f;
     float fFillLightsMaxRadius = 30.0f;

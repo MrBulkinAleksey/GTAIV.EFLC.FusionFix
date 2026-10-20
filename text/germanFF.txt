@@ -229,6 +229,9 @@ Dense grass: colour by surface
 [AerialDebug]
 Aerial Perspective Debug View
 
+[FillLightsDebug]
+Large exterior lights: colour
+
 [WetDbgMaterial]
 Material Categories
 

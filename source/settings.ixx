@@ -2126,6 +2126,7 @@ public:
             { 0, "PREF_CLOUDS_DEBUG",           "DEBUG",      "VolumetricCloudsDebug",              "MENU_DISPLAY_CLOUDS_DEBUG",  0, nullptr, 0, 14 },
             { 0, "PREF_SSR_FULL_DEPTH",         "DEBUG",      "SSRMarchFullDepth",                  "",                           0, nullptr, 0, 1 },
             { 0, "PREF_AERIAL_DEBUG",           "DEBUG",      "AerialPerspectiveDebug",             "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_FILL_LIGHTS_DEBUG",      "DEBUG",      "FillLightsDebug",                    "",                           0, nullptr, 0, 1 },
             { 0, "PREF_FG_DEBUG_VIEW",          "DEBUG",      "FrameGenerationDebugView",           "MENU_DISPLAY_FG_DEBUG",      0, nullptr, 0, 3 },
             { 0, "PREF_VOLUMETRIC_LIGHT",       "LIGHTING",   "VolumetricLight",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_CONTACTSHADOWS",         "LIGHTING",   "ContactShadows",                     "",                           1, nullptr, 0, 1 },
@@ -2470,6 +2471,7 @@ public:
             AddRow(category, "GrassWindDebug", "PREF_GRASS_WIND_DEBUG", 2, toggle);
             AddRow(category, "GpuGrassDebug", "PREF_GPU_GRASS_DEBUG", 2, toggle);
             AddRow(category, "AerialDebug", "PREF_AERIAL_DEBUG", 2, toggle);
+            AddRow(category, "FillLightsDebug", "PREF_FILL_LIGHTS_DEBUG", 2, toggle);
             AddEmptyLine(category);
             AddRow(category, "FGDebug", "PREF_FG_DEBUG_VIEW", 4, "MENU_DISPLAY_FG_DEBUG");
         }

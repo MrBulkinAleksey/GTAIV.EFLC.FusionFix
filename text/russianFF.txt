@@ -229,6 +229,9 @@ Logitech LightSync RGB
 [AerialDebug]
 Отладка воздушной перспективы
 
+[FillLightsDebug]
+Большие уличные огни: цвет
+
 [WetDbgMaterial]
 Категории материалов
 
