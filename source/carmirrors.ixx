@@ -126,7 +126,11 @@ namespace CarMirrors
     static uint32_t passStartDraws = 0;   // RenderSkip's draw count as the mirror's pass started
     enum { TargetsEntities, TargetsWater, TargetsCoronas, TargetsLastEntity, TargetsFirstVehicle, TargetSites };
     static void (__cdecl* setRenderState)(uint32_t state, uint32_t value) = nullptr; // CE 0x432C20, the game's state ids
-    static bool forceDepthWrite = false;  // CarMirrorsForceDepthWrite (hidden): depth test and write set for every entity in the mirror's pass
+    // CarMirrorsForceDepthWrite (hidden, 0 leaves it out): depth test and write set (the game's states, before the entity's
+    // technique applies its own) for every entity in the mirror's pass. A technique that turns the write off (decals and
+    // the like) left it off for every entity after it, the reflection techniques setting none: the cars drawn later wrote
+    // no depth, and peds drawn after them showed through them.
+    static bool forceDepthWrite = true;
     // The mirror phase's draw list turns the depth write off before its entities (CE 0xD76B13: a render state command,
     // the game's state 2 to 0), and the reflection techniques set none of their own: nothing of the mirror's scene was
     // in its depth buffer, and the water and coronas drawn after it showed through the cars, the car's inside and the
@@ -1495,7 +1499,7 @@ public:
                 CarMirrors::extraBuckets = ini.ReadInteger("MISC", "CarMirrorsExtraBuckets", 1) != 0;
                 CarMirrors::ownGlassInInterior = ini.ReadInteger("MISC", "CarMirrorsOwnGlass", 0) != 0;
                 CarMirrors::lampCoronas = ini.ReadInteger("MISC", "CarMirrorsLampCoronas", 1) != 0;
-                CarMirrors::forceDepthWrite = ini.ReadInteger("MISC", "CarMirrorsForceDepthWrite", 0) != 0;
+                CarMirrors::forceDepthWrite = ini.ReadInteger("MISC", "CarMirrorsForceDepthWrite", 1) != 0;
                 CarMirrors::depthWrite = ini.ReadInteger("MISC", "CarMirrorsDepthWrite", 1) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
