@@ -477,11 +477,28 @@ namespace CarMirrors
         return glass ? kinds[glass->kind] : "none";
     }
 
+    // The far LOD models (entity +0x24 & 0x40) go only to a phase with the flag 0x100 (CE 0xAE7906), which also has the
+    // scan walk the far cells (CE 0xAE9EFC); the water reflection's phase has it, the mirror's not: the city across
+    // the river was missing behind the near streets, the bare sky and the water in its place. The scan only marks the
+    // far cells for the phase's list (CE 0xAE93C0); their models are sorted to the phases later, with the flag read
+    // then, so it stays on the phase from its scan to its draw list (CarMirrorsFarModels, hidden).
+    static constexpr uint32_t PhaseFarModelsFlag = 0x100;
+    static uintptr_t farModelsPhase = 0;    // main thread: the phase given the flag, until its draw list or the next frame
+
+    static void TakeFarModelsFlag()
+    {
+        if (!farModelsPhase)
+            return;
+        *reinterpret_cast<uint32_t*>(farModelsPhase + 0x8E8) &= ~PhaseFarModelsFlag;
+        farModelsPhase = 0;
+    }
+
     // Main thread, once a frame, after the game looked for an interior mirror.
     static void Update()
     {
         updateHook.unsafe_call<void>();
         usedThisFrame = false;
+        TakeFarModelsFlag();
         static double lastMs = 0.0;
         const double nowMs = NowMs();
         const float seconds = lastMs > 0.0 ? std::clamp(float(nowMs - lastMs) * 0.001f, 0.0f, 0.1f) : 0.0f;
@@ -744,6 +761,7 @@ namespace CarMirrors
     // from before the car moved this frame, and the reflected view then lagged the car's own side in the mirror.
     static void __fastcall PhaseBuild(uintptr_t phase, void*)
     {
+        TakeFarModelsFlag();
         queuedFirst = false;
         bool capture = false;
         if (usedThisFrame && captureEnabled)
@@ -875,11 +893,6 @@ namespace CarMirrors
     // CE 0xAE4880 under 0xB1E810), which the mirror phase has not: no lamp behind the camera had a corona for the
     // mirror (14-27 within 60 m of it registered, 1-10 of them out of the game camera's view). Given for its scan.
     static constexpr uint32_t PhaseLightsFlag = 0x2000000;
-    // The far LOD models (entity +0x24 & 0x40) go only to a phase with the flag 0x100 (CE 0xAE7906), which also has the
-    // scan walk the far cells (CE 0xAE9EFC); the water reflection's phase has it, the mirror's not: the city across
-    // the river was missing behind the near streets, the bare sky and the water in its place. Given for its scan
-    // (CarMirrorsFarModels, hidden).
-    static constexpr uint32_t PhaseFarModelsFlag = 0x100;
 
     static void __fastcall PhaseVisibility(uintptr_t phase, void*)
     {
@@ -896,13 +909,15 @@ namespace CarMirrors
             const uint32_t before = flags;
             if (lampCoronas)
                 flags |= PhaseLightsFlag;
-            if (farModels)
+            if (farModels && !(flags & PhaseFarModelsFlag))
+            {
                 flags |= PhaseFarModelsFlag;
+                farModelsPhase = phase;
+            }
             inMirrorScan = true;
             waterVisibility(phase, nullptr);
             inMirrorScan = false;
-            constexpr uint32_t given = PhaseLightsFlag | PhaseFarModelsFlag;
-            flags = (flags & ~given) | (before & given);
+            flags = (flags & ~PhaseLightsFlag) | (before & PhaseLightsFlag);
             if (gated) *mirrorOn = 1;
             ++outdoorScans;
             waterScanPhase = phase;
