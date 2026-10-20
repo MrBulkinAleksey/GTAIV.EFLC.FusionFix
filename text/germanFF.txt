@@ -340,6 +340,9 @@ Sun Lens Flare
 [CarMirrors]
 Car Mirror Reflections
 
+[LocalExposure]
+Local Exposure
+
 [FF_PROCDIST]
 Grass & Props Distance
 

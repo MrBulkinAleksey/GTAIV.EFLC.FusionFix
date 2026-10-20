@@ -53,6 +53,7 @@ import wetground;
 import headlightglints;
 import gpugrass;
 import waterreflections;
+import localexposure;
 import sharpening;
 import inireload;
 import skytrace;
@@ -1548,7 +1549,10 @@ private:
     {
         UnbindGlassReflections();
         if (auto pDevice = rage::grcDevice::GetD3DDevice(); pDevice && !bDeviceLost)
+        {
             SetGlassInsideTint(pDevice, false);
+            BindLocalExposure(pDevice);
+        }
         bInsteadDrawPrimitivePostFX = true;
         hbDrawCallPostFX.fun(_this, edx, a2, a3, a4);
         bInsteadDrawPrimitivePostFX = false;
