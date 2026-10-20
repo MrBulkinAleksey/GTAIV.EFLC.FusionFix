@@ -2478,8 +2478,9 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 
 // The high layer's texture (Clouds.fx's HighLayer): 512 x 512, tiling over 8 km, each channel but green equalised so that a
 // threshold of 1 - c leaves a share c of it:
-// - red, cells: two sizes of jittered round cells (40 and 80 a tile, 200 and 100 m), warped so they are no grid
-//   and frayed at their edges by a fine noise; altocumulus and cirrocumulus;
+// - red, cells: two sizes of jittered round puffs (40 and 80 a tile, 200 and 100 m), each a dome of its own
+//   strength, warped a little so they are no grid and softly mottled; altocumulus and cirrocumulus. Frayed by a
+//   fine noise and warped twice as much, they came out as jagged flat pieces, like a jigsaw's;
 // - green, fibres, not equalised but the density itself, 0 to 1: soft streaks along x some 600 m wide, broken
 //   into lengths of 1 to 3 km, of a gauze of fibres 80 m apart and hair-thin ones 30 m apart that curl a little,
 //   all bent by a slow wave across; cirrus. As noise stretched 32 to 1 everywhere, cut at a threshold, the fibres
@@ -2523,7 +2524,8 @@ IDirect3DTexture9* PostFxResource::CloudHighTex()
         }
         return sum / total;
     };
-    // The highest cell over the cells around: 1 at its middle, 0 at its radius (0.45 to 0.7 of a cell).
+    // The highest puff over the cells around: a dome (1 - (d / r)^2)^1.5 of radius 0.45 to 0.75 of a cell, at 0.6 to 1
+    // of full strength.
     auto cells = [&](float x, float y, int n, int seed) {
         const float cell = static_cast<float>(size) / n;
         const float fx = x / cell, fy = y / cell;
@@ -2534,9 +2536,9 @@ IDirect3DTexture9* PostFxResource::CloudHighTex()
             {
                 const int nx = cx + dx, ny = cy + dy, wx = wrap(nx, n), wy = wrap(ny, n);
                 const float px = nx + 0.2f + 0.6f * lattice(wx, wy, seed), py = ny + 0.2f + 0.6f * lattice(wy, wx, seed + 1);
-                const float radius = 0.45f + 0.25f * lattice(wx, wy, seed + 2);
-                const float distance = std::sqrt((px - fx) * (px - fx) + (py - fy) * (py - fy));
-                best = (std::max)(best, std::clamp(1.0f - distance / radius, 0.0f, 1.0f));
+                const float radius = 0.45f + 0.3f * lattice(wx, wy, seed + 2);
+                const float dome = std::clamp(1.0f - ((px - fx) * (px - fx) + (py - fy) * (py - fy)) / (radius * radius), 0.0f, 1.0f);
+                best = (std::max)(best, dome * std::sqrt(dome) * (0.6f + 0.4f * lattice(wx, wy, seed + 3)));
             }
         return best;
     };
@@ -2558,10 +2560,10 @@ IDirect3DTexture9* PostFxResource::CloudHighTex()
         {
             const float fx = static_cast<float>(x), fy = static_cast<float>(y);
             const size_t i = static_cast<size_t>(y) * size + x;
-            const float warp = static_cast<float>(size) / 40.0f * 1.2f;
+            const float warp = static_cast<float>(size) / 40.0f * 0.6f;
             const float wx = fx + (valueNoise(fx, fy, 16, 16, 2, 500, 0.5f) - 0.5f) * warp;
             const float wy = fy + (valueNoise(fx, fy, 16, 16, 2, 510, 0.5f) - 0.5f) * warp;
-            value[0][i] = 0.75f * cells(wx, wy, 40, 520) + 0.35f * cells(wx, wy, 80, 530) - 0.35f * valueNoise(fx, fy, 128, 128, 2, 540, 0.5f);
+            value[0][i] = (0.75f * cells(wx, wy, 40, 520) + 0.35f * cells(wx, wy, 80, 530)) * (1.0f - 0.2f * valueNoise(fx, fy, 64, 64, 2, 540, 0.5f));
             auto smooth = [](float v, float from, float to) {
                 const float u = std::clamp((v - from) / (to - from), 0.0f, 1.0f);
                 return u * u * (3.0f - 2.0f * u);

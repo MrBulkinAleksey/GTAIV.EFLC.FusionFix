@@ -864,8 +864,9 @@ float4 HighLayer(float3 dir, float2 uv)
     float patch = tex2Dlod(HighTex, float4(uvh * 0.25 + 0.37, 0, lod - 2.0)).b;
     float mask = smoothstep(0.88 - vec4High.x, 1.12 - vec4High.x, patch);
     float cells = saturate(0.5 * mask * (0.3 + 1.6 * tex.a));
-    float dc = saturate((tex.r - 1.0 + cells) * 4.0);
-    float towards = saturate((tex2Dlod(HighTex, float4(uvh + vec4HighWind.zw, 0, lod)).r - 1.0 + cells) * 4.0);
+    // The cells over half the texture's range: over a quarter their outlines were cut hard, flat as paper.
+    float dc = saturate((tex.r - 1.0 + cells) * 2.0);
+    float towards = saturate((tex2Dlod(HighTex, float4(uvh + vec4HighWind.zw, 0, lod)).r - 1.0 + cells) * 2.0);
     // The fibres' density as it is, without a threshold: cut at one, the streaks came out solid with a hard outline.
     float df = saturate(tex.g * 2.5 * mask);
     // A faint veil over the patch: at a fifth, the sky between two patches came out a deeper blue than around
@@ -890,7 +891,7 @@ float4 HighLayer(float3 dir, float2 uv)
     return float4(colour * alpha, 1.0 - alpha);
 }
 
-// The light from the march's sums, at half size, for the accumulation, over the high layer.
+// The light from the march's sums, at half size, for the accumulation.
 float4 CloudsLight_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
 {
     float4 sums0 = tex2Dlod(MarchTex0, float4(uv, 0, 0));
@@ -905,9 +906,7 @@ float4 CloudsLight_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     sums.top = sums1.z;
     sums.height = sums1.w;
     float3 dir = WorldRay(vpos);
-    float4 low = Light(sums, dir, true, uv);
-    float4 high = HighLayer(dir, uv);
-    return float4(low.rgb + low.a * high.rgb, low.a * high.a);
+    return Light(sums, dir, true, uv);
 }
 
 // The history read with a Catmull-Rom filter in five bilinear reads: read bilinearly each frame as the
@@ -997,7 +996,11 @@ float4 CloudsComposite_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
             return float4(0.0, 0.0, 0.0, 1.0);
     }
     float4 c = SampleCatmullRom(CloudTex, uv + vec2SteadyShift, vec2DepthTexel);
-    return float4(max(c.rgb, 0.0), saturate(c.a));
+    c = float4(max(c.rgb, 0.0), saturate(c.a));
+    // The high layer behind them, here at full size: drawn at half size and accumulated with the volumetric
+    // clouds, the cirrus' fibres, a few pixels wide, blurred away into smears.
+    float4 high = HighLayer(WorldRay(vpos), uv);
+    return float4(c.rgb + c.a * high.rgb, c.a * high.a);
 }
 
 void FullscreenQuadVS(in float4 iPos : POSITION, in float2 iUV : TEXCOORD0,

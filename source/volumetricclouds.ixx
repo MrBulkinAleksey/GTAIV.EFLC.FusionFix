@@ -596,7 +596,8 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     // VolumetricCloudsFullSize: the march's targets made at full size, each pixel its own ray through the jittered
     // projection, laid over without the accumulation.
     const bool fullSize = halfSize && halfWidth >= width && halfHeight >= height;
-    effect->SetFloat(effect->GetParameterByName(nullptr, "fHighPixel"), std::fabs(ProjInfo(proj, halfWidth, halfHeight).x));
+    // The high layer is drawn at full size, in CloudsComposite.
+    effect->SetFloat(effect->GetParameterByName(nullptr, "fHighPixel"), std::fabs(ProjInfo(proj, width, height).x));
     const float depthTexel[2] = { 1.0f / width, 1.0f / height };
     {
         // The accumulation's texture coordinates for this frame's jittered pixel: the two projections' rays differ by
