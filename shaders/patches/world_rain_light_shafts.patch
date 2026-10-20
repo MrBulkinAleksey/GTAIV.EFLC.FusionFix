@@ -1,0 +1,306 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS18.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS18.asm
+index 625fd721..eb49f2cc 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS18.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS18.asm
+@@ -27,6 +27,9 @@
+     def c1, 0, 0, 0, 0
+     def c2, 0.5, 0.125, 3.14159274, 1.5
+     def c3, 0.85, 0.0416666, -2, 3
++    def c180, 0.103100002, 33.3300018, 0.600000024, 0.699999988 // FusionFix world_rain_light_shafts.patch: the column hash, the speed's spread and least
++    def c181, 0.150000006, 6.66666651, 6, -0.449999988 // FusionFix world_rain_light_shafts.patch: a streak's length (of its cycle) and 1 / it, the gain on a streak and the shift between
++    def c182, 0, 1, 0, 0 // FusionFix world_rain_light_shafts.patch: zero, one
+     dcl_texcoord v0
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord2 v2.xyz
+@@ -123,7 +126,35 @@
+       mul r0.x, r20.x, r0.x
+     endif
+     
+-    mul oC0.xyz, r0.x, v2
++    // --- FusionFix world_rain_light_shafts.patch: rain streaks falling through the shaft (r21.x the shaft's multiplier)
++    mov r21.x, c182.x
++    mov r21.w, c185.x
++    if_lt r21.x, r21.w
++      mul r21.xy, vPos.xy, c185.zw
++      frc r21.z, r21.x
++      add r21.x, r21.x, -r21.z // the column
++      mul r21.z, r21.x, c180.x
++      frc r21.z, r21.z
++      add r22.x, r21.z, c180.y
++      mul r21.z, r21.z, r22.x
++      add r22.x, r21.z, r21.z
++      mul r21.z, r21.z, r22.x
++      frc r21.z, r21.z // its hash
++      mad r22.y, r21.z, c180.z, c180.w
++      mul r22.y, r22.y, c185.y
++      add r22.y, r21.y, -r22.y
++      mad r22.y, r21.z, c181.z, r22.y
++      frc r22.y, r22.y // where in its cycle, falling
++      add r22.y, -r22.y, c181.x
++      mul_sat r22.y, r22.y, c181.y // on a streak, brightest at its head
++      mad r22.y, r22.y, c181.z, c181.w
++      mad r21.x, r22.y, r21.w, c182.y
++      max r21.x, r21.x, c182.x
++    else
++      mov r21.x, c182.y
++    endif
++    mul r22.xyz, r0.x, v2
++    mul oC0.xyz, r22, r21.x // FusionFix world_rain_light_shafts.patch
+     mov oC0.w, c1.x
+     
+     // LogDepth Write
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS19.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS19.asm
+index cce47535..c9912320 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS19.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS19.asm
+@@ -27,6 +27,9 @@
+     def c1, 0, 0, 0, 0
+     def c2, 0.5, 0.125, 3.14159274, 1.5
+     def c3, 0.85, 0.0416666, -2, 3
++    def c180, 0.103100002, 33.3300018, 0.600000024, 0.699999988 // FusionFix world_rain_light_shafts.patch: the column hash, the speed's spread and least
++    def c181, 0.150000006, 6.66666651, 6, -0.449999988 // FusionFix world_rain_light_shafts.patch: a streak's length (of its cycle) and 1 / it, the gain on a streak and the shift between
++    def c182, 0, 1, 0, 0 // FusionFix world_rain_light_shafts.patch: zero, one
+     dcl_texcoord v0
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord2 v2.xyz
+@@ -123,7 +126,35 @@
+       mul r0.x, r20.x, r0.x
+     endif
+     
+-    mul oC0.xyz, -r0.x, v2
++    // --- FusionFix world_rain_light_shafts.patch: rain streaks falling through the shaft (r21.x the shaft's multiplier)
++    mov r21.x, c182.x
++    mov r21.w, c185.x
++    if_lt r21.x, r21.w
++      mul r21.xy, vPos.xy, c185.zw
++      frc r21.z, r21.x
++      add r21.x, r21.x, -r21.z // the column
++      mul r21.z, r21.x, c180.x
++      frc r21.z, r21.z
++      add r22.x, r21.z, c180.y
++      mul r21.z, r21.z, r22.x
++      add r22.x, r21.z, r21.z
++      mul r21.z, r21.z, r22.x
++      frc r21.z, r21.z // its hash
++      mad r22.y, r21.z, c180.z, c180.w
++      mul r22.y, r22.y, c185.y
++      add r22.y, r21.y, -r22.y
++      mad r22.y, r21.z, c181.z, r22.y
++      frc r22.y, r22.y // where in its cycle, falling
++      add r22.y, -r22.y, c181.x
++      mul_sat r22.y, r22.y, c181.y // on a streak, brightest at its head
++      mad r22.y, r22.y, c181.z, c181.w
++      mad r21.x, r22.y, r21.w, c182.y
++      max r21.x, r21.x, c182.x
++    else
++      mov r21.x, c182.y
++    endif
++    mul r22.xyz, -r0.x, v2
++    mul oC0.xyz, r22, r21.x // FusionFix world_rain_light_shafts.patch
+     mov oC0.w, c1.x
+     
+     // LogDepth Write
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS20.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS20.asm
+index d84b6028..20624903 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS20.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS20.asm
+@@ -24,6 +24,9 @@
+     def c0, 0.50999999, 9.99999975e-006, 0.660000026, 0.333330005
+     def c1, 0, 1, -2, 3
+     def c2, 0.85, 0.66, 0, 0
++    def c180, 0.103100002, 33.3300018, 0.600000024, 0.699999988 // FusionFix world_rain_light_shafts.patch: the column hash, the speed's spread and least
++    def c181, 0.150000006, 6.66666651, 6, -0.449999988 // FusionFix world_rain_light_shafts.patch: a streak's length (of its cycle) and 1 / it, the gain on a streak and the shift between
++    def c182, 0, 1, 0, 0 // FusionFix world_rain_light_shafts.patch: zero, one
+     dcl_texcoord v0
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord2 v2.xyz
+@@ -92,7 +95,35 @@
+     mul r0.x, r0.x, r0.x
+     mul r0.x, r0.x, c0.w
+     mul r0.x, r1.x, r0.x
+-    mul oC0.xyz, r0.x, v2
++    // --- FusionFix world_rain_light_shafts.patch: rain streaks falling through the shaft (r21.x the shaft's multiplier)
++    mov r21.x, c182.x
++    mov r21.w, c185.x
++    if_lt r21.x, r21.w
++      mul r21.xy, vPos.xy, c185.zw
++      frc r21.z, r21.x
++      add r21.x, r21.x, -r21.z // the column
++      mul r21.z, r21.x, c180.x
++      frc r21.z, r21.z
++      add r22.x, r21.z, c180.y
++      mul r21.z, r21.z, r22.x
++      add r22.x, r21.z, r21.z
++      mul r21.z, r21.z, r22.x
++      frc r21.z, r21.z // its hash
++      mad r22.y, r21.z, c180.z, c180.w
++      mul r22.y, r22.y, c185.y
++      add r22.y, r21.y, -r22.y
++      mad r22.y, r21.z, c181.z, r22.y
++      frc r22.y, r22.y // where in its cycle, falling
++      add r22.y, -r22.y, c181.x
++      mul_sat r22.y, r22.y, c181.y // on a streak, brightest at its head
++      mad r22.y, r22.y, c181.z, c181.w
++      mad r21.x, r22.y, r21.w, c182.y
++      max r21.x, r21.x, c182.x
++    else
++      mov r21.x, c182.y
++    endif
++    mul r22.xyz, r0.x, v2
++    mul oC0.xyz, r22, r21.x // FusionFix world_rain_light_shafts.patch
+     mov oC0.w, c1.x
+     
+     // LogDepth Write
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS21.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS21.asm
+index 02258c94..47a86b76 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS21.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS21.asm
+@@ -24,6 +24,9 @@
+     def c0, 0.50999999, 9.99999975e-006, 0.660000026, 0.333330005
+     def c1, 0, 1, -2, 3
+     def c2, 0.85, 0.66, 0, 0
++    def c180, 0.103100002, 33.3300018, 0.600000024, 0.699999988 // FusionFix world_rain_light_shafts.patch: the column hash, the speed's spread and least
++    def c181, 0.150000006, 6.66666651, 6, -0.449999988 // FusionFix world_rain_light_shafts.patch: a streak's length (of its cycle) and 1 / it, the gain on a streak and the shift between
++    def c182, 0, 1, 0, 0 // FusionFix world_rain_light_shafts.patch: zero, one
+     dcl_texcoord v0
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord2 v2.xyz
+@@ -92,7 +95,35 @@
+     mul r0.x, r0.x, r0.x
+     mul r0.x, r0.x, c0.w
+     mul r0.x, r1.x, r0.x
+-    mul oC0.xyz, -r0.x, v2
++    // --- FusionFix world_rain_light_shafts.patch: rain streaks falling through the shaft (r21.x the shaft's multiplier)
++    mov r21.x, c182.x
++    mov r21.w, c185.x
++    if_lt r21.x, r21.w
++      mul r21.xy, vPos.xy, c185.zw
++      frc r21.z, r21.x
++      add r21.x, r21.x, -r21.z // the column
++      mul r21.z, r21.x, c180.x
++      frc r21.z, r21.z
++      add r22.x, r21.z, c180.y
++      mul r21.z, r21.z, r22.x
++      add r22.x, r21.z, r21.z
++      mul r21.z, r21.z, r22.x
++      frc r21.z, r21.z // its hash
++      mad r22.y, r21.z, c180.z, c180.w
++      mul r22.y, r22.y, c185.y
++      add r22.y, r21.y, -r22.y
++      mad r22.y, r21.z, c181.z, r22.y
++      frc r22.y, r22.y // where in its cycle, falling
++      add r22.y, -r22.y, c181.x
++      mul_sat r22.y, r22.y, c181.y // on a streak, brightest at its head
++      mad r22.y, r22.y, c181.z, c181.w
++      mad r21.x, r22.y, r21.w, c182.y
++      max r21.x, r21.x, c182.x
++    else
++      mov r21.x, c182.y
++    endif
++    mul r22.xyz, -r0.x, v2
++    mul oC0.xyz, r22, r21.x // FusionFix world_rain_light_shafts.patch
+     mov oC0.w, c1.x
+     
+     // LogDepth Write
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS22.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS22.asm
+index 8c56f239..d16b02f0 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS22.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS22.asm
+@@ -24,6 +24,9 @@
+     def c0, 0.50999999, 9.99999975e-006, 0.660000026, 0.333330005
+     def c1, 0, 1, -2, 3
+     def c2, 0.85, 0.66, 0, 0
++    def c180, 0.103100002, 33.3300018, 0.600000024, 0.699999988 // FusionFix world_rain_light_shafts.patch: the column hash, the speed's spread and least
++    def c181, 0.150000006, 6.66666651, 6, -0.449999988 // FusionFix world_rain_light_shafts.patch: a streak's length (of its cycle) and 1 / it, the gain on a streak and the shift between
++    def c182, 0, 1, 0, 0 // FusionFix world_rain_light_shafts.patch: zero, one
+     dcl_texcoord v0
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord2 v2.xyz
+@@ -93,7 +96,35 @@
+     mul r0.x, r0.x, c0.w
+     mul r0.x, r1.x, r0.x
+     mul r0.xyz, r0.x, v2
+-    mul oC0.xyz, r0, c1.w
++    // --- FusionFix world_rain_light_shafts.patch: rain streaks falling through the shaft (r21.x the shaft's multiplier)
++    mov r21.x, c182.x
++    mov r21.w, c185.x
++    if_lt r21.x, r21.w
++      mul r21.xy, vPos.xy, c185.zw
++      frc r21.z, r21.x
++      add r21.x, r21.x, -r21.z // the column
++      mul r21.z, r21.x, c180.x
++      frc r21.z, r21.z
++      add r22.x, r21.z, c180.y
++      mul r21.z, r21.z, r22.x
++      add r22.x, r21.z, r21.z
++      mul r21.z, r21.z, r22.x
++      frc r21.z, r21.z // its hash
++      mad r22.y, r21.z, c180.z, c180.w
++      mul r22.y, r22.y, c185.y
++      add r22.y, r21.y, -r22.y
++      mad r22.y, r21.z, c181.z, r22.y
++      frc r22.y, r22.y // where in its cycle, falling
++      add r22.y, -r22.y, c181.x
++      mul_sat r22.y, r22.y, c181.y // on a streak, brightest at its head
++      mad r22.y, r22.y, c181.z, c181.w
++      mad r21.x, r22.y, r21.w, c182.y
++      max r21.x, r21.x, c182.x
++    else
++      mov r21.x, c182.y
++    endif
++    mul r22.xyz, r0, c1.w
++    mul oC0.xyz, r22, r21.x // FusionFix world_rain_light_shafts.patch
+     mov oC0.w, c1.x
+     
+     // LogDepth Write
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS23.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS23.asm
+index d07302ba..99b20869 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS23.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS23.asm
+@@ -24,6 +24,9 @@
+     def c0, 0.50999999, 9.99999975e-006, 0.660000026, 0.333330005
+     def c1, 0, 1, -2, 3
+     def c2, 0.85, 0.66, 0, 0
++    def c180, 0.103100002, 33.3300018, 0.600000024, 0.699999988 // FusionFix world_rain_light_shafts.patch: the column hash, the speed's spread and least
++    def c181, 0.150000006, 6.66666651, 6, -0.449999988 // FusionFix world_rain_light_shafts.patch: a streak's length (of its cycle) and 1 / it, the gain on a streak and the shift between
++    def c182, 0, 1, 0, 0 // FusionFix world_rain_light_shafts.patch: zero, one
+     dcl_texcoord v0
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord2 v2.xyz
+@@ -93,7 +96,35 @@
+     mul r0.x, r0.x, c0.w
+     mul r0.x, r1.x, r0.x
+     mul r0.xyz, -r0.x, v2
+-    mul oC0.xyz, r0, c1.w
++    // --- FusionFix world_rain_light_shafts.patch: rain streaks falling through the shaft (r21.x the shaft's multiplier)
++    mov r21.x, c182.x
++    mov r21.w, c185.x
++    if_lt r21.x, r21.w
++      mul r21.xy, vPos.xy, c185.zw
++      frc r21.z, r21.x
++      add r21.x, r21.x, -r21.z // the column
++      mul r21.z, r21.x, c180.x
++      frc r21.z, r21.z
++      add r22.x, r21.z, c180.y
++      mul r21.z, r21.z, r22.x
++      add r22.x, r21.z, r21.z
++      mul r21.z, r21.z, r22.x
++      frc r21.z, r21.z // its hash
++      mad r22.y, r21.z, c180.z, c180.w
++      mul r22.y, r22.y, c185.y
++      add r22.y, r21.y, -r22.y
++      mad r22.y, r21.z, c181.z, r22.y
++      frc r22.y, r22.y // where in its cycle, falling
++      add r22.y, -r22.y, c181.x
++      mul_sat r22.y, r22.y, c181.y // on a streak, brightest at its head
++      mad r22.y, r22.y, c181.z, c181.w
++      mad r21.x, r22.y, r21.w, c182.y
++      max r21.x, r21.x, c182.x
++    else
++      mov r21.x, c182.y
++    endif
++    mul r22.xyz, r0, c1.w
++    mul oC0.xyz, r22, r21.x // FusionFix world_rain_light_shafts.patch
+     mov oC0.w, c1.x
+     
+     // LogDepth Write

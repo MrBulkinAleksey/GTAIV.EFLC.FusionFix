@@ -53,6 +53,7 @@ import wetground;
 import headlightglints;
 import gpugrass;
 import waterreflections;
+import rainlight;
 import sharpening;
 import inireload;
 import skytrace;
@@ -2301,7 +2302,7 @@ private:
                 shShaftDraw = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
                 {
                     const auto& light = *reinterpret_cast<const rage::CLightSource*>(*list + regs.esi);
-                    if (PostFxResources.VolumetricLight() && (light.mFlags & PostFxResources.nVolumetricLightHeadlightFlag))
+                    if (RainLightShaftScale(PostFxResources.VolumetricLight()) > 0.0f && (light.mFlags & PostFxResources.nVolumetricLightHeadlightFlag))
                         *reinterpret_cast<uint8_t*>(regs.esp + 0xF) = 0;
                 });
             }
@@ -2322,7 +2323,7 @@ private:
                 shShaftAim = safetyhook::create_mid(pattern.get_first(0x5B), [](SafetyHookContext& regs)
                 {
                     const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.eax + regs.esi);
-                    if (!PostFxResources.VolumetricLight() || !(light.mFlags & PostFxResources.nVolumetricLightHeadlightFlag))
+                    if (RainLightShaftScale(PostFxResources.VolumetricLight()) <= 0.0f || !(light.mFlags & PostFxResources.nVolumetricLightHeadlightFlag))
                         return;
                     // 4 bytes further off esp for the push 0.
                     float* dir = reinterpret_cast<float*>(regs.esp + 0xF4);
@@ -2389,7 +2390,9 @@ private:
         if (!R.bFillLights && (light->mFlags & fillMask) == (rage::LF_MAP | rage::LF_EXTERIOR) &&
             (light->mType == rage::LT_POINT || light->mType == rage::LT_SPOT) && light->mRadius >= R.fFillLightsMinRadius)
             light->mIntensity = 0.0f;
-        if (!R.VolumetricLight() || R.fVolumetricLightIntensity <= 0.0f)
+        // Rain Light Scattering: brighter shafts in the rain and fog, and with Volumetric Light off shafts in the rain alone
+        const float rainScale = RainLightShaftScale(R.VolumetricLight());
+        if (rainScale <= 0.0f || R.fVolumetricLightIntensity <= 0.0f)
             return;
 
         float cameraPos[3]{};
@@ -2420,7 +2423,7 @@ private:
         light->mFlags |= rage::LF_SHAFT;
         if (headlight)
             light->mFlags |= R.nVolumetricLightHeadlightAddFlags;
-        light->mVolumeIntensity = (headlight ? R.fVolumetricLightHeadlightIntensity : R.fVolumetricLightIntensity) * fade;
+        light->mVolumeIntensity = (headlight ? R.fVolumetricLightHeadlightIntensity : R.fVolumetricLightIntensity) * fade * rainScale;
         // The shaft mesh reaches about 0.66 to 0.85 of radius times scale (light shaft VS), so
         // headlights take a scale that gives the same length to low beams of 33 m and high
         // beams of 75 to 98 m, never past their own reach.
