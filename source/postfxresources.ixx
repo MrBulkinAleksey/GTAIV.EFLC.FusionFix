@@ -786,6 +786,8 @@ public:
     uint32_t nCloudAccumFrame = 0; // FrameHistory::Frame() of the accumulation, 0 if none
     IDirect3DVolumeTexture9* CloudDetailTexture = nullptr;
     IDirect3DVolumeTexture9* CloudDetailTex();
+    IDirect3DVolumeTexture9* CloudShapeTexture = nullptr;
+    IDirect3DVolumeTexture9* CloudShapeTex();
     // The high layer's texture (Clouds.fx's HighLayer, s11): 512 x 512, tiling, with mips.
     IDirect3DTexture9* CloudHighTexture = nullptr;
     IDirect3DTexture9* CloudHighTex();
@@ -2474,6 +2476,101 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
         CloudDetailTexture->UnlockBox(0);
     }
     return CloudDetailTexture;
+}
+
+// The fair weather clouds' shape (Clouds.fx's Density, ShapeTex): 64 x 64 x 64, tiling, value noise in four octaves
+// of 4, 8, 16 and 32 cells a tile, each half as strong as the one before, between the cells by a quintic curve, and
+// equalised, so a threshold of 1 - c leaves a share c of it. The same in both channels. Managed, so it survives a
+// device reset.
+IDirect3DVolumeTexture9* PostFxResource::CloudShapeTex()
+{
+    if (CloudShapeTexture)
+        return CloudShapeTexture;
+    auto pDevice = rage::grcDevice::GetD3DDevice();
+    if (!pDevice)
+        return nullptr;
+
+    constexpr int size = 64;
+    auto lattice = [](int x, int y, int z, int seed) {
+        uint32_t h = static_cast<uint32_t>(x) * 73856093u ^ static_cast<uint32_t>(y) * 19349663u ^ static_cast<uint32_t>(z) * 83492791u ^
+                     static_cast<uint32_t>(seed) * 2654435761u;
+        h = (h ^ (h >> 15)) * 2246822519u;
+        h = (h ^ (h >> 13)) * 3266489917u;
+        return static_cast<float>((h ^ (h >> 16)) & 0xffff) / 65535.0f;
+    };
+    std::vector<float> value(size * size * size, 0.0f);
+    float amplitude = 1.0f;
+    for (int cells = 4; cells <= 32; cells *= 2, amplitude *= 0.5f)
+    {
+        // The curve's weights and lattice indices along one axis, the same for x, y and z.
+        std::vector<float> t(size);
+        std::vector<int> i0(size), i1(size);
+        for (int i = 0; i < size; ++i)
+        {
+            const float f = static_cast<float>(i) * cells / size;
+            i0[i] = static_cast<int>(f);
+            i1[i] = (i0[i] + 1) % cells;
+            const float u = f - i0[i];
+            t[i] = u * u * u * (u * (u * 6.0f - 15.0f) + 10.0f);
+        }
+        for (int z = 0; z < size; ++z)
+            for (int y = 0; y < size; ++y)
+                for (int x = 0; x < size; ++x)
+                {
+                    float v = 0.0f;
+                    for (int c = 0; c < 8; ++c)
+                    {
+                        const int lx = c & 1 ? i1[x] : i0[x], ly = c & 2 ? i1[y] : i0[y], lz = c & 4 ? i1[z] : i0[z];
+                        const float w = (c & 1 ? t[x] : 1.0f - t[x]) * (c & 2 ? t[y] : 1.0f - t[y]) * (c & 4 ? t[z] : 1.0f - t[z]);
+                        v += w * lattice(lx, ly, lz, 900 + cells);
+                    }
+                    value[(z * size + y) * size + x] += amplitude * v;
+                }
+    }
+    {
+        std::vector<int> order(value.size());
+        for (size_t i = 0; i < order.size(); ++i)
+            order[i] = static_cast<int>(i);
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return value[a] < value[b]; });
+        const float last = static_cast<float>(order.size() - 1);
+        for (size_t rank = 0; rank < order.size(); ++rank)
+            value[order[rank]] = rank / last;
+    }
+
+    bool wide = SUCCEEDED(RealDevice(pDevice)->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_G16R16, D3DPOOL_MANAGED, &CloudShapeTexture, nullptr));
+    if (!wide && FAILED(RealDevice(pDevice)->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &CloudShapeTexture, nullptr)))
+    {
+        CloudShapeTexture = nullptr;
+        return nullptr;
+    }
+    D3DLOCKED_BOX locked = {};
+    if (SUCCEEDED(CloudShapeTexture->LockBox(0, &locked, nullptr, 0)))
+    {
+        for (int z = 0; z < size; ++z)
+            for (int y = 0; y < size; ++y)
+            {
+                auto row = static_cast<uint8_t*>(locked.pBits) + z * locked.SlicePitch + y * locked.RowPitch;
+                for (int x = 0; x < size; ++x)
+                {
+                    const float v = value[(z * size + y) * size + x];
+                    if (wide)
+                    {
+                        reinterpret_cast<uint16_t*>(row)[x * 2] = static_cast<uint16_t>(v * 65535.0f + 0.5f);
+                        reinterpret_cast<uint16_t*>(row)[x * 2 + 1] = static_cast<uint16_t>(v * 65535.0f + 0.5f);
+                    }
+                    else
+                    {
+                        const auto b = static_cast<uint8_t>(v * 255.0f + 0.5f);
+                        row[x * 4 + 0] = 0;
+                        row[x * 4 + 1] = b;
+                        row[x * 4 + 2] = b;
+                        row[x * 4 + 3] = 255;
+                    }
+                }
+            }
+        CloudShapeTexture->UnlockBox(0);
+    }
+    return CloudShapeTexture;
 }
 
 // The high layer's texture (Clouds.fx's HighLayer): 512 x 512, tiling over 8 km, each channel but green equalised so that a

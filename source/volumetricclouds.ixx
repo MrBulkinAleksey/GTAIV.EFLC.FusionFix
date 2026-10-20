@@ -200,6 +200,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
 
     auto coverage = R.CloudNoiseTex();
     auto detail = R.CloudDetailTex();
+    auto shape = R.CloudShapeTex();
     // The high layer's texture, made as soon as Cloud Variety is on (a few hundred milliseconds once), so the first
     // high sky does not stall a frame; bound only while there is a high layer (Clouds.fx reads vec4High.x first).
     auto highTexture = R.CloudVarietyEnabled() && !reflection ? R.CloudHighTex() : nullptr;
@@ -208,6 +209,8 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         return skip("no coverage texture");
     if (!detail)
         return skip("no detail texture");
+    if (!shape)
+        return skip("no shape texture");
 
     IDirect3DSurface9* sceneSurface = nullptr;
     if (reflection)
@@ -468,6 +471,13 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     }
     const D3DXVECTOR4 layer(R.Cloud.base, R.Cloud.thickness, 1.0f / R.fCloudShadowsScale, R.Cloud.coverage);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Layer"), &layer);
+    // The fair weather clouds' shape (Clouds.fx's ShapeTex) tiles some 2.5 km, a whole number of times to the map's
+    // tile, so it wraps with the map's offset without a jump.
+    {
+        const float tiles = (std::max)(std::round(R.fCloudShadowsScale / 2500.0f), 1.0f);
+        const D3DXVECTOR4 shapeWind(tiles, tiles / R.fCloudShadowsScale, 0.0f, 0.0f);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4ShapeWind"), &shapeWind);
+    }
     // The detail drifts with the wind too, half as fast, so the billows change as they go.
     const D3DXVECTOR4 wind(R.fCloudWindX, R.fCloudWindY, float(std::fmod(R.fCloudDetailDrift * 0.93, 1.0)),
                            float(std::fmod(R.fCloudDetailDrift * 0.37, 1.0)));
@@ -544,13 +554,13 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     IDirect3DSurface9* oldDepth = nullptr;
     IDirect3DPixelShader9* oldPS = nullptr;
     IDirect3DVertexShader9* oldVS = nullptr;
-    IDirect3DBaseTexture9* oldTextures[12] = {};
+    IDirect3DBaseTexture9* oldTextures[13] = {};
     D3DVIEWPORT9 oldViewport = {};
     DWORD savedRenderStates[std::size(kCloudRenderStates)] = {};
     static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW,
                                                                D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER,
                                                                D3DSAMP_SRGBTEXTURE, D3DSAMP_MAXMIPLEVEL, D3DSAMP_MIPMAPLODBIAS };
-    DWORD savedSamplerStates[12][std::size(kSamplerStates)] = {};
+    DWORD savedSamplerStates[13][std::size(kSamplerStates)] = {};
 
     pDevice->GetRenderTarget(0, &oldTarget);
     pDevice->GetRenderTarget(1, &oldTarget1);
@@ -561,7 +571,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     pDevice->GetVertexShader(&oldVS);
     pDevice->GetPixelShaderConstantF(0, savedPSConsts, kPSConstCount);
     pDevice->GetVertexShaderConstantF(0, savedVSConsts, kVSConstCount);
-    for (DWORD slot = 0; slot < 12; ++slot)
+    for (DWORD slot = 0; slot < 13; ++slot)
     {
         pDevice->GetTexture(slot, &oldTextures[slot]);
         for (size_t i = 0; i < std::size(kSamplerStates); ++i)
@@ -638,7 +648,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         // The samplers have fixed registers: s0 depth, s1 coverage, s2 detail, s3 this frame's
         // half size clouds, s4 the history, s5 the accumulated clouds, s6 the scene, for the sky's
         // brightness, never while drawing into it, s7 that brightness, s8 and s9 the march's sums, s10 the
-        // physical sky's SkyView table, s11 the high layer.
+        // physical sky's SkyView table, s11 the high layer, s12 the fair weather clouds' shape.
         // The reflections have no depth texture of their own: none reads as sky everywhere.
         SetTextureBoth(pDevice, 0, reflection ? nullptr : R.mDepthRT->mD3DTexture);
         SetTextureBoth(pDevice, 1, coverage);
@@ -652,9 +662,10 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         SetTextureBoth(pDevice, 9, readMarch ? R.CloudMarchTex[1]->mD3DTexture : nullptr);
         SetTextureBoth(pDevice, 10, !reflection && pbrShare > 0.0f && R.SkyViewTex ? R.SkyViewTex->mD3DTexture : nullptr);
         SetTextureBoth(pDevice, 11, high);
-        for (DWORD slot = 0; slot < 12; ++slot)
+        SetTextureBoth(pDevice, 12, shape);
+        for (DWORD slot = 0; slot < 13; ++slot)
         {
-            const bool wrap = slot == 1 || slot == 2 || slot == 11;
+            const bool wrap = slot == 1 || slot == 2 || slot == 11 || slot == 12;
             const bool linear = slot != 0 && slot != 3 && slot != 8 && slot != 9;
             SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSU, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
             SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSV, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
@@ -753,7 +764,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
 
     for (size_t i = 0; i < std::size(kCloudRenderStates); ++i)
         pDevice->SetRenderState(kCloudRenderStates[i].state, savedRenderStates[i]);
-    for (DWORD slot = 0; slot < 12; ++slot)
+    for (DWORD slot = 0; slot < 13; ++slot)
     {
         SetTextureBoth(pDevice, slot, oldTextures[slot]);
         for (size_t i = 0; i < std::size(kSamplerStates); ++i)
