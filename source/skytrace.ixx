@@ -331,8 +331,9 @@ namespace SkyTrace
         target->GetDesc(&desc);
         char name[64];
         std::snprintf(name, sizeof(name), "SkyCapture%d_%d_%s", captureCount, captureCall, what);
-        const auto path = FusionLog::PathFor(name, L".png");
-        const HRESULT hr = D3DXSaveSurfaceToFileW(path.c_str(), D3DXIFF_PNG, target, nullptr, nullptr);
+        // DDS keeps the scene's half floats: a PNG clipped the sky's HDR values to white.
+        const auto path = FusionLog::PathFor(name, L".dds");
+        const HRESULT hr = D3DXSaveSurfaceToFileW(path.c_str(), D3DXIFF_DDS, target, nullptr, nullptr);
         FusionLog::Write("SkyTrace", "Capture", "capture %d call %d frame %u %s: target %p %ux%u fmt %lu -> %s (hr %08lx)\n", captureCount,
                          captureCall, frame, what, static_cast<void*>(target), desc.Width, desc.Height, static_cast<unsigned long>(desc.Format),
                          path.filename().string().c_str(), static_cast<unsigned long>(hr));

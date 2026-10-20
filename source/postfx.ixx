@@ -1945,6 +1945,46 @@ private:
     // drawn, the moon technique's samplers for the clouds' noise (s3 and s4, s4 and s5 with the stars) wrap as the
     // plain sky's do: the lighting phase leaves s3 clamped (BindLightingInputs), SMAA s4, and a clamped noise
     // stretched the clouds into streaks inside the rectangle.
+    //
+    // In front is not enough either: with the moon some 80 degrees and more off the view's axis w is a little over zero,
+    // the corners land far off the screen on both sides, the clamped rectangle is the whole screen and the moon pass
+    // redrew all of the sky (SkyTrace: every pass drawn had w under 0.17 and a full screen scissor, the moon itself
+    // nowhere in view). The moon's quad (MoonXVector 8 long: a half-size of 0.5 / 0.9 / 8, some 0.1 out to a corner) is
+    // taken 0.2 out from its centre each way; a corner behind the camera, or all four off the screen, draws no moon pass.
+    static bool MoonOnScreen(const float* centre, const float* m)
+    {
+        constexpr float kRadius = 0.2f;
+        const float len = std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
+        if (!(len > 0.0f))
+            return false;
+        const float c[3] = { centre[0] / len, centre[1] / len, centre[2] / len };
+        const bool upright = std::fabs(c[2]) < 0.9f;
+        const float a[3] = { upright ? 0.0f : 1.0f, 0.0f, upright ? 1.0f : 0.0f };
+        float u[3] = { c[1] * a[2] - c[2] * a[1], c[2] * a[0] - c[0] * a[2], c[0] * a[1] - c[1] * a[0] };
+        const float ul = std::sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+        for (float& x : u)
+            x /= ul;
+        const float v[3] = { c[1] * u[2] - c[2] * u[1], c[2] * u[0] - c[0] * u[2], c[0] * u[1] - c[1] * u[0] };
+        float minX = 1e30f, minY = 1e30f, maxX = -1e30f, maxY = -1e30f;
+        for (int corner = 0; corner < 4; ++corner)
+        {
+            const float su = (corner & 1) ? kRadius : -kRadius, sv = (corner & 2) ? kRadius : -kRadius;
+            float p[3];
+            for (int i = 0; i < 3; ++i)
+                p[i] = centre[i] + (su * u[i] + sv * v[i]) * len;
+            const float w = p[0] * m[3] + p[1] * m[7] + p[2] * m[11] + m[15];
+            if (!(w > 0.0f))
+                return false;
+            const float x = (p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12]) / w;
+            const float y = (p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13]) / w;
+            minX = (std::min)(minX, x);
+            maxX = (std::max)(maxX, x);
+            minY = (std::min)(minY, y);
+            maxY = (std::max)(maxY, y);
+        }
+        return maxX >= -1.0f && minX <= 1.0f && maxY >= -1.0f && minY <= 1.0f;
+    }
+
     static inline injector::hook_back<bool(__fastcall*)(void*, void*, rage::grcViewport*)> hbSkyMoonScissor;
     static bool __fastcall SkyMoonScissor(void* sky, void* edx, rage::grcViewport* viewport)
     {
@@ -1955,9 +1995,9 @@ private:
             const float* centre = reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(sky) + 0x90);
             const float* m = &viewport->mMatrix_200[0][0];
             const float w = centre[0] * m[3] + centre[1] * m[7] + centre[2] * m[11] + m[15];
-            if (!(w > 0.0f))
+            if (!(w > 0.0f) || !MoonOnScreen(centre, m))
             {
-                SkyTrace::Moon(centre, w, false, false);
+                SkyTrace::Moon(centre, w, w > 0.0f, false);
                 return false;
             }
             const bool drawn = hbSkyMoonScissor.fun(sky, edx, viewport);
