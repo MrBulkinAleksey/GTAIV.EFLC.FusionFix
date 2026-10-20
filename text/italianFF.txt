@@ -340,6 +340,9 @@ Sun Lens Flare
 [CarMirrors]
 Car Mirror Reflections
 
+[SSRNoAO]
+Reflections Without Double AO
+
 [FF_PROCDIST]
 Grass & Props Distance
 

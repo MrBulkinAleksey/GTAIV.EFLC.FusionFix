@@ -340,6 +340,9 @@ Logitech LightSync RGB
 [CarMirrors]
 Отражения в зеркалах машины
 
+[SSRNoAO]
+Отражения без двойного AO
+
 [FF_PROCDIST]
 Дальность травы и предметов
 
