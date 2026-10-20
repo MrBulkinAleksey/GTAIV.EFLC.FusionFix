@@ -127,6 +127,19 @@ namespace CarMirrors
     enum { TargetsEntities, TargetsWater, TargetsCoronas, TargetsLastEntity, TargetsFirstVehicle, TargetSites };
     static void (__cdecl* setRenderState)(uint32_t state, uint32_t value) = nullptr; // CE 0x432C20, the game's state ids
     static bool forceDepthWrite = false;  // CarMirrorsForceDepthWrite (hidden): depth test and write set for every entity in the mirror's pass
+    // The mirror phase's draw list turns the depth write off before its entities (CE 0xD76B13: a render state command,
+    // the game's state 2 to 0), and the reflection techniques set none of their own: nothing of the mirror's scene was
+    // in its depth buffer, and the water and coronas drawn after it showed through the cars, the car's inside and the
+    // buildings (two dark lines along the horizon where the water's far edges were). For a car mirror it is left on.
+    static bool depthWrite = true;        // CarMirrorsDepthWrite (hidden): 0 keeps the game's depth write off
+    static SafetyHookMid depthWriteHook;
+
+    static void MirrorDepthWrite(SafetyHookContext& regs)
+    {
+        // push 0 (the value) / push 2 (the state) / mov ecx, eax / call (hooked): the value at [esp + 4]
+        if (usedThisFrame && depthWrite)
+            reinterpret_cast<uint32_t*>(regs.esp)[1] = 1;
+    }
     static PassTargets passTargets[TargetSites]{};
 
     static void CaptureTargets(int site)
@@ -1483,14 +1496,15 @@ public:
                 CarMirrors::ownGlassInInterior = ini.ReadInteger("MISC", "CarMirrorsOwnGlass", 0) != 0;
                 CarMirrors::lampCoronas = ini.ReadInteger("MISC", "CarMirrorsLampCoronas", 1) != 0;
                 CarMirrors::forceDepthWrite = ini.ReadInteger("MISC", "CarMirrorsForceDepthWrite", 0) != 0;
+                CarMirrors::depthWrite = ini.ReadInteger("MISC", "CarMirrorsDepthWrite", 1) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
                 CarMirrors::interiorAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::interiorAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimY", -3.0f), -30.0f, 30.0f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d, force depth write %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d, force depth write %d, depth write %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
                     int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut, int(CarMirrors::water),
                     int(CarMirrors::waterReflection), int(CarMirrors::reflectionShaders), int(CarMirrors::skyAfterEntities), int(CarMirrors::extraBuckets),
-                    int(CarMirrors::ownGlassInInterior), int(CarMirrors::lampCoronas), int(CarMirrors::forceDepthWrite), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
+                    int(CarMirrors::ownGlassInInterior), int(CarMirrors::lampCoronas), int(CarMirrors::forceDepthWrite), int(CarMirrors::depthWrite), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
             };
             CIniReader iniReader("");
             readIni(iniReader);
@@ -1728,6 +1742,12 @@ public:
                     CoronaRender::pOtherRange = &CarMirrors::MirrorCoronaRange;
                 }
             }
+            // in the mirror phase's draw list: test eax, eax / je / push 0 / push 2 / mov ecx, eax / call (the render state
+            // command, hooked) / jmp / xor eax, eax / push eax / call add / ... / push 1 / push 8
+            auto depthOff = hook::pattern("85 C0 74 0D 6A 00 6A 02 8B C8 E8 ? ? ? ? EB 02 33 C0 50 E8 ? ? ? ? 6A 00 6A 10 E8 ? ? ? ? 83 C4 0C 85 C0 74 0D 6A 01 6A 08");
+            if (!depthOff.empty())
+                CarMirrors::depthWriteHook = safetyhook::create_mid(depthOff.get_first(10), CarMirrors::MirrorDepthWrite);
+            FusionLog::Write("CarMirrors", "Init", "the mirror's depth write kept on %s\n", CarMirrors::depthWriteHook ? "on" : "off (not found)");
             // the technique group's setter: mov eax, [esp+4] / mov [group], eax / ret / int3 x6 / mov eax, [group] / ret
             auto groupSetter = hook::pattern("8B 44 24 04 A3 ? ? ? ? C3 CC CC CC CC CC CC A1 ? ? ? ? C3");
             if (!groupSetter.empty() && *groupSetter.get_first<int32_t*>(5) == *groupSetter.get_first<int32_t*>(17))
