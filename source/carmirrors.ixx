@@ -130,7 +130,7 @@ namespace CarMirrors
     // technique applies its own) for every entity in the mirror's pass. A technique that turns the write off (decals and
     // the like) left it off for every entity after it, the reflection techniques setting none: the cars drawn later wrote
     // no depth, and peds drawn after them showed through them.
-    static bool forceDepthWrite = true;
+    static bool forceDepthWrite = false;
     // CarMirrorsBuildingsInOrder (hidden, 0 tests them too): the map's buildings and ground write depth but pass whatever
     // is there (compare always), drawn in the list's order as the game's mirror drew them all with no depth: tested, the
     // road's overlapping meshes fought (the asphalt's textures broken into patches). Cars, peds and props still test.
@@ -139,7 +139,13 @@ namespace CarMirrors
     // the game's state 2 to 0), and the reflection techniques set none of their own: nothing of the mirror's scene was
     // in its depth buffer, and the water and coronas drawn after it showed through the cars, the car's inside and the
     // buildings (two dark lines along the horizon where the water's far edges were). For a car mirror it is left on.
-    static bool depthWrite = true;        // CarMirrorsDepthWrite (hidden): 0 keeps the game's depth write off
+    static bool depthWrite = false;       // CarMirrorsDepthWrite (hidden): 1 leaves the depth write on
+    // With it on the mirror's scene was not right either: the asphalt broke into patches or went (an unseen mesh above
+    // the road written first), peds showed through cars; the game's mirror scene is made to be drawn in order. So the
+    // depth is left off as the game has it and the water and coronas are drawn first, before the mirror's entities,
+    // which cover them in order (CarMirrorsWaterCoronasFirst, hidden, 0 draws them after as before).
+    static bool waterCoronasFirst = true;
+    static bool queuedFirst = false;      // main thread: this build's water and coronas are queued before the entities
     static SafetyHookMid depthWriteHook;
 
     static void MirrorDepthWrite(SafetyHookContext& regs)
@@ -777,6 +783,7 @@ namespace CarMirrors
     // from before the car moved this frame, and the reflected view then lagged the car's own side in the mirror.
     static void __fastcall PhaseBuild(uintptr_t phase, void*)
     {
+        queuedFirst = false;
         const double start = usedThisFrame ? NowMs() : 0.0;
         if (usedThisFrame)
         {
@@ -1091,8 +1098,12 @@ namespace CarMirrors
     static SafetyHookMid techniqueHooks[2];
     static bool techniquePushed = false;
 
-    static void PushReflectionTechniques(SafetyHookContext&)
+    static void QueueWaterAndCoronasFirst(uintptr_t phase);
+
+    static void PushReflectionTechniques(SafetyHookContext& regs)
     {
+        if (usedThisFrame && waterCoronasFirst)
+            QueueWaterAndCoronasFirst(regs.edi); // edi the phase, as at its entities' draw
         techniquePushed = false;
         if (!usedThisFrame || !reflectionShaders || !callback.allocate || !callback.add || !*techniqueGroup.group)
             return;
@@ -1330,7 +1341,7 @@ namespace CarMirrors
     // Main thread, in the mirror phase's draw list right after what is drawn with blending
     static void QueueMirrorCoronas(SafetyHookContext&)
     {
-        if (usedThisFrame && coronaHooks[2])
+        if (usedThisFrame && coronaHooks[2] && !queuedFirst)
             callback.Queue(reinterpret_cast<const void*>(&MirrorCoronasDraw), 0);
     }
 
@@ -1381,14 +1392,29 @@ namespace CarMirrors
     // In the mirror phase's draw list, after its entities and before what is drawn with blending (CE 0xC0FA50): the
     // water, as the main scene queues it after its own (the stencil states it sets round it there left out: the
     // mirror's pass reads no stencil after).
-    static void PhaseWater(SafetyHookContext& regs)
+    static void QueueMirrorWater(uintptr_t phase)
     {
-        const uintptr_t phase = regs.edi;
         if (!waterFlagPhase || phase != waterFlagPhase)
             return;
         const uint32_t list = *reinterpret_cast<const uint32_t*>(phase + 0x938);
         callback.Queue(reinterpret_cast<const void*>(&MirrorWater), list);
         ++waterQueued;
+    }
+
+    static void PhaseWater(SafetyHookContext& regs)
+    {
+        if (!queuedFirst)
+            QueueMirrorWater(regs.edi);
+    }
+
+    // Main thread, right before the mirror's entities (PushReflectionTechniques): the water, then the coronas
+    static void QueueWaterAndCoronasFirst(uintptr_t phase)
+    {
+        if (phaseWaterHook)
+            QueueMirrorWater(phase);
+        if (coronaHooks[2])
+            callback.Queue(reinterpret_cast<const void*>(&MirrorCoronasDraw), 0);
+        queuedFirst = true;
     }
 
     // c152 for mirror.fx (mirror_car_shape.patch): x 1 cuts the quad to the glass's outline, y the zoom out - 1 widens
@@ -1503,17 +1529,18 @@ public:
                 CarMirrors::extraBuckets = ini.ReadInteger("MISC", "CarMirrorsExtraBuckets", 1) != 0;
                 CarMirrors::ownGlassInInterior = ini.ReadInteger("MISC", "CarMirrorsOwnGlass", 0) != 0;
                 CarMirrors::lampCoronas = ini.ReadInteger("MISC", "CarMirrorsLampCoronas", 1) != 0;
-                CarMirrors::forceDepthWrite = ini.ReadInteger("MISC", "CarMirrorsForceDepthWrite", 1) != 0;
+                CarMirrors::forceDepthWrite = ini.ReadInteger("MISC", "CarMirrorsForceDepthWrite", 0) != 0;
                 CarMirrors::buildingsInOrder = ini.ReadInteger("MISC", "CarMirrorsBuildingsInOrder", 1) != 0;
-                CarMirrors::depthWrite = ini.ReadInteger("MISC", "CarMirrorsDepthWrite", 1) != 0;
+                CarMirrors::depthWrite = ini.ReadInteger("MISC", "CarMirrorsDepthWrite", 0) != 0;
+                CarMirrors::waterCoronasFirst = ini.ReadInteger("MISC", "CarMirrorsWaterCoronasFirst", 1) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
                 CarMirrors::interiorAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::interiorAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimY", -3.0f), -30.0f, 30.0f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d, force depth write %d, depth write %d, buildings in order %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d, force depth write %d, depth write %d, buildings in order %d, water and coronas first %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
                     int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut, int(CarMirrors::water),
                     int(CarMirrors::waterReflection), int(CarMirrors::reflectionShaders), int(CarMirrors::skyAfterEntities), int(CarMirrors::extraBuckets),
-                    int(CarMirrors::ownGlassInInterior), int(CarMirrors::lampCoronas), int(CarMirrors::forceDepthWrite), int(CarMirrors::depthWrite), int(CarMirrors::buildingsInOrder), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
+                    int(CarMirrors::ownGlassInInterior), int(CarMirrors::lampCoronas), int(CarMirrors::forceDepthWrite), int(CarMirrors::depthWrite), int(CarMirrors::buildingsInOrder), int(CarMirrors::waterCoronasFirst), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
             };
             CIniReader iniReader("");
             readIni(iniReader);
