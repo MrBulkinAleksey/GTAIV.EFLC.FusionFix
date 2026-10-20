@@ -874,10 +874,13 @@ float4 HighLayer(float3 dir, float2 uv)
     float dc = saturate((tex.r - 1.0 + cells) * 2.0);
     float towards = saturate((tex2Dlod(HighTex, float4(uvh + vec4HighWind.zw, 0, lod)).r - 1.0 + cells) * 2.0);
     // The fibres' density as it is, without a threshold: cut at one, the streaks came out solid with a hard outline.
-    float df = saturate(tex.g * 2.0 * mask);
+    // In their own, far wider patches: within the cells' narrow ones the sheets' outlines stood out as the edges of
+    // smears across the sky.
+    float fibreMask = smoothstep(0.6 - vec4High.x, 1.4 - vec4High.x, patch);
+    float df = saturate(tex.g * 2.0 * fibreMask);
     // A faint veil over the patch: at a fifth, the sky between two patches came out a deeper blue than around
     // them, in the patches' shapes, and read as dark clouds under the cirrus.
-    df += 0.06 * mask * (1.0 - df);
+    df += 0.06 * fibreMask * (1.0 - df);
     float d = lerp(dc, df, vec4High.z);
     // Rows across the cells, some 700 m apart, along the wind, waving with the clumps.
     float b = 1.0 - abs(frac(uvh.y * 11.0 + tex.a * 0.5) - 0.5) * 2.0;

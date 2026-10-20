@@ -2575,14 +2575,16 @@ IDirect3DVolumeTexture9* PostFxResource::CloudShapeTex()
 
 // The high layer's texture (Clouds.fx's HighLayer): 512 x 512, tiling over 8 km, each channel but green equalised so that a
 // threshold of 1 - c leaves a share c of it:
-// - red, cells: two sizes of jittered round puffs (40 and 80 a tile, 200 and 100 m), each a dome of its own
-//   strength, warped a little so they are no grid and softly mottled; altocumulus and cirrocumulus. Frayed by a
-//   fine noise and warped twice as much, they came out as jagged flat pieces, like a jigsaw's;
-// - green, fibres, not equalised but the density itself, 0 to 1: soft streaks along x some 600 m wide, broken
-//   into lengths of 1 to 3 km, of a gauze of fibres 80 m apart and hair-thin ones 30 m apart that curl a little,
-//   all bent by a slow wave across; cirrus. As noise stretched 32 to 1 everywhere, cut at a threshold, the fibres
-//   ran across the whole sky in even, parallel, solid strands, like combed hair, and cut out of streaks they
-//   came out as brush strokes;
+// - red, cells: round puffs of three sizes (37, 59 and 97 a tile, some 220, 140 and 80 m), none to two in a cell of
+//   their grid anywhere in it, each a dome of its own size and strength, warped a little and softly mottled;
+//   altocumulus and cirrocumulus. One in every cell of a grid within its middle three fifths, the cells lay on that
+//   grid in game, plainly; frayed by a fine noise, they came out as jagged flat pieces, like a jigsaw's;
+// - green, fibres, not equalised but the density itself, 0 to 1: soft streaks along x some 600 m wide, thickening
+//   and thinning over several km and fading out at both sides over most of their width, of a gauze of fibres 80 m
+//   apart and hair-thin ones 30 m apart that curl a little, all bent by a slow wave across; cirrus. As noise
+//   stretched 32 to 1 everywhere, cut at a threshold, the fibres ran across the whole sky in even, parallel, solid
+//   strands, like combed hair; broken into lengths of 1 to 3 km with a narrow fade, their ends and sides showed as
+//   the edges of brush strokes;
 // - blue, patches: broad noise, where the layer is (read four times larger, so 32 km across);
 // - alpha, clumps: a middle scale noise, where the cells gather and where they thin out.
 // The same as the offline copy it was tuned in. Mips by a box filter; managed, so it survives a reset.
@@ -2621,8 +2623,8 @@ IDirect3DTexture9* PostFxResource::CloudHighTex()
         }
         return sum / total;
     };
-    // The highest puff over the cells around: a dome (1 - (d / r)^2)^1.5 of radius 0.45 to 0.75 of a cell, at 0.6 to 1
-    // of full strength.
+    // The highest puff over the cells around: up to two a cell (the first in 85% of them, the second in 45%), anywhere
+    // in it, each a dome (1 - (d / r)^2)^1.5 of radius 0.3 to 0.7 of a cell at half to full strength.
     auto cells = [&](float x, float y, int n, int seed) {
         const float cell = static_cast<float>(size) / n;
         const float fx = x / cell, fy = y / cell;
@@ -2632,10 +2634,16 @@ IDirect3DTexture9* PostFxResource::CloudHighTex()
             for (int dx = -1; dx <= 1; ++dx)
             {
                 const int nx = cx + dx, ny = cy + dy, wx = wrap(nx, n), wy = wrap(ny, n);
-                const float px = nx + 0.2f + 0.6f * lattice(wx, wy, seed), py = ny + 0.2f + 0.6f * lattice(wy, wx, seed + 1);
-                const float radius = 0.45f + 0.3f * lattice(wx, wy, seed + 2);
-                const float dome = std::clamp(1.0f - ((px - fx) * (px - fx) + (py - fy) * (py - fy)) / (radius * radius), 0.0f, 1.0f);
-                best = (std::max)(best, dome * std::sqrt(dome) * (0.6f + 0.4f * lattice(wx, wy, seed + 3)));
+                for (int k = 0; k < 2; ++k)
+                {
+                    const int s0 = seed + 10 * k;
+                    if (lattice(wx, wy, s0 + 4) >= (k == 0 ? 0.85f : 0.45f))
+                        continue;
+                    const float px = nx + lattice(wx, wy, s0), py = ny + lattice(wy, wx, s0 + 1);
+                    const float radius = 0.3f + 0.4f * lattice(wx, wy, s0 + 2);
+                    const float dome = std::clamp(1.0f - ((px - fx) * (px - fx) + (py - fy) * (py - fy)) / (radius * radius), 0.0f, 1.0f);
+                    best = (std::max)(best, dome * std::sqrt(dome) * (0.5f + 0.5f * lattice(wx, wy, s0 + 3)));
+                }
             }
         return best;
     };
@@ -2660,15 +2668,16 @@ IDirect3DTexture9* PostFxResource::CloudHighTex()
             const float warp = static_cast<float>(size) / 40.0f * 0.6f;
             const float wx = fx + (valueNoise(fx, fy, 16, 16, 2, 500, 0.5f) - 0.5f) * warp;
             const float wy = fy + (valueNoise(fx, fy, 16, 16, 2, 510, 0.5f) - 0.5f) * warp;
-            value[0][i] = (0.75f * cells(wx, wy, 40, 520) + 0.35f * cells(wx, wy, 80, 530)) * (1.0f - 0.2f * valueNoise(fx, fy, 64, 64, 2, 540, 0.5f));
+            value[0][i] = (0.7f * cells(wx, wy, 37, 520) + 0.45f * cells(wx, wy, 59, 560) + 0.3f * cells(wx, wy, 97, 530)) *
+                          (1.0f - 0.2f * valueNoise(fx, fy, 64, 64, 2, 540, 0.5f));
             auto smooth = [](float v, float from, float to) {
                 const float u = std::clamp((v - from) / (to - from), 0.0f, 1.0f);
                 return u * u * (3.0f - 2.0f * u);
             };
             const float bentY = fy + (valueNoise(fx, fy, 2, 4, 2, 600, 0.5f) - 0.5f) * size * 0.08f;
             const float curl = (valueNoise(fx, fy, 16, 32, 2, 660, 0.5f) - 0.5f) * 6.0f;
-            const float streak = smooth(valueNoise(fx, bentY, 1, 12, 2, 630, 0.4f), 0.4f, 0.85f);
-            const float length = smooth(valueNoise(fx, bentY, 3, 12, 2, 640, 0.5f), 0.3f, 0.8f);
+            const float streak = smooth(valueNoise(fx, bentY, 1, 12, 2, 630, 0.4f), 0.3f, 0.95f);
+            const float length = smooth(valueNoise(fx, bentY, 1, 12, 2, 640, 0.5f), 0.1f, 0.9f);
             const float gauze = smooth(valueNoise(fx, bentY + curl, 4, 96, 2, 650, 0.5f), 0.2f, 0.8f);
             const float hair = smooth(valueNoise(fx, bentY + curl * 1.3f, 8, 256, 2, 680, 0.5f), 0.45f, 0.9f);
             value[1][i] = streak * length * (0.45f * gauze + 0.55f * hair);
