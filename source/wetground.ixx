@@ -39,6 +39,7 @@ import postfxresources;
 import screenquad;
 import ssrtrace;
 import postfxpass;
+import grasswind;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -160,10 +161,16 @@ export void RenderWetGround(IDirect3DDevice9* pDevice)
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Allow0"), &allow0);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Allow1"), &allow1);
     effect->SetFloat(effect->GetParameterByName(nullptr, "fDebug"), float(R.WetGroundDebug()));
+    // Wet Tracks: GrassWind's trample grid, made at the start of this G-buffer pass while it tramples (GrassTrample)
+    static auto tracksPref = FusionFixSettings.GetRef("PREF_WET_TRACKS");
+    IDirect3DTexture9* tracks = (!tracksPref || tracksPref->get() != 0) ? GrassShared::TrampleTexture : nullptr;
+    const D3DXVECTOR4 trackParams(1.0f / GrassShared::TrampleGridSide, GrassShared::TrampleUVOffset[0], GrassShared::TrampleUVOffset[1],
+                                  tracks ? R.fWetTracks : 0.0f);
+    effect->SetVector(effect->GetParameterByName(nullptr, "vec4Tracks"), &trackParams);
 
     // Saved besides what StateBackup keeps around OnGBufferEnd: the textures, sampler states and
     // constants the pass sets.
-    static constexpr DWORD kSlots = 6;
+    static constexpr DWORD kSlots = 7;
     static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER,
                                                                D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
     IDirect3DBaseTexture9* oldTextures[kSlots] = {};
@@ -206,15 +213,16 @@ export void RenderWetGround(IDirect3DDevice9* pDevice)
     effect->BeginPass(0);
     effect->CommitChanges();
     IDirect3DBaseTexture9* textures[kSlots] = { LightingDepth(), R.WetCopyTex[0], R.WetCopyTex[1], R.WetCopyTex[2],
-                                                R.mMaterialIdRT->mD3DTexture, noise };
+                                                R.mMaterialIdRT->mD3DTexture, noise, tracks };
     for (DWORD slot = 0; slot < kSlots; ++slot)
     {
         const bool wrap = slot == 5;
+        const bool linear = wrap || slot == 6; // the trample grid: clamped, its edge texels empty
         SetTextureBoth(pDevice, slot, textures[slot]);
         SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSU, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
         SetSamplerStateBoth(pDevice, slot, D3DSAMP_ADDRESSV, wrap ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
-        SetSamplerStateBoth(pDevice, slot, D3DSAMP_MAGFILTER, wrap ? D3DTEXF_LINEAR : D3DTEXF_POINT);
-        SetSamplerStateBoth(pDevice, slot, D3DSAMP_MINFILTER, wrap ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+        SetSamplerStateBoth(pDevice, slot, D3DSAMP_MAGFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+        SetSamplerStateBoth(pDevice, slot, D3DSAMP_MINFILTER, linear ? D3DTEXF_LINEAR : D3DTEXF_POINT);
         SetSamplerStateBoth(pDevice, slot, D3DSAMP_MIPFILTER, wrap ? D3DTEXF_LINEAR : D3DTEXF_NONE);
         SetSamplerStateBoth(pDevice, slot, D3DSAMP_SRGBTEXTURE, FALSE);
     }

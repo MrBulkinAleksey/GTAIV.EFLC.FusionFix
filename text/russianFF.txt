@@ -340,6 +340,9 @@ Logitech LightSync RGB
 [CarMirrors]
 Отражения в зеркалах машины
 
+[WetTracks]
+Колеи на мокрой дороге
+
 [FF_PROCDIST]
 Дальность травы и предметов
 

@@ -20,6 +20,7 @@ sampler2D NormalTex : register(s2);
 sampler2D SpecularTex : register(s3);
 sampler2D MaterialTex : register(s4); // _STENCIL_BUFFER_, the material IDs
 sampler2D NoiseTex : register(s5);    // the clouds' coverage map, tiling, rank equalised
+sampler2D TrackTex : register(s6);    // GrassWind's trample grid: b how lately wheels or feet passed, a the ground's height modulo 64 m
 
 float4 vec4ProjInfo;
 float fNearPlane;
@@ -33,6 +34,7 @@ float4 vec4Shape;   // 1 / puddle tile in metres, ripple strength, ripples' far 
 float4 vec4Allow0;  // material categories 0..3 that get wet (1) or not (0)
 float4 vec4Allow1;  // and 4..7
 float fDebug;       // WetGroundDebug: 1 the material categories, 2 wetness, puddles and rings
+float4 vec4Tracks;  // Wet Tracks: 1 / the trample grid's side in metres, its texture coordinate's offset, strength (0 = off)
 
 struct Targets
 {
@@ -132,6 +134,20 @@ Targets Wet_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS)
     float n = tex2D(NoiseTex, P.xy * vec4Shape.x).r * 0.8 + tex2D(NoiseTex, P.xy * vec4Shape.x * 3.7 + 0.31).r * 0.2;
     float threshold = 1.0 - vec4Wet.y * wet;
     float puddle = flat * smoothstep(threshold, threshold + 0.06, n);
+
+    // Where wheels and feet passed lately the film is pushed aside: drier tracks through the wet and the puddles, filling
+    // in again as the trample grid recovers. Only where the stamp was made at this height (bridges over roads).
+    [branch]
+    if (vec4Tracks.w > 0.0)
+    {
+        float4 t = tex2Dlod(TrackTex, float4(P.xy * vec4Tracks.x + vec4Tracks.yz, 0.0, 0.0));
+        float h = frac(P.z / 64.0);
+        float dh = abs(h - t.a);
+        dh = min(dh, 1.0 - dh) * 64.0;
+        float track = saturate(t.b * 1.25) * saturate(1.5 - dh) * vec4Tracks.w;
+        puddle *= 1.0 - track;
+        wet *= 1.0 - 0.75 * track;
+    }
 
     // Grass soaks the rain up instead of holding a film of it: green over red, saturated, blue under green
     // (yellow road markings have red at least as high as green, so they stay wet). It keeps a fifth of the

@@ -523,6 +523,7 @@ public:
     float fWetGroundPuddles = 0.35f;
     float fWetGroundPuddleSize = 24.0f;
     float fWetGroundRipples = 1.0f;
+    float fWetTracks = 1.0f; // Wet Tracks: how much drier the tracks of wheels and feet are (WetGround.fx)
     float fWetGroundDarkening = 1.0f;
     float fWetGroundWetting = 30.0f;
     float fWetGroundDrying = 240.0f;
@@ -1950,6 +1951,7 @@ public:
             IniFloat("WEATHER", "WetGroundPuddles", &PostFxResource::fWetGroundPuddles, 0.35f, 0.0f, 1.0f),
             IniFloat("WEATHER", "WetGroundPuddleSize", &PostFxResource::fWetGroundPuddleSize, 24.0f, 2.0f, 500.0f),
             IniFloat("WEATHER", "WetGroundRipples", &PostFxResource::fWetGroundRipples, 1.0f, 0.0f, 3.0f),
+            IniFloat("WEATHER", "WetTracksStrength", &PostFxResource::fWetTracks, 1.0f, 0.0f, 1.0f),
             IniFloat("WEATHER", "WetGroundDarkening", &PostFxResource::fWetGroundDarkening, 1.0f, 0.0f, 2.0f),
             IniFloat("WEATHER", "WetGroundWetting", &PostFxResource::fWetGroundWetting, 30.0f, 0.0f, 3600.0f),
             IniFloat("WEATHER", "WetGroundDrying", &PostFxResource::fWetGroundDrying, 240.0f, 0.0f, 3600.0f),
