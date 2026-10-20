@@ -1,0 +1,12 @@
+# Lights of map models, changed as if the model's .light file had been edited (see debug/light.md).
+# model            type    radius  intensity  flags
+#   model: its name, or its hash as 0x...
+#   type: any, point or spot
+#   radius, intensity: a number sets it, x<number> multiplies it, - keeps it
+#   flags: +bits / -bits joined by commas, or -; 32 day, 64 night, 0x4000 static shadow, 0x8000 dynamic shadow,
+#          0x80000 light shaft, 0x100000 filler
+# GTAIV.EFLC.FusionFix.FillLights.log (FillLightsLog = 1) shows the models of the large and filler lights.
+
+# The four-head industrial floodlight (docks, port, airport): its point lights are about 11 m up with a 10 m radius,
+# so the ground under it got no light once its real lights replaced the far LOD lights.
+CJ_IND_LIGHT_1     point   32      -          -

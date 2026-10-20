@@ -29,6 +29,7 @@ import d3dx9_43;
 import framegeneration;
 import framehistory;
 import hdr;
+import modellights;
 import natives;
 import settings;
 import shaders;
@@ -2371,9 +2372,9 @@ private:
             shPedSkinComponent[1] = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs) { MarkPedSkin(regs.esi); });
     }
 
-    // FillLightsLog: each large or filler exterior map light once, by where it stands, and every 10 s how
-    // many of each kind the game sent, to see which lights flood squares and whether their models mark
-    // them filler.
+    // FillLightsLog: each large or filler map light once, by where it stands, with the model it comes from,
+    // and every 10 s how many of each kind the game sent, to see which lights flood squares and whether
+    // their models mark them filler.
     static void LogFillLight(const rage::CLightSource* light, bool filler, float radius, float intensity, bool changed)
     {
         static std::unordered_set<uint64_t> seen;
@@ -2385,9 +2386,13 @@ private:
         const auto cell = [](float v) { return uint64_t(uint32_t(int32_t(std::floor(v * 4.0f))) & 0x1FFFFF); };
         const uint64_t key = cell(light->mPosition.x) | (cell(light->mPosition.y) << 21) | (cell(light->mPosition.z) << 42);
         if (seen.size() < 20000 && seen.insert(key).second)
-            FusionLog::Write("FillLights", "Light", "pos %.1f %.1f %.1f type %d flags 0x%X %s radius %.1f intensity %.2f colour %.2f %.2f %.2f",
-                             light->mPosition.x, light->mPosition.y, light->mPosition.z, int(light->mType), light->mFlags,
-                             filler ? "filler" : "other", radius, intensity, light->mColor.x, light->mColor.y, light->mColor.z);
+        {
+            const auto model = ModelLights::Current();
+            FusionLog::Write("FillLights", "Light", "pos %.1f %.1f %.1f model 0x%08X type %d flags 0x%X %s %s radius %.1f intensity %.2f colour %.2f %.2f %.2f",
+                             light->mPosition.x, light->mPosition.y, light->mPosition.z, model ? model->model : 0u, int(light->mType),
+                             light->mFlags, (light->mFlags & rage::LF_INTERIOR) ? "interior" : "exterior", filler ? "filler" : "other",
+                             radius, intensity, light->mColor.x, light->mColor.y, light->mColor.z);
+        }
         const ULONGLONG now = GetTickCount64();
         if (now - last >= 10000)
         {
@@ -2399,25 +2404,30 @@ private:
         }
     }
 
-    // Building Fill Lights: the exterior map lights, no interior, vehicle, traffic light or fire.
-    // 0: the large ones go dark; 2: the model's filler lights are capped (see nFillLights).
+    // Building Fill Lights: the map lights, no vehicle, traffic light or fire. Outside, 0: the large ones go
+    // dark; 2: the model's filler lights are capped (see nFillLights). With Indirect Light on, filler lights,
+    // inside too, keep FillLightsIndirectScale of their intensity: they stand in for light bounced off the
+    // surfaces around, which the indirect light now bounces itself from the lit frame.
     static void FillLight(rage::CLightSource* light)
     {
         auto& R = PostFxResources;
-        constexpr uint32_t mask = rage::LF_MAP | rage::LF_INTERIOR | rage::LF_EXTERIOR | rage::LF_VEHICLE | rage::LF_TRAFFIC;
-        if ((light->mFlags & mask) != (rage::LF_MAP | rage::LF_EXTERIOR) || (light->mType != rage::LT_POINT && light->mType != rage::LT_SPOT))
+        if ((light->mFlags & (rage::LF_MAP | rage::LF_VEHICLE | rage::LF_TRAFFIC)) != rage::LF_MAP ||
+            (light->mType != rage::LT_POINT && light->mType != rage::LT_SPOT))
             return;
         const bool filler = (light->mFlags & rage::LF_FILLER) != 0;
+        const bool exterior = (light->mFlags & (rage::LF_INTERIOR | rage::LF_EXTERIOR)) == rage::LF_EXTERIOR;
         const float radius = light->mRadius;
         const float intensity = light->mIntensity;
-        if (R.nFillLights == 0 && light->mRadius >= R.fFillLightsMinRadius)
+        if (exterior && R.nFillLights == 0 && light->mRadius >= R.fFillLightsMinRadius)
             light->mIntensity = 0.0f;
-        else if (R.nFillLights == 2 && filler)
+        else if (exterior && R.nFillLights == 2 && filler)
         {
             light->mRadius = std::min(light->mRadius, R.fFillLightsMaxRadius);
             light->mIntensity = std::min(light->mIntensity, R.fFillLightsMaxIntensity);
         }
-        if (R.bFillLightsLog && (filler || radius >= R.fFillLightsMinRadius))
+        if (filler && R.SSGIEnabled())
+            light->mIntensity *= R.fFillLightsIndirectScale;
+        if (R.bFillLightsLog && (filler || (exterior && radius >= R.fFillLightsMinRadius)))
             LogFillLight(light, filler, radius, intensity, light->mRadius != radius || light->mIntensity != intensity);
     }
 
