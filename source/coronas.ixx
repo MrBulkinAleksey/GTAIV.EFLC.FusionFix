@@ -241,6 +241,9 @@ namespace CoronaRender
     // the coronas listed, those behind the game camera, those drawn (carmirrors.ixx's log)
     export bool bOtherView = false;
     export uint32_t nOtherListed = 0, nOtherBehind = 0, nOtherDrawn = 0;
+    // For a pass from another view: the part of the list made for it (carmirrors.ixx puts the coronas its mirror sees
+    // after the game camera's), by the list's buffer; false draws none. Unset, the whole list.
+    export bool (*pOtherRange)(uint32_t buffer, int32_t& first, int32_t& count) = nullptr;
 
     int32_t nMode = 1;                      // 0: the game's, 1: ours without what is out of view, 2: ours, all of them
     float* pCamera = nullptr;               // CE 0x128e340, the game camera's position, where it looks 8 floats before
@@ -353,8 +356,16 @@ namespace CoronaRender
         bool reflection = (flags >> 0x12) & 1;  // technique 0xf, and coronas with +0x1b set left out
         bool dim = (flags >> 0x11) & 1;
         uint32_t buffer = *pBufferIndex;
+        int32_t first = 0;
         int32_t count = pCounts[buffer];
-        if (count <= 0)
+        if (bOtherView && pOtherRange)
+        {
+            int32_t otherCount = 0;
+            if (!pOtherRange(buffer, first, otherCount))
+                return true;
+            count = first + otherCount;
+        }
+        if (count <= first)
             return true;
         auto list = (uint8_t*)(uintptr_t(*pFlagAddress) - 0x1B) + (size_t(buffer) * (3u << *pShift)) * 0x20;
 
@@ -400,7 +411,7 @@ namespace CoronaRender
 
         static std::vector<uint32_t> drawn;
         drawn.clear();
-        for (int32_t i = 0; i < count; i++)
+        for (int32_t i = first; i < count; i++)
         {
             auto item = list + size_t(i) * 0x20;
             if (reflection && item[0x1B])
@@ -431,12 +442,12 @@ namespace CoronaRender
         }
         if (bOtherView)
         {
-            nOtherListed += uint32_t(count);
+            nOtherListed += uint32_t(count - first);
             nOtherDrawn += uint32_t(drawn.size());
             if (pCamera)
             {
                 const float* look = pCamera - 8;
-                for (int32_t i = 0; i < count; i++)
+                for (int32_t i = first; i < count; i++)
                 {
                     auto pos = (const float*)(list + size_t(i) * 0x20);
                     if ((pos[0] - pCamera[0]) * look[0] + (pos[1] - pCamera[1]) * look[1] + (pos[2] - pCamera[2]) * look[2] < 0.0f)

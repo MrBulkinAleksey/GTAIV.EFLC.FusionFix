@@ -527,6 +527,10 @@ namespace CarMirrors
             FusionLog::Write("CarMirrors", "Coronas", "per mirror draw: %.1f listed, %.1f of them behind the game camera, %.1f drawn\n",
                 float(CoronaRender::nOtherListed) / coronaDraws, float(CoronaRender::nOtherBehind) / coronaDraws,
                 float(CoronaRender::nOtherDrawn) / coronaDraws);
+        if (mirrorCoronaFrames)
+            FusionLog::Write("CarMirrors", "Coronas", "listed for the mirror per frame: %.1f tested in front of its plane, %.1f seen (%u frames)\n",
+                float(mirrorCoronaTested) / mirrorCoronaFrames, float(mirrorCoronaListed) / mirrorCoronaFrames, mirrorCoronaFrames);
+        mirrorCoronaFrames = mirrorCoronaTested = mirrorCoronaListed = 0;
         CoronaRender::nOtherListed = CoronaRender::nOtherBehind = CoronaRender::nOtherDrawn = 0;
         // items: the water's quads, triangles and far cells, summed over the frames
         FusionLog::Write("CarMirrors", "Water", "water.dat %u quads, %u triangles; gathered %u frames, rolled back %u (over the buffers); "
@@ -689,6 +693,7 @@ namespace CarMirrors
         const bool ours = quadsThisFrame && active;
         if (ours)
         {
+            mirrorPhase = phase;
             const auto vehicle = drawnVehicle.load(std::memory_order_relaxed);
             if (const float* m = vehicle ? CEntity::GetMatrix(vehicle) : nullptr)
                 PlacePlane(m, *active);
@@ -1007,6 +1012,96 @@ namespace CarMirrors
         CoronaRender::pBeforeDraw = nullptr;
         inMirrorCoronas = false;
         ++coronaDraws;
+    }
+
+    // The coronas the mirror sees. The game lists a corona for drawing (CE 0xC1EE40, main thread, once a frame) only if
+    // its ball is in the game camera's view (0x431E40 on the camera's grcViewport), a headlight's brightness times
+    // the cosine between its beam and the camera's axis: what a car's mirror sees, behind the camera, was never listed
+    // (15800 listed at night, ~12 behind the camera), and cars behind had their headlights pointed away. Right as the
+    // list is closed, every corona registered this frame is put through the same test and brightness with the mirror
+    // phase's own view (phase + 0xB0, reflected, clipped and widened by PhaseView), those it sees written after the
+    // game camera's in the same buffer; the count stays the camera's, and the mirror's pass draws only its own part
+    // (CoronaRender::pOtherRange).
+    struct CoronaCopy
+    {
+        int32_t* registered = nullptr;  // the coronas registered this frame
+        uint8_t* source = nullptr;      // their list, 0x40 bytes each
+        float* sizeScale = nullptr;
+        float* ballExtra = nullptr;     // added to the ball's radius unless the corona's flag 0x20
+        int (__fastcall* visible)(uintptr_t viewport, void*, float x, float y, float z, float radius, int) = nullptr;
+        int32_t cap = 0;
+        uint8_t* shift = nullptr;       // the list's size exponent (3 << shift a buffer)
+        uint8_t* list = nullptr;        // the drawing list, 0x20 bytes each
+    };
+    static CoronaCopy coronaCopy;
+    static SafetyHookMid coronaCopyHook;
+    static uintptr_t mirrorPhase = 0;    // CRenderPhaseMirrorReflection, as PhaseView last saw it for our mirror
+    static int32_t mirrorCoronaFirst[4]{}, mirrorCoronaCount[4]{};
+    static uint32_t mirrorCoronaFrames = 0, mirrorCoronaTested = 0, mirrorCoronaListed = 0;
+
+    // mov [counts + eax * 4], ecx: eax the buffer, ecx the game camera's count
+    static void MirrorCoronaList(SafetyHookContext& regs)
+    {
+        const uint32_t buffer = regs.eax & 3;
+        const int32_t count = int32_t(regs.ecx);
+        mirrorCoronaFirst[buffer] = count;
+        mirrorCoronaCount[buffer] = 0;
+        if (!usedThisFrame || !mirrorPhase || !plane || !coronaSprites)
+            return;
+        const auto& c = coronaCopy;
+        const uintptr_t viewport = mirrorPhase + 0xB0;
+        const float* axis = reinterpret_cast<const float*>(viewport + 0x60);
+        uint8_t* out = c.list + size_t(regs.eax) * (3u << *c.shift) * 0x20;
+        const int32_t registered = *c.registered;
+        int32_t n = count;
+        for (int32_t i = 0; i < registered && n < c.cap; ++i)
+        {
+            const uint8_t* item = c.source + size_t(i) * 0x40;
+            if (!*reinterpret_cast<const uint32_t*>(item + 0x20))
+                continue;
+            const float* pos = reinterpret_cast<const float*>(item);
+            const uint32_t flags = *reinterpret_cast<const uint32_t*>(item + 0x3C);
+            const float size = *reinterpret_cast<const float*>(item + 0x24) * *c.sizeScale;
+            const float radius = (flags & 0x20) ? size : size + *c.ballExtra;
+            // behind the mirror's plane: clipped away
+            if (plane[0] * pos[0] + plane[1] * pos[1] + plane[2] * pos[2] - plane[3] < -radius)
+                continue;
+            ++mirrorCoronaTested;
+            if (!c.visible(viewport, nullptr, pos[0], pos[1], pos[2], radius, 0))
+                continue;
+            float brightness = *reinterpret_cast<const float*>(item + 0x34) * *reinterpret_cast<const float*>(item + 0x30);
+            if (flags & 0x10)
+            {
+                const float* beam = reinterpret_cast<const float*>(item + 0x10);
+                brightness *= beam[0] * axis[0] + beam[1] * axis[1] + beam[2] * axis[2];
+            }
+            if (!(brightness > 0.0f))
+                continue;
+            uint8_t* to = out + size_t(n) * 0x20;
+            auto* f = reinterpret_cast<float*>(to);
+            f[0] = pos[0];
+            f[1] = pos[1];
+            f[2] = pos[2];
+            f[3] = size;
+            f[4] = brightness;
+            *reinterpret_cast<uint32_t*>(to + 0x14) = *reinterpret_cast<const uint32_t*>(item + 0x28);
+            to[0x18] = item[0x38];
+            to[0x19] = item[0x39];
+            to[0x1A] = item[0x3A];
+            to[0x1B] = uint8_t((flags >> 5) & 1);
+            ++n;
+        }
+        mirrorCoronaCount[buffer] = n - count;
+        mirrorCoronaListed += uint32_t(n - count);
+        ++mirrorCoronaFrames;
+    }
+
+    // Render thread, the mirror's pass (CoronaRender::bOtherView)
+    static bool MirrorCoronaRange(uint32_t buffer, int32_t& first, int32_t& count)
+    {
+        first = mirrorCoronaFirst[buffer & 3];
+        count = mirrorCoronaCount[buffer & 3];
+        return count > 0;
     }
 
     // Main thread, in the mirror phase's draw list right after what is drawn with blending
@@ -1390,6 +1485,37 @@ public:
                     CarMirrors::coronaHooks[2] = safetyhook::create_mid(coronas.get_first(5), CarMirrors::MirrorCoronaFlags);
                 }
             }
+            // the coronas' drawing list made (CE 0xC1EE40): push ebp / mov ebp, esp / and esp, -16 / sub esp, 44 /
+            // mov eax, [buffer] / push ebx / mov ebx, [viewport] / push esi / xor ecx, ecx / push edi / xor edi, edi /
+            // mov [esp+18], ecx / mov [esp+1C], eax / cmp [registered], ecx / jle / mov esi, list + 8
+            auto coronaList = hook::pattern("55 8B EC 83 E4 F0 83 EC 44 A1 ? ? ? ? 53 8B 1D ? ? ? ? 56 33 C9 57 33 FF 89 4C 24 18 89 44 24 1C 39 0D ? ? ? ? 0F 8E ? ? ? ? BE");
+            if (!coronaList.empty() && CarMirrors::plane)
+            {
+                auto f = coronaList.get_first<uint8_t>(0);
+                auto is = [&](uint32_t offset, std::initializer_list<uint8_t> bytes)
+                {
+                    uint32_t i = 0;
+                    for (auto b : bytes)
+                        if (f[offset + i++] != b)
+                            return false;
+                    return true;
+                };
+                if (is(0x55, { 0xF3, 0x0F, 0x59, 0x05 }) && is(0x71, { 0xF3, 0x0F, 0x58, 0x05 }) && is(0x98, { 0xE8 }) &&
+                    is(0x101, { 0x3D }) && is(0x12A, { 0xC1, 0xE1 }) && is(0x13A, { 0xF3, 0x0F, 0x11, 0x89 }) && is(0x1BF, { 0x89, 0x0C, 0x85 }))
+                {
+                    auto& c = CarMirrors::coronaCopy;
+                    c.registered = *reinterpret_cast<int32_t**>(f + 0x25);
+                    c.source = *reinterpret_cast<uint8_t**>(f + 0x30) - 8;
+                    c.sizeScale = *reinterpret_cast<float**>(f + 0x59);
+                    c.ballExtra = *reinterpret_cast<float**>(f + 0x75);
+                    c.visible = reinterpret_cast<decltype(c.visible)>(f + 0x98 + 5 + *reinterpret_cast<int32_t*>(f + 0x99));
+                    c.cap = *reinterpret_cast<int32_t*>(f + 0x102);
+                    c.shift = f + 0x12C;
+                    c.list = *reinterpret_cast<uint8_t**>(f + 0x13E); // movss [ecx + list], xmm1: the item's x
+                    CarMirrors::coronaCopyHook = safetyhook::create_mid(f + 0x1BF, CarMirrors::MirrorCoronaList);
+                    CoronaRender::pOtherRange = &CarMirrors::MirrorCoronaRange;
+                }
+            }
             // the technique group's setter: mov eax, [esp+4] / mov [group], eax / ret / int3 x6 / mov eax, [group] / ret
             auto groupSetter = hook::pattern("8B 44 24 04 A3 ? ? ? ? C3 CC CC CC CC CC CC A1 ? ? ? ? C3");
             if (!groupSetter.empty() && *groupSetter.get_first<int32_t*>(5) == *groupSetter.get_first<int32_t*>(17))
@@ -1427,9 +1553,10 @@ public:
                 CarMirrors::phaseWaterHook ? "on" : "off (not found)", CarMirrors::gatherHook ? "on" : "off (not found)",
                 CarMirrors::waterTargetHooks[1] ? "on" : "off (not found)", CarMirrors::waterFlagHook ? "on" : "off (not found)",
                 CarMirrors::waterPassHook ? "on" : "off (not found)");
-            FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s; its coronas %s (the lamps' %s); "
+            FusionLog::Write("CarMirrors", "Init", "the mirror's entities in the reflection techniques %s; its sky %s; its coronas %s (the lamps' %s, listed by the mirror's view %s); "
                 "the trees' leaves %s, buckets 5 and 4 the main scene's fourth way %s\n", CarMirrors::techniqueHooks[0] ? "on" : "off (not found)", CarMirrors::skyHooks[2] ? "on" : "off (not found)",
-                CarMirrors::coronaHooks[2] ? "on" : "off (not found)", CarMirrors::coronaSprites ? "on" : "off (not found)", CarMirrors::bucketHook ? "on" : "off (not found)",
+                CarMirrors::coronaHooks[2] ? "on" : "off (not found)", CarMirrors::coronaSprites ? "on" : "off (not found)",
+                CarMirrors::coronaCopyHook ? "on" : "off (not found)", CarMirrors::bucketHook ? "on" : "off (not found)",
                 CarMirrors::drawBucket && CarMirrors::techniqueHooks[1] ? "on" : "off (not found)");
             if (CarMirrors::quadOffset)
                 FusionLog::Write("CarMirrors", "Init", "the game's quad offset at start %.4f m (read again each frame)\n", **CarMirrors::quadOffset);
