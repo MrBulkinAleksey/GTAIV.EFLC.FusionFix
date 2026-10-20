@@ -146,12 +146,17 @@ namespace CarMirrors
     // which cover them in order (CarMirrorsWaterCoronasFirst, hidden, 0 draws them after as before).
     static bool waterCoronasFirst = true;
     static bool queuedFirst = false;      // main thread: this build's water and coronas are queued before the entities
+    // CarMirrorsWaterStyle (hidden, 0 the mirror's own): the mirror's entities drawn as the water's reflection draws its
+    // own (CE 0xD76E55: buckets 0x90D, way 2, where the mirror's has 0x307 and 1 or 2 at 0xD76B9A), the depth written
+    // (the water reflection's draw list leaves it on), the water and coronas after them. The mirror's buckets have
+    // bucket 1 (0x307's bit 1), the water's not: with the depth on, something unseen there covered the asphalt.
+    static bool waterStyle = true;
     static SafetyHookMid depthWriteHook;
 
     static void MirrorDepthWrite(SafetyHookContext& regs)
     {
         // push 0 (the value) / push 2 (the state) / mov ecx, eax / call (hooked): the value at [esp + 4]
-        if (usedThisFrame && depthWrite)
+        if (usedThisFrame && (depthWrite || waterStyle))
             reinterpret_cast<uint32_t*>(regs.esp)[1] = 1;
     }
     static PassTargets passTargets[TargetSites]{};
@@ -1102,7 +1107,7 @@ namespace CarMirrors
 
     static void PushReflectionTechniques(SafetyHookContext& regs)
     {
-        if (usedThisFrame && waterCoronasFirst)
+        if (usedThisFrame && waterCoronasFirst && !waterStyle)
             QueueWaterAndCoronasFirst(regs.edi); // edi the phase, as at its entities' draw
         techniquePushed = false;
         if (!usedThisFrame || !reflectionShaders || !callback.allocate || !callback.add || !*techniqueGroup.group)
@@ -1122,8 +1127,16 @@ namespace CarMirrors
 
     static void MirrorBuckets(SafetyHookContext& regs)
     {
-        if (usedThisFrame)
-            *reinterpret_cast<uint32_t*>(regs.esp) |= 8;
+        if (!usedThisFrame)
+            return;
+        auto* arguments = reinterpret_cast<uint32_t*>(regs.esp); // the buckets, then the way
+        if (waterStyle)
+        {
+            arguments[0] = 0x90D;
+            arguments[1] = 2;
+        }
+        else
+            arguments[0] |= 8;
     }
 
     // The coronas (CE 0xC106F0: CE 0xC85080 the coronas, CE 0xD8C8E0 the lens flares, clip planes off round them) are
@@ -1533,14 +1546,15 @@ public:
                 CarMirrors::buildingsInOrder = ini.ReadInteger("MISC", "CarMirrorsBuildingsInOrder", 1) != 0;
                 CarMirrors::depthWrite = ini.ReadInteger("MISC", "CarMirrorsDepthWrite", 0) != 0;
                 CarMirrors::waterCoronasFirst = ini.ReadInteger("MISC", "CarMirrorsWaterCoronasFirst", 1) != 0;
+                CarMirrors::waterStyle = ini.ReadInteger("MISC", "CarMirrorsWaterStyle", 1) != 0;
                 CarMirrors::sideAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::sideAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsSideAimY", -1.5f), -30.0f, 30.0f);
                 CarMirrors::interiorAimX = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimX", 0.0f), -30.0f, 30.0f);
                 CarMirrors::interiorAimY = std::clamp(ini.ReadFloat("MISC", "CarMirrorsInteriorAimY", -3.0f), -30.0f, 30.0f);
-                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d, force depth write %d, depth write %d, buildings in order %d, water and coronas first %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
+                FusionLog::Write("CarMirrors", "Init", "reverse %d, rounded %d, by the drawn car %d, zoom out %.2f, water %d, water reflection %d, reflection shaders %d, sky after the entities %d, extra buckets %d, own glass in the interior mirror %d, lamp coronas %d, force depth write %d, depth write %d, buildings in order %d, water and coronas first %d, water style %d; aim x/y: side %.1f/%.1f, interior %.1f/%.1f\n",
                     int(CarMirrors::reverse), int(CarMirrors::rounded), int(CarMirrors::byDrawnCar), CarMirrors::zoomOut, int(CarMirrors::water),
                     int(CarMirrors::waterReflection), int(CarMirrors::reflectionShaders), int(CarMirrors::skyAfterEntities), int(CarMirrors::extraBuckets),
-                    int(CarMirrors::ownGlassInInterior), int(CarMirrors::lampCoronas), int(CarMirrors::forceDepthWrite), int(CarMirrors::depthWrite), int(CarMirrors::buildingsInOrder), int(CarMirrors::waterCoronasFirst), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
+                    int(CarMirrors::ownGlassInInterior), int(CarMirrors::lampCoronas), int(CarMirrors::forceDepthWrite), int(CarMirrors::depthWrite), int(CarMirrors::buildingsInOrder), int(CarMirrors::waterCoronasFirst), int(CarMirrors::waterStyle), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
             };
             CIniReader iniReader("");
             readIni(iniReader);
