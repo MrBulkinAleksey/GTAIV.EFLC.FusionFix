@@ -770,7 +770,7 @@ public:
     size_t CloudThresholdIdx = 0, CloudBiasIdx = 0, CloudThicknessIdx = 0;
     size_t CloudColorIdx = 0, CloudExposureIdx = 0, CloudSunDirectionIdx = 0;
     size_t SunsetColorIdx = 0, CloudInscatteringIdx = 0, CloudSunColorIdx = 0, CloudExposureClampIdx = 0;
-    size_t CloudMoonPositionIdx = 0, CloudSkyColorIdx = 0;
+    size_t CloudMoonPositionIdx = 0, CloudSkyColorIdx = 0, TopCloudIdx = 0;
     // The lit and shaded colours the clouds were last drawn with, and the sky's clamp, for the log.
     float CloudLastLit[3] = {}, CloudLastShade[3] = {}, CloudLastClamp[3] = {}, CloudLastCeiling = 0.0f, CloudLastLightStrength = 0.0f;
     // The physical sky's share in the clouds' light, its table's colour times this on screen, and the sun's hue it gave.
@@ -801,6 +801,7 @@ public:
         CloudSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
         CloudMoonPositionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "MoonPosition");
         CloudSkyColorIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SkyColor");
+        TopCloudIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "TopCloudBiasDetailThresholdHeight");
         bCloudParamsRegistered = true;
     }
     static constexpr int kSkinDebugMode = 9;

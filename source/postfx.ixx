@@ -55,6 +55,7 @@ import gpugrass;
 import waterreflections;
 import sharpening;
 import inireload;
+import skytrace;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -1871,7 +1872,9 @@ private:
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!bDeviceLost)
             PbrSkyBeforeDraw(pDevice);
+        SkyTrace::Begin();
         const int result = DrawSkyMain(_this, edx, a2, a3, a4, a5, a6, a7);
+        SkyTrace::End();
         PbrSkyAfterDraw(pDevice);
         if (pDevice && !bDeviceLost && IsWaterReflectionTarget(pDevice))
         {
@@ -1930,6 +1933,89 @@ private:
         SAFE_RELEASE(DiffuseSurf);
         SAFE_RELEASE(pShader);
         return hr;
+    }
+
+    // The sky draws the dome a second time with the moon's technique (gta_atmoscatt_clouds PS7/PS9, the clouds as well
+    // as the moon) inside a scissor rectangle around the moon: CE 0x618310 projects the moon's corners with the
+    // viewport's matrix at +0x200, divides by w, clamps the rectangle to the screen and draws if it is not empty. It
+    // never asks whether the moon is in front: with the moon behind the camera w is negative, the corners land mirrored
+    // on the screen, and the clouds the camera looks at were drawn again, in daylight too, so turning the camera
+    // through the direction opposite the moon (and the moon's own) changed the clouds at once. The moon's centre
+    // (sky + 0x90, as CE 0x6164a0 hands it to the projection) behind the camera now draws no moon pass. Before one is
+    // drawn, the moon technique's samplers for the clouds' noise (s3 and s4, s4 and s5 with the stars) wrap as the
+    // plain sky's do: the lighting phase leaves s3 clamped (BindLightingInputs), SMAA s4, and a clamped noise
+    // stretched the clouds into streaks inside the rectangle.
+    //
+    // In front is not enough either: with the moon some 80 degrees and more off the view's axis w is a little over zero,
+    // the corners land far off the screen on both sides, the clamped rectangle is the whole screen and the moon pass
+    // redrew all of the sky (SkyTrace: every pass drawn had w under 0.17 and a full screen scissor, the moon itself
+    // nowhere in view). The moon's quad (MoonXVector 8 long: a half-size of 0.5 / 0.9 / 8, some 0.1 out to a corner) is
+    // taken 0.2 out from its centre each way; a corner behind the camera, or all four off the screen, draws no moon pass.
+    static bool MoonOnScreen(const float* centre, const float* m)
+    {
+        constexpr float kRadius = 0.2f;
+        const float len = std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
+        if (!(len > 0.0f))
+            return false;
+        const float c[3] = { centre[0] / len, centre[1] / len, centre[2] / len };
+        const bool upright = std::fabs(c[2]) < 0.9f;
+        const float a[3] = { upright ? 0.0f : 1.0f, 0.0f, upright ? 1.0f : 0.0f };
+        float u[3] = { c[1] * a[2] - c[2] * a[1], c[2] * a[0] - c[0] * a[2], c[0] * a[1] - c[1] * a[0] };
+        const float ul = std::sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+        for (float& x : u)
+            x /= ul;
+        const float v[3] = { c[1] * u[2] - c[2] * u[1], c[2] * u[0] - c[0] * u[2], c[0] * u[1] - c[1] * u[0] };
+        float minX = 1e30f, minY = 1e30f, maxX = -1e30f, maxY = -1e30f;
+        for (int corner = 0; corner < 4; ++corner)
+        {
+            const float su = (corner & 1) ? kRadius : -kRadius, sv = (corner & 2) ? kRadius : -kRadius;
+            float p[3];
+            for (int i = 0; i < 3; ++i)
+                p[i] = centre[i] + (su * u[i] + sv * v[i]) * len;
+            const float w = p[0] * m[3] + p[1] * m[7] + p[2] * m[11] + m[15];
+            if (!(w > 0.0f))
+                return false;
+            const float x = (p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12]) / w;
+            const float y = (p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13]) / w;
+            minX = (std::min)(minX, x);
+            maxX = (std::max)(maxX, x);
+            minY = (std::min)(minY, y);
+            maxY = (std::max)(maxY, y);
+        }
+        return maxX >= -1.0f && minX <= 1.0f && maxY >= -1.0f && minY <= 1.0f;
+    }
+
+    static inline injector::hook_back<bool(__fastcall*)(void*, void*, rage::grcViewport*)> hbSkyMoonScissor;
+    static bool __fastcall SkyMoonScissor(void* sky, void* edx, rage::grcViewport* viewport)
+    {
+        if (!SkyTrace::bMoonPass)
+            return false;
+        if (sky && viewport)
+        {
+            const float* centre = reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(sky) + 0x90);
+            const float* m = &viewport->mMatrix_200[0][0];
+            const float w = centre[0] * m[3] + centre[1] * m[7] + centre[2] * m[11] + m[15];
+            if (!(w > 0.0f) || !MoonOnScreen(centre, m))
+            {
+                SkyTrace::Moon(centre, w, w > 0.0f, false);
+                return false;
+            }
+            const bool drawn = hbSkyMoonScissor.fun(sky, edx, viewport);
+            SkyTrace::Moon(centre, w, true, drawn);
+            if (!drawn)
+                return false;
+        }
+        else if (!hbSkyMoonScissor.fun(sky, edx, viewport))
+            return false;
+        if (auto pDevice = rage::grcDevice::GetD3DDevice(); pDevice && !bDeviceLost)
+        {
+            for (DWORD i = 2; i <= 5; ++i)
+            {
+                pDevice->SetSamplerState(i, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+                pDevice->SetSamplerState(i, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+            }
+        }
+        return true;
     }
 
     // The reflection map's sky (CE 0xdbc2ab, the sky draw's branch for render phases with flag
@@ -2451,7 +2537,9 @@ public:
             // The game's flat clouds under the volumetric ones, by VolumetricCloudsVanilla:
             // gta_atmoscatt_clouds draws them where CloudThreshold * noise - CloudBias is above
             // 0, so threshold * v and bias towards 1 by 1 - v fade them out at 0. Its high layer
-            // stays.
+            // (TopCloudBiasDetailThresholdHeight: x bias, z threshold, saturate(z * noise - x)) fades
+            // the same way: it is mapped by the dome's texture coordinates, not by direction, and
+            // came out drawn out in streaks at some angles under the volumetric clouds.
             if (R.bCloudParamsRegistered)
             {
                 const bool fade = R.VolumetricCloudsOn() && R.fVolumetricCloudsVanilla < 1.0f;
@@ -2464,6 +2552,10 @@ public:
                 biasOverride.add = { 1.0f - v, 0.0f, 0.0f, 0.0f };
                 thresholdOverride.on = fade;
                 biasOverride.on = fade;
+                auto& topOverride = rage::grmShaderInfo::getShaderParamOverride(R.TopCloudIdx);
+                topOverride.mul = { v, 1.0f, v, 1.0f };
+                topOverride.add = { 1.0f - v, 0.0f, 0.0f, 0.0f };
+                topOverride.on = fade;
             }
             // The shadows work out the clouds' coverage as Clouds.fx does (deferred_lighting_sun_under_clouds
             // patch): from the volumetric clouds' layer while they are on, otherwise from CloudShadowsCoverage
@@ -2729,6 +2821,10 @@ public:
 
                 pattern = find_pattern("E8 ? ? ? ? 8D 44 24 ? 50 8B CF E8 ? ? ? ? 8D 84 24", "E8 ? ? ? ? 8D 44 24 ? 50 8B CE E8 ? ? ? ? 8D 8C 24 ? ? ? ? 51 8B CE E8 ? ? ? ? 8D 94 24");
                 hbDrawSkyHook.fun = injector::MakeCALL(pattern.get_first(0), DrawSky).get();
+
+                pattern = hook::pattern("57 8B CE E8 ? ? ? ? 84 C0 0F 84 ? ? ? ? F3 0F 10 8E D0 02 00 00");
+                if (!pattern.empty())
+                    hbSkyMoonScissor.fun = injector::MakeCALL(pattern.get_first(3), SkyMoonScissor).get();
 
                 pattern = hook::pattern("6A 00 6A 00 6A 00 6A 00 6A 03 57 E8 ? ? ? ? 5F 5E 8B E5 5D C3");
                 if (!pattern.empty())
