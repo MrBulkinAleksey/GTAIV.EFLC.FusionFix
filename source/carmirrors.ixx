@@ -1029,16 +1029,55 @@ namespace CarMirrors
         RageDirect3DDevice9::SetTextureBoth(device, D3DVERTEXTEXTURESAMPLER0, farDepth);
     }
 
+    // The coronas are added to what is drawn (the corona technique's blend: one and one). In the mirror's pass they
+    // came out opaque, their quads' black corners over the reflection: the city's far lights made a black band with
+    // dots along the horizon. The blend is set on the device right before each batch and put back after the coronas.
+    static constexpr D3DRENDERSTATETYPE CoronaStates[] = { D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP };
+    static constexpr DWORD CoronaValues[] = { TRUE, D3DBLEND_ONE, D3DBLEND_ONE, D3DBLENDOP_ADD };
+    static DWORD coronaSavedStates[std::size(CoronaStates)]{};
+    static bool coronaStatesSaved = false;
+
+    static void MirrorCoronaBatch()
+    {
+        BindFarDepth();
+        auto device = rage::grcDevice::GetD3DDevice();
+        if (!device)
+            return;
+        auto real = RageDirect3DDevice9::RealDevice(device);
+        if (!coronaStatesSaved)
+        {
+            for (size_t i = 0; i < std::size(CoronaStates); ++i)
+                real->GetRenderState(CoronaStates[i], &coronaSavedStates[i]);
+            coronaStatesSaved = true;
+        }
+        for (size_t i = 0; i < std::size(CoronaStates); ++i)
+            real->SetRenderState(CoronaStates[i], CoronaValues[i]);
+    }
+
+    static void RestoreCoronaStates()
+    {
+        if (!coronaStatesSaved)
+            return;
+        coronaStatesSaved = false;
+        if (auto device = rage::grcDevice::GetD3DDevice())
+        {
+            auto real = RageDirect3DDevice9::RealDevice(device);
+            for (size_t i = 0; i < std::size(CoronaStates); ++i)
+                real->SetRenderState(CoronaStates[i], coronaSavedStates[i]);
+        }
+    }
+
     static void __cdecl MirrorCoronasDraw(uint32_t)
     {
         inMirrorCoronas = true;
-        CoronaRender::pBeforeDraw = &BindFarDepth;
+        CoronaRender::pBeforeDraw = &MirrorCoronaBatch;
         CoronaRender::bOtherView = true;
         reinterpret_cast<void (__cdecl*)()>(coronaFunction)();
         if (coronaSprites)
             reinterpret_cast<void (__cdecl*)()>(coronaSprites)();
         CoronaRender::bOtherView = false;
         CoronaRender::pBeforeDraw = nullptr;
+        RestoreCoronaStates();
         inMirrorCoronas = false;
         ++coronaDraws;
     }
