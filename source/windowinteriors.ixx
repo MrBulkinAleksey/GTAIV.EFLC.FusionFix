@@ -21,8 +21,9 @@ import entityclass;
 import renderskip;
 
 // Window Interiors (Graphics > Lighting): rooms behind the lit windows at night. The night windows' glow is drawn
-// by the forward techniques ("draw", "lightweight0_draw", "lightweight4_draw") of gta_emissivenight,
-// gta_glass_emissivenight and gta_normal_spec_reflect_emissivenight; shaders/patches/world_window_interiors.patch has
+// by the forward techniques of gta_emissivenight, gta_glass_emissivenight and gta_normal_spec_reflect_emissivenight,
+// most of it by "unlit_draw" (PS2, the scene's forward pass after the lights, per the capture), the rest by "draw",
+// "lightweight0_draw" and "lightweight4_draw"; shaders/patches/world_window_interiors.patch has
 // each lit pixel of a wall look into a box room behind it (interior mapping) and shades the glow by what the view ray
 // meets there. The rooms are a grid on the wall in metres, so they need no model data; the glow keeps its own pattern
 // and colour.
@@ -235,7 +236,7 @@ class WindowInteriors
                     text += number & 0x80000000u ? std::format(" s{}x{}", number & 0x7FFFFFFFu, count) : std::format(" {}x{}", number, count);
                 text += "\n";
             }
-            text += "  emissive shaders (gta_emissivenight 167-178, gta_glass_emissivenight 203-213, gta_normal_spec_reflect_emissivenight 380-390; patched: 167 176 177, 203 211 212, 380 388 389):\n";
+            text += "  emissive shaders (gta_emissivenight 167-178, gta_glass_emissivenight 203-213, gta_normal_spec_reflect_emissivenight 380-390; patched: 167 168 176 177, 203 204 211 212, 380 381 388 389):\n";
             for (const auto& [key, e] : emissive)
             {
                 std::string models;

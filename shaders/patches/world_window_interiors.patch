@@ -1,3 +1,49 @@
+diff --git a/win32_30_nv8/gta_emissivenight.fxc.xml b/win32_30_nv8/gta_emissivenight.fxc.xml
+index bd6c5dfe..d362d959 100644
+--- a/win32_30_nv8/gta_emissivenight.fxc.xml
++++ b/win32_30_nv8/gta_emissivenight.fxc.xml
+@@ -75,7 +75,12 @@
+ 			<Item>
+ 				<DataType>asm</DataType>
+ 				<File>gta_emissivenight\gta_emissivenightVS2.asm</File>
+-				<Variables value="5" >
++				<Variables value="6" >
++					<Item>
++						<Type>float4x4</Type>
++						<Name>gWorld</Name>
++						<Index value="0" />
++					</Item>
+ 					<Item>
+ 						<Type>float4x4</Type>
+ 						<Name>gWorldViewProj</Name>
+@@ -106,7 +111,12 @@
+ 			<Item>
+ 				<DataType>asm</DataType>
+ 				<File>gta_emissivenight\gta_emissivenightVS3.asm</File>
+-				<Variables value="6" >
++				<Variables value="7" >
++					<Item>
++						<Type>float4x4</Type>
++						<Name>gWorld</Name>
++						<Index value="0" />
++					</Item>
+ 					<Item>
+ 						<Type>float4x3</Type>
+ 						<Name>gBoneMtx</Name>
+@@ -374,7 +384,12 @@
+ 			<Item>
+ 				<DataType>asm</DataType>
+ 				<File>gta_emissivenight\gta_emissivenightVS11.asm</File>
+-				<Variables value="5" >
++				<Variables value="6" >
++					<Item>
++						<Type>float4x4</Type>
++						<Name>gWorld</Name>
++						<Index value="0" />
++					</Item>
+ 					<Item>
+ 						<Type>float4x4</Type>
+ 						<Name>gWorldViewProj</Name>
 diff --git a/win32_30_nv8/gta_emissivenight/gta_emissivenightPS1.asm b/win32_30_nv8/gta_emissivenight/gta_emissivenightPS1.asm
 index 7fabd168..54ce4d02 100644
 --- a/win32_30_nv8/gta_emissivenight/gta_emissivenightPS1.asm
@@ -376,6 +422,318 @@ index d21da128..86eb585a 100644
      mul r1.w, r0.w, c39.x
      mul oC0, r1, c51
      
+diff --git a/win32_30_nv8/gta_emissivenight/gta_emissivenightPS2.asm b/win32_30_nv8/gta_emissivenight/gta_emissivenightPS2.asm
+index 0e378f8c..4e8c01eb 100644
+--- a/win32_30_nv8/gta_emissivenight/gta_emissivenightPS2.asm
++++ b/win32_30_nv8/gta_emissivenight/gta_emissivenightPS2.asm
+@@ -30,8 +30,19 @@
+     def c0, 3.99600005, 4, 0.125, 0.25
+     def c1, 0, -1, -0, 1280
+     def c11, 0.99, 0, 0, 0
++    def c12, 0.103100002, 0.103000000, 0.0973000005, 0.109899998 // FusionFix world_window_interiors.patch: the room hash's scales
++    def c13, 33.3300018, 1, 0, 0.5 // FusionFix world_window_interiors.patch: the hash's offset, one, zero, half
++    def c14, 0.5, 0.850000024, 0.5, 6 // FusionFix world_window_interiors.patch: the lamp in the room (along, up, deep), its fall-off
++    def c15, 9.99999975e-006, 0.400000006, 0, 4 // FusionFix world_window_interiors.patch: a tiny step, the most the normal points up or down, -, the saturation gate's slope
++    def c16, 0.649999976, 0.400000006, 0.949999988, 0.800000012 // FusionFix world_window_interiors.patch: side walls, floor, ceiling, back wall
++    def c17, 0.300000012, 0, 0.699999988, 0.699999988 // FusionFix world_window_interiors.patch: ambient, -, the saturation that keeps the glow, the longest blind
++    def c18, 0.699999988, 0.600000024, 0, 0 // FusionFix world_window_interiors.patch: the dimmest room, the rooms' brightness spread
++    def c19, 0.400000006, 0, 0.400000006, 0 // FusionFix world_window_interiors.patch: the debug magenta
++    def c20, 1.08000004, 0.970000029, 0.850000024, 0 // FusionFix world_window_interiors.patch: a warm room
++    def c21, 0.899999976, 0.980000019, 1.10000002, 0 // FusionFix world_window_interiors.patch: a cool room
+     dcl_texcoord v0.xy
+     dcl_color v1
++    dcl_texcoord6 v2.xyz // FusionFix world_window_interiors.patch: world position
+     dcl vPos.xy
+     dcl_texcoord9 v9
+     dcl_2d s0
+@@ -45,6 +56,106 @@
+     mov r1.x, c66.x
+     mul r1.x, r1.x, c45.w
+     mul r1.xyz, r0, r1.x
++    // --- FusionFix world_window_interiors.patch: the room behind a lit window (r1.xyz, the glow)
++    dsx r3.xyz, v2
++    dsy r4.xyz, v2
++    crs r5.xyz, r3, r4
++    nrm r2.xyz, r5 // FusionFix world_window_interiors.patch: the wall's normal from the position's derivatives
++    add r3.xyz, c161, -v2
++    dp3 r3.w, r2, r3
++    cmp r2.xyz, r3.w, r2, -r2 // turned to the camera
++    add r9.x, -r2_abs.z, c15.y
++    mov r9.y, c161.w
++    min r9.x, r9.x, r9.y
++    if_gt r9.x, c13.z
++      mov r3.x, -r2.y
++      mov r3.y, r2.x
++      mov r3.z, c13.z
++      nrm r4.xyz, r3 // along the wall
++      add r5.xyz, v2, -c161
++      dp3 r5.w, r5, r5
++      rsq r6.w, r5.w
++      mul r5.xyz, r5, r6.w // the view ray
++      rcp r6.w, r6.w // the distance
++      dp3 r6.x, v2, r4
++      mov r6.y, v2.z
++      mul r6.xy, r6, c162
++      frc r7.xy, r6
++      add r6.xy, r6, -r7 // the room's cell
++      mov r6.z, r7.y // the height in the window, for the blind
++      dp3 r8.x, r5, r4
++      mov r8.y, r5.z
++      dp3 r8.z, r5, -r2
++      mul r8.xyz, r8, c162
++      add r8.xyz, r8, c15.x // the ray in rooms, into the wall along z
++      cmp r3.xyz, r8, c13.y, c13.z
++      mov r7.z, c13.z
++      add r3.xyz, r3, -r7
++      rcp r9.x, r8.x
++      rcp r9.y, r8.y
++      rcp r9.z, r8.z
++      mul r3.xyz, r3, r9 // how far to each wall
++      min r3.w, r3.x, r3.y
++      min r3.w, r3.w, r3.z
++      max r3.w, r3.w, c13.z
++      mad r7.xyz, r8, r3.w, r7 // where the ray meets the room
++      mov r9.w, c16.w
++      add r9.x, r7.y, -c13.w
++      cmp r9.x, r9.x, c16.z, c16.y
++      add r9.y, r3.w, -r3.y
++      cmp r9.w, r9.y, r9.x, r9.w
++      add r9.y, r3.w, -r3.x
++      cmp r9.w, r9.y, c16.x, r9.w // the wall's brightness
++      add r3.xyz, r7, -c14
++      dp3 r3.x, r3, r3
++      mul r3.x, r3.x, c14.w
++      add r3.x, r3.x, c13.y
++      rcp r3.x, r3.x
++      add r3.x, r3.x, c17.x
++      mul r9.w, r9.w, r3.x // lit by the lamp
++      mul r3, r6.xyxy, c12
++      frc r3, r3
++      add r4, r3.wzxy, c13.x
++      dp4 r4.x, r3, r4
++      add r3, r3, r4.x
++      add r4, r3.xxyz, r3.yzzw
++      mul r4, r4, r3.zywx
++      frc r4, r4 // four numbers of the room
++      mad r3.w, r4.w, c17.w, r6.z
++      add r3.w, r3.w, -c13.y
++      add r8.w, c162.w, -r4.z
++      min r3.w, r3.w, r8.w
++      cmp r9.w, r3.w, c16.z, r9.w // the blind
++      mad r3.w, r4.x, c18.y, c18.x
++      mul r9.w, r9.w, r3.w
++      mul r9.w, r9.w, c163.w
++      mov r5.xyz, c21
++      lrp r3.xyz, r4.y, c20, r5
++      mul r3.xyz, r3, r9.w // the room's shading
++      mad_sat r8.x, r6.w, c163.x, c163.y
++      mul r8.x, r8.x, c161.w
++      max r8.y, r1.x, r1.y
++      max r8.y, r8.y, r1.z
++      min r8.z, r1.x, r1.y
++      min r8.z, r8.z, r1.z
++      add r8.z, r8.y, -r8.z
++      max r8.y, r8.y, c15.x
++      rcp r8.y, r8.y
++      mul r8.z, r8.z, r8.y
++      add r8.z, -r8.z, c17.z
++      mul_sat r8.z, r8.z, c15.w
++      mul r8.x, r8.x, r8.z // how much the glow takes it
++      add r3.xyz, r3, -c13.y
++      mad r3.xyz, r8.x, r3, c13.y
++      mov r8.w, c163.z
++      if_gt r8.w, c13.z
++        mul r3.xyz, r3, c13.w
++        mov r5.xyz, c19
++        lrp r1.xyz, r8.x, r3, r5
++      else
++        mul r1.xyz, r1, r3
++      endif
++    endif
+     mul r1.w, r0.w, c39.x
+     mul oC0, r1, c51
+     
+diff --git a/win32_30_nv8/gta_emissivenight/gta_emissivenightVS11.asm b/win32_30_nv8/gta_emissivenight/gta_emissivenightVS11.asm
+index a8d96588..85082e89 100644
+--- a/win32_30_nv8/gta_emissivenight/gta_emissivenightVS11.asm
++++ b/win32_30_nv8/gta_emissivenight/gta_emissivenightVS11.asm
+@@ -23,7 +23,7 @@
+ 
+     vs_3_0
+     def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 3.0085878029e-42 // 2147
+-    def c0, 1, 0, 0.5, 0
++    def c4, 1, 0, 0.5, 0
+     dcl_position v0
+     dcl_texcoord v1
+     dcl_texcoord1 v3
+@@ -33,8 +33,9 @@
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator - Emissive
+     dcl_texcoord o1.xy
++    dcl_texcoord6 o3 // FusionFix world_window_interiors.patch: world position
+     dcl_color o2
+-    mad r0.xyz, v1.xyxw, c0.xxyw, c0.yyxw
++    mad r0.xyz, v1.xyxw, c4.xxyw, c4.yyxw
+     dp3 o1.x, c208, r0
+     dp3 o1.y, c209, r0
+     mov r0.xyz, v0
+@@ -45,11 +46,16 @@
+     add r0.x, r0.x, v6.z
+     mad r0.yz, r0.z, v5.xxyw, r0.xyww
+     add r0.yz, r0, v6.xxyw
++    mul r2.xyz, c1, r0.z
++    mad r2.xyz, r0.y, c0, r2
++    mad r2.xyz, r0.x, c2, r2
++    add o3.xyz, r2, c3 // FusionFix world_window_interiors.patch: world position
++    mov o3.w, c4.x
+     mul r1, r0.z, c9
+     mad r1, r0.y, c8, r1
+     mad r0, r0.x, c10, r1
+     add r0, r0, c11
+-    mul r1.x, r0.w, c0.z
++    mul r1.x, r0.w, c4.z
+     mad o0.xy, c44.zwzw, r1.x, r0
+     add o0.z, r0.z, -c210.x
+     add o10.z, r0.z, -c210.x
+diff --git a/win32_30_nv8/gta_emissivenight/gta_emissivenightVS2.asm b/win32_30_nv8/gta_emissivenight/gta_emissivenightVS2.asm
+index d4bb9734..2a42f931 100644
+--- a/win32_30_nv8/gta_emissivenight/gta_emissivenightVS2.asm
++++ b/win32_30_nv8/gta_emissivenight/gta_emissivenightVS2.asm
+@@ -23,22 +23,28 @@
+ 
+     vs_3_0
+     def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.9959761167e-42 // 2138
+-    def c0, 1, 0, 0.5, 0
++    def c4, 1, 0, 0.5, 0
+     dcl_position v0
+     dcl_color v1
+     dcl_texcoord v2
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator - Emissive
+     dcl_texcoord o1.xy
++    dcl_texcoord6 o3 // FusionFix world_window_interiors.patch: world position
+     dcl_color o2
+-    mad r0.xyz, v2.xyxw, c0.xxyw, c0.yyxw
++    mad r0.xyz, v2.xyxw, c4.xxyw, c4.yyxw
+     dp3 o1.x, c208, r0
+     dp3 o1.y, c209, r0
+     mul r0, c9, v0.y
+     mad r0, v0.x, c8, r0
+     mad r0, v0.z, c10, r0
+     add r0, r0, c11
+-    mul r1.x, r0.w, c0.z
++    mul r2.xyz, c1, v0.y
++    mad r2.xyz, v0.x, c0, r2
++    mad r2.xyz, v0.z, c2, r2
++    add o3.xyz, r2, c3 // FusionFix world_window_interiors.patch: world position
++    mov o3.w, c4.x
++    mul r1.x, r0.w, c4.z
+     mad o0.xy, c44.zwzw, r1.x, r0
+     add o0.z, r0.z, -c210.x
+     add o10.z, r0.z, -c210.x
+diff --git a/win32_30_nv8/gta_emissivenight/gta_emissivenightVS3.asm b/win32_30_nv8/gta_emissivenight/gta_emissivenightVS3.asm
+index e4ce0fee..8e46a89e 100644
+--- a/win32_30_nv8/gta_emissivenight/gta_emissivenightVS3.asm
++++ b/win32_30_nv8/gta_emissivenight/gta_emissivenightVS3.asm
+@@ -25,7 +25,7 @@
+ 
+     vs_3_0
+     def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.9973774152e-42 // 2139
+-    def c0, 765.005859, 1, 0, 0.5
++    def c4, 765.005859, 1, 0, 0.5
+     dcl_position v0
+     dcl_blendweight v1
+     dcl_blendindices v2
+@@ -34,33 +34,39 @@
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator - Emissive
+     dcl_texcoord o1.xy
++    dcl_texcoord6 o3 // FusionFix world_window_interiors.patch: world position
+     dcl_color o2
+-    mad r0.xyz, v3.xyxw, c0.yyzw, c0.zzyw
++    mad r0.xyz, v3.xyxw, c4.yyzw, c4.zzyw
+     dp3 o1.x, c208, r0
+     dp3 o1.y, c209, r0
+-    mul r0, c0.x, v2
++    mul r0, c4.x, v2
+     mova a0, r0
+     mul r0, v1.y, c65[a0.y]
+     mad r0, c65[a0.x], v1.x, r0
+     mad r0, c65[a0.z], v1.z, r0
+     mad r0, c65[a0.w], v1.w, r0
+-    mad r1, v0.xyzx, c0.yyyz, c0.zzzy
++    mad r1, v0.xyzx, c4.yyyz, c4.zzzy
+     dp4 r0.x, r1, r0
++    mul r3.xyz, r0.x, c1 // FusionFix world_window_interiors.patch: world position, y
+     mul r0, r0.x, c9
+     mul r2, v1.y, c64[a0.y]
+     mad r2, c64[a0.x], v1.x, r2
+     mad r2, c64[a0.z], v1.z, r2
+     mad r2, c64[a0.w], v1.w, r2
+     dp4 r2.x, r1, r2
++    mad r3.xyz, r2.x, c0, r3 // FusionFix world_window_interiors.patch: x
+     mad r0, r2.x, c8, r0
+     mul r2, v1.y, c66[a0.y]
+     mad r2, c66[a0.x], v1.x, r2
+     mad r2, c66[a0.z], v1.z, r2
+     mad r2, c66[a0.w], v1.w, r2
+     dp4 r1.x, r1, r2
++    mad r3.xyz, r1.x, c2, r3 // FusionFix world_window_interiors.patch: z
++    add o3.xyz, r3, c3
++    mov o3.w, c4.y
+     mad r0, r1.x, c10, r0
+     add r0, r0, c11
+-    mul r1.x, r0.w, c0.w
++    mul r1.x, r0.w, c4.w
+     mad o0.xy, c44.zwzw, r1.x, r0
+     add o0.z, r0.z, -c210.x
+     add o10.z, r0.z, -c210.x
+diff --git a/win32_30_nv8/gta_glass_emissivenight.fxc.xml b/win32_30_nv8/gta_glass_emissivenight.fxc.xml
+index 7a0484fb..06fb4bba 100644
+--- a/win32_30_nv8/gta_glass_emissivenight.fxc.xml
++++ b/win32_30_nv8/gta_glass_emissivenight.fxc.xml
+@@ -85,7 +85,12 @@
+ 			<Item>
+ 				<DataType>asm</DataType>
+ 				<File>gta_glass_emissivenight\gta_glass_emissivenightVS2.asm</File>
+-				<Variables value="5" >
++				<Variables value="6" >
++					<Item>
++						<Type>float4x4</Type>
++						<Name>gWorld</Name>
++						<Index value="0" />
++					</Item>
+ 					<Item>
+ 						<Type>float4x4</Type>
+ 						<Name>gWorldViewProj</Name>
+@@ -116,7 +121,12 @@
+ 			<Item>
+ 				<DataType>asm</DataType>
+ 				<File>gta_glass_emissivenight\gta_glass_emissivenightVS3.asm</File>
+-				<Variables value="6" >
++				<Variables value="7" >
++					<Item>
++						<Type>float4x4</Type>
++						<Name>gWorld</Name>
++						<Index value="0" />
++					</Item>
+ 					<Item>
+ 						<Type>float4x3</Type>
+ 						<Name>gBoneMtx</Name>
+@@ -404,7 +414,12 @@
+ 			<Item>
+ 				<DataType>asm</DataType>
+ 				<File>gta_glass_emissivenight\gta_glass_emissivenightVS11.asm</File>
+-				<Variables value="5" >
++				<Variables value="6" >
++					<Item>
++						<Type>float4x4</Type>
++						<Name>gWorld</Name>
++						<Index value="0" />
++					</Item>
+ 					<Item>
+ 						<Type>float4x4</Type>
+ 						<Name>gWorldViewProj</Name>
 diff --git a/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightPS1.asm b/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightPS1.asm
 index 9ccf2b4c..913367dc 100644
 --- a/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightPS1.asm
@@ -628,6 +986,137 @@ index 7eab5751..24ac6a24 100644
      mul r1.w, r0.w, c39.x
      mul oC0, r1, c51
      
+diff --git a/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightPS2.asm b/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightPS2.asm
+index f7ff0075..4d638717 100644
+--- a/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightPS2.asm
++++ b/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightPS2.asm
+@@ -28,8 +28,19 @@
+     def c0, 3.99600005, 4, 0.125, 0.25
+     def c1, 0, -1, -0, 0
+     def c11, 0.99, 0, 0, 0
++    def c12, 0.103100002, 0.103000000, 0.0973000005, 0.109899998 // FusionFix world_window_interiors.patch: the room hash's scales
++    def c13, 33.3300018, 1, 0, 0.5 // FusionFix world_window_interiors.patch: the hash's offset, one, zero, half
++    def c14, 0.5, 0.850000024, 0.5, 6 // FusionFix world_window_interiors.patch: the lamp in the room (along, up, deep), its fall-off
++    def c15, 9.99999975e-006, 0.400000006, 0, 4 // FusionFix world_window_interiors.patch: a tiny step, the most the normal points up or down, -, the saturation gate's slope
++    def c16, 0.649999976, 0.400000006, 0.949999988, 0.800000012 // FusionFix world_window_interiors.patch: side walls, floor, ceiling, back wall
++    def c17, 0.300000012, 0, 0.699999988, 0.699999988 // FusionFix world_window_interiors.patch: ambient, -, the saturation that keeps the glow, the longest blind
++    def c18, 0.699999988, 0.600000024, 0, 0 // FusionFix world_window_interiors.patch: the dimmest room, the rooms' brightness spread
++    def c19, 0.400000006, 0, 0.400000006, 0 // FusionFix world_window_interiors.patch: the debug magenta
++    def c20, 1.08000004, 0.970000029, 0.850000024, 0 // FusionFix world_window_interiors.patch: a warm room
++    def c21, 0.899999976, 0.980000019, 1.10000002, 0 // FusionFix world_window_interiors.patch: a cool room
+     dcl_texcoord v0.xy
+     dcl_color v1
++    dcl_texcoord6 v2.xyz // FusionFix world_window_interiors.patch: world position
+     dcl vPos.xy
+     dcl_texcoord9 v9
+     dcl_2d s0
+@@ -39,6 +50,106 @@
+     mov r1.x, c66.x
+     mul r1.x, r1.x, c45.w
+     mul r1.xyz, r0, r1.x
++    // --- FusionFix world_window_interiors.patch: the room behind a lit window (r1.xyz, the glow)
++    dsx r3.xyz, v2
++    dsy r4.xyz, v2
++    crs r5.xyz, r3, r4
++    nrm r2.xyz, r5 // FusionFix world_window_interiors.patch: the wall's normal from the position's derivatives
++    add r3.xyz, c161, -v2
++    dp3 r3.w, r2, r3
++    cmp r2.xyz, r3.w, r2, -r2 // turned to the camera
++    add r9.x, -r2_abs.z, c15.y
++    mov r9.y, c161.w
++    min r9.x, r9.x, r9.y
++    if_gt r9.x, c13.z
++      mov r3.x, -r2.y
++      mov r3.y, r2.x
++      mov r3.z, c13.z
++      nrm r4.xyz, r3 // along the wall
++      add r5.xyz, v2, -c161
++      dp3 r5.w, r5, r5
++      rsq r6.w, r5.w
++      mul r5.xyz, r5, r6.w // the view ray
++      rcp r6.w, r6.w // the distance
++      dp3 r6.x, v2, r4
++      mov r6.y, v2.z
++      mul r6.xy, r6, c162
++      frc r7.xy, r6
++      add r6.xy, r6, -r7 // the room's cell
++      mov r6.z, r7.y // the height in the window, for the blind
++      dp3 r8.x, r5, r4
++      mov r8.y, r5.z
++      dp3 r8.z, r5, -r2
++      mul r8.xyz, r8, c162
++      add r8.xyz, r8, c15.x // the ray in rooms, into the wall along z
++      cmp r3.xyz, r8, c13.y, c13.z
++      mov r7.z, c13.z
++      add r3.xyz, r3, -r7
++      rcp r9.x, r8.x
++      rcp r9.y, r8.y
++      rcp r9.z, r8.z
++      mul r3.xyz, r3, r9 // how far to each wall
++      min r3.w, r3.x, r3.y
++      min r3.w, r3.w, r3.z
++      max r3.w, r3.w, c13.z
++      mad r7.xyz, r8, r3.w, r7 // where the ray meets the room
++      mov r9.w, c16.w
++      add r9.x, r7.y, -c13.w
++      cmp r9.x, r9.x, c16.z, c16.y
++      add r9.y, r3.w, -r3.y
++      cmp r9.w, r9.y, r9.x, r9.w
++      add r9.y, r3.w, -r3.x
++      cmp r9.w, r9.y, c16.x, r9.w // the wall's brightness
++      add r3.xyz, r7, -c14
++      dp3 r3.x, r3, r3
++      mul r3.x, r3.x, c14.w
++      add r3.x, r3.x, c13.y
++      rcp r3.x, r3.x
++      add r3.x, r3.x, c17.x
++      mul r9.w, r9.w, r3.x // lit by the lamp
++      mul r3, r6.xyxy, c12
++      frc r3, r3
++      add r4, r3.wzxy, c13.x
++      dp4 r4.x, r3, r4
++      add r3, r3, r4.x
++      add r4, r3.xxyz, r3.yzzw
++      mul r4, r4, r3.zywx
++      frc r4, r4 // four numbers of the room
++      mad r3.w, r4.w, c17.w, r6.z
++      add r3.w, r3.w, -c13.y
++      add r8.w, c162.w, -r4.z
++      min r3.w, r3.w, r8.w
++      cmp r9.w, r3.w, c16.z, r9.w // the blind
++      mad r3.w, r4.x, c18.y, c18.x
++      mul r9.w, r9.w, r3.w
++      mul r9.w, r9.w, c163.w
++      mov r5.xyz, c21
++      lrp r3.xyz, r4.y, c20, r5
++      mul r3.xyz, r3, r9.w // the room's shading
++      mad_sat r8.x, r6.w, c163.x, c163.y
++      mul r8.x, r8.x, c161.w
++      max r8.y, r1.x, r1.y
++      max r8.y, r8.y, r1.z
++      min r8.z, r1.x, r1.y
++      min r8.z, r8.z, r1.z
++      add r8.z, r8.y, -r8.z
++      max r8.y, r8.y, c15.x
++      rcp r8.y, r8.y
++      mul r8.z, r8.z, r8.y
++      add r8.z, -r8.z, c17.z
++      mul_sat r8.z, r8.z, c15.w
++      mul r8.x, r8.x, r8.z // how much the glow takes it
++      add r3.xyz, r3, -c13.y
++      mad r3.xyz, r8.x, r3, c13.y
++      mov r8.w, c163.z
++      if_gt r8.w, c13.z
++        mul r3.xyz, r3, c13.w
++        mov r5.xyz, c19
++        lrp r1.xyz, r8.x, r3, r5
++      else
++        mul r1.xyz, r1, r3
++      endif
++    endif
+     mul r1.w, r0.w, c39.x
+     mul oC0, r1, c51
+     
 diff --git a/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightPS9.asm b/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightPS9.asm
 index e970db04..98849a44 100644
 --- a/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightPS9.asm
@@ -754,6 +1243,187 @@ index e970db04..98849a44 100644
      mul r1.w, r0.w, c39.x
      mul oC0, r1, c51
      
+diff --git a/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightVS11.asm b/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightVS11.asm
+index 0d16e80e..84e5fec0 100644
+--- a/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightVS11.asm
++++ b/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightVS11.asm
+@@ -23,7 +23,7 @@
+ 
+     vs_3_0
+     def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 3.0590345476e-42 // 2183
+-    def c0, 1, 0, 0.5, 0
++    def c4, 1, 0, 0.5, 0
+     dcl_position v0
+     dcl_texcoord v1
+     dcl_texcoord1 v3
+@@ -33,8 +33,9 @@
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator - Emissive
+     dcl_texcoord o1.xy
++    dcl_texcoord6 o3 // FusionFix world_window_interiors.patch: world position
+     dcl_color o2
+-    mad r0.xyz, v1.xyxw, c0.xxyw, c0.yyxw
++    mad r0.xyz, v1.xyxw, c4.xxyw, c4.yyxw
+     dp3 o1.x, c208, r0
+     dp3 o1.y, c209, r0
+     mov r0.xyz, v0
+@@ -45,11 +46,16 @@
+     add r0.x, r0.x, v6.z
+     mad r0.yz, r0.z, v5.xxyw, r0.xyww
+     add r0.yz, r0, v6.xxyw
++    mul r2.xyz, c1, r0.z
++    mad r2.xyz, r0.y, c0, r2
++    mad r2.xyz, r0.x, c2, r2
++    add o3.xyz, r2, c3 // FusionFix world_window_interiors.patch: world position
++    mov o3.w, c4.x
+     mul r1, r0.z, c9
+     mad r1, r0.y, c8, r1
+     mad r0, r0.x, c10, r1
+     add r0, r0, c11
+-    mul r1.x, r0.w, c0.z
++    mul r1.x, r0.w, c4.z
+     mad o0.xy, c44.zwzw, r1.x, r0
+     add o0.z, r0.z, -c210.x
+     add o10.z, r0.z, -c210.x
+diff --git a/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightVS2.asm b/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightVS2.asm
+index 83dc73c7..b563a479 100644
+--- a/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightVS2.asm
++++ b/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightVS2.asm
+@@ -23,22 +23,28 @@
+ 
+     vs_3_0
+     def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 3.0464228614e-42 // 2174
+-    def c0, 1, 0, 0.5, 0
++    def c4, 1, 0, 0.5, 0
+     dcl_position v0
+     dcl_color v1
+     dcl_texcoord v2
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator - Emissive
+     dcl_texcoord o1.xy
++    dcl_texcoord6 o3 // FusionFix world_window_interiors.patch: world position
+     dcl_color o2
+-    mad r0.xyz, v2.xyxw, c0.xxyw, c0.yyxw
++    mad r0.xyz, v2.xyxw, c4.xxyw, c4.yyxw
+     dp3 o1.x, c208, r0
+     dp3 o1.y, c209, r0
+     mul r0, c9, v0.y
+     mad r0, v0.x, c8, r0
+     mad r0, v0.z, c10, r0
+     add r0, r0, c11
+-    mul r1.x, r0.w, c0.z
++    mul r2.xyz, c1, v0.y
++    mad r2.xyz, v0.x, c0, r2
++    mad r2.xyz, v0.z, c2, r2
++    add o3.xyz, r2, c3 // FusionFix world_window_interiors.patch: world position
++    mov o3.w, c4.x
++    mul r1.x, r0.w, c4.z
+     mad o0.xy, c44.zwzw, r1.x, r0
+     add o0.z, r0.z, -c210.x
+     add o10.z, r0.z, -c210.x
+diff --git a/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightVS3.asm b/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightVS3.asm
+index 756f5ef5..6d749a80 100644
+--- a/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightVS3.asm
++++ b/win32_30_nv8/gta_glass_emissivenight/gta_glass_emissivenightVS3.asm
+@@ -25,7 +25,7 @@
+ 
+     vs_3_0
+     def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 3.0478241599e-42 // 2175
+-    def c0, 765.005859, 1, 0, 0.5
++    def c4, 765.005859, 1, 0, 0.5
+     dcl_position v0
+     dcl_blendweight v1
+     dcl_blendindices v2
+@@ -34,33 +34,39 @@
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator - Emissive
+     dcl_texcoord o1.xy
++    dcl_texcoord6 o3 // FusionFix world_window_interiors.patch: world position
+     dcl_color o2
+-    mad r0.xyz, v3.xyxw, c0.yyzw, c0.zzyw
++    mad r0.xyz, v3.xyxw, c4.yyzw, c4.zzyw
+     dp3 o1.x, c208, r0
+     dp3 o1.y, c209, r0
+-    mul r0, c0.x, v2
++    mul r0, c4.x, v2
+     mova a0, r0
+     mul r0, v1.y, c65[a0.y]
+     mad r0, c65[a0.x], v1.x, r0
+     mad r0, c65[a0.z], v1.z, r0
+     mad r0, c65[a0.w], v1.w, r0
+-    mad r1, v0.xyzx, c0.yyyz, c0.zzzy
++    mad r1, v0.xyzx, c4.yyyz, c4.zzzy
+     dp4 r0.x, r1, r0
++    mul r3.xyz, r0.x, c1 // FusionFix world_window_interiors.patch: world position, y
+     mul r0, r0.x, c9
+     mul r2, v1.y, c64[a0.y]
+     mad r2, c64[a0.x], v1.x, r2
+     mad r2, c64[a0.z], v1.z, r2
+     mad r2, c64[a0.w], v1.w, r2
+     dp4 r2.x, r1, r2
++    mad r3.xyz, r2.x, c0, r3 // FusionFix world_window_interiors.patch: x
+     mad r0, r2.x, c8, r0
+     mul r2, v1.y, c66[a0.y]
+     mad r2, c66[a0.x], v1.x, r2
+     mad r2, c66[a0.z], v1.z, r2
+     mad r2, c66[a0.w], v1.w, r2
+     dp4 r1.x, r1, r2
++    mad r3.xyz, r1.x, c2, r3 // FusionFix world_window_interiors.patch: z
++    add o3.xyz, r3, c3
++    mov o3.w, c4.y
+     mad r0, r1.x, c10, r0
+     add r0, r0, c11
+-    mul r1.x, r0.w, c0.w
++    mul r1.x, r0.w, c4.w
+     mad o0.xy, c44.zwzw, r1.x, r0
+     add o0.z, r0.z, -c210.x
+     add o10.z, r0.z, -c210.x
+diff --git a/win32_30_nv8/gta_normal_spec_reflect_emissivenight.fxc.xml b/win32_30_nv8/gta_normal_spec_reflect_emissivenight.fxc.xml
+index 72f48eab..b26f97f9 100644
+--- a/win32_30_nv8/gta_normal_spec_reflect_emissivenight.fxc.xml
++++ b/win32_30_nv8/gta_normal_spec_reflect_emissivenight.fxc.xml
+@@ -85,7 +85,12 @@
+ 			<Item>
+ 				<DataType>asm</DataType>
+ 				<File>gta_normal_spec_reflect_emissivenight\gta_normal_spec_reflect_emissivenightVS2.asm</File>
+-				<Variables value="5" >
++				<Variables value="6" >
++					<Item>
++						<Type>float4x4</Type>
++						<Name>gWorld</Name>
++						<Index value="0" />
++					</Item>
+ 					<Item>
+ 						<Type>float4x4</Type>
+ 						<Name>gWorldViewProj</Name>
+@@ -116,7 +121,12 @@
+ 			<Item>
+ 				<DataType>asm</DataType>
+ 				<File>gta_normal_spec_reflect_emissivenight\gta_normal_spec_reflect_emissivenightVS3.asm</File>
+-				<Variables value="6" >
++				<Variables value="7" >
++					<Item>
++						<Type>float4x4</Type>
++						<Name>gWorld</Name>
++						<Index value="0" />
++					</Item>
+ 					<Item>
+ 						<Type>float4x3</Type>
+ 						<Name>gBoneMtx</Name>
+@@ -404,7 +414,12 @@
+ 			<Item>
+ 				<DataType>asm</DataType>
+ 				<File>gta_normal_spec_reflect_emissivenight\gta_normal_spec_reflect_emissivenightVS11.asm</File>
+-				<Variables value="5" >
++				<Variables value="6" >
++					<Item>
++						<Type>float4x4</Type>
++						<Name>gWorld</Name>
++						<Index value="0" />
++					</Item>
+ 					<Item>
+ 						<Type>float4x4</Type>
+ 						<Name>gWorldViewProj</Name>
 diff --git a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS1.asm b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS1.asm
 index 16067916..735af0d5 100644
 --- a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS1.asm
@@ -1006,6 +1676,137 @@ index 7ca3d984..b6e12c7e 100644
      mul r1.w, r0.w, c39.x
      mul oC0, r1, c51
      
+diff --git a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS2.asm b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS2.asm
+index 77afea43..710b41d2 100644
+--- a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS2.asm
++++ b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS2.asm
+@@ -28,8 +28,19 @@
+     def c0, 3.99600005, 4, 0.125, 0.25
+     def c1, 0, -1, -0, 0
+     def c11, 0.99, 0, 0, 0
++    def c12, 0.103100002, 0.103000000, 0.0973000005, 0.109899998 // FusionFix world_window_interiors.patch: the room hash's scales
++    def c13, 33.3300018, 1, 0, 0.5 // FusionFix world_window_interiors.patch: the hash's offset, one, zero, half
++    def c14, 0.5, 0.850000024, 0.5, 6 // FusionFix world_window_interiors.patch: the lamp in the room (along, up, deep), its fall-off
++    def c15, 9.99999975e-006, 0.400000006, 0, 4 // FusionFix world_window_interiors.patch: a tiny step, the most the normal points up or down, -, the saturation gate's slope
++    def c16, 0.649999976, 0.400000006, 0.949999988, 0.800000012 // FusionFix world_window_interiors.patch: side walls, floor, ceiling, back wall
++    def c17, 0.300000012, 0, 0.699999988, 0.699999988 // FusionFix world_window_interiors.patch: ambient, -, the saturation that keeps the glow, the longest blind
++    def c18, 0.699999988, 0.600000024, 0, 0 // FusionFix world_window_interiors.patch: the dimmest room, the rooms' brightness spread
++    def c19, 0.400000006, 0, 0.400000006, 0 // FusionFix world_window_interiors.patch: the debug magenta
++    def c20, 1.08000004, 0.970000029, 0.850000024, 0 // FusionFix world_window_interiors.patch: a warm room
++    def c21, 0.899999976, 0.980000019, 1.10000002, 0 // FusionFix world_window_interiors.patch: a cool room
+     dcl_texcoord v0.xy
+     dcl_color v1
++    dcl_texcoord6 v2.xyz // FusionFix world_window_interiors.patch: world position
+     dcl vPos.xy
+     dcl_texcoord9 v9
+     dcl_2d s0
+@@ -39,6 +50,106 @@
+     mov r1.x, c66.x
+     mul r1.x, r1.x, c45.w
+     mul r1.xyz, r0, r1.x
++    // --- FusionFix world_window_interiors.patch: the room behind a lit window (r1.xyz, the glow)
++    dsx r3.xyz, v2
++    dsy r4.xyz, v2
++    crs r5.xyz, r3, r4
++    nrm r2.xyz, r5 // FusionFix world_window_interiors.patch: the wall's normal from the position's derivatives
++    add r3.xyz, c161, -v2
++    dp3 r3.w, r2, r3
++    cmp r2.xyz, r3.w, r2, -r2 // turned to the camera
++    add r9.x, -r2_abs.z, c15.y
++    mov r9.y, c161.w
++    min r9.x, r9.x, r9.y
++    if_gt r9.x, c13.z
++      mov r3.x, -r2.y
++      mov r3.y, r2.x
++      mov r3.z, c13.z
++      nrm r4.xyz, r3 // along the wall
++      add r5.xyz, v2, -c161
++      dp3 r5.w, r5, r5
++      rsq r6.w, r5.w
++      mul r5.xyz, r5, r6.w // the view ray
++      rcp r6.w, r6.w // the distance
++      dp3 r6.x, v2, r4
++      mov r6.y, v2.z
++      mul r6.xy, r6, c162
++      frc r7.xy, r6
++      add r6.xy, r6, -r7 // the room's cell
++      mov r6.z, r7.y // the height in the window, for the blind
++      dp3 r8.x, r5, r4
++      mov r8.y, r5.z
++      dp3 r8.z, r5, -r2
++      mul r8.xyz, r8, c162
++      add r8.xyz, r8, c15.x // the ray in rooms, into the wall along z
++      cmp r3.xyz, r8, c13.y, c13.z
++      mov r7.z, c13.z
++      add r3.xyz, r3, -r7
++      rcp r9.x, r8.x
++      rcp r9.y, r8.y
++      rcp r9.z, r8.z
++      mul r3.xyz, r3, r9 // how far to each wall
++      min r3.w, r3.x, r3.y
++      min r3.w, r3.w, r3.z
++      max r3.w, r3.w, c13.z
++      mad r7.xyz, r8, r3.w, r7 // where the ray meets the room
++      mov r9.w, c16.w
++      add r9.x, r7.y, -c13.w
++      cmp r9.x, r9.x, c16.z, c16.y
++      add r9.y, r3.w, -r3.y
++      cmp r9.w, r9.y, r9.x, r9.w
++      add r9.y, r3.w, -r3.x
++      cmp r9.w, r9.y, c16.x, r9.w // the wall's brightness
++      add r3.xyz, r7, -c14
++      dp3 r3.x, r3, r3
++      mul r3.x, r3.x, c14.w
++      add r3.x, r3.x, c13.y
++      rcp r3.x, r3.x
++      add r3.x, r3.x, c17.x
++      mul r9.w, r9.w, r3.x // lit by the lamp
++      mul r3, r6.xyxy, c12
++      frc r3, r3
++      add r4, r3.wzxy, c13.x
++      dp4 r4.x, r3, r4
++      add r3, r3, r4.x
++      add r4, r3.xxyz, r3.yzzw
++      mul r4, r4, r3.zywx
++      frc r4, r4 // four numbers of the room
++      mad r3.w, r4.w, c17.w, r6.z
++      add r3.w, r3.w, -c13.y
++      add r8.w, c162.w, -r4.z
++      min r3.w, r3.w, r8.w
++      cmp r9.w, r3.w, c16.z, r9.w // the blind
++      mad r3.w, r4.x, c18.y, c18.x
++      mul r9.w, r9.w, r3.w
++      mul r9.w, r9.w, c163.w
++      mov r5.xyz, c21
++      lrp r3.xyz, r4.y, c20, r5
++      mul r3.xyz, r3, r9.w // the room's shading
++      mad_sat r8.x, r6.w, c163.x, c163.y
++      mul r8.x, r8.x, c161.w
++      max r8.y, r1.x, r1.y
++      max r8.y, r8.y, r1.z
++      min r8.z, r1.x, r1.y
++      min r8.z, r8.z, r1.z
++      add r8.z, r8.y, -r8.z
++      max r8.y, r8.y, c15.x
++      rcp r8.y, r8.y
++      mul r8.z, r8.z, r8.y
++      add r8.z, -r8.z, c17.z
++      mul_sat r8.z, r8.z, c15.w
++      mul r8.x, r8.x, r8.z // how much the glow takes it
++      add r3.xyz, r3, -c13.y
++      mad r3.xyz, r8.x, r3, c13.y
++      mov r8.w, c163.z
++      if_gt r8.w, c13.z
++        mul r3.xyz, r3, c13.w
++        mov r5.xyz, c19
++        lrp r1.xyz, r8.x, r3, r5
++      else
++        mul r1.xyz, r1, r3
++      endif
++    endif
+     mul r1.w, r0.w, c39.x
+     mul oC0, r1, c51
+     
 diff --git a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS9.asm b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS9.asm
 index f1579d18..0ba9b6d9 100644
 --- a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS9.asm
@@ -1132,3 +1933,138 @@ index f1579d18..0ba9b6d9 100644
      mul r1.w, r0.w, c39.x
      mul oC0, r1, c51
      
+diff --git a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightVS11.asm b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightVS11.asm
+index 265e3ad8..2fe8214c 100644
+--- a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightVS11.asm
++++ b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightVS11.asm
+@@ -23,7 +23,7 @@
+ 
+     vs_3_0
+     def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 3.3210773604e-42 // 2370
+-    def c0, 1, 0, 0.5, 0
++    def c4, 1, 0, 0.5, 0
+     dcl_position v0
+     dcl_texcoord v1
+     dcl_texcoord1 v3
+@@ -33,8 +33,9 @@
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator - Emissive
+     dcl_texcoord o1.xy
++    dcl_texcoord6 o3 // FusionFix world_window_interiors.patch: world position
+     dcl_color o2
+-    mad r0.xyz, v1.xyxw, c0.xxyw, c0.yyxw
++    mad r0.xyz, v1.xyxw, c4.xxyw, c4.yyxw
+     dp3 o1.x, c208, r0
+     dp3 o1.y, c209, r0
+     mov r0.xyz, v0
+@@ -45,11 +46,16 @@
+     add r0.x, r0.x, v6.z
+     mad r0.yz, r0.z, v5.xxyw, r0.xyww
+     add r0.yz, r0, v6.xxyw
++    mul r2.xyz, c1, r0.z
++    mad r2.xyz, r0.y, c0, r2
++    mad r2.xyz, r0.x, c2, r2
++    add o3.xyz, r2, c3 // FusionFix world_window_interiors.patch: world position
++    mov o3.w, c4.x
+     mul r1, r0.z, c9
+     mad r1, r0.y, c8, r1
+     mad r0, r0.x, c10, r1
+     add r0, r0, c11
+-    mul r1.x, r0.w, c0.z
++    mul r1.x, r0.w, c4.z
+     mad o0.xy, c44.zwzw, r1.x, r0
+     add o0.z, r0.z, -c210.x
+     add o10.z, r0.z, -c210.x
+diff --git a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightVS2.asm b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightVS2.asm
+index 01fec566..491c2f44 100644
+--- a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightVS2.asm
++++ b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightVS2.asm
+@@ -23,22 +23,28 @@
+ 
+     vs_3_0
+     def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 3.3084656743e-42 // 2361
+-    def c0, 1, 0, 0.5, 0
++    def c4, 1, 0, 0.5, 0
+     dcl_position v0
+     dcl_color v1
+     dcl_texcoord v2
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator - Emissive
+     dcl_texcoord o1.xy
++    dcl_texcoord6 o3 // FusionFix world_window_interiors.patch: world position
+     dcl_color o2
+-    mad r0.xyz, v2.xyxw, c0.xxyw, c0.yyxw
++    mad r0.xyz, v2.xyxw, c4.xxyw, c4.yyxw
+     dp3 o1.x, c208, r0
+     dp3 o1.y, c209, r0
+     mul r0, c9, v0.y
+     mad r0, v0.x, c8, r0
+     mad r0, v0.z, c10, r0
+     add r0, r0, c11
+-    mul r1.x, r0.w, c0.z
++    mul r2.xyz, c1, v0.y
++    mad r2.xyz, v0.x, c0, r2
++    mad r2.xyz, v0.z, c2, r2
++    add o3.xyz, r2, c3 // FusionFix world_window_interiors.patch: world position
++    mov o3.w, c4.x
++    mul r1.x, r0.w, c4.z
+     mad o0.xy, c44.zwzw, r1.x, r0
+     add o0.z, r0.z, -c210.x
+     add o10.z, r0.z, -c210.x
+diff --git a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightVS3.asm b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightVS3.asm
+index 1d6d4369..d5a95a23 100644
+--- a/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightVS3.asm
++++ b/win32_30_nv8/gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightVS3.asm
+@@ -25,7 +25,7 @@
+ 
+     vs_3_0
+     def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 3.3098669727e-42 // 2362
+-    def c0, 765.005859, 1, 0, 0.5
++    def c4, 765.005859, 1, 0, 0.5
+     dcl_position v0
+     dcl_blendweight v1
+     dcl_blendindices v2
+@@ -34,33 +34,39 @@
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator - Emissive
+     dcl_texcoord o1.xy
++    dcl_texcoord6 o3 // FusionFix world_window_interiors.patch: world position
+     dcl_color o2
+-    mad r0.xyz, v3.xyxw, c0.yyzw, c0.zzyw
++    mad r0.xyz, v3.xyxw, c4.yyzw, c4.zzyw
+     dp3 o1.x, c208, r0
+     dp3 o1.y, c209, r0
+-    mul r0, c0.x, v2
++    mul r0, c4.x, v2
+     mova a0, r0
+     mul r0, v1.y, c65[a0.y]
+     mad r0, c65[a0.x], v1.x, r0
+     mad r0, c65[a0.z], v1.z, r0
+     mad r0, c65[a0.w], v1.w, r0
+-    mad r1, v0.xyzx, c0.yyyz, c0.zzzy
++    mad r1, v0.xyzx, c4.yyyz, c4.zzzy
+     dp4 r0.x, r1, r0
++    mul r3.xyz, r0.x, c1 // FusionFix world_window_interiors.patch: world position, y
+     mul r0, r0.x, c9
+     mul r2, v1.y, c64[a0.y]
+     mad r2, c64[a0.x], v1.x, r2
+     mad r2, c64[a0.z], v1.z, r2
+     mad r2, c64[a0.w], v1.w, r2
+     dp4 r2.x, r1, r2
++    mad r3.xyz, r2.x, c0, r3 // FusionFix world_window_interiors.patch: x
+     mad r0, r2.x, c8, r0
+     mul r2, v1.y, c66[a0.y]
+     mad r2, c66[a0.x], v1.x, r2
+     mad r2, c66[a0.z], v1.z, r2
+     mad r2, c66[a0.w], v1.w, r2
+     dp4 r1.x, r1, r2
++    mad r3.xyz, r1.x, c2, r3 // FusionFix world_window_interiors.patch: z
++    add o3.xyz, r3, c3
++    mov o3.w, c4.y
+     mad r0, r1.x, c10, r0
+     add r0, r0, c11
+-    mul r1.x, r0.w, c0.w
++    mul r1.x, r0.w, c4.w
+     mad o0.xy, c44.zwzw, r1.x, r0
+     add o0.z, r0.z, -c210.x
+     add o10.z, r0.z, -c210.x

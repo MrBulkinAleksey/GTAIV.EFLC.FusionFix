@@ -19,8 +19,15 @@
 # c162 = 1 / room width, 1 / room height, 1 / room depth, part of the rooms with a blind; c163 = fade with the distance
 # as a * distance + b, debug (1: rooms in grey, walls left alone in magenta), gain. Defs c12-c21 (free in PS1).
 #
+# The glow of most windows is drawn by "unlit_draw" (VS2, PS2; skinned VS3, instanced VS11), the forward pass that draws
+# the scene after the lights (the capture of 2026-10-21: PS2 of gta_emissivenight and gta_glass_emissivenight drew all the
+# night glow there). Those vertex shaders pass neither normal nor world position: they get the world position (texcoord6,
+# by gWorld at c0-c3, whose register their own def c0 hid: moved to c4), and PS2 takes the wall's normal from the
+# position's screen derivatives, turned to the camera (the windows are seen from outside).
+#
 # Usage: world_window_interiors.py <FusionShaders checkout with the other patches applied>
 # Commit that state first; the patch is the diff this script leaves (git diff).
+import re
 import sys
 from pathlib import Path
 
@@ -37,6 +44,8 @@ SHADERS = [
     'gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS9.asm',
     'gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS10.asm',
 ]
+
+UNLIT = ['gta_emissivenight', 'gta_glass_emissivenight', 'gta_normal_spec_reflect_emissivenight']
 
 DEF_AFTER = '    def c11, 0.99, 0, 0, 0\n'
 DEF = f'''\
@@ -157,6 +166,101 @@ CODE = f'''\
 '''
 
 
+# PS2: the position comes in texcoord6 (v2), the normal from its derivatives.
+PS2_DCL = f'''\
+    dcl_texcoord6 v2.xyz // {TAG}: world position
+'''
+PS2_NORMAL = f'''\
+    dsx r3.xyz, v2
+    dsy r4.xyz, v2
+    crs r5.xyz, r3, r4
+    nrm r2.xyz, r5 // {TAG}: the wall's normal from the position's derivatives
+    add r3.xyz, c161, -v2
+    dp3 r3.w, r2, r3
+    cmp r2.xyz, r3.w, r2, -r2 // turned to the camera
+'''
+PS2_CODE = CODE.replace('    nrm r2.xyz, v2\n', PS2_NORMAL).replace(' v3', ' v2')
+
+VS_DCL_AFTER = '    dcl_texcoord o1.xy\n'
+VS_DCL = f'''\
+    dcl_texcoord6 o3 // {TAG}: world position
+'''
+# Where each vertex shader has the position it transforms, and how it reaches the world: (anchor, code after it).
+VS_POSITION = {
+    'VS2': [('    add r0, r0, c11\n', f'''\
+    mul r2.xyz, c1, v0.y
+    mad r2.xyz, v0.x, c0, r2
+    mad r2.xyz, v0.z, c2, r2
+    add o3.xyz, r2, c3 // {TAG}: world position
+    mov o3.w, c4.x
+''')],
+    'VS3': [('    dp4 r0.x, r1, r0\n', f'''\
+    mul r3.xyz, r0.x, c1 // {TAG}: world position, y
+'''), ('    dp4 r2.x, r1, r2\n', f'''\
+    mad r3.xyz, r2.x, c0, r3 // {TAG}: x
+'''), ('    dp4 r1.x, r1, r2\n', f'''\
+    mad r3.xyz, r1.x, c2, r3 // {TAG}: z
+    add o3.xyz, r3, c3
+    mov o3.w, c4.y
+''')],
+    'VS11': [('    add r0.yz, r0, v6.xxyw\n', f'''\
+    mul r2.xyz, c1, r0.z
+    mad r2.xyz, r0.y, c0, r2
+    mad r2.xyz, r0.x, c2, r2
+    add o3.xyz, r2, c3 // {TAG}: world position
+    mov o3.w, c4.x
+''')],
+}
+GWORLD = '''\
+\t\t\t\t\t<Item>
+\t\t\t\t\t\t<Type>float4x4</Type>
+\t\t\t\t\t\t<Name>gWorld</Name>
+\t\t\t\t\t\t<Index value="0" />
+\t\t\t\t\t</Item>
+'''
+
+
+def insert_after(text, rel, anchor, insert):
+    if text.count(anchor) != 1:
+        sys.exit(f'{rel}: expected one "{anchor.strip()}"')
+    return text.replace(anchor, anchor + insert)
+
+
+def patch_vs(name, vs):
+    rel = f'{name}/{name}{vs}.asm'
+    path = ROOT / rel
+    text = path.read_text()
+    if TAG in text:
+        return
+    scratch = r'\br3\b' if vs == 'VS3' else r'\br2\b'
+    for used in (r'dcl_texcoord6', r'\bo3\b', r'\bc4(?![0-9])', scratch):
+        if re.search(used, text.split('    vs_3_0\n')[1]):
+            sys.exit(f'{rel}: already uses {used}')
+    # Its def c0 hides gWorld's first row: the def moves to c4.
+    head, code = text.split('    vs_3_0\n')
+    code = re.sub(r'\bc0(?![0-9])', 'c4', code)
+    if 'def c4,' not in code:
+        sys.exit(f'{rel}: no def c0')
+    text = head + '    vs_3_0\n' + code
+    text = insert_after(text, rel, VS_DCL_AFTER, VS_DCL)
+    for anchor, insert in VS_POSITION[vs]:
+        text = insert_after(text, rel, anchor, insert)
+    path.write_text(text)
+
+
+def add_gworld(name, vs):
+    path = ROOT / f'{name}.fxc.xml'
+    xml = path.read_text()
+    m = re.search(rf'<File>{name}\\{name}{vs}\.asm</File>\n\t*<Variables value="(\d+)" >\n', xml)
+    if not m:
+        sys.exit(f'{name}.fxc.xml: no {vs}')
+    end = xml.index('</Variables>', m.end())
+    if '<Name>gWorld</Name>' in xml[m.end():end]:
+        return
+    xml = xml[:m.start(1)] + str(int(m.group(1)) + 1) + xml[m.end(1):m.end()] + GWORLD + xml[m.end():]
+    path.write_text(xml)
+
+
 def main():
     for rel in SHADERS:
         path = ROOT / rel
@@ -164,10 +268,19 @@ def main():
         if TAG in text:
             continue
         for anchor, insert in ((DEF_AFTER, DEF), (DCL_AFTER, DCL), (CODE_AFTER, CODE)):
-            if text.count(anchor) != 1:
-                sys.exit(f'{rel}: expected one "{anchor.strip()}"')
-            text = text.replace(anchor, anchor + insert)
+            text = insert_after(text, rel, anchor, insert)
         path.write_text(text)
+    for name in UNLIT:
+        rel = f'{name}/{name}PS2.asm'
+        path = ROOT / rel
+        text = path.read_text()
+        if TAG not in text:
+            for anchor, insert in ((DEF_AFTER, DEF), (DCL_AFTER, PS2_DCL), (CODE_AFTER, PS2_CODE)):
+                text = insert_after(text, rel, anchor, insert)
+            path.write_text(text)
+        for vs in VS_POSITION:
+            patch_vs(name, vs)
+            add_gworld(name, vs)
 
 
 if __name__ == '__main__':
