@@ -334,6 +334,49 @@ public:
             FusionLog::Write("Fixes", "FloodlightRange", "CJ_IND_LIGHT_1 point lights reach 32 m, hook at %p\n", pattern.get_first(5));
         };
 
+        // A model coming in over its LOD (a tree, a building) fades in by its alpha +0x63: the scene scan 0xae6fa0 adds
+        // 0x10 a frame and keeps drawing the LOD parent until it reaches 0xef, so the swap took 15 frames, half a second
+        // at 30 fps and a tenth at 144, a pop. LodFadeTime (hidden, seconds, 0 = as the game) makes the step follow the
+        // clock: at 0xae723f the scan reads the alpha from [esp+18h], adds 0x10 and stores it, so the value read is set
+        // to what the step should give minus 0x10. The fraction of a step left over carries to the next frame.
+        FusionFix::onInitEventAsync() += []()
+        {
+            CIniReader iniReader("");
+            static float fLodFadeTime = std::clamp(iniReader.ReadFloat("MISC", "LodFadeTime", 1.0f), 0.0f, 5.0f);
+            if (fLodFadeTime <= 0.0f)
+                return;
+
+            // mov eax, [esp+18h]; add al, 10h; mov [esi+63h], al
+            auto pattern = hook::pattern("8B 44 24 18 04 10 88 46 63");
+            if (pattern.empty())
+            {
+                FusionLog::Write("Fixes", "LodFade", "LOD fade step not found, as the game\n");
+                return;
+            }
+            static auto fadeHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
+            {
+                static uint32_t lastFrame = UINT32_MAX;
+                static auto lastTime = std::chrono::steady_clock::now();
+                static float carry = 0.0f;
+                static uint32_t step = 0x10;
+                const uint32_t frame = CTimer::m_frameCount ? *CTimer::m_frameCount : 0;
+                if (frame != lastFrame)
+                {
+                    lastFrame = frame;
+                    const auto now = std::chrono::steady_clock::now();
+                    const float dt = std::clamp(std::chrono::duration<float>(now - lastTime).count(), 0.0f, 0.1f);
+                    lastTime = now;
+                    carry += 255.0f * dt / fLodFadeTime;
+                    step = static_cast<uint32_t>(carry);
+                    carry -= static_cast<float>(step);
+                }
+                auto& alpha = *reinterpret_cast<uint32_t*>(regs.esp + 0x18);
+                const uint32_t next = std::min<uint32_t>((alpha & 0xFF) + step, 0xFF);
+                alpha = (next - 0x10) & 0xFF;
+            });
+            FusionLog::Write("Fixes", "LodFade", "models fade in over their LOD in %.2f s, hook at %p\n", fLodFadeTime, pattern.get_first(0));
+        };
+
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
