@@ -236,6 +236,9 @@ namespace CoronaRender
     // Run before each batch is drawn, the technique set: a pass from another view puts its own depth for the
     // coronas' visibility test in (carmirrors.ixx)
     export void (*pBeforeDraw)() = nullptr;
+    // Render thread, around a pass's coronas (watercoronacapture.ixx): after = false before the first batch, true once
+    // the states are restored; reflection and dim as the render flags have them
+    export void (*pPassHook)(bool reflection, bool dim, bool after) = nullptr;
     // A pass from another view than the game camera's, near it (a car's mirror, its reflected camera within half a metre
     // of the eye and looking back): none left out as behind or outside the view, which took the main view's. Counted:
     // the coronas listed, those behind the game camera, those drawn (carmirrors.ixx's log)
@@ -526,6 +529,8 @@ namespace CoronaRender
         // buffer (ZEnable 1), not against the main view's depth texture in the vertex shader (the first pass, depth off),
         // which had a car mirror show the city's lights through the buildings
         SetTechnique(reflection ? 0xF : 0xE, reflection ? 0 : ((dim || bOtherView) ? 1 : 0));
+        if (pPassHook && !bOtherView)
+            pPassHook(reflection, dim, false);
 
         for (size_t first = 0; first < drawn.size();)
         {
@@ -611,6 +616,8 @@ namespace CoronaRender
         SetFinal(1.0f);
         SetState(2, 0);
         SetState(6, 1);
+        if (pPassHook && !bOtherView)
+            pPassHook(reflection, dim, true);
         return true;
     }
 }
