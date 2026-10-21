@@ -35,9 +35,9 @@ class LocalExposure
     static inline float fMin = 0.6f;
     static inline float fMax = 1.8f;
     // Render thread
-    static inline IDirect3DTexture9* small[2] = {};
-    static inline IDirect3DSurface9* smallSurf[2] = {};
-    static inline UINT smallSize[2] = {};
+    static inline IDirect3DTexture9* tiny[2] = {};
+    static inline IDirect3DSurface9* tinySurf[2] = {};
+    static inline UINT tinySize[2] = {};
 
     static void ReadIni(CIniReader& iniReader)
     {
@@ -56,13 +56,13 @@ class LocalExposure
     {
         for (int i = 0; i < 2; ++i)
         {
-            SAFE_RELEASE(smallSurf[i]);
-            SAFE_RELEASE(small[i]);
-            smallSize[i] = 0;
+            SAFE_RELEASE(tinySurf[i]);
+            SAFE_RELEASE(tiny[i]);
+            tinySize[i] = 0;
         }
     }
 
-    // The quarter screen shrunk into small[1]; false when it can't be.
+    // The quarter screen shrunk into tiny[1]; false when it can't be.
     static bool Shrink(IDirect3DDevice9* pDevice)
     {
         auto& R = PostFxResources;
@@ -80,21 +80,21 @@ class LocalExposure
         bool ok = true;
         for (int i = 0; i < 2 && ok; ++i)
         {
-            if (small[i] && smallSize[i] != (w[i] << 16 | h[i]))
+            if (tiny[i] && tinySize[i] != (w[i] << 16 | h[i]))
             {
-                SAFE_RELEASE(smallSurf[i]);
-                SAFE_RELEASE(small[i]);
+                SAFE_RELEASE(tinySurf[i]);
+                SAFE_RELEASE(tiny[i]);
             }
-            if (!small[i])
+            if (!tiny[i])
             {
                 ok = SUCCEEDED(RealDevice(pDevice)->CreateTexture(w[i], h[i], 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT,
-                                                                  &small[i], nullptr)) &&
-                     SUCCEEDED(small[i]->GetSurfaceLevel(0, &smallSurf[i]));
-                smallSize[i] = ok ? (w[i] << 16 | h[i]) : 0;
+                                                                  &tiny[i], nullptr)) &&
+                     SUCCEEDED(tiny[i]->GetSurfaceLevel(0, &tinySurf[i]));
+                tinySize[i] = ok ? (w[i] << 16 | h[i]) : 0;
             }
         }
-        ok = ok && SUCCEEDED(pDevice->StretchRect(quarter, nullptr, smallSurf[0], nullptr, D3DTEXF_LINEAR)) &&
-             SUCCEEDED(pDevice->StretchRect(smallSurf[0], nullptr, smallSurf[1], nullptr, D3DTEXF_LINEAR));
+        ok = ok && SUCCEEDED(pDevice->StretchRect(quarter, nullptr, tinySurf[0], nullptr, D3DTEXF_LINEAR)) &&
+             SUCCEEDED(pDevice->StretchRect(tinySurf[0], nullptr, tinySurf[1], nullptr, D3DTEXF_LINEAR));
         SAFE_RELEASE(quarter);
         if (!ok)
             Release();
@@ -107,14 +107,14 @@ public:
         const bool on = Enabled() && fStrength > 0.0f && Shrink(pDevice);
         const float params[8] = {
             on ? fStrength : 0.0f, fMin, fMax, 0.0f,
-            on ? 1.0f / float(smallSize[1] >> 16) : 0.0f, on ? 1.0f / float(smallSize[1] & 0xFFFF) : 0.0f, 0.0f, 0.0f,
+            on ? 1.0f / float(tinySize[1] >> 16) : 0.0f, on ? 1.0f / float(tinySize[1] & 0xFFFF) : 0.0f, 0.0f, 0.0f,
         };
         pDevice->SetPixelShaderConstantF(157, params, 2);
         if (auto real = RealDevice(pDevice); real != pDevice)
             real->SetPixelShaderConstantF(157, params, 2);
         if (!on)
             return;
-        SetTextureBoth(pDevice, kSampler, small[1]);
+        SetTextureBoth(pDevice, kSampler, tiny[1]);
         for (auto [type, value] : { std::pair{ D3DSAMP_ADDRESSU, DWORD(D3DTADDRESS_CLAMP) }, std::pair{ D3DSAMP_ADDRESSV, DWORD(D3DTADDRESS_CLAMP) },
                  std::pair{ D3DSAMP_MINFILTER, DWORD(D3DTEXF_LINEAR) }, std::pair{ D3DSAMP_MAGFILTER, DWORD(D3DTEXF_LINEAR) },
                  std::pair{ D3DSAMP_MIPFILTER, DWORD(D3DTEXF_NONE) }, std::pair{ D3DSAMP_SRGBTEXTURE, DWORD(FALSE) } })
