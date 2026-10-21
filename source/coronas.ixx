@@ -278,6 +278,32 @@ namespace CoronaRender
     Vertex** ppVertex = nullptr;
     uint32_t* pVertexCount = nullptr;
 
+    // CoronaPassLog (hidden, on while the water reflection's coronas are looked into): per kind of pass (by the
+    // render flags' reflection and dim bits, and another view), the calls, the coronas listed, those left out as
+    // not reflected, those drawn, their brightness, and the pass's eye against the game camera; every 600 calls
+    bool bPassLog = true;
+    struct PassStats { uint32_t calls, empty, listed, notReflected, drawn; double brightness, maxBrightness, eyeDz, eyeDxy; uint32_t flags; };
+    PassStats passStats[8]{};
+    uint32_t nPassCalls = 0;
+
+    void WritePassLog()
+    {
+        static const char* names[8] = { "main", "dim", "reflection", "reflection+dim", "other view", "other view dim", "other view reflection", "other view reflection+dim" };
+        for (int k = 0; k < 8; k++)
+        {
+            auto& s = passStats[k];
+            if (!s.calls)
+                continue;
+            FusionLog::Write("Coronas", "Passes", "%s (flags %08X): %u calls (%u with none listed), per call %.1f listed, %.1f not reflected, %.1f drawn, "
+                "brightness %.3f (max %.3f), eye from the game camera dz %.2f dxy %.2f\n", names[k], s.flags, s.calls, s.empty,
+                float(s.listed) / s.calls, float(s.notReflected) / s.calls, float(s.drawn) / s.calls,
+                s.drawn ? s.brightness / s.drawn : 0.0, s.maxBrightness, s.eyeDz / s.calls, s.eyeDxy / s.calls);
+            s = {};
+        }
+        FusionLog::Write("Coronas", "Passes", "dim scale %.3f, reflection size %.3f, reflection limit %.3f\n",
+            pDimScale ? *pDimScale : -1.0f, pReflectSize ? *pReflectSize : -1.0f, pReflectLimit ? *pReflectLimit : -1.0f);
+    }
+
     template <typename T> T Operand(uint8_t* at) { return *(T*)at; }
     template <typename T> T CallTarget(uint8_t* call) { return (T)(call + 5 + *(int32_t*)(call + 1)); }
 
@@ -365,6 +391,28 @@ namespace CoronaRender
                 return true;
             count = first + otherCount;
         }
+        PassStats* stats = nullptr;
+        if (bPassLog)
+        {
+            stats = &passStats[(reflection ? 2 : 0) | (dim ? 1 : 0) | (bOtherView ? 4 : 0)];
+            stats->flags = flags;
+            ++stats->calls;
+            auto eyeAt = (const float*)(*ppViewport + 0x70);
+            if (pCamera)
+            {
+                stats->eyeDz += eyeAt[2] - pCamera[2];
+                stats->eyeDxy += std::sqrt((eyeAt[0] - pCamera[0]) * (eyeAt[0] - pCamera[0]) + (eyeAt[1] - pCamera[1]) * (eyeAt[1] - pCamera[1]));
+            }
+            if (count <= first)
+                ++stats->empty;
+            else
+                stats->listed += uint32_t(count - first);
+            if (++nPassCalls >= 600)
+            {
+                nPassCalls = 0;
+                WritePassLog();
+            }
+        }
         if (count <= first)
             return true;
         auto list = (uint8_t*)(uintptr_t(*pFlagAddress) - 0x1B) + (size_t(buffer) * (3u << *pShift)) * 0x20;
@@ -415,7 +463,11 @@ namespace CoronaRender
         {
             auto item = list + size_t(i) * 0x20;
             if (reflection && item[0x1B])
+            {
+                if (stats)
+                    ++stats->notReflected;
                 continue;
+            }
             if (skipBehind)
             {
                 auto pos = (const float*)item;
@@ -507,6 +559,12 @@ namespace CoronaRender
                 }
                 else if (dim)
                     brightness *= bDistantLights ? 1.0f : *pDimScale;   // as lodlights' WaterMultiplierHook has it
+                if (stats)
+                {
+                    ++stats->drawn;
+                    stats->brightness += brightness;
+                    stats->maxBrightness = std::max<double>(stats->maxBrightness, brightness);
+                }
 
                 // Moved toward the camera by +0x14
                 float d[3] = { pos[0] - camera[0], pos[1] - camera[1], pos[2] - camera[2] };
@@ -585,6 +643,7 @@ public:
             using namespace CoronaRender;
             CIniReader iniReader("");
             nMode = std::clamp(iniReader.ReadInteger("PROJECT2DFX", "CoronaRenderer", 1), 0, 2);
+            bPassLog = iniReader.ReadInteger("PROJECT2DFX", "CoronaPassLog", 1) != 0;
             if (!nMode)
                 return;
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
