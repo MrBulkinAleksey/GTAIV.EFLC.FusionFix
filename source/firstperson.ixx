@@ -428,31 +428,37 @@ namespace FirstPerson
     // view as rendered, whichever cameras the follow camera's position went through on the way.
     // In a vehicle the head is placed with the ped's matrix as it is now. The near clip (esi+54, read
     // right after) is raised.
+    // The radar's map is drawn from a camera of its own (CAM_RADAR, CE 0xD58550) held above the player
+    // at the radar's range (50 to 960 m) and looking down, and it is handed on here too: only a camera
+    // already near the head is moved, or the map is seen from the head, so near the ground it is blank.
+    static constexpr float PlaceWithin = 15.0f;
     static void PlaceFinal(SafetyHookContext& regs)
     {
         const auto matrix = *reinterpret_cast<float**>(regs.esp);
         if (!matrix) return;
         const auto cam = reinterpret_cast<float*>(regs.esi);
+        float position[3];
         if (SeatCurrent())
         {
             const auto m = CPlayer::getLocalPlayerPed ? CEntity::GetMatrix(CPlayer::getLocalPlayerPed()) : nullptr;
             if (!m) return;
             const float* front = cam + 4;
             const float* up = cam + 8;
-            float position[3];
             for (int i = 0; i < 3; ++i)
                 position[i] = m[12 + i] + m[i] * seat[0] + m[4 + i] * seat[1] + m[8 + i] * seat[2] +
                     front[i] * forwardOffset + up[i] * upOffset;
-            std::copy(std::begin(position), std::end(position), matrix + 12);
-            std::copy(std::begin(position), std::end(position), cam + 12);
         }
         else if (EyeCurrent())
-        {
-            std::copy(std::begin(eye), std::end(eye), matrix + 12);
-            std::copy(std::begin(eye), std::end(eye), cam + 12);
-        }
+            std::copy(std::begin(eye), std::end(eye), position);
         else
             return;
+        float distance = 0.0f;
+        for (int i = 0; i < 3; ++i)
+            distance += (cam[12 + i] - position[i]) * (cam[12 + i] - position[i]);
+        if (distance > PlaceWithin * PlaceWithin)
+            return;
+        std::copy(std::begin(position), std::end(position), matrix + 12);
+        std::copy(std::begin(position), std::end(position), cam + 12);
         auto& nearClip = cam[21];
         if (nearClip > 0.0f && nearClip < NearClip)
             nearClip = NearClip;
