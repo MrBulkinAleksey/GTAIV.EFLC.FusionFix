@@ -369,7 +369,8 @@ namespace CoronaRender
             return true;
         auto list = (uint8_t*)(uintptr_t(*pFlagAddress) - 0x1B) + (size_t(buffer) * (3u << *pShift)) * 0x20;
 
-        // Behind the camera, only in a pass from the game camera itself: reflections and other views keep them all
+        // Behind the camera, only in a pass from the game camera itself: the water's reflection and other views keep
+        // them all (the paraboloid reflection has its own test below)
         auto viewport = *ppViewport;
         auto eye = (const float*)(viewport + 0x70);
         float forward[3] = {};
@@ -389,6 +390,28 @@ namespace CoronaRender
                 skipBehind = std::fabs(cross[0] * forward[0] + cross[1] * forward[1] + cross[2] * forward[2]) > 0.95f;
             }
         }
+
+        // The paraboloid reflection (the reflection map, technique 0xf: paraboloid_corona, deferred_lighting VS13): its
+        // eye 512 m under the game camera, the paraboloid's centre C 512 m above that eye. The shader gives a corona no
+        // colour and no size unless its centre, moved toward the eye, is above C, and fades it out by the distance of
+        // its corners from C, none left 64 m away (1 - L/64 times 16, saturated). Those are left out here (99.5% of
+        // them in a night's log); the corners are within the size times the reflection's scale times 1.42 of the centre.
+        bool skipParaboloid = false;
+        float paraboloidCentre[3] = {};
+        if (nMode == 1 && reflection && pCamera && !bOtherView)
+        {
+            // The view's z axis (grcViewport +0x60) straight down, as the shader's distance takes it: L is from the eye
+            // plus 512 m along the view's z, C only so
+            float dx = eye[0] - pCamera[0], dy = eye[1] - pCamera[1], dz = eye[2] + 512.0f - pCamera[2];
+            if (dx * dx + dy * dy < 0.25f && dz * dz < 1.0f && ((const float*)(viewport + 0x60))[2] < -0.99f)
+            {
+                paraboloidCentre[0] = eye[0];
+                paraboloidCentre[1] = eye[1];
+                paraboloidCentre[2] = eye[2] + 512.0f;
+                skipParaboloid = true;
+            }
+        }
+        constexpr float ParaboloidFadeEnd = 64.0f;
 
         // Outside the view as well: a cone round where the camera looks, as wide as the projection's corner and a tenth
         // more (grcViewport +0x1c0, its x and y scales), each corona a ball 1.5 times its size (its quad's corners are
@@ -437,6 +460,25 @@ namespace CoronaRender
                     if (margin < 0.0f || lateralSquared * coneCos * coneCos > margin * margin)
                         continue;
                 }
+            }
+            else if (skipParaboloid)
+            {
+                // As the draw moves it toward the eye (the vertices' centre the shader reads)
+                auto pos = (const float*)item;
+                float toward = *(const float*)(item + 0x14);
+                float d[3] = { pos[0] - eye[0], pos[1] - eye[1], pos[2] - eye[2] };
+                float lengthSquared = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                float inverse = lengthSquared == 0.0f ? 0.0f : *pOne / std::sqrt(lengthSquared);
+                float P[3];
+                for (int k = 0; k < 3; k++)
+                    P[k] = pos[k] - d[k] * inverse * toward;
+                if (P[2] - paraboloidCentre[2] <= 0.0f)
+                    continue;
+                float corner = std::fabs(*(const float*)(item + 0xC)) * std::fabs(*pReflectSize) * 1.5f;
+                float c[3] = { P[0] - paraboloidCentre[0], P[1] - paraboloidCentre[1], P[2] - paraboloidCentre[2] };
+                float reach = ParaboloidFadeEnd + corner + 0.5f;
+                if (c[0] * c[0] + c[1] * c[1] + c[2] * c[2] > reach * reach)
+                    continue;
             }
             drawn.push_back(uint32_t(i));
         }
