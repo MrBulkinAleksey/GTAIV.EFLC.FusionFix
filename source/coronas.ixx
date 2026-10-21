@@ -12,6 +12,7 @@ export module coronas;
 
 import common;
 import settings;
+import inireload;
 
 static constexpr auto NewLimitExponent = 14;
 
@@ -285,6 +286,25 @@ namespace CoronaRender
     // render flags' reflection and dim bits, and another view), the calls, the coronas listed, those left out as
     // not reflected, those drawn, their brightness, and the pass's eye against the game camera; every 600 calls
     bool bPassLog = true;
+
+    // WaterCoronas (hidden [PROJECT2DFX], 1): the coronas in the water's reflection as streaks. The game draws them
+    // there as it does on the screen, a few pixels each in the 1280x512 target, and the water's shader reads its
+    // reflection moved by the waves by up to a fifth of the target near the camera: of each corona a few scattered
+    // pixels were left, unseen once exposed (the capture of 2026-10-21). Drawn this many times their size taller along
+    // the pass's vertical (toward and away from the camera on the water) and wider, the waves break each into a column
+    // of glints, a lamp's path on the water; brightness times WaterCoronaBrightness. Read again on Ctrl+Shift+F10.
+    bool bWaterStreaks = true;
+    float fWaterCoronaLength = 6.0f;
+    float fWaterCoronaWidth = 1.5f;
+    float fWaterCoronaBrightness = 1.0f;
+
+    void ReadWaterCoronas(CIniReader& iniReader)
+    {
+        bWaterStreaks = iniReader.ReadInteger("PROJECT2DFX", "WaterCoronas", 1) != 0;
+        fWaterCoronaLength = std::clamp(iniReader.ReadFloat("PROJECT2DFX", "WaterCoronaLength", 6.0f), 0.1f, 50.0f);
+        fWaterCoronaWidth = std::clamp(iniReader.ReadFloat("PROJECT2DFX", "WaterCoronaWidth", 1.5f), 0.1f, 10.0f);
+        fWaterCoronaBrightness = std::clamp(iniReader.ReadFloat("PROJECT2DFX", "WaterCoronaBrightness", 1.0f), 0.0f, 20.0f);
+    }
     struct PassStats { uint32_t calls, empty, listed, notReflected, drawn; double brightness, maxBrightness, eyeDz, eyeDxy, axisZ; uint32_t flags; };
     PassStats passStats[8]{};
     uint32_t nPassCalls = 0;
@@ -429,7 +449,17 @@ namespace CoronaRender
         auto eye = (const float*)(viewport + 0x70);
         float forward[3] = {};
         bool skipBehind = false;
+        // The water reflection's pass: its eye right under the game camera
         bool mirrored = false;
+        if (!reflection && pCamera && !bOtherView)
+        {
+            float dx = eye[0] - pCamera[0], dy = eye[1] - pCamera[1];
+            mirrored = dx * dx + dy * dy < 0.25f && eye[2] - pCamera[2] < -0.05f;
+        }
+        // In it the coronas are drawn as streaks along its vertical (WaterCoronas)
+        bool streaks = mirrored && bWaterStreaks;
+        float stretchRight = streaks ? fWaterCoronaWidth : 1.0f, stretchUp = streaks ? fWaterCoronaLength : 1.0f;
+        float stretch = std::max(stretchRight, stretchUp); // how far a quad's corners reach, in sizes
         float waterLevel = 0.0f;                // the water's pass: below it the clip plane leaves nothing
         if (nMode == 1 && !reflection && pCamera && !bOtherView)
         {
@@ -437,7 +467,6 @@ namespace CoronaRender
             const float* look = pCamera - 8;
             float dx = eye[0] - pCamera[0], dy = eye[1] - pCamera[1], dz = eye[2] - pCamera[2];
             float length = std::sqrt(look[0] * look[0] + look[1] * look[1] + look[2] * look[2]);
-            mirrored = dz < -0.05f;
             if (dx * dx + dy * dy < 0.25f && (mirrored || dz * dz < 0.25f) && length > 0.5f && length < 2.0f)
             {
                 float candidate[3] = { look[0] / length, look[1] / length, (mirrored ? -look[2] : look[2]) / length };
@@ -513,6 +542,7 @@ namespace CoronaRender
                 // No size, no pixels: its two triangles have none
                 if (size == 0.0f)
                     continue;
+                size *= stretch;
                 // Under the water, by more than its size and its shift toward the camera, in the water's pass
                 if (mirrored && pos[2] + 1.5f * size + std::fabs(*(const float*)(item + 0x14)) < waterLevel)
                     continue;
@@ -605,8 +635,8 @@ namespace CoronaRender
                 float R[3], U[3];
                 for (int i = 0; i < 3; i++)
                 {
-                    R[i] = axisRight[i] * size;
-                    U[i] = axisUp[i] * size;
+                    R[i] = axisRight[i] * size * stretchRight;
+                    U[i] = axisUp[i] * size * stretchUp;
                 }
                 if (reflection)
                 {
@@ -621,6 +651,8 @@ namespace CoronaRender
                 }
                 else if (dim)
                     brightness *= bDistantLights ? 1.0f : *pDimScale;   // as lodlights' WaterMultiplierHook has it
+                if (streaks)
+                    brightness *= fWaterCoronaBrightness;
                 if (stats)
                 {
                     ++stats->drawn;
@@ -708,6 +740,8 @@ public:
             CIniReader iniReader("");
             nMode = std::clamp(iniReader.ReadInteger("PROJECT2DFX", "CoronaRenderer", 1), 0, 2);
             bPassLog = iniReader.ReadInteger("PROJECT2DFX", "CoronaPassLog", 1) != 0;
+            ReadWaterCoronas(iniReader);
+            IniReload::Add(ReadWaterCoronas);
             if (!nMode)
                 return;
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
