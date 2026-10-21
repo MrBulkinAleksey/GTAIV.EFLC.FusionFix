@@ -30,6 +30,9 @@ namespace WaterCoronaCapture
     static bool keyWasDown = false;
     static std::string text;
     static uint32_t captureNumber = 0, pictures = 0, coronaDraws = 0, waitedDraws = 0;
+    static uint32_t waterDraws = 0;             // the draws reading the reflection one after another, the first among them
+    static uint32_t skippedPasses = 0;          // passes left out (RenderSkip) while armed, waiting for one drawn
+    static uint32_t deviceDrawsAtStart = 0;     // RenderSkip::DrawCount() as the coronas begin, dropped draws counted too
     static IDirect3DTexture9* reflection = nullptr; // the corona pass's target as a texture, held while waiting
     static const char* reflectionName = nullptr;
 
@@ -282,10 +285,20 @@ namespace WaterCoronaCapture
             keyWasDown = down;
             if (stage != Stage::Armed)
                 return;
+            // A frame the reflection is left out of (drawn every other frame, or no water seen): its draws never reach
+            // the device and the target keeps the last one; wait for one drawn
+            if (RenderSkip::DropsDraws() && skippedPasses < 600)
+            {
+                ++skippedPasses;
+                return;
+            }
             ++captureNumber;
             pictures = coronaDraws = waitedDraws = 0;
             reflectionName = RenderSkip::CurrentTarget();
-            text = std::format("capture {}: the dim corona pass, target {}\n", captureNumber, reflectionName ? reflectionName : "?");
+            text = std::format("capture {}: the dim corona pass, target {}, {} passes left out before it, this one {}\n", captureNumber,
+                reflectionName ? reflectionName : "?", skippedPasses, RenderSkip::DropsDraws() ? "left out too" : "drawn");
+            skippedPasses = 0;
+            deviceDrawsAtStart = RenderSkip::DrawCount();
             IDirect3DSurface9* depth = nullptr;
             if (SUCCEEDED(real->GetDepthStencilSurface(&depth)) && depth)
             {
@@ -311,6 +324,7 @@ namespace WaterCoronaCapture
         }
         if (stage != Stage::InCoronas)
             return;
+        text += std::format("the coronas: {} device draws, {} of them seen (not dropped)\n", RenderSkip::DrawCount() - deviceDrawsAtStart, coronaDraws);
         PictureOfTarget(real, "after-coronas");
         IDirect3DSurface9* target = nullptr;
         if (SUCCEEDED(real->GetRenderTarget(0, &target)) && target)
@@ -340,8 +354,33 @@ namespace WaterCoronaCapture
                 text += std::format("corona draw {}: prim {} x{} | {}\n", coronaDraws, int(type), primitives, States(real));
             return;
         }
+        auto readsReflection = [&](DWORD& sampler)
+        {
+            for (DWORD s = 0; s < 16; ++s)
+            {
+                IDirect3DBaseTexture9* texture = nullptr;
+                real->GetTexture(s, &texture);
+                const bool match = texture && texture == reflection;
+                if (texture)
+                    texture->Release();
+                if (match)
+                {
+                    sampler = s;
+                    return true;
+                }
+            }
+            return false;
+        };
+        DWORD s = 0;
         if (stage == Stage::WaterNext)
         {
+            // The water is many quads: the picture once a draw no longer reads the reflection
+            if (readsReflection(s))
+            {
+                ++waterDraws;
+                return;
+            }
+            text += std::format("{} draws read the reflection in a row\n", waterDraws);
             PictureOfTarget(real, "after-water");
             Finish();
             return;
@@ -353,15 +392,8 @@ namespace WaterCoronaCapture
             Finish();
             return;
         }
-        for (DWORD s = 0; s < 16; ++s)
+        if (readsReflection(s))
         {
-            IDirect3DBaseTexture9* texture = nullptr;
-            real->GetTexture(s, &texture);
-            const bool match = texture && texture == reflection;
-            if (texture)
-                texture->Release();
-            if (!match)
-                continue;
             const char* target = RenderSkip::CurrentTarget();
             text += std::format("draw {} after the coronas reads it on s{}: target {}, prim {} x{} | {}\n", waitedDraws, s, target ? target : "?",
                 int(type), primitives, States(real));
@@ -385,8 +417,8 @@ namespace WaterCoronaCapture
                 level->Release();
             }
             PictureOfTarget(real, "before-water");
+            waterDraws = 1;
             stage = Stage::WaterNext;
-            return;
         }
     }
 }
