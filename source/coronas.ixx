@@ -285,7 +285,7 @@ namespace CoronaRender
     // render flags' reflection and dim bits, and another view), the calls, the coronas listed, those left out as
     // not reflected, those drawn, their brightness, and the pass's eye against the game camera; every 600 calls
     bool bPassLog = true;
-    struct PassStats { uint32_t calls, empty, listed, notReflected, drawn; double brightness, maxBrightness, eyeDz, eyeDxy; uint32_t flags; };
+    struct PassStats { uint32_t calls, empty, listed, notReflected, drawn; double brightness, maxBrightness, eyeDz, eyeDxy, axisZ; uint32_t flags; };
     PassStats passStats[8]{};
     uint32_t nPassCalls = 0;
 
@@ -298,9 +298,9 @@ namespace CoronaRender
             if (!s.calls)
                 continue;
             FusionLog::Write("Coronas", "Passes", "%s (flags %08X): %u calls (%u with none listed), per call %.1f listed, %.1f not reflected, %.1f drawn, "
-                "brightness %.3f (max %.3f), eye from the game camera dz %.2f dxy %.2f\n", names[k], s.flags, s.calls, s.empty,
+                "brightness %.3f (max %.3f), eye from the game camera dz %.2f dxy %.2f, the view's z axis z %.3f\n", names[k], s.flags, s.calls, s.empty,
                 float(s.listed) / s.calls, float(s.notReflected) / s.calls, float(s.drawn) / s.calls,
-                s.drawn ? s.brightness / s.drawn : 0.0, s.maxBrightness, s.eyeDz / s.calls, s.eyeDxy / s.calls);
+                s.drawn ? s.brightness / s.drawn : 0.0, s.maxBrightness, s.eyeDz / s.calls, s.eyeDxy / s.calls, s.axisZ / s.calls);
             s = {};
         }
         FusionLog::Write("Coronas", "Passes", "dim scale %.3f, reflection size %.3f, reflection limit %.3f\n",
@@ -401,6 +401,7 @@ namespace CoronaRender
             stats->flags = flags;
             ++stats->calls;
             auto eyeAt = (const float*)(*ppViewport + 0x70);
+            stats->axisZ += ((const float*)(*ppViewport + 0x60))[2];
             if (pCamera)
             {
                 stats->eyeDz += eyeAt[2] - pCamera[2];
@@ -420,26 +421,60 @@ namespace CoronaRender
             return true;
         auto list = (uint8_t*)(uintptr_t(*pFlagAddress) - 0x1B) + (size_t(buffer) * (3u << *pShift)) * 0x20;
 
-        // Behind the camera, only in a pass from the game camera itself: reflections and other views keep them all
+        // Behind the camera, in a pass from the game camera itself or from its reflection in the water (the water
+        // reflection's pass, its eye right under the game camera, as far below the water as the camera is above it);
+        // the paraboloid reflection and other views keep them all here. Where the view looks is its own axes' (right
+        // cross up), turned to agree with the game camera's look, mirrored in the water for the water's pass.
         auto viewport = *ppViewport;
         auto eye = (const float*)(viewport + 0x70);
         float forward[3] = {};
         bool skipBehind = false;
+        bool mirrored = false;
+        float waterLevel = 0.0f;                // the water's pass: below it the clip plane leaves nothing
         if (nMode == 1 && !reflection && pCamera && !bOtherView)
         {
             auto right = (const float*)(viewport + 0x40), up = (const float*)(viewport + 0x50);
             const float* look = pCamera - 8;
             float dx = eye[0] - pCamera[0], dy = eye[1] - pCamera[1], dz = eye[2] - pCamera[2];
             float length = std::sqrt(look[0] * look[0] + look[1] * look[1] + look[2] * look[2]);
-            if (dx * dx + dy * dy + dz * dz < 0.25f && length > 0.5f && length < 2.0f)
+            mirrored = dz < -0.05f;
+            if (dx * dx + dy * dy < 0.25f && (mirrored || dz * dz < 0.25f) && length > 0.5f && length < 2.0f)
             {
-                for (int i = 0; i < 3; i++)
-                    forward[i] = look[i] / length;
-                // The view's own axes must agree that this is where it looks
+                float candidate[3] = { look[0] / length, look[1] / length, (mirrored ? -look[2] : look[2]) / length };
                 float cross[3] = { right[1] * up[2] - right[2] * up[1], right[2] * up[0] - right[0] * up[2], right[0] * up[1] - right[1] * up[0] };
-                skipBehind = std::fabs(cross[0] * forward[0] + cross[1] * forward[1] + cross[2] * forward[2]) > 0.95f;
+                float agree = cross[0] * candidate[0] + cross[1] * candidate[1] + cross[2] * candidate[2];
+                // The view's own axes must agree that this is where it looks
+                if (std::fabs(agree) > 0.95f)
+                {
+                    for (int i = 0; i < 3; i++)
+                        forward[i] = agree > 0.0f ? cross[i] : -cross[i];
+                    skipBehind = true;
+                    waterLevel = 0.5f * (eye[2] + pCamera[2]);
+                }
             }
         }
+
+        // The paraboloid reflection (the reflection map, technique 0xf: paraboloid_corona, deferred_lighting VS13): its
+        // eye 512 m under the game camera, the paraboloid's centre C 512 m above that eye. The shader gives a corona no
+        // colour and no size unless its centre, moved toward the eye, is above C, and fades it out by the distance of
+        // its corners from C, none left 64 m away (1 - L/64 times 16, saturated). Those are left out here; the corners
+        // are within the size times the reflection's scale times 1.42 of the centre.
+        bool skipParaboloid = false;
+        float paraboloidCentre[3] = {};
+        if (nMode == 1 && reflection && pCamera && !bOtherView)
+        {
+            // The view's z axis (grcViewport +0x60) straight down, as the shader's distance takes it: L is from the eye
+            // plus 512 m along the view's z, C only so
+            float dx = eye[0] - pCamera[0], dy = eye[1] - pCamera[1], dz = eye[2] + 512.0f - pCamera[2];
+            if (dx * dx + dy * dy < 0.25f && dz * dz < 1.0f && ((const float*)(viewport + 0x60))[2] < -0.99f)
+            {
+                paraboloidCentre[0] = eye[0];
+                paraboloidCentre[1] = eye[1];
+                paraboloidCentre[2] = eye[2] + 512.0f;
+                skipParaboloid = true;
+            }
+        }
+        constexpr float ParaboloidFadeEnd = 64.0f;
 
         // Outside the view as well: a cone round where the camera looks, as wide as the projection's corner and a tenth
         // more (grcViewport +0x1c0, its x and y scales), each corona a ball 1.5 times its size (its quad's corners are
@@ -478,6 +513,9 @@ namespace CoronaRender
                 // No size, no pixels: its two triangles have none
                 if (size == 0.0f)
                     continue;
+                // Under the water, by more than its size and its shift toward the camera, in the water's pass
+                if (mirrored && pos[2] + 1.5f * size + std::fabs(*(const float*)(item + 0x14)) < waterLevel)
+                    continue;
                 float d[3] = { pos[0] - eye[0], pos[1] - eye[1], pos[2] - eye[2] };
                 float ahead = d[0] * forward[0] + d[1] * forward[1] + d[2] * forward[2];
                 if (ahead < -2.0f * size - 1.0f)
@@ -492,6 +530,25 @@ namespace CoronaRender
                     if (margin < 0.0f || lateralSquared * coneCos * coneCos > margin * margin)
                         continue;
                 }
+            }
+            else if (skipParaboloid)
+            {
+                // As the draw moves it toward the eye (the vertices' centre the shader reads)
+                auto pos = (const float*)item;
+                float toward = *(const float*)(item + 0x14);
+                float d[3] = { pos[0] - eye[0], pos[1] - eye[1], pos[2] - eye[2] };
+                float lengthSquared = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                float inverse = lengthSquared == 0.0f ? 0.0f : *pOne / std::sqrt(lengthSquared);
+                float P[3];
+                for (int k = 0; k < 3; k++)
+                    P[k] = pos[k] - d[k] * inverse * toward;
+                if (P[2] - paraboloidCentre[2] <= 0.0f)
+                    continue;
+                float corner = std::fabs(*(const float*)(item + 0xC)) * std::fabs(*pReflectSize) * 1.5f;
+                float c[3] = { P[0] - paraboloidCentre[0], P[1] - paraboloidCentre[1], P[2] - paraboloidCentre[2] };
+                float reach = ParaboloidFadeEnd + corner + 0.5f;
+                if (c[0] * c[0] + c[1] * c[1] + c[2] * c[2] > reach * reach)
+                    continue;
             }
             drawn.push_back(uint32_t(i));
         }
