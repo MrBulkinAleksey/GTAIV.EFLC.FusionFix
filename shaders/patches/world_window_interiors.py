@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # Writes world_window_interiors.patch: rooms behind the lit windows at night (interior mapping). The glow of the night
-# windows is drawn by the forward "draw" technique of gta_emissivenight, gta_glass_emissivenight and
-# gta_normal_spec_reflect_emissivenight (PS1, the same code in all three; the deferred techniques only give them an
-# albedo). Their vertex shaders already pass the world normal (texcoord1) and the world position (texcoord6), which the
+# windows is drawn by the forward techniques of gta_emissivenight, gta_glass_emissivenight and
+# gta_normal_spec_reflect_emissivenight: "draw" (PS1) and the game's forward pass with lights, "lightweight0_draw" and
+# "lightweight4_draw" (PS10/PS11 in gta_emissivenight, PS9/PS10 in the other two), all with the code of PS1 (the
+# deferred techniques only give them an albedo). Their vertex shaders (VS0, VS1) already pass the world normal (texcoord1) and the world position (texcoord6), which the
 # pixel shaders left out; with them each lit pixel of a wall looks into a box room behind it:
 #  - the rooms are a grid on the wall: along it (the horizontal tangent, normal x up) every c162.x metres, up every
 #    c162.y metres, c162.z metres deep;
@@ -27,8 +28,14 @@ ROOT = Path(sys.argv[1]) / 'win32_30_nv8'
 TAG = 'FusionFix world_window_interiors.patch'
 SHADERS = [
     'gta_emissivenight/gta_emissivenightPS1.asm',
+    'gta_emissivenight/gta_emissivenightPS10.asm',
+    'gta_emissivenight/gta_emissivenightPS11.asm',
     'gta_glass_emissivenight/gta_glass_emissivenightPS1.asm',
+    'gta_glass_emissivenight/gta_glass_emissivenightPS9.asm',
+    'gta_glass_emissivenight/gta_glass_emissivenightPS10.asm',
     'gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS1.asm',
+    'gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS9.asm',
+    'gta_normal_spec_reflect_emissivenight/gta_normal_spec_reflect_emissivenightPS10.asm',
 ]
 
 DEF_AFTER = '    def c11, 0.99, 0, 0, 0\n'

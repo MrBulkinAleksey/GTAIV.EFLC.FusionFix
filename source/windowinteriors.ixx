@@ -12,10 +12,11 @@ import settings;
 import inireload;
 
 // Window Interiors (Graphics > Lighting): rooms behind the lit windows at night. The night windows' glow is drawn
-// by the forward "draw" technique of gta_emissivenight, gta_glass_emissivenight and
-// gta_normal_spec_reflect_emissivenight; shaders/patches/world_window_interiors.patch has each lit pixel of a wall
-// look into a box room behind it (interior mapping) and shades the glow by what the view ray meets there. The rooms
-// are a grid on the wall in metres, so they need no model data; the glow keeps its own pattern and colour.
+// by the forward techniques ("draw", "lightweight0_draw", "lightweight4_draw") of gta_emissivenight,
+// gta_glass_emissivenight and gta_normal_spec_reflect_emissivenight; shaders/patches/world_window_interiors.patch has
+// each lit pixel of a wall look into a box room behind it (interior mapping) and shades the glow by what the view ray
+// meets there. The rooms are a grid on the wall in metres, so they need no model data; the glow keeps its own pattern
+// and colour.
 // Registers, set before the transparent pass: c161 = camera position, strength (0 = off); c162 = 1 / room width,
 // height and depth, part of the rooms with a blind; c163 = fade with the distance as a * distance + b, debug, gain.
 // Tuning: hidden keys of [LIGHTING] (WindowInteriors*), read again on Ctrl+Shift+F10.
