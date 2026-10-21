@@ -20,8 +20,8 @@ index 21ff0ee8..0b0c987f 100644
 -    mov r20.xy, v0
 +    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
 +    texld r31, v0, s1
-+    pow r31.x, c209_abs.z, r31.x
-+    mul r31.x, r31.x, c209.w // the depth
++    pow r29.x, c209_abs.z, r31.x
++    mul r31.x, r29.x, c209.w // the depth
 +    mad_sat r31.y, r31.x, c189.y, c189.x
 +    add r31.z, r31.x, -c189.z
 +    mov r31.w, c189.w
@@ -77,8 +77,8 @@ index 2a2e7aa6..4eb8caa1 100644
 -    texld r3, v0, s2
 +    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
 +    texld r31, v0, s1
-+    pow r31.x, c209_abs.z, r31.x
-+    mul r31.x, r31.x, c209.w // the depth
++    pow r29.x, c209_abs.z, r31.x
++    mul r31.x, r29.x, c209.w // the depth
 +    mad_sat r31.y, r31.x, c189.y, c189.x
 +    add r31.z, r31.x, -c189.z
 +    mov r31.w, c189.w
@@ -182,8 +182,8 @@ index 158fc615..9d5d25fd 100644
 -    texld r0, v0, s1
 +    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
 +    texld r31, v0, s1
-+    pow r31.x, c209_abs.z, r31.x
-+    mul r31.x, r31.x, c209.w // the depth
++    pow r29.x, c209_abs.z, r31.x
++    mul r31.x, r29.x, c209.w // the depth
 +    mad_sat r31.y, r31.x, c189.y, c189.x
 +    add r31.z, r31.x, -c189.z
 +    mov r31.w, c189.w
@@ -285,8 +285,8 @@ index 7f001ff1..944633bf 100644
 -    texld r3, v0, s2
 +    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
 +    texld r31, v0, s1
-+    pow r31.x, c209_abs.z, r31.x
-+    mul r31.x, r31.x, c209.w // the depth
++    pow r29.x, c209_abs.z, r31.x
++    mul r31.x, r29.x, c209.w // the depth
 +    mad_sat r31.y, r31.x, c189.y, c189.x
 +    add r31.z, r31.x, -c189.z
 +    mov r31.w, c189.w
@@ -390,8 +390,8 @@ index 4872c040..28f16688 100644
 -    texld r0, v0, s1
 +    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
 +    texld r31, v0, s1
-+    pow r31.x, c209_abs.z, r31.x
-+    mul r31.x, r31.x, c209.w // the depth
++    pow r29.x, c209_abs.z, r31.x
++    mul r31.x, r29.x, c209.w // the depth
 +    mad_sat r31.y, r31.x, c189.y, c189.x
 +    add r31.z, r31.x, -c189.z
 +    mov r31.w, c189.w
@@ -493,8 +493,8 @@ index a9f15810..c454a10c 100644
 -    texld r0, v0, s1
 +    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
 +    texld r31, v0, s1
-+    pow r31.x, c209_abs.z, r31.x
-+    mul r31.x, r31.x, c209.w // the depth
++    pow r29.x, c209_abs.z, r31.x
++    mul r31.x, r29.x, c209.w // the depth
 +    mad_sat r31.y, r31.x, c189.y, c189.x
 +    add r31.z, r31.x, -c189.z
 +    mov r31.w, c189.w
@@ -608,8 +608,8 @@ index 8d3b1a7d..3e7c5351 100644
 -    texld r0, v0, s1
 +    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
 +    texld r31, v0, s1
-+    pow r31.x, c209_abs.z, r31.x
-+    mul r31.x, r31.x, c209.w // the depth
++    pow r29.x, c209_abs.z, r31.x
++    mul r31.x, r29.x, c209.w // the depth
 +    mad_sat r31.y, r31.x, c189.y, c189.x
 +    add r31.z, r31.x, -c189.z
 +    mov r31.w, c189.w
@@ -711,8 +711,8 @@ index 1dde72b0..fd1dac39 100644
 -    texld r0, v0, s1
 +    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
 +    texld r31, v0, s1
-+    pow r31.x, c209_abs.z, r31.x
-+    mul r31.x, r31.x, c209.w // the depth
++    pow r29.x, c209_abs.z, r31.x
++    mul r31.x, r29.x, c209.w // the depth
 +    mad_sat r31.y, r31.x, c189.y, c189.x
 +    add r31.z, r31.x, -c189.z
 +    mov r31.w, c189.w
@@ -827,8 +827,8 @@ index 9b124d11..216f3530 100644
 -    texld r0, v0, s1
 +    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
 +    texld r31, v0, s1
-+    pow r31.x, c209_abs.z, r31.x
-+    mul r31.x, r31.x, c209.w // the depth
++    pow r29.x, c209_abs.z, r31.x
++    mul r31.x, r29.x, c209.w // the depth
 +    mad_sat r31.y, r31.x, c189.y, c189.x
 +    add r31.z, r31.x, -c189.z
 +    mov r31.w, c189.w
@@ -937,8 +937,8 @@ index 19b348aa..2356f0ee 100644
 -    texld r3, v0, s2
 +    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
 +    texld r31, v0, s1
-+    pow r31.x, c209_abs.z, r31.x
-+    mul r31.x, r31.x, c209.w // the depth
++    pow r29.x, c209_abs.z, r31.x
++    mul r31.x, r29.x, c209.w // the depth
 +    mad_sat r31.y, r31.x, c189.y, c189.x
 +    add r31.z, r31.x, -c189.z
 +    mov r31.w, c189.w
@@ -1052,8 +1052,8 @@ index d27fe7e2..14488ffe 100644
 -    texld r0, v0, s1
 +    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
 +    texld r31, v0, s1
-+    pow r31.x, c209_abs.z, r31.x
-+    mul r31.x, r31.x, c209.w // the depth
++    pow r29.x, c209_abs.z, r31.x
++    mul r31.x, r29.x, c209.w // the depth
 +    mad_sat r31.y, r31.x, c189.y, c189.x
 +    add r31.z, r31.x, -c189.z
 +    mov r31.w, c189.w
@@ -1162,8 +1162,8 @@ index e14da885..ebd3bc2a 100644
 -    texld r3, v0, s2
 +    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
 +    texld r31, v0, s1
-+    pow r31.x, c209_abs.z, r31.x
-+    mul r31.x, r31.x, c209.w // the depth
++    pow r29.x, c209_abs.z, r31.x
++    mul r31.x, r29.x, c209.w // the depth
 +    mad_sat r31.y, r31.x, c189.y, c189.x
 +    add r31.z, r31.x, -c189.z
 +    mov r31.w, c189.w
@@ -1277,8 +1277,8 @@ index eb6f4303..fb1059bc 100644
 -    texld r3, v0, s2
 +    // --- FusionFix world_heat_haze.patch: the coordinate everything below is read at (r30), wavering with the hot air in the distance
 +    texld r31, v0, s1
-+    pow r31.x, c209_abs.z, r31.x
-+    mul r31.x, r31.x, c209.w // the depth
++    pow r29.x, c209_abs.z, r31.x
++    mul r31.x, r29.x, c209.w // the depth
 +    mad_sat r31.y, r31.x, c189.y, c189.x
 +    add r31.z, r31.x, -c189.z
 +    mov r31.w, c189.w

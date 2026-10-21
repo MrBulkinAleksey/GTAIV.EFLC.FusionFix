@@ -35,8 +35,8 @@ DEF = f'''\
 BLOCK = f'''\
     // --- {TAG}: the coordinate everything below is read at (r30), wavering with the hot air in the distance
     texld r31, v0, s1
-    pow r31.x, c209_abs.z, r31.x
-    mul r31.x, r31.x, c209.w // the depth
+    pow r29.x, c209_abs.z, r31.x
+    mul r31.x, r29.x, c209.w // the depth
     mad_sat r31.y, r31.x, c189.y, c189.x
     add r31.z, r31.x, -c189.z
     mov r31.w, c189.w
