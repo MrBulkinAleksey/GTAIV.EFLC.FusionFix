@@ -354,6 +354,16 @@ public:
             int nMenuAccessDelayOnStartup = std::clamp(iniReader.ReadInteger("MISC", "MenuAccessDelayOnStartup", 0), 300, 3000);
             nRadarZoomDelay = std::clamp(iniReader.ReadInteger("MISC", "RadarZoomDelay", 3000), 0, 60000);
 
+            // Test switch (hidden, 1 = as the game): the game draws far LOD trees as billboards baked from 8 views into
+            // 16 slots, one bake a frame, slots out of view given to new models; a tree without a slot draws its mesh.
+            // 0 makes the slot lookup (CE 0x9321D0) answer "no slot", so every LOD tree keeps its mesh
+            if (iniReader.ReadInteger("MISC", "TreeImposters", 1) == 0)
+            {
+                auto pattern = hook::pattern("56 8B 74 24 08 57 BF 01 00 00 00 8B D7 2B 15");
+                if (!pattern.empty())
+                    injector::WriteMemory<uint32_t>(pattern.get_first(0), 0xC3FFC883, true); // or eax, -1; ret
+            }
+
             // Fix weapon zoom states in TBoGT
             if (nAimingZoomFix)
             {
