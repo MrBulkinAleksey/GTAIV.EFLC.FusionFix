@@ -2240,7 +2240,7 @@ private:
             // rounder shadow.
             // A light inside that boxes a car gives it up as the boxes come in too: tunnel lamps are such lights, and
             // a tunnel counts as a room scene.
-            const float unshadowed = R.fLocalContactShadowUnshadowed;
+            const float unshadowed = R.VehicleBoxShadowsEnabled() ? R.fLocalContactShadowUnshadowed : 0.0f;
             const float box = (std::min)(boxed, 1.0f);
             const float fromBoxes = box * R.fVehicleBoxShadowContact;
             const float intensity = (light.mFlags & 0x200) ? 0.0f

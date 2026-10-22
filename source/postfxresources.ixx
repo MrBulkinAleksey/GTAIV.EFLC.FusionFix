@@ -826,9 +826,11 @@ public:
     // c203 off for a light and back on (see InstallLocalContactLightHook).
     bool bLocalContactPass = false;
     bool bLocalContactLightOff = false;
-    // Lights without a shadow map this frame (most headlights, lamps left without a slot) light a car's surroundings all the same, so
-    // their contact shadow is only a dark frame around it on a lit floor (tunnels): this much of it is kept
-    float fLocalContactShadowUnshadowed = 0.0f;
+    // Lights without a shadow map this frame (most headlights, lamps left without a slot): this much of their contact shadow is kept.
+    // All of it (1) since Vehicle Box Shadows shadow the cars under them: at 0 a lamp that lost its slot to a passing car's
+    // lights lost the contact shadows of all under it, and they blinked as cars went by (trace of the slots, 2026-10-23).
+    // With Vehicle Box Shadows off, 0: there the car had no shadow, and its contact shadow was only a dark frame around it.
+    float fLocalContactShadowUnshadowed = 1.0f;
     float fLocalContactLightIntensity = -1.0f;  // what c202.w holds for the light being drawn
     float fLocalContactShadowLength = 0.5f;
     float fLocalContactShadowThickness = 0.2f;
@@ -1892,7 +1894,7 @@ public:
             IniFloat("LIGHTING", "ContactShadowsIntensity", &PostFxResource::fContactShadowIntensity, 1.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "IndirectLightOcclusion", &PostFxResource::fGIOcclusion, 1.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "LocalContactShadowsIntensity", &PostFxResource::fLocalContactShadowIntensity, 1.0f, 0.0f, 1.0f),
-            IniFloat("LIGHTING", "LocalContactShadowsWithoutShadowMap", &PostFxResource::fLocalContactShadowUnshadowed, 0.0f, 0.0f, 1.0f),
+            IniFloat("LIGHTING", "LocalContactShadowsWithoutShadowMap", &PostFxResource::fLocalContactShadowUnshadowed, 1.0f, 0.0f, 1.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLightSize", &PostFxResource::fVehicleBoxShadowLightSize, 0.5f, 0.0f, 4.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsRounding", &PostFxResource::fVehicleBoxShadowRounding, 0.2f, 0.0f, 0.99f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsContact", &PostFxResource::fVehicleBoxShadowContact, 0.0f, 0.0f, 1.0f),
