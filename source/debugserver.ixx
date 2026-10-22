@@ -624,7 +624,11 @@ namespace DebugServer
         const uint32_t hour = uint32_t(request.Number("hour")) % 24, minute = uint32_t(request.Number("minute", 0)) % 60;
         return OnMainThread([=]
         {
-            Natives::SetTimeOfDay(hour, minute);
+            // (while frozen the clock stays stopped at the new time)
+            if (clockStopped)
+                Natives::ForceTimeOfDay(hour, minute);
+            else
+                Natives::SetTimeOfDay(hour, minute);
             return Object({{"time", Quote(std::to_string(hour) + ":" + (minute < 10 ? "0" : "") + std::to_string(minute))}});
         });
     }
@@ -640,6 +644,81 @@ namespace DebugServer
             else
                 Natives::ForceWeatherNow(uint32_t(std::stoul(weather)));
             return Object({{"weather", Quote(weather)}});
+        });
+    }
+
+    // A still scene for comparing frames: a script camera where the game camera is (or at x, y, z turned rx, ry, rz
+    // with fov, as given), the player frozen and without control, the clock stopped. "on": false gives all back.
+    static Camera frozenCamera = 0;
+    static bool clockStopped = false;
+
+    std::string Freeze(const Request& request)
+    {
+        const bool on = request.Get("on", "true") != "false";
+        const bool placed = request.Has("x");
+        float x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, fov = 0;
+        if (placed)
+        {
+            x = std::stof(request.Get("x")), y = std::stof(request.Get("y")), z = std::stof(request.Get("z"));
+            rx = std::stof(request.Get("rx", "0")), ry = std::stof(request.Get("ry", "0")), rz = std::stof(request.Get("rz", "0"));
+        }
+        if (request.Has("fov"))
+            fov = std::stof(request.Get("fov"));
+        return OnMainThread([=]() mutable
+        {
+            const Ped ped = PlayerPed();
+            const auto player = Natives::ConvertIntToPlayerIndex(Natives::GetPlayerId());
+            if (!on)
+            {
+                if (frozenCamera)
+                {
+                    Natives::SetCamActive(frozenCamera, false);
+                    Natives::SetCamPropagate(frozenCamera, false);
+                    Natives::ActivateScriptedCams(false, false);
+                    Natives::DestroyCam(frozenCamera);
+                    frozenCamera = 0;
+                }
+                Natives::FreezeCharPosition(ped, false);
+                Natives::SetPlayerControl(player, true);
+                if (clockStopped)
+                    Natives::ReleaseTimeOfDay();
+                clockStopped = false;
+                FusionLog::Write("DebugServer", "Scene", "freeze off\n");
+                return Object({{"frozen", "false"}});
+            }
+            if (!placed || !fov)
+            {
+                Camera game = 0;
+                Natives::GetGameCam(&game);
+                if (!game)
+                    throw std::runtime_error("no game camera");
+                if (!placed)
+                {
+                    Natives::GetCamPos(game, &x, &y, &z);
+                    Natives::GetCamRot(game, &rx, &ry, &rz);
+                }
+                if (!fov)
+                    Natives::GetCamFov(game, &fov);
+            }
+            if (!frozenCamera)
+                Natives::CreateCam(14, &frozenCamera);
+            if (!frozenCamera)
+                throw std::runtime_error("CreateCam failed");
+            Natives::SetCamPos(frozenCamera, x, y, z);
+            Natives::SetCamRot(frozenCamera, rx, ry, rz);
+            Natives::SetCamFov(frozenCamera, fov);
+            Natives::SetCamActive(frozenCamera, true);
+            Natives::SetCamPropagate(frozenCamera, true);
+            Natives::ActivateScriptedCams(true, true);
+            Natives::FreezeCharPosition(ped, true);
+            Natives::SetPlayerControl(player, false);
+            uint32_t hour = 0, minute = 0;
+            Natives::GetTimeOfDay(&hour, &minute);
+            Natives::ForceTimeOfDay(hour, minute);
+            clockStopped = true;
+            FusionLog::Write("DebugServer", "Scene", "freeze at %.2f %.2f %.2f rot %.2f %.2f %.2f fov %.1f\n", x, y, z, rx, ry, rz, fov);
+            return Object({{"frozen", "true"}, {"camera", Array({Float(x), Float(y), Float(z)})},
+                {"camera_rotation", Array({Float(rx), Float(ry), Float(rz)})}, {"fov", Float(fov)}});
         });
     }
 
@@ -871,6 +950,7 @@ namespace DebugServer
         if (command == "teleport") return Teleport(request);
         if (command == "set_time") return SetTime(request);
         if (command == "set_weather") return SetWeather(request);
+        if (command == "freeze") return Freeze(request);
         throw std::runtime_error("unknown command '" + command + "'");
     }
 
