@@ -122,6 +122,53 @@ namespace FirstPerson
         return true;
     }
 
+    // Standing still, the follow camera turns around the player while he keeps facing where he did: in first
+    // person the view then went over his shoulder, and looking down (the eye moved out along the view) behind his
+    // head into his collar. Once the view is TurnFrom off his heading he turns after it at TurnRate until it is
+    // within TurnUntil, only while nothing else turns him (walking, cover, a ragdoll, swimming, no control; the
+    // aim camera turns him itself).
+    static constexpr float TurnFrom = 95.0f;    // degrees
+    static constexpr float TurnUntil = 15.0f;
+    static constexpr float TurnRate = 220.0f;   // degrees a second
+    static constexpr float TurnBelowSpeed = 0.5f;
+    static bool turning = false;
+    static int32_t turnTime = 0;
+
+    static void TurnToView(Ped handle, const float* front)
+    {
+        const int32_t now = CTimer::m_snTimeInMilliseconds ? *CTimer::m_snTimeInMilliseconds : 0;
+        const float seconds = std::clamp((now - turnTime) / 1000.0f, 0.0f, 0.1f);
+        turnTime = now;
+        float speed = 0.0f;
+        if (handle)
+            Natives::GetCharSpeed(handle, &speed);
+        const bool free = handle && speed < TurnBelowSpeed &&
+            Natives::IsPlayerControlOn(Natives::ConvertIntToPlayerIndex(Natives::GetPlayerId())) &&
+            !Natives::IsPedInCover(handle) && !Natives::IsPedRagdoll(handle) && !Natives::IsCharSwimming(handle);
+        const float level = std::sqrt(front[0] * front[0] + front[1] * front[1]);
+        if (!free || level < 1e-3f)
+        {
+            turning = false;
+            return;
+        }
+        // (the game's heading: 0 faces +y, growing counterclockwise)
+        const float view = std::atan2(-front[0], front[1]) * 57.29578f;
+        float heading = 0.0f;
+        Natives::GetCharHeading(handle, &heading);
+        const float off = std::remainder(view - heading, 360.0f);
+        if (!turning && std::abs(off) > TurnFrom)
+        {
+            turning = true;
+            FusionLog::Write("FirstPerson", "OnFoot", "turning to the view, %.0f degrees off\n", off);
+        }
+        if (!turning)
+            return;
+        const float step = std::min(TurnRate * seconds, std::abs(off));
+        Natives::SetCharHeading(handle, heading + std::copysign(step, off));
+        if (std::abs(off) - step < TurnUntil)
+            turning = false;
+    }
+
     // At the wrap of the zoom after a press may have stepped it (mov eax, [ecx+360]), ecx the camera.
     static void StepZoom(SafetyHookContext& regs)
     {
@@ -174,6 +221,7 @@ namespace FirstPerson
 
         auto frame = reinterpret_cast<float*>(camera + 0x10);
         const float* front = frame + 4;
+        TurnToView(handle, front);
         const float level = std::sqrt(front[0] * front[0] + front[1] * front[1]);
         const float down = std::max(-front[2], 0.0f) * lookDownWeight;
         const float push = forwardOffset + down * LookDownForward;
