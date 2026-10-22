@@ -410,6 +410,8 @@ namespace FirstPerson
         }
     };
     static SeatTracker seatTracker;
+    static constexpr float SeatEase = 0.25f;     // of the way to the tracker's head each frame
+    static constexpr float SeatJumpLog = 0.02f;  // m: a frame's move of the tracker's head that is logged
 
     // CCamFollowVehicle::Update (vtable slot 4), then, in first person, where the head sits in the
     // player's frame: only while he sits in a car the camera follows, not while getting in or out.
@@ -463,7 +465,33 @@ namespace FirstPerson
         float head[3]{};
         if (!HeadBonePosition(ped, head))
             return skip("no head bone");
-        seatTracker.Update(head, model, Natives::IsCharOnAnyBike(handle), speed, seat);
+        // The head in the ped's frame as the tracker has it this frame, then eased into the seat the eye is put
+        // at: the car's own motion is in the ped's matrix, so this holds back only what the head itself does
+        // (the driving animation, a pick of another of the tracker's frames before the model is learned).
+        float raw[3]{};
+        const bool learned = seatTracker.learned.contains(model);
+        seatTracker.Update(head, model, Natives::IsCharOnAnyBike(handle), speed, raw);
+        static float lastRaw[3]{};
+        if (frame - seatFrame > 4)
+        {
+            std::copy(std::begin(raw), std::end(raw), seat);
+            std::copy(std::begin(raw), std::end(raw), lastRaw);
+        }
+        float jump = 0.0f;
+        for (int i = 0; i < 3; ++i)
+        {
+            jump += (raw[i] - lastRaw[i]) * (raw[i] - lastRaw[i]);
+            seat[i] += (raw[i] - seat[i]) * SeatEase;
+        }
+        jump = std::sqrt(jump);
+        static uint32_t jumpLogFrame = 0;
+        if (jump > SeatJumpLog && frame - jumpLogFrame >= 10)
+        {
+            jumpLogFrame = frame;
+            FusionLog::Write("FirstPerson", "Vehicle", "head jumped %.3f m in the ped's frame (%s, speed %.1f): %.3f %.3f %.3f -> %.3f %.3f %.3f\n",
+                jump, learned ? "learned" : "not learned yet", speed, lastRaw[0], lastRaw[1], lastRaw[2], raw[0], raw[1], raw[2]);
+        }
+        std::copy(std::begin(raw), std::end(raw), lastRaw);
         seatFrame = frame;
         if (logDue)
             FusionLog::Write("FirstPerson", "Vehicle", "model %08X speed %.1f, head in the ped's frame %.2f %.2f %.2f%s\n",
