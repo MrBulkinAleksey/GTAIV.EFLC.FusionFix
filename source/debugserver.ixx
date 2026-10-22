@@ -1,11 +1,13 @@
 module;
 
 #include <common.hxx>
+#include <Zydis.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <tlhelp32.h>
 #include <d3dx9.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <condition_variable>
@@ -20,6 +22,7 @@ module;
 #include <map>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 #include "FusionLog.hpp"
 
@@ -36,7 +39,9 @@ import natives;
 // [DEBUG] DebugServerPort: a server on 127.0.0.1 that a tool (tools/gta4-live-mcp in the recomp's repository) reaches
 // through an SSH tunnel, to look into the running game from another machine: memory (read, search, signatures, and
 // writes with DebugServerAllowWrite), the loaded modules, the ini (read, write and read again as Ctrl+Shift+F10 does)
-// and the logs. One client at a time; a request is a JSON object on one line ({"id": 1, "cmd": "read", ...}), the
+// and the logs, and over time: values read each frame (watch_start) and the hits of an instruction or a piece of
+// memory (trace_start: a mid-hook or a debug register, with registers, callers and reads; trace_read, trace_stop,
+// trace_list). One client at a time; a request is a JSON object on one line ({"id": 1, "cmd": "read", ...}), the
 // answer one line ({"id": 1, "ok": true, ...}), the same protocol as the recomp's debug server. Bytes travel as hex in
 // memory order (little-endian here), addresses as "0x..." strings.
 namespace DebugServer
@@ -47,6 +52,26 @@ namespace DebugServer
     constexpr size_t kMaxLogLines = 5000;
 
     static bool allowWrite = false;
+
+    // Decimal, or hex with "0x" (not octal for a leading 0); a sign, a fraction or anything after the digits fails.
+    uint64_t ParseWhole(const std::string& text, const std::string& what)
+    {
+        const bool hex = text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X');
+        const std::string digits = hex ? text.substr(2) : text;
+        size_t used = 0;
+        uint64_t value = 0;
+        try
+        {
+            value = std::stoull(digits, &used, hex ? 16 : 10);
+        }
+        catch (const std::exception&)
+        {
+            used = 0;
+        }
+        if (digits.empty() || !isxdigit(uint8_t(digits[0])) || used != digits.size())
+            throw std::runtime_error("\"" + what + "\" is not a whole number: " + text);
+        return value;
+    }
 
     // ---- requests: a flat JSON object of strings, numbers and booleans ----------------------------------------------
 
@@ -89,26 +114,7 @@ namespace DebugServer
             return it->second;
         }
         std::string Get(const std::string& key, std::string fallback) const { return Has(key) ? Get(key) : fallback; }
-        // Decimal, or hex with "0x" (not octal for a leading 0); a sign, a fraction or anything after the digits fails.
-        uint64_t Number(const std::string& key) const
-        {
-            const std::string text = Get(key);
-            const bool hex = text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X');
-            const std::string digits = hex ? text.substr(2) : text;
-            size_t used = 0;
-            uint64_t value = 0;
-            try
-            {
-                value = std::stoull(digits, &used, hex ? 16 : 10);
-            }
-            catch (const std::exception&)
-            {
-                used = 0;
-            }
-            if (digits.empty() || !isxdigit(uint8_t(digits[0])) || used != digits.size())
-                throw std::runtime_error("\"" + key + "\" is not a whole number: " + text);
-            return value;
-        }
+        uint64_t Number(const std::string& key) const { return ParseWhole(Get(key), key); }
         uint64_t Number(const std::string& key, uint64_t fallback) const { return Has(key) ? Number(key) : fallback; }
         // The id as it came, to echo (a number or a string, here kept as JSON text).
         std::string idJson = "null";
@@ -934,6 +940,884 @@ namespace DebugServer
         return Object({{"file", Quote(Utf8(path))}, {"lines", Array(lines)}});
     }
 
+    // ---- over time: values sampled each frame (watch), the hits of a place in code or memory (trace) ---------------
+    //
+    // A place to read is a spec "base[,offset...]:size": base a register (eax ecx edx ebx esp ebp esi edi, in a trace)
+    // or a number. With no offsets it is the base's own value (at most 4 bytes); else the bytes at base + the first
+    // offset, each further offset reading a pointer there first and adding to that ("0x15E8D30,0x10,0x24:4": 4 bytes at
+    // [0x15E8D30 + 0x10] + 0x24; "ecx,0x24:16": 16 bytes at ecx + 0x24). Specs are joined with ';'.
+    //
+    // A trace is a mid-hook at an instruction (mode "hook", writes needed: its first bytes are patched), or a debug
+    // register of every thread (modes "execute", "write" and "access", up to 4 at once; the code is not touched, threads
+    // made later get it within half a second). Each hit records the registers, the code addresses on the stack (its
+    // callers, roughly), the reads, and for a data breakpoint the bytes before and after; the records go to a buffer of
+    // `count` (the first ones, or the last with keep "last"), the callers are counted for all hits.
+
+    constexpr size_t kMaxSessionBytes = 32u << 20;
+    constexpr size_t kMaxSpecs = 32;
+    constexpr size_t kMaxSpecSize = 4096;
+    constexpr size_t kMaxStackAddresses = 16;
+    constexpr size_t kStackScanBytes = 512;
+    constexpr size_t kHookSlots = 8;
+    constexpr size_t kCallerSlots = 512;
+    constexpr size_t kMaxRecordsAnswered = 5000;
+
+    static std::atomic<uint32_t> frameCount{0};    // frames presented
+    static LARGE_INTEGER clockFrequency{};
+
+    uint64_t Microseconds()
+    {
+        LARGE_INTEGER now{};
+        QueryPerformanceCounter(&now);
+        const uint64_t ticks = uint64_t(now.QuadPart), frequency = uint64_t(clockFrequency.QuadPart);
+        return ticks / frequency * 1000000 + ticks % frequency * 1000000 / frequency;
+    }
+
+    struct Regs
+    {
+        uint32_t r[8];      // eax ecx edx ebx esp ebp esi edi, the encoding's order
+        uint32_t eflags;
+        uint32_t eip;       // the hooked instruction; a data breakpoint's next one, after the access
+    };
+    constexpr const char* kRegisterNames[8] = { "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi" };
+
+    struct Spec
+    {
+        int reg = -1;       // the base is a register, or
+        uint32_t base = 0;  // a number
+        std::vector<uint32_t> offsets;
+        uint32_t size = 4;
+    };
+
+    std::vector<Spec> ParseSpecs(const std::string& text, bool registers)
+    {
+        std::vector<Spec> specs;
+        for (size_t begin = 0; begin < text.size();)
+        {
+            size_t end = text.find(';', begin);
+            if (end == std::string::npos)
+                end = text.size();
+            std::string item;
+            for (char c : text.substr(begin, end - begin))
+                if (c != ' ')
+                    item += char(tolower(uint8_t(c)));
+            begin = end + 1;
+            if (item.empty())
+                continue;
+            Spec spec;
+            const size_t colon = item.rfind(':');
+            if (colon != std::string::npos)
+            {
+                spec.size = uint32_t(ParseWhole(item.substr(colon + 1), "size"));
+                item.resize(colon);
+            }
+            std::vector<std::string> parts;
+            for (size_t at = 0;;)
+            {
+                const size_t comma = item.find(',', at);
+                parts.push_back(item.substr(at, comma == std::string::npos ? std::string::npos : comma - at));
+                if (comma == std::string::npos)
+                    break;
+                at = comma + 1;
+            }
+            const auto named = std::find(std::begin(kRegisterNames), std::end(kRegisterNames), parts[0]);
+            if (named != std::end(kRegisterNames))
+            {
+                if (!registers)
+                    throw std::runtime_error("a watch has no registers: " + parts[0]);
+                spec.reg = int(named - std::begin(kRegisterNames));
+            }
+            else
+                spec.base = uint32_t(ParseWhole(parts[0], "base"));
+            for (size_t i = 1; i < parts.size(); ++i)
+                spec.offsets.push_back(uint32_t(ParseWhole(parts[i], "offset")));
+            if (!spec.size || spec.size > kMaxSpecSize || spec.offsets.size() > 16 || (spec.offsets.empty() && spec.size > 4))
+                throw std::runtime_error("a spec reads 1..4096 bytes through at most 16 offsets, a bare value at most 4");
+            specs.push_back(std::move(spec));
+            if (specs.size() > kMaxSpecs)
+                throw std::runtime_error("at most 32 specs");
+        }
+        return specs;
+    }
+
+    // The spec's bytes into out (spec.size of them); false where a pointer on the way or the bytes cannot be read.
+    // (SafeCopy, not VirtualQuery, for this runs in hooks: an unmapped page costs an exception that it catches)
+    bool Resolve(const Spec& spec, const Regs* regs, uint8_t* out)
+    {
+        const uint32_t value = spec.reg >= 0 ? regs->r[spec.reg] : spec.base;
+        if (spec.offsets.empty())
+        {
+            memcpy(out, &value, spec.size);
+            return true;
+        }
+        uint32_t address = value + spec.offsets[0];
+        for (size_t i = 1; i < spec.offsets.size(); ++i)
+        {
+            uint32_t pointer = 0;
+            if (address < 0x10000 || !SafeCopy(&pointer, reinterpret_cast<const void*>(uintptr_t(address)), 4) || pointer < 0x10000)
+                return false;
+            address = pointer + spec.offsets[i];
+        }
+        return address >= 0x10000 && SafeCopy(out, reinterpret_cast<const void*>(uintptr_t(address)), spec.size);
+    }
+
+    size_t SpecsSize(const std::vector<Spec>& specs)
+    {
+        size_t size = 0;
+        for (const auto& spec : specs)
+            size += spec.size;
+        return size;
+    }
+
+    // The executable sections of the loaded modules, sorted, to tell return addresses among the stack's dwords.
+    struct CodeRange { uint32_t begin, end; };
+
+    std::vector<CodeRange> CodeRanges()
+    {
+        std::vector<CodeRange> ranges;
+        HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+        if (snapshot == INVALID_HANDLE_VALUE)
+            return ranges;
+        MODULEENTRY32W entry{sizeof(entry)};
+        for (BOOL more = Module32FirstW(snapshot, &entry); more; more = Module32NextW(snapshot, &entry))
+        {
+            const auto base = reinterpret_cast<uintptr_t>(entry.modBaseAddr);
+            static uint8_t headers[4096];
+            if (!SafeCopy(headers, entry.modBaseAddr, sizeof(headers)))
+                continue;
+            const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(headers);
+            if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0 || size_t(dos->e_lfanew) + sizeof(IMAGE_NT_HEADERS32) > sizeof(headers))
+                continue;
+            const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(headers + dos->e_lfanew);
+            if (nt->Signature != IMAGE_NT_SIGNATURE)
+                continue;
+            const auto* section = IMAGE_FIRST_SECTION(nt);
+            for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section)
+            {
+                if (reinterpret_cast<const uint8_t*>(section + 1) > headers + sizeof(headers))
+                    break;
+                if (section->Characteristics & IMAGE_SCN_MEM_EXECUTE)
+                    ranges.push_back({ uint32_t(base + section->VirtualAddress), uint32_t(base + section->VirtualAddress + section->Misc.VirtualSize) });
+            }
+        }
+        CloseHandle(snapshot);
+        std::sort(ranges.begin(), ranges.end(), [](const CodeRange& a, const CodeRange& b) { return a.begin < b.begin; });
+        return ranges;
+    }
+
+    bool InCode(const std::vector<CodeRange>& ranges, uint32_t address)
+    {
+        auto it = std::upper_bound(ranges.begin(), ranges.end(), address, [](uint32_t a, const CodeRange& r) { return a < r.begin; });
+        return it != ranges.begin() && address < (it - 1)->end;
+    }
+
+    // Whether address begins an instruction: decoded on from `from` (a function's start, if given), else from the
+    // int3 padding before the nearest functions above it (the closest that decodes to it).
+    bool OnInstructionBoundary(uint32_t address, uint32_t from)
+    {
+        ZydisDecoder decoder;
+        ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LEGACY_32, ZYDIS_STACK_WIDTH_32);
+        const auto decodesTo = [&](uint32_t start)
+        {
+            uint32_t at = start;
+            while (at < address)
+            {
+                ZydisDecodedInstruction instruction;
+                if (!ZYAN_SUCCESS(ZydisDecoderDecodeInstruction(&decoder, nullptr, reinterpret_cast<const void*>(uintptr_t(at)), 15, &instruction)))
+                    return false;
+                at += instruction.length;
+            }
+            return at == address;
+        };
+        if (from)
+            return from <= address && address - from < 0x100000 && RangeAccessible(from, address - from + 16, false) && decodesTo(from);
+        MEMORY_BASIC_INFORMATION info{};
+        if (!VirtualQuery(reinterpret_cast<void*>(uintptr_t(address)), &info, sizeof(info)) || !RangeAccessible(address, 16, false))
+            return false;
+        const uint32_t low = (std::max)(uint32_t(reinterpret_cast<uintptr_t>(info.BaseAddress)) + 2, address > 0x4000 ? address - 0x4000 : 0u);
+        int tried = 0;
+        for (uint32_t p = address; p >= low && tried < 8; --p)
+        {
+            const auto* b = reinterpret_cast<const uint8_t*>(uintptr_t(p));
+            if (b[-1] == 0xCC && (b[-2] == 0xCC || b[-2] == 0xC3))
+            {
+                ++tried;
+                if (decodesTo(p))
+                    return true;
+                // (the rest of this run of padding decodes the same)
+                while (p > low && b[-1] == 0xCC)
+                    --p, --b;
+            }
+        }
+        return false;
+    }
+
+    enum class TraceMode { Hook, Execute, Write, Access };
+
+    // A record: the head, the code addresses on the stack, xmm0..7 if asked, the reads.
+    struct TraceHead
+    {
+        uint64_t time;      // microseconds since the trace began
+        uint32_t frame;     // frames presented since it began
+        uint32_t thread;
+        Regs regs;
+        uint32_t before, after;     // a data breakpoint's bytes before the access (as last seen) and after
+        uint32_t failed;    // bit i: read i could not be read
+    };
+
+    struct Trace
+    {
+        std::string name, meta;
+        TraceMode mode = TraceMode::Hook;
+        uint32_t address = 0, length = 0;   // (length: a data breakpoint's 1, 2 or 4 bytes)
+        std::vector<Spec> reads;
+        bool hasWhen = false, whenNotEqual = false;
+        Spec when;
+        std::vector<uint8_t> equals;
+        size_t stackDepth = 4;
+        bool xmm = false, keepLast = false;
+        size_t recordSize = 0, capacity = 0;
+        std::vector<CodeRange> code;
+        uint64_t started = 0;
+        uint32_t startFrame = 0;
+        int slot = -1;          // its hook slot or debug register
+        safetyhook::MidHook hook;
+        std::atomic<int> inside{0};
+        std::atomic<uint64_t> hits{0};      // all, the condition's misses too
+        // Under busy (a spin lock: hits come from any thread, inside hooks, where a waiting thread must not sleep)
+        std::atomic_flag busy;
+        std::vector<uint8_t> records;
+        uint64_t matched = 0, written = 0;
+        uint32_t last = 0;      // a data breakpoint's bytes, as the last hit left them
+        std::array<std::pair<uint32_t, uint32_t>, kCallerSlots> callers{};  // first code address on the stack, hits
+        uint64_t callersOther = 0;
+
+        void Lock() { while (busy.test_and_set(std::memory_order_acquire)) YieldProcessor(); }
+        void Unlock() { busy.clear(std::memory_order_release); }
+    };
+
+    static std::mutex tracesMutex;      // the server thread's: starting, stopping, reading
+    static std::vector<std::unique_ptr<Trace>> traces;
+    static std::array<std::atomic<Trace*>, kHookSlots> hookSlots{};
+    static std::array<std::atomic<Trace*>, 4> debugSlots{};
+    static thread_local bool inHit = false;
+
+    void Hit(Trace& trace, const Regs& regs, const uint8_t* xmm)
+    {
+        trace.hits.fetch_add(1, std::memory_order_relaxed);
+        if (trace.hasWhen)
+        {
+            uint8_t value[64];
+            const bool same = Resolve(trace.when, &regs, value) && !memcmp(value, trace.equals.data(), trace.when.size);
+            if (same == trace.whenNotEqual)
+                return;
+        }
+        // The stack's dwords that point into code: the return addresses, and some stale ones
+        uint32_t stack[kMaxStackAddresses] = {};
+        size_t found = 0;
+        if (trace.stackDepth)
+        {
+            uint32_t words[kStackScanBytes / 4];
+            size_t count = std::size(words);
+            const void* top = reinterpret_cast<const void*>(uintptr_t(regs.r[4]));
+            if (!SafeCopy(words, top, sizeof(words)))
+                count = SafeCopy(words, top, 64) ? 16 : 0;
+            for (size_t i = 0; i < count && found < trace.stackDepth; ++i)
+                if (InCode(trace.code, words[i]))
+                    stack[found++] = words[i];
+        }
+        uint32_t now = 0;
+        const bool data = trace.mode == TraceMode::Write || trace.mode == TraceMode::Access;
+        if (data)
+            SafeCopy(&now, reinterpret_cast<const void*>(uintptr_t(trace.address)), trace.length);
+
+        trace.Lock();
+        ++trace.matched;
+        {
+            const uint32_t key = found ? stack[0] : regs.eip;
+            size_t index = (key * 2654435761u) >> 23 & (kCallerSlots - 1);
+            bool counted = false;
+            for (int probe = 0; probe < 16 && !counted; ++probe, index = (index + 1) & (kCallerSlots - 1))
+            {
+                auto& slot = trace.callers[index];
+                if (slot.second && slot.first != key)
+                    continue;
+                slot.first = key;
+                ++slot.second;
+                counted = true;
+            }
+            if (!counted)
+                ++trace.callersOther;
+        }
+        const uint32_t before = trace.last;
+        trace.last = now;
+        if (trace.written >= trace.capacity && !trace.keepLast)
+            return trace.Unlock();
+        uint8_t* record = trace.records.data() + (trace.written % trace.capacity) * trace.recordSize;
+        ++trace.written;
+        TraceHead head{ Microseconds() - trace.started, frameCount.load(std::memory_order_relaxed) - trace.startFrame, GetCurrentThreadId(), regs,
+                        before, now, 0 };
+        uint8_t* at = record + sizeof(TraceHead);
+        memcpy(at, stack, trace.stackDepth * 4);
+        at += trace.stackDepth * 4;
+        if (trace.xmm)
+        {
+            if (xmm)
+                memcpy(at, xmm, 128);
+            else
+                memset(at, 0, 128);
+            at += 128;
+        }
+        for (size_t i = 0; i < trace.reads.size(); ++i)
+        {
+            if (!Resolve(trace.reads[i], &regs, at))
+                head.failed |= 1u << i;
+            at += trace.reads[i].size;
+        }
+        memcpy(record, &head, sizeof(head));
+        trace.Unlock();
+    }
+
+    // A slot's trace for this hit, kept from being freed while it is used (StopTrace waits for inside to drop).
+    template <typename Slots>
+    void HitSlot(Slots& slots, size_t n, const Regs& regs, const uint8_t* xmm)
+    {
+        Trace* trace = slots[n].load(std::memory_order_acquire);
+        if (!trace)
+            return;
+        ++trace->inside;
+        inHit = true;
+        Hit(*trace, regs, xmm);
+        inHit = false;
+        --trace->inside;
+    }
+
+    template <size_t N>
+    void OnHookHit(SafetyHookContext& ctx)
+    {
+        if (inHit)
+            return;
+        Trace* trace = hookSlots[N].load(std::memory_order_acquire);
+        if (!trace)
+            return;
+        const Regs regs{ { ctx.eax, ctx.ecx, ctx.edx, ctx.ebx, ctx.esp, ctx.ebp, ctx.esi, ctx.edi }, ctx.eflags, trace->address };
+        HitSlot(hookSlots, N, regs, reinterpret_cast<const uint8_t*>(&ctx.xmm0));
+    }
+
+    template <size_t... N>
+    constexpr std::array<safetyhook::MidHookFn, kHookSlots> HookFunctions(std::index_sequence<N...>)
+    {
+        return { &OnHookHit<N>... };
+    }
+    constexpr auto kHookFunctions = HookFunctions(std::make_index_sequence<kHookSlots>());
+
+    // ---- debug registers: set in every thread of the game but the server's own and the refresher's
+
+    static std::mutex debugMutex;
+    static std::array<std::atomic<uint32_t>, 4> debugAddresses{};   // 0: the register is free
+    static std::atomic<uint32_t> debugDr7{0};
+    static DWORD serverThread = 0, refresherThread = 0;
+    static PVOID exceptionHandler = nullptr;
+
+    void ApplyDebugRegisters()
+    {
+        std::lock_guard lock(debugMutex);
+        const DWORD dr7 = debugDr7;
+        DWORD addresses[4];
+        for (int n = 0; n < 4; ++n)
+            addresses[n] = debugAddresses[n];
+        HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snapshot == INVALID_HANDLE_VALUE)
+            return;
+        const DWORD process = GetCurrentProcessId(), self = GetCurrentThreadId();
+        THREADENTRY32 entry{sizeof(entry)};
+        for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry))
+        {
+            if (entry.th32OwnerProcessID != process || entry.th32ThreadID == self || entry.th32ThreadID == serverThread ||
+                entry.th32ThreadID == refresherThread)
+                continue;
+            HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, entry.th32ThreadID);
+            if (!thread)
+                continue;
+            // (nothing between the suspend and the resume takes a lock or allocates: the thread may hold the heap's)
+            if (SuspendThread(thread) != DWORD(-1))
+            {
+                CONTEXT context{};
+                context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+                if (GetThreadContext(thread, &context) && (context.Dr7 != dr7 || context.Dr0 != addresses[0] || context.Dr1 != addresses[1] ||
+                    context.Dr2 != addresses[2] || context.Dr3 != addresses[3]))
+                {
+                    context.Dr0 = addresses[0];
+                    context.Dr1 = addresses[1];
+                    context.Dr2 = addresses[2];
+                    context.Dr3 = addresses[3];
+                    context.Dr7 = dr7;
+                    context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+                    SetThreadContext(thread, &context);
+                }
+                ResumeThread(thread);
+            }
+            CloseHandle(thread);
+        }
+        CloseHandle(snapshot);
+    }
+
+    LONG CALLBACK OnDebugException(EXCEPTION_POINTERS* info)
+    {
+        if (info->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP)
+            return EXCEPTION_CONTINUE_SEARCH;
+        CONTEXT* c = info->ContextRecord;
+        const DWORD registers[4] = { c->Dr0, c->Dr1, c->Dr2, c->Dr3 };
+        bool ours = false, execute = false;
+        for (size_t n = 0; n < 4; ++n)
+        {
+            if (!(c->Dr6 & (1u << n)) || !registers[n])
+                continue;
+            // (also a register a stopped trace left in a thread not refreshed yet: swallowed, never passed on)
+            ours = true;
+            if (((c->Dr7 >> (16 + 4 * n)) & 3) == 0)
+                execute = true;
+            if (inHit || debugAddresses[n] != registers[n])
+                continue;
+            uint8_t xmm[128] = {};
+            if ((c->ContextFlags & CONTEXT_EXTENDED_REGISTERS) == CONTEXT_EXTENDED_REGISTERS)
+                memcpy(xmm, c->ExtendedRegisters + 160, sizeof(xmm));  // (FXSAVE's layout: xmm0 at 160)
+            const Regs regs{ { c->Eax, c->Ecx, c->Edx, c->Ebx, c->Esp, c->Ebp, c->Esi, c->Edi }, c->EFlags, c->Eip };
+            HitSlot(debugSlots, n, regs, xmm);
+        }
+        if (!ours)
+            return EXCEPTION_CONTINUE_SEARCH;
+        c->Dr6 &= ~0xFu;
+        if (execute)
+            c->EFlags |= 0x10000; // RF: the instruction runs instead of trapping again
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    void UpdateDr7()
+    {
+        uint32_t dr7 = 0;
+        for (size_t n = 0; n < 4; ++n)
+        {
+            const Trace* trace = debugSlots[n].load();
+            if (!trace)
+                continue;
+            const uint32_t rw = trace->mode == TraceMode::Execute ? 0 : trace->mode == TraceMode::Write ? 1 : 3;
+            const uint32_t len = trace->mode == TraceMode::Execute || trace->length == 1 ? 0 : trace->length == 2 ? 1 : 3;
+            dr7 |= 1u << (2 * n) | rw << (16 + 4 * n) | len << (18 + 4 * n);
+        }
+        debugDr7 = dr7;
+    }
+
+    // ---- watches: values read each frame (presented, or the game's own while it runs)
+
+    struct WatchHead
+    {
+        uint64_t time;
+        uint32_t frame;
+        uint32_t failed;
+    };
+
+    struct Watch
+    {
+        std::string name, meta;
+        std::vector<Spec> items;
+        bool onGame = false, changesOnly = false, keepLast = true;
+        uint32_t every = 1, ticks = 0;
+        size_t recordSize = 0, capacity = 0;
+        std::vector<uint8_t> records, scratch, previous;
+        bool hasPrevious = false;
+        uint64_t written = 0, samples = 0, started = 0;
+        uint32_t startFrame = 0;
+    };
+
+    static std::mutex watchesMutex;
+    static std::vector<std::unique_ptr<Watch>> watches;
+
+    void SampleWatches(bool game)
+    {
+        std::lock_guard lock(watchesMutex);
+        for (auto& w : watches)
+        {
+            if (w->onGame != game || w->ticks++ % w->every)
+                continue;
+            if (w->written >= w->capacity && !w->keepLast)
+                continue;
+            WatchHead head{ Microseconds() - w->started, frameCount - w->startFrame, 0 };
+            uint8_t* at = w->scratch.data() + sizeof(WatchHead);
+            for (size_t i = 0; i < w->items.size(); ++i)
+            {
+                if (!Resolve(w->items[i], nullptr, at))
+                {
+                    head.failed |= 1u << i;
+                    memset(at, 0, w->items[i].size);
+                }
+                at += w->items[i].size;
+            }
+            ++w->samples;
+            const size_t valueSize = w->recordSize - sizeof(WatchHead);
+            if (w->changesOnly && w->hasPrevious && !memcmp(w->previous.data(), w->scratch.data() + sizeof(WatchHead), valueSize) &&
+                head.failed == *reinterpret_cast<const uint32_t*>(w->previous.data() + valueSize))
+                continue;
+            memcpy(w->previous.data(), w->scratch.data() + sizeof(WatchHead), valueSize);
+            memcpy(w->previous.data() + valueSize, &head.failed, 4);
+            w->hasPrevious = true;
+            memcpy(w->scratch.data(), &head, sizeof(head));
+            memcpy(w->records.data() + (w->written % w->capacity) * w->recordSize, w->scratch.data(), w->recordSize);
+            ++w->written;
+        }
+    }
+
+    // ---- the commands
+
+    bool NameTaken(const std::string& name)
+    {
+        for (const auto& t : traces)
+            if (t->name == name)
+                return true;
+        std::lock_guard lock(watchesMutex);
+        for (const auto& w : watches)
+            if (w->name == name)
+                return true;
+        return false;
+    }
+
+    size_t Capacity(const Request& request, size_t recordSize, size_t fallback)
+    {
+        const size_t count = size_t(request.Number("count", fallback));
+        if (!count || count * recordSize > kMaxSessionBytes)
+            throw std::runtime_error("count is 1.." + std::to_string(kMaxSessionBytes / recordSize) + " for records of " +
+                std::to_string(recordSize) + " bytes");
+        return count;
+    }
+
+    std::string WatchStart(const Request& request)
+    {
+        std::lock_guard lock(tracesMutex);
+        auto w = std::make_unique<Watch>();
+        w->name = request.Get("name");
+        if (w->name.empty() || NameTaken(w->name))
+            throw std::runtime_error("the name is empty or taken: " + w->name);
+        w->items = ParseSpecs(request.Get("items"), false);
+        if (w->items.empty())
+            throw std::runtime_error("no items");
+        w->meta = request.Get("meta", "");
+        w->onGame = request.Get("on", "present") == "game";
+        w->changesOnly = request.Get("changes", "false") == "true";
+        w->keepLast = request.Get("keep", "last") != "first";
+        w->every = (std::max)(1u, uint32_t(request.Number("every", 1)));
+        w->recordSize = sizeof(WatchHead) + SpecsSize(w->items);
+        w->capacity = Capacity(request, w->recordSize, 600);
+        w->records.resize(w->capacity * w->recordSize);
+        w->scratch.resize(w->recordSize);
+        w->previous.resize(w->recordSize - sizeof(WatchHead) + 4);
+        w->started = Microseconds();
+        w->startFrame = frameCount;
+        FusionLog::Write("DebugServer", "Watch", "%s: %zu items, every %u %s frame(s), %zu records\n", w->name.c_str(), w->items.size(),
+            w->every, w->onGame ? "game" : "presented", w->capacity);
+        const std::string name = w->name;
+        std::lock_guard watchLock(watchesMutex);
+        watches.push_back(std::move(w));
+        return Object({{"name", Quote(name)}});
+    }
+
+    std::string TraceStart(const Request& request)
+    {
+        if (!allowWrite)
+            throw std::runtime_error("traces patch code or set debug registers: writes are off ([DEBUG] DebugServerAllowWrite)");
+        std::lock_guard lock(tracesMutex);
+        auto t = std::make_unique<Trace>();
+        t->name = request.Get("name");
+        if (t->name.empty() || NameTaken(t->name))
+            throw std::runtime_error("the name is empty or taken: " + t->name);
+        const std::string mode = request.Get("mode", "hook");
+        t->mode = mode == "hook" ? TraceMode::Hook : mode == "execute" ? TraceMode::Execute : mode == "write" ? TraceMode::Write :
+            mode == "access" ? TraceMode::Access : throw std::runtime_error("mode is hook, execute, write or access");
+        t->address = uint32_t(request.Number("addr"));
+        t->meta = request.Get("meta", "");
+        t->reads = ParseSpecs(request.Get("reads", ""), true);
+        if (request.Has("when"))
+        {
+            const auto when = ParseSpecs(request.Get("when"), true);
+            if (when.size() != 1 || when[0].size > 64)
+                throw std::runtime_error("when is one spec of at most 64 bytes");
+            t->when = when[0];
+            t->equals = FromHex(request.Get("equals"));
+            if (t->equals.size() != t->when.size)
+                throw std::runtime_error("equals has " + std::to_string(t->equals.size()) + " bytes, when reads " + std::to_string(t->when.size));
+            t->whenNotEqual = request.Get("op", "eq") == "ne";
+            t->hasWhen = true;
+        }
+        t->stackDepth = (std::min)(size_t(request.Number("stack", 4)), kMaxStackAddresses);
+        t->xmm = request.Get("xmm", "false") == "true";
+        t->keepLast = request.Get("keep", "first") == "last";
+        t->recordSize = sizeof(TraceHead) + t->stackDepth * 4 + (t->xmm ? 128 : 0) + SpecsSize(t->reads);
+        t->capacity = Capacity(request, t->recordSize, 1000);
+        t->records.resize(t->capacity * t->recordSize);
+        t->code = CodeRanges();
+        const bool data = t->mode == TraceMode::Write || t->mode == TraceMode::Access;
+        if (data)
+        {
+            t->length = uint32_t(request.Number("length", 4));
+            if ((t->length != 1 && t->length != 2 && t->length != 4) || t->address % t->length)
+                throw std::runtime_error("a data breakpoint watches 1, 2 or 4 bytes at an address aligned to them");
+            SafeCopy(&t->last, reinterpret_cast<const void*>(uintptr_t(t->address)), t->length);
+        }
+        for (const auto& other : traces)
+            if (other->address == t->address && (other->mode == TraceMode::Hook) == (t->mode == TraceMode::Hook))
+                throw std::runtime_error("trace " + other->name + " is there already");
+        t->started = Microseconds();
+        t->startFrame = frameCount;
+
+        if (t->mode == TraceMode::Hook)
+        {
+            const bool force = request.Get("force", "false") == "true";
+            if (!force && !OnInstructionBoundary(t->address, uint32_t(request.Number("func", 0))))
+                throw std::runtime_error("the address does not decode as the start of an instruction (give func, the function's start, "
+                    "or force: true)");
+            for (size_t n = 0; n < kHookSlots && t->slot < 0; ++n)
+                if (!hookSlots[n].load())
+                    t->slot = int(n);
+            if (t->slot < 0)
+                throw std::runtime_error("all 8 hook slots are taken");
+            // (the slot is set first: the hook can be hit as soon as it is made)
+            hookSlots[t->slot] = t.get();
+            auto hook = safetyhook::MidHook::create(reinterpret_cast<void*>(uintptr_t(t->address)), kHookFunctions[t->slot]);
+            if (!hook)
+            {
+                hookSlots[t->slot] = nullptr;
+                throw std::runtime_error("safetyhook could not hook there (error " + std::to_string(int(hook.error().type)) + ")");
+            }
+            t->hook = std::move(*hook);
+        }
+        else
+        {
+            for (size_t n = 0; n < 4 && t->slot < 0; ++n)
+                if (!debugSlots[n].load())
+                    t->slot = int(n);
+            if (t->slot < 0)
+                throw std::runtime_error("all 4 debug registers are taken");
+            if (!exceptionHandler)
+                exceptionHandler = AddVectoredExceptionHandler(1, OnDebugException);
+            if (!refresherThread)
+            {
+                // Threads made later get the registers within half a second
+                std::thread([]
+                {
+                    refresherThread = GetCurrentThreadId();
+                    for (;;)
+                    {
+                        Sleep(500);
+                        if (debugDr7)
+                            ApplyDebugRegisters();
+                    }
+                }).detach();
+            }
+            debugSlots[t->slot] = t.get();
+            debugAddresses[t->slot] = t->address;
+            UpdateDr7();
+            ApplyDebugRegisters();
+        }
+        FusionLog::Write("DebugServer", "Trace", "%s: %s at 0x%08X, %zu reads, %zu records\n", t->name.c_str(), mode.c_str(), t->address,
+            t->reads.size(), t->capacity);
+        const std::string name = t->name;
+        traces.push_back(std::move(t));
+        return Object({{"name", Quote(name)}});
+    }
+
+    // Unhooked, and freed once no thread is inside its hit any more.
+    void StopTrace(Trace& t)
+    {
+        if (t.mode == TraceMode::Hook)
+            hookSlots[t.slot] = nullptr;
+        else
+        {
+            debugSlots[t.slot] = nullptr;
+            debugAddresses[t.slot] = 0;
+            UpdateDr7();
+            ApplyDebugRegisters();
+        }
+        // (a thread that read the slot just before it was cleared has not counted itself inside yet)
+        Sleep(100);
+        while (t.inside)
+            Sleep(1);
+        // Unhooked only now: the hook's stub is freed with it, and a thread in our callback returns through the stub
+        if (t.mode == TraceMode::Hook)
+            t.hook.reset();
+        FusionLog::Write("DebugServer", "Trace", "%s stopped after %llu hits\n", t.name.c_str(), (unsigned long long)t.hits.load());
+    }
+
+    std::string TraceStop(const Request& request)
+    {
+        std::lock_guard lock(tracesMutex);
+        const std::string name = request.Get("name");
+        size_t stopped = 0;
+        for (auto it = traces.begin(); it != traces.end();)
+        {
+            if (name == "all" || (*it)->name == name)
+            {
+                StopTrace(**it);
+                it = traces.erase(it);
+                ++stopped;
+            }
+            else
+                ++it;
+        }
+        {
+            std::lock_guard watchLock(watchesMutex);
+            stopped += std::erase_if(watches, [&](const auto& w) { return name == "all" || w->name == name; });
+        }
+        if (!stopped && name != "all")
+            throw std::runtime_error("no trace or watch " + name);
+        return Object({{"stopped", std::to_string(stopped)}});
+    }
+
+    std::string Hex32(uint32_t value)
+    {
+        char buffer[16];
+        snprintf(buffer, sizeof(buffer), "\"0x%08X\"", value);
+        return buffer;
+    }
+
+    // Records from number `from` on (as numbered since the start; the oldest kept if earlier), at most `max`.
+    std::pair<uint64_t, uint64_t> Window(uint64_t wantedFrom, uint64_t limit, uint64_t written, size_t capacity, bool keepLast)
+    {
+        const uint64_t first = keepLast && written > capacity ? written - capacity : 0;
+        const uint64_t kept = (std::min<uint64_t>)(written, capacity);
+        const uint64_t from = (std::max)(first, wantedFrom);
+        return { from, (std::max)(from, (std::min)(first + kept, from + limit)) };
+    }
+
+    std::string TraceRead(const Request& request)
+    {
+        std::lock_guard lock(tracesMutex);
+        const std::string name = request.Get("name");
+        // (read before a trace's spin lock is taken: a throw while it is held would stop the game's threads)
+        const uint64_t wantedFrom = request.Number("from", 0);
+        const uint64_t limit = (std::min<uint64_t>)(request.Number("max", 200), kMaxRecordsAnswered);
+        for (auto& t : traces)
+        {
+            if (t->name != name)
+                continue;
+            std::vector<uint8_t> copy;
+            uint64_t written = 0, matched = 0, other = 0;
+            std::vector<std::pair<uint32_t, uint32_t>> callers;
+            t->Lock();
+            written = t->written;
+            matched = t->matched;
+            other = t->callersOther;
+            const auto [from, to] = Window(wantedFrom, limit, written, t->capacity, t->keepLast);
+            if (to > from)
+                copy.resize(size_t(to - from) * t->recordSize);
+            for (uint64_t n = from; n < to; ++n)
+                memcpy(copy.data() + size_t(n - from) * t->recordSize, t->records.data() + size_t(n % t->capacity) * t->recordSize, t->recordSize);
+            for (const auto& slot : t->callers)
+                if (slot.second)
+                    callers.push_back(slot);
+            t->Unlock();
+            std::sort(callers.begin(), callers.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+            if (callers.size() > 64)
+                callers.resize(64);
+
+            std::vector<std::string> records;
+            for (uint64_t n = from; n < to; ++n)
+            {
+                const uint8_t* record = copy.data() + size_t(n - from) * t->recordSize;
+                TraceHead head;
+                memcpy(&head, record, sizeof(head));
+                const uint8_t* at = record + sizeof(TraceHead);
+                std::vector<std::string> stack;
+                for (size_t i = 0; i < t->stackDepth; ++i)
+                {
+                    uint32_t address;
+                    memcpy(&address, at + i * 4, 4);
+                    if (address)
+                        stack.push_back(Hex32(address));
+                }
+                at += t->stackDepth * 4;
+                Fields fields = { {"n", std::to_string(n)}, {"t", std::to_string(head.time)}, {"f", std::to_string(head.frame)},
+                                  {"tid", std::to_string(head.thread)}, {"regs", Quote(ToHex(reinterpret_cast<const uint8_t*>(&head.regs), sizeof(Regs)))},
+                                  {"stack", Array(stack)} };
+                if (t->length)
+                {
+                    fields.push_back({"before", Quote(ToHex(reinterpret_cast<const uint8_t*>(&head.before), t->length))});
+                    fields.push_back({"after", Quote(ToHex(reinterpret_cast<const uint8_t*>(&head.after), t->length))});
+                }
+                if (t->xmm)
+                {
+                    fields.push_back({"xmm", Quote(ToHex(at, 128))});
+                    at += 128;
+                }
+                std::vector<std::string> reads;
+                for (size_t i = 0; i < t->reads.size(); ++i)
+                {
+                    reads.push_back(head.failed & (1u << i) ? "null" : Quote(ToHex(at, t->reads[i].size)));
+                    at += t->reads[i].size;
+                }
+                fields.push_back({"reads", Array(reads)});
+                records.push_back(Object(fields));
+            }
+            std::vector<std::string> callerItems;
+            for (const auto& [address, count] : callers)
+                callerItems.push_back(Object({{"addr", Hex32(address)}, {"hits", std::to_string(count)}}));
+            static constexpr const char* kModes[] = { "hook", "execute", "write", "access" };
+            return Object({{"name", Quote(t->name)}, {"kind", Quote("trace")}, {"mode", Quote(kModes[int(t->mode)])},
+                {"addr", Hex32(t->address)}, {"meta", Quote(t->meta)}, {"hits", std::to_string(t->hits.load())},
+                {"matched", std::to_string(matched)}, {"written", std::to_string(written)}, {"capacity", std::to_string(t->capacity)},
+                {"keep", Quote(t->keepLast ? "last" : "first")}, {"seconds", Float(float(double(Microseconds() - t->started) * 1e-6))},
+                {"frames", std::to_string(frameCount - t->startFrame)}, {"callers", Array(callerItems)},
+                {"callers_other", std::to_string(other)}, {"records", Array(records)}});
+        }
+        std::lock_guard watchLock(watchesMutex);
+        for (auto& w : watches)
+        {
+            if (w->name != name)
+                continue;
+            const auto [from, to] = Window(wantedFrom, limit, w->written, w->capacity, w->keepLast);
+            std::vector<std::string> records;
+            for (uint64_t n = from; n < to; ++n)
+            {
+                const uint8_t* record = w->records.data() + size_t(n % w->capacity) * w->recordSize;
+                WatchHead head;
+                memcpy(&head, record, sizeof(head));
+                const uint8_t* at = record + sizeof(WatchHead);
+                std::vector<std::string> values;
+                for (size_t i = 0; i < w->items.size(); ++i)
+                {
+                    values.push_back(head.failed & (1u << i) ? "null" : Quote(ToHex(at, w->items[i].size)));
+                    at += w->items[i].size;
+                }
+                records.push_back(Object({{"n", std::to_string(n)}, {"t", std::to_string(head.time)}, {"f", std::to_string(head.frame)},
+                    {"values", Array(values)}}));
+            }
+            return Object({{"name", Quote(w->name)}, {"kind", Quote("watch")}, {"meta", Quote(w->meta)},
+                {"samples", std::to_string(w->samples)}, {"written", std::to_string(w->written)}, {"capacity", std::to_string(w->capacity)},
+                {"keep", Quote(w->keepLast ? "last" : "first")}, {"seconds", Float(float(double(Microseconds() - w->started) * 1e-6))},
+                {"frames", std::to_string(frameCount - w->startFrame)}, {"records", Array(records)}});
+        }
+        throw std::runtime_error("no trace or watch " + name);
+    }
+
+    std::string TraceList()
+    {
+        std::lock_guard lock(tracesMutex);
+        std::vector<std::string> items;
+        static constexpr const char* kModes[] = { "hook", "execute", "write", "access" };
+        for (auto& t : traces)
+        {
+            t->Lock();
+            const uint64_t written = t->written;
+            t->Unlock();
+            items.push_back(Object({{"name", Quote(t->name)}, {"kind", Quote("trace")}, {"mode", Quote(kModes[int(t->mode)])},
+                {"addr", Hex32(t->address)}, {"hits", std::to_string(t->hits.load())}, {"written", std::to_string(written)},
+                {"capacity", std::to_string(t->capacity)}}));
+        }
+        std::lock_guard watchLock(watchesMutex);
+        for (auto& w : watches)
+            items.push_back(Object({{"name", Quote(w->name)}, {"kind", Quote("watch")}, {"samples", std::to_string(w->samples)},
+                {"written", std::to_string(w->written)}, {"capacity", std::to_string(w->capacity)}}));
+        return Object({{"sessions", Array(items)}});
+    }
+
     std::string Handle(const Request& request)
     {
         const std::string command = request.Get("cmd");
@@ -953,6 +1837,11 @@ namespace DebugServer
         if (command == "set_time") return SetTime(request);
         if (command == "set_weather") return SetWeather(request);
         if (command == "freeze") return Freeze(request);
+        if (command == "watch_start") return WatchStart(request);
+        if (command == "trace_start") return TraceStart(request);
+        if (command == "trace_read") return TraceRead(request);
+        if (command == "trace_stop") return TraceStop(request);
+        if (command == "trace_list") return TraceList();
         throw std::runtime_error("unknown command '" + command + "'");
     }
 
@@ -1023,8 +1912,10 @@ namespace DebugServer
             return;
         }
         FusionLog::Write("DebugServer", "", "listening on 127.0.0.1:%d (writes %s)\n", port, allowWrite ? "on" : "off");
+        QueryPerformanceFrequency(&clockFrequency);
         std::thread([listener]
         {
+            serverThread = GetCurrentThreadId();
             for (;;)
             {
                 SOCKET client = accept(listener, nullptr, nullptr);
@@ -1054,8 +1945,17 @@ public:
             DebugServer::allowWrite = iniReader.ReadInteger("DEBUG", "DebugServerAllowWrite", 0) != 0;
             if (port > 0 && port < 65536)
             {
-                FusionFix::onBeforePresent() += []() { DebugServer::TakeScreenshot(); };
-                FusionFix::onGameProcessEvent() += []() { DebugServer::RunMainThreadCalls(); };
+                FusionFix::onBeforePresent() += []()
+                {
+                    DebugServer::TakeScreenshot();
+                    ++DebugServer::frameCount;
+                    DebugServer::SampleWatches(false);
+                };
+                FusionFix::onGameProcessEvent() += []()
+                {
+                    DebugServer::RunMainThreadCalls();
+                    DebugServer::SampleWatches(true);
+                };
                 DebugServer::Start(port);
             }
         };
