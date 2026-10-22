@@ -812,6 +812,11 @@ namespace CarMirrors
     // CRenderPhaseWaterReflection's visibility (vtable slot 3, CE 0xD77550): the same scan from the phase's own
     // viewport, with no interior gate.
     static void (__fastcall* waterVisibility)(uintptr_t phase, void*) = nullptr;
+    // It also skips while bit 0 of +0x22 of the object at this pointer is set (CE 0x16DD67C, read in it right after the
+    // mirror's gate): in places the game keeps without a water reflection (one 20 x 200 m box along a street, the
+    // car under an elevated line), and the car's mirror, through this scan, went white there and stayed so (its
+    // visibility 0.001 ms, 0.03 ms with the bit cleared by hand). Cleared for the mirror's scan and put back.
+    static uintptr_t* waterReflectionZone = nullptr;
 
     // The water reflection's visibility (CE 0xD77550) and draw list (CE 0xD76C10) are skipped while a mirror is on
     // (0x166DA20 == 1): a bathroom mirror has no water to see. A car's mirror is on all the time in first person, and
@@ -866,9 +871,15 @@ namespace CarMirrors
                 flags |= PhaseFarModelsFlag;
                 farModelsPhase = phase;
             }
+            uint8_t* zoneFlags = waterReflectionZone && *waterReflectionZone ? reinterpret_cast<uint8_t*>(*waterReflectionZone + 0x22) : nullptr;
+            const uint8_t zoneBefore = zoneFlags ? *zoneFlags : 0;
+            if (zoneFlags)
+                *zoneFlags = zoneBefore & ~1u;
             inMirrorScan = true;
             waterVisibility(phase, nullptr);
             inMirrorScan = false;
+            if (zoneFlags)
+                *zoneFlags = zoneBefore;
             flags = (flags & ~PhaseLightsFlag) | (before & PhaseLightsFlag);
             if (gated) *mirrorOn = 1;
             ++outdoorScans;
@@ -1529,6 +1540,7 @@ public:
             if (!water.empty() && *water.get_first<uint8_t*>(2) == CarMirrors::mirrorOn)
             {
                 CarMirrors::waterVisibility = water.get_first<void(__fastcall)(uintptr_t, void*)>(0);
+                CarMirrors::waterReflectionZone = *water.get_first<uintptr_t*>(13);
                 CarMirrors::waterGateHooks[0] = safetyhook::create_mid(water.get_first(10), CarMirrors::WaterVisibilityGate);
             }
             // the water reflection's draw list: push ebp / mov ebp, esp / and esp, -10 / sub esp, 1C / cmp byte [mirror on], 1 /
