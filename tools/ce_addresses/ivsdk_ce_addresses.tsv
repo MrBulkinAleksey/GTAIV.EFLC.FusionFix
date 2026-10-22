@@ -1,0 +1,487 @@
+class	name	kind	addr_from_12059	from_pattern	matches	we_have
+CAERadioTrackManager	GetRadioStation	func?		0x945210	1	site
+CAERadioTrackManager	GetRadioStationByHash	func?		0x9450a0	1	
+CAERadioTrackManager	GetRadioStationByName	func		0x945100	1	
+CAERadioTrackManager	m_aRadioStations	data	0x11d76ac		1	
+CAERadioTrackManager	m_bLazlowStationLocked	data	0x1037606	0x1037606	1	
+CAERadioTrackManager	m_bTaxiGarageRadioState	data	0x1238955	0x1238955	1	
+CAERadioTrackManager	m_nNumRadioStations	data	0x11d74f1	0x11d74f1 0x11d76ac	1	global
+CAchievements	AwardAchievement				0	
+CAchievements	IsAchievementUnlocked				0	
+CAnimManager	AddAnimAssocDefinition	func?		0xc6e1e0	1	
+CAnimManager	Initialise	func?		0xc6fa80	1	
+CAnimManager	ms_aAnimAssocDefinitions	data	0x16dd640	0x16dd640	1	
+CAnimManager	ms_numAnimAssocDefinitions	data	0x16dd638	0x16dd638	1	
+CAudioZones	LastUpdateCoors	data	0x166ea40	0x166ea40 0x166ea44 0x166ea48	1	
+CAudioZones	Update	func?		0xb5af10	1	
+CAudioZones	m_NumActiveBoxes	data	0x166e9dc	0x166e9dc	1	
+CAudioZones	m_NumActiveSpheres	data	0x166e9d8	0x166e9d8	1	
+CAudioZones	m_NumBoxes	data	0x166e9d4	0xfe87a4 0x166e9d4	1	
+CAudioZones	m_NumSpheres	data	0x166e9d0	0x166e9d0 0x166ea68	1	
+CAudioZones	m_aActiveBoxes	data	0x166ea08	0x166e9dc 0x166ea08	1	
+CAudioZones	m_aActiveSpheres	data	0xb5affe	0x166e9d8 0x166e9e0	1	
+CBaseDC	Add				0	
+CBaseDC	new	func?		0x8dc3a0	1	call,literal,site
+CBaseModelInfo	SetAnimGroup	func		0xb5a5e0	1	
+CBaseModelInfo	SetTexDictionary	func		0xb5ac60	1	call
+CBuilding	ReplaceWithNewModel	func?		0xa0d3b0	1	
+CCam	Activate	func?		0xa7c720	1	
+CCam	GetCamOfType	func?		0xa7c740	1	
+CCamera	CreateCam	func?		0xa86c40	1	
+CCamera	TheCamera	data	0x103e498		2	global
+CCamera	g_pFinalCam	data	0x103e49c	0x103e498	1	global
+CCheat	m_bHasPlayerCheated	data	0x12b6170	0x12b6170	1	
+CClock	CurrentDay	data	0x1295834	0x1295834	1	
+CClock	ms_nGameClockDays	data	0x1295844	0x1295844	1	
+CClock	ms_nGameClockForcedHours	data	0x1295854		1	global
+CClock	ms_nGameClockForcedMinutes	data	0x1295858	0x1295858	1	global
+CClock	ms_nGameClockHours	data	0x1295848	0x1173608 0x1295848	1	global
+CClock	ms_nGameClockMinutes	data	0x1295848	0x1295848 0x129584c	1	global
+CClock	ms_nGameClockMonth	data	0x1295840	0x1295840 0x1295844	1	
+CClock	ms_nGameClockSeconds	data	0x1295850	0x1295850	1	global
+CClock	ms_nMillisecondsPerGameMinute	data	0x1295830	0x1295830	1	
+CCutsceneMgr	ms_running	data	0x129475c	0x129475c	1	global
+CDraw	CalculateAspectRatio	func?		0x8f7940	1	
+CDraw	Scene	data	0x118d7f0	0x118d7f0	1	global
+CDrawCurvedWindowDC	CDrawCurvedWindowDC	func?		0x8dabe0	1	
+CDrawRadioHudTextDC	CDrawRadioHudTextDC	func		0x8db600	1	
+CDrawRectDC	CDrawRectDC	func?		0x8db680	1	
+CDrawSpriteDC	CDrawSpriteDC	func		0x8db820	1	
+CDrawSpriteUVDC	CDrawSpriteUVDC	func		0x8dba40	1	
+CDynamicEntity	GetBoneMatrix	func?		0xa49320	1	
+CDynamicEntity	GetBoneMatrix2				0	
+CDynamicEntity	PlayAnimation	func?		0xb54c60	1	
+CEpisodes	IsEpisodeAvailable	func?		0x934b20	1	
+CEpisodes	TheEpisodes	data	0x1bb5624	0x1bb5624	1	global
+CExplosion	ms_ExplosionInfo	data	0x12f8448		1	
+CFileLoader	LoadLevel				0	
+CFileLoader	LoadObject	func?		0x9d73f0	1	
+CFileLoader	LoadObjectTypes	func?		0x9d73f0	1	
+CFileLoader	LoadPedObject	func?		0x9d83b0	1	
+CFileLoader	LoadSpeechData	func?		0x89cd70	1	
+CFileLoader	LoadVehicleObject	func?		0x9d9d90	1	
+CFileLoader	LoadWater	func?		0xad6800	1	
+CFileLoader	MountWavePack	func?		0x889d70	1	
+CFileLoader	sAmbientDataPath	data	0xee447c	0xee447c	1	
+CFileLoader	sButtonsTxdPath	data	0xe84d68	0xe84d68	1	
+CFileLoader	sGameRpfPath	data	0xfaca30	0xedc7d0 0xedc7e8	1	
+CFileLoader	sProceduralDatPath	data	0xec6258	0xec6258 0xec6270 0xec6274	1	
+CFileLoader	sScenariosDatPath	data	0xed4ce4	0xed4ce4	1	
+CFileLoader	sStreamIniPath	data	0xe8136c	0xe8136c	1	
+CFileMgr	CloseFile	func		0x8c4650	1	call
+CFileMgr	LoadLine	func?		0x8c4e70	1	call
+CFileMgr	OpenFile	func?		0x8c4cf0	1	
+CFont	Initialise	func?		0x91f0f0	1	
+CFont	SetColor	func?		0xb91cd0	1	
+CFont	SetScale	func?		0xb91ea0	1	
+CFrontEnd	SwitchOffWaypoint	func?		0x8bf710	1	
+CFrontEnd	SwitchOnWaypoint	func?		0x8bf7a0	1	
+CFrontEnd	ToggleWaypoint	data?		0x11e622f	1	
+CFrontEnd	g_iUserWaypointID	data	0x1160c4c	0x1160c4c	1	
+CFrontEnd	vMapCursor	data	0x1161810	0x18b7a8c	1	global
+CGame	Initialise	func		0x9dd630	1	
+CGame	IsGameRestarting	func?		0x8be0e0	1	call
+CGame	m_nCurrentEpisode	data	0x11d6fd4	0x11d6fd4	1	global
+CGame	m_nCurrentEpisodeMenu	data	0x11d6fd0	0x11d6fd0	1	global
+CGame	m_nForcedEpisode	data	0x5a49bc	0x11d6fe0	1	
+CGame	m_nMenuState	data	0x1160c24	0x1160c24	1	global
+CGame	sGameFile	func	0x5c0ebe	0x5c12a8	1	
+CGameConfigReader	GameConfigReader	data	0x1bb5628	0x19d308c 0x1bb5628	1	global
+CGameConfigReader	LoadFile	func?		0x9da1e0	1	
+CGameLogic	Load	func?		0x942860	1	
+CGameLogic	RestorePlayerStuffDuringResurrection	func?		0x942c70	1	
+CGameLogic	Save	func?		0x9430a0	1	
+CGameLogic	bPenaltyForArrestApplies	data	0x1037599	0x1037599	1	
+CGameLogic	bPenaltyForDeathApplies	data	0x1037598	0x1037598	1	
+CGangs	Gang	data	0x171f9d0		2	
+CGangs	Load	func?		0xd2a840	1	
+CGangs	Save	func?		0xd2a910	1	
+CGarage	IsPointInsideGarage	func?		0xb2d8a0	1	
+CGarage	PlayerArrestedOrDied	func?		0xb2de20	1	
+CGarage	StoreAndRemoveCarsForThisHideOut	func?		0xb2e290	1	
+CGarage	TidyUpGarageClose	data?		0x12e22a4	1	global
+CGarage	Update	func?		0xb2e830	1	
+CGarages	BombsAreFree	data	0x165fd44		2	
+CGarages	CloseHideOutGaragesBeforeSave	func		0xb2c9d0	1	
+CGarages	Init	func?		0xb2cf10	1	
+CGarages	LastGaragePlayerWasIn	data	0x165fd50	0x165fd50	1	
+CGarages	LastTimeHelpMessage	data	0x165fd4c		2	
+CGarages	Load	func?		0xb2dc70	1	
+CGarages	MessageEndTime	data	0x165fd30	0x16613e8	1	
+CGarages	MessageStartTime	data	0x165fd30	0x16613e8	1	
+CGarages	NoResprays	data	0x165fd46		2	
+CGarages	NumGarages	data	0x165fd28		2	
+CGarages	NumSafehouseGarages	data	0x165fd54		2	
+CGarages	PlayerArrestedOrDied	func?		0xb2de70	1	
+CGarages	RespraysAreFree	data	0x165fd45		2	
+CGarages	Save	func?		0xb2df70	1	
+CGarages	Shutdown	func?		0xb2e0b0	1	
+CGarages	Update	func?		0xb2f730	1	
+CGarages	aCarsInSafeHouse	data	0x1c990c0		2	
+CGarages	aGarages	data	0x1660308	0x1660308	1	
+CGarages	bCamShouldBeOutside	data	0x165fd48	0x165fd48 0x1660308	1	
+CGarages	bHasResprayHappened	data	0x165fd47	0x165fd47	1	
+CGenericGameStorage	GetDefaultPCSaveFileName	func		0x8c9830	1	call,site
+CGenericGameStorage	LoadDataFromWorkBuffer	func?		0x8cc2c0	1	
+CGenericGameStorage	SaveDataToWorkBuffer	func?		0x8cc2c0	1	
+CGenericGameStorage	ms_ValidSaveName	data	0x1173100	0x1173100	1	
+CHudColours	ms_HudColour	data	0x118dd98	0x118dd98	1	global
+CImgFileMgr	CdStreamAddImage	func?		0xa95aa0	1	call
+CImgFileMgr	CloseAllImages	func?		0xa961e0	1	
+CImgFileMgr	ms_ImgFiles_FileHandles	data	0x12fb450		1	
+CImgFileMgr	ms_ImgFiles_FileNames	data	0x12fb3c8	0x110c0a0	1	global
+CIplStore	LoadIpls	func?		0xa93200	1	
+CIplStore	SetIfIplIsRequired	func?		0xa935c0	1	
+CIplStore	SetIfIplIsRequiredReducedBB	func?		0xa935f0	1	
+CIplStore	SetIplsRequired	func		0xa93640	1	
+CIplStore	gbIplsNeededAtPosn	data	0x12fb25c	0x12fb25c	1	
+CIplStore	gvecIplsNeededAtPosn	data	0x103e8b0		3+	
+CIplStore	ms_pPool	data	0x12fb258	0x12fb258	1	
+CIplStore	ms_pQuadTree	data	0x12fb260	0x12fb260	1	
+CMenuManager	m_aRemapOptions	data	0x10401f2		1	
+CMenuManager	m_bAutoSave	data	0x1160c50	0x1160c50	1	
+CMenuManager	m_bClipCapture	data	0x101160e		2	
+CMenuManager	m_bHeliMouseControls	data	0x1160ed8	0x1160ed8	1	
+CMenuManager	m_bHudOn	data	0x1160c8c	0x1160c8c	1	
+CMenuManager	m_bInvertMouseX	data	0x1160c60	0x1160c60	1	
+CMenuManager	m_bInvertRightStickX	data	0x1160c64	0x1160c64	1	
+CMenuManager	m_fBrightness	data	0x1036b90		0	
+CMenuManager	m_fContrast	func	0x92ffa3		0	
+CMenuManager	m_fSaturation	data	0x1036b98	0x1036b98	1	
+CMenuManager	m_nBrightness	data	0x1160c78	0x1160c78	1	
+CMenuManager	m_nContrast	data	0x1160c7c	0x1160c7c	1	
+CMenuManager	m_nMouseSensitivity	data	0x1160e70	0x1160e70	1	
+CMenuManager	m_nRadarMode	data	0x1160c9c	0x1160c9c	1	
+CMenuManager	m_nSaturation	data	0x1160c80	0x1160c80	1	
+CMenuManager	m_nVehicleDensity	data	0x1160e9c	0x1160e9c	1	global
+CModelInfo	AddAtomicModel	func?		0x9dbd20	1	
+CModelInfo	AddPedModel	func?		0x9dbe90	1	
+CModelInfo	AddVehicleModel	func?		0x9dbf70	1	
+CModelInfo	GetModelInfo	func?		0x9dc750	1	
+CModelInfo	Initialise	func?		0x9dd320	1	
+CModelInfo	ms_modelInfoPtrs	data	0x1295cd8		3+	global,literal
+CNetwork	CheckFramerate	func?		0x4796a0	1	
+CNetwork	IsNetworkGameRunning	func?		0x47c2e0	1	call
+CNetwork	m_bIsHostingGame	data	0x17f5fc7		2	
+CNetwork	m_bNetworkSession	data	0x11d6fc4	0x11d6fcc 0x11d6fcd	1	
+CNetwork	m_nNetworkStatus	data	0x17f5ea4		3+	
+CNetwork	m_pClientBroadcastVarSize	data	0x167e2c4		2	
+CNetwork	m_pClientBroadcastVars	data	0x167e2bc		2	
+CPad	GetPad	func	0x8f69e0	0x8f69e0	1	
+CPad	Pads	data	0x117e700	0x117e700	1	
+CPed	GetPadFromPlayer	func?		0xa2b350	1	call
+CPed	GetVehicle				2	
+CPed	ProcessHeading	func?		0x9e3200	1	
+CPed	ProcessWeaponSwitch	func?		0xa2c500	1	
+CPedFactory	PedFactory	data	0x166d9f4		3+	
+CPedTasks	AssignTask	func?		0xb81480	1	
+CPedType	FindPedType	func?		0xc74230	1	
+CPedType	IsPedTypePlayer	func?		0xc742d0	1	
+CPhysical	GetConstrainedCollider	func?		0xa31ac0	1	
+CPhysical	_ProcessWater	func?		0xb26910	1	
+CPickup	Destroy	func?		0xb0e120	1	
+CPickups	CreatePickup	func?		0xb0c150	1	
+CPickups	CreateTemporaryRadarBlipForPickup	func?		0x901bb0	1	
+CPickups	CreateTemporaryRadarBlipsForPickupsInArea	func?		0xb0b8d0	1	
+CPickups	DoPickUpEffects	func?		0xb0aa20	1	
+CPickups	Pickups	func	0x2123028		3+	
+CPickups	RemovePickup				3+	
+CPickups	RemoveTemporaryRadarBlipsForPickups	func?		0xb0e280	1	
+CPickups	Reset	func?		0xb0cd60	1	
+CPickups	Shutdown	func?		0xb0e8a0	1	
+CPlayerInfo	FindPlayerCentreOfWorld	func?		0x93f070	1	
+CPlayerInfo	FindPlayerPed	func	0x93f050	0x93f050	1	call
+CPlayerInfo	FindPlayerVehicle	func?		0x8d2110	1	site
+CPlayerInfo	GetPlayerInfo	func?		0x93fbe0	1	
+CPlayerInfo	IsPlayerActive	func?		0xbda440	1	
+CPlayerInfo	KillPlayerOutsideWorld	func?		0x8d3580	1	
+CPool	CPool	func?		0xc6c5f0	1	
+CPool	GetAt	func?		0x499d20	1	call
+CPool	GetIndex	func	0x4b7020	0x4b7020	1	
+CPool	New	func?		0x499940	1	call
+CPools	ms_pAnimBlenderPool	data	0x1669d70	0x1669d70	1	
+CPools	ms_pBuildingPool	data	0x12bd0e8	0x12bd0e8 0x1bb5624	1	global,literal
+CPools	ms_pCameraPool	data	0x12fb1a0		3+	global
+CPools	ms_pDummyPedPool	data	0x18b6f10	0x18b6f10	1	
+CPools	ms_pDummyTaskPool	data	0x171faf4		3+	
+CPools	ms_pFragInstNMGtaPool	data	0x171c120	0x171c120	1	
+CPools	ms_pInteriorInstPool	data	0x12fb214		3+	
+CPools	ms_pIplPool	data	0x12fb258		3+	
+CPools	ms_pObjectPool	data	0x1632c60	0x1632c60	1	global
+CPools	ms_pPedDataPool	data	0x18b6f20	0xfe0aa4 0x18b6f20	1	
+CPools	ms_pPedIntelligencePool	data	0x18b6f0c	0x18b6f0c	1	
+CPools	ms_pPedMoveBlendPool	data	0x18b6f18		3+	
+CPools	ms_pPedPool	data	0x18b6f1c		3+	global
+CPools	ms_pPedTargettingPool	data	0x171f9c0	0x171f9c0	1	
+CPools	ms_pQuadTreeNodePool	data	0x12fb254	0x12fb254	1	
+CPools	ms_pScriptStorePool	data	0x167f594	0x1047fb4 0x167f594	1	global
+CPools	ms_pTaskPool	data	0x167e2a0	0x167e2a0	1	global
+CPools	ms_pTxdPool	data	0x11764c0		3+	global
+CPools	ms_pUnkPedDataPool	data	0x18b6f14	0x18b6f14	1	
+CPools	ms_pVehiclePool	data	0x12e22a4		3+	global
+CPools	ms_pVehicleStructPool	data	0x12fa84c		2	
+CPopulation	Initialise	func?		0xb3a0c0	1	
+CPopulation	PedDensityMultiplier	data	0x1045928	0x1045928 0x1045938	1	
+CPopulation	RemovePed	func?		0xb3bcd0	1	
+CPopulation	ScenarioPedDensityMultiplier	data	0x104592c		2	
+CPopulation	m_AllRandomPedsThisType	data	0x1045938	0x1045938	1	
+CPopulation	ms_nNumCop	data	0x1662460	0x1662460	1	
+CPopulation	ms_nNumEmergency	data	0x1662464	0x1045928 0x1045938 0x1662464	1	
+CProjectileInfo	AddProjectile				3+	
+CQuadTreeNode	CQuadTreeNode	func?		0xa91520	1	
+CQuadTreeNode	ForAllMatching	func?		0xa91840	1	
+CRadar	ConvertUniqueBlipToActualBlip				0	
+CRadar	CreateBlip	func?		0x901770	1	
+CRadar	DrawBlipNames				2	
+CRadar	DrawBlips	func?		0x904380	1	
+CRadar	DrawFrameBack	func?		0x902e60	1	
+CRadar	DrawFrameFront				0	
+CRadar	DrawRoute	func?		0x936510	1	call
+CRadar	IsBlipIdInUse	func?		0x905790	1	
+CRadar	RadarBlipSpriteFilenames	data	0x106c510	0x106c510	1	
+CRadar	RadarBlipSprites	data	0x118f4f0		2	
+CRadar	RadarTrace	data	0x118f6f8		3+	
+CRadar	RemoveBlip	func?		0x9061e0	1	
+CRadar	SetBlipParameter	func?		0x908720	1	
+CRadar	SetBlipParameter_2	func?		0x908b60	1	
+CRadar	fRange	data	0x118f4b0	0x118f4b0 0x1191268	1	
+CRadar	iBlipHovering	data	0x10344a8	0x10344a8 0x118f6f8	1	
+CRadar	iCentreBlip	data	0x103449c	0x103449c	1	
+CRadar	iNorthBlip	data	0x10344a0	0x10344a0	1	
+CRadar	iNumCreatedBlipSprites	data	0x900d19	0x118f4e0	1	
+CRadar	iSimpleBlip	data	0x1034494		3+	
+CRadar	m_pRadarRingBack	data	0x10344d0	0x10344d0 0x18b677c	1	
+CRadar	vec2DRadarOrigin	data	0x1161824	0x1161504 0x1161824	1	global
+CRadioStation	ForceTrack	func?		0x945120	1	
+CReplay	Mode	data	0x11f7060	0x11f7058 0x11f7060 0x11f7078	1	global
+CRestart	ExtraHospitalRestartCoors	data	0x12dde70		2	
+CRestart	ExtraHospitalRestartHeading	data	0x12dd8c8		2	
+CRestart	ExtraHospitalRestartWhenToUse	data	0x12dd8cc		2	
+CRestart	ExtraPoliceStationRestartCoors	data	0x12dd8f0		2	
+CRestart	ExtraPoliceStationRestartHeading	data	0x12dd8d0		3+	
+CRestart	ExtraPoliceStationRestartWhenToUse	data	0x12dd8d4		2	
+CRestart	HospitalRestartHeadings	data	0x12dd640		3+	
+CRestart	HospitalRestartPoints	data	0x12ddc80		2	
+CRestart	HospitalRestartWhenToUse	func	0x9ea862		3+	
+CRestart	Load	func?		0xa2dfd5	1	
+CRestart	NumberOfHospitalRestarts	data	0x12dd690		3+	
+CRestart	NumberOfPoliceRestarts	data	0x12dd694		2	
+CRestart	NumberOfSafehouses	data	0x12dd738		2	
+CRestart	OverrideHeading	data	0x12dd8c4		2	
+CRestart	OverridePosition	data	0x12dde60		2	
+CRestart	PoliceRestartHeadings	data	0x12dd698		2	
+CRestart	PoliceRestartPoints	data	0x12ddd20		2	
+CRestart	PoliceRestartWhenToUse	data	0x12dd6e8		2	
+CRestart	Safehouses	data	0x12ddb10		2	
+CRestart	Save	func?		0xa2dfd0	1	call
+CRestart	bFadeInAfterNextDeath	data	0x12dd8c1		2	
+CRestart	bOverrideRestart	data	0x12dd8c0		3+	
+CSaveGarage	CopyGarageIntoSaveGarage	func?		0xb2ca30	1	
+CSaveGarage	CopyGarageOutOfSaveGarage	func?		0xb2cac0	1	
+CShaderLib	GetTechniqueID	func?		0x42ef30	1	call,site
+CShadows	AddSceneLight	func?		0xabccd0	1	literal
+CShadows	RenderCorona				0	
+CShadows	StoreStaticShadow	func?		0xb8e4f5	1	
+CSprite2d	Delete				3+	
+CSprite2d	SetTexture	func?		0x8d4d30	1	call
+CStats	GetStatValue	func?		0x9f6460	1	
+CStats	LastMissionPassedName	data	0x1173118		1	
+CStats	SetStatValue	func?		0x9f8630	1	
+CStore	ms_pedModelStore	data	0x103ada0	0x103ada0 0x103adac 0x103addc	1	
+CStore	ms_vehicleModelStore	data	0x103ad94	0x103ada0 0x103adac 0x103addc	1	
+CStoredCar	RestoreCar				0	
+CStoredCar	StoreCar	func?		0xd8ded0	1	
+CStreaming	AddImageList				0	
+CStreaming	ClosePlayerPackfile	func?		0xab8f30	1	
+CStreaming	GetPlayerPackfile	func?		0xab7550	1	
+CStreaming	LoadAllRequestedModels	func?		0x8d8570	1	
+CStreaming	RequestModel	func?		0x8d8750	1	
+CStreaming	ScriptRequestModel	func?		0xbb7d80	1	
+CStreaming	m_nPedModelBudget	data	0x10496d8		2	global
+CStreaming	m_nVehicleModelBudget	func	0xa7a039	0xa7a039	1	
+CStreaming	ms_disableStreaming	data	0x12fb3b1	0x12fb3b1	1	global
+CStuntJumpManager	Load	func?		0xcf3630	1	
+CStuntJumpManager	Save	func?		0xcf3730	1	
+CStuntJumpManager	m_bActive	data	0x171ddf4	0x171ddf4	1	
+CStuntJumpManager	m_iNumCompleted	data	0x171ddfc	0x171ddfc	1	
+CStuntJumpManager	m_iNumJumps	data	0x171de00		1	
+CStuntJumpManager	mp_poolStuntJumps	data	0x171de08		1	
+CTaskComplexClimbLadder	CTaskComplexClimbLadder	func?		0xcf7490	1	
+CTaskComplexDie	CTaskComplexDie	func?		0xcc9fb0	1	
+CTaskComplexInWater	CTaskComplexInWater	func?		0xbdec50	1	
+CTaskComplexMobileMakeCall	CTaskComplexMobileMakeCall	func?		0xc7a2c0	1	
+CTaskComplexNM	CTaskComplexNM	func?		0xcd9c60	1	
+CTaskComplexNewGetInVehicle	CTaskComplexNewGetInVehicle	func?		0xd311c0	1	
+CTaskComplexPlayerOnFoot	CTaskComplexPlayerOnFoot	func?		0xa6cd80	1	
+CTaskComplexPlayerSettingsTask	CTaskComplexPlayerSettingsTask	func		0xb78e60	1	
+CTaskComplexWander	CTaskComplexWander	func?		0xcac620	1	
+CTaskComplexWanderStandard	CTaskComplexWanderStandard	func?		0x5d3573	1	
+CTaskSimpleNMHighFall	CTaskSimpleNMHighFall	func?		0xcda010	1	call,site
+CTaskSimpleNMJumpRollFromRoadVehicle	CTaskSimpleNMJumpRollFromRoadVehicle	func?		0xcda060	1	
+CTaskSimpleSidewaysDive	CTaskSimpleSidewaysDive	func		0x4c5420	1	
+CText	Get	func?		0x9d9ce0	1	
+CText	Get_2				0	
+CText	TheText	data	0x116bff0		1	global
+CTheScripts	AddToBuildingSwapArray	func?		0x948480	1	
+CTheScripts	BuildingSwapArray	data	0x11d9110		2	
+CTheScripts	FindNativeAddress	func	0x86e508	0x86fce0	1	site
+CTheScripts	GetNameOfCurrentScript	func		0x94b870	1	
+CTheScripts	GivePedScriptedTask	func?		0x94bd60	1	
+CTheScripts	IsPlayerOnAMission	func		0x94cf80	1	call
+CTheScripts	Load	func?		0x94d390	1	
+CTheScripts	RegisterNative	func?		0x86e820	1	site
+CTheScripts	RegisterNativeNoChecks	func		0x86fd40	1	call
+CTheScripts	Save	func?		0x94e400	1	
+CTheScripts	UndoBuildingSwaps	func?		0x94ec70	1	
+CTheScripts	m_aGlobalVariables	data	0x18b9b3c	0x18b9b38	1	global
+CTheScripts	m_pCurrentThread	data	0x1bb54dc	0x1bb54dc	1	global
+CTheZones	Add	func?		0xaf8a70	1	
+CTheZones	GetZoneNameByCoords	func?		0xaf8c50	1	
+CTheZones	GetZoneNameByIndex	func		0xaf8e30	1	
+CTheZones	GetZoneNumberByName	func?		0xaf8ce0	1	
+CTheZones	IsPointInZone	func?		0xaf9170	1	
+CTheZones	Load	func?		0xaf9110	1	
+CTheZones	MapZoneArray	data	0xaf90f0		2	
+CTheZones	Reset	func?		0xaf8e60	1	
+CTheZones	Save	func?		0xaf93d0	1	
+CTheZones	TotalNumberOfMapZones	data	0x15ffbc0	0x15fccf4 0x15ffbc0	1	
+CTheZones	ZonesRevealed	data	0x15ffbd4		2	
+CTheZones	ZonesVisited	data	0x15ffbd8		2	
+CTimeCycle	InitModifiers	func?		0xaf0ce0	1	site
+CTimeCycle	Initialise	func?		0xaefeb0	1	site
+CTimeCycle	sTheTimeCycle	data	0x15e8d30	0x15e8d30	1	global
+CTimeCycle	sTimecycleModifierPath	data	0xea817c	0xea817c 0xea818c 0x15dbdec	1	global
+CTimer	GetIsPaused	func		0x4c4450	1	site
+CTimer	m_CodePause	data	0x1173591	0x1173591	1	global
+CTimer	m_FrameCounter	func	0x8d0f84		0	
+CTimer	m_UserPause	data	0x1173590	0x1173590	1	global
+CTimer	m_sTimerLength	data	0x1295830	0x1295830	1	
+CTimer	m_snTimeInMilliseconds	data	0x1173594		0	global
+CTimer	ms_fMaxTimeStep	data	0x1032344		3+	
+CTimer	ms_fMinTimeStep	data	0x1032340	0x1032340	1	
+CTimer	ms_fTimeScale	data	0x103234c	0x103234c 0x1165880	1	global
+CTimer	ms_fTimeScale2	data	0x1032354	0xfe88e8 0x1032354	1	global
+CTimer	ms_fTimeScale3	data	0x1032350	0x103234c 0x1032350	1	global
+CTimer	ms_fTimeStep	data	0x11735bc	0x11735bc 0x11735ec	1	global
+CTimer	ms_fTimeStepNonClipped	data	0x11735ec	0xfe88e8 0x11735ec	1	global
+CTxdStore	AddRef	func		0x5b6110	1	
+CTxdStore	AddTxdSlot	func		0x5b6030	1	
+CTxdStore	FindTxdSlot	func		0x5b6750	1	
+CTxdStore	FindTxdSlot_2	func		0x5b60f0	1	call
+CTxdStore	GetTexture	func?		0x42d300	1	
+CTxdStore	LoadTxd	func		0x8e0340	1	
+CTxdStore	PopCurrentTxd	func?		0x8e0580	1	call
+CTxdStore	PushCurrentTxd	func?		0x8e05e0	1	
+CTxdStore	SetCurrentTxd	func?		0x8e0710	1	call
+CTxdStore	ms_pStoredTxd	data	0x1bb5554		3+	
+CVehicle	GetCameraType	func?		0xa132a0	1	
+CVehicle	GetNumberOfWheelsTouchingGround	func?		0xa493e0	1	
+CVehicle	GetRemapIndex	func?		0xa49300	1	
+CVehicle	GetSeatPartId	func?		0xa49680	1	
+CVehicle	GetVehicleLightsStatus	func?		0xa497a0	1	
+CVehicle	HeightAboveCeiling	func?		0xa49bc0	1	site
+CVehicle	IsDriver	func?		0xa4a9e0	1	
+CVehicle	MakeDirty	func?		0xa4b670	1	
+CVehicle	ProcessAirControl	func?		0xc36280	1	
+CVehicle	ProcessRespot				0	
+CVehicle	SetRemap	func?		0xa4d060	1	
+CVehicle	UsesSiren	func?		0xa4aa10	1	
+CVehicleFactory	VehicleFactory	data	0x166d9fc	0x166d9fc	1	
+CVehicleModelInfo	ChooseVehicleColour	func?		0xa77c40	1	
+CVehicleModelInfo	GetNumberOfSeats	func?		0xa78680	1	
+CVehicleModelInfo	SetHandlingParams	func?		0xa7a7a0	1	
+CVehicleModelInfo	SetSecondaryAnimGroup	func		0xa7a720	1	
+CVehicleModelInfo	ms_vehicleColourTable	func	0xd26193	0xd26190	1	
+CVisibilityPlugins	m_carLodDistanceHigh	data	0x103cc80	0x103cc80	1	
+CVisibilityPlugins	m_carLodDistanceMed	data	0x103cc84	0x103cc84	1	
+CVisibilityPlugins	m_pedInCarLodDistanceHigh	data	0x1050d08	0x1050d08 0x12b41c8	1	
+CVisibilityPlugins	m_pedLodDistanceHigh	data	0x1050d04	0x1050d04	1	
+CVisibilityPlugins	m_pedLodDistanceLow	data	0x1050d10	0x1050d10 0x105c884	1	global
+CVisibilityPlugins	m_pedLodDistanceMed	data	0x1050d0c	0x1050d08 0x1050d0c	1	
+CVisibilityPlugins	m_pedLodDistanceSlod	data	0x1050d18	0x1050d18	1	
+CVisibilityPlugins	m_pedLodDistanceVlow	data	0x1050d14	0x1050d14 0x1050d18	1	
+CVisibilityPlugins	sStipplePath	data	0xea7634		2	
+CWanted	MaximumWantedLevel	data	0x103b6ec	0x103b6f0	1	
+CWanted	nMaximumWantedLevel	data	0x103b6f0	0x103b6f0	1	
+CWeaponInfo	FindWeaponDamageType	func		0xaf6110	1	
+CWeaponInfo	FindWeaponFireType	func		0xaf61d0	1	
+CWeaponInfo	FindWeaponType				0	
+CWeaponInfo	FindWeaponType_2	func?		0xaf63b0	1	site
+CWeaponInfo	GetWeaponInfo				0	
+CWeaponInfo	LoadWeaponData	func?		0xaf72a0	1	
+CWeaponInfo	aWeaponInfo	func	0xaf7337	0xaf7335	1	site
+CWeaponInfo	ms_aWeaponNames	data	0x103fc88		2	
+CWeather	ForceWeatherNow	func?		0xa2e640	1	site
+CWeather	ForcedWeatherType	data	0x12dde88	0x12dde88	1	global
+CWeather	ForcedWind	data	0x12ddeb8	0x12ddeb4 0x12ddeb8	1	
+CWeather	InterpolationValue	data	0x12dde94	0x12dde94	1	global
+CWeather	NewWeatherType	data	0x12dde84	0xfe88e8 0x12dde84 0x12dde94	1	global
+CWeather	OldWeatherType	data	0x12dde80	0xfe88e8 0x12dde84	1	global
+CWeather	Rain	data	0x12ddeac	0x12ddeac	1	global
+CWeather	WeatherTypeInList	data	0x12dde90	0x12dde90	1	global
+CWorld	Add	func?		0x93e2d0	1	
+CWorld	PlayerInFocus	data	0x1036f14		2	global
+CWorld	Players	data	0x11a8808	0x11a8808	1	global
+CWorld	ProcessLineOfSight	func?		0xa53770	1	
+CWorld	Remove	func?		0x940780	1	
+CWorld	RemoveFallenCars	func?		0x940a10	1	
+CWorld	RemoveFallenObjects	func?		0x940c70	1	
+CWorld	RemoveFallenPeds	func		0x940ef0	1	
+C_PcSave	LoadSlot	func?		0x8c7670	1	
+C_PcSave	SaveSlot	func?		0x8c7700	1	
+Hooks	GetTexture	func?		0x42d300	1	
+Hooks	PreInitGame	func	0x966e0f	0x59e470	1	
+Hooks	drawingEvent	func		0x9c7100	1	
+Hooks	gameLoadEvent	func		0x9d63f0	1	
+Hooks	gameLoadPriorityEvent	func		0xab6d00	1	
+Hooks	ingameStartupEvent	func		0x8cc770	1	
+Hooks	mountDeviceEvent	func		0x8c55f0	1	
+Hooks	processAutomobileEvent	func		0xa4bb70	1	
+Hooks	processCameraEvent	func?		0xc46621	1	
+Hooks	processPadEvent	func		0x8f4d00	1	
+Hooks	processScriptsEvent	func		0x5cfbb0	1	
+PedWeapons	GiveWeapon	func?		0xb64f70	1	call
+SkyDome	TheSkyDome	data	0x17a66a4	0x17a66a4	1	
+SkyDome	sTexturePath	data	0xef4114	0xef4114	1	
+UnmanagedGameHooks	AddSceneLight	func	0xabccd0	0xabccd0	1	literal
+UnmanagedGameHooks	DoPickupGlow	func	0xb0aa20	0xb0aa20	1	
+UnmanagedGameHooks	GetTrafficLightState1	func	0xd210e0	0xd210e0	1	
+UnmanagedGameHooks	GetTrafficLightState2	func	0xd21140	0xd21140	1	
+UnmanagedGameHooks	IsNetworkGameRunning	func	0x47c2e0		0	call
+UnmanagedGameHooks	IsThisMachineTheServer	func	0xa50d67	0x47c350	1	call
+UnmanagedGameHooks	RegisterNative	func	0x86e820	0x86e820	1	site
+UnmanagedGameHooks	RegisterNativeNoChecks	func	0x86e828	0x86fd40	1	call,site
+UnmanagedGameHooks	RenderCorona	func	0xc1f020	0xc1f020	1	site
+audConfig	LoadFromFile				0	
+audEngine	AudioEngine	data	0x115d9a0	0x115d9a0	1	
+audEngine	SetUnknown	func?		0x898ed0	1	
+audRadioAudioEntity	RadioAudioEntity	data	0x12845d0	0x12845d0	1	
+cHandlingDataMgr	BikeHandlingData	func	0xc72eb3		2	
+cHandlingDataMgr	BoatHandlingData	func	0xc72ebe		2	
+cHandlingDataMgr	FlyingHandlingData	func	0xc72eb9		2	
+cHandlingDataMgr	GetHandlingId	func?		0xc73fc0	1	
+cHandlingDataMgr	HandlingData	func	0xc73a1d	0xc73a1b	1	site
+cHandlingDataMgr	Initialise	func?		0xc73a60	1	
+cHandlingDataMgr	LoadHandlingData	func?		0xc738a0	1	
+crSkeleton	GetBoneDataByName	func?		0x46f190	1	
+fiDevice	Close	func?		0x40ea80	1	
+fiDevice	Flush	func?		0x40eac0	1	
+fiDevice	GetLength	func?		0x40eab0	1	
+fiDevice	Mount	func?		0x40be40	1	
+fiDevice	SetMountPath	func?		0x419b10	1	call
+fiDevice	SetPath	func?		0x419a80	1	call
+fiDevice	Unmount	func?		0x40c080	1	
+fiDevice	g_nMaxMountPoints	data	0x105b354	0x105b354	1	
+fiDevice	m_pVFTable				2	
+fiDeviceLocal	m_pVFTable	data?		0xf1c690 0x110dac4	1	
+fiPackfile	Mount	func?		0x40d5b0	1	
+fiPackfile	OpenPackfile	func?		0x40d010	1	
+fiPackfile	fiPackfile	func?		0x40cee0	1	
+grcTextureFactoryPC	TextureFactory	data	0x17f5630	0x17f5630	1	global
+grcTexturePC	grcTexturePC	func?		0x439920	1	
+grcWindow	ProcessWindowMessage	func?		0x420e90	1	
+pgDictionary	getEntryByKey	func?		0x451c20	1	site
+phInstGta	DetachFragmentGroup	func		0x5f3f80	1	
+rage	atStringHash	func	0x40ba60	0x40ba60	1	call
+rage	g_pDirect3DDevice	data	0x17ed8d8		1	global
+rage	g_pHWND	data	0x17accd8	0xe73394 0x17accd8	1	global
