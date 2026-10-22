@@ -61,7 +61,14 @@ namespace FirstPerson
     static constexpr uintptr_t ZoomOffset = 0x360, TargetOffset = 0x384;
     static constexpr uintptr_t VehicleViewOffset = 0x22C, VehicleOffset = 0x170;
     static constexpr int8_t HoodView = 4;
-    static constexpr float NearClip = 0.12f;        // the game's own is 0.05; hands, guns and the wheel are further
+    static constexpr float NearClip = 0.12f;        // in vehicles; the game's own is 0.05; hands, guns and the wheel are further
+    // On foot the eye keeps within eyeReach of the ped's position across (the head bone leans out with the idle and
+    // running animations, 0.18 m against a wall), and the near clip is nearClipOnFoot: the ped's collision keeps a
+    // wall a capsule's radius (0.2 to 0.3 m) from its position, so the near plane, its corners some 1.35 times the
+    // near clip from the eye, stays on this side. With the eye on the head and a near clip of 0.12 the view went
+    // through walls ahead and to the side (FirstPersonEyeReach / FirstPersonNearClip, hidden, read again live).
+    static float eyeReach = 0.1f;
+    static float nearClipOnFoot = 0.05f;
     static constexpr float LookDownForward = 0.2f;  // m the eye moves out over the chest looking straight down
     static constexpr float LookDownUp = 0.03f;
     static float lookDownWeight = 0.0f;              // eases to 0 while the phone is in the hand
@@ -190,6 +197,39 @@ namespace FirstPerson
         }
     }
 
+    // The eye kept within eyeReach of the ped's position across: moved back along `along` (the aim ray, so the eye
+    // stays on it) as far as that takes it, else straight in towards the position.
+    static void KeepWithinReach(uintptr_t ped, float (&p)[3], const float* along)
+    {
+        float root[3]{};
+        if (!CEntity::GetPosition(ped, root))
+            return;
+        const float d[2] = { p[0] - root[0], p[1] - root[1] };
+        const float out = d[0] * d[0] + d[1] * d[1];
+        if (out <= eyeReach * eyeReach)
+            return;
+        if (along)
+        {
+            // |d - t a| = eyeReach across, the nearest t >= 0
+            const float aa = along[0] * along[0] + along[1] * along[1];
+            const float da = d[0] * along[0] + d[1] * along[1];
+            const float disc = da * da - aa * (out - eyeReach * eyeReach);
+            if (aa > 1e-4f && disc >= 0.0f)
+            {
+                const float t = (da - std::sqrt(disc)) / aa;
+                if (t >= 0.0f)
+                {
+                    for (int i = 0; i < 3; ++i)
+                        p[i] -= along[i] * t;
+                    return;
+                }
+            }
+        }
+        const float scale = eyeReach / std::sqrt(out);
+        p[0] = root[0] + d[0] * scale;
+        p[1] = root[1] + d[1] * scale;
+    }
+
     // CCamFollowPed::Update (vtable slot 4), then where the eye goes: the head, a little ahead along
     // the level view and up, and out over the chest as the view goes down. The camera's frame at +0x10
     // holds right, front and up, then the position at +0x40, which is moved too.
@@ -236,6 +276,7 @@ namespace FirstPerson
             eye[1] = head[1];
         }
         eye[2] = head[2] + upOffset + down * LookDownUp;
+        KeepWithinReach(ped, eye, nullptr);
         // the follow camera lowers its pivot and target by its duck offset (+0x2C8, eased to -0.55 m, CE 0xA1D990)
         static uint32_t logFrame = 0;
         static bool wasDucking = false;
@@ -281,6 +322,7 @@ namespace FirstPerson
             along += (head[i] - position[i]) * front[i];
         for (int i = 0; i < 3; ++i)
             eye[i] = position[i] + front[i] * along;
+        KeepWithinReach(ped, eye, front);
         std::copy(std::begin(eye), std::end(eye), position);
         eyeFrame = aimFrame = *CTimer::m_frameCount;
         static uint32_t logFrame = 0;
@@ -503,7 +545,7 @@ namespace FirstPerson
     // position at +0x30, built from the final camera's frame in esi): the eye goes in there, the
     // view as rendered, whichever cameras the follow camera's position went through on the way.
     // In a vehicle the head is placed with the ped's matrix as it is now. The near clip (esi+54, read
-    // right after) is raised.
+    // right after) is set when under NearClip: NearClip in a vehicle, nearClipOnFoot on foot.
     // The radar's map is drawn from a camera of its own (CAM_RADAR, CE 0xD58550) held above the player
     // at the radar's range (50 to 960 m) and looking down, and it is handed on here too: only a camera
     // already near the head is moved, or the map is seen from the head, so near the ground it is blank.
@@ -514,7 +556,8 @@ namespace FirstPerson
         if (!matrix) return;
         const auto cam = reinterpret_cast<float*>(regs.esi);
         float position[3];
-        if (SeatCurrent())
+        const bool seated = SeatCurrent();
+        if (seated)
         {
             const auto m = CPlayer::getLocalPlayerPed ? CEntity::GetMatrix(CPlayer::getLocalPlayerPed()) : nullptr;
             if (!m) return;
@@ -537,7 +580,7 @@ namespace FirstPerson
         std::copy(std::begin(position), std::end(position), cam + 12);
         auto& nearClip = cam[21];
         if (nearClip > 0.0f && nearClip < NearClip)
-            nearClip = NearClip;
+            nearClip = seated ? NearClip : nearClipOnFoot;
     }
 
     static bool HeadHidden() noexcept
@@ -624,6 +667,8 @@ public:
             {
                 FirstPerson::forwardOffset = std::clamp(ini.ReadFloat("MISC", "FirstPersonForward", 0.1f), -0.5f, 0.5f);
                 FirstPerson::upOffset = std::clamp(ini.ReadFloat("MISC", "FirstPersonUp", 0.05f), -0.5f, 0.5f);
+                FirstPerson::eyeReach = std::clamp(ini.ReadFloat("MISC", "FirstPersonEyeReach", 0.1f), 0.0f, 0.5f);
+                FirstPerson::nearClipOnFoot = std::clamp(ini.ReadFloat("MISC", "FirstPersonNearClip", 0.05f), 0.01f, 0.3f);
             };
             readOffsets(iniReader);
             IniReload::Add(readOffsets);
